@@ -121,7 +121,7 @@ Each product has its own workspace and toolchain under `cuda-oxide/` or
 The setup and validation commands below cover cuda-oxide.
 
 cuda-oxide requires the Rust nightly toolchain with `rustc_private` support.
-See the [README](README.md) for setup instructions.
+See the [cuda-oxide README](cuda-oxide/README.md) for setup instructions.
 
 `cuda-oxide/flake.nix` provides the CUDA 13, LLVM 22, Clang, and pinned nightly
 development environment. From the repository root, run `cd cuda-oxide` and

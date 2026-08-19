@@ -17,7 +17,7 @@ AGENTS.md
 .mcp/
 
 # Internal design notes are maintained out-of-band (see cuda-oxide/cuda-oxide-book/ for the published book).
-/docs/
+/docs/build/
 DESIGN.md
 /debug/
 /tests/

@@ -1,26 +1,28 @@
 # CUDA Rust
 
-CUDA Rust is the home for accessing NVIDIA's CUDA platform from Rust. It hosts two
-GPU programming models, both written in idiomatic Rust, plus the shared host-side
-crates they build on.
+This repository is the Rust language entrypoint for the NVIDIA CUDA platform.
+This includes "host-side" crates for CUDA driver control and also "device-side"
+crates for authoring NVIDIA kernels with idiomatic Rust code.
 
-* [cuda-oxide](https://nvidia.github.io/cuda-rust/cuda-oxide/latest/): A rustc
-  codegen backend that exposes the CUDA **SIMT** programming model. `#[kernel]`
-  functions compile to PTX from ordinary Rust — host and device code in one file,
-  built with one `cargo oxide build`.
-* [cutile](https://nvidia.github.io/cuda-rust/cutile/latest/): A tile-based system
-  that exposes the CUDA **Tile** programming model. Kernels operate on tiles of
-  tensors; `#[cutile::module]` embeds a captured Rust AST that JIT-compiles through
-  CUDA Tile IR to cubin at launch.
-* `cuda-core`, `cuda-async`, `cuda-bindings`: Host-side runtime crates — contexts,
-  streams, device buffers, events, and low-level driver bindings.
+* [cuda-oxide](./cuda-oxide): A rustc compiler plugin, cargo helper utility, and
+  crates to help users target the traditional CUDA **SIMT** (Single Instruction,
+  Multiple Threads) kernel programming model. Here users have access to every
+  detail of device side CUDA programming.
+* [cutile](./cutile): A proc-macro plugin and rates to help users write CUDA
+  kernels using the CUDA **Tile** programming model. Kernels operate on
+  conceptual tiles memory at a time.
+* `cuda-core`, `cuda-async`, `cuda-bindings`: Host-side runtime crates —
+  contexts, streams, device buffers, events, and low-level driver bindings for
+  launching work and managing the GPU.
 
-Both models extend Rust's ownership rules across the GPU launch boundary: mutable
-buffers are partitioned into disjoint pieces before launch, immutable buffers are
-shared, and launchers keep those borrows alive while GPU work is in flight.
+Both kernel programming models extend Rust's ownership rules across the GPU
+launch boundary: mutable buffers are partitioned into disjoint pieces before
+launch, immutable buffers are shared, and launchers keep those borrows alive
+while GPU work is in flight.
 
 CUDA Rust is an early-stage research project. Expect bugs, incomplete features,
-and API breakage.
+and API breakage. That said, we hope you'll try it in your own work and help
+shape its direction by sharing feedback on your experience.
 
 ## Picking a model
 
@@ -31,10 +33,10 @@ and API breakage.
 | Compiles | Ahead of time, Rust → PTX | JIT, Rust AST → Tile IR → cubin |
 | Reach for it when | You need direct control over threads, warps, shared memory, TMA, or cluster ops | Your problem is naturally shaped as tiles of tensors and you want the compiler to schedule them |
 
-Coming from CUDA C++, SIMT is the familiar model. If you are unsure, start with
-cuda-oxide.
+If you are unsure of which model to get started with, start with
+cutile and drop down to the flexibility and control of cuda-oxide when you need it.
 
-The two interoperate: a cutile Tile kernel and a cuda-oxide SIMT kernel can run on
+Kernels from both models interoperate: a cutile Tile kernel and a cuda-oxide SIMT kernel can run on
 the same stream over shared device tensors.
 
 ## Repository layout

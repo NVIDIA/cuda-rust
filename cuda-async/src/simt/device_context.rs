@@ -26,6 +26,7 @@ use crate::simt::scheduling_policies::{
 use cuda_core::{CudaContext, CudaFunction, CudaModule, CudaStream};
 use rustc_hash::FxHashMap;
 use std::cell::Cell;
+use std::collections::hash_map::Entry;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
@@ -176,6 +177,36 @@ fn init_with_default_policy(
     )
 }
 
+/// Checks the thread's device map out of the thread-local, runs `f` on it,
+/// and puts it back **whether or not `f` succeeded**.
+///
+/// The map lives in a `Cell<Option<..>>`, so it is moved out for the duration
+/// of the call. An early `?` between the take and the put-back used to drop
+/// the map on the floor, destroying every device context this thread had
+/// initialized (contexts, stream pools, kernel cache) because one lookup of
+/// an unrelated device failed; the next access then rebuilt everything from
+/// scratch.
+fn with_device_map<R>(
+    device_id: usize,
+    f: impl FnOnce(&mut FxHashMap<usize, AsyncDeviceContext>) -> Result<R, DeviceError>,
+) -> Result<R, DeviceError> {
+    DEVICE_CONTEXTS.with(|ctx| {
+        let mut hashmap = match ctx.devices.take() {
+            Some(hashmap) => hashmap,
+            None => {
+                // Nothing is checked out yet, so a failure here loses nothing.
+                init_device_contexts_default()?;
+                ctx.devices
+                    .take()
+                    .ok_or_else(|| device_error(device_id, "Failed to initialize context"))?
+            }
+        };
+        let result = f(&mut hashmap);
+        ctx.devices.replace(Some(hashmap));
+        result
+    })
+}
+
 /// Borrows the thread-local [`AsyncDeviceContext`] for `device_id` immutably.
 ///
 /// Lazily initializes the context map and the specific device if needed.
@@ -183,25 +214,14 @@ fn with_global_device_context<F, R>(device_id: usize, f: F) -> Result<R, DeviceE
 where
     F: FnOnce(&AsyncDeviceContext) -> R,
 {
-    DEVICE_CONTEXTS.with(|ctx| {
-        let mut hashmap = match ctx.devices.take() {
-            Some(hashmap) => hashmap,
-            None => {
-                init_device_contexts_default()?;
-                ctx.devices
-                    .take()
-                    .ok_or_else(|| device_error(device_id, "Failed to initialize context"))?
-            }
-        };
+    with_device_map(device_id, |hashmap| {
         if !hashmap.contains_key(&device_id) {
-            init_with_default_policy(&mut hashmap, device_id)?;
+            init_with_default_policy(hashmap, device_id)?;
         }
         let device_context = hashmap
             .get(&device_id)
             .ok_or_else(|| device_error(device_id, "Failed to get context"))?;
-        let r = f(device_context);
-        ctx.devices.replace(Some(hashmap));
-        Ok(r)
+        Ok(f(device_context))
     })
 }
 
@@ -212,25 +232,14 @@ fn with_global_device_context_mut<F, R>(device_id: usize, f: F) -> Result<R, Dev
 where
     F: FnOnce(&mut AsyncDeviceContext) -> R,
 {
-    DEVICE_CONTEXTS.with(|ctx| {
-        let mut hashmap = match ctx.devices.take() {
-            Some(hashmap) => hashmap,
-            None => {
-                init_device_contexts_default()?;
-                ctx.devices
-                    .take()
-                    .ok_or_else(|| device_error(device_id, "Failed to initialize context"))?
-            }
-        };
+    with_device_map(device_id, |hashmap| {
         if !hashmap.contains_key(&device_id) {
-            init_with_default_policy(&mut hashmap, device_id)?;
+            init_with_default_policy(hashmap, device_id)?;
         }
         let device_context = hashmap
             .get_mut(&device_id)
             .ok_or_else(|| device_error(device_id, "Failed to get context"))?;
-        let r = f(device_context);
-        ctx.devices.replace(Some(hashmap));
-        Ok(r)
+        Ok(f(device_context))
     })
 }
 
@@ -302,17 +311,23 @@ pub fn load_module_from_ptx(
 /// Inserts a compiled function into the per-device kernel cache.
 ///
 /// The function is keyed by the hash of `func_key`. Returns an error if a
-/// different function was already registered under the same key (hash
-/// collision).
+/// function is already registered under the same key (a duplicate insert or
+/// a hash collision); the existing entry is left in place rather than
+/// replaced, so a caller that ignores the error still gets the function it
+/// registered first from [`get_cuda_function`].
 pub fn insert_cuda_function(
     device_id: usize,
     func_key: &impl FunctionKey,
     value: (Arc<CudaModule>, Arc<CudaFunction>),
 ) -> Result<(), DeviceError> {
     with_global_device_context_mut(device_id, |dc| {
-        let key = func_key.get_hash_string();
-        let res = dc.functions.insert(key, value);
-        device_assert(device_id, res.is_none(), "Unexpected cache key collision.")
+        match dc.functions.entry(func_key.get_hash_string()) {
+            Entry::Occupied(_) => Err(device_error(device_id, "Unexpected cache key collision.")),
+            Entry::Vacant(slot) => {
+                slot.insert(value);
+                Ok(())
+            }
+        }
     })?
 }
 
@@ -357,5 +372,97 @@ mod tests {
         })
         .join()
         .expect("test thread should not panic");
+    }
+
+    /// Runs `body` on a fresh thread (its own thread-local device map) if a
+    /// GPU is available; otherwise reports a skip.
+    fn with_gpu_thread(body: impl FnOnce() + Send + 'static) {
+        if let Err(error) = CudaContext::new(0) {
+            eprintln!("SKIPPED: CUDA unavailable ({error:?})");
+            return;
+        }
+        std::thread::spawn(body)
+            .join()
+            .expect("test thread should not panic");
+    }
+
+    /// A failed lookup of one device must not destroy the contexts already
+    /// initialized for other devices on this thread. Device 0's context is
+    /// the same `Arc` before and after a request for a device that does not
+    /// exist.
+    #[test]
+    fn failed_device_lookup_keeps_the_other_contexts() {
+        with_gpu_thread(|| {
+            let before = with_cuda_context(0, Arc::clone).expect("device 0 initializes");
+
+            let bogus = with_cuda_context(usize::MAX, Arc::clone);
+            assert!(bogus.is_err(), "a nonexistent device must fail: {bogus:?}");
+
+            let after = with_cuda_context(0, Arc::clone).expect("device 0 is still there");
+            assert!(
+                Arc::ptr_eq(&before, &after),
+                "device 0's context must survive the failed lookup"
+            );
+        });
+    }
+
+    /// A second insert under an existing key must fail *without* replacing
+    /// the entry: the first function registered stays the one the cache
+    /// returns.
+    #[test]
+    fn insert_cuda_function_keeps_the_existing_entry_on_collision() {
+        const PTX: &str = r#"
+.version 7.8
+.target sm_75
+.address_size 64
+.visible .entry first() { ret; }
+.visible .entry second() { ret; }
+"#;
+
+        #[derive(Hash)]
+        struct Key;
+        impl FunctionKey for Key {}
+
+        with_gpu_thread(|| {
+            let module = load_module_from_ptx(PTX, 0).expect("JIT the test PTX");
+            let first = Arc::new(module.load_function("first").expect("first"));
+            let second = Arc::new(module.load_function("second").expect("second"));
+
+            insert_cuda_function(0, &Key, (Arc::clone(&module), Arc::clone(&first)))
+                .expect("first insert");
+            let collision = insert_cuda_function(0, &Key, (Arc::clone(&module), second));
+            assert!(collision.is_err(), "duplicate key must be reported");
+
+            let cached = get_cuda_function(0, &Key).expect("the key is still registered");
+            assert!(
+                Arc::ptr_eq(&cached, &first),
+                "the colliding insert must not have replaced the first function"
+            );
+        });
+    }
+
+    /// `.sync()` must run the operation outside the thread-local borrow: an
+    /// operation that itself touches the device context (here, reads device
+    /// 0's `CudaContext`) must see the same context as the caller, not a
+    /// freshly rebuilt one.
+    #[test]
+    fn sync_does_not_rebuild_the_device_map_when_reentered() {
+        use crate::simt::device_operation::{empty, value, DeviceOperation};
+
+        with_gpu_thread(|| {
+            let outer = with_cuda_context(0, |ctx| Arc::as_ptr(ctx) as usize).expect("device 0");
+            let inner = empty(|| {
+                value(
+                    with_cuda_context(0, |ctx| Arc::as_ptr(ctx) as usize)
+                        .expect("device 0 from inside the operation"),
+                )
+            })
+            .sync()
+            .expect("nested operation runs");
+            assert_eq!(
+                outer, inner,
+                "the operation must observe the caller's device context"
+            );
+        });
     }
 }

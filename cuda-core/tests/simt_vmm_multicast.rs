@@ -11,9 +11,9 @@
 //! and tear down in the required order.
 //!
 //! The switch-side reduction semantics can only be exercised from device
-//! code (`multimem.ld_reduce` / `multimem.st`); that lives in the
-//! `nvls_all_reduce` example. Host code must not dereference the multicast
-//! mapping, so this test only establishes and tears it down.
+//! code (`multimem.ld_reduce` / `multimem.st`), which this crate does not
+//! build. Host code must not dereference the multicast mapping, so this test
+//! only establishes and tears it down.
 //!
 //! Requires an NVLink-switch system (e.g. HGX H100/B200); skips elsewhere.
 //! Compiled out entirely when the CUDA toolkit predates the multicast API
@@ -73,10 +73,11 @@ fn multicast_two_gpu_team_roundtrip() {
     }
 
     // The physical size must satisfy the allocation granularity as well as
-    // the multicast granularity, so align to both.
+    // the multicast granularity, so align to both. Bindings borrow the team
+    // and mappings borrow their reservation and backing, so each kind of
+    // handle lives in its own collection, created after what it borrows.
     let contexts = [&ctx0, &ctx1];
     let mut physes = Vec::new();
-    let mut bindings = Vec::new();
     for (i, ctx) in contexts.iter().enumerate() {
         ctx.bind_to_thread().expect("bind context");
         let alloc_gran =
@@ -84,30 +85,41 @@ fn multicast_two_gpu_team_roundtrip() {
         let phys_size = vmm::align_size(size, alloc_gran);
         let phys = vmm::PhysicalAllocation::new(devices[i], phys_size).expect("cuMemCreate failed");
         assert_eq!(phys.device(), devices[i]);
+        physes.push(phys);
+    }
+    let mut bindings = Vec::new();
+    for (i, (ctx, phys)) in contexts.iter().zip(&physes).enumerate() {
+        ctx.bind_to_thread().expect("bind context");
         let binding = team
-            .bind_mem(0, &phys, 0, size)
+            .bind_mem(0, phys, 0, size)
             .expect("cuMulticastBindMem failed");
         assert_eq!(binding.device(), devices[i]);
-        physes.push(phys);
+        assert!(std::ptr::eq(binding.multicast(), &team));
         bindings.push(binding);
     }
 
-    // Per GPU: (uc_va, uc_map, mc_va, mc_map)
-    let mut mappings = Vec::new();
-    for (i, ctx) in contexts.iter().enumerate() {
+    // Per GPU: a unicast reservation over the device's own memory and a
+    // multicast reservation over the team.
+    let mut reservations = Vec::new();
+    for ctx in &contexts {
         ctx.bind_to_thread().expect("bind context");
-
         let uc_va = vmm::VirtualReservation::new(size, 0).expect("unicast VA reserve");
-        let uc_map =
-            vmm::Mapping::new(uc_va.base(), size, &physes[i], 0).expect("unicast cuMemMap");
+        let mc_va = vmm::VirtualReservation::new(size, granularity).expect("multicast VA reserve");
+        reservations.push((uc_va, mc_va));
+    }
+    let mut mappings = Vec::new();
+    for (i, ((uc_va, mc_va), phys)) in reservations.iter().zip(&physes).enumerate() {
+        contexts[i].bind_to_thread().expect("bind context");
+
+        let uc_map = vmm::Mapping::new(uc_va, 0, phys, 0, size).expect("unicast cuMemMap");
         vmm::set_access(uc_va.base(), size, &[devices[i]]).expect("unicast set_access");
 
-        let mc_va = vmm::VirtualReservation::new(size, granularity).expect("multicast VA reserve");
         let mc_map =
-            vmm::Mapping::new_multicast(mc_va.base(), size, &team, 0).expect("multicast cuMemMap");
+            vmm::Mapping::new_multicast(mc_va, 0, &team, 0, size).expect("multicast cuMemMap");
+        assert!(mc_map.multicast().is_some_and(|t| std::ptr::eq(t, &team)));
         vmm::set_access(mc_va.base(), size, &[devices[i]]).expect("multicast set_access");
 
-        mappings.push((uc_va, uc_map, mc_va, mc_map));
+        mappings.push((uc_map, mc_map));
     }
 
     ctx0.bind_to_thread().expect("bind ctx0");
@@ -116,7 +128,7 @@ fn multicast_two_gpu_team_roundtrip() {
     let stream0 = ctx0.default_stream();
     unsafe {
         cuda_core::simt::memory::memcpy_htod_async(
-            mappings[0].0.base(),
+            mappings[0].0.va(),
             pattern.as_ptr(),
             byte_len,
             stream0.cu_stream(),
@@ -129,7 +141,7 @@ fn multicast_two_gpu_team_roundtrip() {
     unsafe {
         cuda_core::simt::memory::memcpy_dtoh_async(
             readback.as_mut_ptr(),
-            mappings[0].0.base(),
+            mappings[0].0.va(),
             byte_len,
             stream0.cu_stream(),
         )
@@ -142,9 +154,11 @@ fn multicast_two_gpu_team_roundtrip() {
     );
 
     // Teardown order: mappings, then bindings, then team, then physical
-    // allocations.
+    // allocations and reservations. The borrows enforce the first three
+    // steps; the last is convention.
     drop(mappings);
     drop(bindings);
     drop(team);
     drop(physes);
+    drop(reservations);
 }

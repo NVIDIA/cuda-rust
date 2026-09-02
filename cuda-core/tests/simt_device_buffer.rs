@@ -4,16 +4,28 @@
  */
 
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer, DriverError, PinnedHostBuffer};
-use std::sync::{mpsc, Mutex, MutexGuard};
+use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 const BLOCKED_TIMEOUT: Duration = Duration::from_millis(100);
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(1);
-static GATED_TEST_LOCK: Mutex<()> = Mutex::new(());
+/// The error the sticky-state tests record; any code that is not `Ok` works.
+const INJECTED: DriverError = DriverError(cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE);
+static TEST_LOCK: Mutex<()> = Mutex::new(());
 
-fn lock_gated_test() -> MutexGuard<'static, ()> {
-    GATED_TEST_LOCK
+/// Serializes every test in this file.
+///
+/// The gated tests park a `cuLaunchHostFunc` callback on a channel until the
+/// test thread releases it. While that callback blocks, a synchronizing driver
+/// call made by *any other* test thread in this process (`cuMemFree` from a
+/// `DeviceBuffer` drop, `cuStreamDestroy`, `cuCtxSynchronize`) waits for the
+/// gated stream while holding the driver's context lock, and the gate owner
+/// then blocks on that lock inside an unrelated call such as `cuEventCreate`
+/// before it can release the gate. Observed as a hard deadlock under the
+/// default parallel test runner; running the file serially removes it.
+fn serialize_test() -> MutexGuard<'static, ()> {
+    TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
@@ -80,6 +92,7 @@ fn gate_stream(stream: &CudaStream) -> mpsc::Sender<()> {
 
 #[test]
 fn device_buffer_from_host_roundtrip() {
+    let _guard = serialize_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
@@ -97,8 +110,62 @@ fn device_buffer_from_host_roundtrip() {
     assert_eq!(host_vec, data);
 }
 
+/// Every `DeviceBuffer` entry point binds `stream.context()` itself. A
+/// freshly spawned thread has no current CUDA context, so a constructor that
+/// reached `cuMemAlloc` without binding would fail with
+/// `CUDA_ERROR_INVALID_CONTEXT` there (and, on a multi-GPU host, a thread
+/// bound to another device would allocate in the wrong context).
+#[test]
+fn device_buffer_binds_the_stream_context_on_an_unbound_thread() {
+    let _guard = serialize_test();
+    let ctx = CudaContext::new(0).expect("failed to create CUDA context");
+    let stream = ctx.new_stream().expect("failed to create CUDA stream");
+    let pinned =
+        PinnedHostBuffer::from_slice(&ctx, &[5_u32, 8, 13, 21]).expect("failed to allocate pinned");
+
+    std::thread::spawn(move || {
+        let mut current: cuda_bindings::CUcontext = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { cuda_bindings::cuCtxGetCurrent(&mut current) },
+            cuda_bindings::cudaError_enum_CUDA_SUCCESS
+        );
+        assert!(
+            current.is_null(),
+            "a new thread must start without a context"
+        );
+
+        let zeroed =
+            DeviceBuffer::<u32>::zeroed(&stream, 4).expect("zeroed must bind the stream context");
+        let from_host = DeviceBuffer::from_host(&stream, &[1_u32, 2, 3, 4])
+            .expect("from_host must bind the stream context");
+        // SAFETY: `pinned` outlives the `to_host_vec` synchronization below.
+        let from_pinned = unsafe { DeviceBuffer::from_pinned_host(&stream, &pinned) }
+            .expect("from_pinned_host must bind the stream context");
+        // SAFETY: the buffer is fully written by `copy_from_host` before it is read.
+        let mut uninit = unsafe { DeviceBuffer::<u32>::uninitialized_async(&stream, 4) }
+            .expect("uninitialized_async must bind the stream context");
+        uninit
+            .copy_from_host(&stream, &[9_u32, 9, 9, 9])
+            .expect("copy_from_host must bind the stream context");
+
+        assert_eq!(zeroed.to_host_vec(&stream).expect("readback"), [0, 0, 0, 0]);
+        assert_eq!(
+            from_host.to_host_vec(&stream).expect("readback"),
+            [1, 2, 3, 4]
+        );
+        assert_eq!(
+            from_pinned.to_host_vec(&stream).expect("readback"),
+            pinned.as_slice()
+        );
+        assert_eq!(uninit.to_host_vec(&stream).expect("readback"), [9, 9, 9, 9]);
+    })
+    .join()
+    .expect("worker thread panicked");
+}
+
 #[test]
 fn device_buffer_zeroed_initializes_with_zeros() {
+    let _guard = serialize_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
@@ -116,6 +183,7 @@ fn device_buffer_zeroed_initializes_with_zeros() {
 
 #[test]
 fn device_buffer_supports_empty_allocations() {
+    let _guard = serialize_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
@@ -134,6 +202,7 @@ fn device_buffer_supports_empty_allocations() {
 
 #[test]
 fn device_buffer_rejects_allocation_size_overflow() {
+    let _guard = serialize_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
     let overflowing_len = usize::MAX / std::mem::size_of::<u64>() + 1;
@@ -146,6 +215,7 @@ fn device_buffer_rejects_allocation_size_overflow() {
 
 #[test]
 fn device_buffer_async_compat_methods_roundtrip() {
+    let _guard = serialize_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
@@ -192,7 +262,7 @@ fn device_buffer_async_compat_methods_roundtrip() {
 
 #[test]
 fn async_allocation_ordinary_drop_waits_for_cross_stream_work() {
-    let _gated_test_guard = lock_gated_test();
+    let _guard = serialize_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let allocation_stream = ctx
         .new_stream()
@@ -231,7 +301,7 @@ fn async_allocation_ordinary_drop_waits_for_cross_stream_work() {
 
 #[test]
 fn async_allocation_drop_async_orders_free_after_allocation_stream() {
-    let _gated_test_guard = lock_gated_test();
+    let _guard = serialize_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let allocation_stream = ctx
         .new_stream()
@@ -272,7 +342,7 @@ fn async_allocation_drop_async_orders_free_after_allocation_stream() {
 
 #[test]
 fn sync_allocation_allows_async_drop_after_queued_work() {
-    let _gated_test_guard = lock_gated_test();
+    let _guard = serialize_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
@@ -306,8 +376,198 @@ fn sync_allocation_allows_async_drop_after_queued_work() {
     .expect("synchronous allocation async free failed");
 }
 
+/// Gates `stream`, enqueues a device-to-host copy into pinned memory behind
+/// the gate, records a sticky error, and runs the wait built by `make_wait`
+/// on a worker thread. The wait must block until the gate is released, then
+/// report the recorded error, and the copy must be complete by the time it
+/// returns: a wait that returned the recorded error *instead of* waiting
+/// would hand the caller host memory the DMA is still writing.
+fn assert_wait_completes_under_sticky_error<W>(
+    label: &str,
+    make_wait: impl FnOnce(&Arc<CudaContext>, &Arc<CudaStream>) -> W,
+) where
+    W: FnOnce() -> Result<(), DriverError> + Send + 'static,
+{
+    let ctx = CudaContext::new(0).expect("failed to create CUDA context");
+    let stream = ctx.new_stream().expect("failed to create CUDA stream");
+    let expected = [1_u32, 2, 3, 4];
+    let src = DeviceBuffer::from_host(&stream, &expected).expect("failed to allocate source");
+    let mut dst = PinnedHostBuffer::<u32>::zeroed(&ctx, expected.len())
+        .expect("failed to allocate pinned destination");
+
+    let release_gate = gate_stream(&stream);
+    // SAFETY: `dst` stays alive, unread, and unaliased until the worker's
+    // wait has returned and been checked below.
+    unsafe { src.copy_to_pinned_host_async(&stream, &mut dst) }
+        .expect("failed to enqueue the gated copy");
+    let wait = make_wait(&ctx, &stream);
+    ctx.record_err::<()>(Err(INJECTED));
+
+    let (started_tx, started_rx) = mpsc::channel();
+    let (completion_tx, completion_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        started_tx
+            .send(())
+            .expect("failed to send wait worker start");
+        completion_tx
+            .send(wait())
+            .expect("failed to send wait result");
+    });
+    let result = finish_gated_worker(label, release_gate, started_rx, completion_rx, worker);
+
+    assert_eq!(
+        result,
+        Err(INJECTED),
+        "{label}: the recorded error must be reported after the wait, not swallowed"
+    );
+    assert_eq!(
+        ctx.check_err(),
+        Ok(()),
+        "{label}: the wait must have drained the recorded error"
+    );
+    assert_eq!(
+        stream.query(),
+        Ok(true),
+        "{label}: the wait must have covered the in-flight copy"
+    );
+    assert_eq!(
+        dst.as_slice(),
+        &expected,
+        "{label}: the copy must have landed before the wait returned"
+    );
+}
+
+#[test]
+fn stream_synchronize_waits_for_in_flight_work_under_a_sticky_error() {
+    let _guard = serialize_test();
+    assert_wait_completes_under_sticky_error("CudaStream::synchronize", |_, stream| {
+        let stream = Arc::clone(stream);
+        move || stream.synchronize()
+    });
+}
+
+#[test]
+fn context_synchronize_waits_for_in_flight_work_under_a_sticky_error() {
+    let _guard = serialize_test();
+    assert_wait_completes_under_sticky_error("CudaContext::synchronize", |ctx, _| {
+        let ctx = Arc::clone(ctx);
+        move || ctx.synchronize()
+    });
+}
+
+#[test]
+fn event_synchronize_waits_for_in_flight_work_under_a_sticky_error() {
+    let _guard = serialize_test();
+    assert_wait_completes_under_sticky_error("CudaEvent::synchronize", |_, stream| {
+        let event = stream
+            .record_event(None)
+            .expect("failed to record the completion event");
+        move || event.synchronize()
+    });
+}
+
+/// Runs a safe enqueue-then-wait `DeviceBuffer` wrapper while a sticky error
+/// lands *between* its enqueue and its wait. The gate callback records the
+/// error when released, which the stream orders after the wrapper's own
+/// pre-enqueue drain and before the copy it gates, so the wrapper cannot
+/// return early: it must finish the copy and then report the error.
+///
+/// `op` performs the copy from the source buffer into host memory it owns,
+/// returning the wrapper's result and the host bytes it can still observe
+/// (`None` when the wrapper's error path consumed them).
+///
+/// Only a pinned destination discriminates: the driver stages a
+/// device-to-host copy into pageable memory synchronously, so `copy_to_host`
+/// and `to_host_vec` complete inside the enqueue call regardless of what the
+/// wait does afterwards. They are exercised for coverage of the reporting
+/// path; `copy_to_pinned_host` is the case that fails without the fix.
+fn assert_copy_wrapper_finishes_before_reporting_sticky_error<F>(label: &str, op: F)
+where
+    F: FnOnce(&DeviceBuffer<u32>, &Arc<CudaStream>) -> (Result<(), DriverError>, Option<Vec<u32>>)
+        + Send
+        + 'static,
+{
+    let ctx = CudaContext::new(0).expect("failed to create CUDA context");
+    let stream = ctx.new_stream().expect("failed to create CUDA stream");
+    let expected = vec![1_u32, 2, 3, 4];
+    let src = DeviceBuffer::from_host(&stream, &expected).expect("failed to allocate source");
+
+    let (release_gate, release_rx) = mpsc::channel();
+    let ctx_for_gate = Arc::clone(&ctx);
+    stream
+        .launch_host_function(move || {
+            let _ = release_rx.recv();
+            ctx_for_gate.record_err::<()>(Err(INJECTED));
+        })
+        .expect("failed to enqueue the recording gate");
+
+    let (started_tx, started_rx) = mpsc::channel();
+    let (completion_tx, completion_rx) = mpsc::channel();
+    let stream_for_thread = Arc::clone(&stream);
+    let worker = std::thread::spawn(move || {
+        started_tx
+            .send(())
+            .expect("failed to send copy worker start");
+        completion_tx
+            .send(op(&src, &stream_for_thread))
+            .expect("failed to send copy result");
+    });
+    let (result, observed) =
+        finish_gated_worker(label, release_gate, started_rx, completion_rx, worker);
+
+    assert_eq!(
+        result,
+        Err(INJECTED),
+        "{label}: the error recorded during the copy must be reported"
+    );
+    assert_eq!(
+        stream.query(),
+        Ok(true),
+        "{label}: the wrapper must not return while its copy is in flight"
+    );
+    if let Some(observed) = observed {
+        assert_eq!(
+            observed, expected,
+            "{label}: the copy must have completed before the wrapper returned"
+        );
+    }
+}
+
+#[test]
+fn copy_to_pinned_host_finishes_the_copy_before_reporting_a_sticky_error() {
+    let _guard = serialize_test();
+    assert_copy_wrapper_finishes_before_reporting_sticky_error(
+        "copy_to_pinned_host",
+        |src, stream| {
+            let mut dst = PinnedHostBuffer::<u32>::zeroed(stream.context(), src.len())
+                .expect("failed to allocate pinned destination");
+            let result = src.copy_to_pinned_host(stream, &mut dst);
+            (result, Some(dst.to_vec()))
+        },
+    );
+}
+
+#[test]
+fn copy_to_host_finishes_the_copy_before_reporting_a_sticky_error() {
+    let _guard = serialize_test();
+    assert_copy_wrapper_finishes_before_reporting_sticky_error("copy_to_host", |src, stream| {
+        let mut dst = vec![0_u32; src.len()];
+        let result = src.copy_to_host(stream, &mut dst);
+        (result, Some(dst))
+    });
+}
+
+#[test]
+fn to_host_vec_finishes_the_copy_before_reporting_a_sticky_error() {
+    let _guard = serialize_test();
+    assert_copy_wrapper_finishes_before_reporting_sticky_error("to_host_vec", |src, stream| {
+        (src.to_host_vec(stream).map(drop), None)
+    });
+}
+
 #[test]
 fn drop_async_bind_error_preserves_ordinary_cleanup() {
+    let _guard = serialize_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
     let dev = DeviceBuffer::<u8>::zeroed(&stream, 4096).expect("failed to allocate device buffer");
@@ -341,6 +601,7 @@ fn drop_async_bind_error_preserves_ordinary_cleanup() {
 
 #[test]
 fn from_host_with_pinned_source_allows_source_drop_after_return() {
+    let _guard = serialize_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
@@ -360,6 +621,7 @@ fn from_host_with_pinned_source_allows_source_drop_after_return() {
 
 #[test]
 fn copy_from_host_with_pinned_source_allows_source_reuse_after_return() {
+    let _guard = serialize_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
@@ -387,6 +649,7 @@ fn copy_from_host_with_pinned_source_allows_source_reuse_after_return() {
 // Run under `compute-sanitizer --tool memcheck` to catch a regression.
 #[test]
 fn uninitialized_async_implicit_drop_waits_for_pending_work() {
+    let _guard = serialize_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
@@ -406,6 +669,7 @@ fn uninitialized_async_implicit_drop_waits_for_pending_work() {
 
 #[test]
 fn uninitialized_async_cast_elem_implicit_drop_is_stream_ordered() {
+    let _guard = serialize_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 

@@ -7,8 +7,10 @@ use crate::error::PipelineError;
 use crate::generated::GeneratedModuleRequirements;
 use crate::target::{
     DetectedFeatures, arch_satisfies, generated_ptx_isa_requirement, generated_target_satisfied,
-    select_target_with_generated, validate_generated_target, validate_target_features,
+    honour_sm_floor, select_target_with_generated, validate_generated_target,
+    validate_target_features,
 };
+use cuda_target_spec::resolve_sm_floor;
 use libnvvm_sys::CudaArch;
 use llvm_export::export::{
     DebugKind, DeviceExternType, ExportBackendConfig, FunctionLocalStaticPlacement, NvvmIrDialect,
@@ -82,6 +84,21 @@ impl llvm_export::export::AsDeviceExtern for DeviceExternDecl {
     }
 }
 
+/// The floor device code was compiled against, for the paths where selection
+/// is free to choose. Those are reached only without an explicit target, so
+/// only the detected-device hint can move it -- downwards, per
+/// [`resolve_sm_floor`]. Taken from that one function rather than written out,
+/// so `cuda-device`'s `cuda_oxide_sm_at_least` ladder and the target selected
+/// here have a single definition between them.
+fn sm_floor_for_selection(device_arch_hint: Option<&CudaArch>) -> Result<u32, PipelineError> {
+    resolve_sm_floor(None, device_arch_hint).map_err(|error| PipelineError::TargetSelection {
+        target: String::new(),
+        reason: format!(
+            "cannot resolve the compute-capability floor device code is compiled against: {error}"
+        ),
+    })
+}
+
 // mir-importer pipeline plumbing; not part of the frontend contract.
 #[doc(hidden)]
 #[cfg(test)]
@@ -153,6 +170,12 @@ pub(crate) fn resolve_nvvm_target_with_generated(
         }
         let target =
             select_target_with_generated(features, generated).map_err(PipelineError::Export)?;
+        // No explicit target reaches here, so this is the shared default
+        // floor; it is resolved rather than restated so the ladder device
+        // code was built against and the target selected here cannot drift.
+        let floor = sm_floor_for_selection(device_arch_hint)?;
+        let target =
+            honour_sm_floor(target, floor, features, generated).map_err(PipelineError::Export)?;
         return Ok(target);
     }
 
@@ -165,6 +188,9 @@ pub(crate) fn resolve_nvvm_target_with_generated(
 
     if !generated.is_empty() {
         let target = select_target_with_generated(DetectedFeatures::Basic, generated)
+            .map_err(PipelineError::Export)?;
+        let floor = sm_floor_for_selection(device_arch_hint)?;
+        let target = honour_sm_floor(target, floor, DetectedFeatures::Basic, generated)
             .map_err(PipelineError::Export)?;
         return Ok(target);
     }

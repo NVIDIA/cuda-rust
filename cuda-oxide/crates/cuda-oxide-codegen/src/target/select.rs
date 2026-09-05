@@ -11,7 +11,7 @@ use super::generated_requirements::{
 };
 use crate::error::PipelineError;
 use crate::generated::GeneratedModuleRequirements;
-use cuda_target_spec::{CudaArch, RECORDED_PTX_FLOORS, recorded_ptx_floor};
+use cuda_target_spec::{CudaArch, RECORDED_PTX_FLOORS, recorded_ptx_floor, resolve_sm_floor};
 
 /// Select a concrete architecture that satisfies every detected feature.
 ///
@@ -167,6 +167,46 @@ pub fn resolve_ptx_target(
     )
 }
 
+/// Raise a feature-selected target to the floor device code was compiled
+/// against, or say why the two cannot both be satisfied.
+///
+/// `cuda-device`'s build script fixes its `cuda_oxide_sm_at_least` ladder
+/// before rustc runs, from the same [`resolve_sm_floor`] the callers below
+/// use, so the two cannot drift. Selection then runs with something the build
+/// script could not have: the module's own features. A module whose features
+/// need less than the floor -- `ldmatrix` alone asks only for `sm_75` -- would
+/// otherwise be built below the capability device code was told to assume.
+///
+/// Raising is the repair whenever the floor can still run the module, which
+/// is every case reachable today: the floor is only ever the default when
+/// this is called, and every feature below it is forward compatible. The
+/// error arm is not decoration -- it is what keeps a future floor from
+/// silently selecting an architecture family that cannot host the module.
+pub(crate) fn honour_sm_floor(
+    selected: CudaArch,
+    floor: u32,
+    features: DetectedFeatures,
+    generated: &GeneratedModuleRequirements,
+) -> Result<CudaArch, String> {
+    if selected.capability() >= floor {
+        return Ok(selected);
+    }
+
+    let at_floor = CudaArch::new(floor, None).map_err(|error| {
+        format!("compute capability {floor} is not a CUDA target this compiler knows: {error}")
+    })?;
+    if arch_satisfies(&at_floor, features) && generated_target_satisfied(&at_floor, generated) {
+        return Ok(at_floor);
+    }
+
+    Err(format!(
+        "device code is compiled against compute capability {floor} or newer, but this module's \
+         features run only on {}, which that floor cannot host. Pin the architecture you mean to \
+         build for with `--arch` (or CUDA_OXIDE_TARGET), so device code and the emitted PTX agree.",
+        selected.sm()
+    ))
+}
+
 pub(crate) fn resolve_ptx_target_with_generated(
     explicit_override: Option<&str>,
     explicit_override_source: &'static str,
@@ -206,8 +246,21 @@ pub(crate) fn resolve_ptx_target_with_generated(
         return Ok((device.clone(), "detected GPU"));
     }
 
+    // Reached only with no explicit target, so only the detected-device hint
+    // can move the floor -- downwards. Resolved through the same function the
+    // build script uses rather than restated here.
+    let floor = resolve_sm_floor(explicit_override, device_hint).map_err(|error| {
+        PipelineError::TargetSelection {
+            target: String::new(),
+            reason: format!(
+                "cannot resolve the compute-capability floor device code is compiled against: {error}"
+            ),
+        }
+    })?;
     let target =
         select_target_with_generated(detected, generated).map_err(PipelineError::PtxGeneration)?;
+    let target = honour_sm_floor(target, floor, detected, generated)
+        .map_err(PipelineError::PtxGeneration)?;
     Ok((target, "feature requirement"))
 }
 

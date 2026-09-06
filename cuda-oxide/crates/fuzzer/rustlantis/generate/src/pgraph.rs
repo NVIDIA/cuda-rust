@@ -10,7 +10,7 @@ use index_vec::IndexVec;
 use mir::{
     syntax::{
         Body, FieldIdx, Literal, Local, LocalDecls, Mutability, Operand, Place, ProjectionElem,
-        Rvalue, TyId, TyKind, UintTy, VariantIdx,
+        Rvalue, Static, TyId, TyKind, UintTy, VariantIdx,
     },
     tyctxt::TyCtxt,
 };
@@ -30,6 +30,13 @@ pub type Path = SmallVec<[ProjectionIndex; 4]>;
 
 pub const MAX_COMPLEXITY: usize = 100;
 
+#[derive(Clone, Copy)]
+struct StaticState {
+    place: PlaceIndex,
+    root_tag: Tag,
+    mutability: Mutability,
+}
+
 #[derive(Clone)]
 struct Frame {
     locals: BiHashMap<Local, PlaceIndex>,
@@ -41,6 +48,7 @@ struct Frame {
     // while the frame is on stack
     return_destination: PlaceIndex,
     moved_in: SmallVec<[PlaceIndex; 4]>,
+    protected_tags: SmallVec<[Tag; 4]>,
 }
 
 impl Frame {
@@ -50,6 +58,7 @@ impl Frame {
             locals_ordered: BinaryHeap::new(),
             return_destination: dest,
             moved_in: SmallVec::from_iter(moved_in),
+            protected_tags: SmallVec::new(),
         }
     }
 
@@ -87,6 +96,9 @@ impl PlaceOperand {
                 PlaceOperand::Move(index)
             }
             Operand::Constant(lit) => PlaceOperand::Constant(*lit),
+            Operand::Static(..) | Operand::StaticMut(..) => {
+                unreachable!("static operands are only generated as direct rvalue sources")
+            }
         }
     }
 }
@@ -98,6 +110,10 @@ pub struct PlaceGraph {
     frames: Vec<Frame>,
     index_candidates: HashMap<usize, SmallVec<[Local; 1]>>,
     pointer_tags: IndexVec<Tag, BTreeSet<PlaceIndex>>,
+    tag_parents: IndexVec<Tag, Option<Tag>>,
+    tag_child_counts: IndexVec<Tag, usize>,
+    tag_alive: IndexVec<Tag, bool>,
+    statics: IndexVec<Static, StaticState>,
 
     places: Graph,
     memory: BasicMemory,
@@ -181,6 +197,10 @@ impl PlaceGraph {
             )],
             index_candidates: HashMap::new(),
             pointer_tags: IndexVec::new(),
+            tag_parents: IndexVec::new(),
+            tag_child_counts: IndexVec::new(),
+            tag_alive: IndexVec::new(),
+            statics: IndexVec::new(),
             places: StableGraph::default(),
             memory: BasicMemory::new(),
             tcx,
@@ -357,17 +377,63 @@ impl PlaceGraph {
         let old_frame = self.frames.pop().expect("call stack isn't empty");
         self.index_candidates.clear(); // Invalidate cache
 
-        // Copy ret
+        if self.statics.is_empty() {
+            // Keep the default-zero path identical to the pre-static model.
+            self.copy_place(old_frame.return_destination, callee_ret);
+
+            // Remove ref edges into places that are about to be deallocated.
+            // This is necessary to prevent dangling references.
+            let mut ref_edges = vec![];
+            let mut alloc_ids = vec![];
+
+            for pidx in old_frame.locals.right_values() {
+                self.visit_transitive_subfields(*pidx, |node| {
+                    ref_edges.extend(self.pointers_to(node).iter().map(|(_, edge)| edge));
+                    VisitAction::Continue
+                });
+                alloc_ids.push(self.places[*pidx].alloc_id);
+            }
+
+            for edge in ref_edges {
+                self.remove_edge(edge);
+            }
+
+            for alloc_id in alloc_ids {
+                self.memory.deallocate(alloc_id);
+            }
+            return;
+        }
+
+        // Static-aware path: copy the return value before dropping callee-owned
+        // pointer edges so returned references keep their provenance.
         self.copy_place(old_frame.return_destination, callee_ret);
 
-        // Remove ref edges into places that are about to be deallocated.
-        // This is necessary to prevent dangling references.
+        for tag in old_frame.protected_tags.iter().copied() {
+            self.memory.unprotect_tag(tag);
+        }
+        for tag in old_frame.protected_tags.iter().copied() {
+            self.retire_tag_if_unused(tag);
+        }
+
+        // Persistent statics outlive the frame, but aliases owned by the frame do
+        // not. Remove both outgoing pointer edges and incoming references to dying
+        // locals before deallocating the local allocations.
         let mut ref_edges = vec![];
         let mut alloc_ids = vec![];
 
         for pidx in old_frame.locals.right_values() {
             self.visit_transitive_subfields(*pidx, |node| {
-                ref_edges.extend(self.pointers_to(node).iter().map(|(_, edge)| edge));
+                if self.places[node].ty.is_any_ptr(&self.tcx)
+                    && let Some(edge) = self.ref_edge(node)
+                    && !ref_edges.contains(&edge)
+                {
+                    ref_edges.push(edge);
+                }
+                for (_, edge) in self.pointers_to(node) {
+                    if !ref_edges.contains(&edge) {
+                        ref_edges.push(edge);
+                    }
+                }
                 VisitAction::Continue
             });
             alloc_ids.push(self.places[*pidx].alloc_id);
@@ -377,7 +443,6 @@ impl PlaceGraph {
             self.remove_edge(edge);
         }
 
-        // Deallocate places.
         for alloc_id in alloc_ids {
             self.memory.deallocate(alloc_id);
         }
@@ -390,6 +455,121 @@ impl PlaceGraph {
         });
         self.current_frame_mut().add_local(local, pidx);
         pidx
+    }
+
+    pub fn allocate_static(
+        &mut self,
+        id: Static,
+        ty: TyId,
+        mutability: Mutability,
+        init: Literal,
+    ) -> PlaceIndex {
+        let mut pidx = Default::default();
+        self.memory.allocate_with_builder(|builder| {
+            pidx = Self::add_place(&mut self.places, ty, &self.tcx, builder, None);
+        });
+        self.mark_place_init(pidx);
+        self.assign_literal(pidx, Some(init));
+        self.update_complexity(pidx, 1);
+
+        // A static has one persistent root provenance. Reacquiring Static/StaticMut
+        // reuses this tag instead of minting an independent borrow that could jump
+        // over a live alias.
+        let root_tag = self.new_tag(BTreeSet::new(), None);
+        let root_borrow = match mutability {
+            Mutability::Mut => BorrowType::Raw,
+            Mutability::Not => BorrowType::Shared,
+        };
+        self.add_borrow_for_place(pidx, root_borrow, root_tag);
+
+        let inserted = self.statics.push(StaticState {
+            place: pidx,
+            root_tag,
+            mutability,
+        });
+        assert_eq!(inserted, id);
+        pidx
+    }
+
+    #[cfg(test)]
+    pub fn static_place(&self, id: Static) -> PlaceIndex {
+        self.statics[id].place
+    }
+
+    #[cfg(test)]
+    fn static_root_tag(&self, id: Static) -> Tag {
+        self.statics[id].root_tag
+    }
+
+    fn is_static_root_tag(&self, tag: Tag) -> bool {
+        self.statics.iter().any(|state| state.root_tag == tag)
+    }
+
+    fn new_tag(&mut self, pointers: BTreeSet<PlaceIndex>, parent: Option<Tag>) -> Tag {
+        let tag = self.pointer_tags.push(pointers);
+        let parent_idx = self.tag_parents.push(parent);
+        let child_count_idx = self.tag_child_counts.push(0);
+        let alive_idx = self.tag_alive.push(true);
+        assert_eq!(tag, parent_idx);
+        assert_eq!(tag, child_count_idx);
+        assert_eq!(tag, alive_idx);
+
+        if let Some(parent) = parent {
+            assert!(self.tag_alive[parent], "parent provenance tag must be live");
+            self.tag_child_counts[parent] += 1;
+        }
+
+        tag
+    }
+
+    fn retire_tag_if_unused(&mut self, tag: Tag) {
+        if !self.tag_alive[tag]
+            || !self.pointer_tags[tag].is_empty()
+            || self.tag_child_counts[tag] != 0
+            || self.is_static_root_tag(tag)
+            || self.memory.tag_is_protected(tag)
+        {
+            return;
+        }
+
+        let parent = self.tag_parents[tag];
+        self.memory.remove_tag(tag);
+        self.tag_alive[tag] = false;
+        self.tag_parents[tag] = None;
+
+        if let Some(parent) = parent {
+            assert!(self.tag_child_counts[parent] > 0);
+            self.tag_child_counts[parent] -= 1;
+            self.retire_tag_if_unused(parent);
+        }
+    }
+
+    fn is_static_allocation(&self, place: PlaceIndex) -> bool {
+        let alloc_id = self.places[place].alloc_id;
+        self.statics
+            .iter()
+            .any(|state| self.places[state.place].alloc_id == alloc_id)
+    }
+
+    pub fn can_acquire_static(&self, id: Static) -> bool {
+        let state = self.statics[id];
+        let mut can_acquire = true;
+        self.visit_transitive_subfields(state.place, |place| {
+            if let Some(run) = self.places[place].run_ptr {
+                can_acquire = match state.mutability {
+                    Mutability::Mut => self.memory.can_write_with(run, state.root_tag),
+                    Mutability::Not => self.memory.can_read_with(run, state.root_tag),
+                };
+                if can_acquire {
+                    VisitAction::Stop
+                } else {
+                    VisitAction::ShortCircuit
+                }
+            } else {
+                VisitAction::Continue
+            }
+        });
+        can_acquire
     }
 
     pub fn deallocate_local(&mut self, local: Local) {
@@ -599,11 +779,30 @@ impl PlaceGraph {
         }
 
         if dst_node.ty.is_any_ptr(&self.tcx) {
-            if let Some(pointee) = self.pointee(src) {
-                self.set_ref(dst, pointee, Some(src));
-            }
-            if let Some(old) = self.ref_edge(dst) {
-                self.remove_edge(old);
+            let pointee = self.pointee(src);
+            let points_into_static =
+                pointee.is_some_and(|pointee| self.is_static_allocation(pointee));
+
+            if points_into_static {
+                // Static-derived aliases must keep the source provenance. Remove
+                // the destination's old edge before installing the copied edge.
+                if let Some(old) = self.ref_edge(dst) {
+                    self.remove_edge(old);
+                }
+                if let Some(pointee) = pointee
+                    && (!self.ty(src).is_ref(&self.tcx) || self.is_ref_valid(src))
+                {
+                    self.set_ref(dst, pointee, Some(src));
+                }
+            } else {
+                // Preserve the legacy non-static behavior exactly so
+                // static_count = 0 does not perturb existing seeds.
+                if let Some(pointee) = pointee {
+                    self.set_ref(dst, pointee, Some(src));
+                }
+                if let Some(old) = self.ref_edge(dst) {
+                    self.remove_edge(old);
+                }
             }
             self.places[dst].offset = self.places[src].offset;
         }
@@ -744,9 +943,23 @@ impl PlaceGraph {
     fn mark_ref_protected(&mut self, p: impl ToPlaceIndex) {
         let p = p.to_place_index(&self).expect("place exists");
         assert!(self.ty(p).is_ref(&self.tcx));
-        let run = self.places[p].run_ptr.expect("has run");
-        self.memory
-            .mark_protected(run, self.places[p].tag.expect("has tag"));
+        let tag = self.places[p].tag.expect("has tag");
+
+        let points_into_static = self
+            .pointee(p)
+            .is_some_and(|pointee| self.is_static_allocation(pointee));
+        if points_into_static {
+            assert!(
+                self.is_ref_valid(p),
+                "cannot protect an invalid reference into a static"
+            );
+            self.memory.protect_tag(tag);
+            self.current_frame_mut().protected_tags.push(tag);
+        } else {
+            // Preserve the legacy call model for ordinary references.
+            let run = self.places[p].run_ptr.expect("has run");
+            self.memory.mark_protected(run, tag);
+        }
     }
 
     pub fn mark_place_moved(&mut self, p: impl ToPlaceIndex) {
@@ -786,13 +999,40 @@ impl PlaceGraph {
         });
     }
 
-    /// Whether a reference value is legal to produce
+    /// Whether a reference value is legal to produce.
+    ///
+    /// For references into statics, pointee initialization is not sufficient:
+    /// the reference's provenance tag must still grant read permission. A write
+    /// through the static root may invalidate that tag while the graph edge remains.
     fn is_ref_valid(&self, r: PlaceIndex) -> bool {
         assert!(self.ty(r).is_ref(&self.tcx));
         let Some(target) = self.pointee(r) else {
             return false;
         };
-        self.is_place_init(target)
+        if !self.is_place_init(target) {
+            return false;
+        }
+
+        if !self.is_static_allocation(target) {
+            return true;
+        }
+
+        let Some(tag) = self.places[r].tag else {
+            return false;
+        };
+        let mut valid = true;
+        self.visit_transitive_subfields(target, |node| {
+            if let Some(run) = self.places[node].run_ptr {
+                if !self.memory.can_read_with(run, tag) {
+                    valid = false;
+                    return VisitAction::ShortCircuit;
+                }
+                VisitAction::Stop
+            } else {
+                VisitAction::Continue
+            }
+        });
+        valid
     }
 
     /// Whether all refs contained in a place are all valid
@@ -878,7 +1118,19 @@ impl PlaceGraph {
             .map(|deref| deref.id())
     }
 
-    /// Creates an edge pointer -[Deref]-> pointee
+    fn add_borrow_for_place(&mut self, pointee: PlaceIndex, ref_type: BorrowType, tag: Tag) {
+        self.update_transitive_subfields(pointee, |this, place| {
+            if let Some(run) = this.places[place].run_ptr {
+                this.memory.add_ref(run, ref_type, tag);
+                VisitAction::Stop
+            } else {
+                VisitAction::Continue
+            }
+        });
+    }
+
+    /// Creates an edge pointer -[Deref]-> pointee. A copied pointer keeps the
+    /// source tag; a newly-created reference gets a fresh tag.
     pub fn set_ref(
         &mut self,
         pointer: impl ToPlaceIndex,
@@ -911,7 +1163,6 @@ impl PlaceGraph {
         self.places[pointer].offset = None;
         self.update_complexity(pointer, self.places[pointee].complexity);
 
-        // Add new ref edge
         self.places
             .add_edge(pointer, pointee, ProjectionElem::Deref);
 
@@ -920,17 +1171,140 @@ impl PlaceGraph {
             self.places[pointer].tag = Some(tag);
             self.pointer_tags[tag].insert(pointer);
         } else {
-            let tag = self.pointer_tags.push(BTreeSet::from([pointer]));
+            let tag = self.new_tag(BTreeSet::from([pointer]), None);
             self.places[pointer].tag = Some(tag);
-            self.update_transitive_subfields(pointee, |this, place| {
-                if let Some(run) = this.places[place].run_ptr {
-                    this.memory.add_ref(run, ref_type, tag);
-                    VisitAction::Stop
-                } else {
-                    VisitAction::Continue
-                }
-            });
+            self.add_borrow_for_place(pointee, ref_type, tag);
         }
+
+        assert_eq!(
+            self.places
+                .edges_directed(pointer, Direction::Outgoing)
+                .count(),
+            1
+        );
+    }
+
+    /// Creates a new reference through an existing pointer/reference into a static.
+    /// The new borrow gets its own tag, but that tag keeps the source tag alive so
+    /// removing the source graph alias cannot relax the derived reference's permissions.
+    pub fn set_ref_from_source(
+        &mut self,
+        pointer: impl ToPlaceIndex,
+        pointee: impl ToPlaceIndex,
+        derived_from: Option<PlaceIndex>,
+    ) {
+        let pointee = pointee.to_place_index(self).expect("place exists");
+        let Some(source) = derived_from.filter(|_| self.is_static_allocation(pointee)) else {
+            self.set_ref(pointer, pointee, None);
+            return;
+        };
+        let pointer = pointer.to_place_index(self).expect("place exists");
+
+        assert_ne!(
+            pointer, source,
+            "a reborrow must use a distinct destination"
+        );
+        assert!(self.ty(source).is_any_ptr(&self.tcx));
+        assert_eq!(
+            self.places[pointer].ty.pointee_ty(&self.tcx).unwrap(),
+            self.places[pointee].ty
+        );
+
+        let ref_type = match self.ty(pointer).kind(&self.tcx) {
+            TyKind::Ref(_, Mutability::Mut) => BorrowType::Exclusive,
+            TyKind::Ref(_, Mutability::Not) => BorrowType::Shared,
+            _ => panic!("reborrow destination must be a reference"),
+        };
+
+        match ref_type {
+            BorrowType::Exclusive => assert!(
+                self.can_write_through(source, pointee),
+                "mutable reborrow requires source write permission"
+            ),
+            BorrowType::Shared => assert!(
+                self.can_read_through(source, pointee),
+                "shared reborrow requires source read permission"
+            ),
+            BorrowType::Raw => unreachable!(),
+        }
+        assert!(self.is_place_init(pointee));
+
+        let parent_tag = self.places[source].tag.expect("source has tag");
+        assert!(
+            self.tag_alive[parent_tag],
+            "source provenance tag must be live"
+        );
+
+        if let Some(old) = self.ref_edge(pointer) {
+            self.remove_edge(old);
+        }
+
+        self.places[pointer].offset = None;
+        self.update_complexity(pointer, self.places[pointee].complexity);
+        self.places
+            .add_edge(pointer, pointee, ProjectionElem::Deref);
+
+        let tag = self.new_tag(BTreeSet::from([pointer]), Some(parent_tag));
+        self.places[pointer].tag = Some(tag);
+        self.add_borrow_for_place(pointee, ref_type, tag);
+
+        assert_eq!(
+            self.places
+                .edges_directed(pointer, Direction::Outgoing)
+                .count(),
+            1
+        );
+    }
+
+    /// Creates an AddressOf edge. Raw pointers created through a static-derived
+    /// pointer inherit that pointer's provenance so dropping the source graph
+    /// alias cannot relax the derived pointer's access permissions.
+    pub fn set_address_of(
+        &mut self,
+        pointer: impl ToPlaceIndex,
+        pointee: impl ToPlaceIndex,
+        inherited_from: Option<PlaceIndex>,
+    ) {
+        let pointee = pointee.to_place_index(self).expect("place exists");
+        let inherited_from = if self.is_static_allocation(pointee) {
+            inherited_from
+        } else {
+            None
+        };
+        self.set_ref(pointer, pointee, inherited_from);
+    }
+
+    /// Connects a Static/StaticMut operand to its persistent global-root tag.
+    pub fn set_static_ref(&mut self, pointer: impl ToPlaceIndex, id: Static) {
+        assert!(
+            self.can_acquire_static(id),
+            "static root is blocked by a live alias"
+        );
+
+        let pointer = pointer.to_place_index(self).expect("place exists");
+        let state = self.statics[id];
+        let pointee = state.place;
+
+        assert_eq!(
+            self.places[pointer].ty.pointee_ty(&self.tcx).unwrap(),
+            self.places[pointee].ty
+        );
+        match (state.mutability, self.ty(pointer).kind(&self.tcx)) {
+            (Mutability::Not, TyKind::Ref(_, Mutability::Not))
+            | (Mutability::Mut, TyKind::RawPtr(_, Mutability::Mut)) => {}
+            _ => panic!("static operand pointer kind does not match static mutability"),
+        }
+
+        if let Some(old) = self.ref_edge(pointer) {
+            self.remove_edge(old);
+        }
+
+        self.places[pointer].offset = None;
+        self.update_complexity(pointer, self.places[pointee].complexity);
+        self.places
+            .add_edge(pointer, pointee, ProjectionElem::Deref);
+        self.places[pointer].tag = Some(state.root_tag);
+        self.pointer_tags[state.root_tag].insert(pointer);
 
         assert_eq!(
             self.places
@@ -1268,15 +1642,24 @@ impl PlaceGraph {
         }
     }
 
-    // We need to mark reference uninit if the edge is removed (though not raw pointers)
+    // We need to mark reference uninit if the edge is removed (though not raw pointers).
+    // Static-derived tags additionally retire when their final graph alias dies.
     fn remove_edge(&mut self, e: ProjectionIndex) {
-        let (source, _) = self.places.edge_endpoints(e).expect("edge exists");
+        let (source, target) = self.places.edge_endpoints(e).expect("edge exists");
         let tag = self.places[source].tag.expect("has tag");
-        let edges: &mut BTreeSet<NodeIndex> = &mut self.pointer_tags[tag];
-        edges.remove(&source);
+        let points_into_static = self.is_static_allocation(target);
+        let tag_is_unused = {
+            let edges: &mut BTreeSet<NodeIndex> = &mut self.pointer_tags[tag];
+            edges.remove(&source);
+            edges.is_empty()
+        };
 
         let removed = self.places.remove_edge(e).expect("edge exists");
         assert!(removed.is_deref());
+
+        if points_into_static && tag_is_unused {
+            self.retire_tag_if_unused(tag);
+        }
     }
 
     // Returns if a ConstantIndex can be turned into an Index with local.
@@ -1482,7 +1865,7 @@ impl HasComplexity for Operand {
     fn complexity(&self, pt: &PlaceGraph) -> usize {
         match self {
             Operand::Copy(place) | Operand::Move(place) => place.complexity(pt),
-            Operand::Constant(_) => 1,
+            Operand::Constant(_) | Operand::Static(..) | Operand::StaticMut(..) => 1,
         }
     }
 }
@@ -1522,8 +1905,9 @@ mod tests {
     use index_vec::IndexVec;
     use mir::{
         syntax::{
-            Adt, BinOp, FieldIdx, Literal, Local, LocalDecl, LocalDecls, Mutability, Operand,
-            Place, ProjectionElem, Rvalue, TyId, TyKind, UintTy, VariantDef, VariantIdx,
+            Adt, BinOp, Body, FieldIdx, IntTy, Literal, Local, LocalDecl, LocalDecls, Mutability,
+            Operand, Place, ProjectionElem, Rvalue, Static, TyId, TyKind, UintTy, VariantDef,
+            VariantIdx,
         },
         tyctxt::{AdtMeta, TyCtxt},
     };
@@ -2160,6 +2544,426 @@ mod tests {
     #[should_panic(expected = "MissingIndexLocal")]
     fn to_place_rejects_an_undeclared_index_local() {
         index_path_place(None);
+    }
+
+    #[test]
+    fn static_allocation_is_persistent() {
+        let mut tcx = TyCtxt::from_primitives(TyConfig::default());
+        let t_ref = tcx.push(TyKind::Ref(TyCtxt::I32, Mutability::Not));
+        let mut pt = PlaceGraph::new(Rc::new(tcx));
+
+        let static_id = Static::new(0);
+        let static_place =
+            pt.allocate_static(static_id, TyCtxt::I32, Mutability::Not, 7_i32.into());
+        assert!(pt.is_place_init(static_place));
+        assert!(matches!(
+            pt.known_val(static_place),
+            Some(&Literal::Int(7, IntTy::I32))
+        ));
+        assert!(pt.current_frame().get_by_index(static_place).is_none());
+        assert_eq!(pt.get_complexity(static_place), 1);
+
+        let reference = Local::new(1);
+        pt.allocate_local(reference, t_ref);
+        pt.mark_place_init(reference);
+        pt.set_static_ref(reference, static_id);
+
+        assert_eq!(pt.static_place(static_id), static_place);
+        assert_eq!(
+            pt.pointee(reference.to_place_index(&pt).unwrap()),
+            Some(static_place)
+        );
+    }
+
+    #[test]
+    fn static_reacquisition_reuses_global_root_provenance() {
+        let mut tcx = TyCtxt::from_primitives(TyConfig::default());
+        let t_ptr = tcx.push(TyKind::RawPtr(TyCtxt::I32, Mutability::Mut));
+        let t_mut_ref = tcx.push(TyKind::Ref(TyCtxt::I32, Mutability::Mut));
+        let mut pt = PlaceGraph::new(Rc::new(tcx));
+
+        let static_id = Static::new(0);
+        let static_place =
+            pt.allocate_static(static_id, TyCtxt::I32, Mutability::Mut, 7_i32.into());
+        let root_tag = pt.static_root_tag(static_id);
+
+        let ptr1 = Local::new(1);
+        let ptr1_p = pt.allocate_local(ptr1, t_ptr);
+        pt.mark_place_init(ptr1_p);
+        pt.set_static_ref(ptr1_p, static_id);
+
+        let ptr2 = Local::new(2);
+        let ptr2_p = pt.allocate_local(ptr2, t_ptr);
+        pt.mark_place_init(ptr2_p);
+        pt.set_static_ref(ptr2_p, static_id);
+
+        assert_eq!(pt.places[ptr1_p].tag, Some(root_tag));
+        assert_eq!(pt.places[ptr2_p].tag, Some(root_tag));
+        assert_eq!(pt.pointer_tags[root_tag].len(), 2);
+        assert!(pt.can_acquire_static(static_id));
+
+        let exclusive = Local::new(3);
+        let exclusive_p = pt.allocate_local(exclusive, t_mut_ref);
+        pt.mark_place_init(exclusive_p);
+        pt.set_ref(exclusive_p, static_place, None);
+
+        assert!(!pt.can_acquire_static(static_id));
+
+        pt.mark_place_uninit(exclusive_p);
+        assert!(pt.can_acquire_static(static_id));
+    }
+
+    #[test]
+    fn static_reacquisition_rejects_live_reference_argument() {
+        let mut tcx = TyCtxt::from_primitives(TyConfig::default());
+        let t_mut_ref = tcx.push(TyKind::Ref(TyCtxt::I32, Mutability::Mut));
+        let mut pt = PlaceGraph::new(Rc::new(tcx));
+
+        let caller = Body::new(&[], TyCtxt::UNIT, false);
+        pt.enter_fn0(&caller);
+
+        let static_id = Static::new(0);
+        let static_place =
+            pt.allocate_static(static_id, TyCtxt::I32, Mutability::Mut, 7_i32.into());
+
+        let reference = Local::new(1);
+        let reference_p = pt.allocate_local(reference, t_mut_ref);
+        pt.mark_place_init(reference_p);
+        pt.set_ref(reference_p, static_place, None);
+        let reference_tag = pt.places[reference_p].tag.expect("has tag");
+        assert!(!pt.can_acquire_static(static_id));
+
+        let callee = Body::new(&[t_mut_ref], TyCtxt::UNIT, false);
+        pt.enter_fn(
+            &callee,
+            &[Operand::Move(Place::from_local(reference))],
+            &Place::RETURN_SLOT,
+        );
+
+        let callee_arg = Local::new(1).to_place_index(&pt).unwrap();
+        assert_eq!(pt.pointee(callee_arg), Some(static_place));
+        assert_eq!(pt.places[callee_arg].tag, Some(reference_tag));
+        assert!(!pt.can_acquire_static(static_id));
+    }
+
+    #[test]
+    fn static_reference_argument_protection_ends_at_frame_exit() {
+        let mut tcx = TyCtxt::from_primitives(TyConfig::default());
+        let t_shared_ref = tcx.push(TyKind::Ref(TyCtxt::I32, Mutability::Not));
+        let mut pt = PlaceGraph::new(Rc::new(tcx));
+
+        let caller = Body::new(&[], TyCtxt::UNIT, false);
+        pt.enter_fn0(&caller);
+
+        let static_id = Static::new(0);
+        let static_place =
+            pt.allocate_static(static_id, TyCtxt::I32, Mutability::Mut, 7_i32.into());
+
+        let reference = Local::new(1);
+        let reference_p = pt.allocate_local(reference, t_shared_ref);
+        pt.mark_place_init(reference_p);
+        pt.set_ref(reference_p, static_place, None);
+
+        let callee = Body::new(&[t_shared_ref], TyCtxt::UNIT, false);
+        pt.enter_fn(
+            &callee,
+            &[Operand::Copy(Place::from_local(reference))],
+            &Place::RETURN_SLOT,
+        );
+        assert!(!pt.can_acquire_static(static_id));
+
+        pt.mark_place_init(Local::RET);
+        pt.exit_fn();
+
+        let caller_reference = reference.to_place_index(&pt).unwrap();
+        assert_eq!(pt.pointee(caller_reference), Some(static_place));
+        assert!(pt.can_acquire_static(static_id));
+    }
+
+    #[test]
+    fn invalidated_static_shared_alias_is_not_valid() {
+        let mut tcx = TyCtxt::from_primitives(TyConfig::default());
+        let t_ptr = tcx.push(TyKind::RawPtr(TyCtxt::I32, Mutability::Mut));
+        let t_shared_ref = tcx.push(TyKind::Ref(TyCtxt::I32, Mutability::Not));
+        let mut pt = PlaceGraph::new(Rc::new(tcx));
+
+        let static_id = Static::new(0);
+        let static_place =
+            pt.allocate_static(static_id, TyCtxt::I32, Mutability::Mut, 7_i32.into());
+
+        let root = Local::new(1);
+        let root_p = pt.allocate_local(root, t_ptr);
+        pt.mark_place_init(root_p);
+        pt.set_static_ref(root_p, static_id);
+
+        let alias = Local::new(2);
+        let alias_p = pt.allocate_local(alias, t_shared_ref);
+        pt.mark_place_init(alias_p);
+        pt.set_ref(alias_p, static_place, None);
+
+        assert!(pt.contains_only_valid_ref(alias_p));
+        assert!(pt.can_read_through(alias_p, static_place));
+
+        let decls = decls(&[(root, t_ptr), (alias, t_shared_ref)]);
+        let mut through_root = Place::from_local(root);
+        through_root
+            .project(ProjectionElem::Deref, &decls, &pt.tcx)
+            .unwrap();
+        let root_tag = pt.accessing_tag(&through_root);
+        pt.place_written(&through_root, root_tag);
+
+        // The graph edge intentionally remains, but the write invalidated the
+        // shared alias's memory tag. Reference validity must observe both.
+        assert_eq!(pt.pointee(alias_p), Some(static_place));
+        assert!(!pt.can_read_through(alias_p, static_place));
+        assert!(!pt.contains_only_valid_ref(alias_p));
+    }
+
+    #[test]
+    #[should_panic(expected = "mutable reborrow requires source write permission")]
+    fn static_shared_source_cannot_create_mutable_reborrow() {
+        let mut tcx = TyCtxt::from_primitives(TyConfig::default());
+        let t_ptr = tcx.push(TyKind::RawPtr(TyCtxt::I32, Mutability::Mut));
+        let t_shared_ref = tcx.push(TyKind::Ref(TyCtxt::I32, Mutability::Not));
+        let t_mut_ref = tcx.push(TyKind::Ref(TyCtxt::I32, Mutability::Mut));
+        let mut pt = PlaceGraph::new(Rc::new(tcx));
+
+        let static_id = Static::new(0);
+        let static_place =
+            pt.allocate_static(static_id, TyCtxt::I32, Mutability::Mut, 7_i32.into());
+
+        let root = Local::new(1);
+        let root_p = pt.allocate_local(root, t_ptr);
+        pt.mark_place_init(root_p);
+        pt.set_static_ref(root_p, static_id);
+
+        let shared = Local::new(2);
+        let shared_p = pt.allocate_local(shared, t_shared_ref);
+        pt.mark_place_init(shared_p);
+        pt.set_ref(shared_p, static_place, None);
+        assert!(!pt.can_write_through(shared_p, static_place));
+
+        let derived = Local::new(3);
+        let derived_p = pt.allocate_local(derived, t_mut_ref);
+        pt.mark_place_init(derived_p);
+        pt.set_ref_from_source(derived_p, static_place, Some(shared_p));
+    }
+
+    #[test]
+    fn copied_static_reborrow_keeps_source_permission_until_last_copy_dies() {
+        let mut tcx = TyCtxt::from_primitives(TyConfig::default());
+        let t_shared_ref = tcx.push(TyKind::Ref(TyCtxt::I32, Mutability::Not));
+        let mut pt = PlaceGraph::new(Rc::new(tcx));
+
+        let static_mut = Static::new(0);
+        let static_mut_place =
+            pt.allocate_static(static_mut, TyCtxt::I32, Mutability::Mut, 7_i32.into());
+        let static_shared = Static::new(1);
+        pt.allocate_static(static_shared, TyCtxt::I32, Mutability::Not, 11_i32.into());
+
+        let source = Local::new(1);
+        let source_p = pt.allocate_local(source, t_shared_ref);
+        pt.mark_place_init(source_p);
+        pt.set_ref(source_p, static_mut_place, None);
+        let source_tag = pt.places[source_p].tag.expect("has tag");
+
+        let derived = Local::new(2);
+        let derived_p = pt.allocate_local(derived, t_shared_ref);
+        pt.mark_place_init(derived_p);
+        pt.set_ref_from_source(derived_p, static_mut_place, Some(source_p));
+        let derived_tag = pt.places[derived_p].tag.expect("has tag");
+        assert_eq!(pt.tag_parents[derived_tag], Some(source_tag));
+
+        let copied = Local::new(3);
+        let copied_p = pt.allocate_local(copied, t_shared_ref);
+        pt.mark_place_init(copied_p);
+        pt.copy_place(copied_p, derived_p);
+        assert_eq!(pt.places[copied_p].tag, Some(derived_tag));
+
+        pt.set_static_ref(source_p, static_shared);
+
+        assert!(pt.tag_alive[source_tag]);
+        assert!(pt.can_read_through(derived_p, static_mut_place));
+        assert!(!pt.can_write_through(derived_p, static_mut_place));
+        assert!(pt.can_read_through(copied_p, static_mut_place));
+        assert!(!pt.can_write_through(copied_p, static_mut_place));
+
+        pt.mark_place_uninit(derived_p);
+        assert!(pt.tag_alive[derived_tag]);
+        pt.mark_place_uninit(copied_p);
+        assert!(!pt.tag_alive[derived_tag]);
+        assert!(!pt.tag_alive[source_tag]);
+    }
+
+    #[test]
+    fn returned_static_reborrow_keeps_source_permission_across_frame_cleanup() {
+        let mut tcx = TyCtxt::from_primitives(TyConfig::default());
+        let t_shared_ref = tcx.push(TyKind::Ref(TyCtxt::I32, Mutability::Not));
+        let mut pt = PlaceGraph::new(Rc::new(tcx));
+
+        let caller = Body::new(&[], TyCtxt::UNIT, false);
+        pt.enter_fn0(&caller);
+
+        let static_id = Static::new(0);
+        let static_place =
+            pt.allocate_static(static_id, TyCtxt::I32, Mutability::Mut, 7_i32.into());
+
+        let returned = Local::new(1);
+        pt.allocate_local(returned, t_shared_ref);
+
+        let callee = Body::new(&[], t_shared_ref, false);
+        pt.enter_fn(&callee, &[], &Place::from_local(returned));
+
+        let source = Local::new(1);
+        let source_p = pt.allocate_local(source, t_shared_ref);
+        pt.mark_place_init(source_p);
+        pt.set_ref(source_p, static_place, None);
+        let source_tag = pt.places[source_p].tag.expect("has tag");
+
+        let derived = Local::new(2);
+        let derived_p = pt.allocate_local(derived, t_shared_ref);
+        pt.mark_place_init(derived_p);
+        pt.set_ref_from_source(derived_p, static_place, Some(source_p));
+        let derived_tag = pt.places[derived_p].tag.expect("has tag");
+
+        pt.mark_place_init(Local::RET);
+        pt.copy_place(Local::RET, derived_p);
+        pt.exit_fn();
+
+        let returned_p = returned.to_place_index(&pt).unwrap();
+        assert_eq!(pt.pointee(returned_p), Some(static_place));
+        assert_eq!(pt.places[returned_p].tag, Some(derived_tag));
+        assert!(pt.tag_alive[source_tag]);
+        assert!(pt.tag_alive[derived_tag]);
+        assert!(pt.can_read_through(returned_p, static_place));
+        assert!(!pt.can_write_through(returned_p, static_place));
+
+        pt.mark_place_uninit(returned_p);
+        assert!(!pt.tag_alive[derived_tag]);
+        assert!(!pt.tag_alive[source_tag]);
+    }
+
+    #[test]
+    fn static_shared_derived_raw_pointer_stays_read_only_after_source_overwrite() {
+        let mut tcx = TyCtxt::from_primitives(TyConfig::default());
+        let t_ptr = tcx.push(TyKind::RawPtr(TyCtxt::I32, Mutability::Mut));
+        let t_shared_ref = tcx.push(TyKind::Ref(TyCtxt::I32, Mutability::Not));
+        let mut pt = PlaceGraph::new(Rc::new(tcx));
+
+        let static_mut = Static::new(0);
+        let static_mut_place =
+            pt.allocate_static(static_mut, TyCtxt::I32, Mutability::Mut, 7_i32.into());
+        let static_shared = Static::new(1);
+        pt.allocate_static(static_shared, TyCtxt::I32, Mutability::Not, 11_i32.into());
+
+        let root = Local::new(1);
+        let root_p = pt.allocate_local(root, t_ptr);
+        pt.mark_place_init(root_p);
+        pt.set_static_ref(root_p, static_mut);
+
+        let shared = Local::new(2);
+        let shared_p = pt.allocate_local(shared, t_shared_ref);
+        pt.mark_place_init(shared_p);
+        pt.set_ref(shared_p, static_mut_place, None);
+        let shared_tag = pt.places[shared_p].tag.expect("has tag");
+
+        let derived = Local::new(3);
+        let derived_p = pt.allocate_local(derived, t_ptr);
+        pt.mark_place_init(derived_p);
+        pt.set_address_of(derived_p, static_mut_place, Some(shared_p));
+
+        assert_eq!(pt.places[derived_p].tag, Some(shared_tag));
+        assert!(!pt.can_write_through(derived_p, static_mut_place));
+
+        // Reassigning the final direct shared-reference local must not retire
+        // the inherited provenance while a derived raw pointer still uses it.
+        pt.set_static_ref(shared_p, static_shared);
+
+        assert_eq!(pt.pointee(derived_p), Some(static_mut_place));
+        assert_eq!(pt.places[derived_p].tag, Some(shared_tag));
+        assert!(!pt.can_write_through(derived_p, static_mut_place));
+    }
+
+    #[test]
+    fn returned_static_shared_derived_raw_pointer_stays_read_only() {
+        let mut tcx = TyCtxt::from_primitives(TyConfig::default());
+        let t_ptr = tcx.push(TyKind::RawPtr(TyCtxt::I32, Mutability::Mut));
+        let t_shared_ref = tcx.push(TyKind::Ref(TyCtxt::I32, Mutability::Not));
+        let mut pt = PlaceGraph::new(Rc::new(tcx));
+
+        let caller = Body::new(&[], TyCtxt::UNIT, false);
+        pt.enter_fn0(&caller);
+
+        let static_id = Static::new(0);
+        let static_place =
+            pt.allocate_static(static_id, TyCtxt::I32, Mutability::Mut, 7_i32.into());
+
+        let returned = Local::new(1);
+        pt.allocate_local(returned, t_ptr);
+
+        let callee = Body::new(&[], t_ptr, false);
+        pt.enter_fn(&callee, &[], &Place::from_local(returned));
+
+        let root = Local::new(1);
+        let root_p = pt.allocate_local(root, t_ptr);
+        pt.mark_place_init(root_p);
+        pt.set_static_ref(root_p, static_id);
+
+        let shared = Local::new(2);
+        let shared_p = pt.allocate_local(shared, t_shared_ref);
+        pt.mark_place_init(shared_p);
+        pt.set_ref(shared_p, static_place, None);
+
+        let derived = Local::new(3);
+        let derived_p = pt.allocate_local(derived, t_ptr);
+        pt.mark_place_init(derived_p);
+        pt.set_address_of(derived_p, static_place, Some(shared_p));
+        assert!(!pt.can_write_through(derived_p, static_place));
+
+        pt.mark_place_init(Local::RET);
+        pt.copy_place(Local::RET, derived_p);
+        pt.exit_fn();
+
+        let returned_p = returned.to_place_index(&pt).unwrap();
+        assert_eq!(pt.pointee(returned_p), Some(static_place));
+        assert!(!pt.can_write_through(returned_p, static_place));
+    }
+
+    #[test]
+    fn returned_direct_static_mut_raw_pointer_remains_writable() {
+        let mut tcx = TyCtxt::from_primitives(TyConfig::default());
+        let t_ptr = tcx.push(TyKind::RawPtr(TyCtxt::I32, Mutability::Mut));
+        let mut pt = PlaceGraph::new(Rc::new(tcx));
+
+        let caller = Body::new(&[], TyCtxt::UNIT, false);
+        pt.enter_fn0(&caller);
+
+        let static_id = Static::new(0);
+        let static_place =
+            pt.allocate_static(static_id, TyCtxt::I32, Mutability::Mut, 7_i32.into());
+
+        let returned = Local::new(1);
+        pt.allocate_local(returned, t_ptr);
+
+        let callee = Body::new(&[], t_ptr, false);
+        pt.enter_fn(&callee, &[], &Place::from_local(returned));
+
+        let direct = Local::new(1);
+        let direct_p = pt.allocate_local(direct, t_ptr);
+        pt.mark_place_init(direct_p);
+        pt.set_static_ref(direct_p, static_id);
+
+        pt.mark_place_init(Local::RET);
+        pt.copy_place(Local::RET, direct_p);
+        pt.exit_fn();
+
+        let returned_p = returned.to_place_index(&pt).unwrap();
+        assert_eq!(pt.pointee(returned_p), Some(static_place));
+        assert_eq!(
+            pt.places[returned_p].tag,
+            Some(pt.static_root_tag(static_id))
+        );
+        assert!(pt.can_write_through(returned_p, static_place));
     }
 
     #[test]

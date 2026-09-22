@@ -72,11 +72,40 @@ impl FlagArray for CudaFlags {
     }
 }
 
-/// What a slot carries: the waker to fire, and the stream whose flag write
+/// What a landed (or retired) slot triggers.
+enum Payload {
+    /// Wake the future registered for this completion.
+    Wake(Arc<StreamCallbackState>),
+    /// Release the resources of a dropped in-flight future (see
+    /// [`crate::reaper`]). Never released on the scanner thread.
+    Reap(crate::reaper::Parked),
+}
+
+/// What a slot carries: the reaction to fire, and the stream whose flag write
 /// completes the slot (kept alive, and probed if the slot goes stale).
 struct Registration {
-    waker_state: Arc<StreamCallbackState>,
+    payload: Payload,
     stream: Arc<Stream>,
+}
+
+impl Registration {
+    /// Fires the slot's reaction. `faulted` slots were retired by the stale
+    /// probe instead of their flag: a future is woken without being marked
+    /// complete so its poll observes the driver error; a parked context is
+    /// released the same way as a landed one, since its submission probes
+    /// the stream itself and leaks rather than frees on a fault.
+    fn fire(self, faulted: bool) {
+        match self.payload {
+            Payload::Wake(waker_state) => {
+                if faulted {
+                    waker_state.wake();
+                } else {
+                    waker_state.signal();
+                }
+            }
+            Payload::Reap(parked) => crate::reaper::release(parked),
+        }
+    }
 }
 
 struct Reactor {
@@ -143,10 +172,11 @@ fn scan_loop() {
     loop {
         reactor.table.scan_once(&mut woken);
         if !woken.is_empty() {
-            // Wakers fire outside any lock the scan held, so a registration
-            // is never blocked behind a waking phase.
+            // Reactions fire outside any lock the scan held, so a registration
+            // is never blocked behind a waking phase. A parked context is
+            // handed to the reaper thread here, never released in this loop.
             for reg in woken.drain(..) {
-                reg.waker_state.signal();
+                reg.fire(false);
             }
             idle_passes = 0;
             continue;
@@ -179,11 +209,10 @@ fn scan_loop() {
             last_probe = Instant::now();
             probe_stale_slots(&reactor.table, &mut woken, &mut faulted);
             for reg in woken.drain(..) {
-                reg.waker_state.signal();
+                reg.fire(false);
             }
             for reg in faulted.drain(..) {
-                // Wake without completing: the poll observes the fault.
-                reg.waker_state.wake();
+                reg.fire(true);
             }
         }
         thread::yield_now();
@@ -233,24 +262,53 @@ pub(crate) unsafe fn register(
     stream: &Arc<Stream>,
     waker_state: Arc<StreamCallbackState>,
 ) -> Result<(), DeviceError> {
-    let reactor = reactor()?;
-    let slot = reactor
-        .table
-        .claim()
-        .ok_or_else(|| internal("reactor slot pool exhausted".into()))?;
+    arm(stream, Payload::Wake(waker_state)).map_err(|(error, _)| error)
+}
+
+/// Parks a dropped in-flight future's context until the work submitted
+/// before this call on `stream` has completed, then releases it on the
+/// reaper thread. On failure the payload is handed back so the caller can
+/// fall back to releasing it inline.
+///
+/// # Safety
+/// As for [`register`].
+pub(crate) unsafe fn park(
+    stream: &Arc<Stream>,
+    parked: crate::reaper::Parked,
+) -> Result<(), crate::reaper::Parked> {
+    arm(stream, Payload::Reap(parked)).map_err(|(_, payload)| match payload {
+        Payload::Reap(parked) => parked,
+        Payload::Wake(_) => unreachable!("park arms a Reap payload"),
+    })
+}
+
+/// Claims a slot, enqueues its flag write behind the work already on
+/// `stream`, and publishes `payload` to the scanner. Returns the payload
+/// with the error when the slot cannot be armed.
+unsafe fn arm(stream: &Arc<Stream>, payload: Payload) -> Result<(), (DeviceError, Payload)> {
+    let reactor = match reactor() {
+        Ok(reactor) => reactor,
+        Err(error) => return Err((error, payload)),
+    };
+    let Some(slot) = reactor.table.claim() else {
+        return Err((internal("reactor slot pool exhausted".into()), payload));
+    };
     reactor.table.reset_flag(slot);
     let addr = reactor.dptr + (slot * std::mem::size_of::<u32>()) as u64;
     let code = cuda_bindings::cuStreamWriteValue32_v2(stream.cu_stream(), addr, 1, 0);
     if code != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
         reactor.table.release(slot);
-        return Err(internal(format!("cuStreamWriteValue32 failed: {code}")));
+        return Err((
+            internal(format!("cuStreamWriteValue32 failed: {code}")),
+            payload,
+        ));
     }
     // empty→wake: unpark only when this registration transitioned the reactor
     // from idle to active (the scanner may be parked). At higher registration
     // rates the scanner is already awake and the skipped unparks avoid
     // cross-core `Parker` contention (+38% throughput in the A/B).
     let registration = Registration {
-        waker_state,
+        payload,
         stream: Arc::clone(stream),
     };
     if reactor.table.publish(slot, registration) {

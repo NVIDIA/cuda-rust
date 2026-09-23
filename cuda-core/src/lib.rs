@@ -32,8 +32,9 @@ pub use simt::{
     launch_kernel_ex_cooperative, launch_kernel_ex_cooperative_on_stream,
     launch_kernel_ex_on_stream, launch_kernel_on_stream, BlockRequirement, ConstantHandle,
     ContextLimit, CudaContext, CudaEvent, CudaFunction, CudaModule, CudaStream, DeviceBuffer,
-    DeviceCopy, DeviceLaunchLimits, DynamicSharedMemoryRequirement, EmbeddedModule,
-    EmbeddedModuleError, KernelLaunchConfig, KernelLaunchContract, LaunchAxis, LaunchConfig1D,
-    LaunchConfig2D, LaunchConfig3D, LaunchContractError, LaunchContractSpec, LaunchDimension,
-    PinnedHostBuffer, PreparedLaunch, StreamPriorityRange, SyncPolicy,
+    DeviceCopy, DeviceLaunchLimits, DeviceSlice, DeviceSliceError, DeviceSliceMut,
+    DynamicSharedMemoryRequirement, EmbeddedModule, EmbeddedModuleError, KernelLaunchConfig,
+    KernelLaunchContract, LaunchAxis, LaunchConfig1D, LaunchConfig2D, LaunchConfig3D,
+    LaunchContractError, LaunchContractSpec, LaunchDimension, PinnedHostBuffer, PreparedLaunch,
+    StreamPriorityRange, SyncPolicy,
 };

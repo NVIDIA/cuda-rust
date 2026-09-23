@@ -31,6 +31,7 @@
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::num::Wrapping;
+use std::ops::{Bound, RangeBounds};
 use std::sync::Arc;
 
 use cuda_bindings::CUdeviceptr;
@@ -153,6 +154,220 @@ pub struct DeviceBuffer<T> {
     _marker: PhantomData<T>,
 }
 
+/// Error returned when constructing or splitting a borrowed device-buffer view.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeviceSliceError {
+    /// An excluded start bound could not be advanced by one element.
+    StartBoundOverflow,
+    /// An included end bound could not be advanced to its exclusive form.
+    EndBoundOverflow,
+    /// The normalized start index exceeds the parent view length.
+    StartOutOfBounds { start: usize, len: usize },
+    /// The normalized exclusive end index exceeds the parent view length.
+    EndOutOfBounds { end: usize, len: usize },
+    /// The normalized range has its start after its end.
+    StartAfterEnd { start: usize, end: usize },
+    /// Converting the element offset to a byte offset overflowed.
+    ByteOffsetOverflow { offset: usize, element_size: usize },
+    /// Adding the byte offset to the CUDA device pointer overflowed.
+    PointerOverflow { ptr: CUdeviceptr, byte_offset: u64 },
+}
+
+impl std::fmt::Display for DeviceSliceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::StartBoundOverflow => write!(f, "device slice start bound overflow"),
+            Self::EndBoundOverflow => write!(f, "device slice end bound overflow"),
+            Self::StartOutOfBounds { start, len } => {
+                write!(f, "device slice start {start} exceeds length {len}")
+            }
+            Self::EndOutOfBounds { end, len } => {
+                write!(f, "device slice end {end} exceeds length {len}")
+            }
+            Self::StartAfterEnd { start, end } => {
+                write!(f, "device slice start {start} exceeds end {end}")
+            }
+            Self::ByteOffsetOverflow {
+                offset,
+                element_size,
+            } => write!(
+                f,
+                "device slice byte offset overflow: {offset} * {element_size}"
+            ),
+            Self::PointerOverflow { ptr, byte_offset } => write!(
+                f,
+                "device slice pointer overflow: {ptr:#x} + {byte_offset:#x}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DeviceSliceError {}
+
+/// Immutable non-owning view over a contiguous range of a [`DeviceBuffer`].
+///
+/// The view carries only an adjusted CUDA device pointer and element count.
+/// Its lifetime borrows the parent allocation, so the allocation cannot be
+/// dropped while the view is live. Dropping the view never frees device memory.
+///
+/// ```compile_fail
+/// use cuda_core::{CudaStream, DeviceBuffer, DeviceSlice};
+///
+/// fn view_cannot_outlive_buffer(stream: &CudaStream) -> DeviceSlice<'static, u32> {
+///     let buffer = DeviceBuffer::<u32>::zeroed(stream, 4).unwrap();
+///     buffer.slice(1..3).unwrap()
+/// }
+/// ```
+pub struct DeviceSlice<'a, T> {
+    ptr: CUdeviceptr,
+    len: usize,
+    _borrow: PhantomData<&'a T>,
+}
+
+impl<T> Copy for DeviceSlice<'_, T> {}
+
+impl<T> Clone for DeviceSlice<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> std::fmt::Debug for DeviceSlice<'_, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeviceSlice")
+            .field("ptr", &self.ptr)
+            .field("len", &self.len)
+            .finish()
+    }
+}
+
+impl<T> DeviceSlice<'_, T> {
+    /// Returns the adjusted CUDA device pointer for this view.
+    #[inline]
+    pub fn cu_deviceptr(&self) -> CUdeviceptr {
+        self.ptr
+    }
+
+    /// Number of elements in this view.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns `true` when this view contains no elements.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Splits this immutable view into two contiguous views at `mid`.
+    pub fn split_at(self, mid: usize) -> Result<(Self, Self), DeviceSliceError> {
+        if mid > self.len {
+            return Err(DeviceSliceError::EndOutOfBounds {
+                end: mid,
+                len: self.len,
+            });
+        }
+        let right_ptr = checked_device_ptr_offset::<T>(self.ptr, mid)?;
+        Ok((
+            Self {
+                ptr: self.ptr,
+                len: mid,
+                _borrow: PhantomData,
+            },
+            Self {
+                ptr: right_ptr,
+                len: self.len - mid,
+                _borrow: PhantomData,
+            },
+        ))
+    }
+}
+
+/// Exclusive non-owning view over a contiguous range of a [`DeviceBuffer`].
+///
+/// The mutable borrow of the parent allocation is retained for `'a`. The type
+/// is intentionally neither `Copy` nor `Clone`; splitting consumes the view and
+/// returns two disjoint mutable views.
+///
+/// ```compile_fail
+/// use cuda_core::{CudaStream, DeviceBuffer};
+///
+/// fn overlapping_mutable_views_are_rejected(stream: &CudaStream) {
+///     let mut buffer = DeviceBuffer::<u32>::zeroed(stream, 4).unwrap();
+///     let first = buffer.slice_mut(0..3).unwrap();
+///     let second = buffer.slice_mut(1..4).unwrap();
+///     let _ = (first, second);
+/// }
+/// ```
+pub struct DeviceSliceMut<'a, T> {
+    ptr: CUdeviceptr,
+    len: usize,
+    _borrow: PhantomData<&'a mut T>,
+}
+
+impl<T> std::fmt::Debug for DeviceSliceMut<'_, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeviceSliceMut")
+            .field("ptr", &self.ptr)
+            .field("len", &self.len)
+            .finish()
+    }
+}
+
+impl<'a, T> DeviceSliceMut<'a, T> {
+    /// Returns the adjusted CUDA device pointer for this view.
+    #[inline]
+    pub fn cu_deviceptr(&self) -> CUdeviceptr {
+        self.ptr
+    }
+
+    /// Number of elements in this view.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns `true` when this view contains no elements.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Splits this mutable view into two proven-disjoint mutable views.
+    pub fn split_at_mut(self, mid: usize) -> Result<(Self, Self), DeviceSliceError> {
+        if mid > self.len {
+            return Err(DeviceSliceError::EndOutOfBounds {
+                end: mid,
+                len: self.len,
+            });
+        }
+        let right_ptr = checked_device_ptr_offset::<T>(self.ptr, mid)?;
+        Ok((
+            Self {
+                ptr: self.ptr,
+                len: mid,
+                _borrow: PhantomData,
+            },
+            Self {
+                ptr: right_ptr,
+                len: self.len - mid,
+                _borrow: PhantomData,
+            },
+        ))
+    }
+
+    /// Consumes the exclusive view and downgrades it to an immutable view.
+    #[inline]
+    pub fn into_shared(self) -> DeviceSlice<'a, T> {
+        DeviceSlice {
+            ptr: self.ptr,
+            len: self.len,
+            _borrow: PhantomData,
+        }
+    }
+}
+
 // SAFETY: CUdeviceptr is a u64 handle valid across threads when the owning
 // context is bound. The PhantomData<T> is Send if T is Send.
 unsafe impl<T: Send> Send for DeviceBuffer<T> {}
@@ -210,6 +425,42 @@ impl<T> DeviceBuffer<T> {
     #[inline]
     pub fn context(&self) -> &Arc<CudaContext> {
         &self.ctx
+    }
+
+    /// Borrows a contiguous immutable subrange of this device allocation.
+    ///
+    /// The returned view does not allocate, copy, or own memory. Range
+    /// normalization, element-to-byte conversion, and pointer addition are all
+    /// checked before the adjusted pointer is exposed. Empty ranges are valid.
+    pub fn slice<R>(&self, range: R) -> Result<DeviceSlice<'_, T>, DeviceSliceError>
+    where
+        R: RangeBounds<usize>,
+    {
+        let (start, end) = normalize_device_range(self.len, range)?;
+        let ptr = checked_device_ptr_offset::<T>(self.ptr, start)?;
+        Ok(DeviceSlice {
+            ptr,
+            len: end - start,
+            _borrow: PhantomData,
+        })
+    }
+
+    /// Borrows a contiguous exclusive subrange of this device allocation.
+    ///
+    /// The exclusive parent borrow is retained by the returned view, preventing
+    /// safe creation of overlapping mutable views from the same buffer. Use
+    /// [`DeviceSliceMut::split_at_mut`] to derive multiple disjoint regions.
+    pub fn slice_mut<R>(&mut self, range: R) -> Result<DeviceSliceMut<'_, T>, DeviceSliceError>
+    where
+        R: RangeBounds<usize>,
+    {
+        let (start, end) = normalize_device_range(self.len, range)?;
+        let ptr = checked_device_ptr_offset::<T>(self.ptr, start)?;
+        Ok(DeviceSliceMut {
+            ptr,
+            len: end - start,
+            _borrow: PhantomData,
+        })
     }
 
     /// Constructs a `DeviceBuffer` from pre-existing raw parts.
@@ -900,6 +1151,58 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
     }
 }
 
+fn normalize_device_range<R>(len: usize, range: R) -> Result<(usize, usize), DeviceSliceError>
+where
+    R: RangeBounds<usize>,
+{
+    let start = match range.start_bound() {
+        Bound::Included(&start) => start,
+        Bound::Excluded(&start) => start
+            .checked_add(1)
+            .ok_or(DeviceSliceError::StartBoundOverflow)?,
+        Bound::Unbounded => 0,
+    };
+    let end = match range.end_bound() {
+        Bound::Included(&end) => end
+            .checked_add(1)
+            .ok_or(DeviceSliceError::EndBoundOverflow)?,
+        Bound::Excluded(&end) => end,
+        Bound::Unbounded => len,
+    };
+
+    if start > len {
+        return Err(DeviceSliceError::StartOutOfBounds { start, len });
+    }
+    if end > len {
+        return Err(DeviceSliceError::EndOutOfBounds { end, len });
+    }
+    if start > end {
+        return Err(DeviceSliceError::StartAfterEnd { start, end });
+    }
+    Ok((start, end))
+}
+
+fn checked_device_ptr_offset<T>(
+    ptr: CUdeviceptr,
+    offset: usize,
+) -> Result<CUdeviceptr, DeviceSliceError> {
+    let element_size = std::mem::size_of::<T>();
+    let byte_offset =
+        offset
+            .checked_mul(element_size)
+            .ok_or(DeviceSliceError::ByteOffsetOverflow {
+                offset,
+                element_size,
+            })?;
+    let byte_offset =
+        u64::try_from(byte_offset).map_err(|_| DeviceSliceError::ByteOffsetOverflow {
+            offset,
+            element_size,
+        })?;
+    ptr.checked_add(byte_offset)
+        .ok_or(DeviceSliceError::PointerOverflow { ptr, byte_offset })
+}
+
 fn allocation_size<T>(len: usize) -> Result<usize, DriverError> {
     len.checked_mul(std::mem::size_of::<T>()).ok_or(DriverError(
         cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE,
@@ -923,6 +1226,74 @@ fn chunk_cast_len(bytes: usize, addr: usize, elem_size: usize, align: usize) -> 
         return None;
     }
     Some(bytes / elem_size)
+}
+
+#[cfg(test)]
+mod device_slice_tests {
+    use super::{checked_device_ptr_offset, normalize_device_range, DeviceSliceError};
+    use std::ops::Bound;
+
+    #[test]
+    fn normalizes_supported_range_bounds() {
+        assert_eq!(normalize_device_range(8, 2..6), Ok((2, 6)));
+        assert_eq!(normalize_device_range(8, 2..=5), Ok((2, 6)));
+        assert_eq!(normalize_device_range(8, ..4), Ok((0, 4)));
+        assert_eq!(normalize_device_range(8, 4..), Ok((4, 8)));
+        assert_eq!(normalize_device_range(8, ..), Ok((0, 8)));
+        assert_eq!(normalize_device_range(8, 3..3), Ok((3, 3)));
+    }
+
+    #[test]
+    fn rejects_invalid_range_bounds() {
+        assert_eq!(
+            normalize_device_range(4, 5..),
+            Err(DeviceSliceError::StartOutOfBounds { start: 5, len: 4 })
+        );
+        assert_eq!(
+            normalize_device_range(4, ..5),
+            Err(DeviceSliceError::EndOutOfBounds { end: 5, len: 4 })
+        );
+        let reversed = (Bound::Included(3), Bound::Excluded(2));
+        assert_eq!(
+            normalize_device_range(4, reversed),
+            Err(DeviceSliceError::StartAfterEnd { start: 3, end: 2 })
+        );
+    }
+
+    #[test]
+    fn rejects_bound_overflow() {
+        assert_eq!(
+            normalize_device_range(usize::MAX, (Bound::Excluded(usize::MAX), Bound::Unbounded),),
+            Err(DeviceSliceError::StartBoundOverflow)
+        );
+        assert_eq!(
+            normalize_device_range(usize::MAX, (Bound::Unbounded, Bound::Included(usize::MAX)),),
+            Err(DeviceSliceError::EndBoundOverflow)
+        );
+    }
+
+    #[test]
+    fn checks_device_pointer_arithmetic() {
+        assert_eq!(checked_device_ptr_offset::<u32>(0x1000, 3), Ok(0x100c));
+        assert_eq!(
+            checked_device_ptr_offset::<()>(0x1000, usize::MAX),
+            Ok(0x1000)
+        );
+        assert_eq!(
+            checked_device_ptr_offset::<u64>(0, usize::MAX),
+            Err(DeviceSliceError::ByteOffsetOverflow {
+                offset: usize::MAX,
+                element_size: 8,
+            })
+        );
+        assert_eq!(
+            checked_device_ptr_offset::<u64>(u64::MAX - 3, 1),
+            Err(DeviceSliceError::PointerOverflow {
+                ptr: u64::MAX - 3,
+                byte_offset: 8,
+            })
+        );
+    }
 }
 
 #[cfg(test)]

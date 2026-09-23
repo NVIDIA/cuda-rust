@@ -16,6 +16,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   [nvidia.github.io/cuda-rust/cutile](https://nvidia.github.io/cuda-rust/cutile/)
   and release tags are namespaced `cutile-rs/vX.Y.Z`. Crate names and versions
   are unchanged.
+- A generated launcher's launch site keeps every specialization it resolved
+  instead of only the most recent one, so a kernel launched at alternating
+  shapes no longer resolves through the kernel cache on every launch.
+- Every eviction that removes a kernel (`clear_kernel_cache`, `evict_kernel`,
+  `retain_kernels`) empties every launch site in the process, so the next
+  launch of each specialization resolves again. `LaunchSite`,
+  `SiteResolution` and the new `CacheEpoch` are `#[doc(hidden)]` launcher
+  support for generated code: `SiteResolution::new` takes the `CacheEpoch`
+  read before resolving, and `LaunchSite::store` takes `&'static self`.
+
+### Fixed
+
+- An eviction releases the modules that launch sites held. Before, a launch
+  site that had resolved an evicted kernel kept its function, and the
+  module, loaded until that site stored another resolution.
 
 ## [0.4.0] - 2026-09-25
 

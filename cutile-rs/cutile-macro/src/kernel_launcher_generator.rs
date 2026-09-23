@@ -926,10 +926,11 @@ pub fn generate_kernel_launcher(
         .stmts
         .push(scalar_hints_stmt.clone());
 
-    // Launch-site probe: on the steady state the launcher skips key
-    // construction, toolchain fingerprinting, hashing, and the global cache
-    // entirely — the volatile specialization inputs are compared against the
-    // site's last resolution by value, borrowed from the arguments.
+    // Launch-site probe: on a hit the launcher skips key construction,
+    // toolchain fingerprinting and the global cache. The volatile
+    // specialization inputs, borrowed from the arguments, are compared by
+    // value against the site's newest entry, then against the entries under
+    // their probe hash.
     // Fixed-size arrays: the probe borrows them, so a steady-state launch
     // allocates nothing here.
     launcher_method.block.stmts.push(parse_stmt(format!(
@@ -967,6 +968,9 @@ pub fn generate_kernel_launcher(
                 spec_args.iter().map(|(_, s)| s.clone()).collect();
             let __hints_snapshot = __hint_vals.to_vec();
             let __options_snapshot = __compile_options.clone();
+            // Read before resolving, so the site can discard the resolution
+            // if an eviction removes its function meanwhile (see `CacheEpoch`).
+            let __epoch = {root}::tile_kernel::CacheEpoch::now();
             let (function, validator) = self.jit_compile(
                 ctx, __module_ast_self,
                 module_name, function_name, function_entry,
@@ -976,6 +980,7 @@ pub fn generate_kernel_launcher(
                 _SOURCE_HASH,
             )?;
             __SITE.store({root}::tile_kernel::SiteResolution::new(
+                __epoch,
                 ctx.get_device_id(),
                 __generics_snapshot,
                 __specs_snapshot,

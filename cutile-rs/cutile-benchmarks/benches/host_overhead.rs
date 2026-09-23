@@ -7,18 +7,26 @@
 //!
 //! Times only the enqueue (`async_on`), never the wait: a batch of launches
 //! is timed, then the stream is drained outside the timer so the launch
-//! queue never fills. Two shapes that matter for decode-style serving:
+//! queue never fills. Cases that matter for decode-style serving include:
 //!
 //! - `launch`: one tiny 4-tensor kernel launch (argument retention, launch
 //!   validation, `cuLaunchKernel`).
 //! - `graph_replay`: one replay of a graph recording 32 such launches over
 //!   8 buffers (per-replay resource reacquisition plus `cuGraphLaunch`).
+//! - `launch_alternating`: two launches per iteration whose inputs
+//!   alternate between two specializations (extent divisible by 16, and by
+//!   8 only), through the generated launcher.
+//! - `launch_12_specializations`: twelve launches per iteration, each at a
+//!   different specialization, through the generated launcher: a kernel
+//!   launched at many shapes must find each one in its launch site instead
+//!   of resolving it again.
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use cuda_async::cuda_graph::CudaGraph;
-use cuda_core::Device;
+use cuda_core::{Device, Stream};
 use cutile::prelude::*;
 use std::future::IntoFuture;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cutile::module]
@@ -174,6 +182,67 @@ fn host_overhead(c: &mut Criterion) {
         });
     });
 
+    // ── Alternating specializations ─────────────────────────────────────
+    // Inputs of 128 elements (divisible by 16) and 136 (by 8 only): the
+    // same kernel at two specializations, as a model forward runs it.
+    let mut zt = api::zeros::<f32>(&[N]).sync_on(&stream).expect("zt");
+    let odd = || -> Arc<Tensor<f32>> {
+        api::ones::<f32>(&[N + 8])
+            .sync_on(&stream)
+            .expect("odd")
+            .into()
+    };
+    let (a2, b2, c2) = (odd(), odd(), odd());
+    kernels::add3((&mut zt).partition([N]), &*a2, &*b2, &*c2)
+        .sync_on(&stream)
+        .expect("warm second specialization");
+
+    group.bench_function("launch_alternating", |bench| {
+        bench.iter_custom(|iters| {
+            enqueue_time(iters, &stream, || {
+                for (x, y, w) in [(&a, &b, &c3), (&a2, &b2, &c2)] {
+                    unsafe {
+                        kernels::add3((&mut zt).partition([N]), &**x, &**y, &**w).async_on(&stream)
+                    }
+                    .expect("launch");
+                }
+            })
+        });
+    });
+
+    // Extents divisible by 16, 8, 4, 2 and 1: `a` and `b` at independent
+    // divisibilities give twelve specializations of one kernel.
+    let extents = [N, N + 8, N + 4, N + 2, N + 1];
+    let input = |len: usize| -> Arc<Tensor<f32>> {
+        api::ones::<f32>(&[len])
+            .sync_on(&stream)
+            .expect("input")
+            .into()
+    };
+    let many: Vec<(Arc<Tensor<f32>>, Arc<Tensor<f32>>)> = extents
+        .iter()
+        .flat_map(|&la| extents[..3].iter().map(move |&lb| (la, lb)))
+        .take(12)
+        .map(|(la, lb)| (input(la), input(lb)))
+        .collect();
+    for (x, y) in &many {
+        kernels::add3((&mut zt).partition([N]), &**x, &**y, &*c3)
+            .sync_on(&stream)
+            .expect("warm specialization");
+    }
+    group.bench_function("launch_12_specializations", |bench| {
+        bench.iter_custom(|iters| {
+            enqueue_time(iters, &stream, || {
+                for (x, y) in &many {
+                    unsafe {
+                        kernels::add3((&mut zt).partition([N]), &**x, &**y, &*c3).async_on(&stream)
+                    }
+                    .expect("launch");
+                }
+            })
+        });
+    });
+
     // A graph of 32 launches over 8 buffers, replayed.
     let mut bufs: Vec<Tensor<f32>> = (0..8)
         .map(|_| api::zeros::<f32>(&[N]).sync_on(&stream).expect("buf"))
@@ -211,6 +280,24 @@ fn host_overhead(c: &mut Criterion) {
     });
 
     group.finish();
+}
+
+/// Host time to enqueue `iters` calls of `enqueue`, draining the stream every
+/// [`BATCH`] calls outside the timer.
+fn enqueue_time(iters: u64, stream: &Stream, mut enqueue: impl FnMut()) -> Duration {
+    let mut elapsed = Duration::ZERO;
+    let mut done = 0;
+    while done < iters {
+        let batch = BATCH.min(iters - done);
+        let start = Instant::now();
+        for _ in 0..batch {
+            enqueue();
+        }
+        elapsed += start.elapsed();
+        unsafe { stream.synchronize() }.expect("drain");
+        done += batch;
+    }
+    elapsed
 }
 
 fn bench_config() -> Criterion {

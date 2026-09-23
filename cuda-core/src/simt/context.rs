@@ -548,6 +548,20 @@ impl CudaContext {
         }
     }
 
+    /// Queries the device memory of this context as `(free, total)` bytes.
+    ///
+    /// Binds the context first, then calls `cuMemGetInfo`. `total` is the
+    /// device's memory; `free` is what the driver can hand out at this
+    /// moment, so allocations on other streams and driver-side caches move
+    /// it between two calls.
+    pub fn mem_info(&self) -> Result<(usize, usize), DriverError> {
+        self.bind_to_thread()?;
+        let mut free = 0usize;
+        let mut total = 0usize;
+        unsafe { cuda_bindings::cuMemGetInfo_v2(&mut free, &mut total) }.result()?;
+        Ok((free, total))
+    }
+
     /// Queries dimension, thread-count, and portable shared-memory launch
     /// limits for this device.
     ///

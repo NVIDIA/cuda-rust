@@ -823,55 +823,24 @@ pub mod ops {
         /// Binary combiner. Must be associative and commutative.
         fn combine(a: T, b: T) -> T;
 
-        /// Whether this `(Op, T)` pair reduces a full warp in one instruction
-        /// on the target being compiled for.
-        ///
-        /// `false` by default, which is what keeps the choice sound: an
-        /// operation with no single-instruction form, and every operation at
-        /// all when the floor is below `sm_80`, falls through to the
-        /// butterfly. Rust has no specialization, so this pair of items is how
-        /// a reduction generic over `T` and `Op` reaches a form that exists
-        /// for only some pairs.
-        ///
-        /// A `const` rather than an `Option` return, and not for style: an
-        /// `Option<i32>` crossing this boundary is an enum with a signed
-        /// payload, which device lowering rejects with `enum payload storage
-        /// type mismatch: si32 cannot be adapted to i32`. A `const` leaves no
-        /// enum to lower and folds the branch before codegen.
+        /// Whether this operation has a full-warp instruction at the target floor.
+        /// Other operation/type pairs use the shuffle implementation.
         const HAS_FULL_WARP_FORM: bool = false;
 
-        /// The whole full-warp reduction as one instruction.
-        ///
-        /// Only reached when [`Self::HAS_FULL_WARP_FORM`] is true, so the
-        /// default is unreachable. It returns the input rather than panicking
-        /// because a device panic would pull formatting machinery into every
-        /// kernel that instantiates it.
-        ///
-        /// `mask` is the tile's participation mask. Only
-        /// [`super::warp_reduce`] calls this, and only at `N == 32`, where
-        /// that mask is `u32::MAX`.
+        /// Reduce the participating warp. Called only when `HAS_FULL_WARP_FORM`
+        /// is true and the tile contains all 32 lanes.
         #[inline(always)]
         fn reduce_full_warp(_mask: u32, value: T) -> T {
             value
         }
     }
 
-    /// Give one integer `(Op, T)` pair its `redux.sync` form.
-    ///
-    /// The `cfg` is what makes this safe to write unconditionally: below the
-    /// Ampere floor the body is not compiled at all, so `redux.sync` never
-    /// reaches the requirement scan and cannot raise a module's target.
+    // Exclude unsupported intrinsics before MIR and feature detection run.
     macro_rules! redux_full_warp {
         ($ty:ty, |$mask:ident, $value:ident| $call:expr) => {
             const HAS_FULL_WARP_FORM: bool = cfg!(cuda_oxide_sm_at_least = "80");
 
-            // Two whole definitions rather than one body with a `cfg` inside:
-            // the body has to be a single expression that hands back the
-            // intrinsic's result, which is the shape `WarpShuffle::shfl_xor_via`
-            // already uses for the shuffle stubs. Wrapping the call in a block
-            // bound to a local instead makes device lowering reject the
-            // function with `ReturnOp operand type does not match the
-            // function's result type`.
+            // Keep the intrinsic call as the return expression for device lowering.
             #[cfg(cuda_oxide_sm_at_least = "80")]
             #[inline(always)]
             fn reduce_full_warp($mask: u32, $value: $ty) -> $ty {
@@ -1119,25 +1088,13 @@ impl WarpShuffle for f32 {
 /// bit-identical results. That is the primitive in isolation — a kernel that
 /// reduces once after a memory-bound pass will see far less.
 ///
-/// **This function now selects that form for you**, for integer `T` on a full
-/// warp (`N == 32`), whenever the compiled-for floor is `sm_80` or newer.
-/// `cuda-device`'s build script derives that floor from the same environment
-/// the backend reads to pick a target — `CUDA_OXIDE_TARGET`, else
-/// `CUDA_OXIDE_DEVICE_ARCH`, else `sm_80` — and exposes it as the
-/// `cuda_oxide_sm_at_least` cfg. Because a cfg is decided before rustc runs,
-/// the branch that does not apply is dropped before MIR exists, so a target
-/// below the floor never sees a `redux.sync` it cannot assemble.
+/// Full-warp integer reductions use `redux.sync` when the target floor is
+/// `sm_80` or newer. Floats, smaller tiles and lower floors use shuffles.
 ///
-/// Three things keep the butterfly, all of them for a reason rather than an
-/// omission: floats (there is no `f32` `redux` before `sm_100`), sub-warp
-/// tiles (`redux.sync` reduces over whatever lanes are in `membermask`, but
-/// the sub-warp wrapper's out-of-tile lane substitution needs its own check
-/// first), and any build whose floor is below `sm_80`.
-///
-/// One consequence worth knowing: with no explicit target the floor is
-/// `sm_80`, so an integer `warp_reduce` emits `redux.sync` and the module
-/// requires Ampere. Build with `--arch sm_75` (or `CUDA_OXIDE_TARGET=sm_75`)
-/// to keep the portable form.
+/// `CUDA_OXIDE_TARGET` sets the floor. An advisory `CUDA_OXIDE_DEVICE_ARCH`
+/// can lower the default `sm_80` floor, but cannot raise it: incompatible
+/// kernels may target another architecture. The build script and backend
+/// share this rule. Use `--arch sm_75` to select the shuffle implementation.
 ///
 /// `N` is the tile size (1, 2, 4, 8, 16, or 32) — already validated by
 /// [`ThreadBlock::tiled_partition`] at construction time.
@@ -1165,10 +1122,7 @@ where
     T: WarpShuffle,
     Op: ops::ReduceOp<T>,
 {
-    // A full warp with a one-instruction form takes it. `N` is a const
-    // generic and `reduce_full_warp` is `None` at compile time for every pair
-    // without one, so this collapses to the butterfly with nothing left
-    // behind for the sub-warp and float paths.
+    // The const conditions remove this branch for floats and smaller tiles.
     if N == 32 && Op::HAS_FULL_WARP_FORM {
         return Op::reduce_full_warp(tile.mask(), value);
     }

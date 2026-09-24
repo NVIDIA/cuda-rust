@@ -572,39 +572,15 @@ pub const SM_FLOOR_LADDER: &[u32] = &[70, 75, 80, 86, 90, 100, 120];
 /// will actually produce.
 pub const DEFAULT_SM_FLOOR: u32 = 80;
 
-/// Resolve the compute-capability floor device code may assume.
+/// Resolve the minimum compute capability assumed by device code.
 ///
-/// Shared with the backend's target selection rather than restated, so the
-/// `cuda_oxide_sm_at_least` ladder `cuda-device`'s build script fixes before
-/// rustc runs cannot drift from the target the PTX is actually built for.
-/// The property that has to hold is one-directional: the selected target is
-/// never *below* this floor.
+/// An explicit target sets the floor. A device hint can only lower the default
+/// `sm_80` floor because backend selection may override an incompatible hint.
+/// Both device cfg generation and backend selection use this rule.
 ///
-/// An explicit target sets it exactly, because that target is what gets built.
-///
-/// A detected device can only lower it, never raise it. `CUDA_OXIDE_DEVICE_ARCH`
-/// is advisory by contract -- the backend "builds for the detected GPU only
-/// when that GPU can actually run the kernel", and otherwise for the arch the
-/// kernel requires -- so it says nothing about how *high* selection will go: a
-/// detected `sm_120` with a WGMMA module lands on `sm_90a`. What it does say
-/// is how *low* selection may go, because a device that can run the kernel is
-/// selected as-is. Running on Turing must still produce `sm_75`, so a detected
-/// device below the default pulls the floor down with it rather than promising
-/// device code rungs the PTX will not have.
-///
-/// With neither, the floor is [`DEFAULT_SM_FLOOR`]: every architecture at or
-/// above it runs what a lower one does, so selection can always honour it, and
-/// it matches both the featureless default selection and the Ampere+ minimum
-/// the book documents.
-///
-/// Values arrive as arguments rather than being read from the environment so
-/// the rule is testable without mutating process state, which is `unsafe` in
-/// edition 2024 and racy across test threads.
-///
-/// An architecture-family suffix is ignored: `sm_90a` floors at `90`. A named
-/// value that does not parse is an error rather than a silent fallback,
-/// because guessing high emits instructions the target cannot run and guessing
-/// low silently drops the faster form. A blank value is treated as unset.
+/// Blank inputs are unset. Malformed explicit targets are errors; malformed
+/// hints are ignored. Architecture suffixes do not affect this numeric floor,
+/// which does not imply support for architecture-specific instruction families.
 pub fn resolve_sm_floor(
     target: Option<&str>,
     device_arch: Option<&CudaArch>,

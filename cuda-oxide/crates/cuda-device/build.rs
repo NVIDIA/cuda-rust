@@ -3,24 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Expose the compute-capability floor to device code as `cfg`s.
+//! Expose the target's minimum compute capability as device cfgs.
 //!
-//! Device code has no way to ask what target it is being compiled for, so an
-//! API with a faster form on newer hardware -- `redux.sync` in place of a
-//! shuffle tree, for one -- either always pays for the portable form or asks
-//! every caller to gate the choice by hand. A `cfg` is decided before rustc
-//! runs, so rustc drops the branch that does not apply and the requirement
-//! scan never sees an instruction the target cannot run.
-//!
-//! Because a `cfg` is fixed before compilation it can only carry a *lower*
-//! bound: the floor is the lowest capability the resulting PTX will be built
-//! for, never the exact device. `CUDA_OXIDE_TARGET` sets it exactly, since
-//! that is what gets built. `CUDA_OXIDE_DEVICE_ARCH` can only lower it: the
-//! backend builds for the detected device when that device can run the kernel
-//! and otherwise for the arch the kernel requires, so it bounds how low
-//! selection may go, not how high. The rule lives in `cuda-target-spec` and is
-//! shared with the backend's own target selection rather than restated here,
-//! so the two cannot disagree about what the floor is.
+//! An explicit target sets the floor; an advisory device hint can only lower
+//! the default. The shared resolver keeps these cfgs consistent with backend
+//! selection. Unsupported intrinsic branches disappear before MIR lowering.
 
 fn main() {
     // The two variables the backend already reads to pick a target.

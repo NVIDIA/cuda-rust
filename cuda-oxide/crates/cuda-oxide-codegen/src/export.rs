@@ -84,12 +84,7 @@ impl llvm_export::export::AsDeviceExtern for DeviceExternDecl {
     }
 }
 
-/// The floor device code was compiled against, for the paths where selection
-/// is free to choose. Those are reached only without an explicit target, so
-/// only the detected-device hint can move it -- downwards, per
-/// [`resolve_sm_floor`]. Taken from that one function rather than written out,
-/// so `cuda-device`'s `cuda_oxide_sm_at_least` ladder and the target selected
-/// here have a single definition between them.
+/// Resolve the shared device cfg floor when no target was explicitly selected.
 fn sm_floor_for_selection(device_arch_hint: Option<&CudaArch>) -> Result<u32, PipelineError> {
     resolve_sm_floor(None, device_arch_hint).map_err(|error| PipelineError::TargetSelection {
         target: String::new(),

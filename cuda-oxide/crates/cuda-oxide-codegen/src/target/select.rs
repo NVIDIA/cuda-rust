@@ -167,21 +167,8 @@ pub fn resolve_ptx_target(
     )
 }
 
-/// Raise a feature-selected target to the floor device code was compiled
-/// against, or say why the two cannot both be satisfied.
-///
-/// `cuda-device`'s build script fixes its `cuda_oxide_sm_at_least` ladder
-/// before rustc runs, from the same [`resolve_sm_floor`] the callers below
-/// use, so the two cannot drift. Selection then runs with something the build
-/// script could not have: the module's own features. A module whose features
-/// need less than the floor -- `ldmatrix` alone asks only for `sm_75` -- would
-/// otherwise be built below the capability device code was told to assume.
-///
-/// Raising is the repair whenever the floor can still run the module, which
-/// is every case reachable today: the floor is only ever the default when
-/// this is called, and every feature below it is forward compatible. The
-/// error arm is not decoration -- it is what keeps a future floor from
-/// silently selecting an architecture family that cannot host the module.
+/// Raise an automatically selected target to the device cfg floor.
+/// Reject the combination if that floor cannot run the module's features.
 pub(crate) fn honour_sm_floor(
     selected: CudaArch,
     floor: u32,

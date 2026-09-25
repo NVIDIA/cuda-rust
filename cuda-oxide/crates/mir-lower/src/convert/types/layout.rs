@@ -35,23 +35,26 @@ pub(super) fn make_padding_type(ctx: &mut Context, size: u64) -> TypeHandle {
 /// longer follow it, and the access lands in the generic window (`ld.v2.b64`)
 /// instead of `ld.global.v2.b64`.
 ///
-/// One integer of the same width is the same bytes in one leaf. It is only
-/// legal where it moves nothing:
+/// A typed filler carries the same bytes with far fewer aggregate leaves when
+/// doing so is layout-neutral:
 ///
-/// - the width is 2, 4 or 8 bytes, so the integer is byte-faithful (a multiple
-///   of 8 bits, hence no padding of its own). 16 is deliberately excluded:
-///   `i128` is legal LLVM but lowers to register pairs on NVPTX, so widening
-///   that far trades one win for another cost and wants its own measurement;
-/// - `offset` is a multiple of the width, so LLVM inserts no gap ahead of the
-///   field and every later field keeps its byte offset;
-/// - the width does not exceed the enum's alignment, or the struct's natural
-///   alignment would rise above rustc's.
+/// - 2, 4, or 8 bytes use one integer of the same width when `offset` is a
+///   multiple of that width and the width does not exceed the enum alignment;
+/// - 16 bytes use `[2 x i64]` when the offset is 8-byte aligned and the enum
+///   alignment is at least 8. Using `i128` here would impose 16-byte natural
+///   alignment, so the two-i64 representation also covers 8-byte-aligned
+///   Rust layouts without changing their ABI.
 ///
-/// Anything else keeps the byte array. The filler is a *vehicle*, not a claim:
-/// nothing reads it field-wise, because a payload that has no typed slot
-/// round-trips through memory as a whole aggregate, and both ends of that
-/// round trip are byte-exact. `build_enum_slot_map`'s own size and alignment
-/// assertions — hard errors, not debug checks — backstop all three conditions.
+/// The 16-byte case also avoids representing the filler as sixteen independent
+/// byte leaves. Keeping it as two typed 64-bit leaves allows aggregate
+/// scalarization to preserve pointer address-space information through enum
+/// control flow.
+///
+/// Anything that does not satisfy these layout constraints keeps the byte
+/// array. The filler is a *vehicle*, not a claim: nothing reads it field-wise,
+/// because a payload that has no typed slot round-trips through memory as a
+/// whole aggregate. `build_enum_slot_map`'s size and alignment checks are hard
+/// errors and backstop these choices.
 pub(super) fn make_enum_filler_type(
     ctx: &mut Context,
     offset: u64,
@@ -62,6 +65,12 @@ pub(super) fn make_enum_filler_type(
         let width = u32::try_from(size * 8).expect("size is at most 8, so width is at most 64");
         return IntegerType::get(ctx, width, Signedness::Signless).into();
     }
+
+    if size == 16 && offset.is_multiple_of(8) && abi_align >= 8 {
+        let i64_ty = IntegerType::get(ctx, 64, Signedness::Signless);
+        return llvm_types::ArrayType::get(ctx, i64_ty.into(), 2).into();
+    }
+
     make_padding_type(ctx, size)
 }
 

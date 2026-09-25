@@ -155,6 +155,91 @@ mod view_kernels {
         empty.as_mut_ptr()
     }
 
+    /// Regression coverage for a 16-byte enum filler beside a pointer niche.
+    ///
+    /// The `[u64; 2]` payload occupies 16 bytes before the slice pointer. Enum
+    /// storage must represent that filler without obscuring the slice pointer's
+    /// global address space; otherwise the final vector load becomes generic
+    /// `ld.v4.*` instead of `ld.global.v4.*`.
+    #[kernel]
+    pub fn f32x4_view_copy_through_wide_option(
+        input: &[f32],
+        mut output: DisjointSlice<f32>,
+        lo: u64,
+        hi: u64,
+    ) {
+        let i = thread::index_1d().get();
+
+        let out_len = output.len();
+        let out_flat = unsafe { core::slice::from_raw_parts_mut(output.as_mut_ptr(), out_len) };
+
+        let Some(input_quads) = vector::as_vectors::<F32x4>(input) else {
+            return;
+        };
+
+        let Some(out_quads) = vector::as_vectors_mut::<F32x4>(out_flat) else {
+            return;
+        };
+
+        let cookie = [lo, hi];
+
+        let wrapped = if lo == u64::MAX {
+            None
+        } else {
+            Some((cookie, input_quads))
+        };
+
+        let Some((_cookie, quads)) = wrapped else {
+            return;
+        };
+
+        if i < quads.len() && i < out_quads.len() {
+            out_quads[i] = quads[i];
+        }
+    }
+
+    /// Regression coverage for a 16-byte enum filler beside a mutable pointer niche.
+    ///
+    /// This mirrors `f32x4_view_copy_through_wide_option`, but places the output
+    /// slice behind the wide enum payload. Losing its address space would turn the
+    /// vector store into generic `st.v4.*` instead of `st.global.v4.*`.
+    #[kernel]
+    pub fn f32x4_view_store_through_wide_option(
+        input: &[f32],
+        mut output: DisjointSlice<f32>,
+        lo: u64,
+        hi: u64,
+    ) {
+        let i = thread::index_1d().get();
+
+        let Some(input_quads) = vector::as_vectors::<F32x4>(input) else {
+            return;
+        };
+
+        let out_len = output.len();
+        let out_flat = unsafe { core::slice::from_raw_parts_mut(output.as_mut_ptr(), out_len) };
+
+        let Some(out_quads) = vector::as_vectors_mut::<F32x4>(out_flat) else {
+            return;
+        };
+
+        let cookie = [lo, hi];
+
+        let wrapped = if lo == u64::MAX {
+            None
+        } else {
+            Some((cookie, out_quads))
+        };
+
+        let Some((_cookie, out_quads)) = wrapped else {
+            return;
+        };
+
+        if i < input_quads.len() && i < out_quads.len() {
+            out_quads[i] = input_quads[i];
+        }
+    }
+
     /// Copy one `F32x4` quad per thread between flat `f32` buffers through
     /// checked [`vector::as_vectors`] views. The quad is moved whole, never
     /// decomposed into lanes, so both the load and the store fuse into
@@ -324,6 +409,40 @@ fn main() {
                          (the 128-bit access is there, but in the generic window)"
                     );
                 }
+            }
+        }
+
+        // A 16-byte enum filler next to the slice pointer must not hide the
+        // pointer's global address space from NVPTX address-space inference.
+        let wide_option_body = kernel_body(&document, "f32x4_view_copy_through_wide_option");
+
+        match find_128bit_global(wide_option_body, "ld") {
+            Some(line) => {
+                println!("f32x4_view_copy_through_wide_option: {line}");
+            }
+            None => {
+                errors += 1;
+                println!(
+                    "  !! f32x4_view_copy_through_wide_option: \
+             16-byte enum filler lost the 128-bit global load"
+                );
+            }
+        }
+
+        // The mutable slice variant must preserve the same address-space information
+        // for stores as the immutable slice variant does for loads.
+        let wide_store_body = kernel_body(&document, "f32x4_view_store_through_wide_option");
+
+        match find_128bit_global(wide_store_body, "st") {
+            Some(line) => {
+                println!("f32x4_view_store_through_wide_option: {line}");
+            }
+            None => {
+                errors += 1;
+                println!(
+                    "  !! f32x4_view_store_through_wide_option: \
+             16-byte enum filler lost the 128-bit global store"
+                );
             }
         }
     } else {

@@ -94,7 +94,7 @@ pub struct SharedGlobalDeclaration {
     pub mir_elem_type: TypeHandle,
     /// Number of elements in the shared allocation.
     pub size: u64,
-    /// Explicit alignment, or zero when natural alignment is requested.
+    /// Effective physical storage alignment in bytes.
     pub alignment: u64,
     /// Source-level debug identity carried on the allocation, when present.
     pub debug_info: Option<DebugGlobalVariableInfo>,

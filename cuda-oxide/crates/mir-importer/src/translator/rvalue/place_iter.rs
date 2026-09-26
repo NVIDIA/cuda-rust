@@ -8,7 +8,8 @@
 use super::const_bytes::translate_zero_sized_constant_value;
 use super::const_enum::create_ghost_enum_default;
 use super::place_addr::{
-    emit_array_subslice_value, emit_slice_len_extract, emit_slice_subslice_value,
+    emit_array_subslice_value, emit_from_end_slice_index, emit_slice_len_extract,
+    emit_slice_subslice_value,
 };
 use super::place_read::{
     apply_deref_projection, apply_enum_field_projection, apply_field_addr_and_load,
@@ -536,14 +537,44 @@ pub fn translate_place_iterative(
                         )
                     );
                 }
-                if *from_end {
-                    return input_err!(
-                        loc,
-                        TranslationErr::unsupported(
-                            "ConstantIndex with from_end=true not yet supported"
-                        )
+                let runtime_index = if *from_end {
+                    // A from-end ConstantIndex needs runtime slice length.
+                    // After a slice Subslice, current_value is intentionally
+                    // kept as the rebuilt `(data_ptr, new_len)` fat value.
+                    let current_ty = current_value.get_type(ctx);
+                    if !current_ty
+                        .deref(ctx)
+                        .is::<dialect_mir::types::MirSliceType>()
+                    {
+                        return input_err!(
+                            loc,
+                            TranslationErr::unsupported(
+                                "from-end ConstantIndex requires preserved slice metadata"
+                                    .to_string()
+                            )
+                        );
+                    }
+
+                    let (slice_len, len_op) = emit_slice_len_extract(
+                        ctx,
+                        current_value,
+                        block_ptr,
+                        current_prev_op,
+                        loc.clone(),
                     );
-                }
+                    let (index_value, index_op) = emit_from_end_slice_index(
+                        ctx,
+                        slice_len,
+                        *offset,
+                        block_ptr,
+                        Some(len_op),
+                        loc.clone(),
+                    )?;
+                    current_prev_op = Some(index_op);
+                    Some(index_value)
+                } else {
+                    None
+                };
                 let index = *offset as usize;
 
                 // A projected unsized slice tail is represented as a fat
@@ -618,30 +649,35 @@ pub fn translate_place_iterative(
                         current_prev_op = Some(extract_op.get_operation());
                     }
                     Ok(ConstIndexKind::Ptr { element_ty, ptr_ty }) => {
-                        // Create constant index value
-                        let i32_ty = IntegerType::get(ctx, 32, Signedness::Signless);
-                        let apint = APInt::from_u32(index as u32, NonZeroUsize::new(32).unwrap());
-                        let index_attr =
-                            pliron::builtin::attributes::IntegerAttr::new(i32_ty, apint);
-                        use dialect_mir::ops::MirConstantOp;
-                        let const_op = Operation::new(
-                            ctx,
-                            MirConstantOp::get_concrete_op_info(),
-                            vec![i32_ty.into()],
-                            vec![],
-                            vec![],
-                            0,
-                        );
-                        const_op.deref_mut(ctx).set_loc(loc.clone());
-                        let const_mir = MirConstantOp::new(const_op);
-                        const_mir.set_attr_value(ctx, index_attr);
-                        if let Some(prev) = current_prev_op {
-                            const_mir.get_operation().insert_after(ctx, prev);
+                        let index_value = if let Some(index_value) = runtime_index {
+                            index_value
                         } else {
-                            const_mir.get_operation().insert_at_front(block_ptr, ctx);
-                        }
-                        current_prev_op = Some(const_mir.get_operation());
-                        let index_value = const_mir.get_operation().deref(ctx).get_result(0);
+                            // Create constant index value.
+                            let i32_ty = IntegerType::get(ctx, 32, Signedness::Signless);
+                            let apint =
+                                APInt::from_u32(index as u32, NonZeroUsize::new(32).unwrap());
+                            let index_attr =
+                                pliron::builtin::attributes::IntegerAttr::new(i32_ty, apint);
+                            use dialect_mir::ops::MirConstantOp;
+                            let const_op = Operation::new(
+                                ctx,
+                                MirConstantOp::get_concrete_op_info(),
+                                vec![i32_ty.into()],
+                                vec![],
+                                vec![],
+                                0,
+                            );
+                            const_op.deref_mut(ctx).set_loc(loc.clone());
+                            let const_mir = MirConstantOp::new(const_op);
+                            const_mir.set_attr_value(ctx, index_attr);
+                            if let Some(prev) = current_prev_op {
+                                const_mir.get_operation().insert_after(ctx, prev);
+                            } else {
+                                const_mir.get_operation().insert_at_front(block_ptr, ctx);
+                            }
+                            current_prev_op = Some(const_mir.get_operation());
+                            const_mir.get_operation().deref(ctx).get_result(0)
+                        };
 
                         // Pointer offset
                         let offset_op = Operation::new(

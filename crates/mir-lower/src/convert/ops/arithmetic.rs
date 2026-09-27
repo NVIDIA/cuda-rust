@@ -494,16 +494,15 @@ where
             pliron::input_error!(op.deref(ctx).loc(), "Shift value must be integer type")
         })?
         .width();
+    let rhs_width = rhs_ty
+        .deref(ctx)
+        .downcast_ref::<IntegerType>()
+        .ok_or_else(|| {
+            pliron::input_error!(op.deref(ctx).loc(), "Shift amount must be integer type")
+        })?
+        .width();
 
-    let rhs_casted = if lhs_ty != rhs_ty {
-        let rhs_width = rhs_ty
-            .deref(ctx)
-            .downcast_ref::<IntegerType>()
-            .ok_or_else(|| {
-                pliron::input_error!(op.deref(ctx).loc(), "Shift amount must be integer type")
-            })?
-            .width();
-
+    let rhs_casted = if lhs_width != rhs_width {
         let cast_op = if lhs_width > rhs_width {
             let zext = llvm::ZExtOp::new(ctx, rhs, lhs_ty);
             let nneg_key: pliron::identifier::Identifier = "llvm_nneg_flag".try_into().unwrap();
@@ -1007,5 +1006,77 @@ mod tests {
         assert_eq!(fmul.fast_math_flags(&ctx).0, FastmathFlags::empty());
         assert_eq!(fadd.fast_math_flags(&ctx).0, FastmathFlags::empty());
         assert_eq!(fsub.fast_math_flags(&ctx).0, FastmathFlags::empty());
+    }
+
+    /// Shifting an unsigned integer by a signed integer of the same width (e.g. `u32 << i32`)
+    /// must not emit an invalid same-width `llvm.trunc`.
+    #[test]
+    fn convert_shl_same_width_different_signedness_does_not_emit_trunc() {
+        let mut ctx = make_ctx();
+        let u32_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+        let i32_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Signed).into();
+
+        let (module_ptr, block) = build_kernel(&mut ctx, vec![u32_ty, i32_ty], vec![]);
+        let lhs = block.deref(&ctx).get_argument(0);
+        let rhs = block.deref(&ctx).get_argument(1);
+
+        let shl_op = Operation::new(
+            &mut ctx,
+            mir::MirShlOp::get_concrete_op_info(),
+            vec![u32_ty],
+            vec![lhs, rhs],
+            vec![],
+            0,
+        );
+        shl_op.insert_at_back(block, &ctx);
+        append_mir_return(&mut ctx, block, vec![]);
+
+        crate::lower_mir_to_llvm(&mut ctx, module_ptr).expect("lowering failed");
+
+        let body = kernel_blocks(&ctx, module_ptr);
+        assert!(
+            find_first::<llvm::TruncOp>(&ctx, &body).is_none(),
+            "same-width shift must not emit an llvm.trunc"
+        );
+        assert!(
+            find_first::<llvm::ShlOp>(&ctx, &body).is_some(),
+            "expected llvm.shl in lowered body"
+        );
+    }
+
+    /// Shifting an unsigned integer by a signed integer of the same width (e.g. `u32 >> i32`)
+    /// must not emit an invalid same-width `llvm.trunc`.
+    #[test]
+    fn convert_shr_same_width_different_signedness_does_not_emit_trunc() {
+        let mut ctx = make_ctx();
+        let u32_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+        let i32_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Signed).into();
+
+        let (module_ptr, block) = build_kernel(&mut ctx, vec![u32_ty, i32_ty], vec![]);
+        let lhs = block.deref(&ctx).get_argument(0);
+        let rhs = block.deref(&ctx).get_argument(1);
+
+        let shr_op = Operation::new(
+            &mut ctx,
+            mir::MirShrOp::get_concrete_op_info(),
+            vec![u32_ty],
+            vec![lhs, rhs],
+            vec![],
+            0,
+        );
+        shr_op.insert_at_back(block, &ctx);
+        append_mir_return(&mut ctx, block, vec![]);
+
+        crate::lower_mir_to_llvm(&mut ctx, module_ptr).expect("lowering failed");
+
+        let body = kernel_blocks(&ctx, module_ptr);
+        assert!(
+            find_first::<llvm::TruncOp>(&ctx, &body).is_none(),
+            "same-width shift must not emit an llvm.trunc"
+        );
+        assert!(
+            find_first::<llvm::LShrOp>(&ctx, &body).is_some(),
+            "expected llvm.lshr in lowered body"
+        );
     }
 }

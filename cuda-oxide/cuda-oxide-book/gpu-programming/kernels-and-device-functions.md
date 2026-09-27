@@ -320,8 +320,9 @@ pub fn sum_four(mut out: DisjointSlice<u32>) {
 }
 ```
 
-The pass currently recognizes explicit counted `while` loops. Range-based
-`for` loops are not yet recognized.
+The pass currently recognizes explicit counted `while` loops and range `for`
+loops (`for i in a..b`). Other iterator loops, such as `a..=b` or
+`.step_by(k)`, are not yet recognized.
 
 Use `#[unroll(N)]`, where `N >= 2`, when the trip count is only known at runtime.
 The loop then does `N` iterations' work per trip. A small remainder loop handles

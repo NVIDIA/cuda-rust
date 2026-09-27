@@ -15,10 +15,13 @@
 
 use core::num::NonZero;
 
+use dialect_mir::attributes::{FieldIndexAttr, MirCastKindAttr, VariantIndexAttr};
 use dialect_mir::ops::{
-    MirAddOp, MirCondBranchOp, MirConstantOp, MirFuncOp, MirGeOp, MirGotoOp, MirGtOp, MirLeOp,
-    MirLtOp, MirNotOp, MirReturnOp, MirSubOp,
+    MirAddOp, MirCastOp, MirCondBranchOp, MirConstantOp, MirConstructEnumOp, MirEnumPayloadOp,
+    MirEqOp, MirFuncOp, MirGeOp, MirGetDiscriminantOp, MirGotoOp, MirGtOp, MirLeOp, MirLtOp,
+    MirNotOp, MirReturnOp, MirSubOp, MirUnreachableOp,
 };
+use dialect_mir::types::{EnumVariant, MirEnumType};
 use mir_transforms::analyses::induction::CmpPred;
 use pliron::basic_block::BasicBlock;
 use pliron::builtin::attributes::{IntegerAttr, TypeAttr};
@@ -1095,5 +1098,309 @@ pub fn multiple_exit_counted_loop(ctx: &mut Context, n: i64) -> MultipleExitLoop
         normal_exit,
         exit_a,
         exit_b,
+    }
+}
+
+/// Where a range `for` loop's start or end bound comes from.
+#[derive(Clone, Copy, Debug)]
+pub enum RangeBound {
+    /// A compile-time constant.
+    Const(i64),
+    /// A function argument. A runtime start comes before a runtime end.
+    Param,
+}
+
+/// The variations of [`range_for_loop`].
+#[derive(Clone, Copy, Debug)]
+pub struct RangeForShape {
+    pub start: RangeBound,
+    pub end: RangeBound,
+    /// `(start..end).rev()`.
+    pub rev: bool,
+    /// `Some(k)`: after `acc += x`, break when `x >= k`.
+    pub break_at: Option<i64>,
+    /// The exit returns `acc + next`, a value from the match that both the
+    /// break and the normal exit reach.
+    pub exit_reads_next: bool,
+}
+
+impl RangeForShape {
+    /// `for x in start..end { acc += x }`.
+    pub fn new(start: RangeBound, end: RangeBound) -> Self {
+        Self {
+            start,
+            end,
+            rev: false,
+            break_at: None,
+            exit_reads_next: false,
+        }
+    }
+}
+
+/// A built range `for` loop and the blocks worth asserting on.
+pub struct RangeForLoop {
+    pub module: Ptr<Operation>,
+    pub region: Ptr<Region>,
+    pub body: Ptr<BasicBlock>,
+}
+
+/// Append `mir.construct_enum` of `variant` with `fields` to `b`.
+fn construct_enum(
+    ctx: &mut Context,
+    b: Ptr<BasicBlock>,
+    enum_ty: TypedHandle<MirEnumType>,
+    variant: u32,
+    fields: Vec<Value>,
+) -> Value {
+    let op = Operation::new(
+        ctx,
+        MirConstructEnumOp::get_concrete_op_info(),
+        vec![enum_ty.into()],
+        fields,
+        vec![],
+        0,
+    );
+    MirConstructEnumOp::new(op)
+        .set_attr_construct_enum_variant_index(ctx, VariantIndexAttr(variant));
+    op.insert_at_back(b, ctx);
+    op.deref(ctx).get_result(0)
+}
+
+/// Build `for x in start..end { acc += x }` over `ty`, in the shape the
+/// importer and mem2reg leave once `Range::next` is inlined and rustc's
+/// JumpThreading is off (as cargo-oxide builds device code). The function
+/// returns `acc`:
+///
+/// ```text
+///   entry(params):   acc0 = 0; i0 = start;            goto header(acc0, i0)
+///   header(acc, i):  nlt = not(i < end);              cond_br nlt [none, some]
+///   some:            i1 = i + 1; o = Some(i);         goto join(o, i1)
+///   none:            o = None;                        goto join(o, i)
+///   join(o, next):   d = discriminant(o) as i64;      cond_br d == 0 [exit(acc), check(acc)]
+///   check(a):                                         cond_br d == 1 [body(a), unreachable]
+///   body(a):         x = payload(o); acc1 = a + x;    goto header(acc1, next)
+///   exit(r):         return r
+/// ```
+///
+/// `check` and `body` take `acc` as an argument, as mem2reg passes a value that
+/// is live across the match. With `rev` the counter starts at `end`, the header tests `start < i`, and
+/// `some` yields and passes on `i - 1`. `break_at` adds
+/// `cond_br x < k [latch, exit(acc1)]` after the addition.
+pub fn range_for_loop(
+    ctx: &mut Context,
+    ty: TypedHandle<IntegerType>,
+    shape: RangeForShape,
+) -> RangeForLoop {
+    let i1 = i1(ctx);
+    let u64t = IntegerType::get(ctx, 64, Signedness::Unsigned);
+    let i64t = IntegerType::get(ctx, 64, Signedness::Signed);
+    let option = MirEnumType::get(
+        ctx,
+        "Option".to_string(),
+        u64t.into(),
+        vec![0, 1],
+        vec![
+            EnumVariant::unit("None".to_string()),
+            EnumVariant::new("Some".to_string(), vec![ty.into()]),
+        ],
+    );
+    let params: Vec<TypeHandle> = [shape.start, shape.end]
+        .iter()
+        .filter(|bound| matches!(bound, RangeBound::Param))
+        .map(|_| ty.into())
+        .collect();
+    let (module, region) = func(ctx, params.clone(), vec![ty.into()]);
+
+    let entry = block(ctx, region, params);
+    let header = block(ctx, region, vec![ty.into(), ty.into()]); // (acc, i)
+    let some = block(ctx, region, vec![]);
+    let none = block(ctx, region, vec![]);
+    let join = block(ctx, region, vec![option.into(), ty.into()]); // (o, next)
+    let check = block(ctx, region, vec![ty.into()]);
+    let unreachable = block(ctx, region, vec![]);
+    let body = block(ctx, region, vec![ty.into()]);
+    let latch = shape.break_at.map(|_| block(ctx, region, vec![]));
+    let exit = block(ctx, region, vec![ty.into()]);
+
+    let mut next_param = 0;
+    let mut bound = |ctx: &mut Context, which: RangeBound| match which {
+        RangeBound::Const(value) => iconst(ctx, entry, ty, value),
+        RangeBound::Param => {
+            next_param += 1;
+            entry.deref(ctx).get_argument(next_param - 1)
+        }
+    };
+    let start = bound(ctx, shape.start);
+    let end = bound(ctx, shape.end);
+    let acc0 = iconst(ctx, entry, ty, 0);
+    let i0 = if shape.rev { end } else { start };
+    goto(ctx, entry, header, vec![acc0, i0]);
+
+    let acc = header.deref(ctx).get_argument(0);
+    let i = header.deref(ctx).get_argument(1);
+    let (lhs, rhs) = if shape.rev { (start, i) } else { (i, end) };
+    let more = op2!(
+        ctx,
+        header,
+        MirLtOp::get_concrete_op_info(),
+        i1.into(),
+        lhs,
+        rhs
+    );
+    let done = {
+        let op = Operation::new(
+            ctx,
+            MirNotOp::get_concrete_op_info(),
+            vec![i1.into()],
+            vec![more],
+            vec![],
+            0,
+        );
+        op.insert_at_back(header, ctx);
+        op.deref(ctx).get_result(0)
+    };
+    cond_br(ctx, header, done, none, some);
+
+    let one = iconst(ctx, some, ty, 1);
+    let step = if shape.rev {
+        MirSubOp::get_concrete_op_info()
+    } else {
+        MirAddOp::get_concrete_op_info()
+    };
+    let inext = op2!(ctx, some, step, ty.into(), i, one);
+    let yielded = if shape.rev { inext } else { i };
+    let some_value = construct_enum(ctx, some, option, 1, vec![yielded]);
+    goto(ctx, some, join, vec![some_value, inext]);
+
+    let none_value = construct_enum(ctx, none, option, 0, vec![]);
+    goto(ctx, none, join, vec![none_value, i]);
+
+    // join(o, next): the `Option` match that `for` lowers to.
+    let o = join.deref(ctx).get_argument(0);
+    let next = join.deref(ctx).get_argument(1);
+    let discriminant = {
+        let op = Operation::new(
+            ctx,
+            MirGetDiscriminantOp::get_concrete_op_info(),
+            vec![u64t.into()],
+            vec![o],
+            vec![],
+            0,
+        );
+        op.insert_at_back(join, ctx);
+        op.deref(ctx).get_result(0)
+    };
+    let tag = {
+        let op = Operation::new(
+            ctx,
+            MirCastOp::get_concrete_op_info(),
+            vec![i64t.into()],
+            vec![discriminant],
+            vec![],
+            0,
+        );
+        MirCastOp::new(op).set_attr_cast_kind(ctx, MirCastKindAttr::IntToInt);
+        op.insert_at_back(join, ctx);
+        op.deref(ctx).get_result(0)
+    };
+    let none_tag = iconst(ctx, join, i64t, 0);
+    let is_none = op2!(
+        ctx,
+        join,
+        MirEqOp::get_concrete_op_info(),
+        i1.into(),
+        tag,
+        none_tag
+    );
+    cond_br_args(ctx, join, is_none, exit, vec![acc], check, vec![acc]);
+
+    let some_tag = iconst(ctx, check, i64t, 1);
+    let is_some = op2!(
+        ctx,
+        check,
+        MirEqOp::get_concrete_op_info(),
+        i1.into(),
+        tag,
+        some_tag
+    );
+    let check_acc = check.deref(ctx).get_argument(0);
+    cond_br_args(
+        ctx,
+        check,
+        is_some,
+        body,
+        vec![check_acc],
+        unreachable,
+        vec![],
+    );
+
+    Operation::new(
+        ctx,
+        MirUnreachableOp::get_concrete_op_info(),
+        vec![],
+        vec![],
+        vec![],
+        0,
+    )
+    .insert_at_back(unreachable, ctx);
+
+    let x = {
+        let op = Operation::new(
+            ctx,
+            MirEnumPayloadOp::get_concrete_op_info(),
+            vec![ty.into()],
+            vec![o],
+            vec![],
+            0,
+        );
+        let payload = MirEnumPayloadOp::new(op);
+        payload.set_attr_payload_variant_index(ctx, VariantIndexAttr(1));
+        payload.set_attr_payload_field_index(ctx, FieldIndexAttr(0));
+        op.insert_at_back(body, ctx);
+        op.deref(ctx).get_result(0)
+    };
+    let body_acc = body.deref(ctx).get_argument(0);
+    let acc1 = op2!(
+        ctx,
+        body,
+        MirAddOp::get_concrete_op_info(),
+        ty.into(),
+        body_acc,
+        x
+    );
+    match (shape.break_at, latch) {
+        (Some(k), Some(latch)) => {
+            let limit = iconst(ctx, body, ty, k);
+            let keep_going = op2!(
+                ctx,
+                body,
+                MirLtOp::get_concrete_op_info(),
+                i1.into(),
+                x,
+                limit
+            );
+            cond_br_args(ctx, body, keep_going, latch, vec![], exit, vec![acc1]);
+            goto(ctx, latch, header, vec![acc1, next]);
+        }
+        _ => goto(ctx, body, header, vec![acc1, next]),
+    }
+
+    let mut result = exit.deref(ctx).get_argument(0);
+    if shape.exit_reads_next {
+        result = op2!(
+            ctx,
+            exit,
+            MirAddOp::get_concrete_op_info(),
+            ty.into(),
+            result,
+            next
+        );
+    }
+    ret_values(ctx, exit, vec![result]);
+
+    RangeForLoop {
+        module,
+        region,
+        body,
     }
 }

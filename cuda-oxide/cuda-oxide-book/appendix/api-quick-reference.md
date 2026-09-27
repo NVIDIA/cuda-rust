@@ -54,10 +54,11 @@ fn helper(x: f32) -> f32 { x * x }
 | `#[pure]`                                   | Mark as side-effect free                                            |
 | `#[readonly]`                               | Mark as read-only                                                   |
 
-Use these annotations only on an explicit counted `while` loop inside a
-`#[kernel]` or `#[device]` function. Range-based `for` loops are not yet
-recognized by the unroll pass. Nested loops and multiple `continue` paths are
-supported. Full `#[unroll]` preserves `break` paths and multiple exit targets.
+Use these annotations only on an explicit counted `while` loop or a range
+`for` loop (`for i in a..b`) inside a `#[kernel]` or `#[device]` function.
+Other iterator loops are not yet recognized by the unroll pass. Nested loops
+and multiple `continue` paths are supported. Full `#[unroll]` preserves `break`
+paths and multiple exit targets.
 
 Partial `#[unroll(N)]` requires a positive step, a `<` or `<=` test, an
 unchanging limit, and no exit besides the normal header test. Other requests

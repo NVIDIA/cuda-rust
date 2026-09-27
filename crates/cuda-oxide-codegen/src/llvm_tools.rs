@@ -121,6 +121,12 @@ impl LlvmToolchain {
             (choice.into_opt(), diagnostics)
         };
 
+        // Warn if llc does not match the LLVM version rustc uses to write IR.
+        if let Some(warning) = llc_rustc_mismatch_warning(&llc_path, llc_major, rustc_llvm_major())
+        {
+            diagnostics.push(warning);
+        }
+
         // Resolve llvm-link for libdevice linking. Same discovery pattern
         // as opt: env var, sibling, sysroot, versioned on PATH. Silently
         // None when absent (the backend decision then avoids the PTX path
@@ -410,6 +416,53 @@ pub(crate) fn llvm_link_mismatch_warning(
          warning: proceeding anyway because CUDA_OXIDE_LLVM_LINK is an explicit override;\n\
          warning: unset it (or point it at an LLVM {llc_major} llvm-link) to fix the mismatch."
     ))
+}
+
+/// Warning when the chosen `llc`'s LLVM major differs from the active `rustc`'s
+/// internal LLVM major, or `None` when they match or either is unknown.
+///
+/// `rustc` writes the LLVM IR that `llc` lowers to PTX, so mixing majors can
+/// produce IR the older backend rejects or miscompiles.
+pub(crate) fn llc_rustc_mismatch_warning(
+    llc_path: &str,
+    llc_major: Option<u32>,
+    rustc_major: Option<u32>,
+) -> Option<String> {
+    let (llc_major, rustc_major) = (llc_major?, rustc_major?);
+    if llc_major == rustc_major {
+        return None;
+    }
+    Some(format!(
+        "warning: LLVM version mismatch between rustc and llc:\n\
+         warning:   rustc = LLVM {rustc_major}\n\
+         warning:   llc   = {llc_path} (LLVM {llc_major})\n\
+         warning: rustc writes the LLVM IR that llc lowers to PTX, so mixing majors\n\
+         warning: can produce IR the older backend rejects or miscompiles.\n\
+         warning: unset CUDA_OXIDE_LLC or install llvm-tools for the active toolchain to fix the mismatch."
+    ))
+}
+
+/// Queries `rustc -vV` and parses the internal LLVM major version.
+pub(crate) fn rustc_llvm_major() -> Option<u32> {
+    let out = std::process::Command::new("rustc")
+        .arg("-vV")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    parse_rustc_llvm_major(&stdout)
+}
+
+/// Parses the LLVM major version from `rustc -vV` output (e.g. `LLVM version: 23.1.0`).
+pub(crate) fn parse_rustc_llvm_major(verbose_output: &str) -> Option<u32> {
+    for line in verbose_output.lines() {
+        if let Some(rest) = line.strip_prefix("LLVM version:") {
+            let trimmed = rest.trim();
+            let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+            return digits.parse().ok();
+        }
+    }
+    None
 }
 
 /// Decision-time capability probe for IR-level libdevice linking.
@@ -702,6 +755,53 @@ mod tests {
             llvm_link_mismatch_warning(Some("/custom/llvm-link"), Some(21), "/custom/llc", None),
             None,
             "an unparseable llc version cannot be shown to mismatch"
+        );
+    }
+
+    #[test]
+    fn parse_rustc_llvm_major_extracts_major_from_verbose_banner() {
+        let sample = "rustc 1.96.0-nightly (000000000 2026-01-01)\n\
+                      binary: rustc\n\
+                      commit-hash: 0000000000000000000000000000000000000000\n\
+                      commit-date: 2026-01-01\n\
+                      host: x86_64-unknown-linux-gnu\n\
+                      release: 1.96.0-nightly\n\
+                      LLVM version: 23.1.0\n";
+        assert_eq!(parse_rustc_llvm_major(sample), Some(23));
+
+        assert_eq!(
+            parse_rustc_llvm_major("release: 1.96.0\nLLVM version: 22.0\n"),
+            Some(22)
+        );
+        assert_eq!(parse_rustc_llvm_major("release: 1.96.0\n"), None);
+        assert_eq!(parse_rustc_llvm_major("LLVM version: invalid"), None);
+        assert_eq!(parse_rustc_llvm_major(""), None);
+    }
+
+    #[test]
+    fn llc_rustc_major_mismatch_is_reported() {
+        // Matching versions: no warning.
+        assert_eq!(
+            llc_rustc_mismatch_warning("/usr/bin/llc-23", Some(23), Some(23)),
+            None
+        );
+
+        // Mismatched versions: report both rustc and llc versions.
+        let warning = llc_rustc_mismatch_warning("/usr/bin/llc-21", Some(21), Some(23))
+            .expect("a major mismatch between rustc and llc must be reported");
+        assert!(warning.contains("rustc = LLVM 23"));
+        assert!(warning.contains("llc   = /usr/bin/llc-21 (LLVM 21)"));
+        assert!(warning.contains("CUDA_OXIDE_LLC"));
+        assert!(warning.contains("llvm-tools"));
+
+        // Either major unparseable: no warning.
+        assert_eq!(
+            llc_rustc_mismatch_warning("/usr/bin/llc-21", Some(21), None),
+            None
+        );
+        assert_eq!(
+            llc_rustc_mismatch_warning("/usr/bin/llc", None, Some(23)),
+            None
         );
     }
 }

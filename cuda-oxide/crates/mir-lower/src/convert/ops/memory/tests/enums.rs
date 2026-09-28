@@ -44,6 +44,68 @@ fn unit_variants(n: usize) -> Vec<EnumVariant> {
     (0..n).map(|i| EnumVariant::unit(format!("V{i}"))).collect()
 }
 
+/// Converting a `repr(align(2^29))` byte alignment directly to an LLVM
+/// integer bit width wraps at the `u32` boundary: `2^29 * 8 == 2^32`.
+/// Keep the storage type's natural alignment within NVPTX's scalar alignment
+/// limit; memory operations carry the stronger Rust ABI alignment explicitly.
+#[test]
+fn enum_conversion_handles_repr_align_bitwidth_boundary() {
+    use crate::convert::types::{llvm_type_size_align, mir_type_abi_align};
+
+    for (align, anchor_bits) in [
+        (8u64, 64),
+        (16, 128),
+        (32, 128),
+        (64, 128),
+        (1 << 20, 128),
+        (1 << 29, 128),
+    ] {
+        let mut ctx = make_ctx();
+        let ty = make_enum_ty(&mut ctx, "AlignedEnum", 8, unit_variants(2), align, align);
+        let conv = convert_type(&mut ctx, ty).unwrap();
+        let array_ty: TypeHandle = MirArrayType::get(&mut ctx, ty, 3).into();
+        let conv_array = convert_type(&mut ctx, array_ty).unwrap();
+        let natural_align = u64::from(anchor_bits / 8);
+
+        assert_eq!(
+            llvm_type_size_align(&ctx, conv),
+            Some((align, natural_align)),
+            "enum with {align}-byte alignment keeps rustc size"
+        );
+        assert_eq!(
+            llvm_type_size_align(&ctx, conv_array),
+            Some((align * 3, natural_align)),
+            "enum array with {align}-byte alignment keeps rustc stride"
+        );
+        assert_eq!(mir_type_abi_align(&ctx, ty), Some(align));
+        assert_eq!(mir_type_abi_align(&ctx, array_ty), Some(align));
+
+        let conv_ref = conv.deref(&ctx);
+        let struct_ty = conv_ref
+            .downcast_ref::<StructType>()
+            .expect("converted enum is a struct");
+        let anchor_ty = struct_ty
+            .fields()
+            .next()
+            .expect("expected alignment anchor");
+        let anchor_ref = anchor_ty.deref(&ctx);
+        let anchor = anchor_ref
+            .downcast_ref::<ArrayType>()
+            .expect("alignment anchor is an array");
+        assert_eq!(anchor.size(), 0, "alignment anchor must occupy no bytes");
+        let anchor_int = anchor.elem_type();
+        let anchor_int_ref = anchor_int.deref(&ctx);
+        assert_eq!(
+            anchor_int_ref
+                .downcast_ref::<IntegerType>()
+                .expect("alignment anchor element is an integer")
+                .width(),
+            anchor_bits,
+            "enum with {align}-byte alignment uses a bounded integer anchor"
+        );
+    }
+}
+
 /// Converted enum allocation size must equal rustc's `total_size` for
 /// every memory-faithful tag shape: that size is what GEP strides by.
 #[test]

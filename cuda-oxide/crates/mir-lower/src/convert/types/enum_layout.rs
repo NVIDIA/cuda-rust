@@ -507,12 +507,13 @@ pub(crate) fn build_enum_slot_map(
         ));
     }
     if natural_align < required_align {
-        // The byte claims alone can under-align the storage, e.g. when the
-        // only claim is an i8 niche carrier inside a 4-aligned enum. Raise
-        // the struct's alignment with a zero-length anchor field, the same
-        // mechanism union storage uses; it occupies no bytes, so every slot
-        // index simply shifts by one.
-        let anchor_int = IntegerType::get(ctx, (required_align * 8) as u32, Signedness::Signless);
+        // Raise the storage's natural alignment with a zero-length anchor;
+        // it occupies no bytes, so the claim slots only shift by one.
+        // NVPTX scalar alignment tops out at 16 bytes. Cap the anchor before
+        // converting alignment to bit width; stronger Rust ABI alignment is
+        // carried explicitly by memory operations.
+        let anchor_align = required_align.min(16);
+        let anchor_int = IntegerType::get(ctx, (anchor_align * 8) as u32, Signedness::Signless);
         let anchor: TypeHandle = llvm_types::ArrayType::get(ctx, anchor_int.into(), 0).into();
         llvm_fields.insert(0, anchor);
         for slot in &mut slot_of_claim {

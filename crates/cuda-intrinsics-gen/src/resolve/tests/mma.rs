@@ -1557,7 +1557,7 @@ fn pinned_sparse_mma_records_close_shape_specific_selectors_and_ranges() {
         .iter()
         .filter(|record| record.family == "sparse_mma")
         .collect::<Vec<_>>();
-    assert_eq!(records.len(), 126);
+    assert_eq!(records.len(), 127);
     assert_eq!(
         records
             .iter()
@@ -1565,7 +1565,7 @@ fn pinned_sparse_mma_records_close_shape_specific_selectors_and_ranges() {
             .collect::<BTreeSet<_>>(),
         (163..=251)
             .chain(525..=549)
-            .chain(1018..=1029)
+            .chain(1018..=1030)
             .map(|id| format!("i{id:04}"))
             .collect::<BTreeSet<_>>()
     );
@@ -1594,10 +1594,10 @@ fn pinned_sparse_mma_records_close_shape_specific_selectors_and_ranges() {
         assert!(derived_source_records.insert(identity.source_record.clone()));
         assert!(derived_llvm_symbols.insert(identity.llvm_symbol.clone()));
     }
-    assert_eq!(derived_ids.len(), 126);
-    assert_eq!(derived_operation_keys.len(), 126);
-    assert_eq!(derived_source_records.len(), 126);
-    assert_eq!(derived_llvm_symbols.len(), 126);
+    assert_eq!(derived_ids.len(), 127);
+    assert_eq!(derived_operation_keys.len(), 127);
+    assert_eq!(derived_source_records.len(), 127);
+    assert_eq!(derived_llvm_symbols.len(), 127);
 
     let integer_records = records
         .iter()
@@ -2375,4 +2375,60 @@ fn plain_sm89_sparse_fp8_admission_is_the_reviewed_four_form_matrix() {
             assert!(sparse_mma_recipe(&mma).is_none());
         }
     }
+}
+
+#[test]
+fn standard_metadata_m16n8k16_bf16_sparse_mma_admits_plain_sp_on_sm80() {
+    let mma = crate::model::SparseMma {
+        shape: SparseMmaShape::M16n8k16,
+        accumulator: SparseMmaAccumulator::F32,
+        a_element: SparseMmaElement::Bf16,
+        b_element: SparseMmaElement::Bf16,
+        a_layout: crate::model::SparseMmaLayout::Row,
+        b_layout: crate::model::SparseMmaLayout::Col,
+        overflow: SparseMmaOverflow::NotApplicable,
+        metadata: SparseMmaMetadata::Standard,
+        selector: SparseMmaSelector::ImmediateZeroThroughThree,
+        participation: crate::model::SparseMmaParticipation::AllWarpLanesSameInstructionAndQualifiersNoExitedLanes,
+        adapter: SparseMmaAdapter::C4F32A2U32B2U32MetadataU32SelectorU32ToD4F32,
+        llvm_adapter: SparseMmaLlvmAdapter::A2I32B2I32C4F32MetadataI32SelectorI32ToD4F32,
+        compatibility_source: crate::model::SparseMmaCompatibilitySource::GeneratedStub,
+        runtime_validation: RuntimeValidation::Unexecuted,
+    };
+    let recipe = sparse_mma_recipe(&mma).expect("standard-metadata m16n8k16 bf16 must admit");
+    assert_eq!(recipe.identity.id, "mma_sp_m16n8k16_f32_bf16");
+    assert_eq!(
+        recipe.identity.source_record,
+        "int_nvvm_mma_sp_m16n8k16_row_col_bf16"
+    );
+    assert_eq!(
+        recipe.identity.llvm_symbol,
+        "llvm.nvvm.mma.sp.m16n8k16.row.col.bf16"
+    );
+    assert_eq!(
+        recipe.identity.operation_key,
+        "matrix.mma.sp.m16n8k16.row.col.f32.bf16.bf16.f32.not_applicable.standard_metadata"
+    );
+    assert_eq!(
+        recipe.identity.ptx_modifiers,
+        [
+            "sp", "sync", "aligned", "m16n8k16", "row", "col", "f32", "bf16", "bf16", "f32",
+        ]
+    );
+    assert_eq!(sparse_mma_minimum_ptx(&mma), "7.1");
+    assert_eq!(sparse_mma_hardware(&mma), ("all", Some("sm_80")));
+
+    // The ordered sibling keeps its existing identity and PTX 8.5 floor.
+    let mut ordered = mma;
+    ordered.metadata = SparseMmaMetadata::Ordered;
+    let ordered_recipe = sparse_mma_recipe(&ordered).unwrap();
+    assert_eq!(
+        ordered_recipe.identity.id,
+        "mma_sp_ordered_metadata_m16n8k16_f32_bf16"
+    );
+    assert_eq!(
+        ordered_recipe.identity.ptx_modifiers[0],
+        "sp::ordered_metadata"
+    );
+    assert_eq!(sparse_mma_minimum_ptx(&ordered), "8.5");
 }

@@ -11,8 +11,8 @@
   },
   "inputs": {
     "imported_sha256": "3f54245b231a5b6e19f3225710c3865b7e1a106242cce873250ef5fdc32e532e",
-    "overlay_sha256": "ecc7d0d7d70db737303abb6271666c67e3757a2727ba2191946a6d4e66e9f717",
-    "abi_ledger_sha256": "fc378e74ef6da50df31de62c3fafcb3264dfb414034e5852147359fcad4184eb",
+    "overlay_sha256": "c06d5ded98e773b7fc3be1b98467812323cbf2822bcb0d19f4de8b2cfafac61a",
+    "abi_ledger_sha256": "405b513888c7154e1df20e1024ca852c5caa988a89841347df0a26c85039a28c",
     "evidence_sha256": [
       "cuda-12.0-libnvvm-12.0.140-ex2-f16.json:7102ea7d567ff2d2eb75a0384148d2e5eb6e605c26a5b98c71371fa3c46adef6",
       "cuda-12.9-libnvvm-12.9.86-f32x2.json:bc5bb505677989affa9ac1044da772b4eb349700dc65e16f09fffffa1f5c493e",
@@ -53,6 +53,7 @@
       "cuda-13.3-libnvvm-13.3.33-sparse-mma-ordered-int4-m16n8k64.json:65c69eb0ca9c1a2423d1241232c25669ae406c8329831ea7890421f5fc936187",
       "cuda-13.3-libnvvm-13.3.33-sparse-mma-ordered-int8-m16n8k64.json:b5d907929b64795b7e32890433cf78f322c0c0f76a47107c69bb0725fe4701ad",
       "cuda-13.3-libnvvm-13.3.33-sparse-mma-ordered-int8.json:eac863f6241bf09043f568769de5d98a9b5294c6fcb66a383e2db1e27ebf3f18",
+      "cuda-13.3-libnvvm-13.3.33-sparse-mma-standard-bf16-m16n8k16.json:5e6e8af2f015f59c47e57fb6c672f8439cff929ad446ecba27a8b0b7433e0f6e",
       "cuda-13.3-libnvvm-13.3.33-sparse-mma-standard-int4.json:02e3dfd40df03f3d7e39ad1067ac560aafc4bb60cb71a6258f02e92e942b3c96",
       "cuda-13.3-libnvvm-13.3.33-special-registers.json:a662dd4fab997972c1961469c5405a54ef784e45b54d8ab4b50d3f775140dbe3",
       "cuda-13.3-libnvvm-13.3.33-stmatrix.json:b598335626f5d4f736c761535060c99bfa954166e24e366a0d4022d51e76638a",
@@ -116,6 +117,7 @@
       "rust-llvm-23.1.0-16696adc-sparse-mma-ordered-int4-m16n8k64.json:c670ca442ab1a2373a8029bdc6c567d5df2e1af6df6bd268b1646373f16faf5e",
       "rust-llvm-23.1.0-16696adc-sparse-mma-ordered-int8-m16n8k64.json:c4bc5eb31670b5be47c4f62f73c202455b5b2fe85544f3195151d2051cf85e09",
       "rust-llvm-23.1.0-16696adc-sparse-mma-ordered-int8.json:3beb54235f31aec145a1db0b7405fa2a14f99f902c231ff33f45bc276e6794aa",
+      "rust-llvm-23.1.0-16696adc-sparse-mma-standard-bf16-m16n8k16.json:fa89f47b350b3e299ed4910d0ae15c3209b92edc1994fb460355590724ae189f",
       "rust-llvm-23.1.0-16696adc-sparse-mma-standard-int4.json:921cdd8ea3aee8e00811161d5b8aac1adfc8e660a130a49c9dac6d6ee948c56c",
       "rust-llvm-23.1.0-16696adc-special-registers.json:767656ba6449cd0707f972fd688bb0f170d4d418aacd130209ea734e7eab24a7",
       "rust-llvm-23.1.0-16696adc-stmatrix.json:ba2f4d6b8b361a6d052395c749295f9ad2174047322b9ac022764c5a288f05e9",
@@ -180130,6 +180132,268 @@
         ]
       },
       "summary": "Multiplies warp-distributed sparse unsigned A and unsigned B INT4 fragments and adds a saturating s32 accumulator."
+    },
+    {
+      "id": "mma_sp_m16n8k16_f32_bf16",
+      "operation_key": "matrix.mma.sp.m16n8k16.row.col.f32.bf16.bf16.f32.not_applicable.standard_metadata",
+      "family": "sparse_mma",
+      "source": {
+        "kind": "llvm_imported",
+        "source_record": "int_nvvm_mma_sp_m16n8k16_row_col_bf16"
+      },
+      "selections": [
+        {
+          "source_record": "anonymous_19308",
+          "asm": "mma.sp.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32\n\t\t{{$rd0, $rd1, $rd2, $rd3}},\n\t\t{{$ra0, $ra1}},\n\t\t{{$rb0, $rb1}},\n\t\t{{$rc0, $rc1, $rc2, $rc3}},\n\t\t$metadata,\n\t\t$selector;",
+          "predicates": [
+            "Subtarget->getSmVersion() >= 80",
+            "Subtarget->getPTXVersion() >= 71"
+          ]
+        }
+      ],
+      "rust": {
+        "abi_id": "i1030",
+        "module": "matrix",
+        "name": "mma_sp_m16n8k16_f32_bf16",
+        "arguments": [
+          "[f32; 4]",
+          "[u32; 2]",
+          "[u32; 2]",
+          "u32",
+          "u32"
+        ],
+        "result": "[f32; 4]",
+        "safe": false,
+        "must_use": true,
+        "safe_allowlist_reason": null,
+        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1030",
+        "public_path": "cuda_intrinsics::matrix::mma_sp_m16n8k16_f32_bf16",
+        "compatibility_paths": [
+          "cuda_device::wmma::mma_sp_m16n8k16_f32_bf16"
+        ]
+      },
+      "dialect": {
+        "op_type": "SparseMmaOp",
+        "op_name": "nvvm.sparse_mma",
+        "operands": [
+          "f32",
+          "f32",
+          "f32",
+          "f32",
+          "u32",
+          "u32",
+          "u32",
+          "u32",
+          "u32",
+          "u32"
+        ],
+        "results": [
+          "f32",
+          "f32",
+          "f32",
+          "f32"
+        ]
+      },
+      "llvm": {
+        "symbol": "llvm.nvvm.mma.sp.m16n8k16.row.col.bf16",
+        "arguments": [
+          "i32",
+          "i32",
+          "i32",
+          "i32",
+          "f32",
+          "f32",
+          "f32",
+          "f32",
+          "i32",
+          "i32"
+        ],
+        "results": [
+          "f32",
+          "f32",
+          "f32",
+          "f32"
+        ],
+        "properties": [
+          "ImmArg<arg9>",
+          "IntrNoCallback",
+          "IntrNoMem",
+          "Range<arg9,0,4>"
+        ],
+        "result_facts": {
+          "no_undef": false,
+          "range": null
+        }
+      },
+      "semantics": {
+        "pure": false,
+        "memory": "none",
+        "convergent": true,
+        "execution_scope": "warp"
+      },
+      "target": {
+        "minimum_ptx": "7.1",
+        "hardware": {
+          "kind": "any_of",
+          "alternatives": [
+            {
+              "kind": "minimum_sm",
+              "sm": 80
+            }
+          ]
+        },
+        "ptx_result": "[f32; 4]",
+        "targets": "all",
+        "ptx_isa_version": "9.3",
+        "ptx_isa_section": "9.7.15.6.3 Multiply-and-Accumulate Instruction: mma.sp",
+        "ptx_isa_url": "https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-instructions-mma-sp"
+      },
+      "backend": {
+        "profile": "rust-llvm-23.1.0-16696adc",
+        "version": "LLVM version 23.1.0-rust-1.100.0-nightly",
+        "sha256": "2e5bc688625ca7d98bca9b5f0f0d14525d2eb59e8a9842964e480df3ffd1f921",
+        "status": "lowered",
+        "target_triple": "nvptx64-nvidia-cuda",
+        "gpu_target": "sm_80",
+        "ptx_feature": "+ptx71"
+      },
+      "backend_lowerings": [
+        {
+          "backend": "llvm_nvptx",
+          "mechanism": "inline_ptx",
+          "evidence_profile": "rust-llvm-23.1.0-16696adc",
+          "target": {
+            "minimum_ptx": "7.1",
+            "hardware": {
+              "kind": "any_of",
+              "alternatives": [
+                {
+                  "kind": "minimum_sm",
+                  "sm": 80
+                }
+              ]
+            }
+          },
+          "version": "LLVM version 23.1.0-rust-1.100.0-nightly",
+          "sha256": "2e5bc688625ca7d98bca9b5f0f0d14525d2eb59e8a9842964e480df3ffd1f921",
+          "artifact_path": null,
+          "build_id_prefix": null,
+          "status": "lowered",
+          "stages": [
+            {
+              "targets": [
+                "sm_80",
+                "ptx71"
+              ],
+              "representation": "convergent inline PTX mma.sp.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 for selector immediates 0 through 3",
+              "stage": "backend_codegen",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "Candidate probe with the nightly-2026-08-28 rustlib llc (SHA-256 2e01bcad3158362e62f1e5f7a5f9c260727b86b4f5375a66f95be63372e6e1ec, LLVM version 23.1.0-rust-1.100.0-nightly, LLVM revision 16696adcd119e6ba9cc175207d984d7021211acb) lowered the inline-PTX probe at sm_80/+ptx71. The 7942-byte PTX module has SHA-256 6b582548488ec61df7b40a595dbb76de1ec1f41d73fbe7ab383b57c066d71131 and retains mma.sp.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 with 4+2+2+4 register operands, a metadata register, and selector immediates 0, 1, 2, and 3. No ptxas is installed on this host, so the terminal assembly stage is not recorded and the record stays lowered. Runtime validation is unexecuted.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            }
+          ]
+        },
+        {
+          "backend": "lib_nvvm",
+          "mechanism": "inline_ptx",
+          "evidence_profile": "cuda-13.3-libnvvm-13.3.33",
+          "target": {
+            "minimum_ptx": "7.1",
+            "hardware": {
+              "kind": "any_of",
+              "alternatives": [
+                {
+                  "kind": "minimum_sm",
+                  "sm": 80
+                }
+              ]
+            }
+          },
+          "version": "CUDA toolkit 13.3; nvcc/libNVVM release V13.3.33",
+          "sha256": "b6a5db233133fb0ed693f8cb8aeb1d405254ce0ab10364478985292ec98cfcf0",
+          "artifact_path": null,
+          "build_id_prefix": null,
+          "status": "lowered",
+          "stages": [
+            {
+              "targets": [
+                "sm_80",
+                "ptx71"
+              ],
+              "representation": "inline PTX mma.sp.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32; libNVVM was not invoked on this host",
+              "stage": "backend_codegen",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "This host has no libNVVM or ptxas binary, so this record does not claim a libNVVM compile, cubin, or device link. The lowering is inline PTX of the imported selection mma.sp.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32. The same spelling was retained by the LLVM candidate probe at sm_80/+ptx71 (7942-byte PTX, SHA-256 6b582548488ec61df7b40a595dbb76de1ec1f41d73fbe7ab383b57c066d71131) for selector immediates 0 through 3. Status stays lowered. Runtime validation is unexecuted.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            }
+          ]
+        }
+      ],
+      "sparse_mma": {
+        "shape": "m16n8k16",
+        "accumulator": "f32",
+        "a_element": "bf16",
+        "b_element": "bf16",
+        "a_layout": "row",
+        "b_layout": "col",
+        "overflow": "not_applicable",
+        "metadata": "standard",
+        "selector": "immediate_zero_through_three",
+        "participation": "all_warp_lanes_same_instruction_and_qualifiers_no_exited_lanes",
+        "adapter": "c4_f32_a2_u32_b2_u32_metadata_u32_selector_u32_to_d4_f32",
+        "llvm_adapter": "a2_i32_b2_i32_c4_f32_metadata_i32_selector_i32_to_d4_f32",
+        "compatibility_source": "generated_stub",
+        "runtime_validation": "unexecuted"
+      },
+      "lowering": "generated_sparse_mma",
+      "expected_ptx": {
+        "mnemonic": "mma",
+        "modifiers": [
+          "sp",
+          "sync",
+          "aligned",
+          "m16n8k16",
+          "row",
+          "col",
+          "f32",
+          "bf16",
+          "bf16",
+          "f32"
+        ],
+        "operands": [
+          {
+            "kind": "register_list",
+            "length": 4
+          },
+          {
+            "kind": "register_list",
+            "length": 2
+          },
+          {
+            "kind": "register_list",
+            "length": 2
+          },
+          {
+            "kind": "register_list",
+            "length": 4
+          },
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "immediate"
+          }
+        ]
+      },
+      "summary": "Multiplies warp-distributed sparse bf16 A and B fragments and adds an f32 accumulator."
     },
     {
       "id": "mma_sp_m16n8k32_s32_s8",

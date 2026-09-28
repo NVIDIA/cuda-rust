@@ -567,6 +567,14 @@ pub fn gpu_printf_impl(input: GpuPrintfInput) -> TokenStream2 {
                 // Signed integer: use i64 to handle all signed integer sizes
                 (quote! { i64 }, quote! { (#arg) as i64 }, true, false, false)
             }
+            // `{:.N}` has no type character. Precision on `%d` is a minimum
+            // digit count, so packing a float as i64 prints "03" for 3.14.
+            // The documented conversion is `%f`. Untyped arguments take the
+            // same path: the macro cannot see their type, and guessing i64
+            // would truncate the float.
+            None if spec.precision.is_some() => {
+                (quote! { f64 }, quote! { (#arg) as f64 }, false, true, false)
+            }
             None => {
                 // Default format - use i64 for integers (most common case)
                 // The C format string will be %lld

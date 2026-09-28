@@ -108,7 +108,7 @@ fn packed_alu_and_conversion_render_exact_pure_inline_ptx_adapters() {
     let catalog = crate::resolve::resolve(&repo_root).unwrap();
     validate_renderable(&catalog).unwrap();
     assert_eq!(packed_alus(&catalog).count(), 30);
-    assert_eq!(packed_conversions(&catalog).count(), 18);
+    assert_eq!(packed_conversions(&catalog).count(), 22);
 
     let dialect = render_dialect_packed_alu(&catalog, "test-hash");
     for op in [

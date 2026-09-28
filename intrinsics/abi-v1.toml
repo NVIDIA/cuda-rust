@@ -7173,3 +7173,31 @@ status = "active"
 catalog_id = "mma_sp_m16n8k64_f32_e5m2_e5m2_f32"
 operation_key = "matrix.mma.sp.m16n8k64.row.col.f32.e5m2.e5m2.f32.not_applicable.standard_metadata"
 raw_rust_signature = { safe = false, arguments = ["[f32; 4]", "[u32; 4]", "[u32; 4]", "u32", "u32"], result = "[f32; 4]" }
+
+[[entry]]
+abi_id = "i1030"
+status = "active"
+catalog_id = "cvt_rn_satfinite_e4m3x2_bf16x2"
+operation_key = "packed.convert.bf16x2.e4m3x2.nearest_even.satfinite"
+raw_rust_signature = { safe = true, arguments = ["u32"], result = "u16" }
+
+[[entry]]
+abi_id = "i1031"
+status = "active"
+catalog_id = "cvt_rn_satfinite_relu_e4m3x2_bf16x2"
+operation_key = "packed.convert.bf16x2.e4m3x2.nearest_even.satfinite.relu"
+raw_rust_signature = { safe = true, arguments = ["u32"], result = "u16" }
+
+[[entry]]
+abi_id = "i1032"
+status = "active"
+catalog_id = "cvt_rn_satfinite_e5m2x2_bf16x2"
+operation_key = "packed.convert.bf16x2.e5m2x2.nearest_even.satfinite"
+raw_rust_signature = { safe = true, arguments = ["u32"], result = "u16" }
+
+[[entry]]
+abi_id = "i1033"
+status = "active"
+catalog_id = "cvt_rn_satfinite_relu_e5m2x2_bf16x2"
+operation_key = "packed.convert.bf16x2.e5m2x2.nearest_even.satfinite.relu"
+raw_rust_signature = { safe = true, arguments = ["u32"], result = "u16" }

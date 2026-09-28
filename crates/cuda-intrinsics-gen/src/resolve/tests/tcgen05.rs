@@ -1188,6 +1188,7 @@ fn tcgen05_compact_schema_is_reserved_for_aggregation() {
         sparse_mma_ordered_ampere_float: None,
         prmt: None,
         packed_conversion_fp8: None,
+        packed_conversion_fp8_bf16x2: None,
         packed_conversion_fp8_f16x2: None,
         scalar_conversion: None,
         scalar_arithmetic: None,

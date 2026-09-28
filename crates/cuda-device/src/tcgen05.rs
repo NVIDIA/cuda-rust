@@ -260,7 +260,12 @@ impl<const N_COLS: u32> TmemGuard<TmemUninit, N_COLS> {
     ///
     /// # Parameters
     ///
-    /// - `alloc_warp`: Warp ID that performs allocation (all 32 threads in this warp)
+    /// - `alloc_warp`: Block-linear warp id that performs allocation (all 32
+    ///   threads in that warp). The id is `linear_tid / 32`, where
+    ///   `linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z)`.
+    ///   Warp 0 is linear tids `0..31`. In a 1D block that matches
+    ///   `threadIdx.x / 32`; in a 2D or 3D block it is not every row that
+    ///   shares the same `threadIdx.x`.
     ///
     /// # Safety
     ///
@@ -276,7 +281,7 @@ impl<const N_COLS: u32> TmemGuard<TmemUninit, N_COLS> {
     /// ```
     #[inline(always)]
     pub unsafe fn alloc_by(self, alloc_warp: u32) -> TmemGuard<TmemReady, N_COLS> {
-        let warp_id = crate::warp::warp_id();
+        let warp_id = crate::warp::block_linear_warp_id_here();
 
         if warp_id == alloc_warp {
             unsafe { tcgen05_alloc(self.smem_ptr, N_COLS) };
@@ -357,7 +362,9 @@ impl<const N_COLS: u32> TmemGuard<TmemReady, N_COLS> {
     ///
     /// # Parameters
     ///
-    /// - `dealloc_warp`: Warp ID that performs deallocation (must match alloc warp)
+    /// - `dealloc_warp`: Block-linear warp id that performs deallocation
+    ///   (`linear_tid / 32`, same numbering as [`TmemGuard::alloc_by`]). Must
+    ///   typically match the allocating warp.
     ///
     /// # Safety
     ///
@@ -376,7 +383,7 @@ impl<const N_COLS: u32> TmemGuard<TmemReady, N_COLS> {
         // Ensure all threads are done with TMEM before deallocating
         crate::thread::sync_threads();
 
-        let warp_id = crate::warp::warp_id();
+        let warp_id = crate::warp::block_linear_warp_id_here();
 
         if warp_id == dealloc_warp {
             unsafe {

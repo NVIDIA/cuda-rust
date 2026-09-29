@@ -320,16 +320,17 @@ fn compute_drop_place_address(
 }
 
 // ============================================================================
-// No-op analysis (unchanged from original)
+// Conservative no-op and termination analysis
 // ============================================================================
 
-/// Proves that calling `instance` does nothing observable.
+/// Proves that erasing a call to `instance` preserves observable behavior,
+/// including whether control can return to its caller.
 ///
 /// `in_progress` holds the mangled names of instances currently being
-/// proven further up the call stack. If we meet one of them again we
-/// treat the cycle as harmless: a cycle cannot *introduce* an
-/// observable effect, every effect would already have failed the proof
-/// on some statement or terminator along the way.
+/// proven further up the call stack. Meeting one again means termination
+/// is not proven: even recursion with no externally visible writes can
+/// diverge, and erasing such a call would make unreachable code execute.
+/// Recursion therefore fails this conservative proof.
 fn instance_is_noop(instance: &Instance, in_progress: &mut Vec<String>) -> bool {
     // Fast path: a type with no drop glue at all resolves to an "empty"
     // drop shim that exists only to fill vtable slots. rustc_public
@@ -344,7 +345,7 @@ fn instance_is_noop(instance: &Instance, in_progress: &mut Vec<String>) -> bool 
 
     let name = instance.mangled_name();
     if in_progress.contains(&name) {
-        return true;
+        return false;
     }
 
     // No body means we cannot see what the call does (an intrinsic, a
@@ -359,102 +360,136 @@ fn instance_is_noop(instance: &Instance, in_progress: &mut Vec<String>) -> bool 
     result
 }
 
-/// Walks every block of `body` reachable from the entry block and
-/// checks that nothing observable happens on the way to `return`.
+/// Walks every block of `body` reachable from the entry block and proves
+/// that execution is effect-free and contains no reachable control-flow cycle.
+///
+/// A cycle fails the proof even when every statement in it is locally harmless:
+/// removing a call that can diverge would change whether its continuation runs.
 fn body_is_noop(body: &mir::Body, in_progress: &mut Vec<String>) -> bool {
-    let mut visited = vec![false; body.blocks.len()];
-    let mut worklist: Vec<mir::BasicBlockIdx> = vec![0];
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum BlockState {
+        Unseen,
+        InProgress,
+        Proven,
+    }
 
-    while let Some(idx) = worklist.pop() {
-        if std::mem::replace(&mut visited[idx], true) {
-            continue;
-        }
-        let block = &body.blocks[idx];
+    #[derive(Clone, Copy)]
+    enum WorkItem {
+        Enter(mir::BasicBlockIdx),
+        Finish(mir::BasicBlockIdx),
+    }
 
-        for stmt in &block.statements {
-            if !statement_is_noop(&stmt.kind) {
-                return false;
+    let mut states = vec![BlockState::Unseen; body.blocks.len()];
+    let mut worklist = vec![WorkItem::Enter(0)];
+
+    while let Some(item) = worklist.pop() {
+        match item {
+            WorkItem::Finish(idx) => {
+                debug_assert!(matches!(states[idx], BlockState::InProgress));
+                states[idx] = BlockState::Proven;
+                continue;
             }
-        }
 
-        match &block.terminator.kind {
-            // Reaching `return` with only no-op work behind us is the
-            // success case. `unreachable` cannot execute in a valid
-            // program, so it cannot contribute an effect either.
-            mir::TerminatorKind::Return | mir::TerminatorKind::Unreachable => {}
+            WorkItem::Enter(idx) => {
+                match states[idx] {
+                    // A completed block reached through another predecessor is
+                    // ordinary CFG reconvergence.
+                    BlockState::Proven => continue,
 
-            mir::TerminatorKind::Goto { target } => worklist.push(*target),
+                    // A block already on the active DFS path is a reachable CFG
+                    // cycle. Effect-freedom does not prove that it terminates.
+                    BlockState::InProgress => return false,
 
-            mir::TerminatorKind::SwitchInt { discr, targets } => {
-                match const_operand_bits(discr) {
-                    // Known discriminant: only the matching branch can
-                    // run, so only that branch needs to be a no-op.
-                    // This is what skips the dead "really drop the
-                    // elements" branch in `IntoIter`'s destructor.
-                    Some(value) => {
-                        let target = targets
-                            .branches()
-                            .find(|(branch_value, _)| *branch_value == value)
-                            .map(|(_, target)| target)
-                            .unwrap_or_else(|| targets.otherwise());
-                        worklist.push(target);
+                    BlockState::Unseen => {}
+                }
+
+                states[idx] = BlockState::InProgress;
+                let block = &body.blocks[idx];
+
+                for stmt in &block.statements {
+                    if !statement_is_noop(&stmt.kind) {
+                        return false;
                     }
-                    // Unknown discriminant: every branch must be a
-                    // no-op.
-                    None => worklist.extend(targets.all_targets()),
+                }
+
+                // Only mark this block Proven after every runtime-reachable
+                // successor has itself been proven.
+                worklist.push(WorkItem::Finish(idx));
+
+                match &block.terminator.kind {
+                    mir::TerminatorKind::Return | mir::TerminatorKind::Unreachable => {}
+
+                    mir::TerminatorKind::Goto { target } => {
+                        worklist.push(WorkItem::Enter(*target));
+                    }
+
+                    mir::TerminatorKind::SwitchInt { discr, targets } => {
+                        match const_operand_bits(discr) {
+                            Some(value) => {
+                                let target = targets
+                                    .branches()
+                                    .find(|(branch_value, _)| *branch_value == value)
+                                    .map(|(_, target)| target)
+                                    .unwrap_or_else(|| targets.otherwise());
+
+                                worklist.push(WorkItem::Enter(target));
+                            }
+
+                            None => {
+                                for target in targets.all_targets() {
+                                    worklist.push(WorkItem::Enter(target));
+                                }
+                            }
+                        }
+                    }
+
+                    mir::TerminatorKind::Drop { place, target, .. } => {
+                        let Ok(place_ty) = place.ty(body.locals()) else {
+                            return false;
+                        };
+
+                        let nested = Instance::resolve_drop_in_place(place_ty);
+                        if !instance_is_noop(&nested, in_progress) {
+                            return false;
+                        }
+
+                        worklist.push(WorkItem::Enter(*target));
+                    }
+
+                    mir::TerminatorKind::Call {
+                        func,
+                        destination,
+                        target: Some(target),
+                        ..
+                    } => {
+                        if place_writes_through_pointer(destination) {
+                            return false;
+                        }
+
+                        let Ok(func_ty) = func.ty(body.locals()) else {
+                            return false;
+                        };
+
+                        let TyKind::RigidTy(RigidTy::FnDef(def, args)) = func_ty.kind() else {
+                            return false;
+                        };
+
+                        let Ok(callee) = Instance::resolve(def, &args) else {
+                            return false;
+                        };
+
+                        if !instance_is_noop(&callee, in_progress) {
+                            return false;
+                        }
+
+                        worklist.push(WorkItem::Enter(*target));
+                    }
+
+                    // Asserts, diverging calls, inline asm, resume/abort, and
+                    // unknown terminators do not prove normal termination.
+                    _ => return false,
                 }
             }
-
-            // A nested drop is fine when the dropped value's own glue
-            // passes this same proof.
-            mir::TerminatorKind::Drop { place, target, .. } => {
-                let Ok(place_ty) = place.ty(body.locals()) else {
-                    return false;
-                };
-                let nested = Instance::resolve_drop_in_place(place_ty);
-                if !instance_is_noop(&nested, in_progress) {
-                    return false;
-                }
-                worklist.push(*target);
-            }
-
-            // A call is fine when we can resolve exactly which function
-            // runs and that function passes this same proof. The
-            // `drop_in_place` shim for a type with an `impl Drop` is a
-            // single such call to `<T as Drop>::drop`.
-            mir::TerminatorKind::Call {
-                func,
-                destination,
-                target: Some(target),
-                ..
-            } => {
-                if place_writes_through_pointer(destination) {
-                    return false;
-                }
-                let Ok(func_ty) = func.ty(body.locals()) else {
-                    return false;
-                };
-                let TyKind::RigidTy(RigidTy::FnDef(def, args)) = func_ty.kind() else {
-                    // A function pointer or other indirect callee: we
-                    // do not know what runs.
-                    return false;
-                };
-                let Ok(callee) = Instance::resolve(def, &args) else {
-                    return false;
-                };
-                if !instance_is_noop(&callee, in_progress) {
-                    return false;
-                }
-                worklist.push(*target);
-            }
-
-            // Everything else (asserts, diverging calls, inline asm,
-            // resume/abort) either has an effect or might not return.
-            // Asserts fail the proof deliberately: following only the
-            // success edge would silently delete a would-be device trap.
-            // A failed proof now emits the real drop_in_place call, so
-            // there is no pressure to widen the proof here.
-            _ => return false,
         }
     }
 

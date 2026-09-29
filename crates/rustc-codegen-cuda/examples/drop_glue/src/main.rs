@@ -41,6 +41,35 @@ impl Drop for DropMarker {
     }
 }
 
+// Compile-only regression probes. These destructors intentionally never return;
+// their kernels are generated but never launched by `main`.
+#[allow(dead_code)]
+struct LoopingDrop(u8);
+
+impl Drop for LoopingDrop {
+    #[inline(never)]
+    #[allow(clippy::empty_loop)]
+    fn drop(&mut self) {
+        loop {}
+    }
+}
+
+#[allow(unconditional_recursion)]
+#[inline(never)]
+fn recursive_noop() {
+    recursive_noop();
+}
+
+#[allow(dead_code)]
+struct RecursiveDrop(u8);
+
+impl Drop for RecursiveDrop {
+    #[inline(never)]
+    fn drop(&mut self) {
+        recursive_noop();
+    }
+}
+
 #[cuda_module]
 mod kernels {
     use super::*;
@@ -54,6 +83,48 @@ mod kernels {
                 target: slot as *mut u32,
             };
             // `_m` drops at end of scope and writes `DROP_SENTINEL`.
+        }
+    }
+
+    /// Compile-only regression: a reachable CFG cycle inside Drop::drop
+    /// must not be classified as an erasable no-op.
+    #[kernel]
+    pub fn diverging_cfg_drop_probe(mut out: DisjointSlice<u32>) {
+        if thread::index_1d().get() != 0 {
+            return;
+        }
+
+        unsafe {
+            let slot = out.as_mut_ptr();
+            slot.write(0x1111_1111);
+
+            {
+                let _guard = LoopingDrop(0);
+            }
+
+            // Semantically unreachable.
+            slot.write(0x2222_2222);
+        }
+    }
+
+    /// Compile-only regression: recursive nontermination in a callee must
+    /// likewise prevent drop elision.
+    #[kernel]
+    pub fn diverging_recursive_drop_probe(mut out: DisjointSlice<u32>) {
+        if thread::index_1d().get() != 0 {
+            return;
+        }
+
+        unsafe {
+            let slot = out.as_mut_ptr();
+            slot.write(0x3333_3333);
+
+            {
+                let _guard = RecursiveDrop(0);
+            }
+
+            // Semantically unreachable.
+            slot.write(0x4444_4444);
         }
     }
 

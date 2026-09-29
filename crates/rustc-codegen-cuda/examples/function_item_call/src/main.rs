@@ -10,8 +10,9 @@
 //! back to the concrete function body instead of emitting a dangling trait-shim
 //! callee symbol. The regression also covers `Fn`/`FnMut`, references,
 //! multiple and nested-tuple arguments, tuple returns, and type/const-generic
-//! function items. Diverging function items and closures also verify that a
-//! direct Rust call returning `!` ends its MIR block with `unreachable`.
+//! function items. Diverging function items, closures, and an ordinary direct
+//! `-> !` device helper also verify that a non-returning Rust call executes
+//! before its MIR block ends with `unreachable`.
 //! `call_once_decoy` proves that an ordinary function whose name contains
 //! trait-like text is not mistaken for a callable-trait shim.
 
@@ -54,6 +55,18 @@ fn nested_sum((a, (b, c)): (u32, (u32, u32))) -> u32 {
 #[allow(clippy::empty_loop)]
 #[inline(never)]
 fn spin_forever(_value: u32) -> ! {
+    loop {}
+}
+
+// Unlike `spin_forever`, this is reached by an ordinary direct MIR `Call`.
+// The store makes replacing that call with an immediate trap observably wrong.
+#[allow(clippy::empty_loop)]
+#[inline(never)]
+#[device]
+unsafe fn write_then_diverge(ptr: *mut u32) -> ! {
+    unsafe {
+        ptr.write(0x1111_1111);
+    }
     loop {}
 }
 
@@ -147,6 +160,14 @@ mod kernels {
             // panic or thread sleeping would exercise unrelated lowering.
             #[allow(clippy::empty_loop)]
             apply_never(|_| loop {}, flag);
+        }
+        if flag == 3 {
+            // The importer must preserve this ordinary direct call. The callee
+            // stores first and then diverges, so replacing it with a trap loses
+            // an observable side effect.
+            unsafe {
+                write_then_diverge(out.as_mut_ptr());
+            }
         }
         if let Some(slot) = out.get_mut(idx) {
             *slot = 0xd1ce;

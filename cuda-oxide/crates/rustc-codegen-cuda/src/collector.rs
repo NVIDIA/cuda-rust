@@ -2464,10 +2464,9 @@ impl<'tcx> DeviceCollector<'tcx> {
     ///    "Symbol ... not found" error.
     ///
     /// Functions that are declared diverging (return type `!`) are left
-    /// alone: their call sites have no target block, so the translator
-    /// already lowers them to LLVM `unreachable` (note: NOT a trap;
-    /// the optimizer may delete paths that provably reach it, a known
-    /// gap tracked separately).
+    /// alone. If their body is emitted, the importer preserves the call and
+    /// terminates its caller with `unreachable`; if collection deliberately
+    /// omits the body, the importer retains the existing device-trap fallback.
     fn check_unreachable_callee(
         &self,
         resolved: Instance<'tcx>,
@@ -2547,8 +2546,9 @@ impl<'tcx> DeviceCollector<'tcx> {
 
         // No stub marker: leave non-local functions to the existing silent
         // skip (this is what keeps the real `cuda_device` intrinsic
-        // placeholders and `core`'s cold panic wrappers working), and leave
-        // declared-diverging functions to the translator's `unreachable` lowering.
+        // placeholders and `core`'s cold panic wrappers working). Declared-
+        // diverging functions that are omitted here retain the translator's
+        // device-trap fallback rather than producing an undefined call.
         if !def_id.is_local() || mir.return_ty().is_never() {
             return;
         }
@@ -2577,7 +2577,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             .with_help(
                 "annotate device helpers with `#[device]`; if the panic is \
                  intentional, declare the function as diverging (`-> !`) so the \
-                 call lowers to LLVM `unreachable`",
+                 device pipeline can treat the path as non-returning",
             )
             .emit()
     }

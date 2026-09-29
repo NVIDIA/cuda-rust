@@ -85,6 +85,12 @@ thread_local! {
             index_mut_trait: None,
         })
     };
+    // Exact monomorphized Rust functions that this pipeline run will emit.
+    //
+    // Store rustc's linkage identity rather than the legalised module symbol:
+    // call classification must not depend on Legaliser ordering or spelling.
+    static EMITTED_FUNCTIONS: std::cell::RefCell<std::collections::BTreeSet<String>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 
 /// Installs the driver-resolved lang-item ids for this pipeline run,
@@ -97,6 +103,21 @@ pub(crate) fn set_known_defs(defs: KnownDefs) {
 /// never provided them).
 pub(crate) fn known_defs() -> KnownDefs {
     KNOWN_DEFS.with(|cell| cell.get())
+}
+
+/// Replace the emitted-function set for the current pipeline run.
+///
+/// Like [`set_known_defs`], this replaces rather than extends previous
+/// thread-local state so one rustc invocation cannot leak into the next.
+pub(crate) fn set_emitted_functions(names: std::collections::BTreeSet<String>) {
+    EMITTED_FUNCTIONS.with(|set| *set.borrow_mut() = names);
+}
+
+/// Whether this exact monomorphized Rust instance will have a `mir.func`
+/// definition in the module being translated.
+pub(crate) fn is_emitted_function(instance: &mir::mono::Instance) -> bool {
+    let identity = instance.mangled_name().to_string();
+    EMITTED_FUNCTIONS.with(|set| set.borrow().contains(&identity))
 }
 
 /// Validate the source reference and the fully specialized read-only storage

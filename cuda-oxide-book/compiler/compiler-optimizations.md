@@ -283,7 +283,8 @@ irreducible control flow, the compiler warns and does not unroll the loop.
 | Shape | Current behavior |
 |:------|:-----------------|
 | Explicit counted `while` loop | Supported when the requirements above hold |
-| Range-based `for` loop | Not yet recognized |
+| Range `for` loop (`for i in a..b`) | Supported when the requirements above hold |
+| Other iterator `for` loops (`a..=b`, `.step_by(k)`, `.iter()`) | Not yet recognized; warns |
 | Constant trip count with `#[unroll]` | Fully unrolled |
 | Runtime, loop-invariant limit with `#[unroll(N)]` | Partially unrolled |
 | Several `continue` paths with the same counter step | Joined and unrolled |

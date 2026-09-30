@@ -12,8 +12,8 @@
 //! `full_unroll` has a compile-time-constant trip count, so `#[unroll]` should
 //! unroll it completely and the per-iteration `i & 3` should fold to literals.
 //! `partial_unroll` has a runtime trip count, so `#[unroll(4)]` unrolls the body
-//! by 4 and leaves a remainder loop. Both are semantics-preserving; the host
-//! checks the sums.
+//! by 4 and leaves a remainder loop. `range_for_loops` puts the same requests on
+//! range `for` loops. All are semantics-preserving; the host checks the sums.
 //!
 //! Run: cargo oxide run unroll_smoke
 
@@ -442,6 +442,68 @@ mod kernels {
         *walk = visited;
         *partial = sum;
     }
+
+    /// Range `for` loops. `#[unroll]` fills a local array over `0..8` and reads
+    /// it back over `(0..8).rev()`: `sum((tid + j) << j) = 255 * tid + 1538`.
+    /// `#[unroll]` on `0..8` with a `break` at 5 sums `0..5 = 10`, and
+    /// `#[unroll(4)]` on `0..n` sums `n*(n-1)/2`. `0..=4` and
+    /// `(0..10).step_by(3)` are not recognized: they warn, stay loops and sum
+    /// `10 + 18 = 28`.
+    #[allow(clippy::needless_range_loop)]
+    #[kernel]
+    pub fn range_for_loops(
+        mut indexed: DisjointSlice<u32>,
+        mut early: DisjointSlice<u32>,
+        mut partial: DisjointSlice<u32>,
+        mut unrecognized: DisjointSlice<u32>,
+        n: u32,
+    ) {
+        let base = thread::index_1d().get() as u32;
+        let (Some(indexed), Some(early), Some(partial), Some(unrecognized)) = (
+            indexed.get_mut(thread::index_1d()),
+            early.get_mut(thread::index_1d()),
+            partial.get_mut(thread::index_1d()),
+            unrecognized.get_mut(thread::index_1d()),
+        ) else {
+            return;
+        };
+        let mut lanes = [0u32; 8];
+        #[unroll]
+        for j in 0..8 {
+            lanes[j] = base + j as u32;
+        }
+        let mut weighted = 0u32;
+        #[unroll]
+        for j in (0..8).rev() {
+            weighted = weighted * 2 + lanes[j];
+        }
+        let mut before_break = 0u32;
+        #[unroll]
+        for i in 0..8u32 {
+            if i == 5 {
+                break;
+            }
+            before_break += i;
+        }
+        let mut sum = 0u32;
+        #[unroll(4)]
+        for i in 0..n {
+            sum = sum.wrapping_add(i);
+        }
+        let mut other = 0u32;
+        #[unroll]
+        for i in 0..=4u32 {
+            other += i;
+        }
+        #[unroll]
+        for i in (0..10u32).step_by(3) {
+            other += i;
+        }
+        *indexed = weighted;
+        *early = before_break;
+        *partial = sum;
+        *unrecognized = other;
+    }
 }
 
 fn main() {
@@ -607,6 +669,47 @@ fn main() {
             d_offset_part.to_host_vec(&stream).unwrap(),
             vec![offset_trip * (offset_trip - 1) / 2; N],
             "partial offset exit test `j + 1 <= {offset_trip}`"
+        );
+    }
+
+    for range_trip in [7u32, 16] {
+        let mut d_indexed = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
+        let mut d_early = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
+        let mut d_range_part = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
+        let mut d_unrecognized = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
+        // SAFETY: each thread writes its own element in four separate buffers.
+        unsafe {
+            module.range_for_loops(
+                stream.as_ref(),
+                cfg,
+                &mut d_indexed,
+                &mut d_early,
+                &mut d_range_part,
+                &mut d_unrecognized,
+                range_trip,
+            )
+        }
+        .expect("launch range_for_loops");
+        let want_indexed: Vec<u32> = (0..N as u32).map(|tid| 255 * tid + 1538).collect();
+        assert_eq!(
+            d_indexed.to_host_vec(&stream).unwrap(),
+            want_indexed,
+            "`0..8` and `(0..8).rev()` over a local array"
+        );
+        assert_eq!(
+            d_early.to_host_vec(&stream).unwrap(),
+            vec![10; N],
+            "`0..8` with a `break` at 5"
+        );
+        assert_eq!(
+            d_range_part.to_host_vec(&stream).unwrap(),
+            vec![range_trip * (range_trip - 1) / 2; N],
+            "partial `0..{range_trip}`"
+        );
+        assert_eq!(
+            d_unrecognized.to_host_vec(&stream).unwrap(),
+            vec![28; N],
+            "`0..=4` and `(0..10).step_by(3)`"
         );
     }
 

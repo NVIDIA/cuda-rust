@@ -14,24 +14,26 @@
 mod common;
 
 use common::{
-    OffsetBound, counted_loop, counted_loop_from_step, early_exit_counted_loop,
-    early_exit_with_direct_liveout, mir_ctx, multi_latch_counted_loop, multiple_exit_counted_loop,
-    nested_counted_loop, offset_counted_loop, u32t,
+    OffsetBound, RangeBound, RangeForLoop, RangeForShape, counted_loop, counted_loop_from_step,
+    early_exit_counted_loop, early_exit_with_direct_liveout, mir_ctx, multi_latch_counted_loop,
+    multiple_exit_counted_loop, nested_counted_loop, offset_counted_loop, range_for_loop, u32t,
 };
 use dialect_mir::ops::{
-    MirAddOp, MirBitAndOp, MirCallOp, MirCondBranchOp, MirConstantOp, MirGeOp, MirGtOp, MirLeOp,
-    MirLtOp, MirNotOp, MirReturnOp, MirSubOp, MirUnrollHintOp,
+    MirAddOp, MirBitAndOp, MirCallOp, MirCondBranchOp, MirConstantOp, MirGeOp,
+    MirGetDiscriminantOp, MirGtOp, MirLeOp, MirLtOp, MirNotOp, MirReturnOp, MirSubOp,
+    MirUnrollHintOp,
 };
 use mir_transforms::analyses::induction::{CmpPred, analyze};
 use mir_transforms::unroll::unroll_annotated_loops;
 use pliron::attribute::Attribute;
 use pliron::builtin::attributes::{IntegerAttr, StringAttr};
+use pliron::builtin::op_interfaces::BranchOpInterface;
 use pliron::builtin::ops::ConstantOp;
 use pliron::builtin::types::{FunctionType, IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
 use pliron::graph::{ControlFlowGraph, dominance::DomInfo};
 use pliron::linked_list::ContainsLinkedList;
-use pliron::op::Op;
+use pliron::op::{Op, op_cast};
 use pliron::operation::Operation;
 use pliron::pass::AnalysisManager;
 use pliron::region::Region;
@@ -866,4 +868,210 @@ fn full_offset_unroll_preserves_signed_descending_and_high_bit_unsigned_results(
         assert_eq!(loop_count(&ctx, lp.region), 0);
         assert_eq!(sole_return_constant(&ctx, lp.region), Some(expected));
     }
+}
+
+/// Run the function in `region` on `args`, taking the branches that
+/// [`evaluate_integer`] decides, and return its value.
+fn run_function(ctx: &Context, region: Ptr<Region>, args: &[i128]) -> i128 {
+    let mut values = HashMap::new();
+    let mut block = region.deref(ctx).iter(ctx).next().unwrap();
+    let mut incoming = args.to_vec();
+    for _ in 0..10_000 {
+        values.extend(block.deref(ctx).arguments().zip(incoming));
+        let term = block.deref(ctx).get_terminator(ctx).unwrap();
+        if Operation::get_op::<MirReturnOp>(term, ctx).is_some() {
+            return evaluate_integer(ctx, term.deref(ctx).get_operand(0), &values);
+        }
+        let taken = if Operation::get_op::<MirCondBranchOp>(term, ctx).is_some() {
+            usize::from(evaluate_integer(ctx, term.deref(ctx).get_operand(0), &values) == 0)
+        } else {
+            0
+        };
+        let opobj = Operation::get_op_dyn(term, ctx);
+        let branch = op_cast::<dyn BranchOpInterface>(opobj.as_ref()).expect("a branch");
+        incoming = branch
+            .successor_operands(ctx, taken)
+            .into_iter()
+            .map(|operand| evaluate_integer(ctx, operand, &values))
+            .collect();
+        block = term.deref(ctx).get_successor(taken);
+    }
+    panic!("the function did not return within 10,000 blocks");
+}
+
+/// Plant an unroll hint (`factor` 0 = full) in a range `for` body and run the
+/// pass.
+fn unroll_range_for(ctx: &mut Context, lp: &RangeForLoop, factor: u32) {
+    pliron::operation::verify_operation(lp.module, ctx).expect("valid input IR");
+    MirUnrollHintOp::new(ctx, factor)
+        .get_operation()
+        .insert_at_front(lp.body, ctx);
+    let mut analyses = AnalysisManager::default();
+    unroll_annotated_loops(lp.module, ctx, &mut analyses).expect("unroll pass succeeds");
+    pliron::operation::verify_operation(lp.module, ctx).expect("valid IR after the pass");
+    assert_eq!(hint_count(ctx, lp.region), 0, "the request was consumed");
+}
+
+/// Each 8-bit type with its range and the bounds a range loop is tested at.
+fn eight_bit_cases() -> [(Signedness, i128, i128, Vec<i128>); 2] {
+    [
+        (
+            Signedness::Signed,
+            -128,
+            127,
+            vec![-128, -127, -1, 0, 1, 126, 127],
+        ),
+        (
+            Signedness::Unsigned,
+            0,
+            255,
+            vec![0, 1, 2, 127, 128, 254, 255],
+        ),
+    ]
+}
+
+/// `sum(start..end)` wrapped to an 8-bit type.
+fn wrapping_range_sum(signedness: Signedness, start: i128, end: i128) -> i128 {
+    let bits = (start..end).sum::<i128>().rem_euclid(256);
+    if signedness == Signedness::Signed && bits >= 128 {
+        bits - 256
+    } else {
+        bits
+    }
+}
+
+#[test]
+fn full_unroll_of_a_range_for_loop_folds_the_wrapping_sum_for_every_boundary_range() {
+    for (signedness, _, _, bounds) in eight_bit_cases() {
+        for rev in [false, true] {
+            for &start in &bounds {
+                for &end in &bounds {
+                    let mut ctx = mir_ctx();
+                    let ty = IntegerType::get(&ctx, 8, signedness);
+                    let shape = RangeForShape {
+                        rev,
+                        ..RangeForShape::new(
+                            RangeBound::Const(start as i64),
+                            RangeBound::Const(end as i64),
+                        )
+                    };
+                    let lp = range_for_loop(&mut ctx, ty, shape);
+                    unroll_range_for(&mut ctx, &lp, 0);
+                    let case = format!("{signedness:?}: {start}..{end}, rev={rev}");
+                    assert_eq!(loop_count(&ctx, lp.region), 0, "{case}");
+                    // `sole_return_constant` reads the bits as signed.
+                    assert_eq!(
+                        sole_return_constant(&ctx, lp.region).map(|v| v.rem_euclid(256)),
+                        Some(wrapping_range_sum(signedness, start, end).rem_euclid(256)),
+                        "{case}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn partial_unroll_of_a_range_for_loop_returns_the_wrapping_sum_for_every_end() {
+    for (signedness, min, max, bounds) in eight_bit_cases() {
+        for factor in [2, 3, 4] {
+            for &start in &bounds {
+                let mut ctx = mir_ctx();
+                let ty = IntegerType::get(&ctx, 8, signedness);
+                let shape = RangeForShape::new(RangeBound::Const(start as i64), RangeBound::Param);
+                let lp = range_for_loop(&mut ctx, ty, shape);
+                unroll_range_for(&mut ctx, &lp, factor);
+                let case = format!("{signedness:?}: {start}..n, factor={factor}");
+                assert_eq!(loop_count(&ctx, lp.region), 2, "{case}");
+                for end in min..=max {
+                    assert_eq!(
+                        run_function(&ctx, lp.region, &[end]),
+                        wrapping_range_sum(signedness, start, end),
+                        "{case}, n={end}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn full_unroll_keeps_a_break_in_a_range_for_loop() {
+    let mut ctx = mir_ctx();
+    let u32 = u32t(&mut ctx);
+    let shape = RangeForShape {
+        break_at: Some(3),
+        ..RangeForShape::new(RangeBound::Const(0), RangeBound::Const(8))
+    };
+    let lp = range_for_loop(&mut ctx, u32, shape);
+
+    unroll_range_for(&mut ctx, &lp, 0);
+
+    assert_eq!(loop_count(&ctx, lp.region), 0);
+    assert_eq!(
+        sole_return_constant(&ctx, lp.region),
+        Some(6),
+        "0 + 1 + 2 + 3"
+    );
+}
+
+#[test]
+fn range_for_loops_the_unroller_refuses_keep_their_loop_and_results() {
+    // The rewrite applies to each of these; the unroller then refuses it.
+    let runtime_start = RangeForShape::new(RangeBound::Param, RangeBound::Const(8));
+    let runtime_end = RangeForShape::new(RangeBound::Const(0), RangeBound::Param);
+    let reversed = RangeForShape {
+        rev: true,
+        ..runtime_end
+    };
+    let with_break = RangeForShape {
+        break_at: Some(3),
+        ..runtime_end
+    };
+    let cases = [
+        (runtime_start, 0),
+        (runtime_end, 0),
+        (reversed, 2),
+        (with_break, 2),
+    ];
+    for (shape, factor) in cases {
+        let mut ctx = mir_ctx();
+        let u32 = u32t(&mut ctx);
+        let lp = range_for_loop(&mut ctx, u32, shape);
+        unroll_range_for(&mut ctx, &lp, factor);
+        assert_eq!(loop_count(&ctx, lp.region), 1, "{shape:?}");
+        for arg in [0, 1, 4, 9] {
+            let (start, end) = match shape.start {
+                RangeBound::Param => (arg, 8),
+                RangeBound::Const(_) => (0, arg),
+            };
+            let last = shape.break_at.map_or(end, |k| end.min(i128::from(k) + 1));
+            assert_eq!(
+                run_function(&ctx, lp.region, &[arg]),
+                (start..last).sum::<i128>(),
+                "{shape:?}, argument {arg}"
+            );
+        }
+    }
+}
+
+#[test]
+fn range_for_loop_whose_next_value_is_read_after_both_exits_is_left_untouched() {
+    let mut ctx = mir_ctx();
+    let u32 = u32t(&mut ctx);
+    let shape = RangeForShape {
+        break_at: Some(3),
+        exit_reads_next: true,
+        ..RangeForShape::new(RangeBound::Const(0), RangeBound::Const(8))
+    };
+    let lp = range_for_loop(&mut ctx, u32, shape);
+
+    unroll_range_for(&mut ctx, &lp, 0);
+
+    assert_eq!(loop_count(&ctx, lp.region), 1);
+    assert_eq!(
+        op_count::<MirGetDiscriminantOp>(&ctx, lp.region),
+        1,
+        "the `Option` match is still there"
+    );
 }

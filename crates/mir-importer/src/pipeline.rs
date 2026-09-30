@@ -620,6 +620,7 @@ pub fn run_pipeline(
                 config.allow_fma_contraction,
                 config.debug_kind,
             )?;
+            write_expected_kernels_sidecar(&config.output_dir, &config.output_name, functions)?;
             // Publish the target last: its version marker is the completion record
             // that says the sibling options file is required.
             write_nvvm_target_sidecar(&config.output_dir, &config.output_name, &generated.target)?;
@@ -735,6 +736,29 @@ fn write_nvvm_compile_options_sidecar(
     })
 }
 
+/// Records, next to the emitted `.ll`, the kernels its finalized image must
+/// define, so that finalizing from files checks them as the embedded route
+/// does.
+fn write_expected_kernels_sidecar(
+    output_dir: &Path,
+    output_name: &str,
+    functions: &[CollectedFunction],
+) -> Result<(), PipelineError> {
+    let path = output_dir.join(format!("{output_name}.kernels"));
+    let text = cuda_artifact_finalizer::expected_kernels_sidecar_text(
+        functions
+            .iter()
+            .filter(|function| function.is_kernel)
+            .map(|function| function.export_name.as_str()),
+    );
+    std::fs::write(&path, text).map_err(|error| {
+        PipelineError::Export(format!(
+            "failed to record expected kernels in {}: {error}",
+            path.display()
+        ))
+    })
+}
+
 fn stale_compilation_artifact_paths(
     output_dir: &Path,
     output_name: &str,
@@ -746,6 +770,7 @@ fn stale_compilation_artifact_paths(
         "ptx",
         "target",
         "options",
+        "kernels",
         "ltoir",
         "cubin",
         "cubin.target",

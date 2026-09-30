@@ -197,10 +197,16 @@ pub(crate) fn nvvm_ir_to_cubin(
     target: &str,
     allow_fma_contraction: bool,
     debug_policy: DebugPolicy,
+    expected_kernels: &[&str],
 ) -> Result<MaterializedCubin, MaterializeError> {
     let options = options(target, allow_fma_contraction, debug_policy)?;
     let finalizer = checked_finalizer(request)?;
-    let report = finalizer.materialize_nvvm_ir_with_report(module_name, nvvm_ir, &options)?;
+    let report = finalizer.materialize_nvvm_ir_with_report(
+        module_name,
+        nvvm_ir,
+        &options,
+        expected_kernels,
+    )?;
     Ok(MaterializedCubin {
         bytes: report.image,
         resource_usage: report.resource_usage,
@@ -214,6 +220,7 @@ pub(crate) fn ltoir_to_cubin(
     target: &str,
     allow_fma_contraction: bool,
     debug_policy: DebugPolicy,
+    expected_kernels: &[&str],
 ) -> Result<MaterializedCubin, MaterializeError> {
     let options = options(target, allow_fma_contraction, debug_policy)?;
     let finalizer = checked_finalizer(request)?;
@@ -221,6 +228,7 @@ pub(crate) fn ltoir_to_cubin(
         &[NamedInput::new(module_name, ltoir)],
         &options,
         FinalizerOutput::Cubin,
+        expected_kernels,
     )?;
     Ok(MaterializedCubin {
         bytes: report.image,

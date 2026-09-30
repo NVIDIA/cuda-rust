@@ -364,6 +364,7 @@ version = "0.2.1"
 dependencies = [
  "libnvvm-sys",
  "nvjitlink-sys",
+ "ptx-parse",
  "serde",
  "serde_json",
  "sha2",
@@ -994,6 +995,7 @@ name = "mir-importer"
 version = "0.2.1"
 dependencies = [
  "combine",
+ "cuda-artifact-finalizer",
  "cuda-oxide-codegen",
  "dialect-iket",
  "dialect-mir",

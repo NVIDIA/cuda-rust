@@ -12,6 +12,7 @@ pub use cuda_core::embedded::{
     embedded_modules_from_current_exe,
 };
 use cuda_core::{CudaContext, CudaModule, DriverError};
+use oxide_artifacts::ArtifactEntryKind;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -305,6 +306,13 @@ fn load_bundle(
         return Ok(ctx.load_module_from_image(ptx)?);
     }
 
+    let expected_kernels = bundle
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == ArtifactEntryKind::Kernel)
+        .map(|entry| entry.symbol.as_str())
+        .collect::<Vec<_>>();
+
     if let Some(nvvm_ir) = bundle.payload(ArtifactPayloadKind::NvvmIr) {
         let emitted = target_arch_for_bundle(bundle)?;
         let execution = ltoir::execution_arch_for_context(ctx)?;
@@ -314,12 +322,14 @@ fn load_bundle(
                 &bundle.name,
                 &emitted.sm(),
                 bundle.compile_options,
+                &expected_kernels,
             )?,
             ltoir::ExecutionRoute::PtxBridge => ltoir::build_ptx_from_nvvm_ir_with_compile_options(
                 nvvm_ir,
                 &bundle.name,
                 &emitted.sm(),
                 bundle.compile_options,
+                &expected_kernels,
             )?,
         };
         return Ok(ctx.load_module_from_image(&image)?);
@@ -334,12 +344,14 @@ fn load_bundle(
                 &bundle.name,
                 &emitted.sm(),
                 bundle.compile_options,
+                &expected_kernels,
             )?,
             ltoir::ExecutionRoute::PtxBridge => ltoir::link_ltoir_to_ptx_with_compile_options(
                 ltoir,
                 &bundle.name,
                 &emitted.sm(),
                 bundle.compile_options,
+                &expected_kernels,
             )?,
         };
         return Ok(ctx.load_module_from_image(&image)?);

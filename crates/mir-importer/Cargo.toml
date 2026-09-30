@@ -17,6 +17,7 @@ dialect-mir = { workspace = true }
 dialect-iket = { workspace = true }
 dialect-nvvm = { workspace = true }
 mir-lower = { workspace = true }
+cuda-artifact-finalizer = { workspace = true }
 oxide-artifacts = { workspace = true }
 cuda-oxide-codegen = { workspace = true }
 reserved-oxide-symbols = { workspace = true }

@@ -77,7 +77,8 @@
 use crate::ltoir_cache::{BuiltArtifacts, CacheResult, cache_or_build};
 use cuda_artifact_finalizer::{
     CudaArch, CudaArchParseError, FinalizationOptions, Finalizer, FinalizerError, FinalizerOutput,
-    LtoLinker, NamedInput, NvJitLinkError, NvvmError,
+    LtoLinker, NamedInput, NvJitLinkError, NvvmError, parse_expected_kernels_sidecar,
+    require_expected_kernels,
 };
 #[cfg(test)]
 use cuda_artifact_finalizer::{
@@ -273,6 +274,11 @@ fn build_cubin_from_ll_file(ll_path: &Path, arch: &CudaArch) -> Result<FileCubin
         source,
     })?;
     let compile_options = read_compile_options(ll_path)?;
+    let expected_kernels = read_expected_kernels(ll_path)?;
+    let expected_kernels = expected_kernels
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
     validate_ir_target_sidecar(ll_path, arch)?;
     // Record the supplied target for older or manually created `.ll` files.
     // The sibling `.ltoir` can then be loaded after the `.ll` is removed.
@@ -293,6 +299,7 @@ fn build_cubin_from_ll_file(ll_path: &Path, arch: &CudaArch) -> Result<FileCubin
         &ltoir_path.display().to_string(),
         arch,
         compile_options,
+        &expected_kernels,
     )?;
     let ltoir = cached
         .ltoir
@@ -327,8 +334,9 @@ pub fn build_cubin_from_nvvm_ir(
     nvvm_ir: &[u8],
     module_name: &str,
     arch: &str,
+    expected_kernels: &[&str],
 ) -> Result<Vec<u8>, LtoirError> {
-    build_cubin_from_nvvm_ir_with_options(nvvm_ir, module_name, arch, true)
+    build_cubin_from_nvvm_ir_with_options(nvvm_ir, module_name, arch, true, expected_kernels)
 }
 
 /// Compile NVVM IR bytes to a loadable cubin with an explicit FMA policy.
@@ -341,12 +349,14 @@ pub fn build_cubin_from_nvvm_ir_with_options(
     module_name: &str,
     arch: &str,
     allow_fma_contraction: bool,
+    expected_kernels: &[&str],
 ) -> Result<Vec<u8>, LtoirError> {
     build_cubin_from_nvvm_ir_with_compile_options(
         nvvm_ir,
         module_name,
         arch,
         ArtifactCompileOptions::new().with_fma_contraction(allow_fma_contraction),
+        expected_kernels,
     )
 }
 
@@ -357,10 +367,16 @@ pub fn build_cubin_from_nvvm_ir_with_compile_options(
     module_name: &str,
     arch: &str,
     compile_options: ArtifactCompileOptions,
+    expected_kernels: &[&str],
 ) -> Result<Vec<u8>, LtoirError> {
     let arch: CudaArch = arch.parse()?;
     let options = finalization_options(&arch, compile_options);
-    Ok(Finalizer::discover()?.materialize_nvvm_ir(module_name, nvvm_ir, &options)?)
+    Ok(Finalizer::discover()?.materialize_nvvm_ir(
+        module_name,
+        nvvm_ir,
+        &options,
+        expected_kernels,
+    )?)
 }
 
 /// Compile NVVM IR bytes to forward-compatible PTX.
@@ -372,8 +388,9 @@ pub fn build_ptx_from_nvvm_ir(
     nvvm_ir: &[u8],
     module_name: &str,
     arch: &str,
+    expected_kernels: &[&str],
 ) -> Result<Vec<u8>, LtoirError> {
-    build_ptx_from_nvvm_ir_with_options(nvvm_ir, module_name, arch, true)
+    build_ptx_from_nvvm_ir_with_options(nvvm_ir, module_name, arch, true, expected_kernels)
 }
 
 /// Compile NVVM IR bytes to forward-compatible PTX with an explicit FMA
@@ -387,12 +404,14 @@ pub fn build_ptx_from_nvvm_ir_with_options(
     module_name: &str,
     arch: &str,
     allow_fma_contraction: bool,
+    expected_kernels: &[&str],
 ) -> Result<Vec<u8>, LtoirError> {
     build_ptx_from_nvvm_ir_with_compile_options(
         nvvm_ir,
         module_name,
         arch,
         ArtifactCompileOptions::new().with_fma_contraction(allow_fma_contraction),
+        expected_kernels,
     )
 }
 
@@ -403,6 +422,7 @@ pub fn build_ptx_from_nvvm_ir_with_compile_options(
     module_name: &str,
     arch: &str,
     compile_options: ArtifactCompileOptions,
+    expected_kernels: &[&str],
 ) -> Result<Vec<u8>, LtoirError> {
     let arch: CudaArch = arch.parse()?;
     let finalizer = Finalizer::discover()?;
@@ -415,6 +435,7 @@ pub fn build_ptx_from_nvvm_ir_with_compile_options(
         &[NamedInput::new(&ltoir_name, &ltoir)],
         &options,
         FinalizerOutput::Ptx,
+        expected_kernels,
     )?)
 }
 
@@ -423,8 +444,9 @@ pub fn link_ltoir_to_cubin(
     ltoir: &[u8],
     module_name: &str,
     arch: &str,
+    expected_kernels: &[&str],
 ) -> Result<Vec<u8>, LtoirError> {
-    link_ltoir_to_cubin_with_options(ltoir, module_name, arch, true)
+    link_ltoir_to_cubin_with_options(ltoir, module_name, arch, true, expected_kernels)
 }
 
 /// Link a single LTOIR payload to a cubin with an explicit FMA policy.
@@ -437,12 +459,14 @@ pub fn link_ltoir_to_cubin_with_options(
     module_name: &str,
     arch: &str,
     allow_fma_contraction: bool,
+    expected_kernels: &[&str],
 ) -> Result<Vec<u8>, LtoirError> {
     link_ltoir_to_cubin_with_compile_options(
         ltoir,
         module_name,
         arch,
         ArtifactCompileOptions::new().with_fma_contraction(allow_fma_contraction),
+        expected_kernels,
     )
 }
 
@@ -453,9 +477,16 @@ pub fn link_ltoir_to_cubin_with_compile_options(
     module_name: &str,
     arch: &str,
     compile_options: ArtifactCompileOptions,
+    expected_kernels: &[&str],
 ) -> Result<Vec<u8>, LtoirError> {
     let arch: CudaArch = arch.parse()?;
-    link_ltoir_to_cubin_parsed_with_compile_options(ltoir, module_name, &arch, compile_options)
+    link_ltoir_to_cubin_parsed_with_compile_options(
+        ltoir,
+        module_name,
+        &arch,
+        compile_options,
+        expected_kernels,
+    )
 }
 
 /// Link one LTOIR payload to forward-compatible PTX.
@@ -466,8 +497,9 @@ pub fn link_ltoir_to_ptx(
     ltoir: &[u8],
     module_name: &str,
     arch: &str,
+    expected_kernels: &[&str],
 ) -> Result<Vec<u8>, LtoirError> {
-    link_ltoir_to_ptx_with_options(ltoir, module_name, arch, true)
+    link_ltoir_to_ptx_with_options(ltoir, module_name, arch, true, expected_kernels)
 }
 
 /// Link one LTOIR payload to forward-compatible PTX with an explicit FMA
@@ -481,12 +513,14 @@ pub fn link_ltoir_to_ptx_with_options(
     module_name: &str,
     arch: &str,
     allow_fma_contraction: bool,
+    expected_kernels: &[&str],
 ) -> Result<Vec<u8>, LtoirError> {
     link_ltoir_to_ptx_with_compile_options(
         ltoir,
         module_name,
         arch,
         ArtifactCompileOptions::new().with_fma_contraction(allow_fma_contraction),
+        expected_kernels,
     )
 }
 
@@ -497,9 +531,16 @@ pub fn link_ltoir_to_ptx_with_compile_options(
     module_name: &str,
     arch: &str,
     compile_options: ArtifactCompileOptions,
+    expected_kernels: &[&str],
 ) -> Result<Vec<u8>, LtoirError> {
     let arch: CudaArch = arch.parse()?;
-    link_ltoir_to_ptx_parsed_with_compile_options(ltoir, module_name, &arch, compile_options)
+    link_ltoir_to_ptx_parsed_with_compile_options(
+        ltoir,
+        module_name,
+        &arch,
+        compile_options,
+        expected_kernels,
+    )
 }
 
 fn link_ltoir_to_cubin_parsed_with_compile_options(
@@ -507,6 +548,7 @@ fn link_ltoir_to_cubin_parsed_with_compile_options(
     module_name: &str,
     arch: &CudaArch,
     compile_options: ArtifactCompileOptions,
+    expected_kernels: &[&str],
 ) -> Result<Vec<u8>, LtoirError> {
     link_ltoir_with_shared_finalizer(
         ltoir,
@@ -514,6 +556,7 @@ fn link_ltoir_to_cubin_parsed_with_compile_options(
         arch,
         compile_options,
         FinalizerOutput::Cubin,
+        expected_kernels,
     )
 }
 
@@ -522,6 +565,7 @@ fn link_ltoir_to_ptx_parsed_with_compile_options(
     module_name: &str,
     arch: &CudaArch,
     compile_options: ArtifactCompileOptions,
+    expected_kernels: &[&str],
 ) -> Result<Vec<u8>, LtoirError> {
     link_ltoir_with_shared_finalizer(
         ltoir,
@@ -529,6 +573,7 @@ fn link_ltoir_to_ptx_parsed_with_compile_options(
         arch,
         compile_options,
         FinalizerOutput::Ptx,
+        expected_kernels,
     )
 }
 
@@ -538,12 +583,14 @@ fn link_ltoir_with_shared_finalizer(
     arch: &CudaArch,
     compile_options: ArtifactCompileOptions,
     output: FinalizerOutput,
+    expected_kernels: &[&str],
 ) -> Result<Vec<u8>, LtoirError> {
     let options = finalization_options(arch, compile_options);
     Ok(LtoLinker::discover()?.link_ltoir(
         &[NamedInput::new(module_name, ltoir)],
         &options,
         output,
+        expected_kernels,
     )?)
 }
 
@@ -568,6 +615,7 @@ fn cached_nvvm_ir_to_cubin(
     nvvm_module_name: &str,
     ltoir_module_name: &str,
     arch: &CudaArch,
+    expected_kernels: &[&str],
 ) -> Result<CacheResult, LtoirError> {
     cached_nvvm_ir_to_cubin_with_compile_options(
         source_dir,
@@ -576,6 +624,7 @@ fn cached_nvvm_ir_to_cubin(
         ltoir_module_name,
         arch,
         ArtifactCompileOptions::new(),
+        expected_kernels,
     )
 }
 
@@ -586,6 +635,7 @@ fn cached_nvvm_ir_to_cubin_with_compile_options(
     ltoir_module_name: &str,
     arch: &CudaArch,
     compile_options: ArtifactCompileOptions,
+    expected_kernels: &[&str],
 ) -> Result<CacheResult, LtoirError> {
     let finalizer = Finalizer::discover()?;
     let options = finalization_options(arch, compile_options);
@@ -606,6 +656,7 @@ fn cached_nvvm_ir_to_cubin_with_compile_options(
             &[NamedInput::new(ltoir_module_name, &ltoir)],
             &options,
             FinalizerOutput::Cubin,
+            expected_kernels,
         )?;
         Ok(BuiltArtifacts::new(cubin, Some(ltoir)))
     };
@@ -614,6 +665,8 @@ fn cached_nvvm_ir_to_cubin_with_compile_options(
         Some(key) => cache_or_build(source_dir, &key, build)?,
         None => uncached_result(build()?),
     };
+    // A fresh build was checked by the link; a hit may predate the check.
+    require_expected_kernels(&result.cubin, FinalizerOutput::Cubin, expected_kernels)?;
     report_cache_result(&result);
     Ok(result)
 }
@@ -624,6 +677,7 @@ fn cached_ltoir_to_cubin(
     ltoir: &[u8],
     module_name: &str,
     arch: &CudaArch,
+    expected_kernels: &[&str],
 ) -> Result<CacheResult, LtoirError> {
     cached_ltoir_to_cubin_with_compile_options(
         source_dir,
@@ -631,6 +685,7 @@ fn cached_ltoir_to_cubin(
         module_name,
         arch,
         ArtifactCompileOptions::new(),
+        expected_kernels,
     )
 }
 
@@ -640,6 +695,7 @@ fn cached_ltoir_to_cubin_with_compile_options(
     module_name: &str,
     arch: &CudaArch,
     compile_options: ArtifactCompileOptions,
+    expected_kernels: &[&str],
 ) -> Result<CacheResult, LtoirError> {
     let linker = LtoLinker::discover()?;
     let options = finalization_options(arch, compile_options);
@@ -647,7 +703,7 @@ fn cached_ltoir_to_cubin_with_compile_options(
     let key = linker.artifact_digest(&inputs, &options, FinalizerOutput::Cubin);
     let build = || -> Result<BuiltArtifacts, LtoirError> {
         Ok(BuiltArtifacts::new(
-            linker.link_ltoir(&inputs, &options, FinalizerOutput::Cubin)?,
+            linker.link_ltoir(&inputs, &options, FinalizerOutput::Cubin, expected_kernels)?,
             None,
         ))
     };
@@ -656,6 +712,8 @@ fn cached_ltoir_to_cubin_with_compile_options(
         Some(key) => cache_or_build(source_dir, &key, build)?,
         None => uncached_result(build()?),
     };
+    // A fresh build was checked by the link; a hit may predate the check.
+    require_expected_kernels(&result.cubin, FinalizerOutput::Cubin, expected_kernels)?;
     report_cache_result(&result);
     Ok(result)
 }
@@ -864,11 +922,16 @@ pub fn load_kernel_module(
                 ExecutionRoute::PtxBridge => {
                     let nvvm_ir = read_artifact(&ll)?;
                     let compile_options = read_compile_options(&ll)?;
+                    let expected_kernels = read_expected_kernels(&ll)?;
                     let ptx = build_ptx_from_nvvm_ir_with_compile_options(
                         &nvvm_ir,
                         &ll.display().to_string(),
                         &emitted.sm(),
                         compile_options,
+                        &expected_kernels
+                            .iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>(),
                     )?;
                     Ok(ctx.load_module_from_image(&ptx)?)
                 }
@@ -879,6 +942,11 @@ pub fn load_kernel_module(
             let execution = execution_arch_for_context(ctx)?;
             let bytes = read_artifact(&ltoir)?;
             let compile_options = read_compile_options(&ltoir)?;
+            let expected_kernels = read_expected_kernels(&ltoir)?;
+            let expected_kernels = expected_kernels
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
             let image = match execution_route(&emitted, &execution)? {
                 ExecutionRoute::Cubin => {
                     cached_ltoir_to_cubin_with_compile_options(
@@ -887,6 +955,7 @@ pub fn load_kernel_module(
                         &ltoir.display().to_string(),
                         &emitted,
                         compile_options,
+                        &expected_kernels,
                     )?
                     .cubin
                 }
@@ -895,6 +964,7 @@ pub fn load_kernel_module(
                     &ltoir.display().to_string(),
                     &emitted,
                     compile_options,
+                    &expected_kernels,
                 )?,
             };
             Ok(ctx.load_module_from_image(&image)?)
@@ -1050,6 +1120,46 @@ fn emitted_target_path(ll_path: &Path) -> PathBuf {
 
 fn emitted_compile_options_path(ll_path: &Path) -> PathBuf {
     ll_path.with_extension("options")
+}
+
+/// Kernels the finalized image of the NVVM IR or LTOIR at `artifact_path`
+/// must define, from its `<name>.kernels` sidecar.
+///
+/// An artifact the compiler emitted (its `.target` carries the compile-options
+/// marker the compiler always writes) must have the list. A manual artifact is
+/// checked only against a list that is present.
+fn read_expected_kernels(artifact_path: &Path) -> Result<Vec<String>, LtoirError> {
+    let path = artifact_path.with_extension("kernels");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            let target_path = emitted_target_path(artifact_path);
+            let emitted_by_compiler = match std::fs::read_to_string(&target_path) {
+                Ok(target) => target.lines().nth(1) == Some(COMPILE_OPTIONS_TARGET_MARKER),
+                Err(source) if source.kind() == std::io::ErrorKind::NotFound => false,
+                Err(source) => {
+                    return Err(LtoirError::Io {
+                        path: target_path,
+                        source,
+                    });
+                }
+            };
+            return if emitted_by_compiler {
+                Err(LtoirError::InvalidCompileOptions {
+                    path,
+                    value: "required expected-kernels sidecar is missing; rebuild the device crate"
+                        .to_string(),
+                })
+            } else {
+                Ok(Vec::new())
+            };
+        }
+        Err(source) => return Err(LtoirError::Io { path, source }),
+    };
+    parse_expected_kernels_sidecar(&text).ok_or_else(|| LtoirError::InvalidCompileOptions {
+        path,
+        value: "not a cuda-oxide expected-kernels list".to_string(),
+    })
 }
 
 fn read_compile_options(ll_path: &Path) -> Result<ArtifactCompileOptions, LtoirError> {
@@ -1433,10 +1543,10 @@ mod tests {
 
     #[test]
     fn invalid_link_target_fails_before_loading_nvidia_libraries() {
-        let error = link_ltoir_to_cubin(&[], "empty", "nvvm-ir").unwrap_err();
+        let error = link_ltoir_to_cubin(&[], "empty", "nvvm-ir", &[]).unwrap_err();
         assert!(matches!(error, LtoirError::InvalidTarget(_)));
 
-        let error = link_ltoir_to_ptx(&[], "empty", "nvvm-ir").unwrap_err();
+        let error = link_ltoir_to_ptx(&[], "empty", "nvvm-ir", &[]).unwrap_err();
         assert!(matches!(error, LtoirError::InvalidTarget(_)));
     }
 
@@ -1750,6 +1860,8 @@ mod tests {
 target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-i128:128:128-f32:32:32-f64:64:64-v16:16:16-v32:32:32-v64:64:64-v128:128:128-n16:32:64"
 target triple = "nvptx64-nvidia-cuda"
 
+@llvm.used = appending global [1 x i8*] [i8* bitcast (void ()* @kernel to i8*)], section "llvm.metadata"
+
 define void @kernel() {
 entry:
   ret void
@@ -1765,6 +1877,11 @@ entry:
         std::fs::create_dir_all(&dir).unwrap();
         let ll = dir.join("kernel.ll");
         std::fs::write(&ll, LEGACY_NVVM_IR).unwrap();
+        std::fs::write(
+            dir.join("kernel.kernels"),
+            cuda_artifact_finalizer::expected_kernels_sidecar_text(["kernel"]),
+        )
+        .unwrap();
 
         let first = build_cubin_from_ll(&ll, "sm_86").unwrap();
         let first_bytes = std::fs::read(&first).unwrap();
@@ -1787,6 +1904,7 @@ entry:
             &ll.display().to_string(),
             &ltoir_path.display().to_string(),
             &arch,
+            &["kernel"],
         )
         .unwrap();
         assert!(native_hit.cache_hit);
@@ -1801,6 +1919,7 @@ entry:
             &ll.display().to_string(),
             &ltoir_path.display().to_string(),
             &arch,
+            &["kernel"],
         )
         .unwrap();
         assert!(native_hit_again.cache_hit);
@@ -1821,11 +1940,13 @@ entry:
         let standalone_dir = dir.join("standalone");
         std::fs::create_dir(&standalone_dir).unwrap();
         let standalone_first =
-            cached_ltoir_to_cubin(&standalone_dir, &ltoir, "kernel.ltoir", &arch).unwrap();
+            cached_ltoir_to_cubin(&standalone_dir, &ltoir, "kernel.ltoir", &arch, &["kernel"])
+                .unwrap();
         assert!(!standalone_first.cache_hit);
         assert_eq!(standalone_first.ltoir, None);
         let standalone_second =
-            cached_ltoir_to_cubin(&standalone_dir, &ltoir, "kernel.ltoir", &arch).unwrap();
+            cached_ltoir_to_cubin(&standalone_dir, &ltoir, "kernel.ltoir", &arch, &["kernel"])
+                .unwrap();
         assert!(standalone_second.cache_hit);
         assert_eq!(standalone_second.cubin, standalone_first.cubin);
         assert_eq!(
@@ -1845,6 +1966,7 @@ entry:
             &ll.display().to_string(),
             &ltoir_path.display().to_string(),
             &arch,
+            &["kernel"],
         )
         .unwrap();
         assert!(changed_hit.cache_hit);

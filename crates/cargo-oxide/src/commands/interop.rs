@@ -477,6 +477,27 @@ fn finalize_interop_device_artifact(
                         );
                         std::process::exit(1);
                     });
+            let kernels_path = ir_path.with_extension("kernels");
+            let kernels_text = std::fs::read_to_string(&kernels_path).unwrap_or_else(|error| {
+                eprintln!(
+                    "Error: could not read emitted kernel list at {}: {error}",
+                    kernels_path.display()
+                );
+                std::process::exit(1);
+            });
+            let expected_kernels =
+                cuda_artifact_finalizer::parse_expected_kernels_sidecar(&kernels_text)
+                    .unwrap_or_else(|| {
+                        eprintln!(
+                            "Error: invalid emitted kernel list at {}",
+                            kernels_path.display()
+                        );
+                        std::process::exit(1);
+                    });
+            let expected_kernels = expected_kernels
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
             let finalizer = cuda_artifact_finalizer::Finalizer::discover().unwrap_or_else(|error| {
                 eprintln!("Error: could not initialize the CUDA artifact finalizer: {error}");
                 eprintln!(
@@ -486,7 +507,7 @@ fn finalize_interop_device_artifact(
             });
             let options = finalization_options_from_artifact(&target, compile_options);
             let cubin = finalizer
-                .materialize_nvvm_ir(artifact_name, &ir, &options)
+                .materialize_nvvm_ir(artifact_name, &ir, &options, &expected_kernels)
                 .unwrap_or_else(|error| {
                     eprintln!(
                         "Error: could not finalize {} for {}: {error}",

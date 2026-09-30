@@ -316,10 +316,10 @@ pub fn bundle_generated_u32_results_as_array(
 /// 1. Translate all MIR arguments to Pliron IR values
 /// 2. At a foreign ABI boundary, adapt pointer address spaces to the exact
 ///    declared parameter types without changing pointer kind or mutability
-/// 3. Prepare the call destination using the current projection state
+/// 3. For returning calls, prepare the destination using the current projection state
 /// 4. Create a `mir.call` operation carrying the callee's name attribute
-/// 5. Store the result through the prepared destination
-/// 6. Emit a zero-operand goto to the call's success target
+/// 5. For returning calls, store the result and goto the success target
+/// 6. For diverging calls, emit `mir.unreachable` after the call
 ///
 /// Reference arguments (`&mut local`) are handed the local's alloca slot
 /// pointer directly, so callee writes through the reference are observed by
@@ -383,16 +383,21 @@ pub fn emit_function_call(
         }
     }
 
-    let (prepared_destination, prepared_last_op) = prepare_destination_write(
-        ctx,
-        body,
-        destination,
-        value_map,
-        block_ptr,
-        last_op,
-        loc.clone(),
-    )?;
-    last_op = prepared_last_op;
+    let prepared_destination = if target.is_some() {
+        let (prepared, prepared_last_op) = prepare_destination_write(
+            ctx,
+            body,
+            destination,
+            value_map,
+            block_ptr,
+            last_op,
+            loc.clone(),
+        )?;
+        last_op = prepared_last_op;
+        Some(prepared)
+    } else {
+        None
+    };
 
     use pliron::builtin::attributes::StringAttr;
 
@@ -423,11 +428,20 @@ pub fn emit_function_call(
         call_op
     };
 
+    if target.is_none() {
+        return Ok(super::emit_unreachable_after(
+            ctx,
+            block_ptr,
+            Some(call_op),
+            loc,
+        ));
+    }
+
     let result_value = call_op.deref(ctx).get_result(0);
 
     let goto_prev = finish_destination_write(
         ctx,
-        prepared_destination,
+        prepared_destination.expect("returning call prepared its destination"),
         result_value,
         value_map,
         block_ptr,
@@ -435,14 +449,13 @@ pub fn emit_function_call(
         loc.clone(),
     )?;
 
-    if let Some(target_idx) = target {
-        Ok(emit_goto(ctx, *target_idx, goto_prev, block_map, loc))
-    } else {
-        input_err!(
-            loc.clone(),
-            TranslationErr::unsupported("Call terminator without target not supported".to_string(),)
-        )
-    }
+    Ok(emit_goto(
+        ctx,
+        target.expect("returning call has a success target"),
+        goto_prev,
+        block_map,
+        loc,
+    ))
 }
 
 /// Adapt a foreign-call pointer argument only when the address space is the

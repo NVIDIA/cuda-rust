@@ -26,6 +26,23 @@ use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;
 use std::sync::Arc;
 
+#[derive(Copy, Clone)]
+struct Pair {
+    x: u32,
+    y: u32,
+}
+
+#[inline(never)]
+fn middle_last_field(values: &[Pair]) -> u32 {
+    let [_, middle @ .., _] = values else {
+        return 0;
+    };
+    let [.., last] = middle else {
+        return 0;
+    };
+    last.x + last.y
+}
+
 #[inline(never)]
 fn array_middle_value(values: [u32; 4]) -> [u32; 2] {
     let [_, middle @ .., _] = values;
@@ -53,9 +70,60 @@ fn bump_slice_middle(values: &mut [u32]) {
     }
 }
 
+#[inline(never)]
+fn bump_slice_middle_last(values: &mut [u32]) {
+    if let [_, middle @ .., _] = values {
+        if let [.., last] = middle {
+            *last += 11;
+        }
+    }
+}
+
+#[inline(never)]
+fn bump_slice_middle_second_last(values: &mut [u32]) {
+    if let [_, middle @ .., _] = values {
+        if let [.., second_last, _] = middle {
+            *second_last += 13;
+        }
+    }
+}
+
 #[cuda_module]
 mod kernels {
     use super::*;
+
+    #[kernel]
+    pub fn test_slice_subslice_from_end_field(input: &[[u32; 4]], mut out: DisjointSlice<u32>) {
+        let idx = thread::index_1d();
+        let i = idx.get();
+        if i >= input.len() {
+            return;
+        }
+
+        let row = input[i];
+        let values = [
+            Pair {
+                x: row[0],
+                y: row[0] + 100,
+            },
+            Pair {
+                x: row[1],
+                y: row[1] + 100,
+            },
+            Pair {
+                x: row[2],
+                y: row[2] + 100,
+            },
+            Pair {
+                x: row[3],
+                y: row[3] + 100,
+            },
+        ];
+
+        if let Some(slot) = out.get_mut(idx) {
+            *slot = middle_last_field(&values);
+        }
+    }
 
     #[kernel]
     pub fn test_array_subslice_value(input: &[[u32; 4]], mut out: DisjointSlice<u32>) {
@@ -121,6 +189,34 @@ mod kernels {
         if let Some(slot) = out.get_mut(idx) {
             // Checks both the advanced data pointer and rebuilt length metadata.
             *slot = (middle.len() as u32) * 1000 + middle[0];
+        }
+    }
+
+    #[kernel]
+    pub fn test_slice_subslice_from_end_mut(input: &[[u32; 4]], mut out: DisjointSlice<u32>) {
+        let idx = thread::index_1d();
+        let i = idx.get();
+        if i >= input.len() {
+            return;
+        }
+
+        let mut values = input[i];
+        let before = values;
+
+        // Exercise two distinct from-end ConstantIndex offsets on the rebuilt
+        // middle subslice: offset 1 selects original element 2, offset 2 selects
+        // original element 1.
+        bump_slice_middle_last(&mut values);
+        bump_slice_middle_second_last(&mut values);
+
+        if let Some(slot) = out.get_mut(idx) {
+            let d0 = values[0] - before[0];
+            let d1 = values[1] - before[1];
+            let d2 = values[2] - before[2];
+            let d3 = values[3] - before[3];
+
+            // Pack every element's delta so collateral writes also fail the test.
+            *slot = d0 | (d1 << 8) | (d2 << 16) | (d3 << 24);
         }
     }
 
@@ -191,6 +287,16 @@ fn main() {
     let mut all_pass = true;
 
     all_pass &= run_and_report(
+        "slice subslice from-end field",
+        &stream,
+        |s, cfg, i, o| {
+            // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
+            unsafe { module.test_slice_subslice_from_end_field(s, cfg, i, o) }.expect("launch")
+        },
+        |i| 160 + 2 * i as u32,
+    );
+
+    all_pass &= run_and_report(
         "array value",
         &stream,
         |s, cfg, i, o| {
@@ -238,6 +344,16 @@ fn main() {
             unsafe { module.test_slice_subslice_mut(s, cfg, i, o) }.expect("launch")
         },
         |_| 9,
+    );
+
+    all_pass &= run_and_report(
+        "slice subslice from-end mutable",
+        &stream,
+        |s, cfg, i, o| {
+            // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
+            unsafe { module.test_slice_subslice_from_end_mut(s, cfg, i, o) }.expect("launch")
+        },
+        |_| (13 << 8) | (11 << 16),
     );
 
     if all_pass {

@@ -7,11 +7,11 @@ Rustc emits `Subslice` for the `middle @ ..` portion of array and slice patterns
 - arrays use `Subslice { from, to, from_end: false }`; the result is the sized array place `[T; to - from]` starting at element `from`;
 - slices use `Subslice { from, to, from_end: true }`; the result keeps a data pointer advanced by `from` elements and metadata `old_len - from - to`.
 
-Before this fix, the place walkers under `crates/mir-importer/src/translator/rvalue/` had no `Subslice` lowering. The value walker reported `Projection element ... not yet implemented in iterative mode`, while the address walker returned `Ok(None)`. Mutable borrows then failed loudly because falling back to a reference to a copy would lose write-through semantics.
+`Subslice` lowering already supports sized arrays and slice fat pointers. This regression extends that support to `ConstantIndex { from_end: true }` immediately following a slice `Subslice`. The index must use the rebuilt subslice metadata: `subslice_len = old_len - from - to`, then `index = subslice_len - offset`. Coverage includes both value reads and address-based mutable writes, plus a field projection after the from-end index.
 
 ## Coverage
 
-The example contains five cases:
+The example contains seven cases:
 
 | Case | MIR property checked |
 |---|---|
@@ -20,6 +20,8 @@ The example contains five cases:
 | `array mutable ref` | mutable reference writes through to original array storage |
 | `slice metadata` | slice data pointer advances and length becomes `old_len - from - to` |
 | `slice mutable ref` | mutable slice subslice writes through to original storage |
+| `slice subslice from-end field` | rebuilt slice metadata drives a from-end index followed by struct field projections |
+| `slice subslice from-end mutable` | two distinct from-end offsets write through the rebuilt subslice while unrelated elements remain unchanged |
 
 The helper functions are `#[inline(never)]` so optimized MIR retains the relevant projection in a separate body.
 
@@ -28,6 +30,9 @@ Typical MIR shapes are expected to include:
 ```text
 Subslice { from: 1, to: 3, from_end: false }   # [u32; 4] -> [u32; 2]
 Subslice { from: 1, to: 1, from_end: true }    # [u32] -> [u32]
+Subslice -> ConstantIndex { offset: 1, from_end: true }
+Subslice -> ConstantIndex { offset: 2, from_end: true }
+Subslice -> ConstantIndex { offset: 1, from_end: true } -> Field
 ```
 
 ## Run

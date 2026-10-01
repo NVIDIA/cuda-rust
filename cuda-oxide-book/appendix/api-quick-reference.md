@@ -310,6 +310,7 @@ pub fn dynamic(data: &[f32]) {
 | `SharedArray<T, N>`       | Compile-time sized, block-scoped shared memory            |
 | `SharedArray<T, N, 128>`  | With 128-byte alignment (required for TMA destinations)   |
 | `DynamicSharedArray<T>`   | Runtime-sized shared memory (set via `LaunchConfig`)      |
+| `SharedPtr<T>`            | Pointer into this block's shared memory, `addrspace(3)` by type |
 
 Both are `!Sync` — concurrent access requires explicit barriers.
 
@@ -647,7 +648,7 @@ debug::prof_trigger::<7>();     // Nsight profiler trigger
 | `thread`             | Thread/block IDs, `index_1d`, `sync_threads`                     | All      |
 | `config`             | Compile-time policies, shapes, tiles, atoms, layouts, memory spaces, and scopes | All |
 | `disjoint`           | `DisjointSlice<T>` — typed writes completed by a launch proof    | All      |
-| `shared`             | `SharedArray<T, N>`, `DynamicSharedArray<T>`                     | All      |
+| `shared`             | `SharedArray<T, N>`, `DynamicSharedArray<T>`, `SharedPtr<T>`     | All      |
 | `warp`               | Shuffle, vote, match, lane/warp ID                               | All      |
 | `atomic`             | Scoped atomics (device/block/system)                             | sm_70+   |
 | `debug`              | `clock64`, `trap`, `breakpoint`, `gpu_printf!`                   | All      |

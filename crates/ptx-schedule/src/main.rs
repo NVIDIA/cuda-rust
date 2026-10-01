@@ -6,7 +6,7 @@
 use clap::{ArgGroup, Parser};
 use ptx_schedule::{InjectionOptions, analyze_ptx, perturb_ptx};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -74,6 +74,52 @@ struct Cli {
     decisions_json: Option<PathBuf>,
 }
 
+/// Canonical path of a destination that may not exist yet. The existing
+/// parent is canonicalized so `./` and `../` aliases compare equal.
+fn canonical_destination(path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    if let Ok(canonical) = fs::canonicalize(&absolute) {
+        return Ok(canonical);
+    }
+    let file_name = absolute
+        .file_name()
+        .ok_or_else(|| format!("--decisions-json path has no file name: {}", path.display()))?;
+    let parent = absolute
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    Ok(fs::canonicalize(parent)?.join(file_name))
+}
+
+fn reject_decisions_clobber(
+    input: &Path,
+    output: &Path,
+    decisions: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let decisions_path = canonical_destination(decisions)?;
+    let same_as_input = decisions_path == canonical_destination(input)?;
+    let same_as_output = decisions_path == canonical_destination(output)?;
+    if same_as_input || same_as_output {
+        let which = if same_as_input && same_as_output {
+            "the PTX input and --output"
+        } else if same_as_input {
+            "the PTX input"
+        } else {
+            "--output"
+        };
+        return Err(format!(
+            "--decisions-json resolves to {}, which is {which}; refusing to overwrite PTX",
+            decisions_path.display()
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let source = fs::read_to_string(&cli.input)?;
@@ -100,9 +146,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = cli
         .output
         .expect("clap requires either --list-sites or --output");
+    if let Some(decisions) = &cli.decisions_json {
+        reject_decisions_clobber(&cli.input, &output, decisions)?;
+    }
     let rewrite = perturb_ptx(&source, &options)?;
-    fs::write(output, &rewrite.ptx)?;
-    if let Some(path) = cli.decisions_json {
+    fs::write(&output, &rewrite.ptx)?;
+    if let Some(path) = &cli.decisions_json {
         fs::write(path, serde_json::to_string_pretty(&rewrite.report)?)?;
     }
     println!(

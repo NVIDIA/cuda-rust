@@ -571,7 +571,7 @@ impl Parse for ClusterArgs {
             .map(|lit| lit.base10_parse::<u32>())
             .collect::<Result<Vec<_>, _>>()?;
 
-        if let Some((index, value)) = values.iter().enumerate().find(|(_, value)| **value == 0) {
+        if let Some((index, _)) = values.iter().enumerate().find(|(_, value)| **value == 0) {
             return Err(syn::Error::new_spanned(
                 &args[index],
                 "cluster dimensions must be greater than zero",
@@ -596,7 +596,7 @@ impl Parse for ClusterArgs {
             }),
             _ => Err(syn::Error::new(
                 input.span(),
-                "cluster expects 1, 2, or 3 dimensions: #[cluster(x)], #[cluster(x, y)], or #[cluster(x, y, z)]",
+                "cluster_launch expects 1, 2, or 3 dimensions: #[cluster_launch(x)], #[cluster_launch(x, y)], or #[cluster_launch(x, y, z)]",
             )),
         }
     }

@@ -1,1 +1,1 @@
-intrinsics/probes/*.ll whitespace=-blank-at-eof
+cuda-oxide/intrinsics/probes/*.ll whitespace=-blank-at-eof

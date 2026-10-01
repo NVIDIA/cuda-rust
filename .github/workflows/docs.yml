@@ -59,7 +59,7 @@ jobs:
       # this gate did not, which is how four broken intra-doc links in its
       # crate-level documentation went unreported.
       - name: Build docs (warning-free) for rustc-codegen-cuda
-        working-directory: crates/rustc-codegen-cuda
+        working-directory: cuda-oxide/crates/rustc-codegen-cuda
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: |

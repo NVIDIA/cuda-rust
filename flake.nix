@@ -134,7 +134,7 @@
         };
 
         cargoOxideDeps = craneLib.buildDepsOnly (
-          craneLib.crateNameFromCargoToml { cargoToml = ./crates/cargo-oxide/Cargo.toml; }
+          craneLib.crateNameFromCargoToml { cargoToml = ./cuda-oxide/crates/cargo-oxide/Cargo.toml; }
           // cargoOxideCommonArgs
         );
 
@@ -174,7 +174,7 @@
         # still builds librustc_codegen_cuda.so on first use and caches it
         # outside the Nix store, so this derivation is not fully pure yet.
         cargo-oxide = craneLib.buildPackage (
-          craneLib.crateNameFromCargoToml { cargoToml = ./crates/cargo-oxide/Cargo.toml; }
+          craneLib.crateNameFromCargoToml { cargoToml = ./cuda-oxide/crates/cargo-oxide/Cargo.toml; }
           // cargoOxideCommonArgs
           // {
             cargoArtifacts = cargoOxideDeps;

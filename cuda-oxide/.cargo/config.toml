@@ -1,0 +1,13 @@
+# Custom cargo aliases for cuda-oxide
+
+[alias]
+oxide = "run --package cargo-oxide --"
+
+# Environment variables for all builds
+[env]
+# libmathdx installation path (for libmathdx-sys crate)
+# Required only when using --features libmathdx with mathdx_ffi_test.
+# IMPORTANT: Replace the placeholder below with your libmathdx install dir,
+# or override at build time with `LIBMATHDX_PATH=/your/path cargo build`.
+# See: crates/rustc-codegen-cuda/examples/mathdx_ffi_test/README.md
+LIBMATHDX_PATH = "/path/to/libmathdx/install"

@@ -43,7 +43,7 @@ jobs:
       # example -- a 15-70s spike in an otherwise ~2s-per-example run.
       # Fails fast, before any toolkit install.
       - name: Example lockfiles resolve identical dependency versions
-        run: bash scripts/sync-example-locks.sh --check
+        run: bash cuda-oxide/scripts/sync-example-locks.sh --check
 
       # Needed for cuda.h and curand.h: bindgen runs in the shared
       # cuda-bindings build script. Same setup as unit-tests.yml / clippy.yml.
@@ -112,7 +112,7 @@ jobs:
           export LIBRARY_PATH="${sysroot}/lib:${LIBRARY_PATH:-}"
           export LD_LIBRARY_PATH="${sysroot}/lib:${LD_LIBRARY_PATH:-}"
 
-          scripts/smoketest.sh --compile-only --no-color
+          cuda-oxide/scripts/smoketest.sh --compile-only --no-color
 
       - name: Artifact modes keep shared Cargo dependencies fresh
         timeout-minutes: 10

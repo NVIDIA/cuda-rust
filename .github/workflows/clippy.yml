@@ -56,7 +56,7 @@ jobs:
         env:
           CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           CARGO_TARGET_DIR: ${{ runner.temp }}/clippy-shared-target
-        working-directory: crates/rustc-codegen-cuda
+        working-directory: cuda-oxide/crates/rustc-codegen-cuda
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Run clippy (rustc-codegen-cuda examples)
@@ -65,7 +65,7 @@ jobs:
           CARGO_TARGET_DIR: ${{ runner.temp }}/clippy-shared-target
         run: |
           set -e
-          for ex in crates/rustc-codegen-cuda/examples/*/; do
+          for ex in cuda-oxide/crates/rustc-codegen-cuda/examples/*/; do
             if [ ! -f "$ex/Cargo.toml" ]; then continue; fi
             name=$(basename "$ex")
             echo "::group::clippy: $name"
@@ -96,11 +96,11 @@ jobs:
                grep -q "\"${sub}\""; then
               continue
             fi
-            echo "::group::clippy: ${dir#crates/rustc-codegen-cuda/examples/}"
+            echo "::group::clippy: ${dir#cuda-oxide/crates/rustc-codegen-cuda/examples/}"
             (cd "${dir}" && cargo clippy --locked --all-targets -- -D warnings)
             echo "::endgroup::"
           done < <(
-            find crates/rustc-codegen-cuda/examples -mindepth 3 -name Cargo.toml \
+            find cuda-oxide/crates/rustc-codegen-cuda/examples -mindepth 3 -name Cargo.toml \
               -not -path '*/target/*' | sort
           )
 
@@ -111,5 +111,5 @@ jobs:
           # surface, and check-device-only-build.sh runs `cargo check` on it but
           # never a lint.
           echo "::group::clippy: cuda-macros device-only fixture"
-          (cd crates/cuda-macros/tests/device-only && cargo clippy --locked --all-targets -- -D warnings)
+          (cd cuda-oxide/crates/cuda-macros/tests/device-only && cargo clippy --locked --all-targets -- -D warnings)
           echo "::endgroup::"

@@ -26,9 +26,9 @@ jobs:
 
       - name: Check rustc-codegen-cuda formatting
         run: cargo fmt --all -- --check
-        working-directory: crates/rustc-codegen-cuda
+        working-directory: cuda-oxide/crates/rustc-codegen-cuda
 
-      # `crates/cuda-macros/tests/device-only` is a workspace of its own, so the
+      # `cuda-oxide/crates/cuda-macros/tests/device-only` is a workspace of its own, so the
       # root `cargo fmt --all` above stops at it, and the examples glob below
       # only covers `examples/`. It is the fixture that proves the #701/#702
       # device-only property, and `check-device-only-build.sh` runs `cargo check`
@@ -36,7 +36,7 @@ jobs:
       # anything.
       - name: Check the cuda-macros device-only fixture formatting
         run: cargo fmt --all -- --check
-        working-directory: crates/cuda-macros/tests/device-only
+        working-directory: cuda-oxide/crates/cuda-macros/tests/device-only
 
       - name: Check example crate formatting
         run: |
@@ -44,7 +44,7 @@ jobs:
           # `cargo fmt --all` also formats local path dependencies. Running it
           # per example repeatedly reformats the large shared workspaces.
           shopt -s globstar nullglob
-          manifests=(crates/rustc-codegen-cuda/examples/**/Cargo.toml)
+          manifests=(cuda-oxide/crates/rustc-codegen-cuda/examples/**/Cargo.toml)
           ((${#manifests[@]} > 0))
           for manifest in "${manifests[@]}"; do
             example_dir="$(dirname "$manifest")"

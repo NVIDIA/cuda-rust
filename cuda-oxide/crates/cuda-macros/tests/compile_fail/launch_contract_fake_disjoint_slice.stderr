@@ -1,0 +1,61 @@
+error[E0277]: the trait bound `for<'__cuda_oxide_disjoint> DisjointSlice<'__cuda_oxide_disjoint, u32>: cuda_device::disjoint::__LaunchContractDisjointSlice<u32, 1>` is not satisfied
+  --> tests/compile_fail/launch_contract_fake_disjoint_slice.rs:27:20
+   |
+27 |     let _ = module.prepare_lookalike(cuda_core::LaunchConfig1D::new(1, 64, 0));
+   |                    ^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `for<'__cuda_oxide_disjoint> cuda_device::disjoint::__LaunchContractDisjointSlice<u32, 1>` is not implemented for `DisjointSlice<'__cuda_oxide_disjoint, u32>`
+  --> tests/compile_fail/launch_contract_fake_disjoint_slice.rs:9:1
+   |
+ 9 | pub struct DisjointSlice<'a, T, IndexSpace = Index1D> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: the following other types implement trait `cuda_device::disjoint::__LaunchContractDisjointSlice<Element, DOMAIN>`:
+             `cuda_device::DisjointSlice<'a, T, Index2D<ROW_STRIDE>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
+             `cuda_device::DisjointSlice<'a, T, Index2D<ROW_STRIDE>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 2>`
+             `cuda_device::DisjointSlice<'a, T, LinearTiles<N>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
+             `cuda_device::DisjointSlice<'a, T, RowMajorTiles<ROWS, COLS, ROW_STRIDE>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 2>`
+             `cuda_device::DisjointSlice<'a, T, Runtime2DIndex>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
+             `cuda_device::DisjointSlice<'a, T, Runtime2DIndex>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 2>`
+             `cuda_device::DisjointSlice<'a, T, RuntimeRowMajorTiles<ROWS, COLS>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 2>`
+             `cuda_device::DisjointSlice<'a, T, WarpIndex>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
+             `cuda_device::DisjointSlice<'a, T>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
+note: required by a bound in `LoadedModule::prepare_lookalike`
+  --> tests/compile_fail/launch_contract_fake_disjoint_slice.rs:15:1
+   |
+15 | #[cuda_module]
+   | ^^^^^^^^^^^^^^ required by this bound in `LoadedModule::prepare_lookalike`
+...
+21 |     pub fn lookalike(mut out: DisjointSlice<u32>) {
+   |            --------- required by a bound in this associated function
+   = note: this error originates in the attribute macro `cuda_module` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `for<'__cuda_oxide_disjoint> DisjointSlice<'__cuda_oxide_disjoint, u32>: cuda_device::disjoint::__LaunchContractDisjointSliceAbi<u32, false>` is not satisfied
+  --> tests/compile_fail/launch_contract_fake_disjoint_slice.rs:27:20
+   |
+27 |     let _ = module.prepare_lookalike(cuda_core::LaunchConfig1D::new(1, 64, 0));
+   |                    ^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `for<'__cuda_oxide_disjoint> cuda_device::disjoint::__LaunchContractDisjointSliceAbi<u32, false>` is not implemented for `DisjointSlice<'__cuda_oxide_disjoint, u32>`
+  --> tests/compile_fail/launch_contract_fake_disjoint_slice.rs:9:1
+   |
+ 9 | pub struct DisjointSlice<'a, T, IndexSpace = Index1D> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: `cuda_device::DisjointSlice<'a, T, IndexSpace>` implements trait `cuda_device::disjoint::__LaunchContractDisjointSliceAbi<Element, HAS_ROW_WIDTH>`
+  --> $WORKSPACE/cuda-oxide/crates/cuda-device/src/disjoint.rs
+   |
+   | / impl<'a, T, IndexSpace: SpaceLayout<Data = ()>> __LaunchContractDisjointSliceAbi<T, false>
+   | |     for DisjointSlice<'a, T, IndexSpace>
+   | |________________________________________^ `cuda_device::disjoint::__LaunchContractDisjointSliceAbi<T, false>`
+...
+   | / impl<'a, T, IndexSpace: SpaceLayout<Data = u32>> __LaunchContractDisjointSliceAbi<T, true>
+   | |     for DisjointSlice<'a, T, IndexSpace>
+   | |________________________________________^ `cuda_device::disjoint::__LaunchContractDisjointSliceAbi<T, true>`
+note: required by a bound in `LoadedModule::prepare_lookalike`
+  --> tests/compile_fail/launch_contract_fake_disjoint_slice.rs:15:1
+   |
+15 | #[cuda_module]
+   | ^^^^^^^^^^^^^^ required by this bound in `LoadedModule::prepare_lookalike`
+...
+21 |     pub fn lookalike(mut out: DisjointSlice<u32>) {
+   |            --------- required by a bound in this associated function
+   = note: this error originates in the attribute macro `cuda_module` (in Nightly builds, run with -Z macro-backtrace for more info)

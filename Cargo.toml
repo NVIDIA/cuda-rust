@@ -2,38 +2,38 @@
 resolver = "3"
 members = [
     # Core crates
-    "crates/cuda-target-spec",
-    "crates/cuda-intrinsics",
-    "crates/cuda-intrinsics-gen",
-    "crates/ptx-parse",
-    "crates/ptx-schedule",
-    "crates/dialect-ptx",
-    "crates/cuda-device",
-    "crates/cuda-artifact-finalizer",
-    "crates/cuda-host",
-    "crates/cuda-macros",
-    "crates/llvm-export",
-    "crates/dialect-mir",
-    "crates/dialect-iket",
-    "crates/dialect-nvvm",
-    "crates/mir-importer",
-    "crates/cuda-oxide-codegen",
-    "crates/mir-lower",
-    "crates/iket-lower",
-    "crates/mir-transforms",
-    "crates/nvvm-transforms",
-    "crates/cargo-oxide",
-    "crates/oxide-artifacts",
+    "cuda-oxide/crates/cuda-target-spec",
+    "cuda-oxide/crates/cuda-intrinsics",
+    "cuda-oxide/crates/cuda-intrinsics-gen",
+    "cuda-oxide/crates/ptx-parse",
+    "cuda-oxide/crates/ptx-schedule",
+    "cuda-oxide/crates/dialect-ptx",
+    "cuda-oxide/crates/cuda-device",
+    "cuda-oxide/crates/cuda-artifact-finalizer",
+    "cuda-oxide/crates/cuda-host",
+    "cuda-oxide/crates/cuda-macros",
+    "cuda-oxide/crates/llvm-export",
+    "cuda-oxide/crates/dialect-mir",
+    "cuda-oxide/crates/dialect-iket",
+    "cuda-oxide/crates/dialect-nvvm",
+    "cuda-oxide/crates/mir-importer",
+    "cuda-oxide/crates/cuda-oxide-codegen",
+    "cuda-oxide/crates/mir-lower",
+    "cuda-oxide/crates/iket-lower",
+    "cuda-oxide/crates/mir-transforms",
+    "cuda-oxide/crates/nvvm-transforms",
+    "cuda-oxide/crates/cargo-oxide",
+    "cuda-oxide/crates/oxide-artifacts",
     # FFI bindings
     # cuda-bindings, cuda-core, and cuda-async are the host-side crates shared
     # with cutile-rs and published from NVlabs/cutile-rs; the cuda-oxide SIMT
     # surface lives under their `simt` modules. The local copies are gone.
-    "crates/libnvvm-sys",
-    "crates/nvjitlink-sys",
+    "cuda-oxide/crates/libnvvm-sys",
+    "cuda-oxide/crates/nvjitlink-sys",
     # Internal naming contract (workspace-private; publish = false)
-    "crates/reserved-oxide-symbols",
+    "cuda-oxide/crates/reserved-oxide-symbols",
     # Differential codegen fuzzer support
-    "crates/fuzzer",
+    "cuda-oxide/crates/fuzzer",
 ]
 
 [workspace.package]
@@ -42,17 +42,17 @@ authors = ["Nihal Pasham <nihalp@nvidia.com>"]
 license = "Apache-2.0"
 repository = "https://github.com/NVlabs/cuda-oxide.git"
 
-# Note: crates/rustc-codegen-cuda is NOT a workspace member because it requires
+# Note: cuda-oxide/crates/rustc-codegen-cuda is NOT a workspace member because it requires
 # special rustc nightly features and a different build process.
 # Build and run examples with: cargo oxide run <example>
-# Examples are in: crates/rustc-codegen-cuda/examples/
+# Examples are in: cuda-oxide/crates/rustc-codegen-cuda/examples/
 
 [workspace.dependencies]
 # Pliron MLIR framework, pinned to upstream struct-layout, GEP no-wrap, volatile,
 # global-constant, inline-asm, and generic LLVM attribute semantics.
 # pliron-llvm uses default-features = false to keep llvm-sys (LLVM 23) out:
 # cuda-oxide consumes the dialect modeling only, not the FFI bridge.
-# `crates/rustc-codegen-cuda/Cargo.toml` MUST stay on this same rev, or pliron
+# `cuda-oxide/crates/rustc-codegen-cuda/Cargo.toml` MUST stay on this same rev, or pliron
 # resolves to two distinct crates and types stop unifying.
 pliron = { git = "https://github.com/pliron-org/pliron", rev = "06d99a3df938394583715aacf5eadb65b4791c09" }
 pliron-derive = { git = "https://github.com/pliron-org/pliron", rev = "06d99a3df938394583715aacf5eadb65b4791c09" }
@@ -61,41 +61,42 @@ pliron-llvm = { git = "https://github.com/pliron-org/pliron", rev = "06d99a3df93
 ] }
 
 # Internal crates
-cuda-target-spec = { path = "crates/cuda-target-spec" }
-llvm-export = { path = "crates/llvm-export" }
-dialect-mir = { path = "crates/dialect-mir" }
-dialect-iket = { path = "crates/dialect-iket" }
-dialect-ptx = { path = "crates/dialect-ptx" }
-dialect-nvvm = { path = "crates/dialect-nvvm" }
-mir-lower = { path = "crates/mir-lower" }
-iket-lower = { path = "crates/iket-lower" }
-mir-importer = { path = "crates/mir-importer" }
-cuda-oxide-codegen = { path = "crates/cuda-oxide-codegen" }
-mir-transforms = { path = "crates/mir-transforms" }
-nvvm-transforms = { path = "crates/nvvm-transforms" }
-cuda-device = { path = "crates/cuda-device" }
-cuda-artifact-finalizer = { path = "crates/cuda-artifact-finalizer" }
-cuda-host = { path = "crates/cuda-host" }
+cuda-target-spec = { path = "cuda-oxide/crates/cuda-target-spec" }
+llvm-export = { path = "cuda-oxide/crates/llvm-export" }
+dialect-mir = { path = "cuda-oxide/crates/dialect-mir" }
+dialect-iket = { path = "cuda-oxide/crates/dialect-iket" }
+dialect-ptx = { path = "cuda-oxide/crates/dialect-ptx" }
+dialect-nvvm = { path = "cuda-oxide/crates/dialect-nvvm" }
+mir-lower = { path = "cuda-oxide/crates/mir-lower" }
+iket-lower = { path = "cuda-oxide/crates/iket-lower" }
+mir-importer = { path = "cuda-oxide/crates/mir-importer" }
+cuda-oxide-codegen = { path = "cuda-oxide/crates/cuda-oxide-codegen" }
+mir-transforms = { path = "cuda-oxide/crates/mir-transforms" }
+nvvm-transforms = { path = "cuda-oxide/crates/nvvm-transforms" }
+cuda-device = { path = "cuda-oxide/crates/cuda-device" }
+cuda-artifact-finalizer = { path = "cuda-oxide/crates/cuda-artifact-finalizer" }
+cuda-host = { path = "cuda-oxide/crates/cuda-host" }
 # No default features: `host` is opt-in per member, so that depending on
 # cuda-device does not unify the host surface back on for kernel-only crates.
 # `cuda-host` names `features = ["host"]`, so anything that loads or launches a
 # module still gets it.
-cuda-macros = { path = "crates/cuda-macros", default-features = false }
+cuda-macros = { path = "cuda-oxide/crates/cuda-macros", default-features = false }
 cuda-bindings = "0.3.1"
 cuda-core = "0.3.1"
 cuda-async = "0.3.1"
-libnvvm-sys = { path = "crates/libnvvm-sys" }
-nvjitlink-sys = { path = "crates/nvjitlink-sys" }
-reserved-oxide-symbols = { path = "crates/reserved-oxide-symbols" }
-fuzzer = { path = "crates/fuzzer" }
+libnvvm-sys = { path = "cuda-oxide/crates/libnvvm-sys" }
+nvjitlink-sys = { path = "cuda-oxide/crates/nvjitlink-sys" }
+reserved-oxide-symbols = { path = "cuda-oxide/crates/reserved-oxide-symbols" }
+fuzzer = { path = "cuda-oxide/crates/fuzzer" }
 # The crates.io release, not the in-tree path: the shared cuda-core (cutile-rs)
 # reads artifact bundles through crates.io oxide-artifacts, and a path copy of
-# the same version is a second crate to rustc. crates/oxide-artifacts stays in
-# the workspace as the source this release is published from; bump, publish,
-# then move this line. scripts/check-oxide-artifacts-parity.sh keeps them equal.
+# the same version is a second crate to rustc. cuda-oxide/crates/oxide-artifacts
+# stays in the workspace as the source this release is published from; bump,
+# publish, then move this line.
+# cuda-oxide/scripts/check-oxide-artifacts-parity.sh keeps them equal.
 oxide-artifacts = "0.2.1"
-ptx-parse = { path = "crates/ptx-parse" }
-ptx-schedule = { path = "crates/ptx-schedule" }
+ptx-parse = { path = "cuda-oxide/crates/ptx-parse" }
+ptx-schedule = { path = "cuda-oxide/crates/ptx-schedule" }
 
 # Common dependencies
 futures = "0.3"

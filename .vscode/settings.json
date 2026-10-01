@@ -11,16 +11,16 @@
     "files.exclude": {
         "**/target/flycheck*": true,
     },
-    // Every example under crates/rustc-codegen-cuda/examples/ is its own cargo
+    // Every example under cuda-oxide/crates/rustc-codegen-cuda/examples/ is its own cargo
     // workspace, so rust-analyzer only sees the ones listed here. Add the ones
     // you are working on. Every path must exist on the checked-out branch, or
     // rust-analyzer reports "Failed to load workspaces".
     "rust-analyzer.linkedProjects": [
         "./Cargo.toml",
-        "./crates/rustc-codegen-cuda/Cargo.toml",
-        "./crates/rustc-codegen-cuda/examples/debug_pointer_locals/Cargo.toml",
-        "./crates/rustc-codegen-cuda/examples/gemm_sol_final/Cargo.toml",
-        "./crates/rustc-codegen-cuda/examples/vecadd/Cargo.toml",
-        "./crates/rustc-codegen-cuda/examples/abi_hmm/Cargo.toml",
+        "./cuda-oxide/crates/rustc-codegen-cuda/Cargo.toml",
+        "./cuda-oxide/crates/rustc-codegen-cuda/examples/debug_pointer_locals/Cargo.toml",
+        "./cuda-oxide/crates/rustc-codegen-cuda/examples/gemm_sol_final/Cargo.toml",
+        "./cuda-oxide/crates/rustc-codegen-cuda/examples/vecadd/Cargo.toml",
+        "./cuda-oxide/crates/rustc-codegen-cuda/examples/abi_hmm/Cargo.toml",
     ],
 }

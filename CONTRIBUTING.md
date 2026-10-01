@@ -124,18 +124,19 @@ flakes enabled, `nix develop` is the quickest way to get everything in place.
 
 ### Running the checks
 
-Most of CI is one command. The repository ships a `Justfile` that mirrors the
+Most of CI is one command. The SIMT tree ships a `Justfile` that mirrors the
 workflows:
 
 ```bash
-just check
+just -f cuda-oxide/Justfile check
 ```
 
 It needs a CUDA toolkit (13.0 or newer, with the cuRAND headers), `cargo-deny`,
 and `python3` on `PATH`; it does not need a GPU or a driver: the shared
 `cuda-bindings` crate loads `libcuda` at run time, so test binaries load without
 one. Individual recipes exist for each piece, and
-`just --list` shows them with a one-line description each.
+`just -f cuda-oxide/Justfile --list` shows them with a one-line description
+each.
 
 A few CI jobs deliberately stay outside `just check` -- ones that need the
 codegen backend, a Python virtualenv, or GitHub's own infrastructure. The
@@ -161,7 +162,7 @@ hand even so.
 
   ```bash
   cargo clippy --workspace --all-targets -- -D warnings
-  (cd crates/rustc-codegen-cuda && cargo clippy --all-targets -- -D warnings)
+  (cd cuda-oxide/crates/rustc-codegen-cuda && cargo clippy --all-targets -- -D warnings)
   ```
 - Follow existing code patterns and conventions in the crate you are
   modifying.
@@ -190,7 +191,7 @@ the copyright holder or are authorized to name the holder. Vendored and other
 third-party files must keep their upstream license and copyright notices, and
 must be attributed in `THIRD_PARTY_NOTICES` at the repository root.
 
-CI enforces this: `scripts/check-spdx-headers.sh` fails on any tracked source
+CI enforces this: `cuda-oxide/scripts/check-spdx-headers.sh` fails on any tracked source
 file missing the header (the `cargo-deny / every source file carries the SPDX
 header` job). Third-party subtrees and OSRB-reviewed exceptions are listed in
 that script.
@@ -198,14 +199,15 @@ that script.
 ### Testing
 
 - Compiler pipeline changes should be validated against the existing examples
-  in `crates/rustc-codegen-cuda/examples/`.
+  in `cuda-oxide/crates/rustc-codegen-cuda/examples/`.
 - New GPU intrinsics should include a corresponding example demonstrating
   correct behavior.
 - Dialect changes should include appropriate tests in the crate's `tests/`
   directory.
 - A new example must print a `SUCCESS`/`PASS`/`Complete` marker once it has
-  verified its results, or `scripts/smoketest.sh` reports it as
-  `FAIL (no success marker)`. `scripts/check-example-smoketest-contract.sh`
+  verified its results, or `cuda-oxide/scripts/smoketest.sh` reports it as
+  `FAIL (no success marker)`.
+  `cuda-oxide/scripts/check-example-smoketest-contract.sh`
   checks that without a GPU, along with the `*_EXAMPLES` arrays in
   `smoketest.sh`; CI runs it as the `status-guard / smoketest example contract`
   job.
@@ -227,13 +229,14 @@ error's `Display` names the library candidates the loader tried.
 - New dependencies must use permissive licenses (MIT, Apache-2.0, BSD, ISC,
   Zlib, or similar).
 - No GPL, AGPL, SSPL, or other copyleft-licensed dependencies.
-- If adding a new dependency, update `dependency-licenses.csv` accordingly.
-  `scripts/check-dependency-licenses.sh` reports anything the workspace
+- If adding a new dependency, update `cuda-oxide/dependency-licenses.csv`
+  accordingly. `cuda-oxide/scripts/check-dependency-licenses.sh` reports
+  anything the workspace
   declares but that file does not record; CI runs it as the
   `cargo-deny / license-manifest` job. It checks presence, not versions, so a
   routine version bump needs no CSV edit.
 - The same applies to an example that pulls third-party code. Each example
-  under `crates/rustc-codegen-cuda/examples/` is its own workspace, so
+  under `cuda-oxide/crates/rustc-codegen-cuda/examples/` is its own workspace, so
   `cargo deny check` does not resolve it; the script reads the example lock
   files directly and asks for a row per third-party crate. Examples that
   depend only on first-party crates by path need nothing.

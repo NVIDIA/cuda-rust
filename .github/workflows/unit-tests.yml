@@ -162,7 +162,7 @@ jobs:
       # The live CUDA-tool tests remain ignored; these regressions need no GPU
       # or toolkit installation.
       - name: Run codegen-backend unit tests
-        working-directory: crates/rustc-codegen-cuda
+        working-directory: cuda-oxide/crates/rustc-codegen-cuda
         run: |
           sysroot="$(rustc --print sysroot)"
           export LIBRARY_PATH="${sysroot}/lib:${LIBRARY_PATH:-}"

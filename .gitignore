@@ -1,6 +1,6 @@
 target/
 # `target/` above is for cargo build dirs; this source module is real code.
-!crates/cuda-oxide-codegen/src/target/
+!cuda-oxide/crates/cuda-oxide-codegen/src/target/
 .smoketest-logs/
 .regress-gemm-sol/
 *.ptx
@@ -12,7 +12,7 @@ target/
 *.bc
 
 # Generated intrinsic probes are checked-in fixtures.
-!intrinsics/probes/*.ll
+!cuda-oxide/intrinsics/probes/*.ll
 .DS_Store
 *.tar.gz
 .cursor/
@@ -27,7 +27,7 @@ target/
 AGENTS.md
 .mcp/
 
-# Internal design notes are maintained out-of-band (see cuda-oxide-book/ for the published book).
+# Internal design notes are maintained out-of-band (see cuda-oxide/cuda-oxide-book/ for the published book).
 /docs/
 DESIGN.md
 test.mlir
@@ -35,8 +35,8 @@ test.mlir
 /tests/
 
 # Removed from codebase but may still exist locally
-crates/ltoir-backend/
-crates/dialect-mir/src/passes/
+cuda-oxide/crates/ltoir-backend/
+cuda-oxide/crates/dialect-mir/src/passes/
 
 # Rust compiler long type name files (generated for overly complex generic types)
 **/*.long-type-*.txt
@@ -52,14 +52,14 @@ vendor/
 
 # Python virtual environments and caches
 .venv/
-crates/rustc-codegen-cuda/examples/*/bench/venv/
+cuda-oxide/crates/rustc-codegen-cuda/examples/*/bench/venv/
 __pycache__/
 **/__pycache__/
 *.pyc
 
 # Locally-built bench helpers (compiled by bench/build.sh)
-crates/rustc-codegen-cuda/examples/gemm_sol/bench/cublaslt_bench
-crates/rustc-codegen-cuda/examples/gemm_sol_final/bench/cublaslt_bench
+cuda-oxide/crates/rustc-codegen-cuda/examples/gemm_sol/bench/cublaslt_bench
+cuda-oxide/crates/rustc-codegen-cuda/examples/gemm_sol_final/bench/cublaslt_bench
 
 # cargo-oxide layered build cache (large, externally configured target dir)
 /.layer-target/

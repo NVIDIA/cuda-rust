@@ -1,0 +1,17 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/ptx_asm_c_constraint_not_bytes.rs:18:21
+   |
+15 | /         ptx_asm!(
+16 | |             "mul%1.u32 %0, %2, %2;",
+17 | |             out("=l") y,
+18 | |             in("C") 42,
+   | |                     ^^ expected `&[u8; _]`, found integer
+19 | |             in("r") x,
+20 | |         );
+   | |_________- arguments to this function are incorrect
+   |
+note: function defined here
+  --> $WORKSPACE/cuda-oxide/crates/cuda-device/src/ptx.rs
+   |
+   | pub const fn __ptx_asm_c<const N: usize>(value: &'static [u8; N]) -> &'static [u8; N] {
+   |              ^^^^^^^^^^^

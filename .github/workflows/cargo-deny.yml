@@ -8,7 +8,7 @@ name: cargo-deny
 # Four parts of the same concern. `check` enforces the license *policy* over
 # the whole resolved graph from deny.toml, once per `[workspace]` root that
 # resolves third-party crates and is neither an example nor under cutile-rs:
-# the root workspace, crates/rustc-codegen-cuda, and the cuda-macros
+# the root workspace, cuda-oxide/crates/rustc-codegen-cuda, and the cuda-macros
 # device-only fixture. Each declares its own `[workspace]`, so each is a
 # separate resolution the others cannot reach. `license-manifest` enforces that
 # the human-readable inventory in dependency-licenses.csv still lists what the
@@ -45,30 +45,31 @@ jobs:
       # Cargo.lock it is judging -- verified: deleting a package block from the
       # lock still exits 0 here and leaves the file rewritten, while --locked
       # stops with "cannot update the lock file". The other two runs below and
-      # in scripts/ already pass it.
+      # in cuda-oxide/scripts/ already pass it.
+      # Find deny.toml through a SIMT member; --workspace checks all root members.
       - name: Run cargo-deny
-        run: cargo deny --locked check
+        run: cargo deny --manifest-path cuda-oxide/crates/cargo-oxide/Cargo.toml --workspace --locked check
 
-      # crates/rustc-codegen-cuda carries its own `[workspace]` for the
+      # cuda-oxide/crates/rustc-codegen-cuda carries its own `[workspace]` for the
       # rustc-private dylibs, so the run above stops at that boundary and never
       # sees the 88 third-party crates it resolves. Same policy, second
       # workspace -- the pass asked for in the #662 review. No --config:
       # cargo-deny walks up from the manifest directory and finds the
-      # repository-root deny.toml, as the example-policy script relies on too.
+      # SIMT-root cuda-oxide/deny.toml, as the example-policy script relies on too.
       - name: Run cargo-deny over the codegen backend workspace
-        run: cargo deny --manifest-path crates/rustc-codegen-cuda/Cargo.toml --locked check
+        run: cargo deny --manifest-path cuda-oxide/crates/rustc-codegen-cuda/Cargo.toml --locked check
 
       # The last `[workspace]` root this job runs.
-      # `crates/cuda-macros/tests/device-only`
+      # `cuda-oxide/crates/cuda-macros/tests/device-only`
       # declares its own `[workspace]` so that its graph provably excludes
       # cuda-host, which is the whole point of the fixture -- and that same
       # boundary puts it outside the root run above, outside the backend run,
       # and outside the example-policy script (which walks
-      # crates/rustc-codegen-cuda/examples only). Its lock resolves
+      # cuda-oxide/crates/rustc-codegen-cuda/examples only). Its lock resolves
       # proc-macro2, quote and syn at versions that appear nowhere in the root
       # lock, so those three (name, version) pairs were governed by no policy
       # at all. It passes today: advisories ok, bans ok, licenses ok, sources
-      # ok. (crates/fuzzer/rustlantis is another `[workspace]` root
+      # ok. (cuda-oxide/crates/fuzzer/rustlantis is another `[workspace]` root
       # and is deliberately not here: it is a vendored upstream project, not
       # first-party code, and bringing its graph under deny.toml is a policy
       # call rather than a gap. The cutile-rs roots -- cutile-rs/Cargo.toml and
@@ -78,10 +79,10 @@ jobs:
       # policy is not the one that judges it. To bring them in one day, add a
       # `cargo deny --manifest-path <root> --locked check` step per root here,
       # and drop the matching CUTILE_ROOT filter in
-      # scripts/check-dependency-licenses.sh so the inventory half
+      # cuda-oxide/scripts/check-dependency-licenses.sh so the inventory half
       # covers them too.)
       - name: Run cargo-deny over the cuda-macros device-only fixture
-        run: cargo deny --manifest-path crates/cuda-macros/tests/device-only/Cargo.toml --locked check
+        run: cargo deny --manifest-path cuda-oxide/crates/cuda-macros/tests/device-only/Cargo.toml --locked check
 
   license-manifest:
     name: dependency-licenses.csv covers every declared crate
@@ -94,7 +95,7 @@ jobs:
       # Only reads manifests: `cargo metadata` resolves the graph without
       # running build scripts, so this needs no CUDA toolkit and no LLVM.
       - name: Verify the license inventory covers the workspace
-        run: bash scripts/check-dependency-licenses.sh
+        run: bash cuda-oxide/scripts/check-dependency-licenses.sh
 
   example-policy:
     name: deny.toml governs the example workspaces
@@ -112,7 +113,7 @@ jobs:
       # than one per lock file, covering the same crates. The script prints
       # both counts.
       - name: Run cargo-deny over the example workspaces
-        run: bash scripts/check-example-license-policy.sh
+        run: bash cuda-oxide/scripts/check-example-license-policy.sh
 
   source-headers:
     name: every source file carries the SPDX header
@@ -126,4 +127,4 @@ jobs:
       # review fixed 32 missing headers in #812 and the next two scripts to
       # land (#819, #835) drifted again; this makes the third time the last.
       - name: Verify SPDX headers on NVIDIA-authored source files
-        run: bash scripts/check-spdx-headers.sh
+        run: bash cuda-oxide/scripts/check-spdx-headers.sh

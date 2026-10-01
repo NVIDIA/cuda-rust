@@ -518,3 +518,177 @@ fn malformed_low_width_targets_keep_override_errors() {
         assert_eq!(explicit.to_string(), expected_reason);
     }
 }
+
+/// The property `cuda-device`'s `cuda_oxide_sm_at_least` ladder depends on:
+/// selection never lands below the floor device code was compiled against
+/// (#811).
+///
+/// The build script fixes that ladder before rustc runs, from the same
+/// [`resolve_sm_floor`] both resolvers below consult, so this asserts the
+/// property end to end rather than re-checking that one helper's table. Both
+/// stages are covered because a module reaches PTX through one or the other.
+#[test]
+fn selection_never_lands_below_the_floor_device_code_assumes() {
+    let generated = crate::generated::GeneratedModuleRequirements::default();
+    for explicit in [None, Some("sm_75"), Some("sm_86"), Some("sm_90a")] {
+        for hint in [None, Some("sm_75"), Some("sm_86"), Some("sm_120a")] {
+            let floor = cuda_target_spec::resolve_sm_floor(explicit, hint).expect("floor");
+            for features in [
+                DetectedFeatures::Basic,
+                DetectedFeatures::Ldmatrix,
+                DetectedFeatures::Movmatrix,
+                DetectedFeatures::Sm75,
+                DetectedFeatures::Sm80,
+                DetectedFeatures::Cluster,
+                DetectedFeatures::Wgmma,
+            ] {
+                // An explicit target that cannot host the module is rejected
+                // outright; that is the other half of the contract, asserted
+                // separately below. Only successful selections are bound.
+                if let Ok((target, source)) =
+                    resolve_ptx_target(explicit, "CUDA_OXIDE_TARGET", hint, features)
+                {
+                    assert!(
+                        target.capability() >= floor,
+                        "PTX: {features:?} with explicit={explicit:?} hint={hint:?} \
+                         selected {} (from {source}) below floor {floor}",
+                        target.sm()
+                    );
+                }
+                if let Ok(target) = crate::export::resolve_nvvm_target_with_generated(
+                    explicit,
+                    hint,
+                    Some(features),
+                    &generated,
+                ) {
+                    assert!(
+                        target.capability() >= floor,
+                        "NVVM: {features:?} with explicit={explicit:?} hint={hint:?} \
+                         selected {} below floor {floor}",
+                        target.sm()
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The two cases that motivated the floor, named so a regression says which.
+#[test]
+fn the_floor_is_honoured_without_overriding_a_runnable_device() {
+    let generated = crate::generated::GeneratedModuleRequirements::default();
+
+    // Nothing pinned: the ladder advertises the sm_80 default, so a module
+    // whose features only need sm_75 must not be built for sm_75.
+    let (ptx, _) =
+        resolve_ptx_target(None, "CUDA_OXIDE_TARGET", None, DetectedFeatures::Ldmatrix).unwrap();
+    assert_eq!(ptx.sm(), "sm_80");
+    let nvvm = crate::export::resolve_nvvm_target_with_generated(
+        None,
+        None,
+        Some(DetectedFeatures::Ldmatrix),
+        &generated,
+    )
+    .unwrap();
+    assert_eq!(nvvm.sm(), "sm_80");
+
+    // A detected Blackwell with a WGMMA module still selects sm_90a, because
+    // the hint cannot raise the floor: it is advisory, and this is exactly the
+    // case the backend is documented to build elsewhere for.
+    let (wgmma, _) = resolve_ptx_target(
+        None,
+        "CUDA_OXIDE_TARGET",
+        Some("sm_120a"),
+        DetectedFeatures::Wgmma,
+    )
+    .unwrap();
+    assert_eq!(wgmma.sm(), "sm_90a");
+    assert_eq!(
+        cuda_target_spec::resolve_sm_floor(None, Some("sm_120a")).unwrap(),
+        80
+    );
+
+    // A detected device *below* the default pulls the floor down with it, so
+    // running on Turing still produces sm_75 rather than PTX it cannot load.
+    let (turing, source) = resolve_ptx_target(
+        None,
+        "CUDA_OXIDE_TARGET",
+        Some("sm_75"),
+        DetectedFeatures::Basic,
+    )
+    .unwrap();
+    assert_eq!((turing.sm().as_str(), source), ("sm_75", "detected GPU"));
+    assert_eq!(
+        cuda_target_spec::resolve_sm_floor(None, Some("sm_75")).unwrap(),
+        75
+    );
+}
+
+/// An architecture family that cannot host the module is refused where it is
+/// stated, rather than quietly resolved to something else.
+#[test]
+fn an_explicit_target_that_cannot_host_the_module_is_refused() {
+    let error = resolve_ptx_target(
+        Some("sm_120a"),
+        "CUDA_OXIDE_TARGET",
+        None,
+        DetectedFeatures::Wgmma,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("Wgmma"), "{error}");
+
+    // Blank and malformed inputs, which the two stages read differently.
+    //
+    // `resolve_sm_floor` treats a blank `CUDA_OXIDE_TARGET` as unset and falls
+    // back to the default floor, while the backend reads the variable with
+    // `env::var().ok()` and hands the empty string to the target parser, which
+    // refuses it. The strict side is the one that decides whether anything is
+    // built, so the ladder can never be the thing that overstates: the build
+    // fails before a module exists.
+    assert_eq!(
+        cuda_target_spec::resolve_sm_floor(Some("  "), None).unwrap(),
+        80
+    );
+    assert!(
+        resolve_ptx_target(
+            Some("  "),
+            "CUDA_OXIDE_TARGET",
+            None,
+            DetectedFeatures::Basic
+        )
+        .is_err()
+    );
+
+    // A malformed *device hint* is read three ways. The floor resolver and the
+    // PTX selector ignore it -- the hint is advisory, so PTX selection falls
+    // through to the feature requirement and the floor stays at the default,
+    // which that fallback satisfies. The NVVM selector rejects it instead, and
+    // is asserted below: both outcomes are fail-closed, because neither builds
+    // below the floor.
+    assert_eq!(
+        cuda_target_spec::resolve_sm_floor(None, Some("sm_9")).unwrap(),
+        80
+    );
+    let (ignored, source) = resolve_ptx_target(
+        None,
+        "CUDA_OXIDE_TARGET",
+        Some("sm_9"),
+        DetectedFeatures::Basic,
+    )
+    .unwrap();
+    assert_eq!(
+        (ignored.sm().as_str(), source),
+        ("sm_80", "feature requirement")
+    );
+    assert!(
+        crate::export::resolve_nvvm_target_with_generated(
+            None,
+            Some("sm_9"),
+            Some(DetectedFeatures::Basic),
+            &crate::generated::GeneratedModuleRequirements::default(),
+        )
+        .is_err(),
+        "the NVVM selector rejects a malformed hint rather than ignoring it"
+    );
+}

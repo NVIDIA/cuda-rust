@@ -555,9 +555,155 @@ pub fn spelling_at_least(floor: u16) -> Option<u16> {
     PtxSpelling::round_up(floor).map(PtxSpelling::get)
 }
 
+/// Compute-capability floors device code can test with the
+/// `cuda_oxide_sm_at_least` cfg, ascending.
+///
+/// `cfg` compares strings, not numbers, so a single "the floor is 86" cfg
+/// could not answer "is this at least sm_80". `cuda-device`'s build script
+/// instead sets every rung at or below the resolved capability, and device
+/// code tests the one rung its instruction needs.
+pub const SM_FLOOR_LADDER: &[u32] = &[70, 75, 80, 86, 90, 100, 120];
+
+/// Capability floor assumed when nothing names a target.
+///
+/// Matches the backend's own "Basic CUDA / sm_80 / Ampere+ (max compat)"
+/// default, so a cross-compile with no environment set agrees with the PTX it
+/// will actually produce.
+pub const DEFAULT_SM_FLOOR: u32 = 80;
+
+/// Resolve the minimum compute capability assumed by device code.
+///
+/// An explicit target sets the floor. A device hint can only lower the default
+/// `sm_80` floor because backend selection may override an incompatible hint.
+/// Both device cfg generation and backend selection use this rule.
+///
+/// Blank inputs are unset. Malformed explicit targets are errors; malformed
+/// hints are ignored. Architecture suffixes do not affect this numeric floor,
+/// which does not imply support for architecture-specific instruction families.
+pub fn resolve_sm_floor(
+    target: Option<&str>,
+    device_arch: Option<&str>,
+) -> Result<u32, CudaArchParseError> {
+    fn named(value: Option<&str>) -> Option<&str> {
+        value.map(str::trim).filter(|value| !value.is_empty())
+    }
+
+    if let Some(target) = named(target) {
+        return Ok(target.parse::<CudaArch>()?.capability());
+    }
+    // A hint that does not parse is ignored rather than fatal, matching what
+    // the backend does with it: `resolve_ptx_target_with_generated` filters
+    // the detected device through `.parse().ok()` and falls through to the
+    // feature requirement. Ignoring it leaves the default floor, which is
+    // still a lower bound on that fallback. An explicit target gets no such
+    // latitude above, because it is what would have been built.
+    match named(device_arch).and_then(|device| device.parse::<CudaArch>().ok()) {
+        Some(device) => Ok(DEFAULT_SM_FLOOR.min(device.capability())),
+        None => Ok(DEFAULT_SM_FLOOR),
+    }
+}
+
+/// The ladder rungs at or below `capability`, ascending.
+pub fn sm_floors_at_most(capability: u32) -> impl Iterator<Item = u32> {
+    SM_FLOOR_LADDER
+        .iter()
+        .copied()
+        .filter(move |floor| *floor <= capability)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An explicit target sets the floor exactly; a detected device can only
+    /// lower it, because the backend may build for that device as-is but is
+    /// documented to build elsewhere when the kernel needs it.
+    #[test]
+    fn a_detected_device_lowers_the_floor_and_never_raises_it() {
+        assert_eq!(resolve_sm_floor(Some("sm_86"), None).unwrap(), 86);
+        assert_eq!(resolve_sm_floor(None, None).unwrap(), DEFAULT_SM_FLOOR);
+
+        // Below the default: running on Turing really does produce sm_75, so
+        // device code must not be told it has Ampere rungs.
+        assert_eq!(resolve_sm_floor(None, Some("sm_75")).unwrap(), 75);
+
+        // Above the default: selection may still land on sm_90a for a WGMMA
+        // module, so the hint promises nothing higher.
+        assert_eq!(
+            resolve_sm_floor(None, Some("sm_120a")).unwrap(),
+            DEFAULT_SM_FLOOR
+        );
+
+        // An explicit target wins over the hint in both directions.
+        assert_eq!(resolve_sm_floor(Some("sm_75"), Some("sm_120")).unwrap(), 75);
+        assert_eq!(
+            resolve_sm_floor(Some("sm_120"), Some("sm_75")).unwrap(),
+            120
+        );
+    }
+
+    /// An env var set to the empty string is how a shell spells "unset", and
+    /// must not be read as a target that failed to parse.
+    #[test]
+    fn blank_env_values_are_not_targets() {
+        assert_eq!(resolve_sm_floor(Some(""), None).unwrap(), DEFAULT_SM_FLOOR);
+        assert_eq!(resolve_sm_floor(Some("  "), Some("sm_75")).unwrap(), 75);
+        assert_eq!(resolve_sm_floor(Some(" sm_86 "), None).unwrap(), 86);
+        assert_eq!(
+            resolve_sm_floor(None, Some("   ")).unwrap(),
+            DEFAULT_SM_FLOOR
+        );
+    }
+
+    /// Family suffixes carry no capability of their own.
+    #[test]
+    fn architecture_family_suffixes_do_not_change_the_floor() {
+        assert_eq!(resolve_sm_floor(Some("sm_90a"), None).unwrap(), 90);
+        assert_eq!(resolve_sm_floor(Some("sm_100f"), None).unwrap(), 100);
+    }
+
+    /// Guessing high emits instructions the target cannot run and guessing low
+    /// silently drops the faster form, so a named value that does not parse
+    /// fails instead of falling back.
+    #[test]
+    fn a_named_target_that_does_not_parse_is_an_error() {
+        assert!(resolve_sm_floor(Some("ampere"), None).is_err());
+        // A malformed *hint* is ignored, not fatal: see the note in the
+        // function. Only an explicit target is held to parsing.
+        assert_eq!(
+            resolve_sm_floor(None, Some("sm_")).unwrap(),
+            DEFAULT_SM_FLOOR
+        );
+        assert!(resolve_sm_floor(Some("sm_9"), None).is_err());
+    }
+
+    #[test]
+    fn the_floor_ladder_is_ascending_and_carries_the_default() {
+        assert!(SM_FLOOR_LADDER.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(SM_FLOOR_LADDER.contains(&DEFAULT_SM_FLOOR));
+    }
+
+    /// The cumulative rungs are what `cfg` needs: every floor at or below the
+    /// capability, so device code can ask for the one it needs.
+    #[test]
+    fn floors_at_most_is_cumulative_and_excludes_higher_rungs() {
+        assert_eq!(
+            sm_floors_at_most(86).collect::<Vec<_>>(),
+            vec![70, 75, 80, 86]
+        );
+        assert_eq!(
+            sm_floors_at_most(120).collect::<Vec<_>>(),
+            SM_FLOOR_LADDER.to_vec()
+        );
+        assert_eq!(sm_floors_at_most(75).collect::<Vec<_>>(), vec![70, 75]);
+        // Between rungs: sm_89 is Ada, which is Ampere-or-newer for our
+        // purposes but is not itself a rung.
+        assert_eq!(
+            sm_floors_at_most(89).collect::<Vec<_>>(),
+            vec![70, 75, 80, 86]
+        );
+        assert!(sm_floors_at_most(50).next().is_none());
+    }
     #[test]
     fn device_arch_requires_sm_spelling_and_reuses_cuda_grammar() {
         for entry in RECORDED_PTX_FLOORS {

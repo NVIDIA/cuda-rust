@@ -160,10 +160,17 @@ Three constraints:
   example does, on `ctx.compute_capability()`, or restrict the build to Ampere
   and newer.
 
-`warp_reduce` does not select this form for you today; making it do so
-automatically needs a way for device code to know its target architecture,
-which is the open question in
-[#811](https://github.com/NVlabs/cuda-oxide/issues/811).
+`warp_reduce` selects this form for you, for integer element types on a full
+32-lane tile, whenever the build's compute-capability floor is `sm_80` or
+newer. That floor comes from the `cuda_oxide_sm_at_least` cfg, which
+`cuda-device`'s build script derives from the same environment the backend
+reads to choose a target: `CUDA_OXIDE_TARGET`, else `CUDA_OXIDE_DEVICE_ARCH`,
+else `sm_80`. A cfg is resolved before rustc runs, so a build below the floor
+drops the branch entirely and never emits an instruction it cannot assemble.
+
+Calling `redux_sync_add` and friends directly is still the right move when you
+want the single instruction regardless of the surrounding generic code, and it
+is the only option for a sub-warp tile.
 
 ### Floats on Blackwell: `redux.sync` for `f32`
 

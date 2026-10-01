@@ -189,6 +189,7 @@ name = "cuda-device"
 version = "0.2.1"
 dependencies = [
  "cuda-macros",
+ "cuda-target-spec",
 ]
 
 [[package]]

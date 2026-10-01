@@ -16,6 +16,12 @@ readme = "README.md"
 # `host` explicitly, so any build that loads or launches a module still has it.
 cuda-macros = { workspace = true }
 
+[build-dependencies]
+# Shares one arch parser and one floor rule with the backend, so the cfg
+# ladder cannot drift from the target the PTX is actually built for. This
+# crate has no dependencies of its own, so it costs the kernel graph nothing.
+cuda-target-spec = { workspace = true }
+
 [dev-dependencies]
 trybuild = "1"
 

@@ -1,0 +1,26 @@
+[package]
+name = "warp_reduce_redux"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+# Mark as standalone crate (not part of parent workspace)
+[workspace]
+
+# This example shows `warp_reduce` taking the single-instruction
+# `redux.sync` form at the Ampere floor and the shuffle butterfly below it.
+# The form is chosen by the `cuda_oxide_sm_at_least` cfg, so the same source
+# builds both ways:
+#   cargo oxide build warp_reduce_redux --arch sm_80   # redux.sync
+#   cargo oxide build warp_reduce_redux --arch sm_75   # shfl butterfly
+#   cargo oxide run   warp_reduce_redux
+
+[dependencies]
+# Device-side cooperative groups (warp_reduce, tiled_partition)
+cuda-device = { path = "../../../cuda-device" }
+
+# Host-side utilities (CudaKernel trait, etc.)
+cuda-host = { path = "../../../cuda-host" }
+
+# Host-side CUDA runtime
+cuda-core = "0.3.1"

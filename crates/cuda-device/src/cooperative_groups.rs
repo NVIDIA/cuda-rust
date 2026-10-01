@@ -833,6 +833,37 @@ pub mod ops {
         fn identity() -> T;
         /// Binary combiner. Must be associative and commutative.
         fn combine(a: T, b: T) -> T;
+
+        /// Whether this operation has a full-warp instruction at the target floor.
+        /// Other operation/type pairs use the shuffle implementation.
+        const HAS_FULL_WARP_FORM: bool = false;
+
+        /// Reduce the participating warp. Called only when `HAS_FULL_WARP_FORM`
+        /// is true and the tile contains all 32 lanes.
+        #[inline(always)]
+        fn reduce_full_warp(_mask: u32, value: T) -> T {
+            value
+        }
+    }
+
+    // Exclude unsupported intrinsics before MIR and feature detection run.
+    macro_rules! redux_full_warp {
+        ($ty:ty, |$mask:ident, $value:ident| $call:expr) => {
+            const HAS_FULL_WARP_FORM: bool = cfg!(cuda_oxide_sm_at_least = "80");
+
+            // Keep the intrinsic call as the return expression for device lowering.
+            #[cfg(cuda_oxide_sm_at_least = "80")]
+            #[inline(always)]
+            fn reduce_full_warp($mask: u32, $value: $ty) -> $ty {
+                $call
+            }
+
+            #[cfg(not(cuda_oxide_sm_at_least = "80"))]
+            #[inline(always)]
+            fn reduce_full_warp(_mask: u32, value: $ty) -> $ty {
+                value
+            }
+        };
     }
 
     /// Sum: wrapping integer addition; IEEE-754 add for floats.
@@ -869,6 +900,7 @@ pub mod ops {
         fn combine(a: u32, b: u32) -> u32 {
             a.wrapping_add(b)
         }
+        redux_full_warp!(u32, |m, v| crate::warp::redux_sync_add(m, v));
     }
     impl ReduceOp<u32> for Min {
         #[inline(always)]
@@ -879,6 +911,7 @@ pub mod ops {
         fn combine(a: u32, b: u32) -> u32 {
             if a < b { a } else { b }
         }
+        redux_full_warp!(u32, |m, v| crate::warp::redux_sync_min_u32(m, v));
     }
     impl ReduceOp<u32> for Max {
         #[inline(always)]
@@ -889,6 +922,7 @@ pub mod ops {
         fn combine(a: u32, b: u32) -> u32 {
             if a > b { a } else { b }
         }
+        redux_full_warp!(u32, |m, v| crate::warp::redux_sync_max_u32(m, v));
     }
     impl ReduceOp<u32> for BitAnd {
         #[inline(always)]
@@ -899,6 +933,7 @@ pub mod ops {
         fn combine(a: u32, b: u32) -> u32 {
             a & b
         }
+        redux_full_warp!(u32, |m, v| crate::warp::redux_sync_and(m, v));
     }
     impl ReduceOp<u32> for BitOr {
         #[inline(always)]
@@ -909,6 +944,7 @@ pub mod ops {
         fn combine(a: u32, b: u32) -> u32 {
             a | b
         }
+        redux_full_warp!(u32, |m, v| crate::warp::redux_sync_or(m, v));
     }
     impl ReduceOp<u32> for BitXor {
         #[inline(always)]
@@ -919,6 +955,7 @@ pub mod ops {
         fn combine(a: u32, b: u32) -> u32 {
             a ^ b
         }
+        redux_full_warp!(u32, |m, v| crate::warp::redux_sync_xor(m, v));
     }
 
     // --- i32 ---
@@ -931,6 +968,7 @@ pub mod ops {
         fn combine(a: i32, b: i32) -> i32 {
             a.wrapping_add(b)
         }
+        redux_full_warp!(i32, |m, v| crate::warp::redux_sync_add(m, v as u32) as i32);
     }
     impl ReduceOp<i32> for Min {
         #[inline(always)]
@@ -941,6 +979,7 @@ pub mod ops {
         fn combine(a: i32, b: i32) -> i32 {
             if a < b { a } else { b }
         }
+        redux_full_warp!(i32, |m, v| crate::warp::redux_sync_min_i32(m, v));
     }
     impl ReduceOp<i32> for Max {
         #[inline(always)]
@@ -951,6 +990,7 @@ pub mod ops {
         fn combine(a: i32, b: i32) -> i32 {
             if a > b { a } else { b }
         }
+        redux_full_warp!(i32, |m, v| crate::warp::redux_sync_max_i32(m, v));
     }
 
     // --- f32 ---
@@ -1059,13 +1099,13 @@ impl WarpShuffle for f32 {
 /// bit-identical results. That is the primitive in isolation — a kernel that
 /// reduces once after a memory-bound pass will see far less.
 ///
-/// This function does not select that form for you: `redux.sync` will not
-/// assemble below `sm_80`, and device code has no way to ask what target it is
-/// being compiled for (see
-/// [#811](https://github.com/NVlabs/cuda-oxide/issues/811)). Call it directly
-/// when you know the target is Ampere+, gating on
-/// `CudaContext::compute_capability` as the `redux_sum` example does. Floats
-/// keep this butterfly — there is no `f32` `redux` before `sm_100`.
+/// Full-warp integer reductions use `redux.sync` when the target floor is
+/// `sm_80` or newer. Floats, smaller tiles and lower floors use shuffles.
+///
+/// `CUDA_OXIDE_TARGET` sets the floor. An advisory `CUDA_OXIDE_DEVICE_ARCH`
+/// can lower the default `sm_80` floor, but cannot raise it: incompatible
+/// kernels may target another architecture. The build script and backend
+/// share this rule. Use `--arch sm_75` to select the shuffle implementation.
 ///
 /// `N` is the tile size (1, 2, 4, 8, 16, or 32) — already validated by
 /// [`ThreadBlock::tiled_partition`] at construction time.
@@ -1093,6 +1133,11 @@ where
     T: WarpShuffle,
     Op: ops::ReduceOp<T>,
 {
+    // The const conditions remove this branch for floats and smaller tiles.
+    if N == 32 && Op::HAS_FULL_WARP_FORM {
+        return Op::reduce_full_warp(tile.mask(), value);
+    }
+
     let mut acc = value;
     let mut delta: u32 = N >> 1;
     while delta > 0 {
@@ -1538,6 +1583,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::CoalescedThreads;
+    use super::ops::{BitAnd, BitOr, BitXor, Max, Min, ReduceOp, Sum};
 
     #[test]
     fn pack_lanes_uses_group_relative_bit_positions() {
@@ -1563,5 +1609,85 @@ mod tests {
                 "group mask {group_mask:#010X}, lane mask {lane_mask:#010X}",
             );
         }
+    }
+
+    /// Every integer pair `warp_reduce` can be asked for, and whether the
+    /// Ampere rung should give it a single-instruction form.
+    ///
+    /// A `const` hook makes this checkable from the host with no device call,
+    /// which matters because the crate is `no_std` and the `redux_sync_*`
+    /// stubs are device functions.
+    const INTEGER_PAIRS: [(&str, bool); 9] = [
+        ("u32 Sum", <Sum as ReduceOp<u32>>::HAS_FULL_WARP_FORM),
+        ("u32 Min", <Min as ReduceOp<u32>>::HAS_FULL_WARP_FORM),
+        ("u32 Max", <Max as ReduceOp<u32>>::HAS_FULL_WARP_FORM),
+        ("u32 BitAnd", <BitAnd as ReduceOp<u32>>::HAS_FULL_WARP_FORM),
+        ("u32 BitOr", <BitOr as ReduceOp<u32>>::HAS_FULL_WARP_FORM),
+        ("u32 BitXor", <BitXor as ReduceOp<u32>>::HAS_FULL_WARP_FORM),
+        ("i32 Sum", <Sum as ReduceOp<i32>>::HAS_FULL_WARP_FORM),
+        ("i32 Min", <Min as ReduceOp<i32>>::HAS_FULL_WARP_FORM),
+        ("i32 Max", <Max as ReduceOp<i32>>::HAS_FULL_WARP_FORM),
+    ];
+
+    /// All nine are wired, not just the one that happened to get tested.
+    #[cfg(cuda_oxide_sm_at_least = "80")]
+    #[test]
+    fn every_integer_reduction_has_the_single_instruction_form_at_the_ampere_floor() {
+        for (name, wired) in INTEGER_PAIRS {
+            assert!(wired, "{name} lost its redux.sync form");
+        }
+    }
+
+    /// Below the floor every one of them goes dark, so nothing can emit
+    /// `redux.sync` into a module that cannot assemble it.
+    #[cfg(not(cuda_oxide_sm_at_least = "80"))]
+    #[test]
+    fn no_integer_reduction_claims_the_form_below_the_ampere_floor() {
+        for (name, wired) in INTEGER_PAIRS {
+            assert!(!wired, "{name} claims redux.sync below sm_80");
+        }
+    }
+
+    /// There is no `f32` `redux` before `sm_100`, so floats keep the butterfly
+    /// at every floor. The control a broadened hook would break: claiming the
+    /// form here would name an instruction that does not exist for the type.
+    #[test]
+    fn floats_never_claim_the_single_instruction_form() {
+        // `const` blocks: these are compile-time facts, so a regression is a
+        // build failure rather than a test failure.
+        const {
+            assert!(!<Sum as ReduceOp<f32>>::HAS_FULL_WARP_FORM);
+            assert!(!<Min as ReduceOp<f32>>::HAS_FULL_WARP_FORM);
+            assert!(!<Max as ReduceOp<f32>>::HAS_FULL_WARP_FORM);
+        }
+    }
+
+    /// The default hook must stay inert: it is reached only when the `const`
+    /// is false, and must not be mistaken for a reduction.
+    #[test]
+    fn the_default_hook_is_the_identity_on_its_input() {
+        assert_eq!(<Sum as ReduceOp<f32>>::reduce_full_warp(u32::MAX, 3.5), 3.5);
+    }
+
+    /// The build script sets every rung at or below the resolved capability,
+    /// and device code relies on that: an `sm_86` build must still answer yes
+    /// to "at least sm_80".
+    #[test]
+    fn the_floor_ladder_reaching_this_crate_is_cumulative() {
+        let rungs = [
+            cfg!(cuda_oxide_sm_at_least = "70"),
+            cfg!(cuda_oxide_sm_at_least = "75"),
+            cfg!(cuda_oxide_sm_at_least = "80"),
+            cfg!(cuda_oxide_sm_at_least = "86"),
+            cfg!(cuda_oxide_sm_at_least = "90"),
+            cfg!(cuda_oxide_sm_at_least = "100"),
+            cfg!(cuda_oxide_sm_at_least = "120"),
+        ];
+        // Once false, every higher rung is false: no gaps in the ladder.
+        let first_unset = rungs.iter().position(|set| !set).unwrap_or(rungs.len());
+        assert!(
+            rungs[first_unset..].iter().all(|set| !set),
+            "floor ladder has a gap: {rungs:?}"
+        );
     }
 }

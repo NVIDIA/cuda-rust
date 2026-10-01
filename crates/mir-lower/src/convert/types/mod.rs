@@ -142,4 +142,4 @@ pub(crate) use pointer_storage::{
 };
 pub use struct_layout::struct_value_lowering_is_byte_faithful;
 pub(crate) use struct_layout::{StructLayoutInfo, StructSlotMap, build_struct_slot_map};
-pub(crate) use union_storage::build_union_storage_type;
+pub(crate) use union_storage::{build_union_storage_type, union_field_storage_type};

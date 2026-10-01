@@ -467,9 +467,11 @@ It keeps ordinary multiply and add/subtract operations separate, with one
 rounding per operation. Explicit fused operations such as `f32::mul_add`
 remain fused.
 
-NVVM IR and LTOIR builds also produce `.options` and versioned `.target`
-sidecars. Keep both files with the artifact so later libNVVM and nvJitLink
-steps preserve the same FMA policy.
+NVVM IR and LTOIR builds also produce `.options`, `.kernels` and versioned
+`.target` sidecars. Keep them with the artifact: later libNVVM and nvJitLink
+steps preserve the same FMA policy, and check that the finalized image still
+defines every kernel listed in `.kernels` (nvJitLink can report success while
+dropping a module's kernels).
 
 Run `memcheck` first when investigating memory safety. The other tools are
 complementary and do not perform full memory-access checking.
@@ -531,7 +533,7 @@ output mode is active in the environment (`CUDA_OXIDE_MATERIALIZE_CUBIN` or
 
 `clean` deletes project-local Cargo `target/` directories and generated
 cuda-oxide device artifacts (`.ptx`, `.ll`, `.opt.ll`, `.ltoir`, `.cubin`,
-plus the `.target` / `.options` / `.cubin.target` sidecars) under the current
+plus the `.target` / `.options` / `.kernels` / `.cubin.target` sidecars) under the current
 workspace or standalone project. It refuses (with an error) to remove a
 symlinked `target/` directory or artifact, and it does **not** wipe the
 shared codegen backend cache at `~/.cargo/cuda-oxide/`.

@@ -111,6 +111,7 @@ pub(super) const GENERATED_ARTIFACT_SUFFIXES: &[&str] = &[
     "ptx.identity",
     "target",
     "options",
+    "kernels",
     "cubin.target",
 ];
 

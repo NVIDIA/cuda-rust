@@ -11,8 +11,8 @@ tools for writing GPU kernels in idiomatic Rust.
   detail of device-side CUDA programming.
 * [cutile-rs](./cutile-rs) ([book](./cutile-rs/cutile-book)): A proc-macro plugin
   and crates to help users write CUDA kernels using the CUDA **Tile**
-  programming model. Tensors in memory are
-  partitioned into sub-tensors; a kernel loads tiles from them, computes on
+  programming model. Tensors are views into device memory, partitioned into
+  sub-tensors; a kernel loads tiles from them, computes on
   whole tiles at a time, and stores tiles back, and the compiler decides how
   tiles map onto each architecture.
 * Runtime: [`cuda-bindings`](./cuda-bindings), [`cuda-core`](./cuda-core)

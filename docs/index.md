@@ -53,7 +53,7 @@ Each tile program gets an exclusive `&mut Tensor` for its sub-tensor; immutable 
 The partition determines the launch grid.
 There is no thread hierarchy, shared memory, or synchronization necessary.
 Together with disjoint mutable outputs, execution within a kernel is data-race free by construction.
-Greater control over kernel behavior is available via unsafe raw Tile IR operations (raw pointers, program id, etc.), 
+Greater control over kernel behavior is available via unsafe raw Tile IR operations (raw pointers, program id, etc.),
 along with explicit control over the launch grid.
 
 Kernels compile just in time on first launch, from Rust through CUDA Tile IR to a cubin.

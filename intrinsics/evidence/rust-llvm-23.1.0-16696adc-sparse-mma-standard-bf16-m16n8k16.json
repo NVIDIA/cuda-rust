@@ -1,0 +1,44 @@
+{
+  "schema": 5,
+  "backend_profile": "rust-llvm-23.1.0-16696adc",
+  "backend_kind": "llvm_nvptx",
+  "llvm_revision": "16696adcd119e6ba9cc175207d984d7021211acb",
+  "backend_version": "LLVM version 23.1.0-rust-1.100.0-nightly",
+  "backend_sha256": "2e5bc688625ca7d98bca9b5f0f0d14525d2eb59e8a9842964e480df3ffd1f921",
+  "records": [
+    {
+      "id": "mma_sp_m16n8k16_f32_bf16",
+      "source_record": "int_nvvm_mma_sp_m16n8k16_row_col_bf16",
+      "llvm_symbol": "llvm.nvvm.mma.sp.m16n8k16.row.col.bf16",
+      "llvm_arguments": ["i32", "i32", "i32", "i32", "f32", "f32", "f32", "f32", "i32", "i32"],
+      "llvm_results": ["f32", "f32", "f32", "f32"],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "sm_80",
+      "ptx_feature": "+ptx71",
+      "status": "lowered",
+      "stages": [
+        {
+          "targets": ["sm_80", "ptx71"],
+          "representation": "convergent inline PTX mma.sp.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 for selector immediates 0 through 3",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Candidate probe with the nightly-2026-08-28 rustlib llc (SHA-256 2e01bcad3158362e62f1e5f7a5f9c260727b86b4f5375a66f95be63372e6e1ec, LLVM version 23.1.0-rust-1.100.0-nightly, LLVM revision 16696adcd119e6ba9cc175207d984d7021211acb) lowered the inline-PTX probe at sm_80/+ptx71. The 7942-byte PTX module has SHA-256 6b582548488ec61df7b40a595dbb76de1ec1f41d73fbe7ab383b57c066d71131 and retains mma.sp.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 with 4+2+2+4 register operands, a metadata register, and selector immediates 0, 1, 2, and 3. No ptxas is installed on this host, so the terminal assembly stage is not recorded and the record stays lowered. Runtime validation is unexecuted."
+        }
+      ],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {
+        "mnemonic": "mma",
+        "modifiers": ["sp", "sync", "aligned", "m16n8k16", "row", "col", "f32", "bf16", "bf16", "f32"],
+        "operands": [
+          {"kind": "register_list", "length": 4},
+          {"kind": "register_list", "length": 2},
+          {"kind": "register_list", "length": 2},
+          {"kind": "register_list", "length": 4},
+          {"kind": "register"},
+          {"kind": "immediate"}
+        ]
+      }
+    }
+  ]
+}

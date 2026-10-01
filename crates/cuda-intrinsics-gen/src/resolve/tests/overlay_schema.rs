@@ -48,8 +48,8 @@ fn overlay_manifest_loads_sorted_family_shards() {
     let (overlay, hash) =
         read_overlay(&repo_root, &repo_root.join("intrinsics/overlay.toml")).unwrap();
     assert_eq!(overlay.schema, OVERLAY_SCHEMA);
-    assert_eq!(overlay.shards.len(), 66);
-    assert_eq!(overlay.intrinsics.len(), 1029);
+    assert_eq!(overlay.shards.len(), 67);
+    assert_eq!(overlay.intrinsics.len(), 1030);
     assert_eq!(
         overlay
             .intrinsics
@@ -144,7 +144,7 @@ fn overlay_manifest_loads_sorted_family_shards() {
             .iter()
             .filter(|record| record.family == "sparse_mma")
             .count(),
-        126
+        127
     );
     assert_eq!(
         overlay
@@ -266,6 +266,7 @@ fn overlay_shard_schema_range_is_composable_and_new_fields_fail_closed() {
         sparse_mma_f8f6f4_f16: None,
         sparse_mma_fp8_f32: None,
         sparse_mma_ordered_ampere_float: None,
+        sparse_mma_standard_bf16_m16n8k16: None,
         prmt,
         packed_conversion_fp8: None,
         packed_conversion_fp8_f16x2: None,
@@ -407,6 +408,7 @@ fn overlay_shard_schema_range_is_composable_and_new_fields_fail_closed() {
         sparse_mma_f8f6f4_f16: None,
         sparse_mma_fp8_f32: None,
         sparse_mma_ordered_ampere_float: None,
+        sparse_mma_standard_bf16_m16n8k16: None,
         prmt: None,
         packed_conversion_fp8: Some(test_fp8_conversion_admission()),
         packed_conversion_fp8_f16x2: None,
@@ -453,6 +455,7 @@ fn overlay_shard_schema_range_is_composable_and_new_fields_fail_closed() {
         sparse_mma_f8f6f4_f16: None,
         sparse_mma_fp8_f32: None,
         sparse_mma_ordered_ampere_float: None,
+        sparse_mma_standard_bf16_m16n8k16: None,
         prmt: None,
         packed_conversion_fp8: None,
         packed_conversion_fp8_f16x2: None,
@@ -500,6 +503,7 @@ fn overlay_shard_schema_range_is_composable_and_new_fields_fail_closed() {
         sparse_mma_f8f6f4_f16: None,
         sparse_mma_fp8_f32: None,
         sparse_mma_ordered_ampere_float: None,
+        sparse_mma_standard_bf16_m16n8k16: None,
         prmt: None,
         packed_conversion_fp8: None,
         packed_conversion_fp8_f16x2: None,

@@ -338,6 +338,7 @@ fn generate_c_specifier(
     is_64bit: bool,
     is_float: bool,
     is_string: bool,
+    is_unsigned: bool,
 ) -> String {
     let mut result = String::from("%");
 
@@ -413,14 +414,141 @@ fn generate_c_specifier(
                 's'
             } else if is_float {
                 'f'
+            } else if is_unsigned {
+                'u'
             } else {
-                'd' // Will be 'u' for unsigned, handled at arg level
+                'd'
             }
         }
     };
     result.push(type_char);
 
     result
+}
+
+/// How a `{}` argument with no type character should be packed.
+enum DefaultArgKind {
+    /// Float literal or `as f32` / `as f64`.
+    Float,
+    /// Unsigned literal suffix or `as u8` / `u16` / `u32` / `u64` / `usize`.
+    Unsigned,
+    /// Signed or unsuffixed integer literal, `bool`, or a signed cast.
+    Signed,
+    /// Binding, call, or other expression whose type the macro cannot see.
+    Unknown,
+}
+
+fn peel_expr(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Group(group) => peel_expr(&group.expr),
+        Expr::Paren(paren) => peel_expr(&paren.expr),
+        other => other,
+    }
+}
+
+fn classify_type(ty: &syn::Type) -> DefaultArgKind {
+    let syn::Type::Path(path) = ty else {
+        return DefaultArgKind::Unknown;
+    };
+    if path.qself.is_some() {
+        return DefaultArgKind::Unknown;
+    }
+    let Some(ident) = path.path.get_ident() else {
+        return DefaultArgKind::Unknown;
+    };
+    match ident.to_string().as_str() {
+        "f32" | "f64" => DefaultArgKind::Float,
+        "u8" | "u16" | "u32" | "u64" | "usize" => DefaultArgKind::Unsigned,
+        "i8" | "i16" | "i32" | "i64" | "isize" | "bool" => DefaultArgKind::Signed,
+        _ => DefaultArgKind::Unknown,
+    }
+}
+
+fn classify_default_arg(expr: &Expr) -> DefaultArgKind {
+    match peel_expr(expr) {
+        Expr::Lit(lit) => match &lit.lit {
+            syn::Lit::Float(_) => DefaultArgKind::Float,
+            syn::Lit::Int(int) => match int.suffix() {
+                "u8" | "u16" | "u32" | "u64" | "usize" => DefaultArgKind::Unsigned,
+                _ => DefaultArgKind::Signed,
+            },
+            syn::Lit::Bool(_) => DefaultArgKind::Signed,
+            _ => DefaultArgKind::Unknown,
+        },
+        Expr::Cast(cast) => classify_type(&cast.ty),
+        Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Neg(_)) => {
+            classify_default_arg(&unary.expr)
+        }
+        _ => DefaultArgKind::Unknown,
+    }
+}
+
+fn append_ascii(bytes: &[u8]) -> TokenStream2 {
+    quote! {
+        #(
+            __buf[__i] = #bytes;
+            __i += 1;
+        )*
+    }
+}
+
+/// Specifier bytes for a default argument whose type is only known later.
+///
+/// `GpuPrintfArg` picks `%f`, `%u` / `%llu`, or `%d` / `%lld`. `ll` is omitted
+/// for `%p` (pointers are already pointer-sized).
+fn append_inferred_spec(ty: &syn::Ident, spec: &FormatSpec) -> TokenStream2 {
+    let mut prefix = String::from("%");
+    if spec.left_justify {
+        prefix.push('-');
+    }
+    if spec.always_sign {
+        prefix.push('+');
+    }
+    if spec.space_sign {
+        prefix.push(' ');
+    }
+    if spec.alternate {
+        prefix.push('#');
+    }
+    if spec.zero_pad {
+        prefix.push('0');
+    }
+    match &spec.width {
+        Some(Width::Literal(w)) => prefix.push_str(&w.to_string()),
+        Some(Width::Runtime) => prefix.push('*'),
+        None => {}
+    }
+    match &spec.precision {
+        Some(Precision::Literal(p)) => {
+            prefix.push('.');
+            prefix.push_str(&p.to_string());
+        }
+        Some(Precision::Runtime) => prefix.push_str(".*"),
+        None => {}
+    }
+    let prefix = append_ascii(prefix.as_bytes());
+    quote! {
+        #prefix
+        if !#ty::IS_FLOAT && #ty::IS_64BIT && #ty::FORMAT_CHAR != 'p' {
+            __buf[__i] = b'l';
+            __i += 1;
+            __buf[__i] = b'l';
+            __i += 1;
+        }
+        __buf[__i] = if #ty::IS_FLOAT {
+            b'f'
+        } else {
+            #ty::FORMAT_CHAR as u8
+        };
+        __i += 1;
+    }
+}
+
+/// Fixed C specifier, or `None` when the argument type must be read from
+/// [`cuda_device::debug::GpuPrintfArg`] at the call site.
+enum SpecPiece {
+    Fixed(String),
+    Inferred(FormatSpec),
 }
 
 /// Main proc macro implementation (called from lib.rs)
@@ -491,8 +619,12 @@ pub fn gpu_printf_impl(input: GpuPrintfInput) -> TokenStream2 {
     // Generate the argument struct fields and initializers
     let mut field_defs: Vec<TokenStream2> = Vec::new();
     let mut field_inits: Vec<TokenStream2> = Vec::new();
-    let mut c_specifiers: Vec<String> = Vec::new();
+    let mut c_specifiers: Vec<SpecPiece> = Vec::new();
     let mut arg_idx = 0;
+    let mut inferred_vals: Vec<TokenStream2> = Vec::new();
+    let mut inferred_val_idents: Vec<syn::Ident> = Vec::new();
+    let mut inferred_tys: Vec<syn::Ident> = Vec::new();
+    let mut promoted_tys: Vec<syn::Ident> = Vec::new();
 
     for (placeholder_idx, placeholder) in placeholders.iter().enumerate() {
         let spec = &placeholder.spec;
@@ -567,59 +699,163 @@ pub fn gpu_printf_impl(input: GpuPrintfInput) -> TokenStream2 {
                 // Signed integer: use i64 to handle all signed integer sizes
                 (quote! { i64 }, quote! { (#arg) as i64 }, true, false, false)
             }
-            None => {
-                // Default format - use i64 for integers (most common case)
-                // The C format string will be %lld
-                (quote! { i64 }, quote! { (#arg) as i64 }, true, false, false)
+            // `{:.N}` has no type character. Precision on `%d` is a minimum
+            // digit count, so packing a float as i64 prints "03" for 3.14.
+            // The documented conversion is `%f`. Untyped arguments take the
+            // same path: the macro cannot see their type, and guessing i64
+            // would truncate the float.
+            None if spec.precision.is_some() => {
+                (quote! { f64 }, quote! { (#arg) as f64 }, false, true, false)
             }
+            None => match classify_default_arg(arg) {
+                // Visible unsigned values must not be narrowed through `as i64`:
+                // a u64 above i64::MAX would print as a negative %lld.
+                DefaultArgKind::Unsigned => {
+                    (quote! { u64 }, quote! { (#arg) as u64 }, true, false, false)
+                }
+                DefaultArgKind::Float => {
+                    (quote! { f64 }, quote! { (#arg) as f64 }, false, true, false)
+                }
+                DefaultArgKind::Signed => {
+                    (quote! { i64 }, quote! { (#arg) as i64 }, true, false, false)
+                }
+                // Type is not in the tokens. `GpuPrintfArg` selects the
+                // conversion so a float is not truncated and a u64 is not
+                // wrapped. The sentinel tuple is replaced below.
+                DefaultArgKind::Unknown => {
+                    (quote! { i64 }, quote! { (#arg) as i64 }, true, false, false)
+                }
+            },
             _ => {
                 // Fallback to i64
                 (quote! { i64 }, quote! { (#arg) as i64 }, true, false, false)
             }
         };
 
-        field_defs.push(quote! { #field_name: #field_ty });
-        field_inits.push(quote! { #field_name: #field_init });
-
-        // Generate C format specifier
-        // For trait-based types, we use a placeholder that gets resolved at compile time
-        let c_spec = generate_c_specifier(spec, is_64bit, is_float, is_string);
-        c_specifiers.push(c_spec);
-    }
-
-    // Build the final C format string
-    let mut c_format = build_c_format_string(&format_str, &placeholders);
-    for c_spec in &c_specifiers {
-        c_format = c_format.replacen("__PLACEHOLDER__", c_spec, 1);
+        let inferred = spec.format_type.is_none()
+            && spec.precision.is_none()
+            && matches!(classify_default_arg(arg), DefaultArgKind::Unknown);
+        if inferred {
+            let infer_idx = inferred_tys.len();
+            let ty_param = format_ident!("__T{}", infer_idx);
+            let promoted = format_ident!("__P{}", infer_idx);
+            let val = format_ident!("__val_{}", placeholder_idx);
+            inferred_tys.push(ty_param);
+            promoted_tys.push(promoted.clone());
+            inferred_val_idents.push(val.clone());
+            inferred_vals.push(quote! { let #val = #arg; });
+            field_defs.push(quote! { #field_name: #promoted });
+            field_inits
+                .push(quote! { #field_name: cuda_device::debug::GpuPrintfArg::promote(#val) });
+            c_specifiers.push(SpecPiece::Inferred(spec.clone()));
+        } else {
+            let is_unsigned = spec.format_type.is_none()
+                && spec.precision.is_none()
+                && matches!(classify_default_arg(arg), DefaultArgKind::Unsigned);
+            field_defs.push(quote! { #field_name: #field_ty });
+            field_inits.push(quote! { #field_name: #field_init });
+            let c_spec = generate_c_specifier(spec, is_64bit, is_float, is_string, is_unsigned);
+            c_specifiers.push(SpecPiece::Fixed(c_spec));
+        }
     }
 
     // Generate unique struct name
     let struct_name = format_ident!("__GpuPrintfArgs");
 
-    // Create byte string literal for format string (avoids str type)
-    let format_with_null = format!("{}\0", c_format);
-    let format_lit =
-        syn::LitByteStr::new(format_with_null.as_bytes(), proc_macro2::Span::call_site());
-
-    let expanded = quote! {
-        {
-            // Argument packing struct with C-compatible layout
-            #[repr(C)]
-            struct #struct_name {
-                #(#field_defs),*
-            }
-
-            // Pack arguments
-            let __args = #struct_name {
-                #(#field_inits),*
+    let expanded = if inferred_tys.is_empty() {
+        // Build the final C format string
+        let mut c_format = build_c_format_string(&format_str, &placeholders);
+        for c_spec in &c_specifiers {
+            let SpecPiece::Fixed(c_spec) = c_spec else {
+                unreachable!("concrete printf args have fixed specifiers");
             };
+            c_format = c_format.replacen("__PLACEHOLDER__", c_spec, 1);
+        }
 
-            // Call vprintf intrinsic
-            // Use byte string literal directly (avoids str type which GPU doesn't support)
-            cuda_device::debug::__gpu_vprintf(
-                #format_lit.as_ptr(),
-                &__args as *const #struct_name as *const u8
-            )
+        // Create byte string literal for format string (avoids str type)
+        let format_with_null = format!("{}\0", c_format);
+        let format_lit =
+            syn::LitByteStr::new(format_with_null.as_bytes(), proc_macro2::Span::call_site());
+
+        quote! {
+            {
+                // Argument packing struct with C-compatible layout
+                #[repr(C)]
+                struct #struct_name {
+                    #(#field_defs),*
+                }
+
+                // Pack arguments
+                let __args = #struct_name {
+                    #(#field_inits),*
+                };
+
+                // Call vprintf intrinsic
+                // Use byte string literal directly (avoids str type which GPU doesn't support)
+                cuda_device::debug::__gpu_vprintf(
+                    #format_lit.as_ptr(),
+                    &__args as *const #struct_name as *const u8
+                )
+            }
+        }
+    } else {
+        let skeleton = build_c_format_string(&format_str, &placeholders);
+        let parts: Vec<&str> = skeleton.split("__PLACEHOLDER__").collect();
+        let mut writes = Vec::new();
+        let mut infer_idx = 0usize;
+        for (part_idx, part) in parts.iter().enumerate() {
+            writes.push(append_ascii(part.as_bytes()));
+            if part_idx >= c_specifiers.len() {
+                continue;
+            }
+            match &c_specifiers[part_idx] {
+                SpecPiece::Fixed(spec) => writes.push(append_ascii(spec.as_bytes())),
+                SpecPiece::Inferred(spec) => {
+                    writes.push(append_inferred_spec(&inferred_tys[infer_idx], spec));
+                    infer_idx += 1;
+                }
+            }
+        }
+        // Flags + width + precision + `ll` + type character, per placeholder.
+        let buf_len = format_str.len() + placeholders.len() * 48 + 8;
+        let fmt_params = inferred_tys.clone();
+        let fmt_param_refs = fmt_params.clone();
+        quote! {
+            {
+                #[inline(always)]
+                #[allow(unused_variables)]
+                fn __oxide_gpu_printf_format<#(#fmt_params: cuda_device::debug::GpuPrintfArg),*>(
+                    #( _: &#fmt_param_refs ),*
+                ) -> &'static [u8] {
+                    const { &{
+                        let mut __buf = [0u8; #buf_len];
+                        let mut __i = 0usize;
+                        #(#writes)*
+                        __buf[__i] = 0;
+                        let _ = __i;
+                        __buf
+                    }}
+                }
+
+                #(#inferred_vals)*
+
+                // Argument packing struct with C-compatible layout.
+                // Inferred slots use the `GpuPrintfArg` promoted type.
+                #[repr(C)]
+                struct #struct_name<#(#promoted_tys),*> {
+                    #(#field_defs),*
+                }
+
+                let __fmt = __oxide_gpu_printf_format(#(&#inferred_val_idents),*);
+                let __args = #struct_name {
+                    #(#field_inits),*
+                };
+
+                cuda_device::debug::__gpu_vprintf(
+                    __fmt.as_ptr(),
+                    &__args as *const _ as *const u8
+                )
+            }
         }
     };
 

@@ -8,7 +8,7 @@ kernels in idiomatic Rust.
   ([book](cuda-oxide/)): A rustc compiler plugin, cargo helper utility, and
   crates to help users target the traditional CUDA **SIMT** (Single Instruction,
   Multiple Threads) kernel programming model. Here users have access to every
-  detail of device side CUDA programming.
+  detail of device-side CUDA programming.
 * [cutile-rs](https://github.com/NVIDIA/cuda-rust/tree/main/cutile-rs)
   ([book](cutile/)): A proc-macro plugin and crates to help users write CUDA
   kernels using the CUDA **Tile** programming model. Tensors in memory are
@@ -45,31 +45,31 @@ shape its direction by sharing feedback on your experience.
 | Portability | CUDA architecture-specific; you control tuning for each GPU | CUDA architecture-agnostic; the compiler tunes per GPU |
 | Reach for it when | You need direct control over threads, warps, shared memory, TMA, or cluster ops | Your problem is naturally expressed as tensor computations and you want the compiler to handle scheduling details |
 
-**cutile-rs — Tile.** You write a kernel as a *tile program*: a function that loads tiles from tensors, 
+**cutile-rs — Tile.** You write a kernel as a *tile program*: a function that loads tiles from tensors,
 computes on whole tiles using operations similar to NumPy or PyTorch, and stores tiles back into tensors.
 
-Tensors are views into in-memory data. On the host, you partition a mutable tensor into disjoint sub-tensors. 
-Each tile program gets an exclusive `&mut Tensor` for its sub-tensor; immutable inputs use shared `&Tensor` references. 
-The partition determines the launch grid: You don’t need to calculate grid indices yourself but can if needed. 
-There is no thread indexing, shared memory, or synchronization in the program. 
-Together with disjoint mutable inputs, execution within a kernel is data-race free by construction.
+Tensors are views into in-memory data. On the host, you partition a mutable tensor into disjoint sub-tensors.
+Each tile program gets an exclusive `&mut Tensor` for its sub-tensor; immutable inputs use shared `&Tensor` references.
+The partition determines the launch grid.
+There is no thread hierarchy, shared memory, or synchronization necessary.
+Together with disjoint mutable outputs, execution within a kernel is data-race free by construction.
+Greater control over kernel behavior is available via unsafe raw Tile IR operations (raw pointers, program id, etc.), 
+along with explicit control over the launch grid.
 
-Kernels compile just in time on first launch, from Rust through CUDA Tile IR to a cubin. 
-The compiler optimizes your tile kernel to your target architecture, leaving your source code architecture-agnostic. 
+Kernels compile just in time on first launch, from Rust through CUDA Tile IR to a cubin.
+The compiler optimizes your tile kernel to your target architecture, leaving your source code architecture-agnostic.
 Use cutile-rs when your problem fits naturally into tensor computations and you want the compiler to handle scheduling.
 
-**cuda-oxide — SIMT.** You write code for one thread and manage the grid yourself, including thread and block indices, shared memory, warp and cluster operations, and TMA. 
+**cuda-oxide — SIMT.** You write code for one thread and manage the grid yourself, including thread and block indices, shared memory, warp and cluster operations, and TMA.
 This is the same programming model as CUDA C++. Use cuda-oxide when porting existing CUDA C++ kernels or when you need direct hardware control.
 
-Disjoint slices give each thread exclusive access to its own elements, providing memory safety within each thread. 
+Disjoint slices give each thread exclusive access to its own elements, providing memory safety within each thread.
 You control how threads synchronize and use shared memory.
 
-Kernels compile ahead of time from Rust to PTX using a pinned nightly toolchain managed by `cargo oxide`. 
+Kernels compile ahead of time from Rust to PTX using a pinned nightly toolchain managed by `cargo oxide`.
 You have direct control over how your kernels are tuned for each GPU architecture.
 
-If you are unsure which model to start with, reach for cutile-rs first: the compiler optimizes your kernel for your specific architecture. 
-Drop down to cuda-oxide when you need control over threads, warps, shared memory, or architecture-specific features, with direct control over tuning for each GPU architectur.
-
+If you are unsure which model to start with, reach for cutile-rs first: the compiler optimizes your kernel for your specific architecture. Drop down to cuda-oxide when you need control over threads, warps, shared memory, architecture-specific features, and tuning per GPU architecture.
 
 Kernels from both models interoperate: a cutile-rs Tile kernel and a cuda-oxide
 SIMT kernel can run on the same stream over shared device buffers.

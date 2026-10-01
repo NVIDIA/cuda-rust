@@ -5,12 +5,13 @@ host-side crates for working with the CUDA driver and device-side crates and
 tools for writing GPU kernels in idiomatic Rust.
 
 * [cuda-oxide](./cuda-oxide) ([book](./cuda-oxide/cuda-oxide-book)): A rustc
-  compiler plugin, cargo helper utility, and crates to help users target the traditional CUDA **SIMT** (Single Instruction,
-  Multiple Threads) kernel programming model. Here users have access to every
-  detail of device side CUDA programming.
+  compiler plugin, cargo helper utility, and crates to help users target the
+  traditional CUDA **SIMT** (Single Instruction, Multiple Threads) kernel
+  programming model. Here users have access to every
+  detail of device-side CUDA programming.
 * [cutile-rs](./cutile-rs) ([book](./cutile-rs/cutile-book)): A proc-macro plugin
-  and crates to help users write
-  CUDA kernels using the CUDA **Tile** programming model. Tensors in memory are
+  and crates to help users write CUDA kernels using the CUDA **Tile**
+  programming model. Tensors in memory are
   partitioned into sub-tensors; a kernel loads tiles from them, computes on
   whole tiles at a time, and stores tiles back, and the compiler decides how
   tiles map onto each architecture.
@@ -40,7 +41,7 @@ shape its direction by sharing feedback on your experience.
 | Portability | CUDA architecture-specific; you control tuning for each GPU | CUDA architecture-agnostic; the compiler tunes per GPU |
 | Reach for it when | You need direct control over threads, warps, shared memory, TMA, or cluster ops | Your problem is naturally expressed as tensor computations and you want the compiler to handle scheduling details |
 
-If you are unsure which model to start with, reach for cutile-rs first: the compiler optimizes your kernel for your specific architecture. Drop down to cuda-oxide when you need control over threads, warps, shared memory, or architecture-specific features, with direct control over tuning for each GPU architectur.
+If you are unsure which model to start with, reach for cutile-rs first: the compiler optimizes your kernel for your specific architecture. Drop down to cuda-oxide when you need control over threads, warps, shared memory, architecture-specific features, and tuning per GPU architecture.
 
 Kernels from both models interoperate: a cutile-rs Tile kernel and a cuda-oxide SIMT
 kernel can run on the same stream over shared device buffers.

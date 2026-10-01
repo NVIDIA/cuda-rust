@@ -312,7 +312,7 @@ catalog you are reading.
 
 **Hand-written**, directly under `crates/dialect-nvvm/src/ops/`. These are the
 ops with bespoke verification or lowering that the intrinsic catalog does not
-describe. There are seven modules and 26 operations:
+describe. There are seven modules and 28 operations:
 
 | Module    | Description                                                 | Ops |
 | :-------- | :---------------------------------------------------------- | --: |
@@ -322,7 +322,7 @@ describe. There are seven modules and 26 operations:
 | `debug`   | `assertfail`, `vprintf`                                     |   2 |
 | `grid`    | Cooperative `grid_sync`                                     |   1 |
 | `memory`  | Generic-to-shared address conversion with a byte offset     |   1 |
-| `wgmma`   | Warpgroup MMA descriptors; bf16/f16 at m64n64k16, bf16 at m64n128k16, tf32 at m64n64k8 |  14 |
+| `wgmma`   | Warpgroup MMA descriptors; bf16/f16 at m64n64k16, bf16/f16 at m64n128k16, tf32 at m64n64k8 |  16 |
 
 **Generated**, under `ops/generated/`, from `intrinsics/catalog.json` by
 `cuda-intrinsics-gen`. Every file there opens with `// @generated ... DO NOT

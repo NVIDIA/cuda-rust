@@ -3191,6 +3191,11 @@ fn try_dispatch_intrinsic(
                 ctx, body, args, target, block_ptr, prev_op, value_map, block_map, loc,
             )?))
         }
+        "cuda_device::wgmma::wgmma_mma_m64n128k16_f32_f16" => {
+            Ok(Some(intrinsics::wgmma::emit_wgmma_mma_m64n128k16_f32_f16(
+                ctx, body, args, target, block_ptr, prev_op, value_map, block_map, loc,
+            )?))
+        }
         "cuda_device::wgmma::wgmma_mma_m64n64k16_f32_f16" => {
             Ok(Some(intrinsics::wgmma::emit_wgmma_mma_m64n64k16_f32_f16(
                 ctx, body, args, target, block_ptr, prev_op, value_map, block_map, loc,

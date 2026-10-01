@@ -13,7 +13,7 @@ use crate::translator::rvalue;
 use crate::translator::values::ValueMap;
 use dialect_nvvm::ops::{
     WgmmaMakeSmemDescOp, WgmmaMmaM64N64K8F32Tf32Op, WgmmaMmaM64N64K16F32Bf16Op,
-    WgmmaMmaM64N64K16F32F16Op, WgmmaMmaM64N128K16F32Bf16Op,
+    WgmmaMmaM64N64K16F32F16Op, WgmmaMmaM64N128K16F32Bf16Op, WgmmaMmaM64N128K16F32F16Op,
 };
 use pliron::basic_block::BasicBlock;
 use pliron::builtin::types::{IntegerType, Signedness};
@@ -280,6 +280,46 @@ pub fn emit_wgmma_mma_m64n128k16_f32_bf16(
     )
 }
 
+/// Emit F16 m64n128k16 WGMMA pointer form.
+///
+/// `mir-lower` accepts this variant only in a canonical linear full-drain
+/// region with a `[[f32; 8]; 8]` accumulator and a final `wait_group<0>`.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_wgmma_mma_m64n128k16_f32_f16(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    emit_wgmma_mma_pointer_form(
+        ctx,
+        body,
+        args,
+        target,
+        block_ptr,
+        prev_op,
+        value_map,
+        block_map,
+        loc,
+        |ctx, operands| {
+            Operation::new(
+                ctx,
+                WgmmaMmaM64N128K16F32F16Op::get_concrete_op_info(),
+                vec![],
+                operands,
+                vec![],
+                0,
+            )
+        },
+        "wgmma_mma_m64n128k16_f32_f16",
+    )
+}
+
 /// Emit F16 m64n64k16 WGMMA pointer form.
 ///
 /// `mir-lower` accepts this variant only in a canonical linear full-drain
@@ -420,6 +460,7 @@ mod tests {
         for path in [
             "cuda_device::wgmma::wgmma_mma_m64n64k16_f32_bf16",
             "cuda_device::wgmma::wgmma_mma_m64n128k16_f32_bf16",
+            "cuda_device::wgmma::wgmma_mma_m64n128k16_f32_f16",
             "cuda_device::wgmma::wgmma_mma_m64n64k16_f32_f16",
             "cuda_device::wgmma::wgmma_mma_m64n64k8_f32_tf32",
         ] {

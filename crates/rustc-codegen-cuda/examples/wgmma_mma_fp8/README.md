@@ -11,10 +11,6 @@ matrix workload.
 
 ## Run
 
-For the complete H100/H200 evidence collection, follow [the short handoff](HOPPER_VALIDATION.md).
-The runner's failure handling can be tested without a GPU from the repo root:
-`python3 scripts/test-fp8-wgmma-runner.py`.
-
 ```bash
 cargo oxide run wgmma_mma_fp8 --arch sm_90a
 ```
@@ -25,6 +21,21 @@ the runtime `SUCCESS` marker.
 
 Pass `-- --check-only` to run the all-output checks and one launch of each
 benchmark kernel, without warmups or timing. This mode fails on a non-Hopper GPU.
+
+Run correctness and Compute Sanitizer checks from the repository root:
+
+```bash
+cargo oxide run wgmma_mma_fp8 --arch sm_90a -- --check-only
+cargo oxide sanitize wgmma_mma_fp8 --arch sm_90a --lineinfo --tool memcheck -- --error-exitcode 86 --print-limit 0 --check-warpgroup-mma yes -- --check-only
+cargo oxide sanitize wgmma_mma_fp8 --arch sm_90a --lineinfo --tool racecheck -- --error-exitcode 86 --print-limit 0 --racecheck-report all --print-level info -- --check-only
+cargo oxide sanitize wgmma_mma_fp8 --arch sm_90a --lineinfo --tool initcheck -- --error-exitcode 86 --print-limit 0 -- --check-only
+cargo oxide sanitize wgmma_mma_fp8 --arch sm_90a --lineinfo --tool synccheck -- --error-exitcode 86 --print-limit 0 --check-warpgroup-mma yes -- --check-only
+```
+
+Each run should print `SUCCESS`; sanitizer summaries should report zero errors
+or hazards. Collect timings separately with the normal run command above,
+without sanitizer instrumentation or `CUDA_OXIDE_DEBUG` enabled. Include the
+GPU model, driver and CUDA toolkit versions when reporting results.
 
 ## Numeric checks
 
@@ -78,3 +89,66 @@ Expected final marker:
 ```text
 SUCCESS: FP8 WGMMA numeric check and BF16 comparison passed
 ```
+
+## Large-GEMM FP8 versus BF16 comparison
+
+For one command collecting the PR correctness checks, four sanitizers, three
+tile benchmark runs, and three large-GEMM sweeps into a shareable archive, use:
+
+```bash
+CUDA_TOOLKIT_PATH=/usr/local/cuda-13.0 CUDA_VISIBLE_DEVICES=0 bash scripts/validate-fp8-wgmma.sh
+```
+
+See [HOPPER_VALIDATION.md](HOPPER_VALIDATION.md) for prerequisites and archive contents.
+
+From the repository root, on H100/H200 with a CUDA toolkit including cuBLASLt:
+
+```bash
+bash scripts/bench-fp8-vs-bf16.sh | tee fp8-vs-bf16.log
+```
+
+This builds `bench/fp8_vs_bf16.cu` and sweeps square GEMMs with dimensions
+64, 256, 1024, 4096 and 8192, followed by a narrow `64x8192x8192` case,
+once with FP8 fast accumulation off and once with it on (12 comparisons).
+To choose one M/N/K shape, enable FP8 fast accumulation explicitly, or run
+the GPU-independent self-check:
+
+```bash
+bash scripts/bench-fp8-vs-bf16.sh 4096 4096 4096
+bash scripts/bench-fp8-vs-bf16.sh 4096 4096 4096 1
+bash scripts/bench-fp8-vs-bf16.sh --self-test
+```
+
+Set `NVCC=/path/to/nvcc` or `CUDA_TOOLKIT_PATH=/path/to/cuda` if needed.
+The selected toolkit must include its matching cuBLASLt headers and library.
+
+Both paths use the same logical inputs, TN layouts, FP32 compute, BF16 output,
+and a 32 MiB workspace limit. FP8 uses E4M3 and unit input scales. Inputs are
+preconverted; timing excludes conversion, allocation, CPU/GPU transfers and
+validation. It includes the complete cuBLASLt GEMM, including output writes.
+Ten warmups precede seven alternating samples of 50 launches, timed with CUDA
+events; results show each sample and the median speedup `BF16_ms / FP8_ms`.
+Each format uses the first supported cuBLASLt heuristic, not an exhaustive
+algorithm search. Small cases can include host launch submission overhead.
+
+Every output is checked before and after timing against a CPU reference rounded
+to BF16, with `atol=0.03125`, `rtol=0.01`, and rejection of nonfinite results.
+The inputs are signed, exactly representable values with a 32-element period;
+this makes full-output validation cheap but does not test real-model FP8
+quantization accuracy. The maximum absolute error is printed. Fast accumulation
+defaults to off; turning it on can trade numerical accuracy for speed on Hopper.
+
+Large square GEMMs are candidates for a larger FP8 advantage because optimized
+kernels can sustain Tensor Core work and reuse inputs. Size alone guarantees
+neither a speedup nor 2x performance. Narrow shapes, staging, synchronization,
+output traffic, library algorithm selection and conversion costs can limit it.
+The original Rust tile benchmark already launches 8192 CTAs; adding more CTAs
+does not turn its short two/four-MMA sequence into a sustained-compute kernel.
+
+This is an independent library experiment, not runtime validation of this PR's
+Rust WGMMA lowering or a replacement for its sanitizer results. cuBLASLt chooses
+its own kernel; identifying its exact instructions requires profiling/disassembly.
+No large-GEMM GPU results are recorded yet.
+
+References: [NVIDIA H100 specifications](https://www.nvidia.com/en-us/data-center/h100/)
+and [cuBLASLt documentation](https://docs.nvidia.com/cuda/archive/13.0.0/cublas/index.html).

@@ -17,6 +17,9 @@ marker='SUCCESS: FP8 WGMMA numeric check and BF16 comparison passed'
 
 finish() {
     status=$?
+    if ((status != 0)); then
+        printf 'FAIL: exit %s; inspect the last log. Partial evidence is preserved.\n' "$status" > "$results/result.txt"
+    fi
     printf 'exit_code=%s\n' "$status" > "$results/status.txt"
     tar -czf "$results.tar.gz" -C "$(dirname "$results")" "$(basename "$results")"
     printf '\nResults (exit %s): %s.tar.gz\n' "$status" "$results"
@@ -48,7 +51,9 @@ run() {
     compute-sanitizer --version
 } > "$results/environment.log" 2>&1
 git diff --binary HEAD > "$results/changes.patch"
-tar -czf "$results/source.tar.gz" "$example/src" "$example/Cargo.toml" "$example/Cargo.lock" scripts/validate-fp8-wgmma.sh
+tar -czf "$results/source.tar.gz" "$example/src" "$example/bench" "$example/Cargo.toml" \
+    "$example/Cargo.lock" "$example/README.md" "$example/HOPPER_VALIDATION.md" \
+    scripts/validate-fp8-wgmma.sh scripts/bench-fp8-vs-bf16.sh scripts/test-fp8-wgmma-runner.py
 run doctor cargo oxide doctor
 run host-tests cargo test --locked --manifest-path "$example/Cargo.toml"
 run correctness cargo oxide run wgmma_mma_fp8 --arch sm_90a -- --check-only
@@ -80,5 +85,21 @@ done
 cp "$example/wgmma_mma_fp8.ptx" "$results/benchmark.ptx"
 run ptxas "$CUDA_TOOLKIT_PATH/bin/ptxas" -arch=sm_90a --compile-only -v \
     "$results/benchmark.ptx" -o "$results/benchmark.cubin"
+printf 'PASS: Rust correctness, four sanitizers, three tile benchmarks and ptxas\n' > "$results/pr-validation.txt"
+
+# Independent cuBLASLt experiment: a slowdown is a valid result, not a failure.
+# Keep it after the PR checks so a library/toolkit failure preserves their evidence.
+for repeat in 1 2 3; do
+    run "gemm-$repeat" env -u CUDA_OXIDE_DEBUG NVCC="$CUDA_TOOLKIT_PATH/bin/nvcc" \
+        bash scripts/bench-fp8-vs-bf16.sh
+    [[ $(grep -c '^RESULT ' "$results/gemm-$repeat.log") == 12 ]]
+    [[ $(grep -c '^SUCCESS: both formats passed before and after timing' "$results/gemm-$repeat.log") == 12 ]]
+done
+{
+    printf 'Rust tile benchmark (PR evidence):\n'
+    grep -H -E '^(BF16 m64n64k16 x4|FP8  m64n64k32 x2):' "$results"/benchmark-*.log
+    printf '\ncuBLASLt GEMM (independent experiment; speedup >1 means FP8 faster):\n'
+    grep -H '^RESULT ' "$results"/gemm-*.log
+} > "$results/summary.txt"
 run gpu-after nvidia-smi -q
-printf 'PASS: correctness, four sanitizers, and three benchmark runs\n' | tee "$results/result.txt"
+printf 'PASS: PR validation and three cuBLASLt sweeps; see summary.txt (FP8 wins are not required)\n' | tee "$results/result.txt"

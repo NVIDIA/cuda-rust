@@ -358,8 +358,8 @@ impl<Kind, const ID: usize> ManagedBarrier<Uninit, Kind, ID> {
 
     /// Initialize the barrier with a specific thread performing initialization.
     ///
-    /// **All threads in the block should call this.** Only the thread with
-    /// `threadIdx.x == init_thread` performs the actual initialization;
+    /// **All threads in the block should call this.** Only the thread whose
+    /// linear id equals `init_thread` performs the actual initialization;
     /// all threads synchronize and receive a `Ready` handle.
     ///
     /// # Block-Scoped Barriers
@@ -371,7 +371,9 @@ impl<Kind, const ID: usize> ManagedBarrier<Uninit, Kind, ID> {
     /// # Parameters
     ///
     /// - `count`: Expected number of arrivals before barrier completes
-    /// - `init_thread`: Thread ID (threadIdx.x) that performs initialization
+    /// - `init_thread`: Linear thread id within the block that performs
+    ///   initialization. `0` is thread `(0, 0, 0)`. In a 1D block this is
+    ///   `threadIdx.x`.
     ///
     /// # Safety
     ///
@@ -390,7 +392,19 @@ impl<Kind, const ID: usize> ManagedBarrier<Uninit, Kind, ID> {
     /// ```
     #[inline(always)]
     pub unsafe fn init_by(self, count: u32, init_thread: u32) -> ManagedBarrier<Ready, Kind, ID> {
-        if crate::thread::threadIdx_x() == init_thread {
+        if is_selected_linear_thread(
+            (
+                crate::thread::threadIdx_x(),
+                crate::thread::threadIdx_y(),
+                crate::thread::threadIdx_z(),
+            ),
+            (
+                crate::thread::blockDim_x(),
+                crate::thread::blockDim_y(),
+                crate::thread::blockDim_z(),
+            ),
+            init_thread,
+        ) {
             unsafe {
                 mbarrier_init(self.ptr as *mut Barrier, count);
                 fence_proxy_async_shared_cta();
@@ -509,15 +523,17 @@ impl<Kind, const ID: usize> ManagedBarrier<Ready, Kind, ID> {
 
     /// Invalidate the barrier with a specific thread performing invalidation.
     ///
-    /// **All threads in the block should call this.** Only the thread with
-    /// `threadIdx.x == inval_thread` performs the actual invalidation;
+    /// **All threads in the block should call this.** Only the thread whose
+    /// linear id equals `inval_thread` performs the actual invalidation;
     /// all threads synchronize before returning.
     ///
     /// Consumes the `Ready` barrier and returns an `Invalidated` barrier.
     ///
     /// # Parameters
     ///
-    /// - `inval_thread`: Thread ID (threadIdx.x) that performs invalidation
+    /// - `inval_thread`: Linear thread id within the block that performs
+    ///   invalidation. `0` is thread `(0, 0, 0)`. In a 1D block this is
+    ///   `threadIdx.x`.
     ///
     /// # Safety
     ///
@@ -536,7 +552,19 @@ impl<Kind, const ID: usize> ManagedBarrier<Ready, Kind, ID> {
         // Ensure all threads are done with the barrier before invalidating
         crate::thread::sync_threads();
 
-        if crate::thread::threadIdx_x() == inval_thread {
+        if is_selected_linear_thread(
+            (
+                crate::thread::threadIdx_x(),
+                crate::thread::threadIdx_y(),
+                crate::thread::threadIdx_z(),
+            ),
+            (
+                crate::thread::blockDim_x(),
+                crate::thread::blockDim_y(),
+                crate::thread::blockDim_z(),
+            ),
+            inval_thread,
+        ) {
             unsafe { mbarrier_inval(self.ptr as *mut Barrier) };
         }
 
@@ -566,3 +594,133 @@ pub type TmaBarrier0<S> = ManagedBarrier<S, TmaBarrier, 0>;
 
 /// Double-buffered TMA barrier #1
 pub type TmaBarrier1<S> = ManagedBarrier<S, TmaBarrier, 1>;
+
+/// Whether this thread is the single block thread selected by a linear id.
+///
+/// `tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z)`.
+/// `block_dim.z` is part of the launch shape but does not appear in the
+/// x-major linearization. Exactly one `(thread_idx, block_dim)` pair matches
+/// a given in-range `selected_linear_id`.
+#[inline(always)]
+fn is_selected_linear_thread(
+    thread_idx: (u32, u32, u32),
+    block_dim: (u32, u32, u32),
+    selected_linear_id: u32,
+) -> bool {
+    let (tx, ty, tz) = thread_idx;
+    let (dx, dy, _dz) = block_dim;
+    let tid = tx + dx * (ty + dy * tz);
+    tid == selected_linear_id
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_selected_linear_thread;
+
+    #[test]
+    fn one_d_block_matches_thread_idx_x() {
+        let block_dim = (128, 1, 1);
+        for x in 0..128 {
+            let thread_idx = (x, 0, 0);
+            assert!(is_selected_linear_thread(thread_idx, block_dim, x));
+            if x != 0 {
+                assert!(!is_selected_linear_thread(thread_idx, block_dim, 0));
+            }
+            if x != 31 {
+                assert!(!is_selected_linear_thread(thread_idx, block_dim, 31));
+            }
+        }
+    }
+
+    #[test]
+    fn two_d_block_selects_one_linear_thread() {
+        // blockDim = (32, 4, 1). Linear id is x-major:
+        // tid = x + 32 * y.
+        let block_dim = (32, 4, 1);
+
+        assert!(is_selected_linear_thread((0, 0, 0), block_dim, 0));
+        for y in 0..4 {
+            for x in 0..32 {
+                let selected = is_selected_linear_thread((x, y, 0), block_dim, 0);
+                assert_eq!(selected, x == 0 && y == 0);
+            }
+        }
+
+        // Linear 32 is (0, 1), not every thread with threadIdx.x == 0.
+        assert!(is_selected_linear_thread((0, 1, 0), block_dim, 32));
+        let mut matches = 0u32;
+        for y in 0..4 {
+            for x in 0..32 {
+                if is_selected_linear_thread((x, y, 0), block_dim, 32) {
+                    matches += 1;
+                    assert_eq!((x, y), (0, 1));
+                }
+            }
+        }
+        assert_eq!(matches, 1);
+
+        // The old threadIdx.x predicate would let every y with x == 0 through.
+        let x0_threads = [(0, 0, 0), (0, 1, 0), (0, 2, 0), (0, 3, 0)];
+        let x0_hits = x0_threads
+            .iter()
+            .filter(|tid| is_selected_linear_thread(**tid, block_dim, 0))
+            .count();
+        assert_eq!(x0_hits, 1);
+    }
+
+    #[test]
+    fn three_d_block_selects_one_linear_thread() {
+        // blockDim = (8, 4, 2).
+        // tid = x + 8 * (y + 4 * z).
+        let block_dim = (8, 4, 2);
+
+        assert!(is_selected_linear_thread((0, 0, 0), block_dim, 0));
+        // Linear 8 is (0, 1, 0); linear 32 is (0, 0, 1).
+        assert!(is_selected_linear_thread((0, 1, 0), block_dim, 8));
+        assert!(is_selected_linear_thread((0, 0, 1), block_dim, 32));
+        assert!(is_selected_linear_thread(
+            (3, 2, 1),
+            block_dim,
+            3 + 8 * (2 + 4 * 1)
+        ));
+
+        for selected in [0u32, 8, 31, 32] {
+            let mut matches = 0u32;
+            for z in 0..2 {
+                for y in 0..4 {
+                    for x in 0..8 {
+                        if is_selected_linear_thread((x, y, z), block_dim, selected) {
+                            matches += 1;
+                        }
+                    }
+                }
+            }
+            assert_eq!(matches, 1, "selected linear id {selected}");
+        }
+    }
+
+    #[test]
+    fn two_threads_never_both_match_the_same_linear_id() {
+        let shapes = [(64, 1, 1), (32, 4, 1), (8, 4, 2), (16, 2, 2)];
+        for (dx, dy, dz) in shapes {
+            let block_dim = (dx, dy, dz);
+            let n = dx * dy * dz;
+            for selected in 0..n {
+                let mut hits = 0u32;
+                for z in 0..dz {
+                    for y in 0..dy {
+                        for x in 0..dx {
+                            if is_selected_linear_thread((x, y, z), block_dim, selected) {
+                                hits += 1;
+                            }
+                        }
+                    }
+                }
+                assert_eq!(
+                    hits, 1,
+                    "block {block_dim:?} selected {selected} matched {hits} threads"
+                );
+            }
+        }
+    }
+}

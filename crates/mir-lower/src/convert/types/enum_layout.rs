@@ -2011,4 +2011,139 @@ mod tests {
             "{error}"
         );
     }
+
+    #[test]
+    fn enum_slot_map_pointer_niche_with_u128_payload_preserves_align16() {
+        let mut ctx = make_ctx();
+
+        let logical = mir_uint(&mut ctx, 8);
+        let wide = mir_uint(&mut ctx, 128);
+        let u32_ty = mir_uint(&mut ctx, 32);
+        let pointer: TypeHandle = MirPtrType::get_generic(&mut ctx, u32_ty, false).into();
+
+        let payload: TypeHandle = MirTupleType::get_with_layout(
+            &mut ctx,
+            vec![wide, pointer],
+            vec![0, 1],
+            vec![0, 16],
+            32,
+            16,
+        )
+        .into();
+
+        let enum_ty: TypeHandle = MirEnumType::get_with_encoding(
+            &mut ctx,
+            "MaybeWideAndPointer".into(),
+            logical,
+            vec![0, 1],
+            vec![
+                EnumVariant::unit("None".into()),
+                EnumVariant::new_with_layout("Some".into(), vec![payload], vec![0], vec![32]),
+            ],
+            EnumEncoding {
+                tag_offset: 16,
+                total_size: 32,
+                abi_align: 16,
+                layout_kind: EnumLayoutKind::Niche,
+                carrier_kind: EnumCarrierKind::Pointer,
+                carrier_width: 64,
+                untagged_variant: 1,
+                variant_inhabited: vec![1, 1],
+                ..EnumEncoding::default()
+            },
+        )
+        .into();
+
+        let map = build_enum_slot_map(&mut ctx, enum_ty).unwrap();
+
+        let fields = struct_fields(&ctx, map.llvm_struct_ty);
+
+        // Required enum alignment is 16, while the 16-byte filler itself is
+        // deliberately represented as two i64 leaves with natural alignment 8.
+        // build_enum_slot_map supplies the zero-length alignment anchor separately.
+        assert_eq!(fields.len(), 4);
+
+        let filler_ref = fields[1].deref(&ctx);
+        let filler = filler_ref
+            .downcast_ref::<llvm_types::ArrayType>()
+            .expect("16-byte enum filler should lower to an LLVM array");
+
+        assert_eq!(
+            filler.size(),
+            2,
+            "16-byte enum filler should use two 64-bit leaves"
+        );
+
+        assert_eq!(
+            filler
+                .elem_type()
+                .deref(&ctx)
+                .downcast_ref::<IntegerType>()
+                .map(IntegerType::width),
+            Some(64),
+            "16-byte enum filler elements should be i64"
+        );
+
+        assert_eq!(
+            llvm_type_size_align(&ctx, map.llvm_struct_ty),
+            Some((32, 16)),
+            "typed 16-byte filler must preserve rustc's enum size and alignment"
+        );
+    }
+
+    #[test]
+    fn enum_filler_16_bytes_falls_back_when_i64_alignment_is_not_layout_neutral() {
+        let mut ctx = make_ctx();
+
+        let filler = make_enum_filler_type(&mut ctx, 0, 16, 4);
+
+        let filler_ref = filler.deref(&ctx);
+
+        let array = filler_ref
+            .downcast_ref::<llvm_types::ArrayType>()
+            .expect("fallback enum filler should remain an LLVM byte array");
+
+        assert_eq!(array.size(), 16, "fallback must retain all 16 bytes");
+
+        assert_eq!(
+            array
+                .elem_type()
+                .deref(&ctx)
+                .downcast_ref::<IntegerType>()
+                .map(IntegerType::width),
+            Some(8),
+            "alignment-sensitive fallback must remain [16 x i8]"
+        );
+
+        assert_eq!(
+            llvm_type_size_align(&ctx, filler),
+            Some((16, 1)),
+            "fallback byte array must remain byte-aligned"
+        );
+    }
+
+    #[test]
+    fn enum_filler_16_bytes_uses_two_i64s_at_align8() {
+        let mut ctx = make_ctx();
+
+        let filler = make_enum_filler_type(&mut ctx, 0, 16, 8);
+
+        let filler_ref = filler.deref(&ctx);
+        let array = filler_ref
+            .downcast_ref::<llvm_types::ArrayType>()
+            .expect("16-byte filler should use an LLVM array");
+
+        assert_eq!(array.size(), 2);
+
+        assert_eq!(
+            array
+                .elem_type()
+                .deref(&ctx)
+                .downcast_ref::<IntegerType>()
+                .map(IntegerType::width),
+            Some(64)
+        );
+
+        assert_eq!(llvm_type_size_align(&ctx, filler), Some((16, 8)));
+    }
 }

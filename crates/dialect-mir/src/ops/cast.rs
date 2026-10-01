@@ -11,7 +11,7 @@ use crate::attributes::{MirCastKindAttr, MirPointerKindAuthorityAttr};
 use crate::types::{
     MirArrayType, MirDisjointSliceType, MirEnumType, MirPointerCarrier, MirPointerKind, MirPtrType,
     MirSliceType, MirStructType, MirTupleType, MirUnionType, is_opaque_fn_pointer_type,
-    pointer_carriers_in_type, pointer_kinds_in_type,
+    pointer_carriers_in_type, pointer_kinds_in_type, required_type_alignment,
 };
 use pliron::{
     builtin::{
@@ -26,7 +26,7 @@ use pliron::{
     op::Op,
     operation::Operation,
     result::Error,
-    r#type::{Typed, type_cast, type_impls},
+    r#type::{Typed, type_impls},
     value::Value,
     verify_err,
 };
@@ -248,62 +248,8 @@ fn is_promoted_empty_unique_ref_transition(
 }
 
 /// Required alignment of a promoted empty pointee.
-///
-/// Even a zero-length reference must be aligned. Aggregate MIR types retain
-/// rustc's exact ABI alignment; arrays inherit it from their element. Scalar
-/// and pointer leaves use the NVPTX64 natural alignment modeled by lowering.
-/// Unknown leaves fail closed instead of relying on a later lowering error.
 fn required_pointee_alignment(ctx: &Context, ty: pliron::r#type::TypeHandle) -> Option<u64> {
-    let ty = ty.deref(ctx);
-    if let Some(array) = ty.downcast_ref::<MirArrayType>() {
-        return required_pointee_alignment(ctx, array.element_ty);
-    }
-    if let Some(tuple) = ty.downcast_ref::<MirTupleType>() {
-        return if tuple.abi_align() > 0 {
-            Some(tuple.abi_align())
-        } else if tuple.types.is_empty() && tuple.total_size == 0 {
-            Some(1)
-        } else {
-            None
-        };
-    }
-    if let Some(structure) = ty.downcast_ref::<MirStructType>() {
-        return if structure.abi_align > 0 {
-            Some(structure.abi_align)
-        } else if structure.field_types.is_empty() && structure.total_size == 0 {
-            Some(1)
-        } else {
-            None
-        };
-    }
-    if let Some(enumeration) = ty.downcast_ref::<MirEnumType>() {
-        return (enumeration.abi_align() > 0).then(|| enumeration.abi_align());
-    }
-    if let Some(union) = ty.downcast_ref::<MirUnionType>() {
-        return (union.abi_align() > 0).then(|| union.abi_align());
-    }
-    if ty.is::<MirSliceType>() {
-        return Some(8);
-    }
-    if let Some(disjoint) = ty.downcast_ref::<MirDisjointSliceType>() {
-        let mut alignment = 8;
-        for &space_ty in &disjoint.space_tys {
-            alignment = alignment.max(required_pointee_alignment(ctx, space_ty)?);
-        }
-        return Some(alignment);
-    }
-    if let Some(integer) = ty.downcast_ref::<IntegerType>() {
-        let size = u64::from(integer.width()).div_ceil(8).max(1);
-        return Some(size.next_power_of_two().min(16));
-    }
-    if ty.is::<MirPtrType>() {
-        return Some(8);
-    }
-    if let Some(float) = type_cast::<dyn FloatTypeInterface>(&*ty) {
-        let size = u64::try_from(float.get_semantics().bits).ok()?.div_ceil(8);
-        return Some(size.next_power_of_two().min(16));
-    }
-    None
+    required_type_alignment(ctx, ty)
 }
 
 /// Pair every pointer carrier in `target` with the carrier at the same

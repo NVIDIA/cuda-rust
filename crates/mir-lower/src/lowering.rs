@@ -49,7 +49,7 @@ use pliron::{
     op::Op,
     operation::Operation,
     result::Result,
-    r#type::TypeHandle,
+    r#type::{TypeHandle, Typed},
     value::Value,
 };
 use reserved_oxide_symbols::{
@@ -314,7 +314,7 @@ pub fn convert_func(
         // Pre-scan MIR blocks for max dynamic shared memory alignment.
         // Must happen BEFORE inline_region empties the MIR region.
         let mir_blocks: Vec<_> = mir_region.deref(ctx).iter(ctx).collect();
-        let body_max_align = compute_max_dynamic_smem_alignment(ctx, &mir_blocks);
+        let body_max_align = compute_max_dynamic_smem_alignment(ctx, &mir_blocks)?;
         let contract_min_align = dynamic_shared_alignment_attr(ctx, op);
         let max_align = match (body_max_align, contract_min_align) {
             (Some(body), Some(contract)) => Some(body.max(contract)),
@@ -1267,7 +1267,7 @@ fn insert_op_sequentially(
 fn compute_max_dynamic_smem_alignment(
     ctx: &Context,
     mir_blocks: &[Ptr<BasicBlock>],
-) -> Option<u64> {
+) -> Result<Option<u64>> {
     let mut max_alignment: Option<u64> = None;
 
     for mir_block in mir_blocks {
@@ -1275,7 +1275,35 @@ fn compute_max_dynamic_smem_alignment(
             let op_id = Operation::get_opid(op, ctx);
             if op_id == dialect_mir::ops::MirExternSharedOp::get_opid_static() {
                 let extern_shared = dialect_mir::ops::MirExternSharedOp::new(op);
-                let alignment = extern_shared.get_alignment_value(ctx);
+                let requested_alignment = extern_shared.get_alignment_value(ctx);
+
+                if requested_alignment == 0 || !requested_alignment.is_power_of_two() {
+                    return Err(anyhow_to_pliron(anyhow::anyhow!(
+                        "mir.extern_shared alignment must be a non-zero power of two, found {}",
+                        requested_alignment
+                    )));
+                }
+
+                let result_ty = op.deref(ctx).get_result(0).get_type(ctx);
+                let result_ty_ref = result_ty.deref(ctx);
+                let ptr_ty = result_ty_ref
+                    .downcast_ref::<dialect_mir::types::MirPtrType>()
+                    .ok_or_else(|| {
+                        anyhow_to_pliron(anyhow::anyhow!(
+                            "mir.extern_shared result is not a MIR pointer"
+                        ))
+                    })?;
+
+                let required_alignment = dialect_mir::types::required_type_alignment(
+                    ctx,
+                    ptr_ty.pointee,
+                )
+                .ok_or_else(|| {
+                    anyhow_to_pliron(anyhow::anyhow!(
+                        "cannot determine required alignment for mir.extern_shared pointee type"
+                    ))
+                })?;
+                let alignment = requested_alignment.max(required_alignment);
 
                 max_alignment = Some(match max_alignment {
                     Some(current_max) => current_max.max(alignment),
@@ -1285,7 +1313,7 @@ fn compute_max_dynamic_smem_alignment(
         }
     }
 
-    max_alignment
+    Ok(max_alignment)
 }
 
 // =====================================================================

@@ -96,6 +96,21 @@ pub fn convert_shared_alloc_dc(
     // optional debug identity against the lowered element layout before it
     // can reach the declaration record or the emitted global.
     let llvm_elem_type = convert_type(ctx, mir_elem_type).map_err(anyhow_to_pliron)?;
+
+    if alignment != 0 && !alignment.is_power_of_two() {
+        return Err(anyhow_to_pliron(anyhow::anyhow!(
+            "mir.shared_alloc alignment must be a power of two, found {}",
+            alignment
+        )));
+    }
+    let required_alignment = dialect_mir::types::required_type_alignment(ctx, mir_elem_type)
+        .ok_or_else(|| {
+            anyhow_to_pliron(anyhow::anyhow!(
+                "cannot determine required alignment for mir.shared_alloc element type"
+            ))
+        })?;
+    let alignment = alignment.max(required_alignment);
+
     let debug_info = debug_info
         .filter(|info| shared_debug_type_matches_physical(ctx, info, llvm_elem_type, size));
     let debug_owner_function = debug_info.as_ref().and(debug_owner_function);

@@ -310,7 +310,7 @@ pub fn print_materializer_handshake() {
         });
     let handshake = finalizer.materializer_handshake().unwrap_or_else(|| {
         eprintln!(
-            "the loaded libNVVM or nvJitLink library cannot be tied to an exact file; refusing materialization because Cargo could not fingerprint the compiler inputs"
+            "the loaded libNVVM or nvJitLink library cannot be tied to an exact file; refusing materialization because Cargo could not fingerprint the compiler inputs. A library found only by SONAME has no exact file: set LIBNVVM_PATH and LIBNVJITLINK_PATH to the library files, or CUDA_HOME to a toolkit root that contains them"
         );
         std::process::exit(1);
     });

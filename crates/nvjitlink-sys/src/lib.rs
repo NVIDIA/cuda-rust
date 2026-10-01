@@ -7,7 +7,8 @@
 //!
 //! nvJitLink links one or more LTOIR modules (and other input forms) into
 //! a final cubin or PTX. It is part of the CUDA Toolkit and ships at
-//! `<cuda>/lib64/libnvJitLink.so`.
+//! `<cuda>/lib64/libnvJitLink.so`, or at `<cuda>/lib/libnvJitLink.so` in
+//! layouts without `lib64`, such as conda environments.
 //!
 //! # Symbol naming
 //!
@@ -729,8 +730,7 @@ fn open_library(tried: &mut Vec<String>, retain_exact_file: bool) -> Option<Open
         }
     }
 
-    for root in cuda_roots() {
-        let path = root.join("lib64/libnvJitLink.so");
+    for path in library_candidates(&cuda_roots()) {
         tried.push(path.display().to_string());
         if let Some(opened) = open_library_path(&path, retain_exact_file) {
             return Some(opened);
@@ -790,6 +790,17 @@ fn open_library_path(path: &Path, retain_exact_file: bool) -> Option<OpenedLibra
         loaded_file: None,
         loaded_identity: None,
     })
+}
+
+/// The library paths probed under each CUDA root, in order: `lib64/` as in
+/// the CUDA Toolkit installer's layout, then `lib/` as in conda environments,
+/// which have no `lib64/`. Finding the exact file matters: a library found
+/// only by SONAME cannot be fingerprinted for cubin materialization.
+fn library_candidates(roots: &[PathBuf]) -> Vec<PathBuf> {
+    roots
+        .iter()
+        .flat_map(|root| ["lib64", "lib"].map(|dir| root.join(dir).join("libnvJitLink.so")))
+        .collect()
 }
 
 fn cuda_roots() -> Vec<PathBuf> {
@@ -1080,6 +1091,20 @@ mod tests {
         let prepared = normalize_input(InputType::Any, auto_detected, "auto").unwrap();
         assert!(matches!(&prepared, Cow::Borrowed(_)));
         assert_eq!(prepared.as_ref(), auto_detected);
+    }
+
+    #[test]
+    fn library_candidates_try_lib64_then_lib_under_each_root() {
+        let roots = [PathBuf::from("/cuda"), PathBuf::from("/conda")];
+        assert_eq!(
+            library_candidates(&roots),
+            vec![
+                PathBuf::from("/cuda/lib64/libnvJitLink.so"),
+                PathBuf::from("/cuda/lib/libnvJitLink.so"),
+                PathBuf::from("/conda/lib64/libnvJitLink.so"),
+                PathBuf::from("/conda/lib/libnvJitLink.so"),
+            ]
+        );
     }
 
     #[test]

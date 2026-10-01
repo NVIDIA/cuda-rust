@@ -577,3 +577,187 @@ fn test_tma_multicast_detection_requires_cta_mask() {
     );
     assert!(!contains_tma_cta_group_features(unrelated_i32));
 }
+
+/// `redux.sync` is f32 by its own token, never by an `.f32` sitting nearby
+/// (#1303).
+#[test]
+fn test_redux_f32_detection_is_scoped_to_the_instruction() {
+    // The shape that found this: integer reductions in one kernel and
+    // ordinary float work in another. In the module that was rejected, the
+    // two matches were 547 lines apart.
+    let integer_redux_and_distant_f32 = r#"
+        declare i32 @llvm.nvvm.redux.sync.add(i32, i32) #0
+        declare float @llvm.nvvm.shfl.sync.bfly.f32(i32, float, i32, i32) #0
+    "#;
+    // LLVM does not require a newline between declarations, so scoping to a
+    // line is not enough either.
+    let same_line = "declare i32 @llvm.nvvm.redux.sync.add(i32, i32) declare float @llvm.nvvm.shfl.sync.bfly.f32(i32, float, i32, i32)";
+    // An SSA name may end in `.f32` and says nothing about the callee.
+    let unrelated_ssa_name = "%acc.f32 = call i32 @llvm.nvvm.redux.sync.umax(i32 -1, i32 %v)";
+
+    for text in [integer_redux_and_distant_f32, same_line, unrelated_ssa_name] {
+        assert!(
+            !detect_features_in_llvm_text(text).contains(DetectedFeatures::ReduxF32),
+            "an integer reduction must not select the f32 extension: {text}"
+        );
+    }
+
+    // The intrinsic spelling has no type suffix -- the `f`-prefixed operation
+    // is what makes it float. These were detected before only when some
+    // unrelated `.f32` happened to sit nearby.
+    let float_intrinsic = "%r = call float @llvm.nvvm.redux.sync.fmin(float %v, i32 -1)";
+    let float_intrinsic_qualified =
+        "%r = call float @llvm.nvvm.redux.sync.fmax.abs.NaN(float %v, i32 -1)";
+    // Inline PTX carries the type as a modifier of the opcode token.
+    let float_asm = r#"call float asm sideeffect "redux.sync.min.abs.NaN.f32 $0, $1, $2;", "=f,f,r"(float %v, i32 %m)"#;
+
+    for text in [float_intrinsic, float_intrinsic_qualified, float_asm] {
+        assert!(
+            detect_features_in_llvm_text(text).contains(DetectedFeatures::ReduxF32),
+            "a float reduction must select the f32 extension: {text}"
+        );
+    }
+}
+
+/// Mentioning an intrinsic is not using one, and a real call may be spelled
+/// with a quoted identifier (#1303).
+#[test]
+fn test_redux_f32_detection_reads_code_and_not_prose() {
+    // Text that names the callee without calling it.
+    let in_a_comment =
+        "%r = call i32 @llvm.nvvm.redux.sync.add(i32 -1, i32 %v) ; @llvm.nvvm.redux.sync.fmin";
+    let in_a_data_string = r#"@.msg = private constant [27 x i8] c"@llvm.nvvm.redux.sync.fmin\00""#;
+    let in_metadata = r#"!0 = !{!"@llvm.nvvm.redux.sync.fmin"}"#;
+    // The same for the inline-PTX spelling: a comment and a data constant are
+    // not instructions.
+    let ptx_in_a_comment = "  ; redux.sync.min.abs.NaN.f32 $0, $1, $2;";
+    let ptx_in_a_data_string = r#"@.msg = private constant [25 x i8] c"redux.sync.min.f32 a,b,c;""#;
+
+    for text in [
+        in_a_comment,
+        in_a_data_string,
+        in_metadata,
+        ptx_in_a_comment,
+        ptx_in_a_data_string,
+    ] {
+        assert!(
+            !detect_features_in_llvm_text(text).contains(DetectedFeatures::ReduxF32),
+            "text that only mentions the f32 reduction must not select it: {text}"
+        );
+    }
+
+    // A real call, spelled with a quoted identifier and with one of its
+    // characters escaped -- `\66` is `f`, so both name `fmin`.
+    let quoted = r#"%r = call float @"llvm.nvvm.redux.sync.fmin"(float %v, i32 -1)"#;
+    let quoted_escaped = r#"%r = call float @"llvm.nvvm.redux.sync.\66min"(float %v, i32 -1)"#;
+    // And the constraint string beside an asm template is data, while the
+    // template itself is code.
+    let asm_template = r#"call float asm sideeffect "redux.sync.min.abs.NaN.f32 $0, $1, $2;", "=f,f,r"(float %v, i32 %m)"#;
+
+    for text in [quoted, quoted_escaped, asm_template] {
+        assert!(
+            detect_features_in_llvm_text(text).contains(DetectedFeatures::ReduxF32),
+            "a float reduction must select the f32 extension: {text}"
+        );
+    }
+}
+
+/// Token identity at the edges the flattened search lost (#1303).
+///
+/// Each input is a line from a module `llvm-as` from the pinned toolchain
+/// accepts, so none of these is a shape valid IR cannot produce. The escape
+/// cases were also round-tripped through `llvm-dis` to confirm what LLVM
+/// itself decodes them to.
+#[test]
+fn test_redux_f32_detection_keeps_token_identity() {
+    // `unwind` is the last of the four modifiers `asm` may carry, in order:
+    // sideeffect, alignstack, inteldialect, unwind.
+    let unwind = r#"%r = call float asm sideeffect unwind "redux.sync.min.f32 $0, $1, $2;", "=f,f,r"(float %v, i32 %m)"#;
+    // `\72` is `r`: LLVM decodes the template before the backend sees it.
+    let escaped_opcode = r#"%r = call float asm sideeffect "\72edux.sync.min.f32 $0, $1, $2;", "=f,f,r"(float %v, i32 %m)"#;
+    // A PTX comment ended by an *escaped* newline, then a real instruction.
+    // Only decoding before stripping comments finds it: the raw template is
+    // one line, so a `//` there would appear to run to its end.
+    let after_escaped_newline = r#"%r = call float asm sideeffect "// scale first\0Aredux.sync.min.f32 $0, $1, $2;", "=f,f,r"(float %v, i32 %m)"#;
+    // Module-level inline asm has the same grammar and reaches the same PTX.
+    let module_asm = r#"module asm "redux.sync.min.f32 %f1, %f2, %r3;""#;
+
+    for text in [unwind, escaped_opcode, after_escaped_newline, module_asm] {
+        assert!(
+            detect_features_in_llvm_text(text).contains(DetectedFeatures::ReduxF32),
+            "a float reduction must select the f32 extension: {text}"
+        );
+    }
+
+    // PTX comments inside a template are prose, in either comment form.
+    let ptx_line_comment = r#"%r = call float asm sideeffect "// redux.sync.min.f32 $0, $1, $2;\0Amov.f32 $0, $1;", "=f,f,r"(float %v, i32 %m)"#;
+    let ptx_block_comment = r#"%r = call float asm sideeffect "/* redux.sync.min.f32 $0, $1, $2; */ mov.f32 $0, $1;", "=f,f,r"(float %v, i32 %m)"#;
+    // `\\` is one backslash and the hex digits after it are plain text: `llc`
+    // emits this template as `\20redux.sync.min.f32 ...`, which is not an
+    // instruction. A decoder that skipped the `\\` rule would read `\20` as a
+    // space instead and find a `redux.sync.min.f32` that is not there.
+    let escaped_backslash = r#"%r = call float asm sideeffect "\\20redux.sync.min.f32 $0, $1, $2;", "=f,f,r"(float %v, i32 %m)"#;
+    // One symbol whose quoted name happens to contain another's spelling.
+    let embedded_in_a_name = r#"@"unused @llvm.nvvm.redux.sync.fmin" = global i32 0"#;
+    // A basic block may be named like an instruction without being one.
+    let label = "redux.sync.min.f32:\n  ret void";
+
+    for text in [
+        ptx_line_comment,
+        ptx_block_comment,
+        escaped_backslash,
+        embedded_in_a_name,
+        label,
+    ] {
+        assert!(
+            !detect_features_in_llvm_text(text).contains(DetectedFeatures::ReduxF32),
+            "no float reduction is executed here: {text}"
+        );
+    }
+}
+
+/// PTX lexical rules inside an asm template (#1303).
+///
+/// Every input is a complete module accepted by `llvm-as` and `llc` from the
+/// pinned toolchain and by ptxas at sm_100a. The float cases are the ones
+/// ptxas then refuses at sm_80 as `redux.f32`; the others assemble there.
+#[test]
+fn test_redux_f32_detection_reads_ptx_as_ptx() {
+    // Whitespace, a newline or a comment may separate an opcode from its
+    // modifiers; it is still one instruction.
+    let spaced_type = r#"%r = call float asm sideeffect "redux.sync.min .f32 $0, $1, $2;", "=f,f,r"(float %v, i32 %m)"#;
+    let comment_between = r#"%r = call float asm sideeffect "redux.sync.min/* qualifier */.f32 $0, $1, $2;", "=f,f,r"(float %v, i32 %m)"#;
+    let fully_spaced = r#"%r = call float asm sideeffect "redux .sync .min .f32 $0, $1, $2;", "=f,f,r"(float %v, i32 %m)"#;
+    let newline_between = r#"%r = call float asm sideeffect "redux.sync.min\0A.f32 $0, $1, $2;", "=f,f,r"(float %v, i32 %m)"#;
+    // A backslash is literal inside a PTX string, so `"nounroll\"` closes at
+    // its last quote and the instruction after it is real.
+    let after_trailing_backslash = r#"%r = call float asm sideeffect ".pragma \22nounroll\5C\22;\0Aredux.sync.min.f32 $0, $1, $2;", "=f,f,r"(float %v, i32 %m)"#;
+
+    for text in [
+        spaced_type,
+        comment_between,
+        fully_spaced,
+        newline_between,
+        after_trailing_backslash,
+    ] {
+        assert!(
+            detect_features_in_llvm_text(text).contains(DetectedFeatures::ReduxF32),
+            "a float reduction must select the f32 extension: {text}"
+        );
+    }
+
+    // A directive's quoted data is not an instruction.
+    let file_path = r#"module asm ".file 1 \22name redux.sync.min.f32 label.cu\22""#;
+    // Spacing does not make an integer reduction float.
+    let spaced_integer = r#"%r = call i32 asm sideeffect "redux .sync .min .u32 $0, $1, $2;", "=r,r,r"(i32 %v, i32 %m)"#;
+    // Nor does float work beside it in the same template: `.f32` counts only
+    // as a modifier of the `redux` opcode itself.
+    let integer_beside_f32 = r#"%r = call i32 asm sideeffect "{ .reg .f32 t; redux.sync.min.u32 $0, $1, $2; mov.f32 t, 0f3F800000; }", "=r,r,r"(i32 %v, i32 %m)"#;
+
+    for text in [file_path, spaced_integer, integer_beside_f32] {
+        assert!(
+            !detect_features_in_llvm_text(text).contains(DetectedFeatures::ReduxF32),
+            "no float reduction is executed here: {text}"
+        );
+    }
+}

@@ -9,12 +9,37 @@ use crate::launch::{
     kernel_sibling_path,
 };
 use crate::launch_attrs::{
-    LaunchBoundsArgs, LoopUnrollAttrVisitor, UnrollArgs, add_const_evaluatable_bound,
-    inject_launch_contract_markers, rewrite_loop_unroll_attrs, standalone_requires_params,
+    ClusterArgs, LaunchBoundsArgs, LoopUnrollAttrVisitor, UnrollArgs,
+    add_const_evaluatable_bound, inject_launch_contract_markers, rewrite_loop_unroll_attrs,
+    standalone_requires_params,
 };
 use quote::{format_ident, quote};
 use reserved_oxide_symbols::INSTANTIATE_PREFIX;
 use syn::{ItemFn, Stmt, parse_quote, visit_mut::VisitMut};
+
+#[test]
+fn cluster_launch_rejects_empty_and_zero_dimensions() {
+    let cases = [
+        ("", "cluster expects 1, 2, or 3 dimensions"),
+        ("0", "cluster dimensions must be greater than zero"),
+        ("1, 0", "cluster dimensions must be greater than zero"),
+        ("1, 1, 0", "cluster dimensions must be greater than zero"),
+    ];
+
+    for (source, expected) in cases {
+        let error = syn::parse_str::<ClusterArgs>(source).unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn cluster_launch_preserves_valid_dimension_defaults() {
+    assert_eq!(syn::parse_str::<ClusterArgs>("1").unwrap().x, 1);
+    assert_eq!(syn::parse_str::<ClusterArgs>("2, 3").unwrap().z, 1);
+
+    let dimensions = syn::parse_str::<ClusterArgs>("2, 3, 4").unwrap();
+    assert_eq!((dimensions.x, dimensions.y, dimensions.z), (2, 3, 4));
+}
 
 #[test]
 fn generated_kernel_siblings_preserve_qualified_paths_and_generics() {

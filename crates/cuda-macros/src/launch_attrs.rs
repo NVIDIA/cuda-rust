@@ -556,6 +556,7 @@ pub(crate) fn cluster_launch_entry(attr: TokenStream, item: TokenStream) -> Toke
 }
 
 /// Arguments for `#[cluster_launch(...)]` attribute.
+#[derive(Debug)]
 pub(crate) struct ClusterArgs {
     pub(crate) x: u32,
     pub(crate) y: u32,
@@ -569,6 +570,13 @@ impl Parse for ClusterArgs {
             .iter()
             .map(|lit| lit.base10_parse::<u32>())
             .collect::<Result<Vec<_>, _>>()?;
+
+        if let Some((index, value)) = values.iter().enumerate().find(|(_, value)| **value == 0) {
+            return Err(syn::Error::new_spanned(
+                &args[index],
+                "cluster dimensions must be greater than zero",
+            ));
+        }
 
         match values.len() {
             1 => Ok(ClusterArgs {
@@ -586,8 +594,8 @@ impl Parse for ClusterArgs {
                 y: values[1],
                 z: values[2],
             }),
-            _ => Err(syn::Error::new_spanned(
-                args.first().unwrap(),
+            _ => Err(syn::Error::new(
+                input.span(),
                 "cluster expects 1, 2, or 3 dimensions: #[cluster(x)], #[cluster(x, y)], or #[cluster(x, y, z)]",
             )),
         }

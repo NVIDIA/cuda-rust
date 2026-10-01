@@ -26,6 +26,7 @@ arguments, and a `compute_rustlantis_trace()` wrapper.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -43,6 +44,7 @@ max_bb_count_hard = 6
 max_fn_count = 1
 max_args_count = 3
 var_dump_chance = 1.0
+static_count = {static_count}
 tuple_max_len = 2
 array_max_len = 2
 struct_max_fields = 2
@@ -72,7 +74,9 @@ def run(cmd: list[str], *, cwd: Path) -> str:
     return proc.stdout
 
 
-def generate_source(rustlantis_dir: Path, seed: int, *, build: bool) -> str:
+def generate_source(
+    rustlantis_dir: Path, seed: int, *, build: bool, static_count: int = 0
+) -> str:
     if build:
         run(["cargo", "build", "-q", "-p", "generate"], cwd=rustlantis_dir)
 
@@ -82,8 +86,18 @@ def generate_source(rustlantis_dir: Path, seed: int, *, build: bool) -> str:
 
     with tempfile.TemporaryDirectory(prefix="rustlantis-cuda-oxide-") as tmp:
         tmpdir = Path(tmp)
-        (tmpdir / "config.toml").write_text(TINY_CONFIG)
+        (tmpdir / "config.toml").write_text(TINY_CONFIG.format(static_count=static_count))
         return run([str(generator), str(seed)], cwd=tmpdir)
+
+
+GENERATED_STATIC_RE = re.compile(
+    r"(?m)^[ \t]*static(?:[ \t]+mut)?[ \t]+static\d+[ \t]*:[^\n;]+;[ \t]*$"
+)
+
+
+def generated_static_decls(source: str, *, before: int | None = None) -> list[str]:
+    prefix = source if before is None else source[:before]
+    return [match.group(0).strip() for match in GENERATED_STATIC_RE.finditer(prefix)]
 
 
 def extract_first_custom_mir_fn(source: str) -> str:
@@ -107,7 +121,12 @@ def extract_first_custom_mir_fn(source: str) -> str:
         elif ch == "}":
             depth -= 1
             if depth == 0:
-                return source[start : idx + 1]
+                fn_src = source[start : idx + 1]
+                statics = generated_static_decls(source, before=start)
+                if not statics:
+                    return fn_src
+                static_prefix = "\n".join(statics)
+                return f"{static_prefix}\n\n{fn_src}"
 
     raise SystemExit("unterminated custom MIR function")
 
@@ -386,6 +405,9 @@ def adapt_function(fn_src: str, fn_name: str) -> str:
 
 def generated_module(fn_src: str, fn_name: str, seed: int) -> str:
     adapted = adapt_function(fn_src, fn_name)
+    generated_lints = "unused_assignments, unused_parens, overflowing_literals"
+    if generated_static_decls(fn_src):
+        generated_lints += ", non_upper_case_globals"
     args = [literal_for_type(ty, idx) for idx, (_, ty) in enumerate(function_args(fn_src))]
     call_args = ", ".join(args)
     ret_ty = return_type(fn_src)
@@ -420,7 +442,7 @@ def generated_module(fn_src: str, fn_name: str, seed: int) -> str:
             "// (explicit casts, redundant temps); clippy findings carry no",
             "// signal here, and checked-in cases sit inside the example's",
             "// `cargo clippy -- -D warnings` CI gate.",
-            "#![allow(unused_assignments, unused_parens, overflowing_literals)]",
+            f"#![allow({generated_lints})]",
             "#![allow(clippy::all)]",
             "",
             "use core::intrinsics::mir::*;",
@@ -441,6 +463,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=int, default=83)
     parser.add_argument("--fn-name", default="fn1")
+    parser.add_argument(
+        "--static-count",
+        type=int,
+        default=int(os.environ.get("RUSTLANTIS_STATIC_COUNT", "0")),
+        help=(
+            "number of scalar statics to mint; defaults to "
+            "RUSTLANTIS_STATIC_COUNT or 0"
+        ),
+    )
     parser.add_argument("--rustlantis-dir", type=Path, default=DEFAULT_RUSTLANTIS_DIR)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--no-build", action="store_true")
@@ -450,8 +481,15 @@ def main() -> int:
         help="emit only the adapted custom-MIR function instead of a generated_case.rs module",
     )
     args = parser.parse_args()
+    if args.static_count < 0:
+        parser.error("--static-count must be non-negative")
 
-    source = generate_source(args.rustlantis_dir, args.seed, build=not args.no_build)
+    source = generate_source(
+        args.rustlantis_dir,
+        args.seed,
+        build=not args.no_build,
+        static_count=args.static_count,
+    )
     fn_src = extract_first_custom_mir_fn(source)
     adapted = (
         adapt_function(fn_src, args.fn_name)

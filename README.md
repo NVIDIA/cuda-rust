@@ -33,14 +33,14 @@ shape its direction by sharing feedback on your experience.
 |  | cuda-oxide (SIMT) | cutile-rs (Tile) |
 | --- | --- | --- |
 | Feels familiar to | CUDA C++ programmers: threads, blocks, shared memory | NumPy or PyTorch programmers: ndarray / tensor operations on multi-dimensional tiles |
-| Safety | Memory safety per thread via disjoint slices; synchronization and shared memory are yours to get right | Data-race freedom by construction within a kernel: no thread indexing, shared memory, or synchronization to get wrong |
+| Safety | Memory safety per thread via disjoint slices; you control how threads synchronize and use shared memory | Data-race freedom by construction within a kernel: no explicit thread indexing, shared memory, or synchronization |
 | Indexing | Explicit thread/block indices | Implicit via partitions |
 | Compiles | Ahead of time, Rust → PTX | JIT at first launch, Rust → Tile IR → cubin |
 | Toolchain | Pinned nightly, managed by `cargo oxide` | Stable Rust 1.89 or newer |
-| Portability | CUDA architecture-specific; you tune per GPU | CUDA architecture-agnostic; the compiler tunes per GPU |
+| Portability | CUDA architecture-specific; you control tuning for each GPU | CUDA architecture-agnostic; the compiler tunes per GPU |
 | Reach for it when | You need direct control over threads, warps, shared memory, TMA, or cluster ops | Your problem is naturally expressed as tensor computations and you want the compiler to handle scheduling details |
 
-If you are unsure which model to start with, reach for cutile-rs first: the compiler optimizes your kernel for your specific architecture. Drop down to cuda-oxide when you need control over threads, warps, shared memory, or architecture-specific features, at the cost of tuning your kernels for each architecture.
+If you are unsure which model to start with, reach for cutile-rs first: the compiler optimizes your kernel for your specific architecture. Drop down to cuda-oxide when you need control over threads, warps, shared memory, or architecture-specific features, with direct control over tuning for each GPU architectur.
 
 Kernels from both models interoperate: a cutile-rs Tile kernel and a cuda-oxide SIMT
 kernel can run on the same stream over shared device buffers.
@@ -59,7 +59,10 @@ cuda-rust/
 
 ## Documentation
 
-Start with the CUDA Rust docs (https://nvidia.github.io/cuda-rust/). cutile-rs and cuda-oxide each have a book with installation instructions, guides, and reference material. The runtime crates (cuda-bindings, cuda-core, cuda-async) are documented in the cutile-rs book.
+Start with the [CUDA Rust docs](https://nvidia.github.io/cuda-rust/). cutile-rs
+and cuda-oxide each have a book with installation instructions, guides, and
+reference material. The runtime crates (cuda-bindings, cuda-core, cuda-async)
+are documented in the cutile-rs book.
 
 ## Contributing
 

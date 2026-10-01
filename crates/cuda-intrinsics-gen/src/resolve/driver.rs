@@ -243,6 +243,8 @@ pub(crate) fn test_catalog_with_tma(repo_root: &Path) -> Result<CatalogFile> {
     let admission = TmaAdmission {
         llvm_evidence_profile: "llvm-tma-test".into(),
         libnvvm_evidence_profile: "libnvvm-tma-test".into(),
+        cta_llvm_evidence_profile: "llvm-tma-test".into(),
+        cta_libnvvm_evidence_profile: "libnvvm-tma-test".into(),
         reduce_llvm_evidence_profile: Some("llvm-tma-reduce-test".into()),
         reduce_libnvvm_evidence_profile: Some("libnvvm-tma-reduce-test".into()),
         runtime_validation: RuntimeValidation::Unexecuted,

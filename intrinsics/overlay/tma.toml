@@ -6,6 +6,8 @@ family = "tma"
 [tma]
 llvm_evidence_profile = "rust-llvm-23.1.0-16696adc-tma"
 libnvvm_evidence_profile = "cuda-13.3-libnvvm-13.3.73-tma"
+cta_llvm_evidence_profile = "rust-llvm-23.1.0-16696adc-tma-cta"
+cta_libnvvm_evidence_profile = "cuda-13.3-libnvvm-13.3.73-tma-cta"
 reduce_llvm_evidence_profile = "rust-llvm-23.1.0-16696adc-tma-reduce"
 reduce_libnvvm_evidence_profile = "cuda-13.3-libnvvm-13.3.73-tma-reduce"
 runtime_validation = "unexecuted"
@@ -15,8 +17,16 @@ abi_id = "i0328"
 operation = "g2s_tile1d"
 
 [[tma.variant]]
+abi_id = "i1030"
+operation = "g2s_cta_tile1d"
+
+[[tma.variant]]
 abi_id = "i0329"
 operation = "g2s_tile2d"
+
+[[tma.variant]]
+abi_id = "i1031"
+operation = "g2s_cta_tile2d"
 
 [[tma.variant]]
 abi_id = "i0330"
@@ -31,12 +41,24 @@ abi_id = "i0332"
 operation = "g2s_tile3d"
 
 [[tma.variant]]
+abi_id = "i1032"
+operation = "g2s_cta_tile3d"
+
+[[tma.variant]]
 abi_id = "i0333"
 operation = "g2s_tile4d"
 
 [[tma.variant]]
+abi_id = "i1033"
+operation = "g2s_cta_tile4d"
+
+[[tma.variant]]
 abi_id = "i0334"
 operation = "g2s_tile5d"
+
+[[tma.variant]]
+abi_id = "i1034"
+operation = "g2s_cta_tile5d"
 
 [[tma.variant]]
 abi_id = "i0335"

@@ -1519,6 +1519,18 @@ fn tma_impls(catalog: &CatalogFile) -> String {
                 )
                 .unwrap();
             }
+            TmaOperation::G2sCtaTile1d
+            | TmaOperation::G2sCtaTile2d
+            | TmaOperation::G2sCtaTile3d
+            | TmaOperation::G2sCtaTile4d
+            | TmaOperation::G2sCtaTile5d => {
+                writeln!(
+                    output,
+                    "        convert_g2s_cta(ctx, rewriter, self.get_operation(), operands_info, {})",
+                    operation.dimensions().unwrap()
+                )
+                .unwrap();
+            }
             TmaOperation::G2sTile2dMulticast => output.push_str(
                 "        convert_g2s(ctx, rewriter, self.get_operation(), operands_info, 2, true)\n",
             ),
@@ -2099,6 +2111,7 @@ const LOWERING_INTRINSIC_HELPERS: &[(&str, &str)] = &[
     ("ReduceConfig", "tma::ReduceConfig"),
     ("convert_control", "tma::convert_control"),
     ("convert_g2s", "tma::convert_g2s"),
+    ("convert_g2s_cta", "tma::convert_g2s_cta"),
     (
         "convert_g2s_multicast_cg2",
         "tma::convert_g2s_multicast_cg2",

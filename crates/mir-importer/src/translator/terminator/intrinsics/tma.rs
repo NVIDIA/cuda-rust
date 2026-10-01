@@ -13,7 +13,9 @@ use crate::translator::rvalue;
 use crate::translator::values::ValueMap;
 use dialect_mir::ops::MirConstantOp;
 use dialect_nvvm::ops::{
-    CpAsyncBulkCommitGroupOp, CpAsyncBulkTensorG2sTile1dOp,
+    CpAsyncBulkCommitGroupOp, CpAsyncBulkTensorG2sCtaTile1dOp, CpAsyncBulkTensorG2sCtaTile2dOp,
+    CpAsyncBulkTensorG2sCtaTile3dOp, CpAsyncBulkTensorG2sCtaTile4dOp,
+    CpAsyncBulkTensorG2sCtaTile5dOp, CpAsyncBulkTensorG2sTile1dOp,
     CpAsyncBulkTensorG2sTile2dMulticastCg2Op, CpAsyncBulkTensorG2sTile2dMulticastOp,
     CpAsyncBulkTensorG2sTile2dOp, CpAsyncBulkTensorG2sTile3dOp, CpAsyncBulkTensorG2sTile4dOp,
     CpAsyncBulkTensorG2sTile5dOp, CpAsyncBulkTensorS2gTile1dOp, CpAsyncBulkTensorS2gTile2dOp,
@@ -61,6 +63,44 @@ pub fn emit_tma_g2s(
     loc: Location,
     dims: usize,
     marker: &str,
+) -> TranslationResult<Ptr<Operation>> {
+    emit_tma_g2s_impl(
+        ctx, body, args, target, block_ptr, prev_op, value_map, block_map, loc, dims, marker, false,
+    )
+}
+
+/// Emits a TMA G2S form whose destination belongs to the issuing CTA.
+pub fn emit_tma_g2s_cta(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+    dims: usize,
+    marker: &str,
+) -> TranslationResult<Ptr<Operation>> {
+    emit_tma_g2s_impl(
+        ctx, body, args, target, block_ptr, prev_op, value_map, block_map, loc, dims, marker, true,
+    )
+}
+
+fn emit_tma_g2s_impl(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+    dims: usize,
+    marker: &str,
+    cta: bool,
 ) -> TranslationResult<Ptr<Operation>> {
     // Expected args: dst, tensor_map, coord0, [coord1, ...], barrier
     let expected_args = 3 + dims; // dst + tensor_map + coords + barrier
@@ -135,38 +175,38 @@ pub fn emit_tma_g2s(
         last_op = last_op_after;
     }
 
-    // Add default cta_mask (i16 = 0) and cache_hint (i64 = 0)
+    // Cluster G2S carries a default CTA mask. CTA-local G2S has no mask.
+    // Both forms carry the default cache hint.
     use pliron::utils::apint::APInt;
     use std::num::NonZeroUsize;
 
-    let i16_type = IntegerType::get(ctx, 16, Signedness::Signed);
     let i64_type = IntegerType::get(ctx, 64, Signedness::Unsigned);
 
-    // Create constant for cta_mask = 0
-    let cta_mask_apint = APInt::from_i64(0, NonZeroUsize::new(16).unwrap());
-    let cta_mask_attr = pliron::builtin::attributes::IntegerAttr::new(i16_type, cta_mask_apint);
-
-    let cta_mask_raw_op = Operation::new(
-        ctx,
-        MirConstantOp::get_concrete_op_info(),
-        vec![i16_type.to_handle()],
-        vec![],
-        vec![],
-        0,
-    );
-    cta_mask_raw_op.deref_mut(ctx).set_loc(loc.clone());
-    let cta_mask_const = MirConstantOp::new(cta_mask_raw_op);
-    cta_mask_const.set_attr_value(ctx, cta_mask_attr);
-
-    if let Some(prev) = last_op {
-        cta_mask_const.get_operation().insert_after(ctx, prev);
-    } else {
-        cta_mask_const
-            .get_operation()
-            .insert_at_front(block_ptr, ctx);
+    if !cta {
+        let i16_type = IntegerType::get(ctx, 16, Signedness::Signed);
+        let cta_mask_apint = APInt::from_i64(0, NonZeroUsize::new(16).unwrap());
+        let cta_mask_attr = pliron::builtin::attributes::IntegerAttr::new(i16_type, cta_mask_apint);
+        let cta_mask_raw_op = Operation::new(
+            ctx,
+            MirConstantOp::get_concrete_op_info(),
+            vec![i16_type.to_handle()],
+            vec![],
+            vec![],
+            0,
+        );
+        cta_mask_raw_op.deref_mut(ctx).set_loc(loc.clone());
+        let cta_mask_const = MirConstantOp::new(cta_mask_raw_op);
+        cta_mask_const.set_attr_value(ctx, cta_mask_attr);
+        if let Some(prev) = last_op {
+            cta_mask_const.get_operation().insert_after(ctx, prev);
+        } else {
+            cta_mask_const
+                .get_operation()
+                .insert_at_front(block_ptr, ctx);
+        }
+        operands.push(cta_mask_const.get_operation().deref(ctx).get_result(0));
+        last_op = Some(cta_mask_const.get_operation());
     }
-    let cta_mask = cta_mask_const.get_operation().deref(ctx).get_result(0);
-    operands.push(cta_mask);
 
     // Create constant for cache_hint = 0
     let cache_hint_apint = APInt::from_i64(0, NonZeroUsize::new(64).unwrap());
@@ -183,19 +223,28 @@ pub fn emit_tma_g2s(
     cache_hint_raw_op.deref_mut(ctx).set_loc(loc.clone());
     let cache_hint_const = MirConstantOp::new(cache_hint_raw_op);
     cache_hint_const.set_attr_value(ctx, cache_hint_attr);
-    cache_hint_const
-        .get_operation()
-        .insert_after(ctx, cta_mask_const.get_operation());
+    if let Some(prev) = last_op {
+        cache_hint_const.get_operation().insert_after(ctx, prev);
+    } else {
+        cache_hint_const
+            .get_operation()
+            .insert_at_front(block_ptr, ctx);
+    }
 
     let cache_hint = cache_hint_const.get_operation().deref(ctx).get_result(0);
     operands.push(cache_hint);
 
     // Select the appropriate NVVM op based on dimensions
     let op_id = match dims {
+        1 if cta => CpAsyncBulkTensorG2sCtaTile1dOp::get_concrete_op_info(),
         1 => CpAsyncBulkTensorG2sTile1dOp::get_concrete_op_info(),
+        2 if cta => CpAsyncBulkTensorG2sCtaTile2dOp::get_concrete_op_info(),
         2 => CpAsyncBulkTensorG2sTile2dOp::get_concrete_op_info(),
+        3 if cta => CpAsyncBulkTensorG2sCtaTile3dOp::get_concrete_op_info(),
         3 => CpAsyncBulkTensorG2sTile3dOp::get_concrete_op_info(),
+        4 if cta => CpAsyncBulkTensorG2sCtaTile4dOp::get_concrete_op_info(),
         4 => CpAsyncBulkTensorG2sTile4dOp::get_concrete_op_info(),
+        5 if cta => CpAsyncBulkTensorG2sCtaTile5dOp::get_concrete_op_info(),
         5 => CpAsyncBulkTensorG2sTile5dOp::get_concrete_op_info(),
         _ => {
             return input_err!(
@@ -213,7 +262,7 @@ pub fn emit_tma_g2s(
         ctx,
         op_id,
         vec![],   // No results
-        operands, // dst, barrier, tensor_map, coords..., cta_mask, cache_hint
+        operands, // dst, barrier, tensor_map, coords..., optional cta_mask, cache_hint
         vec![],
         0,
     );

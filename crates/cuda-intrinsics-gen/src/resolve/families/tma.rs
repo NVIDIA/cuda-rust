@@ -19,14 +19,19 @@ use crate::resolve::guards::*;
 pub(in crate::resolve) const TMA_BLACKWELL_TARGETS: &str = "sm_100a|sm_101a|sm_103a|sm_110a";
 pub(in crate::resolve) const TENSOR_MAP_REPLACE_TARGETS: &str =
     "sm_100a|sm_100f|sm_103a|sm_103f|sm_110a|sm_110f|sm_120a|sm_120f|sm_121a|sm_121f|sm_90a";
-pub(in crate::resolve) const TMA_OPERATIONS: [TmaOperation; 47] = [
+pub(in crate::resolve) const TMA_OPERATIONS: [TmaOperation; 52] = [
     TmaOperation::G2sTile1d,
+    TmaOperation::G2sCtaTile1d,
     TmaOperation::G2sTile2d,
+    TmaOperation::G2sCtaTile2d,
     TmaOperation::G2sTile2dMulticast,
     TmaOperation::G2sTile2dMulticastCg2,
     TmaOperation::G2sTile3d,
+    TmaOperation::G2sCtaTile3d,
     TmaOperation::G2sTile4d,
+    TmaOperation::G2sCtaTile4d,
     TmaOperation::G2sTile5d,
+    TmaOperation::G2sCtaTile5d,
     TmaOperation::S2gTile1d,
     TmaOperation::S2gTile2d,
     TmaOperation::S2gTile3d,
@@ -409,6 +414,15 @@ pub(in crate::resolve) fn tma_recipe(operation: TmaOperation) -> TmaRecipe {
             "CpAsyncBulkTensorG2sTile1dOp",
             "nvvm.cp_async_bulk_tensor_g2s_tile_1d",
         ),
+        TmaOperation::G2sCtaTile1d => (
+            "i1030",
+            "cp_async_bulk_tensor_1d_g2s_cta",
+            "memory.copy.async.bulk.tensor.g2s.cta.tile.1d",
+            "int_nvvm_cp_async_bulk_tensor_g2s_cta_tile_1d",
+            "llvm.nvvm.cp.async.bulk.tensor.g2s.cta.tile.1d",
+            "CpAsyncBulkTensorG2sCtaTile1dOp",
+            "nvvm.cp_async_bulk_tensor_g2s_cta_tile_1d",
+        ),
         TmaOperation::G2sTile2d => (
             "i0329",
             "cp_async_bulk_tensor_2d_g2s",
@@ -417,6 +431,15 @@ pub(in crate::resolve) fn tma_recipe(operation: TmaOperation) -> TmaRecipe {
             "llvm.nvvm.cp.async.bulk.tensor.g2s.tile.2d",
             "CpAsyncBulkTensorG2sTile2dOp",
             "nvvm.cp_async_bulk_tensor_g2s_tile_2d",
+        ),
+        TmaOperation::G2sCtaTile2d => (
+            "i1031",
+            "cp_async_bulk_tensor_2d_g2s_cta",
+            "memory.copy.async.bulk.tensor.g2s.cta.tile.2d",
+            "int_nvvm_cp_async_bulk_tensor_g2s_cta_tile_2d",
+            "llvm.nvvm.cp.async.bulk.tensor.g2s.cta.tile.2d",
+            "CpAsyncBulkTensorG2sCtaTile2dOp",
+            "nvvm.cp_async_bulk_tensor_g2s_cta_tile_2d",
         ),
         TmaOperation::G2sTile2dMulticast => (
             "i0330",
@@ -445,6 +468,15 @@ pub(in crate::resolve) fn tma_recipe(operation: TmaOperation) -> TmaRecipe {
             "CpAsyncBulkTensorG2sTile3dOp",
             "nvvm.cp_async_bulk_tensor_g2s_tile_3d",
         ),
+        TmaOperation::G2sCtaTile3d => (
+            "i1032",
+            "cp_async_bulk_tensor_3d_g2s_cta",
+            "memory.copy.async.bulk.tensor.g2s.cta.tile.3d",
+            "int_nvvm_cp_async_bulk_tensor_g2s_cta_tile_3d",
+            "llvm.nvvm.cp.async.bulk.tensor.g2s.cta.tile.3d",
+            "CpAsyncBulkTensorG2sCtaTile3dOp",
+            "nvvm.cp_async_bulk_tensor_g2s_cta_tile_3d",
+        ),
         TmaOperation::G2sTile4d => (
             "i0333",
             "cp_async_bulk_tensor_4d_g2s",
@@ -454,6 +486,15 @@ pub(in crate::resolve) fn tma_recipe(operation: TmaOperation) -> TmaRecipe {
             "CpAsyncBulkTensorG2sTile4dOp",
             "nvvm.cp_async_bulk_tensor_g2s_tile_4d",
         ),
+        TmaOperation::G2sCtaTile4d => (
+            "i1033",
+            "cp_async_bulk_tensor_4d_g2s_cta",
+            "memory.copy.async.bulk.tensor.g2s.cta.tile.4d",
+            "int_nvvm_cp_async_bulk_tensor_g2s_cta_tile_4d",
+            "llvm.nvvm.cp.async.bulk.tensor.g2s.cta.tile.4d",
+            "CpAsyncBulkTensorG2sCtaTile4dOp",
+            "nvvm.cp_async_bulk_tensor_g2s_cta_tile_4d",
+        ),
         TmaOperation::G2sTile5d => (
             "i0334",
             "cp_async_bulk_tensor_5d_g2s",
@@ -462,6 +503,15 @@ pub(in crate::resolve) fn tma_recipe(operation: TmaOperation) -> TmaRecipe {
             "llvm.nvvm.cp.async.bulk.tensor.g2s.tile.5d",
             "CpAsyncBulkTensorG2sTile5dOp",
             "nvvm.cp_async_bulk_tensor_g2s_tile_5d",
+        ),
+        TmaOperation::G2sCtaTile5d => (
+            "i1034",
+            "cp_async_bulk_tensor_5d_g2s_cta",
+            "memory.copy.async.bulk.tensor.g2s.cta.tile.5d",
+            "int_nvvm_cp_async_bulk_tensor_g2s_cta_tile_5d",
+            "llvm.nvvm.cp.async.bulk.tensor.g2s.cta.tile.5d",
+            "CpAsyncBulkTensorG2sCtaTile5dOp",
+            "nvvm.cp_async_bulk_tensor_g2s_cta_tile_5d",
         ),
         TmaOperation::S2gTile1d => (
             "i0335",
@@ -829,12 +879,17 @@ pub(in crate::resolve) fn tma_recipe(operation: TmaOperation) -> TmaRecipe {
     let is_g2s = matches!(
         operation,
         TmaOperation::G2sTile1d
+            | TmaOperation::G2sCtaTile1d
             | TmaOperation::G2sTile2d
+            | TmaOperation::G2sCtaTile2d
             | TmaOperation::G2sTile2dMulticast
             | TmaOperation::G2sTile2dMulticastCg2
             | TmaOperation::G2sTile3d
+            | TmaOperation::G2sCtaTile3d
             | TmaOperation::G2sTile4d
+            | TmaOperation::G2sCtaTile4d
             | TmaOperation::G2sTile5d
+            | TmaOperation::G2sCtaTile5d
     );
     let is_s2g = matches!(
         operation,
@@ -848,6 +903,7 @@ pub(in crate::resolve) fn tma_recipe(operation: TmaOperation) -> TmaRecipe {
         operation,
         TmaOperation::G2sTile2dMulticast | TmaOperation::G2sTile2dMulticastCg2
     );
+    let cta_g2s = operation.is_cta_g2s();
     let cg2 = operation == TmaOperation::G2sTile2dMulticastCg2;
     let prefetch_coordinates = operation.prefetch_coordinate_count();
     let is_release_fence = matches!(
@@ -877,10 +933,19 @@ pub(in crate::resolve) fn tma_recipe(operation: TmaOperation) -> TmaRecipe {
         }
         dialect_operands.extend(["ptr", "ptr", "ptr"]);
         dialect_operands.extend(std::iter::repeat_n("i32", dimensions.unwrap()));
-        dialect_operands.extend(["i16", "i64"]);
-        llvm_arguments.extend(["shared_cluster_ptr", "shared_ptr", "ptr"]);
-        llvm_arguments.extend(std::iter::repeat_n("i32", dimensions.unwrap()));
-        llvm_arguments.extend(["i16", "i64", "i1", "i1", "i32"]);
+        if !cta_g2s {
+            dialect_operands.push("i16");
+        }
+        dialect_operands.push("i64");
+        if cta_g2s {
+            llvm_arguments.extend(["shared_ptr", "shared_ptr", "ptr"]);
+            llvm_arguments.extend(std::iter::repeat_n("i32", dimensions.unwrap()));
+            llvm_arguments.extend(["i64", "i1"]);
+        } else {
+            llvm_arguments.extend(["shared_cluster_ptr", "shared_ptr", "ptr"]);
+            llvm_arguments.extend(std::iter::repeat_n("i32", dimensions.unwrap()));
+            llvm_arguments.extend(["i16", "i64", "i1", "i1", "i32"]);
+        }
         (
             if multicast {
                 TmaAdapter::G2sPointersCoordinatesBarrierMaskInjectDefaults
@@ -892,6 +957,8 @@ pub(in crate::resolve) fn tma_recipe(operation: TmaOperation) -> TmaRecipe {
             true,
             if multicast {
                 "Starts a multicast TMA tile copy from global to cluster shared memory."
+            } else if cta_g2s {
+                "Starts a TMA tile copy from global to the issuing CTA's shared memory."
             } else {
                 "Starts a TMA tile copy from global to cluster shared memory."
             },
@@ -1094,7 +1161,11 @@ pub(in crate::resolve) fn tma_recipe(operation: TmaOperation) -> TmaRecipe {
             "bulk".into(),
             "tensor".into(),
             format!("{}d", dimensions.unwrap()),
-            "shared::cluster".into(),
+            if cta_g2s {
+                "shared::cta".into()
+            } else {
+                "shared::cluster".into()
+            },
             "global".into(),
             "tile".into(),
             "mbarrier::complete_tx::bytes".into(),
@@ -1308,13 +1379,14 @@ pub(in crate::resolve) fn tma_recipe(operation: TmaOperation) -> TmaRecipe {
         unreachable!("TMA operation category was matched")
     };
 
-    let minimum_ptx = if blackwell_tma || operation == TmaOperation::ReplaceSwizzleAtomicity {
-        "8.6"
-    } else if is_replace || is_fence {
-        "8.3"
-    } else {
-        "8.0"
-    };
+    let minimum_ptx =
+        if blackwell_tma || cta_g2s || operation == TmaOperation::ReplaceSwizzleAtomicity {
+            "8.6"
+        } else if is_replace || is_fence {
+            "8.3"
+        } else {
+            "8.0"
+        };
     let (minimum_sm, targets) = if blackwell_tma {
         (None, TMA_BLACKWELL_TARGETS)
     } else if operation == TmaOperation::ReplaceSwizzleAtomicity {
@@ -1386,7 +1458,9 @@ pub(in crate::resolve) fn expand_tma_admission(
     );
     ensure!(
         !admission.llvm_evidence_profile.trim().is_empty()
-            && !admission.libnvvm_evidence_profile.trim().is_empty(),
+            && !admission.libnvvm_evidence_profile.trim().is_empty()
+            && !admission.cta_llvm_evidence_profile.trim().is_empty()
+            && !admission.cta_libnvvm_evidence_profile.trim().is_empty(),
         "compact TMA admission requires both backend evidence profiles"
     );
     ensure!(
@@ -1410,6 +1484,16 @@ pub(in crate::resolve) fn expand_tma_admission(
                 recipe.id,
                 recipe.abi_id
             );
+            let llvm_evidence_profile = if recipe.operation.is_cta_g2s() {
+                &admission.cta_llvm_evidence_profile
+            } else {
+                &admission.llvm_evidence_profile
+            };
+            let libnvvm_evidence_profile = if recipe.operation.is_cta_g2s() {
+                &admission.cta_libnvvm_evidence_profile
+            } else {
+                &admission.libnvvm_evidence_profile
+            };
             Ok(OverlayIntrinsic {
                 id: recipe.id.into(),
                 abi_id: variant.abi_id.clone(),
@@ -1462,7 +1546,7 @@ pub(in crate::resolve) fn expand_tma_admission(
                     OverlayBackendLowering {
                         backend: IntrinsicBackend::LlvmNvptx,
                         mechanism: recipe.llvm_mechanism,
-                        evidence_profile: admission.llvm_evidence_profile.clone(),
+                        evidence_profile: llvm_evidence_profile.clone(),
                         targets: None,
                         minimum_ptx: Some(recipe.minimum_ptx.into()),
                         minimum_sm: recipe.minimum_sm.map(Into::into),
@@ -1470,7 +1554,7 @@ pub(in crate::resolve) fn expand_tma_admission(
                     OverlayBackendLowering {
                         backend: IntrinsicBackend::LibNvvm,
                         mechanism: BackendLoweringMechanism::InlinePtx,
-                        evidence_profile: admission.libnvvm_evidence_profile.clone(),
+                        evidence_profile: libnvvm_evidence_profile.clone(),
                         targets: None,
                         minimum_ptx: Some(recipe.minimum_ptx.into()),
                         minimum_sm: recipe.minimum_sm.map(Into::into),
@@ -1781,6 +1865,14 @@ pub(in crate::resolve) fn validate_tma_reduction_policy(
 pub(in crate::resolve) fn tma_imported_properties(operation: TmaOperation) -> Vec<String> {
     assert_ne!(operation, TmaOperation::Reduce);
     let dimensions = operation.dimensions();
+    if operation.is_cta_g2s() {
+        return vec![
+            format!("ImmArg<arg{}>", dimensions.unwrap() + 4),
+            "IntrConvergent".into(),
+            "ReadOnly<arg2>".into(),
+            "WriteOnly<arg0>".into(),
+        ];
+    }
     if matches!(
         operation,
         TmaOperation::G2sTile1d

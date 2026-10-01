@@ -389,6 +389,15 @@ mod pointer_origin {
         }
     }
 
+    /// ABI RULE: `cuda_device::SharedPtr<T>` stores a `*mut SharedSlot<T>`, so
+    /// the shared pointer it lowers to is always `RawMut`.
+    pub(crate) fn abi_shared_ptr_field() -> PointerOrigin {
+        PointerOrigin {
+            kind: MirPointerKind::RawMut,
+            mutable: true,
+        }
+    }
+
     /// ABI RULE: `cuda_device::DisjointSlice<'_, T>` stores its data pointer
     /// as `*mut T`, so its data/element pointers are always `RawMut`.
     pub(crate) fn abi_disjoint_slice_data_ptr() -> PointerOrigin {

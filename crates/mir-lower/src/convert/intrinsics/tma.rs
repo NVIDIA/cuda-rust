@@ -17,6 +17,7 @@ use pliron::context::{Context, Ptr};
 use pliron::irbuild::dialect_conversion::{DialectConversionRewriter, OperandsInfo};
 use pliron::irbuild::inserter::Inserter;
 use pliron::irbuild::rewriter::Rewriter;
+use pliron::location::Located;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::result::Result;
@@ -56,6 +57,160 @@ fn g2s_inline_asm(dims: usize, multicast: bool, cta_group: i32) -> (String, Stri
     }
     constraints.push("~{memory}");
     (template, constraints.join(","))
+}
+
+fn g2s_cta_inline_asm(dims: usize) -> (String, String) {
+    let coordinates = (0..dims)
+        .map(|index| format!("${}", 3 + index))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let template = format!(
+        "cp.async.bulk.tensor.{dims}d.shared::cta.global.tile.mbarrier::complete_tx::bytes [$0], [$2, {{{coordinates}}}], [$1];"
+    );
+    let mut constraints = vec!["r", "r", "l"];
+    constraints.extend(std::iter::repeat_n("r", dims));
+    constraints.push("~{memory}");
+    (template, constraints.join(","))
+}
+
+/// Address space of a lowered pointer operand, or `None` if it is not a
+/// pointer.
+fn pointer_address_space(ctx: &Context, value: pliron::value::Value) -> Option<u32> {
+    value
+        .get_type(ctx)
+        .deref(ctx)
+        .downcast_ref::<llvm_types::PointerType>()
+        .map(|pointer| pointer.address_space())
+}
+
+/// Convert a TMA G2S operation whose destination and barrier belong to the
+/// issuing CTA rather than to cluster shared memory.
+///
+/// The caller promises CTA locality, so generic and shared (`addrspace(3)`)
+/// pointers are accepted and converted to the shared window. A pointer known
+/// to be cluster shared (`addrspace(7)`, e.g. from `map_shared_rank`) may name
+/// another CTA's shared memory, so it is rejected rather than reinterpreted as
+/// a local offset; such copies use the cluster form.
+pub(crate) fn convert_g2s_cta(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+    _operands_info: &OperandsInfo,
+    dims: usize,
+) -> Result<()> {
+    let operands: Vec<_> = op.deref(ctx).operands().collect();
+    let expected_operands = 3 + dims + 1;
+    if operands.len() != expected_operands {
+        return pliron::input_err_noloc!(
+            "TMA CTA G2S {}D requires {} operands, got {}",
+            dims,
+            expected_operands,
+            operands.len()
+        );
+    }
+    for (index, role) in [(0, "destination"), (1, "barrier")] {
+        match pointer_address_space(ctx, operands[index]) {
+            Some(0 | 3) => {}
+            Some(7) => {
+                return pliron::input_err!(
+                    op.deref(ctx).loc(),
+                    "cp_async_bulk_tensor_{}d_g2s_cta requires a CTA-local shared {}, \
+                     but it is a cluster shared memory pointer (addrspace 7), which may \
+                     name another CTA's shared memory; use cp_async_bulk_tensor_{}d_g2s \
+                     for cluster destinations",
+                    dims,
+                    role,
+                    dims
+                );
+            }
+            Some(space) => {
+                return pliron::input_err!(
+                    op.deref(ctx).loc(),
+                    "cp_async_bulk_tensor_{}d_g2s_cta requires a shared memory {}, \
+                     but it is in address space {}",
+                    dims,
+                    role,
+                    space
+                );
+            }
+            None => {
+                return pliron::input_err!(
+                    op.deref(ctx).loc(),
+                    "cp_async_bulk_tensor_{}d_g2s_cta {} must be a pointer",
+                    dims,
+                    role
+                );
+            }
+        }
+    }
+
+    let dst_shared = cast_to_shared_addrspace(ctx, rewriter, operands[0]);
+    let barrier_shared = cast_to_shared_addrspace(ctx, rewriter, operands[1]);
+    let void_ty = llvm_types::VoidType::get(ctx);
+
+    if context::lowering_options(ctx).intrinsic_backend == IntrinsicBackend::LibNvvm {
+        // Legacy NVVM IR has no typed CTA-destination intrinsic. Pass the
+        // 32-bit shared-window addresses to the exact PTX instruction.
+        let i32_ty = IntegerType::get(ctx, 32, Signedness::Signless);
+        let dst_address = llvm::PtrToIntOp::new(ctx, dst_shared, i32_ty.into());
+        rewriter.insert_operation(ctx, dst_address.get_operation());
+        let barrier_address = llvm::PtrToIntOp::new(ctx, barrier_shared, i32_ty.into());
+        rewriter.insert_operation(ctx, barrier_address.get_operation());
+        let mut inputs = vec![
+            dst_address.get_operation().deref(ctx).get_result(0),
+            barrier_address.get_operation().deref(ctx).get_result(0),
+            operands[2],
+        ];
+        inputs.extend(operands[3..3 + dims].iter().copied());
+        let (template, constraints) = g2s_cta_inline_asm(dims);
+        inline_asm_convergent(
+            ctx,
+            rewriter,
+            op,
+            void_ty.into(),
+            inputs,
+            &template,
+            &constraints,
+        );
+        rewriter.erase_operation(ctx, op);
+        return Ok(());
+    }
+
+    // LLVM NVPTX: the typed intrinsic the catalog probes record.
+    let i32_ty = IntegerType::get(ctx, 32, Signedness::Signless);
+    let i64_ty = IntegerType::get(ctx, 64, Signedness::Signless);
+    let i1_ty = IntegerType::get(ctx, 1, Signedness::Signless);
+    let smem_ptr_ty = llvm_types::PointerType::get(ctx, 3);
+    let generic_ptr_ty = llvm_types::PointerType::get(ctx, 0);
+    let mut arg_types: Vec<pliron::r#type::TypeHandle> = vec![
+        smem_ptr_ty.into(),
+        smem_ptr_ty.into(),
+        generic_ptr_ty.into(),
+    ];
+    for _ in 0..dims {
+        arg_types.push(i32_ty.into());
+    }
+    arg_types.push(i64_ty.into()); // cache_hint
+    arg_types.push(i1_ty.into()); // use_cache_hint
+
+    let intrinsic_name = format!("llvm_nvvm_cp_async_bulk_tensor_g2s_cta_tile_{}d", dims);
+    let func_ty = llvm_types::FuncType::get(ctx, void_ty.into(), arg_types, false);
+    let parent_block = op.deref(ctx).get_parent_block().unwrap();
+    helpers::ensure_intrinsic_declared(ctx, parent_block, &intrinsic_name, func_ty)
+        .map_err(|e| pliron::input_error_noloc!("{}", e))?;
+
+    let mut call_args = vec![dst_shared, barrier_shared];
+    call_args.extend(operands[2..].iter().copied());
+    let use_cache_hint = create_i1_const(ctx, rewriter, false);
+    call_args.push(use_cache_hint);
+
+    let sym_name: pliron::identifier::Identifier = intrinsic_name.as_str().try_into().unwrap();
+    let callee = CallOpCallable::Direct(sym_name);
+    let llvm_call = llvm::CallOp::new(ctx, callee, func_ty, call_args);
+    crate::convert::preserve_location(ctx, op, llvm_call.get_operation());
+    rewriter.insert_operation(ctx, llvm_call.get_operation());
+    rewriter.erase_operation(ctx, op);
+    Ok(())
 }
 
 fn convert_g2s_impl(
@@ -746,7 +901,7 @@ pub(crate) fn convert_control(
 
 #[cfg(test)]
 mod tests {
-    use super::{g2s_inline_asm, reduce_inline_asm, s2g_inline_asm};
+    use super::{g2s_cta_inline_asm, g2s_inline_asm, reduce_inline_asm, s2g_inline_asm};
 
     #[test]
     fn inline_tma_templates_keep_exact_ptx_shapes() {
@@ -762,6 +917,13 @@ mod tests {
             (
                 "{ .reg .u64 %cluster_dst; cvta.to.shared::cluster.u64 %cluster_dst, $0; cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes.multicast::cluster.cta_group::2 [%cluster_dst], [$2, {$3, $4}], [$1], $5; }".into(),
                 "l,l,l,r,r,h,~{memory}".into(),
+            )
+        );
+        assert_eq!(
+            g2s_cta_inline_asm(2),
+            (
+                "cp.async.bulk.tensor.2d.shared::cta.global.tile.mbarrier::complete_tx::bytes [$0], [$2, {$3, $4}], [$1];".into(),
+                "r,r,l,r,r,~{memory}".into(),
             )
         );
         assert_eq!(

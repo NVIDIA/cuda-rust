@@ -7173,3 +7173,38 @@ status = "active"
 catalog_id = "mma_sp_m16n8k64_f32_e5m2_e5m2_f32"
 operation_key = "matrix.mma.sp.m16n8k64.row.col.f32.e5m2.e5m2.f32.not_applicable.standard_metadata"
 raw_rust_signature = { safe = false, arguments = ["[f32; 4]", "[u32; 4]", "[u32; 4]", "u32", "u32"], result = "[f32; 4]" }
+
+[[entry]]
+abi_id = "i1030"
+status = "active"
+catalog_id = "cp_async_bulk_tensor_1d_g2s_cta"
+operation_key = "memory.copy.async.bulk.tensor.g2s.cta.tile.1d"
+raw_rust_signature = { safe = false, arguments = ["*mut u8", "*const u8", "i32", "*mut u64"], result = "()" }
+
+[[entry]]
+abi_id = "i1031"
+status = "active"
+catalog_id = "cp_async_bulk_tensor_2d_g2s_cta"
+operation_key = "memory.copy.async.bulk.tensor.g2s.cta.tile.2d"
+raw_rust_signature = { safe = false, arguments = ["*mut u8", "*const u8", "i32", "i32", "*mut u64"], result = "()" }
+
+[[entry]]
+abi_id = "i1032"
+status = "active"
+catalog_id = "cp_async_bulk_tensor_3d_g2s_cta"
+operation_key = "memory.copy.async.bulk.tensor.g2s.cta.tile.3d"
+raw_rust_signature = { safe = false, arguments = ["*mut u8", "*const u8", "i32", "i32", "i32", "*mut u64"], result = "()" }
+
+[[entry]]
+abi_id = "i1033"
+status = "active"
+catalog_id = "cp_async_bulk_tensor_4d_g2s_cta"
+operation_key = "memory.copy.async.bulk.tensor.g2s.cta.tile.4d"
+raw_rust_signature = { safe = false, arguments = ["*mut u8", "*const u8", "i32", "i32", "i32", "i32", "*mut u64"], result = "()" }
+
+[[entry]]
+abi_id = "i1034"
+status = "active"
+catalog_id = "cp_async_bulk_tensor_5d_g2s_cta"
+operation_key = "memory.copy.async.bulk.tensor.g2s.cta.tile.5d"
+raw_rust_signature = { safe = false, arguments = ["*mut u8", "*const u8", "i32", "i32", "i32", "i32", "i32", "*mut u64"], result = "()" }

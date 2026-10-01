@@ -190,12 +190,17 @@ fn compact_tma_admission_matches_llvm_and_fails_closed() {
             .collect::<Vec<_>>(),
         [
             ("i0328", "cp_async_bulk_tensor_1d_g2s"),
+            ("i1030", "cp_async_bulk_tensor_1d_g2s_cta"),
             ("i0329", "cp_async_bulk_tensor_2d_g2s"),
+            ("i1031", "cp_async_bulk_tensor_2d_g2s_cta"),
             ("i0330", "cp_async_bulk_tensor_2d_g2s_multicast"),
             ("i0331", "cp_async_bulk_tensor_2d_g2s_multicast_cg2"),
             ("i0332", "cp_async_bulk_tensor_3d_g2s"),
+            ("i1032", "cp_async_bulk_tensor_3d_g2s_cta"),
             ("i0333", "cp_async_bulk_tensor_4d_g2s"),
+            ("i1033", "cp_async_bulk_tensor_4d_g2s_cta"),
             ("i0334", "cp_async_bulk_tensor_5d_g2s"),
+            ("i1034", "cp_async_bulk_tensor_5d_g2s_cta"),
             ("i0335", "cp_async_bulk_tensor_1d_s2g"),
             ("i0336", "cp_async_bulk_tensor_2d_s2g"),
             ("i0337", "cp_async_bulk_tensor_3d_s2g"),
@@ -277,7 +282,7 @@ fn compact_tma_admission_matches_llvm_and_fails_closed() {
     }
 
     assert_eq!(
-        parse_hardware_target(&records[3]).unwrap(),
+        parse_hardware_target(&records[5]).unwrap(),
         CatalogHardwareTarget::AnyOf {
             alternatives: vec![
                 CatalogHardwareAlternative::ExactArchitecture { sm: 100 },

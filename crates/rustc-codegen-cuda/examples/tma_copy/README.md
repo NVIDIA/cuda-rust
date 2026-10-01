@@ -10,9 +10,17 @@ For TMA multicast (also sm_90+), see the [`tma_multicast`](../tma_multicast/) ex
 ## What This Example Does
 
 1. **tma_copy_2d_test**: Async 2D tile copy from global to shared memory
-2. **tma_pipeline_test**: TMA with mbarrier for completion tracking
+2. **tma_copy_2d_cta_test**: The same copy with `cp_async_bulk_tensor_2d_g2s_cta`,
+   whose destination is a `SharedPtr`, the issuing CTA's own shared memory by type
+3. **tma_pipeline_test**: TMA with mbarrier for completion tracking
 
-Both kernels use `#[grid_constant] tensor_map: &TmaDescriptor`. The generated
+`cp_async_bulk_tensor_2d_g2s` addresses cluster shared memory, so its
+destination may belong to another CTA of the cluster. The `_cta` form takes a
+`SharedPtr<u8>` destination, here `SharedArray::shared_ptr(&raw mut TILE)`, and
+emits `cp.async.bulk.tensor.2d.shared::cta.global` without converting any
+address; `verify-code-shape.sh` checks both forms in the generated PTX.
+
+All kernels use `#[grid_constant] tensor_map: &TmaDescriptor`. The generated
 host launcher takes the descriptor by value and places its 128 bytes directly
 in the kernel's parameter storage. Every thread can address that same read-only
 value; no separate device descriptor allocation or upload is needed. The tensor

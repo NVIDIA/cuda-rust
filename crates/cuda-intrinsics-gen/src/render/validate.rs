@@ -733,10 +733,15 @@ pub(super) fn validate_renderable(catalog: &CatalogFile) -> Result<()> {
                             && match (tma.operation, tma.adapter) {
                                 (
                                     TmaOperation::G2sTile1d
+                                    | TmaOperation::G2sCtaTile1d
                                     | TmaOperation::G2sTile2d
+                                    | TmaOperation::G2sCtaTile2d
                                     | TmaOperation::G2sTile3d
+                                    | TmaOperation::G2sCtaTile3d
                                     | TmaOperation::G2sTile4d
-                                    | TmaOperation::G2sTile5d,
+                                    | TmaOperation::G2sCtaTile4d
+                                    | TmaOperation::G2sTile5d
+                                    | TmaOperation::G2sCtaTile5d,
                                     TmaAdapter::G2sPointersCoordinatesBarrierInjectDefaults,
                                 ) => {
                                     !record.rust.safe

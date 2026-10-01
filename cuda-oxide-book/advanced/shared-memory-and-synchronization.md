@@ -233,6 +233,48 @@ total does not exceed `shared_mem_bytes` — there are no runtime guards.
 (Hopper+), use `DynamicSharedArray<f32, 128>` to get the required
 128-byte alignment. The alignment is encoded in the PTX `.align` directive.
 
+### Typed shared pointers: `SharedPtr`
+
+`DynamicSharedArray::get()` and `SharedArray::as_mut_ptr()` return `*mut T`,
+which in device code is a *generic* pointer: it may address global, local or
+shared memory, including another block's shared memory in a cluster. Once
+such a pointer is passed to a helper function, the compiler no longer knows it
+points into this block's shared memory.
+
+`SharedPtr<T>` is a raw pointer into the issuing block's shared memory
+(`.shared::cta`) that carries that fact in its type. It lowers to an
+`addrspace(3)` pointer wherever it goes, including helper parameters and
+return values, struct fields and generic code, so instructions that take it
+use their shared-memory forms without converting a generic address.
+
+```rust
+use cuda_device::{DynamicSharedArray, SharedArray, SharedPtr};
+
+#[inline(never)]
+unsafe fn fill(tile: SharedPtr<f32>, i: usize, value: f32) {
+    // Still a shared-memory pointer here, although `fill` is not inlined.
+    unsafe { tile.add(i).as_ptr().write(value) };
+}
+
+static mut TILE: SharedArray<f32, 256> = SharedArray::UNINIT;
+let tile: SharedPtr<f32> = SharedArray::shared_ptr(&raw mut TILE);
+let pool: SharedPtr<u8> = DynamicSharedArray::<u8, 128>::shared_ptr_at(1024);
+unsafe { fill(tile, thread::threadIdx_x() as usize, 1.0) };
+```
+
+| Operation                              | Result                                              |
+|:---------------------------------------|:----------------------------------------------------|
+| `SharedArray::shared_ptr(&raw mut S)`  | `SharedPtr<T>` to the first element of `S`          |
+| `DynamicSharedArray::<T>::shared_ptr()` / `shared_ptr_at(bytes)` | Like `get()` / `offset(bytes)` |
+| `unsafe SharedPtr::from_raw(p)`        | Asserts that generic `p` points into this block's shared memory |
+| `add`, `offset`, `byte_add`, `cast`    | Pointer arithmetic that keeps the type              |
+| `as_ptr()`                             | The generic `*mut T`, for loads, stores and raw-pointer APIs |
+| `addr_u32()`                           | The 32-bit `.shared::cta` address, for `_shared_u32` forms |
+
+`SharedPtr` cannot be a kernel parameter: the host has no shared-memory
+address to pass. Pointers from `cluster::map_shared_rank` may name another
+block's shared memory and are not `SharedPtr`s.
+
 ---
 
 ## Synchronization: sync_threads()

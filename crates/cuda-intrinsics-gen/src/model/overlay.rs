@@ -322,6 +322,8 @@ pub struct ClcAdmissionVariant {
 pub struct TmaAdmission {
     pub llvm_evidence_profile: String,
     pub libnvvm_evidence_profile: String,
+    pub cta_llvm_evidence_profile: String,
+    pub cta_libnvvm_evidence_profile: String,
     #[serde(default)]
     pub reduce_llvm_evidence_profile: Option<String>,
     #[serde(default)]

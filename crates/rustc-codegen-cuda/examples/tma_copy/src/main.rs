@@ -9,6 +9,9 @@
 //!
 //! Demonstrates TMA (Tensor Memory Accelerator) usage:
 //! - cp_async_bulk_tensor_2d_g2s: Async 2D tensor copy global → shared
+//! - cp_async_bulk_tensor_2d_g2s_cta: the same copy into the issuing CTA's
+//!   own shared memory, whose destination is a `SharedPtr`, a CTA-shared
+//!   pointer by type
 //! - mbarrier: Barrier-based completion tracking
 //! - `#[grid_constant]`: the descriptor is passed by value in the launch packet,
 //!   without allocating or uploading a separate descriptor buffer.
@@ -34,7 +37,9 @@ use cuda_device::barrier::{
     Barrier, fence_proxy_async_shared_cta, mbarrier_arrive, mbarrier_arrive_expect_tx,
     mbarrier_init, mbarrier_try_wait,
 };
-use cuda_device::tma::{TmaDescriptor, cp_async_bulk_tensor_2d_g2s};
+use cuda_device::tma::{
+    TmaDescriptor, cp_async_bulk_tensor_2d_g2s, cp_async_bulk_tensor_2d_g2s_cta,
+};
 use cuda_device::{DisjointSlice, SharedArray, kernel, thread};
 use cuda_host::cuda_module;
 use std::mem::MaybeUninit;
@@ -116,6 +121,65 @@ mod kernels {
         thread::sync_threads();
 
         // Each thread copies one element to output
+        let idx = gid.get();
+        if idx < TILE_SIZE {
+            let val = unsafe { TILE[idx] };
+            if let Some(out_elem) = out.get_mut(gid) {
+                *out_elem = val;
+            }
+        }
+    }
+
+    /// `tma_copy_2d_test` with the CTA-local copy: the tile and the barrier
+    /// are this CTA's own shared statics, so the `.shared::cta` form applies.
+    #[kernel]
+    pub fn tma_copy_2d_cta_test(
+        #[grid_constant] tensor_map: &TmaDescriptor,
+        mut out: DisjointSlice<f32>,
+        tile_x: i32,
+        tile_y: i32,
+    ) {
+        const TILE_SIZE: usize = 64 * 64;
+        const TILE_BYTES: u32 = (TILE_SIZE * 4) as u32;
+        static mut TILE: SharedArray<f32, TILE_SIZE, 128> = SharedArray::UNINIT;
+        static mut BAR: Barrier = Barrier::UNINIT;
+
+        let tid = thread::threadIdx_x();
+        let block_size = thread::blockDim_x();
+        let gid = thread::index_1d();
+
+        if tid == 0 {
+            unsafe {
+                mbarrier_init(&raw mut BAR, block_size);
+                fence_proxy_async_shared_cta();
+            }
+        }
+        thread::sync_threads();
+
+        if tid == 0 {
+            // SAFETY: TILE and BAR outlive the copy, which completes on BAR
+            // before any thread reads TILE.
+            unsafe {
+                cp_async_bulk_tensor_2d_g2s_cta(
+                    SharedArray::shared_ptr(&raw mut TILE).cast::<u8>(),
+                    tensor_map,
+                    tile_x,
+                    tile_y,
+                    &raw mut BAR,
+                );
+            }
+        }
+
+        let token = unsafe {
+            if tid == 0 {
+                mbarrier_arrive_expect_tx(&raw const BAR, 1, TILE_BYTES)
+            } else {
+                mbarrier_arrive(&raw const BAR)
+            }
+        };
+        unsafe { while !mbarrier_try_wait(&raw const BAR, token) {} }
+        thread::sync_threads();
+
         let idx = gid.get();
         if idx < TILE_SIZE {
             let val = unsafe { TILE[idx] };
@@ -227,7 +291,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✓ Module loaded successfully\n");
 
     // Run tests
-    run_tma_copy_test(&stream, &module)?;
+    run_tma_copy_test(&stream, &module, false)?;
+    run_tma_copy_test(&stream, &module, true)?;
     run_tma_pipeline_test(&stream, &module)?;
 
     println!("\n=== TMA Copy Test Complete ===");
@@ -265,8 +330,14 @@ fn verify_ptx_only(ctx: &Arc<CudaContext>) -> Result<(), Box<dyn std::error::Err
 fn run_tma_copy_test(
     stream: &Arc<CudaStream>,
     module: &kernels::LoadedModule,
+    cta: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    println!("--- Test 1: TMA Copy (tma_copy_2d_test) ---\n");
+    let kernel = if cta {
+        "tma_copy_2d_cta_test"
+    } else {
+        "tma_copy_2d_test"
+    };
+    println!("--- Test: TMA Copy ({kernel}) ---\n");
 
     println!(
         "1. Allocating {}x{} tensor ({} floats, {} KB)",
@@ -294,7 +365,7 @@ fn run_tma_copy_test(
         TILE_HEIGHT,
     )?;
 
-    println!("3. Launching tma_copy_2d_test kernel...");
+    println!("3. Launching {kernel} kernel...");
 
     let tile_x: i32 = 0;
     let tile_y: i32 = 0;
@@ -309,14 +380,25 @@ fn run_tma_copy_test(
 
     // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
     unsafe {
-        module.tma_copy_2d_test(
-            (stream).as_ref(),
-            cfg,
-            tensor_map,
-            &mut dev_output,
-            tile_x,
-            tile_y,
-        )
+        if cta {
+            module.tma_copy_2d_cta_test(
+                (stream).as_ref(),
+                cfg,
+                tensor_map,
+                &mut dev_output,
+                tile_x,
+                tile_y,
+            )
+        } else {
+            module.tma_copy_2d_test(
+                (stream).as_ref(),
+                cfg,
+                tensor_map,
+                &mut dev_output,
+                tile_x,
+                tile_y,
+            )
+        }
     }?;
 
     stream.synchronize()?;
@@ -359,7 +441,7 @@ fn run_tma_pipeline_test(
     stream: &Arc<CudaStream>,
     module: &kernels::LoadedModule,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    println!("\n--- Test 2: TMA Pipeline (tma_pipeline_test) ---\n");
+    println!("\n--- Test: TMA Pipeline (tma_pipeline_test) ---\n");
 
     const PIPELINE_TILE_WIDTH: u32 = 32;
     const PIPELINE_TILE_HEIGHT: u32 = 32;

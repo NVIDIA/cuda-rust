@@ -913,12 +913,17 @@ pub(super) fn render_compat_tma(catalog: &CatalogFile, hash: &str) -> String {
         let is_g2s = matches!(
             operation,
             TmaOperation::G2sTile1d
+                | TmaOperation::G2sCtaTile1d
                 | TmaOperation::G2sTile2d
+                | TmaOperation::G2sCtaTile2d
                 | TmaOperation::G2sTile2dMulticast
                 | TmaOperation::G2sTile2dMulticastCg2
                 | TmaOperation::G2sTile3d
+                | TmaOperation::G2sCtaTile3d
                 | TmaOperation::G2sTile4d
+                | TmaOperation::G2sCtaTile4d
                 | TmaOperation::G2sTile5d
+                | TmaOperation::G2sCtaTile5d
         );
         let is_s2g = matches!(
             operation,
@@ -935,6 +940,11 @@ pub(super) fn render_compat_tma(catalog: &CatalogFile, hash: &str) -> String {
                 output.push_str(
                     "/// `dst`, `tensor_map`, and `barrier` must remain valid until the copy completes.\n",
                 );
+                if operation.is_cta_g2s() {
+                    output.push_str(
+                        "/// `barrier` must point into the issuing CTA's shared memory, as for the other\n/// `mbarrier` operations. `dst` is a [`SharedPtr`], which points there by its type.\n",
+                    );
+                }
             } else if is_s2g {
                 output.push_str(
                     "/// `src` and `tensor_map` must remain valid until the committed copy group completes.\n",
@@ -961,8 +971,15 @@ pub(super) fn render_compat_tma(catalog: &CatalogFile, hash: &str) -> String {
         output.push_str("#[inline(never)]\n");
         if is_g2s {
             let dimensions = dimensions.unwrap();
+            // The CTA-local forms take a typed CTA-shared destination; the
+            // raw ABI keeps `*mut u8`, as `*mut Barrier` keeps `*mut u64`.
+            let destination = if operation.is_cta_g2s() {
+                "dst: SharedPtr<u8>"
+            } else {
+                "dst: *mut u8"
+            };
             let mut arguments = vec![
-                "dst: *mut u8".to_owned(),
+                destination.to_owned(),
                 "tensor_map: *const TmaDescriptor".to_owned(),
             ];
             let mut values = vec!["dst".to_owned(), "tensor_map".to_owned()];

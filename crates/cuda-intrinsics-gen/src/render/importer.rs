@@ -2402,6 +2402,18 @@ fn tma_arms(catalog: &CatalogFile) -> String {
                 )
                 .unwrap();
             }
+            TmaOperation::G2sCtaTile1d
+            | TmaOperation::G2sCtaTile2d
+            | TmaOperation::G2sCtaTile3d
+            | TmaOperation::G2sCtaTile4d
+            | TmaOperation::G2sCtaTile5d => {
+                writeln!(
+                    output,
+                    "            Ok(Some(super::super::tma::emit_tma_g2s_cta(\n                ctx, body, args, target, block_ptr, prev_op, value_map, block_map, loc, {}, {marker:?},\n            )?))",
+                    operation.dimensions().unwrap()
+                )
+                .unwrap();
+            }
             TmaOperation::G2sTile2dMulticast => {
                 writeln!(
                     output,

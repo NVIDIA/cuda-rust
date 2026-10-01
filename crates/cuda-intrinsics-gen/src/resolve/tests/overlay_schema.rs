@@ -49,7 +49,7 @@ fn overlay_manifest_loads_sorted_family_shards() {
         read_overlay(&repo_root, &repo_root.join("intrinsics/overlay.toml")).unwrap();
     assert_eq!(overlay.schema, OVERLAY_SCHEMA);
     assert_eq!(overlay.shards.len(), 66);
-    assert_eq!(overlay.intrinsics.len(), 1029);
+    assert_eq!(overlay.intrinsics.len(), 1034);
     assert_eq!(
         overlay
             .intrinsics

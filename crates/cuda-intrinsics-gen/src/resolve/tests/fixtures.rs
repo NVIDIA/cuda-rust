@@ -1520,6 +1520,8 @@ pub(super) fn test_tma_admission() -> TmaAdmission {
     TmaAdmission {
         llvm_evidence_profile: "llvm-tma-test".into(),
         libnvvm_evidence_profile: "libnvvm-tma-test".into(),
+        cta_llvm_evidence_profile: "llvm-tma-test".into(),
+        cta_libnvvm_evidence_profile: "libnvvm-tma-test".into(),
         reduce_llvm_evidence_profile: Some("llvm-tma-reduce-test".into()),
         reduce_libnvvm_evidence_profile: Some("libnvvm-tma-reduce-test".into()),
         runtime_validation: RuntimeValidation::Unexecuted,

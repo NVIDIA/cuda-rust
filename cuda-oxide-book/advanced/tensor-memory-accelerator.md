@@ -119,6 +119,27 @@ The coordinates (`tile_x`, `tile_y`) specify which tile to copy, in units
 of the box dimensions encoded in the descriptor. The barrier pointer tells
 the TMA engine where to signal completion.
 
+These functions address cluster shared memory: the destination may belong to
+any CTA of the cluster, so the compiler converts it to the cluster window.
+When the destination is the issuing CTA's own shared memory,
+`cp_async_bulk_tensor_*_g2s_cta` emits the `.shared::cta` destination form
+(PTX 8.6, sm_90+) without that conversion. Its destination is a
+[`SharedPtr<u8>`](shared-memory-and-synchronization.md),
+a CTA-shared pointer by type, so the locality holds wherever the pointer came
+from, including through helper functions:
+
+```rust
+cp_async_bulk_tensor_2d_g2s_cta(
+    SharedArray::shared_ptr(&raw mut TILE).cast::<u8>(),
+    tensor_map, tile_x, tile_y,
+    &raw mut BAR,
+);
+```
+
+On SM12x this form matters for performance: ptxas implements a non-multicast
+`.shared::cluster` TMA load it cannot prove CTA-local with a runtime check and
+a system call, which also makes it ignore `setmaxnreg`.
+
 ### Only one thread issues the copy
 
 TMA copies are **not** collective operations across the block. Exactly

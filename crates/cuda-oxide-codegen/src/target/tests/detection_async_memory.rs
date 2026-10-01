@@ -58,6 +58,15 @@ fn tma_and_wgmma_raise_their_independent_ptx_floors() {
     assert_eq!(shared_cta_requirements.features, DetectedFeatures::Tma);
     assert_eq!(shared_cta_requirements.ptx_isa, PtxIsaRequirement::new(86));
 
+    let typed_shared_cta = "call void @llvm.nvvm.cp.async.bulk.tensor.g2s.cta.tile.2d(ptr addrspace(3) %0, ptr addrspace(3) %1, ptr %2, i32 %3, i32 %4, i64 0, i1 false)";
+    assert!(contains_tma_shared_cta_destination(typed_shared_cta));
+    let typed_requirements = detect_module_requirements_in_llvm_text(typed_shared_cta);
+    assert_eq!(typed_requirements.features, DetectedFeatures::Tma);
+    assert_eq!(typed_requirements.ptx_isa, PtxIsaRequirement::new(86));
+    assert!(!contains_tma_shared_cta_destination(
+        "call void @llvm.nvvm.cp.async.bulk.tensor.g2s.tile.2d(ptr addrspace(7) %0)"
+    ));
+
     let shared_source = "cp.async.bulk.tensor.2d.global.shared::cta.tile.bulk_group;";
     assert!(!contains_tma_shared_cta_destination(shared_source));
     assert_eq!(

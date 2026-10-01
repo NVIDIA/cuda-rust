@@ -13,6 +13,26 @@ unsafe fn helper(smem: *mut u8, offset: usize) -> u64 {
 }
 ```
 
+Every build also runs the same probe through `SharedPtr`, a CTA-shared
+pointer typed as such:
+
+```rust
+let smem = DynamicSharedArray::<u32, 1024>::shared_ptr();
+shared_ptr_probe(Region { base: smem, offset });
+
+#[inline(never)]
+unsafe fn shared_ptr_probe<T>(region: Region<T>) -> u64 {
+    let full = region.base.cast::<u8>().byte_add(1024).cast::<Barrier>().as_ptr();
+    // ...
+}
+```
+
+`SharedPtr<T>` lowers to an `addrspace(3)` pointer by its type, so the
+generic helper's parameter, nested in a struct, is one too, and the call
+needs no address-space adaptation. `verify-code-shape.sh` checks that the
+helper takes `ptr addrspace(3)` and that no PTX converts a generic address to a
+shared one.
+
 The launch supplies 2048 dynamic shared bytes. Four independent CTAs each use
 one thread. Nine launches cover three data offsets and three input values,
 including wrapping arithmetic. Every CTA checks both a volatile shared-memory
@@ -78,6 +98,9 @@ RTX 5090, NVIDIA driver 580.173.02, and CUDA tools 13.3.
 | Direct control | Builds; GPU checks pass |
 | Local helper, all three inline policies | MIR verification rejects the call |
 | Dependency helper, all three inline policies | Same rejection |
+
+With no features, the `SharedPtr` probe runs after the direct control and
+reports `PASS shared-ptr: 9 launches, 36 CTA data/barrier checks`.
 
 Both Compute Sanitizer runs of the direct control reported:
 

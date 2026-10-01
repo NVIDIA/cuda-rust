@@ -788,6 +788,41 @@ impl CodegenBackend for CudaCodegenBackend {
                     }
                 }
             } else {
+                // All-generic defining crate with no local monomorphization:
+                // cuda_module still emits an anchor keep-alive (issue 1365),
+                // so supply a strong anchor-only stub (.oxlink, no fake PTX).
+                // Full embeds already cover kernel_count > 0.
+                if owner_selected
+                    && collector::cgus_require_ptx_bundle_merge(
+                        tcx,
+                        mono_partitions.codegen_units,
+                    )
+                {
+                    let output_dir = self
+                        .config
+                        .ptx_output_dir
+                        .clone()
+                        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
+                    match write_selected_merge_anchor_object(
+                        &output_dir,
+                        crate_name.as_str(),
+                        tcx.sess.target.llvm_target.as_ref(),
+                        self.config.device_codegen_crates.is_some(),
+                    ) {
+                        Ok(path) => {
+                            if self.config.verbose {
+                                eprintln!(
+                                    "[rustc_codegen_cuda] Wrote selected merge-marker anchor stub: {}",
+                                    path.display()
+                                );
+                            }
+                            artifact_objects.push(path);
+                        }
+                        Err(error) => tcx.dcx().fatal(format!(
+                            "[rustc_codegen_cuda] Failed to write selected merge-marker anchor: {error}"
+                        )),
+                    }
+                }
                 None
             };
 
@@ -1111,6 +1146,37 @@ fn write_filtered_artifact_anchor_object(
         reserved_oxide_symbols::artifact_anchor_symbol(&bundle_name, &package_version);
     let object = oxide_artifacts::build_host_anchor_object_for_target(host_target, &anchor_symbol)?;
     write_artifact_object(output_dir, output_name, host_target, &object, "anchor")
+}
+
+/// Strong package (or v2) anchor with no oxart payload for owner-selected
+/// crates that only have PTX-merge markers (issue 1365).
+fn write_selected_merge_anchor_object(
+    output_dir: &Path,
+    output_name: &str,
+    host_target: &str,
+    use_target_specific_anchor: bool,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let bundle_name = std::env::var("CARGO_PKG_NAME").unwrap_or_else(|_| output_name.to_string());
+    let package_version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
+    let legacy_anchor =
+        reserved_oxide_symbols::artifact_anchor_symbol(&bundle_name, &package_version);
+    let object = if use_target_specific_anchor {
+        let binary_name = std::env::var("CARGO_BIN_NAME").ok();
+        let target_anchor = reserved_oxide_symbols::artifact_anchor_symbol_v2(
+            &bundle_name,
+            &package_version,
+            output_name,
+            binary_name.as_deref(),
+        );
+        oxide_artifacts::build_host_strong_anchor_object_for_target_with_legacy_anchor(
+            host_target,
+            &target_anchor,
+            &legacy_anchor,
+        )?
+    } else {
+        oxide_artifacts::build_host_strong_anchor_object_for_target(host_target, &legacy_anchor)?
+    };
+    write_artifact_object(output_dir, output_name, host_target, &object, "merge-anchor")
 }
 
 fn write_artifact_object(

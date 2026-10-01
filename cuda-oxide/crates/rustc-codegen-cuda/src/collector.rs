@@ -439,6 +439,20 @@ pub fn count_device_fns_in_cgus<'tcx>(tcx: TyCtxt<'tcx>, cgus: &[CodegenUnit<'tc
     count
 }
 
+/// True when any CGU static is a cuda_module PTX-merge-required marker.
+///
+/// The scan does not require monomorphized kernels or other device code, so
+/// owner-selected all-generic crates can still emit an anchor-only stub when
+/// kernel_count == 0 (issue 1365).
+pub fn cgus_require_ptx_bundle_merge<'tcx>(tcx: TyCtxt<'tcx>, cgus: &[CodegenUnit<'tcx>]) -> bool {
+    cgus.iter().any(|cgu| {
+        cgu.items().iter().any(|(item, _data)| match item {
+            MonoItem::Static(def_id) => is_ptx_merge_required_marker(&tcx.def_path_str(*def_id)),
+            _ => false,
+        })
+    })
+}
+
 /// Find a device-code root emitted before the scoped Cargo cache protocol.
 ///
 /// This deliberately inspects both local and external `DefId`s. A generic
@@ -941,12 +955,7 @@ pub fn collect_device_functions<'tcx>(
     verbose: bool,
 ) -> CollectionResult<'tcx> {
     let mut collector = DeviceCollector::new(tcx, verbose);
-    let mut requires_ptx_bundle_merge = cgus.iter().any(|cgu| {
-        cgu.items().iter().any(|(item, _data)| match item {
-            MonoItem::Static(def_id) => is_ptx_merge_required_marker(&tcx.def_path_str(*def_id)),
-            _ => false,
-        })
-    });
+    let mut requires_ptx_bundle_merge = cgus_require_ptx_bundle_merge(tcx, cgus);
 
     // Find all kernel entry points
     for cgu in cgus {

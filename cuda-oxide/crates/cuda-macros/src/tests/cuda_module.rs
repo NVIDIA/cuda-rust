@@ -386,6 +386,48 @@ fn cfg_gated_generic_uses_the_same_gate_for_marker_and_loader() {
         );
 }
 
+#[test]
+fn all_generic_cuda_module_keeps_anchor_keepalive_and_merge_loader() {
+    let module: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            pub fn fill<T: Copy>(value: T) {}
+        }
+    };
+    let expanded = expand_to_compact_string(module);
+
+    assert!(
+        expanded.contains("::cuda_host::load_all_ptx_bundles_merged(ctx)?"),
+        "generic modules must keep the #222 merge loader:\n{expanded}"
+    );
+    assert!(
+        expanded.contains("CUDA_OXIDE_BUNDLE_ANCHOR")
+            && expanded.contains("black_box")
+            && expanded.contains("link_name"),
+        "all-generic modules must emit the #72/#1365 artifact-anchor keep-alive:\n{expanded}"
+    );
+    assert!(
+        expanded.contains("#[allow(unused_mut)]letmut__cuda_oxide_artifact_anchor:::core::option::Option<&::core::primitive::u8>=::core::option::Option::None;"),
+        "load_named must still initialize the optional anchor address:\n{expanded}"
+    );
+}
+
+#[test]
+fn cfg_gated_generic_anchor_keepalive_inherits_effective_cfg() {
+    let module: ItemMod = parse_quote! {
+        mod kernels {
+            #[cfg(feature = "generic")]
+            #[kernel]
+            pub fn fill<T: Copy>(value: T) {}
+        }
+    };
+    let expanded = expand_to_compact_string(module);
+    assert!(
+        expanded.contains("#[cfg(feature=\"generic\")]let_={unsafeextern\"C\"{"),
+        "generic anchor keep-alive must inherit the kernel cfg:\n{expanded}"
+    );
+}
+
 /// The embedded-artifact loader: read the bundle from the binary that maps
 /// the artifact anchor, or from the executable when no anchor was referenced.
 const ANCHORED_EMBEDDED_LOADER: &str = concat!(

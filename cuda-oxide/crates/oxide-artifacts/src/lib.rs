@@ -756,6 +756,50 @@ pub fn build_host_anchor_object_for_target(
     target: &str,
     anchor_symbol: &str,
 ) -> Result<Vec<u8>, ArtifactError> {
+    build_host_anchor_object_for_target_with_strength(target, anchor_symbol, true)
+}
+
+/// Build an anchor-only host object with a strong primary definition.
+///
+/// Used for owner-selected crates that advertise PTX-merge markers but have
+/// no monomorphized kernels in this crate (issue #1365 / the #222 empty
+/// defining-crate shape). The strong binding matches full `.oxart` embeds so
+/// archive extraction stays reliable; discovery still sees no `.oxart` payload.
+#[cfg(feature = "object-write")]
+pub fn build_host_strong_anchor_object_for_target(
+    target: &str,
+    anchor_symbol: &str,
+) -> Result<Vec<u8>, ArtifactError> {
+    build_host_anchor_object_for_target_with_strength(target, anchor_symbol, false)
+}
+
+/// Strong target-specific anchor plus a weak legacy alias, for owner-filtered
+/// selected crates that need an empty keep-alive (issue #1365).
+#[cfg(feature = "object-write")]
+pub fn build_host_strong_anchor_object_for_target_with_legacy_anchor(
+    target: &str,
+    anchor_symbol: &str,
+    legacy_anchor_symbol: &str,
+) -> Result<Vec<u8>, ArtifactError> {
+    if anchor_symbol.is_empty() || legacy_anchor_symbol.is_empty() {
+        return Err(ArtifactError::Malformed(
+            "embedded artifact anchor symbol is empty".to_string(),
+        ));
+    }
+    build_host_object_with_section(
+        ARTIFACT_ANCHOR_SECTION_NAME,
+        &[0],
+        target,
+        &[(anchor_symbol, false), (legacy_anchor_symbol, true)],
+    )
+}
+
+#[cfg(feature = "object-write")]
+fn build_host_anchor_object_for_target_with_strength(
+    target: &str,
+    anchor_symbol: &str,
+    weak: bool,
+) -> Result<Vec<u8>, ArtifactError> {
     if anchor_symbol.is_empty() {
         return Err(ArtifactError::Malformed(
             "embedded artifact anchor symbol is empty".to_string(),
@@ -766,7 +810,7 @@ pub fn build_host_anchor_object_for_target(
         ARTIFACT_ANCHOR_SECTION_NAME,
         &[0],
         target,
-        &[(anchor_symbol, true)],
+        &[(anchor_symbol, weak)],
     )
 }
 
@@ -1299,6 +1343,68 @@ mod tests {
         assert!(anchor.is_definition());
         assert!(anchor.is_global());
         assert!(anchor.is_weak());
+        assert!(
+            read_artifact_bundles_from_object_bytes(&bytes)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// Owner-selected empty merge-marker crates need a strong primary so the
+    /// #72 archive handshake matches full embeds (issue #1365).
+    #[cfg(all(feature = "object-read", feature = "object-write"))]
+    #[test]
+    fn strong_anchor_only_object_is_global_and_not_weak() {
+        use object::{Object, ObjectSymbol};
+
+        let bytes = build_host_strong_anchor_object_for_target(
+            "x86_64-unknown-linux-gnu",
+            "selected_empty_merge_anchor",
+        )
+        .unwrap();
+        let file = object::File::parse(bytes.as_slice()).unwrap();
+        let anchor = file
+            .symbols()
+            .find(|symbol| symbol.name() == Ok("selected_empty_merge_anchor"))
+            .expect("strong anchor symbol missing");
+
+        assert!(anchor.is_definition());
+        assert!(anchor.is_global());
+        assert!(!anchor.is_weak());
+        assert!(
+            read_artifact_bundles_from_object_bytes(&bytes)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[cfg(all(feature = "object-read", feature = "object-write"))]
+    #[test]
+    fn strong_target_anchor_also_defines_weak_legacy_alias() {
+        use object::{Object, ObjectSymbol};
+
+        let bytes = build_host_strong_anchor_object_for_target_with_legacy_anchor(
+            "x86_64-unknown-linux-gnu",
+            "target_stub_anchor",
+            "legacy_stub_anchor",
+        )
+        .unwrap();
+        let file = object::File::parse(bytes.as_slice()).unwrap();
+        let target = file
+            .symbols()
+            .find(|symbol| symbol.name() == Ok("target_stub_anchor"))
+            .expect("strong target anchor missing");
+        let legacy = file
+            .symbols()
+            .find(|symbol| symbol.name() == Ok("legacy_stub_anchor"))
+            .expect("weak legacy alias missing");
+
+        assert!(target.is_definition());
+        assert!(target.is_global());
+        assert!(!target.is_weak());
+        assert!(legacy.is_definition());
+        assert!(legacy.is_global());
+        assert!(legacy.is_weak());
         assert!(
             read_artifact_bundles_from_object_bytes(&bytes)
                 .unwrap()

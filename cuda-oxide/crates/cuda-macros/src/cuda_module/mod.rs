@@ -842,23 +842,24 @@ fn cuda_module_path_description(module_path: &[Ident]) -> String {
 /// no reference at all. The backend also keeps a weak legacy alias for older
 /// macro expansions in mixed-version builds.
 ///
-/// The reference is only emitted when the module is guaranteed to produce
-/// an artifact for this crate. Generic kernels are monomorphized (and
-/// their PTX embedded) in the *consuming* crate, so a module with only
-/// generic kernels yields no artifact here, and an anchor reference would
-/// be an undefined-symbol link error. The same reasoning extends to
-/// cfg-gated kernels: root `load()` emits one equivalent guarded reference per
-/// concrete kernel in the complete inline tree. Each reference carries the
-/// kernel's effective ancestor-plus-local availability attributes, so a module
-/// containing only nested kernels is still independently loadable while no
-/// anchor is referenced when every concrete kernel is absent.
+/// The reference is emitted for every kernel that remains after cfg, generic
+/// or concrete. A concrete kernel always embeds an artifact in this crate. A
+/// generic kernel *may* also embed one here when this crate monomorphizes it
+/// (issue #1365); when it does not, the codegen backend still supplies an
+/// anchor-only host stub whenever PTX-merge markers are present, so the
+/// reference stays defined for the #222 shape (mono only in a consumer).
+/// Root `load()` emits one equivalent guarded reference per kernel in the
+/// complete inline tree. Each reference carries the kernel's effective
+/// ancestor-plus-local availability attributes, so a module containing only
+/// nested kernels is still independently loadable while no anchor is
+/// referenced when every kernel is cfg'd out.
 ///
 /// The anchor's address also tells `load_named()` where the bundle is: the
 /// linker keeps the anchor and the `.oxart` section in the same binary, so
 /// the loader reads that binary rather than the process executable, which
 /// differs whenever the module was compiled into a shared object. Each
 /// reference records the address in `__cuda_oxide_artifact_anchor`; it stays
-/// `None` when no reference is emitted or every concrete kernel is cfg'd out.
+/// `None` when no reference is emitted or every kernel is cfg'd out.
 fn cuda_module_artifact_anchor_statements(
     kernels: &[CudaModuleKernel],
 ) -> syn::Result<TokenStream2> {
@@ -873,8 +874,9 @@ fn cuda_module_artifact_anchor_statements(
     })
 }
 
-/// One guarded anchor reference per concrete kernel, or none when this crate
-/// produces no artifact; see [`cuda_module_artifact_anchor_statements`].
+/// One guarded anchor reference per kernel (generic or concrete), or none when
+/// this crate is filtered out / not cargo-built; see
+/// [`cuda_module_artifact_anchor_statements`].
 fn cuda_module_artifact_anchor_references(
     kernels: &[CudaModuleKernel],
 ) -> syn::Result<Vec<TokenStream2>> {
@@ -899,10 +901,6 @@ fn cuda_module_artifact_anchor_references(
         return Ok(Vec::new());
     }
 
-    if !kernels.iter().any(|kernel| !kernel.is_generic) {
-        return Ok(Vec::new());
-    }
-
     let binary_name = std::env::var("CARGO_BIN_NAME").ok();
     let anchor = if owner_selection.is_some() {
         artifact_anchor_symbol_v2(
@@ -915,9 +913,11 @@ fn cuda_module_artifact_anchor_references(
         artifact_anchor_symbol(&package_name, &package_version)
     };
     let anchor_name = LitStr::new(&anchor, proc_macro2::Span::call_site());
+    // Emit for every kernel, including generics. Generic modules still need
+    // the #72 rlib keep-alive when this crate monomorphizes (issue #1365);
+    // when it does not, the backend's anchor-only stub keeps the link valid.
     let references = kernels
         .iter()
-        .filter(|kernel| !kernel.is_generic)
         .map(|kernel| {
             let cfg_attrs = &kernel.effective_cfg_attrs;
             quote! {

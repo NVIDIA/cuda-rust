@@ -8,12 +8,15 @@ crates for authoring NVIDIA kernels with idiomatic Rust code.
   crates to help users target the traditional CUDA **SIMT** (Single Instruction,
   Multiple Threads) kernel programming model. Here users have access to every
   detail of device side CUDA programming.
-* [cutile](./cutile): A proc-macro plugin and rates to help users write CUDA
-  kernels using the CUDA **Tile** programming model. Kernels operate on
-  conceptual tiles memory at a time.
-* `cuda-core`, `cuda-async`, `cuda-bindings`: Host-side runtime crates —
-  contexts, streams, device buffers, events, and low-level driver bindings for
-  launching work and managing the GPU.
+* [cutile-rs](./cutile-rs): A proc-macro plugin and crates to help users write
+  CUDA kernels using the CUDA **Tile** programming model. Tensors in memory are
+  partitioned into sub-tensors; a kernel loads tiles from them, computes on
+  whole tiles at a time, and stores tiles back, and the compiler decides how
+  tiles map onto each architecture.
+* Runtime: [`cuda-bindings`](./cuda-bindings), [`cuda-core`](./cuda-core),
+  [`cuda-async`](./cuda-async): the host-side runtime shared by both models —
+  driver bindings, contexts, streams, device buffers, events, and lazy,
+  composable device operations.
 
 Both kernel programming models extend Rust's ownership rules across the GPU
 launch boundary: mutable buffers are partitioned into disjoint pieces before
@@ -26,27 +29,29 @@ shape its direction by sharing feedback on your experience.
 
 ## Picking a model
 
-|  | cuda-oxide (SIMT) | cutile (Tile) |
+|  | cuda-oxide (SIMT) | cutile-rs (Tile) |
 | --- | --- | --- |
 | You write | Per-thread code | Per-tile code |
 | Indexing | Explicit thread/block indices | Implicit, from the partition |
-| Compiles | Ahead of time, Rust → PTX | JIT, Rust AST → Tile IR → cubin |
+| Compiles | Ahead of time, Rust → PTX | JIT at first launch, Rust → Tile IR → cubin |
+| Toolchain | Pinned nightly, managed by `cargo oxide` | Stable Rust 1.89 or newer |
 | Reach for it when | You need direct control over threads, warps, shared memory, TMA, or cluster ops | Your problem is naturally shaped as tiles of tensors and you want the compiler to schedule them |
 
-If you are unsure of which model to get started with, start with
-cutile and drop down to the flexibility and control of cuda-oxide when you need it.
+If you are unsure which model to start with, reach for cutile-rs first and
+drop down to the flexibility and control of cuda-oxide when you need it.
 
-Kernels from both models interoperate: a cutile Tile kernel and a cuda-oxide SIMT kernel can run on
-the same stream over shared device tensors.
+Kernels from both models interoperate: a cutile Tile kernel and a cuda-oxide SIMT
+kernel can run on the same stream over shared device buffers.
 
 ## Repository layout
 
 ```
 cuda-rust/
-├── docs/            umbrella documentation
+├── cuda-bindings/   runtime — CUDA driver API bindings
+├── cuda-core/       runtime — contexts, streams, memory, modules, events, launch
+├── cuda-async/      runtime — lazy ops, futures, streams, graphs
 ├── cuda-oxide/      SIMT model — compiler, device crates, book
-├── cutile/          Tile model — compiler, tile crates, book
-└── crates/          shared host-side crates
+└── cutile-rs/       Tile model — compiler, tile crates, book
 ```
 
 ## Documentation
@@ -69,7 +74,8 @@ built artifact. The root `LICENSE` governs the repository as a whole.
 | Component | License | License file |
 | --- | --- | --- |
 | `cuda-oxide` | Apache-2.0 | [`cuda-oxide/LICENSE`](./cuda-oxide/LICENSE) |
-| `cutile` | Apache-2.0 | [`cutile/LICENSE`](./cutile/LICENSE) |
+| `cutile-rs` | Apache-2.0 | [`cutile-rs/LICENSE`](./cutile-rs/LICENSE) |
+| `cuda-bindings`, `cuda-core`, `cuda-async` | Apache-2.0 | root [`LICENSE`](./LICENSE) |
 
 Third-party attributions are listed in
 [`THIRD_PARTY_NOTICES`](./THIRD_PARTY_NOTICES).

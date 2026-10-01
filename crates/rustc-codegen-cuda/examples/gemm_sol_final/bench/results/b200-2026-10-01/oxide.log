@@ -1,0 +1,191 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running `target/debug/cargo-oxide run gemm_sol_final --arch sm_100a`
+Building rustc-codegen-cuda backend...
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
+✓ Backend built: /localhome/local-nihalp/cuda-rust/crates/rustc-codegen-cuda/target/x86_64-unknown-linux-gnu/debug/librustc_codegen_cuda.so
+=========================================
+RUSTC-CODEGEN-CUDA: gemm_sol_final
+=========================================
+
+This is the proper cargo workflow:
+  CARGO_ENCODED_RUSTFLAGS=<cuda-oxide flags> cargo run
+
+Building and running gemm_sol_final...
+
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling cfg-if v1.0.4
+   Compiling glob v0.3.3
+   Compiling prettyplease v0.2.37
+   Compiling libc v0.2.186
+   Compiling rustix v0.38.44
+   Compiling version_check v0.9.5
+   Compiling linux-raw-sys v0.4.15
+   Compiling regex-syntax v0.8.11
+   Compiling minimal-lexical v0.2.1
+   Compiling memchr v2.8.3
+   Compiling either v1.16.0
+   Compiling bitflags v2.13.0
+   Compiling bindgen v0.69.5
+   Compiling typenum v1.20.1
+   Compiling home v0.5.12
+   Compiling log v0.4.29
+   Compiling lazycell v1.3.0
+   Compiling lazy_static v1.5.0
+   Compiling rustc-hash v1.1.0
+   Compiling crc32fast v1.5.0
+   Compiling thiserror v2.0.18
+   Compiling shlex v1.3.0
+   Compiling object v0.36.7
+   Compiling serde_core v1.0.228
+   Compiling foldhash v0.1.5
+   Compiling zerocopy v0.8.52
+   Compiling hashbrown v0.17.1
+   Compiling equivalent v1.0.2
+   Compiling libloading v0.8.9
+   Compiling serde v1.0.228
+   Compiling anyhow v1.0.102
+   Compiling reserved-oxide-symbols v0.2.1 (/localhome/local-nihalp/cuda-rust/crates/reserved-oxide-symbols)
+   Compiling cuda-target-spec v0.1.0 (/localhome/local-nihalp/cuda-rust/crates/cuda-target-spec)
+   Compiling hashbrown v0.15.5
+   Compiling cpufeatures v0.2.17
+   Compiling itertools v0.12.1
+   Compiling cuda-core v0.3.1
+   Compiling ptx-parse v0.1.0 (/localhome/local-nihalp/cuda-rust/crates/ptx-parse)
+   Compiling nom v7.1.3
+   Compiling generic-array v0.14.7
+   Compiling clang-sys v1.8.1
+   Compiling indexmap v2.14.0
+   Compiling syn v2.0.117
+   Compiling regex-automata v0.4.14
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling digest v0.10.7
+   Compiling sha2 v0.10.9
+   Compiling which v4.4.2
+   Compiling cexpr v0.6.0
+   Compiling regex v1.12.3
+   Compiling oxide-artifacts v0.2.1
+   Compiling thiserror-impl v2.0.18
+   Compiling zerocopy-derive v0.8.52
+   Compiling serde_derive v1.0.228
+   Compiling cuda-macros v0.2.1 (/localhome/local-nihalp/cuda-rust/crates/cuda-macros)
+   Compiling cuda-core-derive v0.3.1
+   Compiling libnvvm-sys v0.2.1 (/localhome/local-nihalp/cuda-rust/crates/libnvvm-sys)
+   Compiling nvjitlink-sys v0.2.1 (/localhome/local-nihalp/cuda-rust/crates/nvjitlink-sys)
+   Compiling cuda-artifact-finalizer v0.2.1 (/localhome/local-nihalp/cuda-rust/crates/cuda-artifact-finalizer)
+   Compiling cuda-bindings v0.3.1
+   Compiling half v2.7.1
+   Compiling cuda-device v0.2.1 (/localhome/local-nihalp/cuda-rust/crates/cuda-device)
+   Compiling cuda-host v0.2.1 (/localhome/local-nihalp/cuda-rust/crates/cuda-host)
+   Compiling gemm_sol_final v0.1.0 (/localhome/local-nihalp/cuda-rust/crates/rustc-codegen-cuda/examples/gemm_sol_final)
+    Finished `release` profile [optimized] target(s) in 19.25s
+     Running `target/release/gemm_sol_final`
+═══════════════════════════════════════════════════════
+  GEMM SoL — gemm_sol_final (size-specialized)
+═══════════════════════════════════════════════════════
+
+GPU: sm_100
+Loading embedded CUDA module
+Module loaded
+
+── Full-output correctness tests ────────────────────
+
+Entry: gemm_sol_clc_multicast_4_stage_pipeline (M256xN256)
+Matrix: 4096x4096x4096 (f16 -> bf16)
+CLC + cta_group::2 + 4-stage SMEM pipeline.
+Warps: 4=TMA, 5=MMA (leader only), 0-3=epilogue (both CTAs).
+Validation data: 12-bit Walsh fingerprints varying along K and covering each K code once, with unique signatures for all 4096 rows and columns
+Expected: analytic exact FP32 dot product rounded once to BF16
+
+Grid: 1024 CTAs (1D, CLC-managed), cluster: 2x1x1 (cg2), block: 192 threads (6 warps)
+Host work IDs: 512 (16x32), logical L2 band G=2
+K-loop: 64 outer iters (BK=64, 4 MMAs each)
+
+Launching gemm_sol_clc_multicast_4_stage_pipeline (cg2)...
+
+Full check: 16777216 / 16777216 exact BF16 matches (max rel err 0.0000)
+
+═══════════════════════════════════════════════════════
+PASSED: gemm_sol_clc_multicast_4_stage_pipeline 4096x4096x4096 (full 16777216-element check)
+═══════════════════════════════════════════════════════
+Entry: gemm_sol_clc_multicast_4_stage_pipeline_large (M512xN256)
+Matrix: 4096x4096x4096 (f16 -> bf16)
+CLC + cta_group::2 + 4-stage SMEM pipeline.
+Warps: 4=TMA, 5=MMA (leader only), 0-3=epilogue (both CTAs).
+Validation data: 12-bit Walsh fingerprints varying along K and covering each K code once, with unique signatures for all 4096 rows and columns
+Expected: analytic exact FP32 dot product rounded once to BF16
+
+Grid: 1024 CTAs (1D, CLC-managed), cluster: 2x1x1 (cg2), block: 192 threads (6 warps)
+Host work IDs: 512 (16x32), logical L2 band G=2
+K-loop: 64 outer iters (BK=64, 4 MMAs each)
+
+Launching gemm_sol_clc_multicast_4_stage_pipeline_large (cg2)...
+
+Full check: 16777216 / 16777216 exact BF16 matches (max rel err 0.0000)
+
+═══════════════════════════════════════════════════════
+PASSED: gemm_sol_clc_multicast_4_stage_pipeline_large 4096x4096x4096 (full 16777216-element check)
+═══════════════════════════════════════════════════════
+
+── Benchmarks ───────────────────────────────────────
+
+═══════════════════════════════════════════════════════
+  BENCHMARK: gemm_sol_clc_multicast_4_stage_pipeline (M256xN256, cg2) 4096x4096x4096 f16 -> bf16 [selector]
+═══════════════════════════════════════════════════════
+  Grid:        1024 CTAs (1D, CLC-managed, cluster=2, cg2)
+  K-loop:      64 outer iters (BK=64, 4 MMAs each)
+  Pipeline:    CLC + cta_group::2 + 4-stage SMEM + unroll(4)
+  Iterations:  301 × 5 batches (after 2000 warmup)
+  Statistic:   median batch mean
+  Samples us:  [93.07163023077372, 93.03144283864981, 93.00518352723994, 93.0349470373008, 92.99806106922239]
+  Average:     93.031 us / kernel
+  FLOPS/kern:  1.374e11
+  Throughput:  1477.339 TFLOPS
+RESULT {"implementation":"cuda-oxide","n":4096,"warmup":2000,"iters":301,"repeats":5,"samples_us":[93.07163023077372, 93.03144283864981, 93.00518352723994, 93.0349470373008, 92.99806106922239],"median_us":93.031442839,"tflops":1477.338728481,"variant":"M256xN256","input":"fp16","output":"bf16","compute":"fp32"}
+  vs cuBLAS:   (no live cublasLt baseline; see bench/build.sh)
+═══════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════
+  BENCHMARK: gemm_sol_clc_multicast_4_stage_pipeline (M256xN256, cg2) 8192x8192x8192 f16 -> bf16 [selector]
+═══════════════════════════════════════════════════════
+  Grid:        4096 CTAs (1D, CLC-managed, cluster=2, cg2)
+  K-loop:      128 outer iters (BK=64, 4 MMAs each)
+  Pipeline:    CLC + cta_group::2 + 4-stage SMEM + unroll(4)
+  Iterations:  301 × 5 batches (after 2000 warmup)
+  Statistic:   median batch mean
+  Samples us:  [617.8538680472643, 617.878454468179, 617.8987319287272, 617.8603568346398, 617.8289774644414]
+  Average:     617.860 us / kernel
+  FLOPS/kern:  1.100e12
+  Throughput:  1779.547 TFLOPS
+RESULT {"implementation":"cuda-oxide","n":8192,"warmup":2000,"iters":301,"repeats":5,"samples_us":[617.8538680472643, 617.878454468179, 617.8987319287272, 617.8603568346398, 617.8289774644414],"median_us":617.860356835,"tflops":1779.547134904,"variant":"M256xN256","input":"fp16","output":"bf16","compute":"fp32"}
+  vs cuBLAS:   (no live cublasLt baseline; see bench/build.sh)
+═══════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════
+  BENCHMARK: gemm_sol_clc_multicast_4_stage_pipeline_large (M512xN256, cg2) 16384x16384x16384 f16 -> bf16 [selector]
+═══════════════════════════════════════════════════════
+  Grid:        16384 CTAs (1D, CLC-managed, cluster=2, cg2)
+  K-loop:      256 outer iters (BK=64, 4 MMAs each)
+  Pipeline:    CLC + cta_group::2 + 4-stage SMEM + unroll(4)
+  Iterations:  301 × 5 batches (after 2000 warmup)
+  Statistic:   median batch mean
+  Samples us:  [4415.419062110673, 4416.858761809593, 4414.865487437708, 4415.1980377906975, 4415.293341855274]
+  Average:     4415.293 us / kernel
+  FLOPS/kern:  8.796e12
+  Throughput:  1992.188 TFLOPS
+RESULT {"implementation":"cuda-oxide","n":16384,"warmup":2000,"iters":301,"repeats":5,"samples_us":[4415.419062110673, 4416.858761809593, 4414.865487437708, 4415.1980377906975, 4415.293341855274],"median_us":4415.293341855,"tflops":1992.187685204,"variant":"M512xN256","input":"fp16","output":"bf16","compute":"fp32"}
+  vs cuBLAS:   (no live cublasLt baseline; see bench/build.sh)
+═══════════════════════════════════════════════════════
+
+── Individual fixed-size results ────────────────────
+  4096³: 1477.339 TFLOPS
+  8192³: 1779.547 TFLOPS
+  16384³: 1992.188 TFLOPS
+─────────────────────────────────────────────────────
+
+═══════════════════════════════════════════════════════
+  GEMM SoL target complete
+═══════════════════════════════════════════════════════
+PASS: requested GEMM SoL work completed

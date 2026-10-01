@@ -22,11 +22,11 @@ C[M, N] = A[M, K] @ B[N, K].T + bias[M, 1]  # bias is optional
 ```text
                  one 256 × 352 output tile
                  192 columns       160 columns
-               ┌─────────────────┬────────────────┐
+                ┌─────────────────┬────────────────┐
 CTA 0: 128 rows │                 │                │
-               ├─────────────────┼────────────────┤
+                ├─────────────────┼────────────────┤
 CTA 1: 128 rows │                 │                │
-               └─────────────────┴────────────────┘
+                └─────────────────┴────────────────┘
                  two-CTA MMA pair; A collector reused
 
 A/B global ──cluster TMA──▶ shared [5 stages] ──MMA──▶ TMEM
@@ -81,6 +81,8 @@ cargo oxide run fp16_gemm_256x352_cute --arch sm_100a -- \
   TMA handles partial N352 and K64 tiles.
 - The default comparison uses `256,352,64`, 25 warmup launches, and 100 timed
   samples per implementation. Override these with `--mnk`, `--warmup`, and `--iters`.
+  This small case checks correctness and launch overhead; use the larger
+  workload and repeated-measurement guidance below for throughput comparisons.
 - `--rust-only` checks every output against CPU FP32 accumulation rounded to
   FP16 (`atol=0.1`, `rtol=1e-5`) and prints its JSON report. Large shapes make
   this CPU check expensive.
@@ -88,8 +90,9 @@ cargo oxide run fp16_gemm_256x352_cute --arch sm_100a -- \
   sample. The standalone commands above explicitly use **direct**: one kernel
   per CUDA-event pair, with no graph capture.
 - `--warmup 0 --iters 1` in direct mode launches each selected implementation
-  once total and verifies that timed output. Setup and verification are outside
-  the event interval.
+  once total and verifies that timed output. Use this mode for correctness and
+  launch-count checks: a cold sample can include first-call and launch overhead.
+  The separate correctness oracle also performs GPU work in comparison mode.
 - `--json result.json` saves the combined comparison report by default, or the
   standalone cuda-oxide report with `--rust-only`. `--help` lists all options.
 
@@ -98,18 +101,18 @@ cargo oxide run fp16_gemm_256x352_cute --arch sm_100a -- \
 Normal execution invokes the separately supplied local `compare.py` and
 `reference/` assets; these remain ignored and are not included in a clean
 checkout. The Python environment needs `nvidia-cutlass-dsl[cu13]==4.7.0`,
-CUDA-enabled PyTorch, CUDA Python, and NumPy.
+CUDA-enabled PyTorch, CUDA Python, NumPy, and TVM-FFI (`apache-tvm-ffi`).
+The separately supplied comparison assets must match the host runner's interface.
 
 The executable selects Python in this order: `--python PATH`,
 `CUDA_OXIDE_CUTE_PYTHON`, this example's `.venv/bin/python`, then `python3` on
 `PATH`. Placing the environment in `cuteir/examples/fp16_gemm_256x352_cute/.venv`
-lets the default command find it automatically. To select another environment
-and save results for a larger shape:
+lets the default command find it automatically. Add `--python /path/to/venv/bin/python`
+to select another environment. To compare a larger shape and save its results:
 
 ```bash
-cargo oxide run fp16_gemm_256x352_cute --arch sm_100a -- \
-  --python /path/to/venv/bin/python \
-  --mnk 8192,8096,8192 --warmup 100 --iters 31 --json /tmp/gemm-comparison.json
+CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir cargo oxide run fp16_gemm_256x352_cute --arch sm_100a -- \
+  --mnk 8192,8096,8192 --warmup 2000 --iters 301 --json /tmp/gemm-comparison.json
 ```
 
 The comparison verifies both outputs on identical inputs and prints two lines:
@@ -125,14 +128,40 @@ is sensitive to launch overhead; the large shape above measures a different
 workload. TFLOP/s is calculated from `2 × M × N × K` and the measured time.
 
 Both times are medians of direct CUDA-event samples on the same GPU, with
-matching warmup and iteration counts and one launch per sample. CuTe DSL runs
-first, then cuda-oxide. The event intervals include any gaps in submitting GPU
-work, and clock or power changes can affect the comparison. Use `--rust-only`
-for graph timing.
+matching warmup and iteration counts and one launch per sample. Each event pair
+must be recorded on the stream that actually launches its kernel; passing
+correctness checks alone does not establish that the timing includes that kernel.
+CuTe DSL runs first, then cuda-oxide. Verification, tensor export, and Rust process
+startup separate their timing windows and can change GPU state between them.
+The event intervals include GPU idle gaps while the host submits work, so they
+can exceed the kernel execution durations reported by Nsight Systems.
+Use `--rust-only` for graph timing.
 
 Diagnostics go to stderr. `--json` saves both measurements, verification
 results, and the device and timing settings. Missing comparison assets or
 Python dependencies cause an error; `--rust-only` runs without them.
+
+### Repeated performance measurements
+
+The large-workload command above was tested on a B200 with floating clocks and
+a 1,000 W power limit. Its 2,000 warmups and 301 timed samples are a starting
+point for that workload and hardware configuration. Other shapes or devices
+may need different counts to reach steady performance.
+
+For this shape, 100 warmups followed by 31 samples cover only tens of
+milliseconds in each phase. The GPU can transition from boosted operation into
+power-limited operation during that short timing window, substantially changing
+kernel duration and reversing the apparent ranking on successive runs. Longer
+warmup and sampling windows reduced that variation in the tested configuration.
+
+Repeat the complete comparison several times and retain each JSON report.
+Compare the spread of the run medians before interpreting a small difference as
+a performance advantage. If the ranking changes within that spread, the results
+do not establish a reliable winner. Check clocks, power limits, and competing
+GPU work during the measurements; a clock snapshot after both runs cannot
+describe either timing window. NVIDIA's
+[clock-control guidance](https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#clock-control)
+explains how changing clock states affect measured kernel duration.
 
 ## Rust API example
 

@@ -1,0 +1,5 @@
+GPU: NVIDIA B200, sm_100, 148 SMs
+cuBLASLt: 130800, CUDA runtime: 13040, driver API: 13040
+Protocol: zero-data timing; CUDA events around launch batches; median of 3 batches; 10 warmup, 10 launches/batch; tuning excluded; 32 MiB workspace
+--- FP16 ---
+No supported FP16->bf16 heuristic for 4096 (status=15 count=0)

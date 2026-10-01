@@ -1,0 +1,91 @@
+GPU: NVIDIA B200, sm_100, 148 SMs
+cuBLASLt: 130800, CUDA runtime: 13040, driver API: 13040
+Protocol: zero-data timing; CUDA events around launch batches; median of 5 batches; 2000 warmup, 301 launches/batch; tuning excluded; 32 MiB workspace
+--- FP16 ---
+RESULT {"implementation":"cublaslt","mode":"top8","n":4096,"input":"fp16","output":"fp16","compute":"fp32","workspace_limit":33554432,"workspace_used":0,"warmup":2000,"iters":301,"repeats":5,"samples_us":[74.714045984,74.713836873,74.681196498,74.715851945,74.713196865],"median_us":74.713836873,"tflops":1839.538152835,"configs_checked":8,"configs_timed":8,"algo_ids":0,"validation":"64-nonzero-cpu-dot-products-pass","algo_id":66,"tile":32,"stages":35,"cluster":3,"split_k":1,"reduction":0,"swizzle":0,"custom":1}
+  FP16 FP32 compute 4096x4096x4096 0.074713837 ms 1839.538152835 TFLOPS
+SEARCH n=4096 algo=1/26 id=0 checked=3016 timed=0 best_us=77.024
+SEARCH n=4096 algo=2/26 id=1 checked=6032 timed=0 best_us=77.024
+SEARCH n=4096 algo=3/26 id=3 checked=9048 timed=0 best_us=77.024
+SEARCH n=4096 algo=4/26 id=4 checked=12064 timed=0 best_us=77.024
+SEARCH n=4096 algo=5/26 id=5 checked=15080 timed=0 best_us=77.024
+SEARCH n=4096 algo=6/26 id=6 checked=18096 timed=0 best_us=77.024
+SEARCH n=4096 algo=7/26 id=11 checked=18304 timed=0 best_us=77.024
+SEARCH n=4096 algo=8/26 id=12 checked=18512 timed=0 best_us=77.024
+SEARCH n=4096 algo=9/26 id=13 checked=84864 timed=0 best_us=77.024
+SEARCH n=4096 algo=10/26 id=14 checked=85436 timed=0 best_us=77.024
+SEARCH n=4096 algo=11/26 id=16 checked=85540 timed=1 best_us=77.024
+SEARCH n=4096 algo=12/26 id=21 checked=311740 timed=419 best_us=77.024
+SEARCH n=4096 algo=13/26 id=23 checked=537940 timed=782 best_us=77.024
+SEARCH n=4096 algo=14/26 id=24 checked=622388 timed=947 best_us=77.024
+SEARCH n=4096 algo=15/26 id=30 checked=625404 timed=947 best_us=77.024
+SEARCH n=4096 algo=16/26 id=31 checked=628420 timed=947 best_us=77.024
+SEARCH n=4096 algo=17/26 id=35 checked=631852 timed=947 best_us=77.024
+SEARCH n=4096 algo=18/26 id=39 checked=635284 timed=947 best_us=77.024
+SEARCH n=4096 algo=19/26 id=41 checked=638716 timed=947 best_us=77.024
+SEARCH n=4096 algo=20/26 id=42 checked=642148 timed=947 best_us=77.024
+SEARCH n=4096 algo=21/26 id=56 checked=645580 timed=947 best_us=77.024
+SEARCH n=4096 algo=22/26 id=58 checked=647088 timed=947 best_us=77.024
+SEARCH n=4096 algo=23/26 id=66 checked=3598608 timed=20069 best_us=73.958
+SEARCH n=4096 algo=24/26 id=67 checked=3598712 timed=20069 best_us=73.958
+SEARCH n=4096 algo=25/26 id=70 checked=3604952 timed=20069 best_us=73.958
+SEARCH n=4096 algo=26/26 id=71 checked=3611192 timed=20069 best_us=73.958
+RESULT {"implementation":"cublaslt","mode":"exhaustive-grid","n":4096,"input":"fp16","output":"fp16","compute":"fp32","workspace_limit":33554432,"workspace_used":0,"warmup":2000,"iters":301,"repeats":5,"samples_us":[71.338951390,71.317685403,71.290044689,71.309181543,71.308547872],"median_us":71.309181543,"tflops":1927.366862139,"configs_checked":3611192,"configs_timed":20069,"algo_ids":26,"validation":"64-nonzero-cpu-dot-products-pass","algo_id":66,"tile":20,"stages":35,"cluster":8,"split_k":1,"reduction":0,"swizzle":0,"custom":2}
+RESULT {"implementation":"cublaslt","mode":"top8","n":8192,"input":"fp16","output":"fp16","compute":"fp32","workspace_limit":33554432,"workspace_used":0,"warmup":2000,"iters":301,"repeats":5,"samples_us":[528.710045292,528.738332349,528.720589571,528.665840428,528.702593325],"median_us":528.710045292,"tflops":2079.611759919,"configs_checked":8,"configs_timed":8,"algo_ids":0,"validation":"64-nonzero-cpu-dot-products-pass","algo_id":66,"tile":23,"stages":35,"cluster":3,"split_k":1,"reduction":0,"swizzle":0,"custom":1}
+  FP16 FP32 compute 8192x8192x8192 0.528710045 ms 2079.611759919 TFLOPS
+SEARCH n=8192 algo=1/26 id=0 checked=3016 timed=0 best_us=530.150
+SEARCH n=8192 algo=2/26 id=1 checked=6032 timed=0 best_us=530.150
+SEARCH n=8192 algo=3/26 id=3 checked=9048 timed=0 best_us=530.150
+SEARCH n=8192 algo=4/26 id=4 checked=12064 timed=0 best_us=530.150
+SEARCH n=8192 algo=5/26 id=5 checked=15080 timed=0 best_us=530.150
+SEARCH n=8192 algo=6/26 id=6 checked=18096 timed=0 best_us=530.150
+SEARCH n=8192 algo=7/26 id=11 checked=18304 timed=0 best_us=530.150
+SEARCH n=8192 algo=8/26 id=12 checked=18512 timed=0 best_us=530.150
+SEARCH n=8192 algo=9/26 id=13 checked=84864 timed=0 best_us=530.150
+SEARCH n=8192 algo=10/26 id=14 checked=85436 timed=0 best_us=530.150
+SEARCH n=8192 algo=11/26 id=16 checked=85540 timed=1 best_us=530.150
+SEARCH n=8192 algo=12/26 id=21 checked=311740 timed=419 best_us=530.150
+SEARCH n=8192 algo=13/26 id=23 checked=537940 timed=782 best_us=530.150
+SEARCH n=8192 algo=14/26 id=24 checked=622388 timed=947 best_us=530.150
+SEARCH n=8192 algo=15/26 id=30 checked=625404 timed=947 best_us=530.150
+SEARCH n=8192 algo=16/26 id=31 checked=628420 timed=947 best_us=530.150
+SEARCH n=8192 algo=17/26 id=35 checked=631852 timed=947 best_us=530.150
+SEARCH n=8192 algo=18/26 id=39 checked=635284 timed=947 best_us=530.150
+SEARCH n=8192 algo=19/26 id=41 checked=638716 timed=947 best_us=530.150
+SEARCH n=8192 algo=20/26 id=42 checked=642148 timed=947 best_us=530.150
+SEARCH n=8192 algo=21/26 id=56 checked=645580 timed=947 best_us=530.150
+SEARCH n=8192 algo=22/26 id=58 checked=647088 timed=947 best_us=530.150
+SEARCH n=8192 algo=23/26 id=66 checked=3598608 timed=20069 best_us=528.966
+SEARCH n=8192 algo=24/26 id=67 checked=3598712 timed=20069 best_us=528.966
+SEARCH n=8192 algo=25/26 id=70 checked=3604952 timed=20069 best_us=528.966
+SEARCH n=8192 algo=26/26 id=71 checked=3611192 timed=20069 best_us=528.966
+RESULT {"implementation":"cublaslt","mode":"exhaustive-grid","n":8192,"input":"fp16","output":"fp16","compute":"fp32","workspace_limit":33554432,"workspace_used":0,"warmup":2000,"iters":301,"repeats":5,"samples_us":[527.755179675,527.721569784,527.702965214,527.673106653,527.674171220],"median_us":527.702965214,"tflops":2083.580537265,"configs_checked":3611192,"configs_timed":20069,"algo_ids":26,"validation":"64-nonzero-cpu-dot-products-pass","algo_id":66,"tile":24,"stages":35,"cluster":8,"split_k":1,"reduction":0,"swizzle":0,"custom":0}
+RESULT {"implementation":"cublaslt","mode":"top8","n":16384,"input":"fp16","output":"fp16","compute":"fp32","workspace_limit":33554432,"workspace_used":0,"warmup":2000,"iters":301,"repeats":5,"samples_us":[4260.375976562,4259.838218309,4259.786308010,4259.766436098,4260.071003556],"median_us":4259.838218309,"tflops":2064.888986723,"configs_checked":8,"configs_timed":8,"algo_ids":0,"validation":"64-nonzero-cpu-dot-products-pass","algo_id":66,"tile":447,"stages":35,"cluster":3,"split_k":1,"reduction":0,"swizzle":0,"custom":1}
+  FP16 FP32 compute 16384x16384x16384 4.259838218 ms 2064.888986723 TFLOPS
+SEARCH n=16384 algo=1/26 id=0 checked=3016 timed=0 best_us=4262.547
+SEARCH n=16384 algo=2/26 id=1 checked=6032 timed=0 best_us=4262.547
+SEARCH n=16384 algo=3/26 id=3 checked=9048 timed=0 best_us=4262.547
+SEARCH n=16384 algo=4/26 id=4 checked=12064 timed=0 best_us=4262.547
+SEARCH n=16384 algo=5/26 id=5 checked=15080 timed=0 best_us=4262.547
+SEARCH n=16384 algo=6/26 id=6 checked=18096 timed=0 best_us=4262.547
+SEARCH n=16384 algo=7/26 id=11 checked=18304 timed=0 best_us=4262.547
+SEARCH n=16384 algo=8/26 id=12 checked=18512 timed=0 best_us=4262.547
+SEARCH n=16384 algo=9/26 id=13 checked=84864 timed=0 best_us=4262.547
+SEARCH n=16384 algo=10/26 id=14 checked=85436 timed=0 best_us=4262.547
+SEARCH n=16384 algo=11/26 id=16 checked=85540 timed=1 best_us=4262.547
+SEARCH n=16384 algo=12/26 id=21 checked=311740 timed=419 best_us=4262.547
+SEARCH n=16384 algo=13/26 id=23 checked=537940 timed=782 best_us=4262.547
+SEARCH n=16384 algo=14/26 id=24 checked=622388 timed=947 best_us=4262.547
+SEARCH n=16384 algo=15/26 id=30 checked=625404 timed=947 best_us=4262.547
+SEARCH n=16384 algo=16/26 id=31 checked=628420 timed=947 best_us=4262.547
+SEARCH n=16384 algo=17/26 id=35 checked=631852 timed=947 best_us=4262.547
+SEARCH n=16384 algo=18/26 id=39 checked=635284 timed=947 best_us=4262.547
+SEARCH n=16384 algo=19/26 id=41 checked=638716 timed=947 best_us=4262.547
+SEARCH n=16384 algo=20/26 id=42 checked=642148 timed=947 best_us=4262.547
+SEARCH n=16384 algo=21/26 id=56 checked=645580 timed=947 best_us=4262.547
+SEARCH n=16384 algo=22/26 id=58 checked=647088 timed=947 best_us=4262.547
+SEARCH n=16384 algo=23/26 id=66 checked=3598608 timed=20069 best_us=4182.694
+SEARCH n=16384 algo=24/26 id=67 checked=3598712 timed=20069 best_us=4182.694
+SEARCH n=16384 algo=25/26 id=70 checked=3604952 timed=20069 best_us=4182.694
+SEARCH n=16384 algo=26/26 id=71 checked=3611192 timed=20069 best_us=4182.694
+RESULT {"implementation":"cublaslt","mode":"exhaustive-grid","n":16384,"input":"fp16","output":"fp16","compute":"fp32","workspace_limit":33554432,"workspace_used":0,"warmup":2000,"iters":301,"repeats":5,"samples_us":[4181.172215661,4181.417167385,4181.722951490,4183.538189758,4181.706323972],"median_us":4181.706323972,"tflops":2103.469813694,"configs_checked":3611192,"configs_timed":20069,"algo_ids":26,"validation":"64-nonzero-cpu-dot-products-pass","algo_id":66,"tile":24,"stages":35,"cluster":5,"split_k":1,"reduction":0,"swizzle":0,"custom":0}

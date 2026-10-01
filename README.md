@@ -1,22 +1,23 @@
 # CUDA Rust
 
-This repository is the Rust language entrypoint for the NVIDIA CUDA platform.
-This includes "host-side" crates for CUDA driver control and also "device-side"
-crates for authoring NVIDIA kernels with idiomatic Rust code.
+CUDA Rust is NVIDIA's CUDA platform for Rust. It provides
+host-side crates for working with the CUDA driver and device-side crates and
+tools for writing GPU kernels in idiomatic Rust.
 
-* [cuda-oxide](./cuda-oxide): A rustc compiler plugin, cargo helper utility, and
-  crates to help users target the traditional CUDA **SIMT** (Single Instruction,
+* [cuda-oxide](./cuda-oxide) ([book](./cuda-oxide/cuda-oxide-book)): A rustc
+  compiler plugin, cargo helper utility, and crates to help users target the traditional CUDA **SIMT** (Single Instruction,
   Multiple Threads) kernel programming model. Here users have access to every
   detail of device side CUDA programming.
-* [cutile-rs](./cutile-rs): A proc-macro plugin and crates to help users write
+* [cutile-rs](./cutile-rs) ([book](./cutile-rs/cutile-book)): A proc-macro plugin
+  and crates to help users write
   CUDA kernels using the CUDA **Tile** programming model. Tensors in memory are
   partitioned into sub-tensors; a kernel loads tiles from them, computes on
   whole tiles at a time, and stores tiles back, and the compiler decides how
   tiles map onto each architecture.
-* Runtime: [`cuda-bindings`](./cuda-bindings), [`cuda-core`](./cuda-core),
-  [`cuda-async`](./cuda-async): the host-side runtime shared by both models —
-  driver bindings, contexts, streams, device buffers, events, and lazy,
-  composable device operations.
+* Runtime: [`cuda-bindings`](./cuda-bindings), [`cuda-core`](./cuda-core)
+  (with [`cuda-core-derive`](./cuda-core-derive)), and [`cuda-async`](./cuda-async)
+  provide a shared runtime: driver bindings, contexts, streams, device buffers,
+  events, and lazy, composable device operations.
 
 Both kernel programming models extend Rust's ownership rules across the GPU
 launch boundary: mutable buffers are partitioned into disjoint pieces before
@@ -31,51 +32,50 @@ shape its direction by sharing feedback on your experience.
 
 |  | cuda-oxide (SIMT) | cutile-rs (Tile) |
 | --- | --- | --- |
-| You write | Per-thread code | Per-tile code |
-| Indexing | Explicit thread/block indices | Implicit, from the partition |
+| Feels familiar to | CUDA C++ programmers: threads, blocks, shared memory | NumPy or PyTorch programmers: ndarray / tensor operations on multi-dimensional tiles |
+| Safety | Memory safety per thread via disjoint slices; synchronization and shared memory are yours to get right | Data-race freedom by construction within a kernel: no thread indexing, shared memory, or synchronization to get wrong |
+| Indexing | Explicit thread/block indices | Implicit via partitions |
 | Compiles | Ahead of time, Rust → PTX | JIT at first launch, Rust → Tile IR → cubin |
 | Toolchain | Pinned nightly, managed by `cargo oxide` | Stable Rust 1.89 or newer |
-| Reach for it when | You need direct control over threads, warps, shared memory, TMA, or cluster ops | Your problem is naturally shaped as tiles of tensors and you want the compiler to schedule them |
+| Portability | CUDA architecture-specific; you tune per GPU | CUDA architecture-agnostic; the compiler tunes per GPU |
+| Reach for it when | You need direct control over threads, warps, shared memory, TMA, or cluster ops | Your problem is naturally expressed as tensor computations and you want the compiler to handle scheduling details |
 
-If you are unsure which model to start with, reach for cutile-rs first and
-drop down to the flexibility and control of cuda-oxide when you need it.
+If you are unsure which model to start with, reach for cutile-rs first: the compiler optimizes your kernel for your specific architecture. Drop down to cuda-oxide when you need control over threads, warps, shared memory, or architecture-specific features, at the cost of tuning your kernels for each architecture.
 
-Kernels from both models interoperate: a cutile Tile kernel and a cuda-oxide SIMT
+Kernels from both models interoperate: a cutile-rs Tile kernel and a cuda-oxide SIMT
 kernel can run on the same stream over shared device buffers.
 
 ## Repository layout
 
 ```
 cuda-rust/
-├── cuda-bindings/   runtime — CUDA driver API bindings
-├── cuda-core/       runtime — contexts, streams, memory, modules, events, launch
-├── cuda-async/      runtime — lazy ops, futures, streams, graphs
-├── cuda-oxide/      SIMT model — compiler, device crates, book
-└── cutile-rs/       Tile model — compiler, tile crates, book
+├── cuda-bindings/      runtime — CUDA driver API bindings
+├── cuda-core/          runtime — contexts, streams, memory, modules, events, launch
+├── cuda-core-derive/   runtime — derive macros for cuda-core
+├── cuda-async/         runtime — lazy ops, futures, streams, graphs
+├── cuda-oxide/         SIMT model — compiler, device crates, cuda-oxide-book
+└── cutile-rs/          Tile model — compiler, tile crates, cutile-book
 ```
 
 ## Documentation
 
-Start at [the CUDA Rust docs](https://nvidia.github.io/cuda-rust/). Each model has
-its own book, with installation, guides, and reference.
+Start with the CUDA Rust docs (https://nvidia.github.io/cuda-rust/). cutile-rs and cuda-oxide each have a book with installation instructions, guides, and reference material. The runtime crates (cuda-bindings, cuda-core, cuda-async) are documented in the cutile-rs book.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for repository-wide practice — signing off
-commits, pull requests, and CI. Each model has its own toolchain requirements;
-those are documented in its book.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for commit sign-off requirements, pull requests, and CI. Toolchain requirements differ between the two: cutile-rs builds on stable Rust, cuda-oxide needs its pinned nightly via `cargo oxide`; each book covers its own.
 
 ## License
 
-CUDA Rust is licensed under the [Apache License 2.0](./LICENSE). Each component
-ships a copy of the license alongside its sources so the license accompanies the
-built artifact. The root `LICENSE` governs the repository as a whole.
+CUDA Rust is licensed under the [Apache License 2.0](./LICENSE). The root
+`LICENSE` covers the whole repository. Each component also includes a copy with
+its sources and built artifacts.
 
 | Component | License | License file |
 | --- | --- | --- |
-| `cuda-oxide` | Apache-2.0 | [`cuda-oxide/LICENSE`](./cuda-oxide/LICENSE) |
+| `cuda-oxide` | Apache-2.0 | root [`LICENSE`](./LICENSE) |
 | `cutile-rs` | Apache-2.0 | [`cutile-rs/LICENSE`](./cutile-rs/LICENSE) |
-| `cuda-bindings`, `cuda-core`, `cuda-async` | Apache-2.0 | root [`LICENSE`](./LICENSE) |
+| `cuda-bindings`, `cuda-core`, `cuda-core-derive`, `cuda-async` | Apache-2.0 | root [`LICENSE`](./LICENSE) |
 
 Third-party attributions are listed in
 [`THIRD_PARTY_NOTICES`](./THIRD_PARTY_NOTICES).

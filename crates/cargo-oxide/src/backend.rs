@@ -1261,6 +1261,10 @@ fn auto_fetch_and_build() -> PathBuf {
 /// Copies a freshly built backend into `cache_dir` and records the toolchain
 /// fingerprint and the source commit beside it.
 ///
+/// The `.so` is copied to a temporary file and renamed over the old one, so a
+/// `rustc` that already mapped the old file keeps reading it. On error the
+/// temporary file is removed and the old `.so` stays.
+///
 /// The fingerprint must be written whenever the `.so` is. A `.so` installed
 /// without one falls back to the mtime checks, which cannot see a toolchain
 /// swap, so the next lookup would load a backend linked against the wrong
@@ -1284,10 +1288,27 @@ fn install_backend_into(
     // the only intermediate state is "no record", which counts as stale: a
     // copy interrupted halfway can never be handed out under the old commit.
     record_source_rev(cache_dir, None);
-    std::fs::copy(built_so, &so_path)?;
+    let temporary = temporary_backend_path(cache_dir);
+    if let Err(error) =
+        std::fs::copy(built_so, &temporary).and_then(|_| std::fs::rename(&temporary, &so_path))
+    {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
     write_toolchain_fingerprint(cache_dir, build_dir);
     record_source_rev(cache_dir, source_rev);
     Ok(so_path)
+}
+
+/// A temporary name beside the `.so` (same filesystem, so the rename is
+/// atomic). The pid and a random part keep two installers apart.
+fn temporary_backend_path(cache_dir: &Path) -> PathBuf {
+    use std::hash::{BuildHasher, RandomState};
+    let nonce = RandomState::new().hash_one(());
+    cache_dir.join(format!(
+        "librustc_codegen_cuda.so.{}.{nonce:016x}.tmp",
+        std::process::id()
+    ))
 }
 
 /// What [`publish_to_cache`] installed.
@@ -1820,6 +1841,106 @@ mod tests {
             std::fs::read(&installed).unwrap(),
             b"fresh",
             "an existing cached backend must be overwritten, not kept"
+        );
+    }
+
+    /// The new backend is shorter, so an in-place rewrite would also truncate
+    /// the file under the open handle.
+    #[cfg(unix)]
+    #[test]
+    fn installing_leaves_a_loaded_backend_intact() {
+        use std::io::{Read, Seek};
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        const OLD: &str = "old backend, longer than the new one";
+        const NEW: &str = "new backend";
+        let dir = tempdir();
+        let cache = dir.join("cache");
+        let old = dir.join("old.so");
+        let new = dir.join("new.so");
+        std::fs::write(&old, OLD).unwrap();
+        std::fs::write(&new, NEW).unwrap();
+        std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let installed =
+            install_backend_into(&cache, &old, &dir, None).expect("install must succeed");
+        let mut loaded = std::fs::File::open(&installed).unwrap();
+        let mut seen = String::new();
+        loaded.read_to_string(&mut seen).unwrap();
+        assert_eq!(seen, OLD);
+
+        install_backend_into(&cache, &new, &dir, None).expect("install must succeed");
+
+        seen.clear();
+        loaded.rewind().unwrap();
+        loaded.read_to_string(&mut seen).unwrap();
+        assert_eq!(
+            seen, OLD,
+            "a handle opened before the install must keep reading the old backend"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&installed).unwrap(),
+            NEW,
+            "the path must yield the new backend"
+        );
+        let metadata = std::fs::metadata(&installed).unwrap();
+        assert_ne!(
+            metadata.ino(),
+            loaded.metadata().unwrap().ino(),
+            "the new backend must be a new file, not the old inode rewritten"
+        );
+        assert_eq!(
+            metadata.permissions().mode() & 0o777,
+            0o755,
+            "the installed backend must take the built file's mode"
+        );
+        assert_eq!(
+            unexpected_cache_entries(&cache),
+            Vec::<String>::new(),
+            "installing must not leave a temporary file in the cache"
+        );
+    }
+
+    #[test]
+    fn a_failed_install_keeps_the_cached_backend() {
+        let dir = tempdir();
+        let cache = dir.join("cache");
+        let source = dir.join("built.so");
+        std::fs::write(&source, b"built").unwrap();
+        let installed =
+            install_backend_into(&cache, &source, &dir, None).expect("install must succeed");
+
+        let error = install_backend_into(&cache, &dir.join("missing.so"), &dir, None)
+            .expect_err("installing a build that does not exist must fail");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(
+            std::fs::read(&installed).unwrap(),
+            b"built",
+            "a failed install must keep the cached backend"
+        );
+        assert_eq!(
+            unexpected_cache_entries(&cache),
+            Vec::<String>::new(),
+            "a failed install must not leave a temporary file in the cache"
+        );
+    }
+
+    /// The backend's name is taken by a directory, so the rename fails.
+    #[test]
+    fn a_failed_rename_removes_the_temporary_copy() {
+        let dir = tempdir();
+        let cache = dir.join("cache");
+        std::fs::create_dir_all(cache.join("librustc_codegen_cuda.so").join("occupied")).unwrap();
+        let source = dir.join("built.so");
+        std::fs::write(&source, b"built").unwrap();
+
+        install_backend_into(&cache, &source, &dir, None)
+            .expect_err("installing over a directory must fail");
+        assert_eq!(
+            unexpected_cache_entries(&cache),
+            Vec::<String>::new(),
+            "a failed install must not leave its temporary copy in the cache"
         );
     }
 
@@ -2404,5 +2525,21 @@ mod tests {
             .unwrap();
         f.write_all(contents).unwrap();
         f.set_modified(mtime).unwrap();
+    }
+
+    /// Names in `cache` other than the backend and the two records beside it.
+    fn unexpected_cache_entries(cache: &Path) -> Vec<String> {
+        let known = [
+            "librustc_codegen_cuda.so",
+            TOOLCHAIN_FINGERPRINT_FILE,
+            SOURCE_REV_FILE,
+        ];
+        let mut names = std::fs::read_dir(cache)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| !known.contains(&name.as_str()))
+            .collect::<Vec<_>>();
+        names.sort();
+        names
     }
 }

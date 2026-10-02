@@ -298,7 +298,7 @@ include!("generated/cluster_memory.rs");
 /// .entry my_cluster_kernel .reqnctapercluster 4, 1, 1 { ... }
 /// ```
 #[inline(never)]
-pub fn __cluster_config<const X: u32, const Y: u32, const Z: u32>() {
+pub const fn __cluster_config<const X: u32, const Y: u32, const Z: u32>() {
     const {
         assert!(
             X > 0 && Y > 0 && Z > 0,

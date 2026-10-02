@@ -1,0 +1,24 @@
+[package]
+name = "redux_shift_regression"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+# Mark as standalone crate (not part of parent workspace)
+[workspace]
+
+# Regression for #1328: shifting a `redux.sync` result used to lower through an
+# illegal same-width `llvm.trunc`, because the reduction result carried the
+# catalog's `ui32` representation while the shift count was signless. Build and
+# run with:
+#   cargo oxide run redux_shift_regression --arch sm_80
+
+[dependencies]
+# Device-side intrinsics (warp::redux_sync_max_u32, _min_i32)
+cuda-device = { path = "../../../cuda-device" }
+
+# Host-side utilities (CudaKernel trait, etc.)
+cuda-host = { path = "../../../cuda-host" }
+
+# Host-side CUDA runtime
+cuda-core = "0.3.1"

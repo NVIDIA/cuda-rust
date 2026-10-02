@@ -82,4 +82,4 @@ its sources and built artifacts.
 | `cuda-bindings`, `cuda-core`, `cuda-core-derive`, `cuda-async` | Apache-2.0 | root [`LICENSE`](./LICENSE) |
 
 Third-party attributions are listed in
-[`THIRD_PARTY_NOTICES`](./THIRD_PARTY_NOTICES).
+[`cuda-oxide/THIRD_PARTY_NOTICES`](./cuda-oxide/THIRD_PARTY_NOTICES).

@@ -2,13 +2,16 @@
 name: codeql
 
 on:
+  # Self-hosted runners (linux-amd64-cpu8) cannot run on pull_request events —
+  # see https://docs.gha-runners.nvidia.com/pull-request-testing/. Instead,
+  # copy-pr-bot mirrors trusted PRs to pull-request/<n> and we trigger on that
+  # push (config: .github/copy-pr-bot.yaml).
   push:
     branches:
       - main
-      # Drop after the timing run. A push is the event linux-amd64-cpu8 accepts.
+      - "pull-request/[0-9]+"
+      # Drop after the timing run.
       - ci/codeql-cpu8
-  pull_request:
-    branches: [main]
   schedule:
     - cron: "44 3 * * 6"
 

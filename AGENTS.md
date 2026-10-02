@@ -82,8 +82,8 @@ but the lockfile it resolves belongs to a component, so `cargo deny` runs as
 The nightly is pinned in `cuda-oxide/rust-toolchain.toml`, and
 `cuda-oxide/crates/rustc-codegen-cuda/rust-toolchain.toml` carries a second copy
 for that nested workspace. Do not float either to work around a build failure —
-`scripts/check-toolchain-parity.sh` exists to catch exactly that drift, and it
-checks the `cargo oxide new` scaffold against them too.
+`cuda-oxide/scripts/check-toolchain-parity.sh` exists to catch exactly that
+drift, and it checks the `cargo oxide new` scaffold against them too.
 
 rustup resolves a toolchain by walking up from the **working directory**.
 `--manifest-path` does not move that lookup, so a cargo command run from the
@@ -98,7 +98,8 @@ recipes and scripts change directory rather than pass a manifest path.
   `CONTRIBUTING.md`.
 - **New first-party source files need an SPDX header** — the NVIDIA copyright
   notice plus `Apache-2.0`, in the block-comment form shown under "License
-  Headers" in `CONTRIBUTING.md`. `scripts/check-spdx-headers.sh` enforces it.
+  Headers" in `CONTRIBUTING.md`. `cuda-oxide/scripts/check-spdx-headers.sh`
+  enforces it.
 - **Never push to the canonical upstream repository. Treat it as read-only.**
   Branch and push to a fork. Before pushing, run `git remote -v` and confirm the
   push remote is a fork of the base, comparing full `OWNER/REPOSITORY` names —

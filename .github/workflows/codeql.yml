@@ -16,7 +16,8 @@ concurrency:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: ubuntu-latest
+    # nv-cpu-general: m7i.2xlarge, 8 vCPU / 32 GiB. Smallest size above ubuntu-latest.
+    runs-on: linux-amd64-cpu8
     timeout-minutes: 120
     permissions:
       security-events: write

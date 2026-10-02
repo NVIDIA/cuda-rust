@@ -1,0 +1,40 @@
+# This source module is real code, despite the shared target/ ignore rule.
+!crates/cuda-oxide-codegen/src/target/
+
+# Local validation logs and build caches.
+.smoketest-logs/
+.regress-gemm-sol/
+/.layer-target/
+*.tar.gz
+
+# GPU compilation artifacts.
+*.ptx
+*.ltoir
+*.target
+*.options
+.ltoir_arch
+*.ll
+*.bc
+*.mlir
+*.cubin
+*.identity
+*.gpu
+*.fatbin
+.oxide-artifacts/
+vendor/
+
+# Generated intrinsic probes are checked-in fixtures.
+!intrinsics/probes/*.ll
+
+# Local experiments and removed compiler implementations.
+/docs/
+/debug/
+/tests/
+test.mlir
+crates/ltoir-backend/
+crates/dialect-mir/src/passes/
+
+# Benchmark environments and locally built helpers.
+crates/rustc-codegen-cuda/examples/*/bench/venv/
+crates/rustc-codegen-cuda/examples/gemm_sol/bench/cublaslt_bench
+crates/rustc-codegen-cuda/examples/gemm_sol_final/bench/cublaslt_bench

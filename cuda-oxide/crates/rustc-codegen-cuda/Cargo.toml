@@ -1,0 +1,49 @@
+[package]
+name = "rustc_codegen_cuda"
+version = "0.2.1"
+edition = "2024"
+authors = ["Nihal Pasham <nihalp@nvidia.com>"]
+license = "Apache-2.0"
+repository = "https://github.com/NVlabs/cuda-oxide.git"
+description = "Unified host/device compilation backend for rustc (CUDA/PTX codegen)"
+readme = "README.md"
+
+# IMPORTANT: Must be dylib for rustc to load as codegen backend
+[lib]
+crate-type = ["dylib"]
+
+# Keep out of workspace - requires special nightly build
+[workspace]
+
+[dependencies]
+# cuda-oxide pipeline (reuse existing infrastructure)
+# Use path dependencies since we're isolated from workspace
+mir-importer = { path = "../mir-importer" }
+mir-lower = { path = "../mir-lower" }
+llvm-export = { path = "../llvm-export" }
+dialect-mir = { path = "../dialect-mir" }
+dialect-nvvm = { path = "../dialect-nvvm" }
+reserved-oxide-symbols = { path = "../reserved-oxide-symbols" }
+oxide-artifacts = { version = "0.2.1", features = ["object-write"] }
+# Shared driver-independent libNVVM + nvJitLink finalization policy. This
+# crate loads CUDA compiler libraries at run time and never links libcuda.
+cuda-artifact-finalizer = { path = "../cuda-artifact-finalizer" }
+
+# IMPORTANT: This crate is isolated from the main workspace, so we cannot use
+# `{ workspace = true }`. Keep these versions synchronized with root Cargo.toml
+# [workspace.dependencies] section. Source MUST match the root (same git + rev),
+# or pliron resolves to two distinct crates and types stop unifying.
+pliron = { git = "https://github.com/pliron-org/pliron", rev = "06d99a3df938394583715aacf5eadb65b4791c09" }
+pliron-derive = { git = "https://github.com/pliron-org/pliron", rev = "06d99a3df938394583715aacf5eadb65b4791c09" }
+linkme = "0.3"            # must match workspace
+combine = "4.6"           # must match workspace
+once_cell = "1.18"        # must match workspace
+thiserror = "2"           # must match workspace
+serde_json = "1"          # must match workspace
+
+# Note: rustc internal crates are NOT listed here.
+# They're accessed via `extern crate` with #![feature(rustc_private)]
+# rustc will link them when loading this dylib as a codegen backend.
+
+[package.metadata.rust-analyzer]
+rustc_private = true

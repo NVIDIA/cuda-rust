@@ -1,0 +1,182 @@
+{
+  "schema": 6,
+  "backend_profile": "cuda-13.3-libnvvm-13.3.73",
+  "backend_kind": "lib_nvvm",
+  "llvm_revision": "not-applicable-libnvvm-ir-2.0",
+  "backend_version": "CUDA toolkit 13.3; nvcc/libNVVM release V13.3.73",
+  "backend_sha256": "e55af1135e987372355d19d66cb74e1a1e99c32ac98ffad14fb567eef16e4f77",
+  "artifact_path": "/home/kxqandccx/pr-e2e-20260918/tk/lib/python3.10/site-packages/nvidia/cu13/lib/libnvvm.so.4",
+  "build_id_prefix": "88b802",
+  "nvvm_ir_version": "2.0",
+  "debug_ir_version": "3.2",
+  "defaults": {
+    "llvm_arguments": [
+      "i32",
+      "i32",
+      "i32",
+      "i32",
+      "i32",
+      "i32",
+      "i32",
+      "i32",
+      "f32",
+      "f32",
+      "f32",
+      "f32",
+      "i32",
+      "i32"
+    ],
+    "llvm_results": [
+      "f32",
+      "f32",
+      "f32",
+      "f32"
+    ],
+    "target_triple": "nvptx64-nvidia-cuda",
+    "gpu_target": "compute_89",
+    "ptx_feature": "PTX ISA 8.4 minimum; CUDA 13.3 emits PTX 9.3",
+    "status": "validated",
+    "runtime_validation": "unexecuted"
+  },
+  "fixtures": [
+    {
+      "id": "plain_sparse_fp8_f32_compute89_ptx93",
+      "coverage_count": 4,
+      "stages": [
+        {
+          "targets": [
+            "compute_89",
+            "ptx93"
+          ],
+          "representation": "convergent plain-sparsity sparse FP8 F32 inline PTX in public D, A, B, C, metadata, selector order",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "CUDA 13.3 libNVVM compiled a 4-function NVVM IR module (SHA-256 42a84360a8efa402dae317b5fcb41c95cd857eac174eadf3fc01458b1c513504, requiring the !nvvmir.version 2.0 metadata and an explicit NVPTX data layout) with -arch=compute_89 to 7,193 bytes of PTX (SHA-256 28b1418b52d7911cc7122424e57c4fa0814b51bde354a69d7fa9f1dad3693dac, .version 9.3, .target sm_89) retaining all four requested instructions verbatim, and with -gen-lto to 3,092 bytes of LTOIR (SHA-256 846592e970ecc3f8a8ede212a9c4b5f87586e3629c0ee2b151dab6f62114ab1f). The libNVVM route for compute_89 is accepted: no capability error was raised for any of the four forms."
+        },
+        {
+          "targets": [
+            "sm_89",
+            "ptx93"
+          ],
+          "representation": "libNVVM-emitted plain-sparsity sparse FP8 F32 PTX",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "CUDA 13.3 ptxas assembled the libNVVM PTX at sm_89 into a 1,464-byte cubin (SHA-256 b1f806ccaa8a73aa80b76862b643265a508494c53028348b0f4e730d7a86847a), byte-identical to the cubin the pinned-LLVM route produced from the same four forms.",
+          "tool_path": "/home/kxqandccx/pr-e2e-20260918/cuda-13.3/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        },
+        {
+          "targets": [
+            "sm_89",
+            "ptx93"
+          ],
+          "representation": "libNVVM LTOIR retaining the plain-sparsity sparse FP8 F32 matrix",
+          "stage": "device_link",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "nvJitLink produced a 1,464-byte cubin (SHA-256 18651b809387f94d6074dbdb66590859fac9169a6aab7650569ebd287e8e53b1) from the 3,092-byte LTOIR. The device-link step required the explicit -lto option; without it nvJitLink rejects LTO-IR input with rc=18 \"LTO-IR input cannot be used without LTO enabled (-lto)\".",
+          "tool_path": "/home/kxqandccx/pr-e2e-20260918/tk/lib/python3.10/site-packages/nvidia/cu13/lib/libnvJitLink.so.13",
+          "tool_version": "Cuda compilation tools, release 13.4, V13.4.92",
+          "tool_sha256": "3afdb9677477dd584d3712a9bf2978d085729f0ed6e6432027e925d1e312e3c9"
+        }
+      ]
+    }
+  ],
+  "matrices": [
+    {
+      "axes": [
+        {
+          "name": "a_element",
+          "values": [
+            "e4m3",
+            "e5m2"
+          ]
+        },
+        {
+          "name": "b_element",
+          "values": [
+            "e4m3",
+            "e5m2"
+          ]
+        }
+      ],
+      "product_count": 4,
+      "fixtures": [
+        "plain_sparse_fp8_f32_compute89_ptx93"
+      ],
+      "template": {
+        "id": "mma_sp_m16n8k64_f32_${a_element}_${b_element}_f32",
+        "source_record": "int_nvvm_mma_sp_m16n8k64_row_col_f32_${a_element}_${b_element}_f32",
+        "llvm_symbol": "llvm.nvvm.mma.sp.m16n8k64.row.col.f32.${a_element}.${b_element}.f32",
+        "expected_ptx": {
+          "mnemonic": "mma",
+          "modifiers": [
+            "sp",
+            "sync",
+            "aligned",
+            "m16n8k64",
+            "row",
+            "col",
+            "f32",
+            "${a_element}",
+            "${b_element}",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "immediate"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "f32",
+            "f32",
+            "f32",
+            "f32",
+            "i32",
+            "i32"
+          ],
+          "llvm_results": [
+            "f32",
+            "f32",
+            "f32",
+            "f32"
+          ]
+        }
+      }
+    }
+  ]
+}

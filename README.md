@@ -4,8 +4,8 @@
   <a href="https://discord.gg/ZUEr4AhH5C"><img alt="discord" src="https://img.shields.io/discord/1515530041767759993?style=flat-square&logo=discord&logoColor=white&label=discord&color=5865F2"></a>
   <br>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png">
-    <img src="assets/banner-light.png" alt="cuda-oxide: write CUDA (SIMT) kernels in pure Rust" width="640">
+    <source media="(prefers-color-scheme: dark)" srcset="cuda-oxide/assets/banner-dark.png">
+    <img src="cuda-oxide/assets/banner-light.png" alt="cuda-oxide: write CUDA (SIMT) kernels in pure Rust" width="640">
   </picture>
 </p>
 
@@ -169,11 +169,15 @@ On first run, `cargo-oxide` will automatically fetch and build the codegen backe
 
 #### Nix (alternative)
 
-If you have Nix with flakes enabled, `nix develop` in the repo gives you a reproducible shell with CUDA 13, LLVM 22, Clang, and the pinned Rust nightly — no manual apt installs. The shellHook auto-discovers host NVIDIA drivers on NixOS and non-NixOS systems.
+If you have Nix with flakes enabled, `nix develop` from `cuda-oxide/` gives you a reproducible shell with CUDA 13, LLVM 22, Clang, and the pinned Rust nightly — no manual apt installs. The shellHook auto-discovers host NVIDIA drivers on NixOS and non-NixOS systems.
 
 ```bash
-nix develop                                       # full dev shell in this repo
-nix run github:NVlabs/cuda-oxide#new my-project   # bootstrap a project
+# From the repository root:
+cd cuda-oxide
+nix develop
+
+# Or bootstrap a project without cloning:
+nix run 'github:NVIDIA/cuda-rust?dir=cuda-oxide#new' -- my-project
 ```
 
 #### Rust
@@ -233,9 +237,9 @@ sudo apt install clang-21   # or libclang-common-21-dev
 
 #### Dev Container
 
-The repository includes a standard devcontainer setup in `.devcontainer/` for a
+The repository includes a devcontainer setup in `cuda-oxide/.devcontainer/` for a
 reproducible CUDA, LLVM, Clang, and Rust environment. See the
-[installation chapter](cuda-oxide-book/getting-started/installation.md#dev-container)
+[installation chapter](cuda-oxide/cuda-oxide-book/getting-started/installation.md#dev-container)
 for editor and CLI usage.
 
 ### Verifying Installation
@@ -256,9 +260,11 @@ codegen backend. If everything is configured correctly, `cargo oxide run vecadd`
 compiles a Rust kernel to PTX, launches it on the GPU, and prints
 `✓ SUCCESS: All 1024 elements correct!`.
 
+`CUDA_OXIDE_DEVICE_ARCH` accepts only `sm_<capability>` with an optional `a` suffix; `compute_`, `f` family targets, and malformed hints are errors.
+
 ## Examples
 
-**190+ examples** in `crates/rustc-codegen-cuda/examples/`. Highlights:
+**190+ examples** in `cuda-oxide/crates/rustc-codegen-cuda/examples/`. Highlights:
 
 | Example              | Description                                                              |
 |----------------------|--------------------------------------------------------------------------|
@@ -356,7 +362,7 @@ cargo oxide run gemm_sol_final
 - LTOIR generation for Blackwell+ (device-side LTO)
 - Device FFI: Rust <-> C++/CCCL interop via LTOIR
 - MathDx integration: cuFFTDx thread-level FFT, cuBLASDx block-level GEMM
-- Tile interop: [`cutile_inter_kernel`](crates/rustc-codegen-cuda/examples/cutile_inter_kernel/README.md) chains a cutile-rs Tile kernel and a cuda-oxide SIMT PTX kernel on the same CUDA stream over shared device tensors. Intra-kernel Tile interop is work in progress and tracked in [#96](https://github.com/NVlabs/cuda-oxide/issues/96).
+- Tile interop: [`cutile_inter_kernel`](cuda-oxide/crates/rustc-codegen-cuda/examples/cutile_inter_kernel/README.md) chains a cutile-rs Tile kernel and a cuda-oxide SIMT PTX kernel on the same CUDA stream over shared device tensors. Intra-kernel Tile interop is work in progress and tracked in [#96](https://github.com/NVlabs/cuda-oxide/issues/96).
 - Host runtime: `cuda-core` (explicit control, pinned host transfers) and `cuda-async` (composable async operations)
 - Canonical Blackwell GEMM SoL example with size-specialized M256xN256/M512xN256 CLC + cta_group::2 kernels and vectorized epilogues (see `gemm_sol_final`)
 
@@ -364,7 +370,7 @@ cargo oxide run gemm_sol_final
 
 **WIP:** 🚧 The **[cuda-oxide book](https://nvlabs.github.io/cuda-oxide/)** is the primary reference for the project. It covers SIMT kernel authoring in Rust, synchronous and asynchronous GPU programming, the compiler architecture, and more.
 
-To build and serve the book locally, see [cuda-oxide-book/README.md](./cuda-oxide-book/README.md).
+To build and serve the book locally, see [cuda-oxide/cuda-oxide-book/README.md](cuda-oxide/cuda-oxide-book/README.md).
 
 ## Ecosystem
 
@@ -374,4 +380,4 @@ cuda-oxide is one of several Rust + GPU efforts under active development. Projec
 
 cuda-oxide is licensed under the Apache License, Version 2.0: [LICENSE](LICENSE).
 Third-party components retain the licenses stated in their files; see
-[dependency-licenses.csv](dependency-licenses.csv) for the tracked license inventory.
+[dependency-licenses.csv](cuda-oxide/dependency-licenses.csv) for the tracked license inventory.

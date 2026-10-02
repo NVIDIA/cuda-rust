@@ -1,0 +1,14 @@
+# User-provided images.
+input/*
+!input/banner-dark.png
+!input/.gitkeep
+
+# Generated image outputs.
+output/*
+!output/.gitkeep
+
+# Local build/codegen artifacts.
+target/
+*.ll
+*.ptx
+*.cubin

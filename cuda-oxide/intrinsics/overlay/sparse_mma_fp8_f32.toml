@@ -1,0 +1,20 @@
+# Reviewed plain (standard-metadata) SM89 sparse FP8 F32 MMA family.
+#
+# These are the ordinary `mma.sp.sync.aligned.m16n8k64.row.col.f32.e4m3|e5m2.
+# e4m3|e5m2.f32` forms introduced by PTX ISA 8.4 for sm_89. Unlike the
+# `sparse_mma_ordered_f8f6f4_*` shards they use standard sparsity metadata
+# (no `kind::f8f6f4` qualifier, no block-scale predicate).
+
+schema = 64
+family = "sparse_mma"
+
+# The libNVVM profile is the locally available CUDA 13.3 V13.3.73 toolkit
+# rather than the V13.3.33 build the other shards were recorded against; the
+# evidence file name carries the same release identity as its backend_version.
+[sparse_mma_fp8_f32]
+llvm_evidence_profile = "rust-llvm-23.1.0-16696adc"
+libnvvm_evidence_profile = "cuda-13.3-libnvvm-13.3.73"
+runtime_validation = "unexecuted"
+a_elements = ["e4m3", "e5m2"]
+b_elements = ["e4m3", "e5m2"]
+product_count = 4

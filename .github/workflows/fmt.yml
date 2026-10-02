@@ -18,17 +18,22 @@ jobs:
       - name: Clone repository
         uses: actions/checkout@v4
 
-      # rustfmt comes from rust-toolchain.toml's component list, like clippy,
+      # rustfmt comes from cuda-oxide/rust-toolchain.toml's component list,
+      # like clippy,
       # so `cargo fmt` resolves against the same nightly as the rest of CI.
 
-      - name: Check root workspace formatting
+      - name: Check stable host workspace formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check CUDA Oxide workspace formatting
+        working-directory: cuda-oxide
         run: cargo fmt --all -- --check
 
       - name: Check rustc-codegen-cuda formatting
         run: cargo fmt --all -- --check
-        working-directory: crates/rustc-codegen-cuda
+        working-directory: cuda-oxide/crates/rustc-codegen-cuda
 
-      # `crates/cuda-macros/tests/device-only` is a workspace of its own, so the
+      # `cuda-oxide/crates/cuda-macros/tests/device-only` is a workspace of its own, so the
       # root `cargo fmt --all` above stops at it, and the examples glob below
       # only covers `examples/`. It is the fixture that proves the #701/#702
       # device-only property, and `check-device-only-build.sh` runs `cargo check`
@@ -36,7 +41,7 @@ jobs:
       # anything.
       - name: Check the cuda-macros device-only fixture formatting
         run: cargo fmt --all -- --check
-        working-directory: crates/cuda-macros/tests/device-only
+        working-directory: cuda-oxide/crates/cuda-macros/tests/device-only
 
       - name: Check example crate formatting
         run: |
@@ -44,11 +49,16 @@ jobs:
           # `cargo fmt --all` also formats local path dependencies. Running it
           # per example repeatedly reformats the large shared workspaces.
           shopt -s globstar nullglob
-          manifests=(crates/rustc-codegen-cuda/examples/**/Cargo.toml)
+          manifests=(
+            cuda-oxide/crates/rustc-codegen-cuda/examples/**/Cargo.toml
+            cuda-oxide/cuteir/examples/**/Cargo.toml
+          )
           ((${#manifests[@]} > 0))
           for manifest in "${manifests[@]}"; do
             example_dir="$(dirname "$manifest")"
             echo "::group::cargo fmt --check ($example_dir)"
-            cargo fmt --manifest-path "$manifest" -- --check
+            # Run inside the component so rustup discovers CUDA Oxide's
+            # directory-scoped nightly pin.
+            (cd "$example_dir" && cargo fmt -- --check)
             echo "::endgroup::"
           done

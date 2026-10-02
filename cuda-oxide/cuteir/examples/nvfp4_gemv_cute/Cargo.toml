@@ -1,0 +1,17 @@
+[package]
+name = "nvfp4_gemv_cute"
+version = "0.1.0"
+edition = "2024"
+authors = ["Nihal Pasham <nihalp@nvidia.com>"]
+license = "Apache-2.0"
+description = "Packed NVFP4 GEMV using typed CuTe semantic views"
+publish = false
+
+# Standalone example, matching the other cuda-oxide example crates.
+[workspace]
+
+[dependencies]
+cute-rs = { path = "../../cute-rs" }
+cuda-device = { path = "../../../crates/cuda-device" }
+cuda-host = { path = "../../../crates/cuda-host" }
+cuda-core = { path = "../../../../cuda-core", version = "=0.4.0", features = ["f16"] }

@@ -1,0 +1,17 @@
+[package]
+name = "nvls_all_reduce"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+# Mark as standalone crate (not part of parent workspace)
+[workspace]
+
+# Single-process NVLS (NVLink SHARP) all-reduce across every multicast-capable
+# GPU in the machine. Build with:
+#   cargo oxide run nvls_all_reduce
+
+[dependencies]
+cuda-core = { path = "../../../../../cuda-core", version = "0.4.0" }
+cuda-device = { path = "../../../cuda-device" }
+cuda-host = { path = "../../../cuda-host" }

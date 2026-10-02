@@ -1,0 +1,5 @@
+error: `print_ir` expects a boolean literal (`true` or `false`)
+  --> tests/ui/entry_non_literal_value.rs:10:32
+   |
+10 |     #[cutile::entry(print_ir = VERBOSE)]
+   |                                ^^^^^^^

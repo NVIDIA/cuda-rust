@@ -1,0 +1,39 @@
+[package]
+name = "cuda-core"
+description = "Idiomatic CUDA API."
+version = "0.4.0"
+edition = "2021"
+rust-version = "1.89"
+license = "Apache-2.0"
+authors = ["Melih Elibol"]
+repository = "https://github.com/nvlabs/cutile-rs"
+readme = "README.md"
+
+[dependencies]
+# Sibling paths, not the root workspace entries: those name the published
+# release that cuda-oxide consumes, and inheriting them here would make this
+# copy depend on a crates.io cuda-bindings instead of the one beside it.
+cuda-bindings = { version = "=0.4.0", path = "../cuda-bindings" }
+cuda-core-derive = { version = "=0.4.0", path = "../cuda-core-derive" }
+anyhow = "1"
+half = { version = "2" }
+oxide-artifacts = { version = "0.2.1", features = ["object-read"] }
+
+[dev-dependencies]
+trybuild = "1"
+
+[features]
+# Nightly-only: DeviceCopy for the unstable f16 primitive.
+f16 = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+missing_safety_doc = "allow"
+type_complexity = "allow"
+too_many_arguments = "allow"
+needless_range_loop = "allow"
+large_enum_variant = "allow"
+single_range_in_vec_init = "allow"

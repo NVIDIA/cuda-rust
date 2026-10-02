@@ -1,0 +1,3 @@
+[env]
+CUDA_TOOLKIT_PATH = { value = "/usr/local/cuda-13", relative = false }
+CUDA_TILE_USE_LLVM_INSTALL_DIR = { value = "/usr/lib/llvm-21", relative = false }

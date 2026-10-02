@@ -2,7 +2,8 @@
     // Project-level editor settings, tracked in git. Keep personal preferences
     // (fonts, colours, keybindings) in your VS Code User settings instead.
     "rust-analyzer.rustc.source": "discover",
-    "rust-analyzer.cargo.features": "all",
+    // Keep nightly-only host features opt-in for the stable root workspace.
+    "rust-analyzer.cargo.features": [],
     "rust-analyzer.procMacro.enable": true,
     "rust-analyzer.procMacro.attributes.enable": true,
     // "rust-analyzer.cargo.extraEnv": {
@@ -11,21 +12,23 @@
     "files.exclude": {
         "**/target/flycheck*": true,
     },
-    // Every example under crates/rustc-codegen-cuda/examples/ and cuteir/examples/
-    // is its own cargo workspace, so rust-analyzer only sees the ones listed
-    // here. Add the ones you are working on. Every path must exist on the
-    // checked-out branch, or rust-analyzer reports "Failed to load workspaces".
+    // Compiler and CuTe examples have their own Cargo workspaces, so
+    // rust-analyzer needs explicit entries for the ones you are working on.
+    // Every path must exist on the checked-out branch, or rust-analyzer
+    // reports "Failed to load workspaces".
     "rust-analyzer.linkedProjects": [
         "./Cargo.toml",
-        "./crates/rustc-codegen-cuda/Cargo.toml",
-        // cute-layout, cute-rs and dialect-cute are root-workspace members
-        // (covered by ./Cargo.toml above); there is no cuteir/Cargo.toml.
-        // The standalone cuteir examples need their own entries:
-        "./cuteir/examples/elementwise_cute/Cargo.toml",
-        "./cuteir/examples/blockscale_gemm_cute/Cargo.toml",
-        "./cuteir/examples/nvfp4_gemv_cute/Cargo.toml",
-        "./cuteir/examples/fp16_gemm_256x352_cute/Cargo.toml",
-        "./crates/rustc-codegen-cuda/examples/debug_pointer_locals/Cargo.toml",
-        "./crates/rustc-codegen-cuda/examples/gemm_sol_final/Cargo.toml",
+        "./cuda-oxide/Cargo.toml",
+        "./cutile-rs/Cargo.toml",
+        "./cuda-oxide/crates/rustc-codegen-cuda/Cargo.toml",
+        "./cuda-oxide/crates/rustc-codegen-cuda/examples/debug_pointer_locals/Cargo.toml",
+        "./cuda-oxide/crates/rustc-codegen-cuda/examples/gemm_sol_final/Cargo.toml",
+        "./cuda-oxide/crates/rustc-codegen-cuda/examples/vecadd/Cargo.toml",
+        "./cuda-oxide/crates/rustc-codegen-cuda/examples/abi_hmm/Cargo.toml",
+        // CuTe library crates are covered by cuda-oxide/Cargo.toml above.
+        "./cuda-oxide/cuteir/examples/elementwise_cute/Cargo.toml",
+        "./cuda-oxide/cuteir/examples/blockscale_gemm_cute/Cargo.toml",
+        "./cuda-oxide/cuteir/examples/nvfp4_gemv_cute/Cargo.toml",
+        "./cuda-oxide/cuteir/examples/fp16_gemm_256x352_cute/Cargo.toml",
     ],
 }

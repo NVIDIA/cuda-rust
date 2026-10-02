@@ -34,9 +34,10 @@ jobs:
       - name: Run clippy (workspace crates)
         env:
           CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+        working-directory: cuda-oxide
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # `rustc-codegen-cuda` and each example under examples/ are their own
+      # `rustc-codegen-cuda` and the standard and CuTe examples are their own
       # standalone workspaces (the codegen backend is swapped in via
       # RUSTFLAGS, so they can't live in the root [workspace]). That's 60+
       # cargo invocations from different workspace roots. By default each
@@ -51,26 +52,32 @@ jobs:
       # same pinned nightly deduplicate on identical deps and compile each
       # one once. This is intentionally scoped *not* to cover the
       # `cargo clippy --workspace` step above, which already has a
-      # well-defined `target/` at the repo root.
+      # well-defined `target/` under cuda-oxide.
       - name: Run clippy (rustc-codegen-cuda)
         env:
           CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           CARGO_TARGET_DIR: ${{ runner.temp }}/clippy-shared-target
-        working-directory: crates/rustc-codegen-cuda
+        working-directory: cuda-oxide/crates/rustc-codegen-cuda
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Run clippy (rustc-codegen-cuda examples)
+      - name: Run clippy (standard and CuTe examples)
         env:
           CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           CARGO_TARGET_DIR: ${{ runner.temp }}/clippy-shared-target
         run: |
           set -e
-          for ex in crates/rustc-codegen-cuda/examples/*/; do
-            if [ ! -f "$ex/Cargo.toml" ]; then continue; fi
-            name=$(basename "$ex")
-            echo "::group::clippy: $name"
-            (cd "$ex" && cargo clippy --all-targets -- -D warnings)
-            echo "::endgroup::"
+          example_roots=(
+            cuda-oxide/crates/rustc-codegen-cuda/examples
+            cuda-oxide/cuteir/examples
+          )
+          for example_root in "${example_roots[@]}"; do
+            for ex in "$example_root"/*/; do
+              if [ ! -f "$ex/Cargo.toml" ]; then continue; fi
+              name=$(basename "$ex")
+              echo "::group::clippy: $name"
+              (cd "$ex" && cargo clippy --all-targets -- -D warnings)
+              echo "::endgroup::"
+            done
           done
 
           # The loop above is one level deep. A few examples nest a second
@@ -96,11 +103,11 @@ jobs:
                grep -q "\"${sub}\""; then
               continue
             fi
-            echo "::group::clippy: ${dir#crates/rustc-codegen-cuda/examples/}"
+            echo "::group::clippy: ${dir#cuda-oxide/}"
             (cd "${dir}" && cargo clippy --locked --all-targets -- -D warnings)
             echo "::endgroup::"
           done < <(
-            find crates/rustc-codegen-cuda/examples -mindepth 3 -name Cargo.toml \
+            find "${example_roots[@]}" -mindepth 3 -name Cargo.toml \
               -not -path '*/target/*' | sort
           )
 
@@ -111,5 +118,5 @@ jobs:
           # surface, and check-device-only-build.sh runs `cargo check` on it but
           # never a lint.
           echo "::group::clippy: cuda-macros device-only fixture"
-          (cd crates/cuda-macros/tests/device-only && cargo clippy --locked --all-targets -- -D warnings)
+          (cd cuda-oxide/crates/cuda-macros/tests/device-only && cargo clippy --locked --all-targets -- -D warnings)
           echo "::endgroup::"

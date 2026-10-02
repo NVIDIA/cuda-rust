@@ -1,0 +1,38 @@
+[package]
+name = "cuda-host"
+version = "0.2.1"
+edition.workspace = true
+description = "Host-side utilities for CUDA kernel development"
+readme = "README.md"
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+half = { workspace = true }
+# `host` is a cuda-macros default, but name it: cuda-host is precisely the
+# crate that needs the generated host surface, and it must keep it even if
+# another crate in the graph takes cuda-macros with default-features = false.
+cuda-macros = { workspace = true, features = ["host"] }
+cuda-core = { workspace = true }
+cuda-artifact-finalizer = { workspace = true }
+ptx-parse = { workspace = true }
+sha2 = { workspace = true }
+oxide-artifacts = { workspace = true, features = ["object-read"] }
+thiserror = { workspace = true }
+cuda-async = { workspace = true, optional = true }
+
+# Platform-correct flags and device identity for cache and mapped-image reads.
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+libc = "0.2"
+
+[features]
+default = []
+async = ["dep:cuda-async", "cuda-macros/async"]
+
+[dev-dependencies]
+libloading = { workspace = true }
+cuda-device = { workspace = true }
+# The crates.io release cuda-core re-exports bundle types from; tests
+# construct payloads with it so they use the same crate instance.
+oxide-artifacts = { workspace = true }

@@ -24,9 +24,6 @@ jobs:
         # `cuda-bindings` needs `cuda.h` to compile). `test_args` overrides
         # the default `--all-targets` where a crate needs a narrower set.
         #
-        # cuda-bindings, cuda-core, and cuda-async are the shared host-side
-        # crates from cutile-rs now; their unit tests run in cutile-rs CI.
-        #
         # Crates intentionally not in this matrix:
         #   * `fuzzer` — differential-testing infra with no unit tests.
         #   * `rustc-codegen-cuda` — its own [workspace] that links against
@@ -133,6 +130,7 @@ jobs:
       - name: Run crate unit tests
         env:
           CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+        working-directory: cuda-oxide
         run: |
           sysroot="$(rustc --print sysroot)"
           export LIBRARY_PATH="${sysroot}/lib:${LIBRARY_PATH:-}"
@@ -150,6 +148,7 @@ jobs:
       # exactly the diagnosis it exists to print).
       - name: cargo oxide doctor reaches its checks without the CUDA toolkit
         if: matrix.package == 'cargo-oxide'
+        working-directory: cuda-oxide
         run: |
           set -uo pipefail
           out="$(cargo run -p cargo-oxide -- doctor 2>&1)" || true
@@ -169,7 +168,7 @@ jobs:
       # The live CUDA-tool tests remain ignored; these regressions need no GPU
       # or toolkit installation.
       - name: Run codegen-backend unit tests
-        working-directory: crates/rustc-codegen-cuda
+        working-directory: cuda-oxide/crates/rustc-codegen-cuda
         run: |
           sysroot="$(rustc --print sysroot)"
           export LIBRARY_PATH="${sysroot}/lib:${LIBRARY_PATH:-}"
@@ -190,9 +189,11 @@ jobs:
       # sources; it comes from rust-toolchain.toml's component list.
 
       - name: Check generated intrinsic outputs
+        working-directory: cuda-oxide
         run: cargo run -p cuda-intrinsics-gen -- check
 
       - name: Probe every declared LLVM-NVPTX target
+        working-directory: cuda-oxide
         run: |
           # Stock runners do not carry the recorded CUDA 13.3 ptxas binary.
           # Identity is llc version plus the rustc commit from upstream.lock;
@@ -200,6 +201,7 @@ jobs:
           cargo run -p cuda-intrinsics-gen -- probe --all --skip-terminal --per-target
 
       - name: Check append-only intrinsic ABI ledger
+        working-directory: cuda-oxide
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base_ref="${{ github.event.pull_request.base.sha }}"

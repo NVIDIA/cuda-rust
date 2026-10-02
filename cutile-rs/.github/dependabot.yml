@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+#                         All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Explicitly left behind: there is no `dependabot.yml` in the root of the repository.
+
+---
+version: 2
+updates:
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      # Check for updates to GitHub Actions every week
+      interval: "weekly"
+    labels:
+      - CI
+    # The organization's Actions allowlist admits these two actions by exact
+    # commit only. A bump to a commit that is not on the list makes every
+    # workflow fail at startup (#312), so they are pinned by hand instead.
+    ignore:
+      - dependency-name: "taiki-e/install-action"
+      - dependency-name: "swatinem/rust-cache"
+    groups:
+      all-actions:
+        patterns:
+          - "*"

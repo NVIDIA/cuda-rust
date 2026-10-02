@@ -1,0 +1,16 @@
+[package]
+name = "elementwise_cute"
+version = "0.1.0"
+edition = "2024"
+authors = ["Nihal Pasham <nihalp@nvidia.com>"]
+license = "Apache-2.0"
+description = "CuTe-style f32 and f16 elementwise add with vectorized full tiles and scalar tails"
+
+# Mark as standalone crate (not part of parent workspace).
+[workspace]
+
+[dependencies]
+cute-rs = { path = "../../cute-rs" }
+cuda-device = { path = "../../../crates/cuda-device" }
+cuda-host = { path = "../../../crates/cuda-host" }
+cuda-core = { path = "../../../../cuda-core", version = "=0.4.0", features = ["f16"] }

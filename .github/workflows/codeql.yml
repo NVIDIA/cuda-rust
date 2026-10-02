@@ -3,7 +3,10 @@ name: codeql
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      # Drop after the timing run. A push is the event linux-amd64-cpu8 accepts.
+      - ci/codeql-cpu8
   pull_request:
     branches: [main]
   schedule:

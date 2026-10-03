@@ -42,6 +42,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # nv-cpu-general has no rustup. The Rust extractor runs
+      # `rustup show active-toolchain` and, if that binary is missing, still
+      # exits 0 with an empty database.
+      - name: Install Rust
+        if: matrix.language == 'rust'
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+          echo "${HOME}/.cargo/bin" >> "$GITHUB_PATH"
+          "${HOME}/.cargo/bin/rustup" show active-toolchain
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:

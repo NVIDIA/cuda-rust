@@ -555,9 +555,42 @@ pub fn spelling_at_least(floor: u16) -> Option<u16> {
     PtxSpelling::round_up(floor).map(PtxSpelling::get)
 }
 
+/// The LLVM major a `rustc -vV` banner reports, from its `LLVM version:` line.
+///
+/// Lives here because two consumers need it and neither can depend on the
+/// other: `rustc-codegen-cuda`'s build script records the LLVM major of the
+/// toolchain compiling it (the one whose `librustc_driver` the backend links,
+/// hence the compiler that runs it), and the backend passes that value down
+/// to the LLVM tool resolver. This crate has no dependencies, so a build
+/// script can use it.
+///
+/// Note the colon: an LLVM binary's own `--version` banner spells it
+/// `LLVM version 23.1.0`, which this deliberately does not accept.
+pub fn parse_rustc_llvm_major(version_verbose_output: &str) -> Option<u32> {
+    const NEEDLE: &str = "LLVM version: ";
+    let idx = version_verbose_output.find(NEEDLE)?;
+    let rest = &version_verbose_output[idx + NEEDLE.len()..];
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rustc_llvm_major_comes_from_the_vv_line() {
+        let vv = "rustc 1.100.0-nightly (e457a7b0d 2026-08-27)\nbinary: rustc\n\
+                  host: x86_64-unknown-linux-gnu\nrelease: 1.100.0-nightly\n\
+                  LLVM version: 23.1.0\n";
+        assert_eq!(parse_rustc_llvm_major(vv), Some(23));
+        // An LLVM binary's `--version` banner has no colon; accepting it here
+        // would let a tool's own version masquerade as the compiler's.
+        assert_eq!(parse_rustc_llvm_major("LLVM version 23.1.0"), None);
+        assert_eq!(parse_rustc_llvm_major("LLVM version: x.y.z"), None);
+        assert_eq!(parse_rustc_llvm_major(""), None);
+    }
+
     #[test]
     fn device_arch_requires_sm_spelling_and_reuses_cuda_grammar() {
         for entry in RECORDED_PTX_FLOORS {

@@ -232,6 +232,23 @@ pub struct PipelineConfig {
     /// Valid hints are used only when no explicit target is provided; invalid
     /// hints always produce a target-selection error.
     pub device_arch_hint: Option<DeviceArchHint>,
+    /// LLVM major of the compiler that produces the IR this pipeline hands to
+    /// `llc`, so tool selection can report a mismatch against the `llc` it
+    /// picks (#1300).
+    ///
+    /// Only the frontend knows this, and only from its own build: the backend
+    /// resolves `llc` through `PATH`, so probing `rustc -vV` at run time can
+    /// report the very toolchain the comparison exists to catch.
+    /// `rustc-codegen-cuda` records the LLVM major of the toolchain that
+    /// compiled it, which is the one whose `librustc_driver` it links and
+    /// therefore the compiler that loads it.
+    ///
+    /// `None` states no identity, and no comparison is made.
+    pub ir_llvm_major: Option<u32>,
+    /// Human-readable name for whatever set `ir_llvm_major`, used in the
+    /// mismatch diagnostic. Same contract as `target_arch_source`: whoever
+    /// writes one writes the other.
+    pub ir_llvm_major_source: &'static str,
     /// Device debug metadata tier.
     pub debug_kind: DebugKind,
     /// Source identities and semantic types for device statics,
@@ -272,6 +289,8 @@ impl Default for PipelineConfig {
             target_arch: None,
             target_arch_source: "PipelineConfig::target_arch",
             device_arch_hint: None,
+            ir_llvm_major: None,
+            ir_llvm_major_source: "unstated",
             debug_kind: DebugKind::Off,
             debug_global_variables: BTreeMap::new(),
             allow_fma_contraction: true,
@@ -445,6 +464,14 @@ fn backend_options_for(config: &PipelineConfig) -> BackendOptions {
         // target and leaving `from_env`'s "CUDA_OXIDE_TARGET" in place made
         // every target error blame an env var the caller may never have set.
         backend_options.target_arch_source = config.target_arch_source;
+    }
+    if config.ir_llvm_major.is_some() {
+        // `from_env` deliberately leaves this unset: the environment cannot
+        // say which compiler runs the backend, and probing one would read the
+        // same PATH that supplied `llc` (#1300). The label travels with the
+        // value, as above.
+        backend_options.ir_llvm_major = config.ir_llvm_major;
+        backend_options.ir_llvm_major_source = config.ir_llvm_major_source;
     }
     backend_options.verbose = backend_options.verbose || config.verbose;
     backend_options.no_fma = !config.allow_fma_contraction;
@@ -1303,6 +1330,8 @@ fn adversarial_export_name() -> u64 {
             target_arch: Some("sm_86".to_string()),
             target_arch_source: "PipelineConfig::target_arch",
             device_arch_hint: None,
+            ir_llvm_major: None,
+            ir_llvm_major_source: "unstated",
             debug_kind: DebugKind::Off,
             debug_global_variables: BTreeMap::new(),
             allow_fma_contraction: true,
@@ -1357,6 +1386,8 @@ fn adversarial_export_name() -> u64 {
             target_arch: Some("sm_86".to_string()),
             target_arch_source: "PipelineConfig::target_arch",
             device_arch_hint: None,
+            ir_llvm_major: None,
+            ir_llvm_major_source: "unstated",
             debug_kind: DebugKind::Off,
             debug_global_variables: BTreeMap::new(),
             allow_fma_contraction: true,
@@ -1449,6 +1480,8 @@ fn adversarial_export_name() -> u64 {
             target_arch: Some("sm_86".to_string()),
             target_arch_source: "PipelineConfig::target_arch",
             device_arch_hint: None,
+            ir_llvm_major: None,
+            ir_llvm_major_source: "unstated",
             debug_kind: DebugKind::Off,
             debug_global_variables: BTreeMap::new(),
             allow_fma_contraction: true,
@@ -1486,6 +1519,29 @@ fn adversarial_export_name() -> u64 {
         let options = backend_options_for(&config);
         assert_eq!(options.target_arch.as_deref(), Some("sm_86"));
         assert_eq!(options.target_arch_source, "PipelineConfig::target_arch");
+    }
+
+    #[test]
+    fn a_stated_ir_producer_reaches_the_backend_with_its_label() {
+        let config = PipelineConfig {
+            ir_llvm_major: Some(23),
+            ir_llvm_major_source: "the rustc that built this backend",
+            ..PipelineConfig::default()
+        };
+        let options = backend_options_for(&config);
+        assert_eq!(options.ir_llvm_major, Some(23));
+        assert_eq!(
+            options.ir_llvm_major_source,
+            "the rustc that built this backend"
+        );
+    }
+
+    #[test]
+    fn an_unstated_ir_producer_leaves_the_backend_quiet() {
+        // #1300: no identity means no comparison. Inventing one here would
+        // reintroduce the PATH probe the warning exists to avoid.
+        let options = backend_options_for(&PipelineConfig::default());
+        assert_eq!(options.ir_llvm_major, None);
     }
 
     #[test]

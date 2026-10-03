@@ -361,6 +361,7 @@ impl<P> MappedLaunchPartition<P> {
         partition_grid: (u32, u32, u32),
         num_tile_blocks: u32,
     ) -> Result<(u32, u32, u32), Error> {
+        checked_dimensions_i32("Mapped partition", &self.map_shape)?;
         let map_rank = self.map_shape.len();
         if map_rank == 0 || map_rank > 3 {
             return tensor_error_result(
@@ -832,6 +833,23 @@ fn checked_num_bytes_i32<T>(shape: &[i32]) -> Result<usize, Error> {
         .ok_or_else(|| crate::error::tensor_error("Tensor byte size overflowed usize."))
 }
 
+// Converts host-side shape metadata to the i32 representation used by the
+// compiler and kernel ABI. An unchecked cast would turn dimensions above
+// i32::MAX negative while grid validation still accepted them as u32.
+fn checked_dimensions_i32(kind: &str, dimensions: &[usize]) -> Result<Vec<i32>, Error> {
+    dimensions
+        .iter()
+        .map(|&dimension| {
+            i32::try_from(dimension).map_err(|_| {
+                crate::error::tensor_error(&format!(
+                    "{kind} dimension {dimension} exceeds i32::MAX ({})",
+                    i32::MAX
+                ))
+            })
+        })
+        .collect()
+}
+
 // Launch grid for a partition binding: the ceiling division of every tensor axis by the
 // matching partition axis, so a partial edge tile still gets a block. Both shapes are
 // caller-supplied, so every step is checked: a zero partition axis would divide by zero,
@@ -859,14 +877,16 @@ fn partition_launch_grid(
         ));
     }
     let axis = |i: usize| -> Result<u32, Error> {
-        // `shape[i] > 0` was checked above, so the cast is lossless.
+        // Both tensor and partition dimensions cross the kernel ABI as i32.
+        // `shape[i] > 0` was checked above, so its cast is lossless.
         let extent = shape[i] as u32;
-        let tile = u32::try_from(partition_shape[i]).map_err(|_| {
+        let tile = i32::try_from(partition_shape[i]).map_err(|_| {
             crate::error::tensor_error(&format!(
-                "Partition dimension {} exceeds u32::MAX.",
-                partition_shape[i]
+                "Partition dimension {} exceeds i32::MAX ({}).",
+                partition_shape[i],
+                i32::MAX
             ))
-        })?;
+        })? as u32;
         Ok(extent.div_ceil(tile))
     };
     match shape.len() {
@@ -1877,8 +1897,16 @@ pub trait KernelOutputStored<T: DType>: Send {
     fn map_shape_as_i32(&self) -> Option<Vec<i32>> {
         None
     }
+    /// Converts mapped-partition dimensions to the compiler ABI representation.
+    fn try_map_shape_as_i32(&self) -> Result<Option<Vec<i32>>, Error> {
+        Ok(self.map_shape_as_i32())
+    }
     fn dtype_str(&self) -> &'static str;
     fn partition_shape_as_i32(&self) -> Vec<i32>;
+    /// Converts partition dimensions to the compiler ABI representation.
+    fn try_partition_shape_as_i32(&self) -> Result<Vec<i32>, Error> {
+        checked_dimensions_i32("Partition", self.partition_shape())
+    }
     /// The partition shape as bound, borrowed: what launch validation reads.
     fn partition_shape(&self) -> &[usize];
     fn strides_hint(&self) -> Vec<i32>;
@@ -1924,10 +1952,16 @@ impl<T: DType> KernelOutputStored<T> for Partition<Tensor<T>> {
             launcher.push_arg(*stride);
         }
         for dim in self.partition_shape.iter() {
-            launcher.push_arg(*dim as i32);
+            launcher.push_arg(
+                i32::try_from(*dim)
+                    .expect("partition dimension must be validated before kernel launch"),
+            );
         }
         for stride in self.partition_strides.iter() {
-            launcher.push_arg(*stride as i32);
+            launcher.push_arg(
+                i32::try_from(*stride)
+                    .expect("partition stride originates from valid i32 tensor metadata"),
+            );
         }
     }
     fn grid(&self) -> Result<(u32, u32, u32), Error> {
@@ -1937,7 +1971,8 @@ impl<T: DType> KernelOutputStored<T> for Partition<Tensor<T>> {
         T::DTYPE.as_str()
     }
     fn partition_shape_as_i32(&self) -> Vec<i32> {
-        self.partition_shape.iter().map(|&x| x as i32).collect()
+        self.try_partition_shape_as_i32()
+            .expect("partition dimensions must fit the compiler ABI")
     }
     fn partition_shape(&self) -> &[usize] {
         &self.partition_shape
@@ -1982,10 +2017,16 @@ impl<T: DType> KernelOutputStored<T> for Partition<&mut Tensor<T>> {
             launcher.push_arg(*stride);
         }
         for dim in self.partition_shape.iter() {
-            launcher.push_arg(*dim as i32);
+            launcher.push_arg(
+                i32::try_from(*dim)
+                    .expect("partition dimension must be validated before kernel launch"),
+            );
         }
         for stride in self.partition_strides.iter() {
-            launcher.push_arg(*stride as i32);
+            launcher.push_arg(
+                i32::try_from(*stride)
+                    .expect("partition stride originates from valid i32 tensor metadata"),
+            );
         }
     }
     fn grid(&self) -> Result<(u32, u32, u32), Error> {
@@ -1995,7 +2036,8 @@ impl<T: DType> KernelOutputStored<T> for Partition<&mut Tensor<T>> {
         T::DTYPE.as_str()
     }
     fn partition_shape_as_i32(&self) -> Vec<i32> {
-        self.partition_shape.iter().map(|&x| x as i32).collect()
+        self.try_partition_shape_as_i32()
+            .expect("partition dimensions must fit the compiler ABI")
     }
     fn partition_shape(&self) -> &[usize] {
         &self.partition_shape
@@ -2029,7 +2071,12 @@ impl<T: DType> KernelOutputStored<T> for MappedLaunchPartition<Partition<Tensor<
     }
 
     fn map_shape_as_i32(&self) -> Option<Vec<i32>> {
-        Some(self.map_shape.iter().map(|&dim| dim as i32).collect())
+        self.try_map_shape_as_i32()
+            .expect("mapped partition dimensions must fit the compiler ABI")
+    }
+
+    fn try_map_shape_as_i32(&self) -> Result<Option<Vec<i32>>, Error> {
+        checked_dimensions_i32("Mapped partition", &self.map_shape).map(Some)
     }
 
     fn dtype_str(&self) -> &'static str {
@@ -2069,7 +2116,12 @@ impl<T: DType> KernelOutputStored<T> for MappedLaunchPartition<Partition<&mut Te
     }
 
     fn map_shape_as_i32(&self) -> Option<Vec<i32>> {
-        Some(self.map_shape.iter().map(|&dim| dim as i32).collect())
+        self.try_map_shape_as_i32()
+            .expect("mapped partition dimensions must fit the compiler ABI")
+    }
+
+    fn try_map_shape_as_i32(&self) -> Result<Option<Vec<i32>>, Error> {
+        checked_dimensions_i32("Mapped partition", &self.map_shape).map(Some)
     }
 
     fn dtype_str(&self) -> &'static str {
@@ -2515,6 +2567,47 @@ mod tests {
             .partition([1, 1, 1, 1])
             .grid()
             .is_err());
+    }
+
+    #[test]
+    fn partition_metadata_rejects_dimensions_above_i32_max() {
+        let largest_valid = meta_f32(&[8]).partition([i32::MAX as usize]);
+        assert_eq!(KernelOutputStored::grid(&largest_valid).unwrap(), (1, 1, 1));
+        assert_eq!(
+            largest_valid.try_partition_shape_as_i32().unwrap(),
+            vec![i32::MAX]
+        );
+
+        let oversized = i32::MAX as usize + 1;
+        let partition = meta_f32(&[8]).partition([oversized]);
+
+        let grid_error = KernelOutputStored::grid(&partition).unwrap_err();
+        assert!(
+            grid_error.to_string().contains("exceeds i32::MAX"),
+            "{grid_error}"
+        );
+        let metadata_error = partition.try_partition_shape_as_i32().unwrap_err();
+        assert!(
+            metadata_error.to_string().contains("exceeds i32::MAX"),
+            "{metadata_error}"
+        );
+    }
+
+    #[test]
+    fn mapped_partition_metadata_rejects_dimensions_above_i32_max() {
+        let oversized = i32::MAX as usize + 1;
+        let partition = meta_f32(&[8]).partition([8]).map([oversized], 1);
+
+        let grid_error = KernelOutputStored::grid(&partition).unwrap_err();
+        assert!(
+            grid_error.to_string().contains("exceeds i32::MAX"),
+            "{grid_error}"
+        );
+        let metadata_error = partition.try_map_shape_as_i32().unwrap_err();
+        assert!(
+            metadata_error.to_string().contains("exceeds i32::MAX"),
+            "{metadata_error}"
+        );
     }
 
     #[test]

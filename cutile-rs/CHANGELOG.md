@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Partition and mapped-partition dimensions above `i32::MAX` now fail launch
+  validation instead of wrapping to negative compiler and kernel metadata
+  (#1382).
+
 ## [0.4.0] - 2026-09-25
 
 Debug builds support cuda-gdb and Nsight. DGX Spark is now supported.

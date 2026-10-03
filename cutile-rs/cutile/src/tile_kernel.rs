@@ -1461,10 +1461,16 @@ impl<T: DType> KernelArgument for &Partition<Tensor<T>> {
             launcher.push_arg(*stride);
         }
         for dim in self.partition_shape.iter() {
-            launcher.push_arg(*dim as i32);
+            launcher.push_arg(
+                i32::try_from(*dim)
+                    .expect("partition dimension must be validated before kernel launch"),
+            );
         }
         for stride in self.partition_strides.iter() {
-            launcher.push_arg(*stride as i32);
+            launcher.push_arg(
+                i32::try_from(*stride)
+                    .expect("partition stride originates from valid i32 tensor metadata"),
+            );
         }
     }
 }
@@ -1482,10 +1488,16 @@ impl<T: DType> KernelArgument for &Partition<&mut Tensor<T>> {
             launcher.push_arg(*stride);
         }
         for dim in self.partition_shape.iter() {
-            launcher.push_arg(*dim as i32);
+            launcher.push_arg(
+                i32::try_from(*dim)
+                    .expect("partition dimension must be validated before kernel launch"),
+            );
         }
         for stride in self.partition_strides.iter() {
-            launcher.push_arg(*stride as i32);
+            launcher.push_arg(
+                i32::try_from(*stride)
+                    .expect("partition stride originates from valid i32 tensor metadata"),
+            );
         }
     }
 }

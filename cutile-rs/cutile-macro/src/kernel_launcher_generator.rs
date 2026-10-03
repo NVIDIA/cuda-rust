@@ -1931,7 +1931,7 @@ fn infer_mapped_partition_map_generics(
 ) -> Result<(), Error> {
     let mapped_shape_expr = |dim: usize| {
         format!(
-            "vec![KernelOutputStored::map_shape_as_i32(&{var_name}).expect(\"MappedPartitionMut missing map shape\")[{dim}].to_string()]"
+            "vec![KernelOutputStored::try_map_shape_as_i32(&{var_name})?.expect(\"MappedPartitionMut missing map shape\")[{dim}].to_string()]"
         )
     };
     match map_shape {
@@ -1946,7 +1946,7 @@ fn infer_mapped_partition_map_generics(
                     required_generics.expressions.insert(
                         ident,
                         Some(format!(
-                            "KernelOutputStored::map_shape_as_i32(&{var_name}).expect(\"MappedPartitionMut missing map shape\").iter().map(|x| x.to_string()).collect::<Vec<String>>()"
+                            "KernelOutputStored::try_map_shape_as_i32(&{var_name})?.expect(\"MappedPartitionMut missing map shape\").iter().map(|x| x.to_string()).collect::<Vec<String>>()"
                         )),
                     );
                     Ok(())
@@ -2042,7 +2042,7 @@ pub fn infer_shape_params_from_tensor_type(
                     SupportedGenericType::ConstArray => {
                         // This is a CGA type.
                         if is_mutable {
-                            required_generics.expressions.insert(last_ident.clone(), Some(format!("KernelOutputStored::partition_shape_as_i32(&{var_name}).iter().map(|x| x.to_string()).collect::<Vec<String>>()")));
+                            required_generics.expressions.insert(last_ident.clone(), Some(format!("KernelOutputStored::try_partition_shape_as_i32(&{var_name})?.iter().map(|x| x.to_string()).collect::<Vec<String>>()")));
                         } else {
                             // This might make sense for a small tensor.
                             required_generics.expressions.insert(last_ident.clone(), Some(format!("{var_name}.shape().iter().map(|x| x.to_string()).collect::<Vec<String>>()")));
@@ -2097,7 +2097,7 @@ pub fn infer_shape_params_from_tensor_type(
                                         }
                                         SupportedGenericType::ConstScalar => {
                                             if is_mutable {
-                                                required_generics.expressions.insert(ident.clone(), Some(format!("vec![KernelOutputStored::partition_shape_as_i32(&{var_name})[{i}].to_string()]")));
+                                                required_generics.expressions.insert(ident.clone(), Some(format!("vec![KernelOutputStored::try_partition_shape_as_i32(&{var_name})?[{i}].to_string()]")));
                                             } else {
                                                 required_generics.expressions.insert(
                                                     ident.clone(),

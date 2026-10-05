@@ -215,7 +215,18 @@ impl CudaStream {
     ///
     /// Panics inside the closure are caught and discarded to prevent unwinding
     /// across the FFI boundary.
-    pub fn launch_host_function<F: FnOnce() + Send>(
+    ///
+    /// The callback runs after this call returns, so it must be `'static`;
+    /// closures that borrow from the caller are rejected.
+    ///
+    /// ```compile_fail
+    /// # use cuda_core::simt::CudaStream;
+    /// # fn rejects_borrowing_callback(stream: &CudaStream) {
+    /// let data = vec![1, 2, 3];
+    /// stream.launch_host_function(|| println!("{data:?}")).unwrap();
+    /// # }
+    /// ```
+    pub fn launch_host_function<F: FnOnce() + Send + 'static>(
         &self,
         host_func: F,
     ) -> Result<(), DriverError> {
@@ -243,7 +254,7 @@ impl CudaStream {
     ///   where `f: F`.
     /// - Must be called exactly once per enqueued callback (double-free
     ///   otherwise).
-    unsafe extern "C" fn callback_wrapper<F: FnOnce() + Send>(callback: *mut c_void) {
+    unsafe extern "C" fn callback_wrapper<F: FnOnce() + Send + 'static>(callback: *mut c_void) {
         let _ = std::panic::catch_unwind(|| {
             let callback: Box<F> = unsafe { Box::from_raw(callback as *mut F) };
             callback();

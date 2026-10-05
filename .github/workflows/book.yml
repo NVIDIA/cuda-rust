@@ -1,4 +1,4 @@
-name: Deploy cuda-oxide Book
+name: Deploy CUDA Rust Docs
 
 # Path-filtered lane: only documentation sources can change what this builds.
 on:
@@ -8,6 +8,7 @@ on:
       - 'cuda-oxide/cuda-oxide-book/**'
       - 'cutile-rs/cutile-book/**'
       - 'cutile-rs/scripts/build_versioned_book.sh'
+      - 'docs/**'
       - '.github/workflows/book.yml'
   # Validate the book on PRs too. The build job alone runs there; `deploy` is
   # gated below, so a pull request never publishes. Without this the book was
@@ -19,6 +20,7 @@ on:
       - 'cuda-oxide/cuda-oxide-book/**'
       - 'cutile-rs/cutile-book/**'
       - 'cutile-rs/scripts/build_versioned_book.sh'
+      - 'docs/**'
       - '.github/workflows/book.yml'
   workflow_dispatch:
 
@@ -40,7 +42,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Two Sphinx books (cuda-oxide plus versioned cutile-rs). Bound the job so a
+    # An umbrella page plus two Sphinx books. Bound the job so a
     # wedged install or a sphinx that never returns fails instead of burning to
     # the 6-hour default.
     timeout-minutes: 20
@@ -65,34 +67,17 @@ jobs:
       - name: Install dependencies
         run: pip install -r cuda-oxide/cuda-oxide-book/requirements.txt
 
-      # `-W` matches the Rust docs gate, which builds under
-      # RUSTDOCFLAGS="-D warnings". Without it a broken cross-reference, a
-      # malformed directive or a page dropped from a toctree still exits 0 and
-      # publishes. `--keep-going` reports every warning in one run instead of
-      # stopping at the first.
-      - name: Build cuda-oxide Sphinx site
-        run: >-
-          sphinx-build -W --keep-going -b html
-          -d cuda-oxide/cuda-oxide-book/_build/doctrees
-          cuda-oxide/cuda-oxide-book _site
-
-      # GitHub Pages allows one artifact per repository. Nest the former
-      # cutile-rs Pages site under /cutile-rs/ so both books share one deploy.
-      # Project Pages live at /cuda-oxide/, so the Sphinx base URL includes
-      # that prefix. On PRs skip historical tags to keep the check fast.
-      - name: Build cutile-rs versioned book
-        env:
-          CUTILE_DOCS_SITE_DIR: ${{ github.workspace }}/_site/cutile-rs
-          CUTILE_DOCS_BASE_URL: /cuda-oxide/cutile-rs/
-          CUTILE_DOCS_MAIN_REF: HEAD
-          CUTILE_DOCS_TAG_PATTERN: "cutile-rs/v*"
+      # Build the landing page and both books into one Pages artifact. The
+      # script applies -W --keep-going to current docs and preserves the
+      # Tile version switcher and historical tags on main.
+      - name: Build CUDA Rust documentation
         run: |
           # Unset CUTILE_DOCS_TAGS → build every tag matching the pattern.
           # Empty CUTILE_DOCS_TAGS → current tree only (fast PR check).
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             export CUTILE_DOCS_TAGS=""
           fi
-          cutile-rs/scripts/build_versioned_book.sh
+          bash docs/build_all_docs.sh
 
       # Only `deploy` consumes this, and `deploy` is skipped on pull requests,
       # so uploading it there produces an artifact nothing can ever read. A PR's
@@ -102,7 +87,7 @@ jobs:
       - if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: _site
+          path: docs/build/html
 
   deploy:
     needs: build

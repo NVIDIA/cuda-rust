@@ -36,7 +36,7 @@ export LC_ALL=C
 cd "$(dirname "$0")/.."
 
 MANIFEST=Cargo.toml
-# The Oxide overview stays at the git root. This script runs from cuda-oxide/.
+# The Oxide overview lives with its component; this script runs from cuda-oxide/.
 README=README.md
 BOOK_MAP=cuda-oxide-book/compiler/architecture-overview.md
 

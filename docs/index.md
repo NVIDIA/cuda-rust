@@ -5,12 +5,12 @@ working with the CUDA driver and device-side crates and tools for writing GPU
 kernels in idiomatic Rust.
 
 * [cuda-oxide](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-oxide)
-  ([book](cuda-oxide/)): A rustc compiler plugin, cargo helper utility, and
+  (<a href="cuda-oxide/">book</a>): A rustc compiler plugin, cargo helper utility, and
   crates to help users target the traditional CUDA **SIMT** (Single Instruction,
   Multiple Threads) kernel programming model. Here users have access to every
   detail of device-side CUDA programming.
 * [cutile-rs](https://github.com/NVIDIA/cuda-rust/tree/main/cutile-rs)
-  ([book](cutile/)): A proc-macro plugin and crates to help users write CUDA
+  (<a href="cutile/">book</a>): A proc-macro plugin and crates to help users write CUDA
   kernels using the CUDA **Tile** programming model. Tensors in memory are
   partitioned into sub-tensors; a kernel loads tiles from them, computes on
   whole tiles at a time, and stores tiles back, and the compiler decides how
@@ -80,8 +80,8 @@ cutile-rs and cuda-oxide each have a book with installation instructions,
 guides, and reference material. The runtime crates (`cuda-bindings`,
 `cuda-core`, `cuda-async`) are documented in the cutile-rs book.
 
-- [cuda-oxide book](cuda-oxide/)
-- [cutile-rs book](cutile/)
+- <a href="cuda-oxide/">cuda-oxide book</a>
+- <a href="cutile/">cutile-rs book</a>
 
 ## Contributing
 

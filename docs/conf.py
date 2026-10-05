@@ -22,18 +22,18 @@ myst_enable_extensions = ["colon_fence", "deflist", "tasklist", "attrs_inline"]
 source_suffix = {'.rst': 'restructuredtext', '.md': 'markdown'}
 master_doc = 'index'
 templates_path = ['_templates']
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', '.venv', 'README.md', 'NOTES.md']
+exclude_patterns = ['build', '_build', 'Thumbs.db', '.DS_Store', '.venv', 'README.md', 'NOTES.md']
 
 html_theme = 'pydata_sphinx_theme'
 html_title = "CUDA Rust"
-html_baseurl = os.environ.get('CUDA_RUST_DOCS_BASEURL', 'https://nvlabs.github.io/cuda-rust/')
+html_baseurl = os.environ.get('CUDA_RUST_DOCS_BASEURL', 'https://nvidia.github.io/cuda-rust/')
 
 html_theme_options = {
     "logo": {"text": "CUDA Rust"},
     "icon_links": [
         {
             "name": "GitHub",
-            "url": "https://github.com/NVlabs/cuda-rust",
+            "url": "https://github.com/NVIDIA/cuda-rust",
             "icon": "fa-brands fa-github",
             "type": "fontawesome",
         },

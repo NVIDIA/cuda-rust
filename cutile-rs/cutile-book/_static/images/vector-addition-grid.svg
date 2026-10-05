@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 450" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <!-- Load NVIDIA font from CDN -->
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 700;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Bd.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 500;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Medium.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Filters -->
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Arrow marker -->
+    <marker id="arrow-white" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M 0 0.5 L 5 3 L 0 5.5" fill="none" stroke="#ffffff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="450" fill="#0d1117"/>
+  <rect width="900" height="450" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="450" y="38" text-anchor="middle" font-size="24" font-weight="500" fill="#ffffff" letter-spacing="-0.5">How partitioning creates a multi-dimensional grid of sub-tensors</text>
+  <line x1="260" y1="50" x2="640" y2="50" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+
+  <!-- ==================== LEFT: Original Tensor ==================== -->
+  <g transform="translate(50, 80)">
+    <text x="100" y="0" text-anchor="middle" font-size="14" font-weight="600" fill="#8b949e">Original Tensor (32×32)</text>
+    
+    <!-- Large square representing tensor -->
+    <rect x="0" y="15" width="200" height="200" rx="10" fill="#161b22"/>
+    <rect x="0" y="15" width="200" height="200" rx="10" fill="none" stroke="#ffffff" stroke-width="2"/>
+    
+    <!-- Inner gradient/pattern to show it's data -->
+    <rect x="10" y="25" width="180" height="180" rx="6" fill="#21262d"/>
+    
+    <!-- Dimensions -->
+    <text x="100" y="125" text-anchor="middle" font-size="18" font-weight="600" fill="#6e7681">32 × 32</text>
+    <text x="100" y="150" text-anchor="middle" font-size="13" fill="#484f58">1024 elements</text>
+    
+    <!-- Dimension labels -->
+    <text x="100" y="235" text-anchor="middle" font-size="11" fill="#8b949e">32 columns</text>
+    <text x="-15" y="115" text-anchor="middle" font-size="11" fill="#8b949e" transform="rotate(-90, -15, 115)">32 rows</text>
+  </g>
+
+  <!-- Arrow -->
+  <g transform="translate(275, 180)">
+    <text x="45" y="-12" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">partition( <tspan fill="#ffa657" font-size="14">[ 4, 4 ]</tspan> )</text>
+    <path d="M 0 5 L 80 5" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+  </g>
+
+  <!-- ==================== RIGHT: Partitioned Grid ==================== -->
+  <g transform="translate(380, 80)">
+    <text x="230" y="0" text-anchor="middle" font-size="14" font-weight="600" fill="#8b949e">Partitioned View (8×8 grid of 4×4 tiles)</text>
+    
+    <!-- Container -->
+    <rect x="0" y="15" width="460" height="310" rx="10" fill="#161b22"/>
+    <rect x="0" y="15" width="460" height="310" rx="10" fill="none" stroke="#ffffff" stroke-width="2"/>
+    
+    <!-- 8x8 grid of tiles -->
+    <g transform="translate(10, 25)">
+      <!-- Row 0 -->
+      <rect x="0" y="0" width="52" height="34" rx="4" fill="#f97583"/>
+      <text x="26" y="22" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T0,0</text>
+      
+      <rect x="55" y="0" width="52" height="34" rx="4" fill="#56d364"/>
+      <text x="81" y="22" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T1,0</text>
+      
+      <rect x="110" y="0" width="52" height="34" rx="4" fill="#79c0ff"/>
+      <text x="136" y="22" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T2,0</text>
+      
+      <rect x="165" y="0" width="52" height="34" rx="4" fill="#d2a8ff"/>
+      <text x="191" y="22" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T3,0</text>
+      
+      <rect x="220" y="0" width="52" height="34" rx="4" fill="#f97583"/>
+      <text x="246" y="22" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T4,0</text>
+      
+      <rect x="275" y="0" width="52" height="34" rx="4" fill="#56d364"/>
+      <text x="301" y="22" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T5,0</text>
+      
+      <rect x="330" y="0" width="52" height="34" rx="4" fill="#79c0ff"/>
+      <text x="356" y="22" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T6,0</text>
+      
+      <rect x="385" y="0" width="52" height="34" rx="4" fill="#d2a8ff"/>
+      <text x="411" y="22" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T7,0</text>
+      
+      <!-- Row 1 -->
+      <rect x="0" y="37" width="52" height="34" rx="4" fill="#56d364"/>
+      <text x="26" y="59" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T0,1</text>
+      
+      <rect x="55" y="37" width="52" height="34" rx="4" fill="#79c0ff"/>
+      <text x="81" y="59" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T1,1</text>
+      
+      <rect x="110" y="37" width="52" height="34" rx="4" fill="#d2a8ff"/>
+      <text x="136" y="59" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T2,1</text>
+      
+      <rect x="165" y="37" width="52" height="34" rx="4" fill="#f97583"/>
+      <text x="191" y="59" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T3,1</text>
+      
+      <rect x="220" y="37" width="52" height="34" rx="4" fill="#56d364"/>
+      <text x="246" y="59" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T4,1</text>
+      
+      <rect x="275" y="37" width="52" height="34" rx="4" fill="#79c0ff"/>
+      <text x="301" y="59" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T5,1</text>
+      
+      <rect x="330" y="37" width="52" height="34" rx="4" fill="#d2a8ff"/>
+      <text x="356" y="59" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T6,1</text>
+      
+      <rect x="385" y="37" width="52" height="34" rx="4" fill="#f97583"/>
+      <text x="411" y="59" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T7,1</text>
+      
+      <!-- Rows 2-7 (abbreviated with dots pattern) -->
+      <rect x="0" y="74" width="52" height="34" rx="4" fill="#79c0ff"/>
+      <text x="26" y="96" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T0,2</text>
+      
+      <rect x="55" y="74" width="52" height="34" rx="4" fill="#d2a8ff"/>
+      <text x="81" y="96" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T1,2</text>
+      
+      <!-- Middle area with ellipsis -->
+      <rect x="110" y="74" width="217" height="108" rx="4" fill="#21262d" opacity="0.5"/>
+      <text x="218" y="133" text-anchor="middle" font-size="16" fill="#6e7681">. . .</text>
+      
+      <rect x="330" y="74" width="52" height="34" rx="4" fill="#56d364"/>
+      <text x="356" y="96" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T6,2</text>
+      
+      <rect x="385" y="74" width="52" height="34" rx="4" fill="#79c0ff"/>
+      <text x="411" y="96" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T7,2</text>
+      
+      <!-- More rows abbreviated -->
+      <rect x="0" y="111" width="52" height="34" rx="4" fill="#d2a8ff"/>
+      <text x="26" y="133" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T0,3</text>
+      
+      <rect x="55" y="111" width="52" height="34" rx="4" fill="#f97583"/>
+      <text x="81" y="133" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T1,3</text>
+      
+      <rect x="330" y="111" width="52" height="34" rx="4" fill="#d2a8ff"/>
+      <text x="356" y="133" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T6,3</text>
+      
+      <rect x="385" y="111" width="52" height="34" rx="4" fill="#f97583"/>
+      <text x="411" y="133" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T7,3</text>
+      
+      <!-- Vertical ellipsis on sides -->
+      <text x="26" y="170" text-anchor="middle" font-size="14" fill="#6e7681">⋮</text>
+      <text x="81" y="170" text-anchor="middle" font-size="14" fill="#6e7681">⋮</text>
+      <text x="356" y="170" text-anchor="middle" font-size="14" fill="#6e7681">⋮</text>
+      <text x="411" y="170" text-anchor="middle" font-size="14" fill="#6e7681">⋮</text>
+      
+      <!-- Row 7 (last row) -->
+      <rect x="0" y="185" width="52" height="34" rx="4" fill="#f97583"/>
+      <text x="26" y="207" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T0,7</text>
+      
+      <rect x="55" y="185" width="52" height="34" rx="4" fill="#56d364"/>
+      <text x="81" y="207" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T1,7</text>
+      
+      <rect x="110" y="185" width="52" height="34" rx="4" fill="#79c0ff"/>
+      <text x="136" y="207" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T2,7</text>
+      
+      <rect x="165" y="185" width="52" height="34" rx="4" fill="#d2a8ff"/>
+      <text x="191" y="207" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T3,7</text>
+      
+      <rect x="220" y="185" width="52" height="34" rx="4" fill="#f97583"/>
+      <text x="246" y="207" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T4,7</text>
+      
+      <rect x="275" y="185" width="52" height="34" rx="4" fill="#56d364"/>
+      <text x="301" y="207" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T5,7</text>
+      
+      <rect x="330" y="185" width="52" height="34" rx="4" fill="#79c0ff"/>
+      <text x="356" y="207" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T6,7</text>
+      
+      <rect x="385" y="185" width="52" height="34" rx="4" fill="#d2a8ff"/>
+      <text x="411" y="207" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="9" fill="#ffffff">T7,7</text>
+      
+      <!-- Info box -->
+      <g transform="translate(105, 235)">
+        <rect x="0" y="0" width="230" height="50" rx="6" fill="#21262d"/>
+        <text x="115" y="20" text-anchor="middle" font-size="12" fill="#ffffff">Each T is a <tspan fill="#ffa657" font-weight="600">4×4</tspan> sub-tensor</text>
+        <text x="115" y="38" text-anchor="middle" font-size="12" fill="#8b949e">Grid is 8×8 = <tspan fill="#76B900" font-weight="600">64 sub-tensors</tspan> total</text>
+      </g>
+    </g>
+  </g>
+
+</svg>

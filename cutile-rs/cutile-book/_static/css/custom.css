@@ -1,0 +1,384 @@
+/* Import NVIDIA Sphinx Theme - must be first */
+@import url('nvidia-sphinx-theme.css');
+
+/* ============================================
+   LEFT SIDEBAR - Table of Contents
+   Match TileIR exactly
+   ============================================ */
+.bd-sidebar-primary {
+    display: flex !important;
+    flex-direction: column;
+    flex-basis: 20%;
+    min-width: 280px;
+    max-width: 320px;
+}
+
+.bd-sidebar-primary.hide-on-wide {
+    display: flex !important;
+}
+
+@media (min-width: 960px) {
+    .bd-sidebar-primary {
+        display: flex !important;
+        position: sticky;
+        top: var(--pst-header-height);
+        max-height: calc(100vh - var(--pst-header-height));
+        overflow-y: auto;
+    }
+    
+    .bd-page-width {
+        display: flex;
+    }
+}
+
+/* ============================================
+   Table of Contents Styling - MATCH TILEIR
+   ============================================ */
+.sidebar-tree {
+    padding: 1rem 1rem 1rem 1.25rem;
+    font-family: var(--pst-font-family-base);
+}
+
+/* "Table of Contents" HEADER - bigger and bolder like TileIR */
+.sidebar-tree-title {
+    font-weight: 700;
+    font-size: 1.25rem;
+    padding: 0 0 1.5rem 0;
+    margin: 0;
+    color: var(--pst-color-heading);
+}
+
+/* Section captions (Tutorials, User Guide, Reference) - BIGGER */
+.sidebar-tree .caption {
+    font-weight: 600;
+    font-size: 1.05rem;
+    margin-top: 1.75rem;
+    margin-bottom: 0.6rem;
+    padding-left: 0;
+    color: var(--pst-color-text-muted);
+    text-transform: none;
+}
+
+/* Hide default bullets */
+.sidebar-tree ul {
+    list-style: none;
+    padding-left: 0;
+    margin: 0;
+}
+
+/* TOC items - GREY by default, BOLDER font weight */
+.sidebar-tree .toctree-l1 {
+    margin: 0.3rem 0;
+    padding-left: 0;
+    position: relative;
+}
+
+.sidebar-tree .toctree-l1 > a {
+    color: var(--pst-color-text-muted);
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 500;
+    display: block;
+    padding: 0.2rem 0 0.2rem 0.75rem;
+    border-left: 3px solid transparent;
+    margin-left: 0;
+    line-height: 1.5;
+}
+
+.sidebar-tree .toctree-l1 > a:hover {
+    color: var(--nv-color-green);
+}
+
+/* ACTIVE/SELECTED item - GREEN text + green bar on left */
+.sidebar-tree .toctree-l1.current > a {
+    color: var(--nv-color-green) !important;
+    font-weight: 500;
+    border-left: 3px solid var(--nv-color-green);
+}
+
+/* Nested items (l2, l3) */
+.sidebar-tree .toctree-l2,
+.sidebar-tree .toctree-l3 {
+    margin: 0.2rem 0;
+    padding-left: 0.75rem;
+}
+
+.sidebar-tree .toctree-l2 > a,
+.sidebar-tree .toctree-l3 > a {
+    font-size: 0.85rem;
+    font-weight: 500;
+    padding: 0.15rem 0 0.15rem 0.75rem;
+    border-left: 3px solid transparent;
+    color: var(--pst-color-text-muted);
+}
+
+.sidebar-tree .toctree-l2.current > a,
+.sidebar-tree .toctree-l3.current > a {
+    color: var(--nv-color-green) !important;
+    border-left: 3px solid var(--nv-color-green);
+}
+
+/* ============================================
+   MAIN CONTENT - Heavier/Bolder text like TileIR
+   ============================================ */
+body {
+    font-family: var(--pst-font-family-base) !important;
+    font-weight: 400;
+}
+
+/* Body text in article */
+.bd-article {
+    font-weight: 400;
+}
+
+.bd-article p,
+.bd-article li,
+.bd-article td,
+.bd-article dd {
+    font-weight: 400;
+    color: var(--pst-color-text-base);
+}
+
+/* ============================================
+   HEADERS - Heavier and tighter letter-spacing
+   ============================================ */
+h1, h2, h3, h4, h5, h6,
+.bd-article h1,
+.bd-article h2,
+.bd-article h3,
+.bd-article h4,
+.bd-article h5,
+.bd-article h6 {
+    font-family: var(--pst-font-family-heading) !important;
+    font-weight: 700;
+    letter-spacing: -0.01em;  /* Tighter spacing like TileIR */
+    color: var(--pst-color-heading);
+}
+
+/* Specific header sizes to match TileIR */
+.bd-article h1 {
+    font-size: 2.25rem;
+    letter-spacing: -0.02em;
+}
+
+.bd-article h2 {
+    font-size: 1.75rem;
+    letter-spacing: -0.015em;
+    margin-top: 2rem;
+}
+
+.bd-article h3 {
+    font-size: 1.5rem;
+    letter-spacing: -0.01em;
+}
+
+.bd-article h4 {
+    font-size: 1.25rem;
+}
+
+/* ============================================
+   CODE - Heavier weight
+   ============================================ */
+code, pre, .highlight,
+.bd-article code,
+.bd-article pre {
+    font-family: var(--pst-font-family-monospace) !important;
+    font-weight: 400;
+}
+
+/* Code blocks */
+div.highlight pre {
+    font-weight: 400;
+}
+
+/* Inline code */
+.bd-article code {
+    font-weight: 400;
+}
+
+/* ============================================
+   Better font rendering - brighter/heavier appearance
+   ============================================ */
+html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+}
+
+/* Make sidebar text render with proper weight */
+.bd-sidebar-primary {
+    -webkit-font-smoothing: subpixel-antialiased;
+}
+
+/* ============================================
+   Code Blocks styling
+   ============================================ */
+div.highlight {
+    border-radius: 8px;
+    margin: 1em 0;
+}
+
+div.highlight pre {
+    padding: 1em;
+    overflow-x: auto;
+    font-size: 0.9rem;
+}
+
+/* ============================================
+   Admonitions / Callouts
+   ============================================ */
+.admonition.tip {
+    border-left-color: var(--nv-color-green) !important;
+}
+
+.admonition.tip > .admonition-title {
+    background-color: rgba(118, 185, 0, 0.1) !important;
+}
+
+/* ============================================
+   Page Width
+   ============================================ */
+.bd-main .bd-content .bd-article-container {
+    max-width: 900px;
+}
+
+/* ============================================
+   Heading Anchors
+   ============================================ */
+h1, h2, h3, h4, h5, h6 {
+    scroll-margin-top: 80px;
+}
+
+/* ============================================
+   Prev/Next Navigation - Subtle like TileIR
+   ============================================ */
+.prev-next-area {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--pst-color-on-surface);
+}
+
+.prev-next-area a {
+    color: var(--pst-color-text-muted);
+    text-decoration: none;
+}
+
+.prev-next-area a:hover {
+    color: var(--nv-color-green);
+}
+
+/* ============================================
+   HIDE big green buttons
+   ============================================ */
+.sd-btn-success {
+    display: none !important;
+}
+
+/* ============================================
+   Search Button - Circular background like TileIR
+   ============================================ */
+.search-button__button,
+button.search-button__button {
+    background-color: var(--pst-color-surface) !important;
+    border-radius: 50% !important;
+    width: 2.5rem !important;
+    height: 2.5rem !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    border: none !important;
+}
+
+.search-button__button:hover {
+    background-color: var(--pst-color-on-surface) !important;
+}
+
+/* Theme switcher button - also circular */
+.theme-switch-button {
+    background-color: var(--pst-color-surface) !important;
+    border-radius: 50% !important;
+    width: 2.5rem !important;
+    height: 2.5rem !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    border: none !important;
+}
+
+.theme-switch-button:hover {
+    background-color: var(--pst-color-on-surface) !important;
+}
+
+/* ============================================
+   Header GitHub Links
+   ============================================ */
+.github-links {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    white-space: nowrap;
+}
+
+.github-links .nav-link {
+    padding: 0.25rem 0.5rem;
+    color: var(--pst-color-text-muted);
+    text-decoration: none;
+}
+
+.github-links .nav-link:hover {
+    color: var(--nv-color-green);
+}
+
+.github-links .nav-external::after {
+    content: none !important;
+    display: none !important;
+}
+
+/* ============================================
+   Footer - Match TileIR style exactly
+   ============================================ */
+.bd-footer {
+    border-top: none !important;
+    padding: 0 !important;
+    margin-top: 2rem;
+    background: transparent !important;
+}
+
+.bd-footer-content {
+    display: block;
+}
+
+/* Footer links styling */
+.bd-footer a,
+.footer-container a {
+    color: var(--pst-color-text-muted);
+    text-decoration: none;
+}
+
+.bd-footer a:hover,
+.footer-container a:hover {
+    color: var(--pst-color-text-base);
+    text-decoration: underline;
+}
+
+/* Remove default footer padding */
+.bd-footer .container {
+    padding: 0 !important;
+}
+
+/* ============================================
+   Vector Math Highlight - Tutorial Diagrams
+   ============================================ */
+.highlight-vectors pre {
+    background: linear-gradient(135deg, #161b22 0%, #0d1117 100%) !important;
+    border: 1px solid #30363d !important;
+    border-left: 3px solid var(--nv-color-green) !important;
+    border-radius: 8px !important;
+    padding: 1.25rem 1.5rem !important;
+    font-family: var(--pst-font-family-monospace) !important;
+    font-size: 0.95rem !important;
+    line-height: 1.7 !important;
+    letter-spacing: 0.02em;
+}

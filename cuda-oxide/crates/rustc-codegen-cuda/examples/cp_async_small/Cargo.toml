@@ -1,0 +1,12 @@
+[package]
+name = "cp_async_small"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace]
+
+[dependencies]
+cuda-core = { path = "../../../../../cuda-core", version = "0.4.0" }
+cuda-device = { path = "../../../cuda-device" }
+cuda-host = { path = "../../../cuda-host" }

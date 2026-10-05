@@ -35,11 +35,20 @@ impl Fixture {
     }
 
     fn run(&self, args: &[&str]) -> Output {
+        self.run_in(&self.dir, args)
+    }
+
+    fn run_in(&self, cwd: &Path, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_ptx-schedule"))
+            .current_dir(cwd)
             .arg(&self.input)
             .args(args)
             .output()
             .unwrap()
+    }
+
+    fn bytes(&self) -> Vec<u8> {
+        fs::read(&self.input).unwrap()
     }
 }
 
@@ -106,4 +115,135 @@ fn both_valid_modes_execute() {
     let rewritten = fixture.run(&["--seed", "7", "--output", output_path.to_str().unwrap()]);
     assert!(rewritten.status.success(), "{rewritten:?}");
     assert!(output_path.is_file());
+}
+
+fn assert_decisions_rejected(output: &Output) {
+    assert!(
+        !output.status.success(),
+        "decisions path should be rejected, got {output:?}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("ptx-schedule: seed="),
+        "success summary must not claim a write that was rejected: {stdout}"
+    );
+}
+
+#[test]
+fn decisions_json_exact_output_collision_is_rejected() {
+    let fixture = Fixture::new();
+    let before = fixture.bytes();
+    let output_path = fixture.output();
+    fs::write(&output_path, "ORIGINAL-PTX").unwrap();
+    let path = output_path.to_str().unwrap();
+    let output = fixture.run(&["--seed", "7", "--output", path, "--decisions-json", path]);
+    assert_decisions_rejected(&output);
+    assert_eq!(fixture.bytes(), before);
+    assert_eq!(fs::read_to_string(&output_path).unwrap(), "ORIGINAL-PTX");
+}
+
+#[test]
+fn decisions_json_dot_alias_of_output_is_rejected() {
+    let fixture = Fixture::new();
+    let before = fixture.bytes();
+    let output_path = fixture.output();
+    let output = fixture.run(&[
+        "--seed",
+        "7",
+        "--output",
+        "output.ptx",
+        "--decisions-json",
+        "./output.ptx",
+    ]);
+    assert_decisions_rejected(&output);
+    assert_eq!(fixture.bytes(), before);
+    assert!(
+        !output_path.exists(),
+        "rejected run must not create PTX output"
+    );
+}
+
+#[test]
+fn decisions_json_dotdot_alias_of_output_is_rejected() {
+    let fixture = Fixture::new();
+    let before = fixture.bytes();
+    let nested = fixture.dir.join("nested");
+    fs::create_dir_all(&nested).unwrap();
+    let output_path = fixture.output();
+    let output = fixture.run_in(
+        &nested,
+        &[
+            "--seed",
+            "7",
+            "--output",
+            "../output.ptx",
+            "--decisions-json",
+            "../nested/../output.ptx",
+        ],
+    );
+    assert_decisions_rejected(&output);
+    assert_eq!(fixture.bytes(), before);
+    assert!(
+        !output_path.exists(),
+        "rejected run must not create PTX output"
+    );
+}
+
+#[test]
+fn decisions_json_equal_to_input_leaves_input_unchanged() {
+    let fixture = Fixture::new();
+    let before = fixture.bytes();
+    let output_path = fixture.output();
+    let input = fixture.input.to_str().unwrap();
+    let output = fixture.run(&[
+        "--seed",
+        "7",
+        "--output",
+        output_path.to_str().unwrap(),
+        "--decisions-json",
+        input,
+    ]);
+    assert_decisions_rejected(&output);
+    assert_eq!(fixture.bytes(), before);
+    assert!(
+        !output_path.exists(),
+        "rejected run must not write --output"
+    );
+
+    let dotted = fixture.run(&[
+        "--seed",
+        "7",
+        "--output",
+        "output.ptx",
+        "--decisions-json",
+        "./input.ptx",
+    ]);
+    assert_decisions_rejected(&dotted);
+    assert_eq!(fixture.bytes(), before);
+    assert!(
+        !output_path.exists(),
+        "rejected run must not write --output"
+    );
+}
+
+#[test]
+fn inplace_ptx_rewrite_allows_a_distinct_decisions_json() {
+    let fixture = Fixture::new();
+    let decisions = fixture.dir.join("decisions.json");
+    let input = fixture.input.to_str().unwrap();
+    let output = fixture.run(&[
+        "--seed",
+        "7",
+        "--output",
+        input,
+        "--decisions-json",
+        decisions.to_str().unwrap(),
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("ptx-schedule: seed="));
+    let ptx = fs::read_to_string(&fixture.input).unwrap();
+    assert!(ptx.contains("nanosleep.u32"), "{ptx}");
+    assert!(!ptx.trim_start().starts_with('{'), "{ptx}");
+    let json = fs::read_to_string(&decisions).unwrap();
+    assert!(json.contains("\"sites_injected\""), "{json}");
 }

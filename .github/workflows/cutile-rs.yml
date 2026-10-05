@@ -1,0 +1,301 @@
+---
+# Port of cutile-rs/.github/workflows/pr.yml for the monorepo.
+# Tile crates stay a nested Cargo workspace under cutile-rs/. Shared host
+# crates (cuda-bindings, cuda-core, cuda-core-derive, cuda-async) are git-root
+# workspace members; `-p` those from the repository root.
+# Checkout does not init submodules. cuda-tile-rs is outside default-members,
+# and these CUDA images have no git until the setup action, so
+# `submodules: recursive` makes actions/checkout reject the REST API fallback.
+name: cutile-rs-pr
+
+on:
+  # Self-hosted runners (linux-amd64-cpu16) cannot run on pull_request events —
+  # see https://docs.gha-runners.nvidia.com/pull-request-testing/. Instead,
+  # copy-pr-bot mirrors trusted PRs to pull-request/<n> and we trigger on that
+  # push (config: .github/copy-pr-bot.yaml).
+  #
+  # No workflow-level paths: filter. copy-pr-bot creates pull-request/<n> at an
+  # existing SHA, and GitHub often treats that push as having no path changes,
+  # which would skip the workflow entirely. Tile vs SIMT separation is enforced
+  # by the `changes` job below instead (with a safe fallback when no files are
+  # detected).
+  push:
+    branches:
+      - main
+      - "pull-request/[0-9]+"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash -eou pipefail {0}
+    working-directory: cutile-rs
+
+jobs:
+  # Tile lane gate: cutile-rs tree plus shared host crates. Skips when only
+  # cuda-oxide changes. When copy-pr-bot yields no detectable file diff, run
+  # anyway so the mirror push is never silently skipped.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      tile: ${{ steps.changes.outputs.tile }}
+      any_changed: ${{ steps.changes.outputs.any_changed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            tile:
+              - 'cutile-rs/**'
+              - 'cuda-bindings/**'
+              - 'cuda-core/**'
+              - 'cuda-core-derive/**'
+              - 'cuda-async/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/cutile-rs.yml'
+              - '.github/copy-pr-bot.yaml'
+
+  # Exercise the oldest Tile IR assembler, including its lack of
+  # --list-versions. The separate 13.0 lane only checks shared host crates.
+  tile-ir-cuda13-2:
+    needs: changes
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.tile == 'true' ||
+      needs.changes.outputs.any_changed != 'true'
+    runs-on: linux-amd64-cpu16
+    container:
+      image: nvidia/cuda:13.2.0-devel-ubuntu24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    env:
+      CUDA_TOOLKIT_PATH: /usr/local/cuda
+      CUTILE_TILEIRAS_PATH: /usr/local/cuda/bin/tileiras
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./cutile-rs/.github/actions/setup
+      - name: Verify assembler
+        run: |
+          "$CUTILE_TILEIRAS_PATH" --version
+          "$CUTILE_TILEIRAS_PATH" --help | grep -q 'sm_120'
+      - name: CPU and assembler tests
+        run: ./scripts/run_cpu_tests.sh
+      - name: Standalone bytecode example
+        run: cargo run -p cutile-ir --example build_basic
+
+  # Newest Tile IR assembler: the 13.4 gates in the compiler and encoder must
+  # pass here and refuse correctly on the 13.2 lane above. The dev image may
+  # ship the toolkit without the assembler package; install it when missing.
+  tile-ir-cuda13-4:
+    needs: changes
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.tile == 'true' ||
+      needs.changes.outputs.any_changed != 'true'
+    runs-on: linux-amd64-cpu16
+    container:
+      image: nvidia/cuda:13.4.1-devel-ubuntu24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    env:
+      CUDA_TOOLKIT_PATH: /usr/local/cuda
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./cutile-rs/.github/actions/setup
+      - name: Verify assembler version
+        run: |
+          command -v tileiras || apt-get install -y -qq --no-install-recommends cuda-tileiras-13-4
+          tileiras --version
+          tileiras --list-versions | grep -q '13.4'
+      - name: CPU and assembler tests
+        run: ./scripts/run_cpu_tests.sh
+
+  build:
+    needs: changes
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.tile == 'true' ||
+      needs.changes.outputs.any_changed != 'true'
+    runs-on: linux-amd64-cpu16
+    container:
+      image: nvidia/cuda:13.3.0-devel-ubuntu24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    env:
+      CUDA_TOOLKIT_PATH: /usr/local/cuda
+    timeout-minutes: 30
+    steps:
+      # Before checkout, so this cannot use the cutile-rs working directory.
+      - name: Verify CUDA toolchain
+        working-directory: ${{ github.workspace }}
+        run: |
+          nvcc --version
+          command -v tileiras
+          tileiras --help | grep -q "sm_120"
+
+      - uses: actions/checkout@v7
+      - uses: ./cutile-rs/.github/actions/setup
+
+      # Cheapest checks first so a formatting or lint slip fails in seconds.
+      - name: Format check
+        run: cargo fmt -- --check
+
+      - name: Clippy
+        # cuda-tile-rs is outside default-members (its build compiles LLVM); keep it out of clippy too.
+        run: cargo clippy --workspace --exclude cuda-tile-rs --all-targets
+
+      - name: Clippy (host crates)
+        working-directory: ${{ github.workspace }}
+        # One line: a plain YAML scalar turns `\` into a literal backslash, so
+        # cargo saw ` --all-targets` as one argument. Skip --all-features here;
+        # cuda-core's f16 feature is nightly-only and reactor-verification covers it.
+        run: cargo clippy -p cuda-bindings -p cuda-core -p cuda-core-derive -p cuda-async --all-targets
+
+      - name: TileIR toolchain smoke test
+        run: cargo test -p cutile-ir --test bytecode_validate simple_arithmetic -- --exact --nocapture
+
+      # Compiles every lib, bin, test and example target once; the test script
+      # below then reuses those artifacts. (`cargo build` would be a subset.)
+      - name: Compile all targets
+        run: cargo test --no-run
+
+      - name: CPU only tests
+        run: ./scripts/run_cpu_tests.sh
+
+  # Breaking API changes must ship with the right version bump: compare each
+  # publishable crate's API against its latest crates.io release and fail the
+  # PR when a break arrives without one (the 0.3.0 -> 0.3.1 lesson). Same
+  # CUDA container as `build` because rustdoc needs the crates to compile.
+  semver-checks:
+    needs: changes
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.tile == 'true' ||
+      needs.changes.outputs.any_changed != 'true'
+    runs-on: linux-amd64-cpu16
+    container:
+      image: nvidia/cuda:13.3.0-devel-ubuntu24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    env:
+      CUDA_TOOLKIT_PATH: /usr/local/cuda
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./cutile-rs/.github/actions/setup
+
+      # Prebuilt binary instead of `cargo install` (which compiled the tool
+      # from source on every run).
+      - uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
+        with:
+          tool: cargo-semver-checks
+
+      - name: Check API compatibility against crates.io
+        run: |
+          cargo semver-checks --workspace \
+            --exclude cuda-tile-rs \
+            --exclude cutile-examples \
+            --exclude cutile-benchmarks
+
+      - name: Check host-crate API compatibility against crates.io
+        working-directory: ${{ github.workspace }}
+        run: cargo semver-checks -p cuda-bindings -p cuda-core -p cuda-async
+
+  # The shared host-side crates (cuda-bindings, cuda-core, cuda-async)
+  # support CUDA 13.0+, while the Tile stack requires 13.2+. This lane keeps
+  # the 13.0 floor honest: compile-only, no GPU, no TileIR toolchain (13.0
+  # images have no tileiras, which is exactly the point).
+  shared-crates-cuda13:
+    needs: changes
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.tile == 'true' ||
+      needs.changes.outputs.any_changed != 'true'
+    runs-on: linux-amd64-cpu16
+    container:
+      image: nvidia/cuda:13.0.0-devel-ubuntu24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    env:
+      CUDA_TOOLKIT_PATH: /usr/local/cuda
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./cutile-rs/.github/actions/setup
+
+      - name: Check shared crates against CUDA 13.0
+        working-directory: ${{ github.workspace }}
+        run: cargo check -p cuda-bindings -p cuda-core -p cuda-async --all-targets
+
+  # Nightly also covers cuda-core's optional native f16 support. The remaining
+  # jobs use stable: cutile-rs/rust-toolchain.toml inside this tree, and the
+  # git-root rust-toolchain.toml for the host-crate steps.
+  # Model-checks / sanitizers for the cuda-async completion reactor's lock-free
+  # slot protocol. CPU-only, no GPU: loom explores the interleavings and weak-
+  # memory outcomes, miri checks the UnsafeCell/pointer UB, ThreadSanitizer
+  # samples races on the full-scale std-thread stress. All opt-in tooling —
+  # never part of the default build.
+  reactor-verification:
+    needs: changes
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.tile == 'true' ||
+      needs.changes.outputs.any_changed != 'true'
+    runs-on: linux-amd64-cpu16
+    container:
+      image: nvidia/cuda:13.3.0-devel-ubuntu24.04
+      # ThreadSanitizer must disable ASLR; the default container seccomp blocks
+      # the personality() call it uses, so relax it for this job.
+      options: --security-opt seccomp=unconfined
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    env:
+      CUDA_TOOLKIT_PATH: /usr/local/cuda
+      RUSTUP_TOOLCHAIN: nightly-2026-09-16
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # This nightly must ship clippy, miri, and rust-src on x86_64.
+      - uses: ./cutile-rs/.github/actions/setup
+        with:
+          components: clippy miri rust-src
+
+      - name: Clippy (all features, including native f16)
+        run: cargo clippy --workspace --exclude cuda-tile-rs --all-targets --all-features
+
+      - name: Native f16 DeviceCopy
+        working-directory: ${{ github.workspace }}
+        run: cargo test -p cuda-core --features f16 --test simt_device_copy_impls
+
+      - name: loom model check (interleavings + weak memory)
+        working-directory: ${{ github.workspace }}
+        run: RUSTFLAGS="--cfg loom" cargo test -p cuda-async --lib loom_
+
+      - name: miri (UnsafeCell / pointer UB)
+        working-directory: ${{ github.workspace }}
+        run: cargo miri test -p cuda-async --lib slot_table
+
+      - name: ThreadSanitizer (sampled data races, full-scale stress)
+        working-directory: ${{ github.workspace }}
+        run: |
+          # setarch -R pre-disables ASLR so TSan doesn't need to re-exec itself
+          # (which the container blocks); this sidesteps the high mmap-entropy
+          # incompatibility on newer kernels.
+          RUSTFLAGS="-Zsanitizer=thread" \
+            setarch "$(uname -m)" -R \
+            cargo test -p cuda-async --lib slot_table \
+            -Zbuild-std --target x86_64-unknown-linux-gnu

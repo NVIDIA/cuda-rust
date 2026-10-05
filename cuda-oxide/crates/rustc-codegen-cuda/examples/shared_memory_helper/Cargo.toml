@@ -1,0 +1,22 @@
+[package]
+name = "shared_memory_helper"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Dynamic shared-memory pointer and barrier access across device helper calls"
+
+[workspace]
+members = ["helper-lib"]
+
+[features]
+default = []
+local-helper = []
+cross-crate-helper = []
+force-inline = ["shared-memory-helper-lib/force-inline"]
+heuristic-inline = ["shared-memory-helper-lib/heuristic-inline"]
+
+[dependencies]
+cuda-device = { path = "../../../cuda-device" }
+cuda-host = { path = "../../../cuda-host" }
+cuda-core = { path = "../../../../../cuda-core", version = "0.4.0" }
+shared-memory-helper-lib = { path = "helper-lib" }

@@ -30,4 +30,4 @@ jobs:
       # `cuda_oxide_` is deliberately not matched, and why a search that
       # cannot run has to fail rather than report an empty result.
       - name: Search for hardcoded reserved-prefix literals
-        run: bash scripts/check-reserved-prefixes.sh
+        run: bash cuda-oxide/scripts/check-reserved-prefixes.sh

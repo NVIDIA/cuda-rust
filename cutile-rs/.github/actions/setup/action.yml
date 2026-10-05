@@ -1,0 +1,77 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+---
+name: Set up the build container
+description: >-
+  Installs the build dependencies the nvidia/cuda dev images lack, installs the
+  toolchain pinned in rust-toolchain.toml (or RUSTUP_TOOLCHAIN when set), puts
+  cargo on PATH, and restores the cargo/target cache for this job.
+
+inputs:
+  components:
+    description: Extra rustup components for the selected toolchain (space separated).
+    default: ""
+  cache:
+    description: Restore and save the Rust build cache for this job.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: bash
+      working-directory: cutile-rs
+      env:
+        RUST_COMPONENTS: ${{ inputs.components }}
+        RUST_CACHE: ${{ inputs.cache }}
+      run: |
+        case "$RUST_CACHE" in
+          true|false) ;;
+          *) echo '::error::cache must be true or false'; exit 1 ;;
+        esac
+        if [[ ! "$RUST_COMPONENTS" =~ ^([[:blank:]]*[a-z][a-z0-9-]*)*[[:blank:]]*$ ]]; then
+          echo '::error::components must be space-separated rustup component names'
+          exit 1
+        fi
+
+    - name: Install build dependencies
+      shell: bash
+      working-directory: cutile-rs
+      run: |
+        apt-get update -qq
+        apt-get install -y -qq --no-install-recommends build-essential curl \
+          ca-certificates git cmake pkg-config libclang-dev zlib1g-dev libzstd-dev
+
+    # Stay in cutile-rs. rustup walks up from the working directory, and the
+    # git-root pin is the host-crate stable toolchain, not this file. The Oxide
+    # nightly lives in cuda-oxide/rust-toolchain.toml.
+    - name: Install Rust
+      shell: bash
+      working-directory: cutile-rs
+      env:
+        RUST_COMPONENTS: ${{ inputs.components }}
+      run: |
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+          | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+        echo "${HOME}/.cargo/bin" >> "$GITHUB_PATH"
+        if [[ -n "${RUSTUP_TOOLCHAIN:-}" ]]; then
+          "${HOME}/.cargo/bin/rustup" toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+        fi
+        "${HOME}/.cargo/bin/rustup" show active-toolchain
+        read -r -a components <<< "$RUST_COMPONENTS"
+        if (( ${#components[@]} )); then
+          "${HOME}/.cargo/bin/rustup" component add "${components[@]}"
+        fi
+
+    # Third-party actions must be pinned to a SHA on the organization's Actions
+    # allowlist (repo settings > Actions > selected actions); a tag like @v2 fails
+    # the workflow at startup. Dependabot keeps the version comment current.
+    - name: Restore the Rust build cache
+      if: inputs.cache == 'true'
+      uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        # One cache per job: the CUDA image differs per lane and bindgen output
+        # with it, so artifacts are not interchangeable across lanes.
+        workspaces: cutile-rs
+        key: ${{ github.job }}
+        cache-on-failure: true

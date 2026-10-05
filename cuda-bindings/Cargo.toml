@@ -1,0 +1,35 @@
+[package]
+name = "cuda-bindings"
+version = "0.4.0"
+authors = ["Melih Elibol"]
+edition = "2021"
+rust-version = "1.89"
+description = "NVIDIA CUDA bindings."
+readme = "README.md"
+license = "Apache-2.0"
+repository = "https://github.com/nvlabs/cutile-rs"
+
+[lib]
+doctest = false
+
+[dependencies]
+libloading = "0.8"
+
+[build-dependencies]
+bindgen = "0.69.4"
+prettyplease = "0.2.35"
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1.0.35"
+syn = { version = "2.0", features = ["full", "extra-traits", "visit", "visit-mut", "fold"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+missing_safety_doc = "allow"
+type_complexity = "allow"
+too_many_arguments = "allow"
+needless_range_loop = "allow"
+large_enum_variant = "allow"
+single_range_in_vec_init = "allow"

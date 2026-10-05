@@ -1,11 +1,32 @@
 ---
 name: CI
 
+# Path-filtered SIMT lane: skip when a change cannot affect cuda-oxide or the
+# shared host crates. `cuda-oxide/**` is deliberately broad (prose as well as
+# code) because guard scripts cross-check the book against the crates.
 on:
   push:
     branches: [main]
+    paths:
+      - 'cuda-oxide/**'
+      - 'cuda-bindings/**'
+      - 'cuda-core/**'
+      - 'cuda-core-derive/**'
+      - 'cuda-async/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/**'
   pull_request:
     branches: [main]
+    paths:
+      - 'cuda-oxide/**'
+      - 'cuda-bindings/**'
+      - 'cuda-core/**'
+      - 'cuda-core-derive/**'
+      - 'cuda-async/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/**'
 
 concurrency:
   group: ci-gate-${{ github.ref_name }}

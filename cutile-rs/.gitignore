@@ -1,0 +1,15 @@
+.idea
+.env
+.vscode
+.cargo
+target
+_site
+
+**/*.bc
+**/*.cubin
+**/*.mlir
+**/core
+scratch
+temp
+*~
+scripts/publish.sh

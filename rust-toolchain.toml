@@ -1,10 +1,8 @@
+# Stable pin for the git-root host workspace (cuda-bindings, cuda-core,
+# cuda-core-derive, cuda-async). rustup walks up from the working directory,
+# so `cargo` at the git root must not inherit the Oxide nightly under
+# cuda-oxide/. Keep this channel in lockstep with cutile-rs/rust-toolchain.toml.
 [toolchain]
-channel = "nightly-2026-08-28"
-components = [
-    "rust-src",
-    "rustc-dev",
-    "rust-analyzer",
-    "clippy",
-    "rustfmt",
-    "llvm-tools",
-]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

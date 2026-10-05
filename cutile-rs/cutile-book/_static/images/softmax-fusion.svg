@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 730" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+    </style>
+    
+    <!-- Arrow markers -->
+    <marker id="arrow-pink" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f97583"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#56d364"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#79c0ff"/>
+    </marker>
+    <marker id="arrow-white" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto">
+      <polygon points="0 0, 6 2.5, 0 5" fill="#ffffff"/>
+    </marker>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="730" fill="#0d1117"/>
+  <rect width="900" height="730" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="450" y="38" text-anchor="middle" font-size="26" font-weight="600" fill="#ffffff" letter-spacing="-0.5">Kernel Fusion: Unfused vs Fused Softmax</text>
+  <line x1="250" y1="52" x2="650" y2="52" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+
+  <!-- ==================== LEFT: Unfused (Bad) ==================== -->
+  <g transform="translate(30, 75)">
+    <!-- Container -->
+    <rect width="400" height="590" rx="12" fill="#161b22"/>
+    <rect width="400" height="590" rx="12" fill="none" stroke="#f97583" stroke-width="2" stroke-dasharray="6,4"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="396" height="40" rx="10" fill="#f97583"/>
+    <text x="200" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff">❌ Unfused: 4 Kernels</text>
+    
+    <!-- Global Memory bar (top) -->
+    <rect x="20" y="60" width="360" height="32" rx="6" fill="#79c0ff"/>
+    <text x="200" y="82" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Global Memory (HBM)</text>
+    
+    <!-- Kernel 1: Find max -->
+    <g transform="translate(50, 115)">
+      <rect width="130" height="60" rx="8" fill="#d2a8ff"/>
+      <text x="65" y="26" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">Kernel 1</text>
+      <text x="65" y="46" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">Find max</text>
+      
+      <!-- Arrow to result -->
+      <path d="M 135 30 L 185 30" stroke="#f97583" stroke-width="2" marker-end="url(#arrow-pink)"/>
+      
+      <!-- Result -->
+      <rect x="190" y="5" width="110" height="50" rx="6" fill="#f97583"/>
+      <text x="245" y="35" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">max → HBM</text>
+    </g>
+    
+    <!-- Memory traffic indicator -->
+    <g transform="translate(20, 195)">
+      <path d="M 180 0 L 180 25" stroke="#f97583" stroke-width="2" stroke-dasharray="4,3"/>
+      <text x="205" y="18" font-size="11" font-weight="700" fill="#f97583">↓ Write + ↑ Read</text>
+    </g>
+    
+    <!-- Kernel 2: Subtract & exp -->
+    <g transform="translate(50, 235)">
+      <rect width="130" height="60" rx="8" fill="#79c0ff"/>
+      <text x="65" y="26" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">Kernel 2</text>
+      <text x="65" y="46" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">exp(x-max)</text>
+      
+      <path d="M 135 30 L 185 30" stroke="#f97583" stroke-width="2" marker-end="url(#arrow-pink)"/>
+      
+      <rect x="190" y="5" width="110" height="50" rx="6" fill="#f97583"/>
+      <text x="245" y="35" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">exp → HBM</text>
+    </g>
+    
+    <!-- Memory traffic indicator -->
+    <g transform="translate(20, 315)">
+      <path d="M 180 0 L 180 25" stroke="#f97583" stroke-width="2" stroke-dasharray="4,3"/>
+      <text x="205" y="18" font-size="11" font-weight="700" fill="#f97583">↓ Write + ↑ Read</text>
+    </g>
+    
+    <!-- Kernel 3: Sum -->
+    <g transform="translate(50, 355)">
+      <rect width="130" height="60" rx="8" fill="#ffa657"/>
+      <text x="65" y="26" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">Kernel 3</text>
+      <text x="65" y="46" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">Sum exp vals</text>
+      
+      <path d="M 135 30 L 185 30" stroke="#f97583" stroke-width="2" marker-end="url(#arrow-pink)"/>
+      
+      <rect x="190" y="5" width="110" height="50" rx="6" fill="#f97583"/>
+      <text x="245" y="35" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">sum → HBM</text>
+    </g>
+    
+    <!-- Memory traffic indicator -->
+    <g transform="translate(20, 435)">
+      <path d="M 180 0 L 180 25" stroke="#f97583" stroke-width="2" stroke-dasharray="4,3"/>
+      <text x="205" y="18" font-size="11" font-weight="700" fill="#f97583">↓ Write + ↑ Read</text>
+    </g>
+    
+    <!-- Kernel 4: Divide -->
+    <g transform="translate(50, 475)">
+      <rect width="130" height="60" rx="8" fill="#56d364"/>
+      <text x="65" y="26" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">Kernel 4</text>
+      <text x="65" y="46" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">Divide</text>
+      
+      <path d="M 135 30 L 185 30" stroke="#f97583" stroke-width="2" marker-end="url(#arrow-pink)"/>
+      
+      <rect x="190" y="5" width="110" height="50" rx="6" fill="#f97583"/>
+      <text x="245" y="35" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">result → HBM</text>
+    </g>
+    
+    <!-- Summary -->
+    <g transform="translate(20, 552)">
+      <rect width="360" height="28" rx="6" fill="#f97583"/>
+      <text x="180" y="20" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">4 kernel launches, 4 memory round-trips 🐢</text>
+    </g>
+  </g>
+
+  <!-- ==================== RIGHT: Fused (Good) ==================== -->
+  <g transform="translate(470, 75)">
+    <!-- Container -->
+    <rect width="400" height="590" rx="12" fill="#161b22"/>
+    <rect width="400" height="590" rx="12" fill="none" stroke="#56d364" stroke-width="2.5"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="396" height="40" rx="10" fill="#56d364"/>
+    <text x="200" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff">✓ Fused: 1 Kernel</text>
+    
+    <!-- Global Memory bar (top) -->
+    <rect x="20" y="55" width="360" height="32" rx="6" fill="#79c0ff"/>
+    <text x="200" y="77" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Global Memory (HBM)</text>
+    
+    <!-- Single load arrow -->
+    <g transform="translate(200, 92)">
+      <path d="M 0 0 L 0 28" stroke="#79c0ff" stroke-width="2" marker-end="url(#arrow-blue)"/>
+      <text x="25" y="18" font-size="12" font-weight="700" fill="#79c0ff">Load once</text>
+    </g>
+    
+    <!-- Fused kernel container -->
+    <g transform="translate(30, 128)">
+      <rect width="340" height="330" rx="10" fill="#21262d"/>
+      <rect width="340" height="330" rx="10" fill="none" stroke="#ffa657" stroke-width="2"/>
+      
+      <!-- Registers label -->
+      <rect x="2" y="2" width="336" height="28" rx="8" fill="#ffa657"/>
+      <text x="170" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">⚡ All in Registers (FAST)</text>
+      
+      <!-- Step 1 -->
+      <g transform="translate(30, 45)">
+        <rect width="280" height="48" rx="6" fill="#d2a8ff"/>
+        <text x="140" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">max = reduce_max(x)</text>
+        <text x="140" y="38" text-anchor="middle" font-size="10" font-weight="600" fill="#ffffff">stays in registers ⚡</text>
+      </g>
+      
+      <!-- Flow arrow 1 -->
+      <path d="M 170 98 L 170 114" stroke="#ffffff" stroke-width="2" marker-end="url(#arrow-white)"/>
+      
+      <!-- Step 2 -->
+      <g transform="translate(30, 120)">
+        <rect width="280" height="48" rx="6" fill="#79c0ff"/>
+        <text x="140" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">shifted = x - max</text>
+        <text x="140" y="38" text-anchor="middle" font-size="10" font-weight="600" fill="#ffffff">stays in registers ⚡</text>
+      </g>
+      
+      <!-- Flow arrow 2 -->
+      <path d="M 170 173 L 170 189" stroke="#ffffff" stroke-width="2" marker-end="url(#arrow-white)"/>
+      
+      <!-- Step 3 -->
+      <g transform="translate(30, 195)">
+        <rect width="280" height="48" rx="6" fill="#e3b341"/>
+        <text x="140" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">exp_vals = exp(shifted)</text>
+        <text x="140" y="38" text-anchor="middle" font-size="10" font-weight="600" fill="#ffffff">stays in registers ⚡</text>
+      </g>
+      
+      <!-- Flow arrow 3 -->
+      <path d="M 170 248 L 170 264" stroke="#ffffff" stroke-width="2" marker-end="url(#arrow-white)"/>
+      
+      <!-- Step 4 -->
+      <g transform="translate(30, 270)">
+        <rect width="280" height="48" rx="6" fill="#56d364"/>
+        <text x="140" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">result = exp_vals / sum(exp_vals)</text>
+        <text x="140" y="38" text-anchor="middle" font-size="10" font-weight="600" fill="#ffffff">all in registers! ⚡</text>
+      </g>
+    </g>
+    
+    <!-- Single store arrow -->
+    <g transform="translate(200, 466)">
+      <path d="M 0 0 L 0 28" stroke="#79c0ff" stroke-width="2" marker-end="url(#arrow-blue)"/>
+      <text x="25" y="18" font-size="12" font-weight="700" fill="#79c0ff">Store once</text>
+    </g>
+    
+    <!-- Global Memory bar (bottom) -->
+    <rect x="20" y="502" width="360" height="32" rx="6" fill="#79c0ff"/>
+    <text x="200" y="524" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Global Memory (HBM)</text>
+    
+    <!-- Summary -->
+    <g transform="translate(20, 552)">
+      <rect width="360" height="28" rx="6" fill="#56d364"/>
+      <text x="180" y="20" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">1 kernel launch, 1 memory round-trip ⚡</text>
+    </g>
+  </g>
+
+  <!-- Bottom comparison bar -->
+  <g transform="translate(30, 688)">
+    <rect width="840" height="32" rx="6" fill="#76B900"/>
+    <text x="420" y="22" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">
+      Fusion keeps all intermediate values in registers, avoiding slow global memory traffic
+    </text>
+  </g>
+
+</svg>

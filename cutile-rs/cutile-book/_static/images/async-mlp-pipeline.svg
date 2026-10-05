@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 400" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Arrow markers -->
+    <marker id="arrow-white" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M 0 0.5 L 5 3 L 0 5.5" fill="none" stroke="#ffffff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="400" fill="#0d1117"/>
+  <rect width="900" height="400" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="450" y="38" text-anchor="middle" font-size="24" font-weight="600" fill="#ffffff" letter-spacing="-0.5">Async MLP Pipeline: Lazy Execution</text>
+  <line x1="280" y1="52" x2="620" y2="52" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+
+  <!-- ==================== Pipeline Visualization ==================== -->
+  <g transform="translate(50, 80)">
+    <!-- Container -->
+    <rect width="800" height="175" rx="10" fill="#161b22"/>
+    <rect width="800" height="175" rx="10" fill="none" stroke="#76B900" stroke-width="2"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="796" height="30" rx="8" fill="#1a2a1a"/>
+    <text x="400" y="22" text-anchor="middle" font-size="14" font-weight="600" fill="#76B900">Build graph first, execute once with .await</text>
+    
+    <!-- Pipeline stages -->
+    <!-- Input -->
+    <g transform="translate(30, 55)">
+      <rect width="100" height="70" rx="8" fill="#79c0ff"/>
+      <text x="50" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">Input</text>
+      <text x="50" y="46" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">[16, 32]</text>
+      <text x="50" y="62" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">DeviceOp</text>
+    </g>
+    
+    <!-- Arrow -->
+    <path d="M 140 90 L 170 90" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+    
+    <!-- GEMM -->
+    <g transform="translate(185, 55)">
+      <rect width="140" height="70" rx="8" fill="#21262d"/>
+      <rect width="140" height="70" rx="8" fill="none" stroke="#d2a8ff" stroke-width="2"/>
+      <text x="70" y="24" text-anchor="middle" font-size="13" font-weight="700" fill="#d2a8ff">Linear (GEMM)</text>
+      <text x="70" y="42" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">input @ weights</text>
+      <text x="70" y="60" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="11" font-weight="500" fill="#d2a8ff">gemm(out, data, w)</text>
+    </g>
+    
+    <!-- Arrow -->
+    <path d="M 335 90 L 365 90" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+    
+    <!-- ReLU -->
+    <g transform="translate(380, 55)">
+      <rect width="120" height="70" rx="8" fill="#21262d"/>
+      <rect width="120" height="70" rx="8" fill="none" stroke="#ffa657" stroke-width="2"/>
+      <text x="60" y="24" text-anchor="middle" font-size="13" font-weight="700" fill="#ffa657">ReLU</text>
+      <text x="60" y="42" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">max(0, x)</text>
+      <text x="60" y="60" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="11" font-weight="500" fill="#ffa657">relu</text>
+    </g>
+    
+    <!-- Arrow -->
+    <path d="M 510 90 L 540 90" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+    
+    <!-- .await -->
+    <g transform="translate(555, 55)">
+      <rect width="90" height="70" rx="8" fill="#76B900"/>
+      <text x="45" y="28" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">.await</text>
+      <text x="45" y="46" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">Run!</text>
+      <text x="45" y="62" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">Pipeline runs</text>
+    </g>
+    
+    <!-- Arrow -->
+    <path d="M 655 90 L 685 90" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+    
+    <!-- Output -->
+    <g transform="translate(700, 55)">
+      <rect width="80" height="70" rx="8" fill="#56d364"/>
+      <text x="40" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">Output</text>
+      <text x="40" y="46" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">[16, 16]</text>
+      <text x="40" y="62" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">Tensor</text>
+    </g>
+    
+    <!-- Lazy execution callout -->
+    <g transform="translate(160, 138)">
+      <rect width="480" height="28" rx="4" fill="#21262d"/>
+      <rect width="480" height="28" rx="4" fill="none" stroke="#ffffff" stroke-width="1"/>
+      <text x="240" y="19" text-anchor="middle" font-size="12" font-weight="600">
+        <tspan fill="#ffa657">Nothing runs</tspan>
+        <tspan fill="#ffffff"> until </tspan>
+        <tspan fill="#76B900" font-weight="700">.await</tspan>
+        <tspan fill="#ffffff"> — the runtime can optimize the whole graph</tspan>
+      </text>
+    </g>
+  </g>
+
+  <!-- ==================== Benefits List ==================== -->
+  <g transform="translate(50, 275)">
+    <rect width="800" height="110" rx="10" fill="#161b22"/>
+    <rect width="800" height="110" rx="10" fill="none" stroke="#ffffff" stroke-width="1.5"/>
+    
+    <!-- Header -->
+    <text x="20" y="28" font-size="15" font-weight="700" fill="#76B900">⚡ Async Pipeline Benefits</text>
+    
+    <!-- Benefits in 2x2 grid -->
+    <g transform="translate(20, 48)">
+      <!-- Row 1 -->
+      <g transform="translate(0, 0)">
+        <rect width="365" height="24" rx="4" fill="#21262d"/>
+        <text x="12" y="17" font-size="12" font-weight="600" fill="#ffffff">
+          <tspan fill="#79c0ff">1.</tspan>
+          <tspan fill="#ffffff"> Lazy execution — build graph first, execute once</tspan>
+        </text>
+      </g>
+      
+      <g transform="translate(385, 0)">
+        <rect width="385" height="24" rx="4" fill="#21262d"/>
+        <text x="12" y="17" font-size="12" font-weight="600" fill="#ffffff">
+          <tspan fill="#d2a8ff">2.</tspan>
+          <tspan fill="#ffffff"> Kernel fusion opportunities for runtime</tspan>
+        </text>
+      </g>
+      
+      <!-- Row 2 -->
+      <g transform="translate(0, 32)">
+        <rect width="365" height="24" rx="4" fill="#21262d"/>
+        <text x="12" y="17" font-size="12" font-weight="600" fill="#ffffff">
+          <tspan fill="#ffa657">3.</tspan>
+          <tspan fill="#ffffff"> Overlap compilation with data preparation</tspan>
+        </text>
+      </g>
+      
+      <g transform="translate(385, 32)">
+        <rect width="385" height="24" rx="4" fill="#21262d"/>
+        <text x="12" y="17" font-size="12" font-weight="600" fill="#ffffff">
+          <tspan fill="#56d364">4.</tspan>
+          <tspan fill="#ffffff"> Easy composition of complex operations</tspan>
+        </text>
+      </g>
+    </g>
+  </g>
+
+</svg>

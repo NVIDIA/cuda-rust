@@ -1,0 +1,29 @@
+[package]
+name = "cuda-core-derive"
+description = "Derive macro for cuda-core's DeviceCopy trait."
+version = "0.4.0"
+edition = "2021"
+rust-version = "1.89"
+license = "Apache-2.0"
+authors = ["Melih Elibol"]
+repository = "https://github.com/nvlabs/cutile-rs"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1.0.35"
+syn = { version = "2.0", features = ["full", "extra-traits", "visit", "visit-mut", "fold"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+missing_safety_doc = "allow"
+type_complexity = "allow"
+too_many_arguments = "allow"
+needless_range_loop = "allow"
+large_enum_variant = "allow"
+single_range_in_vec_init = "allow"

@@ -1,0 +1,14 @@
+[package]
+name = "pinned_overlap"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+# Keep this example outside the SIMT workspace, like the other unified
+# compilation examples. Run it with: cargo oxide run pinned_overlap
+[workspace]
+
+[dependencies]
+cuda-device = { path = "../../../cuda-device" }
+cuda-host = { path = "../../../cuda-host" }
+cuda-core = { path = "../../../../../cuda-core", version = "0.4.0" }

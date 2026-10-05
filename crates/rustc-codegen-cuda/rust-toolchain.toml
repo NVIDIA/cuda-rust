@@ -1,5 +1,0 @@
-# Must match the parent cuda-oxide toolchain exactly!
-# rustc_private APIs change between nightly versions.
-[toolchain]
-channel = "nightly-2026-08-28"
-components = ["rust-src", "rustc-dev", "rust-analyzer", "clippy", "rustfmt", "llvm-tools"]

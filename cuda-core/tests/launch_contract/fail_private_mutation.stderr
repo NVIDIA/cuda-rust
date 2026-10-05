@@ -1,0 +1,5 @@
+error[E0616]: field `block_x` of struct `LaunchConfig1D` is private
+ --> tests/launch_contract/fail_private_mutation.rs:8:11
+  |
+8 |     valid.block_x = 64;
+  |           ^^^^^^^ private field

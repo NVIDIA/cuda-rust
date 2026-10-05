@@ -1,0 +1,47 @@
+{
+  "name": "cuda-oxide",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+  "workspaceMount": "source=${localWorkspaceFolder}/..,target=/workspaces/cuda-rust,type=bind",
+  "workspaceFolder": "/workspaces/cuda-rust/cuda-oxide",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "username": "vscode",
+      "userUid": "automatic",
+      "userGid": "automatic",
+      "installZsh": false,
+      "installOhMyZsh": false,
+      "installOhMyZshConfig": false,
+      "upgradePackages": false
+    },
+    "ghcr.io/devcontainers/features/rust:1": {
+      "version": "nightly-2026-08-28",
+      "profile": "minimal",
+      "components": "rust-src,rustc-dev,rust-analyzer,rustfmt,clippy"
+    }
+  },
+  "remoteUser": "vscode",
+  "updateRemoteUserUID": true,
+  "runArgs": [
+    "--gpus=all"
+  ],
+  "containerEnv": {
+    "CUDA_HOME": "/usr/local/cuda",
+    "CUDA_PATH": "/usr/local/cuda",
+    "CUDA_TOOLKIT_PATH": "/usr/local/cuda",
+    "CUDA_OXIDE_LLC": "/usr/bin/llc-21",
+    "LIBCLANG_PATH": "/usr/lib/llvm-21/lib",
+    "LLVM_CONFIG_PATH": "/usr/bin/llvm-config-21"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "vadimcn.vscode-lldb",
+        "tamasfe.even-better-toml"
+      ]
+    }
+  }
+}

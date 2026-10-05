@@ -1,0 +1,23 @@
+[package]
+name = "cutile_inter_kernel"
+version = "0.1.0"
+edition = "2024"
+authors = ["NVIDIA CORPORATION"]
+license = "Apache-2.0"
+
+[package.metadata.cuda-oxide.interop]
+kind = "inter-kernel-t2s"
+
+[[package.metadata.cuda-oxide.device-crates]]
+manifest-path = "simt/Cargo.toml"
+ptx-dir = "simt"
+
+[workspace]
+resolver = "2"
+
+[dependencies]
+cutile = { path = "../../../../../cutile-rs/cutile", version = "0.4.0" }
+cutile-compiler = { path = "../../../../../cutile-rs/cutile-compiler", version = "0.4.0" }
+cuda-async = { path = "../../../../../cuda-async", version = "0.4.0" }
+cuda-core = { path = "../../../../../cuda-core", version = "0.4.0" }
+tokio = { version = "1", features = ["full"] }

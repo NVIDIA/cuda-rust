@@ -1,0 +1,228 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 950 540" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Arrow markers -->
+    <marker id="arrow-green" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M 0 0.5 L 5 3 L 0 5.5" fill="none" stroke="#76B900" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="arrow-white" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M 0 0.5 L 5 3 L 0 5.5" fill="none" stroke="#ffffff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="950" height="540" fill="#0d1117"/>
+  <rect width="950" height="540" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="475" y="38" text-anchor="middle" font-size="24" font-weight="600" fill="#ffffff" letter-spacing="-0.5">The K-Loop: Accumulating Partial Products</text>
+  <line x1="265" y1="52" x2="685" y2="52" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+
+  <!-- ==================== Iteration 0 ==================== -->
+  <g transform="translate(40, 85)">
+    <!-- Label -->
+    <rect x="50" y="0" width="130" height="32" rx="16" fill="#21262d"/>
+    <rect x="50" y="0" width="130" height="32" rx="16" fill="none" stroke="#ffffff" stroke-width="1.5"/>
+    <text x="115" y="21" text-anchor="middle" font-size="14" font-weight="600" fill="#ffa657">Iteration 0</text>
+    
+    <!-- A tile -->
+    <g transform="translate(0, 55)">
+      <rect width="90" height="60" rx="8" fill="#f97583"/>
+      <text x="45" y="26" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">A[row, 0]</text>
+      <text x="45" y="46" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">tile_x</text>
+    </g>
+    
+    <!-- @ symbol -->
+    <text x="115" y="95" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">@</text>
+    
+    <!-- B tile -->
+    <g transform="translate(140, 55)">
+      <rect width="90" height="60" rx="8" fill="#79c0ff"/>
+      <text x="45" y="26" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">B[0, col]</text>
+      <text x="45" y="46" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">tile_y</text>
+    </g>
+    
+    <!-- Arrows down from both tiles -->
+    <path d="M 45 120 L 45 155" stroke="#f97583" stroke-width="2"/>
+    <path d="M 185 120 L 185 155" stroke="#79c0ff" stroke-width="2"/>
+    
+    <!-- Connector bar -->
+    <path d="M 45 155 L 185 155 L 115 155 L 115 175" stroke="#c9d1d9" stroke-width="1.5" fill="none"/>
+    
+    <!-- C tile (accumulator) -->
+    <g transform="translate(40, 180)">
+      <rect width="150" height="70" rx="8" fill="#21262d"/>
+      <rect width="150" height="70" rx="8" fill="none" stroke="#ffffff" stroke-width="1.5"/>
+      <text x="75" y="30" text-anchor="middle" font-size="14" font-weight="600" fill="#ffffff">tile_z = 0</text>
+      <text x="75" y="52" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">+ mma result</text>
+    </g>
+    
+    <!-- Stage label -->
+    <text x="115" y="280" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Initialize + first product</text>
+  </g>
+
+  <!-- Arrow to next iteration -->
+  <path d="M 285 200 L 330 200" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+
+  <!-- ==================== Iteration 1 ==================== -->
+  <g transform="translate(350, 85)">
+    <!-- Label -->
+    <rect x="50" y="0" width="130" height="32" rx="16" fill="#21262d"/>
+    <rect x="50" y="0" width="130" height="32" rx="16" fill="none" stroke="#ffffff" stroke-width="1.5"/>
+    <text x="115" y="21" text-anchor="middle" font-size="14" font-weight="600" fill="#ffa657">Iteration 1</text>
+    
+    <!-- A tile -->
+    <g transform="translate(0, 55)">
+      <rect width="90" height="60" rx="8" fill="#f97583"/>
+      <text x="45" y="26" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">A[row, 1]</text>
+      <text x="45" y="46" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">tile_x</text>
+    </g>
+    
+    <!-- @ symbol -->
+    <text x="115" y="95" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">@</text>
+    
+    <!-- B tile -->
+    <g transform="translate(140, 55)">
+      <rect width="90" height="60" rx="8" fill="#79c0ff"/>
+      <text x="45" y="26" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">B[1, col]</text>
+      <text x="45" y="46" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">tile_y</text>
+    </g>
+    
+    <!-- Arrows down from both tiles -->
+    <path d="M 45 120 L 45 155" stroke="#f97583" stroke-width="2"/>
+    <path d="M 185 120 L 185 155" stroke="#79c0ff" stroke-width="2"/>
+    
+    <!-- Connector bar -->
+    <path d="M 45 155 L 185 155 L 115 155 L 115 175" stroke="#c9d1d9" stroke-width="1.5" fill="none"/>
+    
+    <!-- C tile (accumulator) -->
+    <g transform="translate(40, 180)">
+      <rect width="150" height="70" rx="8" fill="#56d364" opacity="0.15"/>
+      <rect width="150" height="70" rx="8" fill="none" stroke="#56d364" stroke-width="2"/>
+      <text x="75" y="30" text-anchor="middle" font-size="14" font-weight="600" fill="#ffffff">tile_z +=</text>
+      <text x="75" y="52" text-anchor="middle" font-size="13" font-weight="600" fill="#56d364">mma(x, y, z)</text>
+    </g>
+    
+    <!-- Stage label -->
+    <text x="115" y="280" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Accumulate 2nd product</text>
+  </g>
+
+  <!-- Arrow to next iteration -->
+  <path d="M 595 200 L 640 200" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+
+  <!-- Dots indicating more iterations -->
+  <text x="675" y="205" text-anchor="middle" font-size="28" font-weight="600" fill="#c9d1d9">⋯</text>
+
+  <!-- ==================== Final Iteration ==================== -->
+  <g transform="translate(700, 85)">
+    <!-- Label -->
+    <rect x="20" y="0" width="170" height="32" rx="16" fill="#21262d"/>
+    <rect x="20" y="0" width="170" height="32" rx="16" fill="none" stroke="#76B900" stroke-width="1.5"/>
+    <text x="105" y="21" text-anchor="middle" font-size="14" font-weight="600" fill="#76B900">Final (i = K/BK-1)</text>
+    
+    <!-- A tile -->
+    <g transform="translate(0, 55)">
+      <rect width="90" height="60" rx="8" fill="#f97583"/>
+      <text x="45" y="26" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">A[row, last]</text>
+      <text x="45" y="46" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">tile_x</text>
+    </g>
+    
+    <!-- @ symbol -->
+    <text x="105" y="95" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">@</text>
+    
+    <!-- B tile -->
+    <g transform="translate(120, 55)">
+      <rect width="90" height="60" rx="8" fill="#79c0ff"/>
+      <text x="45" y="26" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">B[last, col]</text>
+      <text x="45" y="46" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">tile_y</text>
+    </g>
+    
+    <!-- Arrows down from both tiles -->
+    <path d="M 45 120 L 45 155" stroke="#f97583" stroke-width="2"/>
+    <path d="M 165 120 L 165 155" stroke="#79c0ff" stroke-width="2"/>
+    
+    <!-- Connector bar -->
+    <path d="M 45 155 L 165 155 L 105 155 L 105 175" stroke="#c9d1d9" stroke-width="1.5" fill="none"/>
+    
+    <!-- C tile (final result!) -->
+    <g transform="translate(25, 180)">
+      <rect width="160" height="70" rx="8" fill="#76B900" opacity="0.2"/>
+      <rect width="160" height="70" rx="8" fill="none" stroke="#76B900" stroke-width="2.5"/>
+      <text x="80" y="30" text-anchor="middle" font-size="15" font-weight="700" fill="#76B900">tile_z</text>
+      <text x="80" y="52" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Complete result!</text>
+    </g>
+    
+    <!-- Stage label -->
+    <text x="105" y="280" text-anchor="middle" font-size="13" font-weight="700" fill="#76B900">Final accumulation</text>
+  </g>
+
+  <!-- ==================== Bottom code explanation box ==================== -->
+  <g transform="translate(50, 395)">
+    <rect width="850" height="125" rx="10" fill="#161b22"/>
+    <rect width="850" height="125" rx="10" fill="none" stroke="#ffffff" stroke-width="1.5"/>
+    
+    <!-- Code snippet -->
+    <g transform="translate(35, 28)">
+      <text font-family="'RobotoMono', monospace" font-size="13">
+        <tspan x="0" y="0" fill="#ff7b72" font-weight="600">for</tspan>
+        <tspan fill="#ffffff"> i </tspan>
+        <tspan fill="#ff7b72" font-weight="600">in</tspan>
+        <tspan fill="#ffffff"> 0..(K / BK) {</tspan>
+      </text>
+      <text font-family="'RobotoMono', monospace" font-size="13" y="22">
+        <tspan x="20" fill="#ff7b72" font-weight="600">let</tspan>
+        <tspan fill="#ffffff"> tile_x = part_x.</tspan>
+        <tspan fill="#d2a8ff" font-weight="600">load</tspan>
+        <tspan fill="#ffffff">([pid.0, </tspan>
+        <tspan fill="#79c0ff">i</tspan>
+        <tspan fill="#ffffff">]);</tspan>
+      </text>
+      <text font-family="'RobotoMono', monospace" font-size="13" y="44">
+        <tspan x="20" fill="#ff7b72" font-weight="600">let</tspan>
+        <tspan fill="#ffffff"> tile_y = part_y.</tspan>
+        <tspan fill="#d2a8ff" font-weight="600">load</tspan>
+        <tspan fill="#ffffff">([</tspan>
+        <tspan fill="#79c0ff">i</tspan>
+        <tspan fill="#ffffff">, pid.1]);</tspan>
+      </text>
+      <text font-family="'RobotoMono', monospace" font-size="13" y="66">
+        <tspan x="20" fill="#ffffff">tile_z = </tspan>
+        <tspan fill="#76B900" font-weight="600">mma</tspan>
+        <tspan fill="#ffffff">(tile_x, tile_y, tile_z);</tspan>
+      </text>
+      <text font-family="'RobotoMono', monospace" font-size="13" y="88">
+        <tspan x="0" fill="#ffffff">}</tspan>
+        <tspan x="40" fill="#c9d1d9">// C += A @ B</tspan>
+      </text>
+    </g>
+    
+    <!-- Key insight on right -->
+    <g transform="translate(545, 30)">
+      <rect width="280" height="70" rx="8" fill="#21262d"/>
+      <rect width="280" height="70" rx="8" fill="none" stroke="#76B900" stroke-width="1.5"/>
+      <text x="140" y="28" text-anchor="middle" font-size="14" font-weight="600" fill="#ffffff">After K/BK iterations:</text>
+      <text x="140" y="52" text-anchor="middle" font-size="15" font-weight="700" fill="#76B900">tile_z has the complete result</text>
+    </g>
+  </g>
+
+</svg>

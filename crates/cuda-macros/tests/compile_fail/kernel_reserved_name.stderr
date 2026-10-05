@@ -1,5 +1,0 @@
-error: function name `cuda_oxide_kernel_evil` starts with the reserved cuda-oxide prefix `cuda_oxide_`; rename your function — this namespace is reserved for cuda-oxide internal symbol mangling (see crates/reserved-oxide-symbols)
- --> tests/compile_fail/kernel_reserved_name.rs:7:4
-  |
-7 | fn cuda_oxide_kernel_evil() {}
-  |    ^^^^^^^^^^^^^^^^^^^^^^

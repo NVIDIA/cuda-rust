@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Verify error* examples are in STATUS.md and smoketest.sh
-        run: bash scripts/check-error-example-status.sh
+        run: bash cuda-oxide/scripts/check-error-example-status.sh
 
   # Both of the things this checks are otherwise only visible when the suite
   # runs on a GPU: the compile-only lane collapses every category into
@@ -41,7 +41,7 @@ jobs:
 
       # Reads sources only: no cargo, no CUDA toolkit, no LLVM.
       - name: Verify smoketest categories and standard-example success markers
-        run: bash scripts/check-example-smoketest-contract.sh
+        run: bash cuda-oxide/scripts/check-example-smoketest-contract.sh
 
   # README's Crate Overview is the only map of the tree a newcomer gets, and
   # nothing fails when a crate is missing from it: dialect-iket and iket-lower
@@ -56,7 +56,7 @@ jobs:
 
       # Reads Cargo.toml and README.md: no cargo, no lockfile, no network.
       - name: Verify README lists every workspace member
-        run: bash scripts/check-crate-inventory.sh
+        run: bash cuda-oxide/scripts/check-crate-inventory.sh
 
   # The pin is copied into places no build compares: the nested backend pin
   # (rustup reads it for the backend's own [workspace], so a mismatch there
@@ -75,7 +75,7 @@ jobs:
 
       # Reads sources only: no rustup, no cargo, no CUDA toolkit.
       - name: Verify every copy of the toolchain pin agrees
-        run: bash scripts/check-toolchain-parity.sh
+        run: bash cuda-oxide/scripts/check-toolchain-parity.sh
 
   # The book's Command reference is the only complete list of the CLI surface in
   # the docs, and adding a subcommand to the clap enum is a one-line change that
@@ -91,7 +91,7 @@ jobs:
 
       # Reads the clap enum and the book: no cargo, no build, no network.
       - name: Verify the book documents every cargo oxide subcommand
-        run: bash scripts/check-cli-doc-coverage.sh
+        run: bash cuda-oxide/scripts/check-cli-doc-coverage.sh
 
   # A Rust code block in the book or a README is something a reader pastes. When
   # a device function is renamed the docs still render, so the stale name
@@ -110,7 +110,7 @@ jobs:
       # Reads the book, the crate and example READMEs, and cuda-device's
       # sources: no cargo, no build, no network.
       - name: Verify every device call the book shows resolves
-        run: bash scripts/check-book-api-names.sh
+        run: bash cuda-oxide/scripts/check-book-api-names.sh
 
   # A book block is pasted into an edition-2024 `cargo oxide new` project, where
   # the first `cargo fmt` reorders its `use` lines (`{DisjointSlice, kernel,
@@ -128,11 +128,11 @@ jobs:
       - name: Clone repository
         uses: actions/checkout@v4
 
-      # rustfmt comes from rust-toolchain.toml's component list through the
+# rustfmt comes from cuda-oxide/rust-toolchain.toml's component list through the
       # rustup proxy, as in fmt.yml, so the order checked is the pinned
       # nightly's. No cargo, no CUDA toolkit, no network beyond the toolchain.
       - name: Verify the book's Rust blocks use rustfmt's import order
-        run: bash scripts/check-book-import-order.sh
+        run: bash cuda-oxide/scripts/check-book-import-order.sh
 
   # #1190 split large files into module directories and left three prose
   # references pointing at paths it had removed; #1197 repointed those and 14
@@ -149,7 +149,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Verify prose references name tracked files or declared outputs
-        run: bash scripts/check-source-references.sh
+        run: bash cuda-oxide/scripts/check-source-references.sh
 
   # The dialect-nvvm book page prints the catalog SHA-256 and states its own
   # freshness rule: if the stamp no longer matches, every count on the page
@@ -169,7 +169,7 @@ jobs:
 
       # Hashes one file and greps one page: no cargo, no build, no network.
       - name: Verify the dialect page's catalog stamp is current
-        run: bash scripts/check-book-catalog-stamp.sh
+        run: bash cuda-oxide/scripts/check-book-catalog-stamp.sh
 
   # `unit-tests.yml`'s matrix is the only thing deciding which crates get
   # `cargo test`, and a member missing from it fails nothing: the workflow is
@@ -187,7 +187,7 @@ jobs:
 
       # Reads Cargo.toml, unit-tests.yml and the Justfile: no cargo, no network.
       - name: Verify every workspace member is tested or declared untested
-        run: bash scripts/check-test-matrix-coverage.sh
+        run: bash cuda-oxide/scripts/check-test-matrix-coverage.sh
 
   # #702 let a kernel-only crate drop the host surface (and with it `cuda.h`) via
   # `cuda-macros = { default-features = false }`, which is what #701 asked for.
@@ -208,7 +208,7 @@ jobs:
       # Deliberately no CUDA toolkit step: a toolkit on the runner would mask
       # exactly the dependency this job exists to keep out of the graph.
       - name: Verify a kernel-only crate builds with no host surface
-        run: bash scripts/check-device-only-build.sh
+        run: bash cuda-oxide/scripts/check-device-only-build.sh
 
   # cuda-bindings, cuda-core, and cuda-async are shared with cutile-rs. Their
   # roots carry cutile's Tile API and the cuda-oxide surface lives under
@@ -226,7 +226,7 @@ jobs:
 
       # Reads sources only: no rustup, no cargo, no CUDA toolkit.
       - name: Verify docs and templates spell the shared crates' simt paths
-        run: bash scripts/check-host-api-paths.sh
+        run: bash cuda-oxide/scripts/check-host-api-paths.sh
 
   # The shared host-crate release is named once in the root workspace and
   # copied into every example manifest and into the `cargo oxide new`
@@ -243,12 +243,12 @@ jobs:
 
       # Reads sources only: no rustup, no cargo, no CUDA toolkit.
       - name: Verify every shared-crate pin agrees with the root workspace
-        run: bash scripts/check-shared-crate-pin.sh
+        run: bash cuda-oxide/scripts/check-shared-crate-pin.sh
 
-  # crates/oxide-artifacts is only the publish source now; the backend writes
-  # and the shared cuda-core reads through the crates.io release. An in-tree
-  # bump that is not published and repointed reaches no consumer, so the
-  # in-tree version, both manifests, and every lock must agree.
+  # cuda-oxide/crates/oxide-artifacts is only the publish source now; the
+  # backend writes and the shared cuda-core reads through the crates.io
+  # release. An in-tree bump that is not published and repointed reaches no
+  # consumer, so the in-tree version, both manifests, and every lock must agree.
   oxide-artifacts-parity:
     name: oxide-artifacts release parity
     runs-on: ubuntu-latest
@@ -259,4 +259,4 @@ jobs:
 
       # Reads sources only: no rustup, no cargo, no CUDA toolkit.
       - name: Verify the in-tree crate matches the consumed release
-        run: bash scripts/check-oxide-artifacts-parity.sh
+        run: bash cuda-oxide/scripts/check-oxide-artifacts-parity.sh

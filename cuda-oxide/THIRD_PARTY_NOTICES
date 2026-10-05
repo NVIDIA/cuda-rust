@@ -1,0 +1,57 @@
+THIRD PARTY NOTICES
+===================
+
+This file attributes third-party open source software whose source code is
+embedded in cuda-oxide.
+
+cuda-oxide's own code is licensed under Apache-2.0 (see LICENSE). Third-party
+crates that cuda-oxide merely depends on through Cargo are not redistributed
+here and are therefore not listed below; their licenses are recorded in
+`dependency-licenses.csv` and enforced by `deny.toml`.
+
+--------------------------------------------------------------------------------
+1. Rustlantis
+--------------------------------------------------------------------------------
+
+Location in cuda-oxide:      crates/fuzzer/rustlantis/
+Upstream project:            https://github.com/cbeuw/rustlantis
+Copyright:                   (c) ETH Zurich and contributors
+License:                     Apache-2.0 OR MIT (dual-licensed, at your option)
+
+Rustlantis is a fuzzer for the Rust compiler, authored by Qian (Andy) Wang and
+Ralf Jung (ETH Zurich). Its source is embedded in this repository under
+`crates/fuzzer/rustlantis/` and is used to generate randomized MIR programs for
+differential testing of the cuda-oxide codegen backend.
+
+The upstream license texts are retained in place at
+`crates/fuzzer/rustlantis/LICENSE-APACHE` and
+`crates/fuzzer/rustlantis/LICENSE-MIT`; the `rangemap` sub-crate
+carries its own identical copies at
+`crates/fuzzer/rustlantis/rangemap/LICENSE-APACHE` and
+`crates/fuzzer/rustlantis/rangemap/LICENSE-MIT`. The Apache-2.0 text is
+identical to the one in this directory (LICENSE). The MIT text is
+reproduced here:
+
+    Permission is hereby granted, free of charge, to any
+    person obtaining a copy of this software and associated
+    documentation files (the "Software"), to deal in the
+    Software without restriction, including without
+    limitation the rights to use, copy, modify, merge,
+    publish, distribute, sublicense, and/or sell copies of
+    the Software, and to permit persons to whom the Software
+    is furnished to do so, subject to the following
+    conditions:
+
+    The above copyright notice and this permission notice
+    shall be included in all copies or substantial portions
+    of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+    ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+    TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+    PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+    SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+    OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+    IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.

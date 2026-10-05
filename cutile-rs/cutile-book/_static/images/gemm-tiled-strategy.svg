@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 540" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="540" fill="#0d1117"/>
+  <rect width="900" height="540" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="450" y="38" text-anchor="middle" font-size="24" font-weight="600" fill="#ffffff" letter-spacing="-0.5">Tiled Matrix Multiplication (GEMM)</text>
+  <line x1="260" y1="50" x2="640" y2="50" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+  <text x="450" y="72" text-anchor="middle" font-size="14" fill="#c9d1d9">C = A × B — Each output tile is computed independently</text>
+
+  <!-- ==================== Matrix A [M × K] (LEFT) ==================== -->
+  <g transform="translate(40, 115)">
+    <!-- Dimension label - K (top) -->
+    <text x="75" y="-10" text-anchor="middle" font-size="14" font-weight="600" fill="#c9d1d9">K</text>
+    
+    <!-- Dimension label - M (left, outside) -->
+    <text x="-15" y="100" text-anchor="middle" font-size="14" font-weight="600" fill="#c9d1d9" transform="rotate(-90, -15, 100)">M</text>
+    
+    <!-- Full matrix outline -->
+    <rect width="150" height="200" rx="8" fill="#21262d"/>
+    <rect width="150" height="200" rx="8" fill="none" stroke="#ffffff" stroke-width="2"/>
+    
+    <!-- Active row strip (BM rows) highlighted -->
+    <rect x="0" y="70" width="150" height="50" rx="4" fill="rgba(249,117,131,0.25)"/>
+    
+    <!-- Current tile being loaded (BM x BK) -->
+    <rect x="50" y="70" width="45" height="50" rx="6" fill="#f97583"/>
+    <text x="72" y="100" text-anchor="middle" font-size="11" font-weight="700" fill="#ffffff">tile_x</text>
+    
+    <!-- Tile size labels -->
+    <text x="72" y="135" text-anchor="middle" font-size="11" font-weight="600" fill="#f97583">BK</text>
+    <text x="25" y="95" text-anchor="middle" font-size="11" font-weight="600" fill="#f97583" transform="rotate(-90, 25, 95)">BM</text>
+    
+    <!-- Matrix label -->
+    <text x="75" y="230" text-anchor="middle" font-size="15" font-weight="700" fill="#f97583">Matrix A</text>
+    <text x="75" y="250" text-anchor="middle" font-size="13" font-weight="500" fill="#c9d1d9">[M × K]</text>
+  </g>
+  
+  <!-- Multiplication symbol × -->
+  <text x="270" y="215" text-anchor="middle" font-size="36" font-weight="700" fill="#ffffff">×</text>
+
+  <!-- ==================== Matrix B [K × N] (CENTER) ==================== -->
+  <g transform="translate(365, 115)">
+    <!-- Dimension label - N (top) -->
+    <text x="85" y="-10" text-anchor="middle" font-size="14" font-weight="600" fill="#c9d1d9">N</text>
+    
+    <!-- Dimension label - K (left, outside) -->
+    <text x="-15" y="75" text-anchor="middle" font-size="14" font-weight="600" fill="#c9d1d9" transform="rotate(-90, -15, 75)">K</text>
+    
+    <!-- Full matrix outline -->
+    <rect width="170" height="150" rx="8" fill="#21262d"/>
+    <rect width="170" height="150" rx="8" fill="none" stroke="#ffffff" stroke-width="2"/>
+    
+    <!-- Active column strip (BN columns) highlighted -->
+    <rect x="55" y="0" width="55" height="150" rx="4" fill="rgba(121,192,255,0.25)"/>
+    
+    <!-- Current tile being loaded (BK x BN) -->
+    <rect x="55" y="40" width="55" height="45" rx="6" fill="#79c0ff"/>
+    <text x="82" y="68" text-anchor="middle" font-size="11" font-weight="700" fill="#ffffff">tile_y</text>
+    
+    <!-- Tile size labels -->
+    <text x="82" y="100" text-anchor="middle" font-size="11" font-weight="600" fill="#79c0ff">BN</text>
+    <text x="40" y="62" text-anchor="middle" font-size="11" font-weight="600" fill="#79c0ff" transform="rotate(-90, 40, 62)">BK</text>
+    
+    <!-- Matrix label -->
+    <text x="85" y="180" text-anchor="middle" font-size="15" font-weight="700" fill="#79c0ff">Matrix B</text>
+    <text x="85" y="200" text-anchor="middle" font-size="13" font-weight="500" fill="#c9d1d9">[K × N]</text>
+  </g>
+  
+  <!-- Equals symbol = -->
+  <text x="615" y="215" text-anchor="middle" font-size="36" font-weight="700" fill="#ffffff">=</text>
+
+  <!-- ==================== Matrix C [M × N] (RIGHT) ==================== -->
+  <g transform="translate(695, 115)">
+    <!-- Dimension label - N (top) -->
+    <text x="85" y="-10" text-anchor="middle" font-size="14" font-weight="600" fill="#c9d1d9">N</text>
+    
+    <!-- Dimension label - M (left, outside) -->
+    <text x="-15" y="100" text-anchor="middle" font-size="14" font-weight="600" fill="#c9d1d9" transform="rotate(-90, -15, 100)">M</text>
+    
+    <!-- Full matrix outline -->
+    <rect width="170" height="200" rx="8" fill="#21262d"/>
+    <rect width="170" height="200" rx="8" fill="none" stroke="#ffffff" stroke-width="2"/>
+    
+    <!-- Output tile position (BM x BN) -->
+    <rect x="55" y="70" width="55" height="50" rx="6" fill="#56d364"/>
+    <text x="82" y="100" text-anchor="middle" font-size="11" font-weight="700" fill="#ffffff">tile_z</text>
+    
+    <!-- Tile size labels -->
+    <text x="82" y="135" text-anchor="middle" font-size="11" font-weight="600" fill="#56d364">BN</text>
+    <text x="40" y="95" text-anchor="middle" font-size="11" font-weight="600" fill="#56d364" transform="rotate(-90, 40, 95)">BM</text>
+    
+    <!-- Matrix label -->
+    <text x="85" y="230" text-anchor="middle" font-size="15" font-weight="700" fill="#56d364">Matrix C</text>
+    <text x="85" y="250" text-anchor="middle" font-size="13" font-weight="500" fill="#c9d1d9">[M × N]</text>
+  </g>
+
+  <!-- ==================== K-Loop explanation ==================== -->
+  <g transform="translate(50, 450)">
+    <rect width="800" height="75" rx="10" fill="#161b22"/>
+    <rect width="800" height="75" rx="10" fill="none" stroke="#ffffff" stroke-width="2"/>
+    
+    <!-- K-loop iterations -->
+    <g transform="translate(18, 12)">
+      <text x="0" y="20" font-size="15" font-weight="700" fill="#ffffff">K-Loop:</text>
+      
+      <!-- Iteration boxes -->
+      <g transform="translate(85, 0)">
+        <rect width="115" height="50" rx="6" fill="#21262d"/>
+        <text x="57" y="18" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">i = 0</text>
+        <text x="57" y="38" text-anchor="middle" font-size="11" font-weight="500" fill="#c9d1d9">
+          <tspan fill="#f97583">A</tspan><tspan fill="#8b949e">[:,0]</tspan>
+          <tspan fill="#ffffff"> × </tspan>
+          <tspan fill="#79c0ff">B</tspan><tspan fill="#8b949e">[0,:]</tspan>
+        </text>
+      </g>
+      
+      <text x="215" y="30" text-anchor="middle" font-size="18" font-weight="600" fill="#ffffff">+</text>
+      
+      <g transform="translate(230, 0)">
+        <rect width="115" height="50" rx="6" fill="#21262d"/>
+        <text x="57" y="18" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">i = 1</text>
+        <text x="57" y="38" text-anchor="middle" font-size="11" font-weight="500" fill="#c9d1d9">
+          <tspan fill="#f97583">A</tspan><tspan fill="#8b949e">[:,1]</tspan>
+          <tspan fill="#ffffff"> × </tspan>
+          <tspan fill="#79c0ff">B</tspan><tspan fill="#8b949e">[1,:]</tspan>
+        </text>
+      </g>
+      
+      <text x="360" y="30" text-anchor="middle" font-size="18" font-weight="600" fill="#ffffff">+</text>
+      
+      <g transform="translate(375, 0)">
+        <rect width="115" height="50" rx="6" fill="#21262d"/>
+        <text x="57" y="18" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">i = 2</text>
+        <text x="57" y="38" text-anchor="middle" font-size="11" font-weight="500" fill="#c9d1d9">
+          <tspan fill="#f97583">A</tspan><tspan fill="#8b949e">[:,2]</tspan>
+          <tspan fill="#ffffff"> × </tspan>
+          <tspan fill="#79c0ff">B</tspan><tspan fill="#8b949e">[2,:]</tspan>
+        </text>
+      </g>
+      
+      <text x="508" y="30" text-anchor="middle" font-size="20" font-weight="600" fill="#ffffff">⋯</text>
+      
+      <g transform="translate(528, 0)">
+        <rect width="100" height="50" rx="6" fill="#21262d"/>
+        <text x="50" y="18" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">i = K/BK-1</text>
+        <text x="50" y="38" text-anchor="middle" font-size="11" font-weight="500" fill="#c9d1d9">Last pair</text>
+      </g>
+      
+      <text x="648" y="30" text-anchor="middle" font-size="20" font-weight="700" fill="#ffffff">=</text>
+      
+      <g transform="translate(668, 0)">
+        <rect width="95" height="50" rx="6" fill="#56d364"/>
+        <text x="47" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">Final tile_z</text>
+        <text x="47" y="40" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">Complete!</text>
+      </g>
+    </g>
+  </g>
+
+</svg>

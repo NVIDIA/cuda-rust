@@ -1,0 +1,3 @@
+# Committed data under data/ is paper-facing. Keep scratch copies in
+# data/local/ so they do not get mixed into the plotted result bundles.
+data/local/

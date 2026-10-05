@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+    </style>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="420" fill="#0d1117"/>
+  <rect width="900" height="420" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Title -->
+  <text x="450" y="38" text-anchor="middle" font-size="22" font-weight="600" fill="#ffffff">Performance: Naive vs Tiled GEMM</text>
+  <line x1="280" y1="52" x2="620" y2="52" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+
+  <!-- Left: Naive GEMM -->
+  <g transform="translate(50, 85)">
+    <rect width="380" height="300" rx="10" fill="#161b22"/>
+    <rect width="380" height="300" rx="10" fill="none" stroke="#ff7b72" stroke-width="2" stroke-dasharray="6,4"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="376" height="34" rx="8" fill="#3d1f1f"/>
+    <text x="190" y="25" text-anchor="middle" font-size="14" font-weight="700" fill="#ff7b72">❌ Naive GEMM (per element)</text>
+    
+    <!-- Metrics -->
+    <g transform="translate(30, 60)">
+      <text x="0" y="0" font-size="13" font-weight="600" fill="#79c0ff">Memory Loads:</text>
+      <rect x="130" y="-14" width="80" height="22" rx="4" fill="#79c0ff" fill-opacity="0.2"/>
+      <text x="170" y="2" text-anchor="middle" font-size="14" font-weight="700" fill="#79c0ff">2K</text>
+      
+      <text x="0" y="40" font-size="13" font-weight="600" fill="#56d364">Compute Ops:</text>
+      <rect x="130" y="26" width="80" height="22" rx="4" fill="#56d364" fill-opacity="0.2"/>
+      <text x="170" y="42" text-anchor="middle" font-size="14" font-weight="700" fill="#56d364">2K</text>
+      
+      <text x="0" y="80" font-size="13" font-weight="600" fill="#e3b341">Ops per Load:</text>
+      <rect x="130" y="66" width="80" height="22" rx="4" fill="#e3b341" fill-opacity="0.2"/>
+      <text x="170" y="82" text-anchor="middle" font-size="14" font-weight="700" fill="#e3b341">1</text>
+    </g>
+    
+    <!-- Visual bar representation -->
+    <g transform="translate(30, 170)">
+      <text x="0" y="0" font-size="12" font-weight="600" fill="#c9d1d9">Efficiency visualization:</text>
+      
+      <!-- Loads bar -->
+      <rect x="0" y="15" width="320" height="25" rx="4" fill="#21262d"/>
+      <rect x="2" y="17" width="316" height="21" rx="3" fill="#79c0ff"/>
+      <text x="160" y="32" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">Memory Loads: 2K</text>
+      
+      <!-- Compute bar (same size = 1:1 ratio) -->
+      <rect x="0" y="50" width="320" height="25" rx="4" fill="#21262d"/>
+      <rect x="2" y="52" width="316" height="21" rx="3" fill="#56d364"/>
+      <text x="160" y="67" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">Compute: 2K ops</text>
+    </g>
+    
+    <!-- Summary -->
+    <g transform="translate(30, 260)">
+      <rect x="0" y="0" width="320" height="28" rx="6" fill="#3d1f1f"/>
+      <text x="160" y="19" text-anchor="middle" font-size="12" font-weight="700" fill="#ff7b72">🐢 Memory bound — GPU starved!</text>
+    </g>
+  </g>
+
+  <!-- Right: Tiled GEMM -->
+  <g transform="translate(470, 85)">
+    <rect width="380" height="300" rx="10" fill="#161b22"/>
+    <rect width="380" height="300" rx="10" fill="none" stroke="#76B900" stroke-width="2.5"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="376" height="34" rx="8" fill="#1a2a1a"/>
+    <text x="190" y="25" text-anchor="middle" font-size="14" font-weight="700" fill="#76B900">✓ Tiled GEMM (BM=BN=16, K=128)</text>
+    
+    <!-- Metrics -->
+    <g transform="translate(30, 60)">
+      <text x="0" y="0" font-size="13" font-weight="600" fill="#79c0ff">Memory Loads:</text>
+      <rect x="130" y="-14" width="150" height="22" rx="4" fill="#79c0ff" fill-opacity="0.2"/>
+      <text x="205" y="2" text-anchor="middle" font-size="13" font-weight="700" fill="#79c0ff">16×128 + 128×16</text>
+      <text x="295" y="2" font-size="12" fill="#8b949e">= 4,096</text>
+      
+      <text x="0" y="40" font-size="13" font-weight="600" fill="#56d364">Compute Ops:</text>
+      <rect x="130" y="26" width="150" height="22" rx="4" fill="#56d364" fill-opacity="0.2"/>
+      <text x="205" y="42" text-anchor="middle" font-size="13" font-weight="700" fill="#56d364">16×16×128</text>
+      <text x="295" y="42" font-size="12" fill="#8b949e">= 32,768</text>
+      
+      <text x="0" y="80" font-size="13" font-weight="600" fill="#e3b341">Ops per Load:</text>
+      <rect x="130" y="66" width="80" height="22" rx="4" fill="#76B900" fill-opacity="0.3"/>
+      <text x="170" y="82" text-anchor="middle" font-size="14" font-weight="700" fill="#76B900">8×</text>
+    </g>
+    
+    <!-- Visual bar representation -->
+    <g transform="translate(30, 170)">
+      <text x="0" y="0" font-size="12" font-weight="600" fill="#c9d1d9">Efficiency visualization:</text>
+      
+      <!-- Loads bar (smaller) -->
+      <rect x="0" y="15" width="320" height="25" rx="4" fill="#21262d"/>
+      <rect x="2" y="17" width="40" height="21" rx="3" fill="#79c0ff"/>
+      <text x="50" y="32" font-size="11" font-weight="600" fill="#79c0ff">4K loads</text>
+      
+      <!-- Compute bar (8x larger) -->
+      <rect x="0" y="50" width="320" height="25" rx="4" fill="#21262d"/>
+      <rect x="2" y="52" width="316" height="21" rx="3" fill="#56d364"/>
+      <text x="160" y="67" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">Compute: 32K ops (8× more per load!)</text>
+    </g>
+    
+    <!-- Summary -->
+    <g transform="translate(30, 260)">
+      <rect x="0" y="0" width="320" height="28" rx="6" fill="#1a2a1a"/>
+      <text x="160" y="19" text-anchor="middle" font-size="12" font-weight="700" fill="#76B900">⚡ 8× better data reuse!</text>
+    </g>
+  </g>
+
+</svg>
+

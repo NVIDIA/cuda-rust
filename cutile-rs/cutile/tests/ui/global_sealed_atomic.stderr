@@ -1,0 +1,32 @@
+error[E0277]: the trait bound `UserAtomic: _core::global_sealed::Atomic` is not satisfied
+ --> tests/ui/global_sealed_atomic.rs:9:17
+  |
+9 | impl Atomic for UserAtomic {
+  |                 ^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `_core::global_sealed::Atomic` is not implemented for `UserAtomic`
+ --> tests/ui/global_sealed_atomic.rs:8:1
+  |
+8 | struct UserAtomic;
+  | ^^^^^^^^^^^^^^^^^
+  = note: `UserAtomic` implements similarly named trait `cutile::core::Atomic`, but not `_core::global_sealed::Atomic`
+  = help: the following other types implement trait `_core::global_sealed::Atomic`:
+            AtomicF32
+            AtomicF64
+            AtomicI32
+            AtomicI64
+            AtomicU32
+            AtomicU64
+note: required by a bound in `cutile::core::Atomic`
+ --> src/_core.rs
+  |
+  |     pub trait Atomic: super::global_sealed::Atomic + Copy + Clone {
+  |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Atomic`
+  = note: `Atomic` is a "sealed trait", because to implement it you also need to implement `cutile::_core::global_sealed::Atomic`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+  = help: the following types implement the trait:
+            cutile::core::AtomicI32
+            cutile::core::AtomicU32
+            cutile::core::AtomicI64
+            cutile::core::AtomicU64
+            cutile::core::AtomicF32
+            cutile::core::AtomicF64

@@ -1,11 +1,30 @@
 ---
 name: docs
 
+# Path-filtered SIMT lane (same roots as ci.yml).
 on:
   push:
     branches: [main]
+    paths:
+      - 'cuda-oxide/**'
+      - 'cuda-bindings/**'
+      - 'cuda-core/**'
+      - 'cuda-core-derive/**'
+      - 'cuda-async/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/**'
   pull_request:
     branches: [main]
+    paths:
+      - 'cuda-oxide/**'
+      - 'cuda-bindings/**'
+      - 'cuda-core/**'
+      - 'cuda-core-derive/**'
+      - 'cuda-async/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
@@ -38,6 +57,7 @@ jobs:
           non-cuda-sub-packages: '["libcurand-dev"]'
 
       - name: Build docs (warning-free) and run doctests
+        working-directory: cuda-oxide
         env:
           CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           RUSTDOCFLAGS: "-D warnings"
@@ -49,8 +69,7 @@ jobs:
           # Docs must build warning-free (RUSTDOCFLAGS=-D warnings above).
           cargo doc --no-deps --workspace
 
-          # Run doctests. The shared cuda-bindings is not a workspace member,
-          # so nothing here reaches its bindgen-generated doc comments.
+          # Run doctests.
           cargo test --doc --workspace
 
       # `rustc-codegen-cuda` is its own [workspace] (it links against
@@ -59,7 +78,7 @@ jobs:
       # this gate did not, which is how four broken intra-doc links in its
       # crate-level documentation went unreported.
       - name: Build docs (warning-free) for rustc-codegen-cuda
-        working-directory: crates/rustc-codegen-cuda
+        working-directory: cuda-oxide/crates/rustc-codegen-cuda
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: |

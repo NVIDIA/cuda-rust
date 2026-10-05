@@ -1,0 +1,247 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 720" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <!-- Load NVIDIA font from CDN -->
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 700;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Bd.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 500;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Medium.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Gradients -->
+    <linearGradient id="mem-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#21262d"/>
+      <stop offset="100%" style="stop-color:#161b22"/>
+    </linearGradient>
+
+    <linearGradient id="register-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2d2a1f"/>
+      <stop offset="100%" style="stop-color:#21262d"/>
+    </linearGradient>
+    
+    <!-- Filters -->
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Arrow Markers -->
+    <marker id="arrow-gray-up" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#6e7681"/>
+    </marker>
+    <marker id="arrow-green-up" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#76B900"/>
+    </marker>
+    <marker id="arrow-blue-up" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#58a6ff"/>
+    </marker>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="720" fill="#0d1117"/>
+  
+  <!-- Subtle grid pattern for tech feel -->
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  <rect width="900" height="720" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title with accent -->
+  <text x="450" y="45" text-anchor="middle" font-size="28" font-weight="500" fill="#ffffff" letter-spacing="-0.5">GPU Programming Models</text>
+  <line x1="300" y1="58" x2="600" y2="58" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+  
+  <!-- ==================== LEFT SIDE: Thread-Centric ==================== -->
+  <g transform="translate(30, 80)">
+    <!-- Container with subtle gradient border effect -->
+    <rect width="400" height="600" rx="16" fill="#161b22" stroke="#8b949e" stroke-width="2" stroke-dasharray="12,6"/>
+    
+    <!-- Header bar -->
+    <rect width="400" height="50" rx="16" fill="#1c2128"/>
+    <rect y="35" width="400" height="15" fill="#1c2128"/>
+    <text x="200" y="35" text-anchor="middle" font-size="20" font-weight="500" fill="#c9d1d9" letter-spacing="-0.3">Scalar-Centric (CUDA C++)</text>
+    
+    <!-- Code snippet -->
+    <g transform="translate(25, 65)">
+      <rect width="350" height="55" rx="8" fill="#0d1117" stroke="#484f58" stroke-width="1"/>
+      <text x="15" y="24" font-family="'RobotoMono', 'SF Mono', monospace" font-size="12" fill="#ff7b72">int</text>
+      <text x="38" y="24" font-family="'RobotoMono', 'SF Mono', monospace" font-size="12" fill="#c9d1d9"> i = threadIdx.x +</text>
+      <text x="38" y="44" font-family="'RobotoMono', 'SF Mono', monospace" font-size="12" fill="#c9d1d9">    blockIdx.x * blockDim.x;</text>
+    </g>
+
+    <!-- Thread Swarm -->
+    <g transform="translate(50, 140)">
+      <rect width="300" height="150" rx="10" fill="#1a1f24" stroke="#484f58" stroke-width="1"/>
+      
+      <!-- Dense grid of dots -->
+      <g fill="#3d444d">
+        <circle cx="15" cy="15" r="2.5"/><circle cx="30" cy="15" r="2.5"/><circle cx="45" cy="15" r="2.5"/><circle cx="60" cy="15" r="2.5"/><circle cx="75" cy="15" r="2.5"/><circle cx="90" cy="15" r="2.5"/><circle cx="105" cy="15" r="2.5"/><circle cx="120" cy="15" r="2.5"/><circle cx="135" cy="15" r="2.5"/><circle cx="150" cy="15" r="2.5"/><circle cx="165" cy="15" r="2.5"/><circle cx="180" cy="15" r="2.5"/><circle cx="195" cy="15" r="2.5"/><circle cx="210" cy="15" r="2.5"/><circle cx="225" cy="15" r="2.5"/><circle cx="240" cy="15" r="2.5"/><circle cx="255" cy="15" r="2.5"/><circle cx="270" cy="15" r="2.5"/><circle cx="285" cy="15" r="2.5"/>
+        <circle cx="15" cy="30" r="2.5"/><circle cx="30" cy="30" r="2.5"/><circle cx="45" cy="30" r="2.5"/><circle cx="60" cy="30" r="2.5"/><circle cx="75" cy="30" r="2.5"/><circle cx="90" cy="30" r="2.5"/><circle cx="105" cy="30" r="2.5"/><circle cx="120" cy="30" r="2.5"/><circle cx="135" cy="30" r="2.5"/><circle cx="150" cy="30" r="2.5"/><circle cx="165" cy="30" r="2.5"/><circle cx="180" cy="30" r="2.5"/><circle cx="195" cy="30" r="2.5"/><circle cx="210" cy="30" r="2.5"/><circle cx="225" cy="30" r="2.5"/><circle cx="240" cy="30" r="2.5"/><circle cx="255" cy="30" r="2.5"/><circle cx="270" cy="30" r="2.5"/><circle cx="285" cy="30" r="2.5"/>
+        <circle cx="15" cy="45" r="2.5"/><circle cx="30" cy="45" r="2.5"/><circle cx="45" cy="45" r="2.5"/><circle cx="60" cy="45" r="2.5"/><circle cx="75" cy="45" r="2.5"/><circle cx="90" cy="45" r="2.5"/><circle cx="105" cy="45" r="2.5"/><circle cx="120" cy="45" r="2.5"/><circle cx="135" cy="45" r="2.5"/><circle cx="150" cy="45" r="2.5"/><circle cx="165" cy="45" r="2.5"/><circle cx="180" cy="45" r="2.5"/><circle cx="195" cy="45" r="2.5"/><circle cx="210" cy="45" r="2.5"/><circle cx="225" cy="45" r="2.5"/><circle cx="240" cy="45" r="2.5"/><circle cx="255" cy="45" r="2.5"/><circle cx="270" cy="45" r="2.5"/><circle cx="285" cy="45" r="2.5"/>
+        <circle cx="15" cy="60" r="2.5"/><circle cx="30" cy="60" r="2.5"/><circle cx="45" cy="60" r="2.5"/><circle cx="60" cy="60" r="2.5"/><circle cx="75" cy="60" r="2.5"/><circle cx="90" cy="60" r="2.5"/><circle cx="105" cy="60" r="2.5"/><circle cx="120" cy="60" r="2.5"/><circle cx="135" cy="60" r="2.5"/><circle cx="150" cy="60" r="2.5"/><circle cx="165" cy="60" r="2.5"/><circle cx="180" cy="60" r="2.5"/><circle cx="195" cy="60" r="2.5"/><circle cx="210" cy="60" r="2.5"/><circle cx="225" cy="60" r="2.5"/><circle cx="240" cy="60" r="2.5"/><circle cx="255" cy="60" r="2.5"/><circle cx="270" cy="60" r="2.5"/><circle cx="285" cy="60" r="2.5"/>
+        <circle cx="15" cy="75" r="2.5"/><circle cx="30" cy="75" r="2.5"/><circle cx="45" cy="75" r="2.5"/><circle cx="60" cy="75" r="2.5"/><circle cx="75" cy="75" r="2.5"/><circle cx="90" cy="75" r="2.5"/><circle cx="105" cy="75" r="2.5"/><circle cx="120" cy="75" r="2.5"/><circle cx="135" cy="75" r="2.5"/><circle cx="150" cy="75" r="2.5"/><circle cx="165" cy="75" r="2.5"/><circle cx="180" cy="75" r="2.5"/><circle cx="195" cy="75" r="2.5"/><circle cx="210" cy="75" r="2.5"/><circle cx="225" cy="75" r="2.5"/><circle cx="240" cy="75" r="2.5"/><circle cx="255" cy="75" r="2.5"/><circle cx="270" cy="75" r="2.5"/><circle cx="285" cy="75" r="2.5"/>
+        <circle cx="15" cy="90" r="2.5"/><circle cx="30" cy="90" r="2.5"/><circle cx="45" cy="90" r="2.5"/><circle cx="60" cy="90" r="2.5"/><circle cx="75" cy="90" r="2.5"/><circle cx="90" cy="90" r="2.5"/><circle cx="105" cy="90" r="2.5"/><circle cx="120" cy="90" r="2.5"/><circle cx="135" cy="90" r="2.5"/><circle cx="150" cy="90" r="2.5"/><circle cx="165" cy="90" r="2.5"/><circle cx="180" cy="90" r="2.5"/><circle cx="195" cy="90" r="2.5"/><circle cx="210" cy="90" r="2.5"/><circle cx="225" cy="90" r="2.5"/><circle cx="240" cy="90" r="2.5"/><circle cx="255" cy="90" r="2.5"/><circle cx="270" cy="90" r="2.5"/><circle cx="285" cy="90" r="2.5"/>
+        <circle cx="15" cy="105" r="2.5"/><circle cx="30" cy="105" r="2.5"/><circle cx="45" cy="105" r="2.5"/><circle cx="60" cy="105" r="2.5"/><circle cx="75" cy="105" r="2.5"/><circle cx="90" cy="105" r="2.5"/><circle cx="105" cy="105" r="2.5"/><circle cx="120" cy="105" r="2.5"/><circle cx="135" cy="105" r="2.5"/><circle cx="150" cy="105" r="2.5"/><circle cx="165" cy="105" r="2.5"/><circle cx="180" cy="105" r="2.5"/><circle cx="195" cy="105" r="2.5"/><circle cx="210" cy="105" r="2.5"/><circle cx="225" cy="105" r="2.5"/><circle cx="240" cy="105" r="2.5"/><circle cx="255" cy="105" r="2.5"/><circle cx="270" cy="105" r="2.5"/><circle cx="285" cy="105" r="2.5"/>
+        <circle cx="15" cy="120" r="2.5"/><circle cx="30" cy="120" r="2.5"/><circle cx="45" cy="120" r="2.5"/><circle cx="60" cy="120" r="2.5"/><circle cx="75" cy="120" r="2.5"/><circle cx="90" cy="120" r="2.5"/><circle cx="105" cy="120" r="2.5"/><circle cx="120" cy="120" r="2.5"/><circle cx="135" cy="120" r="2.5"/><circle cx="150" cy="120" r="2.5"/><circle cx="165" cy="120" r="2.5"/><circle cx="180" cy="120" r="2.5"/><circle cx="195" cy="120" r="2.5"/><circle cx="210" cy="120" r="2.5"/><circle cx="225" cy="120" r="2.5"/><circle cx="240" cy="120" r="2.5"/><circle cx="255" cy="120" r="2.5"/><circle cx="270" cy="120" r="2.5"/><circle cx="285" cy="120" r="2.5"/>
+        <circle cx="15" cy="135" r="2.5"/><circle cx="30" cy="135" r="2.5"/><circle cx="45" cy="135" r="2.5"/><circle cx="60" cy="135" r="2.5"/><circle cx="75" cy="135" r="2.5"/><circle cx="90" cy="135" r="2.5"/><circle cx="105" cy="135" r="2.5"/><circle cx="120" cy="135" r="2.5"/><circle cx="135" cy="135" r="2.5"/><circle cx="150" cy="135" r="2.5"/><circle cx="165" cy="135" r="2.5"/><circle cx="180" cy="135" r="2.5"/><circle cx="195" cy="135" r="2.5"/><circle cx="210" cy="135" r="2.5"/><circle cx="225" cy="135" r="2.5"/><circle cx="240" cy="135" r="2.5"/><circle cx="255" cy="135" r="2.5"/><circle cx="270" cy="135" r="2.5"/><circle cx="285" cy="135" r="2.5"/>
+      </g>
+      
+      <!-- Highlighted threads - solid colors -->
+      <circle cx="45" cy="30" r="5" fill="#f97583" filter="url(#glow)"/>
+      <circle cx="150" cy="75" r="5" fill="#56d364" filter="url(#glow)"/>
+      <circle cx="255" cy="120" r="5" fill="#79c0ff" filter="url(#glow)"/>
+    </g>
+    
+    <!-- Label for threads -->
+    <text x="200" y="310" text-anchor="middle" font-size="14" font-weight="500" fill="#6e7681" letter-spacing="0.5">Threads (1000s)</text>
+
+    <!-- Memory Hierarchy -->
+    <g transform="translate(125, 340)">
+      <!-- Registers (top) with lightning bolt -->
+      <rect x="0" y="0" width="150" height="55" rx="10" fill="url(#register-gradient)" stroke="#e3b341" stroke-width="2"/>
+      <text x="75" y="24" text-anchor="middle" font-size="15" font-weight="600" fill="#e3b341">⚡ Registers</text>
+      <text x="75" y="44" text-anchor="middle" font-size="11" font-weight="700" fill="#ffffff">per-thread logic</text>
+      
+      <!-- Two-way arrows: Registers ↔ Shared Mem -->
+      <line x1="55" y1="60" x2="55" y2="82" stroke="#6e7681" stroke-width="1.5" marker-end="url(#arrow-gray-up)"/>
+      <line x1="95" y1="82" x2="95" y2="60" stroke="#6e7681" stroke-width="1.5" marker-end="url(#arrow-gray-up)"/>
+      
+      <!-- Shared Mem -->
+      <rect x="0" y="87" width="150" height="45" rx="8" fill="url(#mem-gradient)" stroke="#58a6ff" stroke-width="1.5"/>
+      <text x="75" y="115" text-anchor="middle" font-size="14" fill="#58a6ff">Shared Mem</text>
+      
+      <!-- Two-way arrows: Shared Mem ↔ Global Mem + Label -->
+      <line x1="55" y1="137" x2="55" y2="159" stroke="#6e7681" stroke-width="1.5" marker-end="url(#arrow-gray-up)"/>
+      <line x1="95" y1="159" x2="95" y2="137" stroke="#6e7681" stroke-width="1.5" marker-end="url(#arrow-gray-up)"/>
+      <text x="168" y="152" font-size="11" font-weight="700" fill="#d2a8ff">Async / TMA</text>
+      
+      <!-- Global Mem (HBM) -->
+      <rect x="0" y="164" width="150" height="50" rx="8" fill="url(#mem-gradient)" stroke="#58a6ff" stroke-width="1.5"/>
+      <text x="75" y="186" text-anchor="middle" font-size="14" fill="#58a6ff">Global Mem</text>
+      <text x="75" y="202" text-anchor="middle" font-size="10" fill="#6e7681">(HBM)</text>
+    </g>
+    
+    <!-- Badge: Manual -->
+    <g transform="translate(155, 565)">
+      <rect width="90" height="28" rx="14" fill="#3d1f1f" stroke="#ff7b72" stroke-width="1.5"/>
+      <text x="45" y="19" text-anchor="middle" font-size="12" font-weight="600" fill="#ff7b72">Manual</text>
+    </g>
+    
+    <!-- Description -->
+    <text x="200" y="618" text-anchor="middle" font-size="13" font-style="italic" fill="#6e7681">"I manage 1000s of individual threads"</text>
+  </g>
+  
+  <!-- ==================== RIGHT SIDE: Tile-Centric ==================== -->
+  <g transform="translate(470, 80)">
+    <!-- Container - same dashed pattern as thread-centric but WHITE and BOLD -->
+    <rect width="400" height="600" rx="16" fill="#161b22" stroke="#ffffff" stroke-width="2.5" stroke-dasharray="12,6"/>
+    
+    <!-- Header bar -->
+    <rect width="400" height="50" rx="16" fill="#1c2128"/>
+    <rect y="35" width="400" height="15" fill="#1c2128"/>
+    <!-- Title in WHITE -->
+    <text x="200" y="35" text-anchor="middle" font-size="20" font-weight="500" fill="#ffffff" letter-spacing="-0.3">Tile-Centric (cuTile Rust)</text>
+
+    <!-- Code snippet -->
+    <g transform="translate(25, 65)">
+      <rect width="350" height="55" rx="8" fill="#0d1117" stroke="#484f58" stroke-width="1"/>
+      <text x="15" y="24" font-family="'RobotoMono', 'SF Mono', monospace" font-size="12" fill="#ff7b72">let</text>
+      <text x="40" y="24" font-family="'RobotoMono', 'SF Mono', monospace" font-size="12" fill="#c9d1d9">tile = </text>
+      <text x="95" y="24" font-family="'RobotoMono', 'SF Mono', monospace" font-size="12" fill="#d2a8ff">load_tile</text>
+      <text x="170" y="24" font-family="'RobotoMono', 'SF Mono', monospace" font-size="12" fill="#c9d1d9">(x);</text>
+      <text x="15" y="44" font-family="'RobotoMono', 'SF Mono', monospace" font-size="12" fill="#ff7b72">let</text>
+      <text x="40" y="44" font-family="'RobotoMono', 'SF Mono', monospace" font-size="12" fill="#c9d1d9">res = tile * 2.0;</text>
+    </g>
+
+    <!-- Tile Grid - 2x2 with solid colors matching thread dots, white text -->
+    <g transform="translate(50, 140)">
+      <rect width="300" height="150" rx="10" fill="#1a1f24" stroke="#484f58" stroke-width="1"/>
+      
+      <!-- Tile 0 - Solid red/pink (matches first thread dot #f97583) -->
+      <rect x="15" y="15" width="125" height="55" rx="8" fill="#f97583"/>
+      <text x="77" y="48" text-anchor="middle" font-size="15" font-weight="600" fill="#ffffff">TILE 0</text>
+      
+      <!-- Tile 1 - Solid green (matches second thread dot #56d364) -->
+      <rect x="160" y="15" width="125" height="55" rx="8" fill="#56d364"/>
+      <text x="222" y="48" text-anchor="middle" font-size="15" font-weight="600" fill="#ffffff">TILE 1</text>
+      
+      <!-- Tile 2 - Solid blue (matches third thread dot #79c0ff) -->
+      <rect x="15" y="80" width="125" height="55" rx="8" fill="#79c0ff"/>
+      <text x="77" y="113" text-anchor="middle" font-size="15" font-weight="600" fill="#ffffff">TILE 2</text>
+      
+      <!-- Tile 3 - Solid purple -->
+      <rect x="160" y="80" width="125" height="55" rx="8" fill="#d2a8ff"/>
+      <text x="222" y="113" text-anchor="middle" font-size="15" font-weight="600" fill="#ffffff">TILE 3</text>
+    </g>
+    
+    <!-- Label for tiles - WHITE -->
+    <text x="200" y="310" text-anchor="middle" font-size="14" font-weight="500" fill="#ffffff" letter-spacing="0.5">Tiles (data blocks)</text>
+
+    <!-- Memory Hierarchy -->
+    <g transform="translate(125, 340)">
+      <!-- Registers (top) - SAME COLOR as thread-centric -->
+      <rect x="0" y="0" width="150" height="55" rx="10" fill="url(#register-gradient)" stroke="#e3b341" stroke-width="2"/>
+      <text x="75" y="24" text-anchor="middle" font-size="15" font-weight="600" fill="#e3b341">⚡ Registers</text>
+      <text x="75" y="44" text-anchor="middle" font-size="11" font-weight="700" fill="#ffffff">per-tile logic</text>
+      
+      <!-- Two-way arrows: Registers ↔ Shared Mem -->
+      <line x1="55" y1="60" x2="55" y2="82" stroke="#76B900" stroke-width="1.5" marker-end="url(#arrow-green-up)"/>
+      <line x1="95" y1="82" x2="95" y2="60" stroke="#76B900" stroke-width="1.5" marker-end="url(#arrow-green-up)"/>
+      
+      <!-- Shared Mem -->
+      <rect x="0" y="87" width="150" height="45" rx="8" fill="url(#mem-gradient)" stroke="#58a6ff" stroke-width="1.5"/>
+      <text x="75" y="110" text-anchor="middle" font-size="14" fill="#58a6ff">Shared Mem</text>
+      <text x="75" y="126" text-anchor="middle" font-size="10" font-style="italic" fill="#76B900">(auto)</text>
+      
+      <!-- Two-way arrows: Shared Mem ↔ Global Mem + Label -->
+      <line x1="55" y1="137" x2="55" y2="159" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow-blue-up)"/>
+      <line x1="95" y1="159" x2="95" y2="137" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow-blue-up)"/>
+      <text x="168" y="152" font-size="11" font-weight="700" fill="#d2a8ff">Async / TMA</text>
+      
+      <!-- Global Mem (HBM) -->
+      <rect x="0" y="164" width="150" height="50" rx="8" fill="url(#mem-gradient)" stroke="#58a6ff" stroke-width="1.5"/>
+      <text x="75" y="186" text-anchor="middle" font-size="14" fill="#58a6ff">Global Mem</text>
+      <text x="75" y="202" text-anchor="middle" font-size="10" fill="#6e7681">(HBM)</text>
+    </g>
+    
+    <!-- Badge: Compiler-Managed - WHITE text -->
+    <g transform="translate(105, 565)">
+      <rect width="190" height="28" rx="14" fill="#1c2128" stroke="#ffffff" stroke-width="1.5"/>
+      <text x="95" y="19" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">✨ Compiler-Managed</text>
+    </g>
+    
+    <!-- Description -->
+    <text x="200" y="618" text-anchor="middle" font-size="13" font-style="italic" fill="#c9d1d9">"I manage blocks of data"</text>
+  </g>
+
+  <!-- Center Divider with VS -->
+  <line x1="450" y1="100" x2="450" y2="660" stroke="#30363d" stroke-width="1" stroke-dasharray="6,4"/>
+  <circle cx="450" cy="380" r="24" fill="#161b22" stroke="#484f58" stroke-width="2"/>
+  <text x="450" y="386" text-anchor="middle" font-size="16" font-weight="700" fill="#8b949e">vs</text>
+
+</svg>

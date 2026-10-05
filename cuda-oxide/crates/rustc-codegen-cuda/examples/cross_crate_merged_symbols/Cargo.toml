@@ -1,0 +1,18 @@
+[package]
+name = "cross_crate_merged_symbols"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+# Standalone workspace so the nested kernel crate can be a workspace member.
+[workspace]
+members = ["merged-symbols-lib"]
+
+[dependencies]
+# Named distinctly from the other examples' library crates: CI builds all
+# examples into one shared CARGO_TARGET_DIR, and two local crates with the
+# same (name, version) alias each other's cache slot there.
+merged-symbols-lib = { path = "merged-symbols-lib" }
+cuda-device = { path = "../../../cuda-device" }
+cuda-host = { path = "../../../cuda-host" }
+cuda-core = { path = "../../../../../cuda-core", version = "0.4.0" }

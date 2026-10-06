@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 SPHINX_BUILD="${SPHINX_BUILD:-sphinx-build}"
+read -r -a SPHINX_FLAGS <<< "${SPHINXOPTS:--W --keep-going}"
 OUT_DIR="${CUTILE_DOCS_SITE_DIR:-$REPO_ROOT/_site}"
 MAIN_REF="${CUTILE_DOCS_MAIN_REF:-HEAD}"
 MAIN_VERSION="${CUTILE_DOCS_MAIN_VERSION:-main}"
@@ -134,9 +135,15 @@ build_ref() {
     fi
 
     echo "Building cuTile book for $version ($ref)"
+    local -a sphinx_flags=()
+    # Check current docs with warnings denied. Historical tags can carry old
+    # Sphinx warnings, so retain their previous build policy.
+    if [[ "$ref" == "$MAIN_REF" ]]; then
+        sphinx_flags=("${SPHINX_FLAGS[@]}")
+    fi
     CUTILE_DOCS_VERSION="$version" \
     CUTILE_DOCS_SWITCHER_JSON="${BASE_URL}_static/versions.json" \
-        "$SPHINX_BUILD" -b html "$book_src" "$out"
+        "$SPHINX_BUILD" "${sphinx_flags[@]}" -b html "$book_src" "$out"
 
     # Older tags may enable sphinx-sitemap with unversioned URLs. The versioned
     # Pages layout does not need per-version sitemap files.

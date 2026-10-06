@@ -103,4 +103,4 @@ html_js_files = [
 pygments_style = 'default'
 html_show_sourcelink = False
 html_title = "cuda-oxide"
-html_baseurl = "https://nvlabs.github.io/cuda-oxide/"
+html_baseurl = "https://nvidia.github.io/cuda-rust/cuda-oxide/"

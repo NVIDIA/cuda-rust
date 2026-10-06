@@ -1,3 +1,29 @@
+# Copy of cuda-oxide/deny.toml for the git-root host workspace
+# (cuda-bindings, cuda-core, cuda-core-derive, cuda-async). Edit the SIMT
+# file and copy it here. This file is not a second policy.
+#
+# cargo-deny finds deny.toml by walking up from the manifest. It does not
+# look into child directories, so a run on the host workspace never sees
+# cuda-oxide/deny.toml. Passing --config does not fix that for every
+# install: 0.18 accepts the flag only after `check` and resolves the path
+# from the manifest directory, while 0.20 accepts it only before `check`
+# and resolves the path from the working directory.
+#
+# The policy stays in cuda-oxide/deny.toml. That is the file the SIMT,
+# codegen, device-only, and example walks stop at. The root workspace is
+# only the four host crates; the allow-list and the pliron git exception
+# belong to the SIMT tree. A single deny.toml at the git root would make
+# those walks continue upward, and any cutile-rs directory that lacked its
+# own deny.toml would then inherit the Oxide policy. cutile-rs/deny.toml is
+# a separate product policy and must remain the file a walk inside that
+# tree finds first.
+#
+# The host graph is still a separate resolution. Normal and build
+# dependencies of the host crates are also in the SIMT graph, but
+# dev-dependencies are not. cuda-async's loom dev-dependency (generator,
+# cc, tracing, and the rest of that tree) exists only in the root
+# Cargo.lock, and only this file lets `cargo deny --locked` judge that lock.
+
 [advisories]
 version = 2
 

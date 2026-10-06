@@ -1,11 +1,30 @@
 ---
 name: examples-compile
 
+# Path-filtered SIMT lane (same roots as ci.yml).
 on:
   push:
     branches: [main]
+    paths:
+      - 'cuda-oxide/**'
+      - 'cuda-bindings/**'
+      - 'cuda-core/**'
+      - 'cuda-core-derive/**'
+      - 'cuda-async/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/**'
   pull_request:
     branches: [main]
+    paths:
+      - 'cuda-oxide/**'
+      - 'cuda-bindings/**'
+      - 'cuda-core/**'
+      - 'cuda-core-derive/**'
+      - 'cuda-async/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
@@ -35,7 +54,7 @@ jobs:
       # example -- a 15-70s spike in an otherwise ~2s-per-example run.
       # Fails fast, before any toolkit install.
       - name: Example lockfiles resolve identical dependency versions
-        run: bash scripts/sync-example-locks.sh --check
+        run: bash cuda-oxide/scripts/sync-example-locks.sh --check
 
       # Needed for cuda.h and curand.h: bindgen runs in the shared
       # cuda-bindings build script. Same setup as unit-tests.yml / clippy.yml.
@@ -95,20 +114,29 @@ jobs:
           # the backend .so at its fixed discovery path.
           CARGO_TARGET_DIR: ${{ runner.temp }}/examples-shared-target
           SMOKETEST_LOG_DIR: ${{ runner.temp }}/smoketest-logs
+          # The runner's ~14 GB disk also holds the CUDA toolkit, LLVM,
+          # cargo-oxide, and ~200 example workspaces; rustc incremental dirs
+          # under rustc-codegen-cuda/target/ are what used to fill it and fail
+          # later examples with ENOSPC / ld bus errors. The cutile-rs source
+          # tree itself is a few MB and must stay: cutile_inter_kernel
+          # path-depends on cutile-rs/cutile and cutile-rs/cutile-compiler.
+          CARGO_INCREMENTAL: "0"
         run: |
           set -euo pipefail
           sysroot="$(rustc --print sysroot)"
           export LIBRARY_PATH="${sysroot}/lib:${LIBRARY_PATH:-}"
           export LD_LIBRARY_PATH="${sysroot}/lib:${LD_LIBRARY_PATH:-}"
 
-          scripts/smoketest.sh --compile-only --no-color
+          cuda-oxide/scripts/smoketest.sh --compile-only --no-color
 
       - name: Artifact modes keep shared Cargo dependencies fresh
         timeout-minutes: 10
+        working-directory: cuda-oxide
         env:
           CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           CUDA_OXIDE_LLC: /usr/bin/llc-22
           CARGO_TARGET_DIR: ${{ runner.temp }}/examples-shared-target
+          CARGO_INCREMENTAL: "0"
         run: |
           set -euo pipefail
           sysroot="$(rustc --print sysroot)"

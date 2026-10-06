@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 500">
+  <defs>
+    <!-- Small elegant arrow -->
+    <marker id="arrow-white" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M 0 0 L 6 3 L 0 6" fill="none" stroke="#ffffff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="750" height="500" fill="#0d1117"/>
+  
+  <!-- Title -->
+  <text x="375" y="35" text-anchor="middle" fill="#ffffff" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="700">Tile Concurrency: Grid of Tile Threads</text>
+  <text x="375" y="55" text-anchor="middle" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="12">Each tile thread processes one sub-tensor independently</text>
+  
+  <!-- Large Tensor (Left Side) -->
+  <text x="180" y="90" text-anchor="middle" fill="#c9d1d9" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="600">Input Tensor [4096 × 4096]</text>
+  
+  <!-- Tensor grid showing tile partitions -->
+  <g transform="translate(40, 105)">
+    <!-- Row 0 -->
+    <rect x="0" y="0" width="65" height="55" fill="#79c0ff" rx="3"/>
+    <text x="32.5" y="32" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="10" font-weight="700">TB(0,0)</text>
+    
+    <rect x="70" y="0" width="65" height="55" fill="#79c0ff" rx="3"/>
+    <text x="102.5" y="32" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="10" font-weight="700">TB(0,1)</text>
+    
+    <rect x="140" y="0" width="65" height="55" fill="#79c0ff" rx="3"/>
+    <text x="172.5" y="32" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="10" font-weight="700">TB(0,2)</text>
+    
+    <rect x="210" y="0" width="65" height="55" fill="#79c0ff" rx="3"/>
+    <text x="242.5" y="32" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="10" font-weight="700">...</text>
+    
+    <!-- Row 1 -->
+    <rect x="0" y="60" width="65" height="55" fill="#56d364" rx="3"/>
+    <text x="32.5" y="92" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="10" font-weight="700">TB(1,0)</text>
+    
+    <rect x="70" y="60" width="65" height="55" fill="#56d364" rx="3"/>
+    <text x="102.5" y="92" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="10" font-weight="700">TB(1,1)</text>
+    
+    <rect x="140" y="60" width="65" height="55" fill="#56d364" rx="3"/>
+    <text x="172.5" y="92" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="10" font-weight="700">TB(1,2)</text>
+    
+    <rect x="210" y="60" width="65" height="55" fill="#56d364" rx="3"/>
+    <text x="242.5" y="92" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="10" font-weight="700">...</text>
+    
+    <!-- Row 2 -->
+    <rect x="0" y="120" width="65" height="55" fill="#d2a8ff" rx="3"/>
+    <text x="32.5" y="152" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="10" font-weight="700">TB(2,0)</text>
+    
+    <rect x="70" y="120" width="65" height="55" fill="#d2a8ff" rx="3"/>
+    <text x="102.5" y="152" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="10" font-weight="700">TB(2,1)</text>
+    
+    <rect x="140" y="120" width="65" height="55" fill="#d2a8ff" rx="3"/>
+    <text x="172.5" y="152" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="10" font-weight="700">TB(2,2)</text>
+    
+    <rect x="210" y="120" width="65" height="55" fill="#d2a8ff" rx="3"/>
+    <text x="242.5" y="152" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="10" font-weight="700">...</text>
+    
+    <!-- Row 3 -->
+    <rect x="0" y="180" width="65" height="55" fill="#f85149" rx="3"/>
+    <text x="32.5" y="212" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="10" font-weight="700">...</text>
+    
+    <rect x="70" y="180" width="65" height="55" fill="#f85149" rx="3"/>
+    <text x="102.5" y="212" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="10" font-weight="700">...</text>
+    
+    <rect x="140" y="180" width="65" height="55" fill="#f85149" rx="3"/>
+    <text x="172.5" y="212" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="10" font-weight="700">...</text>
+    
+    <rect x="210" y="180" width="65" height="55" fill="#f85149" rx="3"/>
+    <text x="242.5" y="212" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="10" font-weight="700">TB(63,63)</text>
+  </g>
+  
+  <!-- Sleek Arrow -->
+  <path d="M 330 230 C 350 230, 380 230, 395 230" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" marker-end="url(#arrow-white)"/>
+  <text x="365" y="218" text-anchor="middle" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="10">Launch</text>
+  
+  <!-- GPU Execution (Right Side) -->
+  <text x="565" y="90" text-anchor="middle" fill="#c9d1d9" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="600">GPU Grid (64 × 64 = 4096 tile blocks)</text>
+  
+  <!-- SM boxes -->
+  <g transform="translate(420, 105)">
+    <!-- SM 0 -->
+    <rect x="0" y="0" width="130" height="70" fill="#161b22" stroke="#79c0ff" stroke-width="2" rx="4"/>
+    <text x="65" y="20" text-anchor="middle" fill="#79c0ff" font-family="system-ui, sans-serif" font-size="11" font-weight="700">Tile Thread 0</text>
+    <rect x="10" y="30" width="110" height="30" fill="#79c0ff" rx="2"/>
+    <text x="65" y="50" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">TB(0,0)</text>
+
+    <!--
+    <rect x="70" y="30" width="50" height="30" fill="#79c0ff" rx="2"/>
+    <text x="95" y="50" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">B(0,1)</text>
+    -->
+    
+    <!-- SM 1 -->
+    <rect x="140" y="0" width="130" height="70" fill="#161b22" stroke="#56d364" stroke-width="2" rx="4"/>
+    <text x="205" y="20" text-anchor="middle" fill="#56d364" font-family="system-ui, sans-serif" font-size="11" font-weight="700">Tile Thread 1</text>
+    <rect x="150" y="30" width="110" height="30" fill="#56d364" rx="2"/>
+    <text x="205" y="50" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">TB(0,1)</text>
+
+    <!--
+    <rect x="210" y="30" width="50" height="30" fill="#56d364" rx="2"/>
+    <text x="235" y="50" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">B(1,1)</text>
+    -->
+    
+    <!-- SM 2 -->
+    <rect x="0" y="80" width="130" height="70" fill="#161b22" stroke="#d2a8ff" stroke-width="2" rx="4"/>
+    <text x="65" y="100" text-anchor="middle" fill="#d2a8ff" font-family="system-ui, sans-serif" font-size="11" font-weight="700">Tile Thread 2</text>
+    <rect x="10" y="110" width="110" height="30" fill="#d2a8ff" rx="2"/>
+    <text x="65" y="130" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">TB(1,0)</text>
+
+    <!--
+    <rect x="70" y="110" width="50" height="30" fill="#d2a8ff" rx="2"/>
+    <text x="95" y="130" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">B(2,1)</text>
+    -->
+    
+    <!-- SM N -->
+    <rect x="140" y="80" width="130" height="70" fill="#161b22" stroke="#f85149" stroke-width="2" rx="4"/>
+    <text x="205" y="100" text-anchor="middle" fill="#f85149" font-family="system-ui, sans-serif" font-size="11" font-weight="700">Tile Thread N</text>
+    <rect x="150" y="110" width="110" height="30" fill="#f85149" rx="2"/>
+    <text x="205" y="130" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">TB(x,y)</text>
+
+    <!--
+    <rect x="210" y="110" width="50" height="30" fill="#f85149" rx="2"/>
+    <text x="235" y="130" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">...</text>
+    -->
+  </g>
+  
+  <!-- Bottom explanation boxes -->
+  <g transform="translate(40, 380)">
+    <!-- Box 1: Partition -->
+    <rect x="0" y="0" width="200" height="85" fill="#161b22" stroke="#30363d" stroke-width="1" rx="4"/>
+    <text x="100" y="22" text-anchor="middle" fill="#79c0ff" font-family="system-ui, sans-serif" font-size="12" font-weight="700">1. Partition</text>
+    <text x="100" y="42" text-anchor="middle" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="10">Tensor divided into sub-tensors</text>
+    <text x="100" y="56" text-anchor="middle" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="10">Each sub-tensor = [64 × 64] elements</text>
+    <text x="100" y="70" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">4096/64 = 64 sub-tensors per axis</text>
+    
+    <!-- Box 2: Distribute -->
+    <rect x="220" y="0" width="200" height="85" fill="#161b22" stroke="#30363d" stroke-width="1" rx="4"/>
+    <text x="320" y="22" text-anchor="middle" fill="#56d364" font-family="system-ui, sans-serif" font-size="12" font-weight="700">2. Distribute</text>
+    <text x="320" y="42" text-anchor="middle" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="10">Tile threads scheduled on SMs</text>
+    <text x="320" y="56" text-anchor="middle" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="10">Runtime handles assignment</text>
+    <text x="320" y="70" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">Multiple tile threads per SM</text>
+    
+    <!-- Box 3: Execute -->
+    <rect x="440" y="0" width="200" height="85" fill="#161b22" stroke="#30363d" stroke-width="1" rx="4"/>
+    <text x="540" y="22" text-anchor="middle" fill="#d2a8ff" font-family="system-ui, sans-serif" font-size="12" font-weight="700">3. Execute</text>
+    <text x="540" y="42" text-anchor="middle" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="10">All tile threads run concurrently</text>
+    <text x="540" y="56" text-anchor="middle" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="10">Same kernel code per tile thread</text>
+    <text x="540" y="70" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">Sub-tensors are loaded as tiles (registers)</text>
+  </g>
+</svg>

@@ -1,133 +1,18 @@
 [workspace]
 resolver = "3"
 members = [
-    # Core crates
-    "crates/cuda-target-spec",
-    "crates/cuda-intrinsics",
-    "crates/cuda-intrinsics-gen",
-    "crates/ptx-parse",
-    "crates/ptx-schedule",
-    "crates/dialect-ptx",
-    "crates/cuda-device",
-    "crates/cuda-artifact-finalizer",
-    "crates/cuda-host",
-    "crates/cuda-macros",
-    "crates/llvm-export",
-    "crates/lean-exporter",
-    "crates/dialect-mir",
-    "crates/dialect-iket",
-    "crates/dialect-nvvm",
-    "crates/mir-importer",
-    "crates/cuda-oxide-codegen",
-    "crates/mir-lower",
-    "crates/iket-lower",
-    "crates/mir-transforms",
-    "crates/nvvm-transforms",
-    "crates/cargo-oxide",
-    "crates/oxide-artifacts",
-    # FFI bindings
-    # cuda-bindings, cuda-core, and cuda-async are the host-side crates shared
-    # with cutile-rs and published from NVlabs/cutile-rs; the cuda-oxide SIMT
-    # surface lives under their `simt` modules. The local copies are gone.
-    "crates/libnvvm-sys",
-    "crates/nvjitlink-sys",
-    # Internal naming contract (workspace-private; publish = false)
-    "crates/reserved-oxide-symbols",
-    # Differential codegen fuzzer support
-    "crates/fuzzer",
+    # Stable host-side crates shared by the Tile and SIMT components.
+    # Package metadata and dependencies stay in each crate so this workspace
+    # does not impose CUDA Oxide's nightly toolchain or edition.
+    "cuda-bindings",
+    "cuda-core",
+    "cuda-core-derive",
+    "cuda-async",
 ]
-
-[workspace.package]
-edition = "2024"
-authors = ["Nihal Pasham <nihalp@nvidia.com>"]
-license = "Apache-2.0"
-repository = "https://github.com/NVlabs/cuda-oxide.git"
-
-# Note: crates/rustc-codegen-cuda is NOT a workspace member because it requires
-# special rustc nightly features and a different build process.
-# Build and run examples with: cargo oxide run <example>
-# Examples are in: crates/rustc-codegen-cuda/examples/
-
-[workspace.dependencies]
-# Pliron MLIR framework, pinned to upstream struct-layout, GEP no-wrap, volatile,
-# global-constant, inline-asm, and generic LLVM attribute semantics.
-# pliron-llvm uses default-features = false to keep llvm-sys (LLVM 23) out:
-# cuda-oxide consumes the dialect modeling only, not the FFI bridge.
-# `crates/rustc-codegen-cuda/Cargo.toml` MUST stay on this same rev, or pliron
-# resolves to two distinct crates and types stop unifying.
-pliron = { git = "https://github.com/pliron-org/pliron", rev = "06d99a3df938394583715aacf5eadb65b4791c09" }
-pliron-derive = { git = "https://github.com/pliron-org/pliron", rev = "06d99a3df938394583715aacf5eadb65b4791c09" }
-pliron-llvm = { git = "https://github.com/pliron-org/pliron", rev = "06d99a3df938394583715aacf5eadb65b4791c09", default-features = false, features = [
-    "std",
-] }
-
-# Internal crates
-cuda-target-spec = { path = "crates/cuda-target-spec" }
-llvm-export = { path = "crates/llvm-export" }
-lean-exporter = { path = "crates/lean-exporter" }
-dialect-mir = { path = "crates/dialect-mir" }
-dialect-iket = { path = "crates/dialect-iket" }
-dialect-ptx = { path = "crates/dialect-ptx" }
-dialect-nvvm = { path = "crates/dialect-nvvm" }
-mir-lower = { path = "crates/mir-lower" }
-iket-lower = { path = "crates/iket-lower" }
-mir-importer = { path = "crates/mir-importer" }
-cuda-oxide-codegen = { path = "crates/cuda-oxide-codegen" }
-mir-transforms = { path = "crates/mir-transforms" }
-nvvm-transforms = { path = "crates/nvvm-transforms" }
-cuda-device = { path = "crates/cuda-device" }
-cuda-artifact-finalizer = { path = "crates/cuda-artifact-finalizer" }
-cuda-host = { path = "crates/cuda-host" }
-# No default features: `host` is opt-in per member, so that depending on
-# cuda-device does not unify the host surface back on for kernel-only crates.
-# `cuda-host` names `features = ["host"]`, so anything that loads or launches a
-# module still gets it.
-cuda-macros = { path = "crates/cuda-macros", default-features = false }
-cuda-bindings = "0.3.1"
-cuda-core = "0.3.1"
-cuda-async = "0.3.1"
-libnvvm-sys = { path = "crates/libnvvm-sys" }
-nvjitlink-sys = { path = "crates/nvjitlink-sys" }
-reserved-oxide-symbols = { path = "crates/reserved-oxide-symbols" }
-fuzzer = { path = "crates/fuzzer" }
-# The crates.io release, not the in-tree path: the shared cuda-core (cutile-rs)
-# reads artifact bundles through crates.io oxide-artifacts, and a path copy of
-# the same version is a second crate to rustc. crates/oxide-artifacts stays in
-# the workspace as the source this release is published from; bump, publish,
-# then move this line. scripts/check-oxide-artifacts-parity.sh keeps them equal.
-oxide-artifacts = "0.2.1"
-ptx-parse = { path = "crates/ptx-parse" }
-ptx-schedule = { path = "crates/ptx-schedule" }
-
-# Common dependencies
-futures = "0.3"
-thiserror = "2"
-linkme = "0.3"
-anyhow = "1.0"
-once_cell = "1.18"
-combine = "4.6"
-log = "0.4"
-half = "2.7"
-libloading = "0.8"
-sha2 = "0.10"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "1"
-tempfile = "3.9"
-rustc-demangle = "0.1"
-
-# llvm-export deps
-rustc-hash = "2.0"
-bitflags = "2.0"
-dyn-clone = "1.0"
-
-# cuda-macros deps
-quote = "1.0"
-syn = { version = "2.0", features = ["full", "visit", "visit-mut"] }
-proc-macro2 = { version = "1.0", features = ["span-locations"] }
-
-# `cargo oxide` runs through the workspace's dev-profile Cargo alias. Its
-# backend fingerprint hashes a large debug shared object on every invocation;
-# optimize only SHA-256 so exact content fingerprinting remains inexpensive.
-[profile.dev.package.sha2]
-opt-level = 3
+# Nested workspaces. Without these, Cargo treats crates under them as part of
+# this workspace and `edition.workspace = true` in cuda-device (etc.) looks at
+# this manifest, which has no [workspace.package].
+exclude = [
+    "cuda-oxide",
+    "cutile-rs",
+]

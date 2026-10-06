@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 360" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+    
+    <!-- Sleek arrow markers -->
+    <marker id="arrow-green" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M 0 0.5 L 9 4 L 0 7.5" fill="none" stroke="#56d364" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M 0 0.5 L 9 4 L 0 7.5" fill="none" stroke="#79c0ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M 0 0.5 L 9 4 L 0 7.5" fill="none" stroke="#d2a8ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="850" height="360" fill="#0d1117"/>
+  <rect width="850" height="360" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="425" y="38" text-anchor="middle" font-size="24" font-weight="700" fill="#ffffff" letter-spacing="-0.5">Tile Data Flow</text>
+  <line x1="305" y1="50" x2="545" y2="50" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+  <text x="425" y="72" text-anchor="middle" font-size="14" font-weight="500" fill="#8b949e">Load → Compute → Store pattern</text>
+
+  <!-- Global Memory Section (Left) -->
+  <g transform="translate(50, 100)">
+    <text x="100" y="0" text-anchor="middle" font-size="14" font-weight="700" fill="#79c0ff">Global Memory (HBM)</text>
+    
+    <!-- Input tensor -->
+    <rect x="0" y="20" width="200" height="80" rx="8" fill="#79c0ff" stroke="none"/>
+    <text x="100" y="52" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">input tensor</text>
+    <text x="100" y="78" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="12" font-weight="500" fill="#ffffff">[1024, 1024]</text>
+    
+    <!-- Output tensor -->
+    <rect x="0" y="170" width="200" height="80" rx="8" fill="#56d364" stroke="none"/>
+    <text x="100" y="202" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">output tensor</text>
+    <text x="100" y="228" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="12" font-weight="500" fill="#ffffff">[1024, 1024]</text>
+  </g>
+
+  <!-- Registers Section (Right) -->
+  <g transform="translate(580, 100)">
+    <text x="100" y="0" text-anchor="middle" font-size="14" font-weight="700" fill="#d2a8ff">Registers</text>
+    
+    <!-- Input tile -->
+    <rect x="0" y="20" width="200" height="80" rx="8" fill="#d2a8ff" stroke="none"/>
+    <text x="100" y="52" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">tile</text>
+    <text x="100" y="78" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="12" font-weight="500" fill="#ffffff">[16, 16]</text>
+    
+    <!-- Result tile -->
+    <rect x="0" y="170" width="200" height="80" rx="8" fill="#ffa657" stroke="none"/>
+    <text x="100" y="202" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">result</text>
+    <text x="100" y="228" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="12" font-weight="500" fill="#ffffff">[16, 16]</text>
+  </g>
+
+  <!-- Arrows -->
+  <!-- load_tile arrow (sleek curved) -->
+  <g>
+    <path d="M 260 160 C 350 160, 480 160, 570 160" fill="none" stroke="#79c0ff" stroke-width="2" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+    <rect x="355" y="142" width="100" height="28" rx="6" fill="#161b22"/>
+    <text x="405" y="162" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="12" font-weight="600" fill="#79c0ff">load_tile</text>
+  </g>
+
+  <!-- compute arrow (sleek down) -->
+  <g>
+    <path d="M 680 200 L 680 260" fill="none" stroke="#d2a8ff" stroke-width="2" stroke-linecap="round" marker-end="url(#arrow-purple)"/>
+    <text x="720" y="235" text-anchor="start" font-size="12" font-weight="600" fill="#d2a8ff">compute</text>
+  </g>
+
+  <!-- store arrow (sleek curved) -->
+  <g>
+    <path d="M 570 310 C 480 310, 350 310, 260 310" fill="none" stroke="#56d364" stroke-width="2" stroke-linecap="round" marker-end="url(#arrow-green)"/>
+    <rect x="365" y="293" width="80" height="28" rx="6" fill="#161b22"/>
+    <text x="405" y="313" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="12" font-weight="600" fill="#56d364">store</text>
+  </g>
+
+  <!-- Callout box -->
+  <g transform="translate(295, 95)">
+    <rect x="0" y="0" width="260" height="35" rx="6" fill="#76B900"/>
+    <text x="130" y="23" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">Many tiles process concurrently!</text>
+  </g>
+
+</svg>

@@ -69,7 +69,12 @@ You control how threads synchronize and use shared memory.
 Kernels compile ahead of time from Rust to PTX using a pinned nightly toolchain managed by `cargo oxide`.
 You have direct control over how your kernels are tuned for each GPU architecture.
 
-If you are unsure which model to start with, reach for cutile-rs first: the compiler optimizes your kernel for your specific architecture. Drop down to cuda-oxide when you need control over threads, warps, shared memory, architecture-specific features, and tuning per GPU architecture.
+If you are unsure which model to start with here are some recommendations that will likely evolve as CUDA Rust matures. 
+* If you are new to GPU programming, Tile can be simpler to start with.
+* If you have familiarity with CUDA programming, then SIMT will feel comfortable to you.
+* If your problem domain primarily involves math over densely packed numerical data, then Tile is a good fit.
+* If your problem domain is sparse, involves pointer chasing, mapping traditional data structures to the GPU, or otherwise similar, then SIMT will give you more flexibility.
+* If you have already tried Tile and/or are willing to put in more effort/expertise/tokens to getting the last bits of possible performance, then CuTe abstractions on top of SIMT are often a good fit.
 
 Kernels from both models interoperate: a cutile-rs Tile kernel and a cuda-oxide
 SIMT kernel can run on the same stream over shared device buffers.

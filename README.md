@@ -34,7 +34,7 @@ shape its direction by sharing feedback on your experience.
 |  | cuda-oxide (SIMT) | cutile-rs (Tile) |
 | --- | --- | --- |
 | Feels familiar to | CUDA C++ programmers: threads, blocks, shared memory | NumPy or PyTorch programmers: ndarray / tensor operations on multi-dimensional tiles |
-| Safety | Disjoint slices prevent conflicting writes when launch geometry matches the kernel's contract | Data-race freedom by construction within a kernel: no explicit thread indexing, shared memory, or synchronization |
+| Safety | Data-race freedom for disjoint slice accesses; you control thread synchronization and shared memory | Data-race freedom by construction within a kernel: no explicit thread indexing, shared memory, or synchronization |
 | Indexing | Explicit thread/block indices | Implicit via partitions |
 | Compiles | Ahead of time, Rust → PTX | JIT at first launch, Rust → Tile IR → cubin |
 | Toolchain | Pinned nightly, managed by `cargo oxide` | Stable Rust 1.89 or newer |

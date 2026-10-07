@@ -4,8 +4,8 @@ CUDA Rust is NVIDIA's CUDA platform for Rust. It provides
 host-side crates for working with the CUDA driver and device-side crates and
 tools for writing GPU kernels in idiomatic Rust.
 
-* [cuda-oxide](./cuda-oxide) ([book](./cuda-oxide/cuda-oxide-book)): A rustc
-  compiler plugin, cargo helper utility, and crates to help users target the
+* [cuda-oxide](./cuda-oxide) ([book](./cuda-oxide/cuda-oxide-book)): A custom rustc
+  codegen backend, cargo helper utility, and crates to help users target the
   traditional CUDA **SIMT** (Single Instruction, Multiple Threads) kernel
   programming model. Here users have access to every
   detail of device-side CUDA programming.
@@ -34,20 +34,23 @@ shape its direction by sharing feedback on your experience.
 |  | cuda-oxide (SIMT) | cutile-rs (Tile) |
 | --- | --- | --- |
 | Feels familiar to | CUDA C++ programmers: threads, blocks, shared memory | NumPy or PyTorch programmers: ndarray / tensor operations on multi-dimensional tiles |
-| Safety | Memory safety per thread via disjoint slices; you control how threads synchronize and use shared memory | Data-race freedom by construction within a kernel: no explicit thread indexing, shared memory, or synchronization |
+| Safety | Disjoint slices prevent conflicting writes when launch geometry matches the kernel's contract | Data-race freedom by construction within a kernel: no explicit thread indexing, shared memory, or synchronization |
 | Indexing | Explicit thread/block indices | Implicit via partitions |
 | Compiles | Ahead of time, Rust → PTX | JIT at first launch, Rust → Tile IR → cubin |
 | Toolchain | Pinned nightly, managed by `cargo oxide` | Stable Rust 1.89 or newer |
-| Portability | CUDA architecture-specific; you control tuning for each GPU | CUDA architecture-agnostic; the compiler tunes per GPU |
+| Portability | PTX can run on compatible CUDA GPUs; hardware-specific features can restrict portability | Compiler maps tiles to supported CUDA GPUs; hardware-specific features can restrict portability |
 | Reach for it when | You need direct control over threads, warps, shared memory, TMA, or cluster ops | Your problem is naturally expressed as tensor computations and you want the compiler to handle scheduling details |
 
-If you are unsure which model to start with here are some recommendations that will likely evolve as CUDA Rust matures. 
-* If you are new to GPU programming, Tile can be simpler to start with.
+Choose between Tile and SIMT based on [each kernel's requirements](https://docs.nvidia.com/cuda/cuda-programming-guide/01-introduction/programming-model.html#relationship-to-simt-programming).
+Tile can simplify development when its abstractions fit the workload, while SIMT
+provides direct control over individual threads. An application can use both.
+
+Here are some recommendations that may evolve as CUDA Rust matures:
+
 * If you have familiarity with CUDA programming, then SIMT will feel comfortable to you.
 * If your problem domain primarily involves math over densely packed numerical data, then Tile is a good fit.
 * If your problem domain is sparse, involves pointer chasing, mapping traditional data structures to the GPU, or otherwise similar, then SIMT will give you more flexibility.
-* If you have already tried Tile and/or are willing to put in more effort/expertise/tokens to getting the last bits of possible performance, then CuTe abstractions on top of SIMT are often a good fit.
-
+* If you are willing to put in more effort, expertise, or tokens for performance tuning, CuTe abstractions on top of SIMT can be a good fit.
 
 Kernels from both models interoperate: a cutile-rs Tile kernel and a cuda-oxide SIMT
 kernel can run on the same stream over shared device buffers.

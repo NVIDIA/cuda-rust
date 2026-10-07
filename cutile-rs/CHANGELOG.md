@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- cuTile Rust now lives in the [NVIDIA/cuda-rust](https://github.com/NVIDIA/cuda-rust)
+  repository under `cutile-rs/`, next to cuda-oxide (SIMT) and the shared host
+  crates (`cuda-bindings`, `cuda-core`, `cuda-core-derive`, `cuda-async`) at the
+  repository root. The book moved to
+  [nvidia.github.io/cuda-rust/cutile](https://nvidia.github.io/cuda-rust/cutile/)
+  and release tags are namespaced `cutile-rs/vX.Y.Z`. Crate names and versions
+  are unchanged.
+
 ## [0.4.0] - 2026-09-25
 
 Debug builds support cuda-gdb and Nsight. DGX Spark is now supported.

@@ -2,11 +2,9 @@
 
 <div align="center">
 
-<img src="assets/logo.svg" alt="cuTile Rust" width="380">
+<img src="https://raw.githubusercontent.com/NVIDIA/cuda-rust/main/cutile-rs/assets/logo.svg" alt="cuTile Rust" width="380">
 
 [![Crates.io](https://badgen.net/crates/v/cutile)](https://crates.io/crates/cutile)
-[![Build](https://img.shields.io/github/actions/workflow/status/NVlabs/cutile-rs/pr.yml?branch=main&event=push&label=build)](https://github.com/NVlabs/cutile-rs/actions/workflows/pr.yml)
-[![Docs](https://img.shields.io/badge/docs-book-blue.svg)](https://nvlabs.github.io/cutile-rs/)
 
 </div>
 
@@ -16,10 +14,17 @@ and device: mutable outputs are split into disjoint pieces, while read-only inpu
 can be shared. Kernels are JIT-compiled through CUDA Tile IR. The same operations
 can run synchronously, with `async`/`await`, or as CUDA graph replay.
 
+cuTile Rust is the Tile kernel programming model of
+[CUDA Rust](https://github.com/NVIDIA/cuda-rust), NVIDIA's CUDA platform for
+Rust. It shares the host runtime crates (`cuda-bindings`, `cuda-core`,
+`cuda-async`) with [cuda-oxide](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-oxide),
+the SIMT kernel programming model, and kernels from both models interoperate
+on the same CUDA stream.
+
 ## Project Status
 We are excited to release this research project as a demonstration of how GPU programming can be made available in the Rust ecosystem. The software is in an early stage and under active development: you should expect bugs, incomplete features, and API breakage as we work to improve it. That being said, we hope you'll be interested to try it in your work and help shape its direction by providing feedback on your experience.
 
-Please check out [CONTRIBUTING.md](CONTRIBUTING.md) if you're interested in contributing.
+Please check out [CONTRIBUTING.md](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/CONTRIBUTING.md) if you're interested in contributing.
 
 ## Quick Start
 
@@ -64,9 +69,9 @@ partition and stores the result in `z`. The partition determines the launch
 grid `(8, 1, 1)`: 1024÷128 = 8 tiles.
 
 - Run a similar example via `cargo run -p cutile-examples --example saxpy`.
-- [More kernel and host API examples](cutile-examples/examples).
+- [More kernel and host API examples](https://github.com/NVIDIA/cuda-rust/tree/main/cutile-rs/cutile-examples/examples).
 - For NVIDIA Nsight Compute, Nsight Systems, and cuda-gdb workflows, see
-  [Debugging and Profiling](cutile-book/guide/debugging-and-profiling.md).
+  [Debugging and Profiling](https://nvidia.github.io/cuda-rust/cutile/latest/guide/debugging-and-profiling.html).
 
 ## Setup
 
@@ -87,7 +92,7 @@ GPU and emitted Tile IR requirements for cuTile Rust:
 <!-- END TILE IR TARGETS -->
 
 For DGX Spark / GB10 (`sm_121`), see the
-[DGX Spark tutorial](https://nvlabs.github.io/cutile-rs/tutorials/12-dgx-spark-inference.html).
+[DGX Spark tutorial](https://nvidia.github.io/cuda-rust/cutile/latest/tutorials/12-dgx-spark-inference.html).
 
 CUDA **13.3 is recommended**. FP4 packing and block-scaled MMA require 13.3.
 GPUs below `sm_80` (such as `sm_70` and `sm_75`) are unsupported.
@@ -114,9 +119,9 @@ JIT error before assembly.
 | Programmatic dependent launch (unsafe, per launch) | Tile IR 13.4 and `sm_90+`; driver `cuLaunchKernelEx` support |
 <!-- END TILE IR REQUIREMENTS -->
 
-See the [version/feature matrix](cutile-book/reference/compatibility.md),
-the [raw DSL reference](cutile-book/reference/dsl-api.md#raw-tile-ir-versioned-surface)
-and the [launch contract](cutile-book/reference/host-api.md#programmatic-dependent-launch).
+See the [version/feature matrix](https://nvidia.github.io/cuda-rust/cutile/latest/reference/compatibility.html),
+the [raw DSL reference](https://nvidia.github.io/cuda-rust/cutile/latest/reference/dsl-api.html#raw-tile-ir-versioned-surface)
+and the [launch contract](https://nvidia.github.io/cuda-rust/cutile/latest/reference/host-api.html#programmatic-dependent-launch).
 
 ### Install
 
@@ -231,7 +236,7 @@ cuda-bindings          NVIDIA CUDA bindings
 - [mistral.rs](https://github.com/EricLBuehler/mistral.rs): Rust LLM inference engine with [cuTile Rust kernels](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs-quant/src/cutile) for quantized linear layers and MoE, enabled by the optional `cutile` feature.
 - [cuTile Python](https://github.com/nvidia/cutile-python): Python kernel programming with CUDA Tile.
 - [TileGym](https://github.com/NVIDIA/TileGym): CUDA Tile kernel examples and tuning patterns, including a set of ready-to-use cuTile Rust kernels under [`ops/cutile_rs`](https://github.com/NVIDIA/TileGym/tree/main/src/tilegym/ops/cutile_rs).
-- [cuda-oxide](https://github.com/NVlabs/cuda-oxide): NVlabs experimental Rust-to-CUDA compiler for writing SIMT-style GPU kernels in Rust.
+- [cuda-oxide](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-oxide) ([book](https://nvidia.github.io/cuda-rust/cuda-oxide/)): CUDA Rust's SIMT kernel programming model, developed alongside cuTile Rust in the same repository.
 - [CUDA Tile IR documentation](https://docs.nvidia.com/cuda/tile-ir/latest/index.html): CUDA Tile IR reference documentation.
 - [CUDA documentation](https://docs.nvidia.com/cuda/): CUDA toolkit documentation.
 - [Rust NVPTX backend](https://doc.rust-lang.org/rustc/platform-support/nvptx64-nvidia-cuda.html): rustc's target support for generating PTX for NVIDIA GPUs.
@@ -249,7 +254,7 @@ inference engine built with cuTile Rust in collaboration with Hugging Face.
 Its batch-1 decode peaks at 171 tokens/s for Qwen3-4B on NVIDIA GeForce RTX 5090
 and 82 tokens/s for Qwen3-32B on B200, on par with vLLM and SGLang.
 
-The [reproducibility artifacts](cutile-benchmarks/paper/) use cuTile Rust 0.2.0.
+The [reproducibility artifacts](https://github.com/NVIDIA/cuda-rust/tree/main/cutile-rs/cutile-benchmarks/paper) use cuTile Rust 0.2.0.
 The [Grout repository](https://github.com/huggingface/grout) contains the version
 used for the paper.
 

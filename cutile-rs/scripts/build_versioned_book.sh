@@ -12,9 +12,9 @@ SPHINX_BUILD="${SPHINX_BUILD:-sphinx-build}"
 read -r -a SPHINX_FLAGS <<< "${SPHINXOPTS:--W --keep-going}"
 OUT_DIR="${CUTILE_DOCS_SITE_DIR:-$REPO_ROOT/_site}"
 MAIN_REF="${CUTILE_DOCS_MAIN_REF:-HEAD}"
-MAIN_VERSION="${CUTILE_DOCS_MAIN_VERSION:-main}"
+MAIN_VERSION="${CUTILE_DOCS_MAIN_VERSION:-latest}"
 TAG_PATTERN="${CUTILE_DOCS_TAG_PATTERN:-cutile-rs/v*}"
-BASE_URL="${CUTILE_DOCS_BASE_URL:-/cuda-oxide/cutile-rs/}"
+BASE_URL="${CUTILE_DOCS_BASE_URL:-/cuda-rust/cutile/}"
 
 if [[ "$BASE_URL" != /* ]]; then
     BASE_URL="/$BASE_URL"

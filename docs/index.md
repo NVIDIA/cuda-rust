@@ -42,7 +42,7 @@ shape its direction by sharing feedback on your experience.
 | Indexing | Explicit thread/block indices | Implicit via partitions |
 | Compiles | Ahead of time, Rust → PTX | JIT at first launch, Rust → Tile IR → cubin |
 | Toolchain | Pinned nightly, managed by `cargo oxide` | Stable Rust 1.89 or newer |
-| Portability | PTX can run on compatible CUDA GPUs; hardware-specific features can restrict portability | CUDA architecture-agnostic; the compiler tunes per GPU |
+| Portability | Produces PTX that the driver compiles for compatible GPUs; you control tuning per GPU | CUDA architecture-agnostic; the compiler tunes per GPU |
 | Reach for it when | You need direct control over threads, warps, shared memory, TMA, or cluster ops | Your problem is naturally expressed as tensor computations and you want the compiler to handle scheduling details |
 
 **cutile-rs — Tile.** You write a kernel as a *tile program*: a function that loads tiles from tensors,

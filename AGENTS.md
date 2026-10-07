@@ -109,7 +109,117 @@ Run `nix develop` from the relevant component.
   Treat it as read-only.** Branch and push to a fork. Before pushing, run
   `git remote -v` and confirm the push remote is a fork of the base, comparing
   full `OWNER/REPOSITORY` names — not remote names like `origin` or `upstream`,
-  and not the owner alone.
+  and not the owner alone. Transplanting a cutile-rs pull request, below, is
+  the exception: that feature branch is pushed to `NVIDIA/cuda-rust`.
+
+## Transplanting a cutile-rs pull request
+
+Use this when replaying a pull request from `NVlabs/cutile-rs` onto current
+`NVIDIA/cuda-rust` `main`. The result is one commit by the original author,
+a feature branch on `NVIDIA/cuda-rust`, and a pull request that links both
+ways with the source pull request.
+
+Do this from a clean tree, on a new branch based on current `main`. Do not
+stack it on another transplant.
+
+### Author
+
+The commit's author, committer, and `Signed-off-by` trailer are the original
+author's. Read them from the source commit (`git log -1 --format=fuller`).
+Pass `GIT_AUTHOR_*` and `GIT_COMMITTER_*` into `git commit-tree` and
+`git cherry-pick --continue`. Do not pass `git cherry-pick -s` or
+`git commit -s`: that records whoever is running the transplant. Do not change
+git config.
+
+If the pull request has several commits and every one has that same author,
+squash them first: the squashed tree is the pull-request head, the parent is
+the first commit's parent, and the message is the source pull request's
+description plus that author's existing sign-off. If the commits have
+different authors, stop and leave them unsquashed.
+
+### Paths
+
+History was imported with `git filter-repo --to-subdirectory-filter cutile-rs`,
+then these directories were moved to the repository root:
+
+- `cutile-rs/cuda-async` → `cuda-async`
+- `cutile-rs/cuda-bindings` → `cuda-bindings`
+- `cutile-rs/cuda-core` → `cuda-core`
+- `cutile-rs/cuda-core-derive` → `cuda-core-derive`
+
+Everything else from that repository, including `CHANGELOG.md`, stayed under
+`cutile-rs/`. Replay both steps. Prefix the squashed commit's trees with
+`cutile-rs/`, then cherry-pick so rename detection applies the later move.
+`merge.directoryRenames=true` carries new files (for example
+`cuda-async/src/reaper.rs`) into the renamed directory. Turn rerere off so a
+remembered resolution is not applied.
+
+```bash
+git fetch https://github.com/NVlabs/cutile-rs.git "pull/<n>/head:pr-<n>"
+# PARENT is the squashed commit's parent; HEAD is the squashed commit.
+# For a one-commit pull request, PARENT is that commit's parent.
+
+IDX=$(mktemp -u)
+export GIT_INDEX_FILE="$IDX"
+git read-tree --prefix=cutile-rs/ "$PARENT^{tree}"
+PARENT_TREE=$(git write-tree)
+rm -f "$IDX"
+git read-tree --prefix=cutile-rs/ "$HEAD^{tree}"
+COMMIT_TREE=$(git write-tree)
+rm -f "$IDX"
+unset GIT_INDEX_FILE
+
+PREFIX_PARENT=$(git commit-tree "$PARENT_TREE" \
+  -m "cutile-rs subdirectory snapshot of the pull request parent")
+PREFIXED=$(git log -1 --format=%B "$HEAD" \
+  | GIT_AUTHOR_NAME="$AUTHOR_NAME" \
+    GIT_AUTHOR_EMAIL="$AUTHOR_EMAIL" \
+    GIT_AUTHOR_DATE="$AUTHOR_DATE" \
+    git commit-tree "$COMMIT_TREE" -p "$PREFIX_PARENT")
+
+git switch -c "feat/<short-name>" main
+git -c rerere.enabled=false -c merge.directoryRenames=true \
+  cherry-pick -X find-renames=50% "$PREFIXED"
+```
+
+### Conflicts
+
+Accept files Git auto-merges. Leave conflict markers in code for a developer
+to resolve. Do not edit those files, and do not finish the cherry-pick while
+they are unmerged.
+
+A `cutile-rs/CHANGELOG.md` conflict is resolvable when the new note is the
+only addition and `main` has already published the surrounding section.
+Put that note under `## [Unreleased]`. Leave a released section as it is,
+including bullets that already describe the same change. Then continue:
+
+```bash
+git add cutile-rs/CHANGELOG.md
+GIT_EDITOR=true \
+GIT_COMMITTER_NAME="$AUTHOR_NAME" \
+GIT_COMMITTER_EMAIL="$AUTHOR_EMAIL" \
+GIT_COMMITTER_DATE="$AUTHOR_DATE" \
+  git cherry-pick --continue
+```
+
+Confirm `git log -1 --format=fuller` shows the original author as both author
+and committer, and that the message has only that author's sign-off.
+
+### Pull request
+
+Push the feature branch to `NVIDIA/cuda-rust`. The local `upstream` URL may
+still say `NVlabs/cuda-oxide`; that repository redirects there. Push the
+branch, not `main`.
+
+```bash
+git remote -v
+git push -u upstream HEAD:feat/<short-name>
+gh pr create --repo NVIDIA/cuda-rust --base main --head feat/<short-name>
+gh pr comment <n> --repo NVlabs/cutile-rs
+```
+
+The new pull request says it is on behalf of the original author and links
+the source pull request. The comment on the source pull request links back.
 
 ## CI
 

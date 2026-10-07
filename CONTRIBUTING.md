@@ -111,14 +111,35 @@ Your `Signed-off-by` name and email must match your Git configuration
 Pull requests that do not meet the requirements below or lack proper DCO
 sign-off will not be merged.
 
+### Branch and pull request naming
+
+Prefix branches and pull request titles with the kind of change. Branches use
+`/` as the separator and titles use `:`, lowercase: `fix/kernel-launch-sync`
+and `fix: resolve kernel launch sync race`.
+
+| Prefix | Use for |
+| --- | --- |
+| `feat` | New features |
+| `fix` | Bug fixes |
+| `docs` | Documentation changes |
+| `refactor` | Code changes with no behavior change |
+| `perf` | Performance improvements with no functional change |
+| `test` | Test additions or changes |
+| `build` | Build system and dependency changes |
+| `ci` | CI changes |
+| `chore` | Maintenance tasks |
+
+A scope in parentheses is welcome when a change is confined to one component,
+for example `docs(cutile-rs): ...`.
+
 ## Code Requirements
 
 ### Toolchains
 
 The shared host crates at the repository root use the root stable pin.
 Each product has its own workspace and toolchain under `cuda-oxide/` or
-`cutile-rs/`. For Tile development, see [cutile-rs/CONTRIBUTING.md](cutile-rs/CONTRIBUTING.md).
-The setup and validation commands below cover cuda-oxide.
+`cutile-rs/`. The setup commands below cover cuda-oxide; the Tile checks have
+their own section further down.
 
 cuda-oxide requires the Rust nightly toolchain with `rustc_private` support.
 See the [cuda-oxide README](cuda-oxide/README.md) for setup instructions.
@@ -149,6 +170,28 @@ codegen backend, a Python virtualenv, or GitHub's own infrastructure. The
 `check` recipe's comment in the `Justfile` names them, and is the place kept in
 step when a workflow changes; the commands below are the ones worth knowing by
 hand even so.
+
+### Running the cutile-rs checks
+
+cutile-rs builds on the stable toolchain pinned in `cutile-rs/rust-toolchain.toml`
+and needs a CUDA 13.2 or newer toolkit with the Tile IR assembler, `tileiras`;
+the [cutile-rs book](https://nvidia.github.io/cuda-rust/cutile/) covers setup.
+Its test scripts locate the Tile workspace from their own path and reach the
+shared host crates at the repository root on their own, so they can be run
+from anywhere:
+
+```bash
+cutile-rs/scripts/run_cpu_tests.sh   # CPU and assembler tests; needs the toolkit, not a GPU
+cutile-rs/scripts/run_gpu_tests.sh   # GPU integration tests
+cutile-rs/scripts/run_all.sh         # both of the above, then the examples and benchmarks
+```
+
+Run `cutile-rs/scripts/run_all.sh` before marking a Tile pull request ready
+for review.
+CI runs the same suites in `.github/workflows/cutile-rs.yml`. Because the Tile
+lanes use NVIDIA self-hosted runners, that workflow triggers on the
+`pull-request/<n>` branches that copy-pr-bot mirrors rather than on the pull
+request itself.
 
 ### Formatting and Style
 

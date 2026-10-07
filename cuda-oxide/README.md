@@ -375,6 +375,6 @@ cuda-oxide is one of several Rust + GPU efforts under active development. Projec
 
 ## License
 
-cuda-oxide is licensed under the Apache License, Version 2.0: [LICENSE](LICENSE).
+cuda-oxide is licensed under the Apache License, Version 2.0: [LICENSE](../LICENSE).
 Third-party components retain the licenses stated in their files; see
 [dependency-licenses.csv](dependency-licenses.csv) for the tracked license inventory.

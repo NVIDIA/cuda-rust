@@ -161,7 +161,7 @@
 //! ## Learning Resources
 //!
 //! For tutorials, the DSL reference, and the execution model, see the
-//! [cuTile Rust Book](https://nvlabs.github.io/cutile-rs/).
+//! [cuTile Rust Book](https://nvidia.github.io/cuda-rust/cutile/).
 
 pub mod _core;
 pub mod _tileir;

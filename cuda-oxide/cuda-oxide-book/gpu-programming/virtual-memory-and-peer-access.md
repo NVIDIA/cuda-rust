@@ -26,12 +26,12 @@ This chapter covers:
 
 :::{seealso}
 The complete integration test is available in
-[`cuda-core/tests/simt_vmm_p2p.rs` in cutile-rs](https://github.com/NVlabs/cutile-rs/blob/main/cuda-core/tests/simt_vmm_p2p.rs).
+[`cuda-core/tests/simt_vmm_p2p.rs`](https://github.com/NVIDIA/cuda-rust/blob/main/cuda-core/tests/simt_vmm_p2p.rs).
 
 The corresponding implementations are:
 
-* [`cuda-core/src/simt/vmm.rs` in cutile-rs](https://github.com/NVlabs/cutile-rs/blob/main/cuda-core/src/simt/vmm.rs)
-* [`cuda-core/src/simt/peer.rs` in cutile-rs](https://github.com/NVlabs/cutile-rs/blob/main/cuda-core/src/simt/peer.rs)
+* [`cuda-core/src/simt/vmm.rs`](https://github.com/NVIDIA/cuda-rust/blob/main/cuda-core/src/simt/vmm.rs)
+* [`cuda-core/src/simt/peer.rs`](https://github.com/NVIDIA/cuda-rust/blob/main/cuda-core/src/simt/peer.rs)
 :::
 
 ## VMM and P2P solve different problems

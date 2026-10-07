@@ -861,8 +861,8 @@ pub(super) struct ToolkitChoice {
 ///
 /// Mirrors BY HAND `resolve_cuda_toolkit`, `find_default_cuda_toolkit` and
 /// `validate_cuda_toolkit` in the shared `cuda-bindings` build script, which
-/// lives in NVlabs/cutile-rs (`cuda-bindings/build.rs`) and is pinned at
-/// `cuda-bindings = "0.3.1"` in the root manifest: doctor cannot import it
+/// lives at the git root of this repository (`cuda-bindings/build.rs`) and is
+/// a path dependency of the cuda-oxide workspace: doctor cannot import it
 /// because build-script logic is not a library. If that discovery changes,
 /// mirror it here.
 ///
@@ -1018,7 +1018,7 @@ pub(super) fn format_cuda_version(version: u32) -> String {
 /// all candidates with that single directory, including the standard layout.
 ///
 /// Mirrors BY HAND the selection table in the shared `cuda-bindings` build
-/// sources in NVlabs/cutile-rs (`cuda-bindings/toolkit_target.rs`,
+/// sources at the git root of this repository (`cuda-bindings/toolkit_target.rs`,
 /// `resolve_toolkit_include_candidates`): doctor cannot import it because
 /// build-script sources are not a library. If the selection there changes,
 /// mirror it here.

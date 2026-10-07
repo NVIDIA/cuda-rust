@@ -2,10 +2,16 @@
 name: codeql
 
 on:
+  # Self-hosted runners (linux-amd64-cpu8) cannot run on pull_request events —
+  # see https://docs.gha-runners.nvidia.com/pull-request-testing/. Instead,
+  # copy-pr-bot mirrors trusted PRs to pull-request/<n> and we trigger on that
+  # push (config: .github/copy-pr-bot.yaml).
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    branches:
+      - main
+      - "pull-request/[0-9]+"
+      # Drop after the timing run.
+      - ci/codeql-cpu8
   schedule:
     - cron: "44 3 * * 6"
 
@@ -16,7 +22,8 @@ concurrency:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: ubuntu-latest
+    # nv-cpu-general: m7i.2xlarge, 8 vCPU / 32 GiB. Smallest size above ubuntu-latest.
+    runs-on: linux-amd64-cpu8
     timeout-minutes: 120
     permissions:
       security-events: write
@@ -34,6 +41,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # nv-cpu-general has no rustup. The Rust extractor runs
+      # `rustup show active-toolchain` and, if that binary is missing, still
+      # exits 0 with an empty database.
+      - name: Install Rust
+        if: matrix.language == 'rust'
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+          echo "${HOME}/.cargo/bin" >> "$GITHUB_PATH"
+          "${HOME}/.cargo/bin/rustup" show active-toolchain
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4

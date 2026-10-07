@@ -7,9 +7,10 @@ on:
   pull_request:
     branches: [main]
 
+# main runs finish; any other ref cancels the older run of this workflow.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 permissions:
   contents: read

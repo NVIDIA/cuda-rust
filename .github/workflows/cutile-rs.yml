@@ -39,8 +39,11 @@ defaults:
 
 jobs:
   # Tile lane gate: cutile-rs tree plus shared host crates. Skips when only
-  # cuda-oxide changes. When copy-pr-bot yields no detectable file diff, run
-  # anyway so the mirror push is never silently skipped.
+  # cuda-oxide (or any other non-tile path) changes. `any_changed` is a real
+  # filter: dorny/paths-filter sets an output only for filters declared here,
+  # and an undeclared name stays empty, which would make `!= 'true'` always
+  # succeed. When copy-pr-bot yields no detectable file diff, both outputs are
+  # false and the jobs run anyway so the mirror push is never silently skipped.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -65,6 +68,10 @@ jobs:
               - 'rust-toolchain.toml'
               - '.github/workflows/cutile-rs.yml'
               - '.github/copy-pr-bot.yaml'
+            # `*` covers a root file such as AGENTS.md. `**` covers every nested path.
+            any_changed:
+              - '*'
+              - '**'
 
   # Exercise the oldest Tile IR assembler, including its lack of
   # --list-versions. The separate 13.0 lane only checks shared host crates.

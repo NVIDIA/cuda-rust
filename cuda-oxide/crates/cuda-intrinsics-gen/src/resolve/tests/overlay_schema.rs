@@ -48,8 +48,8 @@ fn overlay_manifest_loads_sorted_family_shards() {
     let (overlay, hash) =
         read_overlay(&repo_root, &repo_root.join("intrinsics/overlay.toml")).unwrap();
     assert_eq!(overlay.schema, OVERLAY_SCHEMA);
-    assert_eq!(overlay.shards.len(), 66);
-    assert_eq!(overlay.intrinsics.len(), 1029);
+    assert_eq!(overlay.shards.len(), 67);
+    assert_eq!(overlay.intrinsics.len(), 1033);
     assert_eq!(
         overlay
             .intrinsics
@@ -104,7 +104,7 @@ fn overlay_manifest_loads_sorted_family_shards() {
             .iter()
             .filter(|record| record.family == "packed_conversion")
             .count(),
-        18
+        22
     );
     assert_eq!(
         overlay
@@ -268,6 +268,7 @@ fn overlay_shard_schema_range_is_composable_and_new_fields_fail_closed() {
         sparse_mma_ordered_ampere_float: None,
         prmt,
         packed_conversion_fp8: None,
+        packed_conversion_fp8_bf16x2: None,
         packed_conversion_fp8_f16x2: None,
         scalar_conversion: None,
         scalar_arithmetic: None,
@@ -409,6 +410,7 @@ fn overlay_shard_schema_range_is_composable_and_new_fields_fail_closed() {
         sparse_mma_ordered_ampere_float: None,
         prmt: None,
         packed_conversion_fp8: Some(test_fp8_conversion_admission()),
+        packed_conversion_fp8_bf16x2: None,
         packed_conversion_fp8_f16x2: None,
         scalar_conversion: None,
         scalar_arithmetic: None,
@@ -455,6 +457,7 @@ fn overlay_shard_schema_range_is_composable_and_new_fields_fail_closed() {
         sparse_mma_ordered_ampere_float: None,
         prmt: None,
         packed_conversion_fp8: None,
+        packed_conversion_fp8_bf16x2: None,
         packed_conversion_fp8_f16x2: None,
         scalar_conversion: None,
         scalar_arithmetic: None,
@@ -502,6 +505,7 @@ fn overlay_shard_schema_range_is_composable_and_new_fields_fail_closed() {
         sparse_mma_ordered_ampere_float: None,
         prmt: None,
         packed_conversion_fp8: None,
+        packed_conversion_fp8_bf16x2: None,
         packed_conversion_fp8_f16x2: None,
         scalar_conversion: None,
         scalar_arithmetic: None,

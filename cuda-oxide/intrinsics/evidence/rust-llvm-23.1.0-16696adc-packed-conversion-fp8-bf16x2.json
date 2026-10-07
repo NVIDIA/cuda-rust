@@ -1,0 +1,196 @@
+{
+  "schema": 6,
+  "backend_profile": "rust-llvm-23.1.0-16696adc",
+  "backend_kind": "llvm_nvptx",
+  "llvm_revision": "16696adcd119e6ba9cc175207d984d7021211acb",
+  "backend_version": "LLVM version 23.1.0-rust-1.100.0-nightly",
+  "backend_sha256": "2e5bc688625ca7d98bca9b5f0f0d14525d2eb59e8a9842964e480df3ffd1f921",
+  "records": [
+    {
+      "id": "cvt_rn_satfinite_e4m3x2_bf16x2",
+      "source_record": "int_nvvm_bf16x2_to_e4m3x2_rn_satfinite",
+      "llvm_symbol": "llvm.nvvm.bf16x2.to.e4m3x2.rn.satfinite",
+      "llvm_arguments": [
+        "v2bf16"
+      ],
+      "llvm_results": [
+        "i16"
+      ],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "sm_100f",
+      "ptx_feature": "+ptx91",
+      "status": "lowered",
+      "stages": [
+        {
+          "targets": [
+            "sm_100f",
+            "ptx91"
+          ],
+          "representation": "pure inline PTX with a single packed bf16x2 source operand",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Host llc from rustc 1.100.0-nightly (e457a7b0d 2026-08-27) lowered a 743-byte inline-PTX fixture (SHA-256 7cad46e32924ad631c6cdd05fc8859123ddfa4280b0ccee48f897292315cdc45) to 2,789-byte PTX (SHA-256 d0ad803094d87ebaee0a1e4163fe311a11555381de02e3f08de6a0c6441d6f05) at sm_100 +ptx91. Each form is one packed i32 source and an i16 result with constraint =h,r. ptxas and libNVVM are not installed here, so this record is lowered rather than validated and runtime_validation stays unexecuted."
+        }
+      ],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {
+        "mnemonic": "cvt",
+        "modifiers": [
+          "rn",
+          "satfinite",
+          "e4m3x2",
+          "bf16x2"
+        ],
+        "operands": [
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "register"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cvt_rn_satfinite_relu_e4m3x2_bf16x2",
+      "source_record": "int_nvvm_bf16x2_to_e4m3x2_rn_relu_satfinite",
+      "llvm_symbol": "llvm.nvvm.bf16x2.to.e4m3x2.rn.relu.satfinite",
+      "llvm_arguments": [
+        "v2bf16"
+      ],
+      "llvm_results": [
+        "i16"
+      ],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "sm_100f",
+      "ptx_feature": "+ptx91",
+      "status": "lowered",
+      "stages": [
+        {
+          "targets": [
+            "sm_100f",
+            "ptx91"
+          ],
+          "representation": "pure inline PTX with a single packed bf16x2 source operand",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Host llc from rustc 1.100.0-nightly (e457a7b0d 2026-08-27) lowered a 743-byte inline-PTX fixture (SHA-256 7cad46e32924ad631c6cdd05fc8859123ddfa4280b0ccee48f897292315cdc45) to 2,789-byte PTX (SHA-256 d0ad803094d87ebaee0a1e4163fe311a11555381de02e3f08de6a0c6441d6f05) at sm_100 +ptx91. Each form is one packed i32 source and an i16 result with constraint =h,r. ptxas and libNVVM are not installed here, so this record is lowered rather than validated and runtime_validation stays unexecuted."
+        }
+      ],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {
+        "mnemonic": "cvt",
+        "modifiers": [
+          "rn",
+          "satfinite",
+          "relu",
+          "e4m3x2",
+          "bf16x2"
+        ],
+        "operands": [
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "register"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cvt_rn_satfinite_e5m2x2_bf16x2",
+      "source_record": "int_nvvm_bf16x2_to_e5m2x2_rn_satfinite",
+      "llvm_symbol": "llvm.nvvm.bf16x2.to.e5m2x2.rn.satfinite",
+      "llvm_arguments": [
+        "v2bf16"
+      ],
+      "llvm_results": [
+        "i16"
+      ],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "sm_100f",
+      "ptx_feature": "+ptx91",
+      "status": "lowered",
+      "stages": [
+        {
+          "targets": [
+            "sm_100f",
+            "ptx91"
+          ],
+          "representation": "pure inline PTX with a single packed bf16x2 source operand",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Host llc from rustc 1.100.0-nightly (e457a7b0d 2026-08-27) lowered a 743-byte inline-PTX fixture (SHA-256 7cad46e32924ad631c6cdd05fc8859123ddfa4280b0ccee48f897292315cdc45) to 2,789-byte PTX (SHA-256 d0ad803094d87ebaee0a1e4163fe311a11555381de02e3f08de6a0c6441d6f05) at sm_100 +ptx91. Each form is one packed i32 source and an i16 result with constraint =h,r. ptxas and libNVVM are not installed here, so this record is lowered rather than validated and runtime_validation stays unexecuted."
+        }
+      ],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {
+        "mnemonic": "cvt",
+        "modifiers": [
+          "rn",
+          "satfinite",
+          "e5m2x2",
+          "bf16x2"
+        ],
+        "operands": [
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "register"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cvt_rn_satfinite_relu_e5m2x2_bf16x2",
+      "source_record": "int_nvvm_bf16x2_to_e5m2x2_rn_relu_satfinite",
+      "llvm_symbol": "llvm.nvvm.bf16x2.to.e5m2x2.rn.relu.satfinite",
+      "llvm_arguments": [
+        "v2bf16"
+      ],
+      "llvm_results": [
+        "i16"
+      ],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "sm_100f",
+      "ptx_feature": "+ptx91",
+      "status": "lowered",
+      "stages": [
+        {
+          "targets": [
+            "sm_100f",
+            "ptx91"
+          ],
+          "representation": "pure inline PTX with a single packed bf16x2 source operand",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Host llc from rustc 1.100.0-nightly (e457a7b0d 2026-08-27) lowered a 743-byte inline-PTX fixture (SHA-256 7cad46e32924ad631c6cdd05fc8859123ddfa4280b0ccee48f897292315cdc45) to 2,789-byte PTX (SHA-256 d0ad803094d87ebaee0a1e4163fe311a11555381de02e3f08de6a0c6441d6f05) at sm_100 +ptx91. Each form is one packed i32 source and an i16 result with constraint =h,r. ptxas and libNVVM are not installed here, so this record is lowered rather than validated and runtime_validation stays unexecuted."
+        }
+      ],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {
+        "mnemonic": "cvt",
+        "modifiers": [
+          "rn",
+          "satfinite",
+          "relu",
+          "e5m2x2",
+          "bf16x2"
+        ],
+        "operands": [
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "register"
+          }
+        ]
+      }
+    }
+  ]
+}

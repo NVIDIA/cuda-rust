@@ -42,7 +42,7 @@ shape its direction by sharing feedback on your experience.
 | Indexing | Explicit thread/block indices | Implicit via partitions |
 | Compiles | Ahead of time, Rust → PTX | JIT at first launch, Rust → Tile IR → cubin |
 | Toolchain | Pinned nightly, managed by `cargo oxide` | Stable Rust 1.89 or newer |
-| Portability | PTX can run on compatible CUDA GPUs; hardware-specific features can restrict portability | Compiler maps tiles to supported CUDA GPUs; hardware-specific features can restrict portability |
+| Portability | PTX can run on compatible CUDA GPUs; hardware-specific features can restrict portability | CUDA architecture-agnostic; the compiler tunes per GPU |
 | Reach for it when | You need direct control over threads, warps, shared memory, TMA, or cluster ops | Your problem is naturally expressed as tensor computations and you want the compiler to handle scheduling details |
 
 **cutile-rs — Tile.** You write a kernel as a *tile program*: a function that loads tiles from tensors,
@@ -57,7 +57,7 @@ Greater control over kernel behavior is available via unsafe raw Tile IR operati
 along with explicit control over the launch grid.
 
 Kernels compile just in time on first launch, from Rust through CUDA Tile IR to a cubin.
-The compiler maps tile operations to supported CUDA GPUs; hardware-specific features can restrict portability.
+The compiler optimizes your tile kernel to your target architecture, leaving your source code architecture-agnostic.
 Use cutile-rs when your problem fits naturally into tensor computations and you want the compiler to handle scheduling.
 
 **cuda-oxide — SIMT.** You write code for one thread and manage the grid yourself, including thread and block indices, shared memory, warp and cluster operations, and TMA.

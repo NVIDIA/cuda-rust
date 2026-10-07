@@ -117,7 +117,7 @@ edition = "2024"
 [dependencies]
 cuda-device = {{ git = "{GIT_REPO}" }}
 cuda-host = {{ git = "{GIT_REPO}", features = ["async"] }}
-# Shared host-side runtime, published from NVlabs/cutile-rs.
+# Shared host-side runtime, published from NVIDIA/cuda-rust.
 cuda-core = "{SHARED_HOST_CRATES_VERSION}"
 cuda-async = "{SHARED_HOST_CRATES_VERSION}"
 tokio = {{ version = "1", features = ["rt", "rt-multi-thread", "macros"] }}
@@ -135,7 +135,7 @@ edition = "2024"
 [dependencies]
 cuda-device = {{ git = "{GIT_REPO}" }}
 cuda-host = {{ git = "{GIT_REPO}" }}
-# Shared host-side runtime, published from NVlabs/cutile-rs.
+# Shared host-side runtime, published from NVIDIA/cuda-rust.
 cuda-core = "{SHARED_HOST_CRATES_VERSION}"
 "#
         )

@@ -1,6 +1,6 @@
 [package]
 name = "oxide-artifacts"
-version = "0.2.1"
+version = "0.2.2"
 edition.workspace = true
 description = "Architecture-neutral embedded device artifact metadata for cuda-oxide"
 readme = "README.md"

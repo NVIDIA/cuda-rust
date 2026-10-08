@@ -28,9 +28,10 @@ on:
       - 'Cargo.lock'
       - '.github/workflows/**'
 
+# main runs finish; any other ref cancels the older run of this workflow.
 concurrency:
   group: ci-gate-${{ github.ref_name }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 # Every other workflow in the repo pins this rather than inheriting whatever the
 # repository default happens to be. This one is a pure caller today, so the four

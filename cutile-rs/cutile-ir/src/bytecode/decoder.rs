@@ -178,7 +178,7 @@ impl<'a> Reader<'a> {
     }
 
     fn read_bytes(&mut self, n: usize) -> Result<&'a [u8]> {
-        if self.pos + n > self.data.len() {
+        if n > self.remaining() {
             return Err(err("unexpected end of data"));
         }
         let slice = &self.data[self.pos..self.pos + n];
@@ -191,6 +191,10 @@ impl<'a> Reader<'a> {
         let mut shift: u32 = 0;
         loop {
             let b = self.read_byte()?;
+            // The tenth byte can contribute only bit 63 and cannot continue.
+            if shift == 63 && b > 1 {
+                return Err(err("varint overflow"));
+            }
             result |= ((b & 0x7F) as u64) << shift;
             if b & 0x80 == 0 {
                 break;
@@ -882,6 +886,17 @@ mod tests {
         let mut data = minimal_bytecode();
         data[1] = b'X'; // corrupt magic
         assert!(decode_bytecode(&data).is_err());
+    }
+
+    #[test]
+    fn varint_u64_boundaries() {
+        for value in [0, 127, 128, 1 << 63, u64::MAX] {
+            let mut writer = EncodingWriter::new();
+            writer.write_varint(value);
+            let mut reader = Reader::new(writer.as_bytes());
+            assert_eq!(reader.read_varint().unwrap(), value);
+            assert_eq!(reader.remaining(), 0);
+        }
     }
 
     #[test]

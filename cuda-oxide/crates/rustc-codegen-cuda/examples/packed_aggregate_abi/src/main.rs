@@ -5,21 +5,21 @@
 
 //! End-to-end ABI regression coverage for packed aggregates.
 //!
-//! This example exercises nine paths that must agree on the same rustc byte
+//! This example exercises several paths that must agree on the same rustc byte
 //! layout:
 //!
 //! - packed structs passed by value across the host -> kernel boundary;
 //! - packed structs passed to and returned from an internal device helper;
 //! - packed structs containing one shared pointer returned from an internal
 //!   device helper through a target-stable generic-pointer carrier;
-//! - direct field projections from that one-shared-pointer value after local
+//! - direct and recursive field projections from packed-AS3 values after local
 //!   materialization through the same target-stable carrier;
 //! - packed structs containing multiple direct shared-pointer leaves crossing
-//!   the same internal device ABI;
-//! - packed structs containing recursively nested shared-pointer leaves crossing
-//!   the same internal device ABI;
+//!   the internal ABI and carrier-local projection paths;
+//! - packed structs containing recursively nested struct/tuple shared-pointer
+//!   leaves crossing the same internal ABI and local projection paths;
 //! - packed structs containing bounded arrays of shared-pointer leaves crossing
-//!   the same internal device ABI;
+//!   the same internal ABI and carrier-local array-element projection paths;
 //! - whole-value stores of packed structs to device memory;
 //! - whole-value loads of packed structs from device memory.
 //!
@@ -77,6 +77,13 @@ pub struct PackedNestedShared {
 
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
+pub struct PackedTupleShared {
+    pub tag: u8,
+    pub pair: (*mut SharedArray<u32, 1>, *mut SharedArray<u32, 1>),
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
 pub struct PackedSharedArray {
     pub tag: u8,
     pub ptrs: [*mut SharedArray<u32, 1>; 2],
@@ -126,6 +133,12 @@ mod kernels {
 
     #[inline(never)]
     #[device]
+    fn bounce_packed_tuple_shared(value: PackedTupleShared) -> PackedTupleShared {
+        value
+    }
+
+    #[inline(never)]
+    #[device]
     fn bounce_packed_shared_array(value: PackedSharedArray) -> PackedSharedArray {
         value
     }
@@ -152,16 +165,14 @@ mod kernels {
 
     #[inline(never)]
     #[device]
-    unsafe fn consume_packed_shared_pair(
-        _value: PackedSharedPair,
-        left: *mut SharedArray<u32, 1>,
-        right: *mut SharedArray<u32, 1>,
-        out: *mut u32,
-    ) {
+    unsafe fn consume_packed_shared_pair(value: PackedSharedPair, out: *mut u32) {
+        let tag = value.tag;
+        let left = value.left;
+        let right = value.right;
         unsafe {
             (&mut *left)[0] = (&*left)[0].wrapping_add(0x0102_0304);
             (&mut *right)[0] = (&*right)[0].wrapping_add(0x0203_0405);
-            out.write(0x32);
+            out.write(u32::from(tag.wrapping_add(1)));
             out.add(1).write((&*left)[0]);
             out.add(2).write((&*right)[0]);
         }
@@ -169,16 +180,14 @@ mod kernels {
 
     #[inline(never)]
     #[device]
-    unsafe fn consume_packed_nested_shared(
-        _value: PackedNestedShared,
-        left: *mut SharedArray<u32, 1>,
-        right: *mut SharedArray<u32, 1>,
-        out: *mut u32,
-    ) {
+    unsafe fn consume_packed_nested_shared(value: PackedNestedShared, out: *mut u32) {
+        let tag = value.tag;
+        let left = value.pair.left;
+        let right = value.pair.right;
         unsafe {
             (&mut *left)[0] = (&*left)[0].wrapping_add(0x0304_0506);
             (&mut *right)[0] = (&*right)[0].wrapping_add(0x0405_0607);
-            out.write(0x42);
+            out.write(u32::from(tag.wrapping_add(1)));
             out.add(1).write((&*left)[0]);
             out.add(2).write((&*right)[0]);
         }
@@ -186,16 +195,29 @@ mod kernels {
 
     #[inline(never)]
     #[device]
-    unsafe fn consume_packed_shared_array(
-        _value: PackedSharedArray,
-        left: *mut SharedArray<u32, 1>,
-        right: *mut SharedArray<u32, 1>,
-        out: *mut u32,
-    ) {
+    unsafe fn consume_packed_tuple_shared(value: PackedTupleShared, out: *mut u32) {
+        let tag = value.tag;
+        let left = value.pair.0;
+        let right = value.pair.1;
         unsafe {
             (&mut *left)[0] = (&*left)[0].wrapping_add(0x0506_0708);
             (&mut *right)[0] = (&*right)[0].wrapping_add(0x0607_0809);
-            out.write(0x52);
+            out.write(u32::from(tag.wrapping_add(1)));
+            out.add(1).write((&*left)[0]);
+            out.add(2).write((&*right)[0]);
+        }
+    }
+
+    #[inline(never)]
+    #[device]
+    unsafe fn consume_packed_shared_array(value: PackedSharedArray, out: *mut u32) {
+        let tag = value.tag;
+        let left = value.ptrs[0];
+        let right = value.ptrs[1];
+        unsafe {
+            (&mut *left)[0] = (&*left)[0].wrapping_add(0x0708_090a);
+            (&mut *right)[0] = (&*right)[0].wrapping_add(0x0809_0a0b);
+            out.write(u32::from(tag.wrapping_add(1)));
             out.add(1).write((&*left)[0]);
             out.add(2).write((&*right)[0]);
         }
@@ -263,10 +285,9 @@ mod kernels {
             right,
         });
 
-        // The returned packed value contains two direct AS3 leaves. Keep it in
-        // SSA and pass it whole into another device helper; recursive/multi-leaf
-        // carrier-local projection support remains deliberately out of scope.
-        unsafe { consume_packed_shared_pair(value, left, right, out) };
+        // Both direct AS3 fields are projected from the materialized packed
+        // value, exercising multi-leaf carrier-local storage.
+        unsafe { consume_packed_shared_pair(value, out) };
     }
 
     #[kernel]
@@ -286,10 +307,31 @@ mod kernels {
             pair: SharedPair { left, right },
         });
 
-        // The AS3 leaves live under a nested aggregate. Keep the packed outer
-        // value in SSA so this still exercises only the internal ABI carrier
-        // generalization, not recursive packed local storage.
-        unsafe { consume_packed_nested_shared(value, left, right, out) };
+        // The AS3 leaves are reached through two field projections:
+        // packed root -> nested struct -> pointer field.
+        unsafe { consume_packed_nested_shared(value, out) };
+    }
+
+    #[kernel]
+    pub unsafe fn packed_tuple_shared(out: *mut u32) {
+        static mut LEFT: SharedArray<u32, 1> = SharedArray::UNINIT;
+        static mut RIGHT: SharedArray<u32, 1> = SharedArray::UNINIT;
+
+        let left = &raw mut LEFT;
+        let right = &raw mut RIGHT;
+        unsafe {
+            (&mut *left)[0] = 0x5060_7080;
+            (&mut *right)[0] = 0x6070_8090;
+        }
+
+        let value = bounce_packed_tuple_shared(PackedTupleShared {
+            tag: 0x51,
+            pair: (left, right),
+        });
+
+        // Tuple elements use the same verified recursive field-projection path
+        // as nested structs, with rustc's tuple memory order preserved.
+        unsafe { consume_packed_tuple_shared(value, out) };
     }
 
     #[kernel]
@@ -305,14 +347,13 @@ mod kernels {
         }
 
         let value = bounce_packed_shared_array(PackedSharedArray {
-            tag: 0x51,
+            tag: 0x61,
             ptrs: [left, right],
         });
 
-        // The two AS3 leaves live inside one fixed array. Keep the packed value
-        // in SSA so the return boundary rebuilds the bounded target-stable
-        // carrier without widening the narrow local-storage lane.
-        unsafe { consume_packed_shared_array(value, left, right, out) };
+        // The AS3 leaves are projected through the packed field and then through
+        // carrier-aware array-element addresses.
+        unsafe { consume_packed_shared_array(value, out) };
     }
 
     #[kernel]
@@ -471,6 +512,14 @@ fn assert_host_layout() {
     assert_eq!(core::mem::offset_of!(PackedNestedShared, pair), 1);
 
     assert_eq!(
+        core::mem::size_of::<PackedTupleShared>(),
+        1 + 2 * core::mem::size_of::<usize>()
+    );
+    assert_eq!(core::mem::align_of::<PackedTupleShared>(), 1);
+    assert_eq!(core::mem::offset_of!(PackedTupleShared, tag), 0);
+    assert_eq!(core::mem::offset_of!(PackedTupleShared, pair), 1);
+
+    assert_eq!(
         core::mem::size_of::<PackedSharedArray>(),
         1 + 2 * core::mem::size_of::<usize>()
     );
@@ -504,6 +553,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let packed_shared_out = DeviceBuffer::<u32>::zeroed(&stream, 2)?;
     let packed_shared_pair_out = DeviceBuffer::<u32>::zeroed(&stream, 3)?;
     let packed_nested_shared_out = DeviceBuffer::<u32>::zeroed(&stream, 3)?;
+    let packed_tuple_shared_out = DeviceBuffer::<u32>::zeroed(&stream, 3)?;
     let packed_shared_array_out = DeviceBuffer::<u32>::zeroed(&stream, 3)?;
     let load1_out = DeviceBuffer::<u32>::zeroed(&stream, 2)?;
     let load2_out = DeviceBuffer::<u32>::zeroed(&stream, 2)?;
@@ -562,6 +612,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             config,
             packed_nested_shared_out.cu_deviceptr() as *mut u32,
         )?;
+        module.packed_tuple_shared(
+            &stream,
+            config,
+            packed_tuple_shared_out.cu_deviceptr() as *mut u32,
+        )?;
         module.packed_shared_array(
             &stream,
             config,
@@ -607,8 +662,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [0x42, 0x3344_5566, 0x4455_6677]
     );
     assert_eq!(
-        packed_shared_array_out.to_host_vec(&stream)?,
+        packed_tuple_shared_out.to_host_vec(&stream)?,
         [0x52, 0x5566_7788, 0x6677_8899]
+    );
+    assert_eq!(
+        packed_shared_array_out.to_host_vec(&stream)?,
+        [0x62, 0x5768_798a, 0x6879_8a9b]
     );
     assert_eq!(load1_out.to_host_vec(&stream)?, [0x41, 0x90a0_b0c0]);
     assert_eq!(load2_out.to_host_vec(&stream)?, [0x51, 0xd0e0_f001]);
@@ -623,7 +682,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(&bytes2[2..6], &0xd0e0_f001u32.to_le_bytes());
 
     println!(
-        "packed_aggregate_abi: PASS (runtime values, direct packed-AS3 carrier-local projections, recursive/multi-leaf/bounded-array packed shared internal ABI, whole-value load/store, and PTX parameter shapes)"
+        "packed_aggregate_abi: PASS (runtime values, recursive/multi-leaf/bounded-array packed-AS3 carrier-local projections, recursive/multi-leaf/bounded-array packed shared internal ABI, whole-value load/store, and PTX parameter shapes)"
     );
     Ok(())
 }

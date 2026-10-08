@@ -3,16 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Direct field-address lowering for verified packed-AS3 carrier locals.
+//! Recursive field-address lowering for verified packed-AS3 carrier locals.
 
 use super::addressing;
 use super::common::anyhow_to_pliron;
 use crate::convert::types::{StructLayoutInfo, build_struct_slot_map};
 use crate::packed_shared_local_storage::carrier_gep_source_type;
 use dialect_mir::ops::MirFieldAddrOp;
-use dialect_mir::types::MirStructType;
+use dialect_mir::types::{MirStructType, MirTupleType};
 use llvm_export::ops as llvm;
-use llvm_export::types::{StructLayout, StructType};
+use llvm_export::types::StructType;
 use pliron::builtin::types::{IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
 use pliron::irbuild::dialect_conversion::{DialectConversionRewriter, OperandsInfo};
@@ -23,7 +23,7 @@ use pliron::operation::Operation;
 use pliron::result::Result;
 use pliron::r#type::{TypeHandle, Typed};
 
-/// Lower a field address, using the physical carrier struct only when the
+/// Lower a field address, using the physical carrier aggregate only when the
 /// pre-lowering carrier proof stamped this exact projection.
 ///
 /// Ordinary field projections stay on the established #859 path. Carrier
@@ -54,26 +54,28 @@ pub(crate) fn convert_field_addr(
 
     let (layout, aggregate_abi_align) = {
         let aggregate_ref = semantic_aggregate.deref(ctx);
-        let Some(struct_ty) = aggregate_ref.downcast_ref::<MirStructType>() else {
+        if let Some(struct_ty) = aggregate_ref.downcast_ref::<MirStructType>() {
+            (StructLayoutInfo::of_struct(struct_ty), struct_ty.abi_align)
+        } else if let Some(tuple_ty) = aggregate_ref.downcast_ref::<MirTupleType>() {
+            (StructLayoutInfo::of_tuple(tuple_ty), tuple_ty.abi_align())
+        } else {
             return pliron::input_err_noloc!(
-                "packed-AS3 carrier field projection requires a struct root"
+                "packed-AS3 carrier field projection requires a struct or tuple aggregate"
             );
-        };
-        (StructLayoutInfo::of_struct(struct_ty), struct_ty.abi_align)
+        }
     };
     let map = build_struct_slot_map(ctx, &layout).map_err(anyhow_to_pliron)?;
 
-    let carrier_is_packed = {
-        let carrier_ref = carrier_source_ty.deref(ctx);
-        carrier_ref
-            .downcast_ref::<StructType>()
-            .is_some_and(|ty| ty.layout() == StructLayout::Packed)
-    };
-    if !carrier_is_packed {
-        return pliron::input_err_noloc!(
-            "packed-AS3 carrier field projection was stamped with a non-packed physical source type"
-        );
-    }
+    let carrier_field_count = carrier_source_ty
+        .deref(ctx)
+        .downcast_ref::<StructType>()
+        .map(|ty| ty.fields().count())
+        .ok_or_else(|| {
+            pliron::input_error_noloc!(
+                "packed-AS3 carrier field projection was stamped with non-struct physical source type {}",
+                carrier_source_ty.deref(ctx).disp(ctx)
+            )
+        })?;
 
     let slot = match map.decl_to_llvm.get(field_index) {
         Some(Some(slot)) => *slot,
@@ -90,17 +92,25 @@ pub(crate) fn convert_field_addr(
         }
         None => {
             return pliron::input_err_noloc!(
-                "packed-AS3 carrier field index {} out of bounds for struct with {} fields",
+                "packed-AS3 carrier field index {} out of bounds for aggregate with {} fields",
                 field_index,
                 map.decl_to_llvm.len()
             );
         }
     };
+    if slot as usize >= carrier_field_count {
+        return pliron::input_err_noloc!(
+            "packed-AS3 carrier field slot {} out of bounds for physical source with {} fields",
+            slot,
+            carrier_field_count
+        );
+    }
 
-    // The carrier itself is the byte-faithful physical representation. Unlike
+    // The pre-lowering proof supplied the exact physical parent type. Unlike
     // the ordinary semantic path, do not enter #859's natural-layout byte-GEP
-    // fallback: `[0, slot]` over this packed carrier is already the exact
-    // storage address and also selects the physical p0 field type.
+    // fallback: `[0, slot]` over that carrier is the exact storage address.
+    // The root carrier is packed; recursively projected struct/tuple children
+    // may use their own rustc-faithful natural or packed layout.
     use llvm_export::ops::GepIndex;
     let ptr = op.deref(ctx).get_operand(0);
     let gep = llvm::GetElementPtrOp::new(

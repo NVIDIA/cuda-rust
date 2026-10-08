@@ -1,5 +1,9 @@
 # CUDA Rust
 
+[![cuda-oxide CI](https://img.shields.io/github/actions/workflow/status/NVIDIA/cuda-rust/ci.yml?branch=main&event=push&style=flat-square&logo=github-actions&logoColor=white&label=cuda-oxide%20CI)](https://github.com/NVIDIA/cuda-rust/actions/workflows/ci.yml)
+[![cutile-rs CI](https://img.shields.io/github/actions/workflow/status/NVIDIA/cuda-rust/cutile-rs.yml?branch=main&event=push&style=flat-square&logo=github-actions&logoColor=white&label=cutile-rs%20CI)](https://github.com/NVIDIA/cuda-rust/actions/workflows/cutile-rs.yml)
+[![docs](https://img.shields.io/badge/docs-nvidia.github.io%2Fcuda--rust-blue?style=flat-square)](https://nvidia.github.io/cuda-rust/)
+
 CUDA Rust is NVIDIA's CUDA platform for Rust. It provides
 host-side crates for working with the CUDA driver and device-side crates and
 tools for writing GPU kernels in idiomatic Rust.

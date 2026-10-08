@@ -149,7 +149,7 @@ Anonymous promoted allocations remain unsupported.
 | Bi-directional LTOIR Support | **Full** | Rust kernels call CUDA C++ device functions **and** C++ calls Rust device functions. Via NVVM IR → libNVVM → LTOIR → nvJitLink. |
 | Device FFI (`extern "C"`) | **Full** | `#[device] extern "C" { fn ... }` declarations for external LTOIR functions. CUB/CCCL integration demonstrated. |
 | MathDx FFI (cuFFTDx / cuBLASDx) | **Full** | cuFFTDx (8/16/32-point thread-level FFT), cuBLASDx (32x32x32 block-level GEMM) via LTOIR. |
-| Tile interop | **Partial** | Inter-kernel interop works today: a [cutile-rs Tile kernel](https://github.com/NVlabs/cutile-rs) and a cuda-oxide SIMT PTX kernel can run in one host process on the same CUDA stream over shared device tensors. Intra-kernel Tile interop is work in progress and tracked in [#96](https://github.com/NVlabs/cuda-oxide/issues/96). |
+| Tile interop | **Partial** | Inter-kernel interop works today: a [cutile-rs Tile kernel](https://github.com/NVIDIA/cuda-rust/tree/main/cutile-rs) and a cuda-oxide SIMT PTX kernel can run in one host process on the same CUDA stream over shared device tensors. Intra-kernel Tile interop is work in progress and tracked in [#96](https://github.com/NVlabs/cuda-oxide/issues/96). |
 | Cross-Crate Kernels | **Full** | Kernels and device functions defined in library crates with monomorphization at the binary crate use site. |
 
 ## Compiler: Functions

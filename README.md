@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/NVIDIA/cuda-rust/actions/workflows/ci-status.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/NVIDIA/cuda-rust/ci-status.yml?label=build"></a>
-  <a href="https://nvidia.github.io/cuda-rust/"><img alt="Docs" src="https://img.shields.io/badge/docs-site-blue.svg"></a>
+  <a href="https://nvidia.github.io/cuda-rust/"><img alt="Docs" src="https://img.shields.io/badge/docs-latest-blue.svg"></a>
 </p>
 
 CUDA Rust is NVIDIA's CUDA platform for Rust. It provides

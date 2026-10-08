@@ -1,7 +1,9 @@
 # CUDA Rust
 
-[![CI](https://img.shields.io/github/actions/workflow/status/NVIDIA/cuda-rust/ci-status.yml?style=flat-square&logo=github-actions&logoColor=white&label=CI)](https://github.com/NVIDIA/cuda-rust/actions/workflows/ci-status.yml)
-[![docs](https://img.shields.io/badge/docs-nvidia.github.io%2Fcuda--rust-blue?style=flat-square)](https://nvidia.github.io/cuda-rust/)
+<p align="center">
+  <a href="https://github.com/NVIDIA/cuda-rust/actions/workflows/ci-status.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/NVIDIA/cuda-rust/ci-status.yml?style=flat-square&logo=github-actions&logoColor=white&label=CI"></a>
+  <a href="https://nvidia.github.io/cuda-rust/"><img alt="docs" src="https://img.shields.io/badge/docs-nvidia.github.io%2Fcuda--rust-blue?style=flat-square"></a>
+</p>
 
 CUDA Rust is NVIDIA's CUDA platform for Rust. It provides
 host-side crates for working with the CUDA driver and device-side crates and

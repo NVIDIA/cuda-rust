@@ -12,23 +12,24 @@
 //! `wgmma.wait_group` completes. This pass recognizes both closed
 //! straight-line regions and one deliberately narrow counted K-loop shape. The
 //! canonical m64n64 `[[f32; 8]; 4]` accumulator is adapted through 32 scalar SSA
-//! values. BF16 m64n128 linear full drains use a canonical `[[f32; 8]; 8]`
-//! accumulator and 64 scalar SSA values. Unsupported m64n64 BF16 accumulator
-//! shapes retain the existing deferred pointer fallback.
+//! values. BF16 and F16 m64n128 linear full drains use a canonical
+//! `[[f32; 8]; 8]` accumulator and 64 scalar SSA values. Unsupported m64n64
+//! BF16 accumulator shapes retain the existing deferred pointer fallback.
 //! F16 m64n64 is accepted for the canonical accumulator in linear full-drain
 //! regions and the canonical single-slot counted K-loop. TF32 is accepted only
 //! for the canonical m64n64 accumulator in a linear full-drain region, using
-//! the hardware `m64n64k8.f32.tf32.tf32` shape. BF16 m64n128 is accepted only
-//! for canonical linear full-drain regions. Partial waits, counted pipelines,
-//! and pointer fallback remain m64n64-BF16-only.
+//! the hardware `m64n64k8.f32.tf32.tf32` shape. BF16 and F16 m64n128 are
+//! accepted only for canonical linear full-drain regions. Partial waits,
+//! counted pipelines, and pointer fallback remain m64n64-BF16-only.
 //!
 //! Straight-line regions keep the existing shape:
 //!
 //! ```text
 //! wgmma.fence
 //! one or more homogeneous m64n64k16.f32.bf16.bf16,
-//! m64n64k16.f32.f16.f16, m64n64k8.f32.tf32.tf32, or
-//! m64n128k16.f32.bf16.bf16 MMA operations on one shape-correct accumulator
+//! m64n64k16.f32.f16.f16, m64n64k8.f32.tf32.tf32,
+//! m64n128k16.f32.bf16.bf16, or m64n128k16.f32.f16.f16 MMA operations on one
+//! shape-correct accumulator
 //! wgmma.commit_group
 //! wgmma.wait_group<0>
 //! ```
@@ -68,9 +69,10 @@ use dialect_nvvm::ops::{
     WgmmaCommitGroupSyncAlignedOp, WgmmaFenceSyncAlignedOp, WgmmaMmaGroupM64N64K16F32Bf16Op,
     WgmmaMmaGroupValuesM64N64K8F32Tf32Op, WgmmaMmaGroupValuesM64N64K16F32Bf16Op,
     WgmmaMmaGroupValuesM64N64K16F32F16Op, WgmmaMmaGroupValuesM64N128K16F32Bf16Op,
-    WgmmaMmaLoopPipelineValuesM64N64K16F32Bf16Op, WgmmaMmaLoopValuesM64N64K16F32Bf16Op,
-    WgmmaMmaLoopValuesM64N64K16F32F16Op, WgmmaMmaM64N64K8F32Tf32Op, WgmmaMmaM64N64K16F32Bf16Op,
-    WgmmaMmaM64N64K16F32F16Op, WgmmaMmaM64N128K16F32Bf16Op,
+    WgmmaMmaGroupValuesM64N128K16F32F16Op, WgmmaMmaLoopPipelineValuesM64N64K16F32Bf16Op,
+    WgmmaMmaLoopValuesM64N64K16F32Bf16Op, WgmmaMmaLoopValuesM64N64K16F32F16Op,
+    WgmmaMmaM64N64K8F32Tf32Op, WgmmaMmaM64N64K16F32Bf16Op, WgmmaMmaM64N64K16F32F16Op,
+    WgmmaMmaM64N128K16F32Bf16Op, WgmmaMmaM64N128K16F32F16Op,
     WgmmaMmaPipelineValuesM64N64K16F32Bf16Op, WgmmaWaitGroupSyncAlignedOp,
 };
 use mir_transforms::analyses::{induction, loop_info::LoopInfo};
@@ -114,6 +116,7 @@ enum WgmmaMmaKind {
     F16M64N64,
     Tf32M64N64,
     Bf16M64N128,
+    F16M64N128,
 }
 
 struct FusionPlan {
@@ -985,6 +988,8 @@ fn wgmma_mma_kind(ctx: &Context, operation: Ptr<Operation>) -> Option<WgmmaMmaKi
         Some(WgmmaMmaKind::Tf32M64N64)
     } else if Operation::get_op::<WgmmaMmaM64N128K16F32Bf16Op>(operation, ctx).is_some() {
         Some(WgmmaMmaKind::Bf16M64N128)
+    } else if Operation::get_op::<WgmmaMmaM64N128K16F32F16Op>(operation, ctx).is_some() {
+        Some(WgmmaMmaKind::F16M64N128)
     } else {
         None
     }
@@ -1057,7 +1062,7 @@ fn linear_accumulator_rows(kind: WgmmaMmaKind) -> usize {
         WgmmaMmaKind::Bf16M64N64 | WgmmaMmaKind::F16M64N64 | WgmmaMmaKind::Tf32M64N64 => {
             ACCUMULATOR_ROWS
         }
-        WgmmaMmaKind::Bf16M64N128 => M64N128_ACCUMULATOR_ROWS,
+        WgmmaMmaKind::Bf16M64N128 | WgmmaMmaKind::F16M64N128 => M64N128_ACCUMULATOR_ROWS,
     }
 }
 
@@ -1313,7 +1318,8 @@ fn apply_value_plan(
     let rows = linear_accumulator_rows(kind);
     let accumulator_count = rows * ACCUMULATOR_COLUMNS;
     debug_assert!(
-        kind != WgmmaMmaKind::Bf16M64N128 || accumulator_count == M64N128_ACCUMULATOR_LEN
+        !matches!(kind, WgmmaMmaKind::Bf16M64N128 | WgmmaMmaKind::F16M64N128)
+            || accumulator_count == M64N128_ACCUMULATOR_LEN
     );
     let (element_pointers, accumulator_values) = load_accumulator_values_before_for_rows(
         ctx,
@@ -1338,6 +1344,9 @@ fn apply_value_plan(
         WgmmaMmaKind::Bf16M64N128 => {
             WgmmaMmaGroupValuesM64N128K16F32Bf16Op::build(ctx, accumulator_values, descriptors)
         }
+        WgmmaMmaKind::F16M64N128 => {
+            WgmmaMmaGroupValuesM64N128K16F32F16Op::build(ctx, accumulator_values, descriptors)
+        }
     };
     group.deref_mut(ctx).set_loc(loc.clone());
     let accumulator_results = (0..accumulator_count)
@@ -1345,7 +1354,7 @@ fn apply_value_plan(
         .collect::<Vec<_>>();
     group.insert_before(ctx, wait);
 
-    if kind == WgmmaMmaKind::Bf16M64N128 {
+    if matches!(kind, WgmmaMmaKind::Bf16M64N128 | WgmmaMmaKind::F16M64N128) {
         store_canonical_accumulator_values_before_for_rows(
             ctx,
             wait,
@@ -1534,7 +1543,7 @@ fn apply_counted_loop_plan(ctx: &mut Context, plan: CountedLoopPlan) {
             desc_b_step,
             trip_count,
         ),
-        WgmmaMmaKind::Tf32M64N64 | WgmmaMmaKind::Bf16M64N128 => {
+        WgmmaMmaKind::Tf32M64N64 | WgmmaMmaKind::Bf16M64N128 | WgmmaMmaKind::F16M64N128 => {
             unreachable!("counted-loop matching rejects this variant before planning")
         }
     };
@@ -2015,13 +2024,16 @@ fn match_sequence(ctx: &Context, fence: Ptr<Operation>) -> Result<Option<FusionP
                 require_supported_accumulator(ctx, current_accumulator)?;
                 if matches!(
                     current_kind,
-                    WgmmaMmaKind::F16M64N64 | WgmmaMmaKind::Tf32M64N64 | WgmmaMmaKind::Bf16M64N128
+                    WgmmaMmaKind::F16M64N64
+                        | WgmmaMmaKind::Tf32M64N64
+                        | WgmmaMmaKind::Bf16M64N128
+                        | WgmmaMmaKind::F16M64N128
                 ) && linear_value_accumulator_shape(ctx, current_accumulator, current_kind)
                     .is_none()
                 {
                     let expected = match current_kind {
                         WgmmaMmaKind::F16M64N64 | WgmmaMmaKind::Tf32M64N64 => "[[f32; 8]; 4]",
-                        WgmmaMmaKind::Bf16M64N128 => "[[f32; 8]; 8]",
+                        WgmmaMmaKind::Bf16M64N128 | WgmmaMmaKind::F16M64N128 => "[[f32; 8]; 8]",
                         WgmmaMmaKind::Bf16M64N64 => unreachable!(),
                     };
                     return pliron::input_err_noloc!(
@@ -2213,7 +2225,7 @@ fn apply_plan(ctx: &mut Context, plan: FusionPlan) -> Result<()> {
     } else {
         let expected = match kind {
             WgmmaMmaKind::F16M64N64 | WgmmaMmaKind::Tf32M64N64 => "[[f32; 8]; 4]",
-            WgmmaMmaKind::Bf16M64N128 => "[[f32; 8]; 8]",
+            WgmmaMmaKind::Bf16M64N128 | WgmmaMmaKind::F16M64N128 => "[[f32; 8]; 8]",
             WgmmaMmaKind::Bf16M64N64 => unreachable!(),
         };
         return pliron::input_err_noloc!(

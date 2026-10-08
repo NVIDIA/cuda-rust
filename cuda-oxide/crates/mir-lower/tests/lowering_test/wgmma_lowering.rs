@@ -159,6 +159,24 @@ pub(super) fn append_pointer_wgmma_mma_m64n128(
     .insert_at_back(block, ctx);
 }
 
+pub(super) fn append_pointer_wgmma_mma_m64n128_f16(
+    ctx: &mut Context,
+    block: pliron::context::Ptr<pliron::basic_block::BasicBlock>,
+    accumulator: pliron::value::Value,
+    desc_a: pliron::value::Value,
+    desc_b: pliron::value::Value,
+) {
+    Operation::new(
+        ctx,
+        nvvm::WgmmaMmaM64N128K16F32F16Op::get_concrete_op_info(),
+        vec![],
+        vec![accumulator, desc_a, desc_b],
+        vec![],
+        0,
+    )
+    .insert_at_back(block, ctx);
+}
+
 pub(super) fn append_pointer_wgmma_mma_f16(
     ctx: &mut Context,
     block: pliron::context::Ptr<pliron::basic_block::BasicBlock>,
@@ -1162,6 +1180,80 @@ fn test_pointer_form_m64n128_bf16_linear_full_drain_uses_sixty_four_value_adapte
         .get_attr_llvm_inline_asm_constraints(&ctx)
         .map(|value| String::from((*value).clone()))
         .expect("m64n128 pointer-form WGMMA constraints");
+    assert_eq!(
+        constraints
+            .split(',')
+            .filter(|value| *value == "=f")
+            .count(),
+        64
+    );
+    assert_eq!(
+        constraints.split(',').filter(|value| *value == "l").count(),
+        4
+    );
+    assert_eq!(llvm::asm_kind(&ctx, asm), llvm::AsmKind::Convergent);
+
+    Ok(())
+}
+
+#[test]
+fn test_pointer_form_m64n128_f16_linear_full_drain_uses_sixty_four_value_adapter()
+-> Result<(), anyhow::Error> {
+    let mut ctx = make_test_ctx();
+    let (module_ptr, entry, accumulators, descriptors) =
+        build_wgmma_m64n128_canonical_pointer_test_kernel(&mut ctx, 1, 4);
+    let accumulator = accumulators[0];
+
+    nvvm::WgmmaFenceSyncAlignedOp::build(&mut ctx).insert_at_back(entry, &ctx);
+    append_pointer_wgmma_mma_m64n128_f16(
+        &mut ctx,
+        entry,
+        accumulator,
+        descriptors[0],
+        descriptors[1],
+    );
+    append_pointer_wgmma_mma_m64n128_f16(
+        &mut ctx,
+        entry,
+        accumulator,
+        descriptors[2],
+        descriptors[3],
+    );
+    nvvm::WgmmaCommitGroupSyncAlignedOp::build(&mut ctx).insert_at_back(entry, &ctx);
+    append_wgmma_wait_group_constant(&mut ctx, entry, 0);
+    append_return(&mut ctx, entry);
+
+    mir_lower::lower_mir_to_llvm(&mut ctx, module_ptr)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+
+    let matching = lowered_kernel_body(&ctx, module_ptr)
+        .into_iter()
+        .filter_map(|operation| Operation::get_op::<llvm::InlineAsmOp>(operation, &ctx))
+        .filter(|asm| {
+            asm.get_attr_llvm_inline_asm_template(&ctx)
+                .map(|value| String::from((*value).clone()))
+                .is_some_and(|template| {
+                    template.contains("wgmma.mma_async.sync.aligned.m64n128k16.f32.f16.f16")
+                })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(matching.len(), 1);
+
+    let asm = &matching[0];
+    let template = asm
+        .get_attr_llvm_inline_asm_template(&ctx)
+        .map(|value| String::from((*value).clone()))
+        .expect("m64n128 f16 pointer-form WGMMA template");
+    assert_eq!(template.matches("wgmma.mma_async").count(), 2);
+    assert!(template.contains("wgmma.mma_async.sync.aligned.m64n128k16.f32.f16.f16"));
+    assert!(!template.contains(".bf16.bf16"));
+    assert!(!template.contains("ld.f32"));
+    assert!(!template.contains("st.f32"));
+
+    let constraints = asm
+        .get_attr_llvm_inline_asm_constraints(&ctx)
+        .map(|value| String::from((*value).clone()))
+        .expect("m64n128 f16 pointer-form WGMMA constraints");
     assert_eq!(
         constraints
             .split(',')

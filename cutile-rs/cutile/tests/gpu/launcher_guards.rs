@@ -8,7 +8,10 @@
 //! buffers it is handed, however the generics were chosen. A user
 //! `.generics(..)` list overrides the inferred element type, and a kernel
 //! specialized wider than its buffers indexes past them.
+//! Stride constants must also agree with the runtime layout, including when
+//! a custom input/output binding supplies stale specialization metadata.
 
+use cuda_async::launch::AsyncKernelLaunch;
 use cutile::api;
 use cutile::half::f16;
 use cutile::prelude::*;
@@ -24,6 +27,15 @@ mod launcher_guards_module {
         let t: Tile<T, { [128] }> = load_tile_like(x, z);
         z.store(t);
     }
+
+    #[cutile::entry()]
+    fn copy_strided(z: &mut Tensor<f32, { [128, 1] }>, x: &Tensor<f32, { [-1, -1] }>) {
+        let t: Tile<f32, { [128, 1] }> = load_tile_like(x, z);
+        z.store(t);
+    }
+
+    #[cutile::entry()]
+    fn mapped_stride_guard(_z: MappedPartitionMut<f32, { [128, 1] }, { [1, 2] }>) {}
 
     /// Zeroes 128 elements through a raw pointer. The pointer is the only
     /// typed argument, so this isolates the pointer element-type check.
@@ -55,7 +67,218 @@ mod launcher_guards_module {
     }
 }
 
-use launcher_guards_module::{copy_elements, dump_to_missing_dir, zero_through_ptr};
+use launcher_guards_module::{
+    copy_elements, copy_strided, dump_to_missing_dir, mapped_stride_guard, zero_through_ptr,
+};
+
+/// Inject stale specialization metadata through the public binding traits.
+/// Shapes, strides, retention and kernel arguments still come from the real
+/// binding. This tests the generated guard without forging a device pointer.
+struct OverrideSpec<I> {
+    inner: I,
+    spec: SpecializationBits,
+}
+
+fn with_first_stride_one(mut spec: SpecializationBits) -> SpecializationBits {
+    spec.stride_one[0] = true;
+    spec.stride_div[0].divisor = 1;
+    spec
+}
+
+impl<I: KernelInputStored> KernelInputStored for OverrideSpec<I> {
+    fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
+        self.inner.retain(ctx)
+    }
+    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+        self.inner.push_kernel_args(launcher);
+    }
+    fn shape(&self) -> &[i32] {
+        self.inner.shape()
+    }
+    fn strides(&self) -> &[i32] {
+        self.inner.strides()
+    }
+    fn spec(&self) -> &SpecializationBits {
+        &self.spec
+    }
+    fn dtype_str(&self) -> &'static str {
+        self.inner.dtype_str()
+    }
+}
+
+impl<I: KernelInputStored> KernelInput<f32> for OverrideSpec<I> {
+    type Stored = Self;
+    type Returned = Self;
+    fn prepare(self) -> Self {
+        self
+    }
+    fn recover(stored: Self) -> Self {
+        stored
+    }
+}
+
+impl<I: KernelOutputStored<f32>> KernelOutputStored<f32> for OverrideSpec<I> {
+    fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
+        self.inner.retain(ctx)
+    }
+    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+        self.inner.push_kernel_args(launcher);
+    }
+    fn grid(&self) -> Result<(u32, u32, u32), Error> {
+        self.inner.grid()
+    }
+    fn map_shape_as_i32(&self) -> Option<Vec<i32>> {
+        self.inner.map_shape_as_i32()
+    }
+    fn dtype_str(&self) -> &'static str {
+        self.inner.dtype_str()
+    }
+    fn partition_shape_as_i32(&self) -> Vec<i32> {
+        self.inner.partition_shape_as_i32()
+    }
+    fn partition_shape(&self) -> &[usize] {
+        self.inner.partition_shape()
+    }
+    fn strides(&self) -> &[i32] {
+        self.inner.strides()
+    }
+    fn strides_hint(&self) -> Vec<i32> {
+        self.spec
+            .stride_one
+            .iter()
+            .map(|&is_one| if is_one { 1 } else { -1 })
+            .collect()
+    }
+    fn spec(&self) -> &SpecializationBits {
+        &self.spec
+    }
+    fn shape_as_i32(&self) -> Vec<i32> {
+        self.inner.shape_as_i32()
+    }
+}
+
+impl<I: KernelOutputStored<f32>> KernelOutput<f32> for OverrideSpec<I> {
+    type Stored = Self;
+    type Returned = Self;
+    fn prepare(self) -> Self {
+        self
+    }
+    fn recover(stored: Self) -> Self {
+        stored
+    }
+}
+
+#[test]
+fn stale_input_stride_constants_are_rejected_after_cache_fill() {
+    common::with_test_stack(|| {
+        let _guard = common::cache_test_lock();
+        let x = api::arange::<f32>(256)
+            .reshape(&[128, 2])
+            .sync()
+            .expect("alloc x");
+        let view = x.slice(&[0..128, 0..1]).expect("strided input view");
+        assert_eq!(view.shape(), &[128, 1]);
+        assert_eq!(view.strides(), &[2, 1]);
+        let spec = with_first_stride_one(view.spec().clone());
+        let mut z = api::zeros::<f32>(&[128, 1]).sync().expect("alloc z");
+
+        // The JIT resolution is cached before argument validation. Repeating
+        // the failed compile-only launch exercises the cached path too.
+        for _ in 0..2 {
+            let input = OverrideSpec {
+                inner: &view,
+                spec: spec.clone(),
+            };
+            let err = copy_strided((&mut z).partition([128, 1]), value(input))
+                .compile()
+                .expect_err("a unit stride specialization over stride 2 must be rejected");
+            let msg = err.to_string();
+            assert!(msg.contains("x strides mismatch"), "{msg}");
+            assert!(msg.contains("[1, 1]") && msg.contains("[2, 1]"), "{msg}");
+        }
+    });
+}
+
+#[test]
+fn stale_output_stride_constants_are_rejected_after_cache_fill() {
+    common::with_test_stack(|| {
+        let _guard = common::cache_test_lock();
+        let x = api::ones::<f32>(&[128, 2]).sync().expect("alloc x");
+        let mut z = api::zeros::<f32>(&[128, 2]).sync().expect("alloc z");
+        let spec = with_first_stride_one(z.spec().clone());
+        for _ in 0..2 {
+            let output = OverrideSpec {
+                inner: (&mut z).partition([128, 1]),
+                spec: spec.clone(),
+            };
+            let err = copy_strided(value(output), &x)
+                .compile()
+                .expect_err("a unit stride specialization over stride 2 must be rejected");
+            let msg = err.to_string();
+            assert!(msg.contains("z strides mismatch"), "{msg}");
+            assert!(msg.contains("[1, 1]") && msg.contains("[2, 1]"), "{msg}");
+        }
+
+        let output = OverrideSpec {
+            inner: (&mut z).partition([128, 1]).map([1, 2], 2),
+            spec,
+        };
+        let err = mapped_stride_guard(value(output))
+            .compile()
+            .expect_err("mapped outputs must also validate their runtime strides");
+        assert!(err.to_string().contains("_z strides mismatch"), "{err}");
+    });
+}
+
+#[test]
+fn different_dynamic_input_strides_reuse_the_same_specialization() {
+    common::with_test_stack(|| {
+        let _guard = common::cache_test_lock();
+        let mut previous_key = None;
+        for row_stride in [32usize, 48, 32] {
+            let x = api::arange::<f32>(128 * row_stride)
+                .reshape(&[128, row_stride])
+                .sync()
+                .expect("alloc x");
+            let view = x.slice(&[0..128, 0..1]).expect("strided input view");
+            let mut z = api::zeros::<f32>(&[128, 1]).sync().expect("alloc z");
+            // Both strides have the same divisibility hints and are dynamic.
+            let key = copy_strided((&mut z).partition([128, 1]), &view)
+                .l1_cache_key()
+                .expect("specialization key");
+            if let Some(previous) = &previous_key {
+                assert_eq!(previous, &key);
+            }
+            previous_key = Some(key);
+            copy_strided((&mut z).partition([128, 1]), &view)
+                .sync()
+                .expect("a dynamic input stride must be accepted");
+            let host = z.to_host_vec().sync().expect("copy back");
+            let expected: Vec<f32> = (0..128).map(|i| (i * row_stride) as f32).collect();
+            assert_eq!(host, expected);
+        }
+    });
+}
+
+#[test]
+fn dynamic_output_strides_are_accepted() {
+    common::with_test_stack(|| {
+        for columns in [2usize, 3] {
+            let x = api::arange::<f32>(128 * columns)
+                .reshape(&[128, columns])
+                .sync()
+                .expect("alloc x");
+            let host = copy_strided(api::zeros::<f32>(&[128, columns]).partition([128, 1]), &x)
+                .first()
+                .unpartition()
+                .to_host_vec()
+                .sync()
+                .expect("a dynamic output stride must be accepted");
+            let expected: Vec<f32> = (0..128 * columns).map(|i| i as f32).collect();
+            assert_eq!(host, expected);
+        }
+    });
+}
 
 #[test]
 fn unwritable_dump_mlir_dir_is_an_error_not_a_panic() {

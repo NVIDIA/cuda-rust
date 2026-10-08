@@ -343,6 +343,48 @@ mod tests {
     use pliron::builtin::types::{IntegerType, Signedness};
 
     #[test]
+    fn expected_pointer_normalization_preserves_cluster_shared_raw_const() {
+        let mut ctx = Context::new();
+        crate::translator::register_dialects(&mut ctx);
+
+        let pointee: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+
+        let source_ty: TypeHandle = MirPtrType::get_with_kind(
+            &mut ctx,
+            pointee,
+            false,
+            dialect_mir::types::address_space::CLUSTER_SHARED,
+            MirPointerKind::RawConst,
+        )
+        .into();
+
+        let target_ty: TypeHandle =
+            MirPtrType::get_generic_with_kind(&mut ctx, pointee, false, MirPointerKind::RawConst)
+                .into();
+
+        let block = BasicBlock::new(&mut ctx, None, vec![source_ty]);
+        let source_value = block.deref(&ctx).get_argument(0);
+
+        let (normalized, last_op) = cast_to_expected_pointer_type_if_needed(
+            &mut ctx,
+            source_value,
+            target_ty,
+            block,
+            None,
+            Location::Unknown,
+        );
+
+        assert_eq!(normalized.get_type(&ctx), target_ty);
+
+        let cast_op = last_op.expect("AS7 to generic normalization must insert a pointer cast");
+
+        assert!(
+            Operation::get_op::<MirCastOp>(cast_op, &ctx).is_some(),
+            "normalization must produce mir.cast"
+        );
+    }
+
+    #[test]
     fn expected_pointer_normalization_rejects_concrete_kind_change() {
         let mut ctx = Context::new();
         crate::translator::register_dialects(&mut ctx);

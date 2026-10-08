@@ -589,6 +589,30 @@ pub(super) fn translate_aggregate_rvalue(
             })?;
             let tuple_ty = types::translate_type(ctx, &rust_tuple_ty)?;
 
+            // Normalize pointer representations to the tuple's declared
+            // element types before constructing the aggregate.
+            let expected_types = {
+                let tuple_ref = tuple_ty.deref(ctx);
+                tuple_ref
+                    .downcast_ref::<dialect_mir::types::MirTupleType>()
+                    .expect("translated tuple must have MirTupleType")
+                    .get_types()
+                    .to_vec()
+            };
+
+            for (value, expected_type) in element_values.iter_mut().zip(expected_types) {
+                let (normalized, prev_after_cast) = cast_to_expected_pointer_type_if_needed(
+                    ctx,
+                    *value,
+                    expected_type,
+                    block_ptr,
+                    current_prev_op,
+                    loc.clone(),
+                );
+                *value = normalized;
+                current_prev_op = prev_after_cast;
+            }
+
             // Create mir.construct_tuple operation
             use dialect_mir::ops::MirConstructTupleOp;
 

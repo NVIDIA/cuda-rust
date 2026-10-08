@@ -9,6 +9,7 @@
 
 use std::panic::{self, AssertUnwindSafe};
 
+use cuda_async::error::DeviceError;
 use cutile::api;
 use cutile::prelude::*;
 
@@ -103,4 +104,70 @@ fn oversized_allocation_is_an_error_not_a_panic() {
         .sync()
         .expect("allocation after OOM");
     assert_eq!(t.shape(), &[16]);
+}
+
+const INVALID_FULL_SHAPES: &[(&[usize], &str)] = &[
+    (&[usize::MAX, usize::MAX], "overflows usize"),
+    (&[i32::MAX as usize; 3], "overflows usize"),
+    (&[i32::MAX as usize + 1], "exceeds i32::MAX"),
+    (&[32768, 65536], "exceeds i32::MAX"),
+    (&[0], "zero dimension"),
+    (&[3, 0], "zero dimension"),
+];
+
+fn assert_full_shape_error(error: DeviceError, expected: &str) {
+    match error {
+        DeviceError::Internal(message) => {
+            assert!(message.starts_with("full: "), "{message}");
+            assert!(message.contains(expected), "{message}");
+        }
+        other => panic!("expected full shape validation error, got: {other:?}"),
+    }
+}
+
+#[test]
+fn full_reports_invalid_shapes_as_errors() {
+    // Check the specific error, not just is_err(): in release builds the
+    // old product could wrap, allocate and fill, then fail during reshape.
+    for &(shape, expected) in INVALID_FULL_SHAPES {
+        let error = api::full(7.0f32, shape)
+            .sync()
+            .expect_err("invalid full shape must fail");
+        assert_full_shape_error(error, expected);
+    }
+}
+
+#[test]
+fn full_wrappers_report_invalid_shapes_as_errors() {
+    for &(shape, expected) in INVALID_FULL_SHAPES {
+        let zeros_error = api::zeros::<f32>(shape)
+            .sync()
+            .expect_err("invalid zeros shape must fail");
+        assert_full_shape_error(zeros_error, expected);
+
+        let ones_error = api::ones::<f32>(shape)
+            .sync()
+            .expect_err("invalid ones shape must fail");
+        assert_full_shape_error(ones_error, expected);
+    }
+}
+
+#[test]
+fn full_and_wrappers_preserve_shape_and_values() {
+    // Exercise a matrix reshape and a partial edge tile of the fill kernel.
+    for (shape, expected_shape) in [
+        (&[2usize, 3][..], &[2i32, 3][..]),
+        (&[129usize][..], &[129i32][..]),
+    ] {
+        let tensors = [
+            (api::full(3.25f32, shape).sync().expect("valid full"), 3.25),
+            (api::zeros::<f32>(shape).sync().expect("valid zeros"), 0.0),
+            (api::ones::<f32>(shape).sync().expect("valid ones"), 1.0),
+        ];
+        for (tensor, expected) in tensors {
+            assert_eq!(tensor.shape(), expected_shape);
+            let host: Vec<f32> = tensor.to_host_vec().sync().expect("copy");
+            assert_eq!(host, vec![expected; shape.iter().product()]);
+        }
+    }
 }

@@ -66,6 +66,7 @@ for test_target in \
     optimization_hints \
     partition_index_schedules \
     reduce_scan_ops \
+    reduce_symbolic_shape \
     registry_phase_a \
     span_source_location \
     trait_dispatch_probe \

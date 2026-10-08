@@ -746,10 +746,18 @@ verdict_tcgen05() {
 
 verdict_wgmma() {
     local ex="$1" log="$2" ec="$3"
+    local ptx="crates/rustc-codegen-cuda/examples/${ex}/${ex//-/_}.ptx"
     if [[ ${ec} -gt 128 ]]; then echo "FAIL (crashed, signal $((ec - 128)))"; return 1; fi
+    if [[ ${ec} -ne 0 ]]; then echo "FAIL (wgmma, exit=${ec})"; return 1; fi
     if grep -qE 'WARNING: WGMMA requires|WGMMA is Hopper-only|PTX load failed \(expected on non-Hopper\)|PTX module loaded' "${log}"; then
         if grep -qE 'PTX written|PTX Verification|PTX file generated|inspect generated PTX|\.ptx' "${log}"; then
-            if ! ptxas_verify "crates/rustc-codegen-cuda/examples/${ex}/${ex//-/_}.ptx"; then
+            # ptxas_verify may skip missing files; that is not evidence that
+            # the PTX-only fallback actually produced a device artifact.
+            if [[ ! -s "${ptx}" ]]; then
+                echo "FAIL (wgmma, PTX missing or empty: ${ptx})"
+                return 1
+            fi
+            if ! ptxas_verify "${ptx}"; then
                 echo "FAIL (wgmma, ${PTXAS_NOTE})"
                 return 1
             fi
@@ -759,7 +767,6 @@ verdict_wgmma() {
         echo "FAIL (wgmma, PTX not generated)"
         return 1
     fi
-    if [[ ${ec} -ne 0 ]]; then echo "FAIL (wgmma, exit=${ec})"; return 1; fi
     if grep_failure_markers "${log}"; then
         echo "FAIL (wgmma, failure marker in output)"
         return 1

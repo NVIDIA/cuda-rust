@@ -1,11 +1,28 @@
 ---
 name: codeql
 
+# Push and pull_request run only when Rust, workflow, or script inputs change.
+# A Markdown-only commit skips both analyzers. The weekly schedule has no path
+# filter, so that scan still covers the whole tree.
 on:
   push:
     branches: [main]
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '.github/**'
+      - '**/*.sh'
+      - '**/*.py'
   pull_request:
     branches: [main]
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '.github/**'
+      - '**/*.sh'
+      - '**/*.py'
   schedule:
     - cron: "44 3 * * 6"
 

@@ -1,11 +1,26 @@
 ---
 name: naming-guard
 
+# check-reserved-prefixes.sh searches only cuda-oxide/crates. The strings it
+# looks for are the SIMT link-symbol prefixes owned by reserved-oxide-symbols;
+# every other SIMT crate must use that crate's constants. cutile-rs and the
+# shared host crates (cuda-bindings, cuda-core, cuda-core-derive, cuda-async)
+# are outside that rule, so these paths omit them. Listing those directories
+# here would rerun the same search; covering them means adding them to
+# SEARCH_ROOTS in the script first.
 on:
   push:
     branches: [main]
+    paths:
+      - 'cuda-oxide/crates/**'
+      - 'cuda-oxide/scripts/check-reserved-prefixes.sh'
+      - '.github/workflows/naming-guard.yml'
   pull_request:
     branches: [main]
+    paths:
+      - 'cuda-oxide/crates/**'
+      - 'cuda-oxide/scripts/check-reserved-prefixes.sh'
+      - '.github/workflows/naming-guard.yml'
 
 # main runs finish; any other ref cancels the older run of this workflow.
 concurrency:

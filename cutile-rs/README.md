@@ -5,6 +5,7 @@
 <img src="https://raw.githubusercontent.com/NVIDIA/cuda-rust/main/cutile-rs/assets/logo.svg" alt="cuTile Rust" width="380">
 
 [![Crates.io](https://badgen.net/crates/v/cutile)](https://crates.io/crates/cutile)
+[![Docs](https://img.shields.io/badge/docs-book-blue.svg)](https://nvidia.github.io/cuda-rust/cutile/)
 
 </div>
 

@@ -2864,6 +2864,25 @@ fn try_dispatch_intrinsic(
                 name,
             )?))
         }
+        // `false` is a valid answer for any argument. libcore calls this from
+        // integer `checked_pow`/`overflowing_pow` and `checked_ilog`, so
+        // rejecting it also rejects integer `pow` and `ilog`, which call them.
+        "core::intrinsics::is_val_statically_known"
+        | "std::intrinsics::is_val_statically_known" => {
+            Ok(Some(helpers::emit_bool_constant_intrinsic(
+                ctx,
+                body,
+                destination,
+                target,
+                block_ptr,
+                prev_op,
+                value_map,
+                block_map,
+                loc,
+                name,
+                false,
+            )?))
+        }
         "core::intrinsics::copy" | "std::intrinsics::copy" => Ok(Some(emit_ptr_memmove(
             ctx,
             body,

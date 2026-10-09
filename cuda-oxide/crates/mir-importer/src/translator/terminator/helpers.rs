@@ -23,7 +23,7 @@ use crate::translator::values::{ValueMap, establish_declared_pointer_type};
 use crate::translator::{payload_store, rvalue};
 use dialect_mir::{
     attributes::MirPointerKindAuthorityAttr,
-    ops::{MirCallOp, MirConstructArrayOp, MirGotoOp},
+    ops::{MirCallOp, MirConstantOp, MirConstructArrayOp, MirGotoOp},
     types::{MirArrayType, MirPtrType},
 };
 use pliron::basic_block::BasicBlock;
@@ -676,6 +676,73 @@ pub fn emit_unit_noop_intrinsic(
         target,
         block_ptr,
         unit_op,
+        value_map,
+        block_map,
+        loc,
+        &no_target_msg,
+    )
+}
+
+/// Emits a `bool`-returning intrinsic whose result is a fixed constant.
+///
+/// Used for `core::intrinsics::is_val_statically_known`, which may return
+/// `false` for any argument. The argument is a MIR operand with no side
+/// effects, so it is not evaluated.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_bool_constant_intrinsic(
+    ctx: &mut Context,
+    body: &mir::Body,
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+    intrinsic_name: &str,
+    value: bool,
+) -> TranslationResult<Ptr<Operation>> {
+    use pliron::builtin::attributes::IntegerAttr;
+    use pliron::utils::apint::APInt;
+
+    let (prepared_destination, prepared_last_op) = prepare_destination_write(
+        ctx,
+        body,
+        destination,
+        value_map,
+        block_ptr,
+        prev_op,
+        loc.clone(),
+    )?;
+
+    let bool_ty = IntegerType::get(ctx, 1, Signedness::Signless);
+    let const_op = Operation::new(
+        ctx,
+        MirConstantOp::get_concrete_op_info(),
+        vec![bool_ty.into()],
+        vec![],
+        vec![],
+        0,
+    );
+    const_op.deref_mut(ctx).set_loc(loc.clone());
+    MirConstantOp::new(const_op).set_attr_value(
+        ctx,
+        IntegerAttr::new(
+            bool_ty,
+            APInt::from_u64(u64::from(value), std::num::NonZeroUsize::new(1).unwrap()),
+        ),
+    );
+    insert_op(ctx, const_op, block_ptr, prepared_last_op);
+
+    let const_val = const_op.deref(ctx).get_result(0);
+    let no_target_msg = format!("{} call without target not supported", intrinsic_name);
+    emit_prepared_result_and_goto(
+        ctx,
+        prepared_destination,
+        const_val,
+        target,
+        block_ptr,
+        const_op,
         value_map,
         block_map,
         loc,

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Verified lowering facts for the narrow packed-AS3 local-storage lane.
+//! Verified lowering facts for packed-AS3 carrier local storage.
 //!
 //! The physical carrier representation is a storage property, not Rust pointer
 //! provenance. This module therefore does not extend `MirPointerKind`. Instead,
@@ -12,22 +12,23 @@
 //! after the complete proof succeeds stamps the exact physical LLVM type on the
 //! MIR operations that consume the address.
 //!
-//! No lowering converter reconstructs carrier identity from `OperandsInfo` or
-//! from an LLVM defining-op chain. If a carrier address crosses a call, cast,
-//! block-argument edge, return, pointer offset, nested projection, or any other
-//! unmodelled operation, preparation fails before any MIR operation is lowered.
+//! Recursive struct/tuple projections and bounded fixed-array projections are
+//! part of that proof. No lowering converter reconstructs carrier identity from
+//! `OperandsInfo` or from an LLVM defining-op chain. Calls, casts, block-argument
+//! edges, returns, pointer offsets, and any other unmodelled address transport
+//! still fail before any MIR operation is lowered.
 
 use crate::convert::target_stable_storage::{StorageRewriteOptions, target_stable_storage_type};
 use crate::convert::types::{
-    PackedSharedInternalAbiInfo, StructLayoutInfo, build_struct_slot_map, convert_type,
-    is_zero_sized_type, packed_shared_internal_abi_info,
+    MAX_PACKED_SHARED_INTERNAL_ABI_ARRAY_REWRITE_LEAVES, StructLayoutInfo, build_struct_slot_map,
+    convert_type, llvm_type_size_align,
 };
 use dialect_mir::ops::{
     MirAllocaOp, MirArrayElementAddrOp, MirAssertOp, MirCallOp, MirCastOp, MirCondBranchOp,
     MirDbgValueListOp, MirDbgValueOp, MirFieldAddrOp, MirGotoOp, MirLoadOp, MirPtrOffsetOp,
     MirReturnOp, MirStoreOp,
 };
-use dialect_mir::types::{MirPtrType, MirStructType};
+use dialect_mir::types::{MirArrayType, MirFP16Type, MirPtrType, MirStructType, MirTupleType};
 use llvm_export::types as llvm_types;
 use pliron::builtin::attributes::TypeAttr;
 use pliron::builtin::types::{FP32Type, FP64Type, IntegerType};
@@ -46,7 +47,11 @@ const CARRIER_GEP_SOURCE_TYPE_KEY: &str = "cuda_oxide_packed_shared_carrier_gep_
 #[derive(Clone, Copy, Debug)]
 struct CarrierAddress {
     physical_pointee: TypeHandle,
-    projection_depth: u8,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PackedSharedLocalStorageInfo {
+    storage_ty: TypeHandle,
 }
 
 #[derive(Default)]
@@ -100,7 +105,12 @@ pub(crate) fn carrier_storage_type(ctx: &Context, op: Ptr<Operation>) -> Option<
     get_type_attr(ctx, op, CARRIER_STORAGE_TYPE_KEY)
 }
 
-/// Physical aggregate type that a carrier-backed `mir.field_addr` must index.
+/// Physical LLVM source type that a verified carrier projection must index.
+///
+/// For `mir.field_addr` this is the carrier struct/tuple type. For
+/// `mir.array_element_addr` it is the carrier element type used as the typed
+/// GEP source. The fact is attached to the exact MIR projection only after the
+/// whole address-use graph validates.
 pub(crate) fn carrier_gep_source_type(ctx: &Context, op: Ptr<Operation>) -> Option<TypeHandle> {
     get_type_attr(ctx, op, CARRIER_GEP_SOURCE_TYPE_KEY)
 }
@@ -135,17 +145,79 @@ fn reject_preexisting_carrier_facts(ctx: &Context, operations: &[Ptr<Operation>]
     Ok(())
 }
 
-/// Recognize exactly the narrow local-storage shape required by #1036.
+/// Whether a MIR value shape belongs to the recursive packed-AS3 local lane.
 ///
-/// The internal device ABI is intentionally broader today. Local storage does
-/// not inherit that widening: the root must be a packed struct with exactly one
-/// direct AS3 pointer field and all other non-ZST fields scalar. Nested
-/// aggregates, arrays, vectors, and multiple shared-pointer leaves remain
-/// outside this lane even when the internal ABI can carry them.
+/// This is deliberately a local-storage predicate. It mirrors the currently
+/// admitted struct/tuple/array/scalar vocabulary without delegating admission
+/// to the internal device ABI classifier, so a future ABI widening cannot make
+/// new local-memory shapes legal implicitly.
+fn packed_shared_local_mir_shape_is_supported(ctx: &Context, mir_ty: TypeHandle) -> bool {
+    fn mir_type_is_zero_sized(ctx: &Context, ty: TypeHandle) -> bool {
+        let ty_ref = ty.deref(ctx);
+        if let Some(array_ty) = ty_ref.downcast_ref::<MirArrayType>() {
+            return array_ty.size() == 0 || mir_type_is_zero_sized(ctx, array_ty.element_type());
+        }
+        if let Some(struct_ty) = ty_ref.downcast_ref::<MirStructType>() {
+            return struct_ty
+                .field_types
+                .iter()
+                .all(|field| mir_type_is_zero_sized(ctx, *field));
+        }
+        if let Some(tuple_ty) = ty_ref.downcast_ref::<MirTupleType>() {
+            return tuple_ty
+                .get_types()
+                .iter()
+                .all(|field| mir_type_is_zero_sized(ctx, *field));
+        }
+        false
+    }
+
+    let children = {
+        let ty_ref = mir_ty.deref(ctx);
+        if ty_ref.is::<IntegerType>()
+            || ty_ref.is::<MirFP16Type>()
+            || ty_ref.is::<llvm_types::HalfType>()
+            || ty_ref.is::<FP32Type>()
+            || ty_ref.is::<FP64Type>()
+            || ty_ref.is::<MirPtrType>()
+            || ty_ref.is::<llvm_types::PointerType>()
+        {
+            return true;
+        }
+        if let Some(struct_ty) = ty_ref.downcast_ref::<MirStructType>() {
+            Some(struct_ty.field_types.clone())
+        } else if let Some(tuple_ty) = ty_ref.downcast_ref::<MirTupleType>() {
+            Some(tuple_ty.get_types().to_vec())
+        } else {
+            ty_ref
+                .downcast_ref::<MirArrayType>()
+                .map(|array_ty| vec![array_ty.element_type()])
+        }
+    };
+
+    children.is_some_and(|children| {
+        children.into_iter().all(|child| {
+            mir_type_is_zero_sized(ctx, child)
+                || packed_shared_local_mir_shape_is_supported(ctx, child)
+        })
+    })
+}
+
+/// Recognize the recursive/multi-leaf local-storage shape tracked by #1094.
+///
+/// The root remains a byte-faithful packed struct. Nested structs/tuples,
+/// multiple AS3 leaves, and fixed arrays are admitted recursively. Vectors and
+/// unrelated aggregate kinds remain fail-closed.
+///
+/// Array expansion reuses the existing 16-leaf rewrite budget because local
+/// stores/loads invoke the same element-wise target-stable coercion as the
+/// internal ABI. The check is nevertheless performed here, behind the separate
+/// local shape predicate above, so ABI shape changes cannot widen this lane by
+/// themselves.
 fn packed_shared_local_storage_info(
     ctx: &mut Context,
     mir_ty: TypeHandle,
-) -> std::result::Result<Option<PackedSharedInternalAbiInfo>, anyhow::Error> {
+) -> std::result::Result<Option<PackedSharedLocalStorageInfo>, anyhow::Error> {
     let layout = {
         let ty_ref = mir_ty.deref(ctx);
         let Some(struct_ty) = ty_ref.downcast_ref::<MirStructType>() else {
@@ -154,33 +226,46 @@ fn packed_shared_local_storage_info(
         StructLayoutInfo::of_struct(struct_ty)
     };
 
-    let map = build_struct_slot_map(ctx, &layout)?;
-    let mut direct_shared_pointers = 0_u64;
-    for field_ty in &map.field_llvm_types {
-        if is_zero_sized_type(ctx, *field_ty) {
-            continue;
-        }
-        let field_ref = field_ty.deref(ctx);
-        if let Some(pointer) = field_ref.downcast_ref::<llvm_types::PointerType>() {
-            if pointer.address_space() == llvm_types::address_space::SHARED {
-                direct_shared_pointers += 1;
-            }
-            continue;
-        }
-        if field_ref.is::<IntegerType>()
-            || field_ref.is::<llvm_types::HalfType>()
-            || field_ref.is::<FP32Type>()
-            || field_ref.is::<FP64Type>()
-        {
-            continue;
-        }
-        return Ok(None);
-    }
-    if direct_shared_pointers != 1 {
+    if !packed_shared_local_mir_shape_is_supported(ctx, mir_ty) {
         return Ok(None);
     }
 
-    packed_shared_internal_abi_info(ctx, mir_ty)
+    let map = build_struct_slot_map(ctx, &layout)?;
+    if !map.by_value_layout_faithful {
+        return Ok(None);
+    }
+    let is_packed = map
+        .llvm_struct_ty
+        .deref(ctx)
+        .downcast_ref::<llvm_types::StructType>()
+        .is_some_and(|struct_ty| struct_ty.layout() == llvm_types::StructLayout::Packed);
+    if !is_packed {
+        return Ok(None);
+    }
+
+    let rewrite = target_stable_storage_type(
+        ctx,
+        map.llvm_struct_ty,
+        StorageRewriteOptions {
+            canonicalize_bool: false,
+        },
+        "packed shared local storage",
+    )?;
+    if rewrite.shared_pointer_leaves == 0
+        || rewrite.array_shared_pointer_leaves > MAX_PACKED_SHARED_INTERNAL_ABI_ARRAY_REWRITE_LEAVES
+    {
+        return Ok(None);
+    }
+    let Some((storage_size, _)) = llvm_type_size_align(ctx, rewrite.ty) else {
+        return Ok(None);
+    };
+    if layout.total_size > 0 && storage_size != layout.total_size {
+        return Ok(None);
+    }
+
+    Ok(Some(PackedSharedLocalStorageInfo {
+        storage_ty: rewrite.ty,
+    }))
 }
 
 fn target_stable_local_value_type(
@@ -230,29 +315,158 @@ fn seed_carrier_allocas(
             result,
             CarrierAddress {
                 physical_pointee: info.storage_ty,
-                projection_depth: 0,
             },
         );
     }
     Ok(())
 }
 
-fn derive_direct_field_projections(
+fn projection_result_pointee(
+    ctx: &Context,
+    operation: Ptr<Operation>,
+    kind: &str,
+) -> Result<TypeHandle> {
+    let result_ty = operation.deref(ctx).get_result(0).get_type(ctx);
+    let result_ref = result_ty.deref(ctx);
+    let pointer = result_ref.downcast_ref::<MirPtrType>().ok_or_else(|| {
+        pliron::input_error_noloc!(
+            "{} result must be a MIR pointer before packed-AS3 carrier preparation",
+            kind
+        )
+    })?;
+    Ok(pointer.pointee)
+}
+
+fn carrier_field_physical_pointee(
+    ctx: &mut Context,
+    operation: Ptr<Operation>,
+    carrier_source_ty: TypeHandle,
+) -> Result<TypeHandle> {
+    let field_addr = MirFieldAddrOp::new(operation);
+    let field_index = field_addr
+        .get_attr_field_index(ctx)
+        .ok_or_else(|| pliron::input_error_noloc!("MirFieldAddrOp missing field_index attribute"))?
+        .0 as usize;
+    let semantic_aggregate = field_addr
+        .get_attr_aggregate_ty(ctx)
+        .ok_or_else(|| {
+            pliron::input_error_noloc!("MirFieldAddrOp missing verified aggregate_ty attribute")
+        })?
+        .get_type(ctx);
+
+    let layout = {
+        let aggregate_ref = semantic_aggregate.deref(ctx);
+        if let Some(struct_ty) = aggregate_ref.downcast_ref::<MirStructType>() {
+            StructLayoutInfo::of_struct(struct_ty)
+        } else if let Some(tuple_ty) = aggregate_ref.downcast_ref::<MirTupleType>() {
+            StructLayoutInfo::of_tuple(tuple_ty)
+        } else {
+            return pliron::input_err_noloc!(
+                "packed-AS3 carrier field projection requires a struct or tuple aggregate"
+            );
+        }
+    };
+    let map = build_struct_slot_map(ctx, &layout)
+        .map_err(|error| pliron::input_error_noloc!("{error}"))?;
+    let semantic_field = projection_result_pointee(ctx, operation, "mir.field_addr")?;
+    let expected =
+        target_stable_local_value_type(ctx, semantic_field, "packed shared local field projection")
+            .map_err(|error| pliron::input_error_noloc!("{error}"))?;
+
+    let Some(slot_entry) = map.decl_to_llvm.get(field_index).copied() else {
+        return pliron::input_err_noloc!(
+            "packed-AS3 carrier field index {} out of bounds for aggregate with {} fields",
+            field_index,
+            map.decl_to_llvm.len()
+        );
+    };
+    let Some(slot) = slot_entry else {
+        // Stripped ZSTs have no carrier slot. Their pointer still participates
+        // in the verified address graph, so preserve the exact target-stable
+        // result type for any further zero-sized projection.
+        return Ok(expected);
+    };
+
+    let carrier_ref = carrier_source_ty.deref(ctx);
+    let carrier_struct = carrier_ref
+        .downcast_ref::<llvm_types::StructType>()
+        .ok_or_else(|| {
+            pliron::input_error_noloc!(
+                "packed-AS3 carrier field projection expected struct storage, got {}",
+                carrier_source_ty.deref(ctx).disp(ctx)
+            )
+        })?;
+    let physical = carrier_struct.fields().nth(slot as usize).ok_or_else(|| {
+        pliron::input_error_noloc!(
+            "packed-AS3 carrier field slot {} out of bounds for storage type {}",
+            slot,
+            carrier_source_ty.deref(ctx).disp(ctx)
+        )
+    })?;
+    if physical != expected {
+        return pliron::input_err_noloc!(
+            "packed-AS3 carrier field projection physical type {} disagrees with target-stable semantic field type {}",
+            physical.deref(ctx).disp(ctx),
+            expected.deref(ctx).disp(ctx)
+        );
+    }
+    Ok(physical)
+}
+
+fn carrier_array_element_physical_pointee(
+    ctx: &mut Context,
+    operation: Ptr<Operation>,
+    carrier_array_ty: TypeHandle,
+) -> Result<TypeHandle> {
+    let physical = {
+        let carrier_ref = carrier_array_ty.deref(ctx);
+        let carrier_array = carrier_ref
+            .downcast_ref::<llvm_types::ArrayType>()
+            .ok_or_else(|| {
+                pliron::input_error_noloc!(
+                    "packed-AS3 carrier array projection expected array storage, got {}",
+                    carrier_array_ty.deref(ctx).disp(ctx)
+                )
+            })?;
+        carrier_array.elem_type()
+    };
+    let semantic_element = projection_result_pointee(ctx, operation, "mir.array_element_addr")?;
+    let expected = target_stable_local_value_type(
+        ctx,
+        semantic_element,
+        "packed shared local array element projection",
+    )
+    .map_err(|error| pliron::input_error_noloc!("{error}"))?;
+    if physical != expected {
+        return pliron::input_err_noloc!(
+            "packed-AS3 carrier array element type {} disagrees with target-stable semantic element type {}",
+            physical.deref(ctx).disp(ctx),
+            expected.deref(ctx).disp(ctx)
+        );
+    }
+    Ok(physical)
+}
+
+fn derive_carrier_projections(
     ctx: &mut Context,
     operations: &[Ptr<Operation>],
     addresses: &mut FxHashMap<Value, CarrierAddress>,
     plan: &mut CarrierFactPlan,
 ) -> Result<()> {
-    // A direct projection depends only on its root alloca. Iterate so malformed
-    // nested projections are diagnosed deterministically regardless of block
-    // walk order, rather than becoming an unrecognised-use fallback.
+    // Projections form an SSA use graph. Iterate to a fixed point so nested
+    // field/array chains are discovered regardless of block walk order. Every
+    // derived child receives its physical pointee directly from the already
+    // proven parent carrier type; no converted defining-op history is queried.
     let mut changed = true;
     while changed {
         changed = false;
         for &operation in operations {
-            if Operation::get_op::<MirFieldAddrOp>(operation, ctx).is_none() {
+            let is_field = Operation::get_op::<MirFieldAddrOp>(operation, ctx).is_some();
+            let is_array = Operation::get_op::<MirArrayElementAddrOp>(operation, ctx).is_some();
+            if !is_field && !is_array {
                 continue;
             }
+
             let (base, result) = {
                 let op = operation.deref(ctx);
                 (op.get_operand(0), op.get_result(0))
@@ -263,37 +477,22 @@ fn derive_direct_field_projections(
             let Some(base_state) = addresses.get(&base).copied() else {
                 continue;
             };
-            if base_state.projection_depth != 0 {
-                return pliron::input_err_noloc!(
-                    "packed-AS3 carrier locals currently support only one direct field projection; nested carrier projections remain out of scope"
-                );
-            }
 
-            let semantic_field = {
-                let result_ty = result.get_type(ctx);
-                let result_ref = result_ty.deref(ctx);
-                let pointer = result_ref.downcast_ref::<MirPtrType>().ok_or_else(|| {
-                    pliron::input_error_noloc!(
-                        "mir.field_addr result must be a MIR pointer before packed-AS3 carrier preparation"
-                    )
-                })?;
-                pointer.pointee
+            let physical_pointee = if is_field {
+                carrier_field_physical_pointee(ctx, operation, base_state.physical_pointee)?
+            } else {
+                carrier_array_element_physical_pointee(ctx, operation, base_state.physical_pointee)?
             };
-            let physical_field = target_stable_local_value_type(
-                ctx,
-                semantic_field,
-                "packed shared local field projection",
-            )
-            .map_err(|error| pliron::input_error_noloc!("{error}"))?;
 
-            plan.plan_gep_source_type(operation, base_state.physical_pointee);
-            addresses.insert(
-                result,
-                CarrierAddress {
-                    physical_pointee: physical_field,
-                    projection_depth: 1,
-                },
-            );
+            // Field GEPs index the physical parent aggregate. Array-element
+            // GEPs use the physical element type as their typed source.
+            let gep_source_ty = if is_field {
+                base_state.physical_pointee
+            } else {
+                physical_pointee
+            };
+            plan.plan_gep_source_type(operation, gep_source_ty);
+            addresses.insert(result, CarrierAddress { physical_pointee });
             changed = true;
         }
     }
@@ -340,12 +539,17 @@ fn validate_and_plan_uses(
                 continue;
             }
 
-            if Operation::get_op::<MirFieldAddrOp>(operation, ctx).is_some() {
-                if index == 0 && state.projection_depth == 0 {
-                    continue;
+            if Operation::get_op::<MirFieldAddrOp>(operation, ctx).is_some()
+                || Operation::get_op::<MirArrayElementAddrOp>(operation, ctx).is_some()
+            {
+                if index == 0 {
+                    let result = operation.deref(ctx).get_result(0);
+                    if addresses.contains_key(&result) {
+                        continue;
+                    }
                 }
                 return pliron::input_err_noloc!(
-                    "packed-AS3 carrier locals currently support only direct root field projections"
+                    "packed-AS3 carrier projection was not proven by the complete address-use graph"
                 );
             }
 
@@ -370,11 +574,9 @@ fn validate_and_plan_uses(
             if Operation::get_op::<MirReturnOp>(operation, ctx).is_some() {
                 return reject_boundary_use("return boundary");
             }
-            if Operation::get_op::<MirPtrOffsetOp>(operation, ctx).is_some()
-                || Operation::get_op::<MirArrayElementAddrOp>(operation, ctx).is_some()
-            {
+            if Operation::get_op::<MirPtrOffsetOp>(operation, ctx).is_some() {
                 return pliron::input_err_noloc!(
-                    "packed-AS3 carrier locals do not support pointer arithmetic or array-element projections"
+                    "packed-AS3 carrier locals do not support pointer arithmetic"
                 );
             }
 
@@ -387,7 +589,7 @@ fn validate_and_plan_uses(
     Ok(())
 }
 
-/// Prove and stamp every use of the narrow packed-AS3 local-storage lane.
+/// Prove and stamp every use of the packed-AS3 local-storage lane.
 ///
 /// This must run after the final MIR-producing transform and immediately before
 /// dialect conversion. Its attributes are lowering-private capabilities: input
@@ -409,7 +611,7 @@ pub(crate) fn prepare_packed_shared_local_storage(
         return Ok(());
     }
 
-    derive_direct_field_projections(ctx, &operations, &mut addresses, &mut plan)?;
+    derive_carrier_projections(ctx, &operations, &mut addresses, &mut plan)?;
     validate_and_plan_uses(ctx, &operations, &addresses, &mut plan)?;
     plan.apply(ctx);
     Ok(())
@@ -632,6 +834,273 @@ mod tests {
     }
 
     #[test]
+    fn local_storage_accepts_recursive_multi_leaf_and_bounded_array_shapes() {
+        let mut ctx = make_ctx();
+        let tag: TypeHandle = IntegerType::get(&ctx, 8, Signedness::Unsigned).into();
+        let word: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+        let pointee: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+        let shared: TypeHandle = MirPtrType::get_shared(&mut ctx, pointee, false).into();
+
+        let pair: TypeHandle = MirStructType::get_with_full_layout(
+            &mut ctx,
+            "LocalSharedPair".into(),
+            vec!["left".into(), "right".into()],
+            vec![shared, shared],
+            vec![0, 1],
+            vec![0, 8],
+            16,
+            8,
+        )
+        .into();
+        let tuple: TypeHandle = MirTupleType::get_with_layout(
+            &mut ctx,
+            vec![shared, word],
+            vec![0, 1],
+            vec![0, 8],
+            16,
+            8,
+        )
+        .into();
+        let array: TypeHandle = MirArrayType::get(&mut ctx, shared, 2).into();
+
+        for (name, field_ty, size) in [
+            ("PackedLocalNestedStruct", pair, 17),
+            ("PackedLocalNestedTuple", tuple, 17),
+            ("PackedLocalArray", array, 17),
+        ] {
+            let packed: TypeHandle = MirStructType::get_with_full_layout(
+                &mut ctx,
+                name.into(),
+                vec!["tag".into(), "payload".into()],
+                vec![tag, field_ty],
+                vec![0, 1],
+                vec![0, 1],
+                size,
+                1,
+            )
+            .into();
+            assert!(
+                packed_shared_local_storage_info(&mut ctx, packed)
+                    .expect("local classification must not error")
+                    .is_some(),
+                "{name} must be admitted by the recursive local carrier lane"
+            );
+        }
+
+        let multi: TypeHandle = MirStructType::get_with_full_layout(
+            &mut ctx,
+            "PackedLocalMulti".into(),
+            vec!["tag".into(), "left".into(), "right".into()],
+            vec![tag, shared, shared],
+            vec![0, 1, 2],
+            vec![0, 1, 9],
+            17,
+            1,
+        )
+        .into();
+        assert!(
+            packed_shared_local_storage_info(&mut ctx, multi)
+                .expect("local classification must not error")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn local_storage_reuses_array_rewrite_bound_and_rejects_vectors() {
+        let mut ctx = make_ctx();
+        let tag: TypeHandle = IntegerType::get(&ctx, 8, Signedness::Unsigned).into();
+        let pointee: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+        let shared: TypeHandle = MirPtrType::get_shared(&mut ctx, pointee, false).into();
+
+        for (count, admitted) in [
+            (MAX_PACKED_SHARED_INTERNAL_ABI_ARRAY_REWRITE_LEAVES, true),
+            (
+                MAX_PACKED_SHARED_INTERNAL_ABI_ARRAY_REWRITE_LEAVES + 1,
+                false,
+            ),
+        ] {
+            let array: TypeHandle = MirArrayType::get(&mut ctx, shared, count).into();
+            let packed: TypeHandle = MirStructType::get_with_full_layout(
+                &mut ctx,
+                format!("PackedLocalArray{count}"),
+                vec!["tag".into(), "ptrs".into()],
+                vec![tag, array],
+                vec![0, 1],
+                vec![0, 1],
+                1 + 8 * count,
+                1,
+            )
+            .into();
+            assert_eq!(
+                packed_shared_local_storage_info(&mut ctx, packed)
+                    .expect("local classification must not error")
+                    .is_some(),
+                admitted
+            );
+        }
+
+        let shared_pointer: TypeHandle =
+            llvm_types::PointerType::get(&ctx, llvm_types::address_space::SHARED).into();
+        let vector: TypeHandle =
+            llvm_types::VectorType::get(&ctx, shared_pointer, 2, llvm_types::VectorTypeKind::Fixed)
+                .into();
+        let packed_vector: TypeHandle = MirStructType::get_with_full_layout(
+            &mut ctx,
+            "PackedLocalVector".into(),
+            vec!["tag".into(), "ptrs".into()],
+            vec![tag, vector],
+            vec![0, 1],
+            vec![0, 1],
+            17,
+            1,
+        )
+        .into();
+        assert!(
+            packed_shared_local_storage_info(&mut ctx, packed_vector)
+                .expect("vector classification must not error")
+                .is_none(),
+            "vectors must remain outside the carrier-local lane"
+        );
+    }
+
+    #[test]
+    fn nested_struct_and_tuple_projections_keep_exact_carrier_types() {
+        let mut ctx = make_ctx();
+        let tag: TypeHandle = IntegerType::get(&ctx, 8, Signedness::Unsigned).into();
+        let word: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+        let pointee: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+        let shared: TypeHandle = MirPtrType::get_shared(&mut ctx, pointee, false).into();
+        let pair: TypeHandle = MirStructType::get_with_full_layout(
+            &mut ctx,
+            "NestedProjectionPair".into(),
+            vec!["left".into(), "right".into()],
+            vec![shared, shared],
+            vec![0, 1],
+            vec![0, 8],
+            16,
+            8,
+        )
+        .into();
+        let tuple: TypeHandle = MirTupleType::get_with_layout(
+            &mut ctx,
+            vec![shared, word],
+            vec![0, 1],
+            vec![0, 8],
+            16,
+            8,
+        )
+        .into();
+        let packed: TypeHandle = MirStructType::get_with_full_layout(
+            &mut ctx,
+            "PackedNestedProjection".into(),
+            vec!["tag".into(), "pair".into(), "tuple".into()],
+            vec![tag, pair, tuple],
+            vec![0, 1, 2],
+            vec![0, 1, 17],
+            33,
+            1,
+        )
+        .into();
+
+        let (module, block) = build_kernel(&mut ctx, vec![], vec![]);
+        let slot = append_alloca(&mut ctx, block, packed);
+        for (outer_index, aggregate, inner_index) in [(1_u32, pair, 1_u32), (2, tuple, 0)] {
+            let aggregate_ptr: TypeHandle =
+                MirPtrType::get_generic(&mut ctx, aggregate, true).into();
+            let outer = mir::MirFieldAddrOp::build(&mut ctx, slot, aggregate_ptr, outer_index)
+                .expect("outer field address build");
+            outer.insert_at_back(block, &ctx);
+            let aggregate_address = outer.deref(&ctx).get_result(0);
+            let shared_ptr: TypeHandle = MirPtrType::get_generic(&mut ctx, shared, true).into();
+            let inner =
+                mir::MirFieldAddrOp::build(&mut ctx, aggregate_address, shared_ptr, inner_index)
+                    .expect("nested field address build");
+            inner.insert_at_back(block, &ctx);
+            let inner_address = inner.deref(&ctx).get_result(0);
+            let load = Operation::new(
+                &mut ctx,
+                mir::MirLoadOp::get_concrete_op_info(),
+                vec![shared],
+                vec![inner_address],
+                vec![],
+                0,
+            );
+            load.insert_at_back(block, &ctx);
+        }
+        append_mir_return(&mut ctx, block, vec![]);
+
+        crate::lower_mir_to_llvm(&mut ctx, module)
+            .expect("recursive struct/tuple carrier projections must lower");
+        let body = kernel_blocks(&ctx, module);
+        assert_eq!(count_ops::<llvm::AddrSpaceCastOp>(&ctx, &body), 2);
+    }
+
+    #[test]
+    fn array_element_projection_uses_carrier_element_type() {
+        let mut ctx = make_ctx();
+        let tag: TypeHandle = IntegerType::get(&ctx, 8, Signedness::Unsigned).into();
+        let pointee: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+        let shared: TypeHandle = MirPtrType::get_shared(&mut ctx, pointee, false).into();
+        let array: TypeHandle = MirArrayType::get(&mut ctx, shared, 2).into();
+        let packed: TypeHandle = MirStructType::get_with_full_layout(
+            &mut ctx,
+            "PackedArrayProjection".into(),
+            vec!["tag".into(), "ptrs".into()],
+            vec![tag, array],
+            vec![0, 1],
+            vec![0, 1],
+            17,
+            1,
+        )
+        .into();
+        let index_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Signed).into();
+        let (module, block) = build_kernel(&mut ctx, vec![index_ty], vec![]);
+        let index = block.deref(&ctx).get_argument(0);
+        let slot = append_alloca(&mut ctx, block, packed);
+
+        let array_ptr: TypeHandle = MirPtrType::get_generic(&mut ctx, array, true).into();
+        let array_field = mir::MirFieldAddrOp::build(&mut ctx, slot, array_ptr, 1)
+            .expect("array field address build");
+        array_field.insert_at_back(block, &ctx);
+        let array_address = array_field.deref(&ctx).get_result(0);
+
+        let element_ptr: TypeHandle = MirPtrType::get_generic(&mut ctx, shared, true).into();
+        let element_addr = Operation::new(
+            &mut ctx,
+            mir::MirArrayElementAddrOp::get_concrete_op_info(),
+            vec![element_ptr],
+            vec![array_address, index],
+            vec![],
+            0,
+        );
+        element_addr.insert_at_back(block, &ctx);
+        let element_address = element_addr.deref(&ctx).get_result(0);
+        let load = Operation::new(
+            &mut ctx,
+            mir::MirLoadOp::get_concrete_op_info(),
+            vec![shared],
+            vec![element_address],
+            vec![],
+            0,
+        );
+        load.insert_at_back(block, &ctx);
+        append_mir_return(&mut ctx, block, vec![]);
+
+        crate::lower_mir_to_llvm(&mut ctx, module)
+            .expect("carrier-backed array element projection must lower");
+        let body = kernel_blocks(&ctx, module);
+        let geps = find_all::<llvm::GetElementPtrOp>(&ctx, &body);
+        assert_eq!(geps.len(), 2, "field plus element projection expected");
+        let element_source = geps[1].src_elem_type(&ctx);
+        let element_ref = element_source.deref(&ctx);
+        let pointer = element_ref
+            .downcast_ref::<PointerType>()
+            .expect("carrier array element must remain pointer-typed");
+        assert_eq!(pointer.address_space(), llvm_addr::GENERIC);
+        assert_eq!(count_ops::<llvm::AddrSpaceCastOp>(&ctx, &body), 1);
+    }
+
+    #[test]
     fn input_cannot_supply_carrier_storage_facts() {
         for key in [CARRIER_STORAGE_TYPE_KEY, CARRIER_GEP_SOURCE_TYPE_KEY] {
             let mut ctx = make_ctx();
@@ -639,7 +1108,7 @@ mod tests {
             let (module, block) = build_kernel(&mut ctx, vec![], vec![]);
             let slot = append_alloca(&mut ctx, block, packed);
             let alloca = slot.defining_op().unwrap();
-            let storage = packed_shared_internal_abi_info(&mut ctx, packed)
+            let storage = packed_shared_local_storage_info(&mut ctx, packed)
                 .unwrap()
                 .unwrap()
                 .storage_ty;
@@ -687,7 +1156,7 @@ mod tests {
     }
 
     #[test]
-    fn carrier_address_rejects_nested_zero_sized_projection() {
+    fn carrier_address_allows_nested_zero_sized_projection() {
         let mut ctx = make_ctx();
         let (_, tag, shared) = packed_shared_fixture(&mut ctx);
         let unit: TypeHandle = MirStructType::get_with_full_layout(
@@ -734,14 +1203,14 @@ mod tests {
         nested.insert_at_back(block, &ctx);
         append_mir_return(&mut ctx, block, vec![]);
 
-        let error = crate::lower_mir_to_llvm(&mut ctx, module)
-            .expect_err("nested carrier projections must fail even through ZSTs");
-        assert!(
-            error.to_string().contains("nested carrier projections"),
-            "{error}"
+        crate::lower_mir_to_llvm(&mut ctx, module)
+            .expect("recursive carrier projections through ZSTs must lower");
+        let body = kernel_blocks(&ctx, module);
+        assert_eq!(
+            find_all::<llvm::GetElementPtrOp>(&ctx, &body).len(),
+            2,
+            "both zero-sized projections must keep distinct address values"
         );
-        assert!(carrier_storage_type(&ctx, slot.defining_op().unwrap()).is_none());
-        assert!(carrier_gep_source_type(&ctx, first).is_none());
     }
 
     #[test]

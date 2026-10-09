@@ -38,6 +38,7 @@
 
 mod addressing;
 mod array_extract;
+mod carrier_array_element_addr;
 mod carrier_field_addr;
 mod common;
 mod construct;
@@ -47,8 +48,8 @@ mod fields;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use addressing::convert_array_element_addr;
 pub(crate) use array_extract::convert_extract_array_element;
+pub(crate) use carrier_array_element_addr::convert_array_element_addr;
 pub(crate) use carrier_field_addr::convert_field_addr;
 pub(crate) use construct::{
     convert_construct_array, convert_construct_disjoint_slice, convert_construct_slice,

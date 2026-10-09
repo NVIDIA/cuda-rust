@@ -18,6 +18,6 @@ resolver = "2"
 [dependencies]
 cutile = { path = "../../../../../cutile-rs/cutile", version = "0.4.0" }
 cutile-compiler = { path = "../../../../../cutile-rs/cutile-compiler", version = "0.4.0" }
-cuda-async = { path = "../../../../../cuda-async", version = "0.4.0" }
-cuda-core = { path = "../../../../../cuda-core", version = "0.4.0" }
+cuda-async = { path = "../../../../../cuda-async" }
+cuda-core = { path = "../../../../../cuda-core" }
 tokio = { version = "1", features = ["full"] }

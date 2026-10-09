@@ -776,9 +776,25 @@ impl<'m> CUDATileFunctionCompiler<'m> {
     /// stack.
     pub(crate) fn ir_location(&self, span: &proc_macro2::Span) -> cutile_ir::ir::Location {
         let stack = self.call_site_stack.borrow();
+        // Runtime parsing gives each captured module its own source span.
+        // Generated types, arrays, and wrapper calls do not join that span.
+        let captured_location = || {
+            self.modules
+                .name_resolver
+                .all_modules()
+                .iter()
+                .find_map(|(name, module)| {
+                    module.ident.span().join(*span)?;
+                    let base = self.modules.get_span_base(name).filter(|b| b.is_known())?;
+                    Some(base.resolve_span(span))
+                })
+        };
         let (caller, callee_scope, span_base) = match stack.last() {
             None => {
-                let loc = self.resolve_span(span);
+                let loc = captured_location().unwrap_or_else(|| {
+                    self.span_base()
+                        .resolve_span(&self._function.sig.ident.span())
+                });
                 return if loc.is_known() {
                     cutile_ir::ir::Location::FileLineCol {
                         filename: loc.file,
@@ -801,7 +817,12 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         // callee's own module base; scope the op to the CALLEE's subprogram
         // (so inline debug frames name the inlined function, not the kernel
         // entry) and chain where it was inlined.
-        let loc = span_base.resolve_span(span);
+        let loc = captured_location().unwrap_or_else(|| match callee_scope {
+            Some(scope) if span_base.is_known() => {
+                SourceLocation::new(span_base.file.clone(), scope.line as usize, 0)
+            }
+            _ => SourceLocation::unknown(),
+        });
         if !loc.is_known() {
             return cutile_ir::ir::Location::Unknown;
         }

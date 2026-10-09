@@ -393,3 +393,174 @@ fn lowered_dispatch_call_keeps_its_call_site() {
         );
     });
 }
+
+#[cutile::module]
+mod assertion_kernel {
+    use cutile::core::*;
+
+    #[cutile::entry()]
+    fn checked_scale<const S: [i32; 1]>(
+        out: &mut Tensor<f32, S>,
+        x: &Tensor<f32, { [-1] }>,
+        factor: f32,
+    ) {
+        validate_factor(factor);
+        let tile_x = x.load_like(out);
+        out.store(tile_x * factor.broadcast(out.shape()));
+    }
+
+    fn validate_factor(factor: f32) {
+        assert_in_range(factor, 0.0f32, 1000.0f32);
+    }
+
+    #[allow(unreachable_code, unused_variables)]
+    fn assert_in_range(value: f32, lo: f32, hi: f32) {
+        cuda_tile_assert!(value >= lo, "checked_scale: factor below the allowed range");
+        cuda_tile_assert!(value <= hi, "checked_scale: factor above the allowed range");
+    }
+}
+
+fn check_generated_constant_locations(level: DebugInfoLevel) {
+    common::with_test_stack(move || {
+        let artifacts = KernelCompiler::new(
+            assertion_kernel::__module_ast_self,
+            "assertion_kernel",
+            "checked_scale",
+        )
+        .target("sm_120")
+        .generics(vec!["128".into()])
+        .strides(&[("out", &[1]), ("x", &[1])])
+        .options(CompileOptions::new().debug_info(level))
+        .compile()
+        .expect("compile assertion kernel");
+        let source = include_str!("debug_info.rs");
+        let kernel_line = (source
+            .lines()
+            .position(|line| line.trim_start().starts_with("fn checked_scale<"))
+            .unwrap()
+            + 1) as u32;
+        let mut constants = 0;
+        let mut invalid = Vec::new();
+        visit_ops(
+            artifacts.module(),
+            &artifacts.module().functions,
+            &mut |op| {
+                if op.opcode != cutile_ir::bytecode::Opcode::Constant {
+                    return;
+                }
+                constants += 1;
+                fn valid_location(loc: &Location, kernel_line: u32) -> bool {
+                    match loc {
+                        Location::FileLineCol { line, .. } => *line >= kernel_line,
+                        Location::DebugInfo(info) => match &info.scope {
+                            DebugScope::Subprogram(scope) => info.line >= scope.line,
+                            _ => false,
+                        },
+                        Location::CallSite { callee, caller } => {
+                            valid_location(callee, kernel_line)
+                                && valid_location(caller, kernel_line)
+                        }
+                        _ => false,
+                    }
+                }
+                let valid = valid_location(&op.location, kernel_line);
+                if !valid {
+                    invalid.push(format!("{:?}", op.location));
+                }
+            },
+        );
+        println!(
+            "{level:?}: {constants} constants, {} locations before their function",
+            invalid.len()
+        );
+        assert!(constants > 0, "expected generated constants");
+        assert!(
+            invalid.is_empty(),
+            "constants attributed before their function: {invalid:#?}"
+        );
+    });
+}
+
+#[test]
+fn generated_constants_keep_function_locations_line() {
+    check_generated_constant_locations(DebugInfoLevel::Line);
+}
+
+#[test]
+fn generated_constants_keep_function_locations_full() {
+    check_generated_constant_locations(DebugInfoLevel::Full);
+}
+
+#[cutile::module]
+mod generated_helper_kernel {
+    use super::debug_helpers_file::debug_helpers::generated;
+    use cutile::core::*;
+
+    #[cutile::entry()]
+    fn generated_source<const S: [i32; 1]>(out: &mut Tensor<i32, S>, x: i32) {
+        let value = generated::<{ [-17, 23] }, true>(x);
+        out.store(value.broadcast(out.shape()));
+    }
+}
+
+#[test]
+fn generated_helper_constants_keep_definition_file_and_line() {
+    common::with_test_stack(|| {
+        let artifacts = KernelCompiler::new(
+            generated_helper_kernel::__module_ast_self,
+            "generated_helper_kernel",
+            "generated_source",
+        )
+        .target("sm_120")
+        .generics(vec!["32".into()])
+        .strides(&[("out", &[1])])
+        .options(CompileOptions::new().debug_info(DebugInfoLevel::Full))
+        .compile()
+        .expect("compile generic helper");
+        let helper_source = include_str!("fixtures/debug_helpers.rs");
+        let definition_line = (helper_source
+            .lines()
+            .position(|line| line.trim_start().starts_with("pub fn generated<"))
+            .unwrap()
+            + 1) as u32;
+        let mut generated = 0;
+        visit_ops(
+            artifacts.module(),
+            &artifacts.module().functions,
+            &mut |op| {
+                if op.opcode != cutile_ir::bytecode::Opcode::Constant {
+                    return;
+                }
+                let Some((_, cutile_ir::ir::Attribute::DenseElements(value))) =
+                    op.attributes.iter().find(|(name, _)| name == "value")
+                else {
+                    return;
+                };
+                let is_generated =
+                    value.data == (-17i32).to_le_bytes() || value.data == 23i32.to_le_bytes();
+                if !is_generated {
+                    return;
+                }
+                let Location::CallSite { callee, .. } = &op.location else {
+                    return;
+                };
+                let Location::DebugInfo(info) = &**callee else {
+                    panic!("missing helper scope: {callee:?}");
+                };
+                let DebugScope::Subprogram(scope) = &info.scope else {
+                    panic!("missing helper subprogram: {info:?}");
+                };
+                if scope.name != "generated" {
+                    return;
+                }
+                assert!(
+                    info.filename.ends_with("fixtures/debug_helpers.rs"),
+                    "{info:?}"
+                );
+                generated += 1;
+                assert_eq!(info.line, definition_line, "{info:?}");
+            },
+        );
+        assert!(generated >= 2, "missing generated array constants");
+    });
+}

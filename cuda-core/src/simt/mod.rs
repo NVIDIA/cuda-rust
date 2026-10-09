@@ -49,7 +49,7 @@ pub use context::{ContextLimit, CudaContext, StreamPriorityRange, SyncPolicy};
 /// `#[derive(DeviceCopy)]`, re-exported next to the trait so
 /// `use cuda_core::DeviceCopy;` brings both into scope (serde pattern).
 pub use cuda_core_derive::DeviceCopy;
-pub use device_buffer::{DeviceBuffer, DeviceCopy};
+pub use device_buffer::{DeviceBuffer, DeviceCopy, DeviceSlice, DeviceSliceError, DeviceSliceMut};
 pub use embedded::{EmbeddedModule, EmbeddedModuleError};
 pub use event::CudaEvent;
 pub use launch::{

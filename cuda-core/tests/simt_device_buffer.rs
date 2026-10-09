@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-use cuda_core::{CudaContext, CudaStream, DeviceBuffer, DriverError, PinnedHostBuffer};
+use cuda_core::{
+    CudaContext, CudaStream, DeviceBuffer, DeviceSliceError, DriverError, PinnedHostBuffer,
+};
 use std::sync::{mpsc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -420,4 +422,80 @@ fn uninitialized_async_cast_elem_implicit_drop_is_stream_ordered() {
         drop(dst);
     }
     stream.synchronize().expect("stream sync failed");
+}
+
+#[test]
+fn device_buffer_borrowed_subviews_adjust_pointer_and_length() {
+    let ctx = CudaContext::new(0).expect("failed to create CUDA context");
+    let stream = ctx.new_stream().expect("failed to create CUDA stream");
+    let data = [10_u32, 20, 30, 40, 50, 60];
+    let buffer = DeviceBuffer::from_host(&stream, &data).expect("failed to allocate device buffer");
+    let base = buffer.cu_deviceptr();
+
+    let middle = buffer.slice(1..5).expect("failed to create middle subview");
+    assert_eq!(middle.len(), 4);
+    assert!(!middle.is_empty());
+    assert_eq!(
+        middle.cu_deviceptr(),
+        base + std::mem::size_of::<u32>() as u64
+    );
+
+    let (left, right) = middle.split_at(2).expect("failed to split shared view");
+    assert_eq!(left.len(), 2);
+    assert_eq!(right.len(), 2);
+    assert_eq!(left.cu_deviceptr(), base + 4);
+    assert_eq!(right.cu_deviceptr(), base + 12);
+
+    let empty = buffer.slice(3..3).expect("failed to create empty subview");
+    assert!(empty.is_empty());
+    assert_eq!(empty.cu_deviceptr(), base + 12);
+}
+
+#[test]
+fn device_buffer_mutable_subviews_split_into_disjoint_ranges() {
+    let ctx = CudaContext::new(0).expect("failed to create CUDA context");
+    let stream = ctx.new_stream().expect("failed to create CUDA stream");
+    let mut buffer =
+        DeviceBuffer::<u32>::zeroed(&stream, 8).expect("failed to allocate device buffer");
+    let base = buffer.cu_deviceptr();
+
+    let middle = buffer
+        .slice_mut(1..7)
+        .expect("failed to create mutable middle subview");
+    assert_eq!(middle.len(), 6);
+    assert_eq!(middle.cu_deviceptr(), base + 4);
+
+    let (left, right) = middle
+        .split_at_mut(2)
+        .expect("failed to split mutable subview");
+    assert_eq!(left.len(), 2);
+    assert_eq!(right.len(), 4);
+    assert_eq!(left.cu_deviceptr(), base + 4);
+    assert_eq!(right.cu_deviceptr(), base + 12);
+
+    let right = right.into_shared();
+    assert_eq!(right.len(), 4);
+    assert_eq!(right.cu_deviceptr(), base + 12);
+}
+
+#[test]
+fn device_buffer_subviews_reject_invalid_ranges() {
+    let ctx = CudaContext::new(0).expect("failed to create CUDA context");
+    let stream = ctx.new_stream().expect("failed to create CUDA stream");
+    let buffer = DeviceBuffer::<u32>::zeroed(&stream, 4).expect("failed to allocate device buffer");
+
+    assert!(matches!(
+        buffer.slice(5..),
+        Err(DeviceSliceError::StartOutOfBounds { start: 5, len: 4 })
+    ));
+    assert!(matches!(
+        buffer.slice(..5),
+        Err(DeviceSliceError::EndOutOfBounds { end: 5, len: 4 })
+    ));
+    let start = 3;
+    let end = 2;
+    assert!(matches!(
+        buffer.slice(start..end),
+        Err(DeviceSliceError::StartAfterEnd { start: 3, end: 2 })
+    ));
 }

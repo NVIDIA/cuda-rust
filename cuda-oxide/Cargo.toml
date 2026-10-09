@@ -78,15 +78,17 @@ cuda-host = { path = "crates/cuda-host" }
 # `cuda-host` names `features = ["host"]`, so anything that loads or launches a
 # module still gets it.
 cuda-macros = { path = "crates/cuda-macros", default-features = false }
-# Git-root host crates. `=` is an exact pin, same as cutile-rs, so a 0.4.1
-# package version does not match until this line is updated with it.
-# Examples path-depend on the same directories so the graph has one
-# cuda_core (and one cuda-async / cuda-bindings). `cargo oxide new` still
-# pins the crates.io version of this line for out-of-tree projects; keep
-# SHARED_HOST_CRATES_VERSION in lockstep (the pin check ignores the `=`).
-cuda-bindings = { path = "../cuda-bindings", version = "=0.4.0" }
-cuda-core = { path = "../cuda-core", version = "=0.4.0" }
-cuda-async = { path = "../cuda-async", version = "=0.4.0" }
+# Git-root host crates, consumed by path at tip of tree. No version
+# requirement on purpose: a release of the host crates needs no edit here, and
+# the crates that depend on them in this tree are not published, so nothing
+# needs one (#1459). Examples path-depend on the same directories so the graph
+# has one cuda_core (and one cuda-async / cuda-bindings). `cargo oxide new`
+# scaffolds out-of-tree projects on the crates.io release instead; its
+# SHARED_HOST_CRATES_VERSION is checked against the root manifests by
+# scripts/check-shared-crate-pin.sh.
+cuda-bindings = { path = "../cuda-bindings" }
+cuda-core = { path = "../cuda-core" }
+cuda-async = { path = "../cuda-async" }
 libnvvm-sys = { path = "crates/libnvvm-sys" }
 nvjitlink-sys = { path = "crates/nvjitlink-sys" }
 reserved-oxide-symbols = { path = "crates/reserved-oxide-symbols" }

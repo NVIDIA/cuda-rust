@@ -28,6 +28,6 @@ path = "src/bin/bench.rs"
 [dependencies]
 cuda-device = { path = "../../../cuda-device" }
 cuda-host = { path = "../../../cuda-host" }
-cuda-core = { path = "../../../../../cuda-core", version = "0.4.0" }
+cuda-core = { path = "../../../../../cuda-core" }
 hashbrown = "0.15"
 rayon = "1.10"

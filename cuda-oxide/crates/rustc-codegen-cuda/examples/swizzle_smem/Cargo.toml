@@ -20,4 +20,4 @@ cuda-device = { path = "../../../cuda-device" }
 cuda-host = { path = "../../../cuda-host" }
 
 # Host-side CUDA runtime (with HMM support)
-cuda-core = { path = "../../../../../cuda-core", version = "0.4.0" }
+cuda-core = { path = "../../../../../cuda-core" }

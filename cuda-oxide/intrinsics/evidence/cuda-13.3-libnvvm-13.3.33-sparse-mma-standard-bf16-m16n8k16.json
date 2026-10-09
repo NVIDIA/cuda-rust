@@ -1,0 +1,46 @@
+{
+  "schema": 5,
+  "backend_profile": "cuda-13.3-libnvvm-13.3.33",
+  "backend_kind": "lib_nvvm",
+  "llvm_revision": "not-applicable-libnvvm-ir-2.0",
+  "backend_version": "CUDA toolkit 13.3; nvcc/libNVVM release V13.3.33",
+  "backend_sha256": "b6a5db233133fb0ed693f8cb8aeb1d405254ce0ab10364478985292ec98cfcf0",
+  "nvvm_ir_version": "2.0",
+  "debug_ir_version": "3.2",
+  "records": [
+    {
+      "id": "mma_sp_m16n8k16_f32_bf16",
+      "source_record": "int_nvvm_mma_sp_m16n8k16_row_col_bf16",
+      "llvm_symbol": "llvm.nvvm.mma.sp.m16n8k16.row.col.bf16",
+      "llvm_arguments": ["i32", "i32", "i32", "i32", "f32", "f32", "f32", "f32", "i32", "i32"],
+      "llvm_results": ["f32", "f32", "f32", "f32"],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "sm_80",
+      "ptx_feature": "PTX ISA 7.1 minimum",
+      "status": "lowered",
+      "stages": [
+        {
+          "targets": ["sm_80", "ptx71"],
+          "representation": "inline PTX mma.sp.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32; libNVVM was not invoked on this host",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "This host has no libNVVM or ptxas binary, so this record does not claim a libNVVM compile, cubin, or device link. The lowering is inline PTX of the imported selection mma.sp.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32. The same spelling was retained by the LLVM candidate probe at sm_80/+ptx71 (7942-byte PTX, SHA-256 6b582548488ec61df7b40a595dbb76de1ec1f41d73fbe7ab383b57c066d71131) for selector immediates 0 through 3. Status stays lowered. Runtime validation is unexecuted."
+        }
+      ],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {
+        "mnemonic": "mma",
+        "modifiers": ["sp", "sync", "aligned", "m16n8k16", "row", "col", "f32", "bf16", "bf16", "f32"],
+        "operands": [
+          {"kind": "register_list", "length": 4},
+          {"kind": "register_list", "length": 2},
+          {"kind": "register_list", "length": 2},
+          {"kind": "register_list", "length": 4},
+          {"kind": "register"},
+          {"kind": "immediate"}
+        ]
+      }
+    }
+  ]
+}

@@ -10,7 +10,7 @@ use crate::model::{
     SparseMmaF8F6F4F16Admission, SparseMmaFp8F32Admission, SparseMmaIntegerAdmission,
     SparseMmaLayout, SparseMmaLlvmAdapter, SparseMmaMetadata, SparseMmaOrderedAmpereFloatAdmission,
     SparseMmaOrderedAmpereFloatVariant, SparseMmaOverflow, SparseMmaParticipation,
-    SparseMmaSelector, SparseMmaShape,
+    SparseMmaSelector, SparseMmaShape, SparseMmaStandardBf16M16n8k16Admission,
 };
 use crate::ptx::{InstructionPattern, OperandPattern};
 use anyhow::{Context, Result, ensure};
@@ -359,6 +359,17 @@ pub(in crate::resolve) fn is_sparse_mma_fp8_f32(mma: &SparseMma) -> bool {
         && is_sparse_mma_fp8_f32_element(mma.b_element)
 }
 
+/// Plain (standard-metadata) Ampere sparse BF16 `m16n8k16` with an F32
+/// accumulator. The ordered sibling and every other Ampere float shape stay
+/// on `sp::ordered_metadata`.
+pub(in crate::resolve) fn is_sparse_mma_standard_bf16_m16n8k16(mma: &SparseMma) -> bool {
+    mma.shape == SparseMmaShape::M16n8k16
+        && mma.accumulator == SparseMmaAccumulator::F32
+        && mma.metadata == SparseMmaMetadata::Standard
+        && mma.a_element == SparseMmaElement::Bf16
+        && mma.b_element == SparseMmaElement::Bf16
+}
+
 pub(in crate::resolve) fn sparse_mma_identity(mma: &SparseMma) -> SparseMmaIdentity {
     let shape = sparse_mma_shape_name(mma.shape);
     let a_element = sparse_mma_element_name(mma.a_element);
@@ -449,6 +460,33 @@ pub(in crate::resolve) fn sparse_mma_identity(mma: &SparseMma) -> SparseMmaIdent
             (SparseMmaAccumulator::F32, SparseMmaElement::Tf32) => "tf32",
             _ => unreachable!("closed Ampere float recipe rejects this combination"),
         };
+        // Plain `mma.sp` for the one reviewed standard-metadata BF16 shape.
+        // Ordered Ampere floats keep the `ordered_metadata` identity below.
+        if is_sparse_mma_standard_bf16_m16n8k16(mma) {
+            return SparseMmaIdentity {
+                id: format!("mma_sp_{shape}_{accumulator}_{a_element}"),
+                operation_key: format!(
+                    "matrix.mma.sp.{shape}.row.col.{accumulator}.{a_element}.{b_element}.{accumulator}.not_applicable.standard_metadata"
+                ),
+                source_record: format!(
+                    "int_nvvm_mma_sp_{shape}_row_col_{}",
+                    llvm_suffix.replace('.', "_")
+                ),
+                llvm_symbol: format!("llvm.nvvm.mma.sp.{shape}.row.col.{llvm_suffix}"),
+                ptx_modifiers: vec![
+                    "sp",
+                    "sync",
+                    "aligned",
+                    shape,
+                    "row",
+                    "col",
+                    accumulator,
+                    a_element,
+                    b_element,
+                    accumulator,
+                ],
+            };
+        }
         return SparseMmaIdentity {
             id: format!("mma_sp_ordered_metadata_{shape}_{accumulator}_{a_element}"),
             operation_key: format!(
@@ -588,6 +626,30 @@ pub(in crate::resolve) fn sparse_mma_recipe(mma: &SparseMma) -> Option<SparseMma
         });
     }
 
+    // The one plain Ampere BF16 shape. Other floating sparse families, including
+    // the ordered BF16 sibling, stay pinned to ordered metadata.
+    if is_sparse_mma_standard_bf16_m16n8k16(mma) {
+        let scalar_contract = mma.accumulator == SparseMmaAccumulator::F32
+            && mma.overflow == SparseMmaOverflow::NotApplicable
+            && mma.metadata == SparseMmaMetadata::Standard;
+        if !scalar_contract
+            || mma.a_layout != SparseMmaLayout::Row
+            || mma.b_layout != SparseMmaLayout::Col
+            || mma.selector != carrier.selector
+            || mma.participation
+                != SparseMmaParticipation::AllWarpLanesSameInstructionAndQualifiersNoExitedLanes
+            || mma.adapter != carrier.adapter
+            || mma.llvm_adapter != carrier.llvm_adapter
+            || mma.compatibility_source != SparseMmaCompatibilitySource::GeneratedStub
+        {
+            return None;
+        }
+        return Some(SparseMmaRecipe {
+            identity: sparse_mma_identity(mma),
+            carrier,
+        });
+    }
+
     let scalar_contract = match carrier.accumulator {
         SparseMmaAccumulator::F16 | SparseMmaAccumulator::F32 => {
             mma.accumulator == carrier.accumulator
@@ -626,6 +688,11 @@ pub(in crate::resolve) fn sparse_mma_minimum_ptx(mma: &SparseMma) -> &'static st
     // only sparse FP8 variants outside the 8.7 `kind::f8f6f4` block-scale family.
     if is_sparse_mma_fp8_f32(mma) {
         return "8.4";
+    }
+    // Standard-metadata BF16 is the Ampere `mma.sp` form (PTX ISA 7.1). Ordered
+    // metadata on the same element still requires 8.5 below.
+    if is_sparse_mma_standard_bf16_m16n8k16(mma) {
+        return "7.1";
     }
     if matches!(
         mma.a_element,
@@ -827,9 +894,9 @@ pub(in crate::resolve) fn expand_sparse_mma_integer_admission(
             compatibility_source: SparseMmaCompatibilitySource::GeneratedStub,
             runtime_validation: admission.runtime_validation,
         };
-        let recipe = sparse_mma_recipe(&mma).with_context(
-            || "compact sparse integer MMA admission requests a variant outside the closed recipe set",
-        )?;
+        let recipe = sparse_mma_recipe(&mma).with_context(|| {
+            "compact sparse integer MMA admission requests a variant outside the closed recipe set"
+        })?;
         let signedness = |element| match element {
             SparseMmaElement::S4 => "signed",
             SparseMmaElement::U4 => "unsigned",
@@ -1113,6 +1180,59 @@ pub(in crate::resolve) fn expand_sparse_mma_fp8_f32_admission(
     Ok(records)
 }
 
+/// Expands the one reviewed plain (standard-metadata) Ampere sparse BF16
+/// `m16n8k16` F32 form. Other Ampere float shapes stay ordered-metadata.
+pub(in crate::resolve) fn expand_sparse_mma_standard_bf16_m16n8k16_admission(
+    admission: &SparseMmaStandardBf16M16n8k16Admission,
+) -> Result<Vec<OverlayIntrinsic>> {
+    ensure!(
+        admission.runtime_validation == RuntimeValidation::Unexecuted,
+        "sparse BF16 MMA runtime validation may be marked executed only with GPU evidence"
+    );
+    ensure!(
+        !admission.llvm_evidence_profile.trim().is_empty()
+            && !admission.libnvvm_evidence_profile.trim().is_empty(),
+        "sparse BF16 MMA admission requires both backend evidence profiles"
+    );
+    let mma = SparseMma {
+        shape: SparseMmaShape::M16n8k16,
+        accumulator: SparseMmaAccumulator::F32,
+        a_element: SparseMmaElement::Bf16,
+        b_element: SparseMmaElement::Bf16,
+        a_layout: SparseMmaLayout::Row,
+        b_layout: SparseMmaLayout::Col,
+        overflow: SparseMmaOverflow::NotApplicable,
+        metadata: SparseMmaMetadata::Standard,
+        selector: SparseMmaSelector::ImmediateZero,
+        participation:
+            SparseMmaParticipation::AllWarpLanesSameInstructionAndQualifiersNoExitedLanes,
+        adapter: SparseMmaAdapter::C4F32A4U32B4U32MetadataU32SelectorU32ToD4F32,
+        llvm_adapter: SparseMmaLlvmAdapter::A4I32B4I32C4F32MetadataI32SelectorI32ToD4F32,
+        compatibility_source: SparseMmaCompatibilitySource::GeneratedStub,
+        runtime_validation: admission.runtime_validation,
+    };
+    let carrier = sparse_mma_ampere_float_carrier_recipe(&mma)
+        .context("standard-metadata BF16 sparse MMA admission uses an unsupported carrier")?;
+    let mma = SparseMma {
+        selector: carrier.selector,
+        adapter: carrier.adapter,
+        llvm_adapter: carrier.llvm_adapter,
+        ..mma
+    };
+    let recipe = sparse_mma_recipe(&mma).context(
+        "standard-metadata BF16 sparse MMA admission requests a variant outside the closed recipe set",
+    )?;
+    Ok(vec![sparse_mma_overlay_record(
+        String::new(),
+        mma,
+        recipe,
+        &admission.llvm_evidence_profile,
+        &admission.libnvvm_evidence_profile,
+        "Multiplies warp-distributed sparse bf16 A and B fragments and adds an f32 accumulator."
+            .into(),
+    )])
+}
+
 pub(in crate::resolve) fn sparse_mma_overlay_record(
     abi_id: String,
     mma: SparseMma,
@@ -1294,7 +1414,13 @@ pub(in crate::resolve) fn validate_sparse_mma_policy(
         declaration.classes == ["SDPatternOperator", "Intrinsic", "NVVM_MMA_SP"]
             && declaration.properties == recipe.carrier.imported_properties()
             && declaration.selections.len() == 1
-            && (if matches!(
+            && (if is_sparse_mma_standard_bf16_m16n8k16(mma) {
+                declaration.selections[0].predicates
+                    == [
+                        "Subtarget->getSmVersion() >= 80",
+                        "Subtarget->getPTXVersion() >= 71",
+                    ]
+            } else if matches!(
                 mma.a_element,
                 SparseMmaElement::F16 | SparseMmaElement::Bf16 | SparseMmaElement::Tf32
             ) {

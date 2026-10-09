@@ -77,6 +77,8 @@ pub struct OverlayShardFile {
     #[serde(default)]
     pub sparse_mma_ordered_ampere_float: Option<SparseMmaOrderedAmpereFloatAdmission>,
     #[serde(default)]
+    pub sparse_mma_standard_bf16_m16n8k16: Option<SparseMmaStandardBf16M16n8k16Admission>,
+    #[serde(default)]
     pub prmt: Option<PrmtAdmission>,
     #[serde(default)]
     pub packed_conversion_fp8: Option<PackedConversionFp8Admission>,
@@ -764,6 +766,16 @@ pub struct SparseMmaOrderedAmpereFloatVariant {
     pub shape: SparseMmaShape,
     pub accumulator: SparseMmaAccumulator,
     pub element: SparseMmaElement,
+}
+
+/// Compact admission for the one reviewed plain (standard-metadata) Ampere
+/// sparse BF16 `m16n8k16` F32 form (`mma.sp`, not `sp::ordered_metadata`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SparseMmaStandardBf16M16n8k16Admission {
+    pub llvm_evidence_profile: String,
+    pub libnvvm_evidence_profile: String,
+    pub runtime_validation: RuntimeValidation,
 }
 
 #[derive(Debug, Clone, Deserialize)]

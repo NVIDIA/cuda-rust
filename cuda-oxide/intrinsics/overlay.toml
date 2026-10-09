@@ -56,6 +56,7 @@ shards = [
     "overlay/sparse_mma_ordered_int4_m16n8k64.toml",
     "overlay/sparse_mma_ordered_int8.toml",
     "overlay/sparse_mma_ordered_int8_m16n8k64.toml",
+    "overlay/sparse_mma_standard_bf16_m16n8k16.toml",
     "overlay/sreg.toml",
     "overlay/sreg_cluster.toml",
     "overlay/sreg_special.toml",

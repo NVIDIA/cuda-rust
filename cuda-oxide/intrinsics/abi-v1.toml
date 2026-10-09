@@ -7173,3 +7173,10 @@ status = "active"
 catalog_id = "mma_sp_m16n8k64_f32_e5m2_e5m2_f32"
 operation_key = "matrix.mma.sp.m16n8k64.row.col.f32.e5m2.e5m2.f32.not_applicable.standard_metadata"
 raw_rust_signature = { safe = false, arguments = ["[f32; 4]", "[u32; 4]", "[u32; 4]", "u32", "u32"], result = "[f32; 4]" }
+
+[[entry]]
+abi_id = "i1030"
+status = "active"
+catalog_id = "mma_sp_m16n8k16_f32_bf16"
+operation_key = "matrix.mma.sp.m16n8k16.row.col.f32.bf16.bf16.f32.not_applicable.standard_metadata"
+raw_rust_signature = { safe = false, arguments = ["[f32; 4]", "[u32; 2]", "[u32; 2]", "u32", "u32"], result = "[f32; 4]" }

@@ -136,6 +136,21 @@ enum DeviceExternTypePosition {
 /// definitions and lets cuda-oxide's own narrow SSA values flow into the
 /// call with no inserted conversions. `f16` is passed as `half` directly
 /// since NVPTX has native f16 support.
+/// LLVM major of the compiler that runs this backend, recorded by `build.rs`
+/// from the toolchain that compiled this dylib.
+///
+/// That toolchain's `librustc_driver` is what this dylib links, so it is the
+/// rustc that loads it and produces the MIR lowered below. The value is fixed
+/// at build time on purpose: the backend resolves `llc` through `PATH`, and a
+/// run-time `rustc -vV` reads the same `PATH`, so it could report the very
+/// toolchain a mismatch warning exists to catch (#1300).
+///
+/// `None` when the build-time probe could not answer, which states no
+/// producer and leaves tool selection silent rather than guessing.
+fn backend_llvm_major() -> Option<u32> {
+    option_env!("CUDA_OXIDE_BACKEND_LLVM_MAJOR").and_then(|major| major.parse().ok())
+}
+
 fn rustc_ty_to_device_extern_type<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
@@ -1222,6 +1237,14 @@ pub fn generate_device_code<'tcx>(
             target_arch,
             target_arch_source: "CUDA_OXIDE_TARGET",
             device_arch_hint,
+            // The compiler running this backend, recorded when the dylib was
+            // built: rustc loads it through the `librustc_driver` it links,
+            // so the build-time toolchain is the producer of the MIR below
+            // and the right side of the `llc` comparison (#1300). Probing
+            // `rustc -vV` here would read the PATH that supplied `llc` and
+            // could agree with the wrong toolchain.
+            ir_llvm_major: backend_llvm_major(),
+            ir_llvm_major_source: "the rustc that built this backend",
             debug_kind,
             debug_global_variables,
             allow_fma_contraction,
@@ -1371,6 +1394,18 @@ fn read_compilation_artifact(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_build_recorded_an_llvm_major_for_this_backend() {
+        // The whole mechanism rests on build.rs having run and the banner
+        // having parsed; without it every build silently states no producer
+        // and the #1300 warning can never fire.
+        assert!(
+            backend_llvm_major().is_some_and(|major| major >= 21),
+            "build.rs must record the compiling toolchain's LLVM major, got {:?}",
+            backend_llvm_major()
+        );
+    }
 
     #[test]
     fn test_config_default() {

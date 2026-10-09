@@ -45,5 +45,12 @@ serde_json = "1"          # must match workspace
 # They're accessed via `extern crate` with #![feature(rustc_private)]
 # rustc will link them when loading this dylib as a codegen backend.
 
+# Records the LLVM major of the toolchain that builds this dylib, which is the
+# compiler that loads it (#1300). cuda-target-spec has no dependencies of its
+# own, so it is safe as a build-dependency even in this isolated workspace,
+# and it keeps one `rustc -vV` parser in the tree.
+[build-dependencies]
+cuda-target-spec = { path = "../cuda-target-spec" }
+
 [package.metadata.rust-analyzer]
 rustc_private = true

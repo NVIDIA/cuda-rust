@@ -418,8 +418,9 @@ pub fn cuda_module(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `generic_const_exprs` feature. Partial factors must be in `2..=1024`; an
 /// invalid specialization fails compilation instead of becoming a no-op.
 ///
-/// The pass currently recognizes explicit counted `while` loops. Range-based
-/// `for` loops are not yet recognized.
+/// The pass currently recognizes explicit counted `while` loops and range `for`
+/// loops (`for i in a..b`). Other iterator loops, such as `a..=b` or
+/// `.step_by(k)`, are not yet recognized.
 ///
 /// Only the annotated loop is unrolled. Inner loops are copied intact unless
 /// they carry their own annotation. Several `continue` paths (multiple
@@ -817,11 +818,12 @@ pub fn cooperative_launch(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// # Loop unrolling
 ///
 /// Loop annotations work the same way in device function definitions as they do
-/// in kernels. Use an explicit counted `while` loop; range-based `for` loops are
-/// not yet recognized. Partial factors must be `N >= 2`. Multiple `continue`
-/// paths are supported; full unrolling preserves `break` and multiple exit
-/// targets. Partial unrolling requires a positive counter step, a `<` or `<=`
-/// test, an unchanging limit, and no exit besides the normal header test.
+/// in kernels. Use an explicit counted `while` loop or a range `for` loop
+/// (`for i in a..b`); other iterator loops are not yet recognized. Partial
+/// factors must be `N >= 2`. Multiple `continue` paths are supported; full
+/// unrolling preserves `break` and multiple exit targets. Partial unrolling
+/// requires a positive counter step, a `<` or `<=` test, an unchanging limit,
+/// and no exit besides the normal header test.
 ///
 /// One annotation may create at most 1,024 body copies, 8,192 cloned basic
 /// blocks, and 65,536 cloned operations. Factors above 1,024 are rejected;

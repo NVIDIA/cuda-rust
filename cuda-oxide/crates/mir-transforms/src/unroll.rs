@@ -19,8 +19,9 @@
 //! request as a `mir.unroll_hint` operation inside that loop.
 //!
 //! The current analysis recognizes explicit counted `while` loops, including an
-//! exit test that adds a constant to the counter (`while i + 2 <= n`).
-//! Range-based `for` loops are not yet recognized.
+//! exit test that adds a constant to the counter (`while i + 2 <= n`), and range
+//! `for` loops (`for i in a..b`). Other iterator loops, such as `a..=b` or
+//! `.step_by(k)`, are not yet recognized.
 //!
 //! Several `continue` paths are supported: the pass joins their back-edges
 //! before unrolling. Full `#[unroll]` also preserves early `break` paths and
@@ -77,7 +78,9 @@ use std::num::NonZero;
 
 use crate::analyses::induction::{self, ArgKind, CmpPred};
 use crate::analyses::loop_info::LoopInfo;
-use crate::canonicalize::{CanonicalizeOutcome, close_header_liveouts, merge_backedges};
+use crate::canonicalize::{
+    CanonicalizeOutcome, close_header_liveouts, merge_backedges, thread_iterator_exit_test,
+};
 
 /// Hard safety limit on how many body copies one annotation may request.
 /// Explicit annotations still need a bound: accepting an arbitrary `u32`
@@ -274,6 +277,26 @@ pub fn unroll_annotated_loops(
                 );
                 continue;
             };
+
+            // A range `for` loop tests the `Option` from `Iterator::next`, not
+            // its counter. Move that test into the header first, then recompute.
+            match thread_iterator_exit_test(ctx, &info, loop_id) {
+                CanonicalizeOutcome::Unchanged => {}
+                CanonicalizeOutcome::Changed => {
+                    function_changed = true;
+                    changed = true;
+                    continue;
+                }
+                CanonicalizeOutcome::Unsupported(reason) => {
+                    for (op, block, _f) in &hints {
+                        if info.innermost_loop(*block) == Some(loop_id) {
+                            op.unlink(ctx);
+                        }
+                    }
+                    eprintln!("warning: {kind} requested but the loop was not unrolled: {reason}");
+                    continue;
+                }
+            }
 
             // A grouped main loop plus a remainder loop needs explicit merging
             // for every early-exit value. Keep that as a follow-up: full unroll

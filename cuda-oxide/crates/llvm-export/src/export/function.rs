@@ -224,9 +224,19 @@ impl<'a> ModuleExportState<'a> {
             } else {
                 "global"
             };
+            // Host-written storage (`#[constant]`): the initializer is only the
+            // load-time image. Without this, whole-program LTO (libNVVM
+            // `-gen-lto` + nvJitLink `-lto`) internalizes the never-stored
+            // global, folds its loads to the initializer and drops the symbol
+            // the host looks up with `cuModuleGetGlobal`.
+            let externally_initialized = if global.is_host_written(self.ctx) {
+                "externally_initialized "
+            } else {
+                ""
+            };
             write!(
                 output,
-                "@{name} = addrspace({address_space}) {storage_keyword} "
+                "@{name} = addrspace({address_space}) {externally_initialized}{storage_keyword} "
             )
             .unwrap();
             self.export_type(ty, output)?;

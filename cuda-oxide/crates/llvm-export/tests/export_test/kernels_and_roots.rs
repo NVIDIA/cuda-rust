@@ -109,6 +109,38 @@ fn legacy_llvm_used_roots_retained_address_space_global() {
     );
 }
 
+/// Host-written storage must not look like a known constant to LTO, in either
+/// IR dialect; ordinary globals keep their plain definition.
+#[test]
+fn host_written_global_exports_externally_initialized() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "host_written".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signless);
+
+    let params = GlobalOp::new(&mut ctx, "PARAMS".try_into().unwrap(), i32_ty.into());
+    params.set_address_space(&mut ctx, 4);
+    params.mark_host_written(&mut ctx);
+    params.get_operation().insert_at_back(module_block, &ctx);
+
+    let ordinary = GlobalOp::new(&mut ctx, "ORDINARY".try_into().unwrap(), i32_ty.into());
+    ordinary.set_address_space(&mut ctx, 1);
+    ordinary.get_operation().insert_at_back(module_block, &ctx);
+
+    let legacy = NvvmExportConfig::new(NvvmIrDialect::LegacyLlvm7);
+    for ir in [
+        export_module_to_string_with_config(&ctx, &module, &PtxExportConfig),
+        export_module_to_string_with_config(&ctx, &module, &legacy),
+    ] {
+        let ir = ir.expect("host-written global export succeeds");
+        assert!(
+            ir.contains("@PARAMS = addrspace(4) externally_initialized global i32"),
+            "{ir}"
+        );
+        assert!(ir.contains("@ORDINARY = addrspace(1) global i32"), "{ir}");
+    }
+}
+
 #[test]
 fn ptx_export_records_kernel_roots_for_internalization() {
     let mut ctx = Context::new();

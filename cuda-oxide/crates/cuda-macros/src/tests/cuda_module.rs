@@ -5,8 +5,8 @@
 
 use crate::cuda_module::contract::LaunchContractArgs;
 use crate::cuda_module::{
-    device_codegen_owner_selection, expand_cuda_module, expand_cuda_module_inner,
-    transform_cuda_module_items,
+    artifact_anchor_reference_tokens, device_codegen_owner_selection, expand_cuda_module,
+    expand_cuda_module_inner, transform_cuda_module_items,
 };
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -384,6 +384,62 @@ fn cfg_gated_generic_uses_the_same_gate_for_marker_and_loader() {
             expanded.contains(&format!("if__cuda_oxide_has_enabled_generic_kernel{{let_=name;::cuda_host::load_all_ptx_bundles_merged(ctx)?}}else{{{ANCHORED_EMBEDDED_LOADER}}}")),
             "loader must fall back to the embedded artifact when no generic kernel is enabled:\n{expanded}"
         );
+}
+
+/// Anchor references for every kernel in `module`, rendered compactly with a
+/// fixed anchor symbol. Unit tests run without cargo's per-crate env, so the
+/// expansion itself never emits references here; this exercises the token
+/// builder that the expansion uses once the env is present.
+fn anchor_references_compact(module: ItemMod) -> String {
+    let items = &module.content.expect("inline module").1;
+    let transformed =
+        transform_cuda_module_items(items, &mut Vec::new(), &[], false, true).unwrap();
+    let references = artifact_anchor_reference_tokens(&transformed.kernels, "test_anchor");
+    quote!(#(#references)*).to_string().replace(' ', "")
+}
+
+#[test]
+fn all_generic_cuda_module_keeps_anchor_keepalive_and_merge_loader() {
+    let module: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            pub fn fill<T: Copy>(value: T) {}
+        }
+    };
+    let expanded = expand_to_compact_string(module.clone());
+
+    assert!(
+        expanded.contains("::cuda_host::load_all_ptx_bundles_merged(ctx)?"),
+        "generic modules must keep the #222 merge loader:\n{expanded}"
+    );
+    assert!(
+        expanded.contains("#[allow(unused_mut)]letmut__cuda_oxide_artifact_anchor:::core::option::Option<&::core::primitive::u8>=::core::option::Option::None;"),
+        "load_named must still initialize the optional anchor address:\n{expanded}"
+    );
+
+    let references = anchor_references_compact(module);
+    assert!(
+        references.contains("CUDA_OXIDE_BUNDLE_ANCHOR")
+            && references.contains("black_box")
+            && references.contains("#[link_name=\"test_anchor\"]"),
+        "all-generic modules must emit the #72/#1365 artifact-anchor keep-alive:\n{references}"
+    );
+}
+
+#[test]
+fn cfg_gated_generic_anchor_keepalive_inherits_effective_cfg() {
+    let module: ItemMod = parse_quote! {
+        mod kernels {
+            #[cfg(feature = "generic")]
+            #[kernel]
+            pub fn fill<T: Copy>(value: T) {}
+        }
+    };
+    let references = anchor_references_compact(module);
+    assert!(
+        references.starts_with("#[cfg(feature=\"generic\")]let_={unsafeextern\"C\"{"),
+        "generic anchor keep-alive must inherit the kernel cfg:\n{references}"
+    );
 }
 
 /// The embedded-artifact loader: read the bundle from the binary that maps

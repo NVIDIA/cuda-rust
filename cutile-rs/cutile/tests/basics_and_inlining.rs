@@ -6,7 +6,7 @@ use cutile_compiler::compiler::utils::CompileOptions;
 
 mod common;
 
-#[deny(unused_variables, unreachable_code)]
+#[deny(nonstandard_style, unused_variables, unreachable_code)]
 mod host_lint_regression {
     #[test]
     fn generated_host_code_allows_device_only_lints() {}
@@ -16,7 +16,7 @@ mod host_lint_regression {
         use cutile::core::*;
 
         #[cutile::entry]
-        fn print_then_continue(value: i32, unused: i32) {
+        fn printThenContinue(value: i32, unused: i32) {
             cuda_tile_print!("value={}\n", value);
             let _after_print = value;
         }

@@ -26,8 +26,11 @@
 use cuda_core::simt::context::CudaContext;
 use cuda_core::simt::peer;
 use cuda_core::simt::vmm;
-use cuda_core::IntoResult;
+use cuda_core::{DriverError, IntoResult};
 use std::mem::MaybeUninit;
+
+const INVALID_VALUE: DriverError =
+    DriverError(cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE);
 
 fn gpu_count() -> Result<usize, cuda_core::DriverError> {
     unsafe { cuda_core::init(0)? };
@@ -54,8 +57,11 @@ fn vmm_alloc_map_set_access_roundtrip() {
     let va = vmm::VirtualReservation::new(alloc_size, 0).expect("cuMemAddressReserve failed");
     assert_ne!(va.base(), 0);
 
-    let mapping = vmm::Mapping::new(va.base(), alloc_size, &phys, 0).expect("cuMemMap failed");
+    let mapping = vmm::Mapping::new(&va, 0, &phys, 0, alloc_size).expect("cuMemMap failed");
     assert_eq!(mapping.va(), va.base());
+    assert_eq!(mapping.size(), alloc_size);
+    assert!(std::ptr::eq(mapping.reservation(), &va));
+    assert!(mapping.physical().is_some_and(|p| std::ptr::eq(p, &phys)));
 
     vmm::set_access(va.base(), alloc_size, &[ctx.cu_device()]).expect("cuMemSetAccess failed");
 
@@ -86,9 +92,45 @@ fn vmm_alloc_map_set_access_roundtrip() {
 
     assert_eq!(readback, pattern, "single-GPU VMM roundtrip failed");
 
+    // The mapping borrows both, so this is the only order that compiles.
     drop(mapping);
     drop(va);
     drop(phys);
+}
+
+/// The driver cannot tell where our reservation ends (VA ranges are
+/// process-wide), so `Mapping::new` bounds the range itself before calling
+/// `cuMemMap`, and reports a wrap or an overrun as `CUDA_ERROR_INVALID_VALUE`.
+#[test]
+fn mapping_rejects_ranges_outside_the_reservation_or_allocation() {
+    let ctx = CudaContext::new(0).expect("failed to create context for GPU 0");
+    let granularity =
+        vmm::allocation_granularity(ctx.cu_device()).expect("failed to query granularity");
+    let size = vmm::align_size(4096, granularity);
+
+    let phys = vmm::PhysicalAllocation::new(ctx.cu_device(), size).expect("cuMemCreate failed");
+    // Twice the allocation, so there is a valid second half to map into.
+    let va = vmm::VirtualReservation::new(2 * size, 0).expect("cuMemAddressReserve failed");
+
+    assert_eq!(
+        vmm::Mapping::new(&va, 2 * size, &phys, 0, size).err(),
+        Some(INVALID_VALUE),
+        "a range past the end of the reservation is refused"
+    );
+    assert_eq!(
+        vmm::Mapping::new(&va, 0, &phys, granularity, size).err(),
+        Some(INVALID_VALUE),
+        "a range past the end of the allocation is refused"
+    );
+    assert_eq!(
+        vmm::Mapping::new(&va, usize::MAX, &phys, 0, size).err(),
+        Some(INVALID_VALUE),
+        "offset arithmetic that would wrap is refused"
+    );
+
+    let map = vmm::Mapping::new(&va, size, &phys, 0, size).expect("the second half is in range");
+    assert_eq!(map.va(), va.base() + size as u64);
+    assert!(std::ptr::eq(map.reservation(), &va));
 }
 
 #[test]
@@ -118,7 +160,7 @@ fn p2p_vmm_cross_gpu_access() {
 
     // --- Reserve VA and map on GPU 0 ---
     let va0 = vmm::VirtualReservation::new(alloc_size, 0).expect("VA reserve for GPU 0");
-    let map0 = vmm::Mapping::new(va0.base(), alloc_size, &phys, 0).expect("map on GPU 0");
+    let map0 = vmm::Mapping::new(&va0, 0, &phys, 0, alloc_size).expect("map on GPU 0");
     vmm::set_access(
         va0.base(),
         alloc_size,
@@ -128,7 +170,7 @@ fn p2p_vmm_cross_gpu_access() {
 
     // --- Reserve VA and map the SAME physical memory on GPU 1 ---
     let va1 = vmm::VirtualReservation::new(alloc_size, 0).expect("VA reserve for GPU 1");
-    let map1 = vmm::Mapping::new(va1.base(), alloc_size, &phys, 0).expect("map on GPU 1");
+    let map1 = vmm::Mapping::new(&va1, 0, &phys, 0, alloc_size).expect("map on GPU 1");
     vmm::set_access(
         va1.base(),
         alloc_size,

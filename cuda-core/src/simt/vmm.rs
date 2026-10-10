@@ -13,15 +13,39 @@
 //!
 //! All handle types are RAII: `PhysicalAllocation` releases via `cuMemRelease`,
 //! `VirtualReservation` frees via `cuMemAddressFree`, and `Mapping` unmaps
-//! via `cuMemUnmap`. Drop order matters -- mappings must be dropped before the
-//! physical allocation or virtual reservation they reference.
+//! via `cuMemUnmap`. A `Mapping<'a>` borrows both the reservation it lives in
+//! and the memory it maps, so the teardown order (mapping first, then
+//! reservation and allocation) is checked by the compiler rather than left
+//! to convention.
+//!
+//! Unmapping is **not stream-ordered**: `cuMemUnmap` acts on the host
+//! timeline without waiting for enqueued work, so a mapping must not be
+//! dropped while a kernel or copy that touches its range is in flight (see
+//! [`Mapping`]).
 //!
 //! The module also wraps CUDA's multicast objects (`cuMulticast*`, CUDA
 //! 12.1+): `MulticastObject` (compiled out on pre-12.1 toolkits, see the
 //! build script probe) builds an NVLink SHARP (NVLS) team whose
 //! mapped VA ranges respond to device-side `multimem.*` instructions with
-//! switch-side reduction and broadcast across every bound GPU. See
-//! `tests/vmm_multicast.rs` and the `nvls_all_reduce` example.
+//! switch-side reduction and broadcast across every bound GPU. The host-side
+//! plumbing is exercised by `tests/simt_vmm_multicast.rs`; the switch-side
+//! semantics need device code and are not tested in this crate.
+//!
+//! # Contexts
+//!
+//! Nothing in this module binds a [`CudaContext`](crate::CudaContext): every
+//! entry point is addressed by `CUdevice` and operates on the process-wide
+//! VA space, and none of them holds a context to bind. On CUDA 13.3 (driver
+//! 610.43) all of them, `set_access` included, succeed on a thread with no
+//! current context and even in a process that never created one, so a
+//! `CUDA_ERROR_INVALID_VALUE` from `set_access` is about its arguments (a
+//! `va`/`size` that is not an exact mapped range, or a device outside the
+//! system), not about the calling thread's binding. The work that *uses* a
+//! mapping does run in a context: the kernels and copies that touch the VA
+//! run in the context of the device they were issued on, which must be in
+//! the `set_access` device list. `MulticastObject::bind_mem` is the one call
+//! CUDA documents as needing a context for the bound device current; bind
+//! one with `CudaContext::bind_to_thread` first.
 
 use crate::error::{DriverError, IntoResult};
 use cuda_bindings::CUdeviceptr;
@@ -152,34 +176,110 @@ impl Drop for VirtualReservation {
 
 /// A mapping of physical memory into a virtual address range.
 ///
-/// Created by [`Mapping::new`], which calls `cuMemMap` to bind a
-/// `PhysicalAllocation` (or a portion of it) to a region within a
-/// `VirtualReservation`. Dropped via `cuMemUnmap`.
-pub struct Mapping {
+/// Created by [`Mapping::new`] (`cuMemMap` of a [`PhysicalAllocation`]) or
+/// `Mapping::new_multicast` (of a `MulticastObject`, CUDA 12.1+); dropped
+/// via `cuMemUnmap`. The mapping borrows the [`VirtualReservation`] it lives
+/// in and the memory it maps for its whole lifetime, so it cannot outlive
+/// either. Freeing a reservation that is still mapped is exactly the teardown
+/// mistake `Drop` cannot report, and the borrow turns it into a compile
+/// error:
+///
+/// ```compile_fail,E0505
+/// # use cuda_core::simt::vmm::{Mapping, PhysicalAllocation, VirtualReservation};
+/// # fn demo(va: VirtualReservation, phys: PhysicalAllocation) -> Result<(), cuda_core::DriverError> {
+/// let mapping = Mapping::new(&va, 0, &phys, 0, va.size())?;
+/// drop(va); // the range is still mapped
+/// drop(mapping);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Unmapping is not stream-ordered
+///
+/// `cuMemUnmap` takes effect on the host timeline; it does not wait for work
+/// already enqueued on any stream. Dropping a `Mapping` while a kernel or a
+/// copy that touches its range is still in flight is a device-side
+/// use-after-unmap: the access faults (`CUDA_ERROR_ILLEGAL_ADDRESS`) or, if
+/// the range has been remapped meanwhile, lands in someone else's memory.
+/// Synchronize every stream that uses the range before the mapping drops;
+/// nothing here does it for you.
+pub struct Mapping<'a> {
     va: CUdeviceptr,
     size: usize,
+    /// The range `va` lies in; borrowed so the mapping is unmapped first.
+    reservation: &'a VirtualReservation,
+    /// What `va` is backed by; borrowed so it outlives the mapping.
+    backing: MappingBacking<'a>,
 }
 
-impl Mapping {
-    /// Maps `size` bytes of `phys` at `offset` into virtual address `va`.
+/// The memory a [`Mapping`] maps.
+enum MappingBacking<'a> {
+    Physical(&'a PhysicalAllocation),
+    #[cfg(cuda_has_multicast)]
+    Multicast(&'a MulticastObject),
+}
+
+/// Bounds a mapping of `size` bytes at `va_offset` into `reservation` and at
+/// `backing_offset` into a backing of `backing_size` bytes, returning the
+/// mapped address.
+///
+/// The driver cannot check the reservation bound: VA ranges are process-wide,
+/// so a `cuMemMap` past the end of this reservation would succeed if it
+/// happened to land in another one.
+fn mapping_range(
+    reservation: &VirtualReservation,
+    va_offset: usize,
+    backing_size: usize,
+    backing_offset: usize,
+    size: usize,
+) -> Result<CUdeviceptr, DriverError> {
+    let invalid = || DriverError(cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE);
+    let va_end = va_offset.checked_add(size).ok_or_else(invalid)?;
+    let backing_end = backing_offset.checked_add(size).ok_or_else(invalid)?;
+    if va_end > reservation.size() || backing_end > backing_size {
+        return Err(invalid());
+    }
+    let va_offset = CUdeviceptr::try_from(va_offset).map_err(|_| invalid())?;
+    reservation
+        .base()
+        .checked_add(va_offset)
+        .ok_or_else(invalid)
+}
+
+impl<'a> Mapping<'a> {
+    /// Maps `size` bytes of `phys`, starting `phys_offset` bytes into it, at
+    /// `va_offset` bytes into `reservation`.
     ///
-    /// `va` must lie within a `VirtualReservation`. `offset` is the byte
-    /// offset into the physical allocation (typically 0 for full mappings).
-    /// `size` must be a multiple of the allocation granularity.
+    /// Both offsets and `size` must be multiples of the allocation
+    /// granularity; the mapping is not accessible until [`set_access`] grants
+    /// a device permission on it.
+    ///
+    /// # Errors
+    ///
+    /// `CUDA_ERROR_INVALID_VALUE` when the range does not fit in
+    /// `reservation` or in `phys` (checked before the driver call), and
+    /// whatever `cuMemMap` reports otherwise.
     pub fn new(
-        va: CUdeviceptr,
+        reservation: &'a VirtualReservation,
+        va_offset: usize,
+        phys: &'a PhysicalAllocation,
+        phys_offset: usize,
         size: usize,
-        phys: &PhysicalAllocation,
-        offset: usize,
     ) -> Result<Self, DriverError> {
+        let va = mapping_range(reservation, va_offset, phys.size(), phys_offset, size)?;
         unsafe {
-            cuda_bindings::cuMemMap(va, size, offset, phys.handle(), 0).result()?;
+            cuda_bindings::cuMemMap(va, size, phys_offset, phys.handle(), 0).result()?;
         }
-        Ok(Self { va, size })
+        Ok(Self {
+            va,
+            size,
+            reservation,
+            backing: MappingBacking::Physical(phys),
+        })
     }
 
-    /// Maps `size` bytes of a multicast object at `offset` into virtual
-    /// address `va`.
+    /// Maps `size` bytes of `multicast`, starting `mc_offset` bytes into it,
+    /// at `va_offset` bytes into `reservation`.
     ///
     /// The resulting VA is a *multicast* view: `multimem.*` PTX instructions
     /// issued against it operate on every copy bound to the object (see
@@ -188,17 +288,28 @@ impl Mapping {
     ///
     /// All devices must have been added to the multicast object (via
     /// [`MulticastObject::add_device`]) before mapping it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Mapping::new`], with the object's per-device size as the bound.
     #[cfg(cuda_has_multicast)]
     pub fn new_multicast(
-        va: CUdeviceptr,
+        reservation: &'a VirtualReservation,
+        va_offset: usize,
+        multicast: &'a MulticastObject,
+        mc_offset: usize,
         size: usize,
-        multicast: &MulticastObject,
-        offset: usize,
     ) -> Result<Self, DriverError> {
+        let va = mapping_range(reservation, va_offset, multicast.size(), mc_offset, size)?;
         unsafe {
-            cuda_bindings::cuMemMap(va, size, offset, multicast.handle(), 0).result()?;
+            cuda_bindings::cuMemMap(va, size, mc_offset, multicast.handle(), 0).result()?;
         }
-        Ok(Self { va, size })
+        Ok(Self {
+            va,
+            size,
+            reservation,
+            backing: MappingBacking::Multicast(multicast),
+        })
     }
 
     /// Returns the virtual address this mapping occupies.
@@ -210,9 +321,36 @@ impl Mapping {
     pub fn size(&self) -> usize {
         self.size
     }
+
+    /// Returns the reservation this mapping lies in.
+    pub fn reservation(&self) -> &'a VirtualReservation {
+        self.reservation
+    }
+
+    /// Returns the physical allocation this mapping maps, or `None` for a
+    /// multicast view.
+    pub fn physical(&self) -> Option<&'a PhysicalAllocation> {
+        match self.backing {
+            MappingBacking::Physical(phys) => Some(phys),
+            #[cfg(cuda_has_multicast)]
+            MappingBacking::Multicast(_) => None,
+        }
+    }
+
+    /// Returns the multicast object this mapping is a view of, or `None` for
+    /// a mapping of physical memory.
+    #[cfg(cuda_has_multicast)]
+    pub fn multicast(&self) -> Option<&'a MulticastObject> {
+        match self.backing {
+            MappingBacking::Multicast(multicast) => Some(multicast),
+            MappingBacking::Physical(_) => None,
+        }
+    }
 }
 
-impl Drop for Mapping {
+impl Drop for Mapping<'_> {
+    /// `cuMemUnmap`, immediately; see the type docs for why in-flight work on
+    /// the range must be complete first.
     fn drop(&mut self) {
         unsafe {
             let _ = cuda_bindings::cuMemUnmap(self.va, self.size).result();
@@ -227,6 +365,13 @@ impl Drop for Mapping {
 /// `[va, va + size)`.
 ///
 /// Typically called once after all mappings within a reservation are established.
+///
+/// # Errors
+///
+/// `CUDA_ERROR_INVALID_VALUE` means the arguments: `[va, va + size)` must be
+/// exactly one or more whole mappings (granularity-aligned, fully mapped),
+/// and every device must exist. It is not a context error; see the module
+/// docs on contexts.
 pub fn set_access(
     va: CUdeviceptr,
     size: usize,
@@ -267,8 +412,56 @@ pub fn allocation_granularity(device: cuda_bindings::CUdevice) -> Result<usize, 
 }
 
 /// Rounds `size` up to the nearest multiple of `granularity`.
+///
+/// Works for any nonzero granularity, not only powers of two: the driver
+/// reports the value and does not promise a power of two. Panics on a zero
+/// granularity or when the rounded size overflows `usize`, rather than
+/// returning a wrong size that a later `cuMemCreate` would silently accept.
 pub fn align_size(size: usize, granularity: usize) -> usize {
-    (size + granularity - 1) & !(granularity - 1)
+    assert!(granularity != 0, "granularity must be nonzero");
+    let remainder = size % granularity;
+    if remainder == 0 {
+        size
+    } else {
+        size.checked_add(granularity - remainder)
+            .expect("aligned size overflows usize")
+    }
+}
+
+#[cfg(test)]
+mod align_size_tests {
+    use super::align_size;
+
+    #[test]
+    fn handles_power_of_two_granularities() {
+        assert_eq!(align_size(0, 2 << 20), 0);
+        assert_eq!(align_size(1, 2 << 20), 2 << 20);
+        assert_eq!(align_size(2 << 20, 2 << 20), 2 << 20);
+        assert_eq!(align_size((2 << 20) + 1, 2 << 20), 4 << 20);
+    }
+
+    /// The previous mask-based version, `(size + g - 1) & !(g - 1)`, assumed
+    /// a power of two: for `g = 6` it maps 7 to `12 & !5 = 8`, which is not
+    /// a multiple of 6 at all.
+    #[test]
+    fn handles_general_granularities() {
+        assert_eq!(align_size(0, 6), 0);
+        assert_eq!(align_size(12, 6), 12);
+        assert_eq!(align_size(13, 6), 18);
+        assert_eq!(align_size(7, 6), 12);
+    }
+
+    #[test]
+    #[should_panic(expected = "granularity must be nonzero")]
+    fn rejects_zero_granularity() {
+        align_size(1, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "aligned size overflows usize")]
+    fn rejects_overflow() {
+        align_size(usize::MAX, 2);
+    }
 }
 
 /// Granularity flavor for [`multicast_granularity`].
@@ -381,7 +574,10 @@ pub fn multicast_granularity(
 /// 4. [`Mapping::new_multicast`] + [`set_access`] per device.
 ///
 /// Teardown reverses it: mappings first, then bindings ([`MulticastBinding`]),
-/// then this object, then the physical allocations.
+/// then this object, then the physical allocations. Mappings and bindings
+/// borrow this object, so the compiler enforces that they go first; the
+/// physical allocations are not borrowed by the bindings (CUDA keeps bound
+/// memory alive), so releasing them last stays a convention.
 ///
 /// Dropping releases the handle via `cuMemRelease` (the documented release
 /// path for multicast objects).
@@ -429,15 +625,15 @@ impl MulticastObject {
     /// and every team device must already have been added. A CUDA context
     /// for the bound device must be current.
     ///
-    /// The returned [`MulticastBinding`] unbinds on drop; it must be dropped
-    /// before this object and before `phys`.
+    /// The returned [`MulticastBinding`] unbinds on drop. It borrows this
+    /// object, so it cannot outlive it; drop it before `phys` as well.
     pub fn bind_mem(
         &self,
         mc_offset: usize,
         phys: &PhysicalAllocation,
         mem_offset: usize,
         size: usize,
-    ) -> Result<MulticastBinding, DriverError> {
+    ) -> Result<MulticastBinding<'_>, DriverError> {
         unsafe {
             cuda_bindings::cuMulticastBindMem(
                 self.handle,
@@ -450,7 +646,7 @@ impl MulticastObject {
             .result()?;
         }
         Ok(MulticastBinding {
-            mc_handle: self.handle,
+            multicast: self,
             device: phys.device(),
             mc_offset,
             size,
@@ -485,30 +681,38 @@ impl Drop for MulticastObject {
 /// One device's physical memory bound into a [`MulticastObject`].
 ///
 /// Created by [`MulticastObject::bind_mem`]; unbinds via `cuMulticastUnbind`
-/// on drop. Must be dropped before the multicast object and before the
-/// physical allocation it binds.
+/// on drop. It borrows the multicast object, so it cannot outlive it (an
+/// unbind against a released object handle would be a wild handle); drop it
+/// before the physical allocation it binds as well.
 #[cfg(cuda_has_multicast)]
-pub struct MulticastBinding {
-    mc_handle: cuda_bindings::CUmemGenericAllocationHandle,
+pub struct MulticastBinding<'a> {
+    /// The object the memory is bound into; borrowed so the unbind runs
+    /// while the handle is still valid.
+    multicast: &'a MulticastObject,
     device: cuda_bindings::CUdevice,
     mc_offset: usize,
     size: usize,
 }
 
 #[cfg(cuda_has_multicast)]
-impl MulticastBinding {
+impl<'a> MulticastBinding<'a> {
     /// Returns the device whose memory is bound.
     pub fn device(&self) -> cuda_bindings::CUdevice {
         self.device
     }
+
+    /// Returns the multicast object the memory is bound into.
+    pub fn multicast(&self) -> &'a MulticastObject {
+        self.multicast
+    }
 }
 
 #[cfg(cuda_has_multicast)]
-impl Drop for MulticastBinding {
+impl Drop for MulticastBinding<'_> {
     fn drop(&mut self) {
         unsafe {
             let _ = cuda_bindings::cuMulticastUnbind(
-                self.mc_handle,
+                self.multicast.handle(),
                 self.device,
                 self.mc_offset,
                 self.size,

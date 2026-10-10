@@ -45,12 +45,12 @@ unsafe impl Sync for CudaEvent {}
 
 /// Destroys the underlying `CUevent` on drop.
 ///
-/// Binds the context to the current thread first (required by
-/// `cuEventDestroy`). Errors are recorded on the context rather than
-/// panicking.
+/// Makes the context current first without consulting the sticky error
+/// state, so a recorded error cannot stop the destroy from being issued.
+/// Errors are recorded on the context rather than panicking.
 impl Drop for CudaEvent {
     fn drop(&mut self) {
-        self.ctx.record_err(self.ctx.bind_to_thread());
+        self.ctx.record_err(self.ctx.make_current());
         self.ctx
             .record_err(unsafe { cuda_bindings::cuEventDestroy_v2(self.cu_event).result() });
     }
@@ -103,9 +103,15 @@ impl CudaEvent {
 
     /// Blocks the calling thread until this event has been recorded and all
     /// preceding stream work has completed.
+    ///
+    /// Like [`CudaStream::synchronize`], the driver wait is issued
+    /// unconditionally and the context's sticky error state is drained and
+    /// returned only afterwards, so an `Err` never means the wait was
+    /// skipped.
     pub fn synchronize(&self) -> Result<(), DriverError> {
-        self.ctx.bind_to_thread()?;
-        unsafe { cuda_bindings::cuEventSynchronize(self.cu_event).result() }
+        self.ctx.make_current()?;
+        unsafe { cuda_bindings::cuEventSynchronize(self.cu_event).result()? };
+        self.ctx.check_err()
     }
 
     /// Returns `true` when all work captured by this event has completed,

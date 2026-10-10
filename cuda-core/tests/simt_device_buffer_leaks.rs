@@ -18,9 +18,115 @@
 //! pin the zero-length construction path, which must not call the driver
 //! allocator at all (`cuMemAlloc` rejects zero-byte requests).
 
-use std::sync::Arc;
+use std::ffi::c_void;
+use std::mem::MaybeUninit;
+use std::sync::{Arc, Mutex, MutexGuard};
 
-use cuda_core::{CudaContext, DeviceBuffer};
+use cuda_core::{CudaContext, DeviceBuffer, DriverError, IntoResult};
+
+/// The error the sticky-state tests record; any code that is not `Ok` works.
+const INJECTED: DriverError = DriverError(cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE);
+static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// Serializes the tests in this file: they account for device memory with
+/// process-wide counters (`cuMemGetInfo`, the default pool's in-use bytes),
+/// which a concurrently running test's allocations would perturb.
+fn serialize_test() -> MutexGuard<'static, ()> {
+    TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Bytes of `device`'s default memory pool currently handed out by
+/// `cuMemAllocAsync` (`CU_MEMPOOL_ATTR_USED_MEM_CURRENT`). Unlike
+/// `cuMemGetInfo`, this moves by exactly the freed size once a
+/// `cuMemFreeAsync` has executed, whether or not the pool releases the
+/// backing memory to the OS.
+fn pool_used_bytes(device: cuda_bindings::CUdevice) -> u64 {
+    let mut pool = MaybeUninit::uninit();
+    let mut used = 0_u64;
+    unsafe {
+        cuda_bindings::cuDeviceGetDefaultMemPool(pool.as_mut_ptr(), device)
+            .result()
+            .expect("cuDeviceGetDefaultMemPool failed");
+        cuda_bindings::cuMemPoolGetAttribute(
+            pool.assume_init(),
+            cuda_bindings::CUmemPool_attribute_enum_CU_MEMPOOL_ATTR_USED_MEM_CURRENT,
+            (&mut used as *mut u64).cast::<c_void>(),
+        )
+        .result()
+        .expect("cuMemPoolGetAttribute failed");
+    }
+    used
+}
+
+/// A recorded error must not turn a drop into a leak, and must still be
+/// reported afterwards. `Drop` used to reach the driver through
+/// `bind_to_thread`, which returns the recorded error *instead of* binding,
+/// so `cuMemFree` ran against whatever context the thread happened to have
+/// current (none, on a fresh thread) and the error was re-recorded.
+#[test]
+fn sync_allocation_is_freed_when_dropped_under_a_sticky_error() {
+    let _guard = serialize_test();
+    let ctx = CudaContext::new(0).expect("failed to create CUDA context");
+    let stream = ctx.new_stream().expect("failed to create CUDA stream");
+    let buf = DeviceBuffer::<u8>::zeroed(&stream, 4096).expect("failed to allocate device buffer");
+    let ptr = buf.cu_deviceptr();
+    stream.synchronize().expect("sync failed");
+
+    ctx.record_err::<()>(Err(INJECTED));
+    drop(buf);
+
+    let mut base = 0;
+    let mut size = 0;
+    assert_eq!(
+        unsafe { cuda_bindings::cuMemGetAddressRange_v2(&mut base, &mut size, ptr) },
+        cuda_bindings::cudaError_enum_CUDA_ERROR_NOT_FOUND,
+        "drop must free a cuMemAlloc allocation with an error recorded"
+    );
+    assert_eq!(
+        ctx.check_err(),
+        Err(INJECTED),
+        "the recorded error must survive the drop for the next fallible call"
+    );
+}
+
+/// The stream-ordered variant: `Drop` synchronizes the context and then
+/// enqueues `cuMemFreeAsync`. It used to synchronize through the checked
+/// wrapper, which reported the recorded error and skipped the free.
+#[test]
+fn async_allocation_is_freed_when_dropped_under_a_sticky_error() {
+    let _guard = serialize_test();
+    let ctx = CudaContext::new(0).expect("failed to create CUDA context");
+    let stream = ctx.new_stream().expect("failed to create CUDA stream");
+    let size = 1_usize << 20;
+    // SAFETY: the buffer is never read.
+    let buf = unsafe { DeviceBuffer::<u8>::uninitialized_async(&stream, size) }
+        .expect("failed to allocate stream-ordered device buffer");
+    stream.synchronize().expect("sync failed");
+    let used_with_buffer = pool_used_bytes(ctx.cu_device());
+    assert!(
+        used_with_buffer >= size as u64,
+        "pool accounting must include the live allocation"
+    );
+
+    ctx.record_err::<()>(Err(INJECTED));
+    drop(buf);
+    // The free is stream-ordered; the wait that retires it is also the next
+    // fallible call, which reports the recorded error after waiting.
+    assert_eq!(
+        stream.synchronize(),
+        Err(INJECTED),
+        "the recorded error must survive the drop for the next fallible call"
+    );
+
+    let used_after = pool_used_bytes(ctx.cu_device());
+    assert!(
+        used_after + size as u64 <= used_with_buffer,
+        "drop must free a cuMemAllocAsync allocation with an error recorded: \
+         pool bytes in use went {used_with_buffer} -> {used_after}"
+    );
+}
 
 /// A live buffer must hold exactly one extra context strong count, and the
 /// count must return to baseline once the buffer drops. A construction
@@ -28,6 +134,7 @@ use cuda_core::{CudaContext, DeviceBuffer};
 /// guard would) fails the live-count assertion by one per construction.
 #[test]
 fn ctx_strong_count_returns_to_baseline_after_buffer_lifecycle() {
+    let _guard = serialize_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
@@ -70,6 +177,7 @@ fn ctx_strong_count_returns_to_baseline_after_buffer_lifecycle() {
 /// `cuMemGetInfo` before and after the cycles.
 #[test]
 fn vram_returns_to_baseline_after_buffer_cycles() {
+    let _guard = serialize_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
@@ -111,6 +219,7 @@ fn vram_returns_to_baseline_after_buffer_cycles() {
 /// driver allocation.
 #[test]
 fn zero_length_construction_succeeds_for_both_constructors() {
+    let _guard = serialize_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 

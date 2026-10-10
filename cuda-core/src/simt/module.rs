@@ -56,12 +56,13 @@ unsafe impl Sync for CudaModule {}
 
 /// Unloads the module on drop.
 ///
-/// Binds the context to the current thread first (required by
-/// `cuModuleUnload`). Errors are recorded on the context rather than
+/// Makes the context current first (required by `cuModuleUnload`) without
+/// consulting the sticky error state, so a recorded error cannot stop the
+/// unload from being issued. Errors are recorded on the context rather than
 /// panicking.
 impl Drop for CudaModule {
     fn drop(&mut self) {
-        self.ctx.record_err(self.ctx.bind_to_thread());
+        self.ctx.record_err(self.ctx.make_current());
         self.ctx
             .record_err(unsafe { cuda_bindings::cuModuleUnload(self.cu_module).result() });
     }
@@ -166,7 +167,6 @@ pub struct CudaFunction {
     /// Raw CUDA function handle.
     pub(crate) cu_function: cuda_bindings::CUfunction,
     /// Owning module. Prevents unloading while this function handle exists.
-    #[allow(unused)]
     pub(crate) module: Arc<CudaModule>,
 }
 
@@ -258,38 +258,123 @@ impl CudaModule {
     }
 }
 
-/// A resolved handle to a `#[constant]` device global. Macro-generated
-/// `set_<name>` methods resolve these lazily on first use and cache the
-/// handle on the `LoadedModule` struct. Callers pass `size_of::<T>()` on
-/// every write; correctness depends on the resolver asserting that the
-/// driver-reported size matches the host-side type.
-#[derive(Clone, Copy, Debug)]
+/// A resolved handle to a module-scope device global (a `#[constant]` or
+/// `__device__` symbol), as `cuModuleGetGlobal` reports it.
+///
+/// The handle owns an `Arc` to its [`CudaModule`], so the address it holds
+/// stays valid for as long as the handle exists, and it carries the
+/// driver-reported byte size, so every write is bounds-checked against the
+/// symbol instead of trusting the caller's length. Macro-generated
+/// `set_<name>` methods resolve these lazily on first use and cache them on
+/// the `LoadedModule` struct; a resolver that also wants the symbol to match
+/// a host type asserts `size() == size_of::<T>()` once, at resolution.
+///
+/// Cloning is an `Arc` bump. The handle is deliberately not `Copy`: a `Copy`
+/// handle is a bare address that can outlive the module it points into.
+///
+/// ```compile_fail,E0382
+/// # fn demo(handle: cuda_core::ConstantHandle) {
+/// let first = handle;
+/// let second = handle;
+/// # let _ = (first, second);
+/// # }
+/// ```
+#[derive(Clone, Debug)]
 pub struct ConstantHandle {
     pub(crate) dptr: cuda_bindings::CUdeviceptr,
+    /// Size of the symbol in bytes, as reported by `cuModuleGetGlobal`.
+    pub(crate) size: usize,
+    /// The module that owns the symbol; keeps `dptr` valid.
+    pub(crate) module: Arc<CudaModule>,
 }
 
 impl ConstantHandle {
-    /// Construct from a raw device pointer. Used by macro-generated
-    /// `LoadedModule` initializers after [`CudaModule::get_global`] has
-    /// resolved the symbol and the size has been asserted against
-    /// `size_of::<T>()`.
+    /// Resolves the global `name` in `module`.
+    ///
+    /// Binds the module's context and calls [`CudaModule::get_global`]; the
+    /// returned handle records the symbol's address and size and keeps
+    /// `module` loaded.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `get_global` returns: a bind failure, or `CUDA_ERROR_NOT_FOUND`
+    /// for a name the module does not export.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `name` contains interior null bytes.
+    pub fn new(module: &Arc<CudaModule>, name: &str) -> Result<Self, DriverError> {
+        let (dptr, size) = module.get_global(name)?;
+        Ok(Self {
+            dptr,
+            size,
+            module: Arc::clone(module),
+        })
+    }
+
+    /// Builds a handle from an already-resolved address and size.
+    ///
+    /// [`new`](Self::new) is the ordinary constructor; this exists for callers
+    /// that resolved the symbol themselves through [`CudaModule::get_global`]
+    /// and want to avoid a second lookup.
     ///
     /// # Safety
     ///
-    /// `dptr` must point to at least `size_of::<T>()` bytes of constant
-    /// memory in a still-loaded module.
-    pub unsafe fn from_raw(dptr: cuda_bindings::CUdeviceptr) -> Self {
-        Self { dptr }
+    /// - `dptr` and `size` must be exactly the pair `cuModuleGetGlobal`
+    ///   returned for one symbol of `module`. Every bounds check this handle
+    ///   performs trusts `size`, so an overstated size lets the *safe*
+    ///   [`write_async_staged`](Self::write_async_staged) overrun the symbol,
+    ///   and an address from another module, or from an earlier load of the
+    ///   same image, is a wild device pointer.
+    /// - `module` must be the module that owns the symbol; holding it is what
+    ///   keeps the address valid.
+    pub unsafe fn from_raw(
+        module: Arc<CudaModule>,
+        dptr: cuda_bindings::CUdeviceptr,
+        size: usize,
+    ) -> Self {
+        Self { dptr, size, module }
     }
-}
 
-impl ConstantHandle {
+    /// Size of the symbol in bytes, as reported by the driver.
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    /// The module that owns the symbol.
+    pub fn module(&self) -> &Arc<CudaModule> {
+        &self.module
+    }
+
+    /// Rejects a write of `num_bytes` that would run past the symbol, and a
+    /// stream from a context other than the module's, before any driver call.
+    fn check_write(&self, stream: &crate::CudaStream, num_bytes: usize) -> Result<(), DriverError> {
+        if num_bytes > self.size {
+            return Err(DriverError(
+                cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE,
+            ));
+        }
+        if stream.context().as_ref() != self.module.context().as_ref() {
+            return Err(DriverError(
+                cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_CONTEXT,
+            ));
+        }
+        Ok(())
+    }
+
     /// Stream-ordered `cuMemcpyHtoDAsync` from `src` (`num_bytes` of host
     /// memory) into the device global.
     ///
+    /// # Errors
+    ///
+    /// `CUDA_ERROR_INVALID_VALUE` if `num_bytes` exceeds [`size`](Self::size),
+    /// and `CUDA_ERROR_INVALID_CONTEXT` if `stream` belongs to a different
+    /// context than the module; both are checked before anything is enqueued.
+    ///
     /// # Safety
     ///
-    /// - `src` must point to at least `num_bytes` of readable host memory.
+    /// - `src` must point to at least `num_bytes` of readable host memory that
+    ///   stays valid and unmodified until the copy completes.
     /// - The bytes must have a layout compatible with the device-side type.
     pub unsafe fn write_async(
         &self,
@@ -297,6 +382,7 @@ impl ConstantHandle {
         src: *const u8,
         num_bytes: usize,
     ) -> Result<(), DriverError> {
+        self.check_write(stream, num_bytes)?;
         stream.context().bind_to_thread()?;
         unsafe {
             crate::simt::memory::memcpy_htod_async(self.dptr, src, num_bytes, stream.cu_stream())
@@ -309,13 +395,22 @@ impl ConstantHandle {
     /// The bytes are kept alive until the stream reaches a host callback
     /// enqueued after the copy. This makes safe setters sound even when the
     /// caller passes a temporary such as `&3.0`.
+    ///
+    /// # Errors
+    ///
+    /// `CUDA_ERROR_INVALID_VALUE` if `bytes` is longer than the symbol
+    /// ([`size`](Self::size)), and `CUDA_ERROR_INVALID_CONTEXT` if `stream`
+    /// belongs to a different context than the module; both are checked
+    /// before anything is enqueued, so a refused write leaves the symbol
+    /// untouched.
     pub fn write_async_staged(
         &self,
         stream: &crate::CudaStream,
         bytes: Box<[MaybeUninit<u8>]>,
     ) -> Result<(), DriverError> {
-        stream.context().bind_to_thread()?;
         let num_bytes = bytes.len();
+        self.check_write(stream, num_bytes)?;
+        stream.context().bind_to_thread()?;
         if num_bytes == 0 {
             return Ok(());
         }
@@ -351,7 +446,12 @@ impl ConstantHandle {
                     callback_data as *mut Box<[MaybeUninit<u8>]>,
                 )
             };
-            if let Err(sync_err) = stream.synchronize() {
+            // The copy is enqueued but nothing will free the bytes after it:
+            // wait for it here. Only a failed driver wait means the DMA may
+            // still be reading `staged`, in which case leaking is the only
+            // sound option; a sticky error recorded meanwhile does not make
+            // the completed wait any less complete.
+            if let Err(sync_err) = stream.synchronize_driver() {
                 Box::leak(staged);
                 return Err(sync_err);
             }
@@ -365,16 +465,32 @@ impl ConstantHandle {
     /// Synchronous `cuMemcpyHtoD` from `src` into the device global. Blocks
     /// the calling thread.
     ///
+    /// The module is the one this handle was resolved from; it no longer
+    /// needs to be passed in.
+    ///
+    /// # Errors
+    ///
+    /// `CUDA_ERROR_INVALID_VALUE` if `num_bytes` exceeds [`size`](Self::size),
+    /// checked before any driver call.
+    ///
     /// # Safety
     ///
-    /// Same contract as [`write_async`](Self::write_async).
+    /// Same contract as [`write_async`](Self::write_async), except that `src`
+    /// only needs to stay valid for the duration of the call.
     pub unsafe fn write_blocking(
         &self,
-        module: &Arc<CudaModule>,
         src: *const u8,
         num_bytes: usize,
     ) -> Result<(), DriverError> {
-        unsafe { module.copy_bytes_to_device_global_sync(self.dptr, src, num_bytes) }
+        if num_bytes > self.size {
+            return Err(DriverError(
+                cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE,
+            ));
+        }
+        unsafe {
+            self.module
+                .copy_bytes_to_device_global_sync(self.dptr, src, num_bytes)
+        }
     }
 }
 
@@ -640,10 +756,11 @@ impl CudaFunction {
     ) -> Result<u32, DriverError> {
         self.context().bind_to_thread()?;
 
-        // CUlaunchAttribute_st is opaque in the generated CUDA 13.2+
-        // bindings. Its C layout stores the id at offset 0 and the value union
-        // at offset 8; clusterDim.x/y/z occupy the first three u32 values in
-        // that union. This matches the launch helpers in cuda-core's root.
+        // `CUlaunchAttribute_st` is a plain struct in the generated bindings
+        // (`id` at offset 0, a 4-byte pad, the 8-aligned `value` union at 8).
+        // Written through byte offsets, as the launch helpers in `simt` do,
+        // so this does not depend on bindgen's anonymous-member naming;
+        // `clusterDim.{x,y,z}` are the first three u32s of the union.
         let mut cluster_attribute: cuda_bindings::CUlaunchAttribute_st =
             unsafe { std::mem::zeroed() };
         unsafe {

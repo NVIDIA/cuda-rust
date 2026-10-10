@@ -1881,6 +1881,8 @@ pub trait KernelOutputStored<T: DType>: Send {
     fn partition_shape_as_i32(&self) -> Vec<i32>;
     /// The partition shape as bound, borrowed: what launch validation reads.
     fn partition_shape(&self) -> &[usize];
+    /// Runtime strides of the underlying tensor, in elements.
+    fn strides(&self) -> &[i32];
     fn strides_hint(&self) -> Vec<i32>;
     fn spec(&self) -> &SpecializationBits;
     fn shape_as_i32(&self) -> Vec<i32>;
@@ -1942,6 +1944,9 @@ impl<T: DType> KernelOutputStored<T> for Partition<Tensor<T>> {
     fn partition_shape(&self) -> &[usize] {
         &self.partition_shape
     }
+    fn strides(&self) -> &[i32] {
+        self.object.strides()
+    }
     fn strides_hint(&self) -> Vec<i32> {
         self.object
             .spec
@@ -2000,6 +2005,9 @@ impl<T: DType> KernelOutputStored<T> for Partition<&mut Tensor<T>> {
     fn partition_shape(&self) -> &[usize] {
         &self.partition_shape
     }
+    fn strides(&self) -> &[i32] {
+        self.object.strides()
+    }
     fn strides_hint(&self) -> Vec<i32> {
         self.object
             .spec
@@ -2043,6 +2051,10 @@ impl<T: DType> KernelOutputStored<T> for MappedLaunchPartition<Partition<Tensor<
         KernelOutputStored::partition_shape(&self.partition)
     }
 
+    fn strides(&self) -> &[i32] {
+        KernelOutputStored::strides(&self.partition)
+    }
+
     fn strides_hint(&self) -> Vec<i32> {
         self.partition.strides_hint()
     }
@@ -2081,6 +2093,10 @@ impl<T: DType> KernelOutputStored<T> for MappedLaunchPartition<Partition<&mut Te
     }
     fn partition_shape(&self) -> &[usize] {
         KernelOutputStored::partition_shape(&self.partition)
+    }
+
+    fn strides(&self) -> &[i32] {
+        KernelOutputStored::strides(&self.partition)
     }
 
     fn strides_hint(&self) -> Vec<i32> {
@@ -2496,6 +2512,25 @@ mod tests {
             KernelOutputStored::grid(&(&mut t).partition([4, 8, 3])).unwrap(),
             (2, 1, 3)
         );
+    }
+
+    #[test]
+    fn output_bindings_report_underlying_tensor_strides() {
+        // The root's [8, 1] strides differ from the [4, 1] strides a
+        // contiguous [2, 4] tile would have.
+        let owned = meta_f32(&[4, 8]).partition([2, 4]);
+        assert_eq!(KernelOutputStored::strides(&owned), &[8, 1]);
+
+        let mut tensor = meta_f32(&[4, 8]);
+        let borrowed = (&mut tensor).partition([2, 4]);
+        assert_eq!(KernelOutputStored::strides(&borrowed), &[8, 1]);
+
+        let mapped_owned = meta_f32(&[4, 8]).partition([2, 4]).map([2, 2], 4);
+        assert_eq!(KernelOutputStored::strides(&mapped_owned), &[8, 1]);
+
+        let mut tensor = meta_f32(&[4, 8]);
+        let mapped_borrowed = (&mut tensor).partition([2, 4]).map([2, 2], 4);
+        assert_eq!(KernelOutputStored::strides(&mapped_borrowed), &[8, 1]);
     }
 
     #[test]

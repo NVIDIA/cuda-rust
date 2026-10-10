@@ -503,6 +503,7 @@ pub fn generate_entry_point(
                         final_stmnt_args.push(tensor_input.generate_arg());
                         fn_entry.sig.inputs.extend(tensor_input.generate_args());
                         fn_params_concrete_types.push(ValidParamType::Tensor(TensorParamType {
+                            strides: stride_args[&tensor_input.var_name].clone(),
                             element_type: tensor_input.element_type,
                             shape: tensor_input
                                 .input_tensor_shape
@@ -541,6 +542,7 @@ pub fn generate_entry_point(
                             fn_entry.sig.inputs.extend(tensor_input.generate_args());
                             fn_params_concrete_types.push(ValidParamType::Tensor(
                                 TensorParamType {
+                                    strides: stride_args[&tensor_input.var_name].clone(),
                                     element_type: tensor_input.element_type,
                                     shape: tensor_input
                                         .input_tensor_shape

@@ -750,3 +750,66 @@ fn generated_dot_product_floors_record_sm61_and_split_backend_support() {
         ));
     }
 }
+
+#[test]
+fn generated_m16n8k8_mma_floors_admit_turing_only_for_fp16() {
+    use crate::generated_intrinsic_targets::{
+        GeneratedIntrinsicBackend, generated_intrinsic_target_by_marker,
+    };
+
+    let backends = [
+        GeneratedIntrinsicBackend::LlvmNvptx,
+        GeneratedIntrinsicBackend::LibNvvm,
+    ];
+    // mma_m16n8k8_f16_f16 and mma_m16n8k8_f32_f16
+    for marker in ["v1:i0521", "v1:i0523"] {
+        let target = generated_intrinsic_target_by_marker(marker).unwrap();
+        for backend in backends {
+            let generated =
+                GeneratedModuleRequirements::from_targets(vec![target]).for_backend(backend);
+            assert_eq!(
+                generated_ptx_isa_requirement(&generated).unwrap(),
+                PtxIsaRequirement::new(65),
+                "{marker} {backend:?}"
+            );
+            assert!(
+                !generated_target_satisfied(&"sm_72".parse().unwrap(), &generated),
+                "{marker} {backend:?}"
+            );
+            for arch in ["sm_75", "sm_80"] {
+                assert!(
+                    generated_target_satisfied(&arch.parse().unwrap(), &generated),
+                    "{marker} {backend:?} {arch}"
+                );
+            }
+            validate_generated_target(&"sm_75".parse().unwrap(), &generated).unwrap();
+        }
+    }
+
+    // mma_m16n8k8_f32_bf16 and mma_m16n8k8_f32_tf32 keep the Ampere floor even
+    // though LLVM selects them at sm_75
+    for marker in ["v1:i0522", "v1:i0107"] {
+        let target = generated_intrinsic_target_by_marker(marker).unwrap();
+        for backend in backends {
+            let generated =
+                GeneratedModuleRequirements::from_targets(vec![target]).for_backend(backend);
+            assert_eq!(
+                generated_ptx_isa_requirement(&generated).unwrap(),
+                PtxIsaRequirement::new(70),
+                "{marker} {backend:?}"
+            );
+            assert!(
+                !generated_target_satisfied(&"sm_75".parse().unwrap(), &generated),
+                "{marker} {backend:?}"
+            );
+            assert!(
+                generated_target_satisfied(&"sm_80".parse().unwrap(), &generated),
+                "{marker} {backend:?}"
+            );
+            let error =
+                validate_generated_target(&"sm_75".parse().unwrap(), &generated).unwrap_err();
+            assert!(error.contains(target.id), "{error}");
+            assert!(error.contains("sm_80 or newer"), "{error}");
+        }
+    }
+}

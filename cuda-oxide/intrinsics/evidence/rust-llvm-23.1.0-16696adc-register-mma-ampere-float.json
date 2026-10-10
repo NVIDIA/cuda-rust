@@ -16,7 +16,7 @@
   "fixtures": [
     {
       "id": "ampere_dense_float_mma_all",
-      "coverage_count": 5,
+      "coverage_count": 3,
       "stages": [
         {
           "targets": ["sm_80", "ptx70"],
@@ -42,6 +42,40 @@
           "outcome": "succeeded",
           "artifact_kind": "cubin",
           "detail": "CUDA 13.3 ptxas accepted all five forms and produced an 11048-byte cubin with SHA-256 c09d14bf15e6954e1d506e002f53eba2aa3e770bf501ba43346d28587203dc29.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "CUDA 13.3 V13.3.33 build cuda_13.3.r13.3/compiler.37862127_0",
+          "tool_sha256": "7fdd01a4cf50e30746da98989c9272a907f491e6fd7fecfda14642e4375f88fb"
+        }
+      ]
+    },
+    {
+      "id": "turing_dense_f16_mma_m16n8k8",
+      "coverage_count": 2,
+      "stages": [
+        {
+          "targets": ["sm_75", "ptx65"],
+          "representation": "two typed LLVM declarations and duplicate-call probes",
+          "stage": "declaration_canonicalization",
+          "mechanism": "typed_nvvm",
+          "outcome": "succeeded",
+          "detail": "LLVM canonicalized both FP16 m16n8k8 declarations to nocallback nounwind memory(none) without convergent. The 1578-byte source and 1834-byte canonical IR have SHA-256 69324c6a717729ca3c51f4df2c124298a4774a62fa7eef9693619a6be07ab4e5 and 231031c46b8917463fda1b01934ac70893d08c1cee78ae936fdd192bd692f068. O2 merged four typed calls to two, while four convergent side-effecting inline calls remained four; the typed output hash is ecbb29d8af5b7d47929293b70d179b9b784cf9ca413fc628f567c166bd72f1d3, and the inline source/output hashes are 6956b04f6bd51bfd9a2d34edd81b8e17bfc63e2a36ea02a722ed3d582fe7d27a and a6a6856cbfb184c6c0c9bea154f7bffd75b50f3866ed2ed77d31e38ce2268f42."
+        },
+        {
+          "targets": ["sm_75", "ptx65"],
+          "representation": "two convergent side-effecting register-only inline PTX calls",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Pinned LLVM emitted each exact FP16 m16n8k8 form once in 1712-byte PTX 6.5 / sm_75 output with SHA-256 65ec762767bd6cb663cdaef973f241e7709ad710c603f70ecf058643548b2a6a from a 1549-byte kernel fixture with SHA-256 ffafdd6225e7e2897f8f45afc0505f041131c215702223c513f4005143e9835d. The llc binary was the aarch64-apple-darwin build of the same toolchain, SHA-256 2e01bcad3158362e62f1e5f7a5f9c260727b86b4f5375a66f95be63372e6e1ec."
+        },
+        {
+          "targets": ["sm_75", "ptx65"],
+          "representation": "aggregate inline-PTX FP16 MMA fixture at the Turing floor",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "CUDA 13.3 ptxas accepted both forms for sm_75 and produced a 3496-byte cubin with SHA-256 0e4802819588f9ddcbedc4f5f46a999edfc0bd27187539c630e3db309237e240.",
           "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
           "tool_version": "CUDA 13.3 V13.3.33 build cuda_13.3.r13.3/compiler.37862127_0",
           "tool_sha256": "7fdd01a4cf50e30746da98989c9272a907f491e6fd7fecfda14642e4375f88fb"
@@ -84,7 +118,7 @@
     {
       "axes": [{"name": "variant", "values": ["mma_m16n8k8_f16_f16"]}],
       "product_count": 1,
-      "fixtures": ["ampere_dense_float_mma_all"],
+      "fixtures": ["turing_dense_f16_mma_m16n8k8"],
       "template": {
         "id": "${variant}",
         "source_record": "int_nvvm_mma_m16n8k8_row_col_f16_f16",
@@ -95,6 +129,8 @@
           "operands": [{"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 1}, {"kind": "register_list", "length": 2}]
         },
         "facts": {
+          "gpu_target": "sm_75",
+          "ptx_feature": "+ptx65",
           "llvm_arguments": ["v2f16", "v2f16", "v2f16", "v2f16", "v2f16"],
           "llvm_results": ["v2f16", "v2f16"],
           "concrete_llvm_arguments": ["v2f16", "v2f16", "v2f16", "v2f16", "v2f16"],
@@ -136,7 +172,7 @@
     {
       "axes": [{"name": "variant", "values": ["mma_m16n8k8_f32_f16"]}],
       "product_count": 1,
-      "fixtures": ["ampere_dense_float_mma_all"],
+      "fixtures": ["turing_dense_f16_mma_m16n8k8"],
       "template": {
         "id": "${variant}",
         "source_record": "int_nvvm_mma_m16n8k8_row_col_f32_f32",
@@ -147,6 +183,8 @@
           "operands": [{"kind": "register_list", "length": 4}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 1}, {"kind": "register_list", "length": 4}]
         },
         "facts": {
+          "gpu_target": "sm_75",
+          "ptx_feature": "+ptx65",
           "llvm_arguments": ["v2f16", "v2f16", "v2f16", "f32", "f32", "f32", "f32"],
           "llvm_results": ["f32", "f32", "f32", "f32"],
           "concrete_llvm_arguments": ["v2f16", "v2f16", "v2f16", "f32", "f32", "f32", "f32"],

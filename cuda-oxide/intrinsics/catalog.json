@@ -31,7 +31,7 @@
       "cuda-13.3-libnvvm-13.3.33-packed-conversion-fp8-f16x2.json:4e1c360c16059f862409d3e6b73182ca0fcebf8b499068845aa0f49d7facc7eb",
       "cuda-13.3-libnvvm-13.3.33-packed-conversion-fp8.json:167358662f1512c6ca7dba1080140834a22f5e122ae5e8db87fe8e19ff05ad9b",
       "cuda-13.3-libnvvm-13.3.33-prmt.json:e06d8b99575304ab780b58f665babfb7d24dfd2f57e1a9b5eac420208022520c",
-      "cuda-13.3-libnvvm-13.3.33-register-mma-ampere-float.json:0d21e02f6d481667707c2b00ecd63f05a985f1b46c39839f95b6e67fa36eb566",
+      "cuda-13.3-libnvvm-13.3.33-register-mma-ampere-float.json:39007045e58265962e139a571845eb70845452cdac52750b259b4da37d782980",
       "cuda-13.3-libnvvm-13.3.33-register-mma-b1.json:e7974bf639d1957d7115ebb74308611d130daa814f13a408d440e953bc466bee",
       "cuda-13.3-libnvvm-13.3.33-register-mma-f8f6f4-f16.json:c0bdcb899d00b78c78b12dabb4ab6cad713c06c88e4820db8612af8e9416569a",
       "cuda-13.3-libnvvm-13.3.33-register-mma-f8f6f4-f32.json:6f273b30f4e9a6666a8d175f9daa09f62bd4226104b85ac962f5d47237cc85b0",
@@ -92,7 +92,7 @@
       "rust-llvm-23.1.0-16696adc-packed-conversion-fp8.json:5d14d86b3ee6e17bcf6b07647c686649e97a27cc06dd45d8c31307b4705c4564",
       "rust-llvm-23.1.0-16696adc-prmt.json:69847316bd21a159daed299392114df5d9596faa93d5a2dfee9e12003f7b20cc",
       "rust-llvm-23.1.0-16696adc-redux-f32.json:54a42cc223a9c0bae1638c89f2327e6cc889b0cd046be8f406fed9a809e37ee7",
-      "rust-llvm-23.1.0-16696adc-register-mma-ampere-float.json:f12382d3cb8ec45337311206324f35d76051dab36f6973643ce56478c2d060e5",
+      "rust-llvm-23.1.0-16696adc-register-mma-ampere-float.json:d485f39c459f23a7d2604ca774f5eb97c8336a9e5b782a80cf2b716804a95dd8",
       "rust-llvm-23.1.0-16696adc-register-mma-b1.json:629f2dd9244ce6a58c09e39ceac4f62c9d3b054a108447eeee0f82a29d7d524f",
       "rust-llvm-23.1.0-16696adc-register-mma-f8f6f4-f16.json:f8f165a733b58fe84dd397a7113ff79cac046c8417ca2702eb4384c8289e9f3c",
       "rust-llvm-23.1.0-16696adc-register-mma-f8f6f4-f32.json:a32d0b8c44f3cc90516dc9ccb838c6fa3dbdb3b41f0906c17cdb994f3dcb0770",
@@ -171483,13 +171483,13 @@
         "execution_scope": "warp"
       },
       "target": {
-        "minimum_ptx": "7.0",
+        "minimum_ptx": "6.5",
         "hardware": {
           "kind": "any_of",
           "alternatives": [
             {
               "kind": "minimum_sm",
-              "sm": 80
+              "sm": 75
             }
           ]
         },
@@ -171505,8 +171505,8 @@
         "sha256": "2e5bc688625ca7d98bca9b5f0f0d14525d2eb59e8a9842964e480df3ffd1f921",
         "status": "validated",
         "target_triple": "nvptx64-nvidia-cuda",
-        "gpu_target": "sm_80",
-        "ptx_feature": "+ptx70"
+        "gpu_target": "sm_75",
+        "ptx_feature": "+ptx65"
       },
       "backend_lowerings": [
         {
@@ -171514,13 +171514,13 @@
           "mechanism": "inline_ptx",
           "evidence_profile": "rust-llvm-23.1.0-16696adc",
           "target": {
-            "minimum_ptx": "7.0",
+            "minimum_ptx": "6.5",
             "hardware": {
               "kind": "any_of",
               "alternatives": [
                 {
                   "kind": "minimum_sm",
-                  "sm": 80
+                  "sm": 75
                 }
               ]
             }
@@ -171533,14 +171533,14 @@
           "stages": [
             {
               "targets": [
-                "sm_80",
-                "ptx70"
+                "sm_75",
+                "ptx65"
               ],
-              "representation": "five typed LLVM declarations and duplicate-call probes",
+              "representation": "two typed LLVM declarations and duplicate-call probes",
               "stage": "declaration_canonicalization",
               "mechanism": "typed_nvvm",
               "outcome": "succeeded",
-              "detail": "LLVM canonicalized the five declarations to nocallback nounwind memory(none) without convergent. The 6254-byte source and 6413-byte canonical IR have SHA-256 883f351fb1d6eebd787e1312c2365c2dd5ff5a4ad852a6a8ee71901b3dc2ee16 and 20c9a527d322dea1f871debfa500120cccdb8ab1174fa73403f6bfc0f57a1992. O2 merged ten typed calls to five, while ten convergent side-effecting inline calls remained ten; the typed source/output hashes are 139d3203e4622002bf662064a1e83e7c1b4a8c57a82854bfd24fb7a7831d2e88 and cd57bd9a4f2204f7bd69b71fde7e709e183d7815e9e708c786d9c3dd7e087ac8, and the inline hashes are 21548f313f29c146ea089c082ccf5903ac17777dddd7bd663dbd9b59ea53720c and 040d2cc2dc6029aa767212a4b44cfd430c557ee81c2e76bb5ffa740a0a3cd691.",
+              "detail": "LLVM canonicalized both FP16 m16n8k8 declarations to nocallback nounwind memory(none) without convergent. The 1578-byte source and 1834-byte canonical IR have SHA-256 69324c6a717729ca3c51f4df2c124298a4774a62fa7eef9693619a6be07ab4e5 and 231031c46b8917463fda1b01934ac70893d08c1cee78ae936fdd192bd692f068. O2 merged four typed calls to two, while four convergent side-effecting inline calls remained four; the typed output hash is ecbb29d8af5b7d47929293b70d179b9b784cf9ca413fc628f567c166bd72f1d3, and the inline source/output hashes are 6956b04f6bd51bfd9a2d34edd81b8e17bfc63e2a36ea02a722ed3d582fe7d27a and a6a6856cbfb184c6c0c9bea154f7bffd75b50f3866ed2ed77d31e38ce2268f42.",
               "artifact_kind": null,
               "tool_path": null,
               "tool_version": null,
@@ -171548,14 +171548,14 @@
             },
             {
               "targets": [
-                "sm_80",
-                "ptx70"
+                "sm_75",
+                "ptx65"
               ],
-              "representation": "five convergent side-effecting register-only inline PTX calls",
+              "representation": "two convergent side-effecting register-only inline PTX calls",
               "stage": "backend_codegen",
               "mechanism": "inline_ptx",
               "outcome": "succeeded",
-              "detail": "Pinned LLVM emitted each exact MMA form once in 7366-byte PTX with SHA-256 4da1521d328388d9b779f0f070db4d51fe65127288f62a1d69c09834d444f610. The typed comparison fixture also emitted all five forms, but is not selected because it lacks convergence.",
+              "detail": "Pinned LLVM emitted each exact FP16 m16n8k8 form once in 1712-byte PTX 6.5 / sm_75 output with SHA-256 65ec762767bd6cb663cdaef973f241e7709ad710c603f70ecf058643548b2a6a from a 1549-byte kernel fixture with SHA-256 ffafdd6225e7e2897f8f45afc0505f041131c215702223c513f4005143e9835d. The llc binary was the aarch64-apple-darwin build of the same toolchain, SHA-256 2e01bcad3158362e62f1e5f7a5f9c260727b86b4f5375a66f95be63372e6e1ec.",
               "artifact_kind": null,
               "tool_path": null,
               "tool_version": null,
@@ -171563,14 +171563,14 @@
             },
             {
               "targets": [
-                "sm_80",
-                "ptx70"
+                "sm_75",
+                "ptx65"
               ],
-              "representation": "aggregate inline-PTX MMA fixture at the admission floor",
+              "representation": "aggregate inline-PTX FP16 MMA fixture at the Turing floor",
               "stage": "ptx_assembly",
               "mechanism": "inline_ptx",
               "outcome": "succeeded",
-              "detail": "CUDA 13.3 ptxas accepted all five forms and produced an 11048-byte cubin with SHA-256 c09d14bf15e6954e1d506e002f53eba2aa3e770bf501ba43346d28587203dc29.",
+              "detail": "CUDA 13.3 ptxas accepted both forms for sm_75 and produced a 3496-byte cubin with SHA-256 0e4802819588f9ddcbedc4f5f46a999edfc0bd27187539c630e3db309237e240.",
               "artifact_kind": "cubin",
               "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
               "tool_version": "CUDA 13.3 V13.3.33 build cuda_13.3.r13.3/compiler.37862127_0",
@@ -171583,13 +171583,13 @@
           "mechanism": "inline_ptx",
           "evidence_profile": "cuda-13.3-libnvvm-13.3.33",
           "target": {
-            "minimum_ptx": "7.0",
+            "minimum_ptx": "6.5",
             "hardware": {
               "kind": "any_of",
               "alternatives": [
                 {
                   "kind": "minimum_sm",
-                  "sm": 80
+                  "sm": 75
                 }
               ]
             }
@@ -171602,14 +171602,14 @@
           "stages": [
             {
               "targets": [
-                "compute_80",
+                "compute_75",
                 "ptx93"
               ],
-              "representation": "five convergent side-effecting register-only inline PTX calls",
+              "representation": "two convergent side-effecting register-only inline PTX calls",
               "stage": "backend_codegen",
               "mechanism": "inline_ptx",
               "outcome": "succeeded",
-              "detail": "CUDA 13.3 libNVVM compiled the 5775-byte typed-pointer IR fixture with SHA-256 42a32e7fc0a6d40513480eff6d1fef5603bd2dc07621b1a1e3d8d946dac1f8e6. It emitted all five forms once in 6449-byte PTX with SHA-256 b7d87c4199fa520ab749fe1dd8f3b37a3b6685c9a7a9e1c8cebbf99342d2bd50 and 3676-byte LTOIR with SHA-256 582cd60f2d911bc38214437d619a334cb8e5cb96d6ec811329866aea4d027855.",
+              "detail": "CUDA 13.3 libNVVM compiled the 2131-byte typed-pointer IR fixture with SHA-256 9894bea9e6f999978fe093f8534c3d149a0eb22c0d98e70210c09c1963de3c9e for compute_75. It emitted both FP16 m16n8k8 forms once in 1718-byte PTX with SHA-256 ece5ab9797d9a63d44022f7552d0a36bd548cd1a295cbf75677643f898cdc2f8 and 2296-byte LTOIR with SHA-256 ef73a3460da139697a0fe2c694086baf843390de3b42f7e8a71010d709d7b6ae.",
               "artifact_kind": null,
               "tool_path": null,
               "tool_version": null,
@@ -171617,14 +171617,14 @@
             },
             {
               "targets": [
-                "sm_80",
+                "sm_75",
                 "ptx93"
               ],
-              "representation": "libNVVM Ampere floating MMA PTX",
+              "representation": "libNVVM Turing FP16 MMA PTX",
               "stage": "ptx_assembly",
               "mechanism": "inline_ptx",
               "outcome": "succeeded",
-              "detail": "CUDA 13.3 ptxas produced an 11048-byte cubin with SHA-256 e89808e3781dfa9b928f239cf2943777417f6ad789fb6c10f6981777aff6d4ff.",
+              "detail": "CUDA 13.3 ptxas produced a 3496-byte cubin with SHA-256 a2b9a624a0c882c9d2e3d52a5e6dfdcef52c8e4022fbcfd9af92a443ad645b72.",
               "artifact_kind": "cubin",
               "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
               "tool_version": "CUDA 13.3 V13.3.33 build cuda_13.3.r13.3/compiler.37862127_0",
@@ -171632,14 +171632,14 @@
             },
             {
               "targets": [
-                "sm_80",
+                "sm_75",
                 "ptx93"
               ],
-              "representation": "libNVVM LTOIR retaining all five MMA forms",
+              "representation": "libNVVM LTOIR retaining both FP16 MMA forms",
               "stage": "device_link",
               "mechanism": "inline_ptx",
               "outcome": "succeeded",
-              "detail": "nvJitLink produced an 11048-byte cubin with SHA-256 1d242578ce7378f849df0dbcd28bd43a60af64b7f76359b7e5510ecd23a14572. Its 52dc9bf332bdb595b2910550d95f0d0f8c44477440c52977bcc6b0699cecffcb SASS dump contains exactly HMMA.1684.F32.TF32, HMMA.1688.F16, HMMA.1688.F32.BF16, HMMA.1688.F32, and HMMA.16816.F16.",
+              "detail": "nvJitLink produced a 3496-byte cubin with SHA-256 9186009b65f7b3eebca713be6e4d36a1d47e2b6b29d11e7f16f703f696833a12. Its cd6155aec2e5e1b42255777d11f9cea3a49c8d2bd037ab213e8f3bad7277268b SASS dump contains exactly HMMA.1688.F16 and HMMA.1688.F32.",
               "artifact_kind": "cubin",
               "tool_path": "/usr/local/cuda-13.3/lib64/libnvJitLink.so.13.3.33",
               "tool_version": "V13.3.33",
@@ -172104,13 +172104,13 @@
         "execution_scope": "warp"
       },
       "target": {
-        "minimum_ptx": "7.0",
+        "minimum_ptx": "6.5",
         "hardware": {
           "kind": "any_of",
           "alternatives": [
             {
               "kind": "minimum_sm",
-              "sm": 80
+              "sm": 75
             }
           ]
         },
@@ -172126,8 +172126,8 @@
         "sha256": "2e5bc688625ca7d98bca9b5f0f0d14525d2eb59e8a9842964e480df3ffd1f921",
         "status": "validated",
         "target_triple": "nvptx64-nvidia-cuda",
-        "gpu_target": "sm_80",
-        "ptx_feature": "+ptx70"
+        "gpu_target": "sm_75",
+        "ptx_feature": "+ptx65"
       },
       "backend_lowerings": [
         {
@@ -172135,13 +172135,13 @@
           "mechanism": "inline_ptx",
           "evidence_profile": "rust-llvm-23.1.0-16696adc",
           "target": {
-            "minimum_ptx": "7.0",
+            "minimum_ptx": "6.5",
             "hardware": {
               "kind": "any_of",
               "alternatives": [
                 {
                   "kind": "minimum_sm",
-                  "sm": 80
+                  "sm": 75
                 }
               ]
             }
@@ -172154,14 +172154,14 @@
           "stages": [
             {
               "targets": [
-                "sm_80",
-                "ptx70"
+                "sm_75",
+                "ptx65"
               ],
-              "representation": "five typed LLVM declarations and duplicate-call probes",
+              "representation": "two typed LLVM declarations and duplicate-call probes",
               "stage": "declaration_canonicalization",
               "mechanism": "typed_nvvm",
               "outcome": "succeeded",
-              "detail": "LLVM canonicalized the five declarations to nocallback nounwind memory(none) without convergent. The 6254-byte source and 6413-byte canonical IR have SHA-256 883f351fb1d6eebd787e1312c2365c2dd5ff5a4ad852a6a8ee71901b3dc2ee16 and 20c9a527d322dea1f871debfa500120cccdb8ab1174fa73403f6bfc0f57a1992. O2 merged ten typed calls to five, while ten convergent side-effecting inline calls remained ten; the typed source/output hashes are 139d3203e4622002bf662064a1e83e7c1b4a8c57a82854bfd24fb7a7831d2e88 and cd57bd9a4f2204f7bd69b71fde7e709e183d7815e9e708c786d9c3dd7e087ac8, and the inline hashes are 21548f313f29c146ea089c082ccf5903ac17777dddd7bd663dbd9b59ea53720c and 040d2cc2dc6029aa767212a4b44cfd430c557ee81c2e76bb5ffa740a0a3cd691.",
+              "detail": "LLVM canonicalized both FP16 m16n8k8 declarations to nocallback nounwind memory(none) without convergent. The 1578-byte source and 1834-byte canonical IR have SHA-256 69324c6a717729ca3c51f4df2c124298a4774a62fa7eef9693619a6be07ab4e5 and 231031c46b8917463fda1b01934ac70893d08c1cee78ae936fdd192bd692f068. O2 merged four typed calls to two, while four convergent side-effecting inline calls remained four; the typed output hash is ecbb29d8af5b7d47929293b70d179b9b784cf9ca413fc628f567c166bd72f1d3, and the inline source/output hashes are 6956b04f6bd51bfd9a2d34edd81b8e17bfc63e2a36ea02a722ed3d582fe7d27a and a6a6856cbfb184c6c0c9bea154f7bffd75b50f3866ed2ed77d31e38ce2268f42.",
               "artifact_kind": null,
               "tool_path": null,
               "tool_version": null,
@@ -172169,14 +172169,14 @@
             },
             {
               "targets": [
-                "sm_80",
-                "ptx70"
+                "sm_75",
+                "ptx65"
               ],
-              "representation": "five convergent side-effecting register-only inline PTX calls",
+              "representation": "two convergent side-effecting register-only inline PTX calls",
               "stage": "backend_codegen",
               "mechanism": "inline_ptx",
               "outcome": "succeeded",
-              "detail": "Pinned LLVM emitted each exact MMA form once in 7366-byte PTX with SHA-256 4da1521d328388d9b779f0f070db4d51fe65127288f62a1d69c09834d444f610. The typed comparison fixture also emitted all five forms, but is not selected because it lacks convergence.",
+              "detail": "Pinned LLVM emitted each exact FP16 m16n8k8 form once in 1712-byte PTX 6.5 / sm_75 output with SHA-256 65ec762767bd6cb663cdaef973f241e7709ad710c603f70ecf058643548b2a6a from a 1549-byte kernel fixture with SHA-256 ffafdd6225e7e2897f8f45afc0505f041131c215702223c513f4005143e9835d. The llc binary was the aarch64-apple-darwin build of the same toolchain, SHA-256 2e01bcad3158362e62f1e5f7a5f9c260727b86b4f5375a66f95be63372e6e1ec.",
               "artifact_kind": null,
               "tool_path": null,
               "tool_version": null,
@@ -172184,14 +172184,14 @@
             },
             {
               "targets": [
-                "sm_80",
-                "ptx70"
+                "sm_75",
+                "ptx65"
               ],
-              "representation": "aggregate inline-PTX MMA fixture at the admission floor",
+              "representation": "aggregate inline-PTX FP16 MMA fixture at the Turing floor",
               "stage": "ptx_assembly",
               "mechanism": "inline_ptx",
               "outcome": "succeeded",
-              "detail": "CUDA 13.3 ptxas accepted all five forms and produced an 11048-byte cubin with SHA-256 c09d14bf15e6954e1d506e002f53eba2aa3e770bf501ba43346d28587203dc29.",
+              "detail": "CUDA 13.3 ptxas accepted both forms for sm_75 and produced a 3496-byte cubin with SHA-256 0e4802819588f9ddcbedc4f5f46a999edfc0bd27187539c630e3db309237e240.",
               "artifact_kind": "cubin",
               "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
               "tool_version": "CUDA 13.3 V13.3.33 build cuda_13.3.r13.3/compiler.37862127_0",
@@ -172204,13 +172204,13 @@
           "mechanism": "inline_ptx",
           "evidence_profile": "cuda-13.3-libnvvm-13.3.33",
           "target": {
-            "minimum_ptx": "7.0",
+            "minimum_ptx": "6.5",
             "hardware": {
               "kind": "any_of",
               "alternatives": [
                 {
                   "kind": "minimum_sm",
-                  "sm": 80
+                  "sm": 75
                 }
               ]
             }
@@ -172223,14 +172223,14 @@
           "stages": [
             {
               "targets": [
-                "compute_80",
+                "compute_75",
                 "ptx93"
               ],
-              "representation": "five convergent side-effecting register-only inline PTX calls",
+              "representation": "two convergent side-effecting register-only inline PTX calls",
               "stage": "backend_codegen",
               "mechanism": "inline_ptx",
               "outcome": "succeeded",
-              "detail": "CUDA 13.3 libNVVM compiled the 5775-byte typed-pointer IR fixture with SHA-256 42a32e7fc0a6d40513480eff6d1fef5603bd2dc07621b1a1e3d8d946dac1f8e6. It emitted all five forms once in 6449-byte PTX with SHA-256 b7d87c4199fa520ab749fe1dd8f3b37a3b6685c9a7a9e1c8cebbf99342d2bd50 and 3676-byte LTOIR with SHA-256 582cd60f2d911bc38214437d619a334cb8e5cb96d6ec811329866aea4d027855.",
+              "detail": "CUDA 13.3 libNVVM compiled the 2131-byte typed-pointer IR fixture with SHA-256 9894bea9e6f999978fe093f8534c3d149a0eb22c0d98e70210c09c1963de3c9e for compute_75. It emitted both FP16 m16n8k8 forms once in 1718-byte PTX with SHA-256 ece5ab9797d9a63d44022f7552d0a36bd548cd1a295cbf75677643f898cdc2f8 and 2296-byte LTOIR with SHA-256 ef73a3460da139697a0fe2c694086baf843390de3b42f7e8a71010d709d7b6ae.",
               "artifact_kind": null,
               "tool_path": null,
               "tool_version": null,
@@ -172238,14 +172238,14 @@
             },
             {
               "targets": [
-                "sm_80",
+                "sm_75",
                 "ptx93"
               ],
-              "representation": "libNVVM Ampere floating MMA PTX",
+              "representation": "libNVVM Turing FP16 MMA PTX",
               "stage": "ptx_assembly",
               "mechanism": "inline_ptx",
               "outcome": "succeeded",
-              "detail": "CUDA 13.3 ptxas produced an 11048-byte cubin with SHA-256 e89808e3781dfa9b928f239cf2943777417f6ad789fb6c10f6981777aff6d4ff.",
+              "detail": "CUDA 13.3 ptxas produced a 3496-byte cubin with SHA-256 a2b9a624a0c882c9d2e3d52a5e6dfdcef52c8e4022fbcfd9af92a443ad645b72.",
               "artifact_kind": "cubin",
               "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
               "tool_version": "CUDA 13.3 V13.3.33 build cuda_13.3.r13.3/compiler.37862127_0",
@@ -172253,14 +172253,14 @@
             },
             {
               "targets": [
-                "sm_80",
+                "sm_75",
                 "ptx93"
               ],
-              "representation": "libNVVM LTOIR retaining all five MMA forms",
+              "representation": "libNVVM LTOIR retaining both FP16 MMA forms",
               "stage": "device_link",
               "mechanism": "inline_ptx",
               "outcome": "succeeded",
-              "detail": "nvJitLink produced an 11048-byte cubin with SHA-256 1d242578ce7378f849df0dbcd28bd43a60af64b7f76359b7e5510ecd23a14572. Its 52dc9bf332bdb595b2910550d95f0d0f8c44477440c52977bcc6b0699cecffcb SASS dump contains exactly HMMA.1684.F32.TF32, HMMA.1688.F16, HMMA.1688.F32.BF16, HMMA.1688.F32, and HMMA.16816.F16.",
+              "detail": "nvJitLink produced a 3496-byte cubin with SHA-256 9186009b65f7b3eebca713be6e4d36a1d47e2b6b29d11e7f16f703f696833a12. Its cd6155aec2e5e1b42255777d11f9cea3a49c8d2bd037ab213e8f3bad7277268b SASS dump contains exactly HMMA.1688.F16 and HMMA.1688.F32.",
               "artifact_kind": "cubin",
               "tool_path": "/usr/local/cuda-13.3/lib64/libnvJitLink.so.13.3.33",
               "tool_version": "V13.3.33",

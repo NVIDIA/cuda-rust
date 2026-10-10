@@ -800,8 +800,10 @@ pub(in crate::resolve) fn register_mma_recipe(mma: &RegisterMma) -> Option<Regis
             llvm_results: &["v2f16", "v2f16"],
             adapter: C2U32A2U32B1U32ToD2U32,
             compatibility_source: RegisterMmaCompatibilitySource::GeneratedStub,
-            minimum_ptx: "7.0",
-            minimum_sm: "sm_80",
+            // PTX 6.5 added m16n8k8 with f16 inputs for sm_75; the BF16 and TF32
+            // m16n8k8 forms share LLVM's sm_75 predicate but need sm_80
+            minimum_ptx: "6.5",
+            minimum_sm: "sm_75",
             ptx_modifiers: vec![
                 "sync", "aligned", "m16n8k8", "row", "col", "f16", "f16", "f16", "f16",
             ],
@@ -862,8 +864,8 @@ pub(in crate::resolve) fn register_mma_recipe(mma: &RegisterMma) -> Option<Regis
             llvm_results: &["f32", "f32", "f32", "f32"],
             adapter: C4F32A2U32B1U32ToD4F32,
             compatibility_source: RegisterMmaCompatibilitySource::GeneratedStub,
-            minimum_ptx: "7.0",
-            minimum_sm: "sm_80",
+            minimum_ptx: "6.5",
+            minimum_sm: "sm_75",
             ptx_modifiers: vec![
                 "sync", "aligned", "m16n8k8", "row", "col", "f32", "f16", "f16", "f32",
             ],

@@ -231,3 +231,42 @@ fn scoped_global_operations_do_not_add_fences() {
         }
     });
 }
+
+#[test]
+fn unsigned_global_initializers_preserve_bits_and_reject_overflow() {
+    common::with_test_stack(|| {
+        for (atomic, ty, max, overflow, bytes) in [
+            ("AtomicU32", "u32", "4294967295", "4294967296", 4),
+            (
+                "AtomicU64",
+                "u64",
+                "18446744073709551615",
+                "18446744073709551616",
+                8,
+            ),
+        ] {
+            let source = probe_source(
+                atomic,
+                ty,
+                "let _ = VALUE.load(ordering::Relaxed, scope::Device);",
+            );
+            let source = source.replace(&format!("0{ty}"), &format!("{max}{ty}"));
+            let artifacts = cutile::compile_api::KernelCompiler::new(
+                || cutile_compiler::ast::Module::new("probe", syn::parse_str(&source).unwrap()),
+                "probe",
+                "kernel",
+            )
+            .strides(&[("out", &[1])])
+            .target("sm_80")
+            .compile()
+            .unwrap();
+            assert_eq!(artifacts.module().globals[0].value.data, vec![255; bytes]);
+            artifacts
+                .bytecode()
+                .expect("global initializer should serialize");
+            let invalid = source.replace(max, overflow);
+            let error = compile_probe(&invalid).unwrap_err();
+            assert!(error.to_string().contains("out of range"), "{error}");
+        }
+    });
+}

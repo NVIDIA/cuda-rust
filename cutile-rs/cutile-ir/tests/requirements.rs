@@ -141,7 +141,7 @@ fn documented_matrices_match_the_registry() {
         ),
     ] {
         let path = root.join(file);
-        let text = std::fs::read_to_string(path).unwrap();
+        let text = std::fs::read_to_string(path).unwrap().replace("\r\n", "\n");
         let actual = text
             .split(&format!("<!-- BEGIN {marker} -->\n"))
             .nth(1)

@@ -14,9 +14,10 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use reserved_oxide_symbols::{DEVICE_EXTERN_PREFIX, DEVICE_PREFIX, constant_symbol};
 use syn::{
-    ForeignItem, Ident, ItemFn, ItemForeignMod, LitStr, Token,
+    ForeignItem, Ident, ItemFn, ItemForeignMod, LitStr, Meta, Token,
     parse::{Parse, ParseStream},
     parse_macro_input,
+    punctuated::Punctuated,
 };
 
 struct ConstantArgs {
@@ -115,7 +116,7 @@ pub(crate) fn device_entry(_attr: TokenStream, item: TokenStream) -> TokenStream
 /// Handles both non-generic and generic device functions:
 /// - **Non-generic**: `#[no_mangle]` on the prefixed function, `#[inline(always)]` wrapper.
 /// - **Generic**: No `#[no_mangle]` (generics use mangled symbols), `#[inline(never)]` on
-///   the prefixed function (so monomorphizations appear in CGUs for the collector),
+///   the prefixed function by default (so monomorphizations appear in CGUs for the collector),
 ///   `#[inline(always)]` wrapper with generics + turbofish forwarding.
 ///
 /// This mirrors the pattern used by `#[kernel]` for generic kernels
@@ -161,7 +162,7 @@ fn generate_device_function(mut input: ItemFn) -> TokenStream {
         //   monomorphization (e.g., `cuda_oxide_device_<hash>_add::<f32>` gets a
         //   unique mangled name). #[no_mangle] requires a single concrete symbol.
         //
-        // - #[inline(never)] on the prefixed function — ensures each monomorphization
+        // - #[inline(never)] on the prefixed function by default — ensures each monomorphization
         //   appears as a distinct CGU item so the collector can find it. If it were
         //   inlined, the function would disappear from the CGU.
         //
@@ -177,8 +178,14 @@ fn generate_device_function(mut input: ItemFn) -> TokenStream {
             call
         };
 
+        let has_inline_policy = input
+            .attrs
+            .iter()
+            .any(|attr| sets_inline_policy(&attr.meta));
+        let default_inline = (!has_inline_policy).then(|| quote! { #[inline(never)] });
+
         let expanded = quote! {
-            #[inline(never)]
+            #default_inline
             #input
 
             /// Wrapper for the generic device function with the original name.
@@ -209,6 +216,17 @@ fn generate_device_function(mut input: ItemFn) -> TokenStream {
         };
 
         TokenStream::from(expanded)
+    }
+}
+
+/// Returns `true` if `meta` is an `inline` attribute or a `cfg_attr` that
+/// contains an `inline` attribute.
+pub(crate) fn sets_inline_policy(meta: &Meta) -> bool {
+    match meta {
+        Meta::List(list) if list.path.is_ident("cfg_attr") => list
+            .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+            .is_ok_and(|metas| metas.iter().skip(1).any(sets_inline_policy)),
+        _ => meta.path().is_ident("inline"),
     }
 }
 

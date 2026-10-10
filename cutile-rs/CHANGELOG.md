@@ -100,6 +100,26 @@ paths have lower overhead.
 
 ### Changed
 
+- Dropping an in-flight `DeviceFuture` no longer blocks the dropping thread.
+  The result handle is released immediately; the execution context, whose
+  submission owns every resource the device may still use, is parked with
+  the completion reactor and released on a dedicated reaper thread once a
+  flag write enqueued behind the abandoned work lands. Memory safety is
+  unchanged (nothing the device may write is freed before the stream
+  drains); the blocking wait remains the fallback when the reactor cannot
+  take the context, and the leak-with-report path remains for faulted or
+  capturing streams. `cuda_async::reaper::parked()` and `reaped_total()`
+  expose the outstanding and released counts. Code that used a future's
+  drop as a barrier before touching a buffer through an unchecked path (a
+  raw device pointer handed to another library) must now synchronize.
+
+- `Tensor::store` returns its completion `Token`; `Tensor::token` reads it
+  and unsafe `Tensor::set_token` installs an external dependency. Explicit
+  installation rejects conditional/loop regions, block-local receivers,
+  and subsequent shadowing until token updates use control-flow carries.
+  The raw `set_tensor_token` and `make_partition_view` helpers are unsafe;
+  safe partition helpers continue to preserve the tensor's own token.
+
 - Tile IR compiler, encoder and example/test prerequisites share a capability
   registry with checked documentation tables. Standalone bytecode validation
   uses the JIT's assembler-version negotiation, including the CUDA 13.2

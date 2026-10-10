@@ -561,6 +561,29 @@ Relative backend paths are resolved from the `.cargo` directory containing the
 config file. Each `extra-rustflags` array element remains one rustc argument,
 including values that contain spaces.
 
+Flags that belong to one host CPU, such as `-C target-cpu=...`, go in a
+`[target.<triple>]` table, so one config serves several host architectures:
+
+```toml
+extra-rustflags = ["--cfg", "my_device_cfg"]   # every triple
+
+[target.x86_64-unknown-linux-gnu]
+extra-rustflags = ["-C", "target-cpu=znver3"]
+
+[target.aarch64-unknown-linux-gnu]
+extra-rustflags = ["-C", "target-cpu=native"]
+```
+
+A build gets the top-level list, then the table of the triple it builds for:
+the `--target` passed to `cargo oxide` (before any `--`), else
+`CARGO_BUILD_TARGET`, else the host triple of the project's `rustc -vV`. A
+triple with no table gets the top-level list alone. A config without
+`[target.*]` tables behaves as before. `[build] target` in a Cargo config file
+is not consulted; pass `--target` when you cross-compile. The only field of a
+table is `extra-rustflags`; `cfg(...)` keys and other fields are refused, and
+so are two different `--target` values in one command, since each triple's
+flags would apply to both.
+
 Configuration values are defaults. Precedence is:
 
 1. explicit `cargo oxide` flags and internal artifact paths;

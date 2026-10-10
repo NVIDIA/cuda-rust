@@ -668,6 +668,14 @@ fn active_host_triple() -> Option<String> {
         .find_map(|line| line.strip_prefix("host: ").map(str::to_owned))
 }
 
+/// Host target triple of the rustc that rustup resolves from `dir` (the
+/// process working directory when `None`), as reported by `rustc -vV`.
+pub(crate) fn active_host_triple_in(dir: Option<&Path>) -> Option<String> {
+    fingerprint_from_command(toolchain_fingerprint_command(dir))?
+        .lines()
+        .find_map(|line| line.strip_prefix("host: ").map(str::to_owned))
+}
+
 /// True when the cached backend records a toolchain fingerprint that differs
 /// from the active toolchain. Conservative: if the active fingerprint cannot be
 /// read, or no fingerprint was recorded (a cache predating this check), returns

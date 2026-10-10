@@ -43,6 +43,8 @@ use pliron::{
 };
 use pliron_derive::pliron_op;
 
+use reserved_oxide_symbols::{INLINE_INTENT_ATTR, InlineIntent};
+
 use crate::{
     attributes::ReferenceParamValidityAttr,
     types::{MirPtrType, MirSliceType},
@@ -53,6 +55,11 @@ const REFERENCE_PARAM_VALIDITY_ATTR_PREFIX: &str = "reference_param_validity_";
 fn reference_param_validity_key(index: usize) -> Identifier {
     Identifier::try_new(format!("{REFERENCE_PARAM_VALIDITY_ATTR_PREFIX}{index}"))
         .expect("reference parameter validity attribute name is valid")
+}
+
+fn inline_intent_key() -> Identifier {
+    Identifier::try_new(INLINE_INTENT_ATTR.to_string())
+        .expect("inline intent attribute name is valid")
 }
 
 /// MIR function operation.
@@ -67,6 +74,7 @@ fn reference_param_validity_key(index: usize) -> Identifier {
 /// | `sym_name`     | StringAttr| Function name (from SymbolOpInterface) |
 /// | `mir_func_type`| TypeAttr  | Function type (mir.func_type)      |
 /// | `reference_param_validity_N` | ReferenceParamValidityAttr | Proven reference facts for source argument `N` on a kernel entry |
+/// | `cuda_oxide_inline_intent` | StringAttr | The source `#[inline]` intent as its LLVM keyword ([`InlineIntent`]); never on a kernel |
 /// ```
 ///
 /// # Verification
@@ -143,6 +151,29 @@ impl MirFuncOp {
             .attributes
             .get::<ReferenceParamValidityAttr>(&reference_param_validity_key(index))
             .copied()
+    }
+
+    /// Record the source function's `#[inline]` intent. `mir-lower` turns it
+    /// into the LLVM function attribute; kernels must carry none (verified).
+    pub fn set_inline_intent(&self, ctx: &mut Context, intent: InlineIntent) {
+        self.get_operation().deref_mut(ctx).attributes.set(
+            inline_intent_key(),
+            StringAttr::new(intent.llvm_keyword().to_string()),
+        );
+    }
+
+    /// The recorded `#[inline]` intent; None when the source had none. A value
+    /// naming no intent is an error, never read as "none": dropping a
+    /// `noinline` silently would change the generated code.
+    pub fn inline_intent(&self, ctx: &Context) -> Result<Option<InlineIntent>, String> {
+        let op = self.get_operation().deref(ctx);
+        let Some(value) = op.attributes.get::<StringAttr>(&inline_intent_key()) else {
+            return Ok(None);
+        };
+        let keyword = String::from(value.clone());
+        InlineIntent::from_llvm_keyword(&keyword)
+            .map(Some)
+            .ok_or_else(|| format!("invalid inline intent {keyword:?}"))
     }
 }
 
@@ -250,6 +281,20 @@ impl Verify for MirFuncOp {
         let kernel_key: Identifier = "gpu_kernel".try_into().unwrap();
         let is_kernel = op.attributes.get::<StringAttr>(&kernel_key).is_some();
         let inputs = interface.arg_types();
+
+        // An inline intent names a known keyword and only applies to callees:
+        // a kernel `.entry` is never called, and LLVM rejects inline keywords on it.
+        match self.inline_intent(ctx) {
+            Err(error) => return verify_err!(op.loc(), "MirFuncOp {}", error),
+            Ok(Some(intent)) if is_kernel => {
+                return verify_err!(
+                    op.loc(),
+                    "MirFuncOp inline intent {:?} is not valid on a kernel entry",
+                    intent
+                );
+            }
+            Ok(_) => {}
+        }
 
         for (key, _) in &op.attributes.0 {
             let key_text = key.to_string();

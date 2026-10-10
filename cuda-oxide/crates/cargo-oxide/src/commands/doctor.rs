@@ -817,16 +817,24 @@ const TOOLKIT_ENV_VARS: [&str; 2] = ["CUDA_TOOLKIT_PATH", "CUDA_HOME"];
 /// preference list, not a version sort, and `/usr/local/cuda` is its *last*
 /// entry rather than the default.
 #[cfg(not(windows))]
-pub(super) const DEFAULT_TOOLKIT_CANDIDATES: [&str; 4] = [
+pub(super) const DEFAULT_TOOLKIT_CANDIDATES: [&str; 8] = [
+    "/usr/local/cuda-13.5",
+    "/usr/local/cuda-13.4",
     "/usr/local/cuda-13.3",
     "/usr/local/cuda-13.2",
+    "/usr/local/cuda-13.1",
+    "/usr/local/cuda-13.0",
     "/usr/local/cuda-13",
     "/usr/local/cuda",
 ];
 #[cfg(windows)]
-pub(super) const DEFAULT_TOOLKIT_CANDIDATES: [&str; 2] = [
+pub(super) const DEFAULT_TOOLKIT_CANDIDATES: [&str; 6] = [
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.5",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4",
     r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3",
     r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0",
 ];
 
 /// The floor `cuda-bindings` enforces (`build.rs`, `MIN_CUDA_VERSION`):

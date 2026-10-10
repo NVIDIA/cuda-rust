@@ -71,4 +71,9 @@ require_entry_shape test_dsmem_ring_exchange \
 require_entry_shape test_dsmem_mapped_store \
     "cluster-shared remote store" 'st\.shared::cluster\.'
 
+# Verify the tuple round-trip call before NVVM optimizations.
+# The PTX optimizer may eliminate or inline this call.
+require_ll_shape "tuple round-trip LLVM call" \
+    'call \{ ptr, i64 \} @bounce_cluster_pair\('
+
 echo "cluster code shape: PASS"

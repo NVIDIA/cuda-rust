@@ -15,7 +15,7 @@
 //! Uses unified compilation: single `cargo oxide run cluster`
 
 use core::ptr::{addr_of, addr_of_mut};
-use cuda_device::{DisjointSlice, SharedArray, cluster, cluster_launch, kernel, thread};
+use cuda_device::{DisjointSlice, SharedArray, cluster, cluster_launch, device, kernel, thread};
 use cuda_host::cuda_module;
 
 // ============================================================================
@@ -136,6 +136,14 @@ mod kernels {
     // Test 3: Distributed Shared Memory (Ring Exchange)
     // ============================================================================
 
+    #[inline(never)]
+    #[device]
+    fn bounce_cluster_pair(
+        pair: (*const u32, u64),
+    ) -> (*const u32, u64) {
+        pair
+    }
+
     /// Test kernel for distributed shared memory via map_shared_rank() + dereference.
     #[kernel]
     #[cluster_launch(4, 1, 1)]
@@ -160,7 +168,18 @@ mod kernels {
             let neighbor_rank = (my_rank + 1) % cluster_size;
             let neighbor_ptr =
                 unsafe { cluster::map_shared_rank(addr_of!(SHMEM) as *const u32, neighbor_rank) };
-            let neighbor_value = unsafe { *neighbor_ptr };
+            let pair =
+                bounce_cluster_pair((neighbor_ptr, neighbor_rank as u64));
+
+            let direct = unsafe { *neighbor_ptr };
+            let bounced = unsafe { *pair.0 };
+
+            let neighbor_value =
+                if bounced == direct && pair.1 == neighbor_rank as u64 {
+                    bounced
+                } else {
+                    u32::MAX
+                };
 
             let idx = my_rank as usize;
             if idx < output.len() {

@@ -389,6 +389,7 @@ fn module_inner(
     } else {
         quote! {
             pub mod #name {
+                #![allow(nonstandard_style)]
                 #![allow(dead_code)]
                 #![allow(unused_variables, unreachable_code, unused_mut)]
                 // Kernel source is a Rust subset with its own idioms; see above.

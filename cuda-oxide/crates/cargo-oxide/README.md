@@ -254,10 +254,20 @@ cargo oxide build tcgen05        # sm_100a only, but PTX generation works anywhe
 cargo oxide build debug --debug-assertions
 ```
 
-`--debug-assertions` keeps the normal release-like `-Copt-level=3` policy but
-switches to `-Cdebug-assertions=on`. It also explicitly sets
-`-Coverflow-checks=off`: rustc otherwise enables overflow checks with debug
-assertions, which adds distinct MIR checks and trap paths. The option applies
+Builds pin a release-like codegen policy: `opt-level = 3`,
+`debug-assertions = off` and `overflow-checks = off` (overflow checks add
+distinct MIR checks and trap paths). The pins go into the Cargo profile
+(`CARGO_PROFILE_RELEASE_*`, `CARGO_PROFILE_DEV_*`, and the `--profile` you
+pass), so a build whose pins match the release defaults shares every compiled
+crate with `cargo oxide test -- --release`. When your rustflags set one of
+these options, cargo-oxide also appends the pinned `-C` flag after them, so the
+pin still wins. `[profile.*.package.*]` overrides and `--config profile.*`
+arguments outrank the pins; host units (build scripts, proc-macros) follow
+Cargo's `build-override` settings.
+
+`--debug-assertions` keeps `opt-level = 3` and `overflow-checks = off` but
+switches to `debug-assertions = on` (rustc would otherwise enable overflow
+checks with it). The option applies
 to regular builds, passthrough builds, and metadata-declared interop device
 crates. It is independent of `--device-debug`, which controls emitted device
 debug information and CUDA finalization optimization.
@@ -472,7 +482,9 @@ Do not put `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` in the `[env]` table; use
 inherited user flags, explicit `--device-cfg` values, and its required compiler
 flags in boundary-preserving `CARGO_ENCODED_RUSTFLAGS`. Required compiler flags
 are applied last so inherited settings cannot replace the cuda-oxide backend or
-disable its correctness-critical codegen options.
+disable its correctness-critical codegen options. Pinned profile options
+(opt-level, debug assertions, overflow checks, debug info) travel in the Cargo
+profile and appear here only when your flags set the same option.
 
 ## Architecture
 

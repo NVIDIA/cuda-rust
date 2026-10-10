@@ -3825,11 +3825,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                 }
                                 Lit::Int(int_lit) => {
                                     let str = format!("-{}", int_lit.base10_digits());
-                                    let val = -int_lit
-                                        .base10_parse::<i32>()
-                                        .unwrap_or_else(|_| panic!("Failed to parse literal {str}"))
-                                        as i64;
-                                    (str, Some(Bounds::exact(val)))
+                                    let bounds = str.parse::<i64>().ok().map(Bounds::exact);
+                                    (str, bounds)
                                 }
                                 _ => {
                                     return self.jit_error_result(
@@ -3854,7 +3851,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                 &lit_string,
                                 &cuda_tile_ty,
                                 self.ir_location(&lit_expr.span()),
-                            );
+                            )
+                            .map_err(|error| self.jit_error(&lit_expr.span(), &error))?;
 
                             let rust_ty = return_type.rust_ty;
                             let ct_type =
@@ -3965,11 +3963,10 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         Lit::Float(float_lit) => (float_lit.base10_digits().to_string(), None),
                         Lit::Int(int_lit) => {
                             let str = int_lit.base10_digits().to_string();
-                            let val = int_lit
-                                .base10_parse::<i32>()
-                                .unwrap_or_else(|_| panic!("Failed to parse literal {str}"))
-                                as i64;
-                            (str, Some(Bounds::exact(val)))
+                            // Bounds use i64; larger u64 values still encode exactly,
+                            // but cannot carry an interval in this representation.
+                            let bounds = str.parse::<i64>().ok().map(Bounds::exact);
+                            (str, bounds)
                         }
                         Lit::Bool(bool_lit) => (
                             format!("{}", bool_lit.value as i32),
@@ -3998,7 +3995,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         &lit_string,
                         &cuda_tile_ty,
                         self.ir_location(&lit_expr.span()),
-                    );
+                    )
+                    .map_err(|error| self.jit_error(&lit_expr.span(), &error))?;
 
                     let rust_ty = return_type.rust_ty;
                     let ct_type = self.compile_type(&rust_ty, generic_vars, &HashMap::new())?;
@@ -4228,11 +4226,11 @@ fn build_constant_op(
     lit_string: &str,
     cuda_tile_ty: &str,
     location: Location,
-) -> (cutile_ir::ir::Value, cutile_ir::ir::Type) {
+) -> Result<(cutile_ir::ir::Value, cutile_ir::ir::Type), String> {
     use cutile_ir::ir::DenseElements;
 
     let result_ty = cuda_tile_element_type_to_tile_ir(cuda_tile_ty);
-    let data = encode_literal_bytes(lit_string, cuda_tile_ty);
+    let data = encode_literal_bytes(lit_string, cuda_tile_ty)?;
 
     let (op_id, results) = OpBuilder::new(Opcode::Constant, location)
         .result(result_ty.clone())
@@ -4246,35 +4244,27 @@ fn build_constant_op(
         )
         .build(module);
     cutile_ir::builder::append_op(module, block_id, op_id);
-    (results[0], result_ty)
+    Ok((results[0], result_ty))
 }
 
 /// Encode a literal value string into bytes for a DenseElements attribute.
-pub fn encode_literal_bytes(lit_string: &str, cuda_tile_ty: &str) -> Vec<u8> {
+pub fn encode_literal_bytes(lit_string: &str, cuda_tile_ty: &str) -> Result<Vec<u8>, String> {
     use cutile_ir::ir::ScalarType;
     let scalar = super::_type::scalar_from_name(cuda_tile_ty).unwrap_or(ScalarType::I32);
-    match scalar {
-        ScalarType::I1 => vec![if lit_string != "0" { 0xFF } else { 0x00 }],
+    Ok(match scalar {
+        ScalarType::I1 => match lit_string {
+            "false" | "0" => vec![0x00],
+            "true" | "1" => vec![0xFF],
+            _ => return Err(format!("invalid boolean literal `{lit_string}`")),
+        },
         ScalarType::I4 => {
             let v: i8 = lit_string.parse().unwrap_or(0);
             vec![(v as u8) & 0x0F]
         }
-        ScalarType::I8 => {
-            let v: i8 = lit_string.parse().unwrap_or(0);
-            v.to_le_bytes().to_vec()
-        }
-        ScalarType::I16 => {
-            let v: i16 = lit_string.parse().unwrap_or(0);
-            v.to_le_bytes().to_vec()
-        }
-        ScalarType::I32 => {
-            let v: i32 = lit_string.parse().unwrap_or(0);
-            v.to_le_bytes().to_vec()
-        }
-        ScalarType::I64 => {
-            let v: i64 = lit_string.parse().unwrap_or(0);
-            v.to_le_bytes().to_vec()
-        }
+        ScalarType::I8 => encode_integer_literal(lit_string, 8)?,
+        ScalarType::I16 => encode_integer_literal(lit_string, 16)?,
+        ScalarType::I32 => encode_integer_literal(lit_string, 32)?,
+        ScalarType::I64 => encode_integer_literal(lit_string, 64)?,
         ScalarType::F16 => {
             let v = parse_float_or_hex(lit_string);
             half::f16::from_f64(v).to_le_bytes().to_vec()
@@ -4302,7 +4292,28 @@ pub fn encode_literal_bytes(lit_string: &str, cuda_tile_ty: &str) -> Vec<u8> {
             let v: u8 = lit_string.parse().unwrap_or(0);
             vec![v & 0x0F]
         }
+    })
+}
+
+/// Tile IR integer types are signless: accept both signed values and unsigned
+/// bit patterns at the requested width, without truncating out-of-range input.
+fn encode_integer_literal(literal: &str, bits: u32) -> Result<Vec<u8>, String> {
+    // Associated constants (for example T::ZERO) arrive as hexadecimal bits;
+    // syn has already normalized ordinary integer literals to decimal.
+    let value = if let Some(hex) = literal.strip_prefix("0x") {
+        i128::from_str_radix(hex, 16)
+    } else {
+        literal.parse::<i128>()
     }
+    .map_err(|_| format!("invalid i{bits} integer literal `{literal}`"))?;
+    let min = -(1i128 << (bits - 1));
+    let max = (1i128 << bits) - 1;
+    if !(min..=max).contains(&value) {
+        return Err(format!(
+            "integer literal `{literal}` is out of range for i{bits}"
+        ));
+    }
+    Ok(value.to_le_bytes()[..(bits / 8) as usize].to_vec())
 }
 
 /// Parse a float literal string, handling both decimal ("3.14") and hex ("0x40490fdb") forms.
@@ -4323,5 +4334,71 @@ fn parse_float_or_hex(s: &str) -> f64 {
         }
     } else {
         s.parse::<f64>().unwrap_or(0.0)
+    }
+}
+
+#[cfg(test)]
+mod literal_encoding_tests {
+    use super::encode_literal_bytes;
+
+    #[test]
+    fn boolean_spellings_preserve_values() {
+        for (literal, expected) in [("false", 0), ("0", 0), ("true", 255), ("1", 255)] {
+            assert_eq!(encode_literal_bytes(literal, "i1").unwrap(), vec![expected]);
+        }
+        for literal in ["", "2", "-1", "not_a_bool"] {
+            assert!(encode_literal_bytes(literal, "i1").is_err(), "{literal}");
+        }
+    }
+
+    #[test]
+    fn signless_integer_encoding_preserves_signed_and_unsigned_ranges() {
+        for bits in [8u32, 16, 32, 64] {
+            let ty = format!("i{bits}");
+            let bytes = (bits / 8) as usize;
+            let signed_max = (1i128 << (bits - 1)) - 1;
+            let unsigned_max = (1i128 << bits) - 1;
+            for value in [
+                0,
+                1,
+                -1,
+                -signed_max - 1,
+                signed_max,
+                signed_max + 1,
+                unsigned_max,
+            ] {
+                assert_eq!(
+                    encode_literal_bytes(&value.to_string(), &ty).unwrap(),
+                    value.to_le_bytes()[..bytes],
+                    "{ty}: {value}",
+                );
+            }
+            for value in [0, 1, signed_max + 1, unsigned_max] {
+                assert_eq!(
+                    encode_literal_bytes(&format!("0x{value:x}"), &ty).unwrap(),
+                    value.to_le_bytes()[..bytes],
+                );
+            }
+            assert!(encode_literal_bytes(&format!("0x{:x}", unsigned_max + 1), &ty).is_err());
+            for value in [-signed_max - 2, unsigned_max + 1] {
+                let error = encode_literal_bytes(&value.to_string(), &ty).unwrap_err();
+                assert!(error.contains("out of range"), "{ty}: {error}");
+            }
+            for literal in [
+                "",
+                "not_an_integer",
+                "1.5",
+                "340282366920938463463374607431768211456",
+            ] {
+                assert!(
+                    encode_literal_bytes(literal, &ty).is_err(),
+                    "{ty}: {literal}"
+                );
+            }
+        }
+        assert_eq!(
+            encode_literal_bytes("11400714819323198485", "i64").unwrap(),
+            0x9e3779b97f4a7c15u64.to_le_bytes(),
+        );
     }
 }

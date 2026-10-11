@@ -2,9 +2,9 @@
   "schema": 2,
   "source": {
     "llvm_repository": "https://github.com/rust-lang/llvm-project.git",
-    "llvm_revision": "16696adcd119e6ba9cc175207d984d7021211acb",
-    "llvm_tblgen_version": "LLVM version 23.1.0",
-    "llvm_tblgen_source_revision": "16696adcd119e6ba9cc175207d984d7021211acb",
+    "llvm_revision": "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019",
+    "llvm_tblgen_version": "LLVM version 23.1.3",
+    "llvm_tblgen_source_revision": "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019",
     "intrinsics_json_sha256": "c0fb05eda32f2fe89ba600d4d2dc882e0bf54d5aa60b5e5f8601eb87a9881408",
     "nvptx_json_sha256": "492011cd3c20fbd888a2fa05e7eb5d894c0db79270c5bf6dbda0b6648d3c6582"
   },

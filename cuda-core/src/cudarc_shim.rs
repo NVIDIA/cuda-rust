@@ -362,12 +362,11 @@ pub(crate) mod stream {
 pub(crate) mod module {
     use super::{DriverError, IntoResult};
     use core::ffi::c_void;
-    use std::ffi::CString;
     use std::mem::MaybeUninit;
 
     /// Loads a CUDA module from a file path.
     pub fn load(filename: &str) -> Result<cuda_bindings::CUmodule, DriverError> {
-        let c_str = CString::new(filename).unwrap();
+        let c_str = crate::error::c_string(filename)?;
         let fname_ptr = c_str.as_c_str().as_ptr();
         let mut module = MaybeUninit::uninit();
         unsafe {
@@ -382,7 +381,7 @@ pub(crate) mod module {
     /// The PTX source must be valid.
     pub unsafe fn load_ptx_str(src_str: &str) -> Result<cuda_bindings::CUmodule, DriverError> {
         let mut module = MaybeUninit::uninit();
-        let c_str = CString::new(src_str).unwrap();
+        let c_str = crate::error::c_string(src_str)?;
         let module_res =
             cuda_bindings::cuModuleLoadData(module.as_mut_ptr(), c_str.as_ptr() as *const _);
         (module_res, module).result()
@@ -406,7 +405,7 @@ pub(crate) mod module {
         module: cuda_bindings::CUmodule,
         name: &str,
     ) -> Result<cuda_bindings::CUfunction, DriverError> {
-        let name = CString::new(name).unwrap();
+        let name = crate::error::c_string(name)?;
         let name_ptr = name.as_c_str().as_ptr();
         let mut func = MaybeUninit::uninit();
         let res = cuda_bindings::cuModuleGetFunction(func.as_mut_ptr(), module, name_ptr);
@@ -807,5 +806,31 @@ pub(crate) mod memory {
         let mut total = 0;
         unsafe { sys::cuMemGetInfo_v2(&mut free as *mut _, &mut total as *mut _) }.result()?;
         Ok((free, total))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::module;
+
+    const INVALID_VALUE: cuda_bindings::CUresult =
+        cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE;
+
+    /// Each name is rejected before any driver call, so no device or context
+    /// is needed.
+    #[test]
+    fn module_helpers_reject_interior_nul_without_panicking() {
+        for input in ["a\0b", "\0", "trailing\0"] {
+            let load = module::load(input).expect_err("load accepted an interior NUL");
+            assert_eq!(load.0, INVALID_VALUE, "load({input:?})");
+
+            let ptx = unsafe { module::load_ptx_str(input) }
+                .expect_err("load_ptx_str accepted an interior NUL");
+            assert_eq!(ptx.0, INVALID_VALUE, "load_ptx_str({input:?})");
+
+            let func = unsafe { module::get_function(std::ptr::null_mut(), input) }
+                .expect_err("get_function accepted an interior NUL");
+            assert_eq!(func.0, INVALID_VALUE, "get_function({input:?})");
+        }
     }
 }

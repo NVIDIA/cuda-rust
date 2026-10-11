@@ -7203,21 +7203,24 @@ fn explicit_cargo_target_reads_flag_forms_env_and_stops_at_double_dash() {
     let mut cmd = Command::new("cargo");
     cmd.args(["build", "--target=aarch64-unknown-linux-gnu"]);
     assert_eq!(
-        explicit_cargo_target(&cmd, Some("x86_64-unknown-linux-gnu")).unwrap(),
+        explicit_cargo_target(&cmd, Some("x86_64-unknown-linux-gnu"), &mut || None).unwrap(),
         Some("aarch64-unknown-linux-gnu".to_string())
     );
 
     let mut cmd = Command::new("cargo");
     cmd.args(["test", "--", "--target", "aarch64-unknown-linux-gnu"]);
-    assert_eq!(explicit_cargo_target(&cmd, None).unwrap(), None);
     assert_eq!(
-        explicit_cargo_target(&cmd, Some("x86_64-unknown-linux-gnu")).unwrap(),
+        explicit_cargo_target(&cmd, None, &mut || None).unwrap(),
+        None
+    );
+    assert_eq!(
+        explicit_cargo_target(&cmd, Some("x86_64-unknown-linux-gnu"), &mut || None).unwrap(),
         Some("x86_64-unknown-linux-gnu".to_string())
     );
 
     cmd.env("CARGO_BUILD_TARGET", "aarch64-unknown-linux-gnu");
     assert_eq!(
-        explicit_cargo_target(&cmd, Some("x86_64-unknown-linux-gnu")).unwrap(),
+        explicit_cargo_target(&cmd, Some("x86_64-unknown-linux-gnu"), &mut || None).unwrap(),
         Some("aarch64-unknown-linux-gnu".to_string())
     );
 
@@ -7229,17 +7232,141 @@ fn explicit_cargo_target_reads_flag_forms_env_and_stops_at_double_dash() {
         "--target=x86_64-unknown-linux-gnu",
     ]);
     assert_eq!(
-        explicit_cargo_target(&cmd, None).unwrap(),
+        explicit_cargo_target(&cmd, None, &mut || None).unwrap(),
         Some("x86_64-unknown-linux-gnu".to_string())
     );
     cmd.args(["--target", "aarch64-unknown-linux-gnu"]);
-    let error = explicit_cargo_target(&cmd, None).unwrap_err();
+    let error = explicit_cargo_target(&cmd, None, &mut || None).unwrap_err();
     assert!(error.contains("several targets"), "{error}");
 }
 
 #[test]
+fn explicit_cargo_target_resolves_host_tuple_through_the_host_rustc() {
+    let host = || Some("aarch64-unknown-linux-gnu".to_string());
+
+    let mut cmd = Command::new("cargo");
+    cmd.args(["build", "--target", "host-tuple"]);
+    assert_eq!(
+        explicit_cargo_target(&cmd, None, &mut { host }).unwrap(),
+        Some("aarch64-unknown-linux-gnu".to_string())
+    );
+
+    // host-tuple and the host's own name are one target, not two.
+    cmd.args(["--target=aarch64-unknown-linux-gnu"]);
+    assert_eq!(
+        explicit_cargo_target(&cmd, None, &mut { host }).unwrap(),
+        Some("aarch64-unknown-linux-gnu".to_string())
+    );
+
+    let mut asked = 0;
+    let mut counting = || {
+        asked += 1;
+        host()
+    };
+    let mut cmd = Command::new("cargo");
+    cmd.args(["build", "--target", "host-tuple", "--target=host-tuple"]);
+    explicit_cargo_target(&cmd, None, &mut counting).unwrap();
+    assert_eq!(asked, 1, "the host is asked once");
+
+    let mut cmd = Command::new("cargo");
+    cmd.arg("build").env("CARGO_BUILD_TARGET", "host-tuple");
+    assert_eq!(
+        explicit_cargo_target(&cmd, None, &mut { host }).unwrap(),
+        Some("aarch64-unknown-linux-gnu".to_string())
+    );
+    let cmd = Command::new("cargo");
+    assert_eq!(
+        explicit_cargo_target(&cmd, Some("host-tuple"), &mut { host }).unwrap(),
+        Some("aarch64-unknown-linux-gnu".to_string())
+    );
+
+    let mut cmd = Command::new("cargo");
+    cmd.args(["build", "--target", "host-tuple"]);
+    let error = explicit_cargo_target(&cmd, None, &mut || None).unwrap_err();
+    assert!(error.contains("`host-tuple`"), "{error}");
+}
+
+#[test]
+fn host_probe_runs_the_compiler_and_environment_the_build_would() {
+    let inherited = |name: &str| match name {
+        "RUSTC" => Some(std::ffi::OsString::from("/inherited/rustc")),
+        "CARGO_BUILD_RUSTC" => Some(std::ffi::OsString::from("/inherited/build-rustc")),
+        _ => None,
+    };
+    let nothing = |_: &str| None;
+
+    let probe = host_probe_command(&Command::new("cargo"), &nothing);
+    assert_eq!(probe.get_program(), "rustc");
+    assert_eq!(probe.get_args().collect::<Vec<_>>(), ["-vV"]);
+
+    assert_eq!(
+        host_probe_command(&Command::new("cargo"), &inherited).get_program(),
+        "/inherited/rustc"
+    );
+
+    let mut cmd = Command::new("cargo");
+    cmd.env("RUSTC", "/own/rustc");
+    assert_eq!(
+        host_probe_command(&cmd, &inherited).get_program(),
+        "/own/rustc"
+    );
+
+    let mut cmd = Command::new("cargo");
+    cmd.env_remove("RUSTC");
+    assert_eq!(
+        host_probe_command(&cmd, &inherited).get_program(),
+        "/inherited/build-rustc"
+    );
+
+    let root = unique_temp_dir("cargo_oxide_host_probe");
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root)
+        .env("RUSTUP_TOOLCHAIN", "nightly-2026-08-28")
+        .env_remove("RUSTFLAGS");
+    let probe = host_probe_command(&cmd, &nothing);
+    assert_eq!(probe.get_current_dir(), Some(root.as_path()));
+    let envs: Vec<_> = probe.get_envs().collect();
+    assert!(envs.contains(&(
+        std::ffi::OsStr::new("RUSTUP_TOOLCHAIN"),
+        Some(std::ffi::OsStr::new("nightly-2026-08-28"))
+    )));
+    assert!(envs.contains(&(std::ffi::OsStr::new("RUSTFLAGS"), None)));
+}
+
+#[cfg(unix)]
+#[test]
+fn host_triple_of_reads_the_host_line_of_the_chosen_compiler() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = unique_temp_dir("cargo_oxide_fake_rustc");
+    std::fs::create_dir_all(&root).unwrap();
+    let fake = root.join("fake-rustc");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\necho 'rustc 0.0.0'\necho 'host: fake-unknown-none'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let failing = root.join("failing-rustc");
+    std::fs::write(&failing, "#!/bin/sh\necho 'host: never-used'\nexit 1\n").unwrap();
+    std::fs::set_permissions(&failing, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut cmd = Command::new("cargo");
+    cmd.env("RUSTC", &fake);
+    let nothing = |_: &str| None;
+    assert_eq!(
+        host_triple_of(host_probe_command(&cmd, &nothing)).as_deref(),
+        Some("fake-unknown-none")
+    );
+    let mut cmd = Command::new("cargo");
+    cmd.env("RUSTC", &failing);
+    assert_eq!(host_triple_of(host_probe_command(&cmd, &nothing)), None);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn per_target_extra_rustflags_without_target_follow_the_host_rustc() {
-    let Some(host) = crate::backend::active_host_triple_in(None) else {
+    let inherited = |name: &str| std::env::var_os(name);
+    let Some(host) = host_triple_of(host_probe_command(&Command::new("cargo"), &inherited)) else {
         panic!("rustc -vV printed no host line");
     };
     let root = unique_temp_dir("cargo_oxide_config_host_triple");

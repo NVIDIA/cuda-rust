@@ -44,7 +44,7 @@ impl OxideConfig {
             return Err(format!(
                 "cuda-oxide config has `[target.<triple>] extra-rustflags` for {}, but the \
                  build's target triple is unknown (no `--target`, no CARGO_BUILD_TARGET, and \
-                 `rustc -vV` printed no host line)",
+                 the build's `rustc -vV` could not be run or printed no host line)",
                 self.target_extra_rustflags
                     .keys()
                     .map(String::as_str)

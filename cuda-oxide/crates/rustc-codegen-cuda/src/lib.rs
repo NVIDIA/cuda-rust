@@ -337,7 +337,7 @@ use rustc_middle::dep_graph::WorkProductMap;
 use rustc_middle::ty::TyCtxt;
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_session::config::OutputFilenames;
-use rustc_session::{IncrCompSession, Session};
+use rustc_session::{CodegenBackendInit, EarlySession, IncrCompSession, Session};
 use std::any::Any;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -461,12 +461,12 @@ impl CodegenBackend for CudaCodegenBackend {
         "cuda"
     }
 
-    fn init(&self, sess: &Session) {
+    fn init(&mut self, sess: &EarlySession) -> CodegenBackendInit {
         // Note: Don't log here - init() is called for ALL crates including dependencies.
         // We log in codegen_crate() only when there are kernels to compile.
 
         // Initialize the underlying LLVM backend
-        self.llvm_backend.init(sess);
+        self.llvm_backend.init(sess)
     }
 
     fn print_version(&self) {
@@ -481,7 +481,7 @@ impl CodegenBackend for CudaCodegenBackend {
         self.llvm_backend.target_cpu(sess)
     }
 
-    fn target_config(&self, sess: &Session) -> rustc_codegen_ssa::TargetConfig {
+    fn target_config(&self, sess: &EarlySession) -> rustc_codegen_ssa::TargetConfig {
         self.llvm_backend.target_config(sess)
     }
 
@@ -831,7 +831,6 @@ impl CodegenBackend for CudaCodegenBackend {
                 assembly: None,
                 llvm_ir: None,
                 global_asm_object: None,
-                links_from_incr_cache: Vec::new(),
             });
         }
         (compiled_modules, work_products)

@@ -514,7 +514,6 @@ fn test_mir_func_reference_param_validity_verify() {
         &mut ctx,
         0,
         ReferenceParamValidityAttr {
-            read_only: true,
             dereferenceable_bytes: 4,
             ..ReferenceParamValidityAttr::new(4)
         },

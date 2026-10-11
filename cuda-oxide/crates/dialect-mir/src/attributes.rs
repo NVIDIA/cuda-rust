@@ -91,7 +91,6 @@ pub struct MutabilityAttr(pub bool);
 pub struct ReferenceParamValidityAttr {
     pub pointee_alignment: u64,
     pub no_alias: bool,
-    pub read_only: bool,
     pub dereferenceable_bytes: u64,
 }
 
@@ -101,7 +100,6 @@ impl ReferenceParamValidityAttr {
         Self {
             pointee_alignment,
             no_alias: false,
-            read_only: false,
             dereferenceable_bytes: 0,
         }
     }

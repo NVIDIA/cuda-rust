@@ -117,7 +117,7 @@ impl MirFuncOp {
     /// Record rustc-proven validity for one source-level kernel argument.
     ///
     /// Presence proves `nonnull`; the payload carries the pointee alignment
-    /// and independently proven aliasing, access, and size facts.
+    /// and independently proven aliasing and size facts.
     /// The source argument index is deliberately retained until
     /// kernel ABI lowering decides which physical LLVM parameter represents it.
     pub fn set_reference_param_validity(

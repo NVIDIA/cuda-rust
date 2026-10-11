@@ -463,7 +463,6 @@ fn propagate_kernel_reference_param_validities(
             llvm::KernelReferenceParamValidityAttr {
                 pointee_alignment: validity.pointee_alignment,
                 no_alias: validity.no_alias,
-                read_only: validity.read_only,
                 dereferenceable_bytes: validity.dereferenceable_bytes,
             },
         );
@@ -1664,7 +1663,6 @@ mod reference_param_validity_tests {
         let sized = ReferenceParamValidityAttr {
             pointee_alignment: 4,
             no_alias: true,
-            read_only: true,
             dereferenceable_bytes: 4,
         };
         let slice = ReferenceParamValidityAttr {
@@ -1672,11 +1670,7 @@ mod reference_param_validity_tests {
             ..sized
         };
         let aliasable = ReferenceParamValidityAttr::new(4);
-        let mutable = ReferenceParamValidityAttr {
-            read_only: false,
-            ..sized
-        };
-        for (source_index, validity) in [(0, sized), (2, slice), (5, aliasable), (6, mutable)] {
+        for (source_index, validity) in [(0, sized), (2, slice), (5, aliasable), (6, sized)] {
             mir_func.set_reference_param_validity(&mut ctx, source_index, validity);
         }
 
@@ -1689,7 +1683,7 @@ mod reference_param_validity_tests {
 
         assert_eq!(
             mapped,
-            vec![(0, sized), (1, slice), (4, aliasable), (6, mutable)]
+            vec![(0, sized), (1, slice), (4, aliasable), (6, sized)]
         );
         let llvm_func =
             llvm::FuncOp::new(&mut ctx, "transport".try_into().unwrap(), llvm_func_type);
@@ -1704,7 +1698,6 @@ mod reference_param_validity_tests {
                     llvm::KernelReferenceParamValidityAttr {
                         pointee_alignment: 4,
                         no_alias: true,
-                        read_only: true,
                         dereferenceable_bytes: 4,
                     }
                 ),
@@ -1713,7 +1706,6 @@ mod reference_param_validity_tests {
                     llvm::KernelReferenceParamValidityAttr {
                         pointee_alignment: 4,
                         no_alias: true,
-                        read_only: true,
                         dereferenceable_bytes: 0,
                     }
                 ),
@@ -1723,7 +1715,6 @@ mod reference_param_validity_tests {
                     llvm::KernelReferenceParamValidityAttr {
                         pointee_alignment: 4,
                         no_alias: true,
-                        read_only: false,
                         dereferenceable_bytes: 4,
                     }
                 ),

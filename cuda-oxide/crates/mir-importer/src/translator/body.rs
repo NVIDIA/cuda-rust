@@ -2166,7 +2166,6 @@ pub fn translate_body(
                 ReferenceParamValidityAttr {
                     pointee_alignment: validity.pointee_alignment,
                     no_alias: validity.no_alias,
-                    read_only: validity.read_only,
                     dereferenceable_bytes: validity.dereferenceable_bytes,
                 },
             );

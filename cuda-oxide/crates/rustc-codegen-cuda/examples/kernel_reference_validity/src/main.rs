@@ -7,7 +7,7 @@
 //!
 //! Build with `cargo oxide build kernel_reference_validity`, then run the host
 //! binary (or `cargo oxide run kernel_reference_validity`) for valid launches.
-//! `verify-code-shape.sh` checks frontend IR, including in compile-only CI.
+//! `verify-code-shape.sh` checks frontend attributes and optimized PTX loads.
 
 use cuda_device::{DisjointSlice, cuda_module, kernel, launch_contract, thread};
 
@@ -104,6 +104,34 @@ pub unsafe fn read_across_write(input: &u32, scratch: *mut u32, output: *mut u32
 #[inline(never)]
 unsafe fn read_input(input: *const u32) -> u32 {
     unsafe { *input }
+}
+
+/// Even an immutable input must be read twice when both reads are volatile.
+/// Explicit `readonly` plus `noalias` made NVPTX lose `volatile` and allowed
+/// ptxas to merge the reads. Withholding `readonly` preserves both accesses.
+///
+/// # Safety
+/// `output` must be writable, aligned, outside `input`, and owned by this thread.
+#[kernel]
+pub unsafe fn volatile_direct(input: &u32, output: *mut u32) {
+    let before = unsafe { core::ptr::read_volatile(input) };
+    let after = unsafe { core::ptr::read_volatile(input) };
+    unsafe { *output = before.wrapping_add(after) };
+}
+
+/// The same guarantee must survive calls that LLVM later inlines.
+///
+/// # Safety
+/// `output` must be writable, aligned, outside `input`, and owned by this thread.
+#[kernel]
+pub unsafe fn volatile_helper(input: &u32, output: *mut u32) {
+    unsafe { *output = read_volatile_input(input).wrapping_add(read_volatile_input(input)) };
+}
+
+#[inline(never)]
+fn read_volatile_input(input: &u32) -> u32 {
+    // SAFETY: the reference is aligned and initialized; reading does not mutate it.
+    unsafe { core::ptr::read_volatile(input) }
 }
 
 #[kernel]

@@ -192,7 +192,7 @@ fn reference_validity_exports_each_fact_independently_in_all_dialects() {
             let module_block = module_top_block(&mut ctx, &module);
             let ptr = PointerType::get(&ctx, 0);
             let integer = IntegerType::get(&ctx, 64, Signedness::Signless);
-            let mut params = vec![ptr.into(); 7];
+            let mut params = vec![ptr.into(); 6];
             params.push(integer.into());
             let func = if definition {
                 kernel_with_params(&mut ctx, "independent_facts", params, true)
@@ -208,13 +208,12 @@ fn reference_validity_exports_each_fact_independently_in_all_dialects() {
                 );
                 func
             };
-            for (index, (alignment, no_alias, read_only, bytes)) in [
-                (4, true, true, 4),
-                (8, true, false, 8),
-                (1, false, true, 0),
-                (1, false, false, 0),
-                (16, false, false, 128),
-                (4, true, true, 0),
+            for (index, (alignment, no_alias, bytes)) in [
+                (4, true, 4),
+                (8, true, 8),
+                (1, false, 0),
+                (16, false, 128),
+                (4, true, 0),
             ]
             .into_iter()
             .enumerate()
@@ -226,20 +225,19 @@ fn reference_validity_exports_each_fact_independently_in_all_dialects() {
                     KernelReferenceParamValidityAttr {
                         pointee_alignment: alignment,
                         no_alias,
-                        read_only,
                         dereferenceable_bytes: bytes,
                     },
                 );
             }
             func.get_operation().insert_at_back(module_block, &ctx);
             let ir = export_module_to_string_with_config(&ctx, &module, config).unwrap();
+            assert!(!ir.contains(" readonly"), "{ir}");
             let expected = [
-                format!("{pointer} nonnull align 4 noalias readonly dereferenceable(4)"),
+                format!("{pointer} nonnull align 4 noalias dereferenceable(4)"),
                 format!("{pointer} nonnull align 8 noalias dereferenceable(8)"),
-                format!("{pointer} nonnull readonly"),
                 format!("{pointer} nonnull"),
                 format!("{pointer} nonnull align 16 dereferenceable(128)"),
-                format!("{pointer} nonnull align 4 noalias readonly"),
+                format!("{pointer} nonnull align 4 noalias"),
                 pointer.to_string(),
                 "i64".to_string(),
             ]

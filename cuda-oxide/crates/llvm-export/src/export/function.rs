@@ -75,9 +75,6 @@ fn export_reference_parameter_attrs(
     if validity.no_alias {
         write!(output, " noalias").unwrap();
     }
-    if validity.read_only {
-        write!(output, " readonly").unwrap();
-    }
     if validity.dereferenceable_bytes > 0 {
         write!(
             output,

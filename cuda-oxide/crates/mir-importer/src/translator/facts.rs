@@ -447,12 +447,11 @@ pub(crate) use pointer_origin::*;
 /// Validity facts that are safe to expose on a Rust-reference kernel parameter.
 ///
 /// Presence proves non-nullness. Alignment comes from the pointee layout;
-/// aliasing, access, and dereferenceability come only from rustc's argument ABI.
+/// aliasing and dereferenceability come only from rustc's argument ABI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ReferenceParamValidity {
     pub(crate) pointee_alignment: u64,
     pub(crate) no_alias: bool,
-    pub(crate) read_only: bool,
     pub(crate) dereferenceable_bytes: u64,
 }
 
@@ -515,6 +514,11 @@ pub(crate) fn reference_param_validity(
         }
     };
     let flags = attrs.regular();
+    // Do not consume rustc's `read_only`: NVPTX (including libNVVM) can lower
+    // volatile reads through a readonly + noalias kernel parameter to cached
+    // non-volatile loads. Let the optimizer infer read-only access from the
+    // body instead; volatile accesses prevent that inference.
+    //
     // LLVM before 23 (including legacy libNVVM consumers) treats parameter
     // dereferenceability as lasting for the whole call. rustc's NoFree is the
     // proof needed by all supported consumers; producer LLVM version alone is
@@ -527,7 +531,6 @@ pub(crate) fn reference_param_validity(
     Ok(Some(ReferenceParamValidity {
         pointee_alignment: shape.abi_align,
         no_alias: flags.no_alias,
-        read_only: flags.read_only,
         dereferenceable_bytes,
     }))
 }
@@ -1059,7 +1062,6 @@ pub fn reference_validity(
                     (
                         fact.pointee_alignment,
                         fact.no_alias,
-                        fact.read_only,
                         fact.dereferenceable_bytes,
                     )
                 })
@@ -1068,22 +1070,22 @@ pub fn reference_validity(
         assert_eq!(
             observed,
             vec![
-                None,                       // ignored by-value ZST
-                Some((4, true, true, 4)),   // &f32
-                Some((4, true, false, 4)),  // &mut f32
-                Some((4, true, true, 0)),   // &[f32]: unknown length
-                Some((4, true, false, 0)),  // &mut [f32]
-                Some((1, true, true, 1)),   // &u8
-                Some((16, true, true, 0)),  // aligned reference to a ZST
-                None,                       // raw pointer
-                None,                       // direct by-value ADT
-                Some((4, false, false, 0)), // &UnsafeCell<f32>
-                Some((4, true, false, 4)),  // &mut UnsafeCell<f32>
-                Some((4, false, false, 0)), // &mut !Unpin
-                Some((4, true, true, 4)),   // shared frozen !Unpin
-                Some((4, false, false, 0)), // &[UnsafeCell<f32>]
-                Some((4, false, false, 0)), // &mut [!Unpin]
-                None,                       // indirect by-value carrier
+                None,                // ignored by-value ZST
+                Some((4, true, 4)),  // &f32
+                Some((4, true, 4)),  // &mut f32
+                Some((4, true, 0)),  // &[f32]: unknown length
+                Some((4, true, 0)),  // &mut [f32]
+                Some((1, true, 1)),  // &u8
+                Some((16, true, 0)), // aligned reference to a ZST
+                None,                // raw pointer
+                None,                // direct by-value ADT
+                Some((4, false, 0)), // &UnsafeCell<f32>
+                Some((4, true, 4)),  // &mut UnsafeCell<f32>
+                Some((4, false, 0)), // &mut !Unpin
+                Some((4, true, 4)),  // shared frozen !Unpin
+                Some((4, false, 0)), // &[UnsafeCell<f32>]
+                Some((4, false, 0)), // &mut [!Unpin]
+                None,                // indirect by-value carrier
             ]
         );
         assert!(errors[0].contains("type"), "{}", errors[0]);
@@ -1098,7 +1100,6 @@ pub fn reference_validity(
         assert_eq!(facts.iter().flatten().count(), 12);
         for fact in facts.into_iter().flatten() {
             assert!(!fact.no_alias);
-            assert!(!fact.read_only);
             assert_eq!(fact.dereferenceable_bytes, 0);
             assert!(fact.pointee_alignment.is_power_of_two());
         }

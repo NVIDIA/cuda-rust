@@ -63,16 +63,16 @@ fn dense_const_path_parts(path_expr: &syn::ExprPath) -> Option<(String, String)>
 fn generic_arg_to_cga_const_string(
     arg: &syn::GenericArgument,
     generic_args: &GenericVars,
-) -> String {
-    if let Some(cga) = get_cga_from_generic_argument(arg, generic_args) {
+) -> Result<String, JITError> {
+    if let Some(cga) = get_cga_from_generic_argument(arg, generic_args)? {
         let dims = cga
             .iter()
             .map(i32::to_string)
             .collect::<Vec<_>>()
             .join(", ");
-        format!("{{[{dims}]}}")
+        Ok(format!("{{[{dims}]}}"))
     } else {
-        arg.to_token_stream().to_string()
+        Ok(arg.to_token_stream().to_string())
     }
 }
 
@@ -741,7 +741,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 "make_mapped_partition_view expects map shape as generic argument 4",
             );
         };
-        Ok(generic_arg_to_cga_const_string(map_shape, generic_args))
+        generic_arg_to_cga_const_string(map_shape, generic_args)
+            .map_err(|err| self.jit_error(&call_expr.func.span(), &err.to_string()))
     }
 
     fn compile_make_mapped_partition_view(
@@ -810,12 +811,14 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         };
         let tile_shape = match &shape_value.ty.type_instance {
             TypeInstance::StructuredType(instance) => instance.shape.clone(),
-            _ => get_cga_from_type(&shape_value.ty.rust_ty, generic_args).ok_or_else(|| {
-                self.jit_error(
-                    &call_expr.args[1].span(),
-                    "mapped partition tile shape must be static",
-                )
-            })?,
+            _ => get_cga_from_type(&shape_value.ty.rust_ty, generic_args)
+                .map_err(|err| self.jit_error(&call_expr.args[1].span(), &err.to_string()))?
+                .ok_or_else(|| {
+                    self.jit_error(
+                        &call_expr.args[1].span(),
+                        "mapped partition tile shape must be static",
+                    )
+                })?,
         };
         let element_type = tensor_value
             .ty
@@ -2940,6 +2943,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         Kind::Struct | Kind::StructuredType => match &op_arg.ty.rust_ty {
                             Type::Path(_ty_path) => {
                                 let Some(cga) = get_cga_from_type(&op_arg.ty.rust_ty, generic_args)
+                                    .map_err(|err| {
+                                        self.jit_error(&call_expr.args[i].span(), &err.to_string())
+                                    })?
                                 else {
                                     return self.jit_error_result(
                                         &call_expr.args[i].span(),
@@ -3521,7 +3527,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 &format!("{fn_name}: generic argument {pos} for `{param_name}` must be a const expression"),
             );
         };
-        Ok(parse_expr_as_i32(expr, generic_args))
+        parse_expr_as_i32(expr, generic_args)
+            .map_err(|err| self.jit_error(&expr.span(), &err.to_string()))
     }
 
     /// Read an array const generic `[i32; N]` from a return-type annotation at
@@ -3563,14 +3570,16 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 ),
             );
         };
-        get_cga_from_generic_argument(arg, generic_args).ok_or_else(|| {
-            self.jit_error(
-                &return_ty.rust_ty.span(),
-                &format!(
+        get_cga_from_generic_argument(arg, generic_args)
+            .map_err(|err| self.jit_error(&return_ty.rust_ty.span(), &err.to_string()))?
+            .ok_or_else(|| {
+                self.jit_error(
+                    &return_ty.rust_ty.span(),
+                    &format!(
                     "{fn_name}: failed to resolve `{param_name}` from return type argument {pos}"
                 ),
-            )
-        })
+                )
+            })
     }
 
     fn compile_make_gather_scatter_view(
@@ -3639,12 +3648,14 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         };
         let tile_shape = match &shape_value.ty.type_instance {
             TypeInstance::StructuredType(instance) => instance.shape.clone(),
-            _ => get_cga_from_type(&shape_value.ty.rust_ty, generic_args).ok_or_else(|| {
-                self.jit_error(
-                    &call_expr.args[1].span(),
-                    "gather_scatter_view tile shape must be static",
-                )
-            })?,
+            _ => get_cga_from_type(&shape_value.ty.rust_ty, generic_args)
+                .map_err(|err| self.jit_error(&call_expr.args[1].span(), &err.to_string()))?
+                .ok_or_else(|| {
+                    self.jit_error(
+                        &call_expr.args[1].span(),
+                        "gather_scatter_view tile shape must be static",
+                    )
+                })?,
         };
         // SPARSE_DIM is not inferable from the function arguments; read it from
         // the return-type annotation on the let binding (angle-bracket arg 2:
@@ -3791,12 +3802,14 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         };
         let tile_shape = match &shape_value.ty.type_instance {
             TypeInstance::StructuredType(instance) => instance.shape.clone(),
-            _ => get_cga_from_type(&shape_value.ty.rust_ty, generic_args).ok_or_else(|| {
-                self.jit_error(
-                    &call_expr.args[1].span(),
-                    "strided_view tile shape must be static",
-                )
-            })?,
+            _ => get_cga_from_type(&shape_value.ty.rust_ty, generic_args)
+                .map_err(|err| self.jit_error(&call_expr.args[1].span(), &err.to_string()))?
+                .ok_or_else(|| {
+                    self.jit_error(
+                        &call_expr.args[1].span(),
+                        "strided_view tile shape must be static",
+                    )
+                })?,
         };
         // TRAVERSAL_STRIDES and DIM_MAP are not inferable from the function
         // arguments; read them from the return-type annotation on the let binding

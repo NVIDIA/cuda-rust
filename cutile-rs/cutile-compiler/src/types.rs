@@ -13,14 +13,13 @@ use crate::generics::{
     GenericVars, TypInstancePrimitiveType, TypeInstance, TypeInstanceStructuredType,
 };
 use crate::syn_utils::{
-    get_ident_from_path_expr, get_ident_generic_args, get_meta_list, get_type_ident,
-    maybe_generic_args, strip_generic_args_lifetimes, SingleMetaList,
+    get_ident_generic_args, get_meta_list, get_type_ident, maybe_generic_args,
+    strip_generic_args_lifetimes, SingleMetaList,
 };
 use quote::ToTokens;
 use std::collections::HashMap;
 use syn::{
-    Expr, ExprLit, FnArg, GenericArgument, ItemImpl, Lit, Signature, Stmt, Type, TypeReference,
-    UnOp,
+    Expr, ExprLit, FnArg, GenericArgument, ItemImpl, Lit, Signature, Type, TypeReference, UnOp,
 };
 
 /// A type parameter slot in a CUDA Tile type definition (e.g. element type, shape, strides).
@@ -707,30 +706,42 @@ pub fn get_lit_type(lit_expr: &ExprLit) -> Option<syn::Type> {
 }
 
 /// Parses a possibly-negated integer literal expression as an `i32`.
-pub fn parse_signed_literal_as_i32(expr: &Expr) -> i32 {
-    match expr {
-        Expr::Lit(lit) => {
-            let val = match &lit.lit {
-                Lit::Int(int_lit) => int_lit.base10_parse().unwrap(),
-                _ => unimplemented!("Unexpected array element {expr:#?}"),
+pub fn parse_signed_literal_as_i32(expr: &Expr) -> Result<i32, JITError> {
+    let expected_literal = || {
+        JITError::generic_err(&format!(
+            "expected an integer literal or a negated integer literal, got `{}`",
+            expr.to_token_stream()
+        ))
+    };
+    let (lit, negative) = match expr {
+        Expr::Lit(ExprLit {
+            lit: Lit::Int(lit), ..
+        }) => (lit, false),
+        Expr::Unary(unary) if matches!(unary.op, UnOp::Neg(_)) => {
+            let Expr::Lit(ExprLit {
+                lit: Lit::Int(lit), ..
+            }) = unary.expr.as_ref()
+            else {
+                return Err(expected_literal());
             };
-            val
+            (lit, true)
         }
-        Expr::Unary(unary_expr) => match unary_expr.op {
-            UnOp::Neg(_) => match &*unary_expr.expr {
-                Expr::Lit(lit_expr) => {
-                    let val: i32 = match &lit_expr.lit {
-                        Lit::Int(int_lit) => int_lit.base10_parse().unwrap(),
-                        _ => unimplemented!("Unexpected array element {expr:#?}"),
-                    };
-                    -val
-                }
-                _ => panic!("Unexpected unary expr {unary_expr:#?}"),
-            },
-            _ => panic!("Unexpected unary expr {unary_expr:#?}"),
-        },
-        _ => unimplemented!("Unexpected literal expression {expr:#?}"),
-    }
+        _ => return Err(expected_literal()),
+    };
+    let out_of_range = || {
+        JITError::generic_err(&format!(
+            "integer literal `{}` is outside the i32 range",
+            expr.to_token_stream()
+        ))
+    };
+    // Parse the magnitude in a wider type so that -2147483648 remains valid.
+    let magnitude = lit.base10_parse::<i64>().map_err(|_| out_of_range())?;
+    let value = if negative {
+        magnitude.checked_neg().ok_or_else(out_of_range)?
+    } else {
+        magnitude
+    };
+    i32::try_from(value).map_err(|_| out_of_range())
 }
 
 // pub fn get_expr_mutability(expr: &Expr) -> bool {
@@ -784,179 +795,133 @@ pub fn get_type_mutability(ty: &Type) -> bool {
 }
 
 /// Tries to extract a const generic array from a type's generic arguments.
-pub fn try_extract_cga(ty: &Type, generic_vars: &GenericVars) -> Option<Vec<i32>> {
-    let mut type_generic_args = maybe_generic_args(ty)?;
-    strip_generic_args_lifetimes(&mut type_generic_args);
+/// `None` means no array was found; malformed arrays return an error.
+pub fn try_extract_cga(
+    ty: &Type,
+    generic_vars: &GenericVars,
+) -> Result<Option<Vec<i32>>, JITError> {
+    let Some(mut args) = maybe_generic_args(ty) else {
+        return Ok(None);
+    };
+    strip_generic_args_lifetimes(&mut args);
     let mut result = None;
-
-    for generic_arg in type_generic_args.args.iter() {
-        match generic_arg {
-            GenericArgument::Lifetime(_) => continue,
-            GenericArgument::Type(type_param) => {
-                // Currently, this is either shape or element_type
-                if let syn::Type::Path(type_path) = type_param {
-                    let last_ident = type_path.path.segments.last().unwrap().ident.to_string();
-                    // println!("get_variadic_type_args: Type::Path: {}", last_ident);
-                    if generic_vars.inst_array.contains_key(&last_ident) {
-                        // This is something like Shape<D> for const generic array D: [i32; N].
-                        let array_instance = generic_vars.inst_array.get(&last_ident).unwrap();
-                        result = Some(array_instance.clone());
-                    }
-                }
-            }
-            GenericArgument::Const(const_expr) => {
-                // println!("expand GenericArgument::Const? {const_param:#?}");
-                match const_expr {
-                    Expr::Block(block_expr) => {
-                        // This is something like Tensor<E, {[...]}>
-                        assert_eq!(block_expr.block.stmts.len(), 1);
-                        let statement = &block_expr.block.stmts[0];
-                        let Stmt::Expr(statement_expr, _) = statement else {
-                            panic!("Unexpected block expression.")
-                        };
-                        match statement_expr {
-                            Expr::Array(array_expr) => {
-                                // This is something like Tensor<E, {[1, 2, -1]}>
-                                let mut _result = vec![];
-                                for elem in &array_expr.elems {
-                                    match elem {
-                                        Expr::Lit(lit) => {
-                                            let val = match &lit.lit {
-                                                Lit::Int(int_lit) => int_lit.base10_parse::<i32>().unwrap(),
-                                                _ => unimplemented!("Unexpected array element {elem:#?} in {array_expr:#?}"),
-                                            };
-                                            _result.push(val);
-                                        }
-                                        Expr::Unary(unary_expr) => {
-                                            let unary_expr_str =
-                                                unary_expr.to_token_stream().to_string();
-                                            if unary_expr_str == "- 1" {
-                                                _result.push(-1);
-                                            } else {
-                                                panic!("Unexpected unary expression {unary_expr_str:#?} in {array_expr:#?}")
-                                            }
-                                        }
-                                        Expr::Path(path) => {
-                                            let ident = get_ident_from_path_expr(path);
-                                            match generic_vars
-                                                .inst_i32
-                                                .get(ident.to_string().as_str())
-                                            {
-                                                Some(val) => _result.push(*val),
-                                                None => {
-                                                    panic!("Undefined generic parameter {ident}")
-                                                }
-                                            }
-                                        }
-                                        Expr::Index(index) => {
-                                            let Expr::Path(path) = index.expr.as_ref() else {
-                                                unimplemented!(
-                                                    "Unexpected const generic array base {elem:#?}"
-                                                );
-                                            };
-                                            let ident = get_ident_from_path_expr(path);
-                                            let Some(shape) = generic_vars
-                                                .inst_array
-                                                .get(ident.to_string().as_str())
-                                            else {
-                                                panic!(
-                                                    "Undefined const generic array parameter {ident}"
-                                                )
-                                            };
-                                            let i = parse_signed_literal_as_i32(&index.index);
-                                            let Some(dim) = shape.get(i as usize) else {
-                                                panic!(
-                                                    "Index {i} out of bounds for const generic array `{ident}` of length {}",
-                                                    shape.len()
-                                                )
-                                            };
-                                            _result.push(*dim);
-                                        }
-                                        _ => unimplemented!(
-                                            "Unexpected array element {elem:#?} in {array_expr:#?}"
-                                        ),
-                                    }
-                                }
-                                result = Some(_result);
-                            }
-                            Expr::Repeat(repeat_expr) => {
-                                // println!("Expr::Repeat: {:?}", repeat_expr.expr);
-                                let repeat_expr_expr = &*repeat_expr.expr;
-                                let thing_to_repeat = match repeat_expr_expr {
-                                    Expr::Lit(lit) => {
-                                        match &lit.lit {
-                                            Lit::Int(int_lit) => int_lit.base10_parse::<i32>().unwrap(),
-                                            _ => unimplemented!("Unexpected repeat expr {repeat_expr_expr:#?} in {repeat_expr:#?}"),
-                                        }
-                                    },
-                                    Expr::Unary(unary_expr ) => {
-                                        let unary_expr_str = unary_expr.to_token_stream().to_string();
-                                        if unary_expr_str == "- 1" {
-                                            -1
-                                        } else {
-                                            unimplemented!("Unexpected unary expression {repeat_expr_expr:#?} in {repeat_expr:#?}")
-                                        }
-                                    },
-                                    Expr::Path(path) => {
-                                        let ident = get_ident_from_path_expr(path);
-                                        match generic_vars.inst_i32.get(ident.to_string().as_str()) {
-                                            Some(val) => *val,
-                                            None => panic!("Undefined generic parameter {ident}")
-                                        }
-                                    },
-                                    Expr::Index(index) => {
-                                        let Expr::Path(path) = index.expr.as_ref() else {
-                                            unimplemented!("Unexpected const generic array base {repeat_expr_expr:#?}");
-                                        };
-                                        let ident = get_ident_from_path_expr(path);
-                                        let Some(shape) = generic_vars.inst_array.get(ident.to_string().as_str()) else {
-                                            panic!("Undefined const generic array parameter {ident}")
-                                        };
-                                        let i = parse_signed_literal_as_i32(&index.index);
-                                        let Some(dim) = shape.get(i as usize) else {
-                                            panic!(
-                                                "Index {i} out of bounds for const generic array `{ident}` of length {}",
-                                                shape.len()
-                                            )
-                                        };
-                                        *dim
-                                    },
-                                    _ => unimplemented!("Unexpected unary expression {repeat_expr_expr:#?} in {repeat_expr:#?}"),
-                                };
-                                let num_rep = match &*repeat_expr.len {
-                                    Expr::Path(len_path) => {
-                                        // This is something like Tensor<E, {[-1; N]}>
-                                        let num_rep_var = len_path.to_token_stream().to_string();
-                                        if generic_vars.get_i32(&num_rep_var).is_none() {
-                                            panic!(
-                                                "Expected instance for generic argument {}",
-                                                num_rep_var
-                                            );
-                                        }
-                                        generic_vars.get_i32(&num_rep_var).unwrap()
-                                    }
-                                    Expr::Lit(len_lit) => {
-                                        // This is something like Tensor<E, {[-1; 3]}>
-                                        len_lit
-                                            .to_token_stream()
-                                            .to_string()
-                                            .parse::<i32>()
-                                            .unwrap()
-                                    }
-                                    _ => unimplemented!(
-                                        "Unexpected repeat expression: {repeat_expr:#?}"
-                                    ),
-                                };
-                                result = Some(vec![thing_to_repeat; num_rep as usize]);
-                            }
-                            _ => panic!("Unexpected block expression."),
-                        }
-                    }
-                    _ => panic!("Unexpected const expression {const_expr:#?}"),
-                }
-            }
-            _ => panic!("Unexpected generic argument {generic_arg:#?}"),
+    for arg in &args.args {
+        if let Some(array) = crate::generics::get_cga_from_generic_argument(arg, generic_vars)? {
+            result = Some(array);
         }
     }
-    result
+    Ok(result)
+}
+
+#[cfg(test)]
+mod dimension_parse_tests {
+    use super::*;
+
+    fn expr(source: &str) -> Expr {
+        syn::parse_str(source).unwrap()
+    }
+
+    fn vars() -> GenericVars {
+        let mut vars = GenericVars::empty_unchecked();
+        vars.inst_i32.insert("N".into(), 3);
+        vars.inst_array.insert("D".into(), vec![16, 32]);
+        vars.len2array.insert("R".into(), "D".into());
+        vars
+    }
+
+    #[test]
+    fn signed_literals_include_i32_min() {
+        for (source, expected) in [
+            ("0", 0),
+            ("128", 128),
+            ("-1", -1),
+            ("0x20", 32),
+            ("16_i32", 16),
+            ("2147483647", i32::MAX),
+            ("-2147483648", i32::MIN),
+        ] {
+            assert_eq!(
+                parse_signed_literal_as_i32(&expr(source)).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn overflowing_literals_return_errors() {
+        for source in ["2147483648", "-2147483649", "18446744073709551616"] {
+            let error = parse_signed_literal_as_i32(&expr(source)).unwrap_err();
+            assert!(
+                error.to_string().contains("outside the i32 range"),
+                "{source}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_literals_return_errors() {
+        for source in ["true", "1.5", "!1", "1 + 2", "N", "-N", "-(1)"] {
+            let error = parse_signed_literal_as_i32(&expr(source)).unwrap_err();
+            assert!(
+                error.to_string().contains("expected an integer literal"),
+                "{source}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn const_generic_arrays_resolve_literals_variables_and_indices() {
+        for (source, expected) in [
+            ("Shape<{[128, -1, N, D[1]]}>", vec![128, -1, 3, 32]),
+            ("Shape<{[-1; N]}>", vec![-1; 3]),
+            ("Shape<{[-1; R]}>", vec![-1; 2]),
+            ("Shape<{[D[0]; 2]}>", vec![16; 2]),
+            ("Shape<{[1; 0]}>", vec![]),
+            ("Shape<D>", vec![16, 32]),
+        ] {
+            let ty: Type = syn::parse_str(source).unwrap();
+            assert_eq!(
+                try_extract_cga(&ty, &vars()).unwrap(),
+                Some(expected),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_const_generic_arrays_return_errors() {
+        for (source, expected) in [
+            ("Shape<{[2147483648]}>", "outside the i32 range"),
+            ("Shape<{[true]}>", "expected an integer literal"),
+            ("Shape<{[1 + 2]}>", "unsupported dimension expression"),
+            ("Shape<{[M]}>", "undefined generic parameter"),
+            ("Shape<{[M[0]]}>", "undefined const generic array"),
+            ("Shape<{[D[-1]]}>", "out of bounds"),
+            ("Shape<{[D[2]]}>", "out of bounds"),
+            ("Shape<{[D[0 + 0]]}>", "expected an integer literal"),
+            ("Shape<{[D[2147483648]]}>", "outside the i32 range"),
+            (
+                "Shape<{[get_dims()[0]]}>",
+                "expected a const generic array name",
+            ),
+            ("Shape<{[1; -1]}>", "must be non-negative"),
+            ("Shape<{[1; M]}>", "undefined generic parameter"),
+            ("Shape<{[1; 2147483648]}>", "outside the i32 range"),
+            ("Shape<{}>", "single array expression"),
+            ("Shape<{let x = 1; [x]}>", "single array expression"),
+            ("Shape<{1}>", "expected a const generic array expression"),
+        ] {
+            let ty: Type = syn::parse_str(source).unwrap();
+            let error = try_extract_cga(&ty, &vars()).unwrap_err();
+            assert!(error.to_string().contains(expected), "{source}: {error}");
+        }
+    }
+
+    #[test]
+    fn missing_array_is_distinct_from_malformed_array() {
+        for source in ["f32", "Tensor<f32>", "Marker<3>"] {
+            let ty: Type = syn::parse_str(source).unwrap();
+            assert_eq!(try_extract_cga(&ty, &vars()).unwrap(), None, "{source}");
+        }
+    }
 }

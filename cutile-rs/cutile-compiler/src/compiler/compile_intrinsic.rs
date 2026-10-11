@@ -151,7 +151,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
     ) -> Result<Vec<i32>, JITError> {
         if let TypeInstance::StructuredType(instance) = &ty.type_instance {
             Ok(instance.shape.clone())
-        } else if let Some(shape) = get_cga_from_type(&ty.rust_ty, generic_vars) {
+        } else if let Some(shape) = get_cga_from_type(&ty.rust_ty, generic_vars)
+            .map_err(|err| self.jit_error(span, &err.to_string()))?
+        {
             Ok(shape)
         } else {
             self.jit_error_result(span, "expected a statically shaped value")
@@ -770,7 +772,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                     "expected a structured type for the dimension map argument",
                                 );
                             };
-                            let Some(dim_map) = type_inst.try_extract_cga(generic_vars) else {
+                            let Some(dim_map) =
+                                type_inst.try_extract_cga(generic_vars).map_err(|err| {
+                                    self.jit_error(&call_expr.args[1].span(), &err.to_string())
+                                })?
+                            else {
                                 return self.jit_error_result(
                                     &call_expr.args[1].span(),
                                     "dimension map must be a const generic array type",
@@ -1533,6 +1539,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     );
                 };
                 let Some(map_shape) = get_cga_from_generic_argument(map_shape_arg, generic_vars)
+                    .map_err(|err| self.jit_error(&call_expr.func.span(), &err.to_string()))?
                 else {
                     return self.jit_error_result(
                         &call_expr.func.span(),

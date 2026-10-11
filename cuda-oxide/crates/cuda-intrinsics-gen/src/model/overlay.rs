@@ -81,6 +81,7 @@ pub struct OverlayShardFile {
     #[serde(default)]
     pub packed_conversion_fp8: Option<PackedConversionFp8Admission>,
     #[serde(default)]
+    pub packed_conversion_fp8_bf16x2: Option<PackedConversionFp8Bf16x2Admission>,
     pub packed_conversion_fp8_f16x2: Option<PackedConversionFp8F16x2Admission>,
     #[serde(default)]
     pub scalar_conversion: Option<ScalarConversionAdmission>,
@@ -503,6 +504,21 @@ pub struct PackedConversionFp8F16x2Admission {
 pub enum PackedConversionFp8Format {
     E4m3x2,
     E5m2x2,
+}
+
+/// Compact admission for packing `bf16x2` into `e4m3x2` or `e5m2x2`.
+///
+/// Pack only. The imported reverse conversions are block-scaled
+/// (`scale_n2_ue8m0`) and are not part of this family.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackedConversionFp8Bf16x2Admission {
+    pub llvm_evidence_profile: String,
+    pub libnvvm_evidence_profile: String,
+    pub runtime_validation: RuntimeValidation,
+    pub fp8_formats: Vec<PackedConversionFp8Format>,
+    pub relu_variants: bool,
+    pub product_count: usize,
 }
 
 /// Which way an FP8/`f16x2` conversion runs.

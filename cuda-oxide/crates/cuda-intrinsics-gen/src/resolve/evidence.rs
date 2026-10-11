@@ -831,6 +831,18 @@ pub(super) fn validate_packed_conversion_backend_evidence(
     }
     match lowering.backend {
         IntrinsicBackend::LlvmNvptx => {
+            // `bf16x2` pack records have empty selections, so there is no typed
+            // NVVM route to assemble. Inline PTX is the admitted lowering.
+            if policy.packed_conversion.as_ref().is_some_and(|conversion| {
+                conversion.source_format == crate::model::PackedConversionSourceFormat::Bf16x2
+            }) {
+                ensure!(
+                    lowering.mechanism == BackendLoweringMechanism::InlinePtx,
+                    "{} bf16x2 packed conversion must lower through inline PTX",
+                    policy.id
+                );
+                return Ok(());
+            }
             validate_typed_llvm_evidence(policy, record)?;
             for stage in [
                 EvidenceStageKind::DeclarationCanonicalization,

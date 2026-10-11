@@ -383,7 +383,8 @@ pub(in crate::render) fn render_dialect_packed_conversion(
                 )
                 .unwrap();
             }
-            PackedConversionSourceFormat::E4m3x2
+            PackedConversionSourceFormat::Bf16x2
+            | PackedConversionSourceFormat::E4m3x2
             | PackedConversionSourceFormat::E5m2x2
             | PackedConversionSourceFormat::F16x2 => {
                 let source_width = packed_conversion_source_width(record);

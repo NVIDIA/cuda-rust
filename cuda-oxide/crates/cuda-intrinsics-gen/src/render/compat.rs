@@ -2092,7 +2092,8 @@ pub(super) fn render_compat_packed_conversion(
         // follows the record's own argument types rather than a fixed f32 pair.
         let parameter_names: Vec<&str> = match packed_conversion_source(record) {
             PackedConversionSourceFormat::F32x2 => vec![argument_names.0, argument_names.1],
-            PackedConversionSourceFormat::E4m3x2
+            PackedConversionSourceFormat::Bf16x2
+            | PackedConversionSourceFormat::E4m3x2
             | PackedConversionSourceFormat::E5m2x2
             | PackedConversionSourceFormat::F16x2 => vec!["packed"],
         };

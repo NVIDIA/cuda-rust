@@ -19,7 +19,7 @@ use super::guards::*;
 
 pub(super) const OVERLAY_SCHEMA: u32 = 44;
 pub(super) const MINIMUM_OVERLAY_SHARD_SCHEMA: u32 = 26;
-pub(super) const OVERLAY_SHARD_SCHEMA: u32 = 64;
+pub(super) const OVERLAY_SHARD_SCHEMA: u32 = 65;
 pub(super) const REGISTER_MMA_F8F6F4_SHARD_SCHEMA: u32 = 46;
 pub(super) const REGISTER_MMA_F8F6F4_F16_SHARD_SCHEMA: u32 = 47;
 pub(super) const REGISTER_MMA_MXF8F6F4_SHARD_SCHEMA: u32 = 60;
@@ -32,6 +32,7 @@ pub(super) const SPARSE_MMA_FP8_F32_SHARD_SCHEMA: u32 = 64;
 pub(super) const PRMT_SHARD_SCHEMA: u32 = 28;
 pub(super) const PACKED_CONVERSION_FP8_SHARD_SCHEMA: u32 = 29;
 pub(super) const PACKED_CONVERSION_FP8_F16X2_SHARD_SCHEMA: u32 = 59;
+pub(super) const PACKED_CONVERSION_FP8_BF16X2_SHARD_SCHEMA: u32 = 65;
 pub(super) const CLUSTER_SREG_SHARD_SCHEMA: u32 = 30;
 pub(super) const CLUSTER_BARRIER_SHARD_SCHEMA: u32 = 31;
 pub(super) const SPECIAL_REGISTER_SHARD_SCHEMA: u32 = 32;
@@ -114,6 +115,7 @@ pub(super) fn read_overlay(
         let sparse_mma_ampere_float_admission = shard.sparse_mma_ordered_ampere_float.take();
         let prmt_admission = shard.prmt.take();
         let packed_conversion_fp8_admission = shard.packed_conversion_fp8.take();
+        let packed_conversion_fp8_bf16x2_admission = shard.packed_conversion_fp8_bf16x2.take();
         let packed_conversion_fp8_f16x2_admission = shard.packed_conversion_fp8_f16x2.take();
         let scalar_conversion_admission = shard.scalar_conversion.take();
         let scalar_arithmetic_admission = shard.scalar_arithmetic.take();
@@ -253,6 +255,13 @@ pub(super) fn read_overlay(
                 "compact FP8 conversion admission must be the only content of a packed_conversion shard"
             );
             shard.intrinsics = expand_packed_conversion_fp8_admission(&admission)?;
+        }
+        if let Some(admission) = packed_conversion_fp8_bf16x2_admission {
+            ensure!(
+                shard.family == "packed_conversion" && shard.intrinsics.is_empty(),
+                "compact FP8 bf16x2 conversion admission must be the only content of a packed_conversion shard"
+            );
+            shard.intrinsics = expand_packed_conversion_fp8_bf16x2_admission(&admission)?;
         }
         if let Some(admission) = packed_conversion_fp8_f16x2_admission {
             ensure!(
@@ -481,6 +490,12 @@ pub(super) fn validate_overlay_shard_schema_with_max(
             || shard.schema >= PACKED_CONVERSION_FP8_F16X2_SHARD_SCHEMA,
         "compact FP8 f16x2 conversion admission requires overlay shard schema {}",
         PACKED_CONVERSION_FP8_F16X2_SHARD_SCHEMA
+    );
+    ensure!(
+        shard.packed_conversion_fp8_bf16x2.is_none()
+            || shard.schema >= PACKED_CONVERSION_FP8_BF16X2_SHARD_SCHEMA,
+        "compact FP8 bf16x2 conversion admission requires overlay shard schema {}",
+        PACKED_CONVERSION_FP8_BF16X2_SHARD_SCHEMA
     );
     ensure!(
         shard.scalar_conversion.is_none() || shard.schema >= SCALAR_CONVERSION_SHARD_SCHEMA,

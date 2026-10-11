@@ -172,6 +172,50 @@ fn compact_fp8_f16x2_conversion_axes_require_the_exact_closed_product() {
 }
 
 #[test]
+fn compact_fp8_bf16x2_pack_admits_rn_satfinite_forms() {
+    let records =
+        expand_packed_conversion_fp8_bf16x2_admission(&test_fp8_bf16x2_conversion_admission())
+            .unwrap();
+    assert_eq!(records.len(), 4);
+    assert_eq!(records[0].id, "cvt_rn_satfinite_e4m3x2_bf16x2");
+    assert_eq!(records[0].rust_name, "cvt_rn_satfinite_e4m3x2_bf16x2");
+    assert_eq!(
+        records[0].expected_ptx.modifiers,
+        ["rn", "satfinite", "e4m3x2", "bf16x2"]
+    );
+    assert_eq!(records[1].rust_name, "cvt_rn_satfinite_relu_e4m3x2_bf16x2");
+    assert_eq!(
+        records[1].expected_ptx.modifiers,
+        ["rn", "satfinite", "relu", "e4m3x2", "bf16x2"]
+    );
+    assert_eq!(records[2].rust_name, "cvt_rn_satfinite_e5m2x2_bf16x2");
+    assert_eq!(
+        records[2].expected_ptx.modifiers,
+        ["rn", "satfinite", "e5m2x2", "bf16x2"]
+    );
+    assert_eq!(records[3].rust_name, "cvt_rn_satfinite_relu_e5m2x2_bf16x2");
+    assert_eq!(
+        records[3].expected_ptx.modifiers,
+        ["rn", "satfinite", "relu", "e5m2x2", "bf16x2"]
+    );
+    assert!(records.iter().all(|record| {
+        record.rust_arguments == ["u32"]
+            && record.rust_result == "u16"
+            && record.llvm_arguments == ["v2bf16"]
+            && record.llvm_results == ["i16"]
+            && record.expected_ptx.mnemonic == "cvt"
+            && record.expected_ptx.operands.len() == 2
+            && record.minimum_ptx == "9.1"
+            && record.minimum_sm.is_none()
+            && record.targets == "sm_100f|sm_110f|sm_120f"
+            && record
+                .source_record
+                .as_deref()
+                .is_some_and(|source| source.starts_with("int_nvvm_bf16x2_to_"))
+    }));
+}
+
+#[test]
 fn packed_atomic_closed_semantics_reject_every_unreviewed_mutation() {
     let valid = packed_policy("packed_atomic_add_f16x2");
     validate_ptx_native_policy(&valid).unwrap();
@@ -424,7 +468,7 @@ fn pinned_packed_conversion_records_match_the_closed_recipes() {
         .iter()
         .filter(|record| record.family == "packed_conversion")
         .collect();
-    assert_eq!(packed.len(), 18);
+    assert_eq!(packed.len(), 22);
     for policy in packed {
         let source = resolve_policy_source(policy).unwrap();
         let declaration = policy

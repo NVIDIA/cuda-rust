@@ -26,6 +26,7 @@ shards = [
     "overlay/packed_atomic.toml",
     "overlay/packed_conversion.toml",
     "overlay/packed_conversion_fp8.toml",
+    "overlay/packed_conversion_fp8_bf16x2.toml",
     "overlay/packed_conversion_fp8_f16x2.toml",
     "overlay/prmt.toml",
     "overlay/redux.toml",

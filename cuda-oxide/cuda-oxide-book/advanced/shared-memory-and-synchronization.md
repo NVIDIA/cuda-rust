@@ -272,6 +272,68 @@ that not all threads take. Every thread in the block must reach the same
 control flow, restructure so the barrier is outside the branch.
 :::
 
+### Compiler ordering around the barrier
+
+The hardware guarantee above covers visibility between threads. A second
+question is whether the compiler keeps your own accesses on the side of the
+barrier where you wrote them. Both backends emit the barrier as an operation
+that the compiler treats as reading and writing all memory:
+
+- The LLVM NVPTX route calls `llvm.nvvm.barrier.cta.sync.aligned.all`. The
+  call is `convergent` and has no `memory(...)` attribute.
+- The libNVVM route emits `bar.sync 0;` as `asm sideeffect` with a `~{memory}`
+  clobber.
+
+| Access form                                              | Kept on its side of `sync_threads()` | Notes |
+| :------------------------------------------------------- | :----------------------------------- | :---- |
+| `SharedArray` indexing, `S[i]`                           | Yes | A plain load or store in address space 3. |
+| `SharedArray::as_raw_mut_ptr(&raw mut S)`                | Yes | The same instructions as indexing. Prefer it to `as_mut_ptr()`, which needs `&mut S` and is rejected by the `static_mut_refs` lint under edition 2024. |
+| `DynamicSharedArray::<T>::get()` and `offset()`          | Yes | A plain load or store through the returned pointer. |
+| `ptx_asm!` with no options                               | Yes | The call is `asm sideeffect` with no memory attribute. The compiler keeps it, and keeps its order against the barrier and other side-effecting asm. |
+| `ptx_asm!` with `clobber("memory")`                      | Yes | Adds `~{memory}` to the constraint string. The order is the same as with no options today. The clobber declares a memory access that the operands do not name. Add it to every snippet that loads or stores through an address. |
+| `ptx_asm!` with `options(register_only)`                 | Not promised | The call has no `sideeffect` flag, and the compiler deletes it when its result is unused. Use it for snippets that touch registers only. |
+| `cp_async_*` copies, `cp_async_commit_group()`, `cp_async_wait_group(n)` | Yes, but see below | Issue, commit and wait stay in order. The barrier does not wait for the copy to land. |
+| A `&T` or `&mut T` into shared memory that outlives the barrier | Not promised | Undefined behaviour in Rust when another thread writes after the barrier. |
+
+The first six rows were checked on both backends with a producer and consumer
+kernel: store, barrier, load, barrier, store, barrier, load. The PTX keeps
+that order for every form and keeps it when the loads sit in a loop whose trip
+count is a kernel argument. A run on an RTX 5060 Laptop (sm_120) read the
+expected neighbour values. A `register_only` `ld.shared` whose result is unused
+leaves no instruction in the PTX, while the same snippet with no options stays.
+The `register_only` loads in the test kernels kept their order against the
+barrier. The macro does not promise that order. Treat it as unspecified.
+
+The table covers compiler ordering only. The rule under "When to sync" still
+decides where the barriers belong.
+
+#### `cp.async` needs a wait before the barrier
+
+`bar.sync` does not wait for a pending `cp.async`. Each thread waits for its
+own copies and then every thread meets at the barrier:
+
+```rust
+unsafe {
+    cp_async_ca_4(dst, src);
+    cp_async_commit_group();
+    cp_async_wait_group(0); // this thread's copies have landed
+}
+thread::sync_threads(); // other threads may now read `dst`
+```
+
+A test kernel that drops `cp_async_wait_group(0)` and reads a neighbour's slot
+after the barrier returned the stale value in all 128 threads on sm_120. The
+same kernel with the wait returned the copied value in all 128.
+
+#### Keep references out of the barrier
+
+A `&T` into shared memory promises that the target does not change while the
+reference is live. A store by another thread after the barrier breaks that
+promise. Reading through the same reference before and after the barrier is
+undefined behaviour under Rust's aliasing rules. The compiler reloads through
+such a reference today, and the current lowering is the only reason. Read
+through a fresh raw pointer or index after each barrier.
+
 ---
 
 ## Shared memory vs. other approaches

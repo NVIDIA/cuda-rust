@@ -416,7 +416,7 @@ pub unsafe fn mma_sp_m16n8k32_s32_u8_satfinite(
 /// # Safety
 /// All 32 lanes must execute the same instruction with the same qualifiers, and no lane may have exited.
 /// `c`, `a`, and `b` must contain this lane's 4-, 4-, and 4-register fragments; `metadata` must contain its sparse metadata.
-/// Every 4-bit metadata group must encode two distinct 2-bit indices; `0x0`, `0x5`, `0xa`, and `0xf` are undefined behavior.
+/// Every 4-bit metadata group must be `0x4`, `0x8`, `0x9`, `0xc`, `0xd`, or `0xe`; any other value is undefined behavior.
 /// `selector` must be the compile-time constant `0`.
 /// See the [PTX sparse MMA fragment layouts](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-instructions-mma-sp).
 /// This register-only operation is not a memory fence.
@@ -440,7 +440,7 @@ pub unsafe fn mma_sp_m16n8k64_f32_e4m3_e4m3_f32(
 /// # Safety
 /// All 32 lanes must execute the same instruction with the same qualifiers, and no lane may have exited.
 /// `c`, `a`, and `b` must contain this lane's 4-, 4-, and 4-register fragments; `metadata` must contain its sparse metadata.
-/// Every 4-bit metadata group must encode two distinct 2-bit indices; `0x0`, `0x5`, `0xa`, and `0xf` are undefined behavior.
+/// Every 4-bit metadata group must be `0x4`, `0x8`, `0x9`, `0xc`, `0xd`, or `0xe`; any other value is undefined behavior.
 /// `selector` must be the compile-time constant `0`.
 /// See the [PTX sparse MMA fragment layouts](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-instructions-mma-sp).
 /// This register-only operation is not a memory fence.
@@ -464,7 +464,7 @@ pub unsafe fn mma_sp_m16n8k64_f32_e4m3_e5m2_f32(
 /// # Safety
 /// All 32 lanes must execute the same instruction with the same qualifiers, and no lane may have exited.
 /// `c`, `a`, and `b` must contain this lane's 4-, 4-, and 4-register fragments; `metadata` must contain its sparse metadata.
-/// Every 4-bit metadata group must encode two distinct 2-bit indices; `0x0`, `0x5`, `0xa`, and `0xf` are undefined behavior.
+/// Every 4-bit metadata group must be `0x4`, `0x8`, `0x9`, `0xc`, `0xd`, or `0xe`; any other value is undefined behavior.
 /// `selector` must be the compile-time constant `0`.
 /// See the [PTX sparse MMA fragment layouts](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-instructions-mma-sp).
 /// This register-only operation is not a memory fence.
@@ -488,7 +488,7 @@ pub unsafe fn mma_sp_m16n8k64_f32_e5m2_e4m3_f32(
 /// # Safety
 /// All 32 lanes must execute the same instruction with the same qualifiers, and no lane may have exited.
 /// `c`, `a`, and `b` must contain this lane's 4-, 4-, and 4-register fragments; `metadata` must contain its sparse metadata.
-/// Every 4-bit metadata group must encode two distinct 2-bit indices; `0x0`, `0x5`, `0xa`, and `0xf` are undefined behavior.
+/// Every 4-bit metadata group must be `0x4`, `0x8`, `0x9`, `0xc`, `0xd`, or `0xe`; any other value is undefined behavior.
 /// `selector` must be the compile-time constant `0`.
 /// See the [PTX sparse MMA fragment layouts](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-instructions-mma-sp).
 /// This register-only operation is not a memory fence.

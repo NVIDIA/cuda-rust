@@ -9248,7 +9248,7 @@ pub unsafe fn i0169(
 /// `_arg0`, `_arg1`, and `_arg2` hold this lane's 4-register C, 4-register A, and 4-register B fragments; `_arg3` holds its sparse metadata.
 /// `_arg4` must be the compile-time constant `0`.
 /// The operation is register-only and is not a memory fence.
-/// Every 4-bit metadata group must encode two distinct 2-bit indices; `0x0`, `0x5`, `0xa`, and `0xf` are undefined behavior.
+/// Every 4-bit metadata group must be `0x4`, `0x8`, `0x9`, `0xc`, `0xd`, or `0xe`; any other value is undefined behavior.
 /// See the [PTX sparse MMA fragment layouts](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-instructions-mma-sp).
 #[must_use]
 #[inline(never)]
@@ -9274,7 +9274,7 @@ pub unsafe fn i1026(
 /// `_arg0`, `_arg1`, and `_arg2` hold this lane's 4-register C, 4-register A, and 4-register B fragments; `_arg3` holds its sparse metadata.
 /// `_arg4` must be the compile-time constant `0`.
 /// The operation is register-only and is not a memory fence.
-/// Every 4-bit metadata group must encode two distinct 2-bit indices; `0x0`, `0x5`, `0xa`, and `0xf` are undefined behavior.
+/// Every 4-bit metadata group must be `0x4`, `0x8`, `0x9`, `0xc`, `0xd`, or `0xe`; any other value is undefined behavior.
 /// See the [PTX sparse MMA fragment layouts](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-instructions-mma-sp).
 #[must_use]
 #[inline(never)]
@@ -9300,7 +9300,7 @@ pub unsafe fn i1027(
 /// `_arg0`, `_arg1`, and `_arg2` hold this lane's 4-register C, 4-register A, and 4-register B fragments; `_arg3` holds its sparse metadata.
 /// `_arg4` must be the compile-time constant `0`.
 /// The operation is register-only and is not a memory fence.
-/// Every 4-bit metadata group must encode two distinct 2-bit indices; `0x0`, `0x5`, `0xa`, and `0xf` are undefined behavior.
+/// Every 4-bit metadata group must be `0x4`, `0x8`, `0x9`, `0xc`, `0xd`, or `0xe`; any other value is undefined behavior.
 /// See the [PTX sparse MMA fragment layouts](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-instructions-mma-sp).
 #[must_use]
 #[inline(never)]
@@ -9326,7 +9326,7 @@ pub unsafe fn i1028(
 /// `_arg0`, `_arg1`, and `_arg2` hold this lane's 4-register C, 4-register A, and 4-register B fragments; `_arg3` holds its sparse metadata.
 /// `_arg4` must be the compile-time constant `0`.
 /// The operation is register-only and is not a memory fence.
-/// Every 4-bit metadata group must encode two distinct 2-bit indices; `0x0`, `0x5`, `0xa`, and `0xf` are undefined behavior.
+/// Every 4-bit metadata group must be `0x4`, `0x8`, `0x9`, `0xc`, `0xd`, or `0xe`; any other value is undefined behavior.
 /// See the [PTX sparse MMA fragment layouts](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-instructions-mma-sp).
 #[must_use]
 #[inline(never)]

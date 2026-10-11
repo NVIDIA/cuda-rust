@@ -792,6 +792,38 @@ fn register_mma_kind_is_explicit_and_legacy_ir_stays_compatible() {
 }
 
 #[test]
+fn sparse_fp8_metadata_contract_requires_ordered_indices_without_changing_integer_rules() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let catalog = crate::resolve::resolve(&repo_root).unwrap();
+    for id in [
+        "mma_sp_m16n8k64_f32_e4m3_e4m3_f32",
+        "mma_sp_m16n8k64_f32_e4m3_e5m2_f32",
+        "mma_sp_m16n8k64_f32_e5m2_e4m3_f32",
+        "mma_sp_m16n8k64_f32_e5m2_e5m2_f32",
+    ] {
+        let record = sparse_mmas(&catalog)
+            .find(|record| record.id == id)
+            .unwrap();
+        assert_eq!(
+            sparse_mma_metadata_rule(record.sparse_mma.as_ref().unwrap()),
+            "Every 4-bit metadata group must be `0x4`, `0x8`, `0x9`, `0xc`, `0xd`, or `0xe`; any other value is undefined behavior.",
+            "{id}"
+        );
+        assert!(sparse_mma_template(record).starts_with("mma.sp.sync.aligned."));
+    }
+    for id in ["mma_sp_m16n8k64_s32_s8", "mma_sp_m16n8k64_s32_s4"] {
+        let record = sparse_mmas(&catalog)
+            .find(|record| record.id == id)
+            .unwrap();
+        assert_eq!(
+            sparse_mma_metadata_rule(record.sparse_mma.as_ref().unwrap()),
+            "Every 4-bit metadata group must encode two distinct 2-bit indices; `0x0`, `0x5`, `0xa`, and `0xf` are undefined behavior.",
+            "{id}"
+        );
+    }
+}
+
+#[test]
 fn sparse_mma_rendering_enforces_selector_and_keeps_family_distinct() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = crate::resolve::resolve(&repo_root).unwrap();
@@ -1072,8 +1104,8 @@ fn sparse_mma_rendering_enforces_selector_and_keeps_family_distinct() {
     assert!(targets.contains("GeneratedSparseMmaOverflow::NotApplicable"));
     assert!(targets.contains("GeneratedHardwareAlternative::ExactArchitecture(120)"));
 
-    assert_eq!(raw.matches(SPARSE_MMA_STANDARD_METADATA_RULE).count(), 36);
-    assert_eq!(raw.matches(SPARSE_MMA_ORDERED_METADATA_RULE).count(), 88);
+    assert_eq!(raw.matches(SPARSE_MMA_STANDARD_METADATA_RULE).count(), 32);
+    assert_eq!(raw.matches(SPARSE_MMA_ORDERED_METADATA_RULE).count(), 92);
     assert_eq!(
         raw.matches(SPARSE_MMA_ORDERED_TF32_METADATA_RULE).count(),
         2
@@ -1082,13 +1114,13 @@ fn sparse_mma_rendering_enforces_selector_and_keeps_family_distinct() {
         compatibility
             .matches(SPARSE_MMA_STANDARD_METADATA_RULE)
             .count(),
-        36
+        32
     );
     assert_eq!(
         compatibility
             .matches(SPARSE_MMA_ORDERED_METADATA_RULE)
             .count(),
-        88
+        92
     );
     assert_eq!(
         compatibility
@@ -1146,11 +1178,11 @@ fn sparse_mma_rendering_enforces_selector_and_keeps_family_distinct() {
     assert!(reference.contains("LLVM source record uses A, B, C, metadata, selector order"));
     assert_eq!(
         reference.matches(SPARSE_MMA_STANDARD_METADATA_RULE).count(),
-        36
+        32
     );
     assert_eq!(
         reference.matches(SPARSE_MMA_ORDERED_METADATA_RULE).count(),
-        88
+        92
     );
     assert_eq!(
         reference

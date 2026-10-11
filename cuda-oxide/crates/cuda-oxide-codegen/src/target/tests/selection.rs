@@ -665,3 +665,37 @@ fn an_explicit_target_that_cannot_host_the_module_is_refused() {
         .is_err()
     );
 }
+
+/// `cuda-device`'s build script reads `CUDA_OXIDE_DEVICE_ARCH` as
+/// `value.parse::<DeviceArch>().ok()`. Its floor matches selection only while
+/// the backend's input boundary accepts exactly those values and rejects the
+/// rest before any target is chosen.
+#[test]
+fn the_build_script_reads_the_device_hint_as_the_backend_does() {
+    for raw in [
+        "sm_75",
+        "sm_86",
+        "sm_120a",
+        "",
+        "  ",
+        " sm_86",
+        "sm_86 ",
+        "86",
+        "sm_9",
+        "compute_86",
+        "sm_100f",
+    ] {
+        let build_script = raw.parse::<cuda_target_spec::DeviceArch>().ok();
+        let backend = crate::options::DeviceArchHint::from_env_value(Ok(raw.to_string()))
+            .expect("a set variable is a hint")
+            .as_device_arch()
+            .ok()
+            .cloned();
+        assert_eq!(build_script, backend, "CUDA_OXIDE_DEVICE_ARCH={raw:?}");
+    }
+    assert!(
+        crate::options::DeviceArchHint::from_env_value(Err(std::env::VarError::NotPresent))
+            .is_none(),
+        "an unset variable is no hint on either side"
+    );
+}

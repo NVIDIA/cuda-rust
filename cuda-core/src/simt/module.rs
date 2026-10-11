@@ -30,7 +30,7 @@
 use crate::error::{DriverError, IntoResult};
 use crate::simt::context::CudaContext;
 use std::borrow::Cow;
-use std::ffi::{c_void, CString};
+use std::ffi::c_void;
 use std::mem::MaybeUninit;
 use std::sync::Arc;
 
@@ -74,15 +74,15 @@ impl CudaContext {
     /// `ptx_src` must be a valid, null-terminator-free PTX string. The driver
     /// performs JIT compilation targeting the current device architecture.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `ptx_src` contains interior null bytes.
+    /// Returns `CUDA_ERROR_INVALID_VALUE` if `ptx_src` contains an interior null byte.
     pub fn load_module_from_ptx_src(
         self: &Arc<Self>,
         ptx_src: &str,
     ) -> Result<Arc<CudaModule>, DriverError> {
+        let c_src = crate::error::c_string(ptx_src)?;
         self.bind_to_thread()?;
-        let c_src = CString::new(ptx_src).unwrap();
         let cu_module = unsafe {
             let mut cu_module = MaybeUninit::uninit();
             cuda_bindings::cuModuleLoadData(cu_module.as_mut_ptr(), c_src.as_ptr() as *const _)
@@ -124,15 +124,15 @@ impl CudaContext {
     /// `filename` is the filesystem path. The driver selects the loader based
     /// on file contents (PTX text or cubin ELF).
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `filename` contains interior null bytes.
+    /// Returns `CUDA_ERROR_INVALID_VALUE` if `filename` contains an interior null byte.
     pub fn load_module_from_file(
         self: &Arc<Self>,
         filename: &str,
     ) -> Result<Arc<CudaModule>, DriverError> {
+        let c_str = crate::error::c_string(filename)?;
         self.bind_to_thread()?;
-        let c_str = CString::new(filename).unwrap();
         let mut cu_module = MaybeUninit::uninit();
         let cu_module = unsafe {
             cuda_bindings::cuModuleLoad(cu_module.as_mut_ptr(), c_str.as_ptr()).result()?;
@@ -235,12 +235,12 @@ impl CudaModule {
     /// Returns an error if binding the module's context fails or if
     /// `cuModuleGetFunction` cannot resolve `fn_name` in this module.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `fn_name` contains interior null bytes.
+    /// Returns `CUDA_ERROR_INVALID_VALUE` if `fn_name` contains an interior null byte.
     pub fn load_function(self: &Arc<Self>, fn_name: &str) -> Result<CudaFunction, DriverError> {
+        let c_name = crate::error::c_string(fn_name)?;
         self.ctx.bind_to_thread()?;
-        let c_name = CString::new(fn_name).unwrap();
         let cu_function = unsafe {
             let mut cu_function = MaybeUninit::uninit();
             cuda_bindings::cuModuleGetFunction(
@@ -395,15 +395,15 @@ impl CudaModule {
     /// Returns an error if binding fails or if `name` cannot be resolved
     /// in this module.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `name` contains interior null bytes.
+    /// Returns `CUDA_ERROR_INVALID_VALUE` if `name` contains an interior null byte.
     pub fn get_global(
         self: &Arc<Self>,
         name: &str,
     ) -> Result<(cuda_bindings::CUdeviceptr, usize), DriverError> {
+        let c_name = crate::error::c_string(name)?;
         self.ctx.bind_to_thread()?;
-        let c_name = CString::new(name).unwrap();
         let mut dptr = MaybeUninit::<cuda_bindings::CUdeviceptr>::uninit();
         let mut size = MaybeUninit::<usize>::uninit();
         unsafe {

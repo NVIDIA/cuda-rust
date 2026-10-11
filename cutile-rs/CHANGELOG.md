@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `CudaContext::mem_info`, the `(free, total)` device memory query
+  (`cuMemGetInfo`) for the context.
+
 ### Changed
 
 - cuTile Rust now lives in the [NVIDIA/cuda-rust](https://github.com/NVIDIA/cuda-rust)

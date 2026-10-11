@@ -192,7 +192,7 @@ Generic policy expressions require `#![feature(generic_const_exprs)]`.
 currently remain literal.
 
 See the
-[`policy_config`](https://github.com/NVlabs/cuda-oxide/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/policy_config)
+[`policy_config`](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/policy_config)
 example for two concrete policies that generate independent PTX
 specializations and policy-specific prepared launches.
 

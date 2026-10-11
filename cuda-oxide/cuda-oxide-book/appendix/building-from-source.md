@@ -19,8 +19,8 @@ from a fresh checkout. If you just want to run an example, the
 ## Clone the repository
 
 ```bash
-git clone https://github.com/NVlabs/cuda-oxide.git
-cd cuda-oxide
+git clone https://github.com/NVIDIA/cuda-rust.git
+cd cuda-rust
 ```
 
 ## Install the Rust toolchain
@@ -155,7 +155,7 @@ build process. `cargo-oxide` handles building it transparently.
 pipeline. Inside the repo, it works via a workspace alias. For standalone use, install it with the pinned nightly toolchain:
 
 ```bash
-cargo +nightly-2026-10-11 install --git https://github.com/NVlabs/cuda-oxide.git cargo-oxide
+cargo +nightly-2026-10-11 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
 ```
 
 On first run, `cargo-oxide` automatically fetches and builds the codegen backend

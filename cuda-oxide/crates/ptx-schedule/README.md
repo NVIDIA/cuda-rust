@@ -101,4 +101,4 @@ ptx-schedule kernel.ptx --seed 7 --intensity 0.5 -o perturbed.ptx \
 
 ## License
 
-Apache-2.0. See [LICENSE](https://github.com/NVlabs/cuda-oxide/blob/main/LICENSE).
+Apache-2.0. See [LICENSE](https://github.com/NVIDIA/cuda-rust/blob/main/LICENSE).

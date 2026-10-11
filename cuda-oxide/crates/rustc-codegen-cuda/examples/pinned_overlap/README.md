@@ -13,7 +13,7 @@ Run it from the repository root:
 cargo oxide run pinned_overlap
 ```
 
-See the [book chapter](https://github.com/NVlabs/cuda-oxide/blob/main/cuda-oxide/cuda-oxide-book/async-programming/overlapping-transfers-and-compute.md) for the API and pipeline explanation.
+See the [book chapter](https://github.com/NVIDIA/cuda-rust/blob/main/cuda-oxide/cuda-oxide-book/async-programming/overlapping-transfers-and-compute.md) for the API and pipeline explanation.
 
 The program verifies every transformed element before printing its `SUCCESS`
 marker. It reports median CUDA-event bandwidth and wall-clock pipeline time so

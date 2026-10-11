@@ -14,14 +14,15 @@
 mod common;
 
 use common::{
-    OffsetBound, RangeBound, RangeForLoop, RangeForShape, counted_loop, counted_loop_from_step,
-    early_exit_counted_loop, early_exit_with_direct_liveout, mir_ctx, multi_latch_counted_loop,
-    multiple_exit_counted_loop, nested_counted_loop, offset_counted_loop, range_for_loop, u32t,
+    OffsetBound, RangeBound, RangeForLoop, RangeForShape, StepForm, counted_loop,
+    counted_loop_from_step, early_exit_counted_loop, early_exit_with_direct_liveout, i32t, mir_ctx,
+    multi_latch_counted_loop, multiple_exit_counted_loop, nested_counted_loop, offset_counted_loop,
+    range_for_loop, u32t,
 };
 use dialect_mir::ops::{
-    MirAddOp, MirBitAndOp, MirCallOp, MirCondBranchOp, MirConstantOp, MirGeOp,
-    MirGetDiscriminantOp, MirGtOp, MirLeOp, MirLtOp, MirNotOp, MirReturnOp, MirSubOp,
-    MirUnrollHintOp,
+    MirAddOp, MirBitAndOp, MirCallOp, MirCheckedAddOp, MirCheckedSubOp, MirCondBranchOp,
+    MirConstantOp, MirGeOp, MirGetDiscriminantOp, MirGtOp, MirLeOp, MirLtOp, MirNotOp, MirReturnOp,
+    MirSubOp, MirUnrollHintOp,
 };
 use mir_transforms::analyses::induction::{CmpPred, analyze};
 use mir_transforms::unroll::unroll_annotated_loops;
@@ -991,6 +992,138 @@ fn partial_unroll_of_a_range_for_loop_returns_the_wrapping_sum_for_every_end() {
                     );
                 }
             }
+        }
+    }
+}
+
+/// The 8-bit signed bounds a range loop over a checked-step counter is tested at.
+fn signed_eight_bit_case() -> (i128, i128, Vec<i128>) {
+    let (_, min, max, bounds) = eight_bit_cases()
+        .into_iter()
+        .find(|case| case.0 == Signedness::Signed)
+        .expect("a signed case");
+    (min, max, bounds)
+}
+
+#[test]
+fn full_unroll_of_a_signed_range_for_loop_folds_the_wrapping_sum_for_every_boundary_range() {
+    let (_, _, bounds) = signed_eight_bit_case();
+    for rev in [false, true] {
+        for &start in &bounds {
+            for &end in &bounds {
+                let mut ctx = mir_ctx();
+                let ty = IntegerType::get(&ctx, 8, Signedness::Signed);
+                let shape = RangeForShape {
+                    rev,
+                    step_form: StepForm::Checked,
+                    ..RangeForShape::new(
+                        RangeBound::Const(start as i64),
+                        RangeBound::Const(end as i64),
+                    )
+                };
+                let lp = range_for_loop(&mut ctx, ty, shape);
+                unroll_range_for(&mut ctx, &lp, 0);
+                let case = format!("{start}..{end}, rev={rev}");
+                assert_eq!(loop_count(&ctx, lp.region), 0, "{case}");
+                assert_eq!(
+                    sole_return_constant(&ctx, lp.region).map(|v| v.rem_euclid(256)),
+                    Some(wrapping_range_sum(Signedness::Signed, start, end).rem_euclid(256)),
+                    "{case}"
+                );
+                assert_eq!(
+                    op_count::<MirCheckedAddOp>(&ctx, lp.region)
+                        + op_count::<MirCheckedSubOp>(&ctx, lp.region),
+                    0,
+                    "{case}: the overflow check is gone with the dead edge"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn partial_unroll_of_a_signed_range_for_loop_returns_the_wrapping_sum_for_every_end() {
+    let (min, max, bounds) = signed_eight_bit_case();
+    for factor in [2, 3, 4] {
+        for &start in &bounds {
+            let mut ctx = mir_ctx();
+            let ty = IntegerType::get(&ctx, 8, Signedness::Signed);
+            let shape = RangeForShape {
+                step_form: StepForm::Checked,
+                ..RangeForShape::new(RangeBound::Const(start as i64), RangeBound::Param)
+            };
+            let lp = range_for_loop(&mut ctx, ty, shape);
+            unroll_range_for(&mut ctx, &lp, factor);
+            let case = format!("{start}..n, factor={factor}");
+            assert_eq!(loop_count(&ctx, lp.region), 2, "{case}");
+            for end in min..=max {
+                assert_eq!(
+                    run_function(&ctx, lp.region, &[end]),
+                    wrapping_range_sum(Signedness::Signed, start, end),
+                    "{case}, n={end}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn signed_range_for_loops_the_unroller_refuses_keep_their_loop_and_results() {
+    // The checked step is folded first; the unroller then refuses these loops.
+    let runtime_end = RangeForShape::new(RangeBound::Const(0), RangeBound::Param);
+    let runtime_start = RangeForShape::new(RangeBound::Param, RangeBound::Const(8));
+    for (shape, factor) in [(runtime_end, 0), (runtime_start, 0)] {
+        for rev in [false, true] {
+            let shape = RangeForShape {
+                rev,
+                step_form: StepForm::Checked,
+                ..shape
+            };
+            let mut ctx = mir_ctx();
+            let i32 = i32t(&mut ctx);
+            let lp = range_for_loop(&mut ctx, i32, shape);
+            unroll_range_for(&mut ctx, &lp, factor);
+            assert_eq!(loop_count(&ctx, lp.region), 1, "{shape:?}");
+            for arg in [0, 1, 4, 9] {
+                let (start, end) = match shape.start {
+                    RangeBound::Param => (arg, 8),
+                    RangeBound::Const(_) => (0, arg),
+                };
+                assert_eq!(
+                    run_function(&ctx, lp.region, &[arg]),
+                    (start..end).sum::<i128>(),
+                    "{shape:?}, argument {arg}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn checked_step_whose_overflow_edge_is_not_dead_keeps_the_loop_untouched() {
+    for step_form in [StepForm::CheckedOverflowReenters, StepForm::CheckedStepTwo] {
+        for rev in [false, true] {
+            let mut ctx = mir_ctx();
+            let i32 = i32t(&mut ctx);
+            let shape = RangeForShape {
+                rev,
+                step_form,
+                ..RangeForShape::new(RangeBound::Const(0), RangeBound::Const(8))
+            };
+            let lp = range_for_loop(&mut ctx, i32, shape);
+            let before = operations(&ctx, lp.region).len();
+
+            unroll_range_for(&mut ctx, &lp, 0);
+
+            let case = format!("{step_form:?}, rev={rev}");
+            assert_eq!(loop_count(&ctx, lp.region), 1, "{case}");
+            assert_eq!(operations(&ctx, lp.region).len(), before, "{case}");
+            assert_eq!(
+                op_count::<MirCheckedAddOp>(&ctx, lp.region)
+                    + op_count::<MirCheckedSubOp>(&ctx, lp.region),
+                1,
+                "{case}: the overflow check is still there"
+            );
         }
     }
 }

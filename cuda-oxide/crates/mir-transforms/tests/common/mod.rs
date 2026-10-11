@@ -17,11 +17,12 @@ use core::num::NonZero;
 
 use dialect_mir::attributes::{FieldIndexAttr, MirCastKindAttr, VariantIndexAttr};
 use dialect_mir::ops::{
-    MirAddOp, MirCastOp, MirCondBranchOp, MirConstantOp, MirConstructEnumOp, MirEnumPayloadOp,
-    MirEqOp, MirFuncOp, MirGeOp, MirGetDiscriminantOp, MirGotoOp, MirGtOp, MirLeOp, MirLtOp,
-    MirNotOp, MirReturnOp, MirSubOp, MirUnreachableOp,
+    MirAddOp, MirAllocaOp, MirCastOp, MirCheckedAddOp, MirCheckedSubOp, MirCondBranchOp,
+    MirConstantOp, MirConstructEnumOp, MirConstructTupleOp, MirEnumPayloadOp, MirEqOp,
+    MirFieldAddrOp, MirFuncOp, MirGeOp, MirGetDiscriminantOp, MirGotoOp, MirGtOp, MirLeOp,
+    MirLoadOp, MirLtOp, MirNotOp, MirReturnOp, MirStoreOp, MirSubOp, MirUnreachableOp,
 };
-use dialect_mir::types::{EnumVariant, MirEnumType};
+use dialect_mir::types::{EnumVariant, MirEnumType, MirPtrType, MirTupleType};
 use mir_transforms::analyses::induction::CmpPred;
 use pliron::basic_block::BasicBlock;
 use pliron::builtin::attributes::{IntegerAttr, TypeAttr};
@@ -1110,6 +1111,24 @@ pub enum RangeBound {
     Param,
 }
 
+/// How the `Some` arm of a [`range_for_loop`] computes the next counter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepForm {
+    /// `mir.add` (`mir.sub` for `rev`): what an unsigned counter's
+    /// `unchecked_add` imports as.
+    Plain,
+    /// What a signed counter's `forward_unchecked` leaves after mem2reg:
+    /// `mir.checked_add` (`mir.checked_sub`) whose tuple goes through a stack
+    /// slot that mem2reg cannot promote, and a branch on the overflow flag to a
+    /// block that ends in `mir.unreachable`.
+    Checked,
+    /// [`StepForm::Checked`], but the overflow edge returns to the loop header.
+    CheckedOverflowReenters,
+    /// [`StepForm::Checked`] stepping by 2, for which `i < end` does not rule
+    /// out overflow.
+    CheckedStepTwo,
+}
+
 /// The variations of [`range_for_loop`].
 #[derive(Clone, Copy, Debug)]
 pub struct RangeForShape {
@@ -1122,6 +1141,8 @@ pub struct RangeForShape {
     /// The exit returns `acc + next`, a value from the match that both the
     /// break and the normal exit reach.
     pub exit_reads_next: bool,
+    /// How the counter steps.
+    pub step_form: StepForm,
 }
 
 impl RangeForShape {
@@ -1133,6 +1154,7 @@ impl RangeForShape {
             rev: false,
             break_at: None,
             exit_reads_next: false,
+            step_form: StepForm::Plain,
         }
     }
 }
@@ -1186,6 +1208,18 @@ fn construct_enum(
 /// is live across the match. With `rev` the counter starts at `end`, the header tests `start < i`, and
 /// `some` yields and passes on `i - 1`. `break_at` adds
 /// `cond_br x < k [latch, exit(acc1)]` after the addition.
+///
+/// With a [`StepForm`] other than `Plain`, `some` is the shape of a signed
+/// counter, as the backend dumps it:
+///
+/// ```text
+///   entry:   slot = alloca (ty, i1)
+///   some:    t = checked_add(i, 1);  store slot, t
+///            x = load field_addr(slot, 0);  f = load field_addr(slot, 1)
+///            cond_br not(f) [ok, overflow]
+///   ok:      o = Some(i); goto join(o, x)
+///   overflow: construct_tuple (); goto unreachable
+/// ```
 pub fn range_for_loop(
     ctx: &mut Context,
     ty: TypedHandle<IntegerType>,
@@ -1234,6 +1268,20 @@ pub fn range_for_loop(
     let end = bound(ctx, shape.end);
     let acc0 = iconst(ctx, entry, ty, 0);
     let i0 = if shape.rev { end } else { start };
+    let pair: TypeHandle = MirTupleType::get(ctx, vec![ty.into(), i1.into()]).into();
+    let slot = (shape.step_form != StepForm::Plain).then(|| {
+        let slot_ptr: TypeHandle = MirPtrType::get_generic(ctx, pair, true).into();
+        let alloca = Operation::new(
+            ctx,
+            MirAllocaOp::get_concrete_op_info(),
+            vec![slot_ptr],
+            vec![],
+            vec![],
+            0,
+        );
+        alloca.insert_at_back(entry, ctx);
+        alloca.deref(ctx).get_result(0)
+    });
     goto(ctx, entry, header, vec![acc0, i0]);
 
     let acc = header.deref(ctx).get_argument(0);
@@ -1261,16 +1309,92 @@ pub fn range_for_loop(
     };
     cond_br(ctx, header, done, none, some);
 
-    let one = iconst(ctx, some, ty, 1);
-    let step = if shape.rev {
-        MirSubOp::get_concrete_op_info()
+    let amount = if shape.step_form == StepForm::CheckedStepTwo {
+        2
     } else {
-        MirAddOp::get_concrete_op_info()
+        1
     };
-    let inext = op2!(ctx, some, step, ty.into(), i, one);
+    let one = iconst(ctx, some, ty, amount);
+    // The block that builds `Some` and goes to `join`.
+    let mut arm = some;
+    let inext = if let Some(slot) = slot {
+        let checked = if shape.rev {
+            MirCheckedSubOp::get_concrete_op_info()
+        } else {
+            MirCheckedAddOp::get_concrete_op_info()
+        };
+        let pair_value = op2!(ctx, some, checked, pair, i, one);
+        let store = Operation::new(
+            ctx,
+            MirStoreOp::get_concrete_op_info(),
+            vec![],
+            vec![slot, pair_value],
+            vec![],
+            0,
+        );
+        store.insert_at_back(some, ctx);
+        let load_field = |ctx: &mut Context, field: u32, field_ty: TypeHandle| {
+            let field_ptr: TypeHandle = MirPtrType::get_generic(ctx, field_ty, true).into();
+            let address = MirFieldAddrOp::build(ctx, slot, field_ptr, field)
+                .expect("the slot is a MIR pointer");
+            address.insert_at_back(some, ctx);
+            let field_value = address.deref(ctx).get_result(0);
+            let load = Operation::new(
+                ctx,
+                MirLoadOp::get_concrete_op_info(),
+                vec![field_ty],
+                vec![field_value],
+                vec![],
+                0,
+            );
+            load.insert_at_back(some, ctx);
+            load.deref(ctx).get_result(0)
+        };
+        let sum = load_field(ctx, 0, ty.into());
+        let overflowed = load_field(ctx, 1, i1.into());
+        let in_range = {
+            let op = Operation::new(
+                ctx,
+                MirNotOp::get_concrete_op_info(),
+                vec![i1.into()],
+                vec![overflowed],
+                vec![],
+                0,
+            );
+            op.insert_at_back(some, ctx);
+            op.deref(ctx).get_result(0)
+        };
+        let ok = block(ctx, region, vec![]);
+        let overflow = block(ctx, region, vec![]);
+        cond_br(ctx, some, in_range, ok, overflow);
+        let unit: TypeHandle = MirTupleType::get(ctx, vec![]).into();
+        Operation::new(
+            ctx,
+            MirConstructTupleOp::get_concrete_op_info(),
+            vec![unit],
+            vec![],
+            vec![],
+            0,
+        )
+        .insert_at_back(overflow, ctx);
+        if shape.step_form == StepForm::CheckedOverflowReenters {
+            goto(ctx, overflow, header, vec![acc, i]);
+        } else {
+            goto(ctx, overflow, unreachable, vec![]);
+        }
+        arm = ok;
+        sum
+    } else {
+        let step = if shape.rev {
+            MirSubOp::get_concrete_op_info()
+        } else {
+            MirAddOp::get_concrete_op_info()
+        };
+        op2!(ctx, some, step, ty.into(), i, one)
+    };
     let yielded = if shape.rev { inext } else { i };
-    let some_value = construct_enum(ctx, some, option, 1, vec![yielded]);
-    goto(ctx, some, join, vec![some_value, inext]);
+    let some_value = construct_enum(ctx, arm, option, 1, vec![yielded]);
+    goto(ctx, arm, join, vec![some_value, inext]);
 
     let none_value = construct_enum(ctx, none, option, 0, vec![]);
     goto(ctx, none, join, vec![none_value, i]);

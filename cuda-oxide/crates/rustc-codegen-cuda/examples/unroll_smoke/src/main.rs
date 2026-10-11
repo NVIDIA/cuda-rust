@@ -13,7 +13,9 @@
 //! unroll it completely and the per-iteration `i & 3` should fold to literals.
 //! `partial_unroll` has a runtime trip count, so `#[unroll(4)]` unrolls the body
 //! by 4 and leaves a remainder loop. `range_for_loops` puts the same requests on
-//! range `for` loops. All are semantics-preserving; the host checks the sums.
+//! range `for` loops, and `signed_range_for_loops` and `signed_partial_range_for`
+//! on loops over `i32` counters.
+//! All are semantics-preserving; the host checks the sums.
 //!
 //! Run: cargo oxide run unroll_smoke
 
@@ -504,6 +506,52 @@ mod kernels {
         *partial = sum;
         *unrecognized = other;
     }
+
+    /// Range `for` loops over signed counters. A counter used only through `as`
+    /// has no type to infer from, so it is `i32`, and core steps a signed counter
+    /// through `checked_add` (`checked_sub` for `.rev()`) rather than a plain
+    /// add. `#[unroll]` on `0..16` makes the `acc` indices literals, so the array
+    /// stays in registers: the PTX holds no local-memory access and no loop
+    /// branch for it. `acc[j]` sums `input[16 * r + j]` over four rounds, and
+    /// `#[unroll]` on `(0..16).rev()` folds `acc` into `sum(acc[j] * 3^j)`.
+    #[kernel]
+    pub fn signed_range_for_loops(input: &[u32], mut folded: DisjointSlice<u32>) {
+        let base = thread::index_1d().get() as u32;
+        let Some(folded) = folded.get_mut(thread::index_1d()) else {
+            return;
+        };
+        let mut acc = [0u32; 16];
+        let mut round = 0usize;
+        while round < 4 {
+            #[unroll]
+            for j in 0..16 {
+                // SAFETY: the host passes 64 elements.
+                let x = unsafe { *input.get_unchecked(round * 16 + j as usize) };
+                acc[j as usize] = acc[j as usize].wrapping_add(x);
+            }
+            round += 1;
+        }
+        let mut sum = 0u32;
+        #[unroll]
+        for j in (0..16).rev() {
+            sum = sum.wrapping_mul(3).wrapping_add(acc[j as usize]);
+        }
+        *folded = sum.wrapping_add(base);
+    }
+
+    /// `#[unroll(4)]` on `0..n` with `n: i32` sums `n*(n-1)/2`.
+    #[kernel]
+    pub fn signed_partial_range_for(mut partial: DisjointSlice<u32>, n: i32) {
+        let Some(partial) = partial.get_mut(thread::index_1d()) else {
+            return;
+        };
+        let mut sum = 0u32;
+        #[unroll(4)]
+        for i in 0..n {
+            sum = sum.wrapping_add(i as u32);
+        }
+        *partial = sum;
+    }
 }
 
 fn main() {
@@ -710,6 +758,46 @@ fn main() {
             d_unrecognized.to_host_vec(&stream).unwrap(),
             vec![28; N],
             "`0..=4` and `(0..10).step_by(3)`"
+        );
+
+        let signed_input: Vec<u32> = (0..64u32).map(|i| i * 7 + 1).collect();
+        let d_signed_input = DeviceBuffer::from_host(&stream, &signed_input).unwrap();
+        let mut d_signed = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
+        let mut d_signed_part = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
+        // SAFETY: each thread writes its own element of the buffer; the kernel
+        // reads the 64 input elements.
+        unsafe {
+            module.signed_range_for_loops(stream.as_ref(), cfg, &d_signed_input, &mut d_signed)
+        }
+        .expect("launch signed_range_for_loops");
+        // SAFETY: each thread writes its own element of the buffer.
+        unsafe {
+            module.signed_partial_range_for(
+                stream.as_ref(),
+                cfg,
+                &mut d_signed_part,
+                range_trip as i32,
+            )
+        }
+        .expect("launch signed_partial_range_for");
+        let want_folded: Vec<u32> = (0..N as u32)
+            .map(|tid| {
+                (0..16)
+                    .map(|j| (0..4).fold(0u32, |sum, r| sum.wrapping_add(signed_input[16 * r + j])))
+                    .rev()
+                    .fold(0u32, |sum, acc| sum.wrapping_mul(3).wrapping_add(acc))
+                    .wrapping_add(tid)
+            })
+            .collect();
+        assert_eq!(
+            d_signed.to_host_vec(&stream).unwrap(),
+            want_folded,
+            "`i32` `0..16` and `(0..16).rev()` over a local array"
+        );
+        assert_eq!(
+            d_signed_part.to_host_vec(&stream).unwrap(),
+            vec![range_trip * (range_trip - 1) / 2; N],
+            "partial `i32` `0..{range_trip}`"
         );
     }
 

@@ -24,12 +24,14 @@
 //! recompute dominance, loop structure, and induction facts after this rewrite.
 //!
 //! A range `for` loop needs one more rewrite, [`thread_iterator_exit_test`]: its
-//! exit test is a match on the `Option` from `Iterator::next`.
+//! exit test is a match on the `Option` from `Iterator::next`. A signed counter
+//! first needs [`fold_checked_step`]: core steps it through `checked_add`.
 
 use dialect_mir::attributes::MirCastKindAttr;
 use dialect_mir::ops::{
-    MirCastOp, MirCondBranchOp, MirConstantOp, MirConstructEnumOp, MirEnumPayloadOp, MirEqOp,
-    MirGetDiscriminantOp, MirGotoOp, MirNeOp, MirStorageDeadOp, MirStorageLiveOp,
+    MirAddOp, MirCastOp, MirCheckedAddOp, MirCheckedSubOp, MirCondBranchOp, MirConstantOp,
+    MirConstructEnumOp, MirEnumPayloadOp, MirEqOp, MirFieldAddrOp, MirGetDiscriminantOp, MirGotoOp,
+    MirLoadOp, MirNeOp, MirNotOp, MirStorageDeadOp, MirStorageLiveOp, MirStoreOp, MirSubOp,
 };
 use dialect_mir::types::MirEnumType;
 use pliron::basic_block::BasicBlock;
@@ -43,7 +45,8 @@ use pliron::r#type::{Typed, TypedHandle};
 use pliron::value::Value;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analyses::loop_info::{LoopId, LoopInfo};
+use crate::analyses::induction::{CmpPred, const_i128, match_cmp, unwrap_not};
+use crate::analyses::loop_info::{Loop, LoopId, LoopInfo};
 
 /// Result of trying to put one loop into the single-latch form the unroller
 /// consumes.
@@ -333,6 +336,8 @@ struct IteratorArm {
 /// Returns `Unchanged` when the header exits, and `Unsupported`, with the IR
 /// untouched, when the header does not exit and the loop misses this shape or
 /// a value from the match is read where both the body and the exit reach.
+/// `Changed` also covers [`fold_checked_step`], which leaves the match for the
+/// next round.
 pub(crate) fn thread_iterator_exit_test(
     ctx: &mut Context,
     info: &LoopInfo,
@@ -351,6 +356,20 @@ pub(crate) fn thread_iterator_exit_test(
         || !arm_blocks.iter().all(|arm| lp.blocks.contains(arm))
     {
         return CanonicalizeOutcome::Unchanged;
+    }
+
+    // A signed counter's arm ends in a branch on an overflow flag, not in
+    // `goto join(..)`. Fold that into a plain step; the caller's CFG cleanup
+    // merges the arm with the block behind the branch, and the next round sees
+    // the shape above.
+    let steps: Vec<CheckedStep> = (0..2)
+        .filter_map(|index| match_checked_step(ctx, lp, header_term, index))
+        .collect();
+    if !steps.is_empty() {
+        for step in steps {
+            fold_checked_step(ctx, step);
+        }
+        return CanonicalizeOutcome::Changed;
     }
 
     // Each arm is entered only from the header and ends in `goto join(..)`.
@@ -588,6 +607,228 @@ pub(crate) fn thread_iterator_exit_test(
         }
     }
     CanonicalizeOutcome::Changed
+}
+
+/// A header successor that steps a signed counter the way core's
+/// `Step::forward_unchecked` does: see [`match_checked_step`].
+struct CheckedStep {
+    /// The header successor that holds the step.
+    arm: Ptr<BasicBlock>,
+    /// Its branch on the overflow flag.
+    branch: Ptr<Operation>,
+    /// The block the branch enters when nothing overflowed, and the operands it
+    /// passes there.
+    in_range: Ptr<BasicBlock>,
+    in_range_operands: Vec<Value>,
+    /// The counter and the amount it steps by, and whether it steps down.
+    counter: Value,
+    amount: Value,
+    subtract: bool,
+    /// The sum read back from the stack slot the checked tuple went through.
+    sum: Value,
+    slot: Value,
+    /// The operations that build the tuple, store it and read it back, in block
+    /// order.
+    chain: Vec<Ptr<Operation>>,
+}
+
+/// Find the step of a signed range `for` loop in the header successor
+/// `index`. After mem2reg, core's signed `forward_unchecked` (`backward_unchecked`
+/// for `.rev()`) leaves this in the arm, with the tuple in a stack slot that
+/// mem2reg does not promote:
+///
+/// ```text
+///   arm:       t = checked_add(i, 1);  store slot, t
+///              x = load field_addr(slot, 0);  f = load field_addr(slot, 1)
+///              cond_br not(f) [in_range, overflow]
+///   in_range:  o = Some(i);  goto join(o, x)
+///   overflow:  ...                       (leaves the loop)
+/// ```
+///
+/// The arm must hold nothing else but constants and storage markers, step the
+/// counter the header tests by one, and be entered only when the header's test
+/// `lo < hi` holds. `lo + 1` then cannot overflow (`lo < hi <= MAX`) and nor
+/// can `hi - 1` (`MIN <= lo < hi`), so the overflow edge is dead. Only an edge
+/// that leaves the loop is folded; one that stays in it is not `unwrap_unchecked`'s
+/// unreachable path.
+fn match_checked_step(
+    ctx: &Context,
+    lp: &Loop,
+    header_term: Ptr<Operation>,
+    index: usize,
+) -> Option<CheckedStep> {
+    let arm = header_term.deref(ctx).get_successor(index);
+    let branch = arm.deref(ctx).get_terminator(ctx)?;
+    Operation::get_op::<MirCondBranchOp>(branch, ctx)?;
+    if arm.uses(ctx).len() != 1 {
+        return None;
+    }
+
+    let mut checked = None;
+    let mut slot = None;
+    let mut addresses: [Option<Value>; 2] = [None; 2];
+    let mut loaded: [Option<Value>; 2] = [None; 2];
+    let mut flag = None;
+    let mut chain = Vec::new();
+    for op in arm.deref(ctx).iter(ctx) {
+        if op == branch
+            || Operation::get_op::<MirStorageLiveOp>(op, ctx).is_some()
+            || Operation::get_op::<MirStorageDeadOp>(op, ctx).is_some()
+            || Operation::get_op::<MirConstantOp>(op, ctx).is_some()
+        {
+            continue;
+        }
+        let operation = op.deref(ctx);
+        if Operation::get_op::<MirCheckedAddOp>(op, ctx).is_some()
+            || Operation::get_op::<MirCheckedSubOp>(op, ctx).is_some()
+        {
+            if checked.is_some() {
+                return None;
+            }
+            let subtract = Operation::get_op::<MirCheckedSubOp>(op, ctx).is_some();
+            checked = Some((
+                operation.get_result(0),
+                operation.get_operand(0),
+                operation.get_operand(1),
+                subtract,
+            ));
+        } else if let Some(store) = Operation::get_op::<MirStoreOp>(op, ctx) {
+            let (pair, ..) = checked?;
+            if slot.is_some() || store.is_volatile(ctx) || operation.get_operand(1) != pair {
+                return None;
+            }
+            slot = Some(operation.get_operand(0));
+        } else if let Some(address) = Operation::get_op::<MirFieldAddrOp>(op, ctx) {
+            let field = address.get_attr_field_index(ctx)?.0 as usize;
+            if slot != Some(operation.get_operand(0)) || field > 1 || addresses[field].is_some() {
+                return None;
+            }
+            addresses[field] = Some(operation.get_result(0));
+        } else if let Some(load) = Operation::get_op::<MirLoadOp>(op, ctx) {
+            let field = addresses
+                .iter()
+                .position(|address| *address == Some(operation.get_operand(0)))?;
+            if load.is_volatile(ctx) || loaded[field].is_some() {
+                return None;
+            }
+            loaded[field] = Some(operation.get_result(0));
+        } else if Operation::get_op::<MirNotOp>(op, ctx).is_some() {
+            if flag.is_some() || Some(operation.get_operand(0)) != loaded[1] {
+                return None;
+            }
+            flag = Some(operation.get_result(0));
+        } else {
+            return None;
+        }
+        chain.push(op);
+    }
+    let (_, counter, amount, subtract) = checked?;
+    let (slot, sum, flag) = (slot?, loaded[0]?, flag?);
+
+    // The branch enters `in_range` when the flag is clear.
+    let successors: Vec<_> = branch.deref(ctx).successors().collect();
+    if branch.deref(ctx).get_operand(0) != flag || successors.len() != 2 {
+        return None;
+    }
+    let (in_range, overflow) = (successors[0], successors[1]);
+    if in_range == overflow
+        || !lp.blocks.contains(&in_range)
+        || lp.blocks.contains(&overflow)
+        || in_range.uses(ctx).len() != 1
+    {
+        return None;
+    }
+
+    if const_i128(ctx, amount) != Some(1) {
+        return None;
+    }
+    let (lo, hi) = guard_less_than(ctx, header_term, index)?;
+    if counter != if subtract { hi } else { lo } {
+        return None;
+    }
+    Some(CheckedStep {
+        arm,
+        branch,
+        in_range,
+        in_range_operands: successor_operands(ctx, branch, 0)?,
+        counter,
+        amount,
+        subtract,
+        sum,
+        slot,
+        chain,
+    })
+}
+
+/// The pair `(lo, hi)` the header's exit test has ordered, `lo < hi`, on the
+/// path into its successor `index`. `None` when the test does not order two
+/// values strictly.
+fn guard_less_than(
+    ctx: &Context,
+    header_term: Ptr<Operation>,
+    index: usize,
+) -> Option<(Value, Value)> {
+    let (test, negated) = unwrap_not(ctx, header_term.deref(ctx).get_operand(0));
+    let (pred, lhs, rhs) = match_cmp(ctx, test.defining_op()?)?;
+    // The header enters its first successor when the condition holds.
+    let pred = if (index == 0) != negated {
+        pred
+    } else {
+        pred.negate()
+    };
+    match pred {
+        CmpPred::Lt => Some((lhs, rhs)),
+        CmpPred::Gt => Some((rhs, lhs)),
+        CmpPred::Le | CmpPred::Ge => None,
+    }
+}
+
+/// Replace a signed counter's checked step by a plain `add` (`sub`) and its
+/// dead overflow edge by a `goto`, so the arm has the shape an unsigned counter
+/// has: `arm: i1 = i + 1; goto in_range`. The tuple's operations go with the
+/// edge, unless something else reads the slot.
+fn fold_checked_step(ctx: &mut Context, step: CheckedStep) {
+    let info = if step.subtract {
+        MirSubOp::get_concrete_op_info()
+    } else {
+        MirAddOp::get_concrete_op_info()
+    };
+    let ty = step.sum.get_type(ctx);
+    let plain = Operation::new(
+        ctx,
+        info,
+        vec![ty],
+        vec![step.counter, step.amount],
+        vec![],
+        0,
+    );
+    plain.insert_before(ctx, step.branch);
+    let next = plain.deref(ctx).get_result(0);
+    step.sum.replace_all_uses_with(ctx, &next);
+
+    Operation::erase(step.branch, ctx);
+    let goto = Operation::new(
+        ctx,
+        MirGotoOp::get_concrete_op_info(),
+        vec![],
+        step.in_range_operands,
+        vec![step.in_range],
+        0,
+    );
+    goto.insert_at_back(step.arm, ctx);
+
+    for op in step.chain.into_iter().rev() {
+        let dead = if Operation::get_op::<MirStoreOp>(op, ctx).is_some() {
+            step.slot.uses(ctx).len() == 1
+        } else {
+            op.deref(ctx)
+                .results()
+                .all(|result| result.uses(ctx).is_empty())
+        };
+        if dead {
+            Operation::erase(op, ctx);
+        }
+    }
 }
 
 /// Follow a discriminant match from `join` for a value whose discriminant is

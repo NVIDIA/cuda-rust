@@ -2761,6 +2761,26 @@ fn try_dispatch_intrinsic(
         )?));
     }
 
+    if let Some(intrinsic) =
+        intrinsics::integer_minmax::RustIntegerMinMaxIntrinsic::from_core_path(name)
+    {
+        return Ok(Some(
+            intrinsics::integer_minmax::emit_rust_integer_minmax_intrinsic(
+                ctx,
+                body,
+                intrinsic,
+                args,
+                destination,
+                target,
+                block_ptr,
+                prev_op,
+                value_map,
+                block_map,
+                loc,
+            )?,
+        ));
+    }
+
     if let Some(intrinsic) = intrinsics::saturating::RustSaturatingIntrinsic::from_core_path(name) {
         return Ok(Some(
             intrinsics::saturating::emit_rust_saturating_intrinsic(

@@ -577,9 +577,9 @@ pub const DEFAULT_SM_FLOOR: u32 = 80;
 /// `sm_80` floor because backend selection may override an incompatible hint.
 /// Both device cfg generation and backend selection use this rule.
 ///
-/// Blank inputs are unset. Malformed explicit targets are errors; malformed
-/// hints are ignored. Architecture suffixes do not affect this numeric floor,
-/// which does not imply support for architecture-specific instruction families.
+/// A blank target is unset and a malformed one is an error; the hint arrives
+/// parsed. Architecture suffixes do not affect this numeric floor, which does
+/// not imply support for architecture-specific instruction families.
 pub fn resolve_sm_floor(
     target: Option<&str>,
     device_arch: Option<&CudaArch>,

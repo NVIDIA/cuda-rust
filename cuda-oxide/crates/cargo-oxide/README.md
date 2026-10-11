@@ -418,7 +418,7 @@ When `cargo oxide` needs the `librustc_codegen_cuda.so` backend, it searches in 
 Outside the repository the backend follows the project's `Cargo.lock`:
 
 ```text
-Cargo.lock   cuda-device = git+https://github.com/NVlabs/cuda-oxide.git#a1b4f118...
+Cargo.lock   cuda-device = git+https://github.com/NVIDIA/cuda-rust.git#a1b4f118...
                  │
                  ▼
 ~/.cargo/git/checkouts/cuda-oxide-*/a1b4f11/        Cargo's checkout of that commit

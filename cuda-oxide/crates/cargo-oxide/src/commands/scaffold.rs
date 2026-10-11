@@ -11,7 +11,7 @@ use super::*;
 // cargo oxide new -- standalone project scaffolding
 // =========================================================================
 
-const GIT_REPO: &str = "https://github.com/NVlabs/cuda-oxide.git";
+const GIT_REPO: &str = "https://github.com/NVIDIA/cuda-rust.git";
 
 /// crates.io release of the host-side runtime (`cuda-core`, `cuda-async`).
 /// In-tree examples and `cuda-host` path-depend on the git-root copies;

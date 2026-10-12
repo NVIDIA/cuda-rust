@@ -20,7 +20,7 @@ const GIT_REPO: &str = "https://github.com/NVlabs/cuda-oxide.git";
 pub(super) const SHARED_HOST_CRATES_VERSION: &str = "0.4.0";
 
 const RUST_TOOLCHAIN_TOML: &str = r#"[toolchain]
-channel = "nightly-2026-08-28"
+channel = "nightly-2026-10-11"
 components = ["rust-src", "rustc-dev", "rust-analyzer", "clippy", "rustfmt", "llvm-tools"]
 "#;
 

@@ -262,8 +262,8 @@ automatically. Commands at the repository root and in `cutile-rs/` use stable.
 If you need to install it manually:
 
 ```bash
-rustup toolchain install nightly-2026-08-28
-rustup component add rust-src rustc-dev rust-analyzer clippy rustfmt llvm-tools --toolchain nightly-2026-08-28
+rustup toolchain install nightly-2026-10-11
+rustup component add rust-src rustc-dev rust-analyzer clippy rustfmt llvm-tools --toolchain nightly-2026-10-11
 ```
 
 Three of these components are what the codegen backend and doctor need:
@@ -285,7 +285,7 @@ The other three are not needed to build: `rust-analyzer` powers IDE support, `cl
 **For use outside the repo** (your own projects), install it with the pinned nightly toolchain:
 
 ```bash
-cargo +nightly-2026-08-28 install --git https://github.com/NVlabs/cuda-oxide.git cargo-oxide
+cargo +nightly-2026-10-11 install --git https://github.com/NVlabs/cuda-oxide.git cargo-oxide
 ```
 
 On first run, `cargo-oxide` will automatically fetch and build the codegen backend. Subsequent runs reuse the cached build.
@@ -396,8 +396,8 @@ If everything is configured correctly, this compiles a Rust kernel to PTX, launc
 :::{tip}
 **Common issues:**
 
-- `No working llc found` -- prefer `rustup component add llvm-tools --toolchain nightly-2026-08-28`, or install LLVM 21+ (`sudo apt install llvm-21`), add `/usr/lib/llvm-21/bin` to your `PATH`, or set `CUDA_OXIDE_LLC=/usr/bin/llc-21`.
+- `No working llc found` -- prefer `rustup component add llvm-tools --toolchain nightly-2026-10-11`, or install LLVM 21+ (`sudo apt install llvm-21`), add `/usr/lib/llvm-21/bin` to your `PATH`, or set `CUDA_OXIDE_LLC=/usr/bin/llc-21`.
 - `'stddef.h' file not found` when building host `cuda-bindings` -- install clang dev headers: `sudo apt install clang-21` (or `libclang-common-21-dev`).
 - `cuda.h not found` -- Set `CUDA_TOOLKIT_PATH` to your CUDA install root, or ensure `/usr/local/cuda/include/cuda.h` exists.
-- `rust-src` / `llvm-tools` component missing -- Run `rustup component add rust-src llvm-tools --toolchain nightly-2026-08-28`.
+- `rust-src` / `llvm-tools` component missing -- Run `rustup component add rust-src llvm-tools --toolchain nightly-2026-10-11`.
 :::

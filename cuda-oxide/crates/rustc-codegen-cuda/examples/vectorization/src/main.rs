@@ -386,12 +386,22 @@ fn kernel_body<'source>(document: &ptx_parse::Document<'source>, name: &str) -> 
 /// (`ld.global.v4.f32` on older llc, `ld.global.v2.b64` on llc-21/22); every
 /// accepted form is a single 128-bit access.
 fn find_128bit_global<'a>(body: &'a str, dir: &str) -> Option<&'a str> {
-    let prefix = format!("{dir}.global.v");
+    let prefix = format!("{dir}.global.");
     body.lines().map(str::trim).find(|t| {
-        t.starts_with(&prefix)
-            && [".v4.f32", ".v4.b32", ".v2.f64", ".v2.b64"]
-                .iter()
-                .any(|w| t.contains(w))
+        let Some(rest) = t.strip_prefix(&prefix) else {
+            return false;
+        };
+        // Read-only inputs may use ld.global.nc; its cache choice preserves
+        // the global address space and transaction width checked here.
+        let rest = if dir == "ld" {
+            rest.strip_prefix("nc.").unwrap_or(rest)
+        } else {
+            rest
+        };
+        matches!(
+            rest.split_whitespace().next(),
+            Some("v4.f32" | "v4.b32" | "v2.f64" | "v2.b64")
+        )
     })
 }
 

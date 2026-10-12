@@ -61,6 +61,30 @@ fn sanitize_comment(text: &str) -> String {
         .collect()
 }
 
+/// Spell only the facts already proven at the import boundary. Shared by
+/// definitions and declarations, including the empty-region declaration path.
+fn export_reference_parameter_attrs(
+    validity: ops::KernelReferenceParamValidityAttr,
+    include_alignment: bool,
+    output: &mut String,
+) {
+    write!(output, " nonnull").unwrap();
+    if validity.pointee_alignment > 1 && include_alignment {
+        write!(output, " align {}", validity.pointee_alignment).unwrap();
+    }
+    if validity.no_alias {
+        write!(output, " noalias").unwrap();
+    }
+    if validity.dereferenceable_bytes > 0 {
+        write!(
+            output,
+            " dereferenceable({})",
+            validity.dereferenceable_bytes
+        )
+        .unwrap();
+    }
+}
+
 /// Final LLVM spelling of a pliron function symbol.
 ///
 /// Shared-global owner attributes carry the raw symbol, so the module prepass,
@@ -799,7 +823,7 @@ impl<'a> ModuleExportState<'a> {
                     "kernel `@{fixed_func_name}` reference validity parameter {index} is not an LLVM pointer"
                 ));
             }
-            reference_param_validities[index] = Some(validity.0);
+            reference_param_validities[index] = Some(validity);
         }
 
         let is_declaration = func.get_operation().deref(self.ctx).regions().count() == 0;
@@ -975,11 +999,8 @@ impl<'a> ModuleExportState<'a> {
                 let grid_constant = grid_constant_params
                     .iter()
                     .find(|parameter| parameter.index == i);
-                if let Some(alignment) = reference_param_validities[i] {
-                    write!(output, " nonnull").unwrap();
-                    if alignment > 1 && grid_constant.is_none() {
-                        write!(output, " align {alignment}").unwrap();
-                    }
+                if let Some(validity) = reference_param_validities[i] {
+                    export_reference_parameter_attrs(validity, grid_constant.is_none(), output);
                 }
                 if let Some(parameter) = grid_constant {
                     self.export_grid_constant_parameter_attrs(
@@ -1046,15 +1067,9 @@ impl<'a> ModuleExportState<'a> {
             let block = entry_block.deref(self.ctx);
             let args = block.arguments();
             let mut entry_prologue = String::new();
-            // Kernel Rust references may carry importer-proven `nonnull` and
-            // pointee `align N`. Every other parameter remains bare.
-            //
-            // In particular this deliberately does NOT infer `noalias`,
-            // `readonly`, `dereferenceable`, or any validity fact from LLVM
-            // pointer shape. `DisjointSlice` and raw pointers therefore retain
-            // the conservative behavior required by their unsafe construction
-            // contracts. Future alias attributes need their own audited proof
-            // source rather than extending this mechanical export step.
+            // Kernel Rust references carry only importer-proven facts.
+            // LLVM pointer shape alone grants no reference promises, so raw
+            // pointers, slice metadata, and other parameters remain bare.
             for (i, arg) in args.enumerate() {
                 if i > 0 {
                     write!(output, ", ").unwrap();
@@ -1064,11 +1079,8 @@ impl<'a> ModuleExportState<'a> {
                 let grid_constant = grid_constant_params
                     .iter()
                     .find(|parameter| parameter.index == i);
-                if let Some(alignment) = reference_param_validities[i] {
-                    write!(output, " nonnull").unwrap();
-                    if alignment > 1 && grid_constant.is_none() {
-                        write!(output, " align {alignment}").unwrap();
-                    }
+                if let Some(validity) = reference_param_validities[i] {
+                    export_reference_parameter_attrs(validity, grid_constant.is_none(), output);
                 }
                 if let Some(parameter) = grid_constant {
                     self.export_grid_constant_parameter_attrs(
@@ -1409,11 +1421,8 @@ impl<'a> ModuleExportState<'a> {
                 let grid_constant = grid_constant_params
                     .iter()
                     .find(|parameter| parameter.index == i);
-                if let Some(alignment) = reference_param_validities[i] {
-                    write!(output, " nonnull").unwrap();
-                    if alignment > 1 && grid_constant.is_none() {
-                        write!(output, " align {alignment}").unwrap();
-                    }
+                if let Some(validity) = reference_param_validities[i] {
+                    export_reference_parameter_attrs(validity, grid_constant.is_none(), output);
                 }
                 if let Some(parameter) = grid_constant {
                     self.export_grid_constant_parameter_attrs(

@@ -30,13 +30,11 @@ on:
 permissions:
   contents: read
 
-# Serialising every run under one `pages` group is a deploy constraint, and
-# applying it workflow-wide would queue unrelated PR builds behind each other.
-# Scope this to the ref, and keep the single-deploy guarantee on the deploy job
-# itself. Superseded PR runs are cancelled; pushes to main are not, so a
-# publish in flight is never interrupted.
+# Each commit on main builds immediately. Superseded pull requests are
+# cancelled. The deploy job below keeps its own `pages` group so two
+# publishes never overlap.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.sha) || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

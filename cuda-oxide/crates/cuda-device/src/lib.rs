@@ -22,6 +22,7 @@ pub mod atomic;
 pub mod barrier;
 pub mod bf16;
 pub mod bf16x2;
+pub mod cache;
 pub mod clc;
 pub mod cluster;
 pub mod config;

@@ -1,0 +1,135 @@
+{
+  "compute": "compute_75",
+  "terminal": "sm_75",
+  "count": 64,
+  "runtime": "unexecuted",
+  "architectures": [
+    {
+      "compute": 70,
+      "status": 4,
+      "llvm": 0
+    },
+    {
+      "compute": 72,
+      "status": 4,
+      "llvm": 0
+    },
+    {
+      "compute": 75,
+      "status": 0,
+      "llvm": 7
+    },
+    {
+      "compute": 80,
+      "status": 0,
+      "llvm": 7
+    }
+  ],
+  "ir_version": [
+    2,
+    0,
+    3,
+    2
+  ],
+  "nvvm_api_version": [
+    2,
+    0
+  ],
+  "link_version": [
+    13,
+    3
+  ],
+  "cubin_entries": [
+    "probe_add_rm_f32",
+    "probe_add_rm_f64",
+    "probe_add_rm_ftz_f32",
+    "probe_add_rm_ftz_sat_f32",
+    "probe_add_rm_sat_f32",
+    "probe_add_rn_f32",
+    "probe_add_rn_f64",
+    "probe_add_rn_ftz_f32",
+    "probe_add_rn_ftz_sat_f32",
+    "probe_add_rn_sat_f32",
+    "probe_add_rp_f32",
+    "probe_add_rp_f64",
+    "probe_add_rp_ftz_f32",
+    "probe_add_rp_ftz_sat_f32",
+    "probe_add_rp_sat_f32",
+    "probe_add_rz_f32",
+    "probe_add_rz_f64",
+    "probe_add_rz_ftz_f32",
+    "probe_add_rz_ftz_sat_f32",
+    "probe_add_rz_sat_f32",
+    "probe_div_rm_f32",
+    "probe_div_rm_f64",
+    "probe_div_rm_ftz_f32",
+    "probe_div_rn_f32",
+    "probe_div_rn_f64",
+    "probe_div_rn_ftz_f32",
+    "probe_div_rp_f32",
+    "probe_div_rp_f64",
+    "probe_div_rp_ftz_f32",
+    "probe_div_rz_f32",
+    "probe_div_rz_f64",
+    "probe_div_rz_ftz_f32",
+    "probe_fma_rm_f32",
+    "probe_fma_rm_f64",
+    "probe_fma_rm_ftz_f32",
+    "probe_fma_rm_ftz_sat_f32",
+    "probe_fma_rm_sat_f32",
+    "probe_fma_rn_f32",
+    "probe_fma_rn_f64",
+    "probe_fma_rn_ftz_f32",
+    "probe_fma_rn_ftz_sat_f32",
+    "probe_fma_rn_sat_f32",
+    "probe_fma_rp_f32",
+    "probe_fma_rp_f64",
+    "probe_fma_rp_ftz_f32",
+    "probe_fma_rp_ftz_sat_f32",
+    "probe_fma_rp_sat_f32",
+    "probe_fma_rz_f32",
+    "probe_fma_rz_f64",
+    "probe_fma_rz_ftz_f32",
+    "probe_fma_rz_ftz_sat_f32",
+    "probe_fma_rz_sat_f32",
+    "probe_mul_rm_f32",
+    "probe_mul_rm_f64",
+    "probe_mul_rm_ftz_f32",
+    "probe_mul_rn_f32",
+    "probe_mul_rn_f64",
+    "probe_mul_rn_ftz_f32",
+    "probe_mul_rp_f32",
+    "probe_mul_rp_f64",
+    "probe_mul_rp_ftz_f32",
+    "probe_mul_rz_f32",
+    "probe_mul_rz_f64",
+    "probe_mul_rz_ftz_f32"
+  ],
+  "artifacts": {
+    "linked.cubin": {
+      "sha256": "8dca9bae03e7dd0bb03447c322fb2e1b8be928e33629a5ea03f3cd9fee0a6d76",
+      "bytes": 110440
+    },
+    "scalar.cubin": {
+      "sha256": "9c65d7a987602501bee3a0cf3f582370c2b5c15ddf16bcf7ac61a5d6eb318e1a",
+      "bytes": 110440
+    },
+    "scalar.ll": {
+      "sha256": "437765ab6f4ccd45574dff9df0a4e40bd4b5a153378893b9c48651b8120e9024",
+      "bytes": 27458
+    },
+    "scalar.ltoir": {
+      "sha256": "94841dac2b6e26bca30a839dfcf0c2aa3fb36cfc9685dc28dfa3d7d8b8f7fcca",
+      "bytes": 14976
+    },
+    "scalar.ptx": {
+      "sha256": "e11bbe25e6c4bddb45c265bbfe6fc368e29d3637c1e94d78279fe010db9916c7",
+      "bytes": 34001
+    }
+  },
+  "tools": {
+    "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v13.3\\nvvm\\bin\\x64\\nvvm64_40_0.dll": "dfcd82a8d6b8f52d1cbaae3fded0055f3d9cbd86d7461d984c776a7d91e73d5b",
+    "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v13.3\\bin\\x64\\nvJitLink_130_0.dll": "727a0acfc4495b229143b53843004eef36e0a3463fb2e1c7c4215468607fd613",
+    "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v13.3\\bin\\ptxas.exe": "86b2ff48655c55f1547edc59b503d39a62aa5c71745b7ecf6be526c29af0b693"
+  }
+}

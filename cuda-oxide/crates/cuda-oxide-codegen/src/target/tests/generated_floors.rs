@@ -17,6 +17,57 @@ use crate::target::select::*;
 use libnvvm_sys::CudaArch;
 
 #[test]
+fn generated_scalar_arithmetic_floors_are_backend_specific() {
+    use crate::generated_intrinsic_targets::generated_intrinsic_target_by_marker;
+
+    for abi in 390..=453 {
+        let marker = format!("v1:i{abi:04}");
+        let target = generated_intrinsic_target_by_marker(&marker).unwrap();
+        let llvm = GeneratedModuleRequirements::from_targets(vec![target])
+            .for_backend(GeneratedIntrinsicBackend::LlvmNvptx);
+        // LLVM instruction evidence includes sm_20; the compiler's public target set
+        // with recorded backend floors starts at sm_70, independently of these requirements.
+        for architecture in ["sm_70", "sm_72", "sm_75", "sm_80", "sm_86"] {
+            let arch = architecture.parse().unwrap();
+            assert!(
+                generated_target_satisfied(&arch, &llvm),
+                "{} {architecture}",
+                target.id
+            );
+            validate_generated_target(&arch, &llvm).unwrap();
+        }
+        assert_eq!(
+            generated_ptx_isa_requirement(&llvm).unwrap(),
+            PtxIsaRequirement::Default
+        );
+        let libnvvm = GeneratedModuleRequirements::from_targets(vec![target])
+            .for_backend(GeneratedIntrinsicBackend::LibNvvm);
+        for architecture in ["sm_70", "sm_72"] {
+            assert!(
+                !generated_target_satisfied(&architecture.parse().unwrap(), &libnvvm),
+                "{} {architecture}",
+                target.id
+            );
+        }
+        assert!(
+            generated_target_satisfied(&"sm_75".parse().unwrap(), &libnvvm),
+            "{}",
+            target.id
+        );
+        assert!(
+            generated_target_satisfied(&"sm_80".parse().unwrap(), &libnvvm),
+            "{}",
+            target.id
+        );
+        // The compiler's discrete feature vocabulary rounds the PTX 6.3 floor to 6.5.
+        assert_eq!(
+            generated_ptx_isa_requirement(&libnvvm).unwrap(),
+            PtxIsaRequirement::new(65)
+        );
+    }
+}
+
+#[test]
 fn paired_target_floors_compose_with_target_cpu_minima() {
     let generated = GeneratedModuleRequirements::from_targets(vec![&TCGEN_F16]);
 

@@ -321,8 +321,10 @@ pub(in crate::resolve) fn scalar_arithmetic_overlay_record(
         memory: "none".into(),
         convergent: false,
         execution_scope: "thread".into(),
-        minimum_ptx: "7.0".into(),
-        minimum_sm: Some("sm_80".into()),
+        // PTX 2.0 / sm_20 is a conservative common native floor for this family,
+        // including f32 subnormal preservation, directed division and fma.
+        minimum_ptx: "2.0".into(),
+        minimum_sm: Some("sm_20".into()),
         ptx_result: recipe.rust_type.into(),
         targets: "all".into(),
         ptx_isa_version: "9.3".into(),
@@ -352,8 +354,22 @@ pub(in crate::resolve) fn scalar_arithmetic_overlay_record(
             },
             evidence_profile: evidence_profile.clone(),
             targets: None,
-            minimum_ptx: Some("7.0".into()),
-            minimum_sm: Some("sm_80".into()),
+            // Keep compiler evidence floors independent: LLVM lowers the full family
+            // at sm_20/+ptx32; CUDA 13.3 libNVVM is separately validated at compute_75.
+            minimum_ptx: Some(
+                match backend {
+                    IntrinsicBackend::LlvmNvptx => "3.2",
+                    IntrinsicBackend::LibNvvm => "6.3",
+                }
+                .into(),
+            ),
+            minimum_sm: Some(
+                match backend {
+                    IntrinsicBackend::LlvmNvptx => "sm_20",
+                    IntrinsicBackend::LibNvvm => "sm_75",
+                }
+                .into(),
+            ),
         })
         .collect(),
         packed_atomic: None,
@@ -614,8 +630,8 @@ pub(in crate::resolve) fn validate_scalar_arithmetic_policy(
             && policy.memory == "none"
             && !policy.convergent
             && policy.execution_scope == "thread"
-            && policy.minimum_ptx == "7.0"
-            && policy.minimum_sm.as_deref() == Some("sm_80")
+            && policy.minimum_ptx == "2.0"
+            && policy.minimum_sm.as_deref() == Some("sm_20")
             && policy.ptx_result == recipe.rust_type
             && policy.targets == "all"
             && policy.ptx_isa_version == "9.3"
@@ -649,11 +665,15 @@ pub(in crate::resolve) fn validate_scalar_arithmetic_policy(
     ensure!(
         policy.backend_lowerings.len() == 2
             && expected_backends.into_iter().all(|(backend, mechanism)| {
+                let (ptx, sm) = match backend {
+                    IntrinsicBackend::LlvmNvptx => ("3.2", "sm_20"),
+                    IntrinsicBackend::LibNvvm => ("6.3", "sm_75"),
+                };
                 policy.backend_lowerings.iter().any(|lowering| {
                     lowering.backend == backend
                         && lowering.mechanism == mechanism
-                        && lowering.minimum_ptx.as_deref() == Some("7.0")
-                        && lowering.minimum_sm.as_deref() == Some("sm_80")
+                        && lowering.minimum_ptx.as_deref() == Some(ptx)
+                        && lowering.minimum_sm.as_deref() == Some(sm)
                         && !lowering.evidence_profile.trim().is_empty()
                 })
             }),

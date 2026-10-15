@@ -4879,6 +4879,21 @@ fn scaffold_gitignore_covers_every_clean_artifact_suffix() {
 }
 
 #[test]
+fn scaffold_names_the_canonical_repository() {
+    // Both templates must name the repository the crates live in now; the
+    // pre-move URL resolves only through GitHub's redirect.
+    for async_mode in [false, true] {
+        let files = scaffold_files("demo_kernel", async_mode);
+        assert!(
+            files
+                .cargo_toml
+                .contains("git = \"https://github.com/NVIDIA/cuda-rust.git\"")
+        );
+        assert!(!files.cargo_toml.contains("NVlabs"));
+    }
+}
+
+#[test]
 fn device_debug_env_value_matches_the_backend_parser() {
     // The exported strings must round-trip through the shared
     // `CUDA_OXIDE_DEBUG` parser (the same one the codegen backend uses);

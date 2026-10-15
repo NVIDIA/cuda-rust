@@ -20,11 +20,11 @@
 //! Cargo.lock   cuda-device = git+https://github.com/NVIDIA/cuda-rust.git#<sha>
 //!                  │  cargo metadata: package.manifest_path
 //!                  ▼
-//! ~/.cargo/git/checkouts/cuda-oxide-<hash>/<sha>/crates/cuda-device/Cargo.toml
-//!                  │  walk up to the repository root
+//! ~/.cargo/git/checkouts/cuda-rust-<hash>/<sha>/cuda-oxide/crates/cuda-device/Cargo.toml
+//!                  │  walk up to the checkout root that holds the backend crate
 //!                  ▼
-//! ~/.cargo/git/checkouts/cuda-oxide-<hash>/<sha>/crates/rustc-codegen-cuda   built
-//! ~/.cargo/git/checkouts/cuda-oxide-<hash>/<sha>/rust-toolchain.toml         nightly it needs
+//! ~/.cargo/git/checkouts/cuda-rust-<hash>/<sha>/cuda-oxide/crates/rustc-codegen-cuda   built
+//! ~/.cargo/git/checkouts/cuda-rust-<hash>/<sha>/cuda-oxide/rust-toolchain.toml         nightly it needs
 //! ```
 //!
 //! The checkout's `rust-toolchain.toml` matters as much as the code: the

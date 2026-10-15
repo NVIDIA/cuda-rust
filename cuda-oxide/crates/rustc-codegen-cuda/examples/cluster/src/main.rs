@@ -138,9 +138,7 @@ mod kernels {
 
     #[inline(never)]
     #[device]
-    fn bounce_cluster_pair(
-        pair: (*const u32, u64),
-    ) -> (*const u32, u64) {
+    fn bounce_cluster_pair(pair: (*const u32, u64)) -> (*const u32, u64) {
         pair
     }
 
@@ -168,18 +166,16 @@ mod kernels {
             let neighbor_rank = (my_rank + 1) % cluster_size;
             let neighbor_ptr =
                 unsafe { cluster::map_shared_rank(addr_of!(SHMEM) as *const u32, neighbor_rank) };
-            let pair =
-                bounce_cluster_pair((neighbor_ptr, neighbor_rank as u64));
+            let pair = bounce_cluster_pair((neighbor_ptr, neighbor_rank as u64));
 
             let direct = unsafe { *neighbor_ptr };
             let bounced = unsafe { *pair.0 };
 
-            let neighbor_value =
-                if bounced == direct && pair.1 == neighbor_rank as u64 {
-                    bounced
-                } else {
-                    u32::MAX
-                };
+            let neighbor_value = if bounced == direct && pair.1 == neighbor_rank as u64 {
+                bounced
+            } else {
+                u32::MAX
+            };
 
             let idx = my_rank as usize;
             if idx < output.len() {

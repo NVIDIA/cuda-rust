@@ -83,9 +83,8 @@ cuda-macros = { path = "crates/cuda-macros", default-features = false }
 # the crates that depend on them in this tree are not published, so nothing
 # needs one (#1459). Examples path-depend on the same directories so the graph
 # has one cuda_core (and one cuda-async / cuda-bindings). `cargo oxide new`
-# scaffolds out-of-tree projects on the crates.io release instead; its
-# SHARED_HOST_CRATES_VERSION is checked against the root manifests by
-# scripts/check-shared-crate-pin.sh.
+# names every CUDA crate from one git source for the same reason;
+# scripts/check-shared-crate-pin.sh enforces both.
 cuda-bindings = { path = "../cuda-bindings" }
 cuda-core = { path = "../cuda-core" }
 cuda-async = { path = "../cuda-async" }

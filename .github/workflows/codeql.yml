@@ -1,21 +1,17 @@
 ---
 name: codeql
 
-# Push and pull_request run only when Rust, workflow, or script inputs change.
+# Push runs only when Rust, workflow, or script inputs change.
+# Self-hosted runners reject pull_request. copy-pr-bot mirrors trusted PRs to
+# pull-request/<n>, and this workflow triggers on that push
+# (config: .github/copy-pr-bot.yaml).
 # A Markdown-only commit skips both analyzers. The weekly schedule has no path
 # filter, so that scan still covers the whole tree.
 on:
   push:
-    branches: [main]
-    paths:
-      - '**/*.rs'
-      - '**/Cargo.toml'
-      - '**/Cargo.lock'
-      - '.github/**'
-      - '**/*.sh'
-      - '**/*.py'
-  pull_request:
-    branches: [main]
+    branches:
+      - main
+      - "pull-request/[0-9]+"
     paths:
       - '**/*.rs'
       - '**/Cargo.toml'
@@ -35,7 +31,14 @@ concurrency:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: ubuntu-latest
+    # nv-cpu-general: m7i.2xlarge, 8 vCPU / 32 GiB.
+    # The VM image has no rustup. rust:1.98.0-bookworm matches the root
+    # toolchain pin and is buildpack-deps, so git is there for checkout and
+    # rustup is on PATH. The Oxide nightly still comes from
+    # cuda-oxide/rust-toolchain.toml when the extractor enters that tree.
+    runs-on: linux-amd64-cpu8
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 120
     permissions:
       security-events: write
@@ -53,6 +56,16 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # The workspace is mounted from the runner, so git refuses it until this
+      # directory is marked safe. CodeQL's result upload calls git.
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # A missing rustup makes the Rust extractor exit 0 with an empty database.
+      - name: Confirm Rust
+        if: matrix.language == 'rust'
+        run: rustup show active-toolchain
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4

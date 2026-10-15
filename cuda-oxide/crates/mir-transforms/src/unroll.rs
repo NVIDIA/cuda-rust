@@ -20,8 +20,9 @@
 //!
 //! The current analysis recognizes explicit counted `while` loops, including an
 //! exit test that adds a constant to the counter (`while i + 2 <= n`), and range
-//! `for` loops (`for i in a..b`). Other iterator loops, such as `a..=b` or
-//! `.step_by(k)`, are not yet recognized.
+//! `for` loops (`for i in a..b` and `(a..b).rev()`) over any integer counter,
+//! including `isize`. Other iterator loops, such as `a..=b` or `.step_by(k)`,
+//! are not yet recognized.
 //!
 //! Several `continue` paths are supported: the pass joins their back-edges
 //! before unrolling. Full `#[unroll]` also preserves early `break` paths and

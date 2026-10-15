@@ -25,7 +25,9 @@
 //!
 //! A range `for` loop needs one more rewrite, [`thread_iterator_exit_test`]: its
 //! exit test is a match on the `Option` from `Iterator::next`. A signed counter
-//! first needs [`fold_checked_step`]: core steps it through `checked_add`.
+//! first needs [`fold_checked_step`]: core steps it through `checked_add`. An
+//! `isize` step casts through `i64` and back; the importer drops that cast
+//! because both are the same dialect type, so the block matches `i64`.
 
 use dialect_mir::attributes::MirCastKindAttr;
 use dialect_mir::ops::{
@@ -274,12 +276,29 @@ pub(crate) fn merge_backedges(
 }
 
 /// The reason reported for a loop whose header does not exit and that
-/// [`thread_iterator_exit_test`] does not recognize.
+/// [`thread_iterator_exit_test`] does not recognize as a range `for`.
 fn unrecognized_iterator_loop() -> CanonicalizeOutcome {
     CanonicalizeOutcome::Unsupported(
         "its exit test is not in the loop header, and it is not a range `for` loop over `a..b`"
             .into(),
     )
+}
+
+/// A range `for` loop whose step is not the foldable step of 1. This is still
+/// a range loop: the warning must not describe it as something else.
+fn unrecognized_range_step() -> CanonicalizeOutcome {
+    CanonicalizeOutcome::Unsupported(
+        "its exit test is not in the loop header, and its range `for` step was not recognized"
+            .into(),
+    )
+}
+
+/// Whether `arm` holds the checked add or sub of a signed range step.
+fn arm_has_checked_step(ctx: &Context, arm: Ptr<BasicBlock>) -> bool {
+    arm.deref(ctx).iter(ctx).any(|op| {
+        Operation::get_op::<MirCheckedAddOp>(op, ctx).is_some()
+            || Operation::get_op::<MirCheckedSubOp>(op, ctx).is_some()
+    })
 }
 
 /// Bound on the blocks followed through one discriminant match, so a cycle of
@@ -382,6 +401,15 @@ pub(crate) fn thread_iterator_exit_test(
             return unrecognized_iterator_loop();
         };
         if Operation::get_op::<MirGotoOp>(term, ctx).is_none() {
+            // A signed range step ends in a branch on its overflow flag. If
+            // that step was not folded, the loop is still a range `for`; only
+            // the step is unrecognized.
+            if arm_blocks
+                .iter()
+                .any(|candidate| arm_has_checked_step(ctx, *candidate))
+            {
+                return unrecognized_range_step();
+            }
             return unrecognized_iterator_loop();
         }
         let target = term.deref(ctx).get_successor(0);

@@ -419,8 +419,9 @@ pub fn cuda_module(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// invalid specialization fails compilation instead of becoming a no-op.
 ///
 /// The pass currently recognizes explicit counted `while` loops and range `for`
-/// loops (`for i in a..b`). Other iterator loops, such as `a..=b` or
-/// `.step_by(k)`, are not yet recognized.
+/// loops (`for i in a..b` and `(a..b).rev()`) over any integer counter,
+/// including `isize`. Other iterator loops, such as `a..=b` or `.step_by(k)`,
+/// are not yet recognized.
 ///
 /// Only the annotated loop is unrolled. Inner loops are copied intact unless
 /// they carry their own annotation. Several `continue` paths (multiple
@@ -819,7 +820,8 @@ pub fn cooperative_launch(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// Loop annotations work the same way in device function definitions as they do
 /// in kernels. Use an explicit counted `while` loop or a range `for` loop
-/// (`for i in a..b`); other iterator loops are not yet recognized. Partial
+/// (`for i in a..b` or `(a..b).rev()`, over any integer counter including
+/// `isize`); other iterator loops are not yet recognized. Partial
 /// factors must be `N >= 2`. Multiple `continue` paths are supported; full
 /// unrolling preserves `break` and multiple exit targets. Partial unrolling
 /// requires a positive counter step, a `<` or `<=` test, an unchanging limit,

@@ -55,7 +55,8 @@ fn helper(x: f32) -> f32 { x * x }
 | `#[readonly]`                               | Mark as read-only                                                   |
 
 Use these annotations only on an explicit counted `while` loop or a range
-`for` loop (`for i in a..b`) inside a `#[kernel]` or `#[device]` function.
+`for` loop (`for i in a..b` or `(a..b).rev()`, over any integer counter
+including `isize`) inside a `#[kernel]` or `#[device]` function.
 Other iterator loops are not yet recognized by the unroll pass. Nested loops
 and multiple `continue` paths are supported. Full `#[unroll]` preserves `break`
 paths and multiple exit targets.

@@ -14,8 +14,16 @@
 //! `partial_unroll` has a runtime trip count, so `#[unroll(4)]` unrolls the body
 //! by 4 and leaves a remainder loop. `range_for_loops` puts the same requests on
 //! range `for` loops, and `signed_range_for_loops` and `signed_partial_range_for`
-//! on loops over `i32` counters.
+//! on loops over `i32` counters. `nested_lane_range` is a 16×16 nest over a
+//! 16-lane accumulator. A runtime-bounded mix in the inner range is what keeps
+//! LLVM from unrolling that nest itself.
+//! `isize_range_for` covers `a..b`, `(a..b).rev()`, and `#[unroll(4)]` on an
+//! `isize` counter.
 //! All are semantics-preserving; the host checks the sums.
+//!
+//! `verify-code-shape.sh` asserts that `nested_lane_range` and `isize_range_for`
+//! have no local memory in the generated PTX. GPU-less CI runs it through
+//! `scripts/smoketest.sh --compile-only`.
 //!
 //! Run: cargo oxide run unroll_smoke
 
@@ -552,6 +560,83 @@ mod kernels {
         }
         *partial = sum;
     }
+
+    /// 16×16 nested range over a 16-lane accumulator. Each loaded value is mixed
+    /// `steps` times. That runtime-bounded loop is enough for LLVM to leave the
+    /// nest looped, with `acc` in a `.local` depot (`ld.local` / `st.local`).
+    /// `#[unroll]` on both range loops makes the lane indices literals, so `acc`
+    /// stays in registers. `acc[j]` sums the mixed `input[i * 16 + j]` over `i`
+    /// in `0..16`, and the result is that vector summed, plus the thread index.
+    #[allow(clippy::needless_range_loop)]
+    #[kernel]
+    pub fn nested_lane_range(input: &[u32], mut out: DisjointSlice<u32>, steps: u32) {
+        let base = thread::index_1d().get() as u32;
+        let Some(out_elem) = out.get_mut(thread::index_1d()) else {
+            return;
+        };
+        let mut acc = [0u32; 16];
+        #[unroll]
+        for i in 0..16 {
+            #[unroll]
+            for j in 0..16 {
+                // SAFETY: the host passes 256 elements, and both loops cover `0..16`.
+                let mut x = unsafe { *input.get_unchecked(i * 16 + j) };
+                let mut k = 0u32;
+                while k < steps {
+                    x = x.wrapping_mul(3).wrapping_add(1);
+                    k += 1;
+                }
+                acc[j] = acc[j].wrapping_add(x);
+            }
+        }
+        let mut sum = 0u32;
+        #[unroll]
+        for lane in 0..16 {
+            sum = sum.wrapping_add(acc[lane]);
+        }
+        *out_elem = sum.wrapping_add(base);
+    }
+
+    /// Range `for` loops over `isize`. core steps `isize` by casting to `i64`
+    /// and back; those are the same dialect type, so the loops unroll like
+    /// `i64`. `#[unroll]` on `0isize..8` (`a..b`) fills `acc`, `#[unroll]` on
+    /// `(0isize..8).rev()` folds it, and `#[unroll(4)]` on `0isize..n` sums
+    /// `n*(n-1)/2`.
+    #[allow(clippy::needless_range_loop)]
+    #[kernel]
+    pub fn isize_range_for(
+        input: &[u32],
+        mut folded: DisjointSlice<u32>,
+        mut partial: DisjointSlice<u32>,
+        n: isize,
+    ) {
+        let base = thread::index_1d().get() as u32;
+        let (Some(folded), Some(partial)) = (
+            folded.get_mut(thread::index_1d()),
+            partial.get_mut(thread::index_1d()),
+        ) else {
+            return;
+        };
+        let mut acc = [0u32; 8];
+        #[unroll]
+        for i in 0isize..8 {
+            // SAFETY: the host passes at least 8 elements.
+            let x = unsafe { *input.get_unchecked(i as usize) };
+            acc[i as usize] = x;
+        }
+        let mut weighted = 0u32;
+        #[unroll]
+        for i in (0isize..8).rev() {
+            weighted = weighted.wrapping_mul(3).wrapping_add(acc[i as usize]);
+        }
+        let mut sum = 0u32;
+        #[unroll(4)]
+        for i in 0isize..n {
+            sum = sum.wrapping_add(i as u32);
+        }
+        *folded = weighted.wrapping_add(base);
+        *partial = sum;
+    }
 }
 
 fn main() {
@@ -798,6 +883,71 @@ fn main() {
             d_signed_part.to_host_vec(&stream).unwrap(),
             vec![range_trip * (range_trip - 1) / 2; N],
             "partial `i32` `0..{range_trip}`"
+        );
+
+        let nested_input: Vec<u32> = (0..256u32)
+            .map(|i| i.wrapping_mul(3).wrapping_add(1))
+            .collect();
+        let d_nested_input = DeviceBuffer::from_host(&stream, &nested_input).unwrap();
+        let mut d_nested = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
+        // SAFETY: each thread writes its own element; the kernel reads 256 inputs.
+        let steps = 1u32;
+        unsafe {
+            module.nested_lane_range(stream.as_ref(), cfg, &d_nested_input, &mut d_nested, steps)
+        }
+        .expect("launch nested_lane_range");
+        let lane_sum = (0..16).fold(0u32, |sum, lane| {
+            sum.wrapping_add((0..16).fold(0u32, |acc, row| {
+                let mut x = nested_input[row * 16 + lane];
+                for _ in 0..steps {
+                    x = x.wrapping_mul(3).wrapping_add(1);
+                }
+                acc.wrapping_add(x)
+            }))
+        });
+        let want_nested: Vec<u32> = (0..N as u32)
+            .map(|tid| lane_sum.wrapping_add(tid))
+            .collect();
+        assert_eq!(
+            d_nested.to_host_vec(&stream).unwrap(),
+            want_nested,
+            "16x16 nested range over a 16-lane accumulator"
+        );
+
+        let mut d_isize = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
+        let mut d_isize_part = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
+        // SAFETY: each thread writes its own element of each buffer; the kernel
+        // reads the first 8 input elements.
+        unsafe {
+            module.isize_range_for(
+                stream.as_ref(),
+                cfg,
+                &d_nested_input,
+                &mut d_isize,
+                &mut d_isize_part,
+                range_trip as isize,
+            )
+        }
+        .expect("launch isize_range_for");
+        let want_isize: Vec<u32> = (0..N as u32)
+            .map(|tid| {
+                (0..8)
+                    .rev()
+                    .fold(0u32, |sum, i| {
+                        sum.wrapping_mul(3).wrapping_add(nested_input[i])
+                    })
+                    .wrapping_add(tid)
+            })
+            .collect();
+        assert_eq!(
+            d_isize.to_host_vec(&stream).unwrap(),
+            want_isize,
+            "`isize` `0..8` and `(0..8).rev()`"
+        );
+        assert_eq!(
+            d_isize_part.to_host_vec(&stream).unwrap(),
+            vec![range_trip * (range_trip - 1) / 2; N],
+            "partial `isize` `0..{range_trip}`"
         );
     }
 

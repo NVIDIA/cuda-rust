@@ -23,7 +23,7 @@ ptx = re.sub(r"/\*.*?\*/|//[^\n]*", "", ptx, flags=re.S)
 # means the annotated range loops were left for LLVM, which does not unroll
 # `nested_lane_range`.
 names = ("nested_lane_range", "isize_range_for")
-local_memory = re.compile(r"(?:^|[[:space:]])\.local\b|ld\.local|st\.local")
+local_memory = re.compile(r"(?m)(?:^|\s)\.local\b|ld\.local|st\.local")
 for name in names:
     header = re.search(r"\.entry\s+" + re.escape(name) + r"\s*\(", ptx)
     if header is None:

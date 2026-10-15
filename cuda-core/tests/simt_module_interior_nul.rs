@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Module-loading APIs return an error for a name or source with an interior
-//! NUL byte instead of panicking.
+//! Module-loading APIs return `CUDA_ERROR_INVALID_VALUE` for a name or source
+//! with an interior NUL byte. A single NUL in the final byte is a terminator
+//! and loads.
 
 use cuda_core::CudaContext;
 
@@ -19,7 +20,7 @@ const VALID_PTX: &str = "\
 .visible .entry k() { ret; }
 ";
 
-const BAD_STRINGS: [&str; 3] = ["a\0b", "\0", "trailing\0"];
+const BAD_STRINGS: [&str; 2] = ["a\0b", "a\0\0"];
 
 #[test]
 fn load_module_from_ptx_src_rejects_interior_nul() {
@@ -31,6 +32,14 @@ fn load_module_from_ptx_src_rejects_interior_nul() {
             .unwrap_or_else(|| panic!("accepted {input:?}"));
         assert_eq!(err.0, INVALID_VALUE, "ptx_src {input:?}");
     }
+}
+
+#[test]
+fn load_module_from_ptx_src_accepts_a_terminated_source() {
+    let ctx = CudaContext::new(0).expect("failed to create CUDA context");
+    let terminated = format!("{VALID_PTX}\0");
+    ctx.load_module_from_ptx_src(&terminated)
+        .expect("PTX with its terminator failed to load");
 }
 
 #[test]
@@ -52,10 +61,14 @@ fn function_and_global_lookup_reject_interior_nul() {
         .load_module_from_ptx_src(VALID_PTX)
         .expect("valid PTX failed to load");
 
-    // A well-formed name still resolves, so the rejections below come from
-    // the NUL check and not from a missing symbol.
-    module.load_function("k").expect("entry `k` not found");
-    module.get_global("g").expect("global `g` not found");
+    // Both names resolve with and without a terminator. Each rejection below
+    // therefore comes from the NUL check.
+    for name in ["k", "k\0"] {
+        module.load_function(name).expect("entry `k` not found");
+    }
+    for name in ["g", "g\0"] {
+        module.get_global(name).expect("global `g` not found");
+    }
 
     for input in BAD_STRINGS {
         let err = module

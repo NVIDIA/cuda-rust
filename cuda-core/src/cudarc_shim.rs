@@ -362,12 +362,12 @@ pub(crate) mod stream {
 pub(crate) mod module {
     use super::{DriverError, IntoResult};
     use core::ffi::c_void;
+    use std::ffi::CStr;
     use std::mem::MaybeUninit;
 
     /// Loads a CUDA module from a file path.
-    pub fn load(filename: &str) -> Result<cuda_bindings::CUmodule, DriverError> {
-        let c_str = crate::error::c_string(filename)?;
-        let fname_ptr = c_str.as_c_str().as_ptr();
+    pub fn load(filename: &CStr) -> Result<cuda_bindings::CUmodule, DriverError> {
+        let fname_ptr = filename.as_ptr();
         let mut module = MaybeUninit::uninit();
         unsafe {
             cuda_bindings::cuModuleLoad(module.as_mut_ptr(), fname_ptr).result()?;
@@ -816,21 +816,18 @@ mod tests {
     const INVALID_VALUE: cuda_bindings::CUresult =
         cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE;
 
-    /// Each name is rejected before any driver call, so no device or context
-    /// is needed.
+    /// The name is rejected before any driver call. The test needs no device
+    /// or context. `error::c_string` has the full table of inputs.
     #[test]
     fn module_helpers_reject_interior_nul_without_panicking() {
-        for input in ["a\0b", "\0", "trailing\0"] {
-            let load = module::load(input).expect_err("load accepted an interior NUL");
-            assert_eq!(load.0, INVALID_VALUE, "load({input:?})");
+        let input = "a\0b";
 
-            let ptx = unsafe { module::load_ptx_str(input) }
-                .expect_err("load_ptx_str accepted an interior NUL");
-            assert_eq!(ptx.0, INVALID_VALUE, "load_ptx_str({input:?})");
+        let ptx = unsafe { module::load_ptx_str(input) }
+            .expect_err("load_ptx_str accepted an interior NUL");
+        assert_eq!(ptx.0, INVALID_VALUE, "load_ptx_str({input:?})");
 
-            let func = unsafe { module::get_function(std::ptr::null_mut(), input) }
-                .expect_err("get_function accepted an interior NUL");
-            assert_eq!(func.0, INVALID_VALUE, "get_function({input:?})");
-        }
+        let func = unsafe { module::get_function(std::ptr::null_mut(), input) }
+            .expect_err("get_function accepted an interior NUL");
+        assert_eq!(func.0, INVALID_VALUE, "get_function({input:?})");
     }
 }

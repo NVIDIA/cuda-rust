@@ -301,7 +301,7 @@ impl Device {
     ) -> Result<Arc<Module>, DriverError> {
         let c_src = crate::error::c_string(ptx_src)?;
         self.bind_to_thread()?;
-        let cu_module = { unsafe { module::load_data(c_src.as_ptr() as *const _) } }?;
+        let cu_module = unsafe { module::load_data(c_src.as_ptr() as *const _) }?;
         Ok(Arc::new(Module {
             cu_module,
             device: self.clone(),
@@ -314,8 +314,9 @@ impl Device {
         self: &Arc<Self>,
         filename: &str,
     ) -> Result<Arc<Module>, DriverError> {
+        let c_filename = crate::error::c_string(filename)?;
         self.bind_to_thread()?;
-        let cu_module = { module::load(filename) }?;
+        let cu_module = module::load(&c_filename)?;
         Ok(Arc::new(Module {
             cu_module,
             device: self.clone(),

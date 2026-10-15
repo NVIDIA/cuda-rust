@@ -212,6 +212,7 @@ use cuda_async::device_operation::{
     Value,
 };
 use cuda_async::error::DeviceError;
+use cuda_core::bytemuck::AnyBitPattern;
 use cuda_core::sys::CUdeviceptr;
 use cuda_core::{DType, DTypeId};
 use std::fmt::Debug;
@@ -1349,7 +1350,13 @@ impl<T: DType> Tensor<T> {
     ///
     /// Zero-copy. Returns `Err` if the tensor is not contiguous, the total
     /// byte size doesn't match, or the pointer alignment is incompatible.
-    pub fn reinterpret<U: DType>(
+    ///
+    /// `U: AnyBitPattern` is what makes the reinterpretation safe: every bit
+    /// pattern is a valid `U`, so no byte written as a `T` can become an
+    /// invalid `U`. All numeric element types qualify. `bool` does not, since
+    /// only `0` and `1` are `bool` values, so a `Tensor<bool>` can only come
+    /// from memory written as `bool`.
+    pub fn reinterpret<U: DType + AnyBitPattern>(
         self: &Arc<Self>,
         shape: &[usize],
     ) -> Result<Arc<Tensor<U>>, Error> {

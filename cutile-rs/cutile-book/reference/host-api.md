@@ -88,7 +88,12 @@ These accessors do not synchronize with the GPU:
 | `arc_tensor.reinterpret::<U>(&shape)` | Zero-copy reinterpretation as `Arc<Tensor<U>>` |
 
 `reinterpret` requires an `Arc<Tensor<T>>`, contiguous storage, matching total
-byte size, and compatible pointer alignment:
+byte size, and compatible pointer alignment. The target type must also
+implement `bytemuck::AnyBitPattern` (re-exported as
+`cutile::cuda_core::bytemuck`): every bit pattern must be a valid value, so no
+byte written as `T` can become an invalid `U`. Every numeric element type
+qualifies. `bool` does not, because only `0` and `1` are `bool` values, so a
+byte tensor cannot be reinterpreted as `Tensor<bool>`.
 
 ```rust
 use cutile::tensor::Tensor;

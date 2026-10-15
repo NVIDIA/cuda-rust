@@ -176,6 +176,14 @@ macro_rules! define_integer_atomic {
         // All operations go through atomic instructions emitted by the compiler.
         unsafe impl Sync for $Name {}
 
+        // SAFETY: `$Name` is `#[repr(transparent)]` over `UnsafeCell<$ty>`,
+        // which is itself `#[repr(transparent)]` over `$ty`, with no other
+        // fields, so it has the layout and the valid values of `$ty`. This
+        // lets a `DeviceBuffer<$ty>` be viewed as `DeviceBuffer<$Name>` with
+        // cuda-core's `DeviceBuffer::wrap_elem` and turned back with
+        // `peel_elem` so the host can read the result.
+        unsafe impl bytemuck::TransparentWrapper<$ty> for $Name {}
+
         impl $Name {
             /// Create a new atomic with the given initial value.
             pub const fn new(val: $ty) -> Self {
@@ -371,6 +379,14 @@ macro_rules! define_float_atomic {
         // SAFETY: Atomic types are specifically designed for shared access.
         // All operations go through atomic instructions emitted by the compiler.
         unsafe impl Sync for $Name {}
+
+        // SAFETY: `$Name` is `#[repr(transparent)]` over `UnsafeCell<$ty>`,
+        // which is itself `#[repr(transparent)]` over `$ty`, with no other
+        // fields, so it has the layout and the valid values of `$ty`. This
+        // lets a `DeviceBuffer<$ty>` be viewed as `DeviceBuffer<$Name>` with
+        // cuda-core's `DeviceBuffer::wrap_elem` and turned back with
+        // `peel_elem` so the host can read the result.
+        unsafe impl bytemuck::TransparentWrapper<$ty> for $Name {}
 
         impl $Name {
             /// Create a new atomic with the given initial value.

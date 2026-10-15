@@ -15,6 +15,10 @@ readme = "README.md"
 # it back on for all of them and defeat the feature. `cuda-host` requests
 # `host` explicitly, so any build that loads or launches a module still has it.
 cuda-macros = { workspace = true }
+# The atomic types implement `bytemuck::TransparentWrapper` so that cuda-core's
+# `DeviceBuffer::wrap_elem` and `peel_elem` accept them. The orphan rule means
+# only this crate can write those impls; cuda-core cannot name these types.
+bytemuck = { workspace = true }
 
 [dev-dependencies]
 trybuild = "1"

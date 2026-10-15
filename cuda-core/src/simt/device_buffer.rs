@@ -33,6 +33,7 @@ use std::mem::MaybeUninit;
 use std::num::Wrapping;
 use std::sync::Arc;
 
+use bytemuck::{AnyBitPattern, TransparentWrapper};
 use cuda_bindings::CUdeviceptr;
 
 use crate::error::DriverError;
@@ -50,15 +51,21 @@ use crate::simt::stream::CudaStream;
 ///
 /// # Safety
 ///
-/// Implementors must be safe to duplicate with a byte-for-byte copy. Values
-/// copied back from device memory must have a bit pattern that is valid for
-/// `Self`, and the all-zero bit pattern must also be valid because
-/// [`DeviceBuffer::zeroed`] initializes memory with zero bytes.
+/// Implementors must be safe to duplicate with a byte-for-byte copy, and the
+/// all-zero bit pattern must be a valid value because [`DeviceBuffer::zeroed`]
+/// initializes memory with zero bytes. Types whose zero pattern is invalid,
+/// such as `NonZeroU32`, cannot implement `DeviceCopy`.
 ///
-/// `Copy` alone is not enough: types such as `bool`, `char`, and
-/// `NonZeroU32` are `Copy`, but not every byte pattern is a valid value of
-/// those types. `DeviceCopy` is the stronger promise required when
-/// `DeviceBuffer` turns raw device bytes back into initialized Rust values.
+/// `DeviceCopy` does not promise that every bit pattern is valid. `bool`
+/// implements it although only `0` and `1` are `bool` values. That is sound
+/// because a typed `DeviceBuffer<T>` holds valid `T` values by construction:
+/// the safe constructors copy `T` values from the host or write zero bytes, a
+/// kernel that writes through `&mut T` writes a `T`, and the raw constructors
+/// are `unsafe`, so their caller vouches for the contents. The one place
+/// arbitrary bytes could become typed values is the safe reinterpreting casts,
+/// [`DeviceBuffer::cast_elem`] and [`DeviceBuffer::cast_chunks`]. They require
+/// the target to implement [`bytemuck::AnyBitPattern`], which `bool` does not,
+/// so a `DeviceBuffer<bool>` can only come from memory written as `bool`.
 pub unsafe trait DeviceCopy: Copy {}
 
 macro_rules! impl_device_copy {
@@ -86,6 +93,11 @@ impl_device_copy!(
     f32,
     f64
 );
+
+// Zero is `false`, and the trait documentation explains why the `0`/`1`
+// validity requirement does not stop `bool` from being `DeviceCopy`. It is not
+// `bytemuck::AnyBitPattern`, so the reinterpreting casts cannot produce it.
+unsafe impl DeviceCopy for bool {}
 
 unsafe impl<T: DeviceCopy, const N: usize> DeviceCopy for [T; N] {}
 unsafe impl<T: ?Sized> DeviceCopy for *const T {}
@@ -285,33 +297,84 @@ impl<T> DeviceBuffer<T> {
 
     /// Reinterpret the element type of this buffer as `A`.
     ///
-    /// `A` must have the same size and alignment as `T` (e.g. `A` is
-    /// `#[repr(transparent)]` over `T`). This is the "atomic-slice launch
-    /// mapping" for issue #151: allocate and initialize a plain
-    /// `DeviceBuffer<u64>`, then hand it to a kernel that takes
-    /// `&[DeviceAtomicU64]`. The pointer, length, and bytes are unchanged;
-    /// only the element type the kernel sees changes to one whose pointee
-    /// permits shared mutation (so rustc does not mark it `readonly`/`noalias`).
+    /// `A` must have the same size and alignment as `T`. The pointer, length,
+    /// and bytes are unchanged; only the element type changes. Element counts
+    /// are preserved because `size_of::<A>() == size_of::<T>()`.
     ///
-    /// Element counts are preserved because `size_of::<A>() == size_of::<T>()`.
-    pub fn cast_elem<A>(self) -> DeviceBuffer<A> {
+    /// `A: AnyBitPattern` is what makes this safe: every bit pattern is a valid
+    /// `A`, so no byte written as a `T` can become an invalid `A`. Types with
+    /// invalid bit patterns, `bool` for one, are rejected at compile time, so a
+    /// `DeviceBuffer<bool>` can only come from memory written as `bool`.
+    ///
+    /// Atomic types and other `#[repr(transparent)]` wrappers that are not
+    /// `Copy` cannot be `AnyBitPattern`; use [`Self::wrap_elem`] and
+    /// [`Self::peel_elem`] for those.
+    pub fn cast_elem<A: AnyBitPattern>(self) -> DeviceBuffer<A> {
+        // SAFETY: every bit pattern is a valid `A`, so the bytes of any `T`
+        // are valid `A` values; `relabel` checks the layout.
+        unsafe { self.relabel() }
+    }
+
+    /// View this buffer through a `#[repr(transparent)]` wrapper of `T`.
+    ///
+    /// This is the atomic-slice launch mapping for issue #151: allocate and
+    /// initialize a plain `DeviceBuffer<u64>`, then hand it to a kernel that
+    /// takes `&[DeviceAtomicU64]`. The pointer, length, and bytes are
+    /// unchanged; only the element type the kernel sees changes to one whose
+    /// pointee permits shared mutation, so rustc does not mark the slice
+    /// `readonly`/`noalias`.
+    ///
+    /// `W: TransparentWrapper<T>` is the soundness argument: the wrapper has
+    /// the layout and the valid values of `T`, which is what the `bytemuck`
+    /// contract promises, so relabelling the allocation cannot produce an
+    /// invalid value. The wrapper need not be `Copy` or `DeviceCopy`; the
+    /// atomic types are neither. [`Self::peel_elem`] goes back to `T`, for
+    /// example before [`Self::to_host_vec`].
+    pub fn wrap_elem<W: TransparentWrapper<T>>(self) -> DeviceBuffer<W> {
+        // SAFETY: `W` is a transparent wrapper of `T`, so every `T` in the
+        // allocation is a valid `W`; `relabel` checks the layout.
+        unsafe { self.relabel() }
+    }
+
+    /// Remove a `#[repr(transparent)]` wrapper from the element type.
+    ///
+    /// The inverse of [`Self::wrap_elem`]: `T` must be a `TransparentWrapper`
+    /// around `I`, so a `DeviceBuffer<DeviceAtomicU64>` peels back to the
+    /// `DeviceBuffer<u64>` it was made from, which can be read on the host.
+    pub fn peel_elem<I>(self) -> DeviceBuffer<I>
+    where
+        T: TransparentWrapper<I>,
+    {
+        // SAFETY: `T` is a transparent wrapper of `I`, so every `T` in the
+        // allocation is a valid `I`; `relabel` checks the layout.
+        unsafe { self.relabel() }
+    }
+
+    /// Hand this allocation to a `DeviceBuffer<A>` of the same length.
+    ///
+    /// # Safety
+    ///
+    /// Every value of `T` in the allocation must also be a valid `A`. The
+    /// three public casts above each establish that through a trait bound.
+    unsafe fn relabel<A>(self) -> DeviceBuffer<A> {
         assert_eq!(
             std::mem::size_of::<A>(),
             std::mem::size_of::<T>(),
-            "cast_elem requires the same element size"
+            "element casts require the same element size"
         );
         assert_eq!(
             std::mem::align_of::<A>(),
             std::mem::align_of::<T>(),
-            "cast_elem requires the same element alignment"
+            "element casts require the same element alignment"
         );
         let (ptr, len, ctx, dealloc_stream) = self.into_all_raw_parts();
         // SAFETY: `ptr` came from a valid `DeviceBuffer<T>` allocation of `len`
         // elements; `A` has identical size and alignment, so the same allocation
         // is a valid `DeviceBuffer<A>` of the same length and the same byte
-        // extent. Ownership transfers; the original buffer's `Drop` is
-        // suppressed by `into_all_raw_parts`, and the allocation metadata is
-        // preserved for the new element type.
+        // extent, and the caller guarantees the values are valid `A`s.
+        // Ownership transfers; the original buffer's `Drop` is suppressed by
+        // `into_all_raw_parts`, and the allocation metadata is preserved for
+        // the new element type.
         unsafe {
             DeviceBuffer::<A>::from_raw_parts_with_dealloc_stream(ptr, len, ctx, dealloc_stream)
         }
@@ -357,7 +420,12 @@ impl<T> DeviceBuffer<T> {
     /// Returning the original on failure rather than panicking keeps the
     /// fallback path available, since a caller that cannot widen usually has a
     /// scalar version to fall back to.
-    pub fn cast_chunks<A>(self) -> Result<DeviceBuffer<A>, Self> {
+    ///
+    /// As with [`Self::cast_elem`], `A: AnyBitPattern` is what makes the
+    /// reinterpretation safe: every bit pattern is a valid `A`. A host-defined
+    /// vector element gets there with `unsafe impl bytemuck::Pod` next to its
+    /// `DeviceCopy` impl.
+    pub fn cast_chunks<A: AnyBitPattern>(self) -> Result<DeviceBuffer<A>, Self> {
         let bytes = self.len.saturating_mul(std::mem::size_of::<T>());
         let Some(new_len) = chunk_cast_len(
             bytes,
@@ -383,7 +451,7 @@ impl<T> DeviceBuffer<T> {
     /// For choosing between a wide and a scalar path without consuming the
     /// buffer to find out.
     #[must_use]
-    pub fn can_cast_chunks<A>(&self) -> bool {
+    pub fn can_cast_chunks<A: AnyBitPattern>(&self) -> bool {
         let bytes = self.len.saturating_mul(std::mem::size_of::<T>());
         chunk_cast_len(
             bytes,

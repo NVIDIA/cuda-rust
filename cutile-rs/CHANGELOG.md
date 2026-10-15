@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `Tensor::reinterpret` requires the target element type to implement
+  `bytemuck::AnyBitPattern`. Reinterpreting byte storage as `Tensor<bool>`
+  could expose values other than `0` and `1`, which is undefined behavior
+  when the tensor is read back, and is now a compile error. Numeric element
+  types, including `f16`, `bf16`, and the FP8 and packed FP4 storage types,
+  are unaffected (NVIDIA/cuda-rust#1506).
+
 ### Changed
 
 - cuTile Rust now lives in the [NVIDIA/cuda-rust](https://github.com/NVIDIA/cuda-rust)

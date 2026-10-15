@@ -39,8 +39,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let context = CudaContext::new(0)?;
     let stream = context.default_stream();
     let module = kernels::load(&context)?;
-    let counter_f32 = DeviceBuffer::<f32>::zeroed(&stream, 1)?.cast_elem::<DeviceAtomicF32>();
-    let counter_f64 = DeviceBuffer::<f64>::zeroed(&stream, 1)?.cast_elem::<DeviceAtomicF64>();
+    let counter_f32 = DeviceBuffer::<f32>::zeroed(&stream, 1)?.wrap_elem::<DeviceAtomicF32>();
+    let counter_f64 = DeviceBuffer::<f64>::zeroed(&stream, 1)?.wrap_elem::<DeviceAtomicF64>();
     let mut old_values = DeviceBuffer::<(f32, f64)>::zeroed(&stream, N)?;
 
     // SAFETY: the launch covers exactly N unique 1D indices, `old_values` has
@@ -57,8 +57,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     stream.synchronize()?;
 
-    let got_f32 = counter_f32.cast_elem::<f32>().to_host_vec(&stream)?[0];
-    let got_f64 = counter_f64.cast_elem::<f64>().to_host_vec(&stream)?[0];
+    let got_f32 = counter_f32.peel_elem::<f32>().to_host_vec(&stream)?[0];
+    let got_f64 = counter_f64.peel_elem::<f64>().to_host_vec(&stream)?[0];
     let old_values = old_values.to_host_vec(&stream)?;
     let mut old_f32 = old_values
         .iter()

@@ -27,4 +27,7 @@ fn ui() {
     t.compile_fail("tests/ui/entry_non_literal_value.rs");
     t.compile_fail("tests/ui/global_*.rs");
     t.compile_fail("tests/ui/unordered_partition_requires_unsafe.rs");
+    // `Tensor::reinterpret` requires `bytemuck::AnyBitPattern`: a byte tensor
+    // cannot become a `Tensor<bool>`, whose only valid values are 0 and 1.
+    t.compile_fail("tests/ui/reinterpret_bool.rs");
 }

@@ -28,6 +28,11 @@ pub struct Quad(pub [f32; 4]);
 // Plain POD aggregate, no pointers: safe to memcpy to/from the device.
 unsafe impl cuda_core::DeviceCopy for Quad {}
 
+// Four `f32` with no padding: every bit pattern is a valid `Quad`, which is
+// what lets `cast_chunks` build one from flat `f32` bytes.
+unsafe impl cuda_core::bytemuck::Zeroable for Quad {}
+unsafe impl cuda_core::bytemuck::Pod for Quad {}
+
 #[cuda_module]
 mod kernels {
     use super::Quad;

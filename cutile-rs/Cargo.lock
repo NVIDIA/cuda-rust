@@ -444,6 +444,7 @@ name = "cuda-core"
 version = "0.4.0"
 dependencies = [
  "anyhow",
+ "bytemuck",
  "cuda-bindings",
  "cuda-core-derive",
  "half",

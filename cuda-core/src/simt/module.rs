@@ -71,7 +71,7 @@ impl CudaContext {
     /// JIT-compiles PTX source and loads the resulting module into this
     /// context.
     ///
-    /// `ptx_src` must be a valid, null-terminator-free PTX string. The driver
+    /// `ptx_src` is PTX source that may end in one terminating NUL. The driver
     /// performs JIT compilation targeting the current device architecture.
     ///
     /// # Errors

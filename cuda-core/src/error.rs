@@ -148,11 +148,12 @@ impl DriverError {
 
 /// Converts a Rust string into a NUL-terminated C string for a driver call.
 ///
-/// A string with an interior NUL byte cannot be passed to the driver intact.
-/// It maps to `CUDA_ERROR_INVALID_VALUE`, the code the driver uses for a bad
-/// argument, instead of panicking in a function that already returns
-/// `Result<_, DriverError>`.
+/// A single NUL in the final byte is a terminator and is dropped. PTX read
+/// back from NVRTC ends in one. Any other NUL byte would truncate the string
+/// at the driver and maps to `CUDA_ERROR_INVALID_VALUE`. The driver returns
+/// that code for a bad argument.
 pub(crate) fn c_string(s: &str) -> Result<CString, DriverError> {
+    let s = s.strip_suffix('\0').unwrap_or(s);
     CString::new(s).map_err(|_| DriverError(cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE))
 }
 
@@ -161,14 +162,17 @@ mod tests {
     use super::{c_string, DriverError};
 
     #[test]
-    fn c_string_maps_interior_nul_to_invalid_value() {
-        let cases: [(&str, Option<&[u8]>); 6] = [
+    fn c_string_drops_a_final_nul_and_rejects_any_other() {
+        let cases: [(&str, Option<&[u8]>); 9] = [
             ("", Some(b"")),
             ("kernel", Some(b"kernel")),
             ("/tmp/m.ptx", Some(b"/tmp/m.ptx")),
+            ("\0", Some(b"")),
+            ("trailing\0", Some(b"trailing")),
             ("a\0b", None),
-            ("\0", None),
-            ("trailing\0", None),
+            ("\0a", None),
+            ("a\0\0", None),
+            ("a\0b\0", None),
         ];
         for (input, expected) in cases {
             match (c_string(input), expected) {

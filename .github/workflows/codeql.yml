@@ -31,12 +31,12 @@ concurrency:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    # nv-cpu-general: m7i.2xlarge, 8 vCPU / 32 GiB.
+    # nv-cpu-general: m7i.xlarge, 4 vCPU / 16 GiB. Same size as ubuntu-latest.
     # The VM image has no rustup. rust:1.98.0-bookworm matches the root
     # toolchain pin and is buildpack-deps, so git is there for checkout and
     # rustup is on PATH. The Oxide nightly still comes from
     # cuda-oxide/rust-toolchain.toml when the extractor enters that tree.
-    runs-on: linux-amd64-cpu8
+    runs-on: linux-amd64-cpu4
     container:
       image: rust:1.98.0-bookworm
     timeout-minutes: 120

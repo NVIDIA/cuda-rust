@@ -7,7 +7,7 @@ ways:
 2. It compares a serialized pageable upload -> kernel -> download loop with a
    three-stream pipeline using rotating pinned host stagers and persistent device buffers.
 
-Run it from the repository root:
+From the cuda-oxide repository root:
 
 ```bash
 cargo oxide run pinned_overlap

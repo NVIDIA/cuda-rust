@@ -10,7 +10,7 @@ from a fresh checkout. If you just want to run an example, the
 
 | Dependency       | Version                       | Purpose                                                     |
 |:-----------------|:----------------------------- |:------------------------------------------------------------|
-| **Rust nightly** | `nightly-2026-08-28` (pinned) | Compiler toolchain with `rustc-dev` for the codegen backend |
+| **Rust nightly** | `nightly-2026-10-11` (pinned) | Compiler toolchain with `rustc-dev` for the codegen backend |
 | **CUDA Toolkit** | 13.0+ (with cuRAND headers)   | Driver API, `nvcc`, PTX assembler; `curand.h` for bindgen   |
 | **Clang**        | 21+ (`clang-21` pkg)          | `bindgen` in host `cuda-bindings` needs clang's headers     |
 | **Linux**        | Tested on Ubuntu 24.04        | Windows and macOS are not supported                         |
@@ -33,15 +33,15 @@ stable:
 ```toml
 # cuda-oxide/rust-toolchain.toml
 [toolchain]
-channel = "nightly-2026-08-28"
+channel = "nightly-2026-10-11"
 components = ["rust-src", "rustc-dev", "rust-analyzer", "clippy", "rustfmt", "llvm-tools"]
 ```
 
 If you need to install manually:
 
 ```bash
-rustup toolchain install nightly-2026-08-28
-rustup component add rust-src rustc-dev rust-analyzer clippy rustfmt llvm-tools --toolchain nightly-2026-08-28
+rustup toolchain install nightly-2026-10-11
+rustup component add rust-src rustc-dev rust-analyzer clippy rustfmt llvm-tools --toolchain nightly-2026-10-11
 ```
 
 `rust-src` provides the standard library source for cross-compilation,
@@ -66,7 +66,7 @@ required for `ptxas` and header files, but you will not be able to run kernels.
 ## Install LLVM (usually optional)
 
 The codegen pipeline emits LLVM IR and invokes `llc` to produce PTX. The
-pinned Rust toolchain (`nightly-2026-08-28`) already ships LLVM 23 with the
+pinned Rust toolchain (`nightly-2026-10-11`) already ships LLVM 23 with the
 NVPTX backend enabled via the `llvm-tools` component, so the recommended
 path is:
 
@@ -155,7 +155,7 @@ build process. `cargo-oxide` handles building it transparently.
 pipeline. Inside the repo, it works via a workspace alias. For standalone use, install it with the pinned nightly toolchain:
 
 ```bash
-cargo +nightly-2026-08-28 install --git https://github.com/NVlabs/cuda-oxide.git cargo-oxide
+cargo +nightly-2026-10-11 install --git https://github.com/NVlabs/cuda-oxide.git cargo-oxide
 ```
 
 On first run, `cargo-oxide` automatically fetches and builds the codegen backend
@@ -277,7 +277,7 @@ repository/
 
 `error[E0463]: can't find crate for rustc_middle`
 : You are missing the `rustc-dev` component. Run:
-  `rustup component add rustc-dev --toolchain nightly-2026-08-28`.
+  `rustup component add rustc-dev --toolchain nightly-2026-10-11`.
 
 CUDA driver version mismatch
 : The toolkit version (compile-time) and driver version (runtime) must be

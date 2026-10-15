@@ -15,5 +15,5 @@ kernel-lib = { path = "kernel-lib" }
 
 cuda-device = { path = "../../../cuda-device" }
 cuda-host = { path = "../../../cuda-host" }
-cuda-core = { path = "../../../../../cuda-core", version = "0.4.0" }
+cuda-core = { path = "../../../../../cuda-core" }
 ptx-parse = { path = "../../../ptx-parse" }

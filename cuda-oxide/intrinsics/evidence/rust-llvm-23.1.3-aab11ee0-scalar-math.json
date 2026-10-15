@@ -1,0 +1,1294 @@
+{
+  "schema": 6,
+  "backend_profile": "rust-llvm-23.1.3-aab11ee0",
+  "backend_kind": "llvm_nvptx",
+  "llvm_revision": "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019",
+  "backend_version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+  "backend_sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+  "defaults": {
+    "target_triple": "nvptx64-nvidia-cuda",
+    "gpu_target": "sm_80",
+    "ptx_feature": "+ptx70",
+    "status": "validated",
+    "declaration_attributes_canonicalized": true,
+    "runtime_validation": "unexecuted"
+  },
+  "fixtures": [
+    {
+      "id": "scalar_math_typed_sm80_ptx70",
+      "coverage_count": 28,
+      "stages": [
+        {
+          "targets": [
+            "sm_80",
+            "ptx70"
+          ],
+          "representation": "separate typed LLVM declaration probes",
+          "stage": "declaration_canonicalization",
+          "mechanism": "typed_nvvm",
+          "outcome": "succeeded",
+          "detail": "Revalidated 28 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): canonical typed declarations and their exact imported attributes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 fea78dbe8828029a051c62bc546d364a72b197a6b98a1b47854322807aefc125."
+        },
+        {
+          "targets": [
+            "sm_80",
+            "ptx70"
+          ],
+          "representation": "separate probes for the recorded lowering mechanism",
+          "stage": "backend_codegen",
+          "mechanism": "typed_nvvm",
+          "outcome": "succeeded",
+          "detail": "Revalidated 28 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 872fd820a42be92ef628a5cb1f79f46895142f0acb65cc5cd978d0bcee090536."
+        },
+        {
+          "targets": [
+            "sm_80",
+            "ptx70"
+          ],
+          "representation": "separate PTX outputs assembled for the recorded target",
+          "stage": "ptx_assembly",
+          "mechanism": "typed_nvvm",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "Revalidated 28 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 40510f96011426cd1c7d1ca35cbcd48ae2decebcd625310fd37db6fc047b8f7a.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        }
+      ]
+    },
+    {
+      "id": "scalar_math_inline_sm80_ptx70",
+      "coverage_count": 9,
+      "stages": [
+        {
+          "targets": [
+            "sm_80",
+            "ptx70"
+          ],
+          "representation": "separate typed LLVM declaration probes",
+          "stage": "declaration_canonicalization",
+          "mechanism": "typed_nvvm",
+          "outcome": "succeeded",
+          "detail": "Revalidated 9 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): canonical typed declarations and their exact imported attributes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 848e863721c151f4c3bdc1ae80df9bedba7cc7edd2c3d680399119821e67b082."
+        },
+        {
+          "targets": [
+            "sm_80",
+            "ptx70"
+          ],
+          "representation": "separate probes for the recorded lowering mechanism",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Revalidated 9 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 094fb972e1487a21ff367ca7549357317a976326625e1ebbe4ae71f490cbc03b."
+        },
+        {
+          "targets": [
+            "sm_80",
+            "ptx70"
+          ],
+          "representation": "separate PTX outputs assembled for the recorded target",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "Revalidated 9 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 832391a539356a083929e9c33a555ed3d0b71a4ddde88e08e8541fca97689540.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        }
+      ]
+    },
+    {
+      "id": "scalar_math_inline_sm80_ptx70_appended",
+      "coverage_count": 3,
+      "stages": [
+        {
+          "targets": [
+            "sm_80",
+            "ptx70"
+          ],
+          "representation": "separate probes for the recorded lowering mechanism",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Revalidated 3 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 7f7959d76a6bc77d5d1dbd1e909cfd96c0c0c99cc5a5053c4f664f6cd0eddcdb.",
+          "tool_path": "/home/nihalp/.rustup/toolchains/nightly-2026-10-11-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/llc",
+          "tool_version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+          "tool_sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449"
+        },
+        {
+          "targets": [
+            "sm_80",
+            "ptx70"
+          ],
+          "representation": "separate PTX outputs assembled for the recorded target",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "Revalidated 3 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 d0e13be12bb5695c5107849e200384164007696566dcf5a51f890bee17ba356a.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        }
+      ]
+    },
+    {
+      "id": "scalar_math_ex2_f16_sm75_ptx70",
+      "coverage_count": 1,
+      "stages": [
+        {
+          "targets": ["sm_75", "ptx70"],
+          "representation": "separate probes for the recorded lowering mechanism",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 cee684a507daecda40b46b40a8de9a2f2582dfcf5aae88b3d844b49e614c44e7."
+        },
+        {
+          "targets": ["sm_75", "ptx70"],
+          "representation": "separate PTX outputs assembled for the recorded target",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 0fd052b8dd9f1821ac995eba3175320422af7c36dcdf0fc99190a1b2819de6e6.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        }
+      ]
+    }
+  ],
+  "matrices": [
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "sin_approx_f32"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "scalar_math_inline_sm80_ptx70"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_sin_approx_f",
+        "llvm_symbol": "llvm.nvvm.sin.approx.f",
+        "expected_ptx": {
+          "mnemonic": "sin",
+          "modifiers": [
+            "approx",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f32"
+          ],
+          "llvm_results": [
+            "f32"
+          ],
+          "concrete_llvm_arguments": [
+            "f32"
+          ],
+          "concrete_llvm_results": [
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "sin_approx_ftz_f32"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "scalar_math_inline_sm80_ptx70"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_sin_approx_ftz_f",
+        "llvm_symbol": "llvm.nvvm.sin.approx.ftz.f",
+        "expected_ptx": {
+          "mnemonic": "sin",
+          "modifiers": [
+            "approx",
+            "ftz",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f32"
+          ],
+          "llvm_results": [
+            "f32"
+          ],
+          "concrete_llvm_arguments": [
+            "f32"
+          ],
+          "concrete_llvm_results": [
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cos_approx_f32"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "scalar_math_inline_sm80_ptx70"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cos_approx_f",
+        "llvm_symbol": "llvm.nvvm.cos.approx.f",
+        "expected_ptx": {
+          "mnemonic": "cos",
+          "modifiers": [
+            "approx",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f32"
+          ],
+          "llvm_results": [
+            "f32"
+          ],
+          "concrete_llvm_arguments": [
+            "f32"
+          ],
+          "concrete_llvm_results": [
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cos_approx_ftz_f32"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "scalar_math_inline_sm80_ptx70"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cos_approx_ftz_f",
+        "llvm_symbol": "llvm.nvvm.cos.approx.ftz.f",
+        "expected_ptx": {
+          "mnemonic": "cos",
+          "modifiers": [
+            "approx",
+            "ftz",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f32"
+          ],
+          "llvm_results": [
+            "f32"
+          ],
+          "concrete_llvm_arguments": [
+            "f32"
+          ],
+          "concrete_llvm_results": [
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "lg2_approx_f32"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "scalar_math_inline_sm80_ptx70"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_lg2_approx_f",
+        "llvm_symbol": "llvm.nvvm.lg2.approx.f",
+        "expected_ptx": {
+          "mnemonic": "lg2",
+          "modifiers": [
+            "approx",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f32"
+          ],
+          "llvm_results": [
+            "f32"
+          ],
+          "concrete_llvm_arguments": [
+            "f32"
+          ],
+          "concrete_llvm_results": [
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "lg2_approx_ftz_f32"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "scalar_math_inline_sm80_ptx70"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_lg2_approx_ftz_f",
+        "llvm_symbol": "llvm.nvvm.lg2.approx.ftz.f",
+        "expected_ptx": {
+          "mnemonic": "lg2",
+          "modifiers": [
+            "approx",
+            "ftz",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f32"
+          ],
+          "llvm_results": [
+            "f32"
+          ],
+          "concrete_llvm_arguments": [
+            "f32"
+          ],
+          "concrete_llvm_results": [
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "rsqrt_approx_f32"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "scalar_math_inline_sm80_ptx70"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_rsqrt_approx_f",
+        "llvm_symbol": "llvm.nvvm.rsqrt.approx.f",
+        "expected_ptx": {
+          "mnemonic": "rsqrt",
+          "modifiers": [
+            "approx",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f32"
+          ],
+          "llvm_results": [
+            "f32"
+          ],
+          "concrete_llvm_arguments": [
+            "f32"
+          ],
+          "concrete_llvm_results": [
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "rsqrt_approx_ftz_f32"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "scalar_math_inline_sm80_ptx70"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_rsqrt_approx_ftz_f",
+        "llvm_symbol": "llvm.nvvm.rsqrt.approx.ftz.f",
+        "expected_ptx": {
+          "mnemonic": "rsqrt",
+          "modifiers": [
+            "approx",
+            "ftz",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f32"
+          ],
+          "llvm_results": [
+            "f32"
+          ],
+          "concrete_llvm_arguments": [
+            "f32"
+          ],
+          "concrete_llvm_results": [
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "rsqrt_approx_f64"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "scalar_math_inline_sm80_ptx70"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_rsqrt_approx_d",
+        "llvm_symbol": "llvm.nvvm.rsqrt.approx.d",
+        "expected_ptx": {
+          "mnemonic": "rsqrt",
+          "modifiers": [
+            "approx",
+            "f64"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f64"
+          ],
+          "llvm_results": [
+            "f64"
+          ],
+          "concrete_llvm_arguments": [
+            "f64"
+          ],
+          "concrete_llvm_results": [
+            "f64"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "rounding",
+          "values": [
+            "rn",
+            "rz",
+            "rm",
+            "rp"
+          ]
+        }
+      ],
+      "product_count": 4,
+      "fixtures": [
+        "scalar_math_typed_sm80_ptx70"
+      ],
+      "template": {
+        "id": "rcp_${rounding}_f32",
+        "source_record": "int_nvvm_rcp_${rounding}_f",
+        "llvm_symbol": "llvm.nvvm.rcp.${rounding}.f",
+        "expected_ptx": {
+          "mnemonic": "rcp",
+          "modifiers": [
+            "${rounding}",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f32"
+          ],
+          "llvm_results": [
+            "f32"
+          ],
+          "concrete_llvm_arguments": [
+            "f32"
+          ],
+          "concrete_llvm_results": [
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "rounding",
+          "values": [
+            "rn",
+            "rz",
+            "rm",
+            "rp"
+          ]
+        }
+      ],
+      "product_count": 4,
+      "fixtures": [
+        "scalar_math_typed_sm80_ptx70"
+      ],
+      "template": {
+        "id": "rcp_${rounding}_ftz_f32",
+        "source_record": "int_nvvm_rcp_${rounding}_ftz_f",
+        "llvm_symbol": "llvm.nvvm.rcp.${rounding}.ftz.f",
+        "expected_ptx": {
+          "mnemonic": "rcp",
+          "modifiers": [
+            "${rounding}",
+            "ftz",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f32"
+          ],
+          "llvm_results": [
+            "f32"
+          ],
+          "concrete_llvm_arguments": [
+            "f32"
+          ],
+          "concrete_llvm_results": [
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "rounding",
+          "values": [
+            "rn",
+            "rz",
+            "rm",
+            "rp"
+          ]
+        }
+      ],
+      "product_count": 4,
+      "fixtures": [
+        "scalar_math_typed_sm80_ptx70"
+      ],
+      "template": {
+        "id": "rcp_${rounding}_f64",
+        "source_record": "int_nvvm_rcp_${rounding}_d",
+        "llvm_symbol": "llvm.nvvm.rcp.${rounding}.d",
+        "expected_ptx": {
+          "mnemonic": "rcp",
+          "modifiers": [
+            "${rounding}",
+            "f64"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f64"
+          ],
+          "llvm_results": [
+            "f64"
+          ],
+          "concrete_llvm_arguments": [
+            "f64"
+          ],
+          "concrete_llvm_results": [
+            "f64"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "rcp_approx_ftz_f32"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "scalar_math_typed_sm80_ptx70"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_rcp_approx_ftz_f",
+        "llvm_symbol": "llvm.nvvm.rcp.approx.ftz.f",
+        "expected_ptx": {
+          "mnemonic": "rcp",
+          "modifiers": [
+            "approx",
+            "ftz",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f32"
+          ],
+          "llvm_results": [
+            "f32"
+          ],
+          "concrete_llvm_arguments": [
+            "f32"
+          ],
+          "concrete_llvm_results": [
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "rcp_approx_ftz_f64"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "scalar_math_typed_sm80_ptx70"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_rcp_approx_ftz_d",
+        "llvm_symbol": "llvm.nvvm.rcp.approx.ftz.d",
+        "expected_ptx": {
+          "mnemonic": "rcp",
+          "modifiers": [
+            "approx",
+            "ftz",
+            "f64"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f64"
+          ],
+          "llvm_results": [
+            "f64"
+          ],
+          "concrete_llvm_arguments": [
+            "f64"
+          ],
+          "concrete_llvm_results": [
+            "f64"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "sqrt_approx_f32"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "scalar_math_typed_sm80_ptx70"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_sqrt_approx_f",
+        "llvm_symbol": "llvm.nvvm.sqrt.approx.f",
+        "expected_ptx": {
+          "mnemonic": "sqrt",
+          "modifiers": [
+            "approx",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f32"
+          ],
+          "llvm_results": [
+            "f32"
+          ],
+          "concrete_llvm_arguments": [
+            "f32"
+          ],
+          "concrete_llvm_results": [
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "sqrt_approx_ftz_f32"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "scalar_math_typed_sm80_ptx70"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_sqrt_approx_ftz_f",
+        "llvm_symbol": "llvm.nvvm.sqrt.approx.ftz.f",
+        "expected_ptx": {
+          "mnemonic": "sqrt",
+          "modifiers": [
+            "approx",
+            "ftz",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f32"
+          ],
+          "llvm_results": [
+            "f32"
+          ],
+          "concrete_llvm_arguments": [
+            "f32"
+          ],
+          "concrete_llvm_results": [
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "rounding",
+          "values": [
+            "rn",
+            "rz",
+            "rm",
+            "rp"
+          ]
+        }
+      ],
+      "product_count": 4,
+      "fixtures": [
+        "scalar_math_typed_sm80_ptx70"
+      ],
+      "template": {
+        "id": "sqrt_${rounding}_f32",
+        "source_record": "int_nvvm_sqrt_${rounding}_f",
+        "llvm_symbol": "llvm.nvvm.sqrt.${rounding}.f",
+        "expected_ptx": {
+          "mnemonic": "sqrt",
+          "modifiers": [
+            "${rounding}",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f32"
+          ],
+          "llvm_results": [
+            "f32"
+          ],
+          "concrete_llvm_arguments": [
+            "f32"
+          ],
+          "concrete_llvm_results": [
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "rounding",
+          "values": [
+            "rn",
+            "rz",
+            "rm",
+            "rp"
+          ]
+        }
+      ],
+      "product_count": 4,
+      "fixtures": [
+        "scalar_math_typed_sm80_ptx70"
+      ],
+      "template": {
+        "id": "sqrt_${rounding}_ftz_f32",
+        "source_record": "int_nvvm_sqrt_${rounding}_ftz_f",
+        "llvm_symbol": "llvm.nvvm.sqrt.${rounding}.ftz.f",
+        "expected_ptx": {
+          "mnemonic": "sqrt",
+          "modifiers": [
+            "${rounding}",
+            "ftz",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f32"
+          ],
+          "llvm_results": [
+            "f32"
+          ],
+          "concrete_llvm_arguments": [
+            "f32"
+          ],
+          "concrete_llvm_results": [
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "rounding",
+          "values": [
+            "rn",
+            "rz",
+            "rm",
+            "rp"
+          ]
+        }
+      ],
+      "product_count": 4,
+      "fixtures": [
+        "scalar_math_typed_sm80_ptx70"
+      ],
+      "template": {
+        "id": "sqrt_${rounding}_f64",
+        "source_record": "int_nvvm_sqrt_${rounding}_d",
+        "llvm_symbol": "llvm.nvvm.sqrt.${rounding}.d",
+        "expected_ptx": {
+          "mnemonic": "sqrt",
+          "modifiers": [
+            "${rounding}",
+            "f64"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "f64"
+          ],
+          "llvm_results": [
+            "f64"
+          ],
+          "concrete_llvm_arguments": [
+            "f64"
+          ],
+          "concrete_llvm_results": [
+            "f64"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "ex2_approx_f16"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "scalar_math_ex2_f16_sm75_ptx70"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_ex2_approx",
+        "llvm_symbol": "llvm.nvvm.ex2.approx",
+        "facts": {
+          "gpu_target": "sm_75",
+          "ptx_feature": "+ptx70",
+          "llvm_arguments": [
+            "anonymous_8"
+          ],
+          "llvm_results": [
+            "anyfloat"
+          ],
+          "concrete_llvm_arguments": [
+            "f16"
+          ],
+          "concrete_llvm_results": [
+            "f16"
+          ]
+        },
+        "expected_ptx": {
+          "mnemonic": "ex2",
+          "modifiers": [
+            "approx",
+            "f16"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "ex2_approx_f32"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "scalar_math_inline_sm80_ptx70_appended"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_ex2_approx",
+        "llvm_symbol": "llvm.nvvm.ex2.approx",
+        "facts": {
+          "llvm_arguments": [
+            "anonymous_8"
+          ],
+          "llvm_results": [
+            "anyfloat"
+          ],
+          "concrete_llvm_arguments": [
+            "f32"
+          ],
+          "concrete_llvm_results": [
+            "f32"
+          ]
+        },
+        "expected_ptx": {
+          "mnemonic": "ex2",
+          "modifiers": [
+            "approx",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "ex2_approx_ftz_f32"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "scalar_math_inline_sm80_ptx70_appended"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_ex2_approx_ftz",
+        "llvm_symbol": "llvm.nvvm.ex2.approx.ftz",
+        "facts": {
+          "llvm_arguments": [
+            "anonymous_8"
+          ],
+          "llvm_results": [
+            "anyfloat"
+          ],
+          "concrete_llvm_arguments": [
+            "f32"
+          ],
+          "concrete_llvm_results": [
+            "f32"
+          ]
+        },
+        "expected_ptx": {
+          "mnemonic": "ex2",
+          "modifiers": [
+            "approx",
+            "ftz",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "tanh_approx_f32"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "scalar_math_inline_sm80_ptx70_appended"
+      ],
+      "template": {
+        "id": "${id}",
+        "source": {
+          "kind": "ptx_native",
+          "instruction": "tanh.approx.f32"
+        },
+        "llvm_symbol": null,
+        "facts": {
+          "llvm_arguments": [],
+          "llvm_results": []
+        },
+        "expected_ptx": {
+          "mnemonic": "tanh",
+          "modifiers": [
+            "approx",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

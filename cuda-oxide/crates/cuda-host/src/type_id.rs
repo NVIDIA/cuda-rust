@@ -10,7 +10,7 @@
 //! API would force a `T: 'static` bound on the kernel marker, which would in
 //! turn reject perfectly valid non-`'static` borrowing closures (e.g. a kernel
 //! launcher capturing `&[f32]` from a stack frame the caller keeps alive
-//! across the launch). The `core::intrinsics::type_id` form has bound
+//! across the launch). The `core::intrinsics::reflection::type_id` form has bound
 //! `T: ?Sized` — i.e. no `'static` requirement — and produces the exact same
 //! 128-bit value that `tcx.type_id_hash` does for that type, because both go
 //! through the same `erase_and_anonymize_regions` + stable-hash pipeline.
@@ -20,7 +20,7 @@
 //! every monomorphized type and const argument, so one hash covers the complete
 //! specialization without inventing a parallel encoding for const values.
 //!
-//! Framing note for future contributors: `core::intrinsics::type_id` is an
+//! Framing note for future contributors: `core::intrinsics::reflection::type_id` is an
 //! internal API and requires `#![feature(core_intrinsics)]` on the owning
 //! crate. cuda-oxide already ships against `rustc_private` and pins a
 //! nightly toolchain, so this is inside our existing risk surface — but the
@@ -54,7 +54,7 @@ static GENERIC_KERNEL_NAMES: OnceLock<Mutex<HashMap<KernelNameKey, &'static str>
 /// caller (the borrow must outlive `stream.synchronize()`).
 #[inline]
 pub fn type_id_u128<T: ?Sized>() -> u128 {
-    let id = const { core::intrinsics::type_id::<T>() };
+    let id = const { core::intrinsics::reflection::type_id::<T>() };
     unsafe { core::mem::transmute::<TypeId, u128>(id) }
 }
 

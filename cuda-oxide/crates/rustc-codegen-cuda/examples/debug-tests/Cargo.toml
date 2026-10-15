@@ -8,7 +8,7 @@ license = "Apache-2.0"
 [workspace]
 
 [dependencies]
-cuda-core = { path = "../../../../../cuda-core", version = "0.4.0" }
+cuda-core = { path = "../../../../../cuda-core" }
 cuda-macros = { path = "../../../../crates/cuda-macros" }
 cuda-device = { path = "../../../../crates/cuda-device" }
 cuda-host   = { path = "../../../../crates/cuda-host" }

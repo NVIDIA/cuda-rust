@@ -27,37 +27,41 @@ const BINS: &[u32] = &[1, 4, 16, 64, 256, 1024, 4096];
 mod kernels {
     use super::*;
 
+    // Atomic storage arrives as a raw writable pointer: a shared &[f16] or
+    // &[f32] would promise immutable elements even after a cast to an atomic.
+    // The unsafe launch keeps storage alive and excludes non-atomic access.
+
     #[kernel]
-    pub fn f32_add(hist: &[f32], n: u32, nbins: u32) {
+    pub fn f32_add(hist: *mut f32, n: u32, nbins: u32) {
         let i = thread::index_1d().get();
         if i >= n as usize {
             return;
         }
         let bin = i % nbins as usize;
-        let cell = unsafe { &*(hist.as_ptr().add(bin) as *const DeviceAtomicF32) };
+        let cell = unsafe { DeviceAtomicF32::from_ptr(hist.add(bin)) };
         cell.fetch_add(1.0f32, AtomicOrdering::Relaxed);
     }
 
     #[kernel]
-    pub fn f16_add(hist: &[f16], n: u32, nbins: u32) {
+    pub fn f16_add(hist: *mut f16, n: u32, nbins: u32) {
         let i = thread::index_1d().get();
         if i >= n as usize {
             return;
         }
         let bin = i % nbins as usize;
-        let cell = unsafe { &*(hist.as_ptr().add(bin) as *const DeviceAtomicF16) };
+        let cell = unsafe { DeviceAtomicF16::from_ptr(hist.add(bin)) };
         cell.fetch_add(1.0f16, AtomicOrdering::Relaxed);
     }
 
     #[kernel]
-    pub fn f32_add_return(hist: &[f32], mut old: DisjointSlice<f32>, n: u32, nbins: u32) {
+    pub fn f32_add_return(hist: *mut f32, mut old: DisjointSlice<f32>, n: u32, nbins: u32) {
         let gid = thread::index_1d();
         let i = gid.get();
         if i >= n as usize {
             return;
         }
         let bin = i % nbins as usize;
-        let cell = unsafe { &*(hist.as_ptr().add(bin) as *const DeviceAtomicF32) };
+        let cell = unsafe { DeviceAtomicF32::from_ptr(hist.add(bin)) };
         let prev = cell.fetch_add(1.0f32, AtomicOrdering::Relaxed);
         if let Some(out) = old.get_mut(gid) {
             *out = prev;
@@ -65,19 +69,25 @@ mod kernels {
     }
 
     #[kernel]
-    pub fn f16_add_return(hist: &[f16], mut old: DisjointSlice<f16>, n: u32, nbins: u32) {
+    pub fn f16_add_return(hist: *mut f16, mut old: DisjointSlice<f16>, n: u32, nbins: u32) {
         let gid = thread::index_1d();
         let i = gid.get();
         if i >= n as usize {
             return;
         }
         let bin = i % nbins as usize;
-        let cell = unsafe { &*(hist.as_ptr().add(bin) as *const DeviceAtomicF16) };
+        let cell = unsafe { DeviceAtomicF16::from_ptr(hist.add(bin)) };
         let prev = cell.fetch_add(1.0f16, AtomicOrdering::Relaxed);
         if let Some(out) = old.get_mut(gid) {
             *out = prev;
         }
     }
+}
+
+// Request writable-buffer authority without creating a Rust slice over the
+// device allocation. Callers keep it alive and synchronize before host reads.
+fn atomic_storage<T>(buffer: &mut DeviceBuffer<T>) -> *mut T {
+    buffer.cu_deviceptr() as *mut T
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -101,20 +111,22 @@ fn bench_no_return(
     stream: &Arc<CudaStream>,
     bins: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let hist_f32 = DeviceBuffer::<f32>::zeroed(stream, bins as usize)?;
-    let hist_f16 = DeviceBuffer::<f16>::zeroed(stream, bins as usize)?;
+    let mut hist_f32 = DeviceBuffer::<f32>::zeroed(stream, bins as usize)?;
+    let mut hist_f16 = DeviceBuffer::<f16>::zeroed(stream, bins as usize)?;
     let cfg = LaunchConfig::for_num_elems(N);
 
     let f32_ms = time_gpu_iters(stream, ITERS, || {
         reset(&hist_f32, stream)?;
-        // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
-        unsafe { module.f32_add(stream, cfg, &hist_f32, N, bins) }?;
+        // SAFETY: buffers cover all accesses and stay alive until synchronization.
+        // Atomic storage has no concurrent non-atomic accesses.
+        unsafe { module.f32_add(stream, cfg, atomic_storage(&mut hist_f32), N, bins) }?;
         Ok(())
     })?;
     let f16_ms = time_gpu_iters(stream, ITERS, || {
         reset(&hist_f16, stream)?;
-        // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
-        unsafe { module.f16_add(stream, cfg, &hist_f16, N, bins) }?;
+        // SAFETY: buffers cover all accesses and stay alive until synchronization.
+        // Atomic storage has no concurrent non-atomic accesses.
+        unsafe { module.f16_add(stream, cfg, atomic_storage(&mut hist_f16), N, bins) }?;
         Ok(())
     })?;
 
@@ -128,22 +140,42 @@ fn bench_return(
     stream: &Arc<CudaStream>,
     bins: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let hist_f32 = DeviceBuffer::<f32>::zeroed(stream, bins as usize)?;
-    let hist_f16 = DeviceBuffer::<f16>::zeroed(stream, bins as usize)?;
+    let mut hist_f32 = DeviceBuffer::<f32>::zeroed(stream, bins as usize)?;
+    let mut hist_f16 = DeviceBuffer::<f16>::zeroed(stream, bins as usize)?;
     let mut old_f32 = DeviceBuffer::<f32>::zeroed(stream, N as usize)?;
     let mut old_f16 = DeviceBuffer::<f16>::zeroed(stream, N as usize)?;
     let cfg = LaunchConfig::for_num_elems(N);
 
     let f32_ms = time_gpu_iters(stream, ITERS, || {
         reset(&hist_f32, stream)?;
-        // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
-        unsafe { module.f32_add_return(stream, cfg, &hist_f32, &mut old_f32, N, bins) }?;
+        // SAFETY: buffers cover all accesses and stay alive until synchronization.
+        // Atomic storage has no concurrent non-atomic accesses.
+        unsafe {
+            module.f32_add_return(
+                stream,
+                cfg,
+                atomic_storage(&mut hist_f32),
+                &mut old_f32,
+                N,
+                bins,
+            )
+        }?;
         Ok(())
     })?;
     let f16_ms = time_gpu_iters(stream, ITERS, || {
         reset(&hist_f16, stream)?;
-        // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
-        unsafe { module.f16_add_return(stream, cfg, &hist_f16, &mut old_f16, N, bins) }?;
+        // SAFETY: buffers cover all accesses and stay alive until synchronization.
+        // Atomic storage has no concurrent non-atomic accesses.
+        unsafe {
+            module.f16_add_return(
+                stream,
+                cfg,
+                atomic_storage(&mut hist_f16),
+                &mut old_f16,
+                N,
+                bins,
+            )
+        }?;
         Ok(())
     })?;
 

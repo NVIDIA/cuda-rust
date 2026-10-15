@@ -66,7 +66,7 @@ fn reference_param_validity_key(index: usize) -> Identifier {
 /// |----------------|-----------|------------------------------------|
 /// | `sym_name`     | StringAttr| Function name (from SymbolOpInterface) |
 /// | `mir_func_type`| TypeAttr  | Function type (mir.func_type)      |
-/// | `reference_param_validity_N` | ReferenceParamValidityAttr | Proven nonnull/alignment for source argument `N` on a kernel entry |
+/// | `reference_param_validity_N` | ReferenceParamValidityAttr | Proven reference facts for source argument `N` on a kernel entry |
 /// ```
 ///
 /// # Verification
@@ -116,8 +116,9 @@ impl MirFuncOp {
 
     /// Record rustc-proven validity for one source-level kernel argument.
     ///
-    /// Presence proves `nonnull`; the payload carries the rustc ABI alignment
-    /// of the pointee. The source argument index is deliberately retained until
+    /// Presence proves `nonnull`; the payload carries the pointee alignment
+    /// and independently proven aliasing and size facts.
+    /// The source argument index is deliberately retained until
     /// kernel ABI lowering decides which physical LLVM parameter represents it.
     pub fn set_reference_param_validity(
         &self,
@@ -285,12 +286,12 @@ impl Verify for MirFuncOp {
                     key_text
                 );
             };
-            if validity.0 == 0 || !validity.0.is_power_of_two() {
+            if validity.pointee_alignment == 0 || !validity.pointee_alignment.is_power_of_two() {
                 return verify_err!(
                     op.loc(),
                     "MirFuncOp reference validity alignment on argument {} must be a non-zero power of two, found {}",
                     index,
-                    validity.0
+                    validity.pointee_alignment
                 );
             }
 

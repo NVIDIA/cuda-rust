@@ -7,9 +7,11 @@ on:
   pull_request:
     branches: [main]
 
+# Each commit on main gets its own group, so it starts at once. Any other ref
+# still shares one group and cancels the older run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref_name }}${{ github.ref_name == 'main' && format('-{0}', github.sha) || '' }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 permissions:
   contents: read
@@ -242,7 +244,7 @@ jobs:
         uses: actions/checkout@v4
 
       # Reads sources only: no rustup, no cargo, no CUDA toolkit.
-      - name: Verify every shared-crate pin agrees with the root workspace
+      - name: Verify the host crates are path dependencies at tip of tree and the scaffold matches the root version
         run: bash cuda-oxide/scripts/check-shared-crate-pin.sh
 
   # cuda-oxide/crates/oxide-artifacts is only the publish source now; the

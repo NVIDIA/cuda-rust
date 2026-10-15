@@ -5,6 +5,7 @@
 <img src="https://raw.githubusercontent.com/NVIDIA/cuda-rust/main/cutile-rs/assets/logo.svg" alt="cuTile Rust" width="380">
 
 [![Crates.io](https://badgen.net/crates/v/cutile)](https://crates.io/crates/cutile)
+[![Docs](https://img.shields.io/badge/docs-book-blue.svg)](https://nvidia.github.io/cuda-rust/cutile/)
 
 </div>
 
@@ -24,7 +25,7 @@ on the same CUDA stream.
 ## Project Status
 We are excited to release this research project as a demonstration of how GPU programming can be made available in the Rust ecosystem. The software is in an early stage and under active development: you should expect bugs, incomplete features, and API breakage as we work to improve it. That being said, we hope you'll be interested to try it in your work and help shape its direction by providing feedback on your experience.
 
-Please check out [CONTRIBUTING.md](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/CONTRIBUTING.md) if you're interested in contributing.
+Please check out [CONTRIBUTING.md](https://github.com/NVIDIA/cuda-rust/blob/main/CONTRIBUTING.md) if you're interested in contributing.
 
 ## Quick Start
 

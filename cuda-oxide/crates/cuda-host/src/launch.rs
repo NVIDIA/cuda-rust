@@ -164,7 +164,7 @@ pub trait CudaKernel {
 /// The bound on `ptx_name` is intentionally just whatever the kernel
 /// itself declared — typically `Copy` on the value-passed generics. No
 /// `'static` is added: the helper `cuda_host::type_id_u128` uses
-/// `core::intrinsics::type_id`, which is bound `T: ?Sized` rather than
+/// `core::intrinsics::reflection::type_id`, which is bound `T: ?Sized` rather than
 /// `T: 'static`, so closures that borrow non-`'static` data still go
 /// through the typed launch path (just like they did under the legacy
 /// `type_name`-based scheme).

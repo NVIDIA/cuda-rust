@@ -969,7 +969,7 @@ fn standard_fp8_resolves_exact_routes_and_target_floors() {
         (
             IntrinsicBackend::LlvmNvptx,
             BackendLoweringMechanism::InlinePtx,
-            "rust-llvm-23.1.0-16696adc",
+            "rust-llvm-23.1.3-aab11ee0",
         ),
         (
             IntrinsicBackend::LibNvvm,
@@ -1028,7 +1028,11 @@ fn standard_fp8_resolves_exact_routes_and_target_floors() {
             assert!(llvm_route.stages.iter().any(|stage| {
                 stage.stage == EvidenceStageKind::PtxAssembly
                     && stage.mechanism == Some(BackendLoweringMechanism::InlinePtx)
-                    && stage.outcome == "failed"
+                    && stage.outcome == "not_revalidated"
+                    && stage.detail.contains("Original outcome: failed.")
+                    && stage
+                        .detail
+                        .contains("e457a7b0d326d67b4322ef0d11bd715cfaeda48f")
                     && stage.targets == ["sm_89", "ptx86"]
             }));
         }

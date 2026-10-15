@@ -1,6 +1,7 @@
 error[E0080]: evaluation panicked: partial unroll factor must be in 2..=1024, or 0 for full unrolling
  --> $WORKSPACE/crates/cuda-device/src/thread.rs
   |
+  | pub fn __unroll_config<const FACTOR: u32>() {
   |     const { validate_unroll_factor(FACTOR) }
   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `cuda_device::__unroll_config::<1>::{constant#0}` failed inside this call
   |

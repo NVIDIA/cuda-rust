@@ -140,6 +140,7 @@ impl<T, const N: usize, const ALIGN: usize> SharedArray<T, N, ALIGN> {
     pub const fn len() -> usize;
     pub fn as_ptr(&self) -> *const T;
     pub fn as_mut_ptr(&mut self) -> *mut T;
+    pub unsafe fn as_raw_mut_ptr(shared: *mut Self) -> *mut T;
 }
 
 // Indexing (unsafe access via static mut)
@@ -287,25 +288,45 @@ that the compiler treats as reading and writing all memory:
 | Access form                                              | Kept on its side of `sync_threads()` | Notes |
 | :------------------------------------------------------- | :----------------------------------- | :---- |
 | `SharedArray` indexing, `S[i]`                           | Yes | A plain load or store in address space 3. |
-| `SharedArray::as_raw_mut_ptr(&raw mut S)`                | Yes | The same instructions as indexing. Prefer it to `as_mut_ptr()`, which needs `&mut S` and is rejected by the `static_mut_refs` lint under edition 2024. |
+| `SharedArray::as_raw_mut_ptr(&raw mut S)`                | Yes | The same instructions as indexing. Prefer it to `as_mut_ptr()`. That method needs `&mut S`, and the `static_mut_refs` lint rejects it under edition 2024. |
 | `DynamicSharedArray::<T>::get()` and `offset()`          | Yes | A plain load or store through the returned pointer. |
-| `ptx_asm!` with no options                               | Yes | The call is `asm sideeffect` with no memory attribute. The compiler keeps it, and keeps its order against the barrier and other side-effecting asm. |
-| `ptx_asm!` with `clobber("memory")`                      | Yes | Adds `~{memory}` to the constraint string. The order is the same as with no options today. The clobber declares a memory access that the operands do not name. Add it to every snippet that loads or stores through an address. |
-| `ptx_asm!` with `options(register_only)`                 | Not promised | The call has no `sideeffect` flag, and the compiler deletes it when its result is unused. Use it for snippets that touch registers only. |
+| `ptx_asm!` with no options                               | Yes | The call is `asm sideeffect` with no memory attribute. The PTX keeps it in order against the barrier and other side-effecting asm. ptxas may drop a snippet with an unused result from the SASS. |
+| `ptx_asm!` with `clobber("memory")`                      | Yes | Adds `~{memory}` to the constraint string. The order matches the row above in the current lowering. Without the clobber that order comes from the `sideeffect` flag alone. That flag declares no memory access. Add it to every snippet that loads or stores through an address. |
+| `ptx_asm!` with `options(register_only)`                 | No | The call has no `sideeffect` flag. The compiler may move it across memory operations and the barrier, and deletes it when its result is unused. Use it for snippets that touch registers only. |
 | `cp_async_*` copies, `cp_async_commit_group()`, `cp_async_wait_group(n)` | Yes, but see below | Issue, commit and wait stay in order. The barrier does not wait for the copy to land. |
-| A `&T` or `&mut T` into shared memory that outlives the barrier | Not promised | Undefined behaviour in Rust when another thread writes after the barrier. |
+| A `&T` to a slot another thread writes, live across the barrier | No | rustc merges reads through it before either backend runs. See below. |
+| A `&UnsafeCell<T>` or a reference to a `BlockAtomic*` type | Yes | Each read reloads the slot. |
 
-The first six rows were checked on both backends with a producer and consumer
-kernel: store, barrier, load, barrier, store, barrier, load. The PTX keeps
-that order for every form and keeps it when the loads sit in a loop whose trip
-count is a kernel argument. A run on an RTX 5060 Laptop (sm_120) read the
-expected neighbour values. A `register_only` `ld.shared` whose result is unused
-leaves no instruction in the PTX, while the same snippet with no options stays.
-The `register_only` loads in the test kernels kept their order against the
-barrier. The macro does not promise that order. Treat it as unspecified.
+The indexing, `as_raw_mut_ptr`, `DynamicSharedArray` and both side-effecting
+`ptx_asm!` rows were checked on both backends with a producer and consumer
+kernel: store, barrier, load, barrier, store, barrier, load. The PTX keeps that
+order for each of them. It keeps the same order when the loads sit in a loop
+whose trip count is a kernel argument. A run on an RTX 5060 Laptop (sm_120)
+read the expected neighbour values. A `register_only` `ld.shared` whose result
+is unused leaves no instruction in the PTX. The same snippet with no options
+stays. The `cp.async` and reference rows have their own tests below.
 
 The table covers compiler ordering only. The rule under "When to sync" still
 decides where the barriers belong.
+
+#### Raw pointers across the barrier
+
+Each thread derives its pointer from the raw address of the allocation and
+creates no reference to the whole array. A thread writes its own slot
+before the barrier and reads a neighbour's slot after it:
+
+```rust
+static mut TILE: SharedArray<u32, 128> = SharedArray::UNINIT;
+
+let tid = thread::threadIdx_x() as usize;
+let tile = unsafe { SharedArray::as_raw_mut_ptr(&raw mut TILE) };
+unsafe { tile.add(tid).write(tid as u32 + 1) }; // this thread's slot
+thread::sync_threads();
+let next = unsafe { tile.add((tid + 1) % 128).read() }; // a neighbour's slot
+```
+
+A kernel built from this snippet read the neighbour's value in all 128 threads
+on both backends.
 
 #### `cp.async` needs a wait before the barrier
 
@@ -325,14 +346,22 @@ A test kernel that drops `cp_async_wait_group(0)` and reads a neighbour's slot
 after the barrier returned the stale value in all 128 threads on sm_120. The
 same kernel with the wait returned the copied value in all 128.
 
-#### Keep references out of the barrier
+#### Share a slot through a reference only with `UnsafeCell`
 
-A `&T` into shared memory promises that the target does not change while the
-reference is live. A store by another thread after the barrier breaks that
-promise. Reading through the same reference before and after the barrier is
-undefined behaviour under Rust's aliasing rules. The compiler reloads through
-such a reference today, and the current lowering is the only reason. Read
-through a fresh raw pointer or index after each barrier.
+When `T` has no interior mutability, a `&T` into shared memory tells rustc
+that the target does not change while the reference is live. rustc merges two
+reads through it into one load before either backend runs. In a test kernel
+each thread read its neighbour's slot through a `&u32`, passed two barriers
+while the neighbour wrote a new value, and read again. The second read
+returned the old value in all 128 threads on both backends. Keeping such a
+reference live across a barrier while another thread writes the target is
+undefined behaviour.
+
+A `&UnsafeCell<T>` or a reference to a `BlockAtomic*` type reloads at each
+read. The same kernel with either form read the new value in all 128 threads.
+Share a slot through one of these, or read through a raw pointer after each
+barrier. The tip under "Declaration rules" gives the same reason for
+`SharedArray` wrapping `UnsafeCell`.
 
 ---
 

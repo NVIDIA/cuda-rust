@@ -3,19 +3,12 @@ name: docs
 
 # Path-filtered SIMT lane (same roots as ci.yml).
 on:
+  # Self-hosted runners reject pull_request. copy-pr-bot mirrors trusted PRs
+  # to pull-request/<n>, and this workflow triggers on that push.
   push:
-    branches: [main]
-    paths:
-      - 'cuda-oxide/**'
-      - 'cuda-bindings/**'
-      - 'cuda-core/**'
-      - 'cuda-core-derive/**'
-      - 'cuda-async/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/**'
-  pull_request:
-    branches: [main]
+    branches:
+      - main
+      - "pull-request/[0-9]+"
     paths:
       - 'cuda-oxide/**'
       - 'cuda-bindings/**'
@@ -41,11 +34,23 @@ permissions:
 jobs:
   rustdoc-and-doctests:
     name: cargo doc + doctests
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 30
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
+
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install sudo
+        run: |
+          if ! command -v sudo >/dev/null 2>&1; then
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends sudo
+          fi
 
       - name: Install CUDA toolkit
         # `cargo doc --workspace` compiles cuda-bindings' build-time bindgen,

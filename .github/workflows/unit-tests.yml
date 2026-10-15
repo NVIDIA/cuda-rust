@@ -1,9 +1,9 @@
 ---
 name: unit-tests
 
-# Runs as a job of the top-level CI workflow (.github/workflows/ci.yml),
-# which is the single push/pull_request entry point. Concurrency is governed
-# by CI's own group, so this workflow declares none of its own.
+# Runs as a job of the top-level CI workflow (.github/workflows/ci.yml).
+# Concurrency is governed by CI's own group, so this workflow declares none
+# of its own.
 on:
   workflow_call:
 
@@ -13,13 +13,15 @@ permissions:
 jobs:
   rust-unit-tests:
     name: cargo test -p ${{ matrix.package }}
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        # Each entry must be runnable on a stock `ubuntu-latest` runner — i.e.
-        # no live GPU. `needs_cuda: true` installs the CUDA toolkit for build-
+        # Each entry must be runnable on a driverless runner — no live GPU.
+        # `needs_cuda: true` installs the CUDA toolkit for build-
         # time bindgen (every crate that transitively depends on
         # `cuda-bindings` needs `cuda.h` to compile). `test_args` overrides
         # the default `--all-targets` where a crate needs a narrower set.
@@ -95,6 +97,16 @@ jobs:
       - name: Clone repository
         uses: actions/checkout@v4
 
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install sudo
+        run: |
+          if ! command -v sudo >/dev/null 2>&1; then
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends sudo
+          fi
+
       - name: Install CUDA toolkit
         if: matrix.needs_cuda
         uses: Jimver/cuda-toolkit@v0.2.35
@@ -150,11 +162,16 @@ jobs:
 
   rustc-codegen-cuda-unit-tests:
     name: cargo test --lib (rustc-codegen-cuda)
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 30
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
+
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # This standalone workspace uses rustc-private APIs, so run its tests
       # directly rather than pretending the root package matrix covers them.
@@ -170,13 +187,18 @@ jobs:
 
   generated-intrinsics:
     name: generated intrinsics are current and ABI-compatible
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 30
     steps:
       - name: Clone repository with ABI history
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # cuda-intrinsics-gen shells out to rustfmt when it writes generated
       # sources; it comes from rust-toolchain.toml's component list.

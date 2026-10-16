@@ -14,6 +14,9 @@
 //!
 //! A `-1` extent on the mutable parameter must keep the per-CTA slab
 //! semantics of a static one, so the static kernel is the oracle.
+//!
+//! A tensor built inside the kernel is no slab, whatever its extent: a static
+//! extent must index it the way a `-1` extent does.
 
 use std::process::Command;
 use std::sync::Arc;
@@ -104,6 +107,60 @@ mod nested_partition_mut_module {
         let tile: Tile<f32, { [1, 1] }> = input_part.load([pid.0 * SLAB_ROWS, pid.1 * SLAB_COLS]);
         let mut out_part: PartitionMut<f32, { [1, 1] }> = out.partition_mut(shape![1, 1]);
         out_part.store(tile, [local_row, local_col]);
+    }
+
+    #[cutile::entry()]
+    unsafe fn static_built_tile_copy<const LEN: i32>(out_ptr: *mut f32, input_ptr: *mut f32) {
+        let shape: Shape<{ [LEN] }> = Shape::<{ [LEN] }> { dims: &[] };
+        let strides: Array<{ [-1] }> = Array::<{ [-1] }> { dims: &[1i32] };
+        let mut out: Tensor<f32, { [LEN] }> = make_tensor_view(
+            pointer_to_tile(out_ptr),
+            shape,
+            strides,
+            new_token_unordered(),
+        );
+        let input: Tensor<f32, { [LEN] }> = make_tensor_view(
+            pointer_to_tile(input_ptr),
+            shape,
+            strides,
+            new_token_unordered(),
+        );
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let tile: Tile<f32, { [4] }> = input.partition(shape![4]).load([pid.0]);
+        out.partition_mut(shape![4]).store(tile, [pid.0]);
+    }
+
+    #[cutile::entry()]
+    unsafe fn dynamic_built_tile_copy<const LEN: i32>(out_ptr: *mut f32, input_ptr: *mut f32) {
+        let shape: Shape<{ [-1] }> = Shape::<{ [-1] }> { dims: &[LEN] };
+        let strides: Array<{ [-1] }> = Array::<{ [-1] }> { dims: &[1i32] };
+        let mut out: Tensor<f32, { [-1] }> = make_tensor_view(
+            pointer_to_tile(out_ptr),
+            shape,
+            strides,
+            new_token_unordered(),
+        );
+        let input: Tensor<f32, { [-1] }> = make_tensor_view(
+            pointer_to_tile(input_ptr),
+            shape,
+            strides,
+            new_token_unordered(),
+        );
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let tile: Tile<f32, { [4] }> = input.partition(shape![4]).load([pid.0]);
+        out.partition_mut(shape![4]).store(tile, [pid.0]);
+    }
+
+    #[cutile::entry()]
+    fn pair_tile_store<const SLAB: i32>(
+        out: &mut Tensor<f32, { [SLAB] }>,
+        input: &Tensor<f32, { [-1] }>,
+        local_tile: i32,
+    ) {
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let origin: Tile<f32, { [1] }> = input.partition(shape![1]).load([pid.0 * SLAB]);
+        let pair: Tile<f32, { [2] }> = origin.broadcast(shape![2]);
+        out.partition_mut(shape![2]).store(pair, [local_tile]);
     }
 }
 
@@ -361,6 +418,92 @@ fn dynamic_extent_out_of_slab_store_stops_like_static() {
         out_of_slab_store_outcome(SlabExtent::Static),
         "a store one row past the slab must be refused the way the static slab refuses it"
     );
+}
+
+fn copy_built_tiles(extent: SlabExtent, len: usize) -> Vec<f32> {
+    let input_host: Vec<f32> = (0..len).map(|x| x as f32 + 1.0).collect();
+    let input = api::copy_host_vec_to_device(&Arc::new(input_host))
+        .sync()
+        .expect("input alloc");
+    let out = api::zeros::<f32>(&[len]).sync().expect("out alloc");
+    let (out_ptr, input_ptr) = (out.device_pointer(), input.device_pointer());
+    let generics = vec![len.to_string()];
+    let grid = ((len / 4) as u32, 1, 1);
+    match extent {
+        SlabExtent::Static => {
+            unsafe { nested_partition_mut_module::static_built_tile_copy(out_ptr, input_ptr) }
+                .generics(generics)
+                .grid(grid)
+                .sync()
+                .map(drop)
+        }
+        SlabExtent::Dynamic => {
+            unsafe { nested_partition_mut_module::dynamic_built_tile_copy(out_ptr, input_ptr) }
+                .generics(generics)
+                .grid(grid)
+                .sync()
+                .map(drop)
+        }
+    }
+    .expect("built tile copy");
+    out.to_host_vec().sync().expect("to_host")
+}
+
+#[test]
+fn static_extent_built_tensor_matches_dynamic() {
+    common::with_test_stack(|| {
+        const LEN: usize = 32;
+        let expected = copy_built_tiles(SlabExtent::Dynamic, LEN);
+        let actual = copy_built_tiles(SlabExtent::Static, LEN);
+        assert_matrix_eq(&actual, &expected, 1, LEN, "kernel-built tensor");
+    });
+}
+
+/// Each CTA stores a pair tile at `local_tile` of its slab, filled with the
+/// input value at the slab origin. The expected output places the pair in
+/// elements from the slab origin and clips it to the slab, so a slab extent
+/// the tile does not divide still starts at `pid * slab`.
+fn assert_pair_tile_lands_in_slab(root: usize, slab: usize, local_tile: usize) {
+    common::with_test_stack(move || {
+        let input_host: Vec<f32> = (0..root).map(|x| x as f32 + 1.0).collect();
+        let mut expected = vec![0.0f32; root];
+        for origin in (0..root).step_by(slab) {
+            let start = origin + 2 * local_tile;
+            let end = (start + 2).min(origin + slab).min(root);
+            for cell in &mut expected[start.min(end)..end] {
+                *cell = input_host[origin];
+            }
+        }
+        let input = api::copy_host_vec_to_device(&Arc::new(input_host))
+            .sync()
+            .expect("input alloc");
+        let out = api::zeros::<f32>(&[root]).sync().expect("out alloc");
+        let (result, ..) = nested_partition_mut_module::pair_tile_store(
+            out.partition([slab]),
+            &input,
+            local_tile as i32,
+        )
+        .generics(vec![slab.to_string()])
+        .sync()
+        .expect("pair tile store");
+        let actual = result.unpartition().to_host_vec().sync().expect("to_host");
+        assert_matrix_eq(&actual, &expected, 1, root, "pair tile in slab");
+    });
+}
+
+#[test]
+fn indivisible_slab_tile_starts_at_slab_origin() {
+    assert_pair_tile_lands_in_slab(6, 3, 0);
+}
+
+#[test]
+fn indivisible_slab_tile_overhang_stays_in_slab() {
+    assert_pair_tile_lands_in_slab(6, 3, 1);
+}
+
+#[test]
+fn divisible_slab_tile_lands_in_slab() {
+    assert_pair_tile_lands_in_slab(8, 4, 1);
 }
 
 #[test]

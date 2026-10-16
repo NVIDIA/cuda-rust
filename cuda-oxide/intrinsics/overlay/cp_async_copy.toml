@@ -37,7 +37,7 @@ ptx_isa_section = "9.7.9.26.3.1 Data Movement and Conversion Instructions: cp.as
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cp-async"
 lowering = "generated_cp_async_copy"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "typed_nvvm", evidence_profile = "rust-llvm-23.1.0-16696adc" },
+    { backend = "llvm_nvptx", mechanism = "typed_nvvm", evidence_profile = "rust-llvm-23.1.3-aab11ee0" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33" },
 ]
 cp_async_copy = { cache_policy = "ca", copy_size = "b4", source_size = "full", adapter = "direct_pointers", runtime_validation = "unexecuted" }
@@ -78,7 +78,7 @@ ptx_isa_section = "9.7.9.26.3.1 Data Movement and Conversion Instructions: cp.as
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cp-async"
 lowering = "generated_cp_async_copy"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "typed_nvvm", evidence_profile = "rust-llvm-23.1.0-16696adc" },
+    { backend = "llvm_nvptx", mechanism = "typed_nvvm", evidence_profile = "rust-llvm-23.1.3-aab11ee0" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33" },
 ]
 cp_async_copy = { cache_policy = "ca", copy_size = "b4", source_size = "runtime", adapter = "direct_pointers_and_source_size", runtime_validation = "unexecuted" }
@@ -119,7 +119,7 @@ ptx_isa_section = "9.7.9.26.3.1 Data Movement and Conversion Instructions: cp.as
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cp-async"
 lowering = "generated_cp_async_copy"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "typed_nvvm", evidence_profile = "rust-llvm-23.1.0-16696adc" },
+    { backend = "llvm_nvptx", mechanism = "typed_nvvm", evidence_profile = "rust-llvm-23.1.3-aab11ee0" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33" },
 ]
 cp_async_copy = { cache_policy = "ca", copy_size = "b8", source_size = "full", adapter = "direct_pointers", runtime_validation = "unexecuted" }
@@ -160,7 +160,7 @@ ptx_isa_section = "9.7.9.26.3.1 Data Movement and Conversion Instructions: cp.as
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cp-async"
 lowering = "generated_cp_async_copy"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "typed_nvvm", evidence_profile = "rust-llvm-23.1.0-16696adc" },
+    { backend = "llvm_nvptx", mechanism = "typed_nvvm", evidence_profile = "rust-llvm-23.1.3-aab11ee0" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33" },
 ]
 cp_async_copy = { cache_policy = "ca", copy_size = "b8", source_size = "runtime", adapter = "direct_pointers_and_source_size", runtime_validation = "unexecuted" }
@@ -201,7 +201,7 @@ ptx_isa_section = "9.7.9.26.3.1 Data Movement and Conversion Instructions: cp.as
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cp-async"
 lowering = "generated_cp_async_copy"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "typed_nvvm", evidence_profile = "rust-llvm-23.1.0-16696adc" },
+    { backend = "llvm_nvptx", mechanism = "typed_nvvm", evidence_profile = "rust-llvm-23.1.3-aab11ee0" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33" },
 ]
 cp_async_copy = { cache_policy = "ca", copy_size = "b16", source_size = "full", adapter = "direct_pointers", runtime_validation = "unexecuted" }
@@ -242,7 +242,7 @@ ptx_isa_section = "9.7.9.26.3.1 Data Movement and Conversion Instructions: cp.as
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cp-async"
 lowering = "generated_cp_async_copy"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "typed_nvvm", evidence_profile = "rust-llvm-23.1.0-16696adc" },
+    { backend = "llvm_nvptx", mechanism = "typed_nvvm", evidence_profile = "rust-llvm-23.1.3-aab11ee0" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33" },
 ]
 cp_async_copy = { cache_policy = "ca", copy_size = "b16", source_size = "runtime", adapter = "direct_pointers_and_source_size", runtime_validation = "unexecuted" }
@@ -283,7 +283,7 @@ ptx_isa_section = "9.7.9.26.3.1 Data Movement and Conversion Instructions: cp.as
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cp-async"
 lowering = "generated_cp_async_copy"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "typed_nvvm", evidence_profile = "rust-llvm-23.1.0-16696adc" },
+    { backend = "llvm_nvptx", mechanism = "typed_nvvm", evidence_profile = "rust-llvm-23.1.3-aab11ee0" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33" },
 ]
 cp_async_copy = { cache_policy = "cg", copy_size = "b16", source_size = "full", adapter = "direct_pointers", runtime_validation = "unexecuted" }
@@ -324,7 +324,7 @@ ptx_isa_section = "9.7.9.26.3.1 Data Movement and Conversion Instructions: cp.as
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cp-async"
 lowering = "generated_cp_async_copy"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "typed_nvvm", evidence_profile = "rust-llvm-23.1.0-16696adc" },
+    { backend = "llvm_nvptx", mechanism = "typed_nvvm", evidence_profile = "rust-llvm-23.1.3-aab11ee0" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33" },
 ]
 cp_async_copy = { cache_policy = "cg", copy_size = "b16", source_size = "runtime", adapter = "direct_pointers_and_source_size", runtime_validation = "unexecuted" }

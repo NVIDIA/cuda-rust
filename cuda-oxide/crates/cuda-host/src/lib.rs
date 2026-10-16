@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Required for `type_id_u128`'s use of `core::intrinsics::type_id`. The
+// Required for `type_id_u128`'s use of `core::intrinsics::reflection::type_id`. The
 // intrinsic is the only way to obtain the same 128-bit hash the backend
 // uses while keeping the bound at `T: ?Sized` (stable `TypeId::of` would
 // force `T: 'static` on every kernel marker — see `type_id.rs` for why

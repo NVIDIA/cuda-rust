@@ -510,43 +510,50 @@ fn test_mir_func_reference_param_validity_verify() {
     };
 
     let valid = make_func(&mut ctx, true);
-    valid.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr(4));
-    valid.set_reference_param_validity(&mut ctx, 1, ReferenceParamValidityAttr(4));
+    valid.set_reference_param_validity(
+        &mut ctx,
+        0,
+        ReferenceParamValidityAttr {
+            dereferenceable_bytes: 4,
+            ..ReferenceParamValidityAttr::new(4)
+        },
+    );
+    valid.set_reference_param_validity(&mut ctx, 1, ReferenceParamValidityAttr::new(4));
     assert!(
         valid.verify(&ctx).is_ok(),
         "Rust reference facts on kernel source arguments are valid"
     );
 
     let non_kernel = make_func(&mut ctx, false);
-    non_kernel.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr(4));
+    non_kernel.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr::new(4));
     assert!(
         non_kernel.verify(&ctx).is_err(),
         "reference validity is kernel-entry-only"
     );
 
     let raw = make_func(&mut ctx, true);
-    raw.set_reference_param_validity(&mut ctx, 2, ReferenceParamValidityAttr(4));
+    raw.set_reference_param_validity(&mut ctx, 2, ReferenceParamValidityAttr::new(4));
     assert!(
         raw.verify(&ctx).is_err(),
         "raw pointers cannot carry Rust-reference validity"
     );
 
     let scalar = make_func(&mut ctx, true);
-    scalar.set_reference_param_validity(&mut ctx, 3, ReferenceParamValidityAttr(4));
+    scalar.set_reference_param_validity(&mut ctx, 3, ReferenceParamValidityAttr::new(4));
     assert!(
         scalar.verify(&ctx).is_err(),
         "non-pointer parameters cannot carry Rust-reference validity"
     );
 
     let bad_alignment = make_func(&mut ctx, true);
-    bad_alignment.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr(3));
+    bad_alignment.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr::new(3));
     assert!(
         bad_alignment.verify(&ctx).is_err(),
         "alignment must be a non-zero power of two"
     );
 
     let out_of_range = make_func(&mut ctx, true);
-    out_of_range.set_reference_param_validity(&mut ctx, 9, ReferenceParamValidityAttr(4));
+    out_of_range.set_reference_param_validity(&mut ctx, 9, ReferenceParamValidityAttr::new(4));
     assert!(
         out_of_range.verify(&ctx).is_err(),
         "source argument index must be in range"

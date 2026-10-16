@@ -3,8 +3,8 @@
 
 //! Checks all four plain SM89 sparse FP8 MMA forms against an exact host GEMM.
 //!
-//! Each form covers all twelve standard-metadata codes and zero/nonzero C.
-//! Values vary across K bands so swapped fragment registers change the result.
+//! Each form covers all six valid FP8 metadata codes and zero/nonzero C.
+//! Values vary across K bands so swapped B fragment registers change the result.
 //! See the PTX ISA's "Matrix Fragments for sparse mma.m16n8k64" for the layout.
 //! `--probe` additionally compares candidate layouts on the current GPU.
 
@@ -15,7 +15,7 @@ use cuda_device::{DisjointSlice, cuda_module, kernel, thread, wmma};
 const M: usize = 16;
 const N: usize = 8;
 const K: usize = 64;
-const METADATA_CODES: usize = 12;
+const METADATA_CODES: usize = 6;
 const VARIANTS: usize = 2 * 4 * METADATA_CODES;
 /// Compressed K: two kept elements per 4-wide group.
 const KC: usize = K / 2;
@@ -59,9 +59,19 @@ fn f8_bits(v: u32, e4m3: bool) -> u32 {
     }
 }
 
-/// Standard metadata accepts two distinct 2-bit indices, in either order.
+/// Plain FP8 `mma.sp` requires two positions in increasing order, even without
+/// `::ordered_metadata`: `0x4` encodes (0, 1), but reversed `0x1` is undefined.
+/// See PTX 8.4's FP8-specific rule under "Sparse matrix storage":
+/// <https://docs.nvidia.com/cuda/archive/12.4.1/parallel-thread-execution/index.html#warp-level-sparse-matrix-storage>.
 fn nibble_of(i: u32) -> u32 {
-    probe_nibble(i)
+    match i {
+        0 => 0x4,
+        1 => 0x8,
+        2 => 0x9,
+        3 => 0xc,
+        4 => 0xd,
+        _ => 0xe,
+    }
 }
 
 #[cuda_module]
@@ -132,7 +142,7 @@ mod kernels {
     }
 
     /// Variant `v` occupies `out[v*128 + lane*4 .. +4]`, with
-    /// `v = nonzero_accumulator*48 + form*12 + metadata_code`.
+    /// `v = (nonzero_accumulator*4 + form)*METADATA_CODES + metadata_code`.
     #[kernel]
     pub fn oracle(mut out: DisjointSlice<f32>) {
         let l = thread::threadIdx_x();
@@ -211,14 +221,9 @@ mod kernels {
 
                 let mut mi = 0u32;
                 while mi < META_OPTS {
-                    let nib = probe_nibble(mi % 12);
-                    // `sw` exchanges the two 2-bit fields of the nibble.
-                    let word = if mi / 12 == 0 {
-                        nib
-                    } else {
-                        ((nib & 3) << 2) | (nib >> 2)
-                    };
-                    let meta = word * 0x1111_1111;
+                    // Vary fragment layouts, but never reverse the metadata's
+                    // two indices: those FP8 inputs have undefined behavior.
+                    let meta = nibble_of(mi) * 0x1111_1111;
                     let d = unsafe { wmma::mma_sp_m16n8k64_f32_e4m3_e4m3_f32(zero, a, b, meta, 0) };
                     let p = combo * 128 + (l as usize) * 4;
                     let mut j = 0usize;
@@ -292,7 +297,7 @@ fn run_oracle(ctx: &std::sync::Arc<CudaContext>) {
                 }
             }
             println!(
-                "  {name:12} {:>7} all 12 standard metadata codes: {} mismatches",
+                "  {name:12} {:>7} all {METADATA_CODES} FP8 metadata codes: {} mismatches",
                 if acc == 1 { "C!=0," } else { "C=0," },
                 form_bad
             );
@@ -301,7 +306,7 @@ fn run_oracle(ctx: &std::sync::Arc<CudaContext>) {
     }
     assert_eq!(bad, 0, "sparse FP8 MMA accumulator mismatches");
     println!(
-        "SUCCESS: all 4 sparse FP8 m16n8k64 forms x 12 metadata codes x C=0/C!=0; \
+        "SUCCESS: all 4 sparse FP8 m16n8k64 forms x {METADATA_CODES} metadata codes x C=0/C!=0; \
          all 32 lanes and 4 logical accumulators/lane match host GEMM exactly"
     );
 }
@@ -316,12 +321,12 @@ fn run_oracle(ctx: &std::sync::Arc<CudaContext>) {
 //   A order `byte_ord(ao, i)`   -- byte position i -> column offset
 //   B band  `b_band(bb, n)`     -- which dense K rows a register holds
 //   B order `byte_ord(bo, i)`   -- byte position i -> K offset
-//   code    the nibble and which of its two 2-bit fields names the even column
+//   code    one of the six valid FP8 metadata nibbles
 //
 // Every candidate is filled into the registers and executed once; the host
-// compares the result with an exact GEMM whose answer does not depend on the
-// candidate at all. A wrong axis changes the sum, so only the true wiring
-// reproduces it.
+// compares the result with a GEMM using that candidate's layout and metadata.
+// Exact matches are diagnostic candidates: repeated input patterns can leave
+// more than one layout indistinguishable.
 // ---------------------------------------------------------------------------
 
 const A_ROW_OPTS: u32 = 4;
@@ -329,11 +334,9 @@ const A_BAND_OPTS: u32 = 6;
 const A_ORD_OPTS: u32 = 2;
 const B_BAND_OPTS: u32 = 6;
 const B_ORD_OPTS: u32 = 2;
-const META_SWAP_OPTS: u32 = 2;
-
 const A_LAYOUTS: u32 = A_ROW_OPTS * A_BAND_OPTS * A_ORD_OPTS;
 const B_LAYOUTS: u32 = B_BAND_OPTS * B_ORD_OPTS;
-const META_OPTS: u32 = 12 * META_SWAP_OPTS;
+const META_OPTS: u32 = METADATA_CODES as u32;
 const COMBOS: u32 = A_LAYOUTS * B_LAYOUTS * META_OPTS;
 
 /// Separate K-band patterns for the optional layout sweep.
@@ -392,35 +395,6 @@ fn byte_ord(o: u32, i: u32) -> u32 {
     if o == 0 { i } else { 3 - i }
 }
 
-/// The twelve legal nibbles: two 2-bit fields that differ.
-fn probe_nibble(idx: u32) -> u32 {
-    if idx == 0 {
-        0x1
-    } else if idx == 1 {
-        0x2
-    } else if idx == 2 {
-        0x3
-    } else if idx == 3 {
-        0x4
-    } else if idx == 4 {
-        0x6
-    } else if idx == 5 {
-        0x7
-    } else if idx == 6 {
-        0x8
-    } else if idx == 7 {
-        0x9
-    } else if idx == 8 {
-        0xb
-    } else if idx == 9 {
-        0xc
-    } else if idx == 10 {
-        0xd
-    } else {
-        0xe
-    }
-}
-
 #[derive(Clone, Copy)]
 struct Candidate {
     rp: u32,
@@ -429,7 +403,6 @@ struct Candidate {
     bb: u32,
     bo: u32,
     nib: u32,
-    sw: u32,
 }
 
 impl Candidate {
@@ -471,11 +444,7 @@ impl Candidate {
     fn kmap(&self, c: u32) -> u32 {
         let low = self.nib & 3;
         let high = self.nib >> 2;
-        let field = if c.is_multiple_of(2) == (self.sw == 0) {
-            low
-        } else {
-            high
-        };
+        let field = if c.is_multiple_of(2) { low } else { high };
         4 * (c / 2) + field
     }
 
@@ -546,8 +515,7 @@ fn run_probe(ctx: &std::sync::Arc<CudaContext>) {
                     ao: ai % A_ORD_OPTS,
                     bb: bi / B_ORD_OPTS,
                     bo: bi % B_ORD_OPTS,
-                    nib: probe_nibble(mi % 12),
-                    sw: mi / 12,
+                    nib: nibble_of(mi),
                 };
                 let idx = total;
                 total += 1;
@@ -567,8 +535,8 @@ fn run_probe(ctx: &std::sync::Arc<CudaContext>) {
     for c in &exact {
         let (ap, bp) = c.coverage();
         println!(
-            "  exact rp={} ab={} ao={} bb={} bo={} nib={:#x} sw={} (A {ap}/512, B {bp}/512 placed)",
-            c.rp, c.ab, c.ao, c.bb, c.bo, c.nib, c.sw
+            "  exact rp={} ab={} ao={} bb={} bo={} nib={:#x} (A {ap}/512, B {bp}/512 placed)",
+            c.rp, c.ab, c.ao, c.bb, c.bo, c.nib
         );
     }
 }
@@ -607,15 +575,18 @@ mod tests {
     }
 
     #[test]
-    fn metadata_covers_every_distinct_pair() {
+    fn metadata_covers_every_valid_fp8_pair() {
         let mut seen = [false; 16];
         for index in 0..METADATA_CODES as u32 {
             let code = nibble_of(index) as usize;
-            assert_ne!(code & 3, code >> 2);
             assert!(!seen[code]);
             seen[code] = true;
         }
-        assert_eq!(seen.iter().filter(|&&present| present).count(), 12);
+        // FP8 requires the first stored value's position to precede the second.
+        // This checks both that reversed pairs are absent and no valid pair is lost.
+        for (code, present) in seen.into_iter().enumerate() {
+            assert_eq!(present, (code & 3) < (code >> 2), "metadata {code:#x}");
+        }
     }
 
     #[test]

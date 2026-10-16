@@ -4,7 +4,7 @@ version = "0.2.1"
 edition = "2024"
 authors = ["Nihal Pasham <nihalp@nvidia.com>"]
 license = "Apache-2.0"
-repository = "https://github.com/NVlabs/cuda-oxide.git"
+repository = "https://github.com/NVIDIA/cuda-rust"
 description = "Unified host/device compilation backend for rustc (CUDA/PTX codegen)"
 readme = "README.md"
 

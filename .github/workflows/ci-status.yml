@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+---
+name: CI status
+
+# One status for the whole repository, so the README needs one badge.
+#
+# Badges are per workflow file, and the two pipelines have to stay separate
+# for now: ci.yml (SIMT and the shared host crates) runs on GitHub-hosted
+# runners on push and pull_request; cutile-rs.yml (Tile) runs on NVIDIA
+# self-hosted runners, which cannot run on pull_request events, so it
+# triggers on push to main and to the copy-pr-bot mirror branches.
+#
+# This workflow runs whenever either of them completes on main. For each
+# pipeline it finds the newest completed push run on main that actually
+# executed jobs and fails if that run failed. Two kinds of run say nothing
+# about the pipeline and are skipped over: a run whose jobs were all skipped
+# (cutile-rs.yml's `changes` gate does that on a non-Tile push) and a
+# cancelled run. Taking either at face value would turn the badge green while
+# the last real run was red.
+#
+# The badge in README.md points here. To cover another pipeline, add its
+# workflow name to the trigger list and its file name to the loop below.
+on:
+  workflow_run:
+    workflows: [CI, cutile-rs-pr]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  status:
+    name: combined CI status on main
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report the newest executed main run of each pipeline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for workflow in ci.yml cutile-rs.yml; do
+            verdict=none
+            url=-
+            while read -r id conclusion run_url; do
+              [ -n "${id}" ] || continue
+              case "${conclusion}" in
+                success|failure|timed_out) ;;
+                *) continue ;;
+              esac
+              executed="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/jobs?per_page=100" \
+                --jq '[.jobs[] | select(.name != "changes" and .conclusion != "skipped")] | length')"
+              if [ "${executed}" -gt 0 ]; then
+                verdict="${conclusion}"
+                url="${run_url}"
+                break
+              fi
+            done < <(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=main&event=push&status=completed&per_page=10" \
+              --jq '.workflow_runs[] | "\(.id) \(.conclusion) \(.html_url)"')
+            echo "${workflow}: ${verdict} (${url})"
+            case "${verdict}" in
+              success|none) ;;
+              *) failed=1 ;;
+            esac
+          done
+          exit "${failed}"

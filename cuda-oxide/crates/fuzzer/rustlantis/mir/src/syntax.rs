@@ -7,9 +7,18 @@ use crate::tyctxt::TyCtxt;
 
 #[derive(Clone)]
 pub struct Program {
+    pub statics: IndexVec<Static, StaticDecl>,
     pub functions: IndexVec<Function, Body>,
     pub entry_args: Vec<Literal>,
     pub use_debug_dumper: bool,
+}
+
+define_index_type! {pub struct Static = u32;}
+#[derive(Clone)]
+pub struct StaticDecl {
+    pub ty: TyId,
+    pub mutability: Mutability,
+    pub init: Literal,
 }
 
 pub type LocalDecls = IndexVec<Local, LocalDecl>;
@@ -361,9 +370,10 @@ pub enum Operand {
     // define!("mir_move", fn Move<T>(place: T) -> T);
     Move(Place),
     Constant(Literal),
-    // TODO: the following
     // define!("mir_static", fn Static<T>(s: T) -> &'static T);
+    Static(Static, TyId),
     // define!("mir_static_mut", fn StaticMut<T>(s: T) -> *mut T);
+    StaticMut(Static, TyId),
 }
 
 impl Operand {
@@ -371,13 +381,14 @@ impl Operand {
         match self {
             Operand::Copy(place) | Operand::Move(place) => place.ty(local_decls, tcx),
             Operand::Constant(lit) => lit.ty(),
+            Operand::Static(_, ty) | Operand::StaticMut(_, ty) => *ty,
         }
     }
 
     pub fn place(&self) -> Option<&Place> {
         match self {
             Operand::Copy(place) | Operand::Move(place) => Some(place),
-            Operand::Constant(..) => None,
+            Operand::Constant(..) | Operand::Static(..) | Operand::StaticMut(..) => None,
         }
     }
 }
@@ -926,10 +937,15 @@ impl Program {
     // A new, empty function
     pub fn new(debug: bool) -> Self {
         Self {
+            statics: IndexVec::default(),
             functions: IndexVec::default(),
             entry_args: vec![],
             use_debug_dumper: debug,
         }
+    }
+
+    pub fn push_static(&mut self, decl: StaticDecl) -> Static {
+        self.statics.push(decl)
     }
 
     pub fn push_fn(&mut self, body: Body) -> Function {
@@ -938,6 +954,12 @@ impl Program {
 
     pub fn set_entry_args(&mut self, args: &[Literal]) {
         self.entry_args = Vec::from(args);
+    }
+}
+
+impl Static {
+    pub fn identifier(&self) -> String {
+        format!("static{}", self.index())
     }
 }
 

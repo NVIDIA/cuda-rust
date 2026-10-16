@@ -530,6 +530,12 @@ pub fn ones<T: DType>(shape: &[usize]) -> impl DeviceOp<Output = Tensor<T>> {
 /// Allocates GPU memory and fills it with the specified value. This uses a GPU kernel
 /// to initialize the memory efficiently.
 ///
+/// ## Errors
+///
+/// Returns an error on execution if a dimension is zero, the element count
+/// overflows `usize`, or the flattened element count exceeds `i32::MAX`.
+/// Invalid shapes are rejected before GPU allocation or kernel execution.
+///
 /// ## Examples
 ///
 /// ```rust,ignore
@@ -540,15 +546,40 @@ pub fn ones<T: DType>(shape: &[usize]) -> impl DeviceOp<Output = Tensor<T>> {
 /// let matrix = api::full(-1, &[128, 128]).await;
 /// ```
 pub fn full<T: DType>(val: T, shape: &[usize]) -> impl DeviceOp<Output = Tensor<T>> {
+    let len = match checked_full_len(shape) {
+        Ok(len) => len,
+        Err(message) => return fail::<Tensor<T>>(message).boxed(),
+    };
     let shape = shape.to_vec();
-    let len = shape.iter().product::<usize>();
-    Tensor::<T>::uninitialized(len).then(move |t| {
-        // TODO (hme): It's awkward to assume_init this before actually initializing it.
-        let partition_size = 128;
-        let result = unsafe { t.assume_init() }.partition([partition_size]);
-        let (_, res) = value((val, result)).then(full_apply).unzip();
-        res.unpartition().reshape(&shape)
-    })
+    Tensor::<T>::uninitialized(len)
+        .then(move |t| {
+            // TODO (hme): It's awkward to assume_init this before actually initializing it.
+            let partition_size = 128;
+            let result = unsafe { t.assume_init() }.partition([partition_size]);
+            let (_, res) = value((val, result)).then(full_apply).unzip();
+            res.unpartition().reshape(&shape)
+        })
+        .boxed()
+}
+
+// `full` initializes a flat tensor before reshaping it. Its element count
+// must fit that tensor's i32 dimension, which also bounds every positive
+// target dimension and contiguous stride. An empty shape remains a scalar.
+fn checked_full_len(shape: &[usize]) -> Result<usize, String> {
+    let len = shape
+        .iter()
+        .try_fold(1usize, |len, &dim| len.checked_mul(dim))
+        .ok_or_else(|| format!("full: shape {shape:?} element count overflows usize"))?;
+    if len == 0 {
+        return Err(format!("full: shape {shape:?} contains a zero dimension"));
+    }
+    if i32::try_from(len).is_err() {
+        return Err(format!(
+            "full: shape {shape:?} element count {len} exceeds i32::MAX ({})",
+            i32::MAX
+        ));
+    }
+    Ok(len)
 }
 
 pub fn fill<T: DType>(tensor: Tensor<T>, val: T) -> impl DeviceOp<Output = Tensor<T>> {
@@ -963,3 +994,63 @@ pub trait DeviceOpReshapeShared<T: DType + Send>:
 }
 
 impl<T: DType + Send, DI: DeviceOp<Output = Arc<Tensor<T>>>> DeviceOpReshapeShared<T> for DI {}
+
+#[cfg(test)]
+mod full_shape_tests {
+    use super::{checked_full_len, full, ones, zeros};
+
+    #[test]
+    fn accepts_valid_shapes_and_i32_boundary() {
+        assert_eq!(checked_full_len(&[]), Ok(1));
+        assert_eq!(checked_full_len(&[1024]), Ok(1024));
+        assert_eq!(checked_full_len(&[3, 5]), Ok(15));
+        assert_eq!(checked_full_len(&[2, 3, 4]), Ok(24));
+        assert_eq!(
+            checked_full_len(&[i32::MAX as usize]),
+            Ok(i32::MAX as usize)
+        );
+    }
+
+    #[test]
+    fn rejects_zero_dimensions() {
+        for shape in [&[0][..], &[3, 0][..], &[0, usize::MAX][..]] {
+            let error = checked_full_len(shape).expect_err("zero dimension must fail");
+            assert!(error.contains("zero dimension"), "{error}");
+        }
+    }
+
+    #[test]
+    fn rejects_usize_product_overflow() {
+        // The first product wraps to 1 without overflow checks. The second
+        // overflows even though every individual dimension fits in i32.
+        for shape in [&[usize::MAX, usize::MAX][..], &[i32::MAX as usize; 3][..]] {
+            let error = checked_full_len(shape).expect_err("shape product must fail");
+            assert!(error.contains("overflows usize"), "{error}");
+        }
+    }
+
+    #[test]
+    fn rejects_flattened_length_above_i32_max() {
+        // Both products fit usize on 32-bit and 64-bit hosts.
+        for shape in [&[i32::MAX as usize + 1][..], &[32768, 65536][..]] {
+            let error = checked_full_len(shape).expect_err("flat dimension must fail");
+            assert!(error.contains("exceeds i32::MAX"), "{error}");
+        }
+    }
+
+    #[test]
+    fn invalid_shapes_do_not_panic_during_construction() {
+        // Only construct the lazy operations: this must not need a CUDA
+        // context, panic on arithmetic, or reach the zero-length assertion.
+        for shape in [
+            &[usize::MAX, usize::MAX][..],
+            &[i32::MAX as usize + 1][..],
+            &[32768, 65536][..],
+            &[0][..],
+        ] {
+            let _ = full(7.0f32, shape);
+            let _ = zeros::<f32>(shape);
+            let _ = ones::<f32>(shape);
+        }
+    }
+}

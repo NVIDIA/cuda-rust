@@ -1855,6 +1855,8 @@ fn get_tensor_code(
                 let given_shape: &[usize] = KernelOutputStored::partition_shape(&#var_ident);
                 kernel_launch_assert_with(valid_shape.len() == given_shape.len(), || format!("{} rank mismatch: Expected {}, got {}", #var_name, valid_shape.len(), given_shape.len()))?;
                 kernel_launch_assert_with(zip(valid_shape, given_shape).all(|(&expected, &given)| expected as i64 == given as i64), || format!("{} partition shape mismatch. Expected {:?}, got {:?}", #var_name, valid_shape, given_shape))?;
+                let given_strides = KernelOutputStored::strides(&#var_ident);
+                kernel_launch_assert_with(tensor_validator.strides_match(given_strides), || format!("{} strides mismatch. Expected {:?} (-1 denotes a dynamic stride), got {:?}", #var_name, tensor_validator.strides, given_strides))?;
                 // Runtime extents for launch-time check hoisting (indexed by
                 // signature position): root shape resolves `Dim` atoms, and the
                 // partition slab -- this param's kernel-visible view -- resolves
@@ -1894,7 +1896,8 @@ fn get_tensor_code(
                     }).collect::<Vec<_>>();
                     format!("{} partition shape mismatch. Expected {:?}, got {:?}", #var_name, valid_shape_mixed, given_shape)
                 })?;
-                // TODO (hme): add validation for strides here too.
+                let given_strides = KernelInputStored::strides(&#var_ident);
+                kernel_launch_assert_with(tensor_validator.strides_match(given_strides), || format!("{} strides mismatch. Expected {:?} (-1 denotes a dynamic stride), got {:?}", #var_name, tensor_validator.strides, given_strides))?;
                 // Runtime extents for launch-time check hoisting (indexed by
                 // signature position). An immutable tensor is passed whole, so
                 // its view is its root shape.

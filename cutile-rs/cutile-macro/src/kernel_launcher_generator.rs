@@ -945,9 +945,9 @@ pub fn generate_kernel_launcher(
     launcher_method.block.stmts.push(parse_stmt(format!(
         "static __SITE: {tile_rust_crate_root}::tile_kernel::LaunchSite = {tile_rust_crate_root}::tile_kernel::LaunchSite::new();"
     )));
-    launcher_method.block.stmts.push(parse_stmt(
-        "let __const_grid = if self._const_grid { Some(self._grid) } else { None };".to_string(),
-    ));
+    launcher_method.block.stmts.push(parse_stmt(format!(
+        "let __const_grid = {tile_rust_crate_root}::tile_kernel::launcher_const_grid(self._grid, self._const_grid)?;"
+    )));
     launcher_method.block.stmts.push(parse_stmt(
         "let __compile_options = std::mem::take(&mut self._compile_options);".to_string(),
     ));
@@ -994,7 +994,7 @@ pub fn generate_kernel_launcher(
     )));
 
     let specialization_stmts = syn::parse2::<ExprBlock>(quote! {{
-        let const_grid = if self._const_grid { Some(self._grid) } else { None };
+        let const_grid = #tile_rust_crate_root::tile_kernel::launcher_const_grid(self._grid, self._const_grid)?;
         let compile_options = std::mem::take(&mut self._compile_options);
         return Ok(_specialization_from_context(
             ctx,

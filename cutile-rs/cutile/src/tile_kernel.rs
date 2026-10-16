@@ -27,6 +27,27 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
+/// The grid a generated launcher compiles for: `Some(grid)` after
+/// `.const_grid(grid)`, `None` otherwise. A const grid with a zero dimension
+/// is an error. Without this check the kernel was compiled for that empty
+/// grid, and the launch then ran on a different grid: for `(0, 0, 0)`, the
+/// one inferred from an exact partition binding.
+#[doc(hidden)]
+pub fn launcher_const_grid(
+    grid: (u32, u32, u32),
+    const_grid: bool,
+) -> Result<Option<(u32, u32, u32)>, Error> {
+    if !const_grid {
+        return Ok(None);
+    }
+    if grid.0 == 0 || grid.1 == 0 || grid.2 == 0 {
+        return kernel_launch_error_result(&format!(
+            "const_grid {grid:?} has a zero dimension; every dimension must be at least 1."
+        ));
+    }
+    Ok(Some(grid))
+}
+
 /// Capability guard shared by generated launchers, including compile-only warmup.
 #[doc(hidden)]
 pub fn validate_programmatic_dependent_launch(device_id: usize) -> Result<(), DeviceError> {
@@ -1361,6 +1382,8 @@ where
     /// Sets the type and const generic arguments for this kernel.
     fn generics(self, generics: Vec<String>) -> Self;
     /// Sets a compile-time constant grid, enabling grid-dependent optimizations.
+    /// Every dimension must be at least 1; a zero dimension fails the launch,
+    /// warmup and `specialize()`.
     fn const_grid(self, grid: (u32, u32, u32)) -> Self;
     /// Sets the runtime launch grid dimensions.
     fn grid(self, grid: (u32, u32, u32)) -> Self;

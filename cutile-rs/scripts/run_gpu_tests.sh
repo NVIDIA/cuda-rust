@@ -26,6 +26,10 @@ do
 done
 
 run_step \
+    "cutile GPU literal constant regressions" \
+    cargo test -p cutile --test kernel_compiler literal_constants_execute_on_gpu -- --ignored
+
+run_step \
     "cutile GPU integration test control_flow_ops runtime cases" \
     cargo test -p cutile --test control_flow_ops -- --skip compile_
 

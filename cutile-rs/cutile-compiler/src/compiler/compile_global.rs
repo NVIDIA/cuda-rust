@@ -209,7 +209,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         let outer_ty = match return_type {
             Some(ty) => ty,
             None => {
-                let tile_rust_ty = &tile_ty.rust_ty;
+                let tile_rust_ty = tile_ty.rust_ty();
                 let tuple_ty: Type = syn::parse_quote!((#tile_rust_ty, Token));
                 self.compile_type(&tuple_ty, generic_vars, &HashMap::new())?
                     .ok_or_else(|| {
@@ -408,7 +408,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         let outer_ty = match return_type {
             Some(ty) => ty,
             None => {
-                let tile_rust_ty = &tile_ty.rust_ty;
+                let tile_rust_ty = tile_ty.rust_ty();
                 let tuple_ty: Type = syn::parse_quote!((#tile_rust_ty, Token));
                 self.compile_type(&tuple_ty, generic_vars, &HashMap::new())?
                     .ok_or_else(|| {

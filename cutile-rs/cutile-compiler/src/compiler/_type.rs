@@ -50,11 +50,11 @@ pub fn scalar_from_name(name: &str) -> Option<ScalarType> {
 /// Prefers the eagerly parsed `tile_ir_ty` field. Falls back to
 /// `cuda_tile_name` for scalar types if the full type wasn't available.
 pub fn convert_type(old: &TileRustType) -> Option<Type> {
-    if let Some(ty) = &old.tile_ir_ty {
+    if let Some(ty) = old.tile_ir_ty() {
         return Some(ty.clone());
     }
     // Fallback: for primitive types without a full type, use the cuda_tile_name.
-    let name = old.cuda_tile_name.as_deref()?;
+    let name = old.cuda_tile_name()?;
     scalar_from_name(name).map(Type::Scalar)
 }
 

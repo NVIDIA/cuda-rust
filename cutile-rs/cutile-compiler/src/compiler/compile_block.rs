@@ -30,7 +30,7 @@ use syn::{Expr, Item, Pat, Stmt};
 
 impl<'m> CUDATileFunctionCompiler<'m> {
     fn carries_partition_axis_proof_origin(value: &TileRustValue) -> bool {
-        let Some(ident) = get_type_ident(&value.ty.rust_ty) else {
+        let Some(ident) = get_type_ident(value.ty.rust_ty()) else {
             return false;
         };
         matches!(

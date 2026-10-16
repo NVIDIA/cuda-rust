@@ -1126,7 +1126,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             let tile_ir_ty = super::_type::convert_type(ty).ok_or_else(|| {
                 JITError::Generic(format!(
                     "compiler2: failed to convert parameter type to tile-ir: {}",
-                    ty.rust_ty.to_token_stream()
+                    ty.rust_ty().to_token_stream()
                 ))
             })?;
             arg_tile_ir_types.push(tile_ir_ty);
@@ -1338,7 +1338,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
     ) -> Result<TileRustValue, JITError> {
         if !bounds.is_exact() {
             return self.jit_error_result(
-                &tr_ty.rust_ty.span(),
+                &tr_ty.rust_ty().span(),
                 &format!(
                     "expected a compile-time constant, but got a value with bounds [{}, {}]",
                     bounds.start, bounds.end
@@ -1346,15 +1346,16 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             );
         }
         let const_value = bounds.start;
-        let TypeInstance::ElementType(type_inst) = &tr_ty.type_instance else {
-            return self.jit_error_result(&tr_ty.rust_ty.span(), "expected a scalar element type");
+        let TypeInstance::ElementType(type_inst) = tr_ty.type_instance() else {
+            return self
+                .jit_error_result(&tr_ty.rust_ty().span(), "expected a scalar element type");
         };
         let Some(const_ty_str) = get_cuda_tile_element_type_from_rust_primitive_str(
             &type_inst.rust_element_instance_ty,
             self.modules.primitives(),
         ) else {
             return self
-                .jit_error_result(&tr_ty.rust_ty.span(), "failed to compile constant value");
+                .jit_error_result(&tr_ty.rust_ty().span(), "failed to compile constant value");
         };
 
         // Build tile-ir Constant op directly (replaces operation_parse).
@@ -1389,7 +1390,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             _ => (const_value as i32).to_le_bytes().to_vec(),
         };
         let (op_id, results) =
-            OpBuilder::new(Opcode::Constant, self.ir_location(&tr_ty.rust_ty.span()))
+            OpBuilder::new(Opcode::Constant, self.ir_location(&tr_ty.rust_ty().span()))
                 .result(result_ty.clone())
                 .attr(
                     "value",

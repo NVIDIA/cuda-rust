@@ -27,6 +27,7 @@ pub mod optimization_hints;
 pub mod shared_types;
 pub mod shared_utils;
 pub mod tile_rust_type;
+mod type_identity;
 pub mod utils;
 
 pub use _function::CUDATileFunctionCompiler;

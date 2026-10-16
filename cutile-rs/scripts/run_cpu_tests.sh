@@ -72,6 +72,7 @@ for test_target in \
     tile_ir_capabilities \
     token_threading \
     two_cga_trait_impl \
+    type_coherence \
     type_inference_sanity \
     unary_math_ops \
     use_classifier

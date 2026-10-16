@@ -236,7 +236,7 @@ impl TypeckResults {
 
     fn insert_expr_type_by_id(&mut self, id: NodeId, ty: TileRustType) {
         self.resolved_expr_types
-            .insert(id, ResolvedType::from_syn_type(&ty.rust_ty));
+            .insert(id, ResolvedType::from_syn_type(ty.rust_ty()));
         self.expr_types.insert(id, ty);
     }
 
@@ -299,7 +299,7 @@ impl TypeckResults {
             let return_ty = selection
                 .return_type
                 .as_ref()
-                .map(|ty| ty.rust_ty.to_token_stream().to_string())
+                .map(|ty| ty.rust_ty().to_token_stream().to_string())
                 .unwrap_or_else(|| "_".to_string());
             lines.push((
                 id.0,
@@ -417,7 +417,7 @@ pub fn infer_function(
         generic_type_bounds: generic_type_bounds(&fn_item.sig.generics),
         syn_vars: initial_types
             .iter()
-            .map(|(name, ty)| (name.clone(), ty.rust_ty.clone()))
+            .map(|(name, ty)| (name.clone(), ty.rust_ty().clone()))
             .collect(),
         mutable_vars: HashSet::new(),
         vars: HashMap::new(),
@@ -454,7 +454,7 @@ pub fn infer_method(
         generic_type_bounds: bounds,
         syn_vars: initial_types
             .iter()
-            .map(|(name, ty)| (name.clone(), ty.rust_ty.clone()))
+            .map(|(name, ty)| (name.clone(), ty.rust_ty().clone()))
             .collect(),
         mutable_vars: HashSet::new(),
         vars: HashMap::new(),
@@ -646,7 +646,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
                 if path.path.segments.len() == 1 {
                     let name = get_ident_from_path_expr(path).to_string();
                     if name == "None" {
-                        expected.filter(|ty| option_payload_syn_type(&ty.rust_ty).is_some())
+                        expected.filter(|ty| option_payload_syn_type(ty.rust_ty()).is_some())
                     } else if let Some(term) = self.local_terms.get(&name).cloned() {
                         let term = if let Some(expected) = expected.clone() {
                             self.unify_with_known(term, expected)?
@@ -671,12 +671,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
             Expr::Reference(reference) => {
                 let inner = self.infer_expr(&reference.expr, None)?;
                 inner.map(|mut ty| {
-                    ty.rust_ty = Type::Reference(syn::TypeReference {
-                        and_token: reference.and_token,
-                        lifetime: None,
-                        mutability: reference.mutability,
-                        elem: Box::new(ty.rust_ty.clone()),
-                    });
+                    ty.wrap_reference(None, reference.mutability);
                     ty
                 })
             }
@@ -701,7 +696,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
                 if let Some(elem_expected) = elem_expected {
                     for elem in &array.elems {
                         if let Some(elem_ty) = self.infer_expr(elem, Some(elem_expected.clone()))? {
-                            elem_types.push(elem_ty.rust_ty);
+                            elem_types.push(elem_ty.rust_ty().clone());
                         }
                     }
                 } else {
@@ -711,7 +706,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
                         .filter(|elem| !is_unsuffixed_numeric_literal(elem))
                     {
                         if let Some(elem_ty) = self.infer_expr(elem, None)? {
-                            elem_types.push(elem_ty.rust_ty);
+                            elem_types.push(elem_ty.rust_ty().clone());
                         }
                     }
                     let inferred_elem_expected = elem_types.first().and_then(|ty| {
@@ -728,7 +723,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
                         if let Some(elem_ty) =
                             self.infer_expr(elem, inferred_elem_expected.clone())?
                         {
-                            elem_types.push(elem_ty.rust_ty);
+                            elem_types.push(elem_ty.rust_ty().clone());
                         }
                     }
                 }
@@ -758,7 +753,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
                 } else if let (Some(elem_ty), Some(len)) =
                     (elem_ty, repeat_length_value(&repeat.len, self.generic_vars))
                 {
-                    let elem_ty = elem_ty.rust_ty;
+                    let elem_ty = elem_ty.rust_ty();
                     let array_ty: Type = syn::parse_quote!([#elem_ty; #len]);
                     self.compiler
                         .compile_type(&array_ty, self.generic_vars, &HashMap::new())?
@@ -920,7 +915,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
     }
 
     fn bind_tile_var(&mut self, name: String, ty: TileRustType) {
-        self.syn_vars.insert(name.clone(), ty.rust_ty.clone());
+        self.syn_vars.insert(name.clone(), ty.rust_ty().clone());
         self.local_terms
             .insert(name.clone(), InferredTy::Known(ty.clone()));
         self.vars.insert(name, ty);
@@ -1047,7 +1042,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
     }
 
     fn bind_pattern_with_tile_type(&mut self, pat: &Pat, ty: TileRustType) -> Result<(), JITError> {
-        self.bind_pattern_with_type(pat, &ty.rust_ty.clone(), Some(ty))
+        self.bind_pattern_with_type(pat, &ty.rust_ty().clone(), Some(ty))
     }
 
     fn bind_pattern_with_syn_type(&mut self, pat: &Pat, ty: &Type) -> Result<(), JITError> {
@@ -1664,7 +1659,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         match (lhs, rhs) {
             (InferredTy::Unknown, term) | (term, InferredTy::Unknown) => Ok(term),
             (InferredTy::Known(lhs), InferredTy::Known(rhs)) => {
-                if lhs.rust_ty == rhs.rust_ty {
+                if lhs.same_type(&rhs) {
                     Ok(InferredTy::Known(lhs))
                 } else {
                     Ok(InferredTy::Unknown)
@@ -1692,9 +1687,13 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         let lhs_value = self.inference.vars[lhs_root.0].value.clone();
         let rhs_value = self.inference.vars[rhs_root.0].value.clone();
         let root_value = match (&lhs_value, &rhs_value) {
-            (Some(lhs), Some(rhs)) if lhs.rust_ty == rhs.rust_ty => Some(lhs.clone()),
-            (Some(lhs), None) if self.var_accepts_type(rhs_root, &lhs.rust_ty) => Some(lhs.clone()),
-            (None, Some(rhs)) if self.var_accepts_type(lhs_root, &rhs.rust_ty) => Some(rhs.clone()),
+            (Some(lhs), Some(rhs)) if lhs.same_type(rhs) => Some(lhs.clone()),
+            (Some(lhs), None) if self.var_accepts_type(rhs_root, lhs.rust_ty()) => {
+                Some(lhs.clone())
+            }
+            (None, Some(rhs)) if self.var_accepts_type(lhs_root, rhs.rust_ty()) => {
+                Some(rhs.clone())
+            }
             (None, None) => None,
             _ => return Ok(InferredTy::Unknown),
         };
@@ -1761,7 +1760,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
                 if let Some(known) = &var.value {
                     return Ok(InferredTy::Known(known.clone()));
                 }
-                if literal_kind_accepts_type(var.kind, &expected.rust_ty) {
+                if literal_kind_accepts_type(var.kind, expected.rust_ty()) {
                     var.value = Some(expected.clone());
                     var.origin_propagated = false;
                     Ok(InferredTy::Known(expected))
@@ -1862,7 +1861,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         expected: Option<TileRustType>,
     ) -> Result<Option<Type>, JITError> {
         if let Some(inferred) = self.infer_expr(expr, expected)? {
-            return Ok(Some(inferred.rust_ty));
+            return Ok(Some(inferred.rust_ty().clone()));
         }
         if let Some(syn_type) = self.results.syn_expr_type(expr) {
             return Ok(Some(syn_type));
@@ -1892,7 +1891,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         &self,
         expected: &TileRustType,
     ) -> Result<Option<TileRustType>, JITError> {
-        let elem_ty = match &expected.rust_ty {
+        let elem_ty = match expected.rust_ty() {
             Type::Array(array) => Some(&*array.elem),
             Type::Slice(slice) => Some(&*slice.elem),
             _ => None,
@@ -1920,7 +1919,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
             }
             return Ok(None);
         };
-        match &base_ty.rust_ty {
+        match base_ty.rust_ty() {
             Type::Array(array) => {
                 self.compiler
                     .compile_type(&array.elem, self.generic_vars, &HashMap::new())
@@ -1962,7 +1961,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         let Some(array_like) = self.array_like_expr_or_origin(base) else {
             return Ok(None);
         };
-        let elem_ty = &expected_elem_ty.rust_ty;
+        let elem_ty = expected_elem_ty.rust_ty();
         let len = array_like.len();
         let array_syn_ty: Type = syn::parse_quote!([#elem_ty; #len]);
         let Some(array_ty) =
@@ -2096,7 +2095,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         let iter_ty = self.infer_expr(iter_expr, None)?;
         if iter_ty
             .as_ref()
-            .and_then(|ty| get_type_ident(&ty.rust_ty))
+            .and_then(|ty| get_type_ident(ty.rust_ty()))
             .is_some_and(|ident| ident == "Dim")
         {
             return self.compiler.compile_type(
@@ -2177,7 +2176,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         expected: Option<TileRustType>,
     ) -> Result<Option<TileRustType>, JITError> {
         if let Some(expected) = expected {
-            if let Some(elem_types) = tuple_element_syn_types(&expected.rust_ty) {
+            if let Some(elem_types) = tuple_element_syn_types(expected.rust_ty()) {
                 if elem_types.len() == tuple.elems.len() {
                     for (elem, elem_ty) in tuple.elems.iter().zip(elem_types.iter()) {
                         let expected_elem = self.compiler.compile_type(
@@ -2196,7 +2195,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         let mut elem_types = Vec::new();
         for elem in &tuple.elems {
             if let Some(elem_ty) = self.infer_expr(elem, None)? {
-                elem_types.push(elem_ty.rust_ty);
+                elem_types.push(elem_ty.rust_ty().clone());
             }
         }
         if elem_types.len() != tuple.elems.len() {
@@ -2264,7 +2263,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
             }
             return Ok(None);
         };
-        match (&base_ty.rust_ty, &field.member) {
+        match (base_ty.rust_ty(), &field.member) {
             (Type::Tuple(tuple), syn::Member::Unnamed(index)) => {
                 let Some(elem_ty) = tuple.elems.iter().nth(index.index as usize) else {
                     return Ok(None);
@@ -2322,7 +2321,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         let mut elem_types = Vec::new();
         for (idx, elem) in tuple.elems.iter().enumerate() {
             if idx == target_idx {
-                elem_types.push(expected_elem_ty.rust_ty.clone());
+                elem_types.push(expected_elem_ty.rust_ty().clone());
             } else if let Some(elem_ty) = self.infer_expr_syn_type(elem, None)? {
                 elem_types.push(elem_ty);
             } else {
@@ -2402,7 +2401,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         if ident == "Some" && call.args.len() == 1 {
             if let Some(expected) = expected {
                 let payload_expected =
-                    option_payload_syn_type(&expected.rust_ty).and_then(|payload_ty| {
+                    option_payload_syn_type(expected.rust_ty()).and_then(|payload_ty| {
                         self.compiler
                             .compile_type(&payload_ty, self.generic_vars, &HashMap::new())
                             .ok()
@@ -2414,7 +2413,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
             let Some(payload_ty) = self.infer_expr(&call.args[0], None)? else {
                 return Ok(None);
             };
-            let payload_ty = payload_ty.rust_ty;
+            let payload_ty = payload_ty.rust_ty();
             let option_ty: Type = syn::parse_quote!(Option<#payload_ty>);
             return self
                 .compiler
@@ -2470,7 +2469,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         if let Some(expected_return) = expected_return {
             // Speculative seed from the expected type: a conflict just means
             // the hint doesn't apply, the strict check runs at inline time.
-            let _ = generic_arg_inf.add_type_constraints(&return_type, &expected_return.rust_ty);
+            let _ = generic_arg_inf.add_type_constraints(&return_type, expected_return.rust_ty());
         }
         generic_arg_inf.apply_provided_generics_fn_call(call, self.generic_vars);
 
@@ -2712,7 +2711,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         if let Some(expected_return) = expected_return {
             // Speculative seed from the expected type: a conflict just means
             // the hint doesn't apply, the strict check runs at inline time.
-            let _ = generic_arg_inf.add_type_constraints(&return_type, &expected_return.rust_ty);
+            let _ = generic_arg_inf.add_type_constraints(&return_type, expected_return.rust_ty());
         }
         generic_arg_inf.apply_provided_generics_fn_call(call, self.generic_vars);
 
@@ -3118,7 +3117,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         }
         let call_arg_rust_tys = arg_types
             .iter()
-            .map(|arg| arg.rust_ty.clone())
+            .map(|arg| arg.rust_ty().clone())
             .collect::<Vec<_>>();
         let (fn_arg_types, return_type) = get_sig_types(&fn_item.sig, None);
         if fn_arg_types.iter().any(type_has_impl_trait) || type_has_impl_trait(&return_type) {
@@ -3179,9 +3178,9 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
                         let cuda_tile_type_str = arg_type.get_cuda_tile_type_str();
                         let mut type_param = TypeParam::derive_param_from_type(
                             type_param_name.clone(),
-                            arg_type.rust_ty.clone(),
+                            arg_type.rust_ty().clone(),
                             cuda_tile_type_str,
-                            Some(arg_type.type_instance.clone()),
+                            Some(arg_type.type_instance().clone()),
                         );
                         if let TypeParam::Padding(ref mut padding) = type_param {
                             padding.padding_value =
@@ -3595,7 +3594,7 @@ fn expr_diverges(expr: &Expr) -> bool {
 }
 
 fn type_params_by_name(ty: &TileRustType) -> HashMap<String, TypeParam> {
-    ty.params
+    ty.params()
         .iter()
         .filter_map(|param| param.name().map(|name| (name.to_string(), param.clone())))
         .collect()

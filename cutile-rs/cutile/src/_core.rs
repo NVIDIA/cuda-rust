@@ -856,19 +856,16 @@ pub mod core {
             tile: Shape<R>,
         ) -> PartitionMut<'a, E, R> {
             let tensor_token: Token = get_tensor_token(self);
-            let outer_tile: Shape<S> = Shape::<S> { dims: &[] };
             // TODO (hme): document safety
-            let mut p: PartitionMut<E, R> =
-                unsafe { make_nested_partition_view_mut(self, tile, padding::None, tensor_token) };
-            set_nested_mutable_partition_access_offset(&mut p, outer_tile);
-            p
+            unsafe { make_partition_view_mut(self, tile, padding::None, tensor_token) }
         }
 
-        /// Build a mutable partition over the full tensor view.
+        /// Build a mutable partition through a shared borrow.
         ///
-        /// Unlike `Tensor::partition_mut`, this does not offset accesses by
-        /// the current tile-block id. It is intended for schedule-driven
-        /// kernels that store through private `PartitionIndex` values.
+        /// Unlike `Tensor::partition_mut`, the borrow does not keep other
+        /// views of this tensor out, so the caller keeps their writes
+        /// disjoint. It is intended for schedule-driven kernels that store
+        /// through private `PartitionIndex` values.
         pub unsafe fn partition_full_mut<'a, const R: [i32; N]>(
             &'a self,
             tile: Shape<R>,
@@ -2269,24 +2266,6 @@ pub mod core {
         unreachable!()
     }
 
-    /// Attach CTA-local index offset metadata to a nested mutable partition.
-    /// Internal to [`Tensor::partition_mut`]: it rewrites the offsets every
-    /// later store through the view uses, so it must not be reachable from
-    /// kernel code.
-    #[cuda_tile::variadic_op(N = 6)]
-    #[cuda_tile::compiler_op(name = "set_nested_mutable_partition_access_offset")]
-    fn set_nested_mutable_partition_access_offset<
-        'a,
-        E: ElementType,
-        const OUTER_TILE: [i32; N],
-        const NESTED_TILE: [i32; N],
-    >(
-        partition: &mut PartitionMut<'a, E, NESTED_TILE>,
-        outer_tile: Shape<OUTER_TILE>,
-    ) {
-        unreachable!()
-    }
-
     /// Extract a `Partition`'s ordering token.
     #[cuda_tile::variadic_op(N = 6)]
     #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "token")]
@@ -3637,30 +3616,6 @@ pub mod core {
         unreachable!()
     }
 
-    /// Build a nested mutable partition view from an already partitioned
-    /// mutable tensor. This still partitions the full tensor view; the compiler
-    /// attaches metadata so tile accesses are offset by the enclosing CTA tile.
-    #[cuda_tile::op(name="cuda_tile.make_partition_view", since="V13_2",
-                    params=["tensor_view"],
-                    output_type_params=["tensor_view", "padding_value"],
-                    output_type_meta=["token", "tensor_view.shape()"]
-    )]
-    #[cuda_tile::variadic_op(N = 6)]
-    pub unsafe fn make_nested_partition_view_mut<
-        'a,
-        E: ElementType,
-        const TENSOR_SHAPE: [i32; N],
-        const TILE_SHAPE: [i32; N],
-        P: padding::Mode,
-    >(
-        tensor_view: &Tensor<E, TENSOR_SHAPE>,
-        shape: Shape<TILE_SHAPE>,
-        padding_value: P,
-        token: Token,
-    ) -> PartitionMut<'a, E, TILE_SHAPE> {
-        unreachable!()
-    }
-
     // ---- Core pointer helpers ---------------------------------------------
 
     /// Pointer to a kernel-module global declared via the `global` op.
@@ -3890,7 +3845,6 @@ pub mod core {
     }
 
     fn load_tile_mut_1d<E: ElementType, const S: [i32; 1]>(y: &mut Tensor<E, S>) -> Tile<E, S> {
-        let pid: (i32, i32, i32) = get_tile_block_id();
         let tile_shape: Shape<S> = Shape::<S> { dims: &[] };
         let tensor_token: Token = get_tensor_token(y);
         let y_partition: PartitionMut<E, S> =
@@ -3898,7 +3852,7 @@ pub mod core {
         let tile_y: Tile<E, S> = unsafe {
             load_view_tko_mut(
                 &y_partition,
-                [pid.0],
+                [0i32],
                 ordering::Weak,
                 scope::TileBlock,
                 None,
@@ -3913,7 +3867,6 @@ pub mod core {
     }
 
     fn load_tile_mut_2d<E: ElementType, const S: [i32; 2]>(y: &mut Tensor<E, S>) -> Tile<E, S> {
-        let pid: (i32, i32, i32) = get_tile_block_id();
         let tile_shape: Shape<S> = Shape::<S> { dims: &[] };
         let tensor_token: Token = get_tensor_token(y);
         let y_partition: PartitionMut<E, S> =
@@ -3921,7 +3874,7 @@ pub mod core {
         let tile_y: Tile<E, S> = unsafe {
             load_view_tko_mut(
                 &y_partition,
-                [pid.0, pid.1],
+                [0i32, 0i32],
                 ordering::Weak,
                 scope::TileBlock,
                 None,
@@ -3936,7 +3889,6 @@ pub mod core {
     }
 
     fn load_tile_mut_3d<E: ElementType, const S: [i32; 3]>(y: &mut Tensor<E, S>) -> Tile<E, S> {
-        let pid: (i32, i32, i32) = get_tile_block_id();
         let tile_shape: Shape<S> = Shape::<S> { dims: &[] };
         let tensor_token: Token = get_tensor_token(y);
         let y_partition: PartitionMut<E, S> =
@@ -3944,7 +3896,7 @@ pub mod core {
         let tile_y: Tile<E, S> = unsafe {
             load_view_tko_mut(
                 &y_partition,
-                [pid.0, pid.1, pid.2],
+                [0i32, 0i32, 0i32],
                 ordering::Weak,
                 scope::TileBlock,
                 None,
@@ -3962,7 +3914,6 @@ pub mod core {
         y: &mut Tensor<E, S>,
         result: Tile<E, S>,
     ) -> Token {
-        let pid: (i32, i32, i32) = get_tile_block_id();
         let tile_shape: Shape<S> = Shape::<S> { dims: &[] };
         let tensor_token: Token = get_tensor_token(y);
         let mut y_partition: PartitionMut<E, S> =
@@ -3971,7 +3922,7 @@ pub mod core {
             store_view_tko_mut(
                 &mut y_partition,
                 result,
-                [pid.0],
+                [0i32],
                 ordering::Weak,
                 scope::TileBlock,
                 None,
@@ -3989,7 +3940,6 @@ pub mod core {
         y: &mut Tensor<E, S>,
         result: Tile<E, S>,
     ) -> Token {
-        let pid: (i32, i32, i32) = get_tile_block_id();
         let tile_shape: Shape<S> = Shape::<S> { dims: &[] };
         let tensor_token: Token = get_tensor_token(y);
         let mut y_partition: PartitionMut<E, S> =
@@ -3998,7 +3948,7 @@ pub mod core {
             store_view_tko_mut(
                 &mut y_partition,
                 result,
-                [pid.0, pid.1],
+                [0i32, 0i32],
                 ordering::Weak,
                 scope::TileBlock,
                 None,
@@ -4016,7 +3966,6 @@ pub mod core {
         y: &mut Tensor<E, S>,
         result: Tile<E, S>,
     ) -> Token {
-        let pid: (i32, i32, i32) = get_tile_block_id();
         let tile_shape: Shape<S> = Shape::<S> { dims: &[] };
         let tensor_token: Token = get_tensor_token(y);
         let mut y_partition: PartitionMut<E, S> =
@@ -4025,7 +3974,7 @@ pub mod core {
             store_view_tko_mut(
                 &mut y_partition,
                 result,
-                [pid.0, pid.1, pid.2],
+                [0i32, 0i32, 0i32],
                 ordering::Weak,
                 scope::TileBlock,
                 None,

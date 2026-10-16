@@ -126,9 +126,15 @@ impl DeviceOp for ScaleKernel {
         self,
         ctx: &ExecutionContext,
     ) -> Result<<Self as DeviceOp>::Output, DeviceError> {
-        let mut launcher = AsyncKernelLaunch::new(self.function);
-        launcher.push_arg(self.n);
-        launcher.push_arg(self.scale);
+        // SAFETY: the PTX function is a kernel for this device, and this
+        // DeviceOp supplies its complete parameter list below.
+        let mut launcher = unsafe { AsyncKernelLaunch::new(self.function) };
+        // SAFETY: these values follow the `n` and `scale` scalar parameters
+        // declared by the PTX kernel above.
+        unsafe {
+            launcher.push_arg(self.n);
+            launcher.push_arg(self.scale);
+        }
         // Safety:
         // Input okay since it's behind an Arc.
         // Output okay since this struct owns the tensor we will be writing to.

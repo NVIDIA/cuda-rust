@@ -98,17 +98,21 @@ fn smoke_async_saxpy_unsafe() {
 
             let cuda_async_op = async move {
                 let y_part = y.partition(y_partition_shape);
-                let mut launcher = AsyncKernelLaunch::new(function.clone());
+                // SAFETY: `function` is the compiled SAXPY kernel and the
+                // arguments below provide its complete parameter list.
+                let mut launcher = unsafe { AsyncKernelLaunch::new(function.clone()) };
                 let x_arc: Arc<_> = x.into();
-                launcher
-                    .push_arg(&y_part)
-                    .push_arg(a)
-                    .push_arg_arc(&x_arc)
-                    .set_launch_config(LaunchConfig {
-                        grid_dim: y_part.grid().expect("Invalid grid."),
-                        block_dim: (1, 1, 1),
-                        shared_mem_bytes: 0,
-                    });
+                // SAFETY: the arguments match the compiled SAXPY kernel's
+                // partitioned output, scalar, and tensor input parameters;
+                // their storage stays alive until the awaited launch completes.
+                unsafe {
+                    launcher.push_arg(&y_part).push_arg(a).push_arg_arc(&x_arc);
+                }
+                launcher.set_launch_config(LaunchConfig {
+                    grid_dim: y_part.grid().expect("Invalid grid."),
+                    block_dim: (1, 1, 1),
+                    shared_mem_bytes: 0,
+                });
                 launcher.await.expect("Kernel launch failed.");
                 y_part.unpartition()
             };

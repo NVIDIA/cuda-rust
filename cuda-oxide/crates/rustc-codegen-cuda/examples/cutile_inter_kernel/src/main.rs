@@ -66,10 +66,17 @@ impl DeviceOp for ThresholdScaleKernel {
         self,
         ctx: &ExecutionContext,
     ) -> Result<<Self as DeviceOp>::Output, DeviceError> {
-        let mut launcher = AsyncKernelLaunch::new(self.function);
-        launcher.push_arg(self.n);
-        launcher.push_arg(self.threshold);
-        launcher.push_arg(self.scale);
+        // SAFETY: this is the compiled threshold/scale kernel, and the full
+        // parameter list below matches its PTX signature.
+        let mut launcher = unsafe { AsyncKernelLaunch::new(self.function) };
+        // SAFETY: the scalar values and device pointers follow the kernel's
+        // declared parameter order; both tensors remain live through kernel
+        // completion.
+        unsafe {
+            launcher.push_arg(self.n);
+            launcher.push_arg(self.threshold);
+            launcher.push_arg(self.scale);
+        }
         unsafe {
             launcher
                 .push_device_ptr(self.input.device_pointer().cu_deviceptr())

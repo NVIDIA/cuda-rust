@@ -1,22 +1,32 @@
 ---
 name: fmt
 
-# Runs as a job of the top-level CI workflow (.github/workflows/ci.yml),
-# which is the single push/pull_request entry point. Concurrency is governed
-# by CI's own group, so this workflow declares none of its own.
+# Runs as a job of the top-level CI workflow (.github/workflows/ci.yml).
+# Concurrency is governed by CI's own group, so this workflow declares none
+# of its own.
 on:
   workflow_call:
 
 permissions:
   contents: read
 
+# A container job's default shell is dash, which rejects `set -o pipefail`.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   fmt:
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 10
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
+
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # rustfmt comes from cuda-oxide/rust-toolchain.toml's component list,
       # like clippy,

@@ -1,21 +1,17 @@
 ---
 name: codeql
 
-# Push and pull_request run only when Rust, workflow, or script inputs change.
+# Push runs only when Rust, workflow, or script inputs change.
+# Self-hosted runners reject pull_request. copy-pr-bot mirrors trusted PRs to
+# pull-request/<n>, and this workflow triggers on that push
+# (config: .github/copy-pr-bot.yaml).
 # A Markdown-only commit skips both analyzers. The weekly schedule has no path
 # filter, so that scan still covers the whole tree.
 on:
   push:
-    branches: [main]
-    paths:
-      - '**/*.rs'
-      - '**/Cargo.toml'
-      - '**/Cargo.lock'
-      - '.github/**'
-      - '**/*.sh'
-      - '**/*.py'
-  pull_request:
-    branches: [main]
+    branches:
+      - main
+      - "pull-request/[0-9]+"
     paths:
       - '**/*.rs'
       - '**/Cargo.toml'
@@ -28,6 +24,11 @@ on:
 
 # Each commit on main gets its own group, so it starts at once. Any other ref
 # still shares one group and cancels the older run.
+# A container job's default shell is dash; use bash, as on ubuntu-latest.
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}${{ github.ref_name == 'main' && format('-{0}', github.sha) || '' }}
   cancel-in-progress: ${{ github.ref_name != 'main' }}
@@ -35,7 +36,14 @@ concurrency:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: ubuntu-latest
+    # nv-cpu-general: m7i.xlarge, 4 vCPU / 16 GiB. Same size as ubuntu-latest.
+    # The VM image has no rustup. rust:1.98.0-bookworm matches the root
+    # toolchain pin and is buildpack-deps, so git is there for checkout and
+    # rustup is on PATH. The Oxide nightly still comes from
+    # cuda-oxide/rust-toolchain.toml when the extractor enters that tree.
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 120
     permissions:
       security-events: write
@@ -53,6 +61,16 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # The workspace is mounted from the runner, so git refuses it until this
+      # directory is marked safe. CodeQL's result upload calls git.
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # A missing rustup makes the Rust extractor exit 0 with an empty database.
+      - name: Confirm Rust
+        if: matrix.language == 'rust'
+        run: rustup show active-toolchain
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4

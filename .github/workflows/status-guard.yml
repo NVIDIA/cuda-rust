@@ -1,11 +1,13 @@
 ---
 name: status-guard
 
+# Self-hosted runners reject pull_request. copy-pr-bot mirrors trusted PRs to
+# pull-request/<n>, and this workflow triggers on that push.
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    branches:
+      - main
+      - "pull-request/[0-9]+"
 
 # Each commit on main gets its own group, so it starts at once. Any other ref
 # still shares one group and cancels the older run.
@@ -16,10 +18,15 @@ concurrency:
 permissions:
   contents: read
 
+# A container job's default shell is dash. The VM jobs already run bash.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   error-example-status-guard:
     name: error-example status guard
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -35,7 +42,7 @@ jobs:
   # marker and needed a follow-up commit on main to stop reporting FAIL.
   example-smoketest-contract:
     name: smoketest example contract
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -50,7 +57,7 @@ jobs:
   # were both absent, 1,700 lines with no row between them.
   crate-inventory:
     name: crate inventory
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -69,7 +76,7 @@ jobs:
   # book quotes behind.
   toolchain-pin-parity:
     name: toolchain pin parity
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -85,7 +92,7 @@ jobs:
   # missing when that table was written (#794).
   cli-doc-coverage:
     name: CLI command reference
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -103,7 +110,7 @@ jobs:
   # the crate and example READMEs.
   book-api-names:
     name: book device-API names
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -124,11 +131,16 @@ jobs:
   # bodies, and partial snippets with no enclosing item, never trip it.
   book-import-order:
     name: book import order
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 10
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
+
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
 # rustfmt comes from cuda-oxide/rust-toolchain.toml's component list through the
       # rustup proxy, as in fmt.yml, so the order checked is the pinned
@@ -144,7 +156,7 @@ jobs:
   # in markdown and in `///` / `//!` doc comments. Git and Python, no toolchain.
   source-references:
     name: source references
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 10
     steps:
       - name: Clone repository
@@ -163,7 +175,7 @@ jobs:
   # because the page derives staleness from it.
   book-catalog-stamp:
     name: book catalog stamp
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -181,7 +193,7 @@ jobs:
   # reading as complete is what hid them.
   test-matrix-coverage:
     name: test-matrix coverage
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -201,11 +213,16 @@ jobs:
   # here.
   device-only-build:
     name: device-only kernel crate
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 10
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
+
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # Deliberately no CUDA toolkit step: a toolkit on the runner would mask
       # exactly the dependency this job exists to keep out of the graph.
@@ -220,7 +237,7 @@ jobs:
   # snippets, which is how some forty stale lines outlived the crate switch.
   host-api-paths:
     name: host API paths in docs and templates
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -238,7 +255,7 @@ jobs:
   # compile.
   shared-crate-pin-parity:
     name: shared host-crate pin parity
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -254,7 +271,7 @@ jobs:
   # consumer, so the in-tree version, both manifests, and every lock must agree.
   oxide-artifacts-parity:
     name: oxide-artifacts release parity
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository

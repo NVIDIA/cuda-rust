@@ -4,6 +4,14 @@
  */
 
 //! Loading CUDA modules from embedded device artifact bundles.
+//!
+//! cuda-oxide's build backend links each compiled device module into the
+//! host executable as an artifact bundle (a named blob carrying a cubin
+//! and/or PTX payload plus the compile options that produced it; see the
+//! `oxide-artifacts` crate, re-exported here as needed). This module reads
+//! those bundles back out of the running executable, or out of any object
+//! file on disk, and loads the ones that carry a loadable payload into a
+//! [`CudaContext`].
 
 use crate::{CudaContext, CudaModule, DriverError};
 use oxide_artifacts::ArtifactError;
@@ -15,34 +23,49 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// An artifact bundle that carries a payload the driver can load: a cubin,
+/// or failing that PTX for the driver to JIT.
+///
+/// Construct with [`EmbeddedModule::new`], or collect every loadable bundle
+/// linked into the running executable with
+/// [`embedded_modules_from_current_exe`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EmbeddedModule {
     bundle: OwnedArtifactBundle,
 }
 
 impl EmbeddedModule {
+    /// Wraps `bundle` if it carries a cubin or PTX payload; `None` for a
+    /// bundle with neither (metadata-only, or an unsupported payload kind).
     pub fn new(bundle: OwnedArtifactBundle) -> Option<Self> {
         loadable_payload(&bundle)
             .is_some()
             .then_some(Self { bundle })
     }
 
+    /// The bundle's name, as assigned by the build that produced it; this is
+    /// what [`load_embedded_module`] matches on.
     pub fn name(&self) -> &str {
         &self.bundle.name
     }
 
+    /// The GPU target the payload was compiled for (e.g. `sm_90`).
     pub fn target(&self) -> &str {
         &self.bundle.target
     }
 
+    /// The underlying bundle, with its compile options and every payload.
     pub fn bundle(&self) -> &OwnedArtifactBundle {
         &self.bundle
     }
 
+    /// The bytes of the payload of `kind`, if the bundle carries one.
     pub fn payload(&self, kind: ArtifactPayloadKind) -> Option<&[u8]> {
         self.bundle.payload(kind)
     }
 
+    /// Loads the bundle's cubin (preferred) or PTX payload into `ctx` as a
+    /// [`CudaModule`].
     pub fn load(&self, ctx: &Arc<CudaContext>) -> Result<Arc<CudaModule>, EmbeddedModuleError> {
         let image =
             loadable_payload(&self.bundle).expect("EmbeddedModule always has a loadable payload");
@@ -51,6 +74,8 @@ impl EmbeddedModule {
     }
 }
 
+/// Reads every artifact bundle linked into the running executable, loadable
+/// or not.
 pub fn artifact_bundles_from_current_exe() -> Result<Vec<OwnedArtifactBundle>, EmbeddedModuleError>
 {
     let path =
@@ -58,6 +83,8 @@ pub fn artifact_bundles_from_current_exe() -> Result<Vec<OwnedArtifactBundle>, E
     artifact_bundles_from_binary_path(path)
 }
 
+/// Reads every artifact bundle linked into the executable or object file at
+/// `path`, loadable or not.
 pub fn artifact_bundles_from_binary_path(
     path: impl AsRef<Path>,
 ) -> Result<Vec<OwnedArtifactBundle>, EmbeddedModuleError> {
@@ -70,6 +97,8 @@ pub fn artifact_bundles_from_binary_path(
         .map_err(EmbeddedModuleError::Artifacts)
 }
 
+/// The loadable bundles linked into the running executable, in link order.
+/// Bundles without a cubin or PTX payload are skipped.
 pub fn embedded_modules_from_current_exe() -> Result<Vec<EmbeddedModule>, EmbeddedModuleError> {
     Ok(artifact_bundles_from_current_exe()?
         .into_iter()
@@ -77,6 +106,10 @@ pub fn embedded_modules_from_current_exe() -> Result<Vec<EmbeddedModule>, Embedd
         .collect())
 }
 
+/// Loads the embedded module called `name` into `ctx`.
+///
+/// Rereads the executable on every call; callers that load several modules
+/// should collect [`embedded_modules_from_current_exe`] once instead.
 pub fn load_embedded_module(
     ctx: &Arc<CudaContext>,
     name: &str,
@@ -90,6 +123,8 @@ pub fn load_embedded_module(
     module.load(ctx)
 }
 
+/// Loads the first loadable embedded module into `ctx`: the common case of an
+/// executable built with a single device module.
 pub fn load_first_embedded_module(
     ctx: &Arc<CudaContext>,
 ) -> Result<Arc<CudaModule>, EmbeddedModuleError> {
@@ -106,20 +141,31 @@ fn loadable_payload(bundle: &OwnedArtifactBundle) -> Option<&[u8]> {
         .or_else(|| bundle.payload(ArtifactPayloadKind::Ptx))
 }
 
+/// Why an embedded module could not be found or loaded.
 #[derive(Debug)]
 pub enum EmbeddedModuleError {
+    /// The path of the running executable could not be determined.
     CurrentExe {
+        /// The underlying I/O error.
         source: std::io::Error,
     },
+    /// The executable or object file at `path` could not be read.
     Io {
+        /// The file that could not be read.
         path: PathBuf,
+        /// The underlying I/O error.
         source: std::io::Error,
     },
+    /// The file was read but its artifact section could not be parsed.
     Artifacts(ArtifactError),
+    /// No loadable bundle in the executable has the requested name.
     ModuleNotFound {
+        /// The name that was requested.
         name: String,
     },
+    /// The executable contains no loadable bundle at all.
     NoModules,
+    /// The driver rejected the payload (`cuModuleLoadData`).
     Driver(DriverError),
 }
 

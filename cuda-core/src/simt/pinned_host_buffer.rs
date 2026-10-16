@@ -129,9 +129,21 @@ impl<T: DeviceCopy> PinnedHostBuffer<T> {
         } else {
             ctx.bind_to_thread()?;
             let ptr = unsafe { crate::simt::memory::malloc_host(num_bytes)? };
-            NonNull::new(ptr.cast::<T>()).ok_or(DriverError(
-                cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE,
-            ))?
+            // `cuMemAllocHost` returns page-aligned memory in practice, but
+            // the slices handed out below assume `align_of::<T>()`, so check
+            // rather than trust: a misaligned `&[T]` is undefined behavior.
+            if ptr.is_null() || !(ptr as usize).is_multiple_of(std::mem::align_of::<T>()) {
+                if !ptr.is_null() {
+                    // SAFETY: `ptr` came from `malloc_host` above and has not
+                    // been handed out.
+                    ctx.record_err(unsafe { crate::simt::memory::free_host(ptr) });
+                }
+                return Err(DriverError(
+                    cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE,
+                ));
+            }
+            // SAFETY: checked non-null just above.
+            unsafe { NonNull::new_unchecked(ptr.cast::<T>()) }
         };
 
         Ok(Self {
@@ -147,7 +159,8 @@ impl<T: DeviceCopy> PinnedHostBuffer<T> {
 impl<T: DeviceCopy> Drop for PinnedHostBuffer<T> {
     fn drop(&mut self) {
         if self.num_bytes != 0 {
-            self.ctx.record_err(self.ctx.bind_to_thread());
+            // Not `bind_to_thread`: a recorded error must not skip the free.
+            self.ctx.record_err(self.ctx.make_current());
             self.ctx
                 .record_err(unsafe { crate::simt::memory::free_host(self.ptr.as_ptr().cast()) });
         }

@@ -212,9 +212,18 @@ impl SingleStream {
     ///
     /// # Safety
     ///
-    /// The caller must call [`SchedulingPolicy::init`] before use.
+    /// The caller must call [`SchedulingPolicy::init`] before use. Using the
+    /// policy before initialization produces an error, not undefined
+    /// behavior; the `unsafe` mirrors [`StreamPoolRoundRobin::new`].
     pub unsafe fn new() -> Self {
         Self { stream: None }
+    }
+
+    /// The stream, or a [`DeviceError::Scheduling`] if `init` has not run.
+    fn initialized_stream(&self) -> Result<&Arc<CudaStream>, DeviceError> {
+        self.stream.as_ref().ok_or_else(|| {
+            DeviceError::Scheduling("SingleStream policy used before init.".to_string())
+        })
     }
 }
 
@@ -230,7 +239,7 @@ impl SchedulingPolicy for SingleStream {
         &self,
         op: O,
     ) -> Result<DeviceFuture<T, O>, DeviceError> {
-        let stream = self.stream.as_ref().unwrap();
+        let stream = self.initialized_stream()?;
         // See `StreamPoolRoundRobin::schedule` for why the fields are
         // spelled out instead of using `..Default::default()`.
         Ok(DeviceFuture {
@@ -245,7 +254,33 @@ impl SchedulingPolicy for SingleStream {
 
     /// Executes `op` synchronously on the single stream.
     fn sync<T: Send, O: DeviceOperation<Output = T>>(&self, op: O) -> Result<T, DeviceError> {
-        let stream = self.stream.as_ref().unwrap();
-        op.sync_on(stream)
+        op.sync_on(self.initialized_stream()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::simt::device_operation::value;
+
+    /// An uninitialized policy has no stream to hand out; that is a
+    /// scheduling error for the caller, not a panic inside the runtime.
+    #[test]
+    fn single_stream_reports_use_before_init_as_an_error() {
+        // SAFETY: the policy is never initialized on purpose; the contract
+        // says that yields an error rather than undefined behavior.
+        let policy = unsafe { SingleStream::new() };
+
+        let scheduled = policy.schedule(value(7_u32)).map(drop);
+        assert!(
+            matches!(scheduled, Err(DeviceError::Scheduling(_))),
+            "{scheduled:?}"
+        );
+
+        let synced = policy.sync(value(7_u32));
+        assert!(
+            matches!(synced, Err(DeviceError::Scheduling(_))),
+            "{synced:?}"
+        );
     }
 }

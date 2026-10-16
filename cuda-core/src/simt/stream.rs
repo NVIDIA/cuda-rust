@@ -57,10 +57,11 @@ unsafe impl Sync for CudaStream {}
 /// live stream count.
 ///
 /// The default stream (null handle) is never destroyed. Errors during
-/// teardown are recorded on the context rather than panicking.
+/// teardown are recorded on the context rather than panicking, and a
+/// previously recorded error does not stop the destroy from being issued.
 impl Drop for CudaStream {
     fn drop(&mut self) {
-        self.ctx.record_err(self.ctx.bind_to_thread());
+        self.ctx.record_err(self.ctx.make_current());
         if !self.cu_stream.is_null() {
             self.ctx.num_streams.fetch_sub(1, Ordering::Relaxed);
             self.ctx
@@ -99,8 +100,26 @@ impl CudaStream {
 
     /// Blocks the calling thread until all work enqueued on this stream
     /// completes.
+    ///
+    /// `cuStreamSynchronize` is issued unconditionally; the context's sticky
+    /// error state is drained and returned only afterwards. An `Err` from
+    /// this method therefore never means the wait was skipped: either the
+    /// driver failed the wait, or the wait completed and a previously
+    /// recorded error is being reported. The `DeviceBuffer` copy wrappers
+    /// depend on that ordering to hand host memory back only after the DMA
+    /// has finished.
     pub fn synchronize(&self) -> Result<(), DriverError> {
-        self.ctx.bind_to_thread()?;
+        self.synchronize_driver()?;
+        self.ctx.check_err()
+    }
+
+    /// `cuStreamSynchronize` without consulting the sticky error state.
+    ///
+    /// `Err` means the driver refused or failed the wait, so an enqueued
+    /// transfer may still be in flight; callers that own the host buffer
+    /// leak it in that case rather than free memory the device may write.
+    pub(crate) fn synchronize_driver(&self) -> Result<(), DriverError> {
+        self.ctx.make_current()?;
         unsafe { cuda_bindings::cuStreamSynchronize(self.cu_stream) }.result()
     }
 
@@ -142,7 +161,6 @@ impl CudaStream {
     /// in the stream DAG.
     pub fn fork(&self) -> Result<Arc<Self>, DriverError> {
         self.ctx.bind_to_thread()?;
-        self.ctx.num_streams.fetch_add(1, Ordering::Relaxed);
         let mut cu_stream = MaybeUninit::uninit();
         let cu_stream = unsafe {
             cuda_bindings::cuStreamCreate(
@@ -152,6 +170,9 @@ impl CudaStream {
             .result()?;
             cu_stream.assume_init()
         };
+        // Count the stream only once it exists: a failed create has no
+        // `CudaStream` whose drop would undo the increment.
+        self.ctx.num_streams.fetch_add(1, Ordering::Relaxed);
         let stream = Arc::new(CudaStream {
             cu_stream,
             ctx: self.ctx.clone(),
@@ -208,26 +229,65 @@ impl CudaStream {
     /// `oneshot::Sender::send` or `Waker::wake` in `host_func` to unblock a
     /// future when GPU work finishes.
     ///
-    /// `host_func` is boxed, leaked into a raw pointer, and passed as user
-    /// data to `cuLaunchHostFunc`. The driver calls
-    /// `callback_wrapper` on a driver-internal
-    /// thread, which reclaims the box and invokes the closure.
+    /// `host_func` is boxed and handed to `cuLaunchHostFunc` as user data.
+    /// The driver calls a private `extern "C"` trampoline on a driver-internal
+    /// thread, which reclaims the box and invokes the closure. If the enqueue
+    /// itself fails the box is reclaimed here and the closure is dropped
+    /// without running.
     ///
-    /// Panics inside the closure are caught and discarded to prevent unwinding
-    /// across the FFI boundary.
-    pub fn launch_host_function<F: FnOnce() + Send>(
+    /// # What the callback may do
+    ///
+    /// - It runs at an unknown later time on a thread the driver owns, so
+    ///   `F: 'static`: a closure borrowing a local of the enclosing scope is
+    ///   rejected at compile time.
+    ///
+    /// ```compile_fail,E0373
+    /// # fn demo(stream: &cuda_core::CudaStream) {
+    /// let hits = std::sync::atomic::AtomicUsize::new(0);
+    /// let _ = stream.launch_host_function(|| {
+    ///     hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    /// });
+    /// # }
+    /// ```
+    ///
+    /// - It must not call CUDA driver APIs. The driver documents this for
+    ///   `cuLaunchHostFunc` (the call may fail with
+    ///   `CUDA_ERROR_NOT_PERMITTED`, or deadlock). Publishing a result to the
+    ///   host (an atomic store, a channel send, a `Waker::wake`) is what the
+    ///   hook is for; [`CudaContext::record_err`] is a plain atomic store and
+    ///   is fine.
+    /// - It must not block waiting on a thread that may itself be inside the
+    ///   driver: host callbacks run serially on the driver's thread and hold
+    ///   up every later callback and every context-wide wait in the process
+    ///   while they run.
+    /// - Panics inside the closure are caught and **discarded** so the unwind
+    ///   never crosses the C ABI boundary; a panicking callback reports
+    ///   nothing. Record failures somewhere the host can observe them.
+    /// - Unlike the legacy `cuStreamAddCallback`, the driver does not invoke
+    ///   the function once the context is in an error state, in which case
+    ///   the boxed closure is leaked.
+    pub fn launch_host_function<F: FnOnce() + Send + 'static>(
         &self,
         host_func: F,
     ) -> Result<(), DriverError> {
-        let boxed = Box::new(host_func);
-        unsafe {
+        self.ctx.bind_to_thread()?;
+        let boxed = Box::into_raw(Box::new(host_func));
+        let result = unsafe {
             cuda_bindings::cuLaunchHostFunc(
                 self.cu_stream,
                 Some(Self::callback_wrapper::<F>),
-                Box::into_raw(boxed) as *mut c_void,
+                boxed as *mut c_void,
             )
             .result()
+        };
+        if result.is_err() {
+            // The driver did not take the callback and will never invoke
+            // `callback_wrapper` for this pointer.
+            // SAFETY: `boxed` came from `Box::into_raw` above and nothing
+            // else has been given the chance to free it.
+            drop(unsafe { Box::from_raw(boxed) });
         }
+        result
     }
 
     /// `extern "C"` trampoline invoked by the CUDA driver on a driver-internal
@@ -243,7 +303,7 @@ impl CudaStream {
     ///   where `f: F`.
     /// - Must be called exactly once per enqueued callback (double-free
     ///   otherwise).
-    unsafe extern "C" fn callback_wrapper<F: FnOnce() + Send>(callback: *mut c_void) {
+    unsafe extern "C" fn callback_wrapper<F: FnOnce() + Send + 'static>(callback: *mut c_void) {
         let _ = std::panic::catch_unwind(|| {
             let callback: Box<F> = unsafe { Box::from_raw(callback as *mut F) };
             callback();

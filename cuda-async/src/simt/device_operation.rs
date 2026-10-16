@@ -29,12 +29,11 @@ use crate::simt::device_context::with_default_device_policy;
 use crate::simt::device_future::DeviceFuture;
 use crate::simt::error::DeviceError;
 use crate::simt::scheduling_policies::SchedulingPolicy;
-use cuda_core::{CudaContext, CudaStream};
-use std::cell::UnsafeCell;
+use cuda_core::{CudaContext, CudaEvent, CudaStream};
 use std::future::IntoFuture;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::thread::ThreadId;
 
 /// CUDA device ordinal. Type alias for readability.
 pub type Device = usize;
@@ -220,7 +219,13 @@ pub trait DeviceOperation:
     /// Executes the operation synchronously on the default device using the
     /// thread-local scheduling policy. Blocks until the stream is idle.
     fn sync(self) -> Result<<Self as DeviceOperation>::Output, DeviceError> {
-        with_default_device_policy(|policy| policy.sync(self))?
+        // Take the policy out of the thread-local borrow before running the
+        // operation. `execute` runs user code, and a nested `.sync()` (or any
+        // device-context access) in there would find the thread's device map
+        // checked out and rebuild it from scratch: a second `CudaContext`, a
+        // second stream pool, and the originals dropped on the way back out.
+        let policy = with_default_device_policy(Arc::clone)?;
+        policy.sync(self)
     }
 
     /// Executes the operation on `stream` **without** synchronizing.
@@ -430,13 +435,15 @@ where
 
 /// A [`DeviceOperation`] that immediately returns a pre-computed value without
 /// touching the GPU.
-pub struct Value<T>(T);
-
-/// # Safety
 ///
-/// `Value` holds only the inner `T`. If `T` is `Send` the wrapper is too;
-/// the bound is enforced by the `DeviceOperation` impl.
-unsafe impl<T> Send for Value<T> {}
+/// `Value<T>` is `Send` exactly when `T` is, by the auto trait; there is no
+/// manual impl to keep in step with the field.
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<cuda_async::simt::device_operation::Value<std::rc::Rc<u8>>>();
+/// ```
+pub struct Value<T>(T);
 
 /// Returns the wrapped value directly -- no GPU work is performed.
 impl<T: Send + 'static> DeviceOperation for Value<T> {
@@ -482,26 +489,29 @@ impl<T: Send> IntoDeviceOperation<T> for T {
 /// Useful when building the inner operation requires state only available
 /// after scheduling (though it does not receive the [`ExecutionContext`] --
 /// see [`StreamOperation`] for that).
-pub struct Empty<O: Send, DO: DeviceOperation<Output = O>, F: FnOnce() -> DO> {
+///
+/// The closure must be `Send`: the operation is scheduled across threads,
+/// and `Empty` is `Send` by the auto trait because that is its only field.
+///
+/// ```compile_fail,E0277
+/// use cuda_async::simt::device_operation::{empty, value};
+/// let rc = std::rc::Rc::new(1_u8);
+/// let _ = empty(move || value(*rc));
+/// ```
+pub struct Empty<O: Send, DO: DeviceOperation<Output = O>, F: FnOnce() -> DO + Send> {
     /// Closure that produces the inner operation.
     closure: F,
 }
 
 /// Wraps a closure in an [`Empty`] deferred operation.
-pub fn empty<O: Send, DO: DeviceOperation<Output = O>, F: FnOnce() -> DO>(
+pub fn empty<O: Send, DO: DeviceOperation<Output = O>, F: FnOnce() -> DO + Send>(
     closure: F,
 ) -> Empty<O, DO, F> {
     Empty { closure }
 }
 
-/// # Safety
-///
-/// The closure `F` and its produced operation `DO` are both `Send`. The
-/// struct owns the closure exclusively.
-unsafe impl<O: Send, DO: DeviceOperation<Output = O>, F: FnOnce() -> DO> Send for Empty<O, DO, F> {}
-
 /// Invokes the closure to produce the inner operation, then executes it.
-impl<O: Send + 'static, DO: DeviceOperation<Output = O>, F: FnOnce() -> DO> DeviceOperation
+impl<O: Send + 'static, DO: DeviceOperation<Output = O>, F: FnOnce() -> DO + Send> DeviceOperation
     for Empty<O, DO, F>
 {
     type Output = O;
@@ -515,7 +525,7 @@ impl<O: Send + 'static, DO: DeviceOperation<Output = O>, F: FnOnce() -> DO> Devi
 }
 
 /// Schedules via the thread-local default policy.
-impl<O: Send + 'static, DO: DeviceOperation<Output = O>, F: FnOnce() -> DO> IntoFuture
+impl<O: Send + 'static, DO: DeviceOperation<Output = O>, F: FnOnce() -> DO + Send> IntoFuture
     for Empty<O, DO, F>
 {
     type Output = Result<O, DeviceError>;
@@ -722,71 +732,224 @@ impl<
     }
 }
 
-/// Shared state backing the [`SelectLeft`] / [`SelectRight`] split.
+// ── Execute-once memoization (shared by the two halves of `unzip`) ─────────
+
+/// Where a memoized result was produced: the stream the operation ran on and
+/// an event recorded on that stream immediately after its work.
 ///
-/// Holds the source operation and its memoized results. The first selector
-/// to execute triggers the source; subsequent selectors read the cached
-/// values. Interior mutability is used via [`UnsafeCell`] because execution
-/// is always sequential within a single stream.
-pub struct Select<T1: Send, T2: Send, DI: DeviceOperation<Output = (T1, T2)>> {
-    /// Guards one-shot execution of the source operation.
-    computed: AtomicBool,
-    /// Source operation. Consumed on the first call to [`execute`](Self::execute).
-    input: UnsafeCell<Option<DI>>,
-    /// Cached left result.
-    left: UnsafeCell<Option<T1>>,
-    /// Cached right result.
-    right: UnsafeCell<Option<T2>>,
+/// A consumer that picks up the cached value on a *different* stream has no
+/// stream-order relationship to the producing work, so before the value is
+/// handed out its stream is made to wait on the event (`cuStreamWaitEvent`).
+/// Consumers on the producing stream are already ordered and skip the wait.
+struct Producer {
+    stream: Arc<CudaStream>,
+    event: CudaEvent,
 }
 
-impl<T1: Send, T2: Send, DI: DeviceOperation<Output = (T1, T2)>> Select<T1, T2, DI> {
-    /// Executes the source operation if it has not been executed yet, caching
-    /// both halves of the tuple.
-    ///
-    /// # Safety
-    ///
-    /// Must only be called from within a single-stream execution context.
-    /// Concurrent calls from different threads would race on the `UnsafeCell`s.
-    unsafe fn execute(self: &Arc<Self>, context: &ExecutionContext) -> Result<(), DeviceError> {
-        unsafe {
-            if !self.computed.load(Ordering::Acquire) {
-                let input = self.input.get();
-                let input = input.as_mut();
-                let input = input.unwrap().take().ok_or_else(|| {
-                    crate::simt::error::device_error(
-                        context.get_device_id(),
-                        "Select operation failed.",
-                    )
-                })?;
-                let (left, right) = input.execute(context)?;
-                *self.left.get() = Some(left);
-                *self.right.get() = Some(right);
-                self.computed.store(true, Ordering::Release);
-            }
-            Ok(())
+impl Producer {
+    /// Records the completion event for the work just enqueued on the
+    /// context's stream.
+    fn record(ctx: &ExecutionContext) -> Result<Self, DeviceError> {
+        let stream = Arc::clone(ctx.get_cuda_stream());
+        let event = stream.record_event(None)?;
+        Ok(Self { stream, event })
+    }
+
+    /// Orders all future work on `consumer` after the producing work.
+    fn join(&self, consumer: &Arc<CudaStream>) -> Result<(), DeviceError> {
+        if consumer.cu_stream() == self.stream.cu_stream() {
+            return Ok(());
+        }
+        consumer.wait(&self.event)?;
+        Ok(())
+    }
+}
+
+enum OnceState<Op, Out> {
+    /// Not yet executed; holds the operation.
+    Pending(Op),
+    /// Being executed by `thread`. Others wait on the condvar; the executing
+    /// thread itself re-entering is a bug reported as an error, not a
+    /// deadlock.
+    Running { thread: ThreadId },
+    /// Executed; `producer` orders consumers on other streams after the
+    /// work.
+    Done { value: Out, producer: Producer },
+    /// Execution failed (or the executor panicked); every consumer gets the
+    /// error. The operation was consumed and cannot be retried.
+    Failed(DeviceError),
+}
+
+/// Runs an operation exactly once across any number of concurrent callers
+/// and memoizes the outcome.
+///
+/// This replaces the former check-then-act on `UnsafeCell`s behind
+/// hand-written `Send` impls: two executors that both observed "not
+/// computed" both took the operation (the second got "already taken") and
+/// raced on the result cells. Here the state lives under a `Mutex`; the
+/// first caller to see `Pending` takes the operation and runs it *outside*
+/// the lock, later callers block on the condvar until it is `Done` or
+/// `Failed`. `Send`/`Sync` are derived from the field types.
+struct ExecuteOnce<Op, Out> {
+    state: Mutex<OnceState<Op, Out>>,
+    settled: Condvar,
+}
+
+impl<Op, Out> ExecuteOnce<Op, Out> {
+    fn pending(op: Op) -> Self {
+        Self {
+            state: Mutex::new(OnceState::Pending(op)),
+            settled: Condvar::new(),
         }
     }
 
-    /// Takes the cached left value. Must be called after [`execute`](Self::execute).
-    ///
-    /// # Safety
-    ///
-    /// Caller must ensure `execute` has completed and this is called at most once.
-    unsafe fn left(&self) -> T1 {
-        let cell = self.left.get();
-        let cell = unsafe { cell.as_mut() };
-        cell.unwrap().take().unwrap()
+    fn lock(&self) -> MutexGuard<'_, OnceState<Op, Out>> {
+        // A poisoned lock only means a holder panicked; the state machine is
+        // never left mid-transition while the lock is held.
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Takes the cached right value. Must be called after [`execute`](Self::execute).
+    /// Stores a value produced on `ctx`'s stream.
+    fn settle_done(&self, value: Out, ctx: &ExecutionContext) {
+        let outcome = match Producer::record(ctx) {
+            Ok(producer) => OnceState::Done { value, producer },
+            Err(error) => {
+                // Without an event, consumers on other streams could not be
+                // ordered after the producing work. The value may own memory
+                // that work still writes; releasing it now would be the
+                // in-flight-free hazard, so leak it loudly instead.
+                eprintln!(
+                    "cuda-async: leaking a memoized result after its completion \
+                     event could not be recorded: {error}"
+                );
+                std::mem::forget(value);
+                OnceState::Failed(error)
+            }
+        };
+        *self.lock() = outcome;
+        self.settled.notify_all();
+    }
+
+    /// Executes `run(op, ctx)` if this is the first caller (waiting for it
+    /// if another caller is mid-execution), then hands `take` the cached
+    /// value after ordering `ctx`'s stream behind the producing work.
+    fn execute<R>(
+        &self,
+        ctx: &ExecutionContext,
+        run: impl FnOnce(Op, &ExecutionContext) -> Result<Out, DeviceError>,
+        take: impl FnOnce(&mut Out) -> Result<R, DeviceError>,
+    ) -> Result<R, DeviceError> {
+        // `Pending` is observed at most once per `ExecuteOnce`, so `run` is
+        // called at most once; the `Option` makes that visible to the borrow
+        // checker across the loop.
+        let mut run = Some(run);
+        let mut state = self.lock();
+        loop {
+            match &*state {
+                OnceState::Pending(_) => {
+                    let running = OnceState::Running {
+                        thread: std::thread::current().id(),
+                    };
+                    let OnceState::Pending(op) = std::mem::replace(&mut *state, running) else {
+                        unreachable!("matched Pending above");
+                    };
+                    drop(state);
+                    let run = run.take().expect("Pending is observed at most once");
+                    // If `run` unwinds, settle as Failed so waiters are
+                    // released instead of blocking on `Running` forever.
+                    let mut settle_on_unwind = SettleOnUnwind { once: Some(self) };
+                    let outcome = run(op, ctx);
+                    settle_on_unwind.once = None;
+                    match outcome {
+                        Ok(value) => self.settle_done(value, ctx),
+                        Err(error) => {
+                            *self.lock() = OnceState::Failed(error);
+                            self.settled.notify_all();
+                        }
+                    }
+                    state = self.lock();
+                }
+                OnceState::Running { thread } => {
+                    if *thread == std::thread::current().id() {
+                        return Err(DeviceError::Internal(
+                            "execute-once operation re-entered from inside its own \
+                             execution (an unzipped op executing its other half)"
+                                .into(),
+                        ));
+                    }
+                    state = self
+                        .settled
+                        .wait(state)
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                }
+                OnceState::Done { .. } => break,
+                OnceState::Failed(error) => return Err(error.clone()),
+            }
+        }
+        let OnceState::Done { value, producer } = &mut *state else {
+            unreachable!("loop exits only on Done");
+        };
+        producer.join(ctx.get_cuda_stream())?;
+        take(value)
+    }
+}
+
+/// Marks an `ExecuteOnce` as failed if the executing closure unwinds.
+struct SettleOnUnwind<'a, Op, Out> {
+    once: Option<&'a ExecuteOnce<Op, Out>>,
+}
+
+impl<Op, Out> Drop for SettleOnUnwind<'_, Op, Out> {
+    fn drop(&mut self) {
+        if let Some(once) = self.once {
+            *once.lock() = OnceState::Failed(DeviceError::Internal(
+                "execute-once operation panicked while executing".into(),
+            ));
+            once.settled.notify_all();
+        }
+    }
+}
+
+/// Execute-once state shared by the two halves of an
+/// [`unzip`](Unzippable2::unzip).
+///
+/// Whichever half executes first runs the input; the other half waits for
+/// it if it is mid-execution (on another thread), then takes its side of the
+/// result. A half executed on a different stream than the producing one has
+/// its stream wait on the producer's completion event first. `Send`/`Sync`
+/// are derived: the input is `DeviceOperation: Send`, and both halves are
+/// `Send`, so no manual impl is needed.
+pub struct Select<T1: Send, T2: Send, DI: DeviceOperation<Output = (T1, T2)>> {
+    once: ExecuteOnce<DI, (Option<T1>, Option<T2>)>,
+}
+
+impl<T1: Send, T2: Send, DI: DeviceOperation<Output = (T1, T2)>> Select<T1, T2, DI> {
+    /// Runs the input if needed and hands `take` the stored halves.
     ///
     /// # Safety
     ///
-    /// Caller must ensure `execute` has completed and this is called at most once.
-    unsafe fn right(&self) -> T2 {
-        let cell = self.right.get();
-        let cell = unsafe { cell.as_mut() };
-        cell.unwrap().take().unwrap()
+    /// Same contract as [`DeviceOperation::execute`]: GPU work may still be
+    /// in flight when this returns.
+    unsafe fn execute<R>(
+        &self,
+        context: &ExecutionContext,
+        take: impl FnOnce(&mut (Option<T1>, Option<T2>)) -> Option<R>,
+        side: &'static str,
+    ) -> Result<R, DeviceError> {
+        self.once.execute(
+            context,
+            |input, ctx| {
+                let (left, right) = unsafe { input.execute(ctx) }?;
+                Ok((Some(left), Some(right)))
+            },
+            |halves| {
+                take(halves).ok_or_else(|| {
+                    DeviceError::Internal(format!("unzip: the {side} result was already taken"))
+                })
+            },
+        )
     }
 }
 
@@ -799,15 +962,6 @@ pub struct SelectLeft<T1: Send, T2: Send, DI: DeviceOperation<Output = (T1, T2)>
     select: Arc<Select<T1, T2, DI>>,
 }
 
-/// # Safety
-///
-/// The `Arc<Select<..>>` is safe to send because `Select` is only mutated
-/// through `UnsafeCell` during single-stream execution, never concurrently.
-unsafe impl<T1: Send, T2: Send, DI: DeviceOperation<Output = (T1, T2)>> Send
-    for SelectLeft<T1, T2, DI>
-{
-}
-
 /// Triggers the shared source operation (if not yet done) and returns the
 /// left element.
 impl<T1: Send + 'static, T2: Send + 'static, DI: DeviceOperation<Output = (T1, T2)>> DeviceOperation
@@ -817,8 +971,8 @@ impl<T1: Send + 'static, T2: Send + 'static, DI: DeviceOperation<Output = (T1, T
 
     unsafe fn execute(self, context: &ExecutionContext) -> Result<T1, DeviceError> {
         unsafe {
-            self.select.execute(context)?;
-            Ok(self.select.left())
+            self.select
+                .execute(context, |(left, _)| left.take(), "left")
         }
     }
 }
@@ -846,14 +1000,6 @@ pub struct SelectRight<T1: Send, T2: Send, DI: DeviceOperation<Output = (T1, T2)
     select: Arc<Select<T1, T2, DI>>,
 }
 
-/// # Safety
-///
-/// See [`SelectLeft`]'s `Send` impl.
-unsafe impl<T1: Send, T2: Send, DI: DeviceOperation<Output = (T1, T2)>> Send
-    for SelectRight<T1, T2, DI>
-{
-}
-
 /// Triggers the shared source operation (if not yet done) and returns the
 /// right element.
 impl<T1: Send + 'static, T2: Send + 'static, DI: DeviceOperation<Output = (T1, T2)>> DeviceOperation
@@ -863,8 +1009,8 @@ impl<T1: Send + 'static, T2: Send + 'static, DI: DeviceOperation<Output = (T1, T
 
     unsafe fn execute(self, context: &ExecutionContext) -> Result<T2, DeviceError> {
         unsafe {
-            self.select.execute(context)?;
-            Ok(self.select.right())
+            self.select
+                .execute(context, |(_, right)| right.take(), "right")
         }
     }
 }
@@ -889,13 +1035,9 @@ impl<T1: Send + 'static, T2: Send + 'static, DI: DeviceOperation<Output = (T1, T
 fn _unzip<T1: Send, T2: Send, DI: DeviceOperation<Output = (T1, T2)>>(
     input: DI,
 ) -> (SelectLeft<T1, T2, DI>, SelectRight<T1, T2, DI>) {
-    let select = Select {
-        computed: AtomicBool::new(false),
-        input: UnsafeCell::new(Some(input)),
-        left: UnsafeCell::new(None),
-        right: UnsafeCell::new(None),
-    };
-    let select = Arc::new(select);
+    let select = Arc::new(Select {
+        once: ExecuteOnce::pending(input),
+    });
     let out1 = SelectLeft {
         select: Arc::clone(&select),
     };

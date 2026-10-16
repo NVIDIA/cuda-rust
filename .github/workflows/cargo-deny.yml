@@ -30,6 +30,11 @@ on:
 permissions:
   contents: read
 
+# A container job's default shell is dash; use bash, as on ubuntu-latest.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   check:
     runs-on: linux-amd64-cpu4

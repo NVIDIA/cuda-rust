@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+# A container job's default shell is dash, which rejects `set -o pipefail`.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   fmt:
     runs-on: linux-amd64-cpu4

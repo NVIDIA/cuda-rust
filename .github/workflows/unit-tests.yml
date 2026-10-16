@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+# A container job's default shell is dash, which rejects `set -o pipefail`.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   rust-unit-tests:
     name: cargo test -p ${{ matrix.package }}
@@ -20,11 +25,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Each entry must be runnable on a driverless runner — no live GPU.
-        # `needs_cuda: true` installs the CUDA toolkit for build-
-        # time bindgen (every crate that transitively depends on
-        # `cuda-bindings` needs `cuda.h` to compile). `test_args` overrides
-        # the default `--all-targets` where a crate needs a narrower set.
+        # Each entry must be runnable on a driverless runner — no live GPU,
+        # and this image has no CUDA toolkit. `cargo-oxide` doctor asserts
+        # that absence. Crates that bindgen against cuda.h run in
+        # `rust-unit-tests-cuda`. `test_args` overrides the default
+        # `--all-targets` where a crate needs a narrower set.
         #
         # Crates intentionally not in this matrix:
         #   * `fuzzer` — differential-testing infra with no unit tests.
@@ -57,9 +62,6 @@ jobs:
           - package: dialect-mir
           - package: dialect-nvvm
           - package: mir-importer
-          # Includes a real llc -> ptxas spine-kernel validation.
-          - package: cuda-oxide-codegen
-            needs_cuda: true
           - package: mir-lower
           - package: mir-transforms
           - package: nvvm-transforms
@@ -71,10 +73,6 @@ jobs:
           - package: oxide-artifacts
             test_args: --all-targets --features object
           - package: reserved-oxide-symbols
-          # launch_requires_unsafe trybuild fixture dev-depends on
-          # cuda-host/cuda-core, which transitively pull cuda-bindings
-          - package: cuda-macros
-            needs_cuda: true
           # trybuild compile-fail suite for ThreadIndex / DisjointSlice safety
           - package: cuda-device
           # Runtime CUDA compiler/linker discovery and file-identity checks;
@@ -85,9 +83,6 @@ jobs:
           # pure and validates options, provenance, and cubin structure; the
           # live-toolkit smoke test remains explicitly ignored.
           - package: cuda-artifact-finalizer
-          # pure-Rust kernel-launch helpers + tcgen05 tiling tables
-          - package: cuda-host
-            needs_cuda: true
           # cargo subcommand wrapper; pure Rust, no CUDA toolkit required.
           # Running it on a runner with NO toolkit installed is the
           # regression gate for issue #87.
@@ -100,41 +95,7 @@ jobs:
       - name: Mark the workspace as a safe git directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Install sudo
-        run: |
-          if ! command -v sudo >/dev/null 2>&1; then
-            apt-get update -qq
-            apt-get install -y -qq --no-install-recommends sudo
-          fi
-
-      - name: Install CUDA toolkit
-        if: matrix.needs_cuda
-        uses: Jimver/cuda-toolkit@v0.2.35
-        id: cuda-toolkit
-        with:
-          cuda: "13.1.1"
-          method: network
-          sub-packages: '["nvcc", "cudart-dev"]'
-          non-cuda-sub-packages: '["libcurand-dev"]'
-
-      - name: Install LLVM 21 (llc/opt for the NVPTX backend)
-        if: matrix.package == 'cuda-oxide-codegen'
-        run: |
-          set -euo pipefail
-          source /etc/os-release
-          sudo install -d -m 0755 /etc/apt/keyrings
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-            | sudo tee /etc/apt/keyrings/apt-llvm-org.asc >/dev/null
-          echo "deb [signed-by=/etc/apt/keyrings/apt-llvm-org.asc] https://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-21 main" \
-            | sudo tee /etc/apt/sources.list.d/llvm-21.list
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends llvm-21
-          llc-21 --version | head -2
-          opt-21 --version | head -2
-
       - name: Run crate unit tests
-        env:
-          CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
         working-directory: cuda-oxide
         run: |
           sysroot="$(rustc --print sysroot)"
@@ -159,6 +120,56 @@ jobs:
           out="$(cargo run -p cargo-oxide -- doctor 2>&1)" || true
           printf '%s\n' "${out}"
           printf '%s\n' "${out}" | grep -q "CUDA headers (cuda.h)"
+
+  # cuda.h crates. A container is chosen per job, so these cannot share the
+  # rust image above without also handing cargo-oxide a toolkit.
+  rust-unit-tests-cuda:
+    name: cargo test -p ${{ matrix.package }}
+    runs-on: linux-amd64-cpu4
+    container:
+      image: nvidia/cuda:13.1.1-devel-ubuntu24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    env:
+      CUDA_TOOLKIT_PATH: /usr/local/cuda
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Includes a real llc -> ptxas spine-kernel validation.
+          - package: cuda-oxide-codegen
+          # launch_requires_unsafe trybuild fixture dev-depends on
+          # cuda-host/cuda-core, which transitively pull cuda-bindings.
+          - package: cuda-macros
+          # pure-Rust kernel-launch helpers + tcgen05 tiling tables.
+          # bindgen still needs cuda.h.
+          - package: cuda-host
+    steps:
+      - uses: ./.github/actions/setup-cuda-container
+
+      - name: Install LLVM 21 (llc/opt for the NVPTX backend)
+        if: matrix.package == 'cuda-oxide-codegen'
+        run: |
+          set -euo pipefail
+          source /etc/os-release
+          install -d -m 0755 /etc/apt/keyrings
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | tee /etc/apt/keyrings/apt-llvm-org.asc >/dev/null
+          echo "deb [signed-by=/etc/apt/keyrings/apt-llvm-org.asc] https://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-21 main" \
+            | tee /etc/apt/sources.list.d/llvm-21.list
+          apt-get update
+          apt-get install -y --no-install-recommends llvm-21
+          llc-21 --version | head -2
+          opt-21 --version | head -2
+
+      - name: Run crate unit tests
+        working-directory: cuda-oxide
+        run: |
+          sysroot="$(rustc --print sysroot)"
+          export LIBRARY_PATH="${sysroot}/lib:${LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="${sysroot}/lib:${LD_LIBRARY_PATH:-}"
+          cargo test -p ${{ matrix.package }} --all-targets
 
   rustc-codegen-cuda-unit-tests:
     name: cargo test --lib (rustc-codegen-cuda)

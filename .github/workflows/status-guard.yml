@@ -18,6 +18,11 @@ concurrency:
 permissions:
   contents: read
 
+# A container job's default shell is dash. The VM jobs already run bash.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   error-example-status-guard:
     name: error-example status guard

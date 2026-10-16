@@ -48,6 +48,7 @@ mod fields;
 #[cfg(test)]
 mod test_support;
 
+pub(crate) use addressing::{array_alignment_from_base_and_stride, field_alignment_from_base};
 pub(crate) use array_extract::convert_extract_array_element;
 pub(crate) use carrier_array_element_addr::convert_array_element_addr;
 pub(crate) use carrier_field_addr::convert_field_addr;

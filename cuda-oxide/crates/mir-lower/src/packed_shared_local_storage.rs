@@ -21,17 +21,18 @@
 use crate::convert::target_stable_storage::{StorageRewriteOptions, target_stable_storage_type};
 use crate::convert::types::{
     MAX_PACKED_SHARED_INTERNAL_ABI_ARRAY_REWRITE_LEAVES, StructLayoutInfo, build_struct_slot_map,
-    convert_type, llvm_type_size_align,
+    convert_type, llvm_type_size_align, mir_type_abi_align, packed_shared_mir_shape_is_supported,
 };
 use dialect_mir::ops::{
     MirAllocaOp, MirArrayElementAddrOp, MirAssertOp, MirCallOp, MirCastOp, MirCondBranchOp,
     MirDbgValueListOp, MirDbgValueOp, MirFieldAddrOp, MirGotoOp, MirLoadOp, MirPtrOffsetOp,
     MirReturnOp, MirStoreOp,
 };
-use dialect_mir::types::{MirArrayType, MirFP16Type, MirPtrType, MirStructType, MirTupleType};
+use dialect_mir::types::{MirPtrType, MirStructType, MirTupleType};
 use llvm_export::types as llvm_types;
 use pliron::builtin::attributes::TypeAttr;
-use pliron::builtin::types::{FP32Type, FP64Type, IntegerType};
+#[cfg(test)]
+use pliron::builtin::types::IntegerType;
 use pliron::context::{Context, Ptr};
 use pliron::identifier::Identifier;
 use pliron::linked_list::ContainsLinkedList;
@@ -47,17 +48,20 @@ const CARRIER_GEP_SOURCE_TYPE_KEY: &str = "cuda_oxide_packed_shared_carrier_gep_
 #[derive(Clone, Copy, Debug)]
 struct CarrierAddress {
     physical_pointee: TypeHandle,
+    proven_align: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct PackedSharedLocalStorageInfo {
     storage_ty: TypeHandle,
+    root_align: u32,
 }
 
 #[derive(Default)]
 struct CarrierFactPlan {
     storage_types: Vec<(Ptr<Operation>, TypeHandle)>,
     gep_source_types: Vec<(Ptr<Operation>, TypeHandle)>,
+    projection_alignments: Vec<(Ptr<Operation>, u32)>,
 }
 
 impl CarrierFactPlan {
@@ -69,12 +73,19 @@ impl CarrierFactPlan {
         self.gep_source_types.push((operation, ty));
     }
 
+    fn plan_projection_alignment(&mut self, operation: Ptr<Operation>, align: u32) {
+        self.projection_alignments.push((operation, align));
+    }
+
     fn apply(self, ctx: &mut Context) {
         for (operation, ty) in self.storage_types {
             set_type_attr(ctx, operation, CARRIER_STORAGE_TYPE_KEY, ty);
         }
         for (operation, ty) in self.gep_source_types {
             set_type_attr(ctx, operation, CARRIER_GEP_SOURCE_TYPE_KEY, ty);
+        }
+        for (operation, align) in self.projection_alignments {
+            llvm_export::ops::set_address_alignment(ctx, operation, align);
         }
     }
 }
@@ -115,6 +126,14 @@ pub(crate) fn carrier_gep_source_type(ctx: &Context, op: Ptr<Operation>) -> Opti
     get_type_attr(ctx, op, CARRIER_GEP_SOURCE_TYPE_KEY)
 }
 
+/// Proven address alignment attached only after the complete carrier graph
+/// validates. Unlike a nested MIR type's alignment, this fact includes the
+/// packed root's alignment and every projected byte offset or array stride.
+pub(crate) fn carrier_projection_alignment(ctx: &Context, op: Ptr<Operation>) -> Option<u32> {
+    carrier_gep_source_type(ctx, op)?;
+    llvm_export::ops::address_alignment(ctx, op)
+}
+
 fn collect_operations(ctx: &Context, root: Ptr<Operation>) -> Vec<Ptr<Operation>> {
     let mut result = Vec::new();
     let mut pending = vec![root];
@@ -145,64 +164,6 @@ fn reject_preexisting_carrier_facts(ctx: &Context, operations: &[Ptr<Operation>]
     Ok(())
 }
 
-/// Whether a MIR value shape belongs to the recursive packed-AS3 local lane.
-///
-/// This is deliberately a local-storage predicate. It mirrors the currently
-/// admitted struct/tuple/array/scalar vocabulary without delegating admission
-/// to the internal device ABI classifier, so a future ABI widening cannot make
-/// new local-memory shapes legal implicitly.
-fn packed_shared_local_mir_shape_is_supported(ctx: &Context, mir_ty: TypeHandle) -> bool {
-    fn mir_type_is_zero_sized(ctx: &Context, ty: TypeHandle) -> bool {
-        let ty_ref = ty.deref(ctx);
-        if let Some(array_ty) = ty_ref.downcast_ref::<MirArrayType>() {
-            return array_ty.size() == 0 || mir_type_is_zero_sized(ctx, array_ty.element_type());
-        }
-        if let Some(struct_ty) = ty_ref.downcast_ref::<MirStructType>() {
-            return struct_ty
-                .field_types
-                .iter()
-                .all(|field| mir_type_is_zero_sized(ctx, *field));
-        }
-        if let Some(tuple_ty) = ty_ref.downcast_ref::<MirTupleType>() {
-            return tuple_ty
-                .get_types()
-                .iter()
-                .all(|field| mir_type_is_zero_sized(ctx, *field));
-        }
-        false
-    }
-
-    let children = {
-        let ty_ref = mir_ty.deref(ctx);
-        if ty_ref.is::<IntegerType>()
-            || ty_ref.is::<MirFP16Type>()
-            || ty_ref.is::<llvm_types::HalfType>()
-            || ty_ref.is::<FP32Type>()
-            || ty_ref.is::<FP64Type>()
-            || ty_ref.is::<MirPtrType>()
-            || ty_ref.is::<llvm_types::PointerType>()
-        {
-            return true;
-        }
-        if let Some(struct_ty) = ty_ref.downcast_ref::<MirStructType>() {
-            Some(struct_ty.field_types.clone())
-        } else if let Some(tuple_ty) = ty_ref.downcast_ref::<MirTupleType>() {
-            Some(tuple_ty.get_types().to_vec())
-        } else {
-            ty_ref
-                .downcast_ref::<MirArrayType>()
-                .map(|array_ty| vec![array_ty.element_type()])
-        }
-    };
-
-    children.is_some_and(|children| {
-        children.into_iter().all(|child| {
-            mir_type_is_zero_sized(ctx, child)
-                || packed_shared_local_mir_shape_is_supported(ctx, child)
-        })
-    })
-}
-
 /// Recognize the recursive/multi-leaf local-storage shape tracked by #1094.
 ///
 /// The root remains a byte-faithful packed struct. Nested structs/tuples,
@@ -226,7 +187,7 @@ fn packed_shared_local_storage_info(
         StructLayoutInfo::of_struct(struct_ty)
     };
 
-    if !packed_shared_local_mir_shape_is_supported(ctx, mir_ty) {
+    if !packed_shared_mir_shape_is_supported(ctx, mir_ty) {
         return Ok(None);
     }
 
@@ -263,8 +224,17 @@ fn packed_shared_local_storage_info(
         return Ok(None);
     }
 
+    // Root alignment is a rustc storage fact, not the carrier field's ABI.
+    // Every nested projection must inherit this cap before offset narrowing.
+    let Some(root_align) = mir_type_abi_align(ctx, mir_ty)
+        .filter(|align| align.is_power_of_two())
+        .and_then(|align| u32::try_from(align).ok())
+    else {
+        return Ok(None);
+    };
     Ok(Some(PackedSharedLocalStorageInfo {
         storage_ty: rewrite.ty,
+        root_align,
     }))
 }
 
@@ -315,6 +285,7 @@ fn seed_carrier_allocas(
             result,
             CarrierAddress {
                 physical_pointee: info.storage_ty,
+                proven_align: info.root_align,
             },
         );
     }
@@ -341,7 +312,7 @@ fn carrier_field_physical_pointee(
     ctx: &mut Context,
     operation: Ptr<Operation>,
     carrier_source_ty: TypeHandle,
-) -> Result<TypeHandle> {
+) -> Result<(TypeHandle, u64)> {
     let field_addr = MirFieldAddrOp::new(operation);
     let field_index = field_addr
         .get_attr_field_index(ctx)
@@ -366,6 +337,13 @@ fn carrier_field_physical_pointee(
             );
         }
     };
+    let field_offset = layout
+        .field_offsets
+        .get(field_index)
+        .copied()
+        .ok_or_else(|| {
+            pliron::input_error_noloc!("packed-AS3 carrier field is missing a proven byte offset")
+        })?;
     let map = build_struct_slot_map(ctx, &layout)
         .map_err(|error| pliron::input_error_noloc!("{error}"))?;
     let semantic_field = projection_result_pointee(ctx, operation, "mir.field_addr")?;
@@ -384,7 +362,7 @@ fn carrier_field_physical_pointee(
         // Stripped ZSTs have no carrier slot. Their pointer still participates
         // in the verified address graph, so preserve the exact target-stable
         // result type for any further zero-sized projection.
-        return Ok(expected);
+        return Ok((expected, field_offset));
     };
 
     let carrier_ref = carrier_source_ty.deref(ctx);
@@ -410,7 +388,7 @@ fn carrier_field_physical_pointee(
             expected.deref(ctx).disp(ctx)
         );
     }
-    Ok(physical)
+    Ok((physical, field_offset))
 }
 
 fn carrier_array_element_physical_pointee(
@@ -478,10 +456,53 @@ fn derive_carrier_projections(
                 continue;
             };
 
-            let physical_pointee = if is_field {
-                carrier_field_physical_pointee(ctx, operation, base_state.physical_pointee)?
+            let (physical_pointee, proven_align) = if is_field {
+                let (pointee, offset) =
+                    carrier_field_physical_pointee(ctx, operation, base_state.physical_pointee)?;
+                let align = crate::convert::ops::aggregate::field_alignment_from_base(
+                    u64::from(base_state.proven_align),
+                    offset,
+                )
+                .ok_or_else(|| {
+                    pliron::input_error_noloc!(
+                        "packed-AS3 carrier field projection has no provable alignment"
+                    )
+                })?;
+                (pointee, align)
             } else {
-                carrier_array_element_physical_pointee(ctx, operation, base_state.physical_pointee)?
+                let pointee = carrier_array_element_physical_pointee(
+                    ctx,
+                    operation,
+                    base_state.physical_pointee,
+                )?;
+                let semantic_element =
+                    projection_result_pointee(ctx, operation, "mir.array_element_addr")?;
+                let index = operation.deref(ctx).get_operand(1);
+                let (physical_stride, _) = llvm_type_size_align(ctx, pointee).ok_or_else(|| {
+                    pliron::input_error_noloc!(
+                        "packed-AS3 carrier array element has no proven physical stride"
+                    )
+                })?;
+                if let Some(semantic_stride) =
+                    crate::convert::types::mir_element_stride(ctx, semantic_element)
+                    && semantic_stride != physical_stride
+                {
+                    return pliron::input_err_noloc!(
+                        "packed-AS3 carrier array element stride disagrees with the semantic layout"
+                    );
+                }
+                let align = crate::convert::ops::aggregate::array_alignment_from_base_and_stride(
+                    ctx,
+                    u64::from(base_state.proven_align),
+                    physical_stride,
+                    index,
+                )
+                .ok_or_else(|| {
+                    pliron::input_error_noloc!(
+                        "packed-AS3 carrier array projection has no provable alignment"
+                    )
+                })?;
+                (pointee, align)
             };
 
             // Field GEPs index the physical parent aggregate. Array-element
@@ -492,7 +513,14 @@ fn derive_carrier_projections(
                 physical_pointee
             };
             plan.plan_gep_source_type(operation, gep_source_ty);
-            addresses.insert(result, CarrierAddress { physical_pointee });
+            plan.plan_projection_alignment(operation, proven_align);
+            addresses.insert(
+                result,
+                CarrierAddress {
+                    physical_pointee,
+                    proven_align,
+                },
+            );
             changed = true;
         }
     }
@@ -625,6 +653,7 @@ mod tests {
     use crate::convert::ops::test_util::*;
     use dialect_mir::attributes::MirCastKindAttr;
     use dialect_mir::ops as mir;
+    use dialect_mir::types::MirArrayType;
     use llvm_export::op_interfaces::PointerTypeResult;
     use llvm_export::ops as llvm;
     use llvm_export::types::{PointerType, StructType, address_space as llvm_addr};
@@ -1026,13 +1055,41 @@ mod tests {
                 0,
             );
             load.insert_at_back(block, &ctx);
+            let loaded = load.deref(&ctx).get_result(0);
+            let store = Operation::new(
+                &mut ctx,
+                mir::MirStoreOp::get_concrete_op_info(),
+                vec![],
+                vec![inner_address, loaded],
+                vec![],
+                0,
+            );
+            store.insert_at_back(block, &ctx);
         }
         append_mir_return(&mut ctx, block, vec![]);
 
         crate::lower_mir_to_llvm(&mut ctx, module)
             .expect("recursive struct/tuple carrier projections must lower");
         let body = kernel_blocks(&ctx, module);
-        assert_eq!(count_ops::<llvm::AddrSpaceCastOp>(&ctx, &body), 2);
+        assert_eq!(count_ops::<llvm::AddrSpaceCastOp>(&ctx, &body), 4);
+        let loads = find_all::<llvm::LoadOp>(&ctx, &body);
+        let stores = find_all::<llvm::StoreOp>(&ctx, &body);
+        assert_eq!(loads.len(), 2);
+        assert_eq!(stores.len(), 2);
+        for load in &loads {
+            assert_eq!(
+                llvm_export::ops::op_alignment(&ctx, load.get_operation()),
+                Some(1),
+                "nested packed-AS3 carrier loads must claim align 1"
+            );
+        }
+        for store in &stores {
+            assert_eq!(
+                llvm_export::ops::op_alignment(&ctx, store.get_operation()),
+                Some(1),
+                "nested packed-AS3 carrier stores must claim align 1"
+            );
+        }
     }
 
     #[test]
@@ -1084,6 +1141,16 @@ mod tests {
             0,
         );
         load.insert_at_back(block, &ctx);
+        let loaded = load.deref(&ctx).get_result(0);
+        let store = Operation::new(
+            &mut ctx,
+            mir::MirStoreOp::get_concrete_op_info(),
+            vec![],
+            vec![element_address, loaded],
+            vec![],
+            0,
+        );
+        store.insert_at_back(block, &ctx);
         append_mir_return(&mut ctx, block, vec![]);
 
         crate::lower_mir_to_llvm(&mut ctx, module)
@@ -1097,7 +1164,123 @@ mod tests {
             .downcast_ref::<PointerType>()
             .expect("carrier array element must remain pointer-typed");
         assert_eq!(pointer.address_space(), llvm_addr::GENERIC);
-        assert_eq!(count_ops::<llvm::AddrSpaceCastOp>(&ctx, &body), 1);
+        assert_eq!(count_ops::<llvm::AddrSpaceCastOp>(&ctx, &body), 2);
+        let loads = find_all::<llvm::LoadOp>(&ctx, &body);
+        let stores = find_all::<llvm::StoreOp>(&ctx, &body);
+        assert_eq!(loads.len(), 1);
+        assert_eq!(stores.len(), 1);
+        assert_eq!(
+            llvm_export::ops::op_alignment(&ctx, loads[0].get_operation()),
+            Some(1)
+        );
+        assert_eq!(
+            llvm_export::ops::op_alignment(&ctx, stores[0].get_operation()),
+            Some(1)
+        );
+        assert_eq!(
+            llvm_export::ops::address_alignment(&ctx, geps[0].get_operation()),
+            Some(1)
+        );
+        assert_eq!(
+            llvm_export::ops::address_alignment(&ctx, geps[1].get_operation()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn nested_runtime_array_projections_keep_root_alignment() {
+        let mut ctx = make_ctx();
+        let tag: TypeHandle = IntegerType::get(&ctx, 8, Signedness::Unsigned).into();
+        let pointee: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+        let shared: TypeHandle = MirPtrType::get_shared(&mut ctx, pointee, false).into();
+        let inner_array: TypeHandle = MirArrayType::get(&mut ctx, shared, 2).into();
+        let outer_array: TypeHandle = MirArrayType::get(&mut ctx, inner_array, 2).into();
+        let packed: TypeHandle = MirStructType::get_with_full_layout(
+            &mut ctx,
+            "PackedNestedArrayProjection".into(),
+            vec!["tag".into(), "matrix".into()],
+            vec![tag, outer_array],
+            vec![0, 1],
+            vec![0, 1],
+            33,
+            1,
+        )
+        .into();
+        let index_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Signed).into();
+        let (module, block) = build_kernel(&mut ctx, vec![index_ty, index_ty], vec![]);
+        let i = block.deref(&ctx).get_argument(0);
+        let j = block.deref(&ctx).get_argument(1);
+        let slot = append_alloca(&mut ctx, block, packed);
+        let outer_ptr: TypeHandle = MirPtrType::get_generic(&mut ctx, outer_array, true).into();
+        let field =
+            mir::MirFieldAddrOp::build(&mut ctx, slot, outer_ptr, 1).expect("matrix field address");
+        field.insert_at_back(block, &ctx);
+        let outer_addr = field.deref(&ctx).get_result(0);
+        let inner_ptr: TypeHandle = MirPtrType::get_generic(&mut ctx, inner_array, true).into();
+        let outer_element = Operation::new(
+            &mut ctx,
+            mir::MirArrayElementAddrOp::get_concrete_op_info(),
+            vec![inner_ptr],
+            vec![outer_addr, i],
+            vec![],
+            0,
+        );
+        outer_element.insert_at_back(block, &ctx);
+        let inner_addr = outer_element.deref(&ctx).get_result(0);
+        let leaf_ptr: TypeHandle = MirPtrType::get_generic(&mut ctx, shared, true).into();
+        let inner_element = Operation::new(
+            &mut ctx,
+            mir::MirArrayElementAddrOp::get_concrete_op_info(),
+            vec![leaf_ptr],
+            vec![inner_addr, j],
+            vec![],
+            0,
+        );
+        inner_element.insert_at_back(block, &ctx);
+        let leaf_addr = inner_element.deref(&ctx).get_result(0);
+        let load = Operation::new(
+            &mut ctx,
+            mir::MirLoadOp::get_concrete_op_info(),
+            vec![shared],
+            vec![leaf_addr],
+            vec![],
+            0,
+        );
+        load.insert_at_back(block, &ctx);
+        let loaded = load.deref(&ctx).get_result(0);
+        let store = Operation::new(
+            &mut ctx,
+            mir::MirStoreOp::get_concrete_op_info(),
+            vec![],
+            vec![leaf_addr, loaded],
+            vec![],
+            0,
+        );
+        store.insert_at_back(block, &ctx);
+        append_mir_return(&mut ctx, block, vec![]);
+
+        crate::lower_mir_to_llvm(&mut ctx, module).expect("nested array carrier lowering");
+        let body = kernel_blocks(&ctx, module);
+        let geps = find_all::<llvm::GetElementPtrOp>(&ctx, &body);
+        assert_eq!(geps.len(), 3);
+        for gep in &geps {
+            assert_eq!(
+                llvm_export::ops::address_alignment(&ctx, gep.get_operation()),
+                Some(1)
+            );
+        }
+        let loads = find_all::<llvm::LoadOp>(&ctx, &body);
+        let stores = find_all::<llvm::StoreOp>(&ctx, &body);
+        assert_eq!(loads.len(), 1);
+        assert_eq!(stores.len(), 1);
+        assert_eq!(
+            llvm_export::ops::op_alignment(&ctx, loads[0].get_operation()),
+            Some(1)
+        );
+        assert_eq!(
+            llvm_export::ops::op_alignment(&ctx, stores[0].get_operation()),
+            Some(1)
+        );
     }
 
     #[test]

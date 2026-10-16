@@ -6,12 +6,10 @@
 //! Array-element address lowering for verified packed-AS3 carrier locals.
 
 use super::addressing;
-use crate::convert::types::{llvm_type_size_align, mir_element_stride, mir_type_abi_align};
-use crate::packed_shared_local_storage::carrier_gep_source_type;
-use dialect_mir::ops::MirConstantOp;
+use crate::convert::types::{llvm_type_size_align, mir_element_stride};
+use crate::packed_shared_local_storage::{carrier_gep_source_type, carrier_projection_alignment};
 use dialect_mir::types::MirPtrType;
 use llvm_export::ops as llvm;
-use pliron::builtin::attributes::IntegerAttr;
 use pliron::context::{Context, Ptr};
 use pliron::irbuild::dialect_conversion::{DialectConversionRewriter, OperandsInfo};
 use pliron::irbuild::inserter::Inserter;
@@ -20,8 +18,7 @@ use pliron::location::Located;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::result::Result;
-use pliron::r#type::{TypeHandle, Typed};
-use pliron::value::Value;
+use pliron::r#type::Typed;
 
 /// Lower an array element address using the exact physical element type stamped
 /// by the pre-lowering carrier proof.
@@ -70,8 +67,9 @@ pub(crate) fn convert_array_element_addr(
     }
 
     use llvm_export::ops::GepIndex;
-    let element_align =
-        element_address_provable_alignment(ctx, arr_ptr, semantic_element_ty, index);
+    let element_align = carrier_projection_alignment(ctx, op).ok_or_else(|| {
+        pliron::input_error_noloc!("carrier array projection is missing its verified alignment")
+    })?;
     let gep = llvm::GetElementPtrOp::new_with_no_wrap_flags(
         ctx,
         arr_ptr,
@@ -80,57 +78,7 @@ pub(crate) fn convert_array_element_addr(
         llvm_export::attributes::GepNoWrapFlags::INBOUNDS,
     );
     rewriter.insert_operation(ctx, gep.get_operation());
-    if let Some(align) = element_align {
-        llvm_export::ops::set_address_alignment(ctx, gep.get_operation(), align);
-    }
+    llvm_export::ops::set_address_alignment(ctx, gep.get_operation(), element_align);
     rewriter.replace_operation(ctx, op, gep.get_operation());
     Ok(())
-}
-
-fn element_address_provable_alignment(
-    ctx: &Context,
-    arr_ptr: Value,
-    element_ty: TypeHandle,
-    index: Value,
-) -> Option<u32> {
-    const fn gcd(a: u64, b: u64) -> u64 {
-        if b == 0 { a } else { gcd(b, a % b) }
-    }
-
-    let base_align = arr_ptr
-        .defining_op()
-        .and_then(|def| llvm_export::ops::address_alignment(ctx, def))
-        .map(u64::from)
-        .or_else(|| mir_type_abi_align(ctx, element_ty))?;
-    if base_align == 0 {
-        return None;
-    }
-    let stride = mir_element_stride(ctx, element_ty)?;
-    if stride == 0 {
-        return None;
-    }
-
-    let provable = match constant_index_value(ctx, index) {
-        Some(0) => base_align,
-        Some(i) => gcd(base_align, i.checked_mul(stride)?),
-        None => gcd(base_align, stride),
-    };
-    if !provable.is_power_of_two() {
-        return None;
-    }
-    u32::try_from(provable).ok()
-}
-
-fn constant_index_value(ctx: &Context, index: Value) -> Option<u64> {
-    let defining_op = index.defining_op()?;
-    if let Some(constant) = Operation::get_op::<MirConstantOp>(defining_op, ctx) {
-        let value = constant.get_attr_value(ctx)?.value();
-        return (value.bw() <= 64).then(|| value.to_u64());
-    }
-    let constant = Operation::get_op::<llvm::ConstantOp>(defining_op, ctx)?;
-    let attribute = constant.get_value(ctx);
-    let integer =
-        (&*attribute as &dyn pliron::attribute::Attribute).downcast_ref::<IntegerAttr>()?;
-    let value = integer.value();
-    (value.bw() <= 64).then(|| value.to_u64())
 }

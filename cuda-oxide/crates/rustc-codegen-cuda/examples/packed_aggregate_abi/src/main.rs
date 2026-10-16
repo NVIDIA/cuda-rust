@@ -89,6 +89,15 @@ pub struct PackedSharedArray {
     pub ptrs: [*mut SharedArray<u32, 1>; 2],
 }
 
+/// A runtime-indexed matrix keeps packed-AS3 carrier projection accesses
+/// observable even when SROA or store forwarding eliminate scalar locals.
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct PackedSharedMatrix {
+    pub tag: u8,
+    pub ptrs: [[*mut SharedArray<u32, 1>; 2]; 2],
+}
+
 #[cuda_module]
 mod kernels {
     use super::*;
@@ -141,6 +150,41 @@ mod kernels {
     #[device]
     fn bounce_packed_shared_array(value: PackedSharedArray) -> PackedSharedArray {
         value
+    }
+
+    #[inline(never)]
+    #[device]
+    fn bounce_packed_shared_matrix(value: PackedSharedMatrix) -> PackedSharedMatrix {
+        value
+    }
+
+    #[inline(never)]
+    #[device]
+    unsafe fn consume_packed_shared_matrix(
+        mut value: PackedSharedMatrix,
+        row: usize,
+        col: usize,
+        replace: bool,
+        out: *mut u32,
+    ) {
+        // A runtime-indexed store must survive in the packed carrier. The
+        // branch separates that store from the subsequent indexed load.
+        let mut matrix = value.ptrs;
+        let alternate = matrix[row][col ^ 1];
+        let original = matrix[row][col];
+        if replace {
+            matrix[row][col] = alternate;
+        } else {
+            matrix[row][col] = original;
+        }
+        // Replace the packed aggregate by value: never create an unaligned
+        // &mut reference to its nested matrix field.
+        value = PackedSharedMatrix { tag: value.tag, ptrs: matrix };
+        let selected = value.ptrs[row][col];
+        unsafe {
+            out.write(u32::from(value.tag));
+            out.add(1).write((&*selected)[0]);
+        }
     }
 
     #[inline(never)]
@@ -357,6 +401,30 @@ mod kernels {
     }
 
     #[kernel]
+    pub unsafe fn packed_shared_matrix(out: *mut u32, row: usize, col: usize, replace: bool) {
+        static mut A: SharedArray<u32, 1> = SharedArray::UNINIT;
+        static mut B: SharedArray<u32, 1> = SharedArray::UNINIT;
+        static mut C: SharedArray<u32, 1> = SharedArray::UNINIT;
+        static mut D: SharedArray<u32, 1> = SharedArray::UNINIT;
+
+        let a = &raw mut A;
+        let b = &raw mut B;
+        let c = &raw mut C;
+        let d = &raw mut D;
+        unsafe {
+            (&mut *a)[0] = 0x1111_1111;
+            (&mut *b)[0] = 0x2222_2222;
+            (&mut *c)[0] = 0x3333_3333;
+            (&mut *d)[0] = 0x4444_4444;
+        }
+        let packed = bounce_packed_shared_matrix(PackedSharedMatrix {
+            tag: 0x71,
+            ptrs: [[a, b], [c, d]],
+        });
+        unsafe { consume_packed_shared_matrix(packed, row, col, replace, out) };
+    }
+
+    #[kernel]
     pub unsafe fn store_packed1(value: Packed1, dst: *mut Packed1) {
         // SAFETY: `dst` points to device storage large enough for one Packed1.
         unsafe { dst.write(value) };
@@ -526,6 +594,10 @@ fn assert_host_layout() {
     assert_eq!(core::mem::align_of::<PackedSharedArray>(), 1);
     assert_eq!(core::mem::offset_of!(PackedSharedArray, tag), 0);
     assert_eq!(core::mem::offset_of!(PackedSharedArray, ptrs), 1);
+
+    assert_eq!(core::mem::size_of::<PackedSharedMatrix>(), 33);
+    assert_eq!(core::mem::align_of::<PackedSharedMatrix>(), 1);
+    assert_eq!(core::mem::offset_of!(PackedSharedMatrix, ptrs), 1);
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -537,7 +609,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    verify_generated_ptx()?;
+    if option_env!("CUDA_OXIDE_EMIT_NVVM_IR").is_none() {
+        verify_generated_ptx()?;
+    }
 
     let context = CudaContext::new(0)?;
     let stream = context.default_stream();
@@ -555,6 +629,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let packed_nested_shared_out = DeviceBuffer::<u32>::zeroed(&stream, 3)?;
     let packed_tuple_shared_out = DeviceBuffer::<u32>::zeroed(&stream, 3)?;
     let packed_shared_array_out = DeviceBuffer::<u32>::zeroed(&stream, 3)?;
+    let packed_shared_matrix_out = DeviceBuffer::<u32>::zeroed(&stream, 2)?;
     let load1_out = DeviceBuffer::<u32>::zeroed(&stream, 2)?;
     let load2_out = DeviceBuffer::<u32>::zeroed(&stream, 2)?;
     let storage1 = DeviceBuffer::<u8>::zeroed(&stream, core::mem::size_of::<Packed1>())?;
@@ -623,6 +698,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             packed_shared_array_out.cu_deviceptr() as *mut u32,
         )?;
 
+        // Indices are kernel parameters, not compile-time constants within
+        // the device function. Branch replacement must keep the packed local
+        // materialized rather than hiding misaligned loads in store forwarding.
+        module.packed_shared_matrix(
+            &stream,
+            config,
+            packed_shared_matrix_out.cu_deviceptr() as *mut u32,
+            1,
+            0,
+            true,
+        )?;
+
         module.store_packed1(
             &stream,
             config,
@@ -669,6 +756,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         packed_shared_array_out.to_host_vec(&stream)?,
         [0x62, 0x5768_798a, 0x6879_8a9b]
     );
+    assert_eq!(packed_shared_matrix_out.to_host_vec(&stream)?, [0x71, 0x4444_4444]);
     assert_eq!(load1_out.to_host_vec(&stream)?, [0x41, 0x90a0_b0c0]);
     assert_eq!(load2_out.to_host_vec(&stream)?, [0x51, 0xd0e0_f001]);
 

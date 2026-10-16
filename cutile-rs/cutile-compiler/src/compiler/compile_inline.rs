@@ -190,8 +190,13 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 call_variables.vars.insert(key.to_string(), tr_val);
             }
             for (key, value) in call_generic_vars.ordered_inst_bool() {
-                let tr_val =
-                    self.compile_bool_constant(module, block_id, &call_generic_vars, value)?;
+                let tr_val = self.compile_bool_constant(
+                    module,
+                    block_id,
+                    &call_generic_vars,
+                    value,
+                    &call_expr.span(),
+                )?;
                 call_variables.vars.insert(key.to_string(), tr_val);
             }
             // Add function call CGAs arrays as variables.
@@ -429,7 +434,13 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 call_variables.vars.insert(key.to_string(), tr_val);
             }
             for (key, value) in call_generic_vars.ordered_inst_bool() {
-                let tr_val = self.compile_bool_constant(module, block_id, generic_vars, value)?;
+                let tr_val = self.compile_bool_constant(
+                    module,
+                    block_id,
+                    generic_vars,
+                    value,
+                    &method_call_expr.span(),
+                )?;
                 call_variables.vars.insert(key.to_string(), tr_val);
             }
             for (key, value) in call_generic_vars.ordered_inst_array() {

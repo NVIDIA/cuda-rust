@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Generated short-circuit boolean constants now use the logical expression's
+  source location, preserving inlined helper scopes and call chains.
+
 ### Changed
 
 - cuTile Rust now lives in the [NVIDIA/cuda-rust](https://github.com/NVIDIA/cuda-rust)

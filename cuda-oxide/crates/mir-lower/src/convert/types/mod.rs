@@ -103,6 +103,7 @@ mod enum_layout;
 mod func_abi;
 mod global_layout;
 mod layout;
+mod packed_shared_shape;
 mod pointer_storage;
 mod struct_layout;
 #[cfg(test)]
@@ -136,6 +137,7 @@ pub(crate) use layout::{
     llvm_byte_faithful_twin, llvm_type_contains_i1, llvm_type_is_byte_faithful,
     llvm_type_size_align, mir_element_stride, mir_type_abi_align, natural_struct_layout,
 };
+pub(crate) use packed_shared_shape::packed_shared_mir_shape_is_supported;
 pub(crate) use pointer_storage::{
     llvm_packed_struct_contains_pointer_in_address_space,
     llvm_type_contains_pointer_in_address_space,

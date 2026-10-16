@@ -378,17 +378,21 @@ pub fn _specialization_from_context<F: Fn() -> Module>(
     }
 }
 
-/// One macro-generated launch site's most recent resolution: the volatile
-/// parts of the specialization it was resolved for, plus the resolved
-/// function and validator.
+/// One macro-generated launch site's resolutions: for each, the
+/// volatile parts of the specialization it was resolved for, plus the
+/// resolved function and validator. Launcher support for generated code,
+/// not public API.
 ///
 /// The generated launcher probes this before constructing a
-/// [`TileFunctionKey`]: on the steady state the probe is a handful of
-/// integer/`String` comparisons and two `Arc` clones, with no allocation and
-/// no toolchain-fingerprint work. Probe equality implies key equality: the
-/// process-constant key fields (names, source hash, compiler version) cannot
-/// differ at one site, `gpu_name` is a function of `device_id`, and stride
-/// hints are derived from the compared [`SpecializationBits`].
+/// [`TileFunctionKey`]. The probe first compares the launch's specialization
+/// inputs field by field against the newest entry (the most recently
+/// stored); on a mismatch it hashes them (FxHash) and compares against the
+/// entries in that hash's bucket. A hit clones two `Arc`s and allocates
+/// nothing, with no toolchain-fingerprint work. Probe equality implies key
+/// equality: the process-constant key fields (names, source hash, compiler
+/// version) cannot differ at one site, `gpu_name` is a function of
+/// `device_id`, and stride hints are derived from the compared
+/// [`SpecializationBits`].
 ///
 /// Toolchain env semantics: the `CUTILE_TILEIRAS_PATH` / toolkit env values
 /// are snapshotted when the site fills, not re-read per launch — a
@@ -396,16 +400,88 @@ pub fn _specialization_from_context<F: Fn() -> Module>(
 /// global cache still keys by fingerprint) but does not invalidate an
 /// already-hot launch site. Reading the env on every launch costs
 /// allocations on the very path this cache exists to strip.
+///
+/// Size: a site keeps one entry per probe it resolved. Its functions come
+/// from the in-memory kernel cache, and every eviction that removes a
+/// kernel ([`clear_kernel_cache`], [`evict_kernel`], [`retain_kernels`])
+/// empties every site, so a site never holds more entries than the kernel
+/// cache holds specializations of its kernel. An eviction of any key
+/// empties every site in the process; each re-resolves on its next launch
+/// of each specialization.
+#[doc(hidden)]
 pub struct LaunchSite {
-    inner: std::sync::RwLock<Option<std::sync::Arc<SiteResolution>>>,
+    entries: std::sync::RwLock<SiteEntries>,
+    /// Puts this site in [`LAUNCH_SITES`] on its first store, so evictions
+    /// reach it.
+    registered: std::sync::Once,
+}
+
+#[derive(Default)]
+struct SiteEntries {
+    /// The most recently stored resolution, also in `by_hash`.
+    newest: Option<Arc<SiteResolution>>,
+    /// Every resolution, by [`probe_hash`]; a bucket holds the rare probes
+    /// whose hashes collide.
+    by_hash: std::collections::HashMap<u64, Vec<Arc<SiteResolution>>, rustc_hash::FxBuildHasher>,
+}
+
+/// Hashes a launch-site probe. `get` and `store` hold the specializations
+/// differently, so they pass them as an iterator.
+fn probe_hash<'a>(
+    device_id: usize,
+    generics: &[String],
+    specs: impl ExactSizeIterator<Item = &'a SpecializationBits>,
+    scalar_hints: &[DivHint],
+    const_grid: Option<(u32, u32, u32)>,
+    compile_options: &CompileOptions,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = rustc_hash::FxHasher::default();
+    device_id.hash(&mut hasher);
+    generics.hash(&mut hasher);
+    hasher.write_usize(specs.len());
+    for spec in specs {
+        spec.hash(&mut hasher);
+    }
+    scalar_hints.hash(&mut hasher);
+    const_grid.hash(&mut hasher);
+    compile_options.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Every launch site that has stored a resolution; evictions empty them all.
+static LAUNCH_SITES: std::sync::Mutex<Vec<&'static LaunchSite>> = std::sync::Mutex::new(Vec::new());
+
+/// Empties every launch site. The functions are dropped after the locks are
+/// released: dropping the last reference unloads a module.
+fn clear_launch_sites() {
+    let sites = LAUNCH_SITES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let drained: Vec<SiteEntries> = sites
+        .iter()
+        .map(|site| {
+            // Lookups treat a poisoned site as empty, but its entries still
+            // hold modules: empty it anyway, so the eviction releases them.
+            std::mem::take(
+                &mut *site
+                    .entries
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )
+        })
+        .collect();
+    drop(sites);
+    drop(drained);
 }
 
 /// The snapshot a [`LaunchSite`] holds. Constructed by the generated
 /// launcher on a probe miss, after the normal cache path resolved.
+/// Launcher support for generated code, not public API.
+#[doc(hidden)]
 pub struct SiteResolution {
-    /// Cache generation at fill time: any eviction from the global cache
-    /// invalidates every launch site, so no site outlives a quiesced clear.
-    epoch: u64,
+    /// Cache generation read before resolving; see [`CacheEpoch`].
+    epoch: CacheEpoch,
     device_id: usize,
     #[allow(dead_code)]
     toolchain: ToolchainEnvSnapshot,
@@ -419,8 +495,13 @@ pub struct SiteResolution {
 }
 
 impl SiteResolution {
+    /// `epoch` must be read before the function is resolved. Read later, it
+    /// could postdate an eviction of that function, and the site would keep
+    /// the evicted module loaded until the next eviction. The function would
+    /// still be valid to launch.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        epoch: CacheEpoch,
         device_id: usize,
         generics: Vec<String>,
         specs: Vec<SpecializationBits>,
@@ -431,7 +512,7 @@ impl SiteResolution {
         validator: Arc<Validator>,
     ) -> Self {
         Self {
-            epoch: kernel_cache_epoch(),
+            epoch,
             device_id,
             toolchain: toolchain_env_snapshot(),
             generics,
@@ -445,14 +526,40 @@ impl SiteResolution {
     }
 }
 
+impl SiteResolution {
+    fn same_probe(&self, other: &SiteResolution) -> bool {
+        self.device_id == other.device_id
+            && self.const_grid == other.const_grid
+            && self.compile_options == other.compile_options
+            && self.generics == other.generics
+            && self.specs == other.specs
+            && self.scalar_hints == other.scalar_hints
+    }
+
+    fn probe_hash(&self) -> u64 {
+        probe_hash(
+            self.device_id,
+            &self.generics,
+            self.specs.iter(),
+            &self.scalar_hints,
+            self.const_grid,
+            &self.compile_options,
+        )
+    }
+}
+
 impl LaunchSite {
     pub const fn new() -> Self {
         Self {
-            inner: std::sync::RwLock::new(None),
+            entries: std::sync::RwLock::new(SiteEntries {
+                newest: None,
+                by_hash: std::collections::HashMap::with_hasher(rustc_hash::FxBuildHasher),
+            }),
+            registered: std::sync::Once::new(),
         }
     }
 
-    /// The cached resolution, if the probe matches it exactly.
+    /// The cached resolution whose probe matches exactly, if any.
     pub fn get(
         &self,
         device_id: usize,
@@ -462,28 +569,102 @@ impl LaunchSite {
         const_grid: Option<(u32, u32, u32)>,
         compile_options: &CompileOptions,
     ) -> Option<(Arc<Function>, Arc<Validator>)> {
-        let guard = self.inner.read().ok()?;
-        let r = guard.as_ref()?;
-        if r.epoch == kernel_cache_epoch()
-            && r.device_id == device_id
-            && r.const_grid == const_grid
-            && &r.compile_options == compile_options
-            && r.generics.as_slice() == generics
-            && r.specs.len() == specs.len()
-            && r.specs.iter().zip(specs).all(|(a, b)| a == *b)
-            && r.scalar_hints.as_slice() == scalar_hints
-        {
-            Some((Arc::clone(&r.function), Arc::clone(&r.validator)))
-        } else {
-            None
-        }
+        let entries = self.entries.read().ok()?;
+        // An eviction removes kernels from the cache, bumps the epoch, and
+        // then empties the sites one by one. Until it reaches this site,
+        // entries from before the bump are still here; skip them, so a
+        // launch that sees the bump resolves again through the kernel cache.
+        // A launch that read the epoch just before the bump can still get
+        // one: the eviction APIs' safety contract rules that race out, and
+        // the entry's `Arc` keeps its function loaded either way.
+        let epoch = CacheEpoch::now();
+        let matches = |r: &&Arc<SiteResolution>| {
+            r.epoch == epoch
+                && r.device_id == device_id
+                && r.const_grid == const_grid
+                && &r.compile_options == compile_options
+                && r.generics.as_slice() == generics
+                && r.specs.len() == specs.len()
+                && r.specs.iter().zip(specs).all(|(a, b)| a == *b)
+                && r.scalar_hints.as_slice() == scalar_hints
+        };
+        let r = match entries.newest.as_ref().filter(matches) {
+            Some(r) => r,
+            None => {
+                let hash = probe_hash(
+                    device_id,
+                    generics,
+                    specs.iter().copied(),
+                    scalar_hints,
+                    const_grid,
+                    compile_options,
+                );
+                entries.by_hash.get(&hash)?.iter().find(matches)?
+            }
+        };
+        Some((Arc::clone(&r.function), Arc::clone(&r.validator)))
     }
 
-    /// Replaces the cached resolution (single entry: last one wins).
-    pub fn store(&self, resolution: SiteResolution) {
-        if let Ok(mut guard) = self.inner.write() {
-            *guard = Some(std::sync::Arc::new(resolution));
+    /// Adds `resolution`, replacing one a concurrent miss stored for the same
+    /// probe. Discards `resolution` if the kernel cache was evicted since its
+    /// epoch was read: its function may be one the eviction removed. Leaves a
+    /// poisoned site as it is (lookups miss; evictions still empty it).
+    /// `'static` because the site registers itself so evictions can empty it.
+    ///
+    /// Replacing is sound: either of two current resolutions of one probe is
+    /// a valid resolution of it.
+    pub fn store(&'static self, resolution: SiteResolution) {
+        // Invariant: every entry is current until an eviction empties the
+        // site. An eviction bumps the epoch, then, holding the site list,
+        // empties each site under its lock. This site is in the list before
+        // the lock below is taken (`call_once` returns only after the push,
+        // on every thread), and the epoch is checked under that lock. So
+        // either the bump is visible here and the resolution is discarded,
+        // or the eviction takes this site's lock after us and removes the
+        // entry.
+        self.registered.call_once(|| {
+            LAUNCH_SITES
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(self);
+        });
+        let hash = resolution.probe_hash();
+        let Ok(mut entries) = self.entries.write() else {
+            return;
+        };
+        if resolution.epoch != CacheEpoch::now() {
+            // Unlock before `resolution` drops: its function may be the last
+            // reference to an evicted module.
+            drop(entries);
+            return;
         }
+        let resolution = Arc::new(resolution);
+        let bucket = entries.by_hash.entry(hash).or_default();
+        let replaced = bucket
+            .iter()
+            .position(|r| r.same_probe(&resolution))
+            .map(|i| bucket.swap_remove(i));
+        bucket.push(Arc::clone(&resolution));
+        let previous = entries.newest.replace(resolution);
+        drop(entries);
+        drop((replaced, previous));
+    }
+}
+
+impl LaunchSite {
+    /// The epoch of every entry this site holds (none if its lock is
+    /// poisoned). Test-support only, `#[doc(hidden)]`.
+    #[doc(hidden)]
+    pub fn entry_epochs_for_tests(&self) -> Vec<CacheEpoch> {
+        let Ok(entries) = self.entries.read() else {
+            return Vec::new();
+        };
+        entries
+            .by_hash
+            .values()
+            .flatten()
+            .map(|r| r.epoch)
+            .collect()
     }
 }
 
@@ -523,6 +704,19 @@ pub(crate) fn get_kernel_cache() -> &'static DashMap<TileFunctionKey, Arc<OnceCe
     KERNEL_CACHE.get_or_init(DashMap::new)
 }
 
+/// Bumps the cache epoch and empties every launch site, leaving the kernel
+/// cache alone: an eviction as launch sites see it, without unloading the
+/// modules other tests are using. Test-support only, `#[doc(hidden)]`.
+///
+/// # Safety
+/// See [`clear_kernel_cache`]: emptying a site can drop the last reference
+/// to a function only that site held, so quiesce every stream that may run
+/// such a kernel before calling.
+#[doc(hidden)]
+pub unsafe fn bump_kernel_cache_epoch_for_tests() {
+    bump_kernel_cache_epoch();
+}
+
 /// Clears L1. Test-support only — `#[doc(hidden)]`, not public API, and
 /// `unsafe` for the same reason as the eviction APIs: it can unload a
 /// `Module` still executing on the GPU, so the caller must quiesce first.
@@ -537,17 +731,35 @@ pub unsafe fn clear_kernel_cache_for_tests() {
     bump_kernel_cache_epoch();
 }
 
-/// Generation counter for the in-memory cache: bumped by every removal so
-/// launch-site caches (which hold their own `Arc<Function>`) re-resolve
-/// instead of keeping evicted modules alive past a quiesced clear.
+/// Generation counter for the in-memory cache, bumped by every eviction that
+/// removes a kernel. Launch sites hold their own `Arc<Function>`s, so an
+/// eviction bumps this counter and then empties every site. Once an eviction
+/// returns, no site holds a function it removed.
 static KERNEL_CACHE_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn kernel_cache_epoch() -> u64 {
     KERNEL_CACHE_EPOCH.load(std::sync::atomic::Ordering::Acquire)
 }
 
+/// A generation of the in-memory kernel cache. The generated launcher reads
+/// one *before* resolving a function and stores the resolution with it;
+/// [`LaunchSite::store`] discards the resolution if an eviction happened
+/// since. Read after resolving, it could postdate an eviction of the
+/// function being stored. Launcher support for generated code, not public
+/// API.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CacheEpoch(u64);
+
+impl CacheEpoch {
+    pub fn now() -> Self {
+        CacheEpoch(kernel_cache_epoch())
+    }
+}
+
 fn bump_kernel_cache_epoch() {
     KERNEL_CACHE_EPOCH.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    clear_launch_sites();
 }
 
 /// Removes every kernel from the process-global in-memory cache.
@@ -564,6 +776,9 @@ fn bump_kernel_cache_epoch() {
 /// In-flight compiles are unaffected: a thread mid-compile holds its own
 /// `Arc` to its single-flight slot and completes into it; the next
 /// request for that key recompiles (or is served by the disk cache).
+///
+/// Also empties every generated launcher's [`LaunchSite`], which would
+/// otherwise keep evicted modules loaded.
 ///
 /// Returns the number of entries removed. Freed device bytes are not
 /// tracked host-side; per-module sizes are not observable through the

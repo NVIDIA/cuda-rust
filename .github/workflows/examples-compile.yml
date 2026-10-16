@@ -56,10 +56,12 @@ jobs:
     steps:
       # A local action is loaded from the workspace, so checkout comes first.
       # The CUDA image has no git; without it checkout stores a tarball.
-      - name: Install git
+      # sync-example-locks.sh --check is a python3 stdlib script. ubuntu-latest
+      # had python3; this image does not.
+      - name: Install git and Python
         run: |
           apt-get update -qq
-          apt-get install -y -qq --no-install-recommends ca-certificates git
+          apt-get install -y -qq --no-install-recommends ca-certificates git python3
       - name: Clone repository
         uses: actions/checkout@v4
       - uses: ./.github/actions/setup-cuda-container

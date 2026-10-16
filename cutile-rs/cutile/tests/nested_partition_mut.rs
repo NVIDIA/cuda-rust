@@ -11,7 +11,11 @@
 //! - kernel stores subtiles via local indices like `[0, j]`
 //!
 //! Direct stores to CTA-owned `[1, BLOCK]` outputs are used as the control.
+//!
+//! A `-1` extent on the mutable parameter must keep the per-CTA slab
+//! semantics of a static one, so the static kernel is the oracle.
 
+use std::process::Command;
 use std::sync::Arc;
 
 use cutile::api;
@@ -72,6 +76,34 @@ mod nested_partition_mut_module {
             let tile: Tile<f32, { [1, 1, BLOCK] }> = input_part.load([row, head, j]);
             out_part.store(tile, [0i32, 0i32, j]);
         }
+    }
+
+    #[cutile::entry()]
+    fn static_slab_cell_copy<const SLAB_ROWS: i32, const SLAB_COLS: i32>(
+        out: &mut Tensor<f32, { [SLAB_ROWS, SLAB_COLS] }>,
+        input: &Tensor<f32, { [-1, -1] }>,
+        local_row: i32,
+        local_col: i32,
+    ) {
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let input_part: Partition<f32, { [1, 1] }> = input.partition(shape![1, 1]);
+        let tile: Tile<f32, { [1, 1] }> = input_part.load([pid.0 * SLAB_ROWS, pid.1 * SLAB_COLS]);
+        let mut out_part: PartitionMut<f32, { [1, 1] }> = out.partition_mut(shape![1, 1]);
+        out_part.store(tile, [local_row, local_col]);
+    }
+
+    #[cutile::entry()]
+    fn dynamic_slab_cell_copy<const SLAB_ROWS: i32, const SLAB_COLS: i32>(
+        out: &mut Tensor<f32, { [-1, -1] }>,
+        input: &Tensor<f32, { [-1, -1] }>,
+        local_row: i32,
+        local_col: i32,
+    ) {
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let input_part: Partition<f32, { [1, 1] }> = input.partition(shape![1, 1]);
+        let tile: Tile<f32, { [1, 1] }> = input_part.load([pid.0 * SLAB_ROWS, pid.1 * SLAB_COLS]);
+        let mut out_part: PartitionMut<f32, { [1, 1] }> = out.partition_mut(shape![1, 1]);
+        out_part.store(tile, [local_row, local_col]);
     }
 }
 
@@ -180,6 +212,155 @@ fn nested_partition_mut_3d_store_uses_cta_local_indices() {
             );
         }
     });
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SlabExtent {
+    Static,
+    Dynamic,
+}
+
+/// Each CTA stores the input cell at its slab origin to `local` slab coordinates.
+#[derive(Clone, Copy)]
+struct CellCopy {
+    root: [usize; 2],
+    slab: [usize; 2],
+    local: [i32; 2],
+}
+
+const OUT_OF_SLAB_STORE: CellCopy = CellCopy {
+    root: [4, 8],
+    slab: [2, 8],
+    local: [2, 0],
+};
+
+fn copy_cell(extent: SlabExtent, case: CellCopy) -> Result<Vec<f32>, String> {
+    let [rows, cols] = case.root;
+    let [local_row, local_col] = case.local;
+    let input_host: Vec<f32> = (0..rows * cols).map(|x| x as f32 + 1.0).collect();
+    let input = api::copy_host_vec_to_device(&Arc::new(input_host))
+        .sync()
+        .expect("input alloc");
+    let input_2d = input.view(&[rows, cols]).expect("input view");
+    let out = api::zeros::<f32>(&[rows, cols]).sync().expect("out alloc");
+    let out = out.partition(case.slab);
+    let generics = case.slab.iter().map(|dim| dim.to_string()).collect();
+
+    let launched = match extent {
+        SlabExtent::Static => {
+            nested_partition_mut_module::static_slab_cell_copy(out, &input_2d, local_row, local_col)
+                .generics(generics)
+                .sync()
+        }
+        SlabExtent::Dynamic => nested_partition_mut_module::dynamic_slab_cell_copy(
+            out, &input_2d, local_row, local_col,
+        )
+        .generics(generics)
+        .sync(),
+    };
+    let (result, ..) = launched.map_err(|error| format!("{error:?}"))?;
+    Ok(result.unpartition().to_host_vec().sync().expect("to_host"))
+}
+
+fn assert_dynamic_matches_static(case: CellCopy, label: &'static str) {
+    common::with_test_stack(move || {
+        let expected = copy_cell(SlabExtent::Static, case).expect("static slab copy");
+        let actual = copy_cell(SlabExtent::Dynamic, case).expect("dynamic slab copy");
+        assert_matrix_eq(&actual, &expected, case.root[0], case.root[1], label);
+    });
+}
+
+#[test]
+fn dynamic_extent_single_slab_matches_static() {
+    let case = CellCopy {
+        root: [4, 8],
+        slab: [4, 8],
+        local: [3, 0],
+    };
+    assert_dynamic_matches_static(case, "single slab");
+}
+
+#[test]
+fn dynamic_extent_row_slabs_match_static() {
+    let case = CellCopy {
+        root: [4, 8],
+        slab: [2, 8],
+        local: [1, 0],
+    };
+    assert_dynamic_matches_static(case, "row slabs");
+}
+
+#[test]
+fn dynamic_extent_2d_slabs_match_static() {
+    let case = CellCopy {
+        root: [4, 8],
+        slab: [2, 4],
+        local: [1, 3],
+    };
+    assert_dynamic_matches_static(case, "2-D slabs");
+}
+
+#[test]
+fn dynamic_extent_ragged_slabs_match_static() {
+    let case = CellCopy {
+        root: [5, 8],
+        slab: [2, 8],
+        local: [0, 5],
+    };
+    assert_dynamic_matches_static(case, "ragged slabs");
+}
+
+/// Subprocess entry point: an out-of-slab store may trap, which poisons the
+/// CUDA context, so it runs alone and reports one `OUTCOME:` line.
+#[test]
+#[ignore]
+fn out_of_slab_store_runner() {
+    let extent = match std::env::var("CUTILE_SLAB_EXTENT").as_deref() {
+        Ok("static") => SlabExtent::Static,
+        Ok("dynamic") => SlabExtent::Dynamic,
+        other => panic!("CUTILE_SLAB_EXTENT must be static or dynamic, got {other:?}"),
+    };
+    common::with_test_stack(move || match copy_cell(extent, OUT_OF_SLAB_STORE) {
+        Ok(out) => println!("OUTCOME:WROTE:{out:?}"),
+        Err(error) => println!("OUTCOME:STOP:{error}"),
+    });
+}
+
+fn out_of_slab_store_outcome(extent: SlabExtent) -> String {
+    let value = format!("{extent:?}").to_lowercase();
+    let out = Command::new(std::env::current_exe().expect("current_exe"))
+        .args([
+            "--exact",
+            "out_of_slab_store_runner",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("CUTILE_SLAB_EXTENT", value)
+        .output()
+        .expect("spawn out-of-slab runner");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    match stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("OUTCOME:"))
+    {
+        Some(outcome) => outcome.to_string(),
+        None => format!(
+            "ABORTED:{}",
+            String::from_utf8_lossy(&out.stderr)
+                .lines()
+                .find(|line| line.contains("panicked"))
+                .unwrap_or("no panic line")
+        ),
+    }
+}
+
+#[test]
+fn dynamic_extent_out_of_slab_store_stops_like_static() {
+    assert_eq!(
+        out_of_slab_store_outcome(SlabExtent::Dynamic),
+        out_of_slab_store_outcome(SlabExtent::Static),
+        "a store one row past the slab must be refused the way the static slab refuses it"
+    );
 }
 
 #[test]

@@ -3,10 +3,12 @@
 ---
 name: Set up the CUDA devel container
 description: >-
-  Installs git and the host packages the nvidia/cuda devel image lacks, checks
-  out the repository with that git, and installs rustup. The image already
-  contains the CUDA toolkit. Later steps pick up rust-toolchain.toml from
-  their working directory.
+  Installs the host packages the nvidia/cuda devel image lacks, marks the
+  workspace safe for git, and installs rustup. The caller checks the
+  repository out first: a local action is resolved from the workspace, so
+  this action cannot be the job's first step. The image already contains
+  the CUDA toolkit. Later steps pick up rust-toolchain.toml from their
+  working directory.
 
 runs:
   using: composite
@@ -17,12 +19,6 @@ runs:
         apt-get update -qq
         apt-get install -y -qq --no-install-recommends \
           build-essential ca-certificates curl git pkg-config libclang-dev wget
-
-    # checkout needs git on PATH. Without it the action downloads a tarball
-    # and leaves no repository, so the safe-directory step and anything that
-    # calls git would not be looking at a checkout.
-    - name: Clone repository
-      uses: actions/checkout@v4
 
     - name: Mark the workspace as a safe git directory
       shell: bash

@@ -303,18 +303,22 @@ LaunchConfig {
 }
 ```
 
-**`AsyncKernelLaunch`** — wraps a CUDA driver kernel launch as a `DeviceOp`. Build the argument list with `push_arg` (safe, for `DType` scalars) or `push_device_ptr` (`unsafe`, for raw device pointers), set the launch config, then `.await` or `.sync_on()`:
+**`AsyncKernelLaunch`** — wraps a CUDA driver kernel launch as a `DeviceOp`. Push arguments with `push_arg` or `push_device_ptr` inside an `unsafe` block, set the launch config, then `.await` or `.sync_on()`:
 
 ```rust
 use cuda_async::launch::AsyncKernelLaunch;
 
-let mut launcher = AsyncKernelLaunch::new(function.clone());
-launcher.push_arg(num_elements as u32);
-launcher.push_arg(scale);
+// SAFETY: the function is a valid kernel and the complete parameter list below
+// matches its PTX ABI; the device allocations remain valid through completion.
+let mut launcher = unsafe { AsyncKernelLaunch::new(function.clone()) };
 let input_ptr = input.device_pointer();
 let output_ptr = output.device_pointer();
+// SAFETY: the values and pointers match the PTX signature, and both buffers
+// are valid on the launch device until the kernel completes.
 unsafe {
     launcher
+        .push_arg(num_elements as u32)
+        .push_arg(scale)
         .push_device_ptr(input_ptr.cu_deviceptr())
         .push_device_ptr(output_ptr.cu_deviceptr());
 }
@@ -326,7 +330,7 @@ launcher.set_launch_config(LaunchConfig {
 launcher.await?;  // Executes as a DeviceOp
 ```
 
-See [Interoperability](../guide/interoperability.md) for the full walkthrough and the wrapper pattern that hides `unsafe` at the call site.
+See [Interoperability](../guide/interoperability.md) for the full walkthrough and the wrapper pattern that keeps `unsafe` inside a typed `DeviceOp`.
 
 **`.generics(Vec<String>)`** — `#[cutile::entry]`-generated launchers accept this method to bind const generics and type parameters at runtime:
 

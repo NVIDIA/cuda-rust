@@ -56,14 +56,17 @@ Launch the kernel via `AsyncKernelLaunch`, which is a `DeviceOp` wrapping the CU
 use cuda_async::launch::AsyncKernelLaunch;
 use cuda_core::LaunchConfig;
 
-let mut launcher = AsyncKernelLaunch::new(function.clone());
-launcher.push_arg(num_elements as u32);
-launcher.push_arg(scale);
-// SAFETY: input and output are valid device allocations with at least
-// num_elements f32 elements. output is exclusively written; input is
-// read-only. Both remain allocated until this operation completes.
+// SAFETY: the function is a valid kernel, and the complete parameter list
+// below matches its PTX ABI and uses live device allocations.
+let mut launcher = unsafe { AsyncKernelLaunch::new(function.clone()) };
+// SAFETY: the argument order and types match the PTX signature. Input and
+// output are valid device allocations with at least num_elements f32 elements;
+// output is exclusively written and input is read-only. Both remain allocated
+// until this operation completes.
 unsafe {
     launcher
+        .push_arg(num_elements as u32)
+        .push_arg(scale)
         .push_device_ptr(input.device_pointer().cu_deviceptr())
         .push_device_ptr(output.device_pointer().cu_deviceptr());
 }
@@ -77,16 +80,16 @@ launcher.set_launch_config(LaunchConfig {
 launcher.await?;
 ```
 
-Scalar arguments implementing `DType` use the safe `push_arg` method. Device
-pointers require `unsafe { push_device_ptr() }`. The caller must check that
-allocations are valid on the target GPU, large enough for the kernel, and free
-of conflicting accesses. Argument order and types must match the kernel's
-signature. Rust and the CUDA driver cannot validate these conditions; getting
-them wrong can cause undefined behavior or GPU faults.
+Both `push_arg` and `push_device_ptr` are unsafe for raw kernel launches. The
+caller must check that allocations are valid on the target GPU, large enough
+for the kernel, and free of conflicting accesses. Argument order and types
+must match the kernel's signature. Rust and the CUDA driver cannot validate
+these conditions; getting them wrong can cause undefined behavior or GPU
+faults.
 
 To prevent data races, use stream ordering: operations chained with `.then()` on the same stream execute in order and see each other's writes. Operations on different streams require explicit synchronization.
 
-> **Why generated cuTile kernels don't require `unsafe`:** the `#[cutile::entry]` macro generates launchers that call `push_device_ptr` internally, but they do so safely because the framework controls both sides — device pointers come from framework-managed allocations, and the ownership model (`Partition` for exclusive access, `Arc<Tensor>` for shared reads) prevents aliasing at the type level. Custom kernels bypass this: you are pushing pointers the framework didn't allocate and can't track, so the safety burden falls on you.
+> **Why generated cuTile kernels don't require `unsafe`:** the `#[cutile::entry]` macro generates launchers that push arguments inside `unsafe` blocks. The generated argument sequence follows the compiled kernel signature, and the framework retains tensor storage and checks specialization constraints before enqueueing. Custom kernels bypass those checks, so callers must establish the argument ABI and device-memory validity themselves.
 
 ---
 
@@ -121,13 +124,16 @@ impl DeviceOp for ScaleKernel {
         self,
         ctx: &ExecutionContext,
     ) -> Result<<Self as DeviceOp>::Output, DeviceError> {
-        let mut launcher = AsyncKernelLaunch::new(self.function);
-        launcher.push_arg(self.n);
-        launcher.push_arg(self.scale);
-        // SAFETY: input and output are framework-managed Tensor allocations.
-        // input is shared (Arc, read-only); output is exclusively written.
+        // SAFETY: this wrapper supplies the complete signature declared by
+        // its PTX kernel and retains both buffers through completion.
+        let mut launcher = unsafe { AsyncKernelLaunch::new(self.function) };
+        // SAFETY: these values match the `n` and `scale` parameters in the
+        // PTX kernel, and the pointers below match its input and output params.
+        // Input is shared (Arc, read-only); output is exclusively written.
         unsafe {
             launcher
+                .push_arg(self.n)
+                .push_arg(self.scale)
                 .push_device_ptr(self.input.device_pointer().cu_deviceptr())
                 .push_device_ptr(self.output.device_pointer().cu_deviceptr());
         }

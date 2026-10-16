@@ -1866,7 +1866,12 @@ pub enum GridBound {
 pub trait KernelOutputStored<T: DType>: Send {
     /// Retain storage and acquire exclusive device access before enqueueing.
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError>;
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch);
+    ///
+    /// # Safety
+    /// The launch function must expect the parameter sequence emitted by this
+    /// binding, and the referenced device storage must remain valid until the
+    /// kernel completes.
+    unsafe fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch);
     fn grid(&self) -> Result<(u32, u32, u32), Error>;
     /// This binding's launch-grid constraint. Defaults to exact coverage;
     /// only bindings that explicitly opted into partial coverage return
@@ -1913,21 +1918,23 @@ impl<T: DType> KernelOutputStored<T> for Partition<Tensor<T>> {
         })
     }
 
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+    unsafe fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+        // SAFETY: callers must provide a Tile function with the generated
+        // partitioned-output ABI and retain this tensor through completion.
         unsafe {
             launcher.push_device_ptr(self.object.cu_deviceptr());
-        }
-        for dim in self.object.shape.iter() {
-            launcher.push_arg(*dim);
-        }
-        for stride in self.object.strides.iter() {
-            launcher.push_arg(*stride);
-        }
-        for dim in self.partition_shape.iter() {
-            launcher.push_arg(*dim as i32);
-        }
-        for stride in self.partition_strides.iter() {
-            launcher.push_arg(*stride as i32);
+            for dim in self.object.shape.iter() {
+                launcher.push_arg(*dim);
+            }
+            for stride in self.object.strides.iter() {
+                launcher.push_arg(*stride);
+            }
+            for dim in self.partition_shape.iter() {
+                launcher.push_arg(*dim as i32);
+            }
+            for stride in self.partition_strides.iter() {
+                launcher.push_arg(*stride as i32);
+            }
         }
     }
     fn grid(&self) -> Result<(u32, u32, u32), Error> {
@@ -1971,21 +1978,23 @@ impl<T: DType> KernelOutputStored<T> for Partition<&mut Tensor<T>> {
         })
     }
 
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+    unsafe fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+        // SAFETY: callers must provide a Tile function with the generated
+        // partitioned-output ABI and retain this tensor through completion.
         unsafe {
             launcher.push_device_ptr(self.object.cu_deviceptr());
-        }
-        for dim in self.object.shape.iter() {
-            launcher.push_arg(*dim);
-        }
-        for stride in self.object.strides.iter() {
-            launcher.push_arg(*stride);
-        }
-        for dim in self.partition_shape.iter() {
-            launcher.push_arg(*dim as i32);
-        }
-        for stride in self.partition_strides.iter() {
-            launcher.push_arg(*stride as i32);
+            for dim in self.object.shape.iter() {
+                launcher.push_arg(*dim);
+            }
+            for stride in self.object.strides.iter() {
+                launcher.push_arg(*stride);
+            }
+            for dim in self.partition_shape.iter() {
+                launcher.push_arg(*dim as i32);
+            }
+            for stride in self.partition_strides.iter() {
+                launcher.push_arg(*stride as i32);
+            }
         }
     }
     fn grid(&self) -> Result<(u32, u32, u32), Error> {
@@ -2020,8 +2029,9 @@ impl<T: DType> KernelOutputStored<T> for MappedLaunchPartition<Partition<Tensor<
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.partition.retain(ctx)
     }
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
-        self.partition.push_kernel_args(launcher);
+    unsafe fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+        // SAFETY: the wrapped partition emits the declared Tile ABI.
+        unsafe { self.partition.push_kernel_args(launcher) };
     }
 
     fn grid(&self) -> Result<(u32, u32, u32), Error> {
@@ -2060,8 +2070,9 @@ impl<T: DType> KernelOutputStored<T> for MappedLaunchPartition<Partition<&mut Te
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.partition.retain(ctx)
     }
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
-        self.partition.push_kernel_args(launcher);
+    unsafe fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+        // SAFETY: the wrapped partition emits the declared Tile ABI.
+        unsafe { self.partition.push_kernel_args(launcher) };
     }
 
     fn grid(&self) -> Result<(u32, u32, u32), Error> {
@@ -2156,7 +2167,12 @@ impl<'a, T: DType> KernelOutput<T> for MappedLaunchPartition<Partition<&'a mut T
 pub trait KernelInputStored: Send {
     /// Retain storage and acquire shared device access before enqueueing.
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError>;
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch);
+    ///
+    /// # Safety
+    /// The launch function must expect the parameter sequence emitted by this
+    /// binding, and the referenced device storage must remain valid until the
+    /// kernel completes.
+    unsafe fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch);
     fn shape(&self) -> &[i32];
     fn strides(&self) -> &[i32];
     fn spec(&self) -> &SpecializationBits;
@@ -2184,15 +2200,17 @@ impl<T: DType> KernelInputStored for Arc<Tensor<T>> {
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.storage.retain(ctx, false)
     }
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+    unsafe fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+        // SAFETY: callers must provide a Tile function with the generated
+        // tensor-input ABI and retain this storage through completion.
         unsafe {
             launcher.push_device_ptr(self.cu_deviceptr());
-        }
-        for dim in self.shape.iter() {
-            launcher.push_arg(*dim);
-        }
-        for stride in self.strides.iter() {
-            launcher.push_arg(*stride);
+            for dim in self.shape.iter() {
+                launcher.push_arg(*dim);
+            }
+            for stride in self.strides.iter() {
+                launcher.push_arg(*stride);
+            }
         }
     }
     fn shape(&self) -> &[i32] {
@@ -2213,15 +2231,17 @@ impl<T: DType + Sync> KernelInputStored for &Tensor<T> {
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.storage.retain(ctx, false)
     }
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+    unsafe fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+        // SAFETY: callers must provide a Tile function with the generated
+        // tensor-input ABI and retain this storage through completion.
         unsafe {
             launcher.push_device_ptr(self.cu_deviceptr());
-        }
-        for dim in self.shape.iter() {
-            launcher.push_arg(*dim);
-        }
-        for stride in self.strides.iter() {
-            launcher.push_arg(*stride);
+            for dim in self.shape.iter() {
+                launcher.push_arg(*dim);
+            }
+            for stride in self.strides.iter() {
+                launcher.push_arg(*stride);
+            }
         }
     }
     fn shape(&self) -> &[i32] {
@@ -2279,17 +2299,19 @@ impl<'a, T: DType + Sync> KernelInputStored for &'a TensorView<'a, T> {
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.base.storage.retain(ctx, false)
     }
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+    unsafe fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
         // Push the already-offset device pointer. The offset is applied
         // host-side so the kernel sees the correct base address directly.
+        // SAFETY: callers must provide a Tile function with the generated
+        // tensor-view ABI and retain the base storage through completion.
         unsafe {
             launcher.push_device_ptr(self.base.cu_deviceptr() + self.offset_bytes as u64);
-        }
-        for dim in self.shape.iter() {
-            launcher.push_arg(*dim);
-        }
-        for stride in self.strides.iter() {
-            launcher.push_arg(*stride);
+            for dim in self.shape.iter() {
+                launcher.push_arg(*dim);
+            }
+            for stride in self.strides.iter() {
+                launcher.push_arg(*stride);
+            }
         }
     }
     fn shape(&self) -> &[i32] {

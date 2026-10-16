@@ -80,41 +80,53 @@ async fn main() -> Result<(), DeviceError> {
     // Chain a bunch of kernel launches.
     let cuda_async_ops = tokio::spawn(async move {
         let y_part = y.partition(y_partition_shape);
-        let mut launcher = AsyncKernelLaunch::new(function.clone());
-        launcher
-            .push_arg(&y_part)
-            .push_arg(a)
-            .push_arg_arc(&x)
-            .set_launch_config(LaunchConfig {
-                grid_dim: y_part.grid().expect("Invalid grid."),
-                block_dim: (1, 1, 1),
-                shared_mem_bytes: 0,
-            });
+        // SAFETY: `function` is the compiled SAXPY kernel and the arguments
+        // below provide its complete parameter list.
+        let mut launcher = unsafe { AsyncKernelLaunch::new(function.clone()) };
+        // SAFETY: the arguments match the compiled SAXPY kernel's
+        // partitioned output, scalar, and tensor input parameters; their
+        // storage stays alive until the awaited launch completes.
+        unsafe {
+            launcher.push_arg(&y_part).push_arg(a).push_arg_arc(&x);
+        }
+        launcher.set_launch_config(LaunchConfig {
+            grid_dim: y_part.grid().expect("Invalid grid."),
+            block_dim: (1, 1, 1),
+            shared_mem_bytes: 0,
+        });
         launcher
             .then(|_| {
-                let mut launcher = AsyncKernelLaunch::new(function.clone());
-                launcher
-                    .push_arg(&y_part)
-                    .push_arg(a)
-                    .push_arg_arc(&x)
-                    .set_launch_config(LaunchConfig {
-                        grid_dim: y_part.grid().expect("Invalid grid."),
-                        block_dim: (1, 1, 1),
-                        shared_mem_bytes: 0,
-                    });
+                // SAFETY: `function` is the compiled SAXPY kernel and the
+                // arguments below provide its complete parameter list.
+                let mut launcher = unsafe { AsyncKernelLaunch::new(function.clone()) };
+                // SAFETY: the arguments match the compiled SAXPY kernel's
+                // partitioned output, scalar, and tensor input parameters;
+                // their storage stays alive until the awaited launch completes.
+                unsafe {
+                    launcher.push_arg(&y_part).push_arg(a).push_arg_arc(&x);
+                }
+                launcher.set_launch_config(LaunchConfig {
+                    grid_dim: y_part.grid().expect("Invalid grid."),
+                    block_dim: (1, 1, 1),
+                    shared_mem_bytes: 0,
+                });
                 launcher
             })
             .then(|_| {
-                let mut launcher = AsyncKernelLaunch::new(function.clone());
-                launcher
-                    .push_arg(&y_part)
-                    .push_arg(a)
-                    .push_arg_arc(&x)
-                    .set_launch_config(LaunchConfig {
-                        grid_dim: y_part.grid().expect("Invalid grid."),
-                        block_dim: (1, 1, 1),
-                        shared_mem_bytes: 0,
-                    });
+                // SAFETY: `function` is the compiled SAXPY kernel and the
+                // arguments below provide its complete parameter list.
+                let mut launcher = unsafe { AsyncKernelLaunch::new(function.clone()) };
+                // SAFETY: the arguments match the compiled SAXPY kernel's
+                // partitioned output, scalar, and tensor input parameters;
+                // their storage stays alive until the awaited launch completes.
+                unsafe {
+                    launcher.push_arg(&y_part).push_arg(a).push_arg_arc(&x);
+                }
+                launcher.set_launch_config(LaunchConfig {
+                    grid_dim: y_part.grid().expect("Invalid grid."),
+                    block_dim: (1, 1, 1),
+                    shared_mem_bytes: 0,
+                });
                 launcher
             })
             .await

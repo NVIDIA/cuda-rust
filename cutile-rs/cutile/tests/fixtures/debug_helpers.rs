@@ -13,6 +13,14 @@ pub mod debug_helpers {
         offset(x) * 2
     }
 
+    pub fn generated<const VALUES: [i32; 2], const FLAG: bool>(x: i32) -> i32 {
+        if FLAG {
+            x + VALUES[0] + VALUES[1]
+        } else {
+            x
+        }
+    }
+
     pub trait Bump {
         fn bump(self) -> i32;
     }

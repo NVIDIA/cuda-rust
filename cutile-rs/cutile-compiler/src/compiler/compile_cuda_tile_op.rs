@@ -10,7 +10,7 @@
 //! dispatch logic, operand assembly, and attribute handling are identical.
 
 use super::shared_types::Kind::{self, PrimitiveType, StructuredType};
-use super::shared_utils::{get_const_hex, AtomicMode, TileBinaryOp};
+use super::shared_utils::{get_const_hex, AtomicMode};
 use super::tile_rust_type::TileRustType;
 use crate::bounds::Bounds;
 use crate::error::JITError;
@@ -38,8 +38,6 @@ use std::collections::{BTreeMap, HashMap};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{Expr, ExprCall, ExprLit, ItemFn, Lit, Token, Type, UnOp};
-
-const NESTED_MUTABLE_ACCESS_OFFSET_META: &str = "nested_mutable_access_offset";
 
 // ---------------------------------------------------------------------------
 // Helpers ported from old CompilerContext utilities
@@ -315,59 +313,6 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             }
             _ => Ok(None),
         }
-    }
-
-    fn offset_nested_mutable_indices(
-        &self,
-        module: &mut Module,
-        block_id: BlockId,
-        span: &proc_macro2::Span,
-        access_offset: &TileRustValue,
-        mut index_values: Vec<TileRustValue>,
-        generic_vars: &GenericVars,
-        ctx: &mut CompilerContext,
-    ) -> Result<Vec<TileRustValue>, JITError> {
-        let Some(offset_values) = access_offset.values.as_ref() else {
-            return self.jit_error_result(
-                span,
-                "nested mutable partition access offset must be an array value",
-            );
-        };
-        if offset_values.len() != index_values.len() {
-            return self.jit_error_result(
-                span,
-                &format!(
-                    "nested mutable partition access offset rank mismatch: offset rank {}, index rank {}",
-                    offset_values.len(),
-                    index_values.len()
-                ),
-            );
-        }
-
-        let mut adjusted = Vec::with_capacity(index_values.len());
-        for (offset, index) in offset_values.iter().cloned().zip(index_values.drain(..)) {
-            let adjusted_index = if index
-                .bounds
-                .as_ref()
-                .is_some_and(|bounds| bounds.is_exact() && bounds.start == 0 && bounds.end == 0)
-            {
-                offset
-            } else {
-                self.compile_binary_op_from_values(
-                    module,
-                    block_id,
-                    offset,
-                    index,
-                    &TileBinaryOp::Add,
-                    generic_vars,
-                    ctx,
-                    None,
-                    span,
-                )?
-            };
-            adjusted.push(adjusted_index);
-        }
-        Ok(adjusted)
     }
 
     pub fn compile_cuda_tile_op_call(
@@ -1560,10 +1505,6 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 "Expected token value in TypeMeta for view",
             );
         };
-        let nested_access_offset = type_meta
-            .fields
-            .get(NESTED_MUTABLE_ACCESS_OFFSET_META)
-            .cloned();
 
         let value_value = self
             .compile_expression(
@@ -1600,17 +1541,6 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 return self.jit_error_result(&index_arg.span(), "unexpected nested array index");
             }
             index_value_elems.push(value);
-        }
-        if let Some(access_offset) = nested_access_offset.as_ref() {
-            index_value_elems = self.offset_nested_mutable_indices(
-                module,
-                block_id,
-                &call_expr.span(),
-                access_offset,
-                index_value_elems,
-                generic_args,
-                ctx,
-            )?;
         }
         let index_values = index_value_elems
             .iter()
@@ -1885,10 +1815,6 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 "Expected token value in TypeMeta for view",
             );
         };
-        let nested_access_offset = type_meta
-            .fields
-            .get(NESTED_MUTABLE_ACCESS_OFFSET_META)
-            .cloned();
 
         let index_arg = &call_expr.args[1];
         let index_arg_str = index_arg.to_token_stream().to_string();
@@ -1907,17 +1833,6 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 );
             }
             index_value_elems.push(value);
-        }
-        if let Some(access_offset) = nested_access_offset.as_ref() {
-            index_value_elems = self.offset_nested_mutable_indices(
-                module,
-                block_id,
-                &call_expr.span(),
-                access_offset,
-                index_value_elems,
-                generic_args,
-                ctx,
-            )?;
         }
         let index_values = index_value_elems
             .iter()
@@ -2008,10 +1923,6 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 "Expected token value in TypeMeta for view",
             );
         };
-        let nested_access_offset = type_meta
-            .fields
-            .get(NESTED_MUTABLE_ACCESS_OFFSET_META)
-            .cloned();
 
         let tile_value = self
             .compile_expression(
@@ -2048,17 +1959,6 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 );
             }
             index_value_elems.push(value);
-        }
-        if let Some(access_offset) = nested_access_offset.as_ref() {
-            index_value_elems = self.offset_nested_mutable_indices(
-                module,
-                block_id,
-                &call_expr.span(),
-                access_offset,
-                index_value_elems,
-                generic_args,
-                ctx,
-            )?;
         }
         let index_values = index_value_elems
             .iter()

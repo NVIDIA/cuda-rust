@@ -369,6 +369,17 @@ pub fn translate_rvalue(
 
             let result_type = types::translate_type(ctx, ty)?;
 
+            // A cast whose source and target lower to the same dialect type
+            // changes nothing. `isize` and `i64` are that pair on this target:
+            // core steps an `isize` with `overflowing_add(self as i64, rhs as
+            // i64)` and casts the sum back. Leaving those casts in the step
+            // block hides the range `for` from the unroller. Return the operand
+            // and emit no operation, as the reborrow path in this function does
+            // when its transmute would be between identical types.
+            if operand_val.get_type(ctx) == result_type {
+                return Ok((None, operand_val, prev_op_after_operand));
+            }
+
             let op = Operation::new(
                 ctx,
                 MirCastOp::get_concrete_op_info(),

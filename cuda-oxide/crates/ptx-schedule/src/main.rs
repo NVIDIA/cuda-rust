@@ -77,7 +77,8 @@ struct Cli {
 
 /// Longest chain of symbolic links followed for one destination. Linux
 /// follows at most 40 links in one path lookup, so a chain the kernel accepts
-/// is never refused here.
+/// is never refused here; the loop below runs one extra time to resolve the
+/// final non-link component.
 const MAX_SYMLINK_FOLLOWS: usize = 40;
 
 /// Canonical form of a path that may not exist yet, so that two names for one
@@ -93,7 +94,7 @@ fn canonical_destination(path: &Path, label: &str) -> Result<PathBuf, Box<dyn st
     } else {
         std::env::current_dir()?.join(path)
     };
-    for _ in 0..MAX_SYMLINK_FOLLOWS {
+    for _ in 0..=MAX_SYMLINK_FOLLOWS {
         if let Ok(canonical) = fs::canonicalize(&absolute) {
             return Ok(canonical);
         }

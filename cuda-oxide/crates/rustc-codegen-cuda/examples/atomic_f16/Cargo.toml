@@ -25,4 +25,4 @@ cuda-device = { path = "../../../cuda-device" }
 cuda-host = { path = "../../../cuda-host" }
 # Primitive `f16` is nightly-only, so the shared crate gates its `DeviceCopy`
 # impl behind this feature; `half::f16` needs nothing extra.
-cuda-core = { path = "../../../../../cuda-core", version = "0.4.0", features = ["f16"] }
+cuda-core = { path = "../../../../../cuda-core", features = ["f16"] }

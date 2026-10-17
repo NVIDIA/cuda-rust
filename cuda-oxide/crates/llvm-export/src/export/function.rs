@@ -16,12 +16,12 @@ use pliron::{
     attribute::Attribute,
     basic_block::BasicBlock,
     builtin::{
-        attributes::{FPDoubleAttr, FPSingleAttr, IntegerAttr, TypeAttr},
-        op_interfaces::{BranchOpInterface, SymbolOpInterface},
+        attributes::{FPDoubleAttr, FPSingleAttr, IntegerAttr, OperandSegmentSizesAttr, TypeAttr},
+        op_interfaces::{ATTR_KEY_OPERAND_SEGMENT_SIZES, BranchOpInterface, SymbolOpInterface},
         type_interfaces::FunctionTypeInterface,
         types::IntegerType,
     },
-    context::Ptr,
+    context::{Context, Ptr},
     linked_list::ContainsLinkedList,
     location::Located,
     op::Op,
@@ -59,6 +59,66 @@ fn sanitize_comment(text: &str) -> String {
     text.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()
+}
+
+/// Check conditional-branch layout before Pliron's infallible range accessors.
+///
+/// Public export callers need not have verified the source module. Pliron 0.19
+/// also sums segment sizes as u32 without checking overflow, so validate the
+/// complete layout here before it can index or allocate from malformed counts.
+fn validate_conditional_branch_layout(ctx: &Context, branch: &ops::CondBrOp) -> Result<(), String> {
+    let operation = branch.get_operation().deref(ctx);
+    let sizes = operation
+        .attributes
+        .get::<OperandSegmentSizesAttr>(&ATTR_KEY_OPERAND_SEGMENT_SIZES)
+        .ok_or_else(|| {
+            "conditional branch requires an operand-segment-sizes attribute".to_owned()
+        })?;
+    if !matches!(sizes.0.as_slice(), [1, _, _]) {
+        return Err(
+            "conditional branch requires three operand segments with exactly one condition"
+                .to_owned(),
+        );
+    }
+    let total = sizes
+        .0
+        .iter()
+        .try_fold(0_u32, |total, size| total.checked_add(*size))
+        .ok_or_else(|| "conditional branch operand segment total overflows u32".to_owned())?;
+    if total as usize != operation.get_num_operands() {
+        return Err(format!(
+            "conditional branch operand segments describe {total} values, but it has {} operands",
+            operation.get_num_operands()
+        ));
+    }
+    if operation.get_num_successors() != 2 {
+        return Err("conditional branch requires exactly two successors".to_owned());
+    }
+    Ok(())
+}
+
+/// Spell only the facts already proven at the import boundary. Shared by
+/// definitions and declarations, including the empty-region declaration path.
+fn export_reference_parameter_attrs(
+    validity: ops::KernelReferenceParamValidityAttr,
+    include_alignment: bool,
+    output: &mut String,
+) {
+    write!(output, " nonnull").unwrap();
+    if validity.pointee_alignment > 1 && include_alignment {
+        write!(output, " align {}", validity.pointee_alignment).unwrap();
+    }
+    if validity.no_alias {
+        write!(output, " noalias").unwrap();
+    }
+    if validity.dereferenceable_bytes > 0 {
+        write!(
+            output,
+            " dereferenceable({})",
+            validity.dereferenceable_bytes
+        )
+        .unwrap();
+    }
 }
 
 /// Final LLVM spelling of a pliron function symbol.
@@ -799,7 +859,7 @@ impl<'a> ModuleExportState<'a> {
                     "kernel `@{fixed_func_name}` reference validity parameter {index} is not an LLVM pointer"
                 ));
             }
-            reference_param_validities[index] = Some(validity.0);
+            reference_param_validities[index] = Some(validity);
         }
 
         let is_declaration = func.get_operation().deref(self.ctx).regions().count() == 0;
@@ -975,11 +1035,8 @@ impl<'a> ModuleExportState<'a> {
                 let grid_constant = grid_constant_params
                     .iter()
                     .find(|parameter| parameter.index == i);
-                if let Some(alignment) = reference_param_validities[i] {
-                    write!(output, " nonnull").unwrap();
-                    if alignment > 1 && grid_constant.is_none() {
-                        write!(output, " align {alignment}").unwrap();
-                    }
+                if let Some(validity) = reference_param_validities[i] {
+                    export_reference_parameter_attrs(validity, grid_constant.is_none(), output);
                 }
                 if let Some(parameter) = grid_constant {
                     self.export_grid_constant_parameter_attrs(
@@ -1046,15 +1103,9 @@ impl<'a> ModuleExportState<'a> {
             let block = entry_block.deref(self.ctx);
             let args = block.arguments();
             let mut entry_prologue = String::new();
-            // Kernel Rust references may carry importer-proven `nonnull` and
-            // pointee `align N`. Every other parameter remains bare.
-            //
-            // In particular this deliberately does NOT infer `noalias`,
-            // `readonly`, `dereferenceable`, or any validity fact from LLVM
-            // pointer shape. `DisjointSlice` and raw pointers therefore retain
-            // the conservative behavior required by their unsafe construction
-            // contracts. Future alias attributes need their own audited proof
-            // source rather than extending this mechanical export step.
+            // Kernel Rust references carry only importer-proven facts.
+            // LLVM pointer shape alone grants no reference promises, so raw
+            // pointers, slice metadata, and other parameters remain bare.
             for (i, arg) in args.enumerate() {
                 if i > 0 {
                     write!(output, ", ").unwrap();
@@ -1064,11 +1115,8 @@ impl<'a> ModuleExportState<'a> {
                 let grid_constant = grid_constant_params
                     .iter()
                     .find(|parameter| parameter.index == i);
-                if let Some(alignment) = reference_param_validities[i] {
-                    write!(output, " nonnull").unwrap();
-                    if alignment > 1 && grid_constant.is_none() {
-                        write!(output, " align {alignment}").unwrap();
-                    }
+                if let Some(validity) = reference_param_validities[i] {
+                    export_reference_parameter_attrs(validity, grid_constant.is_none(), output);
                 }
                 if let Some(parameter) = grid_constant {
                     self.export_grid_constant_parameter_attrs(
@@ -1337,6 +1385,7 @@ impl<'a> ModuleExportState<'a> {
                         validate_edge(block, dest, &args)?;
                         pred_map.entry(dest).or_default().push((block, args));
                     } else if let Some(branch) = term_dyn.downcast_ref::<ops::CondBrOp>() {
+                        validate_conditional_branch_layout(self.ctx, branch)?;
                         let succs: Vec<_> = term.deref(self.ctx).successors().collect();
                         let true_dest = succs[0];
                         let false_dest = succs[1];
@@ -1409,11 +1458,8 @@ impl<'a> ModuleExportState<'a> {
                 let grid_constant = grid_constant_params
                     .iter()
                     .find(|parameter| parameter.index == i);
-                if let Some(alignment) = reference_param_validities[i] {
-                    write!(output, " nonnull").unwrap();
-                    if alignment > 1 && grid_constant.is_none() {
-                        write!(output, " align {alignment}").unwrap();
-                    }
+                if let Some(validity) = reference_param_validities[i] {
+                    export_reference_parameter_attrs(validity, grid_constant.is_none(), output);
                 }
                 if let Some(parameter) = grid_constant {
                     self.export_grid_constant_parameter_attrs(

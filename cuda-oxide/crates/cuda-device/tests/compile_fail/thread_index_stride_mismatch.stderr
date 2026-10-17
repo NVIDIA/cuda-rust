@@ -13,3 +13,17 @@ note: method defined here
    |
    |     pub fn get_mut<'kernel>(&mut self, idx: ThreadIndex<'kernel, IndexSpace>) -> Option<&mut T> {
    |            ^^^^^^^
+note: the `get_mut` call is resolved to the method in `cuda_device::DisjointSlice<'a, T, IndexSpace>`, shadowing the method of the same name on the inherent impl for `cuda_device::DisjointSlice<'a, T, cuda_device::Runtime2DIndex>`
+  --> tests/compile_fail/thread_index_stride_mismatch.rs:11:17
+   |
+11 |     let _ = out.get_mut(idx);
+   |                 ^^^^^^^ refers to `cuda_device::DisjointSlice::<'a, T, IndexSpace>::get_mut`
+   = note: additionally, there is 1 other available method that isn't in scope
+help: you might have meant to call one of the other methods; you can use the fully-qualified path to call one of them explicitly
+   |
+11 -     let _ = out.get_mut(idx);
+11 +     let _ = DisjointSlice::get_mut(&mut out, idx);
+   |
+11 -     let _ = out.get_mut(idx);
+11 +     let _ = <_ as std::slice::SliceIndex<_>>::get_mut(out, idx);
+   |

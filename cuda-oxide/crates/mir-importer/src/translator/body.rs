@@ -2141,16 +2141,33 @@ pub fn translate_body(
         matches!(signature.skip_binder().abi, rustc_public::ty::Abi::Rust)
     });
     if is_kernel && has_rust_abi {
+        let fn_abi = instance.fn_abi().map_err(|error| {
+            input_error_noloc!(TranslationErr::unsupported(format!(
+                "could not query kernel reference argument ABI: {error:?}"
+            )))
+        })?;
+        if fn_abi.fixed_count as usize != num_args {
+            return input_err_noloc!(TranslationErr::invalid_op(format!(
+                "kernel has {num_args} source arguments but rustc FnAbi declares {}",
+                fn_abi.fixed_count
+            )));
+        }
         for arg_idx in 0..num_args {
             let local = mir::Local::from(arg_idx + 1);
             let source_ty = &body.locals()[local].ty;
-            let Some(validity) = facts::reference_param_validity(source_ty) else {
+            let Some(validity) = facts::reference_param_validity(source_ty, &fn_abi, arg_idx)
+                .map_err(|error| input_error_noloc!(TranslationErr::invalid_op(error)))?
+            else {
                 continue;
             };
             mir_func_op.set_reference_param_validity(
                 ctx,
                 arg_idx,
-                ReferenceParamValidityAttr(validity.pointee_alignment),
+                ReferenceParamValidityAttr {
+                    pointee_alignment: validity.pointee_alignment,
+                    no_alias: validity.no_alias,
+                    dereferenceable_bytes: validity.dereferenceable_bytes,
+                },
             );
         }
     }

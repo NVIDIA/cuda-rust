@@ -1215,15 +1215,23 @@ fn interop_build_keeps_debug_assertions_and_device_debug_independent() {
             append_full_debug_rustflags(&mut encoded, &cmd, None);
             let flags = decoded_rustflags(&encoded);
 
-            assert!(flags.contains(&"-Copt-level=3"));
-            assert!(flags.contains(&if assertions {
+            let pins: Vec<String> = options
+                .codegen_profile()
+                .pinned_options()
+                .iter()
+                .map(|pin| pin.rustc_flag())
+                .collect();
+            let assertions_flag = if assertions {
                 "-Cdebug-assertions=on"
             } else {
                 "-Cdebug-assertions=off"
-            }));
-            if assertions {
-                assert!(flags.contains(&"-Coverflow-checks=off"));
-            }
+            };
+            assert_eq!(
+                pins,
+                ["-Copt-level=3", assertions_flag, "-Coverflow-checks=off"]
+            );
+            // Without incoming overrides the pins stay in the Cargo profile.
+            assert!(!flags.iter().any(|flag| pins.iter().any(|pin| pin == flag)));
             assert_eq!(has_full_debug_cfg(&flags), debug == DeviceDebug::Full);
             for required in FULL_DEBUG_MIR_RUSTFLAGS {
                 assert_eq!(flags.contains(required), debug == DeviceDebug::Full);
@@ -2002,12 +2010,12 @@ fn build_passthrough_retains_release_profile_and_required_flags() {
     assert_eq!(flags[0], "-Lnative=/nix/store/cuda-cudart/lib");
     assert!(flags.contains(&"-Copt-level=0"));
     assert!(flags.contains(&"-Zcodegen-backend=llvm"));
+    // Only the overridden option is re-pinned; debug-assertions stays in the profile.
     assert_eq!(
-        &flags[flags.len() - 6..],
+        &flags[flags.len() - 5..],
         [
             "-Zcodegen-backend=/tmp/librustc_codegen_cuda.so",
             "-Copt-level=3",
-            "-Cdebug-assertions=off",
             "-Zmir-enable-passes=-JumpThreading",
             "-Zalways-encode-mir",
             "-Csymbol-mangling-version=v0",
@@ -2068,8 +2076,9 @@ fn encoded_rustflags_preserve_configured_flag_boundaries_and_spaces() {
             .any(|pair| pair == ["--cfg", "model=\"alpha beta\""])
     );
     assert_eq!(&flags[2..4], ["-L", "native=/nix/store/cuda-cudart/lib"]);
+    // Backend, then the three required -Z/-C invariants (no incoming pin overrides).
     assert_eq!(
-        flags[flags.len() - 6],
+        flags[flags.len() - 4],
         "-Zcodegen-backend=/tmp/backend path/librustc_codegen_cuda.so"
     );
 }
@@ -2148,9 +2157,20 @@ fn debug_profile_retains_release_defaults_and_adds_debuginfo() {
     );
     let flags = decoded_rustflags(&rustflags);
 
-    assert!(flags.contains(&"-Copt-level=3"));
-    assert!(flags.contains(&"-Cdebug-assertions=off"));
-    assert!(flags.contains(&"-Cdebuginfo=2"));
+    assert_eq!(
+        CodegenProfilePolicy::ReleaseLikeWithDebugInfo
+            .pinned_options()
+            .iter()
+            .map(|pin| pin.rustc_flag())
+            .collect::<Vec<_>>(),
+        [
+            "-Copt-level=3",
+            "-Cdebug-assertions=off",
+            "-Coverflow-checks=off",
+            "-Cdebuginfo=2"
+        ]
+    );
+    assert!(!flags.iter().any(|flag| flag.starts_with("-Cdebuginfo")));
     assert!(flags.contains(&"-Zmir-enable-passes=-JumpThreading"));
     assert!(flags.contains(&"-Zalways-encode-mir"));
     assert!(flags.contains(&"-Csymbol-mangling-version=v0"));
@@ -2569,16 +2589,134 @@ fn build_passthrough_debug_assertions_select_the_wrapper_profile() {
     let flags = decoded_rustflags(&encoded);
 
     assert_eq!(
-        &flags[flags.len() - 6..],
+        &flags[flags.len() - 3..],
         [
-            "-Copt-level=3",
-            "-Cdebug-assertions=on",
-            "-Coverflow-checks=off",
             "-Zmir-enable-passes=-JumpThreading",
             "-Zalways-encode-mir",
             "-Csymbol-mangling-version=v0",
         ]
     );
+    for base in ["RELEASE", "DEV"] {
+        for (key, value) in [
+            ("OPT_LEVEL", "3"),
+            ("DEBUG_ASSERTIONS", "true"),
+            ("OVERFLOW_CHECKS", "false"),
+        ] {
+            assert_eq!(
+                command_env(&cmd, &format!("CARGO_PROFILE_{base}_{key}")).as_deref(),
+                Some(value)
+            );
+        }
+    }
+}
+
+/// A release-like build and `test -- --release` must hand rustc the same
+/// rustflags, or Cargo rebuilds every crate between them.
+#[test]
+fn build_and_test_passthrough_share_rustflags() {
+    let ctx = test_context(OxideConfig::default());
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: None,
+        features: None,
+        cargo_target_dir: None,
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+    let rustflags = |subcommand| {
+        let cmd = passthrough_command_for_test(&ctx, subcommand, &opts, &[]).unwrap();
+        command_env(&cmd, "CARGO_ENCODED_RUSTFLAGS").unwrap()
+    };
+    assert_eq!(
+        rustflags(CargoPassthroughSubcommand::Build),
+        rustflags(CargoPassthroughSubcommand::Test)
+    );
+    let test =
+        passthrough_command_for_test(&ctx, CargoPassthroughSubcommand::Test, &opts, &[]).unwrap();
+    assert!(
+        !test
+            .get_envs()
+            .any(|(key, _)| key.to_string_lossy().starts_with("CARGO_PROFILE_"))
+    );
+}
+
+#[test]
+fn codegen_option_names_cover_every_rustc_spelling() {
+    let flags: Vec<String> = [
+        "-Copt-level=0",
+        "-C",
+        "debug-assertions=on",
+        "--codegen",
+        "overflow-checks=on",
+        "--codegen=debuginfo=1",
+        "-O",
+        "-g",
+        "-Copt_level=1",
+        "-Cdebug-assertions",
+        "-Ccodegen-units=1",
+        "-Lnative=/lib",
+        "--cfg",
+        "feature=\"x\"",
+        "-C",
+    ]
+    .map(String::from)
+    .into();
+    assert_eq!(
+        codegen_option_names(&flags),
+        [
+            "opt-level",
+            "debug-assertions",
+            "overflow-checks",
+            "debuginfo",
+            "opt-level",
+            "debuginfo",
+            "opt-level",
+            "debug-assertions",
+            "codegen-units"
+        ]
+    );
+}
+
+/// Pins reach the base profiles and the `--profile` a command selects; a
+/// policy without pins leaves every profile alone.
+#[test]
+fn profile_pins_cover_base_and_selected_profiles() {
+    let mut cmd = Command::new("cargo");
+    cmd.args([
+        "build",
+        "--profile",
+        "release-lto",
+        "--",
+        "--profile",
+        "ignored",
+    ]);
+    apply_profile_pins(&mut cmd, CodegenProfilePolicy::ReleaseLikeWithDebugInfo);
+    for name in ["RELEASE", "DEV", "RELEASE_LTO"] {
+        for (key, value) in [
+            ("OPT_LEVEL", "3"),
+            ("DEBUG_ASSERTIONS", "false"),
+            ("OVERFLOW_CHECKS", "false"),
+            ("DEBUG", "2"),
+        ] {
+            assert_eq!(
+                command_env(&cmd, &format!("CARGO_PROFILE_{name}_{key}")).as_deref(),
+                Some(value),
+                "{name}_{key}"
+            );
+        }
+    }
+    assert!(command_env(&cmd, "CARGO_PROFILE_IGNORED_OPT_LEVEL").is_none());
+
+    let mut test = Command::new("cargo");
+    test.args(["test", "--profile=bench"]);
+    apply_profile_pins(&mut test, CodegenProfilePolicy::CargoSelected);
+    assert_eq!(test.get_envs().count(), 0);
 }
 
 #[test]

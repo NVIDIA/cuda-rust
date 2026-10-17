@@ -118,7 +118,7 @@ pub fn codegen_run(
         println!();
     }
     println!("This is the proper cargo workflow:");
-    println!("  CARGO_ENCODED_RUSTFLAGS=<cuda-oxide flags> cargo run");
+    println!("  CARGO_ENCODED_RUSTFLAGS=<cuda-oxide flags> CARGO_PROFILE_*=<pins> cargo run");
     println!();
 
     touch_main_rs(&example_dir);

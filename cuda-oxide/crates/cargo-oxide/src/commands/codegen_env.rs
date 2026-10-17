@@ -20,11 +20,11 @@ pub(super) const ENCODED_RUSTFLAGS_SEPARATOR: char = '\u{1f}';
 pub(super) const FULL_DEBUG_GET_MUT_OUTLINE_CFG: &str =
     "cuda_oxide_internal_outline_disjoint_get_mut_v1";
 
-/// Profile-related rustc flags owned by cuda-oxide.
+/// Profile-related codegen settings owned by cuda-oxide.
 ///
 /// Backend selection and MIR/symbol invariants are always applied separately.
-/// `CargoSelected` deliberately adds no optimization, assertion, or debug-info
-/// flags so Cargo's chosen profile remains authoritative.
+/// `CargoSelected` deliberately pins no optimization, assertion, or debug-info
+/// setting so Cargo's chosen profile remains authoritative.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CodegenProfilePolicy {
     CargoSelected,
@@ -41,6 +41,145 @@ impl CodegenProfilePolicy {
             Self::ReleaseLike
         }
     }
+
+    /// The codegen options this policy pins, in rustc flag order.
+    pub(super) fn pinned_options(self) -> &'static [PinnedOption] {
+        const OPT_LEVEL: PinnedOption = PinnedOption::new("opt-level", "3", "OPT_LEVEL", "3");
+        const NO_ASSERTIONS: PinnedOption =
+            PinnedOption::new("debug-assertions", "off", "DEBUG_ASSERTIONS", "false");
+        const ASSERTIONS: PinnedOption =
+            PinnedOption::new("debug-assertions", "on", "DEBUG_ASSERTIONS", "true");
+        // Overflow-check MIR changes code shape enough to break pattern-sensitive
+        // device lowerings, so it is off in every release-like policy. Pinned
+        // explicitly: rustc derives it from debug assertions, and Cargo's dev
+        // profile (passthrough builds without `--release`) would turn it on.
+        const NO_OVERFLOW_CHECKS: PinnedOption =
+            PinnedOption::new("overflow-checks", "off", "OVERFLOW_CHECKS", "false");
+        const DEBUGINFO: PinnedOption = PinnedOption::new("debuginfo", "2", "DEBUG", "2");
+        match self {
+            Self::CargoSelected => &[],
+            Self::ReleaseLike => &[OPT_LEVEL, NO_ASSERTIONS, NO_OVERFLOW_CHECKS],
+            Self::ReleaseLikeWithDebugAssertions => &[OPT_LEVEL, ASSERTIONS, NO_OVERFLOW_CHECKS],
+            Self::ReleaseLikeWithDebugInfo => {
+                &[OPT_LEVEL, NO_ASSERTIONS, NO_OVERFLOW_CHECKS, DEBUGINFO]
+            }
+        }
+    }
+}
+
+/// One rustc codegen option a release-like policy requires, with its Cargo
+/// profile spelling.
+///
+/// The Cargo profile is the primary carrier: Cargo fingerprints resolved
+/// profile values, not where they came from, so a release-like `build` whose
+/// pins equal the release defaults shares every artifact with a plain
+/// `cargo test --release`. A `-C` flag in RUSTFLAGS would change every crate's
+/// cache key and rebuild the whole graph between the two. The rustc flag is
+/// emitted only when incoming rustflags set the same option, since rustflags
+/// follow profile flags on the rustc command line and would otherwise win.
+///
+/// Limits of the profile route: `[profile.<name>.package.<pkg>]` overrides and
+/// `--config profile.*` arguments outrank the environment, and host units
+/// (build scripts, proc-macros) follow Cargo's `build-override` defaults.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct PinnedOption {
+    /// rustc `-C` option name.
+    name: &'static str,
+    /// Value in rustc's `-C name=value` spelling.
+    rustc_value: &'static str,
+    /// Suffix of the `CARGO_PROFILE_<PROFILE>_` environment key.
+    cargo_key: &'static str,
+    /// Value in Cargo's profile spelling.
+    cargo_value: &'static str,
+}
+
+impl PinnedOption {
+    const fn new(
+        name: &'static str,
+        rustc_value: &'static str,
+        cargo_key: &'static str,
+        cargo_value: &'static str,
+    ) -> Self {
+        Self {
+            name,
+            rustc_value,
+            cargo_key,
+            cargo_value,
+        }
+    }
+
+    pub(super) fn rustc_flag(self) -> String {
+        format!("-C{}={}", self.name, self.rustc_value)
+    }
+}
+
+/// Base Cargo profiles that always receive the pins: release-like routes run
+/// `--release`, passthrough builds may run the default dev profile, and custom
+/// profiles inherit unset keys from one of the two.
+const BASE_CARGO_PROFILES: [&str; 2] = ["RELEASE", "DEV"];
+
+/// Set the policy's pins on the base Cargo profiles and on the profile the
+/// command selects with `--profile`, which may set the pinned keys itself.
+pub(super) fn apply_profile_pins(cmd: &mut Command, profile: CodegenProfilePolicy) {
+    let pins = profile.pinned_options();
+    if pins.is_empty() {
+        return;
+    }
+    let mut profiles: Vec<String> = BASE_CARGO_PROFILES.map(String::from).into();
+    if let Some(selected) = selected_cargo_profile(cmd)
+        && !profiles.contains(&selected)
+    {
+        profiles.push(selected);
+    }
+    for option in pins {
+        for name in &profiles {
+            cmd.env(
+                format!("CARGO_PROFILE_{name}_{}", option.cargo_key),
+                option.cargo_value,
+            );
+        }
+    }
+}
+
+/// The `--profile` a Cargo command selects, in its environment-key spelling
+/// (`release-lto` -> `RELEASE_LTO`). Arguments after `--` belong to the program.
+fn selected_cargo_profile(cmd: &Command) -> Option<String> {
+    let mut args = cmd
+        .get_args()
+        .map(|arg| arg.to_string_lossy())
+        .take_while(|arg| arg != "--");
+    let mut selected = None;
+    while let Some(arg) = args.next() {
+        if arg == "--profile" {
+            selected = args.next().map(|name| name.into_owned());
+        } else if let Some(name) = arg.strip_prefix("--profile=") {
+            selected = Some(name.to_string());
+        }
+    }
+    selected.map(|name| name.to_uppercase().replace('-', "_"))
+}
+
+/// Names of the `-C` options a rustflags list sets, normalized to rustc's
+/// dashed spelling, including the `-O` (`opt-level`) and `-g` (`debuginfo`)
+/// shorthands.
+pub(super) fn codegen_option_names(flags: &[String]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut tokens = flags.iter().map(String::as_str);
+    while let Some(token) = tokens.next() {
+        let setting = match token {
+            "-O" => Some("opt-level"),
+            "-g" => Some("debuginfo"),
+            "-C" | "--codegen" => tokens.next(),
+            _ => token
+                .strip_prefix("--codegen=")
+                .or_else(|| token.strip_prefix("-C")),
+        };
+        if let Some(setting) = setting {
+            let name = setting.split_once('=').map_or(setting, |(name, _)| name);
+            names.push(name.replace('_', "-"));
+        }
+    }
+    names
 }
 
 /// Construct boundary-preserving rustc flags for Cargo.
@@ -97,26 +236,17 @@ pub(super) fn build_encoded_rustflags_with_existing(
     }
     flags.extend(explicit_rustflags.iter().cloned());
     strip_wrapper_owned_codegen_cfgs(&mut flags);
+    // Pins travel in the Cargo profile (`apply_profile_pins`); a rustc flag is
+    // needed only to beat an incoming flag for the same option.
+    let overridden = codegen_option_names(&flags);
+    let pin_flags: Vec<String> = profile
+        .pinned_options()
+        .iter()
+        .filter(|option| overridden.iter().any(|name| name == option.name))
+        .map(|option| option.rustc_flag())
+        .collect();
     flags.push(format!("-Zcodegen-backend={}", backend_so.display()));
-    if matches!(
-        profile,
-        CodegenProfilePolicy::ReleaseLike
-            | CodegenProfilePolicy::ReleaseLikeWithDebugAssertions
-            | CodegenProfilePolicy::ReleaseLikeWithDebugInfo
-    ) {
-        flags.push("-Copt-level=3".to_string());
-        if profile == CodegenProfilePolicy::ReleaseLikeWithDebugAssertions {
-            // rustc normally enables overflow checks together with debug
-            // assertions. Keep them independent: overflow-check MIR changes
-            // code shape enough to break pattern-sensitive device lowerings.
-            flags.extend([
-                "-Cdebug-assertions=on".to_string(),
-                "-Coverflow-checks=off".to_string(),
-            ]);
-        } else {
-            flags.push("-Cdebug-assertions=off".to_string());
-        }
-    }
+    flags.extend(pin_flags);
     flags.extend([
         "-Zmir-enable-passes=-JumpThreading".to_string(),
         // Device codegen is whole-program: `collector` walks the call graph from
@@ -134,9 +264,6 @@ pub(super) fn build_encoded_rustflags_with_existing(
         "-Zalways-encode-mir".to_string(),
         "-Csymbol-mangling-version=v0".to_string(),
     ]);
-    if profile == CodegenProfilePolicy::ReleaseLikeWithDebugInfo {
-        flags.push("-Cdebuginfo=2".to_string());
-    }
     flags.join(&ENCODED_RUSTFLAGS_SEPARATOR.to_string())
 }
 
@@ -287,6 +414,7 @@ fn apply_codegen_rustflags(
 
     cmd.env("CARGO_ENCODED_RUSTFLAGS", encoded)
         .env_remove("RUSTFLAGS");
+    apply_profile_pins(cmd, profile);
 }
 
 /// Apply the two deliberately different Cargo cache boundaries:

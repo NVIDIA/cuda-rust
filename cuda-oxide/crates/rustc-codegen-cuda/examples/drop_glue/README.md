@@ -42,6 +42,24 @@ distinguish a destructor that ran from one that was correctly suppressed.
 | 5 | `MaybeUninit::write` + `assume_init_drop` | `0xDEADBEEF` |
 | 6 | `MaybeUninit::assume_init_read` | `0xDEADBEEF` |
 
+## Compile-only nontermination probes
+
+Two additional kernels guard against erasing non-terminating destructors
+as no-ops (#1360):
+
+- `diverging_cfg_drop_probe`: the destructor contains `loop {}`.
+- `diverging_recursive_drop_probe`: the destructor calls an unconditionally
+  recursive helper.
+
+Each probe writes a sentinel before the drop and a different value after
+it. `verify-code-shape.sh` checks the optimized PTX: the pre-drop store
+remains and is immediately followed by an unconditional self-loop, while
+the unreachable post-drop store is absent.
+
+These kernels are compiled but **never launched by `main`**. Do not launch
+them manually: their destructors intentionally never return. The existing
+runtime checks above continue to exercise terminating destructors only.
+
 ## Usage
 
 Optimized:
@@ -54,6 +72,21 @@ Low MIR optimization:
 
 ```bash
 CUDA_OXIDE_NO_OPT=1 cargo oxide run drop_glue
+```
+
+Optimized compile-only code-shape checks, from the repository root:
+
+```bash
+cargo oxide build drop_glue
+bash crates/rustc-codegen-cuda/examples/drop_glue/verify-code-shape.sh
+```
+
+The shape check targets optimized output; rebuild without
+`CUDA_OXIDE_NO_OPT=1` before running it. The existing smoketest runner also
+discovers and runs this script automatically:
+
+```bash
+scripts/smoketest.sh -o '^drop_glue$'
 ```
 
 ## Expected output

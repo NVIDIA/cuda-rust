@@ -193,17 +193,6 @@ pub trait WarpCollective: ThreadGroup {
 // Helpers (not part of the public surface)
 // =============================================================================
 
-/// Linearize the (x, y, z) thread index inside the current block.
-#[inline(always)]
-fn thread_in_block_linear() -> u32 {
-    let tx = thread::threadIdx_x();
-    let ty = thread::threadIdx_y();
-    let tz = thread::threadIdx_z();
-    let dx = thread::blockDim_x();
-    let dy = thread::blockDim_y();
-    (tz * dy + ty) * dx + tx
-}
-
 /// Total threads per block.
 #[inline(always)]
 fn threads_per_block() -> u32 {
@@ -268,7 +257,7 @@ impl ThreadGroup for Grid {
 
     #[inline(always)]
     fn thread_rank(&self) -> u32 {
-        block_in_grid_linear() * threads_per_block() + thread_in_block_linear()
+        block_in_grid_linear() * threads_per_block() + thread::block_linear_thread_id_here()
     }
 
     #[inline(always)]
@@ -319,7 +308,7 @@ impl ThreadGroup for Cluster {
 
     #[inline(always)]
     fn thread_rank(&self) -> u32 {
-        cluster::block_rank() * threads_per_block() + thread_in_block_linear()
+        cluster::block_rank() * threads_per_block() + thread::block_linear_thread_id_here()
     }
 
     #[inline(always)]
@@ -383,7 +372,7 @@ impl ThreadGroup for ThreadBlock {
 
     #[inline(always)]
     fn thread_rank(&self) -> u32 {
-        thread_in_block_linear()
+        thread::block_linear_thread_id_here()
     }
 
     #[inline(always)]
@@ -1279,11 +1268,11 @@ where
     acc
 }
 
-/// Linear warp index inside the current block. Works for any block dim
-/// shape; `warp::warp_id` only handles the 1D case.
+/// Linear warp index inside the current block; see
+/// [`thread::block_linear_thread_id`].
 #[inline(always)]
 fn warp_in_block_linear() -> u32 {
-    thread_in_block_linear() / 32
+    thread::block_linear_thread_id_here() / 32
 }
 
 /// Reduce one value per thread down to a single value across a thread block.

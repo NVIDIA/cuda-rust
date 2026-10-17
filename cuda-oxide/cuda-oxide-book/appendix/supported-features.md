@@ -106,6 +106,16 @@ thin-pointer-only device-global union initializers may preserve one full-width
 relocation at byte zero; mixed pointer/integer device-global initializers remain
 rejected.
 
+A union field that holds a shared-memory pointer, directly or through structs
+and bounded arrays, uses generic-pointer storage, so the union's byte image is
+the same on every target and its integer view equals `ptr as usize`. Use
+`cvta_generic_to_shared_offset` or `cvta_generic_to_shared_u32` when the
+shared-window offset (the pointer's position inside the block's shared memory)
+is wanted instead. A field that holds more than 16 shared-memory pointers once
+its arrays are expanded is rejected. Taking the in-place address of such a
+field (`u.ptr = p`, `&u.ptr`, `&mut u.ptr`) is refused with a diagnostic; build
+the union by value and read its fields by value.
+
 Enum constants preserve payload relocations to device statics, including
 non-zero byte addends. This includes niche-encoded `Option<&T>` and
 direct-tagged enum layouts, both for direct thin-reference payloads and for

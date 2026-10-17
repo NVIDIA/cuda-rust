@@ -176,6 +176,15 @@ fn value_group_template_m64n128_bf16(mma_count: usize) -> String {
     )
 }
 
+fn value_group_template_m64n128_f16(mma_count: usize) -> String {
+    value_group_template_for_mnemonic(
+        mma_count,
+        M64N128_VALUE_ACCUMULATOR_COUNT,
+        "wgmma.mma_async.sync.aligned.m64n128k16.f32.f16.f16",
+        "1, 1, 1, 0, 0",
+    )
+}
+
 fn value_group_constraints_for_count(accumulator_count: usize, descriptor_count: usize) -> String {
     let mut constraints = vec!["=f".to_owned(); accumulator_count];
     constraints.extend((0..accumulator_count).map(|index| index.to_string()));
@@ -417,6 +426,22 @@ pub(crate) fn convert_mma_group_values_m64n128_bf16(
         op,
         M64N128_VALUE_ACCUMULATOR_COUNT,
         value_group_template_m64n128_bf16,
+    )
+}
+
+/// Lower a value-form F16 m64n128 WGMMA full-drain group.
+pub(crate) fn convert_mma_group_values_m64n128_f16(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+    _operands_info: &OperandsInfo,
+) -> Result<()> {
+    convert_mma_group_values_for_shape(
+        ctx,
+        rewriter,
+        op,
+        M64N128_VALUE_ACCUMULATOR_COUNT,
+        value_group_template_m64n128_f16,
     )
 }
 
@@ -776,7 +801,7 @@ mod tests {
         WgmmaInputKind, counted_loop_constraints, counted_loop_template,
         counted_pipeline_constraints, counted_pipeline_template, deferred_group_template,
         pipeline_constraints, pipeline_template, value_group_constraints, value_group_template,
-        value_group_template_m64n128_bf16,
+        value_group_template_m64n128_bf16, value_group_template_m64n128_f16,
     };
 
     #[test]
@@ -865,6 +890,21 @@ mod tests {
         assert!(template.contains("$63}"));
         assert!(template.contains("$128, $129"));
         assert!(template.contains("$130, $131"));
+        assert!(!template.contains("ld.f32"));
+        assert!(!template.contains("st.f32"));
+    }
+
+    #[test]
+    fn m64n128_f16_value_template_uses_sixty_four_tied_accumulators() {
+        let template = value_group_template_m64n128_f16(2);
+        assert_eq!(template.matches("wgmma.mma_async").count(), 2);
+        assert!(template.contains("wgmma.mma_async.sync.aligned.m64n128k16.f32.f16.f16"));
+        assert!(!template.contains(".bf16.bf16"));
+        assert!(template.contains("{$0, $1, $2"));
+        assert!(template.contains("$63}"));
+        assert!(template.contains("$128, $129"));
+        assert!(template.contains("$130, $131"));
+        assert!(template.contains("1, 1, 1, 0, 0"));
         assert!(!template.contains("ld.f32"));
         assert!(!template.contains("st.f32"));
     }

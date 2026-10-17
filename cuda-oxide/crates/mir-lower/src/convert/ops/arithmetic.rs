@@ -474,6 +474,14 @@ pub(crate) fn convert_shl(
 /// (trunc) of the shift amount to match, then masks it with `bit_width - 1`.
 /// That matches Rust's unchecked/release shift behavior and avoids LLVM poison
 /// for oversized counts.
+///
+/// Two representation rules apply on top of the width rules. The shift value
+/// is unified to the signless representation first, because every op here is an
+/// `IntBinArithOp` and pliron-llvm rejects a represented operand of one. A count
+/// that differs in representation at equal width is then a representation
+/// change rather than a width change: `trunc` is illegal there (LLVM requires a
+/// strictly smaller result) and reusing the count unchanged would leave the
+/// mask and the shift disagreeing with it.
 fn convert_shift<F>(
     ctx: &mut Context,
     rewriter: &mut DialectConversionRewriter,
@@ -486,7 +494,6 @@ where
     let (lhs, rhs) = get_binary_operands(op, ctx)?;
 
     let lhs_ty = lhs.get_type(ctx);
-    let rhs_ty = rhs.get_type(ctx);
     let lhs_width = lhs_ty
         .deref(ctx)
         .downcast_ref::<IntegerType>()
@@ -495,16 +502,84 @@ where
         })?
         .width();
 
-    let rhs_casted = if lhs_ty != rhs_ty {
-        let rhs_width = rhs_ty
-            .deref(ctx)
-            .downcast_ref::<IntegerType>()
-            .ok_or_else(|| {
-                pliron::input_error!(op.deref(ctx).loc(), "Shift amount must be integer type")
-            })?
-            .width();
+    let lhs = normalize_shift_value(ctx, rewriter, lhs, lhs_ty, lhs_width);
+    let lhs_ty = lhs.get_type(ctx);
 
-        let cast_op = if lhs_width > rhs_width {
+    let rhs_casted = normalize_shift_amount(ctx, rewriter, op, rhs, lhs_ty, lhs_width)?;
+    let rhs_masked = mask_shift_amount(ctx, rewriter, rhs_casted, lhs_ty, lhs_width);
+    let llvm_op = builder(ctx, lhs, rhs_masked);
+    rewriter.insert_operation(ctx, llvm_op);
+    rewriter.replace_operation(ctx, op, llvm_op);
+    Ok(())
+}
+
+/// The shift value on the dialect's canonical integer representation.
+///
+/// Every op in the chain — the count mask's `llvm.and` and the shift itself —
+/// is an `IntBinArithOp`, and pliron-llvm rejects a represented (`uiN`/`siN`)
+/// operand of one outright ("Integer binary arithmetic Op can only have
+/// signless integer result/operand type"). Carrying a represented value into
+/// the mask therefore cannot produce a legal module, whatever the count looks
+/// like; the value is unified here first.
+///
+/// The change is a same-width representation change of the same bits, and the
+/// exporter prints every `IntegerType` as `i{width}` either way, so this is a
+/// no-op in the emitted LLVM IR.
+fn normalize_shift_value(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    lhs: Value,
+    lhs_ty: pliron::r#type::TypeHandle,
+    lhs_width: u32,
+) -> Value {
+    let signless: pliron::r#type::TypeHandle =
+        IntegerType::get(ctx, lhs_width, Signedness::Signless).into();
+    if lhs_ty == signless {
+        return lhs;
+    }
+    let cast_op = llvm::BitcastOp::new(ctx, lhs, signless).get_operation();
+    rewriter.insert_operation(ctx, cast_op);
+    cast_op.deref(ctx).get_result(0)
+}
+
+/// Bring a shift amount onto the shift value's integer representation.
+///
+/// The width relation decides the width-changing cases: a narrower amount is
+/// zero-extended, a wider one is truncated. An *equal* width with a different
+/// representation is neither — it is a representation change of the same bits,
+/// and it must not be expressed as a truncation:
+///
+/// - LLVM `trunc` requires a strictly smaller result, so `trunc i32 -> ui32` is
+///   not a legal instruction and fails module verification (#1328);
+/// - handing the amount over unchanged is not enough either, because the count
+///   mask and the shift itself are `SameOperandsAndResultType` ops, so the whole
+///   chain has to agree on one representation.
+///
+/// The same-width case therefore uses the same-width representation change the
+/// cast lowering already selects for `IntToInt (same width)`.
+fn normalize_shift_amount(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+    rhs: Value,
+    lhs_ty: pliron::r#type::TypeHandle,
+    lhs_width: u32,
+) -> Result<Value> {
+    let rhs_ty = rhs.get_type(ctx);
+    if rhs_ty == lhs_ty {
+        return Ok(rhs);
+    }
+
+    let rhs_width = rhs_ty
+        .deref(ctx)
+        .downcast_ref::<IntegerType>()
+        .ok_or_else(|| {
+            pliron::input_error!(op.deref(ctx).loc(), "Shift amount must be integer type")
+        })?
+        .width();
+
+    let cast_op = match lhs_width.cmp(&rhs_width) {
+        std::cmp::Ordering::Greater => {
             let zext = llvm::ZExtOp::new(ctx, rhs, lhs_ty);
             let nneg_key: pliron::identifier::Identifier = "llvm_nneg_flag".try_into().unwrap();
             zext.get_operation()
@@ -512,20 +587,12 @@ where
                 .attributes
                 .set(nneg_key, pliron::builtin::attributes::BoolAttr::new(false));
             zext.get_operation()
-        } else {
-            llvm::TruncOp::new(ctx, rhs, lhs_ty).get_operation()
-        };
-        rewriter.insert_operation(ctx, cast_op);
-        cast_op.deref(ctx).get_result(0)
-    } else {
-        rhs
+        }
+        std::cmp::Ordering::Less => llvm::TruncOp::new(ctx, rhs, lhs_ty).get_operation(),
+        std::cmp::Ordering::Equal => llvm::BitcastOp::new(ctx, rhs, lhs_ty).get_operation(),
     };
-
-    let rhs_masked = mask_shift_amount(ctx, rewriter, rhs_casted, lhs_ty, lhs_width);
-    let llvm_op = builder(ctx, lhs, rhs_masked);
-    rewriter.insert_operation(ctx, llvm_op);
-    rewriter.replace_operation(ctx, op, llvm_op);
-    Ok(())
+    rewriter.insert_operation(ctx, cast_op);
+    Ok(cast_op.deref(ctx).get_result(0))
 }
 
 fn mask_shift_amount(
@@ -538,6 +605,8 @@ fn mask_shift_amount(
     use pliron::utils::apint::APInt;
     use std::num::NonZeroUsize;
 
+    // The mask, the `and`, and the shift all live on the signless
+    // representation `normalize_shift_value` established.
     let mask_ty = IntegerType::get(ctx, lhs_width, Signedness::Signless);
     let mask_attr = pliron::builtin::attributes::IntegerAttr::new(
         mask_ty,
@@ -1007,5 +1076,376 @@ mod tests {
         assert_eq!(fmul.fast_math_flags(&ctx).0, FastmathFlags::empty());
         assert_eq!(fadd.fast_math_flags(&ctx).0, FastmathFlags::empty());
         assert_eq!(fsub.fast_math_flags(&ctx).0, FastmathFlags::empty());
+    }
+
+    // ========================================================================
+    // Direct converter coverage for shift representation handling.
+    //
+    // The source pipeline normalizes every integer value through `convert_type`
+    // before a shift is converted, so the representation arms of the count
+    // normalization cannot be reached from Rust source on current main. These
+    // tests build the operands at that boundary by hand and call the production
+    // path directly, which is the only way to execute those arms.
+    // ========================================================================
+
+    use pliron::builtin::ops::ConstantOp;
+    use pliron::irbuild::inserter::Inserter;
+    use pliron::linked_list::ContainsLinkedList;
+    use pliron::utils::apint::APInt;
+    use pliron::value::Value;
+    use std::num::NonZeroUsize;
+
+    /// A `builtin.constant` defining a value of the requested representation.
+    fn represented_operand(
+        ctx: &mut Context,
+        block: Ptr<pliron::basic_block::BasicBlock>,
+        width: u32,
+        signedness: Signedness,
+    ) -> (TypeHandle, Value) {
+        let ty = IntegerType::get(ctx, width, signedness);
+        let attr = IntegerAttr::new(
+            ty,
+            APInt::from_u32(3, NonZeroUsize::new(width as usize).unwrap()),
+        );
+        let op = ConstantOp::new(ctx, Box::new(attr)).get_operation();
+        op.insert_at_back(block, ctx);
+        (ty.into(), op.deref(ctx).get_result(0))
+    }
+
+    /// Run the production shift conversion with a real insertion point and hand
+    /// back everything that landed in the block.
+    fn convert_with_real_rewriter(
+        ctx: &mut Context,
+        block: Ptr<pliron::basic_block::BasicBlock>,
+        op: Ptr<Operation>,
+        right: bool,
+    ) -> Vec<Ptr<Operation>> {
+        let mut rewriter = DialectConversionRewriter::default();
+        rewriter.set_insertion_point_to_block_end(block);
+        // The production entry points, not a hand-built builder: `convert_shl`
+        // also attaches the integer-overflow flags the dialect requires.
+        if right {
+            convert_shr(ctx, &mut rewriter, op, &OperandsInfo::default())
+                .expect("shift conversion failed");
+        } else {
+            convert_shl(ctx, &mut rewriter, op, &OperandsInfo::default())
+                .expect("shift conversion failed");
+        }
+        block.deref(ctx).iter(ctx).collect()
+    }
+
+    fn ops_of<T: pliron::op::Op>(ctx: &Context, ops: &[Ptr<Operation>]) -> Vec<Ptr<Operation>> {
+        ops.iter()
+            .filter(|op| Operation::get_op::<T>(**op, ctx).is_some())
+            .copied()
+            .collect()
+    }
+
+    fn operand_types(ctx: &Context, op: Ptr<Operation>) -> Vec<TypeHandle> {
+        op.deref(ctx).operands().map(|v| v.get_type(ctx)).collect()
+    }
+
+    fn result_types(ctx: &Context, op: Ptr<Operation>) -> Vec<TypeHandle> {
+        (0..op.deref(ctx).get_num_results())
+            .map(|i| op.deref(ctx).get_result(i).get_type(ctx))
+            .collect()
+    }
+
+    /// Every op the conversion produced must satisfy its own verifier. This is
+    /// the assertion that matters: pliron-llvm rejects a represented operand of
+    /// an `IntBinArithOp`, so a legal chain is signless end to end.
+    fn verify_all(ctx: &Context, ops: &[Ptr<Operation>]) {
+        use pliron::common_traits::Verify;
+        for op in ops {
+            op.deref(ctx)
+                .verify(ctx)
+                .unwrap_or_else(|e| panic!("lowered op failed verification: {e}"));
+        }
+    }
+
+    /// Shift by an operand of `count_*` representation and assert the whole
+    /// chain: the expected value unification, the expected count cast, a mask
+    /// carrying `width - 1` on the signless representation, and a shift whose
+    /// operands and result agree.
+    fn check_shift_chain(
+        value_width: u32,
+        value_signedness: Signedness,
+        count_width: u32,
+        count_signedness: Signedness,
+        value_unified: bool,
+        count_cast: &str,
+    ) {
+        let mut ctx = make_ctx();
+        let (_, block) = build_kernel(&mut ctx, vec![], vec![]);
+
+        let (value_ty, value) = represented_operand(&mut ctx, block, value_width, value_signedness);
+        let (_, count) = represented_operand(&mut ctx, block, count_width, count_signedness);
+
+        let shift = Operation::new(
+            &mut ctx,
+            mir::MirShlOp::get_concrete_op_info(),
+            vec![value_ty],
+            vec![value, count],
+            vec![],
+            0,
+        );
+        shift.insert_at_back(block, &ctx);
+
+        let ops = convert_with_real_rewriter(&mut ctx, block, shift, false);
+        verify_all(&ctx, &ops);
+
+        let case = format!(
+            "value {value_width}/{value_signedness:?}, count {count_width}/{count_signedness:?}"
+        );
+
+        // A representation change on the value is one bitcast in the block. The
+        // count's own cast is checked separately, so the two are never confused.
+        let bitcasts = ops_of::<llvm::BitcastOp>(&ctx, &ops);
+        match count_cast {
+            "bitcast" => {
+                assert_eq!(
+                    bitcasts.len(),
+                    1,
+                    "{case}: exactly one representation change"
+                );
+                assert_eq!(
+                    ops_of::<llvm::TruncOp>(&ctx, &ops).len(),
+                    0,
+                    "{case}: no truncation"
+                );
+                assert_eq!(
+                    ops_of::<llvm::ZExtOp>(&ctx, &ops).len(),
+                    0,
+                    "{case}: no widening"
+                );
+            }
+            "zext" => {
+                assert_eq!(
+                    ops_of::<llvm::ZExtOp>(&ctx, &ops).len(),
+                    1,
+                    "{case}: one zero extension"
+                );
+                assert_eq!(ops_of::<llvm::TruncOp>(&ctx, &ops).len(), 0, "{case}");
+                assert_eq!(bitcasts.len(), usize::from(value_unified), "{case}");
+            }
+            "trunc" => {
+                assert_eq!(
+                    ops_of::<llvm::TruncOp>(&ctx, &ops).len(),
+                    1,
+                    "{case}: one truncation"
+                );
+                assert_eq!(ops_of::<llvm::ZExtOp>(&ctx, &ops).len(), 0, "{case}");
+                assert_eq!(bitcasts.len(), usize::from(value_unified), "{case}");
+            }
+            "none" => {
+                assert_eq!(ops_of::<llvm::ZExtOp>(&ctx, &ops).len(), 0, "{case}");
+                assert_eq!(ops_of::<llvm::TruncOp>(&ctx, &ops).len(), 0, "{case}");
+                assert_eq!(
+                    bitcasts.len(),
+                    usize::from(value_unified),
+                    "{case}: only the value is unified, if at all"
+                );
+            }
+            other => panic!("unknown count cast {other}"),
+        }
+
+        let expected_ty: TypeHandle =
+            IntegerType::get(&mut ctx, value_width, Signedness::Signless).into();
+
+        let and = ops_of::<llvm::AndOp>(&ctx, &ops);
+        assert_eq!(and.len(), 1, "{case}: one count mask");
+        let and_op = and[0];
+        let and_operands = operand_types(&ctx, and_op);
+        assert_eq!(and_operands.len(), 2, "{case}: mask has two operands");
+        assert_eq!(
+            and_operands[0], and_operands[1],
+            "{case}: and operand types agree"
+        );
+        assert_eq!(
+            and_operands[0], expected_ty,
+            "{case}: and works on the value width"
+        );
+        assert_eq!(
+            result_types(&ctx, and_op),
+            vec![expected_ty],
+            "{case}: and result"
+        );
+
+        let mask_operand = and_op.deref(&ctx).get_operand(1);
+        let constant = mask_operand
+            .defining_op()
+            .and_then(|op| Operation::get_op::<ConstantOp>(op, &ctx))
+            .expect("mask operand is a constant");
+        let attr = constant
+            .get_attr_builtin_constant_value(&ctx)
+            .expect("mask constant carries a value");
+        let integer = (&**attr as &dyn pliron::attribute::Attribute)
+            .downcast_ref::<IntegerAttr>()
+            .expect("mask constant is an integer");
+        assert_eq!(
+            integer.value(),
+            APInt::from_u32(
+                value_width - 1,
+                NonZeroUsize::new(value_width as usize).unwrap()
+            ),
+            "{case}: mask value is bit_width - 1"
+        );
+        assert_eq!(
+            integer.get_type().deref(&ctx).signedness(),
+            Signedness::Signless,
+            "{case}: mask carries the signless representation"
+        );
+
+        let shl = ops_of::<llvm::ShlOp>(&ctx, &ops);
+        assert_eq!(shl.len(), 1, "{case}: one shift");
+        let shl_op = shl[0];
+        let shl_operands = operand_types(&ctx, shl_op);
+        assert_eq!(
+            shl_operands[0], shl_operands[1],
+            "{case}: shift operand types agree"
+        );
+        assert_eq!(shl_operands[0], expected_ty, "{case}: shift is signless");
+        assert_eq!(
+            shl_op.deref(&ctx).get_operand(1),
+            and_op.deref(&ctx).get_result(0),
+            "{case}: the shift consumes the masked count"
+        );
+        assert_eq!(
+            result_types(&ctx, shl_op),
+            vec![expected_ty],
+            "{case}: shift result"
+        );
+    }
+
+    /// #1328 as reported: an unsigned-32 value shifted by a signless-32 count.
+    /// The value is unified to the shift's canonical representation; the count,
+    /// already signless, is left alone. A truncation here is the reported bug.
+    #[test]
+    fn represented_value_is_unified_to_signless() {
+        check_shift_chain(
+            32,
+            Signedness::Unsigned,
+            32,
+            Signedness::Signless,
+            true,
+            "none",
+        );
+    }
+
+    /// The mirror case: a signless value with a represented count. The value
+    /// needs nothing, and the count gets the same-width representation change.
+    #[test]
+    fn represented_count_is_unified_to_signless() {
+        check_shift_chain(
+            32,
+            Signedness::Signless,
+            32,
+            Signedness::Unsigned,
+            false,
+            "bitcast",
+        );
+    }
+
+    /// A signed-32 value against a signless count: same-width representation
+    /// change on the value, no widening or narrowing anywhere.
+    #[test]
+    fn signed_value_is_unified_without_a_width_change() {
+        check_shift_chain(
+            32,
+            Signedness::Signed,
+            32,
+            Signedness::Signless,
+            true,
+            "none",
+        );
+    }
+
+    /// Identical representations introduce no cast at all, but the count is
+    /// still masked.
+    #[test]
+    fn identical_representations_introduce_no_cast() {
+        check_shift_chain(
+            32,
+            Signedness::Signless,
+            32,
+            Signedness::Signless,
+            false,
+            "none",
+        );
+    }
+
+    /// A narrower count is widened, and the result lands on the value's type.
+    #[test]
+    fn narrower_count_is_zero_extended() {
+        check_shift_chain(
+            32,
+            Signedness::Signless,
+            8,
+            Signedness::Signless,
+            false,
+            "zext",
+        );
+    }
+
+    /// A wider count is truncated, and the mask follows the value's width.
+    #[test]
+    fn wider_count_is_truncated() {
+        check_shift_chain(
+            8,
+            Signedness::Signless,
+            32,
+            Signedness::Signless,
+            false,
+            "trunc",
+        );
+    }
+
+    /// Right shift takes its signedness from the original MIR value, not from
+    /// the signless type it lowers to.
+    #[test]
+    fn right_shift_signedness_comes_from_the_original_value() {
+        for (signedness, expects_arithmetic) in
+            [(Signedness::Signed, true), (Signedness::Unsigned, false)]
+        {
+            let mut ctx = make_ctx();
+            let (_, block) = build_kernel(&mut ctx, vec![], vec![]);
+            let (value_ty, value) = represented_operand(&mut ctx, block, 32, signedness);
+            let (_, count) = represented_operand(&mut ctx, block, 32, Signedness::Signless);
+
+            let shift = Operation::new(
+                &mut ctx,
+                mir::MirShrOp::get_concrete_op_info(),
+                vec![value_ty],
+                vec![value, count],
+                vec![],
+                0,
+            );
+            shift.insert_at_back(block, &ctx);
+
+            let ops = convert_with_real_rewriter(&mut ctx, block, shift, true);
+            verify_all(&ctx, &ops);
+
+            let case = format!("{signedness:?} value");
+            assert_eq!(
+                ops_of::<llvm::AShrOp>(&ctx, &ops).len(),
+                usize::from(expects_arithmetic),
+                "{case}: arithmetic form"
+            );
+            assert_eq!(
+                ops_of::<llvm::LShrOp>(&ctx, &ops).len(),
+                usize::from(!expects_arithmetic),
+                "{case}: logical form"
+            );
+            assert_eq!(
+                ops_of::<llvm::AndOp>(&ctx, &ops).len(),
+                1,
+                "{case}: count masked"
+            );
+            assert_eq!(
+                ops_of::<llvm::TruncOp>(&ctx, &ops).len(),
+                0,
+                "{case}: no truncation"
+            );
+        }
     }
 }

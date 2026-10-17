@@ -24,9 +24,12 @@ use pliron::{
 
 /// Legalize a lowered LLVM module for the selected NVVM input dialect.
 ///
-/// Legacy LLVM 7 modules receive the complete compatibility pass. Modern
-/// modules retain modern operations but still rewrite integer widths that
-/// libNVVM does not accept in bit-manipulation intrinsics.
+/// Both dialects first have non-generic pointer returns of non-kernel
+/// functions rewritten to generic pointers, which libNVVM declares correctly
+/// at `.func` boundaries. Legacy LLVM 7 modules then receive the complete
+/// compatibility pass. Modern modules retain modern operations but still
+/// rewrite integer widths that libNVVM does not accept in bit-manipulation
+/// intrinsics.
 ///
 /// `capability` is the numeric compute capability of the build target
 /// (`52`, `86`, `90`, ...). The legacy pass uses it to reject rewrites whose
@@ -38,6 +41,7 @@ pub fn legalize_for_nvvm(
     dialect: NvvmIrDialect,
     capability: u32,
 ) -> Result<()> {
+    legalize::legalize_pointer_returns(ctx, module)?;
     match dialect {
         NvvmIrDialect::LegacyLlvm7 => legalize::legalize_for_legacy_nvvm(ctx, module, capability),
         NvvmIrDialect::Modern => legalize::legalize_nvvm_bit_intrinsics(ctx, module),

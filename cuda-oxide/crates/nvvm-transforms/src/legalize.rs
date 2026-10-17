@@ -27,7 +27,7 @@ use llvm_export::{
 use pliron::{
     attribute::Attribute,
     builtin::{
-        attributes::{BoolAttr, FPDoubleAttr, FPSingleAttr, IntegerAttr, TypeAttr},
+        attributes::{BoolAttr, FPDoubleAttr, FPSingleAttr, IntegerAttr, StringAttr, TypeAttr},
         op_interfaces::{CallOpCallable, CallOpInterface, SymbolOpInterface},
         type_interfaces::FunctionTypeInterface,
         types::{FP16Type, FP32Type, FP64Type, IntegerType, Signedness},
@@ -208,6 +208,205 @@ pub(crate) fn legalize_nvvm_bit_intrinsics(
         }
     }
     Ok(())
+}
+
+/// A function definition whose return type is a bare pointer in a non-generic
+/// address space, with the type it returned before legalization.
+struct PointerReturnRewrite {
+    func: llvm::FuncOp,
+    name: Identifier,
+    original_return: TypeHandle,
+}
+
+/// Give every non-kernel function definition that returns a bare pointer in a
+/// non-generic address space a generic pointer return instead.
+///
+/// libNVVM declares such a return wrongly. Under the NVVM data layout a
+/// shared-memory pointer is 32 bits wide, and libNVVM prints the callee's
+/// return slot as `.param .b64 func_retval0` while the body stores 32 bits
+/// into it and every call site declares a 32-bit `retval0`; ptxas then
+/// rejects the module. The route never met this while such helpers were
+/// inlined before reaching libNVVM, but a `noinline` helper returning
+/// `*mut SharedArray` is a real function. A generic pointer is 64 bits on both
+/// sides, so the function returns one and each side of the call restores the
+/// address space with an `addrspacecast`: the callee casts to generic right
+/// before each `ret`, and each call site casts the generic result back to the
+/// original address space, so every use keeps the type it was lowered with.
+///
+/// Parameters, aggregates holding such pointers and kernels are unaffected and
+/// left alone, as are declarations: their ABI belongs to code cuda-oxide did
+/// not compile. cuda-oxide emits both sides of every call to a definition, so
+/// its signature can change; a function whose address is taken is reported
+/// instead, since an indirect caller would still expect the old signature.
+pub(crate) fn legalize_pointer_returns(ctx: &mut Context, module: Ptr<Operation>) -> Result<()> {
+    let rewrites = pointer_return_rewrites(ctx, module);
+    if rewrites.is_empty() {
+        return Ok(());
+    }
+
+    let mut ops = Vec::new();
+    collect_ops(ctx, module, &mut ops);
+
+    // Validate before changing anything.
+    for &op in &ops {
+        let Some(address_of) = Operation::get_op::<llvm::AddressOfOp>(op, ctx) else {
+            continue;
+        };
+        let name = address_of.get_global_name(ctx);
+        if rewrites.iter().any(|rewrite| rewrite.name == name) {
+            return pliron::input_err!(
+                op.deref(ctx).loc(),
+                "cannot legalize the non-generic pointer return of @{name} for libNVVM: its address is taken"
+            );
+        }
+    }
+
+    let generic_pointer: TypeHandle =
+        llvm_types::PointerType::get(ctx, llvm_types::address_space::GENERIC).into();
+    for rewrite in &rewrites {
+        retype_pointer_return(ctx, rewrite, generic_pointer)?;
+    }
+    for op in ops {
+        let Some(call) = Operation::get_op::<llvm::CallOp>(op, ctx) else {
+            continue;
+        };
+        let CallOpCallable::Direct(callee) = call.callee(ctx) else {
+            continue;
+        };
+        let Some(rewrite) = rewrites.iter().find(|rewrite| rewrite.name == callee) else {
+            continue;
+        };
+        cast_call_result_back(ctx, op, &call, rewrite)?;
+    }
+    Ok(())
+}
+
+fn pointer_return_rewrites(ctx: &Context, module: Ptr<Operation>) -> Vec<PointerReturnRewrite> {
+    let kernel_key: Identifier = "gpu_kernel"
+        .try_into()
+        .expect("static attribute name is valid");
+    let Some(region) = module.deref(ctx).regions().next() else {
+        return Vec::new();
+    };
+    let Some(block) = region.deref(ctx).iter(ctx).next() else {
+        return Vec::new();
+    };
+    let top_level: Vec<_> = block.deref(ctx).iter(ctx).collect();
+    let mut rewrites = Vec::new();
+    for op in top_level {
+        let Some(func) = Operation::get_op::<llvm::FuncOp>(op, ctx) else {
+            continue;
+        };
+        // A declaration names a function cuda-oxide did not compile.
+        if func.get_entry_block(ctx).is_none() {
+            continue;
+        }
+        // A kernel entry returns nothing and is never called.
+        if op
+            .deref(ctx)
+            .attributes
+            .get::<StringAttr>(&kernel_key)
+            .is_some()
+        {
+            continue;
+        }
+        let original_return = func.get_type(ctx).deref(ctx).result_type();
+        let Some(space) = pointer_address_space(ctx, original_return) else {
+            continue;
+        };
+        if space == llvm_types::address_space::GENERIC {
+            continue;
+        }
+        rewrites.push(PointerReturnRewrite {
+            func,
+            name: func.get_symbol_name(ctx),
+            original_return,
+        });
+    }
+    rewrites
+}
+
+fn pointer_address_space(ctx: &Context, ty: TypeHandle) -> Option<u32> {
+    ty.deref(ctx)
+        .downcast_ref::<llvm_types::PointerType>()
+        .map(llvm_types::PointerType::address_space)
+}
+
+/// Change the function's return type to a generic pointer and cast each
+/// returned value to generic right before its `ret`.
+fn retype_pointer_return(
+    ctx: &mut Context,
+    rewrite: &PointerReturnRewrite,
+    generic_pointer: TypeHandle,
+) -> Result<()> {
+    let (arg_types, is_var_arg) = {
+        let func_type = rewrite.func.get_type(ctx);
+        let func_type = func_type.deref(ctx);
+        (func_type.arg_types(), func_type.is_var_arg())
+    };
+    let new_type = llvm_types::FuncType::get(ctx, generic_pointer, arg_types, is_var_arg);
+    rewrite
+        .func
+        .set_attr_llvm_func_type(ctx, TypeAttr::new(new_type.into()));
+
+    let mut body = Vec::new();
+    collect_ops(ctx, rewrite.func.get_operation(), &mut body);
+    for op in body {
+        let Some(ret) = Operation::get_op::<llvm::ReturnOp>(op, ctx) else {
+            continue;
+        };
+        let Some(value) = ret.retval(ctx) else {
+            return pliron::input_err!(
+                op.deref(ctx).loc(),
+                "@{} returns a pointer, but this `ret` carries no value",
+                rewrite.name
+            );
+        };
+        let loc = op.deref(ctx).loc();
+        let cast = llvm::AddrSpaceCastOp::new(ctx, value, generic_pointer);
+        cast.get_operation().deref_mut(ctx).set_loc(loc);
+        let generic = insert_before(ctx, op, cast.get_operation());
+        Operation::replace_operand(op, ctx, 0, generic);
+    }
+    Ok(())
+}
+
+/// Replace a direct call to a retyped function with one that returns the
+/// generic pointer, cast back to the address space its uses were lowered with.
+fn cast_call_result_back(
+    ctx: &mut Context,
+    old_call: Ptr<Operation>,
+    call: &llvm::CallOp,
+    rewrite: &PointerReturnRewrite,
+) -> Result<()> {
+    let args = call.args(ctx);
+    let callee_type = rewrite.func.get_type(ctx);
+    let new_call = llvm::CallOp::new(
+        ctx,
+        CallOpCallable::Direct(rewrite.name.clone()),
+        callee_type,
+        args,
+    );
+    let new_op = new_call.get_operation();
+    {
+        // Keep the call's own attributes (fast-math flags, call-site
+        // attributes) and its location.
+        let attributes = old_call.deref(ctx).attributes.clone();
+        let loc = old_call.deref(ctx).loc();
+        let mut new_call_ref = new_op.deref_mut(ctx);
+        new_call_ref.attributes = attributes;
+        new_call_ref.set_loc(loc);
+    }
+    // The copied dictionary still named the old callee type.
+    let callee_type = rewrite.func.get_type(ctx);
+    new_call.set_callee_type(ctx, callee_type.into());
+    let generic = insert_before(ctx, old_call, new_op);
+
+    let loc = old_call.deref(ctx).loc();
+    let cast = llvm::AddrSpaceCastOp::new(ctx, generic, rewrite.original_return);
+    cast.get_operation().deref_mut(ctx).set_loc(loc);
+    let restored = insert_before(ctx, old_call, cast.get_operation());
+    replace_one_result(ctx, old_call, restored)
 }
 
 /// CUDA 12's LLVM 7 NVVM dialect does not support the scalar `half` type.
@@ -2014,6 +2213,231 @@ mod tests {
         ops.into_iter()
             .map(|op| Operation::get_opid(op, ctx).to_string())
             .collect()
+    }
+
+    /// `define ptr addrspace(3) @recover(i64)`: the address comes in as an
+    /// integer, becomes a generic pointer and is cast to shared before `ret`.
+    fn shared_pointer_recover_function(
+        ctx: &mut Context,
+        module: &ModuleOp,
+    ) -> (llvm::FuncOp, Ptr<BasicBlock>) {
+        let i64_ty: TypeHandle = IntegerType::get(ctx, 64, Signedness::Signless).into();
+        let shared_ptr: TypeHandle = PointerType::get(ctx, 3).into();
+        let generic_ptr: TypeHandle = PointerType::get(ctx, 0).into();
+        let (recover, entry) = function(ctx, module, "recover", shared_ptr, vec![i64_ty]);
+        let address = entry.deref(ctx).get_argument(0);
+        let generic = llvm::IntToPtrOp::new(ctx, address, generic_ptr);
+        generic.get_operation().insert_at_back(entry, ctx);
+        let generic_value = generic.get_operation().deref(ctx).get_result(0);
+        let shared = llvm::AddrSpaceCastOp::new(ctx, generic_value, shared_ptr);
+        shared.get_operation().insert_at_back(entry, ctx);
+        let shared_value = shared.get_operation().deref(ctx).get_result(0);
+        llvm::ReturnOp::new(ctx, Some(shared_value))
+            .get_operation()
+            .insert_at_back(entry, ctx);
+        (recover, entry)
+    }
+
+    /// `define void @use_shared(i64, ptr)`: calls `@recover`, loads a float
+    /// through the shared pointer it returns and stores it to the generic one.
+    fn shared_pointer_caller(
+        ctx: &mut Context,
+        module: &ModuleOp,
+        recover: &llvm::FuncOp,
+    ) -> (Ptr<Operation>, Ptr<Operation>) {
+        let i64_ty: TypeHandle = IntegerType::get(ctx, 64, Signedness::Signless).into();
+        let generic_ptr: TypeHandle = PointerType::get(ctx, 0).into();
+        let f32_ty: TypeHandle = FP32Type::get(ctx).into();
+        let void_ty: TypeHandle = VoidType::get(ctx).into();
+        let (_user, entry) = function(
+            ctx,
+            module,
+            "use_shared",
+            void_ty,
+            vec![i64_ty, generic_ptr],
+        );
+        let (address, out) = {
+            let block = entry.deref(ctx);
+            (block.get_argument(0), block.get_argument(1))
+        };
+        let callee_type = recover.get_type(ctx);
+        let call = llvm::CallOp::new(
+            ctx,
+            CallOpCallable::Direct("recover".try_into().unwrap()),
+            callee_type,
+            vec![address],
+        );
+        call.get_operation().insert_at_back(entry, ctx);
+        let pointer = call.get_operation().deref(ctx).get_result(0);
+        let load = llvm::LoadOp::new(ctx, pointer, f32_ty);
+        load.get_operation().insert_at_back(entry, ctx);
+        let value = load.get_operation().deref(ctx).get_result(0);
+        llvm::StoreOp::new(ctx, value, out)
+            .get_operation()
+            .insert_at_back(entry, ctx);
+        llvm::ReturnOp::new(ctx, None)
+            .get_operation()
+            .insert_at_back(entry, ctx);
+        (call.get_operation(), load.get_operation())
+    }
+
+    #[test]
+    fn non_generic_pointer_returns_become_generic_with_casts_on_both_sides() {
+        for dialect in [NvvmIrDialect::Modern, NvvmIrDialect::LegacyLlvm7] {
+            let mut ctx = Context::new();
+            let module = ModuleOp::new(&mut ctx, "shared_return".try_into().unwrap());
+            let (recover, _) = shared_pointer_recover_function(&mut ctx, &module);
+            let (_call, load) = shared_pointer_caller(&mut ctx, &module, &recover);
+            let shared_ptr: TypeHandle = PointerType::get(&ctx, 3).into();
+            let generic_ptr: TypeHandle = PointerType::get(&ctx, 0).into();
+            module.get_operation().deref(&ctx).verify(&ctx).unwrap();
+
+            crate::legalize_for_nvvm(&mut ctx, module.get_operation(), dialect, 90).unwrap();
+
+            module.get_operation().deref(&ctx).verify(&ctx).unwrap();
+            assert_eq!(
+                recover.get_type(&ctx).deref(&ctx).result_type(),
+                generic_ptr,
+                "{dialect:?}: the definition must return a generic pointer"
+            );
+            assert_eq!(
+                load.deref(&ctx).get_operand(0).get_type(&ctx),
+                shared_ptr,
+                "{dialect:?}: the caller's load must keep its shared pointer"
+            );
+            let ids = operation_ids(&ctx, module.get_operation());
+            assert_eq!(
+                ids.iter().filter(|id| *id == "llvm.addrspacecast").count(),
+                3,
+                "{dialect:?}: one cast before the ret and one after the call join the original: {ids:?}"
+            );
+
+            if dialect == NvvmIrDialect::Modern {
+                let ir = export_module_to_string_with_config(
+                    &ctx,
+                    &module,
+                    &NvvmExportConfig::new(NvvmIrDialect::Modern),
+                )
+                .expect("legalized module exports as modern NVVM IR");
+                assert!(ir.contains("define ptr @recover(i64 "), "{ir}");
+                assert!(!ir.contains("ptr addrspace(3) @recover"), "{ir}");
+                assert!(ir.contains("ret ptr %"), "{ir}");
+                assert!(ir.contains("addrspacecast ptr addrspace(3) %"), "{ir}");
+                assert!(ir.contains("call ptr @recover(i64 "), "{ir}");
+                assert_eq!(
+                    ir.matches("to ptr addrspace(3)").count(),
+                    2,
+                    "the call site casts back to shared next to the original cast:\n{ir}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pointer_return_legalization_leaves_other_signatures_alone() {
+        let mut ctx = Context::new();
+        let module = ModuleOp::new(&mut ctx, "untouched".try_into().unwrap());
+        let i64_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Signless).into();
+        let shared_ptr: TypeHandle = PointerType::get(&ctx, 3).into();
+        let generic_ptr: TypeHandle = PointerType::get(&ctx, 0).into();
+        let void_ty: TypeHandle = VoidType::get(&ctx).into();
+
+        // A generic pointer return needs nothing.
+        let (generic_return, entry) = function(
+            &mut ctx,
+            &module,
+            "generic_return",
+            generic_ptr,
+            vec![i64_ty],
+        );
+        let address = entry.deref(&ctx).get_argument(0);
+        let generic = llvm::IntToPtrOp::new(&mut ctx, address, generic_ptr);
+        generic.get_operation().insert_at_back(entry, &ctx);
+        let generic_value = generic.get_operation().deref(&ctx).get_result(0);
+        llvm::ReturnOp::new(&mut ctx, Some(generic_value))
+            .get_operation()
+            .insert_at_back(entry, &ctx);
+
+        // A shared pointer parameter is declared correctly by libNVVM.
+        let (shared_param, entry) =
+            function(&mut ctx, &module, "shared_param", void_ty, vec![shared_ptr]);
+        llvm::ReturnOp::new(&mut ctx, None)
+            .get_operation()
+            .insert_at_back(entry, &ctx);
+
+        // A declaration belongs to code cuda-oxide did not compile.
+        let declared_type = FuncType::get(&ctx, shared_ptr, vec![i64_ty], false);
+        let declared = llvm::FuncOp::new(&mut ctx, "external".try_into().unwrap(), declared_type);
+        declared
+            .get_operation()
+            .insert_at_back(module_block(&ctx, &module), &ctx);
+        let (_caller, entry) = function(&mut ctx, &module, "caller", void_ty, vec![i64_ty]);
+        let address = entry.deref(&ctx).get_argument(0);
+        let call = llvm::CallOp::new(
+            &mut ctx,
+            CallOpCallable::Direct("external".try_into().unwrap()),
+            declared_type,
+            vec![address],
+        );
+        call.get_operation().insert_at_back(entry, &ctx);
+        llvm::ReturnOp::new(&mut ctx, None)
+            .get_operation()
+            .insert_at_back(entry, &ctx);
+
+        let before = operation_ids(&ctx, module.get_operation());
+        crate::legalize_for_nvvm(&mut ctx, module.get_operation(), NvvmIrDialect::Modern, 120)
+            .unwrap();
+
+        assert_eq!(operation_ids(&ctx, module.get_operation()), before);
+        assert_eq!(
+            generic_return.get_type(&ctx).deref(&ctx).result_type(),
+            generic_ptr
+        );
+        assert_eq!(
+            shared_param.get_type(&ctx).deref(&ctx).arg_types(),
+            vec![shared_ptr]
+        );
+        assert_eq!(
+            declared.get_type(&ctx).deref(&ctx).result_type(),
+            shared_ptr,
+            "a declaration keeps its signature"
+        );
+        assert_eq!(call.callee_type(&ctx), declared_type.into());
+        module.get_operation().deref(&ctx).verify(&ctx).unwrap();
+    }
+
+    #[test]
+    fn pointer_return_legalization_rejects_an_address_taken_function_before_mutation() {
+        let mut ctx = Context::new();
+        let module = ModuleOp::new(&mut ctx, "address_taken".try_into().unwrap());
+        let (recover, _) = shared_pointer_recover_function(&mut ctx, &module);
+        let (call, _) = shared_pointer_caller(&mut ctx, &module, &recover);
+        let shared_ptr: TypeHandle = PointerType::get(&ctx, 3).into();
+        let generic_ptr: TypeHandle = PointerType::get(&ctx, 0).into();
+
+        let (_taker, entry) = function(&mut ctx, &module, "take_address", generic_ptr, vec![]);
+        let address = llvm::AddressOfOp::new(&mut ctx, "recover".try_into().unwrap(), 0);
+        address.get_operation().insert_at_back(entry, &ctx);
+        let address_value = address.get_operation().deref(&ctx).get_result(0);
+        llvm::ReturnOp::new(&mut ctx, Some(address_value))
+            .get_operation()
+            .insert_at_back(entry, &ctx);
+
+        let before = operation_ids(&ctx, module.get_operation());
+        let error =
+            crate::legalize_for_nvvm(&mut ctx, module.get_operation(), NvvmIrDialect::Modern, 120)
+                .unwrap_err();
+        let text = error.disp(&ctx).to_string();
+        assert!(text.contains("@recover"), "{text}");
+        assert!(text.contains("address is taken"), "{text}");
+
+        assert_eq!(operation_ids(&ctx, module.get_operation()), before);
+        assert_eq!(
+            recover.get_type(&ctx).deref(&ctx).result_type(),
+            shared_ptr,
+            "nothing changes once the module is rejected"
+        );
+        assert_eq!(call.deref(&ctx).get_result(0).get_type(&ctx), shared_ptr);
     }
 
     #[test]

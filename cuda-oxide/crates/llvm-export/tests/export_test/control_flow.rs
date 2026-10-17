@@ -11,7 +11,8 @@ use llvm_export::{
 use pliron::{
     basic_block::BasicBlock,
     builtin::{
-        attributes::IntegerAttr,
+        attributes::{IntegerAttr, OperandSegmentSizesAttr, UnitAttr},
+        op_interfaces::{ATTR_KEY_OPERAND_SEGMENT_SIZES, OperandSegmentInterface},
         ops::ModuleOp,
         types::{IntegerType, Signedness},
     },
@@ -23,6 +24,125 @@ use pliron::{
 use std::num::NonZero;
 
 use crate::common::module_top_block;
+
+/// Build a conditional branch forwarding one i32 argument to each destination.
+fn conditional_branch_module(ctx: &mut Context) -> (ModuleOp, CondBrOp) {
+    let module = ModuleOp::new(ctx, "conditional_segments".try_into().unwrap());
+    let module_block = module_top_block(ctx, &module);
+    let i1_ty = IntegerType::get(ctx, 1, Signedness::Signless);
+    let i32_ty = IntegerType::get(ctx, 32, Signedness::Signless);
+    let func_ty = FuncType::get(
+        ctx,
+        i32_ty.into(),
+        vec![i1_ty.into(), i32_ty.into(), i32_ty.into()],
+        false,
+    );
+    let func = FuncOp::new(ctx, "conditional".try_into().unwrap(), func_ty);
+    let entry = func.get_or_create_entry_block(ctx);
+    let condition = entry.deref(ctx).get_argument(0);
+    let if_true = entry.deref(ctx).get_argument(1);
+    let if_false = entry.deref(ctx).get_argument(2);
+    let region = func.get_operation().deref(ctx).get_region(0);
+    let true_dest = BasicBlock::new(ctx, None, vec![i32_ty.into()]);
+    let false_dest = BasicBlock::new(ctx, None, vec![i32_ty.into()]);
+    for destination in [true_dest, false_dest] {
+        destination.insert_at_back(region, ctx);
+        let result = destination.deref(ctx).get_argument(0);
+        ReturnOp::new(ctx, Some(result))
+            .get_operation()
+            .insert_at_back(destination, ctx);
+    }
+    let branch = CondBrOp::new(
+        ctx,
+        condition,
+        true_dest,
+        vec![if_true],
+        false_dest,
+        vec![if_false],
+    );
+    branch.get_operation().insert_at_back(entry, ctx);
+    func.get_operation().insert_at_back(module_block, ctx);
+    (module, branch)
+}
+
+/// Export through the public entry point without assuming prior source verification.
+fn export_conditional_module(ctx: &Context, module: &ModuleOp) -> Result<String, String> {
+    export_module_to_string_with_config(
+        ctx,
+        module,
+        &NvvmExportConfig::new(NvvmIrDialect::LegacyLlvm7),
+    )
+}
+
+/// Invalid segment totals must return an error before accessing successor operands.
+#[test]
+fn exporter_rejects_out_of_bounds_conditional_segments() {
+    let mut ctx = Context::new();
+    let (module, branch) = conditional_branch_module(&mut ctx);
+    branch.set_operand_segment_sizes(&ctx, OperandSegmentSizesAttr(vec![1, 3, 0]));
+    assert!(export_conditional_module(&ctx, &module).is_err());
+}
+
+/// A missing segment attribute must not reach Pliron's infallible segment accessor.
+#[test]
+fn exporter_rejects_missing_conditional_segments() {
+    let mut ctx = Context::new();
+    let (module, branch) = conditional_branch_module(&mut ctx);
+    branch
+        .get_operation()
+        .deref_mut(&ctx)
+        .attributes
+        .0
+        .remove(&ATTR_KEY_OPERAND_SEGMENT_SIZES);
+    assert!(export_conditional_module(&ctx, &module).is_err());
+}
+
+/// The segment attribute must have its expected typed representation.
+#[test]
+fn exporter_rejects_wrong_conditional_segment_attribute_type() {
+    let mut ctx = Context::new();
+    let (module, branch) = conditional_branch_module(&mut ctx);
+    branch
+        .get_operation()
+        .deref_mut(&ctx)
+        .attributes
+        .set(ATTR_KEY_OPERAND_SEGMENT_SIZES.clone(), UnitAttr);
+    assert!(export_conditional_module(&ctx, &module).is_err());
+}
+
+/// Oversized counts must fail without overflowing either total or prefix arithmetic.
+#[test]
+fn exporter_rejects_overflowing_conditional_segments() {
+    let mut ctx = Context::new();
+    let (module, branch) = conditional_branch_module(&mut ctx);
+    branch.set_operand_segment_sizes(&ctx, OperandSegmentSizesAttr(vec![1, u32::MAX, 2]));
+    assert!(export_conditional_module(&ctx, &module).is_err());
+}
+
+/// Conditional branches need three segments, starting with exactly one condition.
+#[test]
+fn exporter_rejects_invalid_conditional_segment_shapes() {
+    for sizes in [vec![], vec![1, 2], vec![0, 2, 1], vec![2, 0, 1]] {
+        let mut ctx = Context::new();
+        let (module, branch) = conditional_branch_module(&mut ctx);
+        branch.set_operand_segment_sizes(&ctx, OperandSegmentSizesAttr(sizes.clone()));
+        assert!(
+            export_conditional_module(&ctx, &module).is_err(),
+            "{sizes:?}"
+        );
+    }
+}
+
+/// Valid segment metadata keeps both conditional edges and their distinct forwarded values.
+#[test]
+fn exporter_preserves_valid_conditional_segments() {
+    let mut ctx = Context::new();
+    let (module, _) = conditional_branch_module(&mut ctx);
+    let ir = export_conditional_module(&ctx, &module).unwrap();
+    assert!(ir.contains("br i1 %v0, label %bb0, label %bb1"), "{ir}");
+    assert!(ir.contains("phi i32 [ %v1, %entry ]"), "{ir}");
+    assert!(ir.contains("phi i32 [ %v2, %entry ]"), "{ir}");
+}
 
 #[test]
 fn exporter_rejects_extra_predecessor_values_before_emitting_phis() {

@@ -72,7 +72,8 @@ pub(super) fn make_padding_type(ctx: &mut Context, size: u64) -> TypeHandle {
 /// filler of a byte-aligned enum. What still exceeds the leaf budget even when
 /// typed: a filler above 14 i64 words (112 bytes) beside a pointer and a
 /// length, since 14 + 2 is the last count that fits. Both keep an aggregate
-/// phi and a `.local` spill, and the budget itself is the follow-up.
+/// phi and the generic access that comes with it; the `bool` carrier case
+/// also keeps its `.local` spill. The budget itself is the follow-up.
 /// `build_enum_slot_map`'s size and alignment checks are hard errors and
 /// backstop every case.
 pub(super) fn make_enum_filler_type(

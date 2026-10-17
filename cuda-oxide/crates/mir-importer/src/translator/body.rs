@@ -26,7 +26,7 @@ use crate::error::{TranslationErr, TranslationResult};
 use crate::pipeline::StatementDebugInfoMap;
 use crate::translator::location::span_to_location;
 use crate::translator::values::{self, SlotAddrSpaceMap, ValueMap};
-use dialect_mir::attributes::ReferenceParamValidityAttr;
+use dialect_mir::attributes::{InlineIntentAttr, ReferenceParamValidityAttr};
 use dialect_mir::ops::MirFuncOp;
 use dialect_mir::types::address_space;
 use llvm_export::export::DebugKind;
@@ -44,7 +44,7 @@ use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::{input_err_noloc, input_error_noloc};
 use reserved_oxide_symbols::{
-    InlineIntent, MIR_GRID_CONSTANT_ALIGN_ATTR_PREFIX, MIR_GRID_CONSTANT_POINTEE_ATTR_PREFIX,
+    MIR_GRID_CONSTANT_ALIGN_ATTR_PREFIX, MIR_GRID_CONSTANT_POINTEE_ATTR_PREFIX,
 };
 use rustc_public::CrateDefType;
 
@@ -1881,7 +1881,7 @@ fn emit_entry_allocas(
 /// * `rustc_mono_successors` - Exact per-block successor edges computed by
 ///   rustc's monomorphization rules under the device runtime-check policy
 /// * `is_kernel` - Add `gpu_kernel` attribute for kernel entry points
-/// * `inline` - The `#[inline]` intent, represented by [`InlineIntent`] on
+/// * `inline` - The `#[inline]` request, recorded as [`InlineIntentAttr`] on
 ///   non-kernel functions (`set_inline_intent_attr`)
 /// * `override_name` - Custom export name (defaults to instance name)
 pub fn translate_body(
@@ -1891,7 +1891,7 @@ pub fn translate_body(
     rustc_mir_block_count: usize,
     rustc_mono_successors: &[Vec<usize>],
     is_kernel: bool,
-    inline: Option<InlineIntent>,
+    inline: Option<InlineIntentAttr>,
     override_name: Option<&str>,
     legaliser: &mut Legaliser,
     debug_kind: DebugKind,
@@ -2515,15 +2515,15 @@ fn function_debug_name(instance: &mono::Instance, is_kernel: bool, export_name: 
     }
 }
 
-/// Record the `#[inline]` intent on the MIR function (`MirFuncOp::set_inline_intent`;
+/// Record the `#[inline]` request on the MIR function (`MirFuncOp::set_inline_intent`;
 /// `mir-lower` makes it the LLVM function attribute). Kernel entry points are
-/// excluded because they're `.entry` in PTX and never callees, so an inline
-/// keyword would be a no-op at best and rejected by LLVM at worst.
+/// excluded because they're `.entry` in PTX and never callees, so there is no
+/// call the request could apply to.
 fn set_inline_intent_attr(
     ctx: &mut Context,
     mir_func_op: &MirFuncOp,
     is_kernel: bool,
-    inline: Option<InlineIntent>,
+    inline: Option<InlineIntentAttr>,
 ) {
     if let Some(intent) = inline
         && !is_kernel
@@ -2745,7 +2745,11 @@ pub fn cuda_oxide_device_generated_kernel(mut wrapped: Wrapper<u16>) -> u32 {
 
     #[test]
     fn inline_intent_reaches_llvm_func_attr_before_export() {
-        for intent in InlineIntent::ALL {
+        for (intent, keyword) in [
+            (InlineIntentAttr::Hint, "inlinehint"),
+            (InlineIntentAttr::Always, "alwaysinline"),
+            (InlineIntentAttr::Never, "noinline"),
+        ] {
             let mut ctx = Context::new();
             crate::translator::register_dialects(&mut ctx);
 
@@ -2808,8 +2812,8 @@ pub fn cuda_oxide_device_generated_kernel(mut wrapped: Wrapper<u16>) -> u32 {
                 .unwrap_or_default();
             assert_eq!(
                 keywords,
-                [intent.llvm_keyword()],
-                "{intent:?} must become exactly its LLVM function attribute before export",
+                [keyword],
+                "{intent:?} must become its one LLVM function attribute before export",
             );
             assert_eq!(
                 llvm_export::ops::debug_function_name(&ctx, llvm_func.get_operation()).as_deref(),

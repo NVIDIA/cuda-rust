@@ -15,4 +15,3 @@ thiserror = { workspace = true }
 linkme = { workspace = true }
 combine = { workspace = true }
 once_cell = { workspace = true }
-reserved-oxide-symbols = { workspace = true }

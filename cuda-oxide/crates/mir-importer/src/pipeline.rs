@@ -91,17 +91,17 @@ pub struct CollectedFunction {
     /// sidecar. Full debug uses supported events to keep affected pointer values
     /// in stack slots; other modes emit no extra code.
     pub statement_debug_info: Option<StatementDebugInfoMap>,
-    /// The function's `#[inline]` intent from rustc's `CodegenFnAttrs`. The
+    /// The function's `#[inline]` request from rustc's `CodegenFnAttrs`. The
     /// stable_mir API does not expose inline attributes, so this is queried via
     /// `rustc_middle::TyCtxt::codegen_fn_attrs` in `rustc-codegen-cuda` and
     /// threaded through.
     ///
-    /// The matching LLVM keyword (`inlinehint`, `alwaysinline`, `noinline`) is
-    /// emitted on the function definition, so the matched LLVM middle-end
-    /// (`opt -O2`) honors it before PTX generation; no separate inliner pass is
-    /// added. This keeps helper boundaries, `#[inline(never)]` ones included,
-    /// from depending entirely on optimizer heuristics.
-    pub inline: Option<reserved_oxide_symbols::InlineIntent>,
+    /// `mir-lower` turns the request into the matching LLVM function attribute
+    /// on the definition, so the matched LLVM middle-end (`opt -O2`) honors it
+    /// before PTX generation; no separate inliner pass is added. This keeps
+    /// helper boundaries, `#[inline(never)]` ones included, from depending
+    /// entirely on optimizer heuristics.
+    pub inline: Option<dialect_mir::attributes::InlineIntentAttr>,
 }
 
 /// Per-function statement debug records aligned with the stable MIR body.

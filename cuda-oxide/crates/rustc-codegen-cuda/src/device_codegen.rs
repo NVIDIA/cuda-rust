@@ -859,7 +859,12 @@ impl From<std::io::Error> for DeviceCodegenError {
 /// The macro's attribute comes first, so rustc keeps it and reports an inline
 /// attribute the user adds there as unused: on such functions a user's own
 /// inline attribute never reached device code, before or after this mapping.
-/// Closures and other unnamed instances are never a match (`opt_item_name`).
+/// Unnamed instances never match (`opt_item_name`). The test keys on the
+/// device symbol name plus own generics, which is enough while the macro
+/// always writes its attribute first. Once #1472 lets a user's inline
+/// attribute replace the macro's, this test must key on where the attribute
+/// came from instead (`AttributeKind::Inline(_, span)` with
+/// `span.from_expansion()`), or it would drop a user's own `#[inline(never)]`.
 fn is_generic_device_collector_boundary<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> bool {
     let def_id = instance.def_id();
     tcx.generics_of(def_id).own_requires_monomorphization()
@@ -867,6 +872,7 @@ fn is_generic_device_collector_boundary<'tcx>(tcx: TyCtxt<'tcx>, instance: Insta
             .opt_item_name(def_id)
             .is_some_and(|name| reserved_oxide_symbols::is_device_symbol(name.as_str()))
 }
+
 /// Generates PTX for device functions using the cuda-oxide pipeline.
 ///
 /// This is the main entry point for device codegen. It bridges between
@@ -1086,19 +1092,19 @@ pub fn generate_device_code<'tcx>(
     // LLVM backend does): helper boundaries, `#[inline(never)]` ones included,
     // must not depend entirely on later optimizer heuristics. The one exception
     // is the collector boundary `#[device]` adds to generic device functions.
-    let inline_intents: Vec<Option<reserved_oxide_symbols::InlineIntent>> = functions
+    let inline_intents: Vec<Option<dialect_mir::attributes::InlineIntentAttr>> = functions
         .iter()
         .map(|func| {
-            use reserved_oxide_symbols::InlineIntent;
+            use dialect_mir::attributes::InlineIntentAttr;
             use rustc_attr_ir::InlineAttr;
             match tcx.codegen_fn_attrs(func.instance.def_id()).inline {
                 InlineAttr::None => None,
-                InlineAttr::Hint => Some(InlineIntent::Hint),
-                InlineAttr::Always | InlineAttr::Force { .. } => Some(InlineIntent::Always),
+                InlineAttr::Hint => Some(InlineIntentAttr::Hint),
+                InlineAttr::Always | InlineAttr::Force { .. } => Some(InlineIntentAttr::Always),
                 InlineAttr::Never if is_generic_device_collector_boundary(tcx, func.instance) => {
                     None
                 }
-                InlineAttr::Never => Some(InlineIntent::Never),
+                InlineAttr::Never => Some(InlineIntentAttr::Never),
             }
         })
         .collect();

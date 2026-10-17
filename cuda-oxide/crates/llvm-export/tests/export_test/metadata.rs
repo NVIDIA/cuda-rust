@@ -145,7 +145,9 @@ fn nvvm_metadata_version_uses_next_allocated_metadata_id() {
 fn export_inline_intent_function_attribute_uses_llvm_define_syntax() {
     // `mir-lower` places an `#[inline]` keyword in `llvm_func_attrs`; the generic
     // attribute renderer writes it after the parameter list, before attr group #0.
-    for intent in reserved_oxide_symbols::InlineIntent::ALL {
+    // The keywords are listed here as plain text: this crate renders whatever
+    // attribute it is handed and does not depend on the MIR dialect's enum.
+    for keyword in ["inlinehint", "alwaysinline", "noinline"] {
         let mut ctx = Context::new();
         let module = ModuleOp::new(&mut ctx, "test_module".try_into().unwrap());
         let module_block = module_top_block(&mut ctx, &module);
@@ -157,7 +159,7 @@ fn export_inline_intent_function_attribute_uses_llvm_define_syntax() {
         ReturnOp::new(&mut ctx, None)
             .get_operation()
             .insert_at_back(entry, &ctx);
-        set_inline_keyword(&mut ctx, &func, intent.llvm_keyword());
+        set_inline_keyword(&mut ctx, &func, keyword);
         func.get_operation().insert_at_back(module_block, &ctx);
 
         let ir = export_module_to_string(&ctx, &module).expect("export succeeds");
@@ -167,11 +169,8 @@ fn export_inline_intent_function_attribute_uses_llvm_define_syntax() {
             .expect("inline helper definition");
         assert_eq!(
             define_line,
-            format!(
-                "define void @inline_helper() {} #0 {{",
-                intent.llvm_keyword()
-            ),
-            "{intent:?} must be emitted after the parameter list, before attr group #0:\n{ir}"
+            format!("define void @inline_helper() {keyword} #0 {{"),
+            "{keyword} must be emitted after the parameter list, before attr group #0:\n{ir}"
         );
         assert!(
             ir.contains("attributes #0 = { convergent }"),

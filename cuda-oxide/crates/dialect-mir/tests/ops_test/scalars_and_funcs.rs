@@ -4,7 +4,7 @@
  */
 
 use dialect_mir::{
-    attributes::{MirCastKindAttr, ReferenceParamValidityAttr},
+    attributes::{InlineIntentAttr, MirCastKindAttr, ReferenceParamValidityAttr},
     ops::{
         MirAddOp, MirAssignOp, MirCallOp, MirCastOp, MirCheckedAddOp, MirCmpOp, MirConstantOp,
         MirDivOp, MirEqOp, MirFuncOp, MirGeOp, MirGtOp, MirLeOp, MirLtOp, MirMulOp, MirNeOp,
@@ -656,12 +656,12 @@ fn test_mir_func_reference_param_validity_verify() {
     );
 }
 
-/// An inline intent is a callee property: every keyword is valid on an ordinary
-/// function, none on a kernel entry, and an unknown keyword is an error rather
-/// than "no intent".
+/// An inline request is a callee property: every request is valid on an
+/// ordinary function, none on a kernel entry, and a value of another attribute
+/// type under the key is an error rather than "no request".
 #[test]
 fn test_mir_func_inline_intent_verify() {
-    use reserved_oxide_symbols::{INLINE_INTENT_ATTR, InlineIntent};
+    use dialect_mir::ops::INLINE_INTENT_ATTR_KEY;
 
     let mut ctx = Context::new();
     dialect_mir::register(&mut ctx);
@@ -688,14 +688,14 @@ fn test_mir_func_inline_intent_verify() {
         func
     };
 
-    for intent in InlineIntent::ALL {
+    for intent in InlineIntentAttr::ALL {
         let helper = make_func(&mut ctx, false);
         helper.set_inline_intent(&mut ctx, intent);
         assert!(
             helper.verify(&ctx).is_ok(),
             "{intent:?} is valid on a callee"
         );
-        assert_eq!(helper.inline_intent(&ctx), Ok(Some(intent)));
+        assert_eq!(helper.inline_intent(&ctx), Some(intent));
 
         let kernel = make_func(&mut ctx, true);
         kernel.set_inline_intent(&mut ctx, intent);
@@ -705,19 +705,19 @@ fn test_mir_func_inline_intent_verify() {
         );
     }
 
-    let unknown = make_func(&mut ctx, false);
-    unknown.get_operation().deref_mut(&ctx).attributes.set(
-        INLINE_INTENT_ATTR.try_into().unwrap(),
-        StringAttr::new("inline".to_string()),
+    let mistyped = make_func(&mut ctx, false);
+    mistyped.get_operation().deref_mut(&ctx).attributes.set(
+        INLINE_INTENT_ATTR_KEY.try_into().unwrap(),
+        StringAttr::new("noinline".to_string()),
     );
-    assert!(unknown.inline_intent(&ctx).is_err());
+    assert_eq!(mistyped.inline_intent(&ctx), None);
     assert!(
-        unknown.verify(&ctx).is_err(),
-        "an unknown keyword is an error, never read as no intent"
+        mistyped.verify(&ctx).is_err(),
+        "a value of another attribute type is an error, never read as no request"
     );
 
     let plain = make_func(&mut ctx, false);
-    assert_eq!(plain.inline_intent(&ctx), Ok(None));
+    assert_eq!(plain.inline_intent(&ctx), None);
     assert!(plain.verify(&ctx).is_ok());
 
     let plain_kernel = make_func(&mut ctx, true);

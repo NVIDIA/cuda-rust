@@ -500,7 +500,7 @@ fn analyze_borrowed_pointer_read(
 
     let function = entry_block.deref(ctx).get_parent_op(ctx)?;
     let mir_function = Operation::get_op::<MirFuncOp>(function, ctx)?;
-    if mir_function.inline_intent(ctx).ok()? != Some(reserved_oxide_symbols::InlineIntent::Always) {
+    if mir_function.inline_intent(ctx) != Some(dialect_mir::attributes::InlineIntentAttr::Always) {
         return None;
     }
 
@@ -1284,7 +1284,7 @@ mod tests {
         let function_op = MirFuncOp::new(ctx, function, TypeAttr::new(function_type.into()));
         function_op.set_symbol_name(ctx, helper_symbol.try_into().unwrap());
         if alwaysinline {
-            function_op.set_inline_intent(ctx, reserved_oxide_symbols::InlineIntent::Always);
+            function_op.set_inline_intent(ctx, dialect_mir::attributes::InlineIntentAttr::Always);
         }
         module.append_operation(ctx, function, 0);
 

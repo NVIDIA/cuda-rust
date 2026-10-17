@@ -44,18 +44,18 @@ impl CodegenProfilePolicy {
 
     /// The codegen options this policy pins, in rustc flag order.
     pub(super) fn pinned_options(self) -> &'static [PinnedOption] {
-        const OPT_LEVEL: PinnedOption = PinnedOption::new("opt-level", "3", "OPT_LEVEL", "3");
+        const OPT_LEVEL: PinnedOption = PinnedOption::new("opt-level", "3", "opt-level", "3");
         const NO_ASSERTIONS: PinnedOption =
-            PinnedOption::new("debug-assertions", "off", "DEBUG_ASSERTIONS", "false");
+            PinnedOption::new("debug-assertions", "off", "debug-assertions", "false");
         const ASSERTIONS: PinnedOption =
-            PinnedOption::new("debug-assertions", "on", "DEBUG_ASSERTIONS", "true");
+            PinnedOption::new("debug-assertions", "on", "debug-assertions", "true");
         // Overflow-check MIR changes code shape enough to break pattern-sensitive
         // device lowerings, so it is off in every release-like policy. Pinned
         // explicitly: rustc derives it from debug assertions, and Cargo's dev
         // profile (passthrough builds without `--release`) would turn it on.
         const NO_OVERFLOW_CHECKS: PinnedOption =
-            PinnedOption::new("overflow-checks", "off", "OVERFLOW_CHECKS", "false");
-        const DEBUGINFO: PinnedOption = PinnedOption::new("debuginfo", "2", "DEBUG", "2");
+            PinnedOption::new("overflow-checks", "off", "overflow-checks", "false");
+        const DEBUGINFO: PinnedOption = PinnedOption::new("debuginfo", "2", "debug", "2");
         match self {
             Self::CargoSelected => &[],
             Self::ReleaseLike => &[OPT_LEVEL, NO_ASSERTIONS, NO_OVERFLOW_CHECKS],
@@ -68,7 +68,7 @@ impl CodegenProfilePolicy {
 }
 
 /// One rustc codegen option a release-like policy requires, with its Cargo
-/// profile spelling.
+/// profile key.
 ///
 /// The Cargo profile is the primary carrier: Cargo fingerprints resolved
 /// profile values, not where they came from, so a release-like `build` whose
@@ -78,18 +78,32 @@ impl CodegenProfilePolicy {
 /// emitted only when incoming rustflags set the same option, since rustflags
 /// follow profile flags on the rustc command line and would otherwise win.
 ///
-/// Limits of the profile route: `[profile.<name>.package.<pkg>]` overrides and
-/// `--config profile.*` arguments outrank the environment, and host units
-/// (build scripts, proc-macros) follow Cargo's `build-override` defaults.
+/// Two carriers deliver the pins. The base profiles `release` and `dev` take
+/// them from the environment (`CARGO_PROFILE_RELEASE_*` and
+/// `CARGO_PROFILE_DEV_*`, see [`apply_profile_pins`]). Any other profile
+/// selected with `--profile` takes them as
+/// `--config profile.<name>.<key>=<value>` arguments (see
+/// [`profile_config_args`]), because the environment key for such a name can
+/// collide with a base profile's table: Cargo reads
+/// `CARGO_PROFILE_RELEASE_LTO_OPT_LEVEL` as `profile.release.lto` and rejects
+/// it.
+///
+/// Limits of the profile route: `[profile.<name>.package.<pkg>]` overrides,
+/// `--config profile.*` arguments and manifest `[profile.<name>.rustflags]` or
+/// `[profile.<name>.package.<pkg>.rustflags]` lists outrank the pins. The
+/// trailing `-C` flag covers RUSTFLAGS, `CARGO_ENCODED_RUSTFLAGS` and the
+/// project's `extra-rustflags` only; cargo-oxide never sees manifest
+/// rustflags. Host units (build scripts, proc-macros) follow Cargo's
+/// `build-override` defaults.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct PinnedOption {
     /// rustc `-C` option name.
     name: &'static str,
-    /// Value in rustc's `-C name=value` spelling.
+    /// Value in rustc's `-C name=value` form.
     rustc_value: &'static str,
-    /// Suffix of the `CARGO_PROFILE_<PROFILE>_` environment key.
+    /// Cargo profile key as a manifest writes it (`opt-level`, `debug`).
     cargo_key: &'static str,
-    /// Value in Cargo's profile spelling.
+    /// Value in Cargo's profile form.
     cargo_value: &'static str,
 }
 
@@ -111,52 +125,90 @@ impl PinnedOption {
     pub(super) fn rustc_flag(self) -> String {
         format!("-C{}={}", self.name, self.rustc_value)
     }
+
+    /// `CARGO_PROFILE_<PROFILE>_<KEY>`. Cargo derives the environment key from
+    /// the manifest key by uppercasing it and replacing `-` with `_`.
+    fn cargo_env_key(self, profile: &str) -> String {
+        format!(
+            "CARGO_PROFILE_{}_{}",
+            profile.to_uppercase(),
+            self.cargo_key.to_uppercase().replace('-', "_")
+        )
+    }
+
+    /// `profile.<name>.<key>=<value>`, the value of one `--config` argument.
+    fn cargo_config_entry(self, profile: &str) -> String {
+        format!("profile.{profile}.{}={}", self.cargo_key, self.cargo_value)
+    }
 }
 
-/// Base Cargo profiles that always receive the pins: release-like routes run
-/// `--release`, passthrough builds may run the default dev profile, and custom
-/// profiles inherit unset keys from one of the two.
-const BASE_CARGO_PROFILES: [&str; 2] = ["RELEASE", "DEV"];
+/// Base Cargo profiles that take the pins from the environment: release-like
+/// routes run `--release`, passthrough builds without `--release` run `dev`,
+/// and every other profile inherits the keys it does not set from one of the
+/// two.
+const BASE_CARGO_PROFILES: [&str; 2] = ["release", "dev"];
 
-/// Set the policy's pins on the base Cargo profiles and on the profile the
-/// command selects with `--profile`, which may set the pinned keys itself.
+fn is_base_cargo_profile(name: &str) -> bool {
+    BASE_CARGO_PROFILES.contains(&name)
+}
+
+/// Set the policy's pins on the base Cargo profiles through the environment.
+///
+/// Only the base profiles can use this carrier. A custom name becomes part of
+/// the key as well, and Cargo reads `CARGO_PROFILE_RELEASE_LTO_OPT_LEVEL` as
+/// `profile.release.lto`, an error it reports before compiling anything. The
+/// profile `--profile` selects gets its pins from [`profile_config_args`].
 pub(super) fn apply_profile_pins(cmd: &mut Command, profile: CodegenProfilePolicy) {
-    let pins = profile.pinned_options();
-    if pins.is_empty() {
-        return;
-    }
-    let mut profiles: Vec<String> = BASE_CARGO_PROFILES.map(String::from).into();
-    if let Some(selected) = selected_cargo_profile(cmd)
-        && !profiles.contains(&selected)
-    {
-        profiles.push(selected);
-    }
-    for option in pins {
-        for name in &profiles {
-            cmd.env(
-                format!("CARGO_PROFILE_{name}_{}", option.cargo_key),
-                option.cargo_value,
-            );
+    for option in profile.pinned_options() {
+        for name in BASE_CARGO_PROFILES {
+            cmd.env(option.cargo_env_key(name), option.cargo_value);
         }
     }
 }
 
-/// The `--profile` a Cargo command selects, in its environment-key spelling
-/// (`release-lto` -> `RELEASE_LTO`). Arguments after `--` belong to the program.
-fn selected_cargo_profile(cmd: &Command) -> Option<String> {
-    let mut args = cmd
-        .get_args()
-        .map(|arg| arg.to_string_lossy())
-        .take_while(|arg| arg != "--");
+/// The profile a Cargo argument list selects with `--profile`, as written.
+///
+/// Both `--profile <name>` and `--profile=<name>` are read; the last one
+/// counts. Arguments after `--` belong to the program. `--release` and the
+/// default select base profiles, which need no lookup.
+pub(super) fn selected_cargo_profile(cargo_args: &[String]) -> Option<&str> {
+    let mut args = cargo_args
+        .iter()
+        .map(String::as_str)
+        .take_while(|arg| *arg != "--");
     let mut selected = None;
     while let Some(arg) = args.next() {
         if arg == "--profile" {
-            selected = args.next().map(|name| name.into_owned());
+            selected = args.next();
         } else if let Some(name) = arg.strip_prefix("--profile=") {
-            selected = Some(name.to_string());
+            selected = Some(name);
         }
     }
-    selected.map(|name| name.to_uppercase().replace('-', "_"))
+    selected
+}
+
+/// `--config profile.<name>.<key>=<value>` argument pairs that carry the
+/// policy's pins to the profile `--profile` selects.
+///
+/// Empty for a base profile, which the environment already covers, for a
+/// policy without pins, and for a name outside the TOML bare-key alphabet
+/// (ASCII letters, digits, `-` and `_`), which cannot be written as an
+/// unquoted config key; such a profile keeps the base pins it inherits. The
+/// pairs belong right after the subcommand: a later user `--config` for the
+/// same key still wins, and `cargo test` never sees them after its `--`.
+pub(super) fn profile_config_args(policy: CodegenProfilePolicy, profile: &str) -> Vec<String> {
+    let bare_key = !profile.is_empty()
+        && profile
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
+    if is_base_cargo_profile(profile) || !bare_key {
+        return Vec::new();
+    }
+    policy
+        .pinned_options()
+        .iter()
+        .flat_map(|option| ["--config".to_string(), option.cargo_config_entry(profile)])
+        .collect()
 }
 
 /// Names of the `-C` options a rustflags list sets, normalized to rustc's

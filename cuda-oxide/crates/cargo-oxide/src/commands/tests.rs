@@ -68,6 +68,16 @@ fn is_sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
+fn strings(args: &[&str]) -> Vec<String> {
+    args.iter().map(|arg| arg.to_string()).collect()
+}
+
+fn command_args(cmd: &Command) -> Vec<String> {
+    cmd.get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect()
+}
+
 /// `cargo_passthrough_command` with an empty ambient
 /// `CUDA_OXIDE_MATERIALIZE_CUBIN`.
 ///
@@ -2683,40 +2693,231 @@ fn codegen_option_names_cover_every_rustc_spelling() {
     );
 }
 
-/// Pins reach the base profiles and the `--profile` a command selects; a
-/// policy without pins leaves every profile alone.
+/// `--profile` is read in both forms from the Cargo arguments; the last one
+/// counts and arguments after `--` belong to the program.
 #[test]
-fn profile_pins_cover_base_and_selected_profiles() {
-    let mut cmd = Command::new("cargo");
-    cmd.args([
-        "build",
-        "--profile",
-        "release-lto",
-        "--",
-        "--profile",
-        "ignored",
-    ]);
-    apply_profile_pins(&mut cmd, CodegenProfilePolicy::ReleaseLikeWithDebugInfo);
-    for name in ["RELEASE", "DEV", "RELEASE_LTO"] {
+fn selected_cargo_profile_reads_both_forms_before_the_separator() {
+    assert_eq!(
+        selected_cargo_profile(&strings(&["--profile", "release-lto", "-p", "app"])),
+        Some("release-lto")
+    );
+    assert_eq!(
+        selected_cargo_profile(&strings(&["-p", "app", "--profile=ci"])),
+        Some("ci")
+    );
+    assert_eq!(
+        selected_cargo_profile(&strings(&["--profile", "first", "--profile=second"])),
+        Some("second")
+    );
+    assert_eq!(
+        selected_cargo_profile(&strings(&["--release", "--", "--profile", "ignored"])),
+        None
+    );
+    assert_eq!(selected_cargo_profile(&strings(&["--profile"])), None);
+}
+
+/// Pins reach the two base profiles through the environment and nothing
+/// else: a selected `release-lto` must not add `CARGO_PROFILE_RELEASE_LTO_*`,
+/// which Cargo reads as `profile.release.lto` and rejects.
+#[test]
+fn profile_pins_stay_on_the_base_profiles() {
+    let ctx = test_context(OxideConfig::default());
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: None,
+        features: None,
+        cargo_target_dir: None,
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+    let cmd = passthrough_command_for_test(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &opts,
+        &strings(&["--profile", "release-lto"]),
+    )
+    .unwrap();
+    let mut expected = BTreeMap::new();
+    for base in ["RELEASE", "DEV"] {
         for (key, value) in [
             ("OPT_LEVEL", "3"),
             ("DEBUG_ASSERTIONS", "false"),
             ("OVERFLOW_CHECKS", "false"),
-            ("DEBUG", "2"),
         ] {
-            assert_eq!(
-                command_env(&cmd, &format!("CARGO_PROFILE_{name}_{key}")).as_deref(),
-                Some(value),
-                "{name}_{key}"
-            );
+            expected.insert(format!("CARGO_PROFILE_{base}_{key}"), value.to_string());
         }
     }
-    assert!(command_env(&cmd, "CARGO_PROFILE_IGNORED_OPT_LEVEL").is_none());
+    let profile_env: BTreeMap<String, String> = cmd
+        .get_envs()
+        .filter_map(|(key, value)| {
+            let key = key.to_string_lossy();
+            key.starts_with("CARGO_PROFILE_").then(|| {
+                let value = value.map(|value| value.to_string_lossy().into_owned());
+                (key.into_owned(), value.unwrap_or_default())
+            })
+        })
+        .collect();
+    assert_eq!(profile_env, expected);
+
+    let mut debug = Command::new("cargo");
+    debug.args(["build", "--release"]);
+    apply_profile_pins(&mut debug, CodegenProfilePolicy::ReleaseLikeWithDebugInfo);
+    for base in ["RELEASE", "DEV"] {
+        assert_eq!(
+            command_env(&debug, &format!("CARGO_PROFILE_{base}_DEBUG")).as_deref(),
+            Some("2")
+        );
+    }
 
     let mut test = Command::new("cargo");
     test.args(["test", "--profile=bench"]);
     apply_profile_pins(&mut test, CodegenProfilePolicy::CargoSelected);
     assert_eq!(test.get_envs().count(), 0);
+}
+
+/// A profile other than `release` or `dev` takes the pins as `--config`
+/// arguments placed before the user's Cargo arguments, in both `--profile`
+/// forms. Base profiles and `cargo oxide test` add none.
+#[test]
+fn custom_profile_pins_travel_as_config_arguments() {
+    let ctx = test_context(OxideConfig::default());
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: None,
+        features: None,
+        cargo_target_dir: None,
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+    let pins = strings(&[
+        "--config",
+        "profile.release-lto.opt-level=3",
+        "--config",
+        "profile.release-lto.debug-assertions=false",
+        "--config",
+        "profile.release-lto.overflow-checks=false",
+    ]);
+    for cargo_args in [
+        strings(&["--profile", "release-lto", "-p", "app"]),
+        strings(&["-p", "app", "--profile=release-lto"]),
+    ] {
+        let cmd = passthrough_command_for_test(
+            &ctx,
+            CargoPassthroughSubcommand::Build,
+            &opts,
+            &cargo_args,
+        )
+        .unwrap();
+        let expected: Vec<String> = strings(&["build"])
+            .into_iter()
+            .chain(pins.iter().cloned())
+            .chain(cargo_args.iter().cloned())
+            .collect();
+        assert_eq!(command_args(&cmd), expected);
+    }
+    for cargo_args in [
+        strings(&[]),
+        strings(&["--release"]),
+        strings(&["--profile", "release"]),
+        strings(&["--profile=dev"]),
+    ] {
+        let cmd = passthrough_command_for_test(
+            &ctx,
+            CargoPassthroughSubcommand::Build,
+            &opts,
+            &cargo_args,
+        )
+        .unwrap();
+        let expected: Vec<String> = strings(&["build"])
+            .into_iter()
+            .chain(cargo_args.iter().cloned())
+            .collect();
+        assert_eq!(command_args(&cmd), expected);
+    }
+
+    let test = passthrough_command_for_test(
+        &ctx,
+        CargoPassthroughSubcommand::Test,
+        &opts,
+        &strings(&["--profile", "release-lto"]),
+    )
+    .unwrap();
+    assert_eq!(
+        command_args(&test),
+        strings(&["test", "--profile", "release-lto"])
+    );
+
+    let with_assertions = CargoPassthroughOptions {
+        debug_assertions: true,
+        ..opts
+    };
+    let cmd = passthrough_command_for_test(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &with_assertions,
+        &strings(&["--profile=ci"]),
+    )
+    .unwrap();
+    assert_eq!(
+        command_args(&cmd),
+        strings(&[
+            "build",
+            "--config",
+            "profile.ci.opt-level=3",
+            "--config",
+            "profile.ci.debug-assertions=true",
+            "--config",
+            "profile.ci.overflow-checks=false",
+            "--profile=ci",
+        ])
+    );
+}
+
+/// `profile_config_args` writes every pinned key as a manifest writes it,
+/// adds the debug-info pin for the debug route, and leaves base profiles,
+/// pin-free policies and names Cargo would reject alone.
+#[test]
+fn profile_config_args_use_manifest_keys() {
+    assert_eq!(
+        profile_config_args(
+            CodegenProfilePolicy::ReleaseLikeWithDebugInfo,
+            "release-lto"
+        ),
+        strings(&[
+            "--config",
+            "profile.release-lto.opt-level=3",
+            "--config",
+            "profile.release-lto.debug-assertions=false",
+            "--config",
+            "profile.release-lto.overflow-checks=false",
+            "--config",
+            "profile.release-lto.debug=2",
+        ])
+    );
+    for (policy, profile) in [
+        (CodegenProfilePolicy::ReleaseLike, "release"),
+        (CodegenProfilePolicy::ReleaseLike, "dev"),
+        (CodegenProfilePolicy::CargoSelected, "release-lto"),
+        (CodegenProfilePolicy::ReleaseLike, "my profile"),
+        (CodegenProfilePolicy::ReleaseLike, ""),
+    ] {
+        assert!(
+            profile_config_args(policy, profile).is_empty(),
+            "{policy:?} {profile:?}"
+        );
+    }
 }
 
 #[test]

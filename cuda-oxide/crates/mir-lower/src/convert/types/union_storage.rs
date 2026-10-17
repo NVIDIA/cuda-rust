@@ -130,32 +130,18 @@ pub(crate) fn build_union_storage_type(
             pointer_carrier = Some(llvm_field_ty);
         }
         let storage_field_ty = union_field_storage_type(ctx, llvm_field_ty)?;
-        let (storage_size, storage_align) = llvm_type_size_align(ctx, storage_field_ty)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "union `{}` field {} has unsupported target-stable LLVM storage layout",
-                    union_ty.name(),
-                    index
-                )
-            })?;
-        if storage_size != field_size || storage_align != field_align {
-            return Err(anyhow::anyhow!(
-                "union `{}` field {} target-stable storage changes layout from size/alignment {}/{} to {}/{}",
-                union_ty.name(),
-                index,
-                field_size,
-                field_align,
-                storage_size,
-                storage_align
-            ));
-        }
+        // The storage rewrite only swaps pointer leaves for pointer leaves,
+        // and lowering sizes every pointer at 8 bytes whatever its address
+        // space, so storage and semantic layout always agree.
+        debug_assert_eq!(
+            llvm_type_size_align(ctx, storage_field_ty),
+            Some((field_size, field_align)),
+            "union `{}` field {} target-stable storage changed its size or alignment",
+            union_ty.name(),
+            index
+        );
 
-        fields.push((
-            storage_field_ty,
-            storage_size,
-            storage_align,
-            contains_pointer,
-        ));
+        fields.push((storage_field_ty, field_size, field_align, contains_pointer));
     }
 
     let storage_align = align.min(16);

@@ -197,7 +197,7 @@ fn parse_tensor_arg(expr: &Expr) -> Result<String, JITError> {
 }
 
 fn parse_axis_arg(expr: &Expr) -> Result<usize, JITError> {
-    let axis = crate::types::parse_signed_literal_as_i32(expr);
+    let axis = crate::types::parse_signed_literal_as_i32(expr)?;
     if axis < 0 {
         return SourceLocation::unknown().jit_error_result(&format!(
             "precondition axis must be non-negative, got {axis}"

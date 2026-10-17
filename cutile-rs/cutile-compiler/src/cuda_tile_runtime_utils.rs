@@ -1300,7 +1300,7 @@ mod tests {
     fn tileiras_binary_defaults_to_path_lookup() {
         assert_eq!(
             resolve_tileiras_binary_with_candidates(None, None, &[]),
-            PathBuf::from("tileiras")
+            PathBuf::from(tileiras_executable_name())
         );
     }
 
@@ -1320,7 +1320,7 @@ mod tests {
     fn tileiras_binary_treats_empty_override_as_default() {
         assert_eq!(
             resolve_tileiras_binary_with_candidates(Some(OsString::new()), None, &[]),
-            PathBuf::from("tileiras")
+            PathBuf::from(tileiras_executable_name())
         );
     }
 

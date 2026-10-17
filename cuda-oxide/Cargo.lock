@@ -534,6 +534,7 @@ dependencies = [
  "once_cell",
  "pliron",
  "pliron-derive",
+ "reserved-oxide-symbols",
  "thiserror 2.0.18",
 ]
 

@@ -247,6 +247,7 @@ dependencies = [
  "once_cell",
  "pliron",
  "pliron-derive",
+ "reserved-oxide-symbols",
  "thiserror",
 ]
 

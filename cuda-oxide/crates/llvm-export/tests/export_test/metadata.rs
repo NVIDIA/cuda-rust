@@ -142,41 +142,49 @@ fn nvvm_metadata_version_uses_next_allocated_metadata_id() {
 }
 
 #[test]
-fn export_alwaysinline_function_attribute_uses_llvm_define_syntax() {
-    let mut ctx = Context::new();
-    let module = ModuleOp::new(&mut ctx, "test_module".try_into().unwrap());
-    let module_block = module_top_block(&mut ctx, &module);
+fn export_inline_intent_function_attribute_uses_llvm_define_syntax() {
+    // `mir-lower` places an `#[inline]` keyword in `llvm_func_attrs`; the generic
+    // attribute renderer writes it after the parameter list, before attr group #0.
+    for intent in reserved_oxide_symbols::InlineIntent::ALL {
+        let mut ctx = Context::new();
+        let module = ModuleOp::new(&mut ctx, "test_module".try_into().unwrap());
+        let module_block = module_top_block(&mut ctx, &module);
 
-    let void_ty = VoidType::get(&ctx);
-    let func_ty = FuncType::get(&ctx, void_ty.to_handle(), vec![], false);
-    let func = FuncOp::new(&mut ctx, "inline_helper".try_into().unwrap(), func_ty);
-    let entry = func.get_or_create_entry_block(&mut ctx);
-    ReturnOp::new(&mut ctx, None)
-        .get_operation()
-        .insert_at_back(entry, &ctx);
+        let void_ty = VoidType::get(&ctx);
+        let func_ty = FuncType::get(&ctx, void_ty.to_handle(), vec![], false);
+        let func = FuncOp::new(&mut ctx, "inline_helper".try_into().unwrap(), func_ty);
+        let entry = func.get_or_create_entry_block(&mut ctx);
+        ReturnOp::new(&mut ctx, None)
+            .get_operation()
+            .insert_at_back(entry, &ctx);
+        set_inline_keyword(&mut ctx, &func, intent.llvm_keyword());
+        func.get_operation().insert_at_back(module_block, &ctx);
 
-    let key: pliron::identifier::Identifier = "alwaysinline".try_into().unwrap();
-    func.get_operation()
-        .deref_mut(&ctx)
-        .attributes
-        .set(key, StringAttr::new("true".to_string()));
-    func.get_operation().insert_at_back(module_block, &ctx);
-
-    let ir = export_module_to_string(&ctx, &module).expect("export succeeds");
-    let define_line = ir
-        .lines()
-        .find(|line| line.starts_with("define void @inline_helper("))
-        .expect("inline helper definition");
-    assert_eq!(
-        define_line, "define void @inline_helper() alwaysinline #0 {",
-        "`alwaysinline` must be emitted after the parameter list, before attr group #0:\n{ir}"
-    );
-    assert!(
-        ir.contains("attributes #0 = { convergent }"),
-        "convergent attribute group must still be emitted:\n{ir}"
-    );
+        let ir = export_module_to_string(&ctx, &module).expect("export succeeds");
+        let define_line = ir
+            .lines()
+            .find(|line| line.starts_with("define void @inline_helper("))
+            .expect("inline helper definition");
+        assert_eq!(
+            define_line,
+            format!(
+                "define void @inline_helper() {} #0 {{",
+                intent.llvm_keyword()
+            ),
+            "{intent:?} must be emitted after the parameter list, before attr group #0:\n{ir}"
+        );
+        assert!(
+            ir.contains("attributes #0 = { convergent }"),
+            "convergent attribute group must still be emitted:\n{ir}"
+        );
+    }
 }
 
+fn set_inline_keyword(ctx: &mut Context, func: &FuncOp, keyword: &str) {
+    let mut attrs = llvm_export::ops::LlvmAttributesAttr::new();
+    attrs.set(keyword, llvm_export::ops::LlvmAttrValue::Unit);
+    func.set_attr_llvm_func_attrs(ctx, attrs);
+}
 #[test]
 fn export_alwaysinline_coexists_with_debug_scope() {
     // alwaysinline and the !dbg scope are emitted on the same define line and
@@ -197,11 +205,8 @@ fn export_alwaysinline_coexists_with_debug_scope() {
     ret.get_operation().deref_mut(&ctx).set_loc(ret_loc);
     ret.get_operation().insert_at_back(entry, &ctx);
 
-    let key: pliron::identifier::Identifier = "alwaysinline".try_into().unwrap();
-    func.get_operation()
-        .deref_mut(&ctx)
-        .attributes
-        .set(key, StringAttr::new("true".to_string()));
+    set_inline_keyword(&mut ctx, &func, "alwaysinline");
+
     func.get_operation().insert_at_back(module_block, &ctx);
 
     let config = DebugConfig {

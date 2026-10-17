@@ -499,12 +499,10 @@ fn analyze_borrowed_pointer_read(
     }
 
     let function = entry_block.deref(ctx).get_parent_op(ctx)?;
-    Operation::get_op::<MirFuncOp>(function, ctx)?;
-    let alwaysinline_key: pliron::identifier::Identifier = "alwaysinline".try_into().ok()?;
-    function
-        .deref(ctx)
-        .attributes
-        .get::<pliron::builtin::attributes::StringAttr>(&alwaysinline_key)?;
+    let mir_function = Operation::get_op::<MirFuncOp>(function, ctx)?;
+    if mir_function.inline_intent(ctx).ok()? != Some(reserved_oxide_symbols::InlineIntent::Always) {
+        return None;
+    }
 
     let aggregate_pointer_type = aggregate_pointer.get_type(ctx);
     let aggregate_pointer_type_ref = aggregate_pointer_type.deref(ctx);
@@ -1286,10 +1284,7 @@ mod tests {
         let function_op = MirFuncOp::new(ctx, function, TypeAttr::new(function_type.into()));
         function_op.set_symbol_name(ctx, helper_symbol.try_into().unwrap());
         if alwaysinline {
-            function.deref_mut(ctx).attributes.set(
-                "alwaysinline".try_into().unwrap(),
-                pliron::builtin::attributes::StringAttr::new("true".to_string()),
-            );
+            function_op.set_inline_intent(ctx, reserved_oxide_symbols::InlineIntent::Always);
         }
         module.append_operation(ctx, function, 0);
 

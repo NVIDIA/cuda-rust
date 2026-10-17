@@ -655,3 +655,74 @@ fn test_mir_func_reference_param_validity_verify() {
         "source argument index must be in range"
     );
 }
+
+/// An inline intent is a callee property: every keyword is valid on an ordinary
+/// function, none on a kernel entry, and an unknown keyword is an error rather
+/// than "no intent".
+#[test]
+fn test_mir_func_inline_intent_verify() {
+    use reserved_oxide_symbols::{INLINE_INTENT_ATTR, InlineIntent};
+
+    let mut ctx = Context::new();
+    dialect_mir::register(&mut ctx);
+
+    let make_func = |ctx: &mut Context, kernel: bool| {
+        let func_ty = FunctionType::get(ctx, vec![], vec![]);
+        let op = Operation::new(
+            ctx,
+            MirFuncOp::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            1,
+        );
+        let func = MirFuncOp::new(ctx, op, TypeAttr::new(func_ty.into()));
+        if kernel {
+            func.get_operation().deref_mut(ctx).attributes.set(
+                "gpu_kernel".try_into().unwrap(),
+                StringAttr::new("true".to_string()),
+            );
+        }
+        let region = func.get_operation().deref(ctx).get_region(0);
+        BasicBlock::new(ctx, None, vec![]).insert_at_front(region, ctx);
+        func
+    };
+
+    for intent in InlineIntent::ALL {
+        let helper = make_func(&mut ctx, false);
+        helper.set_inline_intent(&mut ctx, intent);
+        assert!(
+            helper.verify(&ctx).is_ok(),
+            "{intent:?} is valid on a callee"
+        );
+        assert_eq!(helper.inline_intent(&ctx), Ok(Some(intent)));
+
+        let kernel = make_func(&mut ctx, true);
+        kernel.set_inline_intent(&mut ctx, intent);
+        assert!(
+            kernel.verify(&ctx).is_err(),
+            "{intent:?} must be rejected on a kernel entry"
+        );
+    }
+
+    let unknown = make_func(&mut ctx, false);
+    unknown.get_operation().deref_mut(&ctx).attributes.set(
+        INLINE_INTENT_ATTR.try_into().unwrap(),
+        StringAttr::new("inline".to_string()),
+    );
+    assert!(unknown.inline_intent(&ctx).is_err());
+    assert!(
+        unknown.verify(&ctx).is_err(),
+        "an unknown keyword is an error, never read as no intent"
+    );
+
+    let plain = make_func(&mut ctx, false);
+    assert_eq!(plain.inline_intent(&ctx), Ok(None));
+    assert!(plain.verify(&ctx).is_ok());
+
+    let plain_kernel = make_func(&mut ctx, true);
+    assert!(
+        plain_kernel.verify(&ctx).is_ok(),
+        "a kernel without an intent is valid"
+    );
+}

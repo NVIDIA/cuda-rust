@@ -95,6 +95,45 @@ pub const LLVM_GRID_CONSTANT_POINTEE_ATTR_PREFIX: &str = "cuda_oxide_param_grid_
 /// LLVM-dialect function-attribute prefix carrying a grid-constant pointee alignment.
 pub const LLVM_GRID_CONSTANT_ALIGN_ATTR_PREFIX: &str = "cuda_oxide_param_grid_constant_align_";
 
+/// MIR- and LLVM-dialect function attribute carrying a device callee's [`InlineIntent`],
+/// valued with its LLVM keyword. `mir-importer` sets it, `mir-lower` carries it to the LLVM
+/// function and `llvm-export` writes the keyword on the `define` line.
+pub const INLINE_INTENT_ATTR: &str = "cuda_oxide_inline_intent";
+
+/// The `#[inline]` family of a device callee, lowered as rustc's own LLVM backend does:
+/// `#[inline]` is `inlinehint`, `#[inline(always)]` is `alwaysinline` and `#[inline(never)]`
+/// is `noinline`. A function without one carries no attribute and LLVM's heuristics decide;
+/// kernel entry points are never callees and carry none.
+///
+/// `noinline` is what keeps a deliberate call boundary (register pressure, code size, a
+/// numerical oracle that pins evaluation order) from being inlined away by `opt`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InlineIntent {
+    Hint,
+    Always,
+    Never,
+}
+
+impl InlineIntent {
+    pub const ALL: [Self; 3] = [Self::Hint, Self::Always, Self::Never];
+
+    /// The LLVM function-attribute keyword, also the [`INLINE_INTENT_ATTR`] value.
+    pub const fn llvm_keyword(self) -> &'static str {
+        match self {
+            Self::Hint => "inlinehint",
+            Self::Always => "alwaysinline",
+            Self::Never => "noinline",
+        }
+    }
+
+    /// The intent an [`INLINE_INTENT_ATTR`] value names; None for any other string.
+    pub fn from_llvm_keyword(keyword: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|intent| intent.llvm_keyword() == keyword)
+    }
+}
+
 /// Magic component embedded in every prefix to defend against accidental name
 /// collisions in user code.
 ///
@@ -597,6 +636,30 @@ pub fn constant_base_name(name: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use alloc::string::ToString;
+
+    /// Each intent round-trips through its attribute value, the three keywords
+    /// are distinct, and any other string (the old `"true"` flag) names none.
+    #[test]
+    fn inline_intent_keywords_round_trip_and_reject_others() {
+        for intent in InlineIntent::ALL {
+            assert_eq!(
+                InlineIntent::from_llvm_keyword(intent.llvm_keyword()),
+                Some(intent)
+            );
+        }
+        assert_eq!(
+            [
+                InlineIntent::Hint.llvm_keyword(),
+                InlineIntent::Always.llvm_keyword(),
+                InlineIntent::Never.llvm_keyword(),
+            ],
+            ["inlinehint", "alwaysinline", "noinline"]
+        );
+        for other in ["true", "", "AlwaysInline", "inline"] {
+            assert_eq!(InlineIntent::from_llvm_keyword(other), None);
+        }
+        assert!(INLINE_INTENT_ATTR.starts_with(RESERVED_ROOT));
+    }
 
     /// The hash value is locked. Changing this constant is a
     /// breaking-change to every cuda-oxide built artifact and must be

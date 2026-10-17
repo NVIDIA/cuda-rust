@@ -256,14 +256,19 @@ cargo oxide build debug --debug-assertions
 
 Builds pin a release-like codegen policy: `opt-level = 3`,
 `debug-assertions = off` and `overflow-checks = off` (overflow checks add
-distinct MIR checks and trap paths). The pins go into the Cargo profile
-(`CARGO_PROFILE_RELEASE_*`, `CARGO_PROFILE_DEV_*`, and the `--profile` you
-pass), so a build whose pins match the release defaults shares every compiled
-crate with `cargo oxide test -- --release`. When your rustflags set one of
-these options, cargo-oxide also appends the pinned `-C` flag after them, so the
-pin still wins. `[profile.*.package.*]` overrides and `--config profile.*`
-arguments outrank the pins; host units (build scripts, proc-macros) follow
-Cargo's `build-override` settings.
+distinct MIR checks and trap paths). The pins travel in the Cargo profile, so
+a build whose pins match the release defaults shares every compiled crate
+with `cargo oxide test -- --release`. Two carriers deliver them: the `release`
+and `dev` profiles take `CARGO_PROFILE_RELEASE_*` and `CARGO_PROFILE_DEV_*`
+environment settings, and a profile you select with `--profile` takes
+`--config profile.<name>.<key>=<value>` arguments placed before your own
+Cargo arguments. When `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS` or the project's
+`extra-rustflags` set one of these options, cargo-oxide also appends the
+pinned `-C` flag after them, so the pin still wins there. Three channels
+outrank the pins: `[profile.*.package.*]` overrides, `--config profile.*`
+arguments, and manifest `[profile.*.rustflags]` or
+`[profile.*.package.*.rustflags]` lists, which cargo-oxide never sees. Host
+units (build scripts, proc-macros) follow Cargo's `build-override` settings.
 
 `--debug-assertions` keeps `opt-level = 3` and `overflow-checks = off` but
 switches to `debug-assertions = on` (rustc would otherwise enable overflow
@@ -484,7 +489,11 @@ flags in boundary-preserving `CARGO_ENCODED_RUSTFLAGS`. Required compiler flags
 are applied last so inherited settings cannot replace the cuda-oxide backend or
 disable its correctness-critical codegen options. Pinned profile options
 (opt-level, debug assertions, overflow checks, debug info) travel in the Cargo
-profile and appear here only when your flags set the same option.
+profile, as `CARGO_PROFILE_RELEASE_*` and `CARGO_PROFILE_DEV_*` settings for
+the base profiles and as `--config profile.<name>.*` arguments for a selected
+`--profile`. They appear here only when `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS`
+or `extra-rustflags` set the same option. Manifest `[profile.*.rustflags]`
+lists never pass through here and outrank the pins.
 
 ## Architecture
 

@@ -71,6 +71,7 @@ pub fn codegen_show_pipeline(
     println!("Required settings (Cargo profile; also rustflags if yours override them):");
     println!("  opt-level=3                 MIR optimization");
     println!("  debug-assertions=off        Remove debug checks");
+    println!("  overflow-checks=off         Keep MIR free of overflow trap paths");
     println!("Required flags (applied via CARGO_ENCODED_RUSTFLAGS):");
     println!("  -Z mir-enable-passes=-JumpThreading");
     println!("                              Prevent barrier duplication");

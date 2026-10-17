@@ -119,6 +119,7 @@ pub fn codegen_run(
     }
     println!("This is the proper cargo workflow:");
     println!("  CARGO_ENCODED_RUSTFLAGS=<cuda-oxide flags> CARGO_PROFILE_*=<pins> cargo run");
+    println!("  (a custom --profile takes the pins as --config profile.<name>.<key>=<value>)");
     println!();
 
     touch_main_rs(&example_dir);

@@ -268,7 +268,9 @@ impl<const N_COLS: u32> TmemGuard<TmemUninit, N_COLS> {
     ///   `linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z)`.
     ///   Warp 0 is linear tids `0..=31`. In a 1D block that matches
     ///   `threadIdx.x / 32`; in a 2D or 3D block it is not every row that
-    ///   shares the same `threadIdx.x`.
+    ///   shares the same `threadIdx.x`. A kernel that allocates more than
+    ///   once must issue every allocation from the same warp; the CUTLASS
+    ///   TMEM allocator states this as a precondition.
     ///
     /// # Safety
     ///
@@ -372,8 +374,9 @@ impl<const N_COLS: u32> TmemGuard<TmemReady, N_COLS> {
     ///   (`linear_tid / 32`, same numbering as [`TmemGuard::alloc_by`]). Any
     ///   one full warp of the CTA may deallocate once every TMEM access is
     ///   complete; using the allocating warp is the convention here. The PTX
-    ///   ISA requires one warp for allocation and one for deallocation, not
-    ///   the same warp. CUTLASS requires the same warp only for repeated
+    ///   ISA asks for one warp of the CTA to perform the allocation and one
+    ///   to perform the deallocation; it does not require them to be the
+    ///   same warp. CUTLASS requires the same warp only for repeated
     ///   allocations within one kernel.
     ///
     /// # Safety

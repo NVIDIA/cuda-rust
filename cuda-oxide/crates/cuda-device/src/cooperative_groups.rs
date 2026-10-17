@@ -1268,13 +1268,6 @@ where
     acc
 }
 
-/// Linear warp index inside the current block; see
-/// [`thread::block_linear_thread_id`].
-#[inline(always)]
-fn warp_in_block_linear() -> u32 {
-    thread::block_linear_thread_id_here() / 32
-}
-
 /// Reduce one value per thread down to a single value across a thread block.
 ///
 /// Three-phase shape (the same shape CUB and cuCollections use):
@@ -1358,7 +1351,7 @@ where
     let smem = unsafe { SharedArray::as_raw_mut_ptr(smem) };
 
     let lane = warp::lane_id();
-    let warp_id = warp_in_block_linear();
+    let warp_id = warp::block_linear_warp_id_here();
 
     let remaining = block_threads - warp_id * 32;
     let live = if remaining < 32 { remaining } else { 32 };
@@ -1464,7 +1457,7 @@ where
     crate::gpu_assert!(runtime_warps as usize <= NUM_WARPS);
 
     let lane = warp::lane_id();
-    let warp_id = warp_in_block_linear();
+    let warp_id = warp::block_linear_warp_id_here();
 
     let remaining = block_threads - warp_id * 32;
     let live = if remaining < 32 { remaining } else { 32 };

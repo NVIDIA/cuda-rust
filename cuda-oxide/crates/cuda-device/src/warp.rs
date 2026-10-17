@@ -209,8 +209,10 @@ pub fn active_mask() -> u32 {
 /// Computes: `threadIdx.x / 32`
 ///
 /// This is a derived value, not a hardware register.
-/// Only valid for 1D thread blocks; for multi-dimensional blocks,
-/// compute your own warp ID from the linearized thread index.
+/// Only valid for 1D thread blocks. In a 2D or 3D block hardware warps are
+/// formed from consecutive block-linear thread ids, so use
+/// `cooperative_groups::this_thread_block().thread_rank() / 32` there. That
+/// is the block-linear warp id [`TmemGuard`](crate::tcgen05::TmemGuard) uses.
 #[inline(always)]
 pub fn warp_id() -> u32 {
     crate::thread::threadIdx_x() / 32
@@ -218,18 +220,16 @@ pub fn warp_id() -> u32 {
 
 /// Warp index of one thread inside its block, in linear thread order.
 ///
-/// ```text
-/// linear_tid = thread_idx_x
-///     + block_dim_x * (thread_idx_y + block_dim_y * thread_idx_z)
-/// warp = linear_tid / 32
-/// ```
+/// This is `linear_tid / 32`, with `linear_tid` from
+/// [`crate::thread::block_linear_thread_id`]: `x` fastest, then `y`, then `z`.
 ///
 /// For a 1D block this equals `thread_idx_x / 32`, which is what [`warp_id`]
 /// returns. For a 2D or 3D block it names the single group of 32 consecutive
 /// linear thread ids, not every thread that shares the same `threadIdx.x`.
 ///
-/// [`warp_id`] stays x-only. Callers that must pick exactly one warp in the
-/// block (tensor-memory alloc and dealloc) use this function instead.
+/// [`warp_id`] stays x-only. Callers that must pick one warp of the block
+/// (tensor-memory alloc and dealloc, the cooperative-groups block reductions)
+/// use this function instead.
 #[must_use]
 #[inline(always)]
 pub(crate) const fn block_linear_warp_id(
@@ -239,8 +239,13 @@ pub(crate) const fn block_linear_warp_id(
     block_dim_x: u32,
     block_dim_y: u32,
 ) -> u32 {
-    let linear_tid = thread_idx_x + block_dim_x * (thread_idx_y + block_dim_y * thread_idx_z);
-    linear_tid / 32
+    crate::thread::block_linear_thread_id(
+        thread_idx_x,
+        thread_idx_y,
+        thread_idx_z,
+        block_dim_x,
+        block_dim_y,
+    ) / 32
 }
 
 /// Block-linear warp id of the calling thread.
@@ -1773,5 +1778,52 @@ mod tests {
         assert_eq!(warp0, 32);
         assert_eq!(warp1, 32);
         assert_eq!(warp0 + warp1, dx * dy * dz);
+    }
+
+    /// Threads of a block that the pre-fix rule `threadIdx.x / 32 == warp`
+    /// selects: their count, and how many of them fall into each block-linear
+    /// warp (index = block-linear warp id; 32 entries cover 1024 threads).
+    fn x_only_selection(dx: u32, dy: u32, dz: u32, warp: u32) -> (u32, [u32; 32]) {
+        let mut count = 0u32;
+        let mut per_warp = [0u32; 32];
+        for tz in 0..dz {
+            for ty in 0..dy {
+                for tx in 0..dx {
+                    if tx / 32 == warp {
+                        count += 1;
+                        per_warp[block_linear_warp_id(tx, ty, tz, dx, dy) as usize] += 1;
+                    }
+                }
+            }
+        }
+        (count, per_warp)
+    }
+
+    #[test]
+    fn the_x_only_rule_selects_all_four_warps_of_a_32x4_block() {
+        // Control: every thread of a (32, 4, 1) block has threadIdx.x / 32 == 0,
+        // so the old selection covers 128 threads in four full warps. The
+        // block-linear rule selects the 32 threads of warp 0.
+        let (old_count, per_warp) = x_only_selection(32, 4, 1, 0);
+        assert_eq!(old_count, 128);
+        assert_eq!(per_warp[..4], [32, 32, 32, 32]);
+        assert_eq!(count_matching(32, 4, 1, 0, |_, _, _| true), 32);
+    }
+
+    #[test]
+    fn the_x_only_rule_straddles_two_warps_when_block_dim_x_is_48() {
+        // Control: in a (48, 2, 1) block, target warp 1, the old rule selects
+        // threadIdx.x in 32..48 of both rows: linear ids 32..=47 and 80..=95,
+        // half of block-linear warp 1 and half of warp 2. No full warp is
+        // selected, so a .sync.aligned instruction there is undefined.
+        let (old_count, per_warp) = x_only_selection(48, 2, 1, 1);
+        assert_eq!(old_count, 32);
+        assert_eq!(per_warp[..3], [0, 16, 16]);
+        // The block-linear rule selects linear ids 32..=63: the end of row 0
+        // and the start of row 1, one full hardware warp.
+        let new_count = count_matching(48, 2, 1, 1, |tx, ty, _| {
+            (ty == 0 && tx >= 32) || (ty == 1 && tx < 16)
+        });
+        assert_eq!(new_count, 32);
     }
 }

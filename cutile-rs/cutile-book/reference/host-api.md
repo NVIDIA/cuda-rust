@@ -815,6 +815,13 @@ a buffer, pass it into the operation, and `memcpy` new data before each
 launch. See [Tutorial 10](../tutorials/10-cuda-graphs.md) for a
 complete walkthrough.
 
+Replay safety is enforced at runtime. The graph keeps the storage of every
+buffer it recorded alive for as long as it can replay, each launch re-leases
+those accesses on its own submission, and a replay that conflicts with an
+in-flight access on another stream is rejected before it is enqueued, as is
+any other conflicting operation. Dropping a buffer's handle after capture
+makes its data unreachable but frees nothing the graph still uses.
+
 ---
 
 ## Additional Public API

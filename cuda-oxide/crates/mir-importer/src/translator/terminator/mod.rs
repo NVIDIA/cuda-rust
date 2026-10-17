@@ -1254,25 +1254,37 @@ fn translate_call(
         return Ok(result);
     }
 
-    // Handle diverging calls (calls that never return, like unwrap_failed, panic, etc.)
-    // These have no target block because the function never returns.
+    // `Call { target: None }` means there is no normal successor. It does not
+    // mean an emitted callee can be erased: a collected Rust `-> !` function
+    // may perform observable work before it diverges. Preserve that call and
+    // let `emit_function_call` terminate the caller with `mir.unreachable`.
     //
-    // The callee is dropped and replaced by an immediate trap. That applies
-    // to every `-> !` callee reaching this point, including a user
-    // `#[device]` fn that legitimately diverges (e.g. `loop {}`); full Rust
-    // fidelity would emit the call for resolvable callees the way
-    // `translate_function_item_call` does. Dropping the call is a
-    // pre-existing semantic: the trap only makes it safe, where the bare
-    // `unreachable` previously emitted here was UB that let `opt` delete
-    // the whole panic path.
-    //
-    // Panic entry points additionally never get here with any statements
-    // translated ahead of them: `block::translate_block` recognizes the same
-    // shape via [`is_dropped_panic_call`] and emits the trap directly.
+    // For every diverging callee that is not part of this pipeline run's
+    // emitted-function set, retain the pre-existing trap fallback. Keep this
+    // before the unsupported-intrinsic and libm checks below so non-emitted
+    // diverging calls still take the same path as before this fix.
     if target_usize.is_none() {
-        // This is a diverging call (returns !) - emit trap + unreachable
-        // Examples: unwrap_failed(), panic!(), abort()
-        return Ok(emit_trap_unreachable_after(ctx, block_ptr, prev_op, loc));
+        let resolved_instance = match func {
+            mir::Operand::Constant(constant)
+                if *constant.const_.kind() == ConstantKind::ZeroSized =>
+            {
+                match constant.const_.ty().kind() {
+                    rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::FnDef(
+                        fn_def,
+                        substs,
+                    )) => rustc_public::mir::mono::Instance::resolve(fn_def, &substs).ok(),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+
+        if !resolved_instance
+            .as_ref()
+            .is_some_and(crate::translator::facts::is_emitted_function)
+        {
+            return Ok(emit_trap_unreachable_after(ctx, block_ptr, prev_op, loc));
+        }
     }
 
     // A call to a rustc intrinsic that no dispatch arm above recognized can

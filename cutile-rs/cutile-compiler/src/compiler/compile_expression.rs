@@ -211,9 +211,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         });
         TileRustType::new_enum(type_instance)
     }
-
     fn make_option_type_from_payload(payload_ty: &TileRustType) -> TileRustType {
-        let payload_rust_ty = &payload_ty.rust_ty;
+        let payload_rust_ty = payload_ty.rust_ty();
         let rust_ty: syn::Type = parse_quote!(Option<#payload_rust_ty>);
         Self::make_option_type(rust_ty)
     }
@@ -244,7 +243,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         expected: &TileRustType,
         generic_vars: &GenericVars,
     ) -> Result<Option<TileRustType>, JITError> {
-        let elem_ty = match &expected.rust_ty {
+        let elem_ty = match expected.rust_ty() {
             syn::Type::Array(array) => Some(&*array.elem),
             syn::Type::Slice(slice) => Some(&*slice.elem),
             _ => None,
@@ -297,7 +296,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         generic_vars: &GenericVars,
         span: &proc_macro2::Span,
     ) -> Result<(Vec<i32>, Vec<i32>), JITError> {
-        let (type_ident, type_generic_args) = get_ident_generic_args(&value.ty.rust_ty);
+        let (type_ident, type_generic_args) = get_ident_generic_args(value.ty.rust_ty());
         let Some(type_ident) = type_ident else {
             return self.jit_error_result(span, "expected a mapped partition type");
         };
@@ -306,7 +305,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 span,
                 &format!(
                     "`iter_indices()` for loops require a MappedPartitionMut receiver, got `{}`",
-                    value.ty.rust_ty.to_token_stream()
+                    value.ty.rust_ty().to_token_stream()
                 ),
             );
         }
@@ -654,7 +653,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     "failed to compile IntoDim receiver",
                 )
             })?;
-        if get_type_ident(&receiver.ty.rust_ty).is_some_and(|ident| ident == "Dim") {
+        if get_type_ident(receiver.ty.rust_ty()).is_some_and(|ident| ident == "Dim") {
             return Ok(Some(receiver));
         }
         Ok(Some(self.wrap_scalar_as_dim(
@@ -796,26 +795,16 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         let return_type = match return_type {
             Some(return_type) => return_type,
             None => {
-                let mut bounded_ty = partition.ty.rust_ty.clone();
-                let syn::Type::Path(path_ty) = &mut bounded_ty else {
+                // Derive the bounded name from the receiver's own name rather
+                // than naming one target: `PartitionMut` must become
+                // `BoundedPartitionMut`, not `BoundedPartition`.
+                let mut return_type = partition.ty.clone();
+                if !return_type.prefix_type_name("Bounded") {
                     return self.jit_error_result(
                         span,
                         "expected a partition type for `Partition::with_bounds`",
                     );
-                };
-                let Some(segment) = path_ty.path.segments.last_mut() else {
-                    return self.jit_error_result(
-                        span,
-                        "expected a partition type path for `Partition::with_bounds`",
-                    );
-                };
-                // Derive the bounded name from the receiver's own ident rather
-                // than naming one target: `PartitionMut` must become
-                // `BoundedPartitionMut`, not `BoundedPartition`.
-                segment.ident =
-                    syn::Ident::new(&format!("Bounded{}", segment.ident), segment.ident.span());
-                let mut return_type = partition.ty.clone();
-                return_type.rust_ty = bounded_ty;
+                }
                 return_type
             }
         };
@@ -2123,7 +2112,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         let Some(dim_value) = ctx.vars.get(&dim_name).cloned() else {
             return Ok(false);
         };
-        if get_type_ident(&dim_value.ty.rust_ty).is_none_or(|ident| ident != "Dim") {
+        if get_type_ident(dim_value.ty.rust_ty()).is_none_or(|ident| ident != "Dim") {
             return Ok(false);
         }
         let Some(dim_origin) = Self::value_dim_origin(&dim_value) else {
@@ -3158,7 +3147,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     // TODO (hme): Check whether all expr types can be supported.
                     let return_type = match return_type {
                         Some(ty) => {
-                            if let syn::Type::Reference(ref_type) = ty.rust_ty {
+                            if let syn::Type::Reference(ref_type) = ty.rust_ty() {
                                 self.compile_type(&ref_type.elem, generic_vars, &HashMap::new())?
                             } else {
                                 None
@@ -3206,7 +3195,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     }
                 }
                 Expr::Tuple(tuple_expr) => {
-                    let expected_elem_types = match return_type.as_ref().map(|ty| &ty.rust_ty) {
+                    let expected_elem_types = match return_type.as_ref().map(|ty| ty.rust_ty()) {
                         Some(syn::Type::Tuple(tuple_ty)) => {
                             Some(tuple_ty.elems.iter().cloned().collect::<Vec<_>>())
                         }
@@ -3244,7 +3233,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                             elem_return_type,
                         )? {
                             Some(value) => {
-                                rust_types.push(value.ty.rust_ty.clone());
+                                rust_types.push(value.ty.rust_ty().clone());
                                 values.push(value);
                             }
                             None => {
@@ -3288,7 +3277,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     for elem in &array_expr.elems {
                         let elem_ty = match &return_type {
                             Some(return_type) => {
-                                match &return_type.rust_ty {
+                                match return_type.rust_ty() {
                                     syn::Type::Array(array_type) => self.compile_type(
                                         &array_type.elem,
                                         generic_vars,
@@ -3307,7 +3296,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                             &elem.span(),
                                             &format!(
                                                 "unexpected element type `{}`",
-                                                return_type.rust_ty.to_token_stream()
+                                                return_type.rust_ty().to_token_stream()
                                             ),
                                         )
                                     }
@@ -3342,7 +3331,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                             );
                         }
                         let ty: &TileRustType = &values[0].ty;
-                        let ty_string = ty.rust_ty.to_token_stream().to_string();
+                        let ty_string = ty.rust_ty().to_token_stream().to_string();
                         let ty: syn::Type = match syn::parse2::<syn::Type>(
                             format!("[{ty_string}]").parse().unwrap(),
                         ) {
@@ -3438,7 +3427,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                             );
                         }
                         let ty: &TileRustType = &values[0].ty;
-                        let ty_string = ty.rust_ty.to_token_stream().to_string();
+                        let ty_string = ty.rust_ty().to_token_stream().to_string();
                         let ty: syn::Type = match syn::parse2::<syn::Type>(
                             format!("[{ty_string}]").parse().unwrap(),
                         ) {
@@ -3470,7 +3459,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     // Handle None specially — Rust Option::None, not a variable.
                     if path_expr.path.segments.len() == 1 && var_name == "None" {
                         if let Some(return_type) = return_type {
-                            if return_type.kind == Kind::Enum {
+                            if return_type.kind() == Kind::Enum {
                                 return Ok(Some(TileRustValue::new_enum(
                                     "None",
                                     None,
@@ -3600,7 +3589,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                 }
 
                                 if let Some(return_type) = return_type {
-                                    if return_type.kind == Kind::Enum {
+                                    if return_type.kind() == Kind::Enum {
                                         return Ok(Some(TileRustValue::new_enum(
                                             "Some",
                                             Some(call_expr.args[0].clone()),
@@ -3856,9 +3845,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                 self.ir_location(&lit_expr.span()),
                             );
 
-                            let rust_ty = return_type.rust_ty;
+                            let rust_ty = return_type.rust_ty();
                             let ct_type =
-                                self.compile_type(&rust_ty, generic_vars, &HashMap::new())?;
+                                self.compile_type(rust_ty, generic_vars, &HashMap::new())?;
                             if ct_type.is_none() {
                                 return self.jit_error_result(
                                     &lit_expr.span(),
@@ -3866,12 +3855,12 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                 );
                             }
                             let ct_type = ct_type.unwrap();
-                            if ct_type.kind != Kind::PrimitiveType {
+                            if ct_type.kind() != Kind::PrimitiveType {
                                 return self.jit_error_result(
                                     &lit_expr.span(),
                                     &format!(
                                         "expected a scalar type for this literal, got {:?}",
-                                        ct_type.kind
+                                        ct_type.kind()
                                     ),
                                 );
                             }
@@ -4000,8 +3989,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         self.ir_location(&lit_expr.span()),
                     );
 
-                    let rust_ty = return_type.rust_ty;
-                    let ct_type = self.compile_type(&rust_ty, generic_vars, &HashMap::new())?;
+                    let rust_ty = return_type.rust_ty();
+                    let ct_type = self.compile_type(rust_ty, generic_vars, &HashMap::new())?;
                     if ct_type.is_none() {
                         return self.jit_error_result(
                             &lit_expr.span(),
@@ -4009,12 +3998,12 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         );
                     }
                     let ct_type = ct_type.unwrap();
-                    if ct_type.kind != Kind::PrimitiveType {
+                    if ct_type.kind() != Kind::PrimitiveType {
                         return self.jit_error_result(
                             &lit_expr.span(),
                             &format!(
                                 "expected a scalar type for this literal, got {:?}",
-                                ct_type.kind
+                                ct_type.kind()
                             ),
                         );
                     }

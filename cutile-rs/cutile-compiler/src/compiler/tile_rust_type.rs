@@ -10,6 +10,7 @@
 //! The string form is retained in `cuda_tile_ty_str` for debug output.
 
 use super::shared_types::Kind;
+use super::type_identity::{Referent, TypeIdentity};
 use crate::error::JITError;
 use crate::generics::{GenericVars, TypeInstance};
 use crate::types::*;
@@ -56,23 +57,49 @@ fn synthetic_ptr_instance(
     })
 }
 
+/// Mutability of each `&` in `&mut &T`, outermost first.
+fn reference_mutabilities(mut ty: &syn::Type) -> Vec<bool> {
+    let mut mutabilities = vec![];
+    while let syn::Type::Reference(reference) = ty {
+        mutabilities.push(reference.mutability.is_some());
+        ty = &reference.elem;
+    }
+    mutabilities
+}
+
+/// `Partition<..>` -> `{prefix}Partition<..>`.
+fn prefix_type_name(ty: &mut syn::Type, prefix: &str) -> bool {
+    let syn::Type::Path(path) = ty else {
+        return false;
+    };
+    let Some(segment) = path.path.segments.last_mut() else {
+        return false;
+    };
+    segment.ident = syn::Ident::new(&format!("{prefix}{}", segment.ident), segment.ident.span());
+    true
+}
+
 /// A compiled type binding: maps a Rust `syn::Type` to its CUDA Tile type metadata.
 ///
 /// Lifetime-free — all fields are owned. The tile-ir type is eagerly parsed at
-/// construction and stored in `tile_ir_ty`.
+/// construction and stored in `tile_ir_ty`. Fields change only through the
+/// methods below, which keep the spelling, the instance and the tile-ir type
+/// describing one type.
 #[derive(Debug, Clone)]
 pub struct TileRustType {
-    pub(crate) kind: Kind,
-    pub(crate) cuda_tile_name: Option<String>,
+    kind: Kind,
+    cuda_tile_name: Option<String>,
     /// The dialect type string (e.g. `"!cuda_tile.tile<128x64xf32>"`).
     /// Retained for debug output; the parsed form is in `tile_ir_ty`.
-    pub(crate) cuda_tile_ty_str: Option<String>,
+    cuda_tile_ty_str: Option<String>,
     /// Eagerly parsed tile-ir type. `None` when the type string is absent
     /// or could not be parsed (deferred types).
-    pub(crate) tile_ir_ty: Option<TileIrType>,
-    pub(crate) params: Vec<TypeParam>,
-    pub(crate) rust_ty: syn::Type,
-    pub(crate) type_instance: TypeInstance,
+    tile_ir_ty: Option<TileIrType>,
+    params: Vec<TypeParam>,
+    /// The type as spelled in the scope that owns the value.
+    rust_ty: syn::Type,
+    /// `rust_ty`'s referent, instantiated in that scope.
+    type_instance: TypeInstance,
 }
 
 impl TileRustType {
@@ -118,6 +145,72 @@ impl TileRustType {
     }
     pub(crate) fn get_cuda_tile_type_str(&self) -> Option<String> {
         self.cuda_tile_ty_str.clone()
+    }
+
+    pub(crate) fn kind(&self) -> Kind {
+        self.kind.clone()
+    }
+    pub(crate) fn cuda_tile_name(&self) -> Option<&str> {
+        self.cuda_tile_name.as_deref()
+    }
+    pub(crate) fn tile_ir_ty(&self) -> Option<&TileIrType> {
+        self.tile_ir_ty.as_ref()
+    }
+    pub(crate) fn params(&self) -> &[TypeParam] {
+        &self.params
+    }
+    pub(crate) fn rust_ty(&self) -> &syn::Type {
+        &self.rust_ty
+    }
+    pub(crate) fn type_instance(&self) -> &TypeInstance {
+        &self.type_instance
+    }
+
+    pub(crate) fn identity(&self) -> TypeIdentity {
+        TypeIdentity {
+            references: reference_mutabilities(&self.rust_ty),
+            referent: Referent::of(&self.type_instance),
+        }
+    }
+
+    /// `rust_ty` spells the type in its producer's scope (`{ [N] }` or
+    /// `{ [4] }`); types are compared by identity.
+    pub(crate) fn same_type(&self, other: &TileRustType) -> bool {
+        self.identity() == other.identity()
+    }
+
+    /// Rebinds the value to `spelling`, its type as written in the scope it
+    /// moves into, with `instance` the instantiation there. Unchecked: an
+    /// inlined call's arguments and result already have these types in
+    /// rustc-checked source. The tile-ir type stays the value's.
+    pub(crate) fn adopt(&mut self, spelling: syn::Type, instance: TypeInstance) {
+        self.rust_ty = spelling;
+        self.type_instance = instance;
+    }
+
+    /// Records an op's pointer attribute on `lowered`, this type's tile-ir
+    /// type. The Rust type is unaffected.
+    pub(crate) fn attach_pointer_attribute(
+        &mut self,
+        lowered: TileIrType,
+        attribute: cutile_ir::ir::PointerAttribute,
+    ) {
+        self.tile_ir_ty = Some(lowered.with_pointer_attribute(attribute));
+        self.cuda_tile_ty_str = None;
+    }
+
+    /// `T` -> `&T`; the instance keeps describing the referent.
+    pub(crate) fn wrap_reference(
+        &mut self,
+        lifetime: Option<syn::Lifetime>,
+        mutability: Option<syn::Token![mut]>,
+    ) {
+        self.rust_ty = syn::Type::Reference(syn::TypeReference {
+            and_token: Default::default(),
+            lifetime,
+            mutability,
+            elem: Box::new(self.rust_ty.clone()),
+        });
     }
 
     // -----------------------------------------------------------------------
@@ -266,9 +359,6 @@ impl TileRustType {
                 None
             }
         };
-        if let Some(new_ty) = relabel(&self.rust_ty) {
-            self.rust_ty = new_ty;
-        }
         let relabel_ptr_instance = |inst: &mut crate::generics::TypeInstancePtrType| {
             inst.is_mutable = is_mutable;
             if let Some(new_ty) = relabel(&inst.instance_ty) {
@@ -278,6 +368,9 @@ impl TileRustType {
                 inst.generic_ty = new_ty;
             }
         };
+        if let Some(new_ty) = relabel(&self.rust_ty) {
+            self.rust_ty = new_ty;
+        }
         match &mut self.type_instance {
             TypeInstance::PtrType(inst) => relabel_ptr_instance(inst),
             TypeInstance::StructuredType(structured) => {
@@ -297,58 +390,159 @@ impl TileRustType {
         }
     }
 
+    /// Renames the type in its spelling and its instance alike; the tile-ir
+    /// type is unchanged. Returns `false` when the type has no name.
+    pub(crate) fn prefix_type_name(&mut self, prefix: &str) -> bool {
+        if !prefix_type_name(&mut self.rust_ty, prefix) {
+            return false;
+        }
+        if let TypeInstance::StructuredType(structured) = &mut self.type_instance {
+            prefix_type_name(&mut structured.generic_ty, prefix);
+            prefix_type_name(&mut structured.instance_ty, prefix);
+        }
+        true
+    }
+
+    /// A view whose tile-ir type its op computed (e.g. a partition view).
+    pub(crate) fn new_view(
+        cuda_tile_name: String,
+        tile_ir_ty: TileIrType,
+        type_instance: TypeInstance,
+    ) -> TileRustType {
+        Self::bare(
+            Kind::StructuredType,
+            Some(cuda_tile_name),
+            Some(tile_ir_ty),
+            type_instance,
+        )
+    }
+
     pub(crate) fn new_structure(
         cuda_tile_name: String,
         type_instance: TypeInstance,
     ) -> TileRustType {
-        let rust_ty = type_instance.get_source_type().clone();
-        TileRustType {
-            cuda_tile_ty_str: None,
-            tile_ir_ty: None,
-            cuda_tile_name: Some(cuda_tile_name),
-            params: vec![],
-            rust_ty,
-            type_instance,
-            kind: Kind::Struct,
-        }
+        Self::bare(Kind::Struct, Some(cuda_tile_name), None, type_instance)
     }
 
     pub(crate) fn new_compound(type_instance: TypeInstance) -> TileRustType {
-        let rust_ty = type_instance.get_source_type().clone();
-        TileRustType {
-            cuda_tile_ty_str: None,
-            tile_ir_ty: None,
-            cuda_tile_name: None,
-            params: vec![],
-            rust_ty,
-            type_instance,
-            kind: Kind::Compound,
-        }
+        Self::bare(Kind::Compound, None, None, type_instance)
     }
 
     pub(crate) fn new_string(type_instance: TypeInstance) -> TileRustType {
-        let rust_ty = type_instance.get_source_type().clone();
-        TileRustType {
-            cuda_tile_ty_str: None,
-            tile_ir_ty: None,
-            cuda_tile_name: None,
-            params: vec![],
-            rust_ty,
-            type_instance,
-            kind: Kind::String,
-        }
+        Self::bare(Kind::String, None, None, type_instance)
     }
 
     pub(crate) fn new_enum(type_instance: TypeInstance) -> TileRustType {
-        let rust_ty = type_instance.get_source_type().clone();
+        Self::bare(Kind::Enum, None, None, type_instance)
+    }
+
+    /// A type without type parameters, spelled by `type_instance`'s source.
+    fn bare(
+        kind: Kind,
+        cuda_tile_name: Option<String>,
+        tile_ir_ty: Option<TileIrType>,
+        type_instance: TypeInstance,
+    ) -> TileRustType {
         TileRustType {
+            kind,
+            cuda_tile_name,
             cuda_tile_ty_str: None,
-            tile_ir_ty: None,
-            cuda_tile_name: None,
+            tile_ir_ty,
             params: vec![],
-            rust_ty,
+            rust_ty: type_instance.get_source_type().clone(),
             type_instance,
-            kind: Kind::Enum,
         }
+    }
+}
+
+#[cfg(test)]
+mod same_type_tests {
+    use super::*;
+
+    fn primitives() -> HashMap<(String, String), ItemImpl> {
+        ["f32", "f16"]
+            .into_iter()
+            .map(|name| {
+                let ident = syn::Ident::new(name, proc_macro2::Span::call_site());
+                let item: ItemImpl = syn::parse_quote! {
+                    #[cuda_tile::ty(name = #name)]
+                    impl ElementType for #ident {}
+                };
+                (("ElementType".to_string(), name.to_string()), item)
+            })
+            .collect()
+    }
+
+    fn generic_vars() -> GenericVars {
+        let mut vars = GenericVars::empty_unchecked();
+        vars.inst_i32.insert("N".into(), 4);
+        vars.inst_i32.insert("BM".into(), 4);
+        vars.inst_types.insert("E".into(), "f32".into());
+        vars
+    }
+
+    fn ty(spelling: &str) -> TileRustType {
+        let rust_ty = syn::parse_str::<syn::Type>(spelling).unwrap();
+        let (vars, primitives) = (generic_vars(), primitives());
+        let instance = vars.instantiate_type(&rust_ty, &primitives).unwrap();
+        TileRustType::new_structured_type(
+            "!cuda_tile.tile".into(),
+            &vars,
+            &primitives,
+            vec![],
+            instance,
+        )
+        .unwrap()
+    }
+
+    fn reference_to(spelling: &str) -> TileRustType {
+        let mut reference = ty(spelling);
+        reference.wrap_reference(None, None);
+        reference
+    }
+
+    #[test]
+    fn symbolic_shape_is_its_instantiation() {
+        assert!(ty("Tile<f32, { [N] }>").same_type(&ty("Tile<f32, { [4] }>")));
+        assert!(ty("Tile<f32, { [N] }>").same_type(&TileRustType::from_tile("f32", &[4]).unwrap()));
+    }
+
+    #[test]
+    fn different_symbols_with_equal_values_are_the_same_type() {
+        assert!(ty("Tile<f32, { [N] }>").same_type(&ty("Tile<f32, { [BM] }>")));
+    }
+
+    #[test]
+    fn generic_element_is_its_instantiation() {
+        assert!(ty("Tile<E, { [N] }>").same_type(&ty("Tile<f32, { [4] }>")));
+        assert!(
+            ty("PointerTile<* mut E, { [N] }>").same_type(&ty("PointerTile<* mut f32, { [4] }>"))
+        );
+    }
+
+    #[test]
+    fn different_shape_is_rejected() {
+        assert!(!ty("Tile<f32, { [N] }>").same_type(&ty("Tile<f32, { [8] }>")));
+        assert!(!ty("Tile<f32, { [4] }>").same_type(&ty("Tile<f32, { [4, 1] }>")));
+    }
+
+    #[test]
+    fn different_element_type_is_rejected() {
+        assert!(!ty("Tile<E, { [4] }>").same_type(&ty("Tile<f16, { [4] }>")));
+    }
+
+    #[test]
+    fn different_pointer_mutability_is_rejected() {
+        assert!(!ty("PointerTile<* mut E, { [N] }>")
+            .same_type(&ty("PointerTile<* const f32, { [4] }>")));
+        assert!(!TileRustType::from_scalar_ptr("f32", true)
+            .unwrap()
+            .same_type(&TileRustType::from_scalar_ptr("f32", false).unwrap()));
+    }
+
+    #[test]
+    fn reference_is_not_its_referent() {
+        assert!(!reference_to("Tile<f32, { [4] }>").same_type(&ty("Tile<f32, { [4] }>")));
+        assert!(reference_to("Tile<f32, { [N] }>").same_type(&reference_to("Tile<f32, { [4] }>")));
     }
 }

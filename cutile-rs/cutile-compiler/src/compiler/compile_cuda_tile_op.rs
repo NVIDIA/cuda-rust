@@ -784,7 +784,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         };
         let Some(TileIrType::TensorView(tensor_view_ty)) = tensor_value
             .ty
-            .tile_ir_ty
+            .tile_ir_ty()
             .as_ref()
             .map(|t| t.without_pointer_attribute().clone())
         else {
@@ -808,9 +808,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 "failed to compile mapped partition tile shape",
             );
         };
-        let tile_shape = match &shape_value.ty.type_instance {
+        let tile_shape = match shape_value.ty.type_instance() {
             TypeInstance::StructuredType(instance) => instance.shape.clone(),
-            _ => get_cga_from_type(&shape_value.ty.rust_ty, generic_args).ok_or_else(|| {
+            _ => get_cga_from_type(shape_value.ty.rust_ty(), generic_args).ok_or_else(|| {
                 self.jit_error(
                     &call_expr.args[1].span(),
                     "mapped partition tile shape must be static",
@@ -842,9 +842,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         )
         .unwrap();
         let type_instance = generic_args.instantiate_type(&rust_ty, self.modules.primitives())?;
-        let return_type = TileRustType {
-            cuda_tile_ty_str: None,
-            tile_ir_ty: Some(inherit_pointer_attribute(
+        let return_type = TileRustType::new_view(
+            "!cuda_tile.partition_view".to_string(),
+            inherit_pointer_attribute(
                 TileIrType::PartitionView(PartitionViewType {
                     tile_shape: tile_shape.clone(),
                     tensor_view: tensor_view_ty,
@@ -852,13 +852,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     padding_value: None,
                 }),
                 module.value_type(tensor_view_value),
-            )),
-            cuda_tile_name: Some("!cuda_tile.partition_view".to_string()),
-            params: vec![],
-            rust_ty,
+            ),
             type_instance,
-            kind: Kind::StructuredType,
-        };
+        );
 
         let Some(token_value) = self.compile_expression(
             module,
@@ -915,7 +911,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             );
         }
         let return_type_outer = return_type.unwrap();
-        let Type::Tuple(tuple_type) = &return_type_outer.rust_ty else {
+        let Type::Tuple(tuple_type) = return_type_outer.rust_ty() else {
             return self.jit_error_result(
                 &call_expr.span(),
                 "expected a tuple return type for `load_ptr_tko",
@@ -1230,7 +1226,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             );
         }
         let return_type_outer = return_type.unwrap();
-        let Type::Tuple(tuple_type) = &return_type_outer.rust_ty else {
+        let Type::Tuple(tuple_type) = return_type_outer.rust_ty() else {
             return self.jit_error_result(
                 &call_expr.span(),
                 "expected a tuple return type for `atomic_rmw_tko",
@@ -1382,7 +1378,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             );
         }
         let return_type_outer = return_type.unwrap();
-        let Type::Tuple(tuple_type) = &return_type_outer.rust_ty else {
+        let Type::Tuple(tuple_type) = return_type_outer.rust_ty() else {
             return self.jit_error_result(
                 &call_expr.span(),
                 "expected a tuple return type for `atomic_cas_tko",
@@ -1845,7 +1841,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             );
         }
         let return_type = return_type.unwrap();
-        if return_type.tile_ir_ty.is_none() {
+        if return_type.tile_ir_ty().is_none() {
             return self.jit_error_result(
                 &call_expr.span(),
                 "Expected cuda_tile_ty for load_view_tko return type",
@@ -2296,7 +2292,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             .expect("failed to build scalar tile type for reduce element");
         let elem_rust_ty = operand_value
             .ty
-            .type_instance
+            .type_instance()
             .get_rust_element_instance_ty()
             .unwrap();
         let elem_rust_ty_parsed = syn::parse2::<Type>(elem_rust_ty.parse().unwrap()).unwrap();
@@ -2457,7 +2453,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             .expect("failed to build scalar tile type for scan element");
         let elem_rust_ty = operand_value
             .ty
-            .type_instance
+            .type_instance()
             .get_rust_element_instance_ty()
             .unwrap();
         let elem_rust_ty = syn::parse2::<Type>(elem_rust_ty.parse().unwrap()).unwrap();
@@ -2761,7 +2757,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 );
             }
             if opcode == Opcode::MakeTensorView && matches!(i, 1 | 2) {
-                if let Some(ir_ty) = &return_type.tile_ir_ty {
+                if let Some(ir_ty) = &return_type.tile_ir_ty() {
                     if let TileIrType::TensorView(view) = ir_ty.without_pointer_attribute() {
                         let dims = if i == 1 { &view.shape } else { &view.strides };
                         // Shape witnesses can already contain only dynamic
@@ -2799,8 +2795,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             let ty = super::_type::convert_type(&return_type).ok_or_else(|| {
                 self.jit_error(&call_expr.span(), "expected a pointer or view result type")
             })?;
-            return_type.tile_ir_ty = Some(ty.with_pointer_attribute(attribute));
-            return_type.cuda_tile_ty_str = None;
+            return_type.attach_pointer_attribute(ty, attribute);
         }
 
         let mut attrs: Vec<(String, Attribute)> = vec![];
@@ -2937,9 +2932,10 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     }
                     let op_arg = op_arg.unwrap();
                     match op_arg.kind {
-                        Kind::Struct | Kind::StructuredType => match &op_arg.ty.rust_ty {
+                        Kind::Struct | Kind::StructuredType => match op_arg.ty.rust_ty() {
                             Type::Path(_ty_path) => {
-                                let Some(cga) = get_cga_from_type(&op_arg.ty.rust_ty, generic_args)
+                                let Some(cga) =
+                                    get_cga_from_type(op_arg.ty.rust_ty(), generic_args)
                                 else {
                                     return self.jit_error_result(
                                         &call_expr.args[i].span(),
@@ -3220,15 +3216,15 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             .attrs(attrs);
 
         if function_returns(fn_item) {
-            match return_type.kind {
+            match return_type.kind() {
                 Kind::PrimitiveType | Kind::StructuredType => {
-                    if return_type.tile_ir_ty.is_none() { return self.jit_error_result(&call_expr.span(), "return type is missing a compiled tile type"); }
+                    if return_type.tile_ir_ty().is_none() { return self.jit_error_result(&call_expr.span(), "return type is missing a compiled tile type"); }
                     let result_ir_ty = super::_type::convert_type(&return_type)
-                        .ok_or_else(|| self.jit_error(&call_expr.span(), &format!("failed to convert return type to tile-ir type: {:?}", return_type.cuda_tile_name)))?;
+                        .ok_or_else(|| self.jit_error(&call_expr.span(), &format!("failed to convert return type to tile-ir type: {:?}", return_type.cuda_tile_name())))?;
                     op_builder = op_builder.result(result_ir_ty);
                     let (op_id, results) = op_builder.build(module);
                     append_op(module, block_id, op_id);
-                    let mut result = match return_type.kind {
+                    let mut result = match return_type.kind() {
                         Kind::PrimitiveType => {
                             TileRustValue::new_primitive(results[0], return_type, None)
                         }
@@ -3244,17 +3240,17 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     Ok(Some(result))
                 }
                 Kind::Compound => {
-                    if let Type::Tuple(tuple_type) = &return_type.rust_ty {
+                    if let Type::Tuple(tuple_type) = return_type.rust_ty() {
                         let mut elem_types = vec![];
                         for elem in &tuple_type.elems {
                             let elem_ty = self.compile_type(elem, generic_args, &HashMap::new())?;
                             if elem_ty.is_none() { return self.jit_error_result(&call_expr.span(), "failed to compile type"); }
                             let elem_ty = elem_ty.unwrap();
-                            if elem_ty.tile_ir_ty.is_none() { return self.jit_error_result(&call_expr.span(), "failed to compile tile type"); }
+                            if elem_ty.tile_ir_ty().is_none() { return self.jit_error_result(&call_expr.span(), "failed to compile tile type"); }
                             let elem_ir_ty = super::_type::convert_type(&elem_ty)
                                 .ok_or_else(|| self.jit_error(
                                     &call_expr.span(),
-                                    &format!("failed to convert element type to tile-ir type: {:?}", elem_ty.cuda_tile_name),
+                                    &format!("failed to convert element type to tile-ir type: {:?}", elem_ty.cuda_tile_name()),
                                 ))?;
                             op_builder = op_builder.result(elem_ir_ty);
                             elem_types.push(elem_ty);
@@ -3263,7 +3259,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         append_op(module, block_id, op_id);
                         let mut values = vec![];
                         for (i, elem_ty) in elem_types.iter().enumerate() {
-                            match elem_ty.kind {
+                            match elem_ty.kind() {
                                 Kind::PrimitiveType => {
                                     let op_value = if op_name == "cuda_tile.get_num_tile_blocks" || op_name == "cuda_tile.get_tile_block_id" {
                                         self.compile_value_assumption(module, block_id, results[i], "assume_bounds_lower", &[0], elem_ty.clone(), &call_expr.span())?.value
@@ -3294,11 +3290,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                     values.push(prim);
                                 }
                                 Kind::StructuredType => { values.push(TileRustValue::new_structured_type(results[i], elem_ty.clone(), None)); }
-                                Kind::Compound | Kind::Struct | Kind::String | Kind::Enum => return self.jit_error_result(&call_expr.span(), &format!("this operation returned an unsupported element type ({:?}); only scalar and structured types are supported", elem_ty.kind)),
+                                Kind::Compound | Kind::Struct | Kind::String | Kind::Enum => return self.jit_error_result(&call_expr.span(), &format!("this operation returned an unsupported element type ({:?}); only scalar and structured types are supported", elem_ty.kind())),
                             }
                         }
                         Ok(Some(TileRustValue::new_compound(values, return_type)))
-                    } else { self.jit_error_result(&call_expr.span(), &format!("operations that return multiple values must use a tuple return type, got `{}`", return_type.rust_ty.to_token_stream())) }
+                    } else { self.jit_error_result(&call_expr.span(), &format!("operations that return multiple values must use a tuple return type, got `{}`", return_type.rust_ty().to_token_stream())) }
                 }
                 Kind::Struct => self.jit_error_result(&call_expr.span(), "this operation cannot return a struct; only scalar and structured (tile) types are supported as return types"),
                 Kind::String => self.jit_error_result(&call_expr.span(), "this operation cannot return a string; only scalar and structured (tile) types are supported as return types"),
@@ -3359,7 +3355,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                             }
                             arg_values.push(val.value.unwrap());
                             element_type_instance
-                                .push(val.ty.type_instance.get_rust_element_instance_ty())
+                                .push(val.ty.type_instance().get_rust_element_instance_ty())
                         }
                     }
                 }
@@ -3488,27 +3484,27 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         fn_name: &str,
         param_name: &str,
     ) -> Result<i32, JITError> {
-        let syn::Type::Path(type_path) = &return_ty.rust_ty else {
+        let syn::Type::Path(type_path) = return_ty.rust_ty() else {
             return self.jit_error_result(
-                &return_ty.rust_ty.span(),
+                &return_ty.rust_ty().span(),
                 &format!("{fn_name}: expected a path type for return type annotation"),
             );
         };
         let Some(last_segment) = type_path.path.segments.last() else {
             return self.jit_error_result(
-                &return_ty.rust_ty.span(),
+                &return_ty.rust_ty().span(),
                 &format!("{fn_name}: missing path segment in return type"),
             );
         };
         let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments else {
             return self.jit_error_result(
-                &return_ty.rust_ty.span(),
+                &return_ty.rust_ty().span(),
                 &format!("{fn_name}: return type has no generic arguments"),
             );
         };
         let Some(arg) = args.args.iter().nth(pos) else {
             return self.jit_error_result(
-                &return_ty.rust_ty.span(),
+                &return_ty.rust_ty().span(),
                 &format!(
                     "{fn_name}: return type missing `{param_name}` at generic argument {}",
                     pos + 1
@@ -3517,7 +3513,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         };
         let syn::GenericArgument::Const(expr) = arg else {
             return self.jit_error_result(
-                &return_ty.rust_ty.span(),
+                &return_ty.rust_ty().span(),
                 &format!("{fn_name}: generic argument {pos} for `{param_name}` must be a const expression"),
             );
         };
@@ -3536,27 +3532,27 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         fn_name: &str,
         param_name: &str,
     ) -> Result<Vec<i32>, JITError> {
-        let syn::Type::Path(type_path) = &return_ty.rust_ty else {
+        let syn::Type::Path(type_path) = return_ty.rust_ty() else {
             return self.jit_error_result(
-                &return_ty.rust_ty.span(),
+                &return_ty.rust_ty().span(),
                 &format!("{fn_name}: expected a path type for return type annotation"),
             );
         };
         let Some(last_segment) = type_path.path.segments.last() else {
             return self.jit_error_result(
-                &return_ty.rust_ty.span(),
+                &return_ty.rust_ty().span(),
                 &format!("{fn_name}: missing path segment in return type"),
             );
         };
         let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments else {
             return self.jit_error_result(
-                &return_ty.rust_ty.span(),
+                &return_ty.rust_ty().span(),
                 &format!("{fn_name}: return type has no generic arguments"),
             );
         };
         let Some(arg) = args.args.iter().nth(pos) else {
             return self.jit_error_result(
-                &return_ty.rust_ty.span(),
+                &return_ty.rust_ty().span(),
                 &format!(
                     "{fn_name}: return type missing `{param_name}` at generic argument {}",
                     pos + 1
@@ -3565,7 +3561,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         };
         get_cga_from_generic_argument(arg, generic_args).ok_or_else(|| {
             self.jit_error(
-                &return_ty.rust_ty.span(),
+                &return_ty.rust_ty().span(),
                 &format!(
                     "{fn_name}: failed to resolve `{param_name}` from return type argument {pos}"
                 ),
@@ -3613,7 +3609,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         };
         let Some(TileIrType::TensorView(tensor_view_ty)) = tensor_value
             .ty
-            .tile_ir_ty
+            .tile_ir_ty()
             .as_ref()
             .map(|t| t.without_pointer_attribute().clone())
         else {
@@ -3637,9 +3633,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 "failed to compile gather_scatter_view tile shape",
             );
         };
-        let tile_shape = match &shape_value.ty.type_instance {
+        let tile_shape = match shape_value.ty.type_instance() {
             TypeInstance::StructuredType(instance) => instance.shape.clone(),
-            _ => get_cga_from_type(&shape_value.ty.rust_ty, generic_args).ok_or_else(|| {
+            _ => get_cga_from_type(shape_value.ty.rust_ty(), generic_args).ok_or_else(|| {
                 self.jit_error(
                     &call_expr.args[1].span(),
                     "gather_scatter_view tile shape must be static",
@@ -3688,9 +3684,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         )
         .unwrap();
         let type_instance = generic_args.instantiate_type(&rust_ty, self.modules.primitives())?;
-        let return_type = TileRustType {
-            cuda_tile_ty_str: None,
-            tile_ir_ty: Some(inherit_pointer_attribute(
+        let return_type = TileRustType::new_view(
+            "!cuda_tile.gather_scatter_view".to_string(),
+            inherit_pointer_attribute(
                 TileIrType::GatherScatterView(GatherScatterViewType {
                     tile_shape: tile_shape.clone(),
                     tensor_view: tensor_view_ty,
@@ -3698,13 +3694,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     padding_value: raw_view_padding(&call_expr.args[2])?,
                 }),
                 module.value_type(tensor_view_value),
-            )),
-            cuda_tile_name: Some("!cuda_tile.gather_scatter_view".to_string()),
-            params: vec![],
-            rust_ty,
+            ),
             type_instance,
-            kind: Kind::StructuredType,
-        };
+        );
 
         let result_ir_ty = super::_type::convert_type(&return_type).ok_or_else(|| {
             self.jit_error(
@@ -3765,7 +3757,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         };
         let Some(TileIrType::TensorView(tensor_view_ty)) = tensor_value
             .ty
-            .tile_ir_ty
+            .tile_ir_ty()
             .as_ref()
             .map(|t| t.without_pointer_attribute().clone())
         else {
@@ -3789,9 +3781,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 "failed to compile strided_view tile shape",
             );
         };
-        let tile_shape = match &shape_value.ty.type_instance {
+        let tile_shape = match shape_value.ty.type_instance() {
             TypeInstance::StructuredType(instance) => instance.shape.clone(),
-            _ => get_cga_from_type(&shape_value.ty.rust_ty, generic_args).ok_or_else(|| {
+            _ => get_cga_from_type(shape_value.ty.rust_ty(), generic_args).ok_or_else(|| {
                 self.jit_error(
                     &call_expr.args[1].span(),
                     "strided_view tile shape must be static",
@@ -3864,9 +3856,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         )
         .unwrap();
         let type_instance = generic_args.instantiate_type(&rust_ty, self.modules.primitives())?;
-        let return_type = TileRustType {
-            cuda_tile_ty_str: None,
-            tile_ir_ty: Some(inherit_pointer_attribute(
+        let return_type = TileRustType::new_view(
+            "!cuda_tile.strided_view".to_string(),
+            inherit_pointer_attribute(
                 TileIrType::StridedView(StridedViewType {
                     tile_shape: tile_shape.clone(),
                     traversal_strides,
@@ -3875,13 +3867,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     padding_value: raw_view_padding(&call_expr.args[2])?,
                 }),
                 module.value_type(tensor_view_value),
-            )),
-            cuda_tile_name: Some("!cuda_tile.strided_view".to_string()),
-            params: vec![],
-            rust_ty,
+            ),
             type_instance,
-            kind: Kind::StructuredType,
-        };
+        );
 
         let result_ir_ty = super::_type::convert_type(&return_type).ok_or_else(|| {
             self.jit_error(
@@ -4086,7 +4074,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     "raw view load requires a tuple return type annotation",
                 )
             })?;
-            let Type::Tuple(tuple) = &outer.rust_ty else {
+            let Type::Tuple(tuple) = outer.rust_ty() else {
                 return self.jit_error_result(&call.span(), "expected (Tile<...>, Token)");
             };
             let result_type = self
@@ -4218,7 +4206,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 )
             }
         };
-        let Type::Tuple(tuple_type) = &return_type_outer.rust_ty else {
+        let Type::Tuple(tuple_type) = return_type_outer.rust_ty() else {
             return self.jit_error_result(
                 &call_expr.span(),
                 "expected a tuple return type for load_gather_scatter_view_tko",
@@ -4378,7 +4366,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 )
             }
         };
-        let Type::Tuple(tuple_type) = &return_type_outer.rust_ty else {
+        let Type::Tuple(tuple_type) = return_type_outer.rust_ty() else {
             return self.jit_error_result(
                 &call_expr.span(),
                 "expected a tuple return type for load_strided_view_tko",

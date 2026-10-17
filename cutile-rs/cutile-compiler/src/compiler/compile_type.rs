@@ -20,6 +20,23 @@ use std::collections::HashMap;
 use syn::spanned::Spanned;
 
 impl<'m> CUDATileFunctionCompiler<'m> {
+    /// The types `compile_type` gives an uninstantiated `UserType` instance:
+    /// tuples, arrays, slices, `Option`, and structs without a `cuda_tile`
+    /// type. `ty` is alias-normalized.
+    pub(crate) fn is_user_type(&self, ty: &syn::Type) -> bool {
+        match ty {
+            syn::Type::Tuple(tuple) => !tuple.elems.is_empty(),
+            syn::Type::Array(_) | syn::Type::Slice(_) => true,
+            syn::Type::Path(_) => get_type_ident(ty).is_some_and(|ident| {
+                let name = ident.to_string();
+                name == "Option"
+                    || (self.modules.structs().contains_key(&name)
+                        && self.modules.get_cuda_tile_type_attrs(&name).is_none())
+            }),
+            _ => false,
+        }
+    }
+
     pub fn compile_type(
         &self,
         ty: &syn::Type,
@@ -72,7 +89,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 let mut res = self.compile_type(&ref_ty.elem, generic_vars, type_params)?;
                 match &mut res {
                     Some(cuda_tile_ty) => {
-                        cuda_tile_ty.rust_ty = ty.clone();
+                        cuda_tile_ty.wrap_reference(ref_ty.lifetime.clone(), ref_ty.mutability)
                     }
                     None => return self.jit_error_result(&ty.span(), "Failed to compile type"),
                 }

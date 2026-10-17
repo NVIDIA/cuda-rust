@@ -54,7 +54,7 @@ fn tile_ir_type_from_trt(
         return Some(ty);
     }
     // Structured types: extract element name + shape from the TypeInstance.
-    if let TypeInstance::StructuredType(inst) = &trt.type_instance {
+    if let TypeInstance::StructuredType(inst) = trt.type_instance() {
         // Use the same element-type resolution path the old compiler uses.
         let elem_name = trt.get_cuda_tile_element_type(primitives).ok()??;
         let shape: Vec<i64> = inst.shape.iter().map(|&d| d as i64).collect();
@@ -91,7 +91,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         partition: &TileRustValue,
         span: &proc_macro2::Span,
     ) -> Result<(Vec<i32>, Vec<i32>, Vec<i32>), JITError> {
-        let Some(TypeParam::Tile(tile)) = partition.ty.params.first() else {
+        let Some(TypeParam::Tile(tile)) = partition.ty.params().first() else {
             return Err(self.jit_error(span, "partition type is missing its Tile parameter"));
         };
         let Some(TypeInstance::StructuredType(tile_inst)) = tile.type_instance.as_ref() else {
@@ -100,7 +100,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         let static_tile = tile_inst.shape.clone();
         let tensor = partition
             .ty
-            .params
+            .params()
             .iter()
             .find_map(|p| match p {
                 TypeParam::TensorView(tv) => Some(tv),
@@ -114,7 +114,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             ));
         };
         let static_shape = tensor_inst.shape.clone();
-        let dim_map = match partition.ty.params.iter().find_map(|p| match p {
+        let dim_map = match partition.ty.params().iter().find_map(|p| match p {
             TypeParam::DimMap(dm) => Some(dm),
             _ => None,
         }) {
@@ -149,9 +149,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         generic_vars: &GenericVars,
         span: &proc_macro2::Span,
     ) -> Result<Vec<i32>, JITError> {
-        if let TypeInstance::StructuredType(instance) = &ty.type_instance {
+        if let TypeInstance::StructuredType(instance) = ty.type_instance() {
             Ok(instance.shape.clone())
-        } else if let Some(shape) = get_cga_from_type(&ty.rust_ty, generic_vars) {
+        } else if let Some(shape) = get_cga_from_type(ty.rust_ty(), generic_vars) {
             Ok(shape)
         } else {
             self.jit_error_result(span, "expected a statically shaped value")
@@ -163,7 +163,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         value: &TileRustValue,
         span: &proc_macro2::Span,
     ) -> Result<Vec<i32>, JITError> {
-        let tile_shape = value.ty.params.iter().find_map(|param| match param {
+        let tile_shape = value.ty.params().iter().find_map(|param| match param {
             TypeParam::Tile(tile) => match tile.type_instance.as_ref() {
                 Some(TypeInstance::StructuredType(instance)) => Some(instance.shape.clone()),
                 _ => None,
@@ -541,7 +541,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         ),
                     );
                 };
-                let Some(_out_tile_ir_ty) = &out_type.tile_ir_ty else {
+                let Some(_out_tile_ir_ty) = &out_type.tile_ir_ty() else {
                     return self.jit_error_result(
                         &call_expr.span(),
                         &format!(
@@ -764,7 +764,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                         "failed to compile dimension map for permutation",
                                     )
                                 })?;
-                            let TypeInstance::UserType(type_inst) = dim_map.ty.type_instance else {
+                            let TypeInstance::UserType(type_inst) = dim_map.ty.type_instance()
+                            else {
                                 return self.jit_error_result(
                                     &call_expr.args[1].span(),
                                     "expected a structured type for the dimension map argument",
@@ -1653,11 +1654,12 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         &format!("Failed to parse lit int: {e}"),
                     )
                 })?;
-                let TypeInstance::StructuredType(structured_type) = operand.ty.type_instance else {
+                let TypeInstance::StructuredType(structured_type) = operand.ty.type_instance()
+                else {
                     return self
                         .jit_error_result(&call_expr.args[0].span(), "expected a struct value");
                 };
-                let Some(primitive_type) = structured_type.primitive_type else {
+                let Some(primitive_type) = &structured_type.primitive_type else {
                     return self.jit_error_result(
                         &call_expr.args[0].span(),
                         "Expected primitive type to be defined.",
@@ -1876,18 +1878,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     );
                 }
                 let mut new_value = args[0].clone();
-                let old_type = new_value.ty.rust_ty.clone();
-                match compiler_op_function.as_str() {
+                let old_type = new_value.ty.rust_ty().clone();
+                let new_type = match compiler_op_function.as_str() {
                     "scalar_to_tile" => {
                         let element_type = get_rust_element_type_primitive(&old_type);
-                        if let Some(t) = TileRustType::from_scalar_tile(&element_type) {
-                            new_value.ty = t;
-                        } else {
-                            new_value.ty.rust_ty = syn::parse_str::<syn::Type>(&format!(
-                                "Tile<{element_type}, {{[]}}>"
-                            ))
-                            .unwrap();
-                        }
+                        format!("Tile<{element_type}, {{[]}}>")
                     }
                     "tile_to_scalar" => {
                         let Some(element_type) =
@@ -1902,9 +1897,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                 ),
                             );
                         };
-                        new_value.ty.rust_ty =
-                            syn::parse2::<syn::Type>(element_type.to_string().parse().unwrap())
-                                .unwrap();
+                        element_type
                     }
                     "pointer_to_tile" => {
                         // Wrapping preserves the pointer's constness: a
@@ -1915,15 +1908,10 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                 Some((is_mutable, element)) => (is_mutable, element),
                                 None => (true, get_rust_element_type_primitive(&old_type)),
                             };
-                        if let Some(t) = TileRustType::from_scalar_ptr(&element_type, is_mutable) {
-                            new_value.ty = t;
-                        } else {
-                            new_value.ty.rust_ty = syn::parse_str::<syn::Type>(&format!(
-                                "PointerTile<{} {element_type}, {{[]}}>",
-                                crate::types::ptr_prefix(is_mutable)
-                            ))
-                            .unwrap();
-                        }
+                        format!(
+                            "PointerTile<{} {element_type}, {{[]}}>",
+                            crate::types::ptr_prefix(is_mutable)
+                        )
                     }
                     "tile_to_pointer" => {
                         let Some(element_type) =
@@ -1941,18 +1929,15 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         // Unwrapping preserves the tile's constness.
                         let is_mutable =
                             !old_type.to_token_stream().to_string().contains("* const");
-                        new_value.ty.rust_ty = syn::parse2::<syn::Type>(
-                            format!("{} {element_type}", crate::types::ptr_prefix(is_mutable))
-                                .parse()
-                                .unwrap(),
-                        )
-                        .unwrap();
+                        format!("{} {element_type}", crate::types::ptr_prefix(is_mutable))
                     }
                     "cast_const" | "cast_tile_const" => {
                         new_value.ty.set_pointer_constness(false);
+                        return Ok(Some(new_value));
                     }
                     "cast_mut" | "cast_tile_mut" => {
                         new_value.ty.set_pointer_constness(true);
+                        return Ok(Some(new_value));
                     }
                     _ => {
                         return self.jit_error_result(
@@ -1960,7 +1945,18 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                             &format!("Unsupported cast compiler_op: {}", compiler_op_function),
                         );
                     }
-                }
+                };
+                let new_type = syn::parse_str::<syn::Type>(&new_type).unwrap();
+                let Some(ty) = self.compile_type(&new_type, generic_vars, &HashMap::new())? else {
+                    return self.jit_error_result(
+                        &call_expr.span(),
+                        &format!(
+                            "failed to compile cast type `{}`",
+                            new_type.to_token_stream()
+                        ),
+                    );
+                };
+                new_value.ty = ty;
                 Ok(Some(new_value))
             }
             "convert" => {
@@ -2028,7 +2024,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         };
                         let old_element_type_str = arg
                             .ty
-                            .type_instance
+                            .type_instance()
                             .get_rust_element_instance_ty()
                             .ok_or_else(|| {
                                 self.jit_error(
@@ -2037,7 +2033,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                 )
                             })?;
                         let new_element_type_str = new_type_compiled
-                            .type_instance
+                            .type_instance()
                             .get_rust_element_instance_ty()
                             .ok_or_else(|| {
                                 self.jit_error(

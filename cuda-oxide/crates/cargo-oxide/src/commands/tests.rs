@@ -95,18 +95,19 @@ fn passthrough_command_for_test(
     cargo_passthrough_command_with_env(ctx, cargo_subcommand, opts, cargo_args, None)
 }
 
+/// Run one passthrough command on a scratch workspace and report which units
+/// Cargo reused, by target name. A test harness carries a ` (test)` suffix so
+/// it never shadows the library it was built from.
 fn cargo_artifact_freshness(
     ctx: &Context,
+    cargo_subcommand: CargoPassthroughSubcommand,
     opts: &CargoPassthroughOptions<'_>,
+    cargo_args: &[&str],
     materializer_provenance: Option<&str>,
 ) -> BTreeMap<String, bool> {
-    let mut cmd = passthrough_command_for_test(
-        ctx,
-        CargoPassthroughSubcommand::Build,
-        opts,
-        &["--message-format=json-render-diagnostics".to_string()],
-    )
-    .unwrap();
+    let mut args = strings(&["--message-format=json-render-diagnostics"]);
+    args.extend(strings(cargo_args));
+    let mut cmd = passthrough_command_for_test(ctx, cargo_subcommand, opts, &args).unwrap();
     if let Some(provenance) = materializer_provenance {
         // Exercise a non-canonical spelling accepted by the backend. The
         // macro must still track exact provenance rather than keying that
@@ -127,10 +128,13 @@ fn cargo_artifact_freshness(
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .filter(|message| message["reason"] == "compiler-artifact")
         .filter_map(|message| {
-            Some((
-                message["target"]["name"].as_str()?.to_string(),
-                message["fresh"].as_bool()?,
-            ))
+            let name = message["target"]["name"].as_str()?;
+            let key = if message["profile"]["test"].as_bool()? {
+                format!("{name} (test)")
+            } else {
+                name.to_string()
+            };
+            Some((key, message["fresh"].as_bool()?))
         })
         .collect()
 }
@@ -3114,13 +3118,13 @@ device-owner = { path = "../device-owner" }
         debug_assertions: false,
     };
 
-    let cold = cargo_artifact_freshness(&ctx, &base, None);
+    let cold = cargo_artifact_freshness(&ctx, CargoPassthroughSubcommand::Build, &base, &[], None);
     assert_eq!(cold.get("shared_dep"), Some(&false));
     assert_eq!(cold.get("tracked_macro"), Some(&false));
     assert_eq!(cold.get("device_owner"), Some(&false));
     assert_eq!(cold.get("device-consumer"), Some(&false));
 
-    let warm = cargo_artifact_freshness(&ctx, &base, None);
+    let warm = cargo_artifact_freshness(&ctx, CargoPassthroughSubcommand::Build, &base, &[], None);
     assert_eq!(warm.get("shared_dep"), Some(&true));
     assert_eq!(warm.get("tracked_macro"), Some(&true));
     assert_eq!(warm.get("device_owner"), Some(&true));
@@ -3130,7 +3134,13 @@ device-owner = { path = "../device-owner" }
         arch: Some("sm_90"),
         ..base
     };
-    let arch_switch = cargo_artifact_freshness(&ctx, &different_arch, None);
+    let arch_switch = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &different_arch,
+        &[],
+        None,
+    );
     assert_eq!(arch_switch.get("shared_dep"), Some(&true));
     assert_eq!(arch_switch.get("tracked_macro"), Some(&true));
     assert_eq!(arch_switch.get("device_owner"), Some(&false));
@@ -3140,13 +3150,25 @@ device-owner = { path = "../device-owner" }
         emit_nvvm_ir: true,
         ..different_arch
     };
-    let output_switch = cargo_artifact_freshness(&ctx, &different_output, None);
+    let output_switch = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &different_output,
+        &[],
+        None,
+    );
     assert_eq!(output_switch.get("shared_dep"), Some(&true));
     assert_eq!(output_switch.get("tracked_macro"), Some(&true));
     assert_eq!(output_switch.get("device_owner"), Some(&false));
     assert_eq!(output_switch.get("device-consumer"), Some(&false));
 
-    let repeated_output = cargo_artifact_freshness(&ctx, &different_output, None);
+    let repeated_output = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &different_output,
+        &[],
+        None,
+    );
     assert_eq!(repeated_output.get("shared_dep"), Some(&true));
     assert_eq!(repeated_output.get("tracked_macro"), Some(&true));
     assert_eq!(repeated_output.get("device_owner"), Some(&true));
@@ -3154,7 +3176,9 @@ device-owner = { path = "../device-owner" }
 
     let provenance_switch = cargo_artifact_freshness(
         &ctx,
+        CargoPassthroughSubcommand::Build,
         &different_output,
+        &[],
         Some("11d91fbe164094f6242d44103d0fb01968b96c6d8f48f124eac8fa73a307a657"),
     );
     assert_eq!(provenance_switch.get("shared_dep"), Some(&true));
@@ -3164,7 +3188,9 @@ device-owner = { path = "../device-owner" }
 
     let changed_provenance = cargo_artifact_freshness(
         &ctx,
+        CargoPassthroughSubcommand::Build,
         &different_output,
+        &[],
         Some("5b11618c2e44027877d0cd4d0cfd10afed5ef262876791e483ec58f4c5569139"),
     );
     assert_eq!(changed_provenance.get("shared_dep"), Some(&true));
@@ -3173,6 +3199,203 @@ device-owner = { path = "../device-owner" }
     assert_eq!(changed_provenance.get("device-consumer"), Some(&false));
 
     std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A workspace of one library and one binary that depends on it, for probing
+/// real Cargo. `profiles` is appended to the workspace manifest. The binary
+/// computes `u8::MAX + 1`, which panics under overflow checks, so running it
+/// shows whether the `overflow-checks = false` pin reached the final crate.
+fn write_shared_dependency_workspace(root: &Path, profiles: &str) {
+    for path in [root.join("shared-dep/src"), root.join("app/src")] {
+        fs::create_dir_all(path).unwrap();
+    }
+    fs::write(
+        root.join("Cargo.toml"),
+        format!(
+            r#"[workspace]
+resolver = "3"
+members = ["shared-dep", "app"]
+{profiles}"#
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.join("shared-dep/Cargo.toml"),
+        r#"[package]
+name = "shared-dep"
+version = "0.0.0"
+edition = "2024"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("shared-dep/src/lib.rs"),
+        "pub fn shared_value() -> u32 { 42 }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("app/Cargo.toml"),
+        r#"[package]
+name = "app"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+shared-dep = { path = "../shared-dep" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("app/src/main.rs"),
+        r#"fn main() {
+    assert_eq!(shared_dep::shared_value(), 42);
+    let value: u8 = std::hint::black_box(u8::MAX);
+    assert_eq!(value + 1, 0, "overflow checks reached the binary");
+}
+"#,
+    )
+    .unwrap();
+}
+
+fn scratch_workspace_context(root: &Path) -> Context {
+    Context {
+        workspace_root: root.to_path_buf(),
+        codegen_crate: root.join("unused-codegen-source"),
+        examples_dir: root.join("unused-examples"),
+        backend_so: PathBuf::from("llvm"),
+        is_workspace: false,
+        config: OxideConfig::default(),
+    }
+}
+
+/// Pins equal to the release defaults keep `build -- --release` and
+/// `test -- --release` on one artifact set: the shared dependency is reused
+/// when the two alternate. Carried in rustflags, the same pins changed every
+/// unit's cache key, so the switch recompiled the whole graph and left a
+/// second copy of each artifact behind.
+#[test]
+fn release_build_and_test_reuse_each_others_dependencies() {
+    let root = unique_temp_dir("cargo_oxide_release_build_test_reuse");
+    let target = root.join("target");
+    write_shared_dependency_workspace(&root, "");
+    let ctx = scratch_workspace_context(&root);
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: Some("sm_80"),
+        features: None,
+        cargo_target_dir: Some(&target),
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+
+    let build = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &opts,
+        &["--release"],
+        None,
+    );
+    assert_eq!(build.get("shared_dep"), Some(&false));
+    assert_eq!(build.get("app"), Some(&false));
+
+    let test = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Test,
+        &opts,
+        &["--release", "--no-run"],
+        None,
+    );
+    assert_eq!(
+        test.get("shared_dep"),
+        Some(&true),
+        "test -- --release must reuse the release build's dependency"
+    );
+    assert_eq!(test.get("app (test)"), Some(&false));
+
+    let rebuild = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &opts,
+        &["--release"],
+        None,
+    );
+    assert_eq!(rebuild.get("shared_dep"), Some(&true));
+    assert_eq!(rebuild.get("app"), Some(&true));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// A custom profile with a dash in its name builds in both `--profile` forms,
+/// and the pins beat the keys the profile sets itself: `release-lto` asks for
+/// overflow checks and `opt-level = 1`, yet the binary wraps instead of
+/// panicking. Carried in the environment, the same pins became
+/// `CARGO_PROFILE_RELEASE_LTO_*`, which Cargo reads as `profile.release.lto`
+/// and rejects before compiling.
+#[test]
+fn dashed_custom_profile_builds_with_the_pins_in_force() {
+    let root = unique_temp_dir("cargo_oxide_custom_profile_pins");
+    let target = root.join("target");
+    write_shared_dependency_workspace(
+        &root,
+        r#"
+[profile.release-lto]
+inherits = "release"
+opt-level = 1
+overflow-checks = true
+"#,
+    );
+    let ctx = scratch_workspace_context(&root);
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: Some("sm_80"),
+        features: None,
+        cargo_target_dir: Some(&target),
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+
+    let built = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &opts,
+        &["--profile", "release-lto"],
+        None,
+    );
+    assert_eq!(built.get("app"), Some(&false));
+    let status = Command::new(target.join("release-lto").join("app"))
+        .status()
+        .expect("failed to run the custom-profile binary");
+    assert!(
+        status.success(),
+        "overflow checks reached the custom-profile binary: {status}"
+    );
+
+    let rebuilt = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &opts,
+        &["--profile=release-lto"],
+        None,
+    );
+    assert_eq!(
+        rebuilt.get("app"),
+        Some(&true),
+        "both --profile forms must resolve to one configuration"
+    );
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

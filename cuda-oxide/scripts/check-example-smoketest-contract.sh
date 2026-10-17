@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-# Verify the example classification assumptions and the full-debug route in
-# scripts/smoketest.sh. Most classification failures are otherwise only
+# Verify the example classification assumptions, WGMMA verdicts, and full-debug
+# route in scripts/smoketest.sh. Most classification failures are otherwise only
 # discoverable by running the suite on a GPU:
 #
 #   1. Every name in a *_EXAMPLES array is a real example directory.  These
@@ -75,6 +75,116 @@ import tomllib
 
 smoketest, examples_root = sys.argv[1], sys.argv[2]
 source = open(smoketest, encoding="utf-8").read()
+
+# Exercise the real verdict with controlled logs/artifacts, without a toolkit
+# or GPU. A fallback message must not hide a failed run or missing/empty PTX.
+with tempfile.TemporaryDirectory(prefix="smoketest-wgmma-") as temp:
+    root = pathlib.Path(temp)
+    functions = []
+    for name in ("ptxas_verify", "grep_failure_markers", "verdict_wgmma"):
+        match = re.search(rf"^{name}\(\) \{{\n.*?^\}}", source, re.M | re.S)
+        if match is None:
+            sys.exit(f"parse self-test failed: could not isolate {name}")
+        functions.append(match.group())
+    harness = root / "verdict.sh"
+    harness.write_text("set -uo pipefail\n" + "\n".join(functions) + '''
+PTXAS_BIN="$1"
+PTXAS_NOTE=""
+verdict_wgmma wgmma "$2" "$3"
+''')
+    ptx = root / "crates/rustc-codegen-cuda/examples/wgmma/wgmma.ptx"
+    ptx.parent.mkdir(parents=True)
+    assembler = root / "ptxas"
+    assembler.write_text('''#!/usr/bin/env bash
+[[ "$*" == "-arch=sm_90a crates/rustc-codegen-cuda/examples/wgmma/wgmma.ptx -o /dev/null" ]] || exit 99
+case "$SMOKETEST_TEST_PTXAS" in
+    ok) exit 0 ;;
+    old) echo "ptxas fatal : Unsupported .version 8.0"; exit 1 ;;
+    reject) echo "ptxas fatal : syntax error"; exit 1 ;;
+    *) exit 99 ;;
+esac
+''')
+    assembler.chmod(0o755)
+    log = root / "wgmma.log"
+    fallback = "WGMMA is Hopper-only (sm_90).\nChecking loose PTX artifact: wgmma.ptx\n"
+    valid_ptx = ".version 8.0\n.target sm_90a\n.address_size 64\n"
+    cases = [
+        # name, cargo status, PTX contents, log, ptxas mode, verdict status
+        ("failed run without PTX", 1, None, fallback, "ok", 1),
+        ("failed run with stale PTX", 1, valid_ptx, fallback, "ok", 1),
+        ("signal termination", 139, valid_ptx, fallback, "ok", 1),
+        ("missing PTX", 0, None, fallback, "ok", 1),
+        ("empty PTX", 0, "", fallback, "ok", 1),
+        ("missing PTX without ptxas", 0, None, fallback, "missing", 1),
+        ("valid PTX", 0, valid_ptx, fallback, "ok", 0),
+        ("valid PTX without ptxas", 0, valid_ptx, fallback, "missing", 0),
+        ("valid PTX with old ptxas", 0, valid_ptx, fallback, "old", 0),
+        ("ptxas rejection", 0, valid_ptx, fallback, "reject", 1),
+        ("expected non-Hopper load failure", 0, valid_ptx, fallback +
+         'PTX load failed (expected on non-Hopper): DriverError(1, "invalid argument")\n', "ok", 0),
+        ("successful execution", 0, None, "SUCCESS\n", "ok", 0),
+        ("execution with failure marker", 0, None, "FAIL: verification\nSUCCESS\n", "ok", 1),
+    ]
+    for name, status, artifact, output, mode, expected in cases:
+        ptx.unlink(missing_ok=True)
+        if artifact is not None:
+            ptx.write_text(artifact)
+        log.write_text(output)
+        env = dict(os.environ, SMOKETEST_TEST_PTXAS=mode)
+        result = subprocess.run(
+            ["bash", str(harness), "" if mode == "missing" else str(assembler),
+             str(log), str(status)],
+            cwd=root, env=env, capture_output=True, text=True,
+        )
+        marker = "PASS (" if expected == 0 else "FAIL ("
+        if result.returncode != expected or not result.stdout.startswith(marker):
+            sys.exit(f"WGMMA verdict failed for {name}: "
+                     f"{result.returncode}, {result.stdout!r}, {result.stderr!r}")
+
+    # The original false PASS also made the whole suite exit 0. Exercise the
+    # runner and summary in an isolated checkout with only external tools faked.
+    simt = root / "cuda-oxide"
+    (simt / "scripts").mkdir(parents=True)
+    script = simt / "scripts/smoketest.sh"
+    script.write_text(source)
+    (root / "Cargo.toml").touch()
+    example = simt / "crates/rustc-codegen-cuda/examples/wgmma"
+    example.mkdir(parents=True)
+    (example / "Cargo.toml").touch()
+    bin_dir = root / "bin"
+    bin_dir.mkdir()
+    mocks = {
+        "nvidia-smi": '#!/usr/bin/env bash\necho "Mock RTX 5060 Ti, 12.0"\n',
+        "cargo": '''#!/usr/bin/env bash
+case "$*" in
+    "oxide --help"|"oxide setup") exit 0 ;;
+    "oxide __debug-policy") echo unset; exit 0 ;;
+    "oxide run wgmma")
+        echo 'WGMMA is Hopper-only (sm_90).'
+        echo 'Checking loose PTX artifact: wgmma.ptx'
+        echo 'Error: loose PTX artifact not found' >&2
+        exit 1 ;;
+    *) exit 99 ;;
+esac
+''',
+    }
+    for name, contents in mocks.items():
+        tool = bin_dir / name
+        tool.write_text(contents)
+        tool.chmod(0o755)
+    env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+               CUDA_OXIDE_PTXAS=str(assembler), CUDA_OXIDE_BACKEND="mock-backend.so",
+               SMOKETEST_LOG_DIR=str(root / "logs"), CARGO_TARGET_DIR=str(root / "target"))
+    result = subprocess.run(
+        ["bash", str(script), "--only", "^wgmma$", "--no-color"],
+        cwd=root, env=env, capture_output=True, text=True,
+    )
+    if (result.returncode != 1 or "FAIL (wgmma, exit=1)" not in result.stdout
+            or not re.search(r"^Pass:\s+0 / 1$", result.stdout, re.M)
+            or not re.search(r"^Fail:\s+1 / 1$", result.stdout, re.M)):
+        sys.exit(f"WGMMA runner accepted a failed example: "
+                 f"{result.returncode}, {result.stdout!r}, {result.stderr!r}")
+    print(f"OK: {len(cases)} WGMMA verdict cases and failed-run summary/exit status.")
 
 # Exercise the actual CLI/preflight without building or launching an example.
 # The Rust parser owns aliases and normalization; this checks that the shell

@@ -426,7 +426,8 @@ pub mod ops {
     const GLOBAL_SHARED_SOURCE_NAME_KEY: &str = "cuda_oxide_global_shared_source_name";
     /// Marks a `GlobalOp` as externally consumed even when device code does not
     /// reference it. The exporter adds marked globals to `@llvm.used`, keeping
-    /// profiler metadata alive through libNVVM and nvJitLink materialization.
+    /// profiler metadata and host-written constant memory alive through libNVVM
+    /// and nvJitLink materialization.
     const GLOBAL_RETAINED_KEY: &str = "cuda_oxide_global_retained";
     /// Marks a `GlobalOp` whose contents the host writes after module load
     /// (`cuModuleGetGlobal` + copy). The exporter renders it

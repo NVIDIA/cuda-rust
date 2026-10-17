@@ -259,8 +259,9 @@ fn create_device_global(
     global_op.set_source_global_key(ctx, spec.key);
     if spec.addr_space == llvm_export::types::address_space::CONSTANT {
         // `#[constant]` storage is written by the host after module load. Keep
-        // the symbol rooted (`@llvm.used`) even when no kernel reads it, and
-        // stop optimizers from treating its initializer as the value read.
+        // the symbol rooted (`@llvm.used`) even when every read of it is
+        // optimized away, so the host's `cuModuleGetGlobal` still resolves it,
+        // and stop optimizers from treating its initializer as the value read.
         global_op.mark_retained(ctx);
         global_op.mark_host_written(ctx);
     }

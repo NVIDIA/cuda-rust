@@ -653,4 +653,79 @@ mod tests {
         let branch = op_cast::<dyn BranchOpInterface>(term_obj.as_ref()).unwrap();
         assert_eq!(branch.successor_operands(&ctx, 0).len(), 1);
     }
+
+    /// Enum storage `{ [count x iN], i64, i64 }`: one filler array beside a
+    /// pointer-sized carrier and a length (an `i64` stands in for the `ptr`
+    /// leaf; only the leaf count matters here). Builds a merge of that
+    /// aggregate fed by two predecessors, runs the pass, and returns how many
+    /// arguments the merge block carries afterwards: one when the aggregate
+    /// stays whole, one per leaf when it splits.
+    fn merge_arguments_for_filler_storage(elem_bits: u32, count: u64) -> usize {
+        let mut ctx = make_ctx();
+        let elem: TypeHandle = IntegerType::get(&ctx, elem_bits, Signedness::Signless).into();
+        let i64_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Signless).into();
+        let filler: TypeHandle = llvm_types::ArrayType::get(&ctx, elem, count).into();
+        let agg_ty: TypeHandle = llvm_types::StructType::get_unnamed(
+            &ctx,
+            (
+                vec![filler, i64_ty, i64_ty],
+                llvm_types::StructLayout::Unpacked,
+            ),
+        )
+        .into();
+
+        let (module_ptr, entry) = build_kernel(&mut ctx, vec![], vec![]);
+
+        let undef_op = llvm::UndefOp::new(&mut ctx, agg_ty);
+        undef_op.get_operation().insert_at_back(entry, &ctx);
+        let aggregate = undef_op.get_operation().deref(&ctx).get_result(0);
+
+        let other = append_block(&mut ctx, entry, vec![]);
+        let merge = append_block(&mut ctx, entry, vec![agg_ty]);
+        let br_op = llvm::BrOp::new(&mut ctx, merge, vec![aggregate]);
+        br_op.get_operation().insert_at_back(entry, &ctx);
+
+        let other_undef = llvm::UndefOp::new(&mut ctx, agg_ty);
+        other_undef.get_operation().insert_at_back(other, &ctx);
+        let other_agg = other_undef.get_operation().deref(&ctx).get_result(0);
+        let other_br = llvm::BrOp::new(&mut ctx, merge, vec![other_agg]);
+        other_br.get_operation().insert_at_back(other, &ctx);
+
+        let return_op = llvm::ReturnOp::new(&mut ctx, None);
+        return_op.get_operation().insert_at_back(merge, &ctx);
+
+        scalarize_aggregate_block_args(&mut ctx, module_ptr).unwrap();
+
+        merge.deref(&ctx).get_num_arguments()
+    }
+
+    /// The filler's type decides whether enum storage fits the leaf budget.
+    /// `Option<([u64; 2], &[T])>` stored as `{ [16 x i8], ptr, i64 }` is 18
+    /// leaves and stays one aggregate argument, which is how the pointer
+    /// inside it lost its address space; the same bytes typed as `[2 x i64]`
+    /// are 4 leaves and split. `[14 x i64]` beside two words is the last
+    /// filler that fits (16 leaves); `[15 x i64]` is one over.
+    #[test]
+    fn typed_fillers_decide_whether_enum_storage_splits() {
+        assert_eq!(
+            merge_arguments_for_filler_storage(8, 16),
+            1,
+            "{{ [16 x i8], i64, i64 }} is 18 leaves and must stay whole"
+        );
+        assert_eq!(
+            merge_arguments_for_filler_storage(64, 2),
+            4,
+            "{{ [2 x i64], i64, i64 }} is 4 leaves and must split"
+        );
+        assert_eq!(
+            merge_arguments_for_filler_storage(64, 14),
+            16,
+            "{{ [14 x i64], i64, i64 }} is 16 leaves, the last count that fits"
+        );
+        assert_eq!(
+            merge_arguments_for_filler_storage(64, 15),
+            1,
+            "{{ [15 x i64], i64, i64 }} is 17 leaves and must stay whole"
+        );
+    }
 }

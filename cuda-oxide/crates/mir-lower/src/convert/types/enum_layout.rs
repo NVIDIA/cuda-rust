@@ -2091,35 +2091,33 @@ mod tests {
         );
     }
 
+    /// `(element count, element width in bits)` of an array-typed filler.
+    fn filler_array(ctx: &Context, filler: TypeHandle) -> (u64, u32) {
+        let filler_ref = filler.deref(ctx);
+        let array = filler_ref
+            .downcast_ref::<llvm_types::ArrayType>()
+            .expect("enum filler should lower to an LLVM array");
+        let elem_width = array
+            .elem_type()
+            .deref(ctx)
+            .downcast_ref::<IntegerType>()
+            .map(IntegerType::width)
+            .expect("enum filler elements should be integers");
+        (array.size(), elem_width)
+    }
+
     #[test]
-    fn enum_filler_16_bytes_falls_back_when_i64_alignment_is_not_layout_neutral() {
+    fn enum_filler_16_bytes_at_align4_uses_four_i32s() {
         let mut ctx = make_ctx();
 
         let filler = make_enum_filler_type(&mut ctx, 0, 16, 4);
 
-        let filler_ref = filler.deref(&ctx);
-
-        let array = filler_ref
-            .downcast_ref::<llvm_types::ArrayType>()
-            .expect("fallback enum filler should remain an LLVM byte array");
-
-        assert_eq!(array.size(), 16, "fallback must retain all 16 bytes");
-
         assert_eq!(
-            array
-                .elem_type()
-                .deref(&ctx)
-                .downcast_ref::<IntegerType>()
-                .map(IntegerType::width),
-            Some(8),
-            "alignment-sensitive fallback must remain [16 x i8]"
+            filler_array(&ctx, filler),
+            (4, 32),
+            "i64 would raise the enum alignment to 8; i32 is the widest word that fits"
         );
-
-        assert_eq!(
-            llvm_type_size_align(&ctx, filler),
-            Some((16, 1)),
-            "fallback byte array must remain byte-aligned"
-        );
+        assert_eq!(llvm_type_size_align(&ctx, filler), Some((16, 4)));
     }
 
     #[test]
@@ -2145,5 +2143,63 @@ mod tests {
         );
 
         assert_eq!(llvm_type_size_align(&ctx, filler), Some((16, 8)));
+    }
+
+    #[test]
+    fn enum_filler_keeps_bytes_at_an_odd_offset() {
+        let mut ctx = make_ctx();
+
+        let filler = make_enum_filler_type(&mut ctx, 1, 16, 8);
+
+        assert_eq!(
+            filler_array(&ctx, filler),
+            (16, 8),
+            "no integer width divides offset 1, so a wider word would move every later field"
+        );
+        assert_eq!(llvm_type_size_align(&ctx, filler), Some((16, 1)));
+    }
+
+    #[test]
+    fn enum_filler_keeps_bytes_in_a_byte_aligned_enum() {
+        let mut ctx = make_ctx();
+
+        let filler = make_enum_filler_type(&mut ctx, 0, 16, 1);
+
+        assert_eq!(
+            filler_array(&ctx, filler),
+            (16, 8),
+            "any wider word would raise the enum alignment above rustc's 1"
+        );
+        assert_eq!(llvm_type_size_align(&ctx, filler), Some((16, 1)));
+    }
+
+    #[test]
+    fn enum_filler_keeps_bytes_when_no_width_divides_the_size() {
+        let mut ctx = make_ctx();
+
+        let filler = make_enum_filler_type(&mut ctx, 0, 15, 8);
+
+        assert_eq!(filler_array(&ctx, filler), (15, 8));
+        assert_eq!(llvm_type_size_align(&ctx, filler), Some((15, 1)));
+    }
+
+    #[test]
+    fn enum_filler_24_bytes_uses_three_i64s_at_align8() {
+        let mut ctx = make_ctx();
+
+        let filler = make_enum_filler_type(&mut ctx, 8, 24, 8);
+
+        assert_eq!(filler_array(&ctx, filler), (3, 64));
+        assert_eq!(llvm_type_size_align(&ctx, filler), Some((24, 8)));
+    }
+
+    #[test]
+    fn enum_filler_12_bytes_uses_three_i32s_at_align4() {
+        let mut ctx = make_ctx();
+
+        let filler = make_enum_filler_type(&mut ctx, 4, 12, 4);
+
+        assert_eq!(filler_array(&ctx, filler), (3, 32));
+        assert_eq!(llvm_type_size_align(&ctx, filler), Some((12, 4)));
     }
 }

@@ -26,7 +26,7 @@ The example contains eight cases:
 | `slice subslice from-end mutable` | two distinct from-end offsets write through the rebuilt subslice while unrelated elements remain unchanged |
 | `slice subslice from-end runtime` | a slice length read from the row data (3 to 8) drives two from-end writes and one from-end read on a local buffer; the host checks the packed result with the same helpers |
 
-The helper functions are `#[inline(never)]` so optimized MIR retains the relevant projection in a separate body. LLVM still inlines them into the kernels, and the four-element cases then fold to constant stores, so only the runtime-length case keeps the from-end arithmetic in the PTX: its accesses are `[%rd+-8]` for `[.., last]` and `[%rd+-12]` for `[.., second_last, _]`, off `base + (n << 2)` and behind the pattern-length guards. LLVM folds the `len - offset` subtraction into the displacement, so the PTX carries no `sub` instruction for it.
+The helper functions are `#[inline(never)]` so optimized MIR retains the relevant projection in a separate body. LLVM still inlines them into the kernels, and the four-element cases then fold the from-end index to a constant element offset, so only the runtime-length case keeps the from-end arithmetic in the PTX: its accesses are `[%rd+-8]` for `[.., last]` and `[%rd+-12]` for `[.., second_last, _]`, off `base + (n << 2)` and behind the pattern-length guards. LLVM folds the `len - offset` subtraction into the displacement, so the PTX carries no `sub` instruction for it.
 
 Typical MIR shapes are expected to include:
 

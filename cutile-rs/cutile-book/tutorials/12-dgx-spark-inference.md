@@ -6,7 +6,8 @@ cuTile Rust, starting with the smaller Qwen3-4B model.
 
 The measurements below are from a DGX Spark (GB10, `sm_121`, 20 CPU cores, 128 GB of
 unified LPDDR5X memory) running DGX OS with the 580 driver and CUDA 13.4.
-They use cuTile Rust `v0.4.0` and Grout at commit
+They use cuTile Rust 0.4.0 (tag `cutile-rs/v0.4.0` in the
+[cuda-rust repository](https://github.com/NVIDIA/cuda-rust)) and Grout at commit
 [`deb7427`](https://github.com/elibol/grout/commit/deb74274c731d4ca9e7f9b356a91892398498309).
 
 ---
@@ -53,7 +54,8 @@ These commands keep the model directories and cuTile Rust checkout next to Grout
 
 ```text
 ~/dev/
-  cutile-rs/     # cuTile Rust checkout (Grout builds against it)
+  cuda-rust/     # CUDA Rust checkout at tag cutile-rs/v0.4.0
+  cutile-rs/     # symlink to cuda-rust/cutile-rs (Grout builds against it)
   grout/         # the inference engine
   hf_models/
     qwen3_4b/
@@ -62,7 +64,8 @@ These commands keep the model directories and cuTile Rust checkout next to Grout
 
 ```bash
 mkdir -p ~/dev && cd ~/dev
-git clone --branch v0.4.0 https://github.com/NVlabs/cutile-rs.git
+git clone --branch cutile-rs/v0.4.0 https://github.com/NVIDIA/cuda-rust.git
+ln -s cuda-rust/cutile-rs cutile-rs
 git clone https://github.com/elibol/grout.git
 git -C grout checkout deb74274c731d4ca9e7f9b356a91892398498309
 pip install -U "huggingface_hub[cli]"
@@ -71,7 +74,8 @@ hf download Qwen/Qwen3-32B --local-dir hf_models/qwen3_32b   # about 66 GB
 ```
 
 Grout's pinned commit depends on cuTile Rust 0.4.0. Its `[patch.crates-io]`
-uses the sibling `cutile-rs` checkout.
+uses the sibling `cutile-rs` path, which the symlink above resolves into the
+CUDA Rust checkout.
 
 Build Grout in release mode. On the Spark this takes well under a minute after the
 dependencies are compiled once:

@@ -90,5 +90,5 @@ If you're building a Rust + GPU project — or evaluating which of the above
 fits your needs — we're happy to compare notes. Join the community on
 [Discord](https://discord.gg/ZUEr4AhH5C) for questions, design discussions,
 and announcements, or reach the team via
-[GitHub Discussions](https://github.com/NVlabs/cuda-oxide/discussions)
+[GitHub Discussions](https://github.com/NVIDIA/cuda-rust/discussions)
 or by opening an issue on the repository.

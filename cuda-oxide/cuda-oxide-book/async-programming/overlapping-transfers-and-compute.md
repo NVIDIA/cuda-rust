@@ -72,7 +72,7 @@ completions[slot] = Some(streams[slot].record_event(None)?);
 ```
 
 The complete setup, slot-reuse wait, and final drain are in the
-[`run_overlapped` implementation](https://github.com/NVlabs/cuda-oxide/blob/main/cuda-oxide/crates/rustc-codegen-cuda/examples/pinned_overlap/src/main.rs).
+[`run_overlapped` implementation](https://github.com/NVIDIA/cuda-rust/blob/main/cuda-oxide/crates/rustc-codegen-cuda/examples/pinned_overlap/src/main.rs).
 
 ## Measured impact
 
@@ -92,7 +92,7 @@ On the reference RTX 4090 (`sm_89`) run:
 | Overlapped pinned | 99.332 ms |
 | Speedup | 1.76x |
 
-The full transfer table is in the [example README](https://github.com/NVlabs/cuda-oxide/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/pinned_overlap).
+The full transfer table is in the [example README](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/pinned_overlap).
 Results vary with the GPU, PCIe topology, driver, and system load.
 
 ## Practical tradeoffs
@@ -103,4 +103,4 @@ before increasing the number of streams.
 
 For the lower-level stream model, see
 [Scheduling and Streams](scheduling-and-streams.md). For the complete runnable
-implementation, see the [`pinned_overlap` example](https://github.com/NVlabs/cuda-oxide/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/pinned_overlap).
+implementation, see the [`pinned_overlap` example](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/pinned_overlap).

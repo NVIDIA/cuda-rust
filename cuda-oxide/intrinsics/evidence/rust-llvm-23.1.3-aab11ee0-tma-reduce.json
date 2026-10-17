@@ -1,0 +1,4080 @@
+{
+  "schema": 6,
+  "backend_profile": "rust-llvm-23.1.3-aab11ee0-tma-reduce",
+  "backend_kind": "llvm_nvptx",
+  "llvm_revision": "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019",
+  "backend_version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+  "backend_sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+  "defaults": {
+    "llvm_results": [],
+    "concrete_llvm_results": [],
+    "target_triple": "nvptx64-nvidia-cuda",
+    "gpu_target": "sm_90",
+    "ptx_feature": "+ptx80",
+    "status": "validated",
+    "declaration_attributes_canonicalized": true,
+    "runtime_validation": "unexecuted"
+  },
+  "fixtures": [
+    {
+      "id": "tma_reduce_typed_sm90",
+      "coverage_count": 64,
+      "stages": [
+        {
+          "targets": [
+            "sm_90"
+          ],
+          "representation": "separate typed LLVM declaration probes",
+          "stage": "declaration_canonicalization",
+          "mechanism": "typed_nvvm",
+          "outcome": "succeeded",
+          "detail": "Revalidated 64 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): canonical typed declarations and their exact imported attributes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 5e6c07a1e38ba5d7919b12f3d3286addbc62387ea95e27bec48769dfff546e66."
+        },
+        {
+          "targets": [
+            "sm_90",
+            "ptx80"
+          ],
+          "representation": "separate probes for the recorded lowering mechanism",
+          "stage": "backend_codegen",
+          "mechanism": "typed_nvvm",
+          "outcome": "succeeded",
+          "detail": "Revalidated 64 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 a716e70847f67f8313d9b79a1625486bb1a0690df021f2191feda1e4b16277cc."
+        },
+        {
+          "targets": [
+            "sm_90",
+            "ptx80"
+          ],
+          "representation": "separate PTX outputs assembled for the recorded target",
+          "stage": "ptx_assembly",
+          "mechanism": "typed_nvvm",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "Revalidated 64 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 8e767deaa1398c0c43700dd0a91d40f67b8c2ea19f4211ee206a2129590c84e9.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        }
+      ]
+    }
+  ],
+  "matrices": [
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_add_tile_1d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_add_tile_1d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.add.tile.1d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "1d",
+            "global",
+            "shared::cta",
+            "add",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_add_tile_2d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_add_tile_2d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.add.tile.2d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "2d",
+            "global",
+            "shared::cta",
+            "add",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_add_tile_3d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_add_tile_3d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.add.tile.3d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "3d",
+            "global",
+            "shared::cta",
+            "add",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_add_tile_4d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_add_tile_4d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.add.tile.4d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "4d",
+            "global",
+            "shared::cta",
+            "add",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_add_tile_5d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_add_tile_5d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.add.tile.5d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "5d",
+            "global",
+            "shared::cta",
+            "add",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_add_im2col_3d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_add_im2col_3d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.add.im2col.3d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "3d",
+            "global",
+            "shared::cta",
+            "add",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_add_im2col_4d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_add_im2col_4d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.add.im2col.4d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "4d",
+            "global",
+            "shared::cta",
+            "add",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_add_im2col_5d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_add_im2col_5d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.add.im2col.5d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "5d",
+            "global",
+            "shared::cta",
+            "add",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_and_tile_1d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_and_tile_1d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.and.tile.1d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "1d",
+            "global",
+            "shared::cta",
+            "and",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_and_tile_2d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_and_tile_2d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.and.tile.2d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "2d",
+            "global",
+            "shared::cta",
+            "and",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_and_tile_3d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_and_tile_3d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.and.tile.3d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "3d",
+            "global",
+            "shared::cta",
+            "and",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_and_tile_4d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_and_tile_4d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.and.tile.4d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "4d",
+            "global",
+            "shared::cta",
+            "and",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_and_tile_5d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_and_tile_5d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.and.tile.5d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "5d",
+            "global",
+            "shared::cta",
+            "and",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_and_im2col_3d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_and_im2col_3d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.and.im2col.3d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "3d",
+            "global",
+            "shared::cta",
+            "and",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_and_im2col_4d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_and_im2col_4d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.and.im2col.4d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "4d",
+            "global",
+            "shared::cta",
+            "and",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_and_im2col_5d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_and_im2col_5d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.and.im2col.5d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "5d",
+            "global",
+            "shared::cta",
+            "and",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_dec_tile_1d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_dec_tile_1d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.dec.tile.1d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "1d",
+            "global",
+            "shared::cta",
+            "dec",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_dec_tile_2d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_dec_tile_2d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.dec.tile.2d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "2d",
+            "global",
+            "shared::cta",
+            "dec",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_dec_tile_3d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_dec_tile_3d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.dec.tile.3d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "3d",
+            "global",
+            "shared::cta",
+            "dec",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_dec_tile_4d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_dec_tile_4d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.dec.tile.4d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "4d",
+            "global",
+            "shared::cta",
+            "dec",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_dec_tile_5d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_dec_tile_5d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.dec.tile.5d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "5d",
+            "global",
+            "shared::cta",
+            "dec",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_dec_im2col_3d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_dec_im2col_3d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.dec.im2col.3d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "3d",
+            "global",
+            "shared::cta",
+            "dec",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_dec_im2col_4d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_dec_im2col_4d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.dec.im2col.4d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "4d",
+            "global",
+            "shared::cta",
+            "dec",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_dec_im2col_5d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_dec_im2col_5d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.dec.im2col.5d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "5d",
+            "global",
+            "shared::cta",
+            "dec",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_inc_tile_1d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_inc_tile_1d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.inc.tile.1d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "1d",
+            "global",
+            "shared::cta",
+            "inc",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_inc_tile_2d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_inc_tile_2d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.inc.tile.2d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "2d",
+            "global",
+            "shared::cta",
+            "inc",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_inc_tile_3d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_inc_tile_3d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.inc.tile.3d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "3d",
+            "global",
+            "shared::cta",
+            "inc",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_inc_tile_4d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_inc_tile_4d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.inc.tile.4d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "4d",
+            "global",
+            "shared::cta",
+            "inc",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_inc_tile_5d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_inc_tile_5d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.inc.tile.5d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "5d",
+            "global",
+            "shared::cta",
+            "inc",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_inc_im2col_3d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_inc_im2col_3d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.inc.im2col.3d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "3d",
+            "global",
+            "shared::cta",
+            "inc",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_inc_im2col_4d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_inc_im2col_4d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.inc.im2col.4d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "4d",
+            "global",
+            "shared::cta",
+            "inc",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_inc_im2col_5d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_inc_im2col_5d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.inc.im2col.5d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "5d",
+            "global",
+            "shared::cta",
+            "inc",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_max_tile_1d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_max_tile_1d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.max.tile.1d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "1d",
+            "global",
+            "shared::cta",
+            "max",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_max_tile_2d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_max_tile_2d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.max.tile.2d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "2d",
+            "global",
+            "shared::cta",
+            "max",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_max_tile_3d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_max_tile_3d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.max.tile.3d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "3d",
+            "global",
+            "shared::cta",
+            "max",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_max_tile_4d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_max_tile_4d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.max.tile.4d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "4d",
+            "global",
+            "shared::cta",
+            "max",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_max_tile_5d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_max_tile_5d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.max.tile.5d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "5d",
+            "global",
+            "shared::cta",
+            "max",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_max_im2col_3d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_max_im2col_3d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.max.im2col.3d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "3d",
+            "global",
+            "shared::cta",
+            "max",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_max_im2col_4d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_max_im2col_4d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.max.im2col.4d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "4d",
+            "global",
+            "shared::cta",
+            "max",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_max_im2col_5d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_max_im2col_5d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.max.im2col.5d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "5d",
+            "global",
+            "shared::cta",
+            "max",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_min_tile_1d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_min_tile_1d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.min.tile.1d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "1d",
+            "global",
+            "shared::cta",
+            "min",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_min_tile_2d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_min_tile_2d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.min.tile.2d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "2d",
+            "global",
+            "shared::cta",
+            "min",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_min_tile_3d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_min_tile_3d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.min.tile.3d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "3d",
+            "global",
+            "shared::cta",
+            "min",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_min_tile_4d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_min_tile_4d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.min.tile.4d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "4d",
+            "global",
+            "shared::cta",
+            "min",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_min_tile_5d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_min_tile_5d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.min.tile.5d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "5d",
+            "global",
+            "shared::cta",
+            "min",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_min_im2col_3d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_min_im2col_3d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.min.im2col.3d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "3d",
+            "global",
+            "shared::cta",
+            "min",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_min_im2col_4d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_min_im2col_4d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.min.im2col.4d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "4d",
+            "global",
+            "shared::cta",
+            "min",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_min_im2col_5d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_min_im2col_5d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.min.im2col.5d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "5d",
+            "global",
+            "shared::cta",
+            "min",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_or_tile_1d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_or_tile_1d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.or.tile.1d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "1d",
+            "global",
+            "shared::cta",
+            "or",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_or_tile_2d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_or_tile_2d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.or.tile.2d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "2d",
+            "global",
+            "shared::cta",
+            "or",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_or_tile_3d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_or_tile_3d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.or.tile.3d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "3d",
+            "global",
+            "shared::cta",
+            "or",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_or_tile_4d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_or_tile_4d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.or.tile.4d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "4d",
+            "global",
+            "shared::cta",
+            "or",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_or_tile_5d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_or_tile_5d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.or.tile.5d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "5d",
+            "global",
+            "shared::cta",
+            "or",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_or_im2col_3d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_or_im2col_3d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.or.im2col.3d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "3d",
+            "global",
+            "shared::cta",
+            "or",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_or_im2col_4d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_or_im2col_4d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.or.im2col.4d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "4d",
+            "global",
+            "shared::cta",
+            "or",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_or_im2col_5d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_or_im2col_5d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.or.im2col.5d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "5d",
+            "global",
+            "shared::cta",
+            "or",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_xor_tile_1d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_xor_tile_1d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.xor.tile.1d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "1d",
+            "global",
+            "shared::cta",
+            "xor",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_xor_tile_2d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_xor_tile_2d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.xor.tile.2d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "2d",
+            "global",
+            "shared::cta",
+            "xor",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_xor_tile_3d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_xor_tile_3d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.xor.tile.3d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "3d",
+            "global",
+            "shared::cta",
+            "xor",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_xor_tile_4d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_xor_tile_4d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.xor.tile.4d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "4d",
+            "global",
+            "shared::cta",
+            "xor",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_xor_tile_5d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_xor_tile_5d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.xor.tile.5d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "5d",
+            "global",
+            "shared::cta",
+            "xor",
+            "tile",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_xor_im2col_3d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_xor_im2col_3d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.xor.im2col.3d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "3d",
+            "global",
+            "shared::cta",
+            "xor",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_xor_im2col_4d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_xor_im2col_4d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.xor.im2col.4d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "4d",
+            "global",
+            "shared::cta",
+            "xor",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "cp_async_bulk_tensor_reduce_xor_im2col_5d"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tma_reduce_typed_sm90"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_cp_async_bulk_tensor_reduce_xor_im2col_5d",
+        "llvm_symbol": "llvm.nvvm.cp.async.bulk.tensor.reduce.xor.im2col.5d",
+        "expected_ptx": {
+          "mnemonic": "cp",
+          "modifiers": [
+            "reduce",
+            "async",
+            "bulk",
+            "tensor",
+            "5d",
+            "global",
+            "shared::cta",
+            "xor",
+            "im2col_no_offs",
+            "bulk_group"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ],
+          "concrete_llvm_arguments": [
+            "ptr addrspace(3)",
+            "ptr",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i64",
+            "i1"
+          ]
+        }
+      }
+    }
+  ]
+}

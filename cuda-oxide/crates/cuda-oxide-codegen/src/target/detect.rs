@@ -5,6 +5,7 @@
 
 use super::features::{DetectedFeatures, ModuleRequirements, PtxIsaRequirement};
 use crate::error::PipelineError;
+use std::borrow::Cow;
 use std::path::Path;
 
 pub(super) fn contains_wgmma_features(contents: &str) -> bool {
@@ -95,11 +96,255 @@ fn contains_multimem_blackwell_features(contents: &str) -> bool {
     })
 }
 
-/// Checks the PTX 8.6 floating-point extension to `redux.sync`.
+/// Checks the PTX 8.6 floating-point extension to `redux.sync`: a call to a
+/// float NVVM redux intrinsic, or a `redux.sync ... .f32` instruction in
+/// inline PTX. Decided on tokens, so text that only mentions either -- in a
+/// comment, a string or another symbol's name -- does not count.
 fn contains_redux_f32_features(contents: &str) -> bool {
-    contents
-        .split(';')
-        .any(|statement| statement.contains("redux.sync") && statement.contains(".f32"))
+    let tokens = lex_llvm_ir(contents);
+    tokens.iter().enumerate().any(|(index, token)| match token {
+        IrToken::Global(name) => is_float_redux_callee(name),
+        IrToken::Word(word) if *word == "asm" => inline_asm_template(&tokens[index + 1..])
+            .is_some_and(|template| ptx_contains_float_redux(&unescape_llvm_string(template))),
+        // A raw PTX fragment rather than IR, which is how tests pass PTX.
+        IrToken::Word(word) => ptx_contains_float_redux(word),
+        IrToken::Label(_) | IrToken::String(_) => false,
+    })
+}
+
+/// `llvm.nvvm.redux.sync.` followed by a float operation. Those are the ones
+/// beginning with `f` (`fmin`, `fmax`, each with optional `.abs` and `.NaN`);
+/// no integer operation does.
+fn is_float_redux_callee(name: &str) -> bool {
+    name.strip_prefix("llvm.nvvm.redux.sync.")
+        .is_some_and(|operation| operation.starts_with('f'))
+}
+
+/// Does this PTX contain a `redux.sync` instruction with an `.f32` modifier?
+///
+/// An opcode's modifiers are the run of `.name` tokens after it, so
+/// `redux.sync.min.f32`, `redux .sync .min .f32` and a comment between two
+/// modifiers are the same instruction.
+fn ptx_contains_float_redux(ptx: &str) -> bool {
+    if !ptx.contains("redux") {
+        return false;
+    }
+    let tokens = lex_ptx(ptx);
+    tokens.iter().enumerate().any(|(index, token)| {
+        let mut modifiers = tokens[index + 1..].iter().map_while(|token| match token {
+            PtxToken::Modifier(modifier) => Some(*modifier),
+            _ => None,
+        });
+        *token == PtxToken::Identifier("redux")
+            && modifiers.next() == Some(".sync")
+            && modifiers.any(|modifier| modifier == ".f32")
+    })
+}
+
+/// A PTX token. Whitespace, comments and string literals produce none.
+#[derive(Debug, PartialEq)]
+enum PtxToken<'a> {
+    /// An opcode or other identifier: `redux`, `%r1`, `$0`.
+    Identifier(&'a str),
+    /// A `.name` token: an instruction modifier or a directive.
+    Modifier(&'a str),
+    /// Punctuation or a number.
+    Other,
+}
+
+/// Split PTX into [`PtxToken`]s, dropping whitespace, `//` and `/* */`
+/// comments, and string literals such as a `.file` path.
+fn lex_ptx(ptx: &str) -> Vec<PtxToken<'_>> {
+    fn is_identifier(byte: u8) -> bool {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$')
+    }
+
+    let bytes = ptx.as_bytes();
+    let run_end = |from: usize| {
+        bytes[from..]
+            .iter()
+            .position(|&byte| !is_identifier(byte))
+            .map_or(bytes.len(), |offset| from + offset)
+    };
+
+    let mut tokens = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        let rest = &bytes[index..];
+        if rest.starts_with(b"//") {
+            index += rest
+                .iter()
+                .position(|&byte| byte == b'\n')
+                .unwrap_or(rest.len());
+        } else if rest.starts_with(b"/*") {
+            index += rest[2..]
+                .windows(2)
+                .position(|pair| pair == b"*/")
+                .map_or(rest.len(), |offset| offset + 4);
+        } else if rest[0] == b'"' {
+            // A backslash is literal in a PTX string -- ptxas accepts
+            // `.file 1 "C:\dir\"` -- so the next quote always closes it.
+            index += rest[1..]
+                .iter()
+                .position(|&byte| byte == b'"')
+                .map_or(rest.len(), |offset| offset + 2);
+        } else if rest[0] == b'.' && rest.get(1).is_some_and(|&byte| is_identifier(byte)) {
+            let end = run_end(index + 1);
+            tokens.push(PtxToken::Modifier(&ptx[index..end]));
+            index = end;
+        } else if rest[0].is_ascii_digit() {
+            // A number consumes its whole run -- `0f3F800000`, `0x1F`, `123U` --
+            // so an identifier is never read out of its tail.
+            index = run_end(index + 1);
+            tokens.push(PtxToken::Other);
+        } else if rest[0].is_ascii_alphabetic() || matches!(rest[0], b'_' | b'$' | b'%') {
+            let end = run_end(index + 1);
+            tokens.push(PtxToken::Identifier(&ptx[index..end]));
+            index = end;
+        } else {
+            if !rest[0].is_ascii_whitespace() {
+                tokens.push(PtxToken::Other);
+            }
+            index += 1;
+        }
+    }
+    tokens
+}
+
+/// The template of an inline-asm expression, given the tokens after `asm`:
+/// the string after `[sideeffect] [alignstack] [inteldialect] [unwind]`,
+/// each optional and in that order, as `LLParser` accepts them. Also covers
+/// `module asm`.
+fn inline_asm_template<'a>(after_asm: &[IrToken<'a>]) -> Option<&'a str> {
+    const MODIFIERS: [&str; 4] = ["sideeffect", "alignstack", "inteldialect", "unwind"];
+    let mut tokens = after_asm.iter();
+    let mut next = tokens.next();
+    for modifier in MODIFIERS {
+        if matches!(next, Some(IrToken::Word(word)) if *word == modifier) {
+            next = tokens.next();
+        }
+    }
+    match next {
+        Some(IrToken::String(template)) => Some(template),
+        _ => None,
+    }
+}
+
+/// An LLVM IR token. Comments, punctuation, local and metadata names and
+/// attribute groups produce none.
+#[derive(Debug, PartialEq)]
+enum IrToken<'a> {
+    /// A bare keyword, type or identifier.
+    Word(&'a str),
+    /// A basic-block label, `name:`.
+    Label(&'a str),
+    /// A global symbol with the sigil removed and quoting decoded, so
+    /// `@name` and `@"quoted name"` both yield the name.
+    Global(Cow<'a, str>),
+    /// A string literal between its quotes, still escaped.
+    String(&'a str),
+}
+
+/// Split LLVM IR into [`IrToken`]s. Quoted text is consumed whole before
+/// anything inside it is read, so a `;` in a string is not a comment and a
+/// `@` in a quoted name does not start another symbol.
+fn lex_llvm_ir(contents: &str) -> Vec<IrToken<'_>> {
+    fn is_identifier(byte: u8) -> bool {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'$' | b'.' | b'_')
+    }
+
+    let bytes = contents.as_bytes();
+    // LLVM writes a quote inside quoted text as `\22`, so the next `"` closes it.
+    let closing_quote = |from: usize| {
+        bytes[from..]
+            .iter()
+            .position(|&byte| byte == b'"')
+            .map_or(bytes.len(), |offset| from + offset)
+    };
+    let identifier_end = |from: usize| {
+        bytes[from..]
+            .iter()
+            .position(|&byte| !is_identifier(byte))
+            .map_or(bytes.len(), |offset| from + offset)
+    };
+
+    let mut tokens = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b';' => {
+                index = bytes[index..]
+                    .iter()
+                    .position(|&byte| byte == b'\n')
+                    .map_or(bytes.len(), |offset| index + offset);
+            }
+            b'"' => {
+                let close = closing_quote(index + 1);
+                tokens.push(IrToken::String(&contents[index + 1..close]));
+                index = bytes.len().min(close + 1);
+            }
+            sigil @ (b'@' | b'%' | b'!' | b'#') => {
+                let (name, next) = if bytes.get(index + 1) == Some(&b'"') {
+                    let close = closing_quote(index + 2);
+                    (
+                        unescape_llvm_string(&contents[index + 2..close]),
+                        bytes.len().min(close + 1),
+                    )
+                } else {
+                    let end = identifier_end(index + 1);
+                    (Cow::Borrowed(&contents[index + 1..end]), end)
+                };
+                if sigil == b'@' {
+                    tokens.push(IrToken::Global(name));
+                }
+                index = next;
+            }
+            byte if is_identifier(byte) => {
+                let end = identifier_end(index);
+                let word = &contents[index..end];
+                if bytes.get(end) == Some(&b':') {
+                    tokens.push(IrToken::Label(word));
+                    index = end + 1;
+                } else {
+                    tokens.push(IrToken::Word(word));
+                    index = end;
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    tokens
+}
+
+/// Decode LLVM quoted text as `llvm::UnEscapeLexed` does: `\\` is one
+/// backslash, `\XX` is the byte with that hex value, and any other backslash
+/// stands for itself.
+fn unescape_llvm_string(text: &str) -> Cow<'_, str> {
+    if !text.contains('\\') {
+        return Cow::Borrowed(text);
+    }
+    let hex = |byte: Option<&u8>| byte.and_then(|&byte| (byte as char).to_digit(16));
+    let bytes = text.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            if bytes.get(index + 1) == Some(&b'\\') {
+                decoded.push(b'\\');
+                index += 2;
+                continue;
+            }
+            if let (Some(high), Some(low)) = (hex(bytes.get(index + 1)), hex(bytes.get(index + 2)))
+            {
+                decoded.push((high * 16 + low) as u8);
+                index += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    Cow::Owned(String::from_utf8_lossy(&decoded).into_owned())
 }
 
 /// Checks for forward-compatible instructions whose minimum target is sm_90.

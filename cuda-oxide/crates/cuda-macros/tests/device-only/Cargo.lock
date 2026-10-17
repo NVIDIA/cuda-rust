@@ -7,6 +7,7 @@ name = "cuda-device"
 version = "0.2.1"
 dependencies = [
  "cuda-macros",
+ "cuda-target-spec",
 ]
 
 [[package]]
@@ -18,6 +19,10 @@ dependencies = [
  "reserved-oxide-symbols",
  "syn",
 ]
+
+[[package]]
+name = "cuda-target-spec"
+version = "0.1.0"
 
 [[package]]
 name = "device-only-kernels"

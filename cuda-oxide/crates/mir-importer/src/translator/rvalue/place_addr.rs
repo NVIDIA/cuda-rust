@@ -171,8 +171,9 @@ pub(super) fn emit_slice_len_extract(
 /// `ConstantIndex { offset, from_end: true }` on a runtime-length slice.
 ///
 /// rustc defines the offset as 1-based from the end, so the index is
-/// `slice_len - offset`. The MIR pattern-length test dominates this place,
-/// therefore the subtraction cannot underflow on an executed path.
+/// `slice_len - offset`. rustc's MIR validator rejects a from-end index whose
+/// `offset` exceeds `min_length`, and the MIR pattern-length test dominates
+/// this place, therefore the subtraction cannot underflow on an executed path.
 pub(super) fn emit_from_end_slice_index(
     ctx: &mut Context,
     slice_len: Value,
@@ -597,6 +598,10 @@ pub(super) fn emit_array_subslice_value(
 /// ConstantIndex projections can continue from that rebuilt slice. A from-end
 /// ConstantIndex uses the rebuilt slice's runtime length metadata, so its index
 /// is computed relative to the subslice rather than the original fat slice.
+/// Two cases still return `Ok(None)` on purpose: a slice `Subslice` that does
+/// not directly follow a fat Deref (a nested `Subslice`, or a `Subslice` after
+/// a slice-tail `Field`), and a from-end `ConstantIndex` on a base that
+/// carries no slice length.
 ///
 /// Returns `Ok(Some((addr, last_op)))` on success, `Ok(None)` if the
 /// projection chain contains an element this helper doesn't know how to

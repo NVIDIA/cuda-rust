@@ -624,6 +624,14 @@ pub fn translate_place_iterative(
 
                 match kind {
                     Ok(ConstIndexKind::Array { element_ty }) => {
+                        // A from-end index never reaches this branch: the
+                        // from_end path above requires a MirSliceType, which
+                        // normalizes to its data pointer and takes the Ptr
+                        // branch. The raw offset is a forward field index here.
+                        debug_assert!(
+                            runtime_index.is_none(),
+                            "from-end ConstantIndex reached the array value path"
+                        );
                         let op = Operation::new(
                             ctx,
                             MirExtractFieldOp::get_concrete_op_info(),
@@ -790,9 +798,13 @@ pub fn translate_place_iterative(
                     current_value = subslice;
                     current_prev_op = Some(last_op);
 
-                    // A subsequent element projection needs only the adjusted
-                    // data pointer. Keep a terminal Subslice as a fat value so
-                    // PtrMetadata/borrow users can observe the rebuilt length.
+                    // A following Index or forward ConstantIndex needs only the
+                    // adjusted data pointer. Keep a terminal Subslice as a fat
+                    // value so PtrMetadata/borrow users can observe the rebuilt
+                    // length, and keep it for a following from-end
+                    // ConstantIndex as well: that arm reads field 1 for the
+                    // length. The filter below must therefore stay restricted
+                    // to Index and forward ConstantIndex.
                     if matches!(
                         place.projection.get(proj_idx + 1),
                         Some(ProjectionElem::Index(_))

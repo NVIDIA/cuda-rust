@@ -111,8 +111,9 @@ and bounded arrays, uses generic-pointer storage, so the union's byte image is
 the same on every target and its integer view equals `ptr as usize`. Use
 `cvta_generic_to_shared_offset` or `cvta_generic_to_shared_u32` when the
 shared-window offset (the pointer's position inside the block's shared memory)
-is wanted instead. A field that holds more than 16 shared-memory pointers once
-its arrays are expanded is rejected. Taking the in-place address of such a
+is wanted instead. A field whose fixed arrays expand to more than 16
+shared-memory pointers is rejected; pointers held directly or through structs
+do not count toward that bound. Taking the in-place address of such a
 field (`u.ptr = p`, `&u.ptr`, `&mut u.ptr`) is refused with a diagnostic; build
 the union by value and read its fields by value.
 

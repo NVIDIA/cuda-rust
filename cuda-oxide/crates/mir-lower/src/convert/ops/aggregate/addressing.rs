@@ -1113,8 +1113,8 @@ mod tests {
 
     /// A union field whose storage IS its semantic type keeps the address
     /// path: one zero-offset `i8` GEP off the ORIGINAL union pointer, no
-    /// stack spill. This is the `union_aggregate` write shape
-    /// (`bits.bytes[i] = b` on a `{ word: u32, bytes: [u8; 4] }` union).
+    /// stack spill. This is the `union_aggregate` write form
+    /// (`bits.bytes = [..]` on a `{ word: u32, bytes: [u8; 4] }` union).
     #[test]
     fn plain_union_field_addr_lowers_to_zero_offset_gep() {
         use llvm_export::ops::GepIndex;

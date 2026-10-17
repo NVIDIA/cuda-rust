@@ -83,7 +83,7 @@ IKET_EXAMPLES=(iket_trace)
 BLACKWELL_COMPILE_EXAMPLES=(generated_intrinsics_blackwell)
 SM100_COMPILE_EXAMPLES=(redux_f32)
 NVVM_VERIFY_EXAMPLES=(cp_async_small device_global enum_constant_provenance ex2_approx_f16 generated_intrinsics generated_intrinsics_blackwell generated_ldmatrix kernel_reference_validity legacy_atomic_fadd legacy_atomic_rmw_cas libdevice_math legacy_nvvm_pointer_shapes packed_atomic_add primitive_stress scoped_atomic_load_store shuffle_64 tcgen05 tuple_constant_provenance wgmma_mma_bf16)
-ERROR_EXAMPLES=(error error_set_discriminant_uninhabited error_enum_bool_payload_addr error_enum_pointer_overlap error_enum_shared_pointer_layout error_heap_alloc error_host_arch_intrinsic error_host_target_feature error_kernel_shared_param error_missing_device_attr error_generated_intrinsic_abi error_generated_intrinsic_unknown_id error_generated_intrinsic_fn_pointer error_generated_intrinsic_callable)
+ERROR_EXAMPLES=(error error_set_discriminant_uninhabited error_enum_bool_payload_addr error_enum_pointer_overlap error_enum_shared_pointer_layout error_heap_alloc error_host_arch_intrinsic error_host_target_feature error_kernel_shared_param error_missing_device_attr error_generated_intrinsic_abi error_generated_intrinsic_unknown_id error_generated_intrinsic_fn_pointer error_generated_intrinsic_callable error_union_shared_pointer_addr error_union_shared_pointer_layout)
 
 # Per-example rustc flags policy: an example that needs a special rustc flag
 # (e.g. disjoint_slice_len needs -Zinline-mir=no to keep its regression
@@ -622,6 +622,21 @@ verdict_error() {
         error_enum_shared_pointer_layout)
             if ! grep -Fq 'arrays containing shared-memory pointers are not supported' "${log}"; then
                 echo "FAIL (missing shared-pointer array layout diagnostic)"
+                return 1
+            fi
+            ;;
+        error_union_shared_pointer_addr)
+            if ! grep -Fq 'in-place address of union field' "${log}" \
+                || ! grep -Fq 'canonical storage type' "${log}"; then
+                echo "FAIL (missing shared-pointer union field-address diagnostic)"
+                return 1
+            fi
+            ;;
+        error_union_shared_pointer_layout)
+            # The `union field storage:` prefix keeps this marker distinct from
+            # the enum fixture's, which carries `enum payload storage:`.
+            if ! grep -Fq 'union field storage: arrays containing shared-memory pointers are not supported' "${log}"; then
+                echo "FAIL (missing shared-pointer union array layout diagnostic)"
                 return 1
             fi
             ;;

@@ -13,11 +13,12 @@ Tests tcgen05 (Tensor Core Gen 5) infrastructure for Blackwell GPUs. This is the
 3. **tcgen05_commit_test**: Commit with mbarrier integration
 4. **tcgen05_mma_minimal**: Full MMA pipeline (alloc → copy → MMA → read → dealloc)
 5. **tmem_guard_2d_test**: `TmemGuard` alloc/dealloc in a (32, 4, 1) block; the guard selects the warp by block-linear thread id, so one hardware warp allocates
+6. **tmem_guard_2d_warp3_test**: the same block through `alloc_by(3)` / `dealloc_by(3)`; a separate kernel, since repeated TMEM allocations in one CTA must come from the same warp
 
 ### cta_group::2 (CTA pairs)
 
-6. **tcgen05_alloc_cg2_test**: Cooperative TMEM alloc/dealloc across a 2-CTA cluster
-7. **tcgen05_mma_cg2_test**: Cooperative MMA with multicast commit across the pair
+7. **tcgen05_alloc_cg2_test**: Cooperative TMEM alloc/dealloc across a 2-CTA cluster
+8. **tcgen05_mma_cg2_test**: Cooperative MMA with multicast commit across the pair
 
 CTA pairs place 2 CTAs on adjacent SMs (a TPC). They cooperate on larger MMA
 tiles — each SM's tensor core handles its half of the rows. All `tcgen05`
@@ -139,7 +140,7 @@ TMEM address: 0x00000000
 --- Test: TmemGuard in a (32, 4, 1) block ---
 TMEM address (warp 0): 0x00000000
 TMEM address (warp 3): 0x00000000
-✓ TmemGuard allocated and freed from block-linear warps 0 and 3
+✓ TmemGuard allocated and freed from block-linear warps 0 and 3, one kernel each
 
 --- CTA Pair (cta_group::2) Tests ---
 

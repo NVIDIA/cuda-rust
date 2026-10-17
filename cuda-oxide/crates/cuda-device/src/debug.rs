@@ -376,3 +376,28 @@ impl<T> GpuPrintfArg for *mut T {
 
 // Re-export the gpu_printf macro from cuda-macros
 pub use cuda_macros::gpu_printf;
+
+#[cfg(test)]
+mod tests {
+    use super::gpu_printf;
+
+    #[test]
+    fn default_format_typechecks_for_visible_and_untyped_args() {
+        let value: u64 = u64::MAX;
+        let pi: f32 = 3.14159;
+        let signed = 42i32;
+        // Typecheck only. `__gpu_vprintf` traps if the closure is called.
+        let _ = || {
+            let _ = gpu_printf!("{:.2}", pi);
+            let _ = gpu_printf!("{:.2}", 3.14159f64);
+            let _ = gpu_printf!("{}", value);
+            let _ = gpu_printf!("{}", 18446744073709551615u64);
+            let _ = gpu_printf!("{}", signed);
+            let _ = gpu_printf!("{:08}", 42);
+            let _ = gpu_printf!("{:08}", value);
+            let _ = gpu_printf!("{:x}", 255u32);
+            let _ = gpu_printf!("{:e}", 1000.0f64);
+            let _ = gpu_printf!("n={} x={:x}\n", value, 1u32);
+        };
+    }
+}

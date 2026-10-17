@@ -228,7 +228,7 @@ Anonymous promoted allocations remain unsupported.
 |:--------|:-------|:------------|
 | Warp Shuffle Operations | **Full** | `shuffle`, `shuffle_xor`, `shuffle_down`, `shuffle_up`. Unsuffixed forms take `u32`; `_f32`, `_u64`, `_f64` variants and a `_sync` form of each. |
 | Warp Vote Operations | **Full** | `all(pred)`, `any(pred)`, `ballot(pred)` → bitmask. |
-| Lane/Warp ID | **Full** | `lane_id()` (0–31), `warp_id()`. Direct register reads. |
+| Lane/Warp ID | **Full** | `lane_id()` (0–31) reads `%laneid`; `warp_id()` is `threadIdx.x / 32`, valid for 1D blocks only. |
 | Warp Reduction (`redux.sync`) | **Full** | One-instruction full-warp reduction. Integers on sm_80+: `redux_sync_add`, `_min_{u32,i32}`, `_max_{u32,i32}`, `_and`, `_or`, `_xor`. `f32` min/max with optional `.abs` and `.NaN` on `sm_100a`/`sm_100f`/`sm_103a`/`sm_103f`. No `f64` form. |
 
 ## Runtime Library: Cooperative Groups

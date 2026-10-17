@@ -109,8 +109,10 @@ fn legacy_llvm_used_roots_retained_address_space_global() {
     );
 }
 
-/// Host-written storage must not look like a known constant to LTO, in either
-/// IR dialect; ordinary globals keep their plain definition.
+/// Host-written storage must not look like a known constant to LTO in any IR
+/// dialect, and it stays rooted in `@llvm.used` so the symbol the host
+/// resolves survives even when every read of it is optimized away. Ordinary
+/// globals keep their plain definition and stay out of the root list.
 #[test]
 fn host_written_global_exports_externally_initialized() {
     let mut ctx = Context::new();
@@ -118,8 +120,10 @@ fn host_written_global_exports_externally_initialized() {
     let module_block = module_top_block(&mut ctx, &module);
     let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signless);
 
+    // Mirror `create_device_global`: a `#[constant]` carries both markers.
     let params = GlobalOp::new(&mut ctx, "PARAMS".try_into().unwrap(), i32_ty.into());
     params.set_address_space(&mut ctx, 4);
+    params.mark_retained(&mut ctx);
     params.mark_host_written(&mut ctx);
     params.get_operation().insert_at_back(module_block, &ctx);
 
@@ -127,17 +131,32 @@ fn host_written_global_exports_externally_initialized() {
     ordinary.set_address_space(&mut ctx, 1);
     ordinary.get_operation().insert_at_back(module_block, &ctx);
 
+    let opaque_used = "@llvm.used = appending global [1 x ptr] [ptr addrspacecast (ptr addrspace(4) @PARAMS to ptr)], section \"llvm.metadata\"";
+    let legacy_used = "@llvm.used = appending global [1 x i8*] [i8* addrspacecast (i32 addrspace(4)* @PARAMS to i8*)], section \"llvm.metadata\"";
+    let modern = NvvmExportConfig::new(NvvmIrDialect::Modern);
     let legacy = NvvmExportConfig::new(NvvmIrDialect::LegacyLlvm7);
-    for ir in [
-        export_module_to_string_with_config(&ctx, &module, &PtxExportConfig),
-        export_module_to_string_with_config(&ctx, &module, &legacy),
+    for (ir, used) in [
+        (
+            export_module_to_string_with_config(&ctx, &module, &PtxExportConfig),
+            opaque_used,
+        ),
+        (
+            export_module_to_string_with_config(&ctx, &module, &modern),
+            opaque_used,
+        ),
+        (
+            export_module_to_string_with_config(&ctx, &module, &legacy),
+            legacy_used,
+        ),
     ] {
         let ir = ir.expect("host-written global export succeeds");
         assert!(
             ir.contains("@PARAMS = addrspace(4) externally_initialized global i32"),
             "{ir}"
         );
+        assert!(ir.contains(used), "{ir}");
         assert!(ir.contains("@ORDINARY = addrspace(1) global i32"), "{ir}");
+        assert!(!ir.contains("@ORDINARY to"), "{ir}");
     }
 }
 

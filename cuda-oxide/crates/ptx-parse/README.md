@@ -89,4 +89,4 @@ re-parsing.
 
 ## License
 
-Apache-2.0. See [LICENSE](https://github.com/NVlabs/cuda-oxide/blob/main/LICENSE).
+Apache-2.0. See [LICENSE](https://github.com/NVIDIA/cuda-rust/blob/main/LICENSE).

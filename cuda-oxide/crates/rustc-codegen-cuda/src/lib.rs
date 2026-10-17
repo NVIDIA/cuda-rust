@@ -728,7 +728,7 @@ impl CodegenBackend for CudaCodegenBackend {
                         tcx.dcx().fatal(format!(
                             "[rustc_codegen_cuda] Internal compiler error in \
                              device codegen: {msg}. This is a bug in cuda-oxide. \
-                             Please file at https://github.com/NVlabs/cuda-oxide/issues"
+                             Please file at https://github.com/NVIDIA/cuda-rust/issues"
                         ));
                     }
                     Ok(Ok(result)) => {

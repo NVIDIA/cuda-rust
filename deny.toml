@@ -11,8 +11,8 @@
 #
 # The policy stays in cuda-oxide/deny.toml. That is the file the SIMT,
 # codegen, device-only, and example walks stop at. The root workspace is
-# only the four host crates; the allow-list and the pliron git exception
-# belong to the SIMT tree. A single deny.toml at the git root would make
+# only the four host crates; the allow-list belongs to the SIMT tree. A
+# single deny.toml at the git root would make
 # those walks continue upward, and any cutile-rs directory that lacked its
 # own deny.toml would then inherit the Oxide policy. cutile-rs/deny.toml is
 # a separate product policy and must remain the file a walk inside that
@@ -49,4 +49,3 @@ wildcards = "allow"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = ["https://github.com/pliron-org/pliron"]

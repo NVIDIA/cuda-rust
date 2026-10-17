@@ -626,7 +626,7 @@ mod tests {
         let (module_ptr, entry) = build_kernel(&mut ctx, vec![i1_ty], vec![]);
         let cond = entry.deref(&ctx).get_argument(0);
         let assert_loc = Location::SrcPos {
-            src: Source::new_from_file(&mut ctx, PathBuf::from("kernel.rs")),
+            src: Source::new_from_file(&ctx, PathBuf::from("kernel.rs")),
             pos: combine::stream::position::SourcePosition {
                 line: 44,
                 column: 36,

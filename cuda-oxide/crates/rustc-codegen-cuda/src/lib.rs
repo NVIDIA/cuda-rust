@@ -316,6 +316,7 @@ extern crate rustc_metadata;
 extern crate rustc_middle;
 extern crate rustc_session;
 extern crate rustc_span;
+extern crate rustc_structures;
 extern crate rustc_target;
 
 // rustc_public (stable MIR) and its bridge - for calling mir-importer
@@ -331,13 +332,15 @@ mod generated_intrinsics;
 mod materialize;
 
 use rustc_codegen_ssa::traits::CodegenBackend;
-use rustc_codegen_ssa::{CompiledModule, CompiledModules, CrateInfo, ModuleKind};
+use rustc_codegen_ssa::{CompiledModule, CompiledModules, CrateInfo, ModuleKind, NativeLib};
 use rustc_metadata::EncodedMetadata;
 use rustc_middle::dep_graph::WorkProductMap;
 use rustc_middle::ty::TyCtxt;
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_session::config::OutputFilenames;
 use rustc_session::{CodegenBackendInit, EarlySession, IncrCompSession, Session};
+use rustc_span::Symbol;
+use rustc_structures::{CrateType, NativeLibKind};
 use std::any::Any;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -822,16 +825,12 @@ impl CodegenBackend for CudaCodegenBackend {
             crate_info,
         );
         for (index, object) in ongoing.artifact_objects.into_iter().enumerate() {
-            compiled_modules.modules.push(CompiledModule {
-                name: format!("oxide_artifact_embed_{index}"),
-                kind: ModuleKind::Regular,
-                object: Some(object),
-                dwarf_object: None,
-                bytecode: None,
-                assembly: None,
-                llvm_ir: None,
-                global_asm_object: None,
-            });
+            compiled_modules.modules.push(artifact_module(
+                index,
+                object,
+                &crate_info.crate_types,
+                sess.opts.unstable_opts.link_native_libraries,
+            ));
         }
         (compiled_modules, work_products)
     }
@@ -840,13 +839,89 @@ impl CodegenBackend for CudaCodegenBackend {
         &self,
         sess: &Session,
         compiled_modules: CompiledModules,
-        crate_info: CrateInfo,
+        mut crate_info: CrateInfo,
         metadata: EncodedMetadata,
         outputs: &OutputFilenames,
     ) {
+        for object in artifact_link_args(&compiled_modules.modules, &crate_info.crate_types) {
+            let Some(object) = object.to_str() else {
+                sess.dcx().fatal(format!(
+                    "[rustc_codegen_cuda] The path of the artifact object is not UTF-8: {}",
+                    object.display()
+                ));
+            };
+            crate_info.used_libraries.push(NativeLib {
+                kind: NativeLibKind::LinkArg,
+                name: Symbol::intern(object),
+                cfg: None,
+                verbatim: true,
+                dll_imports: Vec::new(),
+            });
+        }
         self.llvm_backend
             .link(sess, compiled_modules, crate_info, metadata, outputs);
     }
+}
+
+/// The prefix of the names of the artifact modules.
+const ARTIFACT_MODULE_PREFIX: &str = "oxide_artifact_embed_";
+
+/// The module of an artifact object.
+///
+/// rustc keeps a list of the Rust objects in each rlib. This list contains the
+/// objects of all modules. With LTO, rustc reads bitcode from these objects and
+/// removes them from the link. The artifact objects have no bitcode. If the
+/// session writes an rlib, the artifact object is the DWARF object of its
+/// module. rustc puts the DWARF objects in the rlib, but not in the list.
+///
+/// The system linker does not get the DWARF objects. `link` gives the artifact
+/// objects to this linker as link arguments. With `-Zlink-native-libraries=no`,
+/// rustc does not give link arguments to the linker. Then, if the session also
+/// uses the system linker, the artifact objects are Rust objects.
+fn artifact_module(
+    index: usize,
+    object: PathBuf,
+    crate_types: &[CrateType],
+    link_native_libraries: bool,
+) -> CompiledModule {
+    let dwarf = crate_types.contains(&CrateType::Rlib)
+        && (link_native_libraries || !crate_types.iter().any(uses_system_linker));
+    let (object, dwarf_object) = if dwarf {
+        (None, Some(object))
+    } else {
+        (Some(object), None)
+    };
+    CompiledModule {
+        name: format!("{ARTIFACT_MODULE_PREFIX}{index}"),
+        kind: ModuleKind::Regular,
+        object,
+        dwarf_object,
+        bytecode: None,
+        assembly: None,
+        llvm_ir: None,
+        global_asm_object: None,
+    }
+}
+
+/// The artifact objects that `link` gives to the system linker.
+fn artifact_link_args<'a>(
+    modules: &'a [CompiledModule],
+    crate_types: &[CrateType],
+) -> Vec<&'a Path> {
+    if !crate_types.iter().any(uses_system_linker) {
+        return Vec::new();
+    }
+    modules
+        .iter()
+        .filter(|module| module.name.starts_with(ARTIFACT_MODULE_PREFIX))
+        .filter_map(|module| module.dwarf_object.as_deref())
+        .collect()
+}
+
+/// rustc writes rlibs and static libraries. The system linker makes the other
+/// crate types.
+fn uses_system_linker(crate_type: &CrateType) -> bool {
+    !matches!(crate_type, CrateType::Rlib | CrateType::StaticLib)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1216,6 +1291,77 @@ pub(crate) fn host_target_supported(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_artifact_objects_of_an_rlib_are_not_rust_objects() {
+        let object = PathBuf::from("library.0.0.embed.o");
+        let rlib_sessions: [&[CrateType]; 6] = [
+            &[CrateType::Rlib],
+            &[CrateType::Rlib, CrateType::Cdylib],
+            &[CrateType::Rlib, CrateType::Dylib],
+            &[CrateType::Rlib, CrateType::StaticLib],
+            &[CrateType::Rlib, CrateType::StaticLib, CrateType::Cdylib],
+            &[CrateType::Rlib, CrateType::StaticLib, CrateType::Dylib],
+        ];
+        for crate_types in rlib_sessions {
+            let module = artifact_module(0, object.clone(), crate_types, true);
+            assert_eq!(module.object, None, "{crate_types:?}");
+            assert_eq!(module.dwarf_object, Some(object.clone()), "{crate_types:?}");
+        }
+
+        // Sessions without an rlib link the artifact objects.
+        let other_sessions: [&[CrateType]; 4] = [
+            &[CrateType::Executable],
+            &[CrateType::Cdylib],
+            &[CrateType::Dylib],
+            &[CrateType::StaticLib],
+        ];
+        for crate_types in other_sessions {
+            let module = artifact_module(0, object.clone(), crate_types, true);
+            assert_eq!(module.object, Some(object.clone()), "{crate_types:?}");
+            assert_eq!(module.dwarf_object, None, "{crate_types:?}");
+        }
+
+        // With `-Zlink-native-libraries=no`, the system linker gets no link
+        // arguments.
+        let mixed = artifact_module(
+            0,
+            object.clone(),
+            &[CrateType::Rlib, CrateType::Cdylib],
+            false,
+        );
+        assert_eq!(mixed.object, Some(object.clone()));
+        let rlib = artifact_module(0, object.clone(), &[CrateType::Rlib], false);
+        assert_eq!(rlib.dwarf_object, Some(object));
+    }
+
+    #[test]
+    fn the_system_linker_gets_the_artifact_objects() {
+        let artifact = PathBuf::from("library.0.0.embed.o");
+        let crate_types = [CrateType::Rlib, CrateType::Cdylib];
+        let modules = [
+            // A module of LLVM with split debug information.
+            CompiledModule {
+                name: "library.0".to_string(),
+                kind: ModuleKind::Regular,
+                object: Some(PathBuf::from("library.0.rcgu.o")),
+                dwarf_object: Some(PathBuf::from("library.0.rcgu.dwo")),
+                bytecode: None,
+                assembly: None,
+                llvm_ir: None,
+                global_asm_object: None,
+            },
+            artifact_module(0, artifact.clone(), &crate_types, true),
+        ];
+        assert_eq!(
+            artifact_link_args(&modules, &crate_types),
+            [artifact.as_path()]
+        );
+
+        // rustc puts the DWARF objects in rlibs and static libraries.
+        assert!(artifact_link_args(&modules, &[CrateType::Rlib]).is_empty());
+        assert!(artifact_link_args(&modules, &[CrateType::Rlib, CrateType::StaticLib]).is_empty());
+    }
 
     #[test]
     fn host_targets_that_match_the_ptx_data_model_are_accepted() {

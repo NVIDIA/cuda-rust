@@ -10,7 +10,7 @@ use pliron::context::Context;
 use pliron::derive::{format, pliron_type, type_interface_impl};
 use pliron::location::Location;
 use pliron::result::Error;
-use pliron::r#type::{Type, TypeHandle, TypedHandle};
+use pliron::r#type::{Type, TypeHandle, TypedHandle, type_cast};
 use pliron::utils::apfloat::{self, GetSemantics, Semantics};
 use pliron::{common_traits::Verify, verify_err};
 
@@ -2054,6 +2054,65 @@ impl Verify for MirEnumType {
         }
         Ok(())
     }
+}
+
+/// Required ABI alignment of a MIR value type in bytes.
+///
+/// Aggregate MIR types retain rustc's exact ABI alignment; arrays inherit it
+/// from their element. Scalar and pointer leaves use the NVPTX64 natural
+/// alignment modeled by lowering. Unknown leaves fail closed rather than
+/// guessing an alignment that could make typed storage under-aligned.
+pub fn required_type_alignment(ctx: &Context, ty: TypeHandle) -> Option<u64> {
+    let ty = ty.deref(ctx);
+    if let Some(array) = ty.downcast_ref::<MirArrayType>() {
+        return required_type_alignment(ctx, array.element_ty);
+    }
+    if let Some(tuple) = ty.downcast_ref::<MirTupleType>() {
+        return if tuple.abi_align() > 0 {
+            Some(tuple.abi_align())
+        } else if tuple.types.is_empty() && tuple.total_size == 0 {
+            Some(1)
+        } else {
+            None
+        };
+    }
+    if let Some(structure) = ty.downcast_ref::<MirStructType>() {
+        return if structure.abi_align > 0 {
+            Some(structure.abi_align)
+        } else if structure.field_types.is_empty() && structure.total_size == 0 {
+            Some(1)
+        } else {
+            None
+        };
+    }
+    if let Some(enumeration) = ty.downcast_ref::<MirEnumType>() {
+        return (enumeration.abi_align() > 0).then(|| enumeration.abi_align());
+    }
+    if let Some(union) = ty.downcast_ref::<MirUnionType>() {
+        return (union.abi_align() > 0).then(|| union.abi_align());
+    }
+    if ty.is::<MirSliceType>() {
+        return Some(8);
+    }
+    if let Some(disjoint) = ty.downcast_ref::<MirDisjointSliceType>() {
+        let mut alignment = 8;
+        for &space_ty in &disjoint.space_tys {
+            alignment = alignment.max(required_type_alignment(ctx, space_ty)?);
+        }
+        return Some(alignment);
+    }
+    if let Some(integer) = ty.downcast_ref::<IntegerType>() {
+        let size = u64::from(integer.width()).div_ceil(8).max(1);
+        return Some(size.next_power_of_two().min(16));
+    }
+    if ty.is::<MirPtrType>() {
+        return Some(8);
+    }
+    if let Some(float) = type_cast::<dyn FloatTypeInterface>(&*ty) {
+        let size = u64::try_from(float.get_semantics().bits).ok()?.div_ceil(8);
+        return Some(size.next_power_of_two().min(16));
+    }
+    None
 }
 
 /// A pointer carrier embedded directly or recursively in a MIR value type.

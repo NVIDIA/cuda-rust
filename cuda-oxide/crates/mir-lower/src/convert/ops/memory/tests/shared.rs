@@ -195,6 +195,62 @@ fn convert_shared_alloc_rejects_conflicting_key_declarations() {
 }
 
 #[test]
+fn shared_alloc_alignment_is_at_least_scalar_requirement() {
+    let mut ctx = make_ctx();
+    let (module_ptr, block) = build_kernel(&mut ctx, vec![], vec![]);
+    let i64_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Signless).into();
+
+    append_shared_alloc_typed(&mut ctx, block, "under-aligned-i64", i64_ty, 1, None, 1);
+    append_mir_return(&mut ctx, block, vec![]);
+
+    crate::lower_mir_to_llvm(&mut ctx, module_ptr).expect("lowering failed");
+
+    let top = module_top_block(&ctx, module_ptr);
+    let global = top
+        .deref(&ctx)
+        .iter(&ctx)
+        .find_map(|op| Operation::get_op::<llvm::GlobalOp>(op, &ctx))
+        .expect("expected shared global");
+    assert_eq!(
+        global.get_alignment(&ctx),
+        Some(8),
+        "typed i64 shared storage must not be weakened below its ABI alignment"
+    );
+}
+
+#[test]
+fn shared_alloc_alignment_preserves_mir_over_alignment() {
+    let mut ctx = make_ctx();
+    let (module_ptr, block) = build_kernel(&mut ctx, vec![], vec![]);
+    let aligned_ty = over_aligned_tuple_ty(&mut ctx);
+
+    append_shared_alloc_typed(
+        &mut ctx,
+        block,
+        "under-aligned-aggregate",
+        aligned_ty,
+        1,
+        None,
+        1,
+    );
+    append_mir_return(&mut ctx, block, vec![]);
+
+    crate::lower_mir_to_llvm(&mut ctx, module_ptr).expect("lowering failed");
+
+    let top = module_top_block(&ctx, module_ptr);
+    let global = top
+        .deref(&ctx)
+        .iter(&ctx)
+        .find_map(|op| Operation::get_op::<llvm::GlobalOp>(op, &ctx))
+        .expect("expected shared global");
+    assert_eq!(
+        global.get_alignment(&ctx),
+        Some(32),
+        "MIR ABI over-alignment must survive shared-storage lowering"
+    );
+}
+
+#[test]
 fn shared_alloc_repeated_debug_identity_is_attached_once() {
     let mut ctx = make_ctx();
     let (module_ptr, block) = build_kernel(&mut ctx, vec![], vec![]);
@@ -649,11 +705,21 @@ fn append_extern_shared(
     byte_offset: u64,
 ) -> Ptr<Operation> {
     let i8_ty: TypeHandle = IntegerType::get(ctx, 8, Signedness::Signless).into();
-    let shared_i8 = MirPtrType::get_shared(ctx, i8_ty, true);
+    append_extern_shared_typed(ctx, block, i8_ty, alignment, byte_offset)
+}
+
+fn append_extern_shared_typed(
+    ctx: &mut Context,
+    block: Ptr<BasicBlock>,
+    pointee_type: TypeHandle,
+    alignment: u64,
+    byte_offset: u64,
+) -> Ptr<Operation> {
+    let shared_ptr = MirPtrType::get_shared(ctx, pointee_type, true);
     let op = Operation::new(
         ctx,
         mir::MirExternSharedOp::get_concrete_op_info(),
-        vec![shared_i8.into()],
+        vec![shared_ptr.into()],
         vec![],
         vec![],
         0,
@@ -663,6 +729,68 @@ fn append_extern_shared(
     extern_shared.set_byte_offset_value(ctx, byte_offset);
     op.insert_at_back(block, ctx);
     op
+}
+
+#[test]
+fn extern_shared_alignment_is_at_least_pointee_requirement() {
+    let mut ctx = make_ctx();
+    let (module_ptr, block) = build_kernel(&mut ctx, vec![], vec![]);
+    let i64_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Signless).into();
+
+    append_extern_shared_typed(&mut ctx, block, i64_ty, 1, 0);
+    append_mir_return(&mut ctx, block, vec![]);
+
+    crate::lower_mir_to_llvm(&mut ctx, module_ptr).expect("lowering failed");
+
+    let top = module_top_block(&ctx, module_ptr);
+    let global = top
+        .deref(&ctx)
+        .iter(&ctx)
+        .filter_map(|op| Operation::get_op::<llvm::GlobalOp>(op, &ctx))
+        .find(|global| {
+            global
+                .get_symbol_name(&ctx)
+                .to_string()
+                .starts_with("__dynamic_smem_")
+        })
+        .expect("expected dynamic shared-memory global");
+    assert_eq!(
+        global.get_alignment(&ctx),
+        Some(8),
+        "typed i64 dynamic shared storage must not be weakened below its ABI alignment"
+    );
+}
+
+#[test]
+fn extern_shared_alignment_uses_maximum_typed_requirement() {
+    let mut ctx = make_ctx();
+    let (module_ptr, block) = build_kernel(&mut ctx, vec![], vec![]);
+    let i64_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Signless).into();
+    let aligned_ty = over_aligned_tuple_ty(&mut ctx);
+
+    append_extern_shared_typed(&mut ctx, block, i64_ty, 1, 0);
+    append_extern_shared_typed(&mut ctx, block, aligned_ty, 1, 0);
+    append_mir_return(&mut ctx, block, vec![]);
+
+    crate::lower_mir_to_llvm(&mut ctx, module_ptr).expect("lowering failed");
+
+    let top = module_top_block(&ctx, module_ptr);
+    let global = top
+        .deref(&ctx)
+        .iter(&ctx)
+        .filter_map(|op| Operation::get_op::<llvm::GlobalOp>(op, &ctx))
+        .find(|global| {
+            global
+                .get_symbol_name(&ctx)
+                .to_string()
+                .starts_with("__dynamic_smem_")
+        })
+        .expect("expected dynamic shared-memory global");
+    assert_eq!(
+        global.get_alignment(&ctx),
+        Some(32),
+        "one dynamic pool must satisfy the strongest typed alignment requirement"
+    );
 }
 
 /// A `mir.extern_shared` with a nonzero byte offset addresses into an extern

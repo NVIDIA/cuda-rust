@@ -413,9 +413,14 @@ fn out_of_slab_store_outcome(extent: SlabExtent) -> String {
 
 #[test]
 fn dynamic_extent_out_of_slab_store_stops_like_static() {
+    let static_outcome = out_of_slab_store_outcome(SlabExtent::Static);
+    assert!(
+        static_outcome.starts_with("STOP:"),
+        "a store one row past a static slab must be refused, got {static_outcome}"
+    );
     assert_eq!(
         out_of_slab_store_outcome(SlabExtent::Dynamic),
-        out_of_slab_store_outcome(SlabExtent::Static),
+        static_outcome,
         "a store one row past the slab must be refused the way the static slab refuses it"
     );
 }

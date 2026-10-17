@@ -103,12 +103,13 @@ ERROR_EXAMPLES=(error error_set_discriminant_uninhabited error_enum_bool_payload
 # verified results.
 NO_LAUNCH_EXAMPLES=(wgmma_mma_bf16)
 
-# Examples whose verify-code-shape.sh asserts on `#[inline(never)]` marker
-# symbols. Those markers are private, so once the middle end inlines them into
-# their single caller it deletes them, and they survive only in the
-# unoptimized IR. The optimized build still runs and still decides the verdict;
-# these get one extra CUDA_OXIDE_NO_OPT=1 build afterwards purely to produce
-# artifacts the shape check can read.
+# Examples whose verify-code-shape.sh reads unoptimized artifacts. Their
+# `#[inline(never)]` marker symbols reach LLVM as `noinline`, so most of them
+# now survive -O2 as real functions, but these scripts assert which markers
+# the frontend reaches in which branch, and that is written against the text
+# emitted before opt folds and reorders it. The optimized build still runs and
+# still decides the verdict; these get one extra CUDA_OXIDE_NO_OPT=1 build
+# afterwards purely to produce the artifacts the shape check reads.
 NO_OPT_SHAPE_EXAMPLES=(const_bool_dead_branch)
 
 # This example intentionally configures a cubin artifact in Cargo metadata.

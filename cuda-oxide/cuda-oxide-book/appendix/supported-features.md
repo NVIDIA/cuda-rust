@@ -157,7 +157,7 @@ Anonymous promoted allocations remain unsupported.
 | Feature | Status | Description |
 |:--------|:-------|:------------|
 | `#[kernel]` Attribute | **Full** | Marks functions as GPU kernel entry points (`ptx_kernel` calling convention). Multiple kernels per file. |
-| `#[device]` Helper Functions | **Full** | Device-side helper functions callable from kernels. `#[inline(always)]` is preserved as the LLVM `alwaysinline` attribute (emitted alongside the convergent group and any `!dbg` scope), so `opt` honors the inline intent. |
+| `#[device]` Helper Functions | **Full** | Device-side helper functions callable from kernels. The `#[inline]` family reaches LLVM as the matching function attribute, as in rustc's own backend: `#[inline]` becomes `inlinehint`, `#[inline(always)]` becomes `alwaysinline` and `#[inline(never)]` becomes `noinline` (emitted alongside the convergent group and any `!dbg` scope), so `opt` and libNVVM honor the request. An `#[inline(never)]` helper is a real PTX function call. The one exception is the `#[inline(never)]` that `#[device]` adds to a helper with its own type or const parameters: it only keeps each copy visible to the device collector on the host side and is not carried to device code, so const-generic arguments keep folding into their kernels. |
 | Standalone `#[device]` Functions | **Full** | Device functions compiled without any kernel present. Clean export names for C++ consumption. |
 | Multi-Kernel Modules | **Full** | Multiple `#[kernel]` functions in a single source file compile to a single PTX module. |
 

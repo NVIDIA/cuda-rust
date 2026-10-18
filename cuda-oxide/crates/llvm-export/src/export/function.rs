@@ -23,7 +23,6 @@ use pliron::{
     },
     context::{Context, Ptr},
     linked_list::ContainsLinkedList,
-    location::Located,
     op::Op,
     operation::Operation,
     printable::Printable,
@@ -1081,7 +1080,7 @@ impl<'a> ModuleExportState<'a> {
             .is_some();
 
         if let Some(entry_block) = entry_block_opt {
-            let func_loc = func.get_operation().deref(self.ctx).loc();
+            let func_loc = func.get_operation().deref(self.ctx).loc().clone();
             let debug_name = ops::debug_function_name(self.ctx, func.get_operation())
                 .unwrap_or_else(|| fixed_func_name.clone());
             let debug_scope =

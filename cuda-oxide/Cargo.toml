@@ -45,16 +45,16 @@ repository = "https://github.com/NVIDIA/cuda-rust"
 # Examples are in: crates/rustc-codegen-cuda/examples/
 
 [workspace.dependencies]
-# Pliron MLIR framework, pinned to the published 0.19.0 release, retaining
+# Pliron MLIR framework, pinned to the published 0.20.0 release, retaining
 # struct-layout, GEP no-wrap, volatile, global-constant, inline-asm, and generic
 # LLVM attribute semantics.
 # pliron-llvm uses default-features = false to keep llvm-sys (LLVM 23) out:
 # cuda-oxide consumes the dialect modeling only, not the FFI bridge.
 # `crates/rustc-codegen-cuda/Cargo.toml` MUST use the same registry source and
 # exact release, or pliron resolves to distinct crates and types stop unifying.
-pliron = { version = "=0.19.0" }
-pliron-derive = { version = "=0.19.0" }
-pliron-llvm = { version = "=0.19.0", default-features = false, features = [
+pliron = { version = "=0.20.0" }
+pliron-derive = { version = "=0.20.0" }
+pliron-llvm = { version = "=0.20.0", default-features = false, features = [
     "std",
 ] }
 

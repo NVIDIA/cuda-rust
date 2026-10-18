@@ -16,7 +16,6 @@ use pliron::context::{Context, Ptr};
 use pliron::irbuild::dialect_conversion::{DialectConversionRewriter, OperandsInfo};
 use pliron::irbuild::inserter::Inserter;
 use pliron::irbuild::rewriter::Rewriter;
-use pliron::location::Located;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::result::Result;
@@ -451,7 +450,7 @@ fn convert_mma_group_values_for_shape<F>(
 where
     F: FnOnce(usize) -> String,
 {
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     let result_count = op.deref(ctx).get_num_results();
     let operands: Vec<_> = op.deref(ctx).operands().collect();
 
@@ -541,7 +540,7 @@ fn convert_mma_loop_values_for_kind(
     op: Ptr<Operation>,
     input_kind: WgmmaInputKind,
 ) -> Result<()> {
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     let result_count = op.deref(ctx).get_num_results();
     let operands: Vec<_> = op.deref(ctx).operands().collect();
 
@@ -604,7 +603,7 @@ pub(crate) fn convert_mma_loop_pipeline_values(
     op: Ptr<Operation>,
     _operands_info: &OperandsInfo,
 ) -> Result<()> {
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     let result_count = op.deref(ctx).get_num_results();
     let operands: Vec<_> = op.deref(ctx).operands().collect();
 
@@ -680,7 +679,7 @@ pub(crate) fn convert_mma_pipeline_values(
     op: Ptr<Operation>,
     _operands_info: &OperandsInfo,
 ) -> Result<()> {
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     let result_count = op.deref(ctx).get_num_results();
     let operands: Vec<_> = op.deref(ctx).operands().collect();
 

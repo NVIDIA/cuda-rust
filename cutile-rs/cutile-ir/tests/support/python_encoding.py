@@ -58,7 +58,44 @@ elif operation == "StoreViewTko":
              weak, None, None, [option == "true"])
 elif operation == "Atan2":
     function(cb, type_id(1), value(0), value(1))
+elif operation == "PreviewCall":
+    # The preview attribute classes live in the experimental tile_preview
+    # package; only int, type and string constant arguments exist there, so
+    # Access below is a local stand-in, not a reference encoder: for the
+    # arg_attrs variant the reference contributes the array and dictionary
+    # framing, while the 0xDF tag and the value bytes follow the spec.
+    preview_root = (pathlib.Path(source) / "experimental" / "tile_preview" / "src"
+                    / "cuda" / "tile_preview")
+    package = types.ModuleType("cuda.tile_preview")
+    package.__path__ = [str(preview_root)]
+    sys.modules["cuda.tile_preview"] = package
+    preview_attr = importlib.import_module("cuda.tile_preview._attribute")
+    attribute = importlib.import_module("cuda.tile._bytecode.attribute")
+    basic = importlib.import_module("cuda.tile._bytecode.basic")
+    cb = builder.CodeBuilder(bytearray(), version, basic.StringTable(), None, [])
+
+    class Access(attribute.TaggedAttribute):
+        def __init__(self, access):
+            self.access = access
+
+        def encode_tagged(self, string_table, buf):
+            basic.encode_varint(0xDF, buf)
+            basic.encode_varint(self.access, buf)
+
+    const_args = [preview_attr.PreviewExprInt(4),
+                  preview_attr.PreviewConcreteType(type_id(0)),
+                  preview_attr.PreviewExprConstStr("nvrtc")]
+    arg_attrs = None
+    if option == "true":
+        arg_attrs = [attribute.Dictionary([("cuda_tile.preview$access", Access(0))]),
+                     attribute.Dictionary([("cuda_tile.preview$access", Access(2))])]
+    function(cb, [type_id(1), type_id(3)], [value(0), value(1)], "tilelib_scale",
+             const_args, arg_attrs, None)
 else:
     raise ValueError(operation)
 # Rust's helper writes the body; compare the opcode separately in its test.
-print(cb.buf[1:].hex())
+# The opcode is a varint: one byte for public ops, three for preview ops.
+opcode_len = 1
+while cb.buf[opcode_len - 1] & 0x80:
+    opcode_len += 1
+print(cb.buf[opcode_len:].hex())

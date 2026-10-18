@@ -5,9 +5,15 @@
 
 //! Static raw-op checks. These cannot prove runtime unsafe preconditions.
 
+use std::collections::HashSet;
+
 use crate::bytecode::Opcode;
 use crate::capabilities::{CapabilityError, TargetCapabilities};
-use crate::ir::{Attribute, Module, Operation, ScalarType, TileElementType, TileType, Type};
+use crate::ir::{
+    Access, Attribute, ConstParam, FragmentType, FuncType, Layout, MemorySpace, Module, Operation,
+    PreviewParamType, ScalarType, ScratchRequest, SymExpr, Synchronization, TileElementType,
+    TileType, Type, ACCESS_ATTR,
+};
 use crate::requirements::Feature;
 
 fn integer(op: &Operation, name: &str) -> Option<i64> {
@@ -153,8 +159,837 @@ pub(crate) fn verify_type(ty: &Type) -> Result<(), String> {
                 Some(tensor.element_type),
             )
         }
+        Type::Fragment(fragment) => verify_fragment(fragment),
         _ => Ok(()),
     }
+}
+
+// =========================================================================
+// Public-preview SIMT interop structure (PreviewOps.cpp, Types.cpp)
+// =========================================================================
+
+/// Product of the integer leaves of a concrete (possibly nested) mode.
+/// `None` for a symbolic leaf or an overflowing product.
+pub(crate) fn mode_size(mode: &SymExpr) -> Option<i64> {
+    match mode {
+        SymExpr::Tuple(values) => values
+            .iter()
+            .try_fold(1i64, |acc, v| acc.checked_mul(mode_size(v)?)),
+        other => other.as_int(),
+    }
+}
+
+/// Product of the shape leaves whose stride is nonzero (`cute::filter_zeros`):
+/// a stride-0 leaf is a broadcast and does not consume tile elements.
+pub(crate) fn injective_mode_size(shape: &SymExpr, stride: &SymExpr) -> Option<i64> {
+    match (shape, stride) {
+        (SymExpr::Tuple(shapes), SymExpr::Tuple(strides)) if shapes.len() == strides.len() => {
+            shapes.iter().zip(strides).try_fold(1i64, |acc, (s, d)| {
+                acc.checked_mul(injective_mode_size(s, d)?)
+            })
+        }
+        (SymExpr::Tuple(_), _) | (_, SymExpr::Tuple(_)) => None,
+        (shape, stride) => {
+            let (shape, stride) = (shape.as_int()?, stride.as_int()?);
+            Some(if stride == 0 { 1 } else { shape })
+        }
+    }
+}
+
+/// Whether every non-unit leaf of a concrete mode has stride zero.
+pub(crate) fn mode_has_zero_stride(shape: &SymExpr, stride: &SymExpr) -> Option<bool> {
+    match (shape, stride) {
+        (SymExpr::Tuple(shapes), SymExpr::Tuple(strides)) if shapes.len() == strides.len() => {
+            shapes
+                .iter()
+                .zip(strides)
+                .try_fold(true, |acc, (s, d)| Some(acc && mode_has_zero_stride(s, d)?))
+        }
+        (SymExpr::Tuple(_), _) | (_, SymExpr::Tuple(_)) => None,
+        (shape, stride) => {
+            let (shape, stride) = (shape.as_int()?, stride.as_int()?);
+            Some(shape == 1 || stride == 0)
+        }
+    }
+}
+
+/// `verifySymbolicExprKind(Int)`: an integer context (a layout leaf, an
+/// alignment, a scratch size, an index argument) takes integer literals,
+/// variables, context builtins and arithmetic over them at any depth.
+/// Tuples, strings, types and the toward-zero `Div` have no meaning there.
+pub(crate) fn verify_int_expr(expr: &SymExpr, what: &str) -> Result<(), String> {
+    match expr {
+        SymExpr::Int(_) | SymExpr::Var(_) | SymExpr::Builtin { .. } => Ok(()),
+        SymExpr::Tuple(_) => Err(format!("{what} must be an integer expression, got a tuple")),
+        SymExpr::ConstStr(_) => Err(format!(
+            "{what} must be an integer expression, got a string constant"
+        )),
+        SymExpr::ConcreteType(_) => {
+            Err(format!("{what} must be an integer expression, got a type"))
+        }
+        SymExpr::Div(..) => Err(format!(
+            "{what} must be an integer expression; toward-zero division is unsupported in \
+             integer contexts, use floor or ceiling division"
+        )),
+        SymExpr::Mul(l, r)
+        | SymExpr::Add(l, r)
+        | SymExpr::Sub(l, r)
+        | SymExpr::FloorDiv(l, r)
+        | SymExpr::CeilDiv(l, r) => {
+            verify_int_expr(l, what)?;
+            verify_int_expr(r, what)
+        }
+        SymExpr::Neg(x) => verify_int_expr(x, what),
+    }
+}
+
+/// `verifySymbolicExprKind(Tuple)`: a shape is a variable standing for the
+/// whole shape, or a tuple whose elements are integer expressions or nested
+/// tuples.
+fn verify_tuple_expr(expr: &SymExpr, what: &str) -> Result<(), String> {
+    match expr {
+        SymExpr::Var(_) => Ok(()),
+        SymExpr::Tuple(values) => values.iter().try_for_each(|value| match value {
+            SymExpr::Tuple(_) => verify_tuple_expr(value, what),
+            _ => verify_int_expr(value, what),
+        }),
+        _ => Err(format!(
+            "{what} must be a tuple expression (a tuple or a shape variable)"
+        )),
+    }
+}
+
+/// `verifyConstantArgumentKind`: a constant argument has the kind of the
+/// parameter it binds. A variable forwards an in-scope parameter and is
+/// accepted for every kind; its own kind is checked where it is declared.
+pub(crate) fn verify_const_arg_kind(
+    index: usize,
+    param: &ConstParam,
+    arg: &SymExpr,
+) -> Result<(), String> {
+    let what = format!(
+        "constant argument #{index} for constant parameter '{}'",
+        param.name
+    );
+    match &param.ty {
+        Type::Index => verify_int_expr(arg, &what),
+        Type::PreviewParam(PreviewParamType::Shape) => verify_tuple_expr(arg, &what),
+        Type::PreviewParam(PreviewParamType::DType) => match arg {
+            SymExpr::Var(_) | SymExpr::ConcreteType(_) => Ok(()),
+            _ => Err(format!(
+                "{what} must be a datatype expression (a concrete type or a variable)"
+            )),
+        },
+        Type::PreviewParam(PreviewParamType::String) => match arg {
+            SymExpr::Var(_) | SymExpr::ConstStr(_) => Ok(()),
+            _ => Err(format!(
+                "{what} must be a string expression (a string constant or a variable)"
+            )),
+        },
+        _ => Err(format!(
+            "constant parameter '{}' must be index, preview$shape, preview$Datatype or \
+             preview$string",
+            param.name
+        )),
+    }
+}
+
+/// The first variable of `expr` missing from `declared`; with an empty set,
+/// the first variable at all.
+fn undeclared_variable<'a>(expr: &'a SymExpr, declared: &HashSet<&str>) -> Option<&'a str> {
+    match expr {
+        SymExpr::Var(name) => (!declared.contains(name.as_str())).then_some(name.as_str()),
+        SymExpr::Tuple(values) => values
+            .iter()
+            .find_map(|value| undeclared_variable(value, declared)),
+        SymExpr::Mul(l, r)
+        | SymExpr::Div(l, r)
+        | SymExpr::Add(l, r)
+        | SymExpr::Sub(l, r)
+        | SymExpr::FloorDiv(l, r)
+        | SymExpr::CeilDiv(l, r) => {
+            undeclared_variable(l, declared).or_else(|| undeclared_variable(r, declared))
+        }
+        SymExpr::Neg(x) => undeclared_variable(x, declared),
+        SymExpr::Int(_)
+        | SymExpr::Builtin { .. }
+        | SymExpr::ConstStr(_)
+        | SymExpr::ConcreteType(_) => None,
+    }
+}
+
+/// Names of the non-wildcard parameters: the only variables an
+/// implementation's fragments and scratch request may reference.
+pub(crate) fn declared_variables<'a>(
+    params: impl IntoIterator<Item = &'a ConstParam>,
+) -> HashSet<&'a str> {
+    params
+        .into_iter()
+        .filter(|p| !p.is_wildcard())
+        .map(|p| p.name.as_str())
+        .collect()
+}
+
+/// `verifyNativeImpl`: every variable in a fragment's `mem_layout`, `fragmap`
+/// and `alignment` must be a declared parameter. The static shape cannot
+/// hold one, since `verify_fragment` rejects symbolic dimensions.
+pub(crate) fn verify_fragment_variables(
+    fragment: &FragmentType,
+    declared: &HashSet<&str>,
+) -> Result<(), String> {
+    fn leaves(layout: &Layout) -> Vec<&SymExpr> {
+        layout.shapes.iter().chain(&layout.strides).collect()
+    }
+    let fields = [
+        ("mem_layout", leaves(&fragment.mem_layout)),
+        ("fragmap", leaves(&fragment.fragmap)),
+        ("alignment", vec![&fragment.alignment]),
+    ];
+    for (field, exprs) in fields {
+        if let Some(name) = exprs
+            .iter()
+            .find_map(|expr| undeclared_variable(expr, declared))
+        {
+            return Err(format!(
+                "field {field} references an undeclared symbolic variable '{name}'; it must be \
+                 a named constant parameter of the implementation"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A scratch request may only reference the implementation's declared
+/// parameters (and context builtins).
+pub(crate) fn verify_scratch_variables(
+    scratch: &ScratchRequest,
+    declared: &HashSet<&str>,
+) -> Result<(), String> {
+    for (expr, what) in [
+        (&scratch.size, "scratch size"),
+        (&scratch.alignment, "scratch alignment"),
+    ] {
+        if let Some(name) = undeclared_variable(expr, declared) {
+            return Err(format!(
+                "{what} references an undeclared symbolic variable '{name}'; it must be a named \
+                 constant parameter of the implementation"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Shapes and strides must nest identically; concrete extents must be
+/// positive and concrete strides non-negative (`LayoutAttr::verify`).
+fn verify_layout(layout: &Layout, what: &str) -> Result<(), String> {
+    if layout.shapes.len() != layout.strides.len() {
+        return Err(format!(
+            "{what} shapes and strides must have the same rank, got {} vs {}",
+            layout.shapes.len(),
+            layout.strides.len()
+        ));
+    }
+    fn mode(shape: &SymExpr, stride: &SymExpr, what: &str) -> Result<(), String> {
+        match (shape, stride) {
+            (SymExpr::Tuple(s), SymExpr::Tuple(d)) => {
+                if s.len() != d.len() {
+                    return Err(format!(
+                        "{what} shapes and strides must have the same nesting structure"
+                    ));
+                }
+                s.iter().zip(d).try_for_each(|(s, d)| mode(s, d, what))
+            }
+            (SymExpr::Tuple(_), _) | (_, SymExpr::Tuple(_)) => Err(format!(
+                "{what} shapes and strides must have the same nesting structure"
+            )),
+            (shape, stride) => {
+                verify_int_expr(shape, &format!("{what} shape leaf"))?;
+                verify_int_expr(stride, &format!("{what} stride leaf"))?;
+                if shape.as_int().is_some_and(|n| n <= 0) {
+                    return Err(format!("{what} shape extents must be positive"));
+                }
+                if stride.as_int().is_some_and(|n| n < 0) {
+                    return Err(format!("{what} strides must be non-negative"));
+                }
+                Ok(())
+            }
+        }
+    }
+    layout
+        .shapes
+        .iter()
+        .zip(&layout.strides)
+        .try_for_each(|(s, d)| mode(s, d, what))
+}
+
+/// Flatten a concrete layout into `(extent, stride)` leaves, or `None` when
+/// a leaf is symbolic.
+fn concrete_leaves(layout: &Layout) -> Option<Vec<(i64, i64)>> {
+    fn walk(shape: &SymExpr, stride: &SymExpr, out: &mut Vec<(i64, i64)>) -> Option<()> {
+        match (shape, stride) {
+            (SymExpr::Tuple(s), SymExpr::Tuple(d)) => {
+                s.iter().zip(d).try_for_each(|(s, d)| walk(s, d, out))
+            }
+            (SymExpr::Tuple(_), _) | (_, SymExpr::Tuple(_)) => None,
+            (s, d) => {
+                out.push((s.as_int()?, d.as_int()?));
+                Some(())
+            }
+        }
+    }
+    let mut out = Vec::new();
+    layout
+        .shapes
+        .iter()
+        .zip(&layout.strides)
+        .try_for_each(|(s, d)| walk(s, d, &mut out))?;
+    Some(out)
+}
+
+/// A fragment buffer holds a single invocation's footprint and the ABI
+/// hands over a bare pointer, so `mem_layout` must be a permutation of
+/// `[0, count)`. Checked only once the layout and shape are concrete.
+pub(crate) fn verify_mem_layout(layout: &Layout, count: i64) -> Result<(), String> {
+    let Some(leaves) = concrete_leaves(layout) else {
+        return Ok(());
+    };
+    let domain = leaves
+        .iter()
+        .try_fold(1i64, |acc, (n, _)| acc.checked_mul(*n))
+        .ok_or("mem_layout domain size must be representable as a signed 64-bit integer")?;
+    if domain != count {
+        return Err(format!(
+            "mem_layout domain size ({domain}) must equal the fragment element count ({count})"
+        ));
+    }
+    let cosize = leaves
+        .iter()
+        .try_fold(1i64, |acc, (n, d)| {
+            acc.checked_add((n - 1).checked_mul(*d)?)
+        })
+        .ok_or("mem_layout storage span must be representable as a signed 64-bit integer")?;
+    if cosize != count {
+        return Err(format!(
+            "mem_layout must be a bijection on the footprint elements (a permutation of \
+             [0, {count})), but its codomain spans {cosize} element(s)"
+        ));
+    }
+    // Enumerate the offsets for small footprints; the size and span checks
+    // above already bound larger ones.
+    if count <= (1 << 20) && count > 0 {
+        let mut seen = vec![false; count as usize];
+        let mut index = vec![0i64; leaves.len()];
+        loop {
+            let offset: i64 = index.iter().zip(&leaves).map(|(i, (_, d))| i * d).sum();
+            if offset < 0 || offset >= count || seen[offset as usize] {
+                return Err(
+                    "mem_layout must be a bijection on the footprint elements, but its \
+                     modes overlap or leave gaps"
+                        .into(),
+                );
+            }
+            seen[offset as usize] = true;
+            let mut carry = true;
+            for (i, (n, _)) in index.iter_mut().zip(&leaves) {
+                if carry {
+                    *i += 1;
+                    carry = *i == *n;
+                    if carry {
+                        *i = 0;
+                    }
+                }
+            }
+            if carry {
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// An alignment is one integer expression; a concrete value must be a
+/// positive power of two.
+fn verify_alignment(alignment: &SymExpr, what: &str) -> Result<(), String> {
+    verify_int_expr(alignment, what)?;
+    if let Some(value) = alignment.as_int() {
+        if value <= 0 || !(value as u64).is_power_of_two() {
+            return Err(format!(
+                "{what} must be a positive power of two, got {value}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `FragmentType::verify`: static positive shape, integer power-of-two
+/// alignment, well-formed layouts, a three-mode fragmap and a permutation
+/// `mem_layout`.
+pub(crate) fn verify_fragment(fragment: &FragmentType) -> Result<(), String> {
+    for (i, dim) in fragment.shape.iter().enumerate() {
+        if *dim == crate::ir::DYNAMIC {
+            return Err(format!(
+                "fragment shape dimension {i} is symbolic; this writer supports concrete \
+                 fragment shapes only"
+            ));
+        }
+        if *dim <= 0 {
+            return Err(format!(
+                "fragment shape dimension {i} must be positive, got {dim}"
+            ));
+        }
+    }
+    let count = fragment
+        .num_elements()
+        .ok_or("fragment element count must fit in a signed 64-bit integer")?;
+    verify_alignment(&fragment.alignment, "fragment alignment")?;
+    verify_layout(&fragment.mem_layout, "mem_layout")?;
+    verify_layout(&fragment.fragmap, "fragmap")?;
+    if fragment.fragmap.rank() != 3 {
+        return Err(format!(
+            "fragmap must have 3 modes (invocation, participant, footprint), got {}",
+            fragment.fragmap.rank()
+        ));
+    }
+    verify_mem_layout(&fragment.mem_layout, count)
+}
+
+/// `verifySynchronizationParticipation`: warp needs a positive multiple of
+/// 32 participants, warpgroup of 128. `cta` is checked by the consumer,
+/// which knows the calling kernel's thread count.
+pub(crate) fn verify_synchronization_participation(
+    synchronization: Synchronization,
+    participants: i64,
+) -> Result<(), String> {
+    let (granularity, scope) = match synchronization {
+        Synchronization::None | Synchronization::Cta => return Ok(()),
+        Synchronization::Warp => (32, "warp"),
+        Synchronization::Warpgroup => (128, "warpgroup"),
+    };
+    if participants <= 0 || participants % granularity != 0 {
+        return Err(format!(
+            "synchronization '{scope}' requires the fragmap participant mode size \
+             ({participants}) to be a positive multiple of {granularity}"
+        ));
+    }
+    Ok(())
+}
+
+/// `out`/`inout` arguments must form one contiguous run with no `in`
+/// argument between them. Upstream applies this to native implementations
+/// only (PreviewOps.cpp, `verifyNativeImpl`); `verify_preview_func` applies
+/// it to declarations as well, as this crate's narrowing.
+pub(crate) fn verify_access_run(accesses: &[Access]) -> Result<(), String> {
+    let non_in: Vec<usize> = accesses
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| **a != Access::In)
+        .map(|(i, _)| i)
+        .collect();
+    if let (Some(first), Some(last)) = (non_in.first(), non_in.last()) {
+        if last - first + 1 != non_in.len() {
+            return Err(format!(
+                "out/inout arguments must form a single contiguous run; found {} out/inout \
+                 argument(s) spanning indices {first}..{last} with an 'in' argument in between",
+                non_in.len()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A concrete scratch size is non-negative and a concrete alignment a
+/// positive power of two (`ScratchRequestAttr::verify`).
+pub(crate) fn verify_scratch(scratch: &ScratchRequest) -> Result<(), String> {
+    verify_int_expr(&scratch.size, "scratch size")?;
+    if scratch.size.as_int().is_some_and(|n| n < 0) {
+        return Err("scratch size must be non-negative".into());
+    }
+    verify_alignment(&scratch.alignment, "scratch alignment")
+}
+
+/// The `cuda_tile.preview$access` of every argument, from an `arg_attrs`
+/// array of dictionaries.
+pub(crate) fn argument_accesses(
+    arg_attrs: Option<&Attribute>,
+    num_args: usize,
+) -> Result<Vec<Access>, String> {
+    let dicts = match arg_attrs {
+        Some(Attribute::Array(dicts)) if dicts.len() == num_args => dicts,
+        _ => {
+            return Err(format!(
+                "every argument needs a '{ACCESS_ATTR}' attribute: expected an arg_attrs \
+                 array of {num_args} dictionaries"
+            ))
+        }
+    };
+    dicts
+        .iter()
+        .enumerate()
+        .map(|(i, dict)| match dict {
+            Attribute::Dictionary(entries) => entries
+                .iter()
+                .find_map(|(k, v)| match v {
+                    Attribute::Access(a) if k == ACCESS_ATTR => Some(*a),
+                    _ => None,
+                })
+                .ok_or_else(|| format!("argument {i} must carry a '{ACCESS_ATTR}' attribute")),
+            _ => Err(format!("arg_attrs[{i}] must be a dictionary")),
+        })
+        .collect()
+}
+
+/// Constant parameters have unique, non-empty names and a parameter type;
+/// the wildcard `?` is only meaningful on an implementation.
+pub(crate) fn verify_const_param_list<'a>(
+    params: impl IntoIterator<Item = &'a ConstParam>,
+    allow_wildcard: bool,
+) -> Result<(), String> {
+    let mut names = HashSet::new();
+    for (i, param) in params.into_iter().enumerate() {
+        if param.is_wildcard() {
+            if allow_wildcard {
+                continue;
+            }
+            return Err(format!(
+                "const_params[{i}]: '?' wildcard is only valid in extern_impl const_params"
+            ));
+        }
+        if param.name.is_empty() {
+            return Err("constant parameter name cannot be empty".into());
+        }
+        if !matches!(param.ty, Type::Index | Type::PreviewParam(_)) {
+            return Err(format!(
+                "constant parameter '{}' must be index, preview$shape, preview$Datatype or \
+                 preview$string",
+                param.name
+            ));
+        }
+        if !names.insert(param.name.as_str()) {
+            return Err(format!(
+                "duplicate constant parameter name: '{}'",
+                param.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The `ConstParam`s of a `const_params` array attribute.
+fn const_params(params: Option<&Attribute>) -> Result<Vec<&ConstParam>, String> {
+    let Some(params) = params else {
+        return Ok(Vec::new());
+    };
+    let Attribute::Array(params) = params else {
+        return Err("const_params must be an array".into());
+    };
+    params
+        .iter()
+        .enumerate()
+        .map(|(i, param)| match param {
+            Attribute::ConstParam(param) => Ok(param),
+            _ => Err(format!("const_params[{i}] must be a constant parameter")),
+        })
+        .collect()
+}
+
+fn function_type(op: &Operation) -> Result<&FuncType, String> {
+    match op.attributes.iter().find(|(k, _)| k == "function_type") {
+        Some((_, Attribute::Type(Type::Func(f)))) => Ok(f),
+        _ => Err("function_type must be a function type".into()),
+    }
+}
+
+fn attr<'a>(op: &'a Operation, name: &str) -> Option<&'a Attribute> {
+    op.attributes
+        .iter()
+        .find_map(|(k, v)| if k == name { Some(v) } else { None })
+}
+
+/// A symbol-valued attribute (`sym_name`, `implements`, `callee`): a
+/// non-empty string.
+fn symbol<'a>(op: &'a Operation, name: &str) -> Result<&'a str, String> {
+    match attr(op, name) {
+        Some(Attribute::String(s)) if !s.is_empty() => Ok(s),
+        _ => Err(format!("{name} must be a non-empty symbol name")),
+    }
+}
+
+/// The structural rules of the three public-preview ops, shared by
+/// `verify_operation` and `verify_library`, so the typed library layer runs
+/// the same checks on the modules it builds instead of restating them.
+/// Other opcodes pass.
+pub(crate) fn verify_preview_op(module: &Module, op: &Operation) -> Result<(), String> {
+    match op.opcode {
+        Opcode::PreviewFunc => verify_preview_func(op),
+        Opcode::PreviewExternImpl => verify_extern_impl(op),
+        Opcode::PreviewCall => verify_preview_call(module, op),
+        _ => Ok(()),
+    }
+}
+
+/// `preview$func extern`: tile-typed boundary with per-argument access, a
+/// contiguous out/inout run, and results equal to the out/inout tiles in
+/// order. Two of these are this crate's narrowings of upstream's
+/// `FuncOp::verify`, which the SIMT implementation path needs: upstream
+/// tolerates extra trailing results after the bound outputs, but there is
+/// no fragment to bind an extra result to; and upstream requires the
+/// contiguous out/inout run only of native implementations
+/// (`verifyNativeImpl`), but every declaration here is implemented by one,
+/// whose arguments mirror the declaration's, so the order is checked where
+/// it is chosen. Only declarations are supported.
+fn verify_preview_func(op: &Operation) -> Result<(), String> {
+    if attr(op, "is_extern") != Some(&Attribute::Bool(true)) {
+        return Err(
+            "only extern declarations are supported; a body-bearing preview$func cannot \
+                    be written"
+                .into(),
+        );
+    }
+    symbol(op, "sym_name")?;
+    let func = function_type(op)?;
+    if func.inputs.is_empty() {
+        return Err("extern functions must declare at least one input".into());
+    }
+    for (i, ty) in func.inputs.iter().enumerate() {
+        if !matches!(ty, Type::Tile(_)) {
+            return Err(format!("input type {i} must be a cuda_tile.tile"));
+        }
+        verify_type(ty).map_err(|e| format!("input type {i}: {e}"))?;
+    }
+    for (i, ty) in func.results.iter().enumerate() {
+        if !matches!(ty, Type::Tile(_)) {
+            return Err(format!("result type {i} must be a cuda_tile.tile"));
+        }
+    }
+    let accesses = argument_accesses(attr(op, "arg_attrs"), func.inputs.len())?;
+    verify_access_run(&accesses).map_err(|e| {
+        format!(
+            "{e}; this is this crate's narrowing on declarations (upstream FuncOp::verify \
+             does not require the run, its native implementation verifier does), because \
+             every declaration here is implemented by a native SIMT function"
+        )
+    })?;
+    let bound: Vec<&Type> = func
+        .inputs
+        .iter()
+        .zip(&accesses)
+        .filter(|(_, a)| **a != Access::In)
+        .map(|(ty, _)| ty)
+        .collect();
+    if bound.len() != func.results.len() || bound.iter().zip(&func.results).any(|(b, r)| *b != r) {
+        return Err(
+            "results must be the out/inout argument tile types in order and nothing else; \
+             upstream tolerates extra trailing results, which the SIMT implementation path \
+             cannot bind"
+                .into(),
+        );
+    }
+    verify_const_param_list(const_params(attr(op, "const_params"))?, false)
+}
+
+/// `preview$extern_impl` on the native SIMT path: fragment arguments only,
+/// no results, no `config`, per-argument access matching a contiguous run,
+/// consistent fragmaps and a participant count the synchronization accepts.
+fn verify_extern_impl(op: &Operation) -> Result<(), String> {
+    symbol(op, "sym_name")?;
+    symbol(op, "implements")?;
+    let func = function_type(op)?;
+    if attr(op, "config").is_some() {
+        return Err("extern_impl must not carry 'config'".into());
+    }
+    if !func.results.is_empty() {
+        return Err(format!(
+            "extern_impl must not declare results; outputs are represented as 'out' or 'inout' \
+             fragment args, got {} result(s)",
+            func.results.len()
+        ));
+    }
+    let fragments: Vec<&FragmentType> = func
+        .inputs
+        .iter()
+        .map(|ty| match ty {
+            Type::Fragment(f) => Some(f),
+            _ => None,
+        })
+        .collect::<Option<_>>()
+        .filter(|f: &Vec<_>| !f.is_empty())
+        .ok_or(
+            "function_type must have at least one input and all inputs must be fragment types",
+        )?;
+    let accesses = argument_accesses(attr(op, "arg_attrs"), fragments.len())?;
+    verify_access_run(&accesses)?;
+    let params = const_params(attr(op, "const_params"))?;
+    verify_const_param_list(params.iter().copied(), true)?;
+    let declared = declared_variables(params);
+    if let Some(args) = attr(op, "const_args") {
+        match args {
+            Attribute::Array(args) => {
+                if let Some(i) = args
+                    .iter()
+                    .position(|a| !matches!(a, Attribute::SymExpr(_)))
+                {
+                    return Err(format!(
+                        "constant argument {i} must be a symbolic expression attribute"
+                    ));
+                }
+            }
+            _ => return Err("const_args must be an array".into()),
+        }
+    }
+    if let Some(arch) = attr(op, "arch") {
+        match arch {
+            Attribute::Array(items) => {
+                for (i, item) in items.iter().enumerate() {
+                    if !matches!(item, Attribute::String(s) if !s.is_empty()) {
+                        return Err(format!("arch[{i}] must be a non-empty string"));
+                    }
+                }
+            }
+            _ => return Err("arch must be an array of strings".into()),
+        }
+    }
+    if let Some(scratch) = attr(op, "scratch_smem") {
+        match scratch {
+            Attribute::ScratchRequest(scratch) => {
+                verify_scratch(scratch)?;
+                verify_scratch_variables(scratch, &declared)?;
+            }
+            _ => return Err("scratch_smem must be a scratch request".into()),
+        }
+    }
+    let synchronization = match attr(op, "synchronization") {
+        Some(Attribute::Synchronization(s)) => *s,
+        None => Synchronization::None,
+        Some(_) => return Err("synchronization must be a synchronization attribute".into()),
+    };
+
+    let mut shared_participants: Option<(i64, usize)> = None;
+    let mut shared_invocations: Option<(i64, usize)> = None;
+    let mut all_concrete = true;
+    for (i, (fragment, access)) in fragments.iter().zip(&accesses).enumerate() {
+        verify_fragment(fragment).map_err(|e| format!("fragment arg {i}: {e}"))?;
+        verify_fragment_variables(fragment, &declared)
+            .map_err(|e| format!("fragment arg {i}: {e}"))?;
+        // This crate's narrowing: it emits a rank-0 mem_layout only for the
+        // one case the SIMT ABI promotes to a by-value scalar. Upstream
+        // accepts rank 0 on any fragment and passes an out/inout one as a
+        // pointer.
+        if fragment.mem_layout.rank() == 0
+            && (*access != Access::In || fragment.memory_space != MemorySpace::Local)
+        {
+            return Err(format!(
+                "fragment arg {i}: this crate only emits a rank-0 mem_layout (by-value scalar) \
+                 for an 'in' argument in local memory; upstream would pass an out/inout rank-0 \
+                 fragment as a pointer"
+            ));
+        }
+        if !fragment.fragmap.is_concrete() || !fragment.mem_layout.is_concrete() {
+            all_concrete = false;
+            continue;
+        }
+        let shapes = &fragment.fragmap.shapes;
+        let strides = &fragment.fragmap.strides;
+        let (Some(inv), Some(part), Some(foot)) = (
+            mode_size(&shapes[0]),
+            mode_size(&shapes[1]),
+            mode_size(&shapes[2]),
+        ) else {
+            return Err(format!(
+                "fragment arg {i} fragmap modes must contain signed 64-bit shape leaves with \
+                 representable products"
+            ));
+        };
+        let elements = fragment.num_elements().unwrap_or(0);
+        if foot != elements {
+            return Err(format!(
+                "fragment arg {i} fragmap footprint mode size ({foot}) must equal the fragment \
+                 element count ({elements})"
+            ));
+        }
+        if fragment.memory_space == MemorySpace::Smem
+            && mode_has_zero_stride(&shapes[1], &strides[1]) != Some(true)
+        {
+            return Err(format!(
+                "fragment arg {i} smem fragmap participant mode must have zero stride for \
+                 every non-unit submode"
+            ));
+        }
+        match shared_participants {
+            None => shared_participants = Some((part, i)),
+            Some((shared, reference)) if shared != part => {
+                return Err(format!(
+                    "fragment arg {i} fragmap participant mode size ({part}) must match arg \
+                     {reference}'s ({shared}); all args of one invocation use the same participants"
+                ))
+            }
+            _ => {}
+        }
+        match shared_invocations {
+            None => shared_invocations = Some((inv, i)),
+            Some((shared, reference)) if shared != inv => {
+                return Err(format!(
+                    "fragment arg {i} fragmap invocation mode size ({inv}) must match arg \
+                     {reference}'s ({shared})"
+                ))
+            }
+            _ => {}
+        }
+    }
+    if all_concrete {
+        if let Some((participants, _)) = shared_participants {
+            verify_synchronization_participation(synchronization, participants)?;
+        }
+    }
+    Ok(())
+}
+
+/// `preview$call`: a named callee, statically known constant arguments, and
+/// tile or token operands and results. A call instantiates a declaration,
+/// so its constant arguments may not forward a symbolic variable or pass an
+/// empty tuple (`verifyCallConstArgIsStatic`); context builtins have a
+/// bounded definition and stay allowed.
+fn verify_preview_call(module: &Module, op: &Operation) -> Result<(), String> {
+    symbol(op, "callee")?;
+    match attr(op, "const_args") {
+        None => {}
+        Some(Attribute::Array(args)) => {
+            let none = HashSet::new();
+            for (i, arg) in args.iter().enumerate() {
+                let Attribute::SymExpr(expr) = arg else {
+                    return Err(format!(
+                        "constant argument {i} must be a symbolic expression attribute"
+                    ));
+                };
+                let empty = matches!(expr, SymExpr::Tuple(values) if values.is_empty());
+                let variable = undeclared_variable(expr, &none);
+                if empty {
+                    return Err(format!(
+                        "constant argument {i} must be statically known; an empty tuple is \
+                         not supported"
+                    ));
+                }
+                if let Some(name) = variable {
+                    return Err(format!(
+                        "constant argument {i} must be statically known; it references the \
+                         symbolic variable '{name}'"
+                    ));
+                }
+            }
+        }
+        Some(_) => return Err("const_args must be an array".into()),
+    }
+    let boundary = |ty: &Type| matches!(ty, Type::Tile(_) | Type::Token);
+    if let Some(i) = op
+        .operands
+        .iter()
+        .position(|v| !boundary(module.value_type(*v)))
+    {
+        return Err(format!("operand {i} must be a cuda_tile.tile or token"));
+    }
+    if let Some(i) = op.result_types.iter().position(|ty| !boundary(ty)) {
+        return Err(format!("result {i} must be a cuda_tile.tile or token"));
+    }
+    Ok(())
 }
 
 pub(crate) fn verify_operation(
@@ -172,6 +1007,9 @@ pub(crate) fn verify_operation(
     let result = || op.result_types.first().and_then(tile);
     let rounding = integer(op, "rounding_mode");
     match op.opcode {
+        PreviewFunc | PreviewExternImpl | PreviewCall => {
+            verify_preview_op(module, op).map_err(|e| fail(&e))?
+        }
         Bitcast | Reshape | Broadcast | Permute | Pack | Unpack => {
             let src = operand(0).ok_or_else(|| fail("source must be a tile"))?;
             let dst = result().ok_or_else(|| fail("result must be a tile"))?;

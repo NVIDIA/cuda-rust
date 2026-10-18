@@ -7,6 +7,7 @@
 //!
 //! Mirrors the CUDA Tile dialect types defined in `Types.td`.
 
+use super::attr::{Layout, MemorySpace, SymExpr};
 use crate::bytecode::TypeTag;
 
 /// Marker for a dimension or stride whose size is not statically known.
@@ -181,6 +182,69 @@ pub struct FuncType {
     pub results: Vec<Type>,
 }
 
+/// One invocation's view of a tile at the SIMT interop ABI boundary
+/// (`!cuda_tile.preview$fragment<...>`, public preview).
+///
+/// The implementation receives a buffer of `shape` elements laid out by
+/// `mem_layout` (a permutation of the footprint); `fragmap` has three modes
+/// and no more, `(invocations, participants, footprint)`, mapping those to
+/// tile elements. Shapes are static in this writer: a symbolic dimension is
+/// rejected at serialization.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FragmentType {
+    pub shape: Vec<i64>,
+    pub element_type: ScalarType,
+    pub memory_space: MemorySpace,
+    pub mem_layout: Layout,
+    pub fragmap: Layout,
+    /// Alignment in elements; the default `1` is elided when printed.
+    pub alignment: SymExpr,
+}
+
+impl FragmentType {
+    /// A fragment with the default alignment of one element.
+    pub fn new(
+        shape: Vec<i64>,
+        element_type: ScalarType,
+        memory_space: MemorySpace,
+        mem_layout: Layout,
+        fragmap: Layout,
+    ) -> Self {
+        Self {
+            shape,
+            element_type,
+            memory_space,
+            mem_layout,
+            fragmap,
+            alignment: SymExpr::Int(1),
+        }
+    }
+
+    /// Element count of the static shape; `None` on a symbolic dimension or
+    /// an overflowing product.
+    pub fn num_elements(&self) -> Option<i64> {
+        self.shape.iter().try_fold(1i64, |acc, &dim| {
+            if dim == DYNAMIC || dim < 0 {
+                None
+            } else {
+                acc.checked_mul(dim)
+            }
+        })
+    }
+}
+
+/// Placeholder types of constant parameters (`M: index` uses the builtin
+/// `index`; the others name a datatype, a whole shape or a string).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PreviewParamType {
+    /// `!cuda_tile.preview$Datatype`
+    DType,
+    /// `!cuda_tile.preview$shape`
+    Shape,
+    /// `!cuda_tile.preview$string`
+    String,
+}
+
 /// The unified type enum — every value in the IR has one of these types.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
@@ -196,9 +260,34 @@ pub enum Type {
     /// Attach a classification to a pointer, pointer tile, or a view's base
     /// tensor. A wrapper preserves the existing public carrier structs.
     WithPointerAttribute(Box<Type>, PointerAttribute),
+    // Public-preview types (feature `simt`).
+    Fragment(FragmentType),
+    /// The builtin `index` type of constant parameters and context builtins.
+    Index,
+    /// The builtin `none` type (upstream's `NoneType`); only the type of a
+    /// wildcard constant parameter.
+    NoneType,
+    PreviewParam(PreviewParamType),
 }
 
 impl Type {
+    /// A public-preview type, or a type that contains one.
+    pub fn is_preview(&self) -> bool {
+        match self {
+            Self::Fragment(_) | Self::Index | Self::NoneType | Self::PreviewParam(_) => true,
+            Self::Func(f) => f.inputs.iter().chain(&f.results).any(Self::is_preview),
+            Self::WithPointerAttribute(base, _) => base.is_preview(),
+            Self::Scalar(_)
+            | Self::Pointer(_)
+            | Self::Tile(_)
+            | Self::TensorView(_)
+            | Self::PartitionView(_)
+            | Self::GatherScatterView(_)
+            | Self::StridedView(_)
+            | Self::Token => false,
+        }
+    }
+
     pub fn with_pointer_attribute(self, attribute: PointerAttribute) -> Self {
         Self::WithPointerAttribute(
             Box::new(self.without_pointer_attribute().clone()),
@@ -269,6 +358,12 @@ impl From<FuncType> for Type {
     }
 }
 
+impl From<FragmentType> for Type {
+    fn from(f: FragmentType) -> Self {
+        Self::Fragment(f)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Type parser — equivalent of melior::ir::Type::parse(ctx, s)
 // ---------------------------------------------------------------------------
@@ -295,6 +390,21 @@ impl Type {
         // Accept both `!cuda_tile.token` and shorthand `token`.
         if s == "!cuda_tile.token" || s == "token" {
             return Some(Type::Token);
+        }
+        // Builtin and placeholder types of constant parameters.
+        match s {
+            "index" => return Some(Type::Index),
+            "none" => return Some(Type::NoneType),
+            "!cuda_tile.preview$Datatype" | "preview$Datatype" => {
+                return Some(Type::PreviewParam(PreviewParamType::DType))
+            }
+            "!cuda_tile.preview$shape" | "preview$shape" => {
+                return Some(Type::PreviewParam(PreviewParamType::Shape))
+            }
+            "!cuda_tile.preview$string" | "preview$string" => {
+                return Some(Type::PreviewParam(PreviewParamType::String))
+            }
+            _ => {}
         }
         // Prefixed forms.
         if let Some(inner) = strip_prefix_suffix(s, "!cuda_tile.tile<", ">") {

@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Workspace-internal assembler negotiation. It must not depend on a CUDA
-//! driver: standalone bytecode tests and examples use the same path as JIT.
+//! Assembler discovery and bytecode-version negotiation, shared by the
+//! workspace tools and by in-tree consumers of this crate. It must not
+//! depend on a CUDA driver: standalone bytecode tests and examples use the
+//! same path as JIT.
 
 use crate::bytecode::{write_bytecode_version, BytecodeVersion};
 use std::{
@@ -14,10 +16,18 @@ use std::{
 };
 use uuid::Uuid;
 
-const BYTECODE_VERSION_ENV: &str = "CUTILE_BYTECODE_VERSION";
-const TILEIRAS_PATH_ENV: &str = "CUTILE_TILEIRAS_PATH";
-const CUDA_TOOLKIT_PATH_ENV: &str = "CUDA_TOOLKIT_PATH";
-const CUDA_HOME_ENV: &str = "CUDA_HOME";
+/// `CUTILE_BYTECODE_VERSION`: an explicit bytecode version
+/// (`major.minor[.tag]`), checked against the writer and the assembler and
+/// never downgraded.
+pub const BYTECODE_VERSION_ENV: &str = "CUTILE_BYTECODE_VERSION";
+/// `CUTILE_TILEIRAS_PATH`: the assembler executable, taking precedence over
+/// the toolkit roots below.
+pub const TILEIRAS_PATH_ENV: &str = "CUTILE_TILEIRAS_PATH";
+/// `CUDA_TOOLKIT_PATH`: a toolkit root whose `bin/tileiras` is used when no
+/// executable is named.
+pub const CUDA_TOOLKIT_PATH_ENV: &str = "CUDA_TOOLKIT_PATH";
+/// `CUDA_HOME`: the toolkit root tried after `CUDA_TOOLKIT_PATH`.
+pub const CUDA_HOME_ENV: &str = "CUDA_HOME";
 
 /// Selection for the standalone IR tools. The runtime supplies its richer
 /// toolkit discovery result directly to `negotiate_bytecode_version`.
@@ -45,6 +55,10 @@ pub fn tileiras_from_env() -> PathBuf {
 
 /// Select only formats both the writer and the exact executable accept.
 /// An explicit request is checked, never silently downgraded.
+///
+/// Automatic selection stops at [`BytecodeVersion::CURRENT`]: versions the
+/// writer can emit beyond it (13.5, whose only purpose here is public-preview
+/// library content) are used only when requested explicitly.
 pub fn negotiate_bytecode_version(
     tileiras: &Path,
     requested: Option<&std::ffi::OsStr>,
@@ -68,53 +82,76 @@ pub fn negotiate_bytecode_version(
 
     // Recent assemblers enumerate their supported input formats. Do not
     // infer this list from --version: tool and bytecode versions are distinct.
-    let listed = Command::new(tileiras).arg("--list-versions").output();
-    if let Err(e) = &listed {
-        emit_setup_diagnostic(format_args!(
-            "could not launch {} --list-versions ({e}); falling back to compile probes",
-            tileiras.display()
-        ));
-    }
-    if let Ok(output) = listed {
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout);
-            let versions: Option<Vec<_>> = text
-                .lines()
-                .filter(|s| !s.trim().is_empty())
-                .map(parse_bytecode_version)
-                .collect();
-            if let Some(versions) = versions.filter(|v| !v.is_empty()) {
-                if let Some(version) = requested {
-                    if versions.contains(&version) {
-                        return Ok(version);
-                    }
-                    return Err(std::io::Error::other(format!(
-                        "{BYTECODE_VERSION_ENV}={version} is not accepted by {} (supports {})",
-                        tileiras.display(),
-                        versions
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )));
-                }
-                return BytecodeVersion::SUPPORTED.iter().rev()
-                    .find(|v| versions.contains(v)).copied()
-                    .ok_or_else(|| std::io::Error::other(format!(
-                        "{} accepts none of the bytecode versions this compiler can emit; cuTile requires CUDA 13.2 or newer (assembler supports {})",
-                        tileiras.display(), versions.iter().map(ToString::to_string)
-                            .collect::<Vec<_>>().join(", ")
-                    )));
+    let versions = list_bytecode_versions(tileiras).unwrap_or_else(|e| {
+        emit_setup_diagnostic(format_args!("{e}; falling back to compile probes"));
+        Vec::new()
+    });
+    if !versions.is_empty() {
+        if let Some(version) = requested {
+            if versions.contains(&version) {
+                return Ok(version);
             }
+            return Err(std::io::Error::other(format!(
+                "{BYTECODE_VERSION_ENV}={version} is not accepted by {} (supports {})",
+                tileiras.display(),
+                versions
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
         }
+        return default_candidates()
+            .find(|v| versions.contains(v))
+            .ok_or_else(|| std::io::Error::other(format!(
+                "{} accepts none of the bytecode versions this compiler can emit; cuTile requires CUDA 13.2 or newer (assembler supports {})",
+                tileiras.display(), versions.iter().map(ToString::to_string)
+                    .collect::<Vec<_>>().join(", ")
+            )));
     }
     // Older/custom assemblers may not implement --list-versions. Compile a
     // representative image, not an empty module, against the same executable.
-    let candidates = requested.map_or_else(
-        || BytecodeVersion::SUPPORTED.iter().rev().copied().collect(),
-        |version| vec![version],
-    );
+    let candidates =
+        requested.map_or_else(|| default_candidates().collect(), |version| vec![version]);
     probe_bytecode_versions(tileiras, &candidates)
+}
+
+/// The bytecode versions `tileiras --list-versions` names, one per line.
+///
+/// A launch failure (no such file, not executable) is returned as the error
+/// it is, with the path in the message and the kind kept. An assembler that
+/// ran but predates the flag exits non-zero or prints a usage message
+/// instead of versions; both give an empty list, which
+/// [`negotiate_bytecode_version`] answers with compile probes. Lines that
+/// are not versions are skipped: a development assembler names `internal`
+/// after its numbered versions (the CUDA 13.6 build lists `13.1` through
+/// `13.6` and then `internal`), and a usage message has no version line at
+/// all, so it still gives an empty list.
+pub fn list_bytecode_versions(tileiras: &Path) -> std::io::Result<Vec<BytecodeVersion>> {
+    let output = Command::new(tileiras)
+        .arg("--list-versions")
+        .output()
+        .map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!("could not run {} --list-versions: {e}", tileiras.display()),
+            )
+        })?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(text.lines().filter_map(parse_bytecode_version).collect())
+}
+
+/// Versions tried without an explicit request, newest first, capped at the
+/// writer's default.
+fn default_candidates() -> impl Iterator<Item = BytecodeVersion> {
+    BytecodeVersion::SUPPORTED
+        .iter()
+        .rev()
+        .copied()
+        .filter(|v| *v <= BytecodeVersion::CURRENT)
 }
 
 /// Parses an exact version; an explicit unsupported request is never clamped.
@@ -417,6 +454,72 @@ mod tests {
         }
         write_fake_tileiras_script(&path, "printf '13.1\\n'\n");
         assert!(negotiate_bytecode_version(&path, None).is_err());
+    }
+
+    /// `list_bytecode_versions` separates "cannot run" from "lists nothing":
+    /// a missing executable is an error, an assembler that rejects or does
+    /// not understand the flag is an empty list.
+    #[test]
+    #[cfg(unix)]
+    fn listing_versions_separates_launch_failures_from_empty_listings() {
+        let missing = env::temp_dir().join(format!("cutile_missing_lister_{}", Uuid::new_v4()));
+        let error = list_bytecode_versions(&missing).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert!(error.to_string().contains("--list-versions"), "{error}");
+
+        let path = env::temp_dir().join(format!("cutile_lister_{}", Uuid::new_v4()));
+        let _cleanup = ScopedTempFile::new(path.clone());
+        write_fake_tileiras_script(&path, "printf '13.4\\n 13.5 \\n\\n'\n");
+        assert_eq!(
+            list_bytecode_versions(&path).unwrap(),
+            [BytecodeVersion::V13_4, BytecodeVersion::V13_5]
+        );
+        // A development assembler names `internal` after its numbered
+        // versions, and a version newer than this crate knows is still a
+        // version; neither empties the list.
+        write_fake_tileiras_script(&path, "printf '13.4\\n13.5\\n13.6\\ninternal\\n'\n");
+        assert_eq!(
+            list_bytecode_versions(&path)
+                .unwrap()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["13.4", "13.5", "13.6"]
+        );
+        for body in ["exit 1\n", "printf 'usage: tileiras [options]\\n'\n", ":\n"] {
+            write_fake_tileiras_script(&path, body);
+            assert!(
+                list_bytecode_versions(&path).unwrap().is_empty(),
+                "{body:?}"
+            );
+        }
+    }
+
+    /// 13.5 is emittable (public-preview libraries need it) but beyond the
+    /// default: an assembler that lists it still negotiates 13.4 on its own,
+    /// and only an explicit request selects it.
+    #[test]
+    #[cfg(unix)]
+    fn versions_past_the_default_need_an_explicit_request() {
+        let path = env::temp_dir().join(format!("cutile_preview_{}", Uuid::new_v4()));
+        let _cleanup = ScopedTempFile::new(path.clone());
+        write_fake_tileiras_script(
+            &path,
+            "case \"$1\" in --list-versions) printf '13.4\\n13.5\\n';; *) exit 1;; esac\n",
+        );
+        assert_eq!(
+            negotiate_bytecode_version(&path, None).unwrap(),
+            BytecodeVersion::CURRENT
+        );
+        assert_eq!(
+            negotiate_bytecode_version(&path, Some("13.5".as_ref())).unwrap(),
+            BytecodeVersion::V13_5
+        );
+        write_fake_tileiras_script(
+            &path,
+            "case \"$1\" in --list-versions) printf '13.4\\n';; *) exit 1;; esac\n",
+        );
+        assert!(negotiate_bytecode_version(&path, Some("13.5".as_ref())).is_err());
     }
 
     #[test]

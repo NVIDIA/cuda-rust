@@ -120,6 +120,12 @@ pub enum Opcode {
     GdcWaitTko = 0x78,
     FPowI = 0x79,
     MemoryFenceAliasTko = 0x7A,
+    // Public-preview operations (0x4000-0x4FFF, feature `simt`). They are
+    // not part of the portable wire format: a module containing one is only
+    // valid at `BytecodeVersion::PREVIEW_CONTENT`.
+    PreviewCall = 0x4002,
+    PreviewFunc = 0x4003,
+    PreviewExternImpl = 0x4004,
 }
 
 impl Opcode {
@@ -232,7 +238,23 @@ impl Opcode {
             GdcWaitTko => "gdc_wait_tko",
             FPowI => "fpowi",
             MemoryFenceAliasTko => "memory_fence_alias_tko",
+            PreviewCall => "preview$call",
+            PreviewFunc => "preview$func",
+            PreviewExternImpl => "preview$extern_impl",
         }
+    }
+
+    /// Public-preview opcode (0x4000 and above).
+    pub const fn is_preview(self) -> bool {
+        (self as u16) >= 0x4000
+    }
+
+    /// Operations that live in `Module::functions` rather than in a block.
+    pub const fn is_function_like(self) -> bool {
+        matches!(
+            self,
+            Opcode::Entry | Opcode::PreviewFunc | Opcode::PreviewExternImpl
+        )
     }
 
     /// Minimum supported wire version for this opcode. Operand types and
@@ -258,11 +280,11 @@ impl Opcode {
             // Ops that write varint numResults (from Bytecode.inc audit):
             Break | Continue | Extract | Insert | For | GetIndexSpaceShape | GetTensorShape
             | If | JoinTokens | LoadViewTko | Loop | MakeTensorView | Print | Reduce | Return
-            | Scan | StoreViewTko | Yield => None,
+            | Scan | StoreViewTko | Yield | PreviewCall => None,
 
             // Fixed-count ops (from Ops.td):
             // 0 results
-            Assert | Global | Module => Some(0),
+            Assert | Global | Module | PreviewFunc | PreviewExternImpl => Some(0),
             // 1 result
             AbsF
             | AbsI

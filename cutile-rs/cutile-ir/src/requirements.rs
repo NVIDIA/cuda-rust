@@ -127,6 +127,7 @@ features! {
     HopperTarget => ("target sm_90", V13_3, Only(90)),
     RubinTarget => ("target sm_107", V13_4, Only(107)),
     ProgrammaticDependentLaunch => ("programmatic dependent launch", V13_4, AtLeast(90)),
+    SimtPreview => ("SIMT interop preview ops and fragment types", V13_5, Any),
 }
 
 /// Target names accepted by the dialect, paired with their earliest version
@@ -301,4 +302,7 @@ operations! {
     GdcWaitTko => GdcTokens,
     FPowI => IntegerPower,
     MemoryFenceAliasTko => AliasFence,
+    PreviewCall => SimtPreview,
+    PreviewFunc => SimtPreview,
+    PreviewExternImpl => SimtPreview,
 }

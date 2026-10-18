@@ -14,43 +14,44 @@ An explicit `CUTILE_BYTECODE_VERSION` must be supported; we do not downgrade it.
 driver does not make an older assembler understand newer bytecode.
 
 <!-- BEGIN TILE IR REQUIREMENTS -->
-| Feature | 13.2 | 13.3 | 13.4 | Target requirement |
-|---|---|---|---|---|
-| baseline Tile IR | Yes | Yes | Yes | `sm_80+` |
-| alloca | — | Yes | Yes | Any supported target |
-| pack/unpack | — | Yes | Yes | Any supported target |
-| block-scaled MMA | — | Yes | Yes | `sm_100+` |
-| gather_scatter_view | — | Yes | Yes | Any supported target |
-| strided_view | — | Yes | Yes | Any supported target |
-| atomic_red_view_tko | — | Yes | Yes | Any supported target |
-| insert | — | — | Yes | Any supported target |
-| fpowi | — | — | Yes | Any supported target |
-| GDC tokens | — | — | Yes | Any supported target |
-| memory_fence_alias_tko | — | — | Yes | Any supported target |
-| i4 | — | Yes | Yes | Any supported target |
-| f8E4M3FN/f8E5M2 | Yes | Yes | Yes | `sm_90+` |
-| f8E8M0FNU | Yes | Yes | Yes | `sm_100+` |
-| f4E2M1FN | — | Yes | Yes | `sm_100+` |
-| f8E5M3FNU | — | — | Yes | `sm_107+` |
-| cuda_tile.mmaf_scaled with f8E5M3FNU scales | — | — | Yes | `sm_107` only |
-| ptr_attr | — | — | Yes | Any supported target |
-| rounding_mode=nearest_away | — | — | Yes | Any supported target |
-| ftof additional rounding modes (type-dependent) | — | — | Yes | Any supported target |
-| ftoi.saturating | — | — | Yes | Any supported target |
-| inbounds=true | — | — | Yes | Any supported target |
-| mmaf.fast_acc | — | Yes | Yes | Any supported target |
-| exp.rounding_mode (non-approximate) | — | Yes | Yes | Any supported target |
-| module.producer | — | Yes | Yes | Any supported target |
-| global.constant | — | Yes | Yes | Any supported target |
-| global.symbol_visibility | — | Yes | Yes | Any supported target |
-| num_worker_warps_per_cta | — | Yes | Yes | Any supported target |
-| num_cta_in_cga greater than 1 | Yes | Yes | Yes | `sm_90+` |
-| num_worker_warps_per_cta restricted to 4 or 8 | — | — | Yes | Any supported target |
-| bf16 atomic add | — | Yes | Yes | `sm_90+` |
-| return inside loop | — | — | Yes | Any supported target |
-| target sm_90 | — | Yes | Yes | `sm_90` only |
-| target sm_107 | — | — | Yes | `sm_107` only |
-| programmatic dependent launch | — | — | Yes | `sm_90+` |
+| Feature | 13.2 | 13.3 | 13.4 | 13.5 | 13.6 | Target requirement |
+|---|---|---|---|---|---|---|
+| baseline Tile IR | Yes | Yes | Yes | Yes | Yes | `sm_80+` |
+| alloca | — | Yes | Yes | Yes | Yes | Any supported target |
+| pack/unpack | — | Yes | Yes | Yes | Yes | Any supported target |
+| block-scaled MMA | — | Yes | Yes | Yes | Yes | `sm_100+` |
+| gather_scatter_view | — | Yes | Yes | Yes | Yes | Any supported target |
+| strided_view | — | Yes | Yes | Yes | Yes | Any supported target |
+| atomic_red_view_tko | — | Yes | Yes | Yes | Yes | Any supported target |
+| insert | — | — | Yes | Yes | Yes | Any supported target |
+| fpowi | — | — | Yes | Yes | Yes | Any supported target |
+| GDC tokens | — | — | Yes | Yes | Yes | Any supported target |
+| memory_fence_alias_tko | — | — | Yes | Yes | Yes | Any supported target |
+| i4 | — | Yes | Yes | Yes | Yes | Any supported target |
+| f8E4M3FN/f8E5M2 | Yes | Yes | Yes | Yes | Yes | `sm_90+` |
+| f8E8M0FNU | Yes | Yes | Yes | Yes | Yes | `sm_100+` |
+| f4E2M1FN | — | Yes | Yes | Yes | Yes | `sm_100+` |
+| f8E5M3FNU | — | — | Yes | Yes | Yes | `sm_107+` |
+| cuda_tile.mmaf_scaled with f8E5M3FNU scales | — | — | Yes | Yes | Yes | `sm_107` only |
+| ptr_attr | — | — | Yes | Yes | Yes | Any supported target |
+| rounding_mode=nearest_away | — | — | Yes | Yes | Yes | Any supported target |
+| ftof additional rounding modes (type-dependent) | — | — | Yes | Yes | Yes | Any supported target |
+| ftoi.saturating | — | — | Yes | Yes | Yes | Any supported target |
+| inbounds=true | — | — | Yes | Yes | Yes | Any supported target |
+| mmaf.fast_acc | — | Yes | Yes | Yes | Yes | Any supported target |
+| exp.rounding_mode (non-approximate) | — | Yes | Yes | Yes | Yes | Any supported target |
+| module.producer | — | Yes | Yes | Yes | Yes | Any supported target |
+| global.constant | — | Yes | Yes | Yes | Yes | Any supported target |
+| global.symbol_visibility | — | Yes | Yes | Yes | Yes | Any supported target |
+| num_worker_warps_per_cta | — | Yes | Yes | Yes | Yes | Any supported target |
+| num_cta_in_cga greater than 1 | Yes | Yes | Yes | Yes | Yes | `sm_90+` |
+| num_worker_warps_per_cta restricted to 4 or 8 | — | — | Yes | Yes | Yes | Any supported target |
+| bf16 atomic add | — | Yes | Yes | Yes | Yes | `sm_90+` |
+| return inside loop | — | — | Yes | Yes | Yes | Any supported target |
+| target sm_90 | — | Yes | Yes | Yes | Yes | `sm_90` only |
+| target sm_107 | — | — | Yes | Yes | Yes | `sm_107` only |
+| programmatic dependent launch | — | — | Yes | Yes | Yes | `sm_90+` |
+| SIMT interop preview ops and fragment types | — | — | — | Yes | Yes | Any supported target |
 
 | Target | Minimum emitted Tile IR version |
 |---|---|

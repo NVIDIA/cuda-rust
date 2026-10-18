@@ -135,6 +135,76 @@ impl TargetCapabilities {
                 Ok(())
             }
             Type::Token => Ok(()),
+            // Public-preview types: the 13.5 gate, then whatever they embed.
+            Type::Fragment(fragment) => {
+                Feature::SimtPreview.check(self, loc)?;
+                self.check_scalar(fragment.element_type, feature, loc)?;
+                for expr in fragment
+                    .mem_layout
+                    .shapes
+                    .iter()
+                    .chain(&fragment.mem_layout.strides)
+                    .chain(&fragment.fragmap.shapes)
+                    .chain(&fragment.fragmap.strides)
+                    .chain(std::iter::once(&fragment.alignment))
+                {
+                    for ty in expr.types() {
+                        self.check_type(ty, feature, loc)?;
+                    }
+                }
+                Ok(())
+            }
+            Type::Index | Type::NoneType | Type::PreviewParam(_) => {
+                Feature::SimtPreview.check(self, loc)
+            }
+        }
+    }
+
+    /// Public-preview attributes need the 13.5 gate wherever they appear,
+    /// including inside the dictionaries of an `arg_attrs` array.
+    fn check_attribute(
+        &self,
+        attr: &Attribute,
+        feature: &str,
+        loc: &Location,
+    ) -> Result<(), CapabilityError> {
+        match attr {
+            Attribute::Type(ty) => self.check_type(ty, feature, loc),
+            Attribute::DenseElements(d) => self.check_type(&d.element_type, feature, loc),
+            Attribute::Array(items) => items
+                .iter()
+                .try_for_each(|item| self.check_attribute(item, feature, loc)),
+            Attribute::Dictionary(entries) => entries
+                .iter()
+                .try_for_each(|(_, value)| self.check_attribute(value, feature, loc)),
+            Attribute::Access(_)
+            | Attribute::MemorySpace(_)
+            | Attribute::Synchronization(_)
+            | Attribute::Layout(_)
+            | Attribute::SymExpr(_)
+            | Attribute::ScratchRequest(_)
+            | Attribute::ConstParam(_) => {
+                Feature::SimtPreview.check(self, loc)?;
+                let mut types = Vec::new();
+                match attr {
+                    Attribute::Layout(layout) => layout
+                        .shapes
+                        .iter()
+                        .chain(&layout.strides)
+                        .for_each(|e| types.extend(e.types())),
+                    Attribute::SymExpr(e) => types.extend(e.types()),
+                    Attribute::ScratchRequest(s) => {
+                        types.extend(s.size.types());
+                        types.extend(s.alignment.types());
+                    }
+                    Attribute::ConstParam(p) => types.push(&p.ty),
+                    _ => {}
+                }
+                types
+                    .into_iter()
+                    .try_for_each(|ty| self.check_type(ty, feature, loc))
+            }
+            _ => Ok(()),
         }
     }
 
@@ -205,96 +275,92 @@ impl TargetCapabilities {
             self.check_type(ty, &feature, loc)?;
         }
         for (name, attr) in &op.attributes {
-            match attr {
-                Attribute::Type(ty) => self.check_type(ty, &feature, loc)?,
-                Attribute::DenseElements(d) => self.check_type(&d.element_type, &feature, loc)?,
-                Attribute::OptimizationHints(hints) => {
-                    for (arch, values) in &hints.entries {
-                        if arch != "default" {
-                            let requirement = arch
-                                .strip_prefix("sm_")
-                                .and_then(|sm| sm.parse().ok())
-                                .filter(|sm: &u32| arch == &format!("sm_{sm}"))
-                                .and_then(target_requirement)
-                                .ok_or_else(|| {
-                                    self.error(
-                                        &format!("optimization hint target {arch}"),
-                                        "a public Tile IR architecture key or default",
-                                        loc,
-                                    )
-                                })?;
-                            self.require_version(
-                                &format!("optimization hint target {arch}"),
-                                requirement.since,
-                                loc,
-                            )?;
+            self.check_attribute(attr, &feature, loc)?;
+            if let Attribute::OptimizationHints(hints) = attr {
+                for (arch, values) in &hints.entries {
+                    if arch != "default" {
+                        let requirement = arch
+                            .strip_prefix("sm_")
+                            .and_then(|sm| sm.parse().ok())
+                            .filter(|sm: &u32| arch == &format!("sm_{sm}"))
+                            .and_then(target_requirement)
+                            .ok_or_else(|| {
+                                self.error(
+                                    &format!("optimization hint target {arch}"),
+                                    "a public Tile IR architecture key or default",
+                                    loc,
+                                )
+                            })?;
+                        self.require_version(
+                            &format!("optimization hint target {arch}"),
+                            requirement.since,
+                            loc,
+                        )?;
+                    }
+                    for (key, value) in values {
+                        if key == "num_worker_warps_per_cta" {
+                            Feature::WorkerWarps.check(self, loc)?;
                         }
-                        for (key, value) in values {
-                            if key == "num_worker_warps_per_cta" {
-                                Feature::WorkerWarps.check(self, loc)?;
+                        let mut hint_sm =
+                            arch.strip_prefix("sm_").and_then(|s| s.parse::<u32>().ok());
+                        if arch == "default"
+                            && !hints.entries.iter().any(|(target, values)| {
+                                target == &self.architecture
+                                    && values.iter().any(|(key, _)| key == "num_cta_in_cga")
+                            })
+                        {
+                            hint_sm = self.sm();
+                        }
+                        if key == "num_cta_in_cga"
+                            && matches!(value, Attribute::Integer(n, _) if *n != 1)
+                        {
+                            if let Some(sm) = hint_sm {
+                                let hint_target =
+                                    Self::new(self.bytecode_version, format!("sm_{sm}"));
+                                Feature::ClusterCta.check(&hint_target, loc)?;
                             }
-                            let mut hint_sm =
-                                arch.strip_prefix("sm_").and_then(|s| s.parse::<u32>().ok());
-                            if arch == "default"
-                                && !hints.entries.iter().any(|(target, values)| {
-                                    target == &self.architecture
-                                        && values.iter().any(|(key, _)| key == "num_cta_in_cga")
-                                })
-                            {
-                                hint_sm = self.sm();
+                        }
+                        let valid = match (key.as_str(), value) {
+                            ("num_cta_in_cga", Attribute::Integer(n, _)) => {
+                                op.opcode == Opcode::Entry && matches!(n, 1 | 2 | 4 | 8 | 16)
                             }
-                            if key == "num_cta_in_cga"
-                                && matches!(value, Attribute::Integer(n, _) if *n != 1)
-                            {
-                                if let Some(sm) = hint_sm {
-                                    let hint_target =
-                                        Self::new(self.bytecode_version, format!("sm_{sm}"));
-                                    Feature::ClusterCta.check(&hint_target, loc)?;
-                                }
+                            ("occupancy", Attribute::Integer(n, _)) => {
+                                op.opcode == Opcode::Entry && (1..=32).contains(n)
                             }
-                            let valid = match (key.as_str(), value) {
-                                ("num_cta_in_cga", Attribute::Integer(n, _)) => {
-                                    op.opcode == Opcode::Entry && matches!(n, 1 | 2 | 4 | 8 | 16)
-                                }
-                                ("occupancy", Attribute::Integer(n, _)) => {
-                                    op.opcode == Opcode::Entry && (1..=32).contains(n)
-                                }
-                                ("num_worker_warps_per_cta", Attribute::Integer(n, _)) => {
-                                    op.opcode == Opcode::Entry
-                                        && if self.bytecode_version
-                                            >= Feature::WorkerWarpsRestricted.since()
-                                        {
-                                            matches!(n, 4 | 8)
-                                        } else {
-                                            matches!(n, 1 | 2 | 4 | 8 | 16 | 32)
-                                        }
-                                }
-                                ("allow_tma", Attribute::Bool(_)) => {
-                                    matches!(op.opcode, Opcode::LoadViewTko | Opcode::StoreViewTko)
-                                }
-                                ("latency", Attribute::Integer(n, _)) => {
-                                    matches!(
-                                        op.opcode,
-                                        Opcode::LoadViewTko
-                                            | Opcode::StoreViewTko
-                                            | Opcode::LoadPtrTko
-                                            | Opcode::StorePtrTko
-                                    ) && (1..=10).contains(n)
-                                }
-                                _ => false,
-                            };
-                            if !valid {
-                                return Err(CapabilityError {
-                                    message: format!(
-                                        "{feature}: invalid optimization hint {key}={value:?}"
-                                    ),
-                                    location: Box::new(loc.clone()),
-                                });
+                            ("num_worker_warps_per_cta", Attribute::Integer(n, _)) => {
+                                op.opcode == Opcode::Entry
+                                    && if self.bytecode_version
+                                        >= Feature::WorkerWarpsRestricted.since()
+                                    {
+                                        matches!(n, 4 | 8)
+                                    } else {
+                                        matches!(n, 1 | 2 | 4 | 8 | 16 | 32)
+                                    }
                             }
+                            ("allow_tma", Attribute::Bool(_)) => {
+                                matches!(op.opcode, Opcode::LoadViewTko | Opcode::StoreViewTko)
+                            }
+                            ("latency", Attribute::Integer(n, _)) => {
+                                matches!(
+                                    op.opcode,
+                                    Opcode::LoadViewTko
+                                        | Opcode::StoreViewTko
+                                        | Opcode::LoadPtrTko
+                                        | Opcode::StorePtrTko
+                                ) && (1..=10).contains(n)
+                            }
+                            _ => false,
+                        };
+                        if !valid {
+                            return Err(CapabilityError {
+                                message: format!(
+                                    "{feature}: invalid optimization hint {key}={value:?}"
+                                ),
+                                location: Box::new(loc.clone()),
+                            });
                         }
                     }
                 }
-                _ => {}
             }
             if let Some(requirement) = attribute_feature(op.opcode, name, attr) {
                 requirement

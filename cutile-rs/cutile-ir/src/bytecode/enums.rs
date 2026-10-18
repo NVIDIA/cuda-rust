@@ -14,6 +14,11 @@ pub const ALIGNMENT_BYTE: u8 = 0xCB;
 /// Magic number at the start of every Tile IR bytecode file.
 pub const MAGIC: [u8; 8] = [0x7F, b'T', b'i', b'l', b'e', b'I', b'R', 0x00];
 
+/// Bit 0 of the header's version tag (`kContainsPreview`): set when the module
+/// carries public-preview ops, types or attributes. Such a module is only
+/// valid at [`BytecodeVersion::PREVIEW_CONTENT`].
+pub const VERSION_TAG_CONTAINS_PREVIEW: u16 = 0x1;
+
 // ---------------------------------------------------------------------------
 // Section IDs
 // ---------------------------------------------------------------------------
@@ -70,6 +75,14 @@ pub enum TypeTag {
     StridedView = 21,
     I4 = 22,
     F8E5M3FNU = 0x82,
+    // Public-preview types (0xD0-0xEF), valid only at the preview version.
+    SymbolicType = 0xD1,
+    Fragment = 0xD2,
+    DTypeParam = 0xD3,
+    ShapeParam = 0xD4,
+    StringParam = 0xD5,
+    Index = 0xD6,
+    None = 0xD7,
 }
 
 // ---------------------------------------------------------------------------
@@ -112,8 +125,23 @@ pub enum FunctionFlag {
     /// Bit 1: 0 = device function, 1 = kernel entry point.
     KindKernel = 0x02,
     /// Bit 2: 0 = no optimization hints, 1 = has optimization hints.
+    /// Only before 13.5; the form layout below reclaims the bit.
     HasOptimizationHints = 0x04,
 }
+
+/// Bits 3:2 of the flag byte select the entry form from 13.5 on
+/// (`BytecodeEnums.h`, `FunctionFlags::Form*`). Kernels always carry an
+/// optimization-hints payload at that version, so the presence bit is gone.
+pub const FUNCTION_FORM_MASK: u8 = 0x0C;
+/// Entry or `preview$func`; an extern `preview$func` is a normal-form entry
+/// with body length zero.
+pub const FUNCTION_FORM_NORMAL: u8 = 0x00;
+/// `preview$extern_impl`: the generated op payload replaces the body.
+pub const FUNCTION_FORM_EXTERN_IMPL: u8 = 0x04;
+/// Test-only function form; never written by this crate.
+pub const FUNCTION_FORM_TESTING: u8 = 0x08;
+/// Reserved form value; the reader rejects it.
+pub const FUNCTION_FORM_RESERVED: u8 = 0x0C;
 
 // ---------------------------------------------------------------------------
 // Attribute tags
@@ -135,6 +163,27 @@ pub enum AttributeTag {
     Dictionary = 10,
     OptimizationHints = 11,
     Bounded = 12,
+    // Public-preview attributes (0xD0-0xEF). Every tag is at least 0x80, so
+    // each is a two-byte varint on the wire.
+    SymbolicExprInt = 0xD1,
+    SymbolicExprVar = 0xD2,
+    SymbolicExprMul = 0xD3,
+    SymbolicExprDiv = 0xD4,
+    SymbolicExprAdd = 0xD5,
+    SymbolicExprSub = 0xD6,
+    SymbolicExprFloorDiv = 0xD7,
+    SymbolicTuple = 0xD8,
+    Layout = 0xD9,
+    SymbolicExprCeilDiv = 0xDA,
+    ConcreteType = 0xDB,
+    SymbolicExprNeg = 0xDC,
+    MemorySpace = 0xDD,
+    Synchronization = 0xDE,
+    Access = 0xDF,
+    ScratchRequest = 0xE0,
+    ConstParam = 0xE2,
+    SymbolicExprBuiltin = 0xE3,
+    SymbolicExprConstStr = 0xE4,
 }
 
 // ---------------------------------------------------------------------------
@@ -168,9 +217,44 @@ impl BytecodeVersion {
         minor: 4,
         tag: 0,
     };
+    pub const V13_5: Self = Self {
+        major: 13,
+        minor: 5,
+        tag: 0,
+    };
+    /// The current version of the CUDA 13.6 development assembler (toolkit
+    /// build 39136670, 2026-10-14). Its function table and op layouts are the
+    /// 13.5 ones: that assembler reads this writer's 13.5-layout output at
+    /// 13.6, and it reads public-preview content at 13.6 alone. No shipped
+    /// toolkit lists 13.6 yet.
+    pub const V13_6: Self = Self {
+        major: 13,
+        minor: 6,
+        tag: 0,
+    };
 
-    /// Newest version this writer can emit.
+    /// Version the writer selects when nothing asks for another one.
+    ///
+    /// 13.5 is emittable but not the default: it is only chosen on request
+    /// or when a module carries public-preview content (see
+    /// [`PREVIEW_CONTENT`](Self::PREVIEW_CONTENT)), because no shipped
+    /// toolkit reads it yet and ordinary kernels gain nothing from it.
     pub const CURRENT: Self = Self::V13_4;
+
+    /// The first version at which public-preview content (`preview$func`,
+    /// `preview$extern_impl`, `preview$call`, fragment types and the
+    /// symbolic attributes) exists, and the version `write_bytecode` selects
+    /// for it. Preview content is not portable: an assembler reads it only
+    /// at the version it calls current, so a module meant for a newer
+    /// assembler is written at that version through
+    /// `write_bytecode_version` (the CUDA 13.6 development assembler lists
+    /// 13.6 and reads preview content at 13.6 alone).
+    pub const PREVIEW_CONTENT: Self = Self::V13_5;
+
+    /// First version with the form-bit function table: kernel hints are
+    /// always written, `arg_attrs` is a positional field, and bodiless
+    /// entries (extern functions and implementations) are encoded.
+    pub const FUNCTION_FORM_LAYOUT: Self = Self::V13_5;
 
     /// Oldest version this writer can emit.
     ///
@@ -182,8 +266,20 @@ impl BytecodeVersion {
     pub const MIN_SUPPORTED: Self = Self::V13_2;
 
     /// All emittable versions, oldest to newest. Used to probe the installed
-    /// `tileiras` for the newest bytecode version it accepts.
-    pub const SUPPORTED: [Self; 3] = [Self::V13_2, Self::V13_3, Self::V13_4];
+    /// `tileiras` for the newest bytecode version it accepts; automatic
+    /// negotiation stops at [`CURRENT`](Self::CURRENT).
+    pub const SUPPORTED: [Self; 5] = [
+        Self::V13_2,
+        Self::V13_3,
+        Self::V13_4,
+        Self::V13_5,
+        Self::V13_6,
+    ];
+
+    /// Same `major.minor`, ignoring the header tag bits.
+    pub const fn same_release(self, other: Self) -> bool {
+        self.major == other.major && self.minor == other.minor
+    }
 }
 
 impl std::fmt::Display for BytecodeVersion {

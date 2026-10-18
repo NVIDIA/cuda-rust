@@ -598,6 +598,38 @@ pub(super) fn write_op_body(
             write_operands(op, w, ctx, false)?;
         }
 
+        // ----- preview$call (spec 4.7): variadic results, flags, callee,
+        // const_args (required, may be empty), optional arg/res attrs, sized
+        // operands. The differential test below checks the body against
+        // cuTile Python's encode_PreviewCallOp.
+        PreviewCall => {
+            w.write_varint(op.result_types.len() as u64);
+            write_result_types(op, w, ctx)?;
+            let flags = flag_if_present(op, "arg_attrs", 0) | flag_if_present(op, "res_attrs", 1);
+            w.write_varint(flags);
+            write_inline_attr(op, "callee", w, ctx)?;
+            match find_op_attr(op, "const_args") {
+                Some(attr) => write_attr_value_inline(attr, w, ctx)?,
+                None => w.write_varint(0),
+            }
+            if flags & (1 << 0) != 0 {
+                write_inline_attr(op, "arg_attrs", w, ctx)?;
+            }
+            if flags & (1 << 1) != 0 {
+                write_inline_attr(op, "res_attrs", w, ctx)?;
+            }
+            write_operands(op, w, ctx, true)?;
+        }
+
+        // Function-like preview ops live in the function table, where the
+        // writer encodes them without an opcode byte.
+        PreviewFunc | PreviewExternImpl => {
+            return Err(Error::BytecodeWrite(format!(
+                "{} must be a module-level function, not an operation in a block",
+                op.opcode.name()
+            )));
+        }
+
         // ----- Entry (function-like, with flags + optional attrs + regions) -----
         Entry => {
             write_result_types(op, w, ctx)?;
@@ -628,6 +660,53 @@ pub(super) fn write_op_body(
             )));
         }
     }
+    Ok(())
+}
+
+/// The `preview$extern_impl` payload a function-table entry carries in place
+/// of a body (spec 4.6): the generated op writer's output without an opcode.
+///
+/// Optional attributes get presence bits in declaration order, then every
+/// attribute follows in declaration order, then the single empty region.
+pub(super) fn write_extern_impl_payload(
+    op: &Operation,
+    w: &mut EncodingWriter,
+    ctx: &mut WriterCtx,
+) -> Result<()> {
+    require_version(op.opcode.name(), op.opcode.minimum_version(), ctx.version)?;
+    const OPTIONAL: [&str; 10] = [
+        "const_params",
+        "const_args",
+        "arg_attrs",
+        "res_attrs",
+        "scratch_smem",
+        "config",
+        "arch",
+        "frontendABI",
+        "synchronization",
+        "provider_score",
+    ];
+    let flags = OPTIONAL.iter().enumerate().fold(0u64, |acc, (bit, name)| {
+        acc | flag_if_present(op, name, bit as u32)
+    });
+    w.write_varint(flags);
+    write_inline_attr(op, "sym_name", w, ctx)?;
+    write_inline_attr(op, "implements", w, ctx)?;
+    for name in ["const_params", "const_args"] {
+        if find_op_attr(op, name).is_some() {
+            write_inline_attr(op, name, w, ctx)?;
+        }
+    }
+    write_inline_attr(op, "function_type", w, ctx)?;
+    for name in &OPTIONAL[2..] {
+        if find_op_attr(op, name).is_some() {
+            write_inline_attr(op, name, w, ctx)?;
+        }
+    }
+    // One region with zero blocks: `SizedRegion<0>` still serializes its
+    // block count.
+    w.write_varint(1);
+    w.write_varint(0);
     Ok(())
 }
 
@@ -893,6 +972,24 @@ fn write_attr_value_inline(
                 )?;
             }
         }
+        // Public-preview inline forms (spec 4.3): the enclosing op or
+        // attribute names the kind, so only the payload is written. A bare
+        // expression is interface-typed and stays tagged.
+        Attribute::Access(a) => w.write_varint(*a as u64),
+        Attribute::MemorySpace(m) => w.write_varint(*m as u64),
+        Attribute::Synchronization(s) => w.write_varint(*s as u64),
+        Attribute::Layout(layout) => {
+            super::writer::write_layout_payload(layout, w, &mut ctx.strings, &mut ctx.types)?;
+        }
+        Attribute::SymExpr(expr) => {
+            super::writer::write_sym_expr_tagged(expr, w, &mut ctx.strings, &mut ctx.types)?;
+        }
+        Attribute::ScratchRequest(scratch) => {
+            super::writer::write_scratch_payload(scratch, w, &mut ctx.strings, &mut ctx.types)?;
+        }
+        Attribute::ConstParam(param) => {
+            super::writer::write_const_param_payload(param, w, &mut ctx.strings, &mut ctx.types);
+        }
         _ => {
             super::writer::write_self_contained_attribute(
                 attr,
@@ -1032,7 +1129,10 @@ mod tests {
 
     fn compare_python(operation: &str, version: BytecodeVersion, option: bool, actual: &[u8]) {
         let Some(source) = std::env::var_os("CUTILE_PYTHON_SOURCE") else {
-            eprintln!("Python differential check skipped: set CUTILE_PYTHON_SOURCE to a reference checkout");
+            eprintln!(
+                "Python differential check skipped: CUTILE_PYTHON_SOURCE is unset; point it at \
+                 a cuTile Python checkout to run it"
+            );
             return;
         };
         let output = std::process::Command::new("python3")
@@ -1286,5 +1386,86 @@ mod tests {
             op_body_bytes(&module, &args, op),
             vec![0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01]
         );
+    }
+
+    /// `preview$call` body (spec 4.7): variadic result count and types,
+    /// flags, callee, const_args, optional arg attributes, sized operands.
+    /// With `CUTILE_PYTHON_SOURCE` set, the same bytes are compared against
+    /// cuTile Python's `encode_PreviewCallOp`; both variants last ran and
+    /// matched against the cutile-python checkout at commit 770b493.
+    #[test]
+    fn preview_call_body_matches_spec_and_python() {
+        use crate::ir::{Access, SymExpr};
+        for with_arg_attrs in [false, true] {
+            let mut module = Module::new("call");
+            let tile_i32 = Type::Tile(TileType {
+                shape: vec![],
+                element_type: TileElementType::Scalar(ScalarType::I32),
+            });
+            let (_, _, args) =
+                build_single_block_region(&mut module, &[tile_f32(), tile_i32.clone()]);
+            let mut builder = OpBuilder::new(Opcode::PreviewCall, Location::Unknown)
+                .attr("callee", Attribute::String("tilelib_scale".into()))
+                .attr(
+                    "const_args",
+                    Attribute::Array(vec![
+                        Attribute::SymExpr(SymExpr::Int(4)),
+                        Attribute::SymExpr(SymExpr::concrete_type(Type::Scalar(ScalarType::F32))),
+                        Attribute::SymExpr(SymExpr::const_str("nvrtc")),
+                    ]),
+                )
+                .operands(args.iter().copied())
+                .result(tile_f32())
+                .result(tile_i32);
+            if with_arg_attrs {
+                builder = builder.attr(
+                    "arg_attrs",
+                    Attribute::Array(vec![
+                        Attribute::access_dict(Access::In),
+                        Attribute::access_dict(Access::InOut),
+                    ]),
+                );
+            }
+            let (op, _) = builder.build(&mut module);
+            let bytes = op_body_bytes_version(&module, &args, op, BytecodeVersion::V13_5).unwrap();
+            // Fresh tables: types f32=0, tile<f32>=1, i32=2, tile<i32>=3;
+            // strings callee=0, "nvrtc"=1, then the access key=2.
+            let mut expected = vec![
+                0x02,
+                0x01,
+                0x03,                     // two results
+                u8::from(with_arg_attrs), // flags
+                0x00,                     // callee
+                0x03,
+                0xD1,
+                0x01,
+                0x08,
+                0xDB,
+                0x01,
+                0x00,
+                0xE4,
+                0x01,
+                0x01, // const_args
+            ];
+            if with_arg_attrs {
+                expected.extend_from_slice(&[
+                    0x02, 0x0A, 0x01, 0x02, 0xDF, 0x01, 0x00, 0x0A, 0x01, 0x02, 0xDF, 0x01, 0x02,
+                ]);
+            }
+            expected.extend_from_slice(&[0x02, 0x00, 0x01]); // sized operands
+            assert_eq!(bytes, expected, "arg_attrs = {with_arg_attrs}");
+            compare_python(
+                "PreviewCall",
+                BytecodeVersion::V13_5,
+                with_arg_attrs,
+                &bytes,
+            );
+            assert!(
+                op_body_bytes_version(&module, &args, op, BytecodeVersion::V13_4)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("13.5")
+            );
+        }
     }
 }

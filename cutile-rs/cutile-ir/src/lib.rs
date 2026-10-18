@@ -15,6 +15,7 @@ pub mod builder;
 pub mod bytecode;
 pub mod capabilities;
 pub mod ir;
+pub mod tilelib;
 
 // Shared implementation details; not re-exported by the cuTile user API.
 #[doc(hidden)]
@@ -30,5 +31,11 @@ pub use error::{Error, Result};
 // Re-export the most commonly used entry points at crate root.
 pub use builder::OpBuilder;
 pub use bytecode::decoder::{decode_bytecode, decode_bytecode_file};
-pub use bytecode::{write_bytecode, write_bytecode_to_file};
+pub use bytecode::{
+    module_preview_content, write_bytecode, write_bytecode_to_file, write_bytecode_version,
+};
 pub use ir::Module;
+pub use tilelib::{
+    add_extern_func, add_extern_impl, implementation_module, interface_module, preview_call,
+    verify_library, ExternFunc, ExternImpl, FragmentArg, TileArg,
+};

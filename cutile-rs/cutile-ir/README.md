@@ -131,6 +131,58 @@ CUTILE_TILEIRAS_PATH=/opt/cuda-tile/bin/tileiras \
     cargo test -p cutile-compiler
 ```
 
+## Tile library API
+
+Tile IR 13.5 (public preview `simt`) lets a Tile program call a SIMT
+function from a *tile library*. `cutile_ir::tilelib` describes the two
+bytecode halves of such a library; `tileiras --preview-create-tile-lib`
+combines them with the code payload.
+
+```text
+                 interface (.nvtlifc)                 implementation catalog (.nvtl.0)
+   ExternFunc ----------------------------> .tilebc    ExternImpl ----------------------> .tilebc
+   @scale(%x: tile<128xf32> inout)                     @scale_impl implements @scale
+     -> tile<128xf32>                                    (%x: fragment<1xf32, local,
+                                                              mem_layout (1):(1),
+   caller: preview$call @scale(%t)                            fragmap (128, 1, 1):(1, 0, 0)> inout)
+            ^ resolved to @scale_impl by tileiras -l           ^ one invocation per tile element
+```
+
+```rust
+use cutile_ir::ir::*;
+use cutile_ir::tilelib::*;
+
+let tile = TileType { shape: vec![128], element_type: TileElementType::Scalar(ScalarType::F32) };
+let decl = ExternFunc::new("scale", vec![TileArg::new("x", tile, Access::InOut)]);
+let fragment = FragmentType::new(
+    vec![1], ScalarType::F32, MemorySpace::Local,
+    Layout::contiguous_mem(1), Layout::elementwise(128),
+);
+let imp = ExternImpl::new("scale_impl", "scale", vec![FragmentArg::new("x", fragment, Access::InOut)]);
+
+verify_library(&[decl.clone()], &[imp.clone()])?;
+let interface = cutile_ir::write_bytecode(&interface_module("lib", &[decl]))?;
+let catalog = cutile_ir::write_bytecode(&implementation_module("lib", &[imp]))?;
+```
+
+`write_bytecode` selects 13.5 and sets the preview header tag whenever a
+module carries preview content. An assembler reads preview content only at
+the version it calls current, the newest numbered version its
+`--list-versions` prints, so a library meant for a newer assembler goes
+through `write_bytecode_version` with that version (the CUDA 13.6
+development assembler wants 13.6); asking for a version older than 13.5 is
+an error, as in the reference writer. `Layout::elementwise`,
+`warp_lanes`, `footprint_blocks` and `shared_whole` build the common fragmaps;
+`to_mlir_text()` prints the modules in the textual form of the Tile IR
+fixtures.
+
+`ExternImpl::new` leaves every optional clause unset. `synchronization` is
+an `Option`: `None` is an implementation without a `synchronization` clause,
+and `Some(Synchronization::None)` writes the clause with its default value,
+as the upstream scratch fixtures do. A cooperative implementation sets
+`Some(Synchronization::Warp)` together with a fragmap such as
+`Layout::warp_lanes(128)`, whose 32 participants satisfy the warp domain.
+
 ## Design
 
 ### Arena ownership

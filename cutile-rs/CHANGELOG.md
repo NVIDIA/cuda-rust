@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `cutile-ir` writes Tile IR 13.5 public-preview SIMT interop content:
+  `preview$func extern`, `preview$extern_impl` and `preview$call`, fragment
+  types and the symbolic layout attributes, with a typed `tilelib` API for
+  library interface and implementation modules, decoder support for the 13.5
+  function table, and structural verification of a library before assembly.
+  A module with preview content is written at 13.5 with the preview header
+  tag, or at the newer version an assembler calls current when asked (an
+  assembler reads preview content only at its current version); the
+  default version for everything else stays 13.4.
+  `CUTILE_BYTECODE_VERSION=13.5` is accepted when the assembler lists it and
+  writes the 13.5 function table for ordinary kernels; automatic negotiation
+  still stops at 13.4.
+
 ### Changed
 
 - cuTile Rust now lives in the [NVIDIA/cuda-rust](https://github.com/NVIDIA/cuda-rust)

@@ -15,7 +15,7 @@
 
 use std::fmt::Write;
 
-use super::attr::Attribute;
+use super::attr::{Attribute, Layout, ScratchRequest, SymExpr, ARG_NAMES_ATTR};
 use super::module::{Global, Module};
 use super::types::*;
 use super::value::{BlockId, OpId, RegionId, Value};
@@ -56,11 +56,193 @@ impl<'a> ModulePrinter<'a> {
         }
 
         for &func_id in &self.module.functions {
-            self.print_function(func_id, out);
+            match self.module.op(func_id).opcode {
+                Opcode::PreviewFunc => self.print_preview_func(func_id, out),
+                Opcode::PreviewExternImpl => self.print_extern_impl(func_id, out),
+                _ => self.print_function(func_id, out),
+            }
         }
 
         self.indent -= 2;
         writeln!(out, "}}").unwrap();
+    }
+
+    // -----------------------------------------------------------------------
+    // Public-preview function-like ops. These print the fully qualified
+    // upstream notation (`!cuda_tile.tile<...>`, `#cuda_tile.preview$...`)
+    // so a library module reads like the textual fixtures tileiras accepts.
+    // -----------------------------------------------------------------------
+
+    /// `cuda_tile.preview$func extern @name<[params]>(%arg0: type {access}, ...) -> results`
+    fn print_preview_func(&mut self, func_id: OpId, out: &mut String) {
+        let op = self.module.op(func_id);
+        let name = find_str_attr(&op.attributes, "sym_name").unwrap_or("?");
+        let is_extern = find_bool_attr(&op.attributes, "is_extern") == Some(true);
+        let pad = " ".repeat(self.indent);
+
+        write!(out, "{pad}cuda_tile.preview$func ").unwrap();
+        if is_extern {
+            write!(out, "extern ").unwrap();
+        }
+        write!(out, "@{name}").unwrap();
+        if is_extern {
+            if let Some(Attribute::Array(params)) = find_attr(&op.attributes, "const_params") {
+                if !params.is_empty() {
+                    write!(out, "<{}>", format_const_params(params)).unwrap();
+                }
+            }
+        }
+        // Block arguments name the parameters of a function with a body.
+        let block_arg_names: Vec<String> = op
+            .regions
+            .first()
+            .and_then(|r| self.module.region(*r).blocks.first().copied())
+            .map(|b| {
+                self.module
+                    .block(b)
+                    .args
+                    .iter()
+                    .map(|(v, _)| format!("%{}", v.index()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.print_preview_signature(&op.attributes, &block_arg_names, out);
+        if is_extern || op.regions.is_empty() {
+            writeln!(out).unwrap();
+            return;
+        }
+        writeln!(out, " {{").unwrap();
+        self.indent += 2;
+        self.print_region_body(op.regions[0], true, out);
+        self.indent -= 2;
+        writeln!(out, "{pad}}}").unwrap();
+    }
+
+    /// `cuda_tile.preview$extern_impl @sym<[params]> implements @decl<[args]>(sig)
+    ///   synchronization = ... arch = [...] scratch {...} {attr-dict}`
+    ///
+    /// The `synchronization` clause is printed whenever the attribute is
+    /// attached, as upstream's printer does (its parser attaches the
+    /// attribute only for a written clause). `add_extern_impl` attaches it
+    /// for `Some`, so an absent clause (`None`) prints nothing and an
+    /// explicit default (`Some(Synchronization::None)`) prints `<none>`.
+    fn print_extern_impl(&mut self, func_id: OpId, out: &mut String) {
+        let op = self.module.op(func_id);
+        let name = find_str_attr(&op.attributes, "sym_name").unwrap_or("?");
+        let implements = find_str_attr(&op.attributes, "implements").unwrap_or("?");
+        let pad = " ".repeat(self.indent);
+        let clause_pad = " ".repeat(self.indent + 2);
+
+        write!(out, "{pad}cuda_tile.preview$extern_impl @{name}").unwrap();
+        if let Some(Attribute::Array(params)) = find_attr(&op.attributes, "const_params") {
+            write!(out, "<{}>", format_const_params(params)).unwrap();
+        }
+        write!(out, " implements @{implements}").unwrap();
+        if let Some(Attribute::Array(args)) = find_attr(&op.attributes, "const_args") {
+            write!(out, "<{}>", format_const_args(args)).unwrap();
+        }
+        self.print_preview_signature(&op.attributes, &[], out);
+
+        if let Some(Attribute::Synchronization(sync)) = find_attr(&op.attributes, "synchronization")
+        {
+            write!(
+                out,
+                "\n{clause_pad}synchronization = #cuda_tile.preview$synchronization<{}>",
+                sync.name()
+            )
+            .unwrap();
+        }
+        if let Some(arch) = find_attr(&op.attributes, "arch") {
+            write!(out, "\n{clause_pad}arch = {}", format_attr(arch)).unwrap();
+        }
+        if let Some(Attribute::ScratchRequest(scratch)) = find_attr(&op.attributes, "scratch_smem")
+        {
+            write!(out, "\n{clause_pad}{}", format_scratch_clause(scratch)).unwrap();
+        }
+        // Everything else (frontendABI, config, provider_score) is the
+        // trailing attribute dictionary, in upstream's elision order.
+        let extras: Vec<_> = op
+            .attributes
+            .iter()
+            .filter(|(k, _)| {
+                !matches!(
+                    k.as_str(),
+                    "sym_name"
+                        | "implements"
+                        | "function_type"
+                        | "arg_attrs"
+                        | "res_attrs"
+                        | "const_params"
+                        | "const_args"
+                        | "scratch_smem"
+                        | "arch"
+                        | "synchronization"
+                ) && k != ARG_NAMES_ATTR
+            })
+            .collect();
+        if !extras.is_empty() {
+            write!(out, "\n{clause_pad}{{").unwrap();
+            for (i, (k, v)) in extras.iter().enumerate() {
+                if i > 0 {
+                    write!(out, ", ").unwrap();
+                }
+                write!(out, "{} = {}", format_dict_key(k), format_attr(v)).unwrap();
+            }
+            write!(out, "}}").unwrap();
+        }
+        writeln!(out).unwrap();
+    }
+
+    /// `(%name: !cuda_tile.type {arg attrs}, ...) -> result | (results)`;
+    /// no arrow at all without results, like the upstream signature printer.
+    fn print_preview_signature(
+        &self,
+        attrs: &[(String, Attribute)],
+        block_arg_names: &[String],
+        out: &mut String,
+    ) {
+        let func_type = match find_attr(attrs, "function_type") {
+            Some(Attribute::Type(Type::Func(f))) => Some(f),
+            _ => None,
+        };
+        let arg_attrs = match find_attr(attrs, "arg_attrs") {
+            Some(Attribute::Array(dicts)) => dicts.as_slice(),
+            _ => &[],
+        };
+        let arg_names = match find_attr(attrs, ARG_NAMES_ATTR) {
+            Some(Attribute::Array(names)) => names.as_slice(),
+            _ => &[],
+        };
+        write!(out, "(").unwrap();
+        if let Some(f) = func_type {
+            for (i, ty) in f.inputs.iter().enumerate() {
+                if i > 0 {
+                    write!(out, ", ").unwrap();
+                }
+                match (arg_names.get(i), block_arg_names.get(i)) {
+                    (Some(Attribute::String(name)), _) => write!(out, "%{name}").unwrap(),
+                    (_, Some(name)) => write!(out, "{name}").unwrap(),
+                    _ => write!(out, "%arg{i}").unwrap(),
+                }
+                write!(out, ": {}", format_type_qualified(ty)).unwrap();
+                if let Some(Attribute::Dictionary(entries)) = arg_attrs.get(i) {
+                    if !entries.is_empty() {
+                        write!(out, " {}", format_attr(&arg_attrs[i])).unwrap();
+                    }
+                }
+            }
+        }
+        write!(out, ")").unwrap();
+        if let Some(f) = func_type {
+            match f.results.as_slice() {
+                [] => {}
+                [single] => write!(out, " -> {}", format_type_qualified(single)).unwrap(),
+                results => {
+                    let results: Vec<_> = results.iter().map(format_type_qualified).collect();
+                    write!(out, " -> ({})", results.join(", ")).unwrap();
+                }
+            }
+        }
     }
 
     fn print_global(&self, global: &Global, out: &mut String) {
@@ -1069,6 +1251,39 @@ impl<'a> ModulePrinter<'a> {
                 self.print_reduce_or_scan(op_id, out);
             }
 
+            // ---- preview$call: `@callee<[const args]>(operands) : functional-type` ----
+            Opcode::PreviewCall => {
+                let op = self.module.op(op_id);
+                let callee = find_str_attr(&op.attributes, "callee").unwrap_or("?");
+                write!(out, " @{callee}").unwrap();
+                if let Some(Attribute::Array(args)) = find_attr(&op.attributes, "const_args") {
+                    if !args.is_empty() {
+                        write!(out, "<{}>", format_const_args(args)).unwrap();
+                    }
+                }
+                write!(out, "(").unwrap();
+                for (i, &v) in op.operands.iter().enumerate() {
+                    if i > 0 {
+                        write!(out, ", ").unwrap();
+                    }
+                    write!(out, "%{}", v.index()).unwrap();
+                }
+                write!(out, ")").unwrap();
+                self.print_attr_dict(op_id, &["callee", "const_args"], out);
+                let inputs: Vec<_> = op
+                    .operands
+                    .iter()
+                    .map(|v| format_type_qualified(self.module.value_type(*v)))
+                    .collect();
+                let results: Vec<_> = op.result_types.iter().map(format_type_qualified).collect();
+                write!(out, " : ({}) -> ", inputs.join(", ")).unwrap();
+                match results.as_slice() {
+                    [single] => write!(out, "{single}").unwrap(),
+                    _ => write!(out, "({})", results.join(", ")).unwrap(),
+                }
+                writeln!(out).unwrap();
+            }
+
             // ---- Global / Module / Entry handled elsewhere ----
             Opcode::Alloca
             | Opcode::AtomicRedViewTko
@@ -1076,7 +1291,9 @@ impl<'a> ModulePrinter<'a> {
             | Opcode::MakeGatherScatterView
             | Opcode::MakeStridedView
             | Opcode::Module
-            | Opcode::Entry => {
+            | Opcode::Entry
+            | Opcode::PreviewFunc
+            | Opcode::PreviewExternImpl => {
                 writeln!(out, " <structural-op>").unwrap();
             }
         }
@@ -2180,6 +2397,385 @@ pub fn format_type(ty: &Type) -> String {
             format!("({inputs}) -> ({results})")
         }
         Type::Token => "token".into(),
+        Type::Fragment(f) => format_fragment(f),
+        Type::Index => "index".into(),
+        Type::NoneType => "none".into(),
+        Type::PreviewParam(p) => format!("preview${}", preview_param_name(*p)),
+    }
+}
+
+/// Format a type with the `!cuda_tile.` dialect prefix on dialect types, the
+/// form the public-preview fixtures use (`!cuda_tile.tile<128xf32>`).
+/// Builtin types (`f32`, `index`, `none`) have no prefix. Nested dialect
+/// types inside tiles and fragments are prefixed too; view types keep the
+/// shorthand for their inner tensor view.
+pub(crate) fn format_type_qualified(ty: &Type) -> String {
+    match ty {
+        Type::Scalar(_) | Type::Index | Type::NoneType => format_type(ty),
+        Type::Func(f) => {
+            let inputs = f
+                .inputs
+                .iter()
+                .map(format_type_qualified)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let results = f
+                .results
+                .iter()
+                .map(format_type_qualified)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({inputs}) -> ({results})")
+        }
+        Type::Tile(t) => {
+            let elem = match &t.element_type {
+                TileElementType::Scalar(s) => format_scalar(*s),
+                TileElementType::Pointer(p) => {
+                    format!("!cuda_tile.ptr<{}>", format_scalar(p.pointee))
+                }
+            };
+            if t.shape.is_empty() {
+                format!("!cuda_tile.tile<{elem}>")
+            } else {
+                let shape = t
+                    .shape
+                    .iter()
+                    .map(|d| d.to_string())
+                    .collect::<Vec<_>>()
+                    .join("x");
+                format!("!cuda_tile.tile<{shape}x{elem}>")
+            }
+        }
+        Type::WithPointerAttribute(..) => {
+            let text = format_type(ty);
+            format!("!cuda_tile.{text}")
+        }
+        _ => format!("!cuda_tile.{}", format_type(ty)),
+    }
+}
+
+fn preview_param_name(p: PreviewParamType) -> &'static str {
+    match p {
+        PreviewParamType::DType => "Datatype",
+        PreviewParamType::Shape => "shape",
+        PreviewParamType::String => "string",
+    }
+}
+
+/// `preview$fragment<1xf32, local, mem_layout = #cuda_tile.preview$layout<(1):(1)>,
+/// fragmap = #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>[, alignment = A]>`
+fn format_fragment(f: &FragmentType) -> String {
+    let mut shape = f
+        .shape
+        .iter()
+        .map(|d| {
+            if *d == DYNAMIC || *d < 0 {
+                "?".to_string()
+            } else {
+                d.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("x");
+    if !shape.is_empty() {
+        shape.push('x');
+    }
+    let mut text = format!(
+        "preview$fragment<{shape}{}, {}, mem_layout = {}, fragmap = {}",
+        format_scalar(f.element_type),
+        f.memory_space.name(),
+        format_layout(&f.mem_layout),
+        format_layout(&f.fragmap)
+    );
+    // The default alignment of one element is elided, as upstream does.
+    if f.alignment != SymExpr::Int(1) {
+        let mut alignment = String::new();
+        compact_expr(
+            &mut alignment,
+            &f.alignment,
+            Precedence::Additive,
+            false,
+            CompactStyle::Layout,
+        );
+        write!(text, ", alignment = {alignment}").unwrap();
+    }
+    text.push('>');
+    text
+}
+
+// =========================================================================
+// Public-preview attribute notation
+// =========================================================================
+
+/// Compact-expression precedence, lowest to highest (upstream
+/// `CompactExprPrecedence`).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Precedence {
+    Additive,
+    Multiplicative,
+    Unary,
+    Primary,
+}
+
+/// Two compact forms exist upstream: layouts and scratch print operators
+/// with spaces and give a trailing comma only to nested one-element tuples;
+/// constant-argument lists print operators without spaces and every
+/// one-element tuple with a trailing comma.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CompactStyle {
+    Layout,
+    ConstArg,
+}
+
+fn precedence_of(expr: &SymExpr) -> Precedence {
+    match expr {
+        SymExpr::Add(..) | SymExpr::Sub(..) => Precedence::Additive,
+        SymExpr::Mul(..) | SymExpr::FloorDiv(..) | SymExpr::CeilDiv(..) | SymExpr::Div(..) => {
+            Precedence::Multiplicative
+        }
+        SymExpr::Neg(_) => Precedence::Unary,
+        _ => Precedence::Primary,
+    }
+}
+
+/// Upstream `canPrintCompact`: every leaf has a compact form except a
+/// negated literal (`-4` reads back as the literal) and, in layouts, string
+/// and type leaves.
+fn can_print_compact(expr: &SymExpr, style: CompactStyle) -> bool {
+    match expr {
+        SymExpr::Int(_) | SymExpr::Var(_) | SymExpr::Builtin { .. } => true,
+        SymExpr::ConstStr(_) | SymExpr::ConcreteType(_) => style == CompactStyle::ConstArg,
+        SymExpr::Tuple(values) => values.iter().all(|v| can_print_compact(v, style)),
+        SymExpr::Div(..) => false,
+        SymExpr::Mul(l, r)
+        | SymExpr::Add(l, r)
+        | SymExpr::Sub(l, r)
+        | SymExpr::FloorDiv(l, r)
+        | SymExpr::CeilDiv(l, r) => can_print_compact(l, style) && can_print_compact(r, style),
+        SymExpr::Neg(x) => !matches!(**x, SymExpr::Int(_)) && can_print_compact(x, style),
+    }
+}
+
+/// Print one compact expression with upstream's parenthesization: a child
+/// of lower precedence, an equal-precedence right child, and a negation
+/// inside a negation get parentheses.
+fn compact_expr(
+    out: &mut String,
+    expr: &SymExpr,
+    parent: Precedence,
+    is_right: bool,
+    style: CompactStyle,
+) {
+    let precedence = precedence_of(expr);
+    let parens = (precedence == Precedence::Unary && parent == Precedence::Unary)
+        || precedence < parent
+        || (precedence == parent && is_right);
+    if parens {
+        out.push('(');
+    }
+    let op = |out: &mut String, symbol: &str| {
+        if style == CompactStyle::Layout {
+            write!(out, " {symbol} ").unwrap();
+        } else {
+            out.push_str(symbol);
+        }
+    };
+    let binary = |out: &mut String, l: &SymExpr, r: &SymExpr, symbol: &str| {
+        compact_expr(out, l, precedence, false, style);
+        op(out, symbol);
+        compact_expr(out, r, precedence, true, style);
+    };
+    match expr {
+        SymExpr::Int(v) => write!(out, "{v}").unwrap(),
+        SymExpr::Var(name) | SymExpr::Builtin { name, .. } => out.push_str(name),
+        SymExpr::ConstStr(s) => write!(out, "{s:?}").unwrap(),
+        SymExpr::ConcreteType(ty) => out.push_str(&format_type_qualified(ty)),
+        SymExpr::Tuple(values) => compact_tuple(out, values, true, style),
+        SymExpr::Mul(l, r) => binary(out, l, r, "*"),
+        SymExpr::Div(l, r) => binary(out, l, r, "/"),
+        SymExpr::FloorDiv(l, r) => binary(out, l, r, "/"),
+        SymExpr::CeilDiv(l, r) => binary(out, l, r, "/+"),
+        SymExpr::Add(l, r) => binary(out, l, r, "+"),
+        SymExpr::Sub(l, r) => binary(out, l, r, "-"),
+        SymExpr::Neg(x) => {
+            out.push('-');
+            compact_expr(out, x, precedence, false, style);
+        }
+    }
+    if parens {
+        out.push(')');
+    }
+}
+
+/// `(a, b, c)`; a one-element tuple gets a trailing comma when it must
+/// survive re-parsing as a tuple (always for constant arguments, only when
+/// nested for the shapes and strides of a layout).
+fn compact_tuple(out: &mut String, values: &[SymExpr], nested: bool, style: CompactStyle) {
+    out.push('(');
+    for (i, v) in values.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        compact_expr(out, v, Precedence::Additive, false, style);
+    }
+    if values.len() == 1 && (nested || style == CompactStyle::ConstArg) {
+        out.push(',');
+    }
+    out.push(')');
+}
+
+/// `#cuda_tile.preview$layout<(shapes):(strides)>`, falling back to the
+/// verbose `<shapes = ..., strides = ...>` form when a leaf has no compact
+/// form.
+pub(crate) fn format_layout(layout: &Layout) -> String {
+    let compact = layout
+        .shapes
+        .iter()
+        .chain(&layout.strides)
+        .all(|e| can_print_compact(e, CompactStyle::Layout));
+    if compact {
+        let mut text = String::from("#cuda_tile.preview$layout<");
+        compact_tuple(&mut text, &layout.shapes, false, CompactStyle::Layout);
+        text.push(':');
+        compact_tuple(&mut text, &layout.strides, false, CompactStyle::Layout);
+        text.push('>');
+        text
+    } else {
+        format!(
+            "#cuda_tile.preview$layout<shapes = {}, strides = {}>",
+            format_symbolic_tuple(&layout.shapes),
+            format_symbolic_tuple(&layout.strides)
+        )
+    }
+}
+
+/// `#cuda_tile.preview$symbolic_tuple<[a, b]>`
+fn format_symbolic_tuple(values: &[SymExpr]) -> String {
+    let items: Vec<_> = values.iter().map(format_sym_expr).collect();
+    format!("#cuda_tile.preview$symbolic_tuple<[{}]>", items.join(", "))
+}
+
+/// The verbose attribute form of an expression
+/// (`#cuda_tile.preview$expr_mul<#cuda_tile.preview$expr_var<"M">, ...>`).
+pub(crate) fn format_sym_expr(expr: &SymExpr) -> String {
+    let binary = |name: &str, l: &SymExpr, r: &SymExpr| {
+        format!(
+            "#cuda_tile.preview${name}<{}, {}>",
+            format_sym_expr(l),
+            format_sym_expr(r)
+        )
+    };
+    match expr {
+        SymExpr::Int(v) => format!("#cuda_tile.preview$expr_int<{v}>"),
+        SymExpr::Var(name) => format!("#cuda_tile.preview$expr_var<{name:?}>"),
+        SymExpr::Builtin { name, ty } => {
+            format!(
+                "#cuda_tile.preview$expr_builtin<{name:?}, {}>",
+                format_type_qualified(ty)
+            )
+        }
+        SymExpr::ConstStr(s) => format!("#cuda_tile.preview$expr_const_str<{s:?}>"),
+        SymExpr::ConcreteType(ty) => {
+            format!(
+                "#cuda_tile.preview$concrete_type<{}>",
+                format_type_qualified(ty)
+            )
+        }
+        SymExpr::Tuple(values) => format_symbolic_tuple(values),
+        SymExpr::Mul(l, r) => binary("expr_mul", l, r),
+        SymExpr::Div(l, r) => binary("expr_div", l, r),
+        SymExpr::Add(l, r) => binary("expr_add", l, r),
+        SymExpr::Sub(l, r) => binary("expr_sub", l, r),
+        SymExpr::FloorDiv(l, r) => binary("expr_floor_div", l, r),
+        SymExpr::CeilDiv(l, r) => binary("expr_ceil_div", l, r),
+        SymExpr::Neg(x) => format!("#cuda_tile.preview$expr_neg<{}>", format_sym_expr(x)),
+    }
+}
+
+/// A compact constant argument (`4`, `f32`, `"nvrtc"`, `(1,)`, `1+3`), or
+/// the verbose attribute when it has no compact form.
+pub(crate) fn format_const_arg(expr: &SymExpr) -> String {
+    if can_print_compact(expr, CompactStyle::ConstArg) {
+        let mut text = String::new();
+        compact_expr(
+            &mut text,
+            expr,
+            Precedence::Additive,
+            false,
+            CompactStyle::ConstArg,
+        );
+        text
+    } else {
+        format_sym_expr(expr)
+    }
+}
+
+/// `[4, f32, "nvrtc"]` for a `const_args` array; a non-expression element
+/// falls back to the generic attribute form.
+pub(crate) fn format_const_args(args: &[Attribute]) -> String {
+    let items: Vec<_> = args
+        .iter()
+        .map(|a| match a {
+            Attribute::SymExpr(e) => format_const_arg(e),
+            other => format_attr(other),
+        })
+        .collect();
+    format!("[{}]", items.join(", "))
+}
+
+/// `[M: index, ?, T: !cuda_tile.preview$Datatype]` for a `const_params` array.
+pub(crate) fn format_const_params(params: &[Attribute]) -> String {
+    let items: Vec<_> = params
+        .iter()
+        .map(|p| match p {
+            Attribute::ConstParam(cp) if cp.is_wildcard() => "?".to_string(),
+            Attribute::ConstParam(cp) => format!("{}: {}", cp.name, format_type_qualified(&cp.ty)),
+            other => format_attr(other),
+        })
+        .collect();
+    format!("[{}]", items.join(", "))
+}
+
+/// `scratch {smem.size = 512, smem.alignment = 128}`. Upstream prints the
+/// verbose expression attributes here; the compact form it also parses
+/// is what its fixtures write, so that is the one emitted.
+pub(crate) fn format_scratch_clause(scratch: &ScratchRequest) -> String {
+    let compact = |expr: &SymExpr| {
+        if can_print_compact(expr, CompactStyle::Layout) {
+            let mut text = String::new();
+            compact_expr(
+                &mut text,
+                expr,
+                Precedence::Additive,
+                false,
+                CompactStyle::Layout,
+            );
+            text
+        } else {
+            format_sym_expr(expr)
+        }
+    };
+    format!(
+        "scratch {{smem.size = {}, smem.alignment = {}}}",
+        compact(&scratch.size),
+        compact(&scratch.alignment)
+    )
+}
+
+/// Dictionary keys that are not bare identifiers are quoted, as MLIR does
+/// (`{"!llvm.ptr<3>" = "!llvm.ptr"}`).
+fn format_dict_key(key: &str) -> String {
+    let mut chars = key.chars();
+    let bare = match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+            chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '$' | '.'))
+        }
+        _ => false,
+    };
+    if bare {
+        key.to_string()
+    } else {
+        format!("{key:?}")
     }
 }
 
@@ -2205,7 +2801,7 @@ fn format_scalar(s: ScalarType) -> String {
     .into()
 }
 
-fn format_attr(attr: &Attribute) -> String {
+pub(crate) fn format_attr(attr: &Attribute) -> String {
     match attr {
         Attribute::Integer(v, _) => v.to_string(),
         Attribute::Float(v, _) => format!("{v}"),
@@ -2242,7 +2838,7 @@ fn format_attr(attr: &Attribute) -> String {
         Attribute::Dictionary(entries) => {
             let kvs: Vec<_> = entries
                 .iter()
-                .map(|(k, v)| format!("{k} = {}", format_attr(v)))
+                .map(|(k, v)| format!("{} = {}", format_dict_key(k), format_attr(v)))
                 .collect();
             format!("{{{}}}", kvs.join(", "))
         }
@@ -2265,6 +2861,23 @@ fn format_attr(attr: &Attribute) -> String {
             let ub = b.ub.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
             format!("#cuda_tile.bounded<{lb}, {ub}>")
         }
+        Attribute::Access(a) => format!("#cuda_tile.preview$access<{}>", a.name()),
+        Attribute::MemorySpace(m) => format!("#cuda_tile.preview$memory_space<{}>", m.name()),
+        Attribute::Synchronization(s) => {
+            format!("#cuda_tile.preview$synchronization<{}>", s.name())
+        }
+        Attribute::Layout(l) => format_layout(l),
+        Attribute::SymExpr(e) => format_sym_expr(e),
+        Attribute::ScratchRequest(s) => format!(
+            "#cuda_tile.preview$scratch_request<smem.size = {}, smem.alignment = {}>",
+            format_sym_expr(&s.size),
+            format_sym_expr(&s.alignment)
+        ),
+        Attribute::ConstParam(cp) => format!(
+            "#cuda_tile.preview$const_param<name = {:?}, type = {}>",
+            cp.name,
+            format_type_qualified(&cp.ty)
+        ),
     }
 }
 
@@ -2332,7 +2945,7 @@ fn is_structural_attr(name: &str) -> bool {
     matches!(
         name,
         "sym_name" | "function_type" | "operandSegmentSizes" | "arg_attrs" | "res_attrs"
-    )
+    ) || name == ARG_NAMES_ATTR
 }
 
 // =========================================================================

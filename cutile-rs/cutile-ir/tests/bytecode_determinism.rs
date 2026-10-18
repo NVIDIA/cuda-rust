@@ -118,6 +118,49 @@ fn same_module_serializes_to_identical_bytes() {
     );
 }
 
+/// A tile library description (13.5 preview content) goes through the same
+/// managers plus the new attribute and type encodings, which intern strings
+/// (variable names, access keys) and types (fragments) of their own.
+#[test]
+fn library_module_serializes_to_identical_bytes() {
+    use cutile_ir::tilelib::{implementation_module, ExternImpl, FragmentArg};
+
+    let fragment = FragmentType::new(
+        vec![4],
+        ScalarType::F32,
+        MemorySpace::Local,
+        Layout::contiguous_mem(4),
+        Layout {
+            shapes: vec![SymExpr::var("N"), SymExpr::Int(32), SymExpr::Int(4)],
+            strides: vec![SymExpr::Int(128), SymExpr::Int(4), SymExpr::Int(1)],
+        },
+    );
+    let mut implementation = ExternImpl::new(
+        "det_impl",
+        "det",
+        vec![
+            FragmentArg::new("a", fragment.clone(), Access::In),
+            FragmentArg::new("b", fragment, Access::InOut),
+        ],
+    );
+    implementation.const_params = vec![ConstParam::index("N")];
+    implementation.const_args = vec![SymExpr::var("N")];
+    implementation.arch = (0..12).map(|i| format!("sm_{}", 80 + i)).collect();
+    implementation.frontend_abi = (0..12)
+        .map(|i| (format!("!llvm.ptr<{i}>"), "!llvm.ptr".to_string()))
+        .collect();
+    implementation.scratch = Some(ScratchRequest::new(
+        SymExpr::times(SymExpr::builtin("context.num_threads"), SymExpr::Int(4)),
+        SymExpr::Int(16),
+    ));
+    let module = implementation_module("determinism_library", &[implementation]);
+
+    let first = cutile_ir::write_bytecode(&module).expect("write_bytecode failed");
+    let second = cutile_ir::write_bytecode(&module).expect("write_bytecode failed");
+    assert_eq!(first, second, "library bytecode differs between two writes");
+    assert_eq!(first[8..12], [13, 5, 1, 0], "13.5 with the preview tag");
+}
+
 /// The module must exercise the string pool for the test above to be meaningful:
 /// if there were no strings, HashMap-order non-determinism could hide.
 #[test]

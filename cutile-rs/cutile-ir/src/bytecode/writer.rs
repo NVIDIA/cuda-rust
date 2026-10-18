@@ -13,11 +13,14 @@ use std::collections::HashMap;
 use std::io::Write;
 
 use super::encoding::{patch_u32, patch_u64, EncodingWriter};
-use super::enums::{AttributeTag, BytecodeVersion, FunctionFlag, Section, TypeTag, MAGIC};
+use super::enums::{
+    AttributeTag, BytecodeVersion, FunctionFlag, Section, TypeTag, FUNCTION_FORM_EXTERN_IMPL,
+    FUNCTION_FORM_NORMAL, MAGIC, VERSION_TAG_CONTAINS_PREVIEW,
+};
 use super::opcode::Opcode;
-use crate::ir::SymbolVisibility;
 use crate::ir::{
-    Attribute, BlockId, Module, OpId, RegionId, TileElementType, Type, Value, ValueProducer,
+    Attribute, BlockId, Layout, Module, OpId, OptimizationHints, RegionId, SymExpr,
+    SymbolVisibility, TileElementType, Type, Value, ValueProducer, ARG_NAMES_ATTR, DYNAMIC,
 };
 use crate::requirements::{target_requirement, Feature};
 use crate::{Error, Result};
@@ -28,13 +31,74 @@ use crate::{Error, Result};
 
 /// Serialize a [`Module`] into Tile IR bytecode.
 ///
-/// Returns the bytecode as a `Vec<u8>`.
+/// Writes [`BytecodeVersion::CURRENT`], or [`BytecodeVersion::PREVIEW_CONTENT`]
+/// when the module carries public-preview content (see
+/// [`module_preview_content`]); the header tag then has
+/// [`VERSION_TAG_CONTAINS_PREVIEW`] set, as the reference writer does. An
+/// assembler reads preview content only at its own current version, so a
+/// module meant for a newer assembler goes through
+/// [`write_bytecode_version`] with that version instead.
 pub fn write_bytecode(module: &Module) -> Result<Vec<u8>> {
-    write_bytecode_version(module, BytecodeVersion::CURRENT)
+    let version = if module_preview_content(module) {
+        BytecodeVersion::PREVIEW_CONTENT
+    } else {
+        BytecodeVersion::CURRENT
+    };
+    write_bytecode_impl(module, version)
 }
 
 /// Serialize a [`Module`] with a specific bytecode version.
+///
+/// Public-preview content exists from [`BytecodeVersion::PREVIEW_CONTENT`]
+/// on, and an assembler reads it only at the version it calls current (the
+/// newest numbered version its `--list-versions` prints): a 13.5 assembler
+/// reads preview content at 13.5, a 13.6 one at 13.6. Pass that version
+/// here. Asking for an older version than 13.5 for a module that contains
+/// preview content is an error rather than a silent upgrade, mirroring the
+/// reference writer.
 pub fn write_bytecode_version(module: &Module, version: BytecodeVersion) -> Result<Vec<u8>> {
+    if module_preview_content(module) && version < BytecodeVersion::PREVIEW_CONTENT {
+        return Err(Error::BytecodeWrite(format!(
+            "module contains public-preview content, which needs bytecode version {} or newer, \
+             but version {version} was explicitly requested",
+            BytecodeVersion::PREVIEW_CONTENT
+        )));
+    }
+    write_bytecode_impl(module, version)
+}
+
+/// Whether the module uses anything from the public-preview SIMT surface: a
+/// preview opcode, a fragment or placeholder type, or a preview attribute,
+/// anywhere in its functions, bodies or globals.
+pub fn module_preview_content(module: &Module) -> bool {
+    module
+        .globals
+        .iter()
+        .any(|g| g.value.element_type.is_preview())
+        || module
+            .functions
+            .iter()
+            .any(|&f| op_preview_content(module, f))
+}
+
+fn op_preview_content(module: &Module, id: OpId) -> bool {
+    let op = module.op(id);
+    op.opcode.is_preview()
+        || op.result_types.iter().any(Type::is_preview)
+        || op.attributes.iter().any(|(_, a)| a.contains_preview())
+        || op.regions.iter().any(|&region| {
+            module.region(region).blocks.iter().any(|&block| {
+                let block = module.block(block);
+                block.args.iter().any(|(_, ty)| ty.is_preview())
+                    || block
+                        .ops
+                        .iter()
+                        .any(|&child| op_preview_content(module, child))
+            })
+        })
+}
+
+fn write_bytecode_impl(module: &Module, version: BytecodeVersion) -> Result<Vec<u8>> {
     if version < BytecodeVersion::MIN_SUPPORTED {
         return Err(Error::BytecodeWrite(format!(
             "unsupported version {version}, minimum is {}",
@@ -50,6 +114,7 @@ pub fn write_bytecode_version(module: &Module, version: BytecodeVersion) -> Resu
             BytecodeVersion::SUPPORTED.map(|v| v.to_string()).join(", ")
         )));
     }
+    let contains_preview = module_preview_content(module);
 
     // Initialize writer context with all managers.
     let mut ctx = WriterCtx {
@@ -84,7 +149,7 @@ pub fn write_bytecode_version(module: &Module, version: BytecodeVersion) -> Resu
     }
 
     // 1. Header
-    write_header(&mut out, version);
+    write_header(&mut out, version, contains_preview);
 
     // 2. Global section
     write_global_section(&mut out, &mut ctx)?;
@@ -99,7 +164,7 @@ pub fn write_bytecode_version(module: &Module, version: BytecodeVersion) -> Resu
     write_debug_section(&mut out, &mut ctx)?;
 
     // 6. Type section
-    write_type_section(&mut out, &ctx.types, version)?;
+    write_type_section(&mut out, &ctx.types, &mut ctx.strings, version)?;
 
     // 7. String section
     write_string_section(&mut out, &ctx.strings)?;
@@ -192,11 +257,15 @@ pub fn write_bytecode_to_file(module: &Module, path: &str) -> Result<()> {
 // Header
 // =========================================================================
 
-fn write_header(out: &mut Vec<u8>, version: BytecodeVersion) {
+fn write_header(out: &mut Vec<u8>, version: BytecodeVersion, contains_preview: bool) {
     out.extend_from_slice(&MAGIC);
     out.push(version.major);
     out.push(version.minor);
-    out.extend_from_slice(&version.tag.to_le_bytes());
+    let mut tag = version.tag;
+    if contains_preview {
+        tag |= VERSION_TAG_CONTAINS_PREVIEW;
+    }
+    out.extend_from_slice(&tag.to_le_bytes());
 }
 
 // =========================================================================
@@ -274,6 +343,12 @@ impl StringManager {
         let idx = self.map.len() as u64;
         self.map.insert(s.to_owned(), idx);
         idx
+    }
+
+    /// The interned strings in table order.
+    #[cfg(test)]
+    pub(super) fn entries(&self) -> Vec<String> {
+        self.map.keys().cloned().collect()
     }
 }
 
@@ -387,18 +462,54 @@ impl TypeManager {
                     self.get_or_insert(res);
                 }
             }
-            Type::Scalar(_) | Type::Token => {}
+            // A fragment entry references its element type and any type a
+            // layout or alignment leaf names, so those go in first.
+            Type::Fragment(f) => {
+                self.get_or_insert(&Type::Scalar(f.element_type));
+                for expr in fragment_exprs(f) {
+                    self.register_expr_types(expr);
+                }
+            }
+            Type::Scalar(_)
+            | Type::Token
+            | Type::Index
+            | Type::NoneType
+            | Type::PreviewParam(_) => {}
         }
     }
+
+    fn register_expr_types(&mut self, expr: &SymExpr) {
+        for ty in expr.types() {
+            self.get_or_insert(ty);
+        }
+    }
+
+    /// The registered types in table order.
+    #[cfg(test)]
+    pub(super) fn entries(&self) -> &[Type] {
+        &self.list
+    }
+}
+
+/// Every expression a fragment type embeds: both layouts and the alignment.
+fn fragment_exprs(f: &crate::ir::FragmentType) -> impl Iterator<Item = &SymExpr> {
+    f.mem_layout
+        .shapes
+        .iter()
+        .chain(&f.mem_layout.strides)
+        .chain(&f.fragmap.shapes)
+        .chain(&f.fragmap.strides)
+        .chain(std::iter::once(&f.alignment))
 }
 
 fn serialize_type(
     ty: &Type,
     types: &mut TypeManager,
+    strings: &mut StringManager,
     w: &mut EncodingWriter,
     version: BytecodeVersion,
 ) -> Result<()> {
-    serialize_type_with_pointer_attribute(ty, types, w, version, None)
+    serialize_type_with_pointer_attribute(ty, types, strings, w, version, None)
 }
 
 fn pointer_dependency(ty: &Type) -> Option<Type> {
@@ -417,6 +528,7 @@ fn pointer_dependency(ty: &Type) -> Option<Type> {
 fn serialize_type_with_pointer_attribute(
     ty: &Type,
     types: &mut TypeManager,
+    strings: &mut StringManager,
     w: &mut EncodingWriter,
     version: BytecodeVersion,
     pointer_attribute: Option<crate::ir::PointerAttribute>,
@@ -435,7 +547,7 @@ fn serialize_type_with_pointer_attribute(
                     "ptr_attr requires a pointer, pointer tile or view type".into(),
                 ));
             }
-            serialize_type_with_pointer_attribute(base, types, w, version, Some(*attr))?;
+            serialize_type_with_pointer_attribute(base, types, strings, w, version, Some(*attr))?;
         }
         Type::Scalar(s) => {
             require_version(&format!("{s:?}"), s.minimum_version(), version)?;
@@ -546,6 +658,50 @@ fn serialize_type_with_pointer_attribute(
         Type::Token => {
             w.write_varint(TypeTag::Token as u64);
         }
+        // Fragment entry (spec 4.4): tagged symbolic shape, static shape,
+        // element type, memory space, tagged layouts, tagged alignment.
+        // Nested attributes inside a type are always self-contained.
+        Type::Fragment(f) => {
+            require_version("preview$fragment", Feature::SimtPreview.since(), version)?;
+            if f.shape.iter().any(|d| *d == DYNAMIC || *d < 0) {
+                return Err(Error::BytecodeWrite(
+                    "preview$fragment with a symbolic dimension is not supported; \
+                     this writer emits concrete fragment shapes only"
+                        .into(),
+                ));
+            }
+            w.write_varint(TypeTag::Fragment as u64);
+            // symbolicShape: the empty tuple of a fully static shape.
+            w.write_varint(AttributeTag::SymbolicTuple as u64);
+            w.write_varint(0);
+            w.write_le_var_size_i64(&f.shape);
+            let idx = types.get_or_insert(&Type::Scalar(f.element_type));
+            w.write_varint(idx);
+            w.write_varint(f.memory_space as u64);
+            write_layout_tagged(&f.mem_layout, w, strings, types)?;
+            write_layout_tagged(&f.fragmap, w, strings, types)?;
+            write_sym_expr_tagged(&f.alignment, w, strings, types)?;
+        }
+        Type::Index => {
+            require_version("index", Feature::SimtPreview.since(), version)?;
+            w.write_varint(TypeTag::Index as u64);
+        }
+        Type::NoneType => {
+            require_version("none", Feature::SimtPreview.since(), version)?;
+            w.write_varint(TypeTag::None as u64);
+        }
+        Type::PreviewParam(p) => {
+            require_version(
+                "preview$ parameter type",
+                Feature::SimtPreview.since(),
+                version,
+            )?;
+            w.write_varint(match p {
+                crate::ir::PreviewParamType::DType => TypeTag::DTypeParam as u64,
+                crate::ir::PreviewParamType::Shape => TypeTag::ShapeParam as u64,
+                crate::ir::PreviewParamType::String => TypeTag::StringParam as u64,
+            });
+        }
     }
     Ok(())
 }
@@ -566,6 +722,7 @@ pub(super) fn require_version(
 fn write_type_section(
     out: &mut Vec<u8>,
     types: &TypeManager,
+    strings: &mut StringManager,
     version: BytecodeVersion,
 ) -> Result<()> {
     if types.list.is_empty() {
@@ -594,7 +751,7 @@ fn write_type_section(
     for ty in &type_list {
         offsets.push(running);
         let before = w.tell();
-        serialize_type(ty, &mut types_mut, &mut w, version)?;
+        serialize_type(ty, &mut types_mut, strings, &mut w, version)?;
         running += (w.tell() - before) as u32;
     }
 
@@ -629,6 +786,12 @@ impl ConstantManager {
         let idx = self.entries.len() as u64;
         self.entries.push(data);
         idx
+    }
+
+    /// The pooled constant entries (length-prefixed) in table order.
+    #[cfg(test)]
+    pub(super) fn entries(&self) -> &[Vec<u8>] {
+        &self.entries
     }
 }
 
@@ -800,8 +963,12 @@ fn prescan_function(
 ) -> Result<()> {
     let op = module.op(func_op);
 
-    // Register function name and type from attributes.
+    // Register function name and type from attributes. The formatter-only
+    // argument names have no encoding and stay out of the string table.
     for (name, attr) in &op.attributes {
+        if name == ARG_NAMES_ATTR {
+            continue;
+        }
         prescan_attribute(name, attr, strings, types);
     }
 
@@ -811,6 +978,37 @@ fn prescan_function(
     }
 
     Ok(())
+}
+
+/// Strings interned by a type's own encoding: the variable, builtin and
+/// constant names inside a fragment's layouts and alignment.
+fn prescan_type_strings(ty: &Type, strings: &mut StringManager) {
+    match ty {
+        Type::Fragment(f) => {
+            for expr in fragment_exprs(f) {
+                for s in expr.strings() {
+                    strings.get_or_insert(s);
+                }
+            }
+        }
+        Type::Func(f) => {
+            for ty in f.inputs.iter().chain(&f.results) {
+                prescan_type_strings(ty, strings);
+            }
+        }
+        Type::WithPointerAttribute(base, _) => prescan_type_strings(base, strings),
+        _ => {}
+    }
+}
+
+fn prescan_sym_expr(expr: &SymExpr, strings: &mut StringManager, types: &mut TypeManager) {
+    for s in expr.strings() {
+        strings.get_or_insert(s);
+    }
+    for ty in expr.types() {
+        types.get_or_insert(ty);
+        prescan_type_strings(ty, strings);
+    }
 }
 
 fn prescan_region(
@@ -825,12 +1023,14 @@ fn prescan_region(
         // Block argument types.
         for (_, ty) in &block.args {
             types.get_or_insert(ty);
+            prescan_type_strings(ty, strings);
         }
         for &op_id in &block.ops {
             let op = module.op(op_id);
             // Result types.
             for ty in &op.result_types {
                 types.get_or_insert(ty);
+                prescan_type_strings(ty, strings);
             }
             // Attributes.
             for (name, attr) in &op.attributes {
@@ -858,9 +1058,24 @@ fn prescan_attribute(
         }
         Attribute::Type(ty) => {
             types.get_or_insert(ty);
+            prescan_type_strings(ty, strings);
         }
         Attribute::DenseElements(de) => {
             types.get_or_insert(&de.element_type);
+        }
+        Attribute::Layout(layout) => {
+            for expr in layout.shapes.iter().chain(&layout.strides) {
+                prescan_sym_expr(expr, strings, types);
+            }
+        }
+        Attribute::SymExpr(expr) => prescan_sym_expr(expr, strings, types),
+        Attribute::ScratchRequest(scratch) => {
+            prescan_sym_expr(&scratch.size, strings, types);
+            prescan_sym_expr(&scratch.alignment, strings, types);
+        }
+        Attribute::ConstParam(param) => {
+            strings.get_or_insert(&param.name);
+            types.get_or_insert(&param.ty);
         }
         Attribute::Dictionary(entries) => {
             for (k, v) in entries {
@@ -913,8 +1128,34 @@ fn write_function_section(out: &mut Vec<u8>, ctx: &mut WriterCtx) -> Result<()> 
         w.write_varint(name_idx);
         w.write_varint(sig_idx);
 
-        // Entry flag.
-        let is_entry = op.opcode == Opcode::Entry;
+        // Entry kind. The function table takes the function-like opcodes
+        // only; bodiless preview entries exist in the 13.5 form layout, and
+        // the opcode gate below reports that version requirement.
+        if !op.opcode.is_function_like() {
+            return Err(Error::BytecodeWrite(format!(
+                "{} is not a function-like operation and cannot appear in module functions",
+                op.opcode.name()
+            )));
+        }
+        let kind = match op.opcode {
+            Opcode::Entry => FunctionKind::Kernel,
+            Opcode::PreviewFunc => {
+                if find_attr(&op.attributes, "is_extern") != Some(&Attribute::Bool(true)) {
+                    return Err(Error::BytecodeWrite(format!(
+                        "preview$func @{name} must be extern: only declarations are written to \
+                         the function table"
+                    )));
+                }
+                FunctionKind::ExternFunc
+            }
+            Opcode::PreviewExternImpl => FunctionKind::ExternImpl,
+            _ => unreachable!("Opcode::is_function_like admits only the opcodes above"),
+        };
+        if kind != FunctionKind::Kernel {
+            require_version(op.opcode.name(), op.opcode.minimum_version(), ctx.version)?;
+        }
+        let form_layout = ctx.version >= BytecodeVersion::FUNCTION_FORM_LAYOUT;
+        let is_entry = kind == FunctionKind::Kernel;
         let hints_attr = if is_entry {
             find_attr(&op.attributes, "optimization_hints").cloned()
         } else {
@@ -935,12 +1176,25 @@ fn write_function_section(out: &mut Vec<u8>, ctx: &mut WriterCtx) -> Result<()> 
                 }
             }
         }
-        let has_hints = hints_attr.is_some();
         let mut flags: u8 = 0;
         if is_entry {
             flags |= FunctionFlag::KindKernel as u8;
+        } else {
+            // Bit 0 is the only place a function's symbol visibility lives.
+            // Extern declarations and implementations are bodiless symbols,
+            // and the reference verifier rejects a bodiless symbol that is
+            // public ("symbol declaration cannot have public visibility"),
+            // so both are written private, as the reference writer does for
+            // the ops its parser builds.
+            flags |= FunctionFlag::VisibilityPrivate as u8;
         }
-        if is_entry && has_hints {
+        if form_layout {
+            // Bits 3:2 carry the form; hints are no longer flagged.
+            flags |= match kind {
+                FunctionKind::ExternImpl => FUNCTION_FORM_EXTERN_IMPL,
+                FunctionKind::Kernel | FunctionKind::ExternFunc => FUNCTION_FORM_NORMAL,
+            };
+        } else if is_entry && hints_attr.is_some() {
             flags |= FunctionFlag::HasOptimizationHints as u8;
         }
         w.write_byte(flags);
@@ -948,22 +1202,89 @@ fn write_function_section(out: &mut Vec<u8>, ctx: &mut WriterCtx) -> Result<()> 
         // Function debug-info index: 1-based into the Debug section's
         // per-function attribute lists. The DI name is the user-facing
         // kernel name when the frontend provided one; the linkage name is
-        // the emitted symbol.
+        // the emitted symbol. A bodiless entry's list holds only this
+        // location, which is all the reader consumes for it.
         let di_name = find_string_attr(&op.attributes, "di_name");
         let di_idx =
             ctx.debug
                 .begin_function(&mut ctx.strings, &name, di_name.as_deref(), &op.location);
         w.write_varint(di_idx);
 
-        // Write optimization hints if present.
-        if let Some(hints_attr) = hints_attr {
+        // Optimization hints: flagged before 13.5, always present for a
+        // kernel from 13.5 on (an empty dictionary when none were given).
+        if is_entry && (form_layout || hints_attr.is_some()) {
+            let hints = hints_attr.unwrap_or_else(|| {
+                Attribute::OptimizationHints(OptimizationHints {
+                    entries: Vec::new(),
+                })
+            });
             write_self_contained_attribute(
-                &hints_attr,
+                &hints,
                 &mut w,
                 &mut ctx.strings,
                 &mut ctx.types,
                 &mut ctx.constants,
             )?;
+        }
+
+        // An implementation is bodiless: its generated op payload stands in
+        // for the body, followed by a zero body length (spec 4.5/4.6).
+        if kind == FunctionKind::ExternImpl {
+            super::op_writer::write_extern_impl_payload(op, &mut w, ctx)?;
+            w.write_varint(0);
+            continue;
+        }
+
+        // Argument attributes are a positional field from 13.5 on (an empty
+        // array when none). Before that the table has no slot for them, so
+        // refuse rather than drop them silently, as the reference writer does.
+        let arg_attrs = find_attr(&op.attributes, "arg_attrs");
+        if form_layout {
+            let arg_attrs = match arg_attrs {
+                Some(attr @ Attribute::Array(_)) => attr.clone(),
+                Some(_) => {
+                    return Err(Error::BytecodeWrite(format!(
+                        "arg_attrs of @{name} must be an array of dictionaries"
+                    )))
+                }
+                None => Attribute::Array(Vec::new()),
+            };
+            write_self_contained_attribute(
+                &arg_attrs,
+                &mut w,
+                &mut ctx.strings,
+                &mut ctx.types,
+                &mut ctx.constants,
+            )?;
+        } else if arg_attrs.is_some() {
+            return Err(Error::BytecodeWrite(format!(
+                "argument attributes require bytecode version {} or newer, requested {}",
+                BytecodeVersion::FUNCTION_FORM_LAYOUT,
+                ctx.version
+            )));
+        }
+
+        // An extern declaration is a normal-form entry with body length
+        // zero, followed by its always-present constant parameters.
+        if kind == FunctionKind::ExternFunc {
+            w.write_varint(0);
+            let const_params = match find_attr(&op.attributes, "const_params") {
+                Some(attr @ Attribute::Array(_)) => attr.clone(),
+                Some(_) => {
+                    return Err(Error::BytecodeWrite(format!(
+                        "const_params of @{name} must be an array"
+                    )))
+                }
+                None => Attribute::Array(Vec::new()),
+            };
+            write_self_contained_attribute(
+                &const_params,
+                &mut w,
+                &mut ctx.strings,
+                &mut ctx.types,
+                &mut ctx.constants,
+            )?;
+            continue;
         }
 
         // Write function body.
@@ -980,6 +1301,17 @@ fn write_function_section(out: &mut Vec<u8>, ctx: &mut WriterCtx) -> Result<()> 
     write_section_header(out, Section::Func, buf.len(), 8);
     out.extend_from_slice(&buf);
     Ok(())
+}
+
+/// The three function-table entry kinds of the 13.5 form layout.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FunctionKind {
+    /// `entry`: kernel bit set, hints, arg_attrs, body.
+    Kernel,
+    /// `preview$func extern`: normal form, body length zero, const_params.
+    ExternFunc,
+    /// `preview$extern_impl`: form bits 01, op payload, body length zero.
+    ExternImpl,
 }
 
 fn write_function_body(ctx: &mut WriterCtx, func_op: OpId) -> Result<Vec<u8>> {
@@ -1399,8 +1731,150 @@ pub(super) fn write_self_contained_attribute(
                 w.write_signed_varint(ub);
             }
         }
+        // Public-preview attributes (spec 4.3): tag, then the payload shared
+        // with the inline form. None of them has optional parameters, so
+        // there is no flags word.
+        Attribute::Access(a) => {
+            w.write_varint(AttributeTag::Access as u64);
+            w.write_varint(*a as u64);
+        }
+        Attribute::MemorySpace(m) => {
+            w.write_varint(AttributeTag::MemorySpace as u64);
+            w.write_varint(*m as u64);
+        }
+        Attribute::Synchronization(s) => {
+            w.write_varint(AttributeTag::Synchronization as u64);
+            w.write_varint(*s as u64);
+        }
+        Attribute::Layout(layout) => write_layout_tagged(layout, w, strings, types)?,
+        Attribute::SymExpr(expr) => write_sym_expr_tagged(expr, w, strings, types)?,
+        Attribute::ScratchRequest(scratch) => {
+            w.write_varint(AttributeTag::ScratchRequest as u64);
+            write_scratch_payload(scratch, w, strings, types)?;
+        }
+        Attribute::ConstParam(param) => {
+            w.write_varint(AttributeTag::ConstParam as u64);
+            write_const_param_payload(param, w, strings, types);
+        }
     }
     Ok(())
+}
+
+// =========================================================================
+// Public-preview attribute payloads (spec 4.3)
+// =========================================================================
+
+/// A symbolic expression is an interface-typed parameter wherever it
+/// appears, so it is always written self-contained: tag, then payload.
+pub(super) fn write_sym_expr_tagged(
+    expr: &SymExpr,
+    w: &mut EncodingWriter,
+    strings: &mut StringManager,
+    types: &mut TypeManager,
+) -> Result<()> {
+    let mut binary = |tag: AttributeTag, l: &SymExpr, r: &SymExpr, w: &mut EncodingWriter| {
+        w.write_varint(tag as u64);
+        write_sym_expr_tagged(l, w, strings, types)?;
+        write_sym_expr_tagged(r, w, strings, types)
+    };
+    match expr {
+        SymExpr::Int(v) => {
+            w.write_varint(AttributeTag::SymbolicExprInt as u64);
+            // The parameter is an int64_t, hence zigzag.
+            w.write_signed_varint(*v);
+        }
+        SymExpr::Var(name) => {
+            w.write_varint(AttributeTag::SymbolicExprVar as u64);
+            w.write_varint(strings.get_or_insert(name));
+        }
+        SymExpr::Builtin { name, ty } => {
+            w.write_varint(AttributeTag::SymbolicExprBuiltin as u64);
+            w.write_varint(strings.get_or_insert(name));
+            w.write_varint(types.get_or_insert(ty));
+        }
+        SymExpr::ConstStr(s) => {
+            w.write_varint(AttributeTag::SymbolicExprConstStr as u64);
+            w.write_varint(strings.get_or_insert(s));
+        }
+        SymExpr::ConcreteType(ty) => {
+            w.write_varint(AttributeTag::ConcreteType as u64);
+            w.write_varint(types.get_or_insert(ty));
+        }
+        SymExpr::Tuple(values) => {
+            w.write_varint(AttributeTag::SymbolicTuple as u64);
+            write_sym_expr_array(values, w, strings, types)?;
+        }
+        SymExpr::Mul(l, r) => binary(AttributeTag::SymbolicExprMul, l, r, w)?,
+        SymExpr::Div(l, r) => binary(AttributeTag::SymbolicExprDiv, l, r, w)?,
+        SymExpr::Add(l, r) => binary(AttributeTag::SymbolicExprAdd, l, r, w)?,
+        SymExpr::Sub(l, r) => binary(AttributeTag::SymbolicExprSub, l, r, w)?,
+        SymExpr::FloorDiv(l, r) => binary(AttributeTag::SymbolicExprFloorDiv, l, r, w)?,
+        SymExpr::CeilDiv(l, r) => binary(AttributeTag::SymbolicExprCeilDiv, l, r, w)?,
+        SymExpr::Neg(x) => {
+            w.write_varint(AttributeTag::SymbolicExprNeg as u64);
+            write_sym_expr_tagged(x, w, strings, types)?;
+        }
+    }
+    Ok(())
+}
+
+/// `varint(count)` then each element self-contained: the SymbolicTuple
+/// payload, and the inline form of every `ArrayRef<SymbolicExprAttr>`.
+pub(super) fn write_sym_expr_array(
+    values: &[SymExpr],
+    w: &mut EncodingWriter,
+    strings: &mut StringManager,
+    types: &mut TypeManager,
+) -> Result<()> {
+    w.write_varint(values.len() as u64);
+    for value in values {
+        write_sym_expr_tagged(value, w, strings, types)?;
+    }
+    Ok(())
+}
+
+/// Layout payload: the shapes and strides tuples inline (they are concrete
+/// nested parameters, so no tags of their own).
+pub(super) fn write_layout_payload(
+    layout: &Layout,
+    w: &mut EncodingWriter,
+    strings: &mut StringManager,
+    types: &mut TypeManager,
+) -> Result<()> {
+    write_sym_expr_array(&layout.shapes, w, strings, types)?;
+    write_sym_expr_array(&layout.strides, w, strings, types)
+}
+
+pub(super) fn write_layout_tagged(
+    layout: &Layout,
+    w: &mut EncodingWriter,
+    strings: &mut StringManager,
+    types: &mut TypeManager,
+) -> Result<()> {
+    w.write_varint(AttributeTag::Layout as u64);
+    write_layout_payload(layout, w, strings, types)
+}
+
+/// ScratchRequest payload: two interface-typed expressions, each tagged.
+pub(super) fn write_scratch_payload(
+    scratch: &crate::ir::ScratchRequest,
+    w: &mut EncodingWriter,
+    strings: &mut StringManager,
+    types: &mut TypeManager,
+) -> Result<()> {
+    write_sym_expr_tagged(&scratch.size, w, strings, types)?;
+    write_sym_expr_tagged(&scratch.alignment, w, strings, types)
+}
+
+/// ConstParam payload: name string index, then type index.
+pub(super) fn write_const_param_payload(
+    param: &crate::ir::ConstParam,
+    w: &mut EncodingWriter,
+    strings: &mut StringManager,
+    types: &mut TypeManager,
+) {
+    w.write_varint(strings.get_or_insert(&param.name));
+    w.write_varint(types.get_or_insert(&param.ty));
 }
 
 // =========================================================================
@@ -1448,9 +1922,10 @@ mod tests {
 
     fn type_bytes(ty: &Type, version: BytecodeVersion) -> Result<Vec<u8>> {
         let mut types = TypeManager::new();
+        let mut strings = StringManager::new();
         types.get_or_insert(ty);
         let mut writer = EncodingWriter::new();
-        serialize_type(ty, &mut types, &mut writer, version)?;
+        serialize_type(ty, &mut types, &mut strings, &mut writer, version)?;
         Ok(writer.into_bytes())
     }
 
@@ -1545,5 +2020,206 @@ mod tests {
                 .unwrap()
                 .contains("cutile-rs test"));
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // Public-preview encodings, byte for byte (tilelib spec sections 4.3,
+    // 4.4). Every preview tag is at least 0x80, so it is a two-byte varint.
+    // ---------------------------------------------------------------------
+
+    use crate::ir::{
+        Access, ConstParam, FragmentType, Layout, MemorySpace, PreviewParamType, ScratchRequest,
+        SymExpr, Synchronization, DYNAMIC,
+    };
+
+    /// Self-contained encoding with fresh tables: the first string and the
+    /// first type each get index 0.
+    fn attr_bytes(attr: &Attribute) -> Vec<u8> {
+        let mut strings = StringManager::new();
+        let mut types = TypeManager::new();
+        let mut constants = ConstantManager::new();
+        let mut w = EncodingWriter::new();
+        write_self_contained_attribute(attr, &mut w, &mut strings, &mut types, &mut constants)
+            .unwrap();
+        w.into_bytes()
+    }
+
+    /// Spec 4.3: an enum attribute is its tag then one varint.
+    #[test]
+    fn preview_enum_attributes_are_tag_then_value() {
+        assert_eq!(
+            attr_bytes(&Attribute::Access(Access::InOut)),
+            [0xDF, 0x01, 0x02]
+        );
+        assert_eq!(
+            attr_bytes(&Attribute::MemorySpace(MemorySpace::Smem)),
+            [0xDD, 0x01, 0x01]
+        );
+        assert_eq!(
+            attr_bytes(&Attribute::Synchronization(Synchronization::Warp)),
+            [0xDE, 0x01, 0x01]
+        );
+        // The per-argument dictionary of an `arg_attrs` array.
+        assert_eq!(
+            attr_bytes(&Attribute::access_dict(Access::InOut)),
+            [0x0A, 0x01, 0x00, 0xDF, 0x01, 0x02]
+        );
+    }
+
+    /// Spec 4.3: integer leaves are zigzag varints, names and types are
+    /// table indices, nodes nest their tagged operands.
+    #[test]
+    fn symbolic_expression_leaves_and_nodes() {
+        let expr = |e: SymExpr| attr_bytes(&Attribute::SymExpr(e));
+        assert_eq!(expr(SymExpr::Int(-3)), [0xD1, 0x01, 0x05]);
+        assert_eq!(expr(SymExpr::Int(128)), [0xD1, 0x01, 0x80, 0x02]);
+        assert_eq!(expr(SymExpr::var("M")), [0xD2, 0x01, 0x00]);
+        assert_eq!(expr(SymExpr::const_str("nvrtc")), [0xE4, 0x01, 0x00]);
+        // name index 0, then the `index` type at type index 0.
+        assert_eq!(
+            expr(SymExpr::builtin("context.num_threads")),
+            [0xE3, 0x01, 0x00, 0x00]
+        );
+        assert_eq!(
+            expr(SymExpr::concrete_type(Type::Scalar(ScalarType::F32))),
+            [0xDB, 0x01, 0x00]
+        );
+        // M * 16: tag, tagged lhs, tagged rhs (16 zigzags to 32).
+        assert_eq!(
+            expr(SymExpr::times(SymExpr::var("M"), SymExpr::Int(16))),
+            [0xD3, 0x01, 0xD2, 0x01, 0x00, 0xD1, 0x01, 0x20]
+        );
+        assert_eq!(
+            expr(SymExpr::negate(SymExpr::var("M"))),
+            [0xDC, 0x01, 0xD2, 0x01, 0x00]
+        );
+        // (1, (2, 3)): nested tuples are tagged elements of the outer one.
+        assert_eq!(
+            expr(SymExpr::tuple([
+                SymExpr::Int(1),
+                SymExpr::tuple([SymExpr::Int(2), SymExpr::Int(3)]),
+            ])),
+            [
+                0xD8, 0x01, 0x02, 0xD1, 0x01, 0x02, 0xD8, 0x01, 0x02, 0xD1, 0x01, 0x04, 0xD1, 0x01,
+                0x06
+            ]
+        );
+        let one = || SymExpr::Int(1);
+        for (node, tag) in [
+            (SymExpr::Div(Box::new(one()), Box::new(one())), 0xD4u8),
+            (SymExpr::plus(one(), one()), 0xD5),
+            (SymExpr::minus(one(), one()), 0xD6),
+            (SymExpr::floor_div(one(), one()), 0xD7),
+            (SymExpr::ceil_div(one(), one()), 0xDA),
+        ] {
+            assert_eq!(
+                expr(node),
+                [tag, 0x01, 0xD1, 0x01, 0x02, 0xD1, 0x01, 0x02],
+                "tag {tag:#X}"
+            );
+        }
+    }
+
+    /// Spec 4.3: a layout is its tag, then the shapes and strides tuples
+    /// inline (count + tagged elements, no tuple tag of their own).
+    #[test]
+    fn layout_payload_is_two_inline_tuples() {
+        assert_eq!(
+            attr_bytes(&Attribute::Layout(Layout::contiguous_mem(1))),
+            [0xD9, 0x01, 0x01, 0xD1, 0x01, 0x02, 0x01, 0xD1, 0x01, 0x02]
+        );
+        assert_eq!(
+            attr_bytes(&Attribute::Layout(Layout::elementwise(128))),
+            [
+                0xD9, 0x01, // tag
+                0x03, 0xD1, 0x01, 0x80, 0x02, 0xD1, 0x01, 0x02, 0xD1, 0x01,
+                0x02, // (128, 1, 1)
+                0x03, 0xD1, 0x01, 0x02, 0xD1, 0x01, 0x00, 0xD1, 0x01, 0x00, // (1, 0, 0)
+            ]
+        );
+        assert_eq!(
+            attr_bytes(&Attribute::Layout(Layout::scalar_mem())),
+            [0xD9, 0x01, 0x00, 0x00]
+        );
+        // The empty tuple: the symbolic shape of a fully static fragment.
+        assert_eq!(
+            attr_bytes(&Attribute::SymExpr(SymExpr::tuple([]))),
+            [0xD8, 0x01, 0x00]
+        );
+    }
+
+    /// Spec 4.3: scratch requests carry two tagged expressions; constant
+    /// parameters a name and a type index.
+    #[test]
+    fn scratch_request_and_const_param_payloads() {
+        // 512 and 128 zigzag to 1024 (0x80 0x08) and 256 (0x80 0x02).
+        assert_eq!(
+            attr_bytes(&Attribute::ScratchRequest(ScratchRequest::bytes(512))),
+            [0xE0, 0x01, 0xD1, 0x01, 0x80, 0x08, 0xD1, 0x01, 0x80, 0x02]
+        );
+        assert_eq!(
+            attr_bytes(&Attribute::ConstParam(ConstParam::index("M"))),
+            [0xE2, 0x01, 0x00, 0x00]
+        );
+        // The wildcard is the name "?" with the `none` type.
+        assert_eq!(
+            attr_bytes(&Attribute::ConstParam(ConstParam::wildcard())),
+            [0xE2, 0x01, 0x00, 0x00]
+        );
+    }
+
+    /// Spec 4.4: the fragment type entry, with its dependent types
+    /// registered first, and the tag-only preview types.
+    #[test]
+    fn fragment_type_entry_layout() {
+        let fragment = FragmentType::new(
+            vec![1],
+            ScalarType::F32,
+            MemorySpace::Local,
+            Layout::contiguous_mem(1),
+            Layout::elementwise(128),
+        );
+        let ty = Type::Fragment(fragment.clone());
+        let mut expected = vec![0xD2, 0x01]; // tag
+        expected.extend_from_slice(&[0xD8, 0x01, 0x00]); // empty symbolic shape
+        expected.push(0x01); // rank
+        expected.extend_from_slice(&1i64.to_le_bytes());
+        expected.extend_from_slice(&[0x00, 0x00]); // f32 at type index 0, local
+        expected.extend_from_slice(&attr_bytes(&Attribute::Layout(fragment.mem_layout.clone())));
+        expected.extend_from_slice(&attr_bytes(&Attribute::Layout(fragment.fragmap.clone())));
+        expected.extend_from_slice(&[0xD1, 0x01, 0x02]); // alignment 1, always written
+        assert_eq!(type_bytes(&ty, BytecodeVersion::V13_5).unwrap(), expected);
+        assert!(type_bytes(&ty, BytecodeVersion::V13_4)
+            .unwrap_err()
+            .to_string()
+            .contains("13.5"));
+
+        // The element type precedes the fragment in the type table.
+        let mut types = TypeManager::new();
+        types.get_or_insert(&ty);
+        assert_eq!(types.entries(), [Type::Scalar(ScalarType::F32), ty]);
+
+        for (ty, tag) in [
+            (Type::Index, 0xD6u8),
+            (Type::NoneType, 0xD7),
+            (Type::PreviewParam(PreviewParamType::DType), 0xD3),
+            (Type::PreviewParam(PreviewParamType::Shape), 0xD4),
+            (Type::PreviewParam(PreviewParamType::String), 0xD5),
+        ] {
+            assert_eq!(
+                type_bytes(&ty, BytecodeVersion::V13_5).unwrap(),
+                [tag, 0x01]
+            );
+            assert!(type_bytes(&ty, BytecodeVersion::V13_4).is_err());
+        }
+
+        let mut symbolic = fragment;
+        symbolic.shape = vec![DYNAMIC];
+        assert!(
+            type_bytes(&Type::Fragment(symbolic), BytecodeVersion::V13_5)
+                .unwrap_err()
+                .to_string()
+                .contains("symbolic")
+        );
     }
 }

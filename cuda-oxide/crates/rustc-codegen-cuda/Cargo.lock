@@ -589,6 +589,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxide-tile-export"
+version = "0.2.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "pliron"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -746,6 +755,7 @@ dependencies = [
  "mir-lower",
  "once_cell",
  "oxide-artifacts",
+ "oxide-tile-export",
  "pliron",
  "pliron-derive",
  "reserved-oxide-symbols",

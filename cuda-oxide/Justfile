@@ -89,6 +89,14 @@ test-cuda:
     cargo test --all-targets \
         -p cuda-oxide-codegen -p cuda-macros -p cuda-host
 
+# Prove the cuda-device witness arithmetic with Kani (needs cargo-kani 0.68.0)
+kani *args:
+    bash scripts/kani.sh {{args}}
+
+# Require every kani-mutants/ fault to fail its Kani harnesses (needs cargo-kani 0.68.0)
+kani-mutants *args:
+    bash scripts/kani-mutants.sh {{args}}
+
 # Mirror unit-tests.yml's third job, `generated-intrinsics`: the three gates a
 # change under crates/cuda-intrinsics-gen has to pass. Nothing else here ran
 # them, so a catalog edit could clear `just check` and still fail CI -- and the
@@ -130,7 +138,7 @@ doc-check:
 # per example workspace), examples-compile (needs the CUDA codegen backend),
 # and CodeQL. The book gate has a local mirror too, but `just book` stays out
 # of `check` as the one gate needing a Python virtualenv.
-# Run CI's gates minus examples-compile, book, CodeQL
+# Run CI's gates minus examples-compile, book, kani, CodeQL
 check: fmt-check clippy test test-cuda check-guards check-intrinsics doc-check
 
 # Clean project-local Cargo outputs and known cuda-oxide artifacts

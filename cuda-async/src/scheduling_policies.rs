@@ -39,7 +39,15 @@ pub struct StreamPoolRoundRobin {
 
 impl StreamPoolRoundRobin {
     /// Creates a round-robin pool with `num_streams` streams on the given device.
+    ///
+    /// Returns [`DeviceError::Scheduling`] when `num_streams` is zero, since a
+    /// pool with no streams can never serve [`next_stream`](SchedulingPolicy::next_stream).
     pub fn new(device: &Arc<Device>, num_streams: usize) -> Result<Self, DeviceError> {
+        if num_streams == 0 {
+            return Err(DeviceError::Scheduling(
+                "StreamPoolRoundRobin requires at least one stream".to_string(),
+            ));
+        }
         let mut stream_pool = Vec::with_capacity(num_streams);
         for _ in 0..num_streams {
             stream_pool.push(device.new_stream()?);

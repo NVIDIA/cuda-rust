@@ -11,6 +11,8 @@ on:
       - 'cuda-core/**'
       - 'cuda-core-derive/**'
       - 'cuda-async/**'
+      # cargo-oxide depends on cutile-rs/cutile-ir by path, so a change there can break the SIMT build.
+      - 'cutile-rs/cutile-ir/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/**'
@@ -22,6 +24,8 @@ on:
       - 'cuda-core/**'
       - 'cuda-core-derive/**'
       - 'cuda-async/**'
+      # cargo-oxide depends on cutile-rs/cutile-ir by path, so a change there can break the SIMT build.
+      - 'cutile-rs/cutile-ir/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/**'
@@ -121,7 +125,8 @@ jobs:
           # under rustc-codegen-cuda/target/ are what used to fill it and fail
           # later examples with ENOSPC / ld bus errors. The cutile-rs source
           # tree itself is a few MB and must stay: cutile_inter_kernel
-          # path-depends on cutile-rs/cutile and cutile-rs/cutile-compiler.
+          # path-depends on cutile-rs/cutile and cutile-rs/cutile-compiler,
+          # and cargo-oxide (which smoketest.sh builds) on cutile-rs/cutile-ir.
           CARGO_INCREMENTAL: "0"
         run: |
           set -euo pipefail

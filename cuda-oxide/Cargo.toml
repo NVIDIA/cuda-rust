@@ -101,6 +101,11 @@ oxide-artifacts = "0.2.1"
 # Tile export descriptions shared by `#[tile_export]`, the backend, and
 # `cargo oxide tilelib`.
 oxide-tile-export = { path = "crates/oxide-tile-export" }
+# The Tile model's pure Rust Tile IR writer, consumed by path from cutile-rs:
+# `cargo oxide tilelib` builds a tile library's interface and implementation
+# bytecode through its typed API. No CUDA dependency, so cargo-oxide stays
+# toolkit-free.
+cutile-ir = { path = "../cutile-rs/cutile-ir" }
 ptx-parse = { path = "crates/ptx-parse" }
 ptx-schedule = { path = "crates/ptx-schedule" }
 

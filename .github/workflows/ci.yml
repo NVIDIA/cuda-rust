@@ -13,6 +13,8 @@ on:
       - 'cuda-core/**'
       - 'cuda-core-derive/**'
       - 'cuda-async/**'
+      # cargo-oxide depends on cutile-rs/cutile-ir by path, so a change there can break the SIMT build.
+      - 'cutile-rs/cutile-ir/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/**'
@@ -24,6 +26,8 @@ on:
       - 'cuda-core/**'
       - 'cuda-core-derive/**'
       - 'cuda-async/**'
+      # cargo-oxide depends on cutile-rs/cutile-ir by path, so a change there can break the SIMT build.
+      - 'cutile-rs/cutile-ir/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/**'

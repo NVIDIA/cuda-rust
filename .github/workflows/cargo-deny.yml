@@ -84,7 +84,11 @@ jobs:
       # the four paper benchmarks under cutile-rs/cutile-benchmarks/paper --
       # are out for the same kind of reason: cutile-rs is a nested import of a
       # separate product that carries its own cutile-rs/deny.toml, so Oxide's
-      # policy is not the one that judges it. To bring them in one day, add a
+      # policy is not the one that judges it. One crate of it is judged here
+      # all the same: cargo-oxide depends on cutile-rs/cutile-ir by path, so
+      # cutile-ir and its dependency tree sit in cuda-oxide/Cargo.lock and the
+      # SIMT-workspace step above checks them under Oxide's deny.toml. To bring
+      # the roots themselves in one day, add a
       # `cargo deny --manifest-path <root> --locked check` step per root here,
       # and drop the matching CUTILE_ROOT filter in
       # cuda-oxide/scripts/check-dependency-licenses.sh so the inventory half

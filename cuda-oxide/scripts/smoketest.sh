@@ -40,6 +40,20 @@
 #                   Blackwell+ (CC >= 10.0) and requires full execution
 #                   there; elsewhere compiles for the sm_100 floor and
 #                   requires the NVVM IR (`.ll`) plus its `.target` sidecar.
+#   tilelib      -- a tile library written in Rust (`#[tile_export]`).
+#                   `cargo oxide tilelib <ex> --arch=<host> --library-optional`
+#                   must exit 0 and leave the LTOIR, the interface and the
+#                   implementation bytecode (`.iface.tilebc`, `.impl.tilebc`)
+#                   and the readable `.tilelib.mlir`. cargo-oxide decides
+#                   itself whether the installed tileiras can build the
+#                   `.tilelib` (it lists bytecode 13.5, CUDA 13.5+) and ends
+#                   its summary with one of two lines: after "Tile library
+#                   written to" the `.tilelib` must exist too, after "Tile
+#                   library skipped" it is not required; neither line fails
+#                   the lane. Then the example's host program runs through
+#                   `cargo oxide run --emit-nvvm-ir --arch=<host>` and must
+#                   print the SUCCESS marker, or opt out with `skipping:`.
+#                   --compile-only stops after the first step.
 #   auto-nvvm    -- runs without NVVM or architecture flags to check automatic
 #                   libdevice and target selection. Compile-only CI supplies a
 #                   target because no GPU is available.
@@ -78,6 +92,7 @@ WGMMA_EXAMPLES=(wgmma)
 BLACKWELL_MMA_EXAMPLES=(mma_mxf8f6f4)
 LTOIR_EXAMPLES=(addressof_sharedarray cpp_consumes_rust_device device_ffi_test legacy_atomic_fadd legacy_atomic_rmw_cas legacy_nvvm_pointer_shapes manual_launch_libdevice mathdx_ffi_test primitive_stress)
 LTOIR_MODERN_EXAMPLES=(small_type_ffi_test)
+TILELIB_EXAMPLES=(tilelib_relu)
 AUTO_NVVM_EXAMPLES=(libdevice_math)
 IKET_EXAMPLES=(iket_trace)
 BLACKWELL_COMPILE_EXAMPLES=(generated_intrinsics_blackwell)
@@ -126,6 +141,7 @@ classify() {
     for cat in "${BLACKWELL_MMA_EXAMPLES[@]}"; do [[ "$ex" == "$cat" ]] && { echo blackwell-mma; return; }; done
     for cat in "${LTOIR_EXAMPLES[@]}";       do [[ "$ex" == "$cat" ]] && { echo ltoir;       return; }; done
     for cat in "${LTOIR_MODERN_EXAMPLES[@]}"; do [[ "$ex" == "$cat" ]] && { echo ltoir-modern; return; }; done
+    for cat in "${TILELIB_EXAMPLES[@]}";     do [[ "$ex" == "$cat" ]] && { echo tilelib;     return; }; done
     for cat in "${AUTO_NVVM_EXAMPLES[@]}";   do [[ "$ex" == "$cat" ]] && { echo auto-nvvm;   return; }; done
     for cat in "${IKET_EXAMPLES[@]}";        do [[ "$ex" == "$cat" ]] && { echo iket;        return; }; done
     for cat in "${BLACKWELL_COMPILE_EXAMPLES[@]}"; do [[ "$ex" == "$cat" ]] && { echo blackwell-compile; return; }; done
@@ -148,6 +164,45 @@ example_never_launches() {
         [[ "$ex" == "$candidate" ]] && return 0
     done
     return 1
+}
+
+example_is_tilelib() {
+    local ex="$1" candidate
+    for candidate in "${TILELIB_EXAMPLES[@]}"; do
+        [[ "${ex}" == "${candidate}" ]] && return 0
+    done
+    return 1
+}
+
+# The two summary lines `cargo oxide tilelib` ends with, one of which every
+# successful run prints: the library was written, or skipped because the
+# resolved tileiras cannot build one. They are constants in
+# crates/cargo-oxide/src/commands/tilelib.rs (LIBRARY_WRITTEN_MARKER,
+# LIBRARY_SKIPPED_MARKER) and a unit test there pins the text grepped here.
+# cargo-oxide resolves tileiras and reads its `--list-versions` itself, so the
+# lane takes its verdict from the log instead of probing the assembler a
+# second time with a search order of its own.
+tilelib_library_written() {
+    grep -qF 'Tile library written to' "$1"
+}
+
+tilelib_library_skipped() {
+    grep -qF 'Tile library skipped' "$1"
+}
+
+# Names, space separated, of the tilelib artifacts `cargo oxide tilelib` must
+# have left for ${1} given its log ${2}; empty when every one is present. The
+# LTOIR, the two bytecode halves and the readable dump are always required;
+# the `.tilelib` itself when the log says it was written.
+tilelib_missing_artifacts() {
+    local ex_dir="crates/rustc-codegen-cuda/examples/$1" artifact="${1//-/_}" log="$2" missing="" file
+    for file in "${artifact}.ltoir" "${artifact}.iface.tilebc" "${artifact}.impl.tilebc" "${artifact}.tilelib.mlir"; do
+        [[ -s "${ex_dir}/${file}" ]] || missing="${missing} ${file}"
+    done
+    if tilelib_library_written "${log}" && [[ ! -s "${ex_dir}/${artifact}.tilelib" ]]; then
+        missing="${missing} ${artifact}.tilelib"
+    fi
+    printf '%s' "${missing# }"
 }
 
 full_debug_uses_configured_route() {
@@ -872,6 +927,40 @@ verdict_ltoir_modern() {
     return 1
 }
 
+verdict_tilelib() {
+    local ex="$1" log="$2" ec="$3"
+    if [[ ${ec} -gt 128 ]]; then echo "FAIL (crashed, signal $((ec - 128)))"; return 1; fi
+    # The descriptions come first. `cargo oxide tilelib` prints this line
+    # once both bytecode halves are on disk, and run_tilelib records a
+    # missing artifact in the log with a failing exit code, so the marker is
+    # the proof that the library half finished before the host program ran.
+    if ! grep -qF 'Tile library descriptions written' "${log}"; then
+        echo "FAIL (tilelib, descriptions not written)"
+        return 1
+    fi
+    if [[ ${ec} -ne 0 ]]; then echo "FAIL (tilelib, exit=${ec})"; return 1; fi
+    # The host program opts out without nvcc or a matching GPU; the
+    # descriptions still had to be written.
+    if grep -qE '^[[:space:]]*skipping:' "${log}"; then
+        echo "PASS (tilelib, descriptions written, host check skipped)"
+        return 0
+    fi
+    if grep_failure_markers "${log}"; then
+        echo "FAIL (tilelib, failure marker in output)"
+        return 1
+    fi
+    if grep -qE 'SUCCESS|PASS|Complete' "${log}"; then
+        if tilelib_library_written "${log}"; then
+            echo "PASS (tilelib, .tilelib built, ABI verified on ${LTOIR_ARCH})"
+        else
+            echo "PASS (tilelib, descriptions written, ABI verified on ${LTOIR_ARCH})"
+        fi
+        return 0
+    fi
+    echo "FAIL (tilelib, no success marker)"
+    return 1
+}
+
 verdict_iket() {
     local ex="$1" log="$2" ec="$3"
     local ex_dir="crates/rustc-codegen-cuda/examples/${ex}"
@@ -974,6 +1063,24 @@ verdict_compile() {
         fi
         echo "FAIL (libNVVM compile produced no fresh LTOIR)"
         return 1
+    fi
+    if [[ ${FULL_DEBUG} -eq 0 ]] && example_is_tilelib "${ex}"; then
+        # run_tilelib ran the library step only. It already failed the exit
+        # code on a missing artifact or a missing summary line; naming the
+        # artifacts here tells a built library apart from descriptions alone
+        # in the summary, with cargo-oxide's own reason for skipping it.
+        local missing
+        missing="$(tilelib_missing_artifacts "${ex}" "${log}")"
+        if [[ -n "${missing}" ]]; then
+            echo "FAIL (tilelib, missing ${missing})"
+            return 1
+        fi
+        if tilelib_library_written "${log}"; then
+            echo "PASS (tilelib descriptions and .tilelib for ${LTOIR_ARCH})"
+        else
+            echo "PASS (tilelib descriptions for ${LTOIR_ARCH}; $(grep -F 'Tile library skipped' "${log}" | head -1))"
+        fi
+        return 0
     fi
     if [[ -s "${ex_dir}/${artifact}.ptx" ]]; then
         # Nothing executes in compile-only mode, so every emitted PTX must
@@ -1228,6 +1335,7 @@ run_full_debug_build() {
         blackwell-mma)    arch="sm_120a" ;;
         ltoir)            arch="${LTOIR_ARCH}" ;;
         ltoir-modern)     arch="${LTOIR_MODERN_ARCH}" ;;
+        tilelib)          arch="${LTOIR_ARCH}" ;;
         auto-nvvm)        arch="${LTOIR_ARCH}" ;;
         iket)             arch="sm_90" ;;
         blackwell-compile) arch="sm_120a" ;;
@@ -2035,6 +2143,12 @@ run_cargo() {
         return
     fi
 
+    # Tile libraries have their own two-step lane in every mode.
+    if [[ "${cat}" == "tilelib" ]]; then
+        run_tilelib "${ex}" "${log}"
+        return
+    fi
+
     # Designated NVVM examples use `emit-ltoir` in compile-only mode so CI
     # checks both textual export and real libNVVM compilation. Other examples
     # use `build`.
@@ -2223,6 +2337,59 @@ run_cargo() {
     fi
 }
 
+# The tilelib lane: the library half first, then the example's own host
+# program, both through `cargo oxide` the way the example's README runs
+# them. `--library-optional` lets the first step exit 0 on a toolkit whose
+# tileiras cannot build a `.tilelib`; whether that step had to leave one is
+# read from its own summary line (tilelib_library_written). The second step
+# rebuilds the device half, and a rebuild clears every generated artifact,
+# so the artifacts are checked in between and a gap is recorded in the log
+# with a failing CARGO_EC, as the other lanes do.
+run_tilelib() {
+    local ex="$1" log="$2" note=""
+    local -a args=("tilelib" "${ex}" "--arch=${LTOIR_ARCH}" "--library-optional")
+    if [[ ${VERBOSE} -eq 1 ]]; then
+        cargo oxide "${args[@]}" 2>&1 | tee "${log}"
+        CARGO_EC=${PIPESTATUS[0]}
+    else
+        cargo oxide "${args[@]}" >"${log}" 2>&1
+        CARGO_EC=$?
+    fi
+    if [[ ${CARGO_EC} -ne 0 ]]; then
+        return
+    fi
+    # Exit 0 without either summary line means the command's contract
+    # changed under this lane, not that a library is optional.
+    if ! tilelib_library_written "${log}" && ! tilelib_library_skipped "${log}"; then
+        note="${ex}: cargo oxide tilelib --library-optional exited 0 without reporting the tile library as written or skipped"
+    else
+        local missing
+        missing="$(tilelib_missing_artifacts "${ex}" "${log}")"
+        if [[ -n "${missing}" ]]; then
+            note="${ex}: cargo oxide tilelib --library-optional exited 0 but left no ${missing}"
+        fi
+    fi
+    if [[ -n "${note}" ]]; then
+        printf '%s\n' "${note}" >>"${log}"
+        if [[ ${VERBOSE} -eq 1 ]]; then
+            printf '%s\n' "${note}"
+        fi
+        CARGO_EC=1
+        return
+    fi
+    if [[ ${COMPILE_ONLY} -eq 1 ]]; then
+        return
+    fi
+    local -a run_args=("run" "${ex}" "--emit-nvvm-ir" "--arch=${LTOIR_ARCH}")
+    if [[ ${VERBOSE} -eq 1 ]]; then
+        cargo oxide "${run_args[@]}" 2>&1 | tee -a "${log}"
+        CARGO_EC=${PIPESTATUS[0]}
+    else
+        cargo oxide "${run_args[@]}" >>"${log}" 2>&1
+        CARGO_EC=$?
+    fi
+}
+
 # ---- Shared example target dir -------------------------------------------
 #
 # Each example under crates/rustc-codegen-cuda/examples/ is its own standalone
@@ -2332,6 +2499,7 @@ for ex in "${selected[@]}"; do
             blackwell-mma) verdict="$(verdict_blackwell_mma "${ex}" "${log}" "${ec}")" && status=0 || status=$? ;;
             ltoir)       verdict="$(verdict_ltoir       "${ex}" "${log}" "${ec}")" && status=0 || status=$? ;;
             ltoir-modern) verdict="$(verdict_ltoir_modern "${ex}" "${log}" "${ec}")" && status=0 || status=$? ;;
+            tilelib)     verdict="$(verdict_tilelib     "${ex}" "${log}" "${ec}")" && status=0 || status=$? ;;
             auto-nvvm)   verdict="$(verdict_ltoir       "${ex}" "${log}" "${ec}")" && status=0 || status=$? ;;
             iket)        verdict="$(verdict_iket        "${ex}" "${log}" "${ec}")" && status=0 || status=$? ;;
             standard)    verdict="$(verdict_standard    "${log}" "${ec}" "${ex}")" && status=0 || status=$? ;;

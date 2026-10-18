@@ -27,7 +27,7 @@ use dialect_mir::ops::{
 use pliron::basic_block::BasicBlock;
 use pliron::builtin::types::{FP32Type, FP64Type, IntegerType};
 use pliron::context::{Context, Ptr};
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::r#type::Typed;

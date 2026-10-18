@@ -12,7 +12,7 @@ use dialect_mir::attributes::{MirCastKindAttr, MirPointerKindAuthorityAttr};
 use dialect_mir::ops::MirCastOp;
 use pliron::basic_block::BasicBlock;
 use pliron::context::{Context, Ptr};
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::r#type::{TypeHandle, Typed};

@@ -28,7 +28,6 @@ use pliron::{
     builtin::op_interfaces::{NOpdsInterface, NResultsInterface},
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -124,7 +123,6 @@ use pliron::{
     },
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -300,7 +298,6 @@ use pliron::{
     builtin::{op_interfaces::{NOpdsInterface, NResultsInterface}, types::IntegerType},
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -407,7 +404,6 @@ pub(in crate::render) fn render_dialect_debug_control(catalog: &CatalogFile, has
              common_traits::Verify,\n\
              context::{Context, Ptr},\n\
              identifier::Identifier,\n\
-             location::Located,\n\
              op::Op,\n\
              operation::Operation,\n\
              result::Error,\n\
@@ -501,7 +497,7 @@ pub(in crate::render) fn render_dialect_clc(catalog: &CatalogFile, hash: &str) -
     assert_eq!(clc_intrinsics(catalog).count(), 6);
     let mut output = rust_header(catalog, hash);
     output.push_str(
-        "//! Generated Cluster Launch Control operations.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::IntegerType,\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::{TypeHandle, Typed},\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\n",
+        "//! Generated Cluster Launch Control operations.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::IntegerType,\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::{TypeHandle, Typed},\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\n",
     );
     for record in clc_intrinsics(catalog) {
         let result_count = record.dialect.results.len();
@@ -547,7 +543,7 @@ pub(in crate::render) fn render_dialect_execution_control(
     assert_eq!(execution_controls(catalog).count(), 8);
     let mut output = rust_header(catalog, hash);
     output.push_str(
-        "//! Generated counted-barrier, grid-dependency, and register-control operations.\n\nuse pliron::{\n    builtin::{attributes::IntegerAttr, op_interfaces::{NOpdsInterface, NResultsInterface}, types::{IntegerType, Signedness}},\n    common_traits::Verify,\n    context::{Context, Ptr},\n    identifier::Identifier,\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    verify_err,\n};\nuse pliron::utils::apint::APInt;\nuse pliron_derive::pliron_op;\nuse std::num::NonZeroUsize;\n\n",
+        "//! Generated counted-barrier, grid-dependency, and register-control operations.\n\nuse pliron::{\n    builtin::{attributes::IntegerAttr, op_interfaces::{NOpdsInterface, NResultsInterface}, types::{IntegerType, Signedness}},\n    common_traits::Verify,\n    context::{Context, Ptr},\n    identifier::Identifier,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    verify_err,\n};\nuse pliron::utils::apint::APInt;\nuse pliron_derive::pliron_op;\nuse std::num::NonZeroUsize;\n\n",
     );
     for record in execution_controls(catalog).filter(|record| record.family != "register_control") {
         let operand_count = record.dialect.operands.len();
@@ -630,7 +626,6 @@ use pliron::{
     },
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,

@@ -16,7 +16,7 @@ use pliron::{
     basic_block::BasicBlock,
     context::{Context, Ptr},
     input_err,
-    location::{Located, Location},
+    location::Location,
     op::Op,
     operation::Operation,
     value::Value,

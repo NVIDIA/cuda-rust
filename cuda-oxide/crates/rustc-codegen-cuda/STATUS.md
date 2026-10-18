@@ -27,6 +27,8 @@ Run `cuda-oxide/scripts/check-error-example-status.sh` to verify both are in syn
 | `error_kernel_shared_param`            | diagnostics-fixture | AS3/AS5 pointer as kernel parameter  |
 | `error_missing_device_attr`            | diagnostics-fixture | `thread::index_*` stub (#76)         |
 | `error_set_discriminant_uninhabited`   | diagnostics-fixture | Invalid enum variant selection       |
+| `error_union_shared_pointer_addr`      | diagnostics-fixture | `&mut`/in-place write to a shared-pointer union field |
+| `error_union_shared_pointer_layout`    | support-gap         | Oversized AS3 pointer array in a union field |
 
 Drops whose monomorphized glue is provably a no-op (e.g. the
 `core::array::IntoIter` behind `for x in arr` with Copy elements) lower
@@ -54,3 +56,13 @@ Larger expansions remain rejected to keep generated code shape bounded, while
 pointer vectors still need separate ABI and address-space-cast semantics.
 (Bool leaves use canonical i8 physical bytes and are converted recursively at
 the same boundary.)
+
+The two union fixtures fail closed for related reasons. A union field that
+holds a shared-memory pointer, directly or through structs and bounded arrays,
+uses the same target-stable generic-pointer storage, converted at the union's
+construct and extract boundaries, and the same 16-leaf bound applies to each
+field. Taking the in-place address of such a field (`u.ptr = p`, `&u.ptr`,
+`&mut u.ptr`, or a write into a struct nested in it) is refused: the loads and
+stores made through that address carry the field's semantic type, the raw
+shared pointer, which the generic-pointer bytes cannot honor. Build the union
+by value and read its fields by value instead.

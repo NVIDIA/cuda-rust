@@ -39,7 +39,6 @@ use pliron::basic_block::BasicBlock;
 use pliron::builtin::op_interfaces::SymbolOpInterface;
 use pliron::context::{Context, Ptr};
 use pliron::identifier::{Identifier, Legaliser};
-use pliron::location::Located;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::{input_err_noloc, input_error_noloc};

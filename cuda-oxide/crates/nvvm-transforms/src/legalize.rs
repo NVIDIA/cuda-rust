@@ -35,7 +35,6 @@ use pliron::{
     context::{Context, Ptr},
     identifier::Identifier,
     linked_list::ContainsLinkedList,
-    location::Located,
     op::{Op, op_cast},
     operation::Operation,
     result::Result,
@@ -362,7 +361,7 @@ fn retype_pointer_return(
                 rewrite.name
             );
         };
-        let loc = op.deref(ctx).loc();
+        let loc = op.deref(ctx).loc().clone();
         let cast = llvm::AddrSpaceCastOp::new(ctx, value, generic_pointer);
         cast.get_operation().deref_mut(ctx).set_loc(loc);
         let generic = insert_before(ctx, op, cast.get_operation());
@@ -392,7 +391,7 @@ fn cast_call_result_back(
         // Keep the call's own attributes (fast-math flags, call-site
         // attributes) and its location.
         let attributes = old_call.deref(ctx).attributes.clone();
-        let loc = old_call.deref(ctx).loc();
+        let loc = old_call.deref(ctx).loc().clone();
         let mut new_call_ref = new_op.deref_mut(ctx);
         new_call_ref.attributes = attributes;
         new_call_ref.set_loc(loc);
@@ -402,7 +401,7 @@ fn cast_call_result_back(
     new_call.set_callee_type(ctx, callee_type.into());
     let generic = insert_before(ctx, old_call, new_op);
 
-    let loc = old_call.deref(ctx).loc();
+    let loc = old_call.deref(ctx).loc().clone();
     let cast = llvm::AddrSpaceCastOp::new(ctx, generic, rewrite.original_return);
     cast.get_operation().deref_mut(ctx).set_loc(loc);
     let restored = insert_before(ctx, old_call, cast.get_operation());

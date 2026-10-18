@@ -33,8 +33,8 @@ cuda-artifact-finalizer = { path = "../cuda-artifact-finalizer" }
 # `{ workspace = true }`. Keep these versions synchronized with root Cargo.toml
 # [workspace.dependencies] section. Use the same registry source and exact
 # release, or pliron resolves to distinct crates and types stop unifying.
-pliron = { version = "=0.19.0" }
-pliron-derive = { version = "=0.19.0" }
+pliron = { version = "=0.20.0" }
+pliron-derive = { version = "=0.20.0" }
 linkme = "0.3"            # must match workspace
 combine = "4.6.8"         # must match workspace; Pliron needs SourcePosition: Hash
 once_cell = "1.18"        # must match workspace

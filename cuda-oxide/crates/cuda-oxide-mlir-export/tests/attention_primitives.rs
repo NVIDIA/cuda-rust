@@ -199,7 +199,7 @@ fn full_cute_attention_numeric_pack_keeps_precise_intrinsics() {
         .unwrap()
         .translate_module(&ctx, &module)
         .unwrap();
-    let text = pliron_mlir_export::render_module(&result);
+    let text = cuda_oxide_mlir_export::render_module(&result).unwrap();
     for name in [
         "llvm.nvvm.ex2.approx.f32",
         "llvm.nvvm.lg2.approx.f",

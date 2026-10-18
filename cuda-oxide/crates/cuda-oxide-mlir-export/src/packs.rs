@@ -5,6 +5,11 @@
 
 //! Builtin scalar types, constants, and attributes shared by every export profile.
 
+use crate::{
+    AttributeTranslation, DropAttribute, FixedType, MlirAttribute, MlirFloatType, MlirOperation,
+    MlirType, OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
+    TranslationSession, TypeTranslation,
+};
 use pliron::{
     attribute::AttrObj,
     builtin::{
@@ -21,11 +26,6 @@ use pliron::{
     operation::Operation,
     r#type::{TypeHandle, Typed, type_cast},
     utils::apfloat::Float,
-};
-use pliron_mlir_export::{
-    AttributeTranslation, DropAttribute, FixedType, MlirAttribute, MlirFloatType, MlirOperation,
-    MlirType, OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
-    TranslationSession, TypeTranslation,
 };
 
 /// Register Pliron builtin items used by every CUDA mapping profile.

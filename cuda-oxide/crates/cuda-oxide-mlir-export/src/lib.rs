@@ -5,8 +5,9 @@
 
 //! cuda-oxide mappings for textual MLIR export.
 //!
-//! The generic exporter builds typed MLIR text. This crate maps cuda-oxide
-//! operations to the types and operations accepted by the pinned CUTLASS compiler.
+//! This crate maps cuda-oxide operations to the types and operations accepted
+//! by the pinned CUTLASS compiler. Upstream pliron-mlir-interop renders the
+//! resulting target graph with its generic MLIR printer.
 //!
 //! Use a consumer profile to export a prepared Pliron context and module:
 //!
@@ -16,7 +17,7 @@
 //! # fn export(ctx: &Context, module: &ModuleOp) -> Result<(), cuda_oxide_mlir_export::ProfileError> {
 //! let profile = CutlassFullCuteMlir22::new("sm_120a")?;
 //! let target = profile.translate_module(ctx, module)?;
-//! let text = pliron_mlir_export::render_module(&target);
+//! let text = cuda_oxide_mlir_export::render_module(&target)?;
 //! # Ok(())
 //! # }
 //! ```
@@ -27,11 +28,16 @@
 
 mod cute;
 mod grid_constant;
+mod interop;
 mod mir;
 mod nvvm;
 mod packs;
 mod primitives;
 mod profile;
+mod translation;
+
+pub use interop::{INTEROP_REVISION, render_module};
+pub use translation::*;
 
 pub use cute::register_cute_elementwise_pack;
 pub(crate) use cute::{

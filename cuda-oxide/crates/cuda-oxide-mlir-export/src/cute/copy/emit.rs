@@ -5,11 +5,11 @@
 
 //! Layout-aware operation builder shared by cooperative copy and matrix loads.
 
-use cute_layout::{ComposedLayout, Layout, Swizzle};
-use pliron_mlir_export::{
+use crate::{
     MlirAttribute, MlirLocation, MlirOperation, MlirResult, MlirType, MlirValueUse, OperationInput,
     TranslationSession,
 };
+use cute_layout::{ComposedLayout, Layout, Swizzle};
 
 /// Require the expected operands and no results or untranslated source structure.
 pub(in crate::cute) fn require_input(

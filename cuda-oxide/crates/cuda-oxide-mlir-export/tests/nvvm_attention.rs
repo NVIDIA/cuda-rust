@@ -3,6 +3,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use cuda_oxide_mlir_export::render_module;
 use cuda_oxide_mlir_export::{CutlassFullCuteMlir22, CutlassPrimitivesMlir22, MlirConsumerProfile};
 use dialect_mir::ops::{MirConstantOp, MirFuncOp, MirReturnOp};
 use dialect_nvvm::ops::*;
@@ -20,7 +21,6 @@ use pliron::{
     utils::apint::APInt,
     value::Value,
 };
-use pliron_mlir_export::render_module;
 
 /// Typed scalar and asynchronous-copy source function for comparing both consumer profiles.
 struct Fixture {
@@ -145,7 +145,7 @@ impl Fixture {
     fn translate_with_profile(&self, profile: &dyn MlirConsumerProfile) -> Result<String, String> {
         profile
             .translate_module(&self.ctx, &self.module)
-            .map(|m| render_module(&m))
+            .and_then(|m| render_module(&m).map_err(Into::into))
             .map_err(|e| e.to_string())
     }
 }
@@ -172,7 +172,7 @@ fn rsqrt_preserves_subnormals_and_native_intrinsic_identity() {
                 text.contains("intrin = \"llvm.nvvm.rsqrt.approx.f\""),
                 "{text}"
             );
-            assert!(text.contains(": (f32) -> f32"), "{text}");
+            assert!(text.contains(": (f32) -> (f32)"), "{text}");
             assert!(!text.contains("rsqrt.approx.ftz"), "{text}");
             assert!(!text.contains("cuda_oxide_intrinsic_marker"), "{text}");
         }
@@ -251,7 +251,7 @@ fn sin_preserves_subnormals_and_native_intrinsic_identity() {
                 text.contains("intrin = \"llvm.nvvm.sin.approx.f\""),
                 "{text}"
             );
-            assert!(text.contains(": (f32) -> f32"), "{text}");
+            assert!(text.contains(": (f32) -> (f32)"), "{text}");
             assert!(!text.contains("sin.approx.ftz"), "{text}");
             assert!(!text.contains("cuda_oxide_intrinsic_marker"), "{text}");
         }
@@ -330,7 +330,7 @@ fn ftz_exp2_keeps_its_exact_subnormal_mode_in_both_profiles() {
             "{text}"
         );
         assert!(text.contains("constraints = \"=f,f\""), "{text}");
-        assert!(text.contains(": (f32) -> f32"), "{text}");
+        assert!(text.contains(": (f32) -> (f32)"), "{text}");
         assert!(!text.contains("ex2.approx.f32"), "{text}");
         assert!(!text.contains("has_side_effects"), "{text}");
         assert!(!text.contains("llvm.call"), "{text}");
@@ -430,7 +430,7 @@ fn softmax_math_keeps_approximation_and_subnormal_modes() {
     assert!(!text.contains("ex2.approx.ftz"), "{text}");
     assert!(!text.contains("llvm.call"), "{text}");
     assert!(
-        text.contains("\"nvvm.rcp.approx.ftz.f\"(%v1) : (f32) -> f32"),
+        text.contains("\"nvvm.rcp.approx.ftz.f\"(%v1) : (f32) -> (f32)"),
         "{text}"
     );
     assert!(!text.contains("cuda_oxide_intrinsic_marker"));

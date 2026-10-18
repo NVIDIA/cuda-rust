@@ -9,6 +9,11 @@
 //! preserve the native address spaces, and try-wait preserves its boolean
 //! result rather than becoming the similarly named blocking NVVM operation.
 
+use crate::{
+    DropAttribute, MlirAttribute, MlirLocation, MlirOperation, MlirResult, MlirType, MlirValueUse,
+    OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
+    TranslationSession,
+};
 use dialect_mir::ops::MirConstantOp;
 use dialect_nvvm::ops::*;
 use pliron::{
@@ -16,11 +21,6 @@ use pliron::{
     context::{Context, Ptr},
     op::Op,
     operation::Operation,
-};
-use pliron_mlir_export::{
-    DropAttribute, MlirAttribute, MlirLocation, MlirOperation, MlirResult, MlirType, MlirValueUse,
-    OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
-    TranslationSession,
 };
 
 /// Register the native primitives used by persistent two-CTA TMA kernels.
@@ -1154,7 +1154,7 @@ mod tests {
         assert!(text.contains("scope = #nvvm.mbar_scope<cluster>"), "{text}");
         assert!(text.contains("relaxed = true"), "{text}");
         assert!(
-            text.contains("\"llvm.inttoptr\"(%v6) : (i64) -> !llvm.ptr<7>"),
+            text.contains("\"llvm.inttoptr\"(%v6) : (i64) -> (!llvm.ptr<7>)"),
             "{text}"
         );
         assert!(!text.contains("\"nvvm.mbarrier.try_wait.parity\""));
@@ -1172,7 +1172,7 @@ mod tests {
         );
         let text = fixture.render().unwrap();
         assert!(
-            text.contains("\"llvm.inttoptr\"(%v6) : (i64) -> !llvm.ptr<7>"),
+            text.contains("\"llvm.inttoptr\"(%v6) : (i64) -> (!llvm.ptr<7>)"),
             "{text}"
         );
         assert!(text.contains("\"nvvm.mbarrier.arrive\""), "{text}");
@@ -1248,7 +1248,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("\"llvm.ptrtoint\"(%v2) : (!llvm.ptr<7>) -> i32"),
+            text.contains("\"llvm.ptrtoint\"(%v2) : (!llvm.ptr<7>) -> (i32)"),
             "{text}"
         );
         assert!(
@@ -1283,7 +1283,7 @@ mod tests {
             let error = fixture.render().unwrap_err();
             assert!(
                 error.contains(if cache_hint.is_none() {
-                    "Expected 7 operands"
+                    "Expected 7 operand(s), but found 6"
                 } else {
                     "zero cache hint"
                 }),

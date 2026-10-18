@@ -108,7 +108,7 @@ fn independent_attention_mma_and_rank_three_copy_lower_without_gemm_story() {
             .unwrap()
             .translate_module(&ctx, &module)
             .unwrap();
-        let text = pliron_mlir_export::render_module(&target);
+        let text = cuda_oxide_mlir_export::render_module(&target).unwrap();
         assert_eq!(
             text.matches("\"nvvm.tcgen05.mma\"").count(),
             if group == 1 { 16 } else { 8 }
@@ -139,7 +139,7 @@ fn independent_attention_mma_and_rank_three_copy_lower_without_gemm_story() {
                 text.lines()
                     .any(|line| line.trim_start().starts_with(&format!("{input} = "))
                         && line.contains("\"arith.extui\"")
-                        && line.contains("(i32) -> i64")),
+                        && line.contains("(i32) -> (i64)")),
                 "{text}"
             );
         }

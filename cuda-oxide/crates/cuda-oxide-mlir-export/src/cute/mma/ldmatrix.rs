@@ -6,16 +6,16 @@
 //! Matrix-load address plans and ldmatrix instruction emission.
 
 use crate::cute::copy::emit::{Emitter, integer, require_input};
+use crate::{
+    MlirAttribute, MlirOperation, MlirType, OperationInput, OperationTranslation,
+    TranslationSession,
+};
 use cute_layout::{ComposedLayout, IntTuple, OffsetUnit};
 use dialect_cute::{attributes::CuteMatrixRoleAttr, ops::CuteLdmatrixOp};
 use pliron::{
     common_traits::Verify,
     context::{Context, Ptr},
     operation::Operation,
-};
-use pliron_mlir_export::{
-    MlirAttribute, MlirOperation, MlirType, OperationInput, OperationTranslation,
-    TranslationSession,
 };
 
 /// Emit lane-specific ldmatrix addresses and the verified transpose/register-count variant.

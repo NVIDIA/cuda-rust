@@ -7,7 +7,7 @@ use super::common::{anyhow_to_pliron, byte_offset_gep};
 use crate::convert::enum_payload_storage::enum_payload_storage_type;
 use crate::convert::types::{
     StructLayoutInfo, build_enum_slot_map, build_struct_slot_map, convert_type,
-    llvm_type_size_align, mir_element_stride, mir_type_abi_align,
+    llvm_type_size_align, mir_element_stride, mir_type_abi_align, union_field_storage_type,
 };
 use dialect_mir::ops::{MirConstantOp, MirFieldAddrOp};
 use dialect_mir::types::{MirEnumType, MirPtrType, MirStructType, MirTupleType, MirUnionType};
@@ -18,7 +18,6 @@ use pliron::context::{Context, Ptr};
 use pliron::irbuild::dialect_conversion::{DialectConversionRewriter, OperandsInfo};
 use pliron::irbuild::inserter::Inserter;
 use pliron::irbuild::rewriter::Rewriter;
-use pliron::location::Located;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::result::Result;
@@ -74,18 +73,52 @@ pub(crate) fn convert_field_addr(
             }
         };
 
-    let union_field_count = mir_ptr_pointee
+    let union_field = mir_ptr_pointee
         .deref(ctx)
         .downcast_ref::<MirUnionType>()
-        .map(MirUnionType::field_count);
-    if let Some(field_count) = union_field_count {
-        if field_index >= field_count {
+        .map(|union_ty| {
+            (
+                union_ty.name().to_string(),
+                union_ty.field_count(),
+                union_ty.get_field_type(field_index),
+            )
+        });
+    if let Some((union_name, field_count, field_ty)) = union_field {
+        let Some(field_ty) = field_ty else {
             return pliron::input_err_noloc!(
                 "field_addr index {} out of bounds for union with {} fields",
                 field_index,
                 field_count
             );
+        };
+
+        // A union field's bytes hold its STORAGE type, the type the bytes
+        // really have, which can differ from its SEMANTIC type, the type the
+        // program sees. A field holding a shared-memory pointer is stored as
+        // a generic pointer so the union's byte image is the same on every
+        // target (a shared pointer is 4 bytes under modern NVVM's p3:32 and
+        // 8 bytes elsewhere); the value paths (insert/extract) convert at
+        // that boundary. The address formed here ESCAPES to loads and stores
+        // typed with the semantic type, which the storage bytes cannot honor:
+        // a raw shared pointer stored through it is a 4-byte write into the
+        // 8-byte slot under p3:32, and a load through it reads the generic
+        // address back as a shared offset on the other paths. Fail closed,
+        // as the enum arm below does for payload fields. Fields whose storage
+        // is their semantic type (integers, byte arrays, generic pointers)
+        // keep the address path. The diagnostic calls the storage type
+        // "canonical", the wording the enum arm and its fixture share.
+        let semantic_ty = convert_type(ctx, field_ty).map_err(anyhow_to_pliron)?;
+        let storage_ty = union_field_storage_type(ctx, semantic_ty).map_err(anyhow_to_pliron)?;
+        if storage_ty != semantic_ty {
+            return pliron::input_err_noloc!(
+                "field_addr: cannot hand out the in-place address of union field {} of `{}`: its bytes use canonical storage type {} while its semantic type is {}, and loads or stores made through an escaped field address are typed with the semantic type, which the canonical bytes cannot honor; build the union by value and read the field by value; in-place writes and borrows of this field are refused",
+                field_index,
+                union_name,
+                storage_ty.deref(ctx).disp(ctx),
+                semantic_ty.deref(ctx).disp(ctx)
+            );
         }
+
         // Every union field begins at byte zero. Emit an explicit zero-offset
         // GEP instead of forwarding the base SSA value directly: the distinct
         // result keeps dialect conversion's pointer-type history unambiguous
@@ -373,7 +406,7 @@ pub(crate) fn convert_array_element_addr(
     op: Ptr<Operation>,
     _operands_info: &OperandsInfo,
 ) -> Result<()> {
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     let arr_ptr = op.deref(ctx).get_operand(0);
     let index = op.deref(ctx).get_operand(1);
 
@@ -1036,6 +1069,100 @@ mod tests {
             err.err.to_string().contains("canonical storage type"),
             "unexpected error: {}",
             err.err
+        );
+    }
+
+    /// The union arm of the same gate. A union field that holds a
+    /// shared-memory pointer is stored as a GENERIC pointer, so an in-place
+    /// address would let a semantic `ptr addrspace(3)` store write 4 bytes
+    /// under modern NVVM's `p3:32` into the 8-byte slot, and would let a
+    /// load read the generic address back as a shared offset elsewhere.
+    #[test]
+    fn shared_pointer_union_field_addr_fails_closed() {
+        let mut ctx = make_ctx();
+        let pointee: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+        let shared: TypeHandle = MirPtrType::get_shared(&mut ctx, pointee, true).into();
+        let bits: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Unsigned).into();
+        let union_ty: TypeHandle = MirUnionType::get(
+            &mut ctx,
+            "SharedPtrBits".into(),
+            vec!["ptr".into(), "bits".into()],
+            vec![shared, bits],
+            8,
+            8,
+        )
+        .into();
+        let union_ptr_ty: TypeHandle = MirPtrType::get_generic(&mut ctx, union_ty, true).into();
+        let field_ptr_ty: TypeHandle = MirPtrType::get_generic(&mut ctx, shared, true).into();
+
+        let (module, block) = build_kernel(&mut ctx, vec![union_ptr_ty], vec![]);
+        let base = block.deref(&ctx).get_argument(0);
+        let op = MirFieldAddrOp::build(&mut ctx, base, field_ptr_ty, 0).expect("field_addr build");
+        op.insert_at_back(block, &ctx);
+        append_mir_return(&mut ctx, block, vec![]);
+
+        let err = crate::lower_mir_to_llvm(&mut ctx, module)
+            .expect_err("addressing a shared-pointer union field in place must fail to lower");
+        assert!(
+            err.err.to_string().contains("canonical storage type"),
+            "unexpected error: {}",
+            err.err
+        );
+    }
+
+    /// A union field whose storage IS its semantic type keeps the address
+    /// path: one zero-offset `i8` GEP off the ORIGINAL union pointer, no
+    /// stack spill. This is the `union_aggregate` write form
+    /// (`bits.bytes = [..]` on a `{ word: u32, bytes: [u8; 4] }` union).
+    #[test]
+    fn plain_union_field_addr_lowers_to_zero_offset_gep() {
+        use llvm_export::ops::GepIndex;
+
+        let mut ctx = make_ctx();
+        let u8_ty: TypeHandle = IntegerType::get(&ctx, 8, Signedness::Unsigned).into();
+        let u32_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+        let bytes_ty: TypeHandle = MirArrayType::get(&mut ctx, u8_ty, 4).into();
+        let union_ty: TypeHandle = MirUnionType::get(
+            &mut ctx,
+            "Bits".into(),
+            vec!["word".into(), "bytes".into()],
+            vec![u32_ty, bytes_ty],
+            4,
+            4,
+        )
+        .into();
+        let union_ptr_ty: TypeHandle = MirPtrType::get_generic(&mut ctx, union_ty, true).into();
+        let bytes_ptr_ty: TypeHandle = MirPtrType::get_generic(&mut ctx, bytes_ty, true).into();
+
+        let (module, block) = build_kernel(&mut ctx, vec![union_ptr_ty], vec![]);
+        let base = block.deref(&ctx).get_argument(0);
+        let op = MirFieldAddrOp::build(&mut ctx, base, bytes_ptr_ty, 1).expect("field_addr build");
+        op.insert_at_back(block, &ctx);
+        append_mir_return(&mut ctx, block, vec![]);
+
+        crate::lower_mir_to_llvm(&mut ctx, module).expect("lowering failed");
+        let body = kernel_blocks(&ctx, module);
+        assert_eq!(
+            count_ops::<llvm::AllocaOp>(&ctx, &body),
+            0,
+            "a plain union field address must not spill the union to a stack copy"
+        );
+        let geps = find_all::<llvm::GetElementPtrOp>(&ctx, &body);
+        assert_eq!(geps.len(), 1, "one union field_addr lowers to one GEP");
+        let gep = &geps[0];
+        assert_eq!(
+            gep.get_operation().deref(&ctx).get_operand(0),
+            base,
+            "the GEP must address the ORIGINAL union storage"
+        );
+        assert_eq!(
+            gep.src_elem_type(&ctx),
+            IntegerType::get(&ctx, 8, Signedness::Signless).into(),
+            "every union field starts at byte zero, addressed in byte units"
+        );
+        assert!(
+            matches!(gep.indices(&ctx).as_slice(), [GepIndex::Constant(0)]),
+            "a union field address is a zero-offset GEP"
         );
     }
 

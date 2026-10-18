@@ -35,6 +35,8 @@ permissions:
 # Scope this to the ref, and keep the single-deploy guarantee on the deploy job
 # itself. Superseded PR runs are cancelled; pushes to main are not, so a
 # publish in flight is never interrupted.
+# The group deliberately has no commit SHA. Parallel builds on main would let
+# a slower older commit deploy after a newer one and replace the published site.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

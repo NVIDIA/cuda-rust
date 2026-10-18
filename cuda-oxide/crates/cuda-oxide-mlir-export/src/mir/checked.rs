@@ -5,6 +5,11 @@
 //! Physical Rust carriers needed by checked instruction-level APIs.
 //! Enum storage retains rustc's byte offsets, size and alignment. Niche encoding
 //! remains unsupported rather than being approximated by a logical tag.
+use crate::{
+    DropAttribute, MlirAttribute, MlirLocation, MlirOperation, MlirResult, MlirType, MlirValueUse,
+    OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
+    TranslationSession, TypeTranslation,
+};
 use dialect_mir::{
     attributes::VariantIndexAttr,
     ops::*,
@@ -18,11 +23,6 @@ use pliron::{
     context::{Context, Ptr},
     operation::Operation,
     r#type::{TypeHandle, Typed},
-};
-use pliron_mlir_export::{
-    DropAttribute, MlirAttribute, MlirLocation, MlirOperation, MlirResult, MlirType, MlirValueUse,
-    OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
-    TranslationSession, TypeTranslation,
 };
 
 /// Register physical enum carriers, checked integer arithmetic, and unreachable mappings.
@@ -951,13 +951,13 @@ mod tests {
             blocks[2].operations.last().unwrap().successors,
             vec![blocks[2].id, blocks[3].id]
         );
-        let text = pliron_mlir_export::render_module(&translated);
+        let text = crate::render_module(&translated).unwrap();
         assert!(!text.contains(ENUM_SCRATCH_COUNT) && !text.contains(ENUM_SCRATCH_SLOT));
     }
 
     /// Build a small target function with marked enum scratch for hoisting validation.
     fn scratch_fixture() -> MlirOperation {
-        use pliron_mlir_export::{MlirBlock, MlirBlockId, MlirRegion, MlirValueId};
+        use crate::{MlirBlock, MlirBlockId, MlirRegion, MlirValueId};
         let mut count = MlirOperation::new("arith.constant").unwrap();
         count.results.push(MlirResult {
             id: MlirValueId(0),
@@ -1013,7 +1013,7 @@ mod tests {
         let mut f = scratch_fixture();
         let mut ordinary = f.regions[0].blocks[1].operations[1].clone();
         ordinary.attributes.clear();
-        ordinary.operands[0].id = pliron_mlir_export::MlirValueId(99); // Dynamic count.
+        ordinary.operands[0].id = crate::MlirValueId(99); // Dynamic count.
         f.regions[0].blocks[1].operations.push(ordinary.clone());
         hoist_enum_scratch(&mut f).unwrap();
         assert_eq!(f.regions[0].blocks[1].operations, vec![ordinary]);
@@ -1037,7 +1037,7 @@ mod tests {
                     );
                 }
                 1 => {
-                    operations[1].operands[0].id = pliron_mlir_export::MlirValueId(99);
+                    operations[1].operands[0].id = crate::MlirValueId(99);
                 }
                 2 => {
                     operations[1].attributes.clear();

@@ -184,7 +184,7 @@ fn cutlass_sm100_semantic_pack_compiles() {
     ret.insert_at_back(block, &ctx);
     let profile = CutlassFullCuteMlir22::new("sm_100a").unwrap();
     let target = profile.translate_module(&ctx, &module).unwrap();
-    let mlir = pliron_mlir_export::render_module(&target);
+    let mlir = cuda_oxide_mlir_export::render_module(&target).unwrap();
     assert!(mlir.contains("cute_nvgpu.arch.copy.SM100.tmem_load"));
     assert!(mlir.contains("vector<32xi32>"));
     assert_eq!(mlir.matches("cute_nvgpu.make_umma_smem_desc").count(), 3);

@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::{MlirAttribute, MlirOperation, MlirType};
 use dialect_mir::{ops::MirFuncOp, types::MirPtrType};
 use pliron::{
     builtin::{attributes::TypeAttr, type_interfaces::FunctionTypeInterface},
@@ -14,7 +15,6 @@ use pliron::{
     operation::Operation,
     r#type::{Typed, type_cast},
 };
-use pliron_mlir_export::{MlirAttribute, MlirOperation, MlirType};
 use reserved_oxide_symbols::{
     MIR_GRID_CONSTANT_ALIGN_ATTR_PREFIX, MIR_GRID_CONSTANT_POINTEE_ATTR_PREFIX,
 };

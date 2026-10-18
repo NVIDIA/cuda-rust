@@ -25,6 +25,10 @@ use crate::cute::{
     },
     mma::sm120::{CarrierLayout, extract_carrier},
 };
+use crate::{
+    MlirAttribute, MlirLocation, MlirOperation, MlirType, MlirValueUse, OperationInput,
+    OperationTranslation, TranslationSession,
+};
 use dialect_cute::{
     attributes::{CuteEpilogueSyncPhaseAttr, CuteTmaStorePipelineAttr},
     epilogue_ops::{
@@ -37,10 +41,6 @@ use pliron::{
     context::{Context, Ptr},
     operation::Operation,
     r#type::Typed,
-};
-use pliron_mlir_export::{
-    MlirAttribute, MlirLocation, MlirOperation, MlirType, MlirValueUse, OperationInput,
-    OperationTranslation, TranslationSession,
 };
 
 /// NVVM operation spelling for a barrier with an explicit participant count.
@@ -451,7 +451,7 @@ fn emit_f16x2_pack(
 ) -> Result<MlirValueUse, String> {
     let vector_type = MlirType::Vector {
         shape: vec![2],
-        element: Box::new(MlirType::Float(pliron_mlir_export::MlirFloatType::F16)),
+        element: Box::new(MlirType::Float(crate::MlirFloatType::F16)),
     };
     let (call_result, converted) = fresh(session, vector_type);
     let mut call = operation(
@@ -543,5 +543,5 @@ pub(in crate::cute) fn epilogue_sync_operations(
 
 /// Return f16 because epilogue pointer offsets count elements rather than bytes.
 pub(in crate::cute) fn epilogue_gep_element_type() -> MlirType {
-    MlirType::Float(pliron_mlir_export::MlirFloatType::F16)
+    MlirType::Float(crate::MlirFloatType::F16)
 }

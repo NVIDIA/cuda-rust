@@ -64,7 +64,11 @@ fn primitives_profile_pins_consumer_and_target() {
     assert_eq!(manifest.llvm_major, 22);
     assert_eq!(
         manifest.pliron_revision,
-        "06d99a3df938394583715aacf5eadb65b4791c09"
+        "435536c8611af34c48c8f73d78e77894a05d103d"
+    );
+    assert_eq!(
+        manifest.interop_revision,
+        cuda_oxide_mlir_export::INTEROP_REVISION
     );
     assert_eq!(
         CutlassPrimitivesMlir22::new("sm_120a")

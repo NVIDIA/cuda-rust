@@ -3,6 +3,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use cuda_oxide_mlir_export::render_module;
 use cuda_oxide_mlir_export::{CutlassFullCuteMlir22, CutlassPrimitivesMlir22, MlirConsumerProfile};
 use dialect_mir::ops::{MirFuncOp, MirReturnOp};
 use dialect_nvvm::ops::{
@@ -21,7 +22,6 @@ use pliron::{
     op::Op,
     operation::Operation,
 };
-use pliron_mlir_export::render_module;
 
 /// Source module containing release/acquire proxy fences whose contracts can be mutated independently.
 struct Fixture {
@@ -94,7 +94,9 @@ impl Fixture {
                 .unwrap()
                 .translate_module(&self.ctx, &self.module)
         };
-        module.map(|m| render_module(&m)).map_err(|e| e.to_string())
+        module
+            .and_then(|m| render_module(&m).map_err(Into::into))
+            .map_err(|e| e.to_string())
     }
 }
 

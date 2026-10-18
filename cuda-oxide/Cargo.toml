@@ -18,7 +18,6 @@ members = [
     "crates/cuda-host",
     "crates/cuda-macros",
     "crates/llvm-export",
-    "crates/pliron-mlir-export",
     "crates/cuda-oxide-mlir-export",
     "crates/dialect-mir",
     "crates/dialect-iket",
@@ -40,11 +39,14 @@ members = [
     "crates/fuzzer",
 ]
 
+# Upstream snapshot with the documented printer fixes in UPSTREAM.md.
+exclude = ["third_party/pliron-mlir-interop"]
+
 [workspace.package]
 edition = "2024"
 authors = ["Nihal Pasham <nihalp@nvidia.com>"]
 license = "Apache-2.0"
-repository = "https://github.com/NVlabs/cuda-oxide.git"
+repository = "https://github.com/NVIDIA/cuda-rust"
 
 # Note: crates/rustc-codegen-cuda is NOT a workspace member because it requires
 # special rustc nightly features and a different build process.
@@ -53,22 +55,25 @@ repository = "https://github.com/NVlabs/cuda-oxide.git"
 # Complete model workloads are in: cuteir/models/
 
 [workspace.dependencies]
-# Pliron MLIR framework, pinned to upstream struct-layout, GEP no-wrap, volatile,
-# global-constant, inline-asm, and generic LLVM attribute semantics.
+# Pliron MLIR framework, pinned to the published 0.20.0 release, retaining
+# struct-layout, GEP no-wrap, volatile, global-constant, inline-asm, and generic
+# LLVM attribute semantics.
 # pliron-llvm uses default-features = false to keep llvm-sys (LLVM 23) out:
 # cuda-oxide consumes the dialect modeling only, not the FFI bridge.
-# `crates/rustc-codegen-cuda/Cargo.toml` MUST stay on this same rev, or pliron
-# resolves to two distinct crates and types stop unifying.
-pliron = { git = "https://github.com/pliron-org/pliron", rev = "06d99a3df938394583715aacf5eadb65b4791c09" }
-pliron-derive = { git = "https://github.com/pliron-org/pliron", rev = "06d99a3df938394583715aacf5eadb65b4791c09" }
-pliron-llvm = { git = "https://github.com/pliron-org/pliron", rev = "06d99a3df938394583715aacf5eadb65b4791c09", default-features = false, features = [
+# `crates/rustc-codegen-cuda/Cargo.toml` MUST use the same registry source and
+# exact release, or pliron resolves to distinct crates and types stop unifying.
+pliron = { version = "=0.20.0" }
+pliron-derive = { version = "=0.20.0" }
+pliron-llvm = { version = "=0.20.0", default-features = false, features = [
     "std",
 ] }
 
 # Internal crates
 cuda-target-spec = { path = "crates/cuda-target-spec" }
 llvm-export = { path = "crates/llvm-export" }
-pliron-mlir-export = { path = "crates/pliron-mlir-export" }
+# Upstream 295773c4ab9cd7c5c3a14c2082be564b9cf5af90, with the small generic
+# printer patch recorded alongside the snapshot until upstream publishes it.
+pliron-mlir-interop = { path = "third_party/pliron-mlir-interop", version = "=0.1.0" }
 cuda-oxide-mlir-export = { path = "crates/cuda-oxide-mlir-export" }
 cute-layout = { path = "cuteir/cute-layout" }
 ctm-rs = { path = "cuteir/ctm-rs" }
@@ -95,9 +100,8 @@ cuda-macros = { path = "crates/cuda-macros", default-features = false }
 # the crates that depend on them in this tree are not published, so nothing
 # needs one (#1459). Examples path-depend on the same directories so the graph
 # has one cuda_core (and one cuda-async / cuda-bindings). `cargo oxide new`
-# scaffolds out-of-tree projects on the crates.io release instead; its
-# SHARED_HOST_CRATES_VERSION is checked against the root manifests by
-# scripts/check-shared-crate-pin.sh.
+# names every CUDA crate from one git source for the same reason;
+# scripts/check-shared-crate-pin.sh enforces both.
 cuda-core = { path = "../cuda-core" }
 cuda-async = { path = "../cuda-async" }
 libnvvm-sys = { path = "crates/libnvvm-sys" }
@@ -118,7 +122,8 @@ thiserror = "2"
 linkme = "0.3"
 anyhow = "1.0"
 once_cell = "1.18"
-combine = "4.6"
+# Pliron 0.19 requires SourcePosition: Hash, introduced in combine 4.6.8.
+combine = "4.6.8"
 log = "0.4"
 half = "2.7"
 libloading = "0.8"

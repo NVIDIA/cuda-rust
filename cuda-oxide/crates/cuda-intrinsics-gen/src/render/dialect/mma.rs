@@ -22,7 +22,7 @@ pub(in crate::render) fn render_dialect_movmatrix(catalog: &CatalogFile, hash: &
     }
     let record = movmatrix(catalog).next().unwrap();
     output.push_str(
-        "//! Structural operation for generated in-register matrix transpose.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_i32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == 32)\n}\n\n",
+        "//! Structural operation for generated in-register matrix transpose.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_i32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == 32)\n}\n\n",
     );
     writeln!(output, "/// {}", record.summary).unwrap();
     writeln!(
@@ -66,7 +66,6 @@ use pliron::{
     },
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -396,7 +395,6 @@ use pliron::{
     },
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -499,7 +497,6 @@ use pliron::{
     },
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -776,7 +773,6 @@ use pliron::{
     builtin::{attributes::IntegerAttr, ops::ConstantOp, types::{FP32Type, IntegerType, Signedness}},
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,

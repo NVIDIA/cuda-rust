@@ -150,7 +150,7 @@ fn cutlass_tcgen05_pack_compiles() {
 
     let profile = CutlassFullCuteMlir22::new("sm_100a").unwrap();
     let target = profile.translate_module(&ctx, &module).unwrap();
-    let mlir = pliron_mlir_export::render_module(&target);
+    let mlir = cuda_oxide_mlir_export::render_module(&target).unwrap();
     let library =
         CutlassCompilerLibrary::load(compiler_path, CUTLASS_COMPILER_LIBRARY_SHA256).unwrap();
     let object = library
@@ -446,7 +446,7 @@ fn cutlass_attention_tmem_pack_compiles() {
         append::<MirReturnOp>(&mut ctx, block, vec![], vec![], None);
         let profile = CutlassFullCuteMlir22::new("sm_100a").unwrap();
         let target = profile.translate_module(&ctx, &module).unwrap();
-        let mlir = pliron_mlir_export::render_module(&target);
+        let mlir = cuda_oxide_mlir_export::render_module(&target).unwrap();
         let library =
             CutlassCompilerLibrary::load(compiler_path, CUTLASS_COMPILER_LIBRARY_SHA256).unwrap();
         let object = library
@@ -633,7 +633,7 @@ fn cutlass_cluster_tma_pack_compiles() {
 
     let profile = CutlassFullCuteMlir22::new("sm_100a").unwrap();
     let target = profile.translate_module(&ctx, &module).unwrap();
-    let mlir = pliron_mlir_export::render_module(&target);
+    let mlir = cuda_oxide_mlir_export::render_module(&target).unwrap();
     let library =
         CutlassCompilerLibrary::load(compiler_path, CUTLASS_COMPILER_LIBRARY_SHA256).unwrap();
     let dump = tempfile::tempdir().unwrap();
@@ -801,7 +801,7 @@ mod cutlass_attention_semantic_pack_compiles_module {
                 .unwrap()
                 .translate_module(&ctx, &module)
                 .unwrap();
-            let text = pliron_mlir_export::render_module(&target);
+            let text = cuda_oxide_mlir_export::render_module(&target).unwrap();
             let library = super::CutlassCompilerLibrary::load(
                 std::env::var_os("CUDA_OXIDE_TEST_CUTLASS_COMPILER").expect("pinned compiler path"),
                 super::CUTLASS_COMPILER_LIBRARY_SHA256,
@@ -1093,7 +1093,7 @@ mod cutlass_attention_numeric_pack_compiles_module {
             .unwrap()
             .translate_module(&ctx, &module)
             .unwrap();
-        let text = pliron_mlir_export::render_module(&result);
+        let text = cuda_oxide_mlir_export::render_module(&result).unwrap();
         let library = super::CutlassCompilerLibrary::load(
             std::env::var_os("CUDA_OXIDE_TEST_CUTLASS_COMPILER").expect("pinned compiler path"),
             super::CUTLASS_COMPILER_LIBRARY_SHA256,
@@ -1208,7 +1208,7 @@ fn cutlass_warp_uniform_matches_cute_native_hint() {
         .unwrap()
         .translate_module(&ctx, &module)
         .unwrap();
-    let native = pliron_mlir_export::render_module(&target);
+    let native = cuda_oxide_mlir_export::render_module(&target).unwrap();
     assert!(native.contains("llvm.nvvm.shfl.sync.idx.i32"), "{native}");
     let cute = r#"module {
       gpu.module @kernels {
@@ -1292,7 +1292,7 @@ fn cutlass_global_store_no_allocate_is_one_256_bit_transaction() {
         .unwrap()
         .translate_module(&ctx, &module)
         .unwrap();
-    let text = pliron_mlir_export::render_module(&target);
+    let text = cuda_oxide_mlir_export::render_module(&target).unwrap();
     assert!(
         text.contains("atom.r2g<i32 copy_bits = 256 l1_cache_evict_priority = no_allocate>"),
         "{text}"

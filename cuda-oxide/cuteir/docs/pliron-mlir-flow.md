@@ -7,7 +7,7 @@ then asks the pinned CUTLASS compiler to build the GPU binary.
 module. They describe different parts of the program; they are not three
 successive compilation stages.
 
-![One Pliron module passes through verification, a generic exporter using our mapping rules, and CUTLASS compilation](assets/pliron-mlir-flow.svg)
+![One Pliron module passes through verification, our mapping rules and upstream generic printing, and CUTLASS compilation](assets/pliron-mlir-flow.svg)
 
 ## What gets mapped?
 
@@ -26,16 +26,19 @@ CuTe state can disappear after its checks have succeeded.
 
 ## Which crate does what?
 
-- **`cuda-oxide-mlir-export` supplies the rules:** how Rust values, CuTe
-  operations, and GPU instructions map to the selected CUTLASS version.
-- **`pliron-mlir-export` supplies the machinery:** look up each rule, keep
-  values and blocks connected, build a typed MLIR syntax tree, and print it.
-  An unregistered operation, type, or attribute is an error.
+- **`cuda-oxide-mlir-export` supplies the rules and target graph:** Rust layouts,
+  CuTe operations, and GPU instructions map to the selected CUTLASS version.
+  Its registry keeps value and block connections checked. Unregistered source
+  operations, types, and attributes remain errors.
+- **Upstream `pliron-mlir-interop` prints the target graph:** locally owned
+  adapters implement `ToMlirOp`, `ToMlirType`, and `ToMlirAttr`. The upstream
+  `GenericOp` builder renders operations, regions, blocks, and SSA connections.
 - **CUTLASS compiles the text:** cuda-oxide extracts and validates the resulting
   cubin, then embeds it for the normal CUDA launch path.
 
-The two export crates work together: the generic engine calls our registered
-rules during translation.
+The mapping recipes can expand one source operation into several target
+operations before printing. They retain control of types, inherent operation
+properties, discardable attributes, and locations.
 
 Shared preparation and CuTe verification happen before export. Checks cover
 the represented layouts and protocol state; dynamic thread participation,
@@ -47,20 +50,22 @@ The native backend takes a separate route through LLVM. This diagram describes
 ## Where upstream interop fits
 
 [`pliron-mlir-interop`](https://github.com/pliron-org/pliron-mlir-interop)
-serves the same broad purpose as our generic exporter. It uses
-`ToMlirOp`, `ToMlirType`, and `ToMlirAttr` implementations to print MLIR;
-our current exporter uses a mapping registry and an intermediate syntax tree.
+is the generic printing dependency. cuda-oxide materializes its translated plan
+as a separate Pliron target graph, then uses upstream's interfaces and printer.
+Its MIR, CuTe, and NVVM recipes and CUTLASS version policy remain here.
 
-Upstream already supports user-defined translations. Our CUDA/CuTe rules,
-Rust layout handling, safety checks, and CUTLASS version policy remain ours.
-Adopting its interfaces requires adapting those rules; changing the dependency
-alone would not replace the current exporter.
+For example, MIR loads and stores become target `llvm` operations through our
+memory mappings. They do not pass through upstream's bundled LLVM source-dialect
+translations. The adapter carries the properties those mappings selected,
+including volatile memory behavior and address spaces.
 
-See the [interop assessment](reference/pliron-mlir-interop.md) for what works
-with existing extension points and which generic improvements may be useful.
+The [dependency provenance](../../third_party/pliron-mlir-interop/UPSTREAM.md)
+records the exact upstream revision and generic local extensions. The earlier
+[interop assessment](reference/pliron-mlir-interop.md) remains a dated record of
+the extension probe that preceded this integration.
 
 ## Read or run it
 
 - [Build with the CUTLASS backend](translation.md).
 - [Our mapping rules](../../crates/cuda-oxide-mlir-export/README.md).
-- [The generic exporter](../../crates/pliron-mlir-export/README.md).
+- [The target adapter](../../crates/cuda-oxide-mlir-export/src/interop/mod.rs).

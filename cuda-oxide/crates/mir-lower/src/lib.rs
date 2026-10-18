@@ -143,7 +143,6 @@ use pliron::{
         DialectConversion, DialectConversionRewriter, OperandsInfo, apply_dialect_conversion,
     },
     irbuild::{listener::Recorder, rewriter::IRRewriter},
-    location::Located,
     op::{Op, op_cast},
     operation::Operation,
     opts::simplify_cfg::remove_blocks_inside_op,
@@ -304,7 +303,7 @@ impl DialectConversion for MirToLlvmConversionDriver {
         operands_info: &OperandsInfo,
     ) -> Result<()> {
         let opid = Operation::get_opid(op, ctx);
-        let loc = op.deref(ctx).loc();
+        let loc = op.deref(ctx).loc().clone();
 
         // Special-case ops that need CUDA pass-level state.
         if opid == dialect_mir::ops::MirFuncOp::get_opid_static() {

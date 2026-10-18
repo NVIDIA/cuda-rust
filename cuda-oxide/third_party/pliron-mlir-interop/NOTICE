@@ -1,0 +1,5 @@
+pliron-mlir-interop: IR translation between pliron and MLIR
+Copyright 2026 Vaivaswatha Nagaraj and all contributors
+https://github.com/pliron-org/pliron-mlir-interop
+
+Licensed under the Apache License, Version 2.0.

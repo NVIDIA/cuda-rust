@@ -30,7 +30,6 @@ use pliron::{
     builtin::types::IntegerType,
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::{Op, OpId},
     operation::Operation,
     result::Error,

@@ -5,11 +5,11 @@
 
 //! Operation builder shared by SM100 recipes and NVVM numeric mappings.
 
-use dialect_cute::attributes::CuteComposedLayoutAttr;
-use pliron_mlir_export::{
+use crate::{
     MlirAttribute, MlirBlock, MlirLocation, MlirOperation, MlirRegion, MlirResult, MlirType,
     MlirValueUse, TranslationSession,
 };
+use dialect_cute::attributes::CuteComposedLayoutAttr;
 
 /// Build SM100 and numeric MLIR sequences while sharing SSA allocation and source location.
 pub(crate) struct Emit<'a, 'b> {

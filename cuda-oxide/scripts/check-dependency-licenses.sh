@@ -133,11 +133,13 @@ FIRST_PARTY_WORKSPACE_ROOTS=(
     cuda-oxide/crates/rustc-codegen-cuda/tests/fixtures/primitives_api_compile/Cargo.toml
 )
 
-# The vendored rustlantis subtree also declares `[workspace]`. It is
-# third-party code attributed in THIRD_PARTY_NOTICES, its dependencies are not
-# ours to record, and check-spdx-headers.sh excludes it for the same reason.
+# These vendored crates have independent workspace roots. Their upstream
+# development dependencies are not first-party inventory entries. Production
+# dependencies still participate in the consuming workspace's cargo-deny checks.
+# Attribution and local changes are recorded in THIRD_PARTY_NOTICES.
 VENDORED_WORKSPACE_ROOTS=(
     cuda-oxide/crates/fuzzer/rustlantis/Cargo.toml
+    cuda-oxide/third_party/pliron-mlir-interop/Cargo.toml
 )
 
 # Ask Cargo which workspace owns every tracked manifest. This handles valid

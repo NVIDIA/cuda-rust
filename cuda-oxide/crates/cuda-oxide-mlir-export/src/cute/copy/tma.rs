@@ -20,6 +20,10 @@ use crate::cute::common::{
     emit_binary, emit_i64_constant, expect_shape, fresh, generic_pointer_type, operation,
     shared_pointer_type, stringify,
 };
+use crate::{
+    MlirAttribute, MlirLocation, MlirOperation, MlirType, MlirValueUse, OperationInput,
+    OperationTranslation, TranslationRegistry, TranslationSession, TypeTranslation,
+};
 use dialect_cute::{
     attributes::CuteTensorAddressSpaceAttr, epilogue_ops::CuteTmaStore2dSemanticOp,
     gemm_tma_ops::CuteTmaCopy2dOp, types::CuteTmaViewType,
@@ -29,10 +33,6 @@ use pliron::{
     context::{Context, Ptr},
     operation::Operation,
     r#type::{TypeHandle, Typed},
-};
-use pliron_mlir_export::{
-    MlirAttribute, MlirLocation, MlirOperation, MlirType, MlirValueUse, OperationInput,
-    OperationTranslation, TranslationRegistry, TranslationSession, TypeTranslation,
 };
 
 /// Erase a verified TMA view to a generic or CTA-shared pointer according to its space.

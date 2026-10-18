@@ -9,6 +9,11 @@
 //! ABI as an LLVM struct, and fixed arrays and structs keep their physical
 //! field order. Operations then use LLVM's aggregate and memory operations.
 
+use crate::{
+    DropAttribute, MlirAttribute, MlirFloatType, MlirOperation, MlirResult, MlirType, MlirValueUse,
+    OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
+    TranslationSession, TypeTranslation,
+};
 use dialect_mir::{
     attributes::{CompilerResultBundleAttr, FieldIndexAttr, MutabilityAttr},
     ops::{
@@ -29,11 +34,6 @@ use pliron::{
     context::{Context, Ptr},
     operation::Operation,
     r#type::{TypeHandle, Typed},
-};
-use pliron_mlir_export::{
-    DropAttribute, MlirAttribute, MlirFloatType, MlirOperation, MlirResult, MlirType, MlirValueUse,
-    OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
-    TranslationSession, TypeTranslation,
 };
 
 /// Register reviewed pointer, physical aggregate, call, and memory mappings.
@@ -1106,14 +1106,14 @@ impl OperationTranslation for AssertTranslation {
         let mut conditional = MlirOperation::new("scf.if")?;
         conditional.operands.push(failure);
         conditional.regions = vec![
-            pliron_mlir_export::MlirRegion {
-                blocks: vec![pliron_mlir_export::MlirBlock {
+            crate::MlirRegion {
+                blocks: vec![crate::MlirBlock {
                     id: session.fresh_block(),
                     arguments: vec![],
                     operations: vec![trap, yield_op],
                 }],
             },
-            pliron_mlir_export::MlirRegion { blocks: vec![] },
+            crate::MlirRegion { blocks: vec![] },
         ];
         conditional.location = input.location;
 
@@ -1747,9 +1747,9 @@ mod tests {
         assert_eq!(true_constant.name, "arith.constant");
         assert_eq!(
             true_constant.properties.get("value"),
-            Some(&pliron_mlir_export::MlirAttribute::Integer {
+            Some(&crate::MlirAttribute::Integer {
                 value: 1,
-                ty: pliron_mlir_export::MlirType::Integer(1),
+                ty: crate::MlirType::Integer(1),
             }),
         );
         assert_eq!(inversion.operands[1].id, true_constant.results[0].id);
@@ -1957,25 +1957,28 @@ mod tests {
         let text = render_mapping_module_without_cutlass_envelope(&target, "memory");
         let expected = r#""builtin.module"() <{sym_name = "memory"}> ({
   ^bb0:
-    "func.func"() <{function_type = (!llvm.struct<(!llvm.array<4 x f32>)>, i64) -> f32, sym_name = "read_tile"}> ({
+    "func.func"() <{function_type = (!llvm.struct<(!llvm.array<4 x f32>)>, i64) -> (f32), sym_name = "read_tile"}> ({
       ^bb1(%v0: !llvm.struct<(!llvm.array<4 x f32>)>, %v1: i64):
-        %v9 = "arith.constant"() <{value = 1 : i32}> : () -> i32
-        %v2 = "llvm.alloca"(%v9) <{alignment = 4 : i64, elem_type = !llvm.struct<(!llvm.array<4 x f32>)>}> : (i32) -> !llvm.ptr
+        %v9 = "arith.constant"() <{value = 1 : i32}> : () -> (i32)
+        %v2 = "llvm.alloca"(%v9) <{alignment = 4 : i64, elem_type = !llvm.struct<(!llvm.array<4 x f32>)>}> : (i32) -> (!llvm.ptr)
         "llvm.store"(%v0, %v2) <{alignment = 4 : i64, ordering = 0 : i64}> : (!llvm.struct<(!llvm.array<4 x f32>)>, !llvm.ptr) -> ()
-        %v3 = "llvm.getelementptr"(%v2) <{elem_type = !llvm.struct<(!llvm.array<4 x f32>)>, noWrapFlags = 0 : i32, rawConstantIndices = array<i32: 0, 0>}> : (!llvm.ptr) -> !llvm.ptr
-        %v4 = "llvm.getelementptr"(%v3, %v1) <{elem_type = !llvm.array<4 x f32>, noWrapFlags = 0 : i32, rawConstantIndices = array<i32: 0, -2147483648>}> : (!llvm.ptr, i64) -> !llvm.ptr
-        %v5 = "llvm.load"(%v4) <{alignment = 4 : i64, ordering = 0 : i64}> : (!llvm.ptr) -> f32
-        %v6 = "llvm.extractvalue"(%v0) <{position = array<i64: 0>}> : (!llvm.struct<(!llvm.array<4 x f32>)>) -> !llvm.array<4 x f32>
-        %v10 = "arith.constant"() <{value = 1 : i32}> : () -> i32
-        %v11 = "llvm.alloca"(%v10) <{alignment = 4 : i64, elem_type = !llvm.array<4 x f32>}> : (i32) -> !llvm.ptr
+        %v3 = "llvm.getelementptr"(%v2) <{elem_type = !llvm.struct<(!llvm.array<4 x f32>)>, noWrapFlags = 0 : i32, rawConstantIndices = array<i32: 0, 0>}> : (!llvm.ptr) -> (!llvm.ptr)
+        %v4 = "llvm.getelementptr"(%v3, %v1) <{elem_type = !llvm.array<4 x f32>, noWrapFlags = 0 : i32, rawConstantIndices = array<i32: 0, -2147483648>}> : (!llvm.ptr, i64) -> (!llvm.ptr)
+        %v5 = "llvm.load"(%v4) <{alignment = 4 : i64, ordering = 0 : i64}> : (!llvm.ptr) -> (f32)
+        %v6 = "llvm.extractvalue"(%v0) <{position = array<i64: 0>}> : (!llvm.struct<(!llvm.array<4 x f32>)>) -> (!llvm.array<4 x f32>)
+        %v10 = "arith.constant"() <{value = 1 : i32}> : () -> (i32)
+        %v11 = "llvm.alloca"(%v10) <{alignment = 4 : i64, elem_type = !llvm.array<4 x f32>}> : (i32) -> (!llvm.ptr)
         "llvm.store"(%v6, %v11) <{alignment = 4 : i64, ordering = 0 : i64}> : (!llvm.array<4 x f32>, !llvm.ptr) -> ()
-        %v12 = "llvm.getelementptr"(%v11, %v1) <{elem_type = !llvm.array<4 x f32>, noWrapFlags = 0 : i32, rawConstantIndices = array<i32: 0, -2147483648>}> : (!llvm.ptr, i64) -> !llvm.ptr
-        %v7 = "llvm.load"(%v12) <{alignment = 4 : i64, ordering = 0 : i64}> : (!llvm.ptr) -> f32
-        %v8 = "arith.addf"(%v5, %v7) : (f32, f32) -> f32
+        %v12 = "llvm.getelementptr"(%v11, %v1) <{elem_type = !llvm.array<4 x f32>, noWrapFlags = 0 : i32, rawConstantIndices = array<i32: 0, -2147483648>}> : (!llvm.ptr, i64) -> (!llvm.ptr)
+        %v7 = "llvm.load"(%v12) <{alignment = 4 : i64, ordering = 0 : i64}> : (!llvm.ptr) -> (f32)
+        %v8 = "arith.addf"(%v5, %v7) : (f32, f32) -> (f32)
         "func.return"(%v8) : (f32) -> ()
     }) {cute.kernel = unit, gpu.kernel = unit} : () -> ()
 }) : () -> ()
 "#;
-        assert_eq!(text, expected);
+        assert_eq!(
+            crate::profile::normalize_mlir_identifiers(&text),
+            crate::profile::normalize_mlir_identifiers(expected)
+        );
     }
 }

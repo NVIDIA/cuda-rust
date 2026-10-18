@@ -19,7 +19,6 @@ use dialect_nvvm::ops::{
 use pliron::context::Context;
 use pliron::derive::op_interface_impl;
 use pliron::irbuild::dialect_conversion::{DialectConversionRewriter, OperandsInfo};
-use pliron::location::Located;
 use pliron::op::Op;
 use pliron::result::Result;
 

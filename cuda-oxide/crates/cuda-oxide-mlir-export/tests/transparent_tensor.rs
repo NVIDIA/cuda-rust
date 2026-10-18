@@ -5,6 +5,7 @@
 
 //! Transparent numeric wrappers retain Rust identity across CuTe vector copies.
 
+use cuda_oxide_mlir_export::render_module;
 use cuda_oxide_mlir_export::{CutlassFullCuteMlir22, MlirConsumerProfile};
 use dialect_cute::{
     attributes::CuteTensorAccessAttr,
@@ -31,7 +32,6 @@ use pliron::{
     operation::Operation,
     r#type::TypeHandle,
 };
-use pliron_mlir_export::render_module;
 
 /// Append one detached operation to the test function.
 fn append<O: Op>(block: Ptr<BasicBlock>, operation: O, ctx: &Context) -> Ptr<Operation> {
@@ -141,7 +141,7 @@ fn transparent_u16_tensor_uses_bit_preserving_vector_copies_and_tails() {
 
     let profile = CutlassFullCuteMlir22::new("sm_120a").unwrap();
     let target = profile.translate_module(&ctx, &module).unwrap();
-    let text = render_module(&target);
+    let text = render_module(&target).unwrap();
     assert!(text.contains("!cute.memref<i16, gmem"), "{text}");
     assert!(
         text.contains("!cute_nvgpu.atom.universal_copy<i16, 128b>"),

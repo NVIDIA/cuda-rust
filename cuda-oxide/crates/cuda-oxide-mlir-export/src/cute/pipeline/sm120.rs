@@ -25,6 +25,11 @@ use crate::cute::common::{
     emit_binary, emit_i32_constant, emit_i64_constant, expect_shape, fresh, gep_value,
     integer_constant, operation, shared_pointer_type, stringify,
 };
+use crate::{
+    MlirAttribute, MlirBlock, MlirLocation, MlirOperation, MlirRegion, MlirResult, MlirType,
+    MlirValueUse, OperationInput, OperationTranslation, TranslationRegistry, TranslationSession,
+    TypeTranslation,
+};
 use dialect_cute::{
     attributes::CutePipelineRoleAttr,
     pipeline_ops::{
@@ -39,11 +44,6 @@ use pliron::{
     context::{Context, Ptr},
     operation::Operation,
     r#type::{TypeHandle, Typed},
-};
-use pliron_mlir_export::{
-    MlirAttribute, MlirBlock, MlirLocation, MlirOperation, MlirRegion, MlirResult, MlirType,
-    MlirValueUse, OperationInput, OperationTranslation, TranslationRegistry, TranslationSession,
-    TypeTranslation,
 };
 
 /// Bound for each hardware wait probe; the high-level NVVM wait retries to completion.

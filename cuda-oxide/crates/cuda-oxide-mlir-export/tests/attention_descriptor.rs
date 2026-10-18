@@ -6,6 +6,7 @@
 //! Execute the actual exported descriptor arithmetic on the CPU. Native CuTe
 //! descriptor construction is an input to this probe; its layout is unchanged.
 use cuda_oxide_mlir_export::{CutlassFullCuteMlir22, MlirConsumerProfile};
+use cuda_oxide_mlir_export::{MlirAttribute, MlirBlock, MlirOperation, MlirType, MlirValueId};
 use dialect_cute::sm100_attention_ops::*;
 use dialect_mir::{
     ops::{MirFuncOp, MirReturnOp},
@@ -24,7 +25,6 @@ use pliron::{
     operation::Operation,
     r#type::TypeHandle,
 };
-use pliron_mlir_export::{MlirAttribute, MlirBlock, MlirOperation, MlirType, MlirValueId};
 use std::collections::HashMap;
 
 /// Exported descriptor-building SSA graph evaluated independently of GPU execution.

@@ -325,8 +325,7 @@ cargo oxide run gemm_sol_final
 | `iket-lower`         | `dialect-iket` profiles + instrumentation lowering    |
 | `llvm-export`        | pliron-llvm shim + textual `.ll` exporter             |
 | `dialect-cute`       | Backend-neutral semantic IR for CuTe tensor programs |
-| `pliron-mlir-export` | Typed deterministic Pliron-to-MLIR translation |
-| `cuda-oxide-mlir-export` | CUTLASS 4.7 CuTe MLIR mapping packs and profile |
+| `cuda-oxide-mlir-export` | CUTLASS 4.7 mappings and profiles; upstream MLIR printing |
 | `dialect-nvvm`       | pliron dialect modelling NVVM intrinsics              |
 | `dialect-ptx`        | pliron dialect modelling structured PTX               |
 | `mir-transforms`     | Optimization passes over the MIR dialect (loop unroll, ...) |

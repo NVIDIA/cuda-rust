@@ -6,6 +6,7 @@
 //! Pinned instruction-level consumer, independent of CuTe source semantics.
 
 use crate::{CutlassFullCuteMlir22, ExportManifest, MlirConsumerProfile, ProfileError};
+use crate::{MlirModule, TranslationRegistry, translate_module};
 use dialect_mir::types::*;
 use pliron::{
     attribute::{Attribute, attr_type},
@@ -17,13 +18,12 @@ use pliron::{
     context::Context,
     dialect::DialectName,
     linked_list::ContainsLinkedList,
-    location::{Located, Location},
+    location::Location,
     op::Op,
     operation::{Operation, verify_operation},
     printable::Printable,
     r#type::{TypeHandle, Typed, type_cast},
 };
-use pliron_mlir_export::{MlirModule, TranslationRegistry, translate_module};
 use std::collections::HashSet;
 
 /// CUTLASS 4.7 / MLIR 22 primitives for SM100a and SM120a.
@@ -56,6 +56,7 @@ impl MlirConsumerProfile for CutlassPrimitivesMlir22 {
             profile: Self::NAME.into(),
             exporter_version: env!("CARGO_PKG_VERSION").into(),
             pliron_revision: CutlassFullCuteMlir22::PLIRON_REVISION.into(),
+            interop_revision: crate::INTEROP_REVISION.into(),
             consumer_revision: CutlassFullCuteMlir22::CONSUMER_REVISION.into(),
             llvm_major: 22,
             gpu_arch: self.gpu_arch.clone(),
@@ -119,7 +120,7 @@ pub fn verify_primitives_source(ctx: &Context, module: &ModuleOp) -> Result<(), 
         for attr in op.attributes.0.values() {
             scan.attr(&**attr)?;
         }
-        scan.location(&op.loc())?;
+        scan.location(op.loc())?;
         for region in op.regions() {
             for block in region.deref(ctx).iter(ctx) {
                 let block = block.deref(ctx);
@@ -129,7 +130,7 @@ pub fn verify_primitives_source(ctx: &Context, module: &ModuleOp) -> Result<(), 
                 for attr in block.attributes.0.values() {
                     scan.attr(&**attr)?;
                 }
-                scan.location(&block.loc())?;
+                scan.location(block.loc())?;
                 pending.extend(block.iter(ctx));
             }
         }

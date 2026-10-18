@@ -3,6 +3,10 @@
 
 //! Native proxy fences retaining the catalog's restricted shared-memory ordering.
 
+use crate::{
+    MlirAttribute, MlirOperation, OperationInput, OperationTranslation, TranslationError,
+    TranslationRegistry, TranslationSession,
+};
 use dialect_nvvm::ops::{
     FenceProxyAsyncGenericAcquireSharedClusterClusterOp,
     FenceProxyAsyncGenericReleaseSharedCtaClusterOp,
@@ -11,10 +15,6 @@ use pliron::{
     common_traits::Verify,
     context::{Context, Ptr},
     operation::Operation,
-};
-use pliron_mlir_export::{
-    MlirAttribute, MlirOperation, OperationInput, OperationTranslation, TranslationError,
-    TranslationRegistry, TranslationSession,
 };
 
 /// Register cluster-scoped acquire/release ordering between generic and async proxies.

@@ -7,6 +7,7 @@
 
 use std::num::NonZero;
 
+use cuda_oxide_mlir_export::render_module;
 use cuda_oxide_mlir_export::{CutlassFullCuteMlir22, MlirConsumerProfile};
 use dialect_cute::{
     attributes::CuteTensorAccessAttr,
@@ -35,7 +36,6 @@ use pliron::{
     r#type::TypeHandle,
     utils::apint::APInt,
 };
-use pliron_mlir_export::render_module;
 
 /// Append a typed source operation to the fixture block and return its operation handle.
 fn append<O: Op>(block: Ptr<BasicBlock>, operation: O, ctx: &Context) -> Ptr<Operation> {
@@ -226,7 +226,7 @@ fn all_eight_elementwise_ops_map_to_cutlass_cute_and_core_mlir() {
     // composes builtin, MIR, NVVM, and CuTe mappings.
     let profile = CutlassFullCuteMlir22::new("sm_120a").unwrap();
     let target = profile.translate_module(&ctx, &module).unwrap();
-    let text = render_module(&target);
+    let text = render_module(&target).unwrap();
 
     assert!(text.contains("\"cute.make_view\""), "{text}");
     assert!(text.contains("\"cute.zipped_divide\""), "{text}");
@@ -254,12 +254,12 @@ fn all_eight_elementwise_ops_map_to_cutlass_cute_and_core_mlir() {
     assert!(text.contains("\"llvm.store\""), "{text}");
     assert_eq!(text.matches("\"llvm.addrspacecast\"").count(), 6, "{text}");
     assert_eq!(
-        text.matches("(!llvm.ptr) -> !llvm.ptr<1>").count(),
+        text.matches("(!llvm.ptr) -> (!llvm.ptr<1>)").count(),
         3,
         "{text}"
     );
     assert_eq!(
-        text.matches("(!llvm.ptr<5>) -> !llvm.ptr").count(),
+        text.matches("(!llvm.ptr<5>) -> (!llvm.ptr)").count(),
         3,
         "{text}"
     );
@@ -369,51 +369,53 @@ fn production_kernel_gets_one_device_module_and_the_six_argument_launch_abi() {
     let root = &target.root;
     assert_eq!(
         root.attributes.get("gpu.container_module"),
-        Some(&pliron_mlir_export::MlirAttribute::Unit)
+        Some(&cuda_oxide_mlir_export::MlirAttribute::Unit)
     );
     assert_eq!(root.regions[0].blocks[0].operations.len(), 1);
     let device_module = &root.regions[0].blocks[0].operations[0];
     assert_eq!(device_module.name, "gpu.module");
     assert_eq!(
         device_module.properties.get("sym_name"),
-        Some(&pliron_mlir_export::MlirAttribute::String("kernels".into()))
+        Some(&cuda_oxide_mlir_export::MlirAttribute::String(
+            "kernels".into()
+        ))
     );
     assert_eq!(device_module.regions[0].blocks[0].operations.len(), 2);
 
     let kernel = &device_module.regions[0].blocks[0].operations[0];
     assert_eq!(
         kernel.attributes.get("cute.kernel"),
-        Some(&pliron_mlir_export::MlirAttribute::Unit)
+        Some(&cuda_oxide_mlir_export::MlirAttribute::Unit)
     );
     assert_eq!(
         kernel.attributes.get("gpu.kernel"),
-        Some(&pliron_mlir_export::MlirAttribute::Unit)
+        Some(&cuda_oxide_mlir_export::MlirAttribute::Unit)
     );
     assert_eq!(
         kernel.attributes.get("nvvm.reqntid"),
-        Some(&pliron_mlir_export::MlirAttribute::DenseI32Array(vec![
+        Some(&cuda_oxide_mlir_export::MlirAttribute::DenseI32Array(vec![
             256, 1, 1
         ]))
     );
     assert_eq!(
         kernel.attributes.get("nvvm.minctasm"),
-        Some(&pliron_mlir_export::MlirAttribute::Integer {
+        Some(&cuda_oxide_mlir_export::MlirAttribute::Integer {
             value: 1,
-            ty: pliron_mlir_export::MlirType::Integer(32)
+            ty: cuda_oxide_mlir_export::MlirType::Integer(32)
         })
     );
     assert!(!kernel.attributes.contains_key("minctasm"));
     assert!(!kernel.attributes.contains_key("maxntid"));
     assert!(!kernel.attributes.contains_key("nvvm.maxntid"));
-    let pliron_mlir_export::MlirAttribute::Type(pliron_mlir_export::MlirType::Function {
+    let cuda_oxide_mlir_export::MlirAttribute::Type(cuda_oxide_mlir_export::MlirType::Function {
         inputs,
         ..
     }) = kernel.properties.get("function_type").unwrap()
     else {
         panic!("kernel function_type is not a function type")
     };
-    let pointer = pliron_mlir_export::MlirType::dialect("!llvm.ptr").unwrap();
-    let length = pliron_mlir_export::MlirType::Integer(64);
+    let pointer = cuda_oxide_mlir_export::MlirType::dialect("!llvm.ptr").unwrap();
+    let length = cuda_oxide_mlir_export::MlirType::Integer(64);
     let expected_inputs = vec![
         pointer.clone(),
         length.clone(),
@@ -453,7 +455,7 @@ fn production_kernel_gets_one_device_module_and_the_six_argument_launch_abi() {
     assert_eq!(helper.name, "func.func");
     assert!(!helper.attributes.contains_key("gpu.kernel"));
 
-    let text = render_module(&target);
+    let text = render_module(&target).unwrap();
     assert_eq!(text.matches("\"gpu.module\"").count(), 1, "{text}");
     assert!(text.contains("gpu.container_module = unit"), "{text}");
     assert!(
@@ -473,7 +475,7 @@ fn production_kernel_gets_one_device_module_and_the_six_argument_launch_abi() {
             .remove(&Identifier::try_from(key).unwrap());
     }
     let bounded = profile.translate_module(&ctx, &module).unwrap();
-    let text = render_module(&bounded);
+    let text = render_module(&bounded).unwrap();
     assert!(
         text.contains("nvvm.maxntid = array<i32: 256, 1, 1>"),
         "{text}"

@@ -24,6 +24,10 @@ use crate::cute::{
     mma::sm100::emit_mma,
     pipeline::sm100::emit_pipeline,
 };
+use crate::{
+    DropAttribute, MlirAttribute, MlirOperation, MlirType, OperationInput, OperationTranslation,
+    TranslationError, TranslationRegistry, TranslationSession,
+};
 #[cfg(test)]
 use dialect_cute::attributes::CuteComposedLayoutAttr;
 use dialect_cute::{attributes::CuteTmaStorePipelineAttr, sm100_ops::*};
@@ -31,10 +35,6 @@ use pliron::{
     common_traits::Verify,
     context::{Context, Ptr},
     operation::Operation,
-};
-use pliron_mlir_export::{
-    DropAttribute, MlirAttribute, MlirOperation, MlirType, OperationInput, OperationTranslation,
-    TranslationError, TranslationRegistry, TranslationSession,
 };
 
 /// Register paired SM100 GEMM plans and their tensor-memory, copy, and pipeline recipes.
@@ -383,14 +383,9 @@ mod tests {
         let registry = profile.build_registry().unwrap();
         // Mapping-unit tests deliberately bypass whole-kernel lifecycle checks;
         // each source operation is still verified by its own translation.
-        let target = pliron_mlir_export::translate_module(
-            ctx,
-            module,
-            &registry,
-            &profile.translation_config(),
-        )
-        .unwrap();
-        pliron_mlir_export::render_module(&target)
+        let target =
+            crate::translate_module(ctx, module, &registry, &profile.translation_config()).unwrap();
+        crate::render_module(&target).unwrap()
     }
     /// Check each paired-MMA partition uses plan-derived descriptors and the intended collector transition.
     #[test]

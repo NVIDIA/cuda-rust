@@ -2,6 +2,7 @@
 
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
+use cuda_oxide_mlir_export::render_module;
 use cuda_oxide_mlir_export::{CutlassPrimitivesMlir22, MlirConsumerProfile};
 use dialect_mir::{
     attributes::{FieldIndexAttr, VariantIndexAttr},
@@ -23,7 +24,6 @@ use pliron::{
     utils::apint::APInt,
     value::Value,
 };
-use pliron_mlir_export::render_module;
 /// Append a typed source operation to the fixture block and return its operation handle.
 fn append<O: Op>(
     ctx: &mut Context,
@@ -63,7 +63,7 @@ fn render(ctx: &Context, m: &ModuleOp) -> Result<String, String> {
     CutlassPrimitivesMlir22::new("sm_100a")
         .unwrap()
         .translate_module(ctx, m)
-        .map(|m| render_module(&m))
+        .and_then(|m| render_module(&m).map_err(Into::into))
         .map_err(|e| e.to_string())
 }
 /// Check overflow intrinsics use source signedness and return the exact padded Rust tuple.
@@ -339,7 +339,7 @@ fn explicitly_returned_zero_sized_aggregates_keep_their_call_result() {
             .find(|line| line.contains("\"func.call\""))
             .unwrap();
         assert!(
-            call.contains(" = ") && call.ends_with("-> !llvm.struct<()>"),
+            call.contains(" = ") && call.ends_with("-> (!llvm.struct<()>)"),
             "{text}"
         );
         assert!(!text.contains("\"ub.poison\""), "{text}");

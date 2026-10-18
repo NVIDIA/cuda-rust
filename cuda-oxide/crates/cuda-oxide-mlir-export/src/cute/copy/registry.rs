@@ -6,6 +6,7 @@
 //! Single ownership of cooperative-copy and matrix-load profile registrations.
 
 use crate::cute::{copy::cooperative::CopyTranslation, mma::ldmatrix::MatrixTranslation};
+use crate::{DropAttribute, TranslationError, TranslationRegistry};
 use dialect_cute::{
     attributes::{
         CuteComposedLayoutAttr, CuteCopyAtomAttr, CuteDivisibilityAttr, CuteLayoutAttr,
@@ -13,7 +14,6 @@ use dialect_cute::{
     },
     ops::{CuteCopyG2SOp, CuteLdmatrixOp},
 };
-use pliron_mlir_export::{DropAttribute, TranslationError, TranslationRegistry};
 
 /// Register cooperative-copy and matrix-load operations plus their consumed plan attributes.
 pub(crate) fn register_cute_attention_pack(

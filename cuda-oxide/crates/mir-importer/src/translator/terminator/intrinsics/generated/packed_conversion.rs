@@ -22,7 +22,7 @@ use dialect_nvvm::ops::{
 };
 use pliron::basic_block::BasicBlock;
 use pliron::context::{Context, Ptr};
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::operation::Operation;
 use rustc_public::mir;
 

@@ -13,7 +13,7 @@ Replaces the previous `xtask` pattern with a proper cargo subcommand that works 
 Install with the project's pinned nightly toolchain:
 
 ```bash
-cargo +nightly-2026-10-11 install --git https://github.com/NVlabs/cuda-oxide.git cargo-oxide
+cargo +nightly-2026-10-11 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
 ```
 
 On first run, `cargo-oxide` will automatically fetch and build the codegen backend if it's not already available.
@@ -422,13 +422,13 @@ When `cargo oxide` needs the `librustc_codegen_cuda.so` backend, it searches in 
 Outside the repository the backend follows the project's `Cargo.lock`:
 
 ```text
-Cargo.lock   cuda-device = git+https://github.com/NVlabs/cuda-oxide.git#a1b4f118...
+Cargo.lock   cuda-device = git+https://github.com/NVIDIA/cuda-rust.git#<sha>
                  │
                  ▼
-~/.cargo/git/checkouts/cuda-oxide-*/a1b4f11/        Cargo's checkout of that commit
-                 │  crates/rustc-codegen-cuda  →  cargo build
+~/.cargo/git/checkouts/cuda-rust-*/<sha>/           Cargo's checkout of that commit
+                 │  cuda-oxide/crates/rustc-codegen-cuda  →  cargo build
                  ▼
-~/.cargo/cuda-oxide/librustc_codegen_cuda.so         + source-rev.txt = a1b4f118...
+~/.cargo/cuda-oxide/librustc_codegen_cuda.so         + source-rev.txt = <sha>
 ```
 
 The kernels compile against the crates at that commit and the backend that

@@ -9,14 +9,12 @@ use crate::cute::{
     common_sm100::contract,
     emit::{Emit, integer_property, llvm_ptr_type, property, segments},
 };
+use crate::{MlirOperation, MlirType, OperationInput, OperationTranslation, TranslationSession};
 use dialect_cute::sm100_attention_ops::*;
 use pliron::{
     common_traits::Verify,
     context::{Context, Ptr},
     operation::Operation,
-};
-use pliron_mlir_export::{
-    MlirOperation, MlirType, OperationInput, OperationTranslation, TranslationSession,
 };
 
 /// Emit independent SM100 attention loads or stores using the verified descriptor plan.

@@ -28,7 +28,6 @@ use pliron::builtin::{
 };
 use pliron::common_traits::Verify;
 use pliron::context::{Context, Ptr};
-use pliron::location::Located;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::result::Error;

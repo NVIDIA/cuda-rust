@@ -195,7 +195,7 @@ handles all of that flattening.
 
 ### Operations
 
-At the pinned `pliron` revision the dialect defines 69 operations:
+The pinned `pliron-llvm` 0.20.0 release defines 69 operations:
 
 | Category     | Examples                                                                                                                                | Count |
 | :----------- | :-------------------------------------------------------------------------------------------------------------------------------------- | ----: |
@@ -216,9 +216,9 @@ At the pinned `pliron` revision the dialect defines 69 operations:
 `llvm-export` adds one operation of its own on top of those, `llvm.dbg_value`,
 alongside the address-space and fp16 helpers mentioned above.
 
-Because the dialect is upstream, this table moves when the `pliron` pin moves
-rather than when this repository changes; `pliron-llvm`'s `src/ops.rs` is the
-list it is counting.
+The operation inventory follows the pinned upstream release. This table counts
+the operations in [`pliron-llvm`'s `src/ops.rs`](https://github.com/pliron-org/pliron/blob/435536c8611af34c48c8f73d78e77894a05d103d/pliron-llvm/src/ops.rs),
+the source revision recorded in the 0.20.0 crate.
 
 If you have read LLVM IR before, nothing here will surprise you. The operation
 names are intentionally the same as their LLVM counterparts, prefixed with

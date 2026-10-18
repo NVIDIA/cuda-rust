@@ -13,6 +13,10 @@
 //! caller-owned, as do the unsafe pointer, capacity, and participation promises.
 
 use crate::cute::copy::emit::{Emitter, integer, require_input};
+use crate::{
+    MlirAttribute, MlirOperation, MlirType, OperationInput, OperationTranslation,
+    TranslationSession,
+};
 use cute_layout::{IntTuple, validate_cooperative_copy_plan};
 use dialect_cute::ops::CuteCopyG2SOp;
 use dialect_mir::types::MirFP16Type;
@@ -22,10 +26,6 @@ use pliron::{
     context::{Context, Ptr},
     operation::Operation,
     r#type::TypeHandle,
-};
-use pliron_mlir_export::{
-    MlirAttribute, MlirOperation, MlirType, OperationInput, OperationTranslation,
-    TranslationSession,
 };
 
 /// Emit cooperative two-byte storage copies with partial-atom zero filling.
@@ -42,7 +42,7 @@ impl OperationTranslation for CopyTranslation {
         copy.verify(ctx).map_err(|e| e.to_string())?;
         let elem: TypeHandle = copy.get_attr_copy_g2s_elem(ctx).unwrap().clone().into();
         let element = if elem.deref(ctx).is::<MirFP16Type>() {
-            MlirType::Float(pliron_mlir_export::MlirFloatType::F16)
+            MlirType::Float(crate::MlirFloatType::F16)
         } else if elem
             .deref(ctx)
             .downcast_ref::<IntegerType>()

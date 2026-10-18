@@ -15,10 +15,11 @@
 #      `version` field. Examples are their own [workspace], so they cannot
 #      inherit the SIMT entry, and a crates.io copy there would resolve a
 #      second cuda_core and break type unification with path cuda-host.
-#   3. `cargo oxide new` scaffolds out-of-tree projects, which cannot use the
-#      git-root paths, so its SHARED_HOST_CRATES_VERSION is the one place a
-#      crates.io version of the host crates lives. It must equal the root
-#      crates' version until it is derived from the root manifests directly.
+#   3. `cargo oxide new` takes cuda-core and cuda-async from the same git
+#      source as cuda-host. cuda-host depends on them by path, so in a project
+#      that pulls cuda-host from git they resolve from that checkout; a
+#      crates.io requirement beside it is a second cuda_core, and the
+#      scaffolded project fails to type-check.
 set -euo pipefail
 export LC_ALL=C
 cd "$(dirname "$0")/.."
@@ -70,13 +71,17 @@ done < <(git -C "${GIT_ROOT}" ls-files \
     'cuda-oxide/cuteir/models/*/*/Cargo.toml' \
     'cuda-oxide/cuteir/models/*/*/*/Cargo.toml')
 
-# 3. The scaffold's crates.io version.
-scaffold_version="$(sed -n -E 's/^pub\(super\) const SHARED_HOST_CRATES_VERSION: &str = "([^"]+)";/\1/p' "${SCAFFOLD}")"
-if [ -z "${scaffold_version}" ]; then
-    echo "error: ${SCAFFOLD}: SHARED_HOST_CRATES_VERSION not found" >&2; status=1
-elif [ "${scaffold_version}" != "${root_version}" ]; then
-    echo "error: ${SCAFFOLD}: SHARED_HOST_CRATES_VERSION is ${scaffold_version}, root host crates are ${root_version}" >&2; status=1
+# 3. The scaffold names every host crate from GIT_REPO.
+scaffold_lines="$(grep -E '^(cuda-bindings|cuda-core|cuda-async)[[:space:]]*=' "${SCAFFOLD}" || true)"
+if [ -z "${scaffold_lines}" ]; then
+    echo "error: ${SCAFFOLD}: no host-crate dependency lines in the templates" >&2; status=1
 fi
+while IFS= read -r line; do
+    [ -n "${line}" ] || continue
+    if [[ ! "${line}" =~ git[[:space:]]*=[[:space:]]*\"\{GIT_REPO\}\" ]]; then
+        echo "error: ${SCAFFOLD}: '${line}' (want git = \"{GIT_REPO}\", the source cuda-host comes from)" >&2; status=1
+    fi
+done <<< "${scaffold_lines}"
 
-[ "${status}" -eq 0 ] && echo "OK: host crates are path dependencies at tip of tree; scaffold pins crates.io ${root_version}."
+[ "${status}" -eq 0 ] && echo "OK: host crates are path dependencies at tip of tree; the scaffold takes them from git beside cuda-host."
 exit "${status}"

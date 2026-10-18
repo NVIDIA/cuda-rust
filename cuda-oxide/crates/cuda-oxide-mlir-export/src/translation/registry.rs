@@ -13,7 +13,7 @@ use pliron::{
     r#type::{Type, TypeHandle, TypeId},
 };
 
-use crate::translate::TranslationSession;
+use crate::TranslationSession;
 use crate::{MlirAttribute, MlirOperation, MlirType, OperationInput, TranslationError};
 
 /// Translate one source type. Implementations may recursively ask the registry

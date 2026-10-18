@@ -7,6 +7,11 @@
 //! Source intrinsic identities and structural selectors are checked before any
 //! source-only attributes are removed. No CuTe operations or types are involved.
 
+use crate::{
+    DropAttribute, MlirAttribute, MlirFloatType, MlirLocation, MlirOperation, MlirResult, MlirType,
+    MlirValueUse, OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
+    TranslationSession,
+};
 use dialect_mir::ops::MirConstantOp;
 use dialect_nvvm::ops::*;
 use pliron::{
@@ -14,11 +19,6 @@ use pliron::{
     context::{Context, Ptr},
     op::Op,
     operation::Operation,
-};
-use pliron_mlir_export::{
-    DropAttribute, MlirAttribute, MlirFloatType, MlirLocation, MlirOperation, MlirResult, MlirType,
-    MlirValueUse, OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
-    TranslationSession,
 };
 
 /// The exact register-MMA and matrix-load variants used by the supported kernels.

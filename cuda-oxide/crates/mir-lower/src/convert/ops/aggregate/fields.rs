@@ -4,9 +4,10 @@
  */
 
 use super::common::{anyhow_to_pliron, spill_enum_value};
+use crate::convert::target_stable_storage::coerce_target_stable_value;
 use crate::convert::types::{
     StructLayoutInfo, StructSlotMap, build_struct_slot_map, build_union_storage_type, convert_type,
-    is_zero_sized_type, make_slice_struct,
+    is_zero_sized_type, make_slice_struct, union_field_storage_type,
 };
 use dialect_mir::ops::{MirExtractFieldOp, MirInsertFieldOp};
 use dialect_mir::types::{
@@ -311,10 +312,15 @@ fn convert_extract_union_field(
 
     let storage_ty = build_union_storage_type(ctx, &union_ty).map_err(anyhow_to_pliron)?;
     let ptr = spill_enum_value(ctx, rewriter, union_value, storage_ty, union_ty.abi_align());
-    let load = llvm::LoadOp::new(ctx, ptr, field_llvm_ty);
+    let field_storage_ty =
+        union_field_storage_type(ctx, field_llvm_ty).map_err(anyhow_to_pliron)?;
+    let load = llvm::LoadOp::new(ctx, ptr, field_storage_ty);
     llvm_export::ops::set_op_alignment(ctx, load.get_operation(), union_ty.abi_align() as u32);
     rewriter.insert_operation(ctx, load.get_operation());
-    rewriter.replace_operation(ctx, op, load.get_operation());
+    let stored = load.get_operation().deref(ctx).get_result(0);
+    let semantic =
+        coerce_target_stable_value(ctx, rewriter, stored, field_llvm_ty, "union field storage")?;
+    rewriter.replace_operation_with_values(ctx, op, vec![semantic]);
     Ok(())
 }
 
@@ -344,7 +350,16 @@ fn convert_insert_union_field(
 
     let storage_ty = build_union_storage_type(ctx, &union_ty).map_err(anyhow_to_pliron)?;
     let ptr = spill_enum_value(ctx, rewriter, union_value, storage_ty, union_ty.abi_align());
-    let store = llvm::StoreOp::new(ctx, new_value, ptr);
+    let field_storage_ty =
+        union_field_storage_type(ctx, field_llvm_ty).map_err(anyhow_to_pliron)?;
+    let stored_value = coerce_target_stable_value(
+        ctx,
+        rewriter,
+        new_value,
+        field_storage_ty,
+        "union field storage",
+    )?;
+    let store = llvm::StoreOp::new(ctx, stored_value, ptr);
     llvm_export::ops::set_op_alignment(ctx, store.get_operation(), union_ty.abi_align() as u32);
     rewriter.insert_operation(ctx, store.get_operation());
 
@@ -363,6 +378,7 @@ mod tests {
     use crate::convert::ops::test_util::*;
     use dialect_mir::attributes::FieldIndexAttr;
     use dialect_mir::ops as mir;
+    use dialect_mir::types::MirPtrType;
 
     use llvm_export::types as llvm_types;
 
@@ -429,6 +445,176 @@ mod tests {
             zst_un_defs, 2,
             "one undef should build the ZST value and one should materialize the extracted ZST"
         );
+    }
+
+    /// A shared pointer carried through a union must use generic-pointer
+    /// physical storage in both directions. Construction converts AS3 -> AS0;
+    /// extraction converts the stored AS0 pointer back to semantic AS3.
+    #[test]
+    fn shared_pointer_union_field_round_trips_through_generic_storage() {
+        let mut ctx = make_ctx();
+
+        let pointee: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+        let shared: TypeHandle = MirPtrType::get_shared(&mut ctx, pointee, true).into();
+        let bits: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Unsigned).into();
+        let union_ty: TypeHandle = MirUnionType::get(
+            &mut ctx,
+            "SharedPointerBits".into(),
+            vec!["ptr".into(), "bits".into()],
+            vec![shared, bits],
+            8,
+            8,
+        )
+        .into();
+
+        let (module, block) = build_kernel(&mut ctx, vec![shared], vec![shared]);
+        let pointer = block.deref(&ctx).get_argument(0);
+
+        let undef = mir::MirUndefOp::new(&mut ctx, union_ty).get_operation();
+        undef.insert_at_back(block, &ctx);
+        let undef_value = undef.deref(&ctx).get_result(0);
+
+        let insert = Operation::new(
+            &mut ctx,
+            MirInsertFieldOp::get_concrete_op_info(),
+            vec![union_ty],
+            vec![undef_value, pointer],
+            vec![],
+            0,
+        );
+        MirInsertFieldOp::new(insert).set_attr_insert_index(&ctx, FieldIndexAttr(0));
+        insert.insert_at_back(block, &ctx);
+        let union_value = insert.deref(&ctx).get_result(0);
+
+        let extract = Operation::new(
+            &mut ctx,
+            MirExtractFieldOp::get_concrete_op_info(),
+            vec![shared],
+            vec![union_value],
+            vec![],
+            0,
+        );
+        MirExtractFieldOp::new(extract).set_attr_index(&ctx, FieldIndexAttr(0));
+        extract.insert_at_back(block, &ctx);
+        let result = extract.deref(&ctx).get_result(0);
+
+        append_mir_return(&mut ctx, block, vec![result]);
+
+        crate::lower_mir_to_llvm(&mut ctx, module).expect("lowering failed");
+        let body = kernel_blocks(&ctx, module);
+
+        assert_eq!(
+            count_ops::<llvm::AddrSpaceCastOp>(&ctx, &body),
+            2,
+            "union insertion must genericize AS3 and extraction must restore AS3"
+        );
+        assert_eq!(
+            count_ops::<MirInsertFieldOp>(&ctx, &body),
+            0,
+            "MirInsertFieldOp must be fully lowered"
+        );
+        assert_eq!(
+            count_ops::<MirExtractFieldOp>(&ctx, &body),
+            0,
+            "MirExtractFieldOp must be fully lowered"
+        );
+    }
+
+    #[test]
+    fn nested_shared_pointer_union_field_round_trips_through_generic_storage() {
+        let mut ctx = make_ctx();
+
+        let pointee: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+        let shared: TypeHandle = MirPtrType::get_shared(&mut ctx, pointee, true).into();
+        let cookie: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Unsigned).into();
+        let inner: TypeHandle = MirStructType::get_with_full_layout(
+            &mut ctx,
+            "SharedPointerInner".into(),
+            vec!["pointer".into(), "cookie".into()],
+            vec![shared, cookie],
+            vec![0, 1],
+            vec![0, 8],
+            16,
+            8,
+        )
+        .into();
+        let union_ty: TypeHandle = MirUnionType::get(
+            &mut ctx,
+            "NestedSharedPointerUnion".into(),
+            vec!["inner".into()],
+            vec![inner],
+            16,
+            8,
+        )
+        .into();
+
+        let (module, block) = build_kernel(&mut ctx, vec![shared, cookie], vec![shared]);
+        let pointer = block.deref(&ctx).get_argument(0);
+        let cookie_value = block.deref(&ctx).get_argument(1);
+
+        let construct_inner = Operation::new(
+            &mut ctx,
+            mir::MirConstructStructOp::get_concrete_op_info(),
+            vec![inner],
+            vec![pointer, cookie_value],
+            vec![],
+            0,
+        );
+        construct_inner.insert_at_back(block, &ctx);
+        let inner_value = construct_inner.deref(&ctx).get_result(0);
+
+        let undef = mir::MirUndefOp::new(&mut ctx, union_ty).get_operation();
+        undef.insert_at_back(block, &ctx);
+        let undef_value = undef.deref(&ctx).get_result(0);
+
+        let insert = Operation::new(
+            &mut ctx,
+            MirInsertFieldOp::get_concrete_op_info(),
+            vec![union_ty],
+            vec![undef_value, inner_value],
+            vec![],
+            0,
+        );
+        MirInsertFieldOp::new(insert).set_attr_insert_index(&ctx, FieldIndexAttr(0));
+        insert.insert_at_back(block, &ctx);
+        let union_value = insert.deref(&ctx).get_result(0);
+
+        let extract_inner = Operation::new(
+            &mut ctx,
+            MirExtractFieldOp::get_concrete_op_info(),
+            vec![inner],
+            vec![union_value],
+            vec![],
+            0,
+        );
+        MirExtractFieldOp::new(extract_inner).set_attr_index(&ctx, FieldIndexAttr(0));
+        extract_inner.insert_at_back(block, &ctx);
+        let recovered_inner = extract_inner.deref(&ctx).get_result(0);
+
+        let extract_pointer = Operation::new(
+            &mut ctx,
+            MirExtractFieldOp::get_concrete_op_info(),
+            vec![shared],
+            vec![recovered_inner],
+            vec![],
+            0,
+        );
+        MirExtractFieldOp::new(extract_pointer).set_attr_index(&ctx, FieldIndexAttr(0));
+        extract_pointer.insert_at_back(block, &ctx);
+        let result = extract_pointer.deref(&ctx).get_result(0);
+
+        append_mir_return(&mut ctx, block, vec![result]);
+
+        crate::lower_mir_to_llvm(&mut ctx, module).expect("lowering failed");
+        let body = kernel_blocks(&ctx, module);
+
+        assert_eq!(
+            count_ops::<llvm::AddrSpaceCastOp>(&ctx, &body),
+            2,
+            "nested union insertion must genericize AS3 and extraction must restore AS3"
+        );
+        assert_eq!(count_ops::<MirInsertFieldOp>(&ctx, &body), 0);
+        assert_eq!(count_ops::<MirExtractFieldOp>(&ctx, &body), 0);
     }
 
     /// The row-width arm of [`resolve_aggregate_slots`]' no-history fallback

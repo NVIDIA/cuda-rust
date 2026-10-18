@@ -5,9 +5,9 @@
 
 //! Paired SM100 GEMM MMA with explicit A-collector lifetime sequencing.
 
+use crate::MlirValueUse;
 use crate::cute::emit::{Emit, llvm_ptr_type, property, segments};
 use dialect_cute::sm100_ops::*;
-use pliron_mlir_export::MlirValueUse;
 
 /// Emit each K16 MMA step with layout-derived descriptors and explicit A-collector reuse.
 pub(in crate::cute) fn emit_mma(

@@ -308,7 +308,7 @@ The other three are not needed to build: `rust-analyzer` powers IDE support, `cl
 **For use outside the repo** (your own projects), install it with the pinned nightly toolchain:
 
 ```bash
-cargo +nightly-2026-10-11 install --git https://github.com/NVlabs/cuda-oxide.git cargo-oxide
+cargo +nightly-2026-10-11 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
 ```
 
 On first run, `cargo-oxide` will automatically fetch and build the codegen backend. Subsequent runs reuse the cached build.

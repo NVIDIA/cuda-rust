@@ -10,6 +10,10 @@
 //! Pointer provenance and bool's canonical storage require separate adapters and
 //! remain unsupported here.
 
+use crate::{
+    MlirOperation, MlirType, OperationInput, TranslationError, TranslationRegistry,
+    TranslationSession, TypeTranslation,
+};
 use dialect_mir::{
     ops::{MirCastOp, MirExtractFieldOp, MirInsertFieldOp},
     types::{
@@ -23,10 +27,6 @@ use pliron::{
     context::{Context, Ptr},
     operation::Operation,
     r#type::{TypeHandle, Typed},
-};
-use pliron_mlir_export::{
-    MlirOperation, MlirType, OperationInput, TranslationError, TranslationRegistry,
-    TranslationSession, TypeTranslation,
 };
 
 use super::{

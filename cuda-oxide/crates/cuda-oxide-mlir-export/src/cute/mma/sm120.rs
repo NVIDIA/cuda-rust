@@ -9,6 +9,10 @@ use crate::cute::common::{
     cast_int, emit_binary, emit_i32_constant, emit_i64_constant, expect_shape, fresh, gep_value,
     operation, stringify,
 };
+use crate::{
+    MlirAttribute, MlirLocation, MlirOperation, MlirResult, MlirType, MlirValueUse, OperationInput,
+    OperationTranslation, TranslationSession,
+};
 use dialect_cute::smem_mma_ops::{
     CuteFragmentFillOp, CuteFragmentSliceKOp, CuteMmaLoadAOp, CuteMmaLoadScalesOp, CuteTiledGemmOp,
 };
@@ -18,10 +22,6 @@ use pliron::{
     context::{Context, Ptr},
     operation::Operation,
     r#type::{TypeHandle, Typed},
-};
-use pliron_mlir_export::{
-    MlirAttribute, MlirLocation, MlirOperation, MlirResult, MlirType, MlirValueUse, OperationInput,
-    OperationTranslation, TranslationSession,
 };
 
 /// Byte-address bits selected by the verified FP16 shared-layout swizzle.
@@ -968,7 +968,7 @@ fn emit_mxf4_mma(
     operands.extend_from_slice(accumulator);
     operands.extend([scale_a, scale_b]);
 
-    let result_type = MlirType::Float(pliron_mlir_export::MlirFloatType::F32);
+    let result_type = MlirType::Float(crate::MlirFloatType::F32);
     let mut results = Vec::with_capacity(4);
     let mut uses = Vec::with_capacity(4);
     for _ in 0..4 {
@@ -984,13 +984,13 @@ fn emit_mxf4_mma(
     )?;
     operation_.properties.insert(
         "a_type".into(),
-        MlirAttribute::Type(MlirType::Float(pliron_mlir_export::MlirFloatType::Other(
+        MlirAttribute::Type(MlirType::Float(crate::MlirFloatType::Other(
             "f4E2M1FN".into(),
         ))),
     );
     operation_.properties.insert(
         "b_type".into(),
-        MlirAttribute::Type(MlirType::Float(pliron_mlir_export::MlirFloatType::Other(
+        MlirAttribute::Type(MlirType::Float(crate::MlirFloatType::Other(
             "f4E2M1FN".into(),
         ))),
     );
@@ -1000,7 +1000,7 @@ fn emit_mxf4_mma(
     );
     operation_.properties.insert(
         "sf_type".into(),
-        MlirAttribute::Type(MlirType::Float(pliron_mlir_export::MlirFloatType::Other(
+        MlirAttribute::Type(MlirType::Float(crate::MlirFloatType::Other(
             "f8E8M0FNU".into(),
         ))),
     );

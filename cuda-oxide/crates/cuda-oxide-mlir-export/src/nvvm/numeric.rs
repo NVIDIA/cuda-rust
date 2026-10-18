@@ -5,15 +5,15 @@
 //! Shared scalar and packed arithmetic for CuTe and instruction-only profiles.
 //! Precision, rounding, lane masks, and intrinsic identity survive translation.
 use crate::nvvm::tcgen05::{fresh, operation, require_input};
+use crate::{
+    DropAttribute, MlirAttribute, MlirFloatType, MlirOperation, MlirType, OperationInput,
+    OperationTranslation, TranslationError, TranslationRegistry, TranslationSession,
+};
 use dialect_nvvm::ops::*;
 use pliron::{
     common_traits::Verify,
     context::{Context, Ptr},
     operation::Operation,
-};
-use pliron_mlir_export::{
-    DropAttribute, MlirAttribute, MlirFloatType, MlirOperation, MlirType, OperationInput,
-    OperationTranslation, TranslationError, TranslationRegistry, TranslationSession,
 };
 
 /// Source-operation verifier run before discarding its intrinsic metadata.

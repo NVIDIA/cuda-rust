@@ -9,6 +9,10 @@ use crate::cute::common::{
     binary, constant_value, emit_binary, emit_i64_constant, expect_shape, fresh, operation,
     stringify, u64_bits,
 };
+use crate::{
+    MlirAttribute, MlirOperation, MlirType, OperationInput, OperationTranslation,
+    TranslationRegistry, TranslationSession, TypeTranslation,
+};
 use dialect_cute::{
     attributes::CuteTileGridAttr,
     scheduler_ops::{
@@ -22,10 +26,6 @@ use pliron::{
     context::{Context, Ptr},
     operation::Operation,
     r#type::{TypeHandle, Typed},
-};
-use pliron_mlir_export::{
-    MlirAttribute, MlirOperation, MlirType, OperationInput, OperationTranslation,
-    TranslationRegistry, TranslationSession, TypeTranslation,
 };
 
 /// Represent a verified scheduler work tile as its runtime integer cursor.

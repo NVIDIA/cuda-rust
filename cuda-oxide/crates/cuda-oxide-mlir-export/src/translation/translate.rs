@@ -11,7 +11,7 @@ use pliron::{
     builtin::ops::ModuleOp,
     context::{Context, Ptr},
     linked_list::ContainsLinkedList,
-    location::{Located, Location, Source},
+    location::{Location, Source},
     op::Op,
     operation::{Operation, verify_operation},
     region::Region,
@@ -204,7 +204,7 @@ fn scan_operation(
         scan_type(ctx, value.get_type(ctx), registry, missing);
     }
     scan_attributes(&operation.attributes.0, registry, missing);
-    scan_location(&operation.loc(), registry, missing);
+    scan_location(operation.loc(), registry, missing);
     for region in operation.regions() {
         for block in region.deref(ctx).iter(ctx) {
             let block_ref = block.deref(ctx);
@@ -212,7 +212,7 @@ fn scan_operation(
                 scan_type(ctx, argument.get_type(ctx), registry, missing);
             }
             scan_attributes(&block_ref.attributes.0, registry, missing);
-            scan_location(&block_ref.loc(), registry, missing);
+            scan_location(block_ref.loc(), registry, missing);
             for child in block_ref.iter(ctx) {
                 scan_operation(ctx, child, registry, missing);
             }
@@ -358,7 +358,7 @@ fn translate_operation(
         session.config,
         &operation.attributes.0,
     )?;
-    let location = translate_location(ctx, session, &operation.loc())?;
+    let location = translate_location(ctx, session, operation.loc())?;
     drop(operation);
 
     let input = OperationInput {
@@ -418,7 +418,7 @@ fn translate_region(
             arguments.push(MlirBlockArgument {
                 id: session.values[&argument],
                 ty: session.translate_type(argument.get_type(ctx))?,
-                location: translate_location(ctx, session, &block_ref.loc())?,
+                location: translate_location(ctx, session, block_ref.loc())?,
             });
         }
         let operations = block_ref.iter(ctx).collect::<Vec<_>>();
@@ -617,7 +617,7 @@ fn check_source_results(
     Ok(())
 }
 
-fn validate_target(module: &MlirModule) -> Result<(), TranslationError> {
+pub(crate) fn validate_target(module: &MlirModule) -> Result<(), TranslationError> {
     let mut values = HashMap::<MlirValueId, MlirType>::new();
     let mut blocks = HashSet::<MlirBlockId>::new();
     collect_target_definitions(&module.root, &mut values, &mut blocks)?;
@@ -713,7 +713,7 @@ mod tests {
 
     use crate::{
         OperationTranslation,
-        registry::{DropAttribute, FixedType, OneToOneOperation},
+        translation::registry::{DropAttribute, FixedType, OneToOneOperation},
     };
 
     use super::*;
@@ -787,9 +787,9 @@ mod tests {
             .unwrap();
         let translated =
             translate_module(&ctx, &module, &registry, &TranslationConfig::new("test")).unwrap();
-        let text = crate::render_module(&translated);
+        let text = crate::render_module(&translated).unwrap();
         assert!(text.starts_with("\"builtin.module\"() ({"));
-        assert!(text.ends_with(": () -> ()\n"));
+        assert!(text.trim_end().ends_with(": () -> ()"));
     }
 
     #[test]
@@ -814,7 +814,10 @@ mod tests {
         assert_ne!(source_block, generated_block);
         assert_eq!(source_block, MlirBlockId(0));
         assert_eq!(generated_block, MlirBlockId(1));
-        assert_eq!(crate::render_module(&first), crate::render_module(&second));
+        assert_eq!(
+            crate::render_module(&first).unwrap(),
+            crate::render_module(&second).unwrap()
+        );
     }
 
     #[test]

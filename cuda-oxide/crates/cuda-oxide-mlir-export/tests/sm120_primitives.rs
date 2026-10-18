@@ -3,6 +3,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use cuda_oxide_mlir_export::render_module;
 use cuda_oxide_mlir_export::{CutlassFullCuteMlir22, CutlassPrimitivesMlir22, MlirConsumerProfile};
 use dialect_mir::{
     ops::{MirConstantOp, MirFuncOp, MirReturnOp},
@@ -24,7 +25,6 @@ use pliron::{
     utils::apint::APInt,
     value::Value,
 };
-use pliron_mlir_export::render_module;
 
 /// MIR/NVVM function with shared pointers and register carriers for SM120 primitive export tests.
 struct Fixture {
@@ -143,7 +143,7 @@ impl Fixture {
         CutlassPrimitivesMlir22::new("sm_120a")
             .unwrap()
             .translate_module(&self.ctx, &self.module)
-            .map(|m| render_module(&m))
+            .and_then(|m| render_module(&m).map_err(Into::into))
             .map_err(|e| e.to_string())
     }
     /// Append the canonical reviewed shared matrix-load operation for mutation tests.
@@ -290,7 +290,7 @@ fn fp16_mma_preserves_packed_a_b_and_f32_accumulator_order() {
     for register in 10..16 {
         assert!(
             text.contains(&format!(
-                "\"llvm.bitcast\"(%v{register}) : (i32) -> vector<2xf16>"
+                "\"llvm.bitcast\"(%v{register}) : (i32) -> (vector<2xf16>)"
             )),
             "{text}"
         );
@@ -321,7 +321,7 @@ fn fp16_mma_preserves_packed_a_b_and_f32_accumulator_order() {
         let text = CutlassFullCuteMlir22::new(arch)
             .unwrap()
             .translate_module(&f.ctx, &f.module)
-            .map(|m| render_module(&m))
+            .and_then(|m| render_module(&m).map_err(Into::into))
             .unwrap();
         assert!(text.contains("\"nvvm.mma.sync\""), "{arch}: {text}");
     }
@@ -412,7 +412,7 @@ fn bf16_mma_preserves_integer_packing_and_fp32_accumulator_order() {
         let text = CutlassFullCuteMlir22::new(arch)
             .unwrap()
             .translate_module(&f.ctx, &f.module)
-            .map(|m| render_module(&m))
+            .and_then(|m| render_module(&m).map_err(Into::into))
             .unwrap();
         assert!(
             text.contains("multiplicandAPtxType = #nvvm.mma_type<bf16>"),

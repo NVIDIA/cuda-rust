@@ -33,6 +33,7 @@ use crate::ptx::{
 };
 use crate::target::detect_features_in_llvm_text;
 use crate::verify::verify_operation;
+use cuda_oxide_mlir_export::render_module as render_mlir_module;
 use cuda_oxide_mlir_export::{
     CutlassFullCuteMlir22, CutlassPrimitivesMlir22, ExportManifest, MlirConsumerProfile,
 };
@@ -42,7 +43,6 @@ use pliron::context::{Context, Ptr};
 use pliron::linked_list::ContainsLinkedList;
 use pliron::operation::Operation;
 use pliron::printable::Printable;
-use pliron_mlir_export::render_module as render_mlir_module;
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -977,7 +977,7 @@ fn render_live_cutlass_mlir(
 
 fn render_cutlass_mlir(
     manifest: &ExportManifest,
-    module: &pliron_mlir_export::MlirModule,
+    module: &cuda_oxide_mlir_export::MlirModule,
 ) -> Result<String, PipelineError> {
     let manifest = manifest.to_pretty_json().map_err(|error| {
         PipelineError::Export(format!(
@@ -990,7 +990,10 @@ fn render_cutlass_mlir(
         output.push_str(line);
         output.push('\n');
     }
-    output.push_str(&render_mlir_module(module));
+    let rendered = render_mlir_module(module).map_err(|error| {
+        PipelineError::Export(format!("CUTLASS MLIR rendering failed: {error}"))
+    })?;
+    output.push_str(&rendered);
     Ok(output)
 }
 
@@ -1323,14 +1326,15 @@ mod tests {
             profile: "test-profile".to_owned(),
             exporter_version: "0.1.0".to_owned(),
             pliron_revision: "pliron-rev".to_owned(),
+            interop_revision: cuda_oxide_mlir_export::INTEROP_REVISION.to_owned(),
             consumer_revision: "consumer-rev".to_owned(),
             llvm_major: 22,
             gpu_arch: "sm_120a".to_owned(),
             pointer_model: "opaque".to_owned(),
             index_bits: 64,
         };
-        let module = pliron_mlir_export::MlirModule {
-            root: pliron_mlir_export::MlirOperation::new("builtin.module").unwrap(),
+        let module = cuda_oxide_mlir_export::MlirModule {
+            root: cuda_oxide_mlir_export::MlirOperation::new("builtin.module").unwrap(),
             profile: "test-profile".to_owned(),
         };
 
@@ -1343,6 +1347,29 @@ mod tests {
                 .lines()
                 .all(|line| line.starts_with("//"))
         );
+    }
+
+    /// Invalid target plans must produce an export diagnostic instead of a formatting panic.
+    #[test]
+    fn cutlass_rendering_failure_is_an_export_error() {
+        use cuda_oxide_mlir_export::{
+            MlirModule, MlirOperation, MlirType, MlirValueId, MlirValueUse,
+        };
+
+        let mut root = MlirOperation::new("builtin.module").unwrap();
+        root.operands.push(MlirValueUse {
+            id: MlirValueId(99),
+            ty: MlirType::Integer(32),
+        });
+        let profile = CutlassFullCuteMlir22::new("sm_120a").unwrap();
+        let target = MlirModule {
+            root,
+            profile: profile.name().into(),
+        };
+        let error = render_cutlass_mlir(&profile.manifest(), &target).unwrap_err();
+        assert!(matches!(error, PipelineError::Export(message)
+            if message.contains("CUTLASS MLIR rendering failed")
+                && message.contains("has no definition")));
     }
 
     #[test]

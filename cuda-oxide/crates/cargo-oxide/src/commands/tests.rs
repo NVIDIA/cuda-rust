@@ -5029,15 +5029,45 @@ fn scaffold_sync_template_uses_launch_contract_and_docs() {
     assert!(files.main_rs.contains("prepare_vecadd"));
     assert!(files.main_rs.contains("LaunchConfig1D"));
     assert!(!files.main_rs.contains("LaunchConfig::for_num_elems"));
-    // The host runtime is the crates.io release of the git-root crates.
-    // In-tree examples path-depend on those crates; a freshly scaffolded
-    // project is not inside this monorepo, so it cannot use those paths.
-    assert!(
-        files
+    // cuda-core comes from the same git source as cuda-host, which depends on
+    // it at tip of tree; a crates.io copy would be a second cuda_core.
+    assert!(files.cargo_toml.contains("cuda-core = { git = \""));
+    assert!(!files.cargo_toml.contains("cuda-core = \""));
+}
+
+/// Every CUDA crate in either template resolves from the git source
+/// `cuda-device` names. A host crate taken from crates.io next to a git
+/// `cuda-host` puts two `cuda_core` crates in the graph, and `#[cuda_module]`
+/// then fails to type-check.
+#[test]
+fn scaffold_takes_every_cuda_crate_from_one_git_source() {
+    for async_mode in [false, true] {
+        let files = scaffold_files("one_source", async_mode);
+        let git_source = |line: &str| {
+            line.split("git = \"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .map(str::to_owned)
+        };
+        let cuda_lines: Vec<&str> = files
             .cargo_toml
-            .contains(&format!("cuda-core = \"{SHARED_HOST_CRATES_VERSION}\""))
-    );
-    assert!(!files.cargo_toml.contains("cuda-core = {"));
+            .lines()
+            .filter(|line| line.starts_with("cuda-"))
+            .collect();
+        assert!(cuda_lines.len() >= 3, "{cuda_lines:?}");
+        let device = cuda_lines
+            .iter()
+            .find(|line| line.starts_with("cuda-device"))
+            .and_then(|line| git_source(line))
+            .expect("cuda-device comes from git");
+        for line in cuda_lines {
+            assert_eq!(
+                git_source(line).as_deref(),
+                Some(device.as_str()),
+                "async={async_mode}: {line}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -5055,13 +5085,10 @@ fn scaffold_async_template_keeps_async_deps_and_docs() {
     assert!(files.main_rs.contains("vecadd_async"));
     assert!(files.main_rs.contains("use cuda_host::cuda_module;"));
     assert!(!files.main_rs.contains("use cuda_device::{cuda_module"));
-    // Shared host runtime from crates.io; the SIMT surface lives under simt::.
-    assert!(
-        files
-            .cargo_toml
-            .contains(&format!("cuda-async = \"{SHARED_HOST_CRATES_VERSION}\""))
-    );
-    assert!(!files.cargo_toml.contains("cuda-async = {"));
+    // Shared host runtime from the same git source as cuda-host; the SIMT
+    // surface lives under simt::.
+    assert!(files.cargo_toml.contains("cuda-async = { git = \""));
+    assert!(!files.cargo_toml.contains("cuda-async = \""));
     assert!(!files.cargo_toml.contains("cuda-bindings"));
     assert!(files.main_rs.contains("use cuda_core::simt::LaunchConfig;"));
     assert!(
@@ -5136,6 +5163,21 @@ fn scaffold_gitignore_covers_every_clean_artifact_suffix() {
             gitignore.lines().any(|line| line == pattern),
             "scaffold .gitignore must ignore clean suffix `{suffix}`"
         );
+    }
+}
+
+#[test]
+fn scaffold_names_the_canonical_repository() {
+    // Both templates must name the repository the crates live in now; the
+    // pre-move URL resolves only through GitHub's redirect.
+    for async_mode in [false, true] {
+        let files = scaffold_files("demo_kernel", async_mode);
+        assert!(
+            files
+                .cargo_toml
+                .contains("git = \"https://github.com/NVIDIA/cuda-rust.git\"")
+        );
+        assert!(!files.cargo_toml.contains("NVlabs"));
     }
 }
 

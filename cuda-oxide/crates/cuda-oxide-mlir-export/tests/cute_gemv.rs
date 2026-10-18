@@ -6,6 +6,7 @@
 //! Production-shaped NVFP4 GEMV view, narrow-load, and ordered-dot integration.
 
 use cuda_oxide_mlir_export::{CutlassFullCuteMlir22, MlirConsumerProfile};
+use cuda_oxide_mlir_export::{MlirModule, render_module};
 use dialect_cute::{
     attributes::CuteTensorRoleAttr,
     gemv_ops::{
@@ -31,7 +32,6 @@ use pliron::{
     operation::Operation,
     r#type::TypeHandle,
 };
-use pliron_mlir_export::{MlirModule, render_module};
 
 /// Append a typed source operation to the fixture block and return its operation handle.
 fn append<O: Op>(block: Ptr<BasicBlock>, operation: O, ctx: &Context) -> Ptr<Operation> {
@@ -230,7 +230,7 @@ fn translate_gemv_target(ctx: &Context, module: &ModuleOp) -> MlirModule {
 
 /// Render the exported GEMV target for textual contract assertions.
 fn translate_gemv(ctx: &Context, module: &ModuleOp) -> String {
-    render_module(&translate_gemv_target(ctx, module))
+    render_module(&translate_gemv_target(ctx, module)).unwrap()
 }
 
 /// Check the exporter retains narrow FP4/scale loads and the required FP32 accumulation order.

@@ -33,6 +33,8 @@
 #     THIRD_PARTY_NOTICES). Its files keep their upstream form; adding an
 #     NVIDIA copyright line to code we do not own would be wrong, so the whole
 #     subtree is out of scope.
+#     cuda-oxide/third_party/pliron-mlir-interop/** likewise retains its upstream
+#     Apache-2.0 notices and contributor attribution; see THIRD_PARTY_NOTICES.
 #   * cutile-rs/** is a nested import of a separate product. Its sources keep
 #     the headers that tree already uses; do not rewrite them to the Oxide
 #     Apache-2.0 pair. Drop the `cutile-rs/` grep below when Oxide should
@@ -129,6 +131,7 @@ done < <(git ls-files -- '*.rs' '*.sh' '*.py' '*.cu' '*.c' '*.h' '*.ll' \
     '*.js' '*.css' '*.html' '*.nix' |
     grep -v '^cutile-rs/' |
     grep -v '^cuda-oxide/crates/fuzzer/rustlantis/' |
+    grep -v '^cuda-oxide/third_party/pliron-mlir-interop/' |
     grep -vxF -f <(printf '%s\n' "${BSD_EXEMPT_FILES[@]}"))
 
 if [ -n "${violations}" ]; then

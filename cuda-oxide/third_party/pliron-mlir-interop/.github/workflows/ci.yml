@@ -1,0 +1,65 @@
+name: pliron-mlir-interop
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  CARGO_TERM_COLOR: always
+  # The testsuite verifies its translated MLIR with this binary.
+  MLIR_OPT: /usr/lib/llvm-23/bin/mlir-opt
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: dtolnay/rust-toolchain@stable
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Configure apt archive cache directory
+      run: |
+        mkdir -p ~/.cache/apt-archives
+        echo 'Dir::Cache::Archives "'"$HOME"'/.cache/apt-archives";' | sudo tee /etc/apt/apt.conf.d/99-archives-cache
+
+    - name: Cache LLVM apt packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/apt-archives
+        key: llvm-23-apt-archives-${{ runner.os }}
+
+    - name: Setup LLVM
+      run: |
+        wget https://apt.llvm.org/llvm.sh
+        chmod +x llvm.sh
+        sudo ./llvm.sh 23
+        sudo apt-get install -y mlir-23-tools
+        # apt falls back to downloading as root when the sandboxed `_apt`
+        # user can't write into our redirected (non-standard) cache dir,
+        # leaving root-owned files that the later cache-save step (running
+        # unprivileged) can't read. Reclaim ownership so caching works.
+        sudo chown -R "$(id -u):$(id -g)" ~/.cache/apt-archives
+        "$MLIR_OPT" --version
+
+    - name: Format
+      run: cargo fmt --check
+
+    - name: Clippy
+      run: cargo clippy --workspace --all-targets -- -D warnings
+
+    - name: Build
+      run: RUSTFLAGS="-D warnings" cargo build --workspace --verbose
+
+    - name: Tests (Debug)
+      run: cargo test --workspace --verbose
+
+    - name: Tests (Release)
+      run: cargo test --release --workspace --verbose
+
+    - name: Documentation
+      run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace

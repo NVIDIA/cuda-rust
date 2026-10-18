@@ -9,6 +9,7 @@
 #![allow(clippy::disallowed_methods)]
 
 use cuda_oxide_mlir_export::{CutlassFullCuteMlir22, MlirConsumerProfile};
+use cuda_oxide_mlir_export::{MlirAttribute, MlirOperation, MlirType};
 use dialect_mir::{
     attributes::MirPointerKindAuthorityAttr,
     ops::{MirConstructStructOp, MirFuncOp, MirGotoOp, MirRefOp, MirReturnOp},
@@ -28,7 +29,6 @@ use pliron::{
     r#type::TypeHandle,
     value::Value,
 };
-use pliron_mlir_export::{MlirAttribute, MlirOperation, MlirType};
 
 /// Build the same full-profile context used by CuTe device compilation.
 fn context() -> Context {

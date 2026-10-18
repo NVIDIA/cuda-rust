@@ -6,8 +6,8 @@
 //! Independent SM100 attention pack registration.
 
 use crate::cute::{copy::sm100_attention::Tma, mma::sm100_attention::Mma};
+use crate::{DropAttribute, TranslationError, TranslationRegistry};
 use dialect_cute::sm100_attention_ops::*;
-use pliron_mlir_export::{DropAttribute, TranslationError, TranslationRegistry};
 
 /// Register standalone SM100 attention MMA and TMA operations without GEMM-plan ownership.
 pub(crate) fn register_cute_sm100_attention_pack(

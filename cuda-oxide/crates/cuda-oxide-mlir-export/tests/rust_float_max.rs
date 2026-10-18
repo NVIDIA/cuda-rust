@@ -3,6 +3,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use cuda_oxide_mlir_export::render_module;
 use cuda_oxide_mlir_export::{CutlassFullCuteMlir22, CutlassPrimitivesMlir22, MlirConsumerProfile};
 use dialect_mir::{
     ops::{MirCallOp, MirFuncOp, MirReturnOp},
@@ -21,7 +22,6 @@ use pliron::{
     operation::Operation,
     r#type::TypeHandle,
 };
-use pliron_mlir_export::render_module;
 
 /// Build and export a scalar call with independently controlled operand and result signatures.
 fn translate_call(
@@ -86,7 +86,7 @@ fn translate_call(
     ret.insert_at_back(block, &ctx);
     profile
         .translate_module(&ctx, &module)
-        .map(|module| render_module(&module))
+        .and_then(|module| render_module(&module).map_err(Into::into))
         .map_err(|error| error.to_string())
 }
 
@@ -108,7 +108,7 @@ fn rust_f32_max_exports_nan_ignoring_subnormal_preserving_native_maximum() {
         // nvvm.fmax for maximumNumber: ignore qNaN/sNaN, preserve subnormals.
         // PTX's preference for +0 over -0 is allowed by Rust's nsz contract.
         assert!(
-            text.contains("\"nvvm.fmax\"(%v0, %v1) : (f32, f32) -> f32"),
+            text.contains("\"nvvm.fmax\"(%v0, %v1) : (f32, f32) -> (f32)"),
             "{}: {text}",
             profile.name()
         );
@@ -172,7 +172,7 @@ fn ordinary_f32_function_calls_remain_calls() {
     for profile in profiles() {
         let text = translate_call(&*profile, "user_max", &["f32", "f32"], &["f32"]).unwrap();
         assert!(
-            text.contains("\"func.call\"(%v0, %v1) <{callee = @user_max}> : (f32, f32) -> f32"),
+            text.contains("\"func.call\"(%v0, %v1) <{callee = @user_max}> : (f32, f32) -> (f32)"),
             "{text}"
         );
         assert!(!text.contains("\"nvvm.fmax\""), "{text}");

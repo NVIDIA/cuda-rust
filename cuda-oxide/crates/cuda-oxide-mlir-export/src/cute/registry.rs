@@ -30,6 +30,7 @@ use crate::cute::{
         WorkTileCoordinatesTranslation, WorkTileTypeTranslation,
     },
 };
+use crate::{DropAttribute, TranslationError, TranslationRegistry};
 use dialect_cute::{
     attributes::{
         CuteCountedCtaBarrierAttr, CuteEpilogueHalfAttr, CuteEpilogueSyncPhaseAttr,
@@ -62,7 +63,6 @@ use dialect_cute::{
     },
 };
 use dialect_mir::ops::{MirExternSharedOp, MirInsertFieldOp};
-use pliron_mlir_export::{DropAttribute, TranslationError, TranslationRegistry};
 
 /// Register the runtime foundation shared by TMA, the mainloop, and epilogue.
 pub(crate) fn register_cute_gemm_pack(

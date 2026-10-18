@@ -26,7 +26,6 @@ use pliron::attribute::Attribute;
 use pliron::builtin::types::{FP32Type, IntegerType};
 use pliron::common_traits::Verify;
 use pliron::context::{Context, Ptr};
-use pliron::location::Located;
 use pliron::op::{Op, OpId};
 use pliron::operation::Operation;
 use pliron::result::Error;

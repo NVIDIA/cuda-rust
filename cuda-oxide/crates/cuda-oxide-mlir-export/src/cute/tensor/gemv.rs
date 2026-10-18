@@ -25,6 +25,11 @@ use crate::cute::tensor::elementwise::{
     TensorViewTypeTranslation, register_cute_elementwise_mappings,
 };
 
+use crate::{
+    MlirAttribute, MlirFloatType, MlirLocation, MlirOperation, MlirResult, MlirType, MlirValueUse,
+    OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
+    TranslationSession, TypeTranslation,
+};
 use dialect_cute::{
     attributes::{
         CuteScaledLayoutAttr, CuteTensorAccessAttr, CuteTensorAddressSpaceAttr,
@@ -41,11 +46,6 @@ use pliron::{
     context::{Context, Ptr},
     operation::Operation,
     r#type::{TypeHandle, Typed},
-};
-use pliron_mlir_export::{
-    MlirAttribute, MlirFloatType, MlirLocation, MlirOperation, MlirResult, MlirType, MlirValueUse,
-    OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
-    TranslationSession, TypeTranslation,
 };
 
 /// Packed FP4 storage bytes consumed by one 64-element K tile.

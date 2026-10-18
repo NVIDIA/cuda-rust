@@ -1,17 +1,30 @@
 # cuda-oxide MLIR export
 
 This crate maps cuda-oxide operations to MLIR accepted by the pinned CUTLASS
-compiler. It uses `pliron-mlir-export` to build and render the MLIR text:
+compiler. It retains the explicit builtin, MIR, NVVM, and CuTe mapping packs,
+source checks, typed translation plans, and consumer profiles. The generic
+printer comes from upstream `pliron-mlir-interop`:
 
 ```text
-pliron-mlir-export                 this crate
-------------------                ----------
-syntax tree + renderer      +     builtin / MIR / NVVM / CuTe mappings
-registry + diagnostics            pinned consumer profiles
+prepared source module
+        │ explicit mapping recipes and checked value/block connections
+        ▼
+typed target plan
+        │ local target operation/type/attribute adapters
+        ▼
+Pliron target graph
+        │ upstream GenericOp + MlirPrinter
+        ▼
+MLIR text
 ```
 
-The generic crate can translate any Pliron dialect. CUDA-specific mappings
-and compiler-version requirements live here.
+The adapters implement upstream interfaces on locally owned types. They preserve
+target properties, discardable attributes, and source locations without changing
+the source module. `render_module` returns `Result<String, TranslationError>`;
+unsupported mappings and malformed target plans remain errors. The export
+manifest records the Pliron revision and upstream printer revision, including
+its local extension version. See the [vendored dependency provenance](../../third_party/pliron-mlir-interop/UPSTREAM.md)
+for the generic printer extensions.
 
 The profile targets the official CUTLASS 4.7 compiler library. cuda-oxide installs the exact NVIDIA release archive, verifies both the archive and
 library digests, and loads that versioned library explicitly:
@@ -26,7 +39,7 @@ shared high-level Pliron module
  builtin + MIR + NVVM + CuTe recipes
                 │
                 ▼
-      generic MLIR renderer
+ upstream pliron-mlir-interop
                 │
                 ▼
  official CUTLASS 4.7 compiler

@@ -9,6 +9,7 @@
 #![allow(clippy::disallowed_methods)]
 
 use cuda_oxide_mlir_export::{CutlassFullCuteMlir22, MlirConsumerProfile};
+use cuda_oxide_mlir_export::{MlirAttribute, MlirOperation, MlirType, render_module};
 use dialect_mir::{
     attributes::{FieldIndexAttr, MirCastKindAttr, MirPointerKindAuthorityAttr},
     ops::*,
@@ -28,7 +29,6 @@ use pliron::{
     r#type::TypeHandle,
     value::Value,
 };
-use pliron_mlir_export::{MlirAttribute, MlirOperation, MlirType, render_module};
 
 /// Create a source context with the dialects used by the full CuTe profile.
 fn context() -> Context {
@@ -79,7 +79,7 @@ fn render(ctx: &Context, module: &ModuleOp) -> Result<String, String> {
     CutlassFullCuteMlir22::new("sm_120a")
         .unwrap()
         .translate_module(ctx, module)
-        .map(|target| render_module(&target))
+        .and_then(|target| render_module(&target).map_err(Into::into))
         .map_err(|error| error.to_string())
 }
 

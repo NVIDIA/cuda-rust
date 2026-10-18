@@ -27,7 +27,7 @@ use dialect_mir::ops::{
 use pliron::basic_block::BasicBlock;
 use pliron::builtin::types::{FP32Type, FP64Type, IntegerType};
 use pliron::context::{Context, Ptr};
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::r#type::Typed;
@@ -368,6 +368,17 @@ pub fn translate_rvalue(
             )?;
 
             let result_type = types::translate_type(ctx, ty)?;
+
+            // A cast whose source and target lower to the same dialect type
+            // changes nothing. `isize` and `i64` are that pair on this target:
+            // core steps an `isize` with `overflowing_add(self as i64, rhs as
+            // i64)` and casts the sum back. Leaving those casts in the step
+            // block hides the range `for` from the unroller. Return the operand
+            // and emit no operation, as the reborrow path in this function does
+            // when its transmute would be between identical types.
+            if operand_val.get_type(ctx) == result_type {
+                return Ok((None, operand_val, prev_op_after_operand));
+            }
 
             let op = Operation::new(
                 ctx,

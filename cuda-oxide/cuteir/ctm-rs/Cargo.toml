@@ -18,4 +18,6 @@ default = []
 host = ["dep:cuda-core", "dep:thiserror"]
 
 [dev-dependencies]
+# Kernel macro tests also emit host metadata when workspace features unify.
+cuda-host = { workspace = true }
 trybuild = "1"

@@ -12,15 +12,15 @@ use crate::cute::{
     mma::sm120::ldmatrix_swizzled_byte_offset,
     pipeline::sm120::mbarrier_init,
 };
+use crate::{MlirAttribute, MlirLocation, MlirType, MlirValueUse};
 use dialect_cute::attributes::CuteEpilogueSyncPhaseAttr;
-use pliron_mlir_export::{MlirAttribute, MlirLocation, MlirType, MlirValueUse};
 
 #[cfg(test)]
 mod tests {
     //! Focused checks for GEMM byte offsets, packed lanes, and synchronization ordering.
 
     use super::*;
-    use pliron_mlir_export::{MlirFloatType, MlirValueId};
+    use crate::{MlirFloatType, MlirValueId};
 
     /// Construct a target SSA operand with a chosen identifier and type for recipe tests.
     fn value(id: u64, ty: MlirType) -> MlirValueUse {

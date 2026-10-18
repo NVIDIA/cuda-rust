@@ -5,14 +5,14 @@
 
 //! Pinned consumer contracts, source validation, and executable GPU module packaging.
 
-use pliron::{
-    builtin::ops::ModuleOp, context::Context, linked_list::ContainsLinkedList, op::Op,
-    operation::Operation,
-};
-use pliron_mlir_export::{
+use crate::{
     MlirAttribute, MlirBlock, MlirBlockId, MlirModule, MlirOperation, MlirRegion,
     TranslationConfig, TranslationError, TranslationRegistry,
     translate_module as translate_pliron_module,
+};
+use pliron::{
+    builtin::ops::ModuleOp, context::Context, linked_list::ContainsLinkedList, op::Op,
+    operation::Operation,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -32,6 +32,8 @@ pub struct ExportManifest {
     pub exporter_version: String,
     /// Exact Pliron revision whose source IR contract was translated.
     pub pliron_revision: String,
+    /// Pinned upstream printer revision and local generic extension version.
+    pub interop_revision: String,
     /// Pinned CUTLASS compiler release expected to accept this target MLIR.
     pub consumer_revision: String,
     /// LLVM/MLIR major version defining the target dialect syntax.
@@ -127,7 +129,7 @@ impl CutlassFullCuteMlir22 {
     /// Exact CUTLASS compiler release defining this profile's accepted dialects.
     pub const CONSUMER_REVISION: &'static str = "cutlass-compiler-v4.7.0";
     /// Exact Pliron revision defining this profile's source IR contract.
-    pub const PLIRON_REVISION: &'static str = "06d99a3df938394583715aacf5eadb65b4791c09";
+    pub const PLIRON_REVISION: &'static str = "435536c8611af34c48c8f73d78e77894a05d103d";
 
     /// Accept only sm_100a or sm_120a, whose mappings have been validated for this consumer.
     pub fn new(gpu_arch: impl Into<String>) -> Result<Self, ProfileError> {
@@ -149,6 +151,7 @@ impl MlirConsumerProfile for CutlassFullCuteMlir22 {
             profile: self.name().into(),
             exporter_version: env!("CARGO_PKG_VERSION").into(),
             pliron_revision: Self::PLIRON_REVISION.into(),
+            interop_revision: crate::INTEROP_REVISION.into(),
             consumer_revision: Self::CONSUMER_REVISION.into(),
             llvm_major: 22,
             gpu_arch: self.gpu_arch.clone(),
@@ -317,7 +320,59 @@ pub(crate) fn render_mapping_module_without_cutlass_envelope(
         .root
         .properties
         .insert("sym_name".into(), MlirAttribute::String(source_name.into()));
-    pliron_mlir_export::render_module(&unwrapped)
+    crate::render_module(&unwrapped).unwrap()
+}
+
+/// Compare mapping goldens modulo SSA and block spelling, retaining each binding's identity.
+#[cfg(test)]
+pub(crate) fn normalize_mlir_identifiers(text: &str) -> String {
+    use std::collections::HashMap;
+
+    let mut values = HashMap::new();
+    let mut blocks = HashMap::new();
+    let mut normalized = String::new();
+    let mut characters = text.chars().peekable();
+    let mut quoted = false;
+    let mut escaped = false;
+    while let Some(character) = characters.next() {
+        if quoted {
+            normalized.push(character);
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                quoted = false;
+            }
+        } else if character == '"' {
+            quoted = true;
+            normalized.push(character);
+        } else if matches!(character, '%' | '^') {
+            let mut name = String::new();
+            while let Some(next) = characters.peek().copied() {
+                if !next.is_ascii_alphanumeric() && !matches!(next, '_' | '.' | '$' | '-') {
+                    break;
+                }
+                name.push(characters.next().unwrap());
+            }
+            if name.is_empty() {
+                normalized.push(character);
+                continue;
+            }
+            let names = if character == '%' {
+                &mut values
+            } else {
+                &mut blocks
+            };
+            let next = names.len();
+            let index = names.entry(name).or_insert(next);
+            normalized.push(character);
+            normalized.push_str(&index.to_string());
+        } else {
+            normalized.push(character);
+        }
+    }
+    normalized
 }
 
 #[cfg(test)]
@@ -327,6 +382,27 @@ mod tests {
     use super::*;
     use pliron::identifier::Identifier;
 
+    /// Alpha-renaming must not erase changed operands, block references, or string contents.
+    #[test]
+    fn golden_normalization_preserves_binding_identity_and_strings() {
+        let original = "%x = op(%a, %a) [^x, ^next] {note = \"%x ^next\"}";
+        let renamed = "%r = op(%input, %input) [^entry, ^exit] {note = \"%x ^next\"}";
+        assert_eq!(
+            normalize_mlir_identifiers(original),
+            normalize_mlir_identifiers(renamed)
+        );
+        for changed in [
+            "%r = op(%input, %other) [^entry, ^exit] {note = \"%x ^next\"}",
+            "%r = op(%input, %input) [^entry, ^entry] {note = \"%x ^next\"}",
+            "%r = op(%input, %input) [^entry, ^exit] {note = \"%r ^exit\"}",
+        ] {
+            assert_ne!(
+                normalize_mlir_identifiers(original),
+                normalize_mlir_identifiers(changed)
+            );
+        }
+    }
+
     /// Check manifest JSON records the pinned consumer/LLVM contract and the registry is sealed.
     #[test]
     fn profile_is_exact_and_machine_readable() {
@@ -334,6 +410,8 @@ mod tests {
         let json = profile.manifest().to_pretty_json().unwrap();
 
         assert!(json.contains(CutlassFullCuteMlir22::CONSUMER_REVISION));
+        assert!(json.contains(CutlassFullCuteMlir22::PLIRON_REVISION));
+        assert!(json.contains(crate::INTEROP_REVISION));
         assert!(json.contains("\"llvm_major\": 22"));
         assert!(profile.build_registry().unwrap().is_sealed());
     }

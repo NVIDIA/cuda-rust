@@ -1,0 +1,22 @@
+{
+  "repository": "https://github.com/pliron-org/pliron-mlir-interop",
+  "revision": "295773c4ab9cd7c5c3a14c2082be564b9cf5af90",
+  "tree": "09c94b029fa7063e6c097e05a9a985123ffe30e4",
+  "package_version": "0.1.0",
+  "checked_date": "2026-10-18",
+  "local_revision": "cuda-oxide.1",
+  "patch": "cuda-oxide.patch",
+  "patch_sha256": "1c5e1acbc1a267230df4f543f3cb65fcbde247ac1f51e72da702b3f683c8b827",
+  "upstream_source_hashes": "UPSTREAM_SOURCE_SHA256",
+  "vendored_source_hashes": "VENDORED_SOURCE_SHA256",
+  "pliron": "0.20.0",
+  "pliron_llvm": "0.20.0",
+  "upstream_ci_mlir_major": 23,
+  "functional_changes": [
+    "src/printers.rs",
+    "tests/block_argument_locations.rs"
+  ],
+  "formatting_only_changes": {
+    "src/llvm/types.rs": "dict_key! argument line break required by nightly-2026-10-11 rustfmt"
+  }
+}

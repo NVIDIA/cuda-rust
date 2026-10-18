@@ -70,7 +70,6 @@ use pliron::context::{Context, Ptr};
 use pliron::irbuild::dialect_conversion::{DialectConversionRewriter, OperandsInfo};
 use pliron::irbuild::inserter::Inserter;
 use pliron::irbuild::rewriter::Rewriter;
-use pliron::location::Located;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::printable::Printable;
@@ -87,7 +86,7 @@ pub fn convert(
     op: Ptr<Operation>,
     operands_info: &OperandsInfo,
 ) -> Result<()> {
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     let operands: Vec<_> = op.deref(ctx).operands().collect();
 
     let val = match operands.as_slice() {

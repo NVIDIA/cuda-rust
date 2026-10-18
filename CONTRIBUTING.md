@@ -19,6 +19,7 @@ If you are unsure whether something is worth a full issue or PR, the Discord
 - [Signing Your Commits](#signing-your-commits)
 - [Contribution Process](#contribution-process)
 - [Code Requirements](#code-requirements)
+- [AI-Assisted Contributions](#ai-assisted-contributions)
 - [IP Review Process](#ip-review-process)
 
 ## Developer Certificate of Origin
@@ -289,6 +290,14 @@ error's `Display` names the library candidates the loader tried.
   `cargo deny check` does not resolve it; the script reads the example lock
   files directly and asks for a row per third-party crate. Examples that
   depend only on first-party crates by path need nothing.
+
+## AI-Assisted Contributions
+
+- **You are responsible:** Review and understand all AI-generated code before submitting it.
+- **Verify correctness:** AI-generated code may contain bugs or security issues. Run the applicable tests and review the diff carefully.
+- **No AI-generated sensitive content:** Do not use AI to generate security policies, legal, or license text.
+
+See [AGENTS.md](AGENTS.md) for instructions for coding agents working in this repository.
 
 ## IP Review Process
 

@@ -8,6 +8,7 @@
 use std::num::NonZero;
 
 use cuda_oxide_mlir_export::{CutlassFullCuteMlir22, MlirConsumerProfile};
+use cuda_oxide_mlir_export::{MlirAttribute, render_module};
 use dialect_mir::{
     attributes::ReferenceParamValidityAttr,
     ops::{MirFuncOp, MirReturnOp},
@@ -27,7 +28,6 @@ use pliron::{
     r#type::TypeHandle,
     utils::apint::APInt,
 };
-use pliron_mlir_export::{MlirAttribute, render_module};
 use reserved_oxide_symbols::{
     MIR_GRID_CONSTANT_ALIGN_ATTR_PREFIX, MIR_GRID_CONSTANT_POINTEE_ATTR_PREFIX,
 };
@@ -145,7 +145,10 @@ fn fixture(case: &str) -> Result<(String, Vec<MlirAttribute>), String> {
     let Some(MlirAttribute::Array(attributes)) = function.properties.get("arg_attrs") else {
         return Err("missing argument attributes".into());
     };
-    Ok((render_module(&target), attributes.clone()))
+    Ok((
+        render_module(&target).map_err(|error| error.to_string())?,
+        attributes.clone(),
+    ))
 }
 
 /// Check descriptor byte size, alignment, and grid-constant attributes follow the expanded argument index.

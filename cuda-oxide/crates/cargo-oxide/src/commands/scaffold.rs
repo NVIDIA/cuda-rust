@@ -11,13 +11,7 @@ use super::*;
 // cargo oxide new -- standalone project scaffolding
 // =========================================================================
 
-const GIT_REPO: &str = "https://github.com/NVlabs/cuda-oxide.git";
-
-/// crates.io release of the host-side runtime (`cuda-core`, `cuda-async`).
-/// In-tree examples and `cuda-host` path-depend on the git-root copies;
-/// `cargo oxide new` still uses this version because a standalone project
-/// is not inside the monorepo.
-pub(super) const SHARED_HOST_CRATES_VERSION: &str = "0.4.0";
+const GIT_REPO: &str = "https://github.com/NVIDIA/cuda-rust.git";
 
 const RUST_TOOLCHAIN_TOML: &str = r#"[toolchain]
 channel = "nightly-2026-10-11"
@@ -104,6 +98,12 @@ cargo oxide run
     )
 }
 
+/// Every CUDA crate comes from `GIT_REPO`. `cuda-host` depends on `cuda-core`
+/// and `cuda-async` by path at tip of tree, so in a project that takes
+/// `cuda-host` from git those crates resolve from the same checkout. Naming
+/// them from crates.io instead adds a second, distinct `cuda_core` whose
+/// `CudaContext` and `CudaModule` do not unify with the ones `#[cuda_module]`
+/// expands against, and the project fails to compile.
 fn scaffold_cargo_toml(name: &str, async_mode: bool) -> String {
     if async_mode {
         format!(
@@ -117,9 +117,10 @@ edition = "2024"
 [dependencies]
 cuda-device = {{ git = "{GIT_REPO}" }}
 cuda-host = {{ git = "{GIT_REPO}", features = ["async"] }}
-# Shared host-side runtime, published from NVIDIA/cuda-rust.
-cuda-core = "{SHARED_HOST_CRATES_VERSION}"
-cuda-async = "{SHARED_HOST_CRATES_VERSION}"
+# Shared host-side runtime. It has to come from the same repository as
+# cuda-host, which depends on it; a crates.io copy is a second cuda-core.
+cuda-core = {{ git = "{GIT_REPO}" }}
+cuda-async = {{ git = "{GIT_REPO}" }}
 tokio = {{ version = "1", features = ["rt", "rt-multi-thread", "macros"] }}
 "#
         )
@@ -135,8 +136,9 @@ edition = "2024"
 [dependencies]
 cuda-device = {{ git = "{GIT_REPO}" }}
 cuda-host = {{ git = "{GIT_REPO}" }}
-# Shared host-side runtime, published from NVIDIA/cuda-rust.
-cuda-core = "{SHARED_HOST_CRATES_VERSION}"
+# Shared host-side runtime. It has to come from the same repository as
+# cuda-host, which depends on it; a crates.io copy is a second cuda-core.
+cuda-core = {{ git = "{GIT_REPO}" }}
 "#
         )
     }

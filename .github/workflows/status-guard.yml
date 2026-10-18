@@ -7,9 +7,10 @@ on:
   pull_request:
     branches: [main]
 
-# main runs finish; any other ref cancels the older run of this workflow.
+# Each commit on main gets its own group, so it starts at once. Any other ref
+# still shares one group and cancels the older run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.ref_name }}${{ github.ref_name == 'main' && format('-{0}', github.sha) || '' }}
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 permissions:
@@ -229,11 +230,12 @@ jobs:
       - name: Verify docs and templates spell the shared crates' simt paths
         run: bash cuda-oxide/scripts/check-host-api-paths.sh
 
-  # The shared host-crate release is named once in the root workspace and
-  # copied into every example manifest and into the `cargo oxide new`
-  # templates. A drifted example resolves a second runtime and breaks the
-  # shared example build cache; a drifted scaffold hands each new project a
-  # runtime the generated code was not written against.
+  # The shared host crates are path dependencies in the SIMT and example
+  # workspaces, and the `cargo oxide new` templates take them from the same
+  # git source as cuda-host. A drifted example resolves a second runtime and
+  # breaks the shared example build cache; a scaffold naming a crates.io copy
+  # hands each new project two cuda_core crates, and the project fails to
+  # compile.
   shared-crate-pin-parity:
     name: shared host-crate pin parity
     runs-on: ubuntu-latest
@@ -243,7 +245,7 @@ jobs:
         uses: actions/checkout@v4
 
       # Reads sources only: no rustup, no cargo, no CUDA toolkit.
-      - name: Verify the host crates are path dependencies at tip of tree and the scaffold matches the root version
+      - name: Verify the host crates are path dependencies at tip of tree and the scaffold takes them from git beside cuda-host
         run: bash cuda-oxide/scripts/check-shared-crate-pin.sh
 
   # cuda-oxide/crates/oxide-artifacts is only the publish source now; the

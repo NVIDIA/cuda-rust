@@ -9,6 +9,11 @@
 //! signless, so operations that care about signedness choose an explicit
 //! signed or unsigned `arith` operation before that information disappears.
 
+use crate::{
+    AttributeTranslation, DropAttribute, FixedType, MlirAttribute, MlirBlockArgument,
+    MlirFloatType, MlirOperation, MlirResult, MlirType, MlirValueUse, OperationInput,
+    OperationTranslation, TranslationError, TranslationRegistry, TranslationSession,
+};
 use dialect_mir::{
     attributes::{
         MirCastKindAttr, MirFP16Attr, MirPointerKindAuthorityAttr, ReferenceParamValidityAttr,
@@ -32,11 +37,6 @@ use pliron::{
     operation::Operation,
     r#type::{TypeHandle, Typed, type_cast, type_impls},
     utils::apfloat::Float,
-};
-use pliron_mlir_export::{
-    AttributeTranslation, DropAttribute, FixedType, MlirAttribute, MlirBlockArgument,
-    MlirFloatType, MlirOperation, MlirResult, MlirType, MlirValueUse, OperationInput,
-    OperationTranslation, TranslationError, TranslationRegistry, TranslationSession,
 };
 
 /// Register standard-MLIR mappings for scalar MIR and arbitrary CFG.
@@ -755,7 +755,7 @@ impl OperationTranslation for NegTranslation {
                     .clone();
                 let zero_id = session.fresh_value();
                 let mut zero = MlirOperation::new("arith.constant")?;
-                zero.results.push(pliron_mlir_export::MlirResult {
+                zero.results.push(crate::MlirResult {
                     id: zero_id,
                     ty: result_type.clone(),
                 });
@@ -771,7 +771,7 @@ impl OperationTranslation for NegTranslation {
                 let mut neg = renamed("arith.subi", input)?;
                 neg.operands.insert(
                     0,
-                    pliron_mlir_export::MlirValueUse {
+                    crate::MlirValueUse {
                         id: zero_id,
                         ty: result_type,
                     },
@@ -808,7 +808,7 @@ impl OperationTranslation for NotTranslation {
             .clone();
         let ones_id = session.fresh_value();
         let mut ones = MlirOperation::new("arith.constant")?;
-        ones.results.push(pliron_mlir_export::MlirResult {
+        ones.results.push(crate::MlirResult {
             id: ones_id,
             ty: result_type.clone(),
         });
@@ -822,7 +822,7 @@ impl OperationTranslation for NotTranslation {
         ones.location = input.location.clone();
 
         let mut not = renamed("arith.xori", input)?;
-        not.operands.push(pliron_mlir_export::MlirValueUse {
+        not.operands.push(crate::MlirValueUse {
             id: ones_id,
             ty: result_type,
         });
@@ -1209,7 +1209,7 @@ mod tests {
     /// Reject incomplete cluster shapes and dimensions that are zero, negative, or too large.
     #[test]
     fn cluster_contract_rejects_partial_and_nonpositive_dimensions() {
-        use pliron_mlir_export::{MlirAttribute, MlirOperation, MlirType};
+        use crate::{MlirAttribute, MlirOperation, MlirType};
         let mut kernel = MlirOperation::new("func.func").unwrap();
         kernel.attributes.insert(
             "cluster_dim_x".into(),
@@ -1372,7 +1372,7 @@ mod tests {
                 .find(|line| line.contains(&format!("\"{name}\"")))
                 .unwrap();
             assert!(
-                shift_line.contains(&format!(": (i{width}, i{width}) -> i{width}")),
+                shift_line.contains(&format!(": (i{width}, i{width}) -> (i{width})")),
                 "{text}"
             );
             assert!(
@@ -1491,19 +1491,22 @@ mod tests {
   ^bb0:
     "func.func"() <{function_type = (i64, i64, i64, i64, f32) -> (i64, i64, i1, i1, f32, f64), sym_name = "scalar"}> ({
       ^bb1(%v0: i64, %v1: i64, %v2: i64, %v3: i64, %v4: f32):
-        %v5 = "arith.constant"() <{value = 4 : i64}> : () -> i64
-        %v6 = "arith.divui"(%v0, %v5) : (i64, i64) -> i64
-        %v7 = "arith.divsi"(%v2, %v3) : (i64, i64) -> i64
-        %v8 = "arith.cmpi"(%v0, %v1) <{predicate = 6 : i64}> : (i64, i64) -> i1
-        %v9 = "arith.cmpi"(%v2, %v3) <{predicate = 2 : i64}> : (i64, i64) -> i1
-        %v10 = "arith.constant"() <{value = 0x3F800000 : f32}> : () -> f32
-        %v11 = "arith.addf"(%v4, %v10) : (f32, f32) -> f32
-        %v12 = "arith.extf"(%v4) : (f32) -> f64
+        %v5 = "arith.constant"() <{value = 4 : i64}> : () -> (i64)
+        %v6 = "arith.divui"(%v0, %v5) : (i64, i64) -> (i64)
+        %v7 = "arith.divsi"(%v2, %v3) : (i64, i64) -> (i64)
+        %v8 = "arith.cmpi"(%v0, %v1) <{predicate = 6 : i64}> : (i64, i64) -> (i1)
+        %v9 = "arith.cmpi"(%v2, %v3) <{predicate = 2 : i64}> : (i64, i64) -> (i1)
+        %v10 = "arith.constant"() <{value = 0x3F800000 : f32}> : () -> (f32)
+        %v11 = "arith.addf"(%v4, %v10) : (f32, f32) -> (f32)
+        %v12 = "arith.extf"(%v4) : (f32) -> (f64)
         "func.return"(%v6, %v7, %v8, %v9, %v11, %v12) : (i64, i64, i1, i1, f32, f64) -> ()
     }) {llvm.linkage = #llvm.linkage<internal>} : () -> ()
 }) : () -> ()
 "#;
-        assert_eq!(text, expected);
+        assert_eq!(
+            crate::profile::normalize_mlir_identifiers(&text),
+            crate::profile::normalize_mlir_identifiers(expected)
+        );
     }
 
     /// Check same-width scalar transmutation preserves bits rather than performing numeric conversion.
@@ -1530,7 +1533,7 @@ mod tests {
 
         let text = translate(&mut ctx, &module);
         assert!(
-            text.contains(r#""arith.bitcast"(%v0) : (i32) -> f32"#),
+            text.contains(r#""arith.bitcast"(%v0) : (i32) -> (f32)"#),
             "{text}"
         );
     }
@@ -1556,11 +1559,11 @@ mod tests {
         operation::<MirReturnOp>(&mut ctx, entry, vec![], vec![bits_value, half_value]);
         let text = translate(&mut ctx, &module);
         assert!(
-            text.contains(r#""arith.bitcast"(%v0) : (f16) -> i16"#),
+            text.contains(r#""arith.bitcast"(%v0) : (f16) -> (i16)"#),
             "{text}"
         );
         assert!(
-            text.contains(r#""arith.bitcast"(%v1) : (i16) -> f16"#),
+            text.contains(r#""arith.bitcast"(%v1) : (i16) -> (f16)"#),
             "{text}"
         );
     }
@@ -1605,8 +1608,8 @@ mod tests {
         let pointer_value = data.deref(&ctx).get_result(0);
         operation::<MirReturnOp>(&mut ctx, entry, vec![], vec![raw_value, pointer_value]);
         let text = translate(&mut ctx, &module);
-        assert!(text.contains(r#""builtin.unrealized_conversion_cast"(%v0) : (!llvm.struct<(!llvm.ptr, i64)>) -> !llvm.struct<(!llvm.ptr, i64)>"#), "{text}");
-        assert!(text.contains(r#""llvm.extractvalue"(%v1) <{position = array<i64: 0>}> : (!llvm.struct<(!llvm.ptr, i64)>) -> !llvm.ptr"#), "{text}");
+        assert!(text.contains(r#""builtin.unrealized_conversion_cast"(%v0) : (!llvm.struct<(!llvm.ptr, i64)>) -> (!llvm.struct<(!llvm.ptr, i64)>)"#), "{text}");
+        assert!(text.contains(r#""llvm.extractvalue"(%v1) <{position = array<i64: 0>}> : (!llvm.struct<(!llvm.ptr, i64)>) -> (!llvm.ptr)"#), "{text}");
         assert!(!text.contains("llvm.load"), "{text}");
         assert!(!text.contains("llvm.ptrtoint"), "{text}");
     }
@@ -1694,7 +1697,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("function_type = (!llvm.struct<()>) -> !llvm.struct<()>"),
+            text.contains("function_type = (!llvm.struct<()>) -> (!llvm.struct<()>)"),
             "{text}"
         );
     }
@@ -1815,7 +1818,7 @@ mod tests {
         let text = translate(&mut ctx, &module);
         let expected = r#""builtin.module"() <{sym_name = "cfg"}> ({
   ^bb0:
-    "func.func"() <{function_type = (i1, i64) -> i64, sym_name = "choose"}> ({
+    "func.func"() <{function_type = (i1, i64) -> (i64), sym_name = "choose"}> ({
       ^bb1(%v0: i1, %v1: i64):
         "cf.cond_br"(%v0, %v1, %v1) [^bb2, ^bb3] <{operandSegmentSizes = array<i32: 1, 1, 1>}> : (i1, i64, i64) -> ()
       ^bb2(%v2: i64):
@@ -1825,6 +1828,9 @@ mod tests {
     }) {llvm.linkage = #llvm.linkage<internal>} : () -> ()
 }) : () -> ()
 "#;
-        assert_eq!(text, expected);
+        assert_eq!(
+            crate::profile::normalize_mlir_identifiers(&text),
+            crate::profile::normalize_mlir_identifiers(expected)
+        );
     }
 }

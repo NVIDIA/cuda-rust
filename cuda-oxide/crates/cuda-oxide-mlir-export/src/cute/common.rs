@@ -5,6 +5,10 @@
 
 //! Shared static handles, MIR adapters, and scalar operation builders.
 
+use crate::{
+    MlirAttribute, MlirLocation, MlirOperation, MlirResult, MlirType, MlirValueUse, OperationInput,
+    OperationTranslation, TranslationRegistry, TranslationSession, TypeTranslation,
+};
 use dialect_mir::{
     ops::{MirExternSharedOp, MirInsertFieldOp},
     types::MirUnionType,
@@ -14,10 +18,6 @@ use pliron::{
     context::{Context, Ptr},
     operation::Operation,
     r#type::{TypeHandle, Typed},
-};
-use pliron_mlir_export::{
-    MlirAttribute, MlirLocation, MlirOperation, MlirResult, MlirType, MlirValueUse, OperationInput,
-    OperationTranslation, TranslationRegistry, TranslationSession, TypeTranslation,
 };
 
 /// Represent source-only verified layout contracts with an empty target tuple.

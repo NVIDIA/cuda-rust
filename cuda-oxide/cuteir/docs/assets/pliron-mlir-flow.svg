@@ -2,7 +2,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="840" height="672" viewBox="0 0 840 672" role="img" aria-labelledby="title desc">
   <title id="title">From Pliron operations to a GPU binary</title>
-  <desc id="desc">Current CUTLASS backend, top to bottom: one Pliron module contains MIR, CuTe and NVVM operations. After shared preparation and safety verification, the generic pliron-mlir-export engine calls rules registered by cuda-oxide-mlir-export. Together they connect values and blocks, build an MLIR syntax tree and print text. The pinned CUTLASS compiler produces a cubin which cuda-oxide validates and embeds for GPU execution.</desc>
+  <desc id="desc">Current CUTLASS backend, top to bottom: one Pliron module contains MIR, CuTe and NVVM operations. After shared preparation and safety verification, cuda-oxide-mlir-export applies its mapping rules and builds a checked target graph. Upstream pliron-mlir-interop prints its operations, regions, blocks and value connections. The pinned CUTLASS compiler produces a cubin which cuda-oxide validates and embeds for GPU execution.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M 0 0 L 10 5 L 0 10 Z" fill="#52647b"/>
@@ -31,17 +31,17 @@
       <text x="420" y="574">CUTLASS compiler → GPU binary</text>
     </g>
     <g font-size="20" font-weight="600">
-      <text x="257" y="380">pliron-mlir-export</text>
-      <text x="583" y="380">cuda-oxide-mlir-export</text>
+      <text x="257" y="380">cuda-oxide-mlir-export</text>
+      <text x="583" y="380">pliron-mlir-interop</text>
     </g>
     <g font-size="17" fill="#334155">
       <text x="420" y="119">dialect-mir + dialect-cute + dialect-nvvm</text>
       <text x="420" y="241">Check types, layouts, and represented CuTe protocol state</text>
-      <text x="257" y="414">Connect values and blocks</text>
-      <text x="257" y="440">Build MLIR; print text</text>
-      <text x="583" y="414">Rust, CuTe, and GPU rules</text>
-      <text x="583" y="440">Types, attributes, expansions</text>
-      <text x="420" y="490">The generic engine calls our registered rules.</text>
+      <text x="257" y="414">Rust, CuTe, and GPU rules</text>
+      <text x="257" y="440">Build a checked target graph</text>
+      <text x="583" y="414">Generic MLIR syntax</text>
+      <text x="583" y="440">Operations, regions, and SSA</text>
+      <text x="420" y="490">Our target adapters use the upstream generic printer.</text>
       <text x="420" y="605">Compile MLIR; cuda-oxide validates and embeds the cubin</text>
     </g>
   </g>

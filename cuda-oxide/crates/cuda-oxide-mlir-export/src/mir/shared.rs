@@ -3,16 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! Static shared declarations, deduplicated inside the executable GPU module.
+use crate::{
+    MlirAttribute, MlirBlock, MlirOperation, MlirRegion, MlirResult, MlirType, MlirValueUse,
+    OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
+    TranslationSession,
+};
 use dialect_mir::ops::MirSharedAllocOp;
 use pliron::{
     context::{Context, Ptr},
     operation::Operation,
     r#type::Typed,
-};
-use pliron_mlir_export::{
-    MlirAttribute, MlirBlock, MlirOperation, MlirRegion, MlirResult, MlirType, MlirValueUse,
-    OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
-    TranslationSession,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;

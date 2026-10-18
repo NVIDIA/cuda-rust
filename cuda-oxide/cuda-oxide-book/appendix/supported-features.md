@@ -106,6 +106,17 @@ thin-pointer-only device-global union initializers may preserve one full-width
 relocation at byte zero; mixed pointer/integer device-global initializers remain
 rejected.
 
+A union field that holds a shared-memory pointer, directly or through structs
+and bounded arrays, uses generic-pointer storage, so the union's byte image is
+the same on every target and its integer view equals `ptr as usize`. Use
+`cvta_generic_to_shared_offset` or `cvta_generic_to_shared_u32` when the
+shared-window offset (the pointer's position inside the block's shared memory)
+is wanted instead. A field whose fixed arrays expand to more than 16
+shared-memory pointers is rejected; pointers held directly or through structs
+do not count toward that bound. Taking the in-place address of such a
+field (`u.ptr = p`, `&u.ptr`, `&mut u.ptr`) is refused with a diagnostic; build
+the union by value and read its fields by value.
+
 Enum constants preserve payload relocations to device statics, including
 non-zero byte addends. This includes niche-encoded `Option<&T>` and
 direct-tagged enum layouts, both for direct thin-reference payloads and for
@@ -131,7 +142,7 @@ Anonymous promoted allocations remain unsupported.
 | For Loops (range, iterator, enumerate) | **Full** | Full iterator desugaring: range-based, `slice.iter()`, `enumerate()`, nested loops, `break`, `continue`. |
 | While Loops / If-Else | **Full** | Baseline control flow fully supported. |
 | Break and Continue | **Full** | `break` and `continue` in for/while loops, including early exit. |
-| Loop Unroll Annotations | **Partial** | `#[unroll]` and `#[unroll(N)]` request unrolling of explicit counted `while` loops. Nested loops and multiple `continue` paths work; full unrolling preserves `break` paths and multiple exit targets, while partial unrolling requires a positive-step `<`/`<=` loop with an invariant limit and only the normal header exit. Requests are capped at 1,024 copies, 8,192 cloned blocks, and 65,536 cloned operations. |
+| Loop Unroll Annotations | **Partial** | `#[unroll]` and `#[unroll(N)]` request unrolling of explicit counted `while` loops and range `for` loops (`for i in a..b` and `(a..b).rev()`) over any integer counter, including `isize`. Other iterator loops, such as `a..=b` or `.step_by(k)`, are not yet recognized. Nested loops and multiple `continue` paths work; full unrolling preserves `break` paths and multiple exit targets, while partial unrolling requires a positive-step `<`/`<=` loop with an invariant limit and only the normal header exit. Requests are capped at 1,024 copies, 8,192 cloned blocks, and 65,536 cloned operations. |
 | Monomorphization-Dead Branches | **Partial** | Branches that become dead after generic specialization (e.g. the const-false arm of `if M::ENABLED`) are ignored by symbol collection, panic checks, and pointer address-space inference, so panic-only hooks in dead arms compile. Only switches rustc itself folds are pruned: a constant discriminant operand or a direct single-assignment constant. Multi-step constant copy chains keep both arms, matching rustc's host monomorphization; this is deliberate, not a general constant-propagation pass. |
 
 ## Compiler: Arithmetic and Casting
@@ -228,7 +239,7 @@ Anonymous promoted allocations remain unsupported.
 |:--------|:-------|:------------|
 | Warp Shuffle Operations | **Full** | `shuffle`, `shuffle_xor`, `shuffle_down`, `shuffle_up`. Unsuffixed forms take `u32`; `_f32`, `_u64`, `_f64` variants and a `_sync` form of each. |
 | Warp Vote Operations | **Full** | `all(pred)`, `any(pred)`, `ballot(pred)` → bitmask. |
-| Lane/Warp ID | **Full** | `lane_id()` (0–31), `warp_id()`. Direct register reads. |
+| Lane/Warp ID | **Full** | `lane_id()` (0–31) reads `%laneid`; `warp_id()` is `threadIdx.x / 32`, valid for 1D blocks only. |
 | Warp Reduction (`redux.sync`) | **Full** | One-instruction full-warp reduction. Integers on sm_80+: `redux_sync_add`, `_min_{u32,i32}`, `_max_{u32,i32}`, `_and`, `_or`, `_xor`. `f32` min/max with optional `.abs` and `.NaN` on `sm_100a`/`sm_100f`/`sm_103a`/`sm_103f`. No `f64` form. |
 
 ## Runtime Library: Cooperative Groups

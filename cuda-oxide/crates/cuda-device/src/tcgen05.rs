@@ -46,7 +46,10 @@
 //! use cuda_device::tcgen05::*;
 //! use cuda_device::barrier::*;
 //!
-//! // 1. Allocate TMEM (warp-synchronous - all 32 threads in warp)
+//! // 1. Allocate TMEM (warp-synchronous - all 32 threads in warp).
+//! //    `warp_id()` is `threadIdx.x / 32` and names one hardware warp only in
+//! //    a 1D block. A 2D or 3D block must select the warp by block-linear
+//! //    thread id, which `TmemGuard::alloc` / `dealloc` do.
 //! if warp_id() == 0 {
 //!     tcgen05_alloc(tmem_addr_ptr, 64);  // 64 columns
 //! }
@@ -62,7 +65,7 @@
 //! // 3. All threads wait via mbarrier
 //! mbarrier_try_wait(&mbar, 0);
 //!
-//! // 4. Deallocate TMEM (warp-synchronous)
+//! // 4. Deallocate TMEM (warp-synchronous; the 1D-only note from step 1 applies)
 //! if warp_id() == 0 {
 //!     tcgen05_dealloc(tmem_addr, 64);
 //! }
@@ -260,13 +263,23 @@ impl<const N_COLS: u32> TmemGuard<TmemUninit, N_COLS> {
     ///
     /// # Parameters
     ///
-    /// - `alloc_warp`: Warp ID that performs allocation (all 32 threads in this warp)
+    /// - `alloc_warp`: Block-linear warp id that performs allocation (all 32
+    ///   threads in that warp). The id is `linear_tid / 32`, where
+    ///   `linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z)`.
+    ///   Warp 0 is linear tids `0..=31`. In a 1D block that matches
+    ///   `threadIdx.x / 32`; in a 2D or 3D block it is not every row that
+    ///   shares the same `threadIdx.x`. A kernel that allocates more than
+    ///   once must issue every allocation from the same warp; the CUTLASS
+    ///   TMEM allocator states this as a precondition.
     ///
     /// # Safety
     ///
     /// - Must be called before any TMEM operations
     /// - All participating threads in the block must call this together
-    /// - `alloc_warp` must be a valid warp ID within the block
+    /// - `alloc_warp` must name a full 32-thread warp: the block must hold at
+    ///   least `32 * (alloc_warp + 1)` threads. The instruction is
+    ///   `.sync.aligned`, and its behavior is undefined when a lane of the
+    ///   warp has exited (PTX ISA 9.7.18.7.1, `tcgen05.alloc`)
     ///
     /// # Example
     ///
@@ -276,7 +289,7 @@ impl<const N_COLS: u32> TmemGuard<TmemUninit, N_COLS> {
     /// ```
     #[inline(always)]
     pub unsafe fn alloc_by(self, alloc_warp: u32) -> TmemGuard<TmemReady, N_COLS> {
-        let warp_id = crate::warp::warp_id();
+        let warp_id = crate::warp::block_linear_warp_id_here();
 
         if warp_id == alloc_warp {
             unsafe { tcgen05_alloc(self.smem_ptr, N_COLS) };
@@ -359,18 +372,28 @@ impl<const N_COLS: u32> TmemGuard<TmemReady, N_COLS> {
     ///
     /// # Parameters
     ///
-    /// - `dealloc_warp`: Warp ID that performs deallocation (must match alloc warp)
+    /// - `dealloc_warp`: Block-linear warp id that performs deallocation
+    ///   (`linear_tid / 32`, same numbering as [`TmemGuard::alloc_by`]). Any
+    ///   one full warp of the CTA may deallocate once every TMEM access is
+    ///   complete; using the allocating warp is the convention here. The PTX
+    ///   ISA asks for one warp of the CTA to perform the allocation and one
+    ///   to perform the deallocation; it does not require them to be the
+    ///   same warp. CUTLASS requires the same warp only for repeated
+    ///   allocations within one kernel.
     ///
     /// # Safety
     ///
     /// - All threads must have completed their TMEM operations before calling
     /// - All participating threads in the block must call this together
-    /// - `dealloc_warp` should typically match the warp that allocated
+    /// - `dealloc_warp` must name a full 32-thread warp: the block must hold
+    ///   at least `32 * (dealloc_warp + 1)` threads. The instruction is
+    ///   `.sync.aligned`, and its behavior is undefined when a lane of the
+    ///   warp has exited (PTX ISA 9.7.18.7.1, `tcgen05.dealloc`)
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// // Use warp 1 for deallocation (should match allocation warp)
+    /// // Use warp 1 for deallocation; the allocating warp is the convention
     /// let _dead = unsafe { tmem.dealloc_by(1) };
     /// ```
     #[inline(always)]
@@ -378,7 +401,7 @@ impl<const N_COLS: u32> TmemGuard<TmemReady, N_COLS> {
         // Ensure all threads are done with TMEM before deallocating
         crate::thread::sync_threads();
 
-        let warp_id = crate::warp::warp_id();
+        let warp_id = crate::warp::block_linear_warp_id_here();
 
         if warp_id == dealloc_warp {
             unsafe {

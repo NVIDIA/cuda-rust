@@ -14,6 +14,7 @@ use crate::cute::{
 mod tests {
     //! Evaluate exported copy and matrix-load address arithmetic against independent layout expectations.
 
+    use crate::render_module;
     use crate::{CutlassFullCuteMlir22, MlirConsumerProfile};
     use cute_layout::{ComposedLayout, Layout, OffsetUnit, Swizzle};
     use dialect_cute::{
@@ -38,7 +39,6 @@ mod tests {
         operation::Operation,
         r#type::TypeHandle,
     };
-    use pliron_mlir_export::render_module;
 
     /// Construct the canonical swizzled shared tile used by cooperative-copy fixtures.
     fn shared_layout() -> ComposedLayout {
@@ -193,7 +193,7 @@ mod tests {
             .unwrap()
             .translate_module(&ctx, &source)
             .unwrap();
-        let text = render_module(&target);
+        let text = render_module(&target).unwrap();
         assert_eq!(
             text.matches("\"nvvm.cp.async.shared.global\"").count(),
             4,
@@ -222,7 +222,7 @@ mod tests {
                 .unwrap()
                 .translate_module(&ctx, &source)
                 .unwrap();
-            let text = render_module(&target);
+            let text = render_module(&target).unwrap();
             assert!(text.contains(&format!("num = {number} : i32")), "{text}");
             assert!(
                 text.contains(&format!("#nvvm.mma_layout<{layout}>")),
@@ -234,7 +234,7 @@ mod tests {
     }
 
     /// Find the device function's block through the executable GPU envelope.
-    fn function_block(op: &pliron_mlir_export::MlirOperation) -> &pliron_mlir_export::MlirBlock {
+    fn function_block(op: &crate::MlirOperation) -> &crate::MlirBlock {
         if op.name == "func.func" {
             return &op.regions[0].blocks[0];
         }
@@ -244,7 +244,7 @@ mod tests {
             .flat_map(|b| &b.operations)
             .find_map(|op| {
                 /// Recognize a nested target subtree containing a translated function.
-                fn has_function(op: &pliron_mlir_export::MlirOperation) -> bool {
+                fn has_function(op: &crate::MlirOperation) -> bool {
                     op.name == "func.func"
                         || op
                             .regions
@@ -262,8 +262,8 @@ mod tests {
     // counts handed to hardware. This checks the actual lowering, not a second
     // copy of its address formula. No kernel or GPU runtime is involved.
     /// Interpret exported integer address arithmetic and collect each memory instruction's runtime arguments.
-    fn memory_arguments(block: &pliron_mlir_export::MlirBlock, args: &[u64]) -> Vec<Vec<u64>> {
-        use pliron_mlir_export::{MlirAttribute as A, MlirFloatType, MlirType as T};
+    fn memory_arguments(block: &crate::MlirBlock, args: &[u64]) -> Vec<Vec<u64>> {
+        use crate::{MlirAttribute as A, MlirFloatType, MlirType as T};
         let mut values = block
             .arguments
             .iter()
@@ -342,7 +342,7 @@ mod tests {
     /// Integer copy carriers preserve D128 byte addresses and every edge atom's source-byte count.
     #[test]
     fn attention_copy_integer16_preserves_storage_and_zero_fills_d128_edges() {
-        use pliron_mlir_export::{MlirAttribute as A, MlirType as T};
+        use crate::{MlirAttribute as A, MlirType as T};
         for signedness in [Signedness::Unsigned, Signedness::Signed] {
             for atom in [4, 8, 16] {
                 let mut ctx = Context::new();
@@ -734,7 +734,7 @@ mod tests {
         {
             assert_eq!(
                 op.results[0].ty,
-                pliron_mlir_export::MlirType::Integer(32),
+                crate::MlirType::Integer(32),
                 "{}",
                 op.name
             );
@@ -744,10 +744,7 @@ mod tests {
             .iter()
             .find(|op| op.name == "llvm.getelementptr")
             .unwrap();
-        assert_eq!(
-            source_gep.operands[1].ty,
-            pliron_mlir_export::MlirType::Integer(64)
-        );
+        assert_eq!(source_gep.operands[1].ty, crate::MlirType::Integer(64));
     }
 
     /// Check proved carry-free window/lane splitting preserves the full matrix-load address calculation.
@@ -1006,7 +1003,7 @@ mod tests {
                 {
                     assert_eq!(
                         op.results[0].ty,
-                        pliron_mlir_export::MlirType::Integer(expected_width),
+                        crate::MlirType::Integer(expected_width),
                         "layout={layout:?}, op={}",
                         op.name
                     );

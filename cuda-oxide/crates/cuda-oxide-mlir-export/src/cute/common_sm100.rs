@@ -5,7 +5,7 @@
 
 //! Shared input contract for independent SM100 attention operations.
 
-use pliron_mlir_export::OperationInput;
+use crate::OperationInput;
 
 /// Reject results, attributes, regions, or successors on independent SM100 operations.
 pub(in crate::cute) fn contract(input: &OperationInput) -> Result<(), String> {

@@ -9,14 +9,14 @@ use crate::cute::{
     common_sm100::contract,
     emit::{Emit, llvm_ptr_type, property, segments},
 };
+use crate::{
+    MlirOperation, MlirType, MlirValueUse, OperationInput, OperationTranslation, TranslationSession,
+};
 use dialect_cute::{attributes::CuteComposedLayoutAttr, sm100_attention_ops::*};
 use pliron::{
     common_traits::Verify,
     context::{Context, Ptr},
     operation::Operation,
-};
-use pliron_mlir_export::{
-    MlirOperation, MlirType, MlirValueUse, OperationInput, OperationTranslation, TranslationSession,
 };
 
 /// Emit independent SM100 attention MMA with shared or tensor-memory A operands.

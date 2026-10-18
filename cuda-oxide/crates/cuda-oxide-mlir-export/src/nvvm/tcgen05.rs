@@ -12,15 +12,15 @@
 
 use dialect_nvvm::ops::*;
 
+use crate::{
+    DropAttribute, MlirAttribute, MlirLocation, MlirOperation, MlirResult, MlirType, MlirValueUse,
+    OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
+    TranslationSession,
+};
 use pliron::{
     common_traits::Verify,
     context::{Context, Ptr},
     operation::Operation,
-};
-use pliron_mlir_export::{
-    DropAttribute, MlirAttribute, MlirLocation, MlirOperation, MlirResult, MlirType, MlirValueUse,
-    OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
-    TranslationSession,
 };
 
 /// Register the two-CTA FP16/TMEM primitives used by the split-N GEMM.
@@ -614,6 +614,7 @@ mod tests {
     //! Selector, identity, and register-order tests for tensor-memory instructions.
 
     use super::*;
+    use crate::render_module;
     use crate::{CutlassFullCuteMlir22, MlirConsumerProfile};
     use dialect_mir::{
         ops::{MirFuncOp, MirReturnOp},
@@ -632,7 +633,6 @@ mod tests {
         r#type::TypeHandle,
         value::Value,
     };
-    use pliron_mlir_export::render_module;
 
     /// Append a typed source operation to the fixture block and return its operation handle.
     fn append<O: Op>(
@@ -741,7 +741,7 @@ mod tests {
         let target = profile
             .translate_module(ctx, module)
             .map_err(|error| error.to_string())?;
-        Ok(render_module(&target))
+        render_module(&target).map_err(|error| error.to_string())
     }
 
     /// Check paired MMA retains collector fill/reuse/last-use order and TMEM scalar register order.
@@ -763,7 +763,7 @@ mod tests {
             text.contains("(!llvm.ptr<6>, i64, i64, i32, i1) -> ()"),
             "{text}"
         );
-        assert!(text.contains("-> vector<32xi32>"), "{text}");
+        assert!(text.contains("-> (vector<32xi32>)"), "{text}");
         assert_eq!(text.matches("\"vector.extract\"").count(), 32, "{text}");
         for index in 0..32 {
             assert!(

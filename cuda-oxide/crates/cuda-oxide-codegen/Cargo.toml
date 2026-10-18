@@ -24,7 +24,6 @@ iket-lower = { workspace = true }
 mir-lower = { workspace = true }
 mir-transforms = { workspace = true }
 llvm-export = { workspace = true }
-pliron-mlir-export = { workspace = true }
 libnvvm-sys = { workspace = true }
 nvvm-transforms = { workspace = true }
 tempfile = { workspace = true }

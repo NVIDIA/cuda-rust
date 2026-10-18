@@ -9,15 +9,15 @@
 //! source attributes. Common numeric operations share their precise mappings.
 
 use crate::nvvm::sm120::{constant_integer, fresh, operation, property, require_input};
+use crate::{
+    DropAttribute, MlirAttribute, MlirOperation, MlirType, OperationInput, OperationTranslation,
+    TranslationError, TranslationRegistry, TranslationSession,
+};
 use dialect_nvvm::ops::*;
 use pliron::{
     common_traits::Verify,
     context::{Context, Ptr},
     operation::Operation,
-};
-use pliron_mlir_export::{
-    DropAttribute, MlirAttribute, MlirOperation, MlirType, OperationInput, OperationTranslation,
-    TranslationError, TranslationRegistry, TranslationSession,
 };
 
 /// Register the instruction variants used by the Ampere attention schedule.

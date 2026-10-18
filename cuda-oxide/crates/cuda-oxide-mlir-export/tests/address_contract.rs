@@ -3,6 +3,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 use cuda_oxide_mlir_export::{CutlassPrimitivesMlir22, MlirConsumerProfile};
+use cuda_oxide_mlir_export::{MlirOperation, MlirType};
 use dialect_mir::{
     attributes::MirCastKindAttr,
     ops::{MirCastOp, MirFuncOp, MirReturnOp},
@@ -22,7 +23,6 @@ use pliron::{
     operation::Operation,
     r#type::TypeHandle,
 };
-use pliron_mlir_export::{MlirOperation, MlirType};
 
 /// Build pointer-address operations for a selected source space and export through the primitives profile.
 fn translate(

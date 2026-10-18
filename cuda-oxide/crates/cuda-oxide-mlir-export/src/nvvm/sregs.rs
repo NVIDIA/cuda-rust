@@ -9,6 +9,10 @@
 //! intentionally narrow: another NVVM operation needs its own reviewed recipe
 //! instead of being renamed by a catch-all rule.
 
+use crate::{
+    MlirOperation, OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
+    TranslationSession,
+};
 use dialect_nvvm::ops::{
     ReadPtxSregCtaidXOp, ReadPtxSregCtaidYOp, ReadPtxSregCtaidZOp, ReadPtxSregNctaidXOp,
     ReadPtxSregNctaidYOp, ReadPtxSregNctaidZOp, ReadPtxSregNtidXOp, ReadPtxSregNtidYOp,
@@ -17,10 +21,6 @@ use dialect_nvvm::ops::{
 use pliron::{
     context::{Context, Ptr},
     operation::Operation,
-};
-use pliron_mlir_export::{
-    MlirOperation, OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
-    TranslationSession,
 };
 
 /// Register the zero-operand thread, block, and grid dimension reads.
@@ -101,7 +101,7 @@ impl OperationTranslation for SregTranslation {
                     self.target, self.marker
                 )
             })?;
-        if marker != pliron_mlir_export::MlirAttribute::String(self.marker.into()) {
+        if marker != crate::MlirAttribute::String(self.marker.into()) {
             return Err(format!(
                 "{} expected intrinsic marker {}, got {marker:?}",
                 self.target, self.marker
@@ -232,23 +232,26 @@ mod tests {
   ^bb0:
     "func.func"() <{function_type = () -> (), sym_name = "coordinates"}> ({
       ^bb1:
-        %v0 = "nvvm.read.ptx.sreg.tid.x"() : () -> i32
-        %v1 = "nvvm.read.ptx.sreg.tid.y"() : () -> i32
-        %v2 = "nvvm.read.ptx.sreg.tid.z"() : () -> i32
-        %v3 = "nvvm.read.ptx.sreg.ntid.x"() : () -> i32
-        %v4 = "nvvm.read.ptx.sreg.ntid.y"() : () -> i32
-        %v5 = "nvvm.read.ptx.sreg.ntid.z"() : () -> i32
-        %v6 = "nvvm.read.ptx.sreg.ctaid.x"() : () -> i32
-        %v7 = "nvvm.read.ptx.sreg.ctaid.y"() : () -> i32
-        %v8 = "nvvm.read.ptx.sreg.ctaid.z"() : () -> i32
-        %v9 = "nvvm.read.ptx.sreg.nctaid.x"() : () -> i32
-        %v10 = "nvvm.read.ptx.sreg.nctaid.y"() : () -> i32
-        %v11 = "nvvm.read.ptx.sreg.nctaid.z"() : () -> i32
+        %v0 = "nvvm.read.ptx.sreg.tid.x"() : () -> (i32)
+        %v1 = "nvvm.read.ptx.sreg.tid.y"() : () -> (i32)
+        %v2 = "nvvm.read.ptx.sreg.tid.z"() : () -> (i32)
+        %v3 = "nvvm.read.ptx.sreg.ntid.x"() : () -> (i32)
+        %v4 = "nvvm.read.ptx.sreg.ntid.y"() : () -> (i32)
+        %v5 = "nvvm.read.ptx.sreg.ntid.z"() : () -> (i32)
+        %v6 = "nvvm.read.ptx.sreg.ctaid.x"() : () -> (i32)
+        %v7 = "nvvm.read.ptx.sreg.ctaid.y"() : () -> (i32)
+        %v8 = "nvvm.read.ptx.sreg.ctaid.z"() : () -> (i32)
+        %v9 = "nvvm.read.ptx.sreg.nctaid.x"() : () -> (i32)
+        %v10 = "nvvm.read.ptx.sreg.nctaid.y"() : () -> (i32)
+        %v11 = "nvvm.read.ptx.sreg.nctaid.z"() : () -> (i32)
         "func.return"() : () -> ()
     }) {llvm.linkage = #llvm.linkage<internal>} : () -> ()
 }) : () -> ()
 "#;
-        assert_eq!(text, expected);
+        assert_eq!(
+            crate::profile::normalize_mlir_identifiers(&text),
+            crate::profile::normalize_mlir_identifiers(expected)
+        );
 
         tid_x.deref_mut(&ctx).attributes.set(
             Identifier::try_from("cuda_oxide_intrinsic_marker").unwrap(),

@@ -6,8 +6,8 @@
 //! SM100 tensor-memory accumulator load, bias, conversion, and shared stores.
 
 use crate::cute::emit::{Emit, dialect, integer_property};
+use crate::{MlirAttribute, MlirFloatType, MlirType, MlirValueUse};
 use dialect_cute::sm100_ops::*;
-use pliron_mlir_export::{MlirAttribute, MlirFloatType, MlirType, MlirValueUse};
 
 /// Load a TMEM vector, add scalar bias, convert to FP16, and store swizzled shared chunks.
 pub(in crate::cute) fn emit_epilogue(

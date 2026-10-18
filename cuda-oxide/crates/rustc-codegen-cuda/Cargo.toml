@@ -4,7 +4,7 @@ version = "0.2.1"
 edition = "2024"
 authors = ["Nihal Pasham <nihalp@nvidia.com>"]
 license = "Apache-2.0"
-repository = "https://github.com/NVlabs/cuda-oxide.git"
+repository = "https://github.com/NVIDIA/cuda-rust"
 description = "Unified host/device compilation backend for rustc (CUDA/PTX codegen)"
 readme = "README.md"
 
@@ -31,12 +31,12 @@ cuda-artifact-finalizer = { path = "../cuda-artifact-finalizer" }
 
 # IMPORTANT: This crate is isolated from the main workspace, so we cannot use
 # `{ workspace = true }`. Keep these versions synchronized with root Cargo.toml
-# [workspace.dependencies] section. Source MUST match the root (same git + rev),
-# or pliron resolves to two distinct crates and types stop unifying.
-pliron = { git = "https://github.com/pliron-org/pliron", rev = "06d99a3df938394583715aacf5eadb65b4791c09" }
-pliron-derive = { git = "https://github.com/pliron-org/pliron", rev = "06d99a3df938394583715aacf5eadb65b4791c09" }
+# [workspace.dependencies] section. Use the same registry source and exact
+# release, or pliron resolves to distinct crates and types stop unifying.
+pliron = { version = "=0.20.0" }
+pliron-derive = { version = "=0.20.0" }
 linkme = "0.3"            # must match workspace
-combine = "4.6"           # must match workspace
+combine = "4.6.8"         # must match workspace; Pliron needs SourcePosition: Hash
 once_cell = "1.18"        # must match workspace
 thiserror = "2"           # must match workspace
 serde_json = "1"          # must match workspace

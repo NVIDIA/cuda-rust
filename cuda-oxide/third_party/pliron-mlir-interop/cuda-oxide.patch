@@ -1,0 +1,171 @@
+--- a/src/llvm/types.rs
++++ b/src/llvm/types.rs
+@@ -87,7 +87,8 @@
+
+ dict_key!(
+     /// Names of the named structs currently being printed, innermost last.
+-    STRUCT_IN_PRINTING, "mlir_interop_struct_in_printing"
++    STRUCT_IN_PRINTING,
++    "mlir_interop_struct_in_printing"
+ );
+
+ /// Record that we're now printing `name`, returning `true` if it's already
+--- a/src/printers.rs
++++ b/src/printers.rs
+@@ -3,7 +3,7 @@
+
+ //! Pliron -> textual MLIR printers.
+
+-use std::fmt;
++use std::{collections::HashMap, fmt};
+
+ use pliron::{
+     attribute::{Attribute, attr_cast},
+@@ -11,7 +11,7 @@
+     builtin::attributes::ATTR_KEY_GIVEN_NAMES,
+     common_traits::Named,
+     context::{Context, Ptr},
+-    input_err, input_err_noloc,
++    ident, input_err, input_err_noloc,
+     linked_list::ContainsLinkedList,
+     location::{Location, Source},
+     op::op_cast,
+@@ -232,7 +232,7 @@
+     }
+
+     /// Add a pliron `Attribute` to the discardable attribute dictionary.
+-    fn attr_attr(mut self, name: &'a str, attr: &'a dyn Attribute) -> Self {
++    pub fn attr_attr(mut self, name: &'a str, attr: &'a dyn Attribute) -> Self {
+         self.attributes.push((name, MlirAttr::Attr(attr)));
+         self
+     }
+@@ -467,6 +467,13 @@
+                 }
+                 write!(f, "%{}: ", arg.unique_name(ctx))?;
+                 print_type(ctx, arg.get_type(ctx), state, f)?;
++                let location = state
++                    .aux_data_ref()
++                    .get(&ident!("mlir_block_argument_locations"))
++                    .and_then(|locations| locations.downcast_ref::<HashMap<Value, Location>>())
++                    .and_then(|locations| locations.get(&arg).cloned())
++                    .unwrap_or_else(|| arg.loc(ctx));
++                print_op_location(ctx, &location, state, f)?;
+             }
+             write!(f, ")")?;
+         }
+@@ -479,6 +486,23 @@
+         print_op(ctx, op, state, f)?;
+     }
+     Ok(())
++}
++
++/// Override block argument locations for this print state.
++///
++/// Pliron normally gives each argument its parent block's location. Adapters
++/// from IRs with individual argument locations can supply those locations
++/// here, including an explicit unknown location to suppress the fallback.
++/// Replaces any previously supplied overrides; values must belong to the
++/// context being printed. The caller can set this inside [crate::MlirPrinterT].
++pub fn set_block_argument_locations(
++    state: &State,
++    locations: impl IntoIterator<Item = (Value, Location)>,
++) {
++    state.aux_data_mut().insert(
++        ident!("mlir_block_argument_locations"),
++        Box::new(locations.into_iter().collect::<HashMap<_, _>>()),
++    );
+ }
+
+ fn print_newline_indent(state: &State, f: &mut fmt::Formatter<'_>) -> Result<()> {
+--- /dev/null
++++ b/tests/block_argument_locations.rs
+@@ -0,0 +1,89 @@
++/*
++ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++mod common;
++
++use pliron::{
++    builtin::{
++        ops::FuncOp,
++        types::{FunctionType, IntegerType, Signedness},
++    },
++    context::Context,
++    location::Location,
++    op::Op,
++};
++use pliron_llvm::ops::ReturnOp;
++
++#[test]
++fn block_location_is_preserved_on_arguments() {
++    let ctx = &mut Context::new();
++    let i32 = IntegerType::get(ctx, 32, Signedness::Signless).into();
++    let function_type = FunctionType::get(ctx, vec![i32], vec![]);
++    let function = FuncOp::new(ctx, "locations".try_into().unwrap(), function_type);
++    let region = function.get_operation().deref(ctx).get_region(0);
++    let block = region.deref(ctx).get_entry_block().unwrap();
++    block.deref_mut(ctx).set_loc(Location::Named {
++        name: "argument origin".into(),
++        child_loc: Box::new(Location::Unknown),
++    });
++    ReturnOp::new(ctx, None)
++        .get_operation()
++        .insert_at_back(block, ctx);
++    let text = common::to_mlir(ctx, &function.get_operation());
++    assert!(text.contains(": i32 loc(\"argument origin\")"), "{text}");
++    common::verify_with_mlir_opt(&text);
++}
++
++#[test]
++fn individual_argument_locations_override_the_block() {
++    use pliron::{context::Ptr, operation::Operation, printable::State};
++    use pliron_mlir_interop::{
++        MlirPrinterT,
++        printers::{print_op, set_block_argument_locations},
++    };
++    struct WithLocations(Ptr<Operation>);
++    impl MlirPrinterT for WithLocations {
++        fn mlir_print(
++            &self,
++            ctx: &Context,
++            state: &State,
++            f: &mut std::fmt::Formatter<'_>,
++        ) -> pliron::result::Result<()> {
++            let region = self.0.deref(ctx).get_region(0);
++            let block = region.deref(ctx).get_entry_block().unwrap();
++            set_block_argument_locations(
++                state,
++                [
++                    (
++                        block.deref(ctx).get_argument(0),
++                        Location::Named {
++                            name: "first".into(),
++                            child_loc: Box::new(Location::Unknown),
++                        },
++                    ),
++                    (block.deref(ctx).get_argument(1), Location::Unknown),
++                ],
++            );
++            print_op(ctx, self.0, state, f)
++        }
++    }
++    let ctx = &mut Context::new();
++    let i32 = IntegerType::get(ctx, 32, Signedness::Signless).into();
++    let function_type = FunctionType::get(ctx, vec![i32, i32], vec![]);
++    let function = FuncOp::new(ctx, "locations".try_into().unwrap(), function_type);
++    let region = function.get_operation().deref(ctx).get_region(0);
++    let block = region.deref(ctx).get_entry_block().unwrap();
++    block.deref_mut(ctx).set_loc(Location::Named {
++        name: "fallback".into(),
++        child_loc: Box::new(Location::Unknown),
++    });
++    ReturnOp::new(ctx, None)
++        .get_operation()
++        .insert_at_back(block, ctx);
++    let text = common::to_mlir(ctx, &WithLocations(function.get_operation()));
++    assert!(text.contains(": i32 loc(\"first\"), %v1: i32)"), "{text}");
++    assert!(!text.contains("fallback"), "{text}");
++    common::verify_with_mlir_opt(&text);
++}

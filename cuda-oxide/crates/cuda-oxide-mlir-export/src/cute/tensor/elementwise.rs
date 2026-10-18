@@ -19,6 +19,11 @@
 //! need the original logical length and absolute index, so they map to scalar
 //! arithmetic and LLVM memory operations.
 
+use crate::{
+    DropAttribute, MlirAttribute, MlirLocation, MlirOperation, MlirResult, MlirType, MlirValueUse,
+    OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
+    TranslationSession, TypeTranslation,
+};
 use dialect_cute::{
     attributes::{
         CuteAlignmentAttr, CuteTensorAddressSpaceAttr, CuteTensorFormatAttr, CuteTensorLayoutAttr,
@@ -37,11 +42,6 @@ use pliron::{
     operation::Operation,
     r#type::{TypeHandle, Typed},
     value::Value,
-};
-use pliron_mlir_export::{
-    DropAttribute, MlirAttribute, MlirLocation, MlirOperation, MlirResult, MlirType, MlirValueUse,
-    OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
-    TranslationSession, TypeTranslation,
 };
 
 /// Register the elementwise tensor-view mapping for the pinned CUTLASS profile.
@@ -843,8 +843,8 @@ fn transport_scalar(ctx: &Context, view: &CuteTensorViewType) -> Result<TypeHand
 fn scalar_spelling(ty: &MlirType) -> Result<String, String> {
     match ty {
         MlirType::Integer(width) => Ok(format!("i{width}")),
-        MlirType::Float(pliron_mlir_export::MlirFloatType::F16) => Ok("f16".into()),
-        MlirType::Float(pliron_mlir_export::MlirFloatType::F32) => Ok("f32".into()),
+        MlirType::Float(crate::MlirFloatType::F16) => Ok("f16".into()),
+        MlirType::Float(crate::MlirFloatType::F32) => Ok("f32".into()),
         other => Err(format!(
             "the elementwise CUTLASS pack needs an i8, i16, f16, or f32 scalar, got {other:?}"
         )),

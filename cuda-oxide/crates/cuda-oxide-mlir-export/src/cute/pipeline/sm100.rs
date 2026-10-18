@@ -9,8 +9,8 @@ use crate::cute::{
     emit::{Emit, llvm_ptr_type, property},
     sm100::Kind,
 };
+use crate::{MlirAttribute, MlirRegion, MlirType, MlirValueUse};
 use dialect_cute::sm100_ops::*;
-use pliron_mlir_export::{MlirAttribute, MlirRegion, MlirType, MlirValueUse};
 
 /// Emit cluster load/accumulator barrier actions and their required TCGen05 fences.
 pub(in crate::cute) fn emit_pipeline(

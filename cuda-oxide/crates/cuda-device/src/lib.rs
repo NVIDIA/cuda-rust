@@ -5,6 +5,9 @@
 
 #![feature(f16)]
 #![no_std]
+// Each `#[kani::stub]` on a harness re-expands the attributes below it, and a
+// harness carries one stub per hardware register.
+#![cfg_attr(kani, recursion_limit = "512")]
 
 // Proc-macro expansions use the public crate path so the same expansion works
 // both here and in downstream device crates.
@@ -41,6 +44,8 @@ pub mod grid;
 pub mod i16x2;
 pub mod iket;
 pub mod int;
+#[cfg(kani)]
+mod kani_proofs;
 pub mod mma_frag;
 pub mod prmt;
 pub mod ptx;

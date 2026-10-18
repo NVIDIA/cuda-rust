@@ -22,7 +22,7 @@ use dialect_mir::ops::{MirInsertFieldOp, MirUndefOp};
 use pliron::basic_block::BasicBlock;
 use pliron::context::{Context, Ptr};
 use pliron::input_error;
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::printable::Printable;

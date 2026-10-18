@@ -30,6 +30,12 @@
 //!   the integer metadata while the data-pointer half follows the compiler's
 //!   address-space rules. The cast must remain an SSA reconstruction rather
 //!   than an aggregate memory round-trip.
+//! - union view: a union holding the shared pointer next to a `u64` stores
+//!   the pointer as a generic pointer, so its integer view must equal the
+//!   transmuted `usize` above, the bits must recover the same pointer, and
+//!   a store through that pointer must be visible through the allocation.
+//!   The union is built and read by value; in-place writes to the pointer
+//!   field are refused by the compiler.
 //!
 //! Each scalar transmute and the fat-pointer cast live in `#[inline(never)]`
 //! device functions so LLVM cannot see both halves of a round trip in one body
@@ -48,6 +54,16 @@ mod kernels {
     use super::*;
 
     const THREADS: usize = 32;
+
+    /// One byte image, two views: the shared pointer as the program sees it,
+    /// and the same 8 bytes as an integer. The compiler stores the pointer as
+    /// a generic pointer, so the image is the same on every target even
+    /// though a shared-memory pointer is 4 bytes wide under modern NVVM.
+    #[repr(C)]
+    union SharedPtrBits {
+        ptr: *mut SharedArray<u32, THREADS>,
+        bits: u64,
+    }
 
     // Clippy would rewrite these transmutes as `as` casts, but the `as`
     // form lowers through a different compiler path (PtrToAddress /
@@ -158,6 +174,22 @@ mod kernels {
                 *out.get_unchecked_mut(5) = core::ptr::eq(recast_data.cast::<u32>(), base) as u32;
                 recast_data.add(1).write(0x1234_i32);
                 *out.get_unchecked_mut(6) = SCRATCH[1];
+
+                // Union view, by value in both directions. The integer view
+                // is the Rust-visible address (the transmute result above),
+                // the bits recover the pointer, and a store through the
+                // recovered pointer lands in the shared allocation. The
+                // store is guarded by the pointer check so a wrong pointer
+                // is reported as a failure instead of faulting.
+                let union_bits = SharedPtrBits { ptr: raw }.bits;
+                let from_bits = SharedPtrBits { bits: bits as u64 }.ptr;
+                let from_bits_eq = core::ptr::eq(from_bits, raw);
+                *out.get_unchecked_mut(7) = (union_bits == bits as u64) as u32;
+                *out.get_unchecked_mut(8) = from_bits_eq as u32;
+                if from_bits_eq {
+                    (&mut (*from_bits))[2] = 0xBEEF;
+                }
+                *out.get_unchecked_mut(9) = SCRATCH[2];
             }
         }
     }
@@ -175,11 +207,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         block_dim: (32, 1, 1),
         shared_mem_bytes: 0,
     };
-    let mut out = DeviceBuffer::<u32>::zeroed(&stream, 7)?;
+    let mut out = DeviceBuffer::<u32>::zeroed(&stream, 10)?;
 
     // SAFETY: one 32-thread block writes 32 distinct shared elements, then
     // thread 0 reads or mutates the shared allocation after a block-wide
-    // barrier. Only thread 0 writes the seven output elements.
+    // barrier. Only thread 0 writes the ten output elements.
     unsafe { module.shared_ptr_transmute(&stream, cfg, &mut out) }?;
 
     let result = out.to_host_vec(&stream)?;
@@ -224,9 +256,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         std::process::exit(1);
     }
+    if result[7] != 1 {
+        eprintln!(
+            "FAIL shared_ptr_transmute: shared-pointer union integer view differs from the pointer's address bits"
+        );
+        std::process::exit(1);
+    }
+    if result[8] != 1 {
+        eprintln!(
+            "FAIL shared_ptr_transmute: shared-pointer union bits did not recover the pointer"
+        );
+        std::process::exit(1);
+    }
+    if result[9] != 0xBEEF {
+        eprintln!(
+            "FAIL shared_ptr_transmute: store through the union-recovered pointer read back {:#X}, expected 0xBEEF",
+            result[9]
+        );
+        std::process::exit(1);
+    }
     println!(
-        "PASS shared_ptr_transmute: scalar and slice-fat-pointer casts preserve shared-pointer semantics, sum={}, scalar_readback={:#X}, slice_readback={:#X}",
-        result[1], result[3], result[6]
+        "PASS shared_ptr_transmute: scalar, slice-fat-pointer and union views preserve shared-pointer semantics, sum={}, scalar_readback={:#X}, slice_readback={:#X}, union_readback={:#X}",
+        result[1], result[3], result[6], result[9]
     );
     Ok(())
 }

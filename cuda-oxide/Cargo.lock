@@ -212,6 +212,8 @@ dependencies = [
  "libnvvm-sys",
  "nvjitlink-sys",
  "oxide-artifacts 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oxide-tile-export",
+ "oxide-tilebc",
  "ptx-parse",
  "ptx-schedule",
  "reserved-oxide-symbols",
@@ -1108,7 +1110,14 @@ version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "oxide-tilebc"
+version = "0.2.1"
+dependencies = [
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -147,6 +147,7 @@ cuda-oxide is split into focused crates. Here is every one and its role:
 | `cuda-artifact-finalizer` | Driver-independent NVVM IR, LTOIR, and PTX finalization                           |
 | `oxide-artifacts`    | Architecture-neutral embedded device artifact metadata                                 |
 | `oxide-tile-export`  | `#[tile_export]` descriptions shared by the macro, the backend and `cargo oxide tilelib` |
+| `oxide-tilebc`       | Tile IR bytecode writer for the tile library descriptions `cargo oxide tilelib` emits  |
 | `dialect-iket`       | pliron dialect modelling in-kernel event tracing                                       |
 | `iket-lower`         | `dialect-iket` profiles + instrumentation lowering                                     |
 | `dialect-ptx`        | pliron dialect modelling structured PTX                                                |

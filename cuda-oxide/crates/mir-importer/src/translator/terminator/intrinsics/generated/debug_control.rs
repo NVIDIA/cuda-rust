@@ -17,7 +17,7 @@ use dialect_nvvm::ops::{BreakpointOp, PmEventOp, TrapOp};
 use pliron::basic_block::BasicBlock;
 use pliron::context::{Context, Ptr};
 use pliron::input_err;
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use rustc_public::mir;

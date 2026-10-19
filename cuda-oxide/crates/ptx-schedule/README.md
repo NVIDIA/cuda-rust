@@ -99,6 +99,14 @@ ptx-schedule kernel.ptx --seed 7 --intensity 0.5 -o perturbed.ptx \
     --decisions-json decisions.json
 ```
 
+`--decisions-json` must name a file other than the input and `-o`, and it
+cannot be a directory. The binary resolves all three paths before it writes
+anything: it follows symbolic links, including one whose target does not exist
+yet, and on Unix it compares existing files by device and inode (the identity
+on disk that a hard link shares with its original). A collision is refused
+with `refusing to overwrite PTX` and nothing is written. Rewriting the PTX in
+place, with `-o` equal to the input and a separate report file, stays allowed.
+
 ## License
 
-Apache-2.0. See [LICENSE](https://github.com/NVlabs/cuda-oxide/blob/main/LICENSE).
+Apache-2.0. See [LICENSE](https://github.com/NVIDIA/cuda-rust/blob/main/LICENSE).

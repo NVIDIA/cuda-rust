@@ -48,7 +48,6 @@ use pliron::{
         rewriter::{IRRewriter, Rewriter},
     },
     linked_list::{ContainsLinkedList, LinkedList},
-    location::Located,
     op::Op,
     operation::Operation,
     pass::AnalysisManager,

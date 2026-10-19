@@ -19,7 +19,6 @@ use pliron::{
         types::{FP32Type, FP64Type, IntegerType},
     },
     context::Ptr,
-    location::Located,
     op::Op,
     operation::Operation,
     value::Value,
@@ -486,10 +485,10 @@ impl<'a> ModuleExportState<'a> {
             Some(LlvmOp::Constant(op)) => self.emit_constant(op, value_names)?,
             Some(LlvmOp::AddressOf(op)) => self.emit_address_of(op, value_names, output)?,
             Some(LlvmOp::DebugValue(op)) => {
-                self.emit_debug_value(op, value_names, debug_scope, &op_loc, output)?
+                self.emit_debug_value(op, value_names, debug_scope, op_loc, output)?
             }
             Some(LlvmOp::DebugValueList(op)) => {
-                self.emit_debug_value_list(op, value_names, debug_scope, &op_loc, output)?
+                self.emit_debug_value_list(op, value_names, debug_scope, op_loc, output)?
             }
             // Unknown
             None if self.legacy_typed_pointers() => {
@@ -511,12 +510,12 @@ impl<'a> ModuleExportState<'a> {
                 output,
                 output_before,
                 debug_scope,
-                &op_loc,
+                op_loc,
                 allow_scope_debug_fallback,
             );
         }
         if let Some(alloca) = debug_alloca {
-            self.emit_debug_declare_for_alloca(alloca, value_names, debug_scope, &op_loc, output)?;
+            self.emit_debug_declare_for_alloca(alloca, value_names, debug_scope, op_loc, output)?;
         }
 
         Ok(())

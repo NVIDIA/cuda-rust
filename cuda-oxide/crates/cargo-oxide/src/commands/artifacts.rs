@@ -112,6 +112,15 @@ pub(super) const GENERATED_ARTIFACT_SUFFIXES: &[&str] = &[
     "target",
     "options",
     "cubin.target",
+    // `#[tile_export]` descriptions the backend writes next to the `.ll`
+    // (`oxide_tile_export::DESCRIPTIONS_SUFFIX`).
+    "tileexports.json",
+    // What `cargo oxide tilelib` writes from those descriptions: the two
+    // Tile IR bytecode halves, their readable dump, and the library itself.
+    TILELIB_INTERFACE_SUFFIX,
+    TILELIB_IMPLEMENTATION_SUFFIX,
+    TILELIB_DUMP_SUFFIX,
+    TILELIB_LIBRARY_SUFFIX,
 ];
 
 pub(super) fn generated_artifact_paths(project_dir: &Path, package_name: &str) -> Vec<PathBuf> {

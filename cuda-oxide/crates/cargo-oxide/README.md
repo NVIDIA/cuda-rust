@@ -28,6 +28,7 @@ cargo oxide build vecadd            # compile only (no run)
 cargo oxide build vecadd --debug-assertions  # keep release optimization, compile debug assertions
 cargo oxide build vecadd --materialize-cubin --arch sm_120  # embed native cubin
 cargo oxide emit-ltoir vecadd --arch sm_100  # device code -> .ltoir (Tile/SIMT interop)
+cargo oxide tilelib tilelib_relu --arch sm_120  # #[tile_export] crate -> cuTile tile library
 cargo oxide build -- -p my_app      # arbitrary cargo build through cuda-oxide
 cargo oxide test                    # cargo test with cuda-oxide defaults
 cargo oxide test -- -p my_app       # arbitrary cargo test through cuda-oxide
@@ -53,20 +54,22 @@ cargo oxide update --force          # inside the workspace, run setup via update
 |------------------------------|----------------------------------|-------------------------------------------------|
 | `--materialize-cubin`        | run, sanitize, build, test, pipeline, debug | Finalize and embed target-specific native GPU code during the host build |
 | `--emit-nvvm-ir`             | run, build, pipeline             | Generate NVVM IR for libNVVM                    |
-| `--arch <sm_XX>`             | run, sanitize, build, test, pipeline, emit-ltoir, inspect, debug | Target architecture override |
-| `--features <F>`             | run, sanitize, debug, build, build passthrough, emit-ltoir, inspect | Comma-separated cargo features to enable |
+| `--arch <sm_XX>`             | run, sanitize, build, test, pipeline, emit-ltoir, tilelib, inspect, debug | Target architecture override |
+| `--features <F>`             | run, sanitize, debug, build, build passthrough, emit-ltoir, tilelib, inspect | Comma-separated cargo features to enable |
 | `--device-features <F>`      | run, build                       | Comma-separated features for metadata-declared device crates only |
 | `--bin <NAME>`               | run, sanitize, debug                | Specific binary target to build/run      |
 | `--tool <T>`                 | sanitize                         | Compute Sanitizer tool: `memcheck`, `racecheck`, `initcheck`, or `synccheck` |
-| `-o, --output <P>`           | emit-ltoir                       | Output path for the `.ltoir` artifact           |
+| `-o, --output <P>`           | emit-ltoir, tilelib              | Output path for the `.ltoir` or `.tilelib` artifact |
+| `--library-optional`         | tilelib                          | Succeed when the installed tileiras cannot build the `.tilelib`; the descriptions and LTOIR are still written |
+| `--print`                    | tilelib                          | Print the readable form of the interface and implementation modules |
 | `--cargo-target-dir <PATH>`  | build/test passthrough           | Cargo target directory                          |
 | `--device-codegen-crate <LIST>` | build/test passthrough        | Comma-separated device owner crate filter       |
 | `--device-cfg <NAME>`        | build/test passthrough           | Append `--cfg NAME` to rustflags                |
-| `-v, --verbose`              | run, sanitize, build, test, emit-ltoir, inspect | Show detailed compilation output           |
-| `--no-fmad`                  | run, sanitize, build, test, emit-ltoir, pipeline, inspect | Keep ordinary multiply and add/subtract operations separate |
-| `--unchecked-indexing`       | run, sanitize, build, test, emit-ltoir, pipeline, inspect | Elide device slice/array bounds checks (UB on OOB) |
-| `--lineinfo`                 | run, sanitize, build, test, emit-ltoir, pipeline, inspect | Emit device line-number info for profilers (nvcc `-lineinfo`) |
-| `--device-debug`             | run, sanitize, build, test, emit-ltoir, pipeline, inspect | Emit full device debug info; disables libNVVM optimization (nvcc `-G`) |
+| `-v, --verbose`              | run, sanitize, build, test, emit-ltoir, tilelib, inspect | Show detailed compilation output           |
+| `--no-fmad`                  | run, sanitize, build, test, emit-ltoir, tilelib, pipeline, inspect | Keep ordinary multiply and add/subtract operations separate |
+| `--unchecked-indexing`       | run, sanitize, build, test, emit-ltoir, tilelib, pipeline, inspect | Elide device slice/array bounds checks (UB on OOB) |
+| `--lineinfo`                 | run, sanitize, build, test, emit-ltoir, tilelib, pipeline, inspect | Emit device line-number info for profilers (nvcc `-lineinfo`) |
+| `--device-debug`             | run, sanitize, build, test, emit-ltoir, tilelib, pipeline, inspect | Emit full device debug info; disables libNVVM optimization (nvcc `-G`) |
 | `--debug-assertions`         | build                            | Compile `debug_assert!` / `cfg(debug_assertions)` with release-like optimization and overflow checks disabled |
 | `--force`                    | update                           | Inside the workspace, run `setup` instead of advising it |
 | `--async`                    | new                              | Use the async template                          |
@@ -75,8 +78,8 @@ cargo oxide update --force          # inside the workspace, run setup via update
 | `--check`                    | fmt                              | Check formatting only                           |
 | `--json`                     | list                             | Emit stable machine-readable output             |
 
-`--arch` is required for `emit-ltoir` and explicit NVVM IR output because those
-artifacts are architecture-specific. Without an override, `run` detects the
+`--arch` is required for `emit-ltoir`, `tilelib` and explicit NVVM IR output
+because those artifacts are architecture-specific. Without an override, `run` detects the
 local GPU, while `build` and `pipeline` use the compiler's feature-based target
 so they remain useful for cross-compilation.
 
@@ -124,8 +127,8 @@ multi-artifact linking is not yet represented by this single-cubin path.
 Metadata-interop projects keep rejecting this global flag; they can instead
 request one independently finalized cubin per declared device crate with
 `artifact-kind = "cubin"`, as described below. Materialization is also a
-final-output mode, so it cannot be combined with `--emit-nvvm-ir` or
-`emit-ltoir`.
+final-output mode, so it cannot be combined with `--emit-nvvm-ir`,
+`emit-ltoir` or `tilelib`.
 
 ## Commands
 
@@ -313,6 +316,64 @@ cuda-oxide chooses the NVVM IR format from the selected architecture.
 Pre-Blackwell targets use LLVM 7 typed pointers; `compute_100` and newer targets
 use modern opaque pointers. The target is checked before export and recorded
 alongside the artifact so the runtime uses the same format.
+
+### `cargo oxide tilelib <crate>`
+
+Packages a crate's `#[tile_export]` functions as a cuTile tile library: the
+other direction of the interop, where a cuTile program calls Rust device
+functions through `foreign_call`.
+
+```text
+emit-ltoir ──> <crate>.ltoir   <crate>.ll   <crate>.tileexports.json
+                                  │                  │
+            define @<symbol>(...) checked against the ABI table
+                                                     │
+                          descriptions ──> oxide-tilebc Declaration + Implementation
+                                                     │
+               <crate>.iface.tilebc   <crate>.impl.tilebc   <crate>.tilelib.mlir
+                                                     │
+         tileiras --preview-create-tile-lib (lists 13.5 or newer) ──> <crate>.tilelib
+```
+
+The command runs `emit-ltoir` for the device half, then checks that the
+emitted NVVM IR defines every implementation symbol the descriptions name
+with the parameter list the native SIMT ABI predicts (`in` scalars by value,
+everything else a pointer, `void` return), because the assembler never looks
+inside the code payload and a missing symbol would otherwise surface only
+when a cuTile program is compiled against the library. The descriptions then
+become the two halves of the library through the `oxide-tilebc` crate: the
+interface (`preview$func extern` declarations with tile-typed arguments) and
+the implementation catalog (`preview$extern_impl` entries whose fragments
+describe each parameter's buffer and its map onto the tile). Both are
+written as Tile IR bytecode with the preview tag, at the version the resolved
+assembler calls current (its newest listed version, 13.5 when none can read
+them yet), next to a readable `<crate>.tilelib.mlir`; `--print` shows that
+text.
+
+`tileiras --preview-create-tile-lib` exists from the CUDA 13.5 assembler on,
+the first one whose `--list-versions` names bytecode 13.5. An assembler reads
+preview content only at its current version, which is why the descriptions
+are written at that version. When the resolved tileiras lists 13.5 or newer,
+the library is assembled from the interface, the implementation catalog and
+the LTOIR into `<crate>.tilelib` (or `-o`).
+Otherwise the command explains what the installed assembler can read, points
+at the files a newer one needs, and exits 2; `--library-optional` makes that
+outcome exit 0, for toolkits that can build the descriptions but not the
+library yet. The summary ends with one of two lines a script can read instead
+of probing tileiras itself: `Tile library written to <path>` or
+`Tile library skipped: <tileiras> lists bytecode versions ...`. The assembler
+is resolved from `CUTILE_TILEIRAS_PATH` (cuTile's own override), then like
+every other toolkit tool: PATH, the configured CUDA toolkit root, the standard
+install locations. A tileiras that is configured but cannot be run is an
+error (exit 1) naming the path and the OS error; only an assembler that runs
+and lists no bytecode versions is treated as one that predates
+`--list-versions`.
+
+```bash
+cargo oxide tilelib tilelib_relu --arch sm_120 --print
+cargo oxide tilelib tilelib_relu --arch sm_120 --library-optional   # CUDA 13.4: descriptions and LTOIR
+cargo oxide tilelib my_lib --arch sm_120 -o build/my_lib.tilelib
+```
 
 ### `cargo oxide test`
 

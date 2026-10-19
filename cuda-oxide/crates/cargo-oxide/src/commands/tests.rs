@@ -34,6 +34,7 @@ const COMMANDS_SOURCE: &str = concat!(
     include_str!("scaffold.rs"),
     include_str!("setup_update.rs"),
     include_str!("tests.rs"),
+    include_str!("tilelib.rs"),
     include_str!("toolkit.rs"),
 );
 
@@ -5188,4 +5189,665 @@ fn doctor_backend_source_check_covers_every_branch() {
             "the backend-source line is informational and must never fail doctor"
         );
     }
+}
+
+// =============================================================================
+// cargo oxide tilelib
+// =============================================================================
+
+/// The three exports of the `tilelib_relu` example, as the backend's
+/// descriptions file records them.
+fn tilelib_relu_descriptions() -> Vec<oxide_tile_export::TileExportDesc> {
+    use oxide_tile_export::{TileAccess, TileElem, TileExportDesc, TileParamDesc, TileSync};
+    let param = |name: &str, access: TileAccess, by_value: bool| TileParamDesc {
+        name: name.to_string(),
+        elem: TileElem::F32,
+        access,
+        footprint: 1,
+        by_value,
+    };
+    vec![
+        TileExportDesc {
+            version: oxide_tile_export::CURRENT_VERSION,
+            decl: "relu".into(),
+            symbol: "relu_impl".into(),
+            shape: vec![128],
+            params: vec![
+                param("x", TileAccess::In, true),
+                param("relu_out", TileAccess::Out, false),
+            ],
+            sync: TileSync::None,
+            arch: Vec::new(),
+        },
+        TileExportDesc {
+            version: oxide_tile_export::CURRENT_VERSION,
+            decl: "scale_in_place".into(),
+            symbol: "scale_in_place_impl".into(),
+            shape: vec![128],
+            params: vec![
+                param("x", TileAccess::InOut, false),
+                param("factor", TileAccess::In, true),
+            ],
+            sync: TileSync::None,
+            arch: Vec::new(),
+        },
+        TileExportDesc {
+            version: oxide_tile_export::CURRENT_VERSION,
+            decl: "warp_sum".into(),
+            symbol: "warp_sum_impl".into(),
+            shape: vec![128],
+            params: vec![
+                param("x", TileAccess::In, true),
+                param("warp_sum_out", TileAccess::Out, false),
+            ],
+            sync: TileSync::Warp,
+            arch: Vec::new(),
+        },
+    ]
+}
+
+/// Whitespace-insensitive form of a Tile IR text, the rule the upstream
+/// fixture tests apply: a whitespace run survives, as one space, only between
+/// two word characters, so the hand-written multi-line layout below compares
+/// equal to the printer's one-line form while a missing space between two
+/// words still differs.
+fn normalize_tile_ir(text: &str) -> String {
+    let is_word = |c: char| c.is_alphanumeric() || "_$.@%!#\"?".contains(c);
+    let mut out = String::new();
+    let mut pending_space = false;
+    for c in text.chars() {
+        if c.is_whitespace() {
+            pending_space = true;
+            continue;
+        }
+        if pending_space {
+            if let Some(prev) = out.chars().last()
+                && is_word(prev)
+                && is_word(c)
+            {
+                out.push(' ');
+            }
+            pending_space = false;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The interface of `tilelib_relu` in the upstream textual syntax: one
+/// extern declaration per export, every argument carrying its access, the
+/// results being the out/inout tiles.
+const TILELIB_RELU_INTERFACE: &str = r#"
+cuda_tile.module @tilelib_relu {
+  cuda_tile.preview$func extern @relu(
+      %x: !cuda_tile.tile<128xf32>
+        {cuda_tile.preview$access = #cuda_tile.preview$access<in>},
+      %relu_out: !cuda_tile.tile<128xf32>
+        {cuda_tile.preview$access = #cuda_tile.preview$access<out>})
+    -> !cuda_tile.tile<128xf32>
+  cuda_tile.preview$func extern @scale_in_place(
+      %x: !cuda_tile.tile<128xf32>
+        {cuda_tile.preview$access = #cuda_tile.preview$access<inout>},
+      %factor: !cuda_tile.tile<128xf32>
+        {cuda_tile.preview$access = #cuda_tile.preview$access<in>})
+    -> !cuda_tile.tile<128xf32>
+  cuda_tile.preview$func extern @warp_sum(
+      %x: !cuda_tile.tile<128xf32>
+        {cuda_tile.preview$access = #cuda_tile.preview$access<in>},
+      %warp_sum_out: !cuda_tile.tile<128xf32>
+        {cuda_tile.preview$access = #cuda_tile.preview$access<out>})
+    -> !cuda_tile.tile<128xf32>
+}
+"#;
+
+/// The implementation catalog of `tilelib_relu`: by-value scalars are the
+/// rank-0 `():()` buffer, pointers the contiguous `(1):(1)` one; the two
+/// elementwise exports map one invocation per element and `warp_sum` one
+/// element per lane with a whole warp per invocation, which is what its
+/// `synchronization = warp` clause requires.
+const TILELIB_RELU_IMPLEMENTATION: &str = r#"
+cuda_tile.module @tilelib_relu {
+  cuda_tile.preview$extern_impl @relu_impl implements @relu
+    (%x: !cuda_tile.preview$fragment<1xf32, local,
+       mem_layout = #cuda_tile.preview$layout<():()>,
+       fragmap = #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>>
+     {cuda_tile.preview$access = #cuda_tile.preview$access<in>},
+     %relu_out: !cuda_tile.preview$fragment<1xf32, local,
+       mem_layout = #cuda_tile.preview$layout<(1):(1)>,
+       fragmap = #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>>
+     {cuda_tile.preview$access = #cuda_tile.preview$access<out>})
+  cuda_tile.preview$extern_impl @scale_in_place_impl implements @scale_in_place
+    (%x: !cuda_tile.preview$fragment<1xf32, local,
+       mem_layout = #cuda_tile.preview$layout<(1):(1)>,
+       fragmap = #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>>
+     {cuda_tile.preview$access = #cuda_tile.preview$access<inout>},
+     %factor: !cuda_tile.preview$fragment<1xf32, local,
+       mem_layout = #cuda_tile.preview$layout<():()>,
+       fragmap = #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>>
+     {cuda_tile.preview$access = #cuda_tile.preview$access<in>})
+  cuda_tile.preview$extern_impl @warp_sum_impl implements @warp_sum
+    (%x: !cuda_tile.preview$fragment<1xf32, local,
+       mem_layout = #cuda_tile.preview$layout<():()>,
+       fragmap = #cuda_tile.preview$layout<(4, 32, 1):(32, 1, 0)>>
+     {cuda_tile.preview$access = #cuda_tile.preview$access<in>},
+     %warp_sum_out: !cuda_tile.preview$fragment<1xf32, local,
+       mem_layout = #cuda_tile.preview$layout<(1):(1)>,
+       fragmap = #cuda_tile.preview$layout<(4, 32, 1):(32, 1, 0)>>
+     {cuda_tile.preview$access = #cuda_tile.preview$access<out>})
+    synchronization = #cuda_tile.preview$synchronization<warp>
+}
+"#;
+
+#[test]
+fn tilelib_relu_descriptions_print_as_the_upstream_modules() {
+    let library = TileLibrary::from_descriptions(&tilelib_relu_descriptions())
+        .unwrap()
+        .library("tilelib_relu");
+    library.verify().unwrap();
+    let interface = library.interface_text();
+    assert_eq!(
+        normalize_tile_ir(&interface),
+        normalize_tile_ir(TILELIB_RELU_INTERFACE),
+        "printed interface:\n{interface}"
+    );
+    let implementation = library.implementation_text();
+    assert_eq!(
+        normalize_tile_ir(&implementation),
+        normalize_tile_ir(TILELIB_RELU_IMPLEMENTATION),
+        "printed implementation:\n{implementation}"
+    );
+    // Both halves are preview content, written at the version the
+    // assembler calls current with the header tag set.
+    let version = oxide_tilebc::BytecodeVersion::PREVIEW_FIRST;
+    for bytes in [
+        library.interface_bytecode(version).unwrap(),
+        library.implementation_bytecode(version).unwrap(),
+    ] {
+        assert_eq!(&bytes[8..12], &[13, 5, 1, 0]);
+    }
+    // The readable dump names the file each module ends up in.
+    let dump = library_dump(&library, "tilelib_relu");
+    assert!(dump.starts_with("// tilelib_relu.iface.tilebc"), "{dump}");
+    assert!(dump.contains("\n// tilelib_relu.impl.tilebc"), "{dump}");
+    assert_eq!(dump.matches("cuda_tile.module @tilelib_relu {").count(), 2);
+}
+
+#[test]
+fn fragmaps_follow_the_synchronization_and_the_footprint() {
+    use oxide_tile_export::TileSync;
+    use oxide_tilebc::Layout;
+    // One invocation per element; a footprint of F gives N/F invocations of
+    // F contiguous elements.
+    assert_eq!(
+        fragmap(TileSync::None, 128, 1).unwrap(),
+        Layout::flat(&[128, 1, 1], &[1, 0, 0])
+    );
+    assert_eq!(
+        fragmap(TileSync::None, 128, 4).unwrap(),
+        Layout::flat(&[32, 1, 4], &[4, 0, 1])
+    );
+    // A warp per invocation: 32 participants, one element each, or F
+    // contiguous elements each with adjacent lanes adjacent in the tile.
+    assert_eq!(
+        fragmap(TileSync::Warp, 128, 1).unwrap(),
+        Layout::flat(&[4, 32, 1], &[32, 1, 0])
+    );
+    assert_eq!(
+        fragmap(TileSync::Warp, 256, 4).unwrap(),
+        Layout::flat(&[2, 32, 4], &[128, 4, 1])
+    );
+    // The footprint must divide the tile size.
+    assert!(
+        fragmap(TileSync::None, 128, 3)
+            .unwrap_err()
+            .contains("does not divide")
+    );
+    assert!(
+        fragmap(TileSync::Warp, 64, 4)
+            .unwrap_err()
+            .contains("multiple of 128")
+    );
+    assert!(
+        fragmap(TileSync::None, 128, 0)
+            .unwrap_err()
+            .contains("positive")
+    );
+
+    // Footprints above one verify against the declaration's tile like the
+    // one-element case does, when every parameter shares them: `fn
+    // scale4(x: &mut [f32; 4], factor: &[f32; 4])`.
+    let mut descriptions = tilelib_relu_descriptions();
+    let scale = &mut descriptions[1];
+    for param in &mut scale.params {
+        param.footprint = 4;
+        param.by_value = false;
+    }
+    let library = TileLibrary::from_descriptions(&descriptions)
+        .unwrap()
+        .library("lib");
+    library.verify().unwrap();
+    let text = library.implementation_text();
+    assert!(
+        text.contains(
+            "%x: !cuda_tile.preview$fragment<4xf32, local, mem_layout = \
+             #cuda_tile.preview$layout<(4):(1)>, fragmap = \
+             #cuda_tile.preview$layout<(32, 1, 4):(4, 0, 1)>>"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "%factor: !cuda_tile.preview$fragment<4xf32, local, mem_layout = \
+             #cuda_tile.preview$layout<(4):(1)>, fragmap = \
+             #cuda_tile.preview$layout<(32, 1, 4):(4, 0, 1)>>"
+        ),
+        "{text}"
+    );
+    // A window beside a scalar cannot share one invocation count, so the
+    // description is refused before the verifier would reject the fragmaps.
+    descriptions[1].params[1].footprint = 1;
+    descriptions[1].params[1].by_value = true;
+    let error = TileLibrary::from_descriptions(&descriptions).unwrap_err();
+    assert!(
+        error.contains("`x` (footprint 4) and `factor` (footprint 1) differ"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_bf16_scalar_passed_by_value_adds_the_frontend_abi_entry() {
+    use oxide_tile_export::TileElem;
+    // cuda-device's bf16 is a u16 wrapper, so the LLVM parameter is i16
+    // while the tile element is bf16: the implementation has to say so.
+    let mut descriptions = tilelib_relu_descriptions();
+    let relu = &mut descriptions[0];
+    for param in &mut relu.params {
+        param.elem = TileElem::BF16;
+    }
+    let (_, implementation) = describe_export(relu).unwrap();
+    assert_eq!(
+        implementation.frontend_abi,
+        vec![("bf16".to_string(), "i16".to_string())]
+    );
+    // No `sync` means no clause at all, not an explicit `synchronization<none>`.
+    assert_eq!(implementation.synchronization, None);
+    let library = TileLibrary::from_descriptions(&descriptions[..1])
+        .unwrap()
+        .library("lib");
+    library.verify().unwrap();
+    let text = library.implementation_text();
+    assert!(
+        normalize_tile_ir(&text).contains("{frontendABI={bf16=\"i16\"}}"),
+        "{text}"
+    );
+    assert!(text.contains("preview$fragment<1xbf16, local"), "{text}");
+
+    // A bf16 behind a pointer travels as a pointer and needs no entry.
+    let scale = &mut descriptions[1];
+    scale.params[0].elem = TileElem::BF16;
+    let (_, implementation) = describe_export(scale).unwrap();
+    assert!(implementation.frontend_abi.is_empty());
+
+    // Unsigned Rust integers are the signless Tile IR integers.
+    let warp_sum = &mut descriptions[2];
+    for param in &mut warp_sum.params {
+        param.elem = TileElem::U32;
+    }
+    let (func, implementation) = describe_export(warp_sum).unwrap();
+    assert_eq!(func.args[0].ty.element, oxide_tilebc::ScalarType::I32);
+    assert_eq!(
+        implementation.args[1].fragment.element,
+        oxide_tilebc::ScalarType::I32
+    );
+    assert_eq!(
+        implementation.synchronization,
+        Some(oxide_tilebc::Synchronization::Warp)
+    );
+}
+
+/// The NVVM IR the backend emits for `tilelib_relu` on a modern target,
+/// reduced to its function definitions.
+const TILELIB_RELU_LL: &str = "\
+; ModuleID = 'builtin.module'
+source_filename = \"tilelib_relu\"
+target triple = \"nvptx64-nvidia-cuda\"
+
+define void @relu_impl(float %v0, ptr %v1) #0 {
+entry:
+  ret void
+}
+
+define void @scale_in_place_impl(ptr %v0, float %v1) #0 {
+entry:
+  ret void
+}
+
+define void @warp_sum_impl(float %v0, ptr %v1) #0 {
+entry:
+  ret void
+}
+
+declare float @llvm.nvvm.shfl.sync.bfly.f32(i32, float, i32, i32) #0
+
+define float @tilelib_relu__warp_sum(float %v0) #0 {
+entry:
+  ret float %v0
+}
+";
+
+#[test]
+fn ll_defines_are_read_with_their_return_and_parameter_types() {
+    let defines = ll_defines(TILELIB_RELU_LL);
+    assert_eq!(
+        defines.keys().collect::<Vec<_>>(),
+        [
+            "relu_impl",
+            "scale_in_place_impl",
+            "tilelib_relu__warp_sum",
+            "warp_sum_impl"
+        ]
+    );
+    assert_eq!(
+        defines["relu_impl"],
+        LlDefine {
+            ret: "void".into(),
+            params: vec!["float".into(), "ptr".into()],
+            local_linkage: None,
+        }
+    );
+    assert_eq!(defines["tilelib_relu__warp_sum"].ret, "float");
+    // `declare` lines are not definitions.
+    assert!(!defines.contains_key("llvm.nvvm.shfl.sync.bfly.f32"));
+
+    // Linkage, calling convention and parameter attributes do not change
+    // the types; address spaces and legacy typed pointers survive intact. A
+    // linkage that keeps the symbol out of the module's exports is kept
+    // aside for the symbol check to report.
+    let defines = ll_defines(
+        "define internal fastcc void @k(ptr noundef %a, i64 %n, ptr addrspace(3) %s, i8* %p, { ptr, i64 } %slice) #0 {\n\
+         define dso_local weak_odr void @w() {\n\
+         define private void @p() {\n\
+         define linkonce_odr void @l() {\n\
+         define ptx_kernel void @\"quoted name\"() {\n",
+    );
+    assert_eq!(
+        defines["k"],
+        LlDefine {
+            ret: "void".into(),
+            params: vec![
+                "ptr".into(),
+                "i64".into(),
+                "ptr addrspace(3)".into(),
+                "i8*".into(),
+                "{ ptr, i64 }".into(),
+            ],
+            local_linkage: Some("internal".into()),
+        }
+    );
+    assert_eq!(defines["w"].ret, "void");
+    assert_eq!(defines["w"].local_linkage, None);
+    assert_eq!(defines["p"].local_linkage.as_deref(), Some("private"));
+    assert_eq!(defines["l"].local_linkage.as_deref(), Some("linkonce_odr"));
+    assert_eq!(defines["quoted name"].params, Vec::<String>::new());
+    assert_eq!(defines["quoted name"].local_linkage, None);
+}
+
+#[test]
+fn implementation_symbols_are_checked_against_the_abi_table() {
+    let descriptions = tilelib_relu_descriptions();
+    check_implementation_symbols(TILELIB_RELU_LL, &descriptions).unwrap();
+
+    // The legacy LLVM 7 dialect spells every pointer `i8*`.
+    let legacy = TILELIB_RELU_LL.replace("ptr %v", "i8* %v");
+    check_implementation_symbols(&legacy, &descriptions).unwrap();
+
+    // A missing symbol names what the module does define.
+    let renamed = TILELIB_RELU_LL.replace("@relu_impl(", "@relu(");
+    let problems = check_implementation_symbols(&renamed, &descriptions).unwrap_err();
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0].contains("no `define ... @relu_impl(`"),
+        "{problems:?}"
+    );
+    assert!(problems[0].contains("@scale_in_place_impl"), "{problems:?}");
+
+    // Every mismatch is reported, symbol by symbol: a wrong scalar type, a
+    // by-value parameter where a pointer is predicted, a non-void return.
+    let wrong = TILELIB_RELU_LL
+        .replace(
+            "@relu_impl(float %v0, ptr %v1)",
+            "@relu_impl(double %v0, ptr %v1)",
+        )
+        .replace(
+            "void @scale_in_place_impl(ptr %v0, float %v1)",
+            "float @scale_in_place_impl(float %v0, float %v1)",
+        );
+    let problems = check_implementation_symbols(&wrong, &descriptions).unwrap_err();
+    assert_eq!(problems.len(), 3, "{problems:?}");
+    assert!(
+        problems[0].contains("`relu_impl`: parameter 0 (`x`) is `double`")
+            && problems[0].contains("predicts `float`"),
+        "{problems:?}"
+    );
+    assert!(
+        problems[1].contains("`scale_in_place_impl`: returns `float`"),
+        "{problems:?}"
+    );
+    assert!(
+        problems[2].contains("`scale_in_place_impl`: parameter 0 (`x`) is `float`")
+            && problems[2].contains("predicts `ptr"),
+        "{problems:?}"
+    );
+
+    // A parameter count mismatch is one problem with both lists.
+    let short = TILELIB_RELU_LL.replace(
+        "@warp_sum_impl(float %v0, ptr %v1)",
+        "@warp_sum_impl(float %v0)",
+    );
+    let problems = check_implementation_symbols(&short, &descriptions).unwrap_err();
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0].contains("`warp_sum_impl`: 1 parameter(s) in the module (float), 2 in the description (float, ptr"),
+        "{problems:?}"
+    );
+
+    // A definition the module does not export cannot be linked as
+    // `.extern .func`, however right its signature is.
+    let hidden = TILELIB_RELU_LL
+        .replace(
+            "define void @relu_impl(",
+            "define internal void @relu_impl(",
+        )
+        .replace(
+            "define void @warp_sum_impl(",
+            "define linkonce_odr void @warp_sum_impl(",
+        );
+    let problems = check_implementation_symbols(&hidden, &descriptions).unwrap_err();
+    assert_eq!(problems.len(), 2, "{problems:?}");
+    assert!(
+        problems[0].contains("`relu_impl`: defined with `internal` linkage")
+            && problems[0].contains("not externally visible")
+            && problems[0].contains(".extern .func"),
+        "{problems:?}"
+    );
+    assert!(
+        problems[1].contains("`warp_sum_impl`: defined with `linkonce_odr` linkage"),
+        "{problems:?}"
+    );
+}
+
+/// The capability decision reads `tileiras --list-versions` through
+/// the command's own lookup, so the stand-ins here are executables, not
+/// listings: that is the seam the command uses.
+#[cfg(unix)]
+#[test]
+fn tileiras_capability_follows_the_listed_bytecode_versions() {
+    use super::tilelib::list_bytecode_versions;
+    use oxide_tilebc::BytecodeVersion;
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = unique_temp_dir("cargo_oxide_tileiras");
+    fs::create_dir_all(&root).unwrap();
+    let stand_in = |name: &str, body: &str| -> PathBuf {
+        let path = root.join(name);
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    };
+
+    // CUDA 13.4's assembler.
+    let old = stand_in("tileiras-13.4", "printf '13.1\\n13.2\\n13.3\\n13.4\\n'");
+    let versions = list_bytecode_versions(&old).unwrap();
+    assert_eq!(
+        versions.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        ["13.1", "13.2", "13.3", "13.4"]
+    );
+    assert!(super::tilelib::description_version(&versions).is_none());
+    // The first assembler that reads the preview content; the header tag
+    // bits are not part of a release.
+    let new = stand_in(
+        "tileiras-13.5",
+        "printf '13.1\\n13.2\\n13.3\\n13.4\\n13.5\\n'",
+    );
+    assert_eq!(
+        super::tilelib::description_version(&list_bytecode_versions(&new).unwrap()),
+        Some(BytecodeVersion::PREVIEW_FIRST)
+    );
+    assert_eq!(BytecodeVersion::PREVIEW_FIRST.to_string(), "13.5");
+    // The descriptions are written at the assembler's current version, the
+    // newest numbered one it lists: a newer assembler gets its own version
+    // (a named build such as `internal` is not a version), a 13.5.1 listing
+    // names 13.5, and a 13.4 listing names nothing.
+    let dev = stand_in(
+        "tileiras-newer",
+        "printf '13.1\\n13.2\\n13.3\\n13.4\\n13.5\\n13.6\\ninternal\\n'",
+    );
+    assert_eq!(
+        super::tilelib::description_version(&list_bytecode_versions(&dev).unwrap())
+            .map(|version| version.to_string()),
+        Some("13.6".to_string())
+    );
+    assert_eq!(
+        super::tilelib::description_version(&[BytecodeVersion::new(13, 5)]),
+        Some(BytecodeVersion::PREVIEW_FIRST)
+    );
+    assert_eq!(
+        super::tilelib::description_version(&list_bytecode_versions(&old).unwrap()),
+        None
+    );
+    // An assembler without the flag prints a usage message and exits 1: it
+    // lists nothing, which is not an error.
+    let legacy = stand_in(
+        "tileiras-13.1",
+        "echo 'tileiras: unknown option --list-versions' >&2; exit 1",
+    );
+    assert_eq!(list_bytecode_versions(&legacy).unwrap(), Vec::new());
+    assert!(super::tilelib::description_version(&[]).is_none());
+    // A configured tileiras that cannot be run is an error naming the path
+    // and the OS error, not an old assembler.
+    let missing = root.join("no-such-tileiras");
+    let error = list_bytecode_versions(&missing).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    let message = error.to_string();
+    assert!(
+        message.contains(&missing.display().to_string())
+            && message.contains("--list-versions")
+            && message.contains("os error"),
+        "{message}"
+    );
+    // The exit policy when no library was created.
+    assert_eq!(no_library_exit_code(true), 0);
+    assert_eq!(no_library_exit_code(false), 2);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn tilelib_paths_and_the_tileiras_invocation_follow_the_crate_stem() {
+    let dir = Path::new("/tmp/cargo-oxide-tilelib");
+    let paths = TileLibraryPaths::new(dir, "my-lib", None);
+    assert_eq!(paths.ll, dir.join("my_lib.ll"));
+    assert_eq!(paths.descriptions, dir.join("my_lib.tileexports.json"));
+    assert_eq!(paths.ltoir, dir.join("my_lib.ltoir"));
+    assert_eq!(paths.interface, dir.join("my_lib.iface.tilebc"));
+    assert_eq!(paths.implementation, dir.join("my_lib.impl.tilebc"));
+    assert_eq!(paths.dump, dir.join("my_lib.tilelib.mlir"));
+    assert_eq!(paths.library, dir.join("my_lib.tilelib"));
+    let custom = TileLibraryPaths::new(dir, "my-lib", Some(Path::new("out/lib.tilelib")));
+    assert_eq!(custom.library, PathBuf::from("out/lib.tilelib"));
+
+    // The invocation the Tile IR repository documents for creating a
+    // library: interface, implementation catalog, code payload, output.
+    assert_eq!(
+        create_tile_lib_command(Path::new("/opt/cuda/bin/tileiras"), &custom),
+        [
+            "/opt/cuda/bin/tileiras",
+            "--preview-create-tile-lib",
+            "--preview-interface=/tmp/cargo-oxide-tilelib/my_lib.iface.tilebc",
+            "--preview-implementation=/tmp/cargo-oxide-tilelib/my_lib.impl.tilebc",
+            "--preview-implementation=/tmp/cargo-oxide-tilelib/my_lib.ltoir",
+            "-o",
+            "out/lib.tilelib",
+        ]
+    );
+    // tileiras resolves like every other toolkit tool.
+    for path in TILEIRAS_FALLBACK_PATHS {
+        assert_eq!(
+            Path::new(path).file_name().and_then(|n| n.to_str()),
+            Some("tileiras")
+        );
+    }
+}
+
+#[test]
+fn tilelib_artifacts_are_cleaned_between_builds() {
+    // A stale library or description must not outlive the build that
+    // produced it, so every suffix the command writes is a generated
+    // artifact.
+    for suffix in [
+        TILELIB_INTERFACE_SUFFIX,
+        TILELIB_IMPLEMENTATION_SUFFIX,
+        TILELIB_DUMP_SUFFIX,
+        TILELIB_LIBRARY_SUFFIX,
+    ] {
+        assert!(GENERATED_ARTIFACT_SUFFIXES.contains(&suffix), "{suffix}");
+    }
+    let root = unique_temp_dir("cargo_oxide_tilelib_clean");
+    std::fs::create_dir_all(&root).unwrap();
+    let files: Vec<_> = ["iface.tilebc", "impl.tilebc", "tilelib.mlir", "tilelib"]
+        .iter()
+        .map(|suffix| root.join(format!("my_lib.{suffix}")))
+        .collect();
+    for file in &files {
+        std::fs::write(file, b"stale").unwrap();
+    }
+    clean_generated_files(&root, "my-lib");
+    for file in &files {
+        assert!(!file.exists(), "{} survived the clean", file.display());
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// The smoketest's tilelib lane greps the summary lines: the descriptions
+/// marker for proof that the descriptions were written before the host
+/// program ran, and the two library markers to decide whether a `.tilelib`
+/// is required, instead of probing tileiras itself. The script and the
+/// command have to name the same text.
+#[test]
+fn the_smoketest_greps_the_summary_markers_this_command_prints() {
+    const SMOKETEST: &str = include_str!("../../../../scripts/smoketest.sh");
+    for marker in [
+        DESCRIPTIONS_WRITTEN_MARKER,
+        LIBRARY_WRITTEN_MARKER,
+        LIBRARY_SKIPPED_MARKER,
+    ] {
+        assert!(
+            SMOKETEST.contains(&format!("grep -qF '{marker}'")),
+            "scripts/smoketest.sh no longer greps {marker:?}"
+        );
+    }
+    // Each grep must hit only its own line: the library markers must not be
+    // substrings of the descriptions line, which every run prints.
+    assert!(!DESCRIPTIONS_WRITTEN_MARKER.contains(LIBRARY_WRITTEN_MARKER));
+    assert!(!DESCRIPTIONS_WRITTEN_MARKER.contains(LIBRARY_SKIPPED_MARKER));
+    assert!(!LIBRARY_WRITTEN_MARKER.contains(LIBRARY_SKIPPED_MARKER));
 }

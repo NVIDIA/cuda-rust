@@ -106,6 +106,17 @@ thin-pointer-only device-global union initializers may preserve one full-width
 relocation at byte zero; mixed pointer/integer device-global initializers remain
 rejected.
 
+A union field that holds a shared-memory pointer, directly or through structs
+and bounded arrays, uses generic-pointer storage, so the union's byte image is
+the same on every target and its integer view equals `ptr as usize`. Use
+`cvta_generic_to_shared_offset` or `cvta_generic_to_shared_u32` when the
+shared-window offset (the pointer's position inside the block's shared memory)
+is wanted instead. A field whose fixed arrays expand to more than 16
+shared-memory pointers is rejected; pointers held directly or through structs
+do not count toward that bound. Taking the in-place address of such a
+field (`u.ptr = p`, `&u.ptr`, `&mut u.ptr`) is refused with a diagnostic; build
+the union by value and read its fields by value.
+
 Enum constants preserve payload relocations to device statics, including
 non-zero byte addends. This includes niche-encoded `Option<&T>` and
 direct-tagged enum layouts, both for direct thin-reference payloads and for
@@ -149,7 +160,7 @@ Anonymous promoted allocations remain unsupported.
 | Bi-directional LTOIR Support | **Full** | Rust kernels call CUDA C++ device functions **and** C++ calls Rust device functions. Via NVVM IR → libNVVM → LTOIR → nvJitLink. |
 | Device FFI (`extern "C"`) | **Full** | `#[device] extern "C" { fn ... }` declarations for external LTOIR functions. CUB/CCCL integration demonstrated. |
 | MathDx FFI (cuFFTDx / cuBLASDx) | **Full** | cuFFTDx (8/16/32-point thread-level FFT), cuBLASDx (32x32x32 block-level GEMM) via LTOIR. |
-| Tile interop | **Partial** | Inter-kernel interop works today: a [cutile-rs Tile kernel](https://github.com/NVIDIA/cuda-rust/tree/main/cutile-rs) and a cuda-oxide SIMT PTX kernel can run in one host process on the same CUDA stream over shared device tensors. Intra-kernel Tile interop is work in progress and tracked in [#96](https://github.com/NVlabs/cuda-oxide/issues/96). |
+| Tile interop | **Partial** | Inter-kernel interop works today: a [cutile-rs Tile kernel](https://github.com/NVIDIA/cuda-rust/tree/main/cutile-rs) and a cuda-oxide SIMT PTX kernel can run in one host process on the same CUDA stream over shared device tensors. Intra-kernel interop is built as a [tile library](../advanced/tile-libraries.md): `#[tile_export]` and `cargo oxide tilelib` produce the LTOIR and the Tile IR descriptions today (at the installed assembler's current bytecode version, 13.5 or newer), packaging them into a `.tilelib` needs the CUDA 13.5 or newer `tileiras`, and the caller is cuTile Python's `foreign_call`. Tracked in [#96](https://github.com/NVlabs/cuda-oxide/issues/96). |
 | Cross-Crate Kernels | **Full** | Kernels and device functions defined in library crates with monomorphization at the binary crate use site. |
 
 ## Compiler: Functions
@@ -228,7 +239,7 @@ Anonymous promoted allocations remain unsupported.
 |:--------|:-------|:------------|
 | Warp Shuffle Operations | **Full** | `shuffle`, `shuffle_xor`, `shuffle_down`, `shuffle_up`. Unsuffixed forms take `u32`; `_f32`, `_u64`, `_f64` variants and a `_sync` form of each. |
 | Warp Vote Operations | **Full** | `all(pred)`, `any(pred)`, `ballot(pred)` → bitmask. |
-| Lane/Warp ID | **Full** | `lane_id()` (0–31), `warp_id()`. Direct register reads. |
+| Lane/Warp ID | **Full** | `lane_id()` (0–31) reads `%laneid`; `warp_id()` is `threadIdx.x / 32`, valid for 1D blocks only. |
 | Warp Reduction (`redux.sync`) | **Full** | One-instruction full-warp reduction. Integers on sm_80+: `redux_sync_add`, `_min_{u32,i32}`, `_max_{u32,i32}`, `_and`, `_or`, `_xor`. `f32` min/max with optional `.abs` and `.NaN` on `sm_100a`/`sm_100f`/`sm_103a`/`sm_103f`. No `f64` form. |
 
 ## Runtime Library: Cooperative Groups

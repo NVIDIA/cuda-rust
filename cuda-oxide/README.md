@@ -139,6 +139,9 @@ cargo oxide test
 # Compile a crate's device code to a binary LTOIR artifact in one step
 cargo oxide emit-ltoir
 
+# Package a crate's #[tile_export] functions as a cuTile tile library
+cargo oxide tilelib
+
 # Refresh the cached codegen backend
 cargo oxide update
 ```
@@ -335,6 +338,8 @@ cargo oxide run gemm_sol_final
 | `cuda-intrinsics-gen`     | Extractor and deterministic source generator for the intrinsics |
 | `cuda-artifact-finalizer` | Driver-independent NVVM IR, LTOIR, and PTX finalization         |
 | `oxide-artifacts`         | Architecture-neutral embedded device artifact metadata         |
+| `oxide-tile-export`       | `#[tile_export]` descriptions shared by the macro, the backend and `cargo oxide tilelib` |
+| `oxide-tilebc`            | Tile IR bytecode writer for the tile library descriptions `cargo oxide tilelib` emits |
 | `reserved-oxide-symbols`  | Workspace-private `cuda_oxide_*` symbol-name contract          |
 | `fuzzer`                  | Differential codegen fuzzer support (rustlantis adapter)       |
 | `ptx-schedule`            | PTX schedule-perturbation fuzzing (nanosleep injection campaigns) |

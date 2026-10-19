@@ -772,6 +772,25 @@ impl CodegenBackend for CudaCodegenBackend {
                                 "[rustc_codegen_cuda] Device codegen did not produce an embeddable artifact",
                             );
                         }
+                        if !collection_result.tile_exports.is_empty() {
+                            match write_tile_export_descriptions(
+                                &device_config.output_dir,
+                                &device_config.output_name,
+                                &collection_result.tile_exports,
+                            ) {
+                                Ok(path) => {
+                                    if self.config.verbose {
+                                        eprintln!(
+                                            "[rustc_codegen_cuda] Tile export descriptions written: {}",
+                                            path.display()
+                                        );
+                                    }
+                                }
+                                Err(e) => tcx.dcx().fatal(format!(
+                                    "[rustc_codegen_cuda] Failed to write tile export descriptions: {e}"
+                                )),
+                            }
+                        }
                         Some(result)
                     }
                     Ok(Err(e)) => {
@@ -847,6 +866,25 @@ impl CodegenBackend for CudaCodegenBackend {
         self.llvm_backend
             .link(sess, compiled_modules, crate_info, metadata, outputs);
     }
+}
+
+/// Write `<output_name>.tileexports.json` next to the `.ll`/`.ptx`: the JSON
+/// array of this crate's `#[tile_export]` descriptions. `cargo oxide tilelib`
+/// reads it to build the Tile IR interface and implementation modules; the
+/// device artifact itself carries nothing from it.
+fn write_tile_export_descriptions(
+    output_dir: &Path,
+    output_name: &str,
+    tile_exports: &[oxide_tile_export::TileExportDesc],
+) -> std::io::Result<PathBuf> {
+    let path = output_dir.join(format!(
+        "{output_name}.{}",
+        oxide_tile_export::DESCRIPTIONS_SUFFIX
+    ));
+    let mut text = oxide_tile_export::descriptions_to_json_pretty(tile_exports);
+    text.push('\n');
+    std::fs::write(&path, text)?;
+    Ok(path)
 }
 
 #[allow(clippy::too_many_arguments)]

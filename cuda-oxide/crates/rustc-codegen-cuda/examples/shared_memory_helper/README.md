@@ -29,9 +29,24 @@ unsafe fn shared_ptr_probe<T>(region: Region<T>) -> u64 {
 
 `SharedPtr<T>` lowers to an `addrspace(3)` pointer by its type, so the
 generic helper's parameter, nested in a struct, is one too, and the call
-needs no address-space adaptation. `verify-code-shape.sh` checks that the
-helper takes `ptr addrspace(3)` and that no PTX converts a generic address to a
-shared one.
+needs no address-space adaptation.
+
+Two more shapes run after that probe, in `shared_ptr_shapes_probe`: a struct
+with two `SharedPtr<f32>` fields passed by value to the non-inlined
+`write_pair`, which writes through both, and a `SharedPtr<f32>` returned from
+the non-inlined `select_slot` and used as a store target. Each of 64 lanes
+writes its own slots, then overwrites one slot of its partner lane through the
+returned pointer, so the final values prove both stores landed.
+
+`verify-code-shape.sh` checks the LLVM IR and PTX the build leaves next to
+this file:
+
+| Helper | Required code shape |
+| --- | --- |
+| `shared_ptr_probe` | first parameter is `ptr addrspace(3)` |
+| `write_pair` | both `Pair` fields arrive as `ptr addrspace(3)` parameters |
+| `select_slot` | return type is `ptr addrspace(3)` |
+| whole module | no `cvta.to.shared` in the PTX |
 
 The launch supplies 2048 dynamic shared bytes. Four independent CTAs each use
 one thread. Nine launches cover three data offsets and three input values,
@@ -100,7 +115,9 @@ RTX 5090, NVIDIA driver 580.173.02, and CUDA tools 13.3.
 | Dependency helper, all three inline policies | Same rejection |
 
 With no features, the `SharedPtr` probe runs after the direct control and
-reports `PASS shared-ptr: 9 launches, 36 CTA data/barrier checks`.
+reports `PASS shared-ptr: 9 launches, 36 CTA data/barrier checks`, and the
+shapes probe reports `PASS shared-ptr-shapes: 3 launches, 384 slot checks`,
+on the LLVM NVPTX route and with `--emit-nvvm-ir --arch sm_120`.
 
 Both Compute Sanitizer runs of the direct control reported:
 

@@ -67,6 +67,43 @@ unsafe fn shared_ptr_probe<T>(region: Region<T>) -> u64 {
     }
 }
 
+/// Two typed shared pointers in one struct, passed by value.
+#[derive(Clone, Copy)]
+struct Pair {
+    a: SharedPtr<f32>,
+    b: SharedPtr<f32>,
+}
+
+/// Writes through both fields of a by-value `Pair`. The call boundary splits
+/// the struct into two parameters; both must stay CTA-shared pointers.
+///
+/// # Safety
+/// Both fields must point at live shared memory with at least `index + 1`
+/// `f32` slots.
+#[inline(never)]
+unsafe fn write_pair(pair: Pair, index: usize, value: f32) {
+    unsafe {
+        pair.a.add(index).as_ptr().write(value);
+        pair.b.add(index).as_ptr().write(value + 1000.0);
+    }
+}
+
+/// Returns one slot of a `Pair` as a typed shared pointer. The return type
+/// must stay a CTA-shared pointer so the caller's store needs no conversion.
+///
+/// # Safety
+/// As for `write_pair`.
+#[inline(never)]
+unsafe fn select_slot(pair: Pair, index: usize, second: bool) -> SharedPtr<f32> {
+    unsafe {
+        if second {
+            pair.b.add(index)
+        } else {
+            pair.a.add(index)
+        }
+    }
+}
+
 #[cuda_module]
 mod kernels {
     use super::*;
@@ -107,6 +144,37 @@ mod kernels {
             let completed = shared_ptr_probe(Region { base: smem, offset });
             *output.add(block * 2) = core::ptr::read_volatile(data);
             *output.add(block * 2 + 1) = completed;
+        }
+    }
+
+    /// `SharedPtr` shapes a helper boundary must keep: a two-field struct of
+    /// typed shared pointers passed by value, and a typed shared pointer
+    /// returned from a helper and used as a store target.
+    #[kernel]
+    #[launch_bounds(64)]
+    pub fn shared_ptr_shapes_probe(output: *mut f32, seed: f32) {
+        const LANES: usize = 64;
+        let lane = thread::threadIdx_x() as usize;
+        let smem = DynamicSharedArray::<f32, 16>::shared_ptr();
+        // SAFETY: the launch supplies 2048 shared bytes, enough for the two
+        // 64-slot regions, and every lane writes only its own index and one
+        // slot of its partner lane, after a barrier.
+        unsafe {
+            let pair = Pair {
+                a: smem,
+                b: smem.add(LANES),
+            };
+            let value = seed + lane as f32;
+            write_pair(pair, lane, value);
+            thread::sync_threads();
+            // Each lane overwrites one slot of its partner lane through the
+            // pointer a helper returns; odd lanes pick the second field.
+            let partner = LANES - 1 - lane;
+            let slot = select_slot(pair, partner, lane % 2 == 1);
+            slot.as_ptr().write(-value);
+            thread::sync_threads();
+            *output.add(lane) = *pair.a.add(lane).as_ptr();
+            *output.add(LANES + lane) = *pair.b.add(lane).as_ptr();
         }
     }
 }
@@ -175,5 +243,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cases * BLOCKS
         );
     }
+
+    const LANES: usize = 64;
+    let shapes_output = DeviceBuffer::<f32>::zeroed(&stream, LANES * 2)?;
+    let shapes_config = LaunchConfig {
+        grid_dim: (1, 1, 1),
+        block_dim: (LANES as u32, 1, 1),
+        shared_mem_bytes: 2048,
+    };
+    let seeds = [0.0f32, 17.0, 1024.0];
+    for seed in seeds {
+        let out = shapes_output.cu_deviceptr() as *mut f32;
+        // SAFETY: one CTA of 64 lanes; output holds two f32 per lane, and the
+        // kernel uses 512 of the 2048 shared bytes supplied.
+        unsafe { module.shared_ptr_shapes_probe(&stream, shapes_config, out, seed)? };
+        let got = shapes_output.to_host_vec(&stream)?;
+        for lane in 0..LANES {
+            let partner = LANES - 1 - lane;
+            // Lane `partner` overwrote one of this lane's slots: the second
+            // field when `partner` is odd, the first field otherwise.
+            let overwritten = -(seed + partner as f32);
+            let (want_a, want_b) = if partner % 2 == 1 {
+                (seed + lane as f32, overwritten)
+            } else {
+                (overwritten, seed + lane as f32 + 1000.0)
+            };
+            assert_eq!(
+                got[lane], want_a,
+                "shared-ptr-shapes: field a, seed={seed}, lane={lane}"
+            );
+            assert_eq!(
+                got[LANES + lane],
+                want_b,
+                "shared-ptr-shapes: field b, seed={seed}, lane={lane}"
+            );
+        }
+    }
+    println!(
+        "PASS shared-ptr-shapes: {} launches, {} slot checks",
+        seeds.len(),
+        seeds.len() * LANES * 2
+    );
     Ok(())
 }

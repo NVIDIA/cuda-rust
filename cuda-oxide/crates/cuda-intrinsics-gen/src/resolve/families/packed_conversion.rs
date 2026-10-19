@@ -17,6 +17,17 @@ use std::collections::BTreeSet;
 
 use crate::resolve::guards::*;
 
+// PTX ISA 9.1 lists `cvt.rn.satfinite{.relu}.{e4m3x2,e5m2x2}.bf16x2` for
+// sm_100f, sm_110f and sm_120f "or higher in the same family". The ISA's
+// `.target` section lets family-specific features run on f-targets and on
+// a-targets of the same family, nvcc defines `__CUDA_ARCH_FAMILY_SPECIFIC__`
+// for `compute_100a` as well, and ptxas 13.4 and the pinned llc accept every
+// member below while rejecting the unsuffixed targets. cuda-oxide-codegen
+// matches a family target only on the literal `f` suffix, so the a-targets
+// are enumerated here, as the other Blackwell family records do.
+pub(in crate::resolve) const PACKED_CONVERSION_BF16X2_TARGETS: &str =
+    "sm_100a|sm_100f|sm_103a|sm_103f|sm_110a|sm_110f|sm_120a|sm_120f|sm_121a|sm_121f";
+
 pub(in crate::resolve) struct PackedConversionRecipe {
     pub(in crate::resolve) id: &'static str,
     pub(in crate::resolve) abi_id: &'static str,
@@ -45,9 +56,13 @@ pub(in crate::resolve) fn packed_conversion_recipe(
 
 /// Recipes for packing `bf16x2` into `e4m3x2` or `e5m2x2`.
 ///
-/// These imported records have empty selections, so the lowering is inline PTX.
-/// PTX ISA 9.1 introduces them on the `sm_100f`, `sm_110f`, and `sm_120f`
-/// families, not on the Ada `sm_89` floor used by `f16x2`.
+/// Like the `f16x2` packs, these lower through inline PTX: the MIR side carries
+/// both halves in one integer register while the typed intrinsics are declared
+/// over `<2 x bfloat>` (see [`packed_conversion_uses_typed_nvvm`]). The
+/// recorded evidence assembles the typed and inline routes to the same cubin.
+/// PTX ISA 9.1 introduces the instruction on the Blackwell families named by
+/// [`PACKED_CONVERSION_BF16X2_TARGETS`], not on the Ada `sm_89` floor used by
+/// `f16x2`.
 pub(in crate::resolve) fn packed_conversion_recipe_fp8_bf16x2(
     conversion: &crate::model::PackedConversion,
 ) -> Option<PackedConversionRecipe> {
@@ -555,7 +570,7 @@ pub(in crate::resolve) fn packed_conversion_floor(
     // `bf16x2` to packed FP8 is a PTX ISA 9.1 family-specific conversion.
     // It is not available on the Ada `sm_89` floor used by `f16x2`.
     if conversion.source_format == PackedConversionSourceFormat::Bf16x2 {
-        return ("9.1", None, "sm_100f|sm_110f|sm_120f");
+        return ("9.1", None, PACKED_CONVERSION_BF16X2_TARGETS);
     }
     // FP8 on either side carries the Ada floor, including when FP8 is the
     // source and the destination is the older `f16x2`.
@@ -584,12 +599,13 @@ pub(in crate::resolve) fn packed_conversion_backend_mechanism(
 
 /// Whether the conversion lowers through a typed NVVM intrinsic call.
 ///
-/// Only the scalar-`f32` pair does. The `f16x2` sources and destinations carry
-/// their halves in one integer register on the MIR side, while the typed
-/// intrinsics are declared over `<2 x half>`; routing them through inline PTX
-/// avoids a packed-half MIR type for no change in emitted code. The recorded
-/// evidence assembles both routes to a byte-identical cubin, so the typed route
-/// can be switched on later without changing the PTX contract.
+/// Only the scalar-`f32` pair does. The `f16x2` and `bf16x2` sources and the
+/// `f16x2` destinations carry their halves in one integer register on the MIR
+/// side, while the typed intrinsics are declared over `<2 x half>` or
+/// `<2 x bfloat>`; routing them through inline PTX avoids a packed-half MIR
+/// type for no change in emitted code. The recorded evidence assembles both
+/// routes to a byte-identical cubin, so the typed route can be switched on
+/// later without changing the PTX contract.
 pub(in crate::resolve) fn packed_conversion_uses_typed_nvvm(
     conversion: &crate::model::PackedConversion,
 ) -> bool {

@@ -172,7 +172,7 @@ fn compact_fp8_f16x2_conversion_axes_require_the_exact_closed_product() {
 }
 
 #[test]
-fn compact_fp8_bf16x2_pack_admits_rn_satfinite_forms() {
+fn compact_fp8_bf16x2_pack_axes_require_the_closed_rn_satfinite_product() {
     let records =
         expand_packed_conversion_fp8_bf16x2_admission(&test_fp8_bf16x2_conversion_admission())
             .unwrap();
@@ -207,12 +207,33 @@ fn compact_fp8_bf16x2_pack_admits_rn_satfinite_forms() {
             && record.expected_ptx.operands.len() == 2
             && record.minimum_ptx == "9.1"
             && record.minimum_sm.is_none()
-            && record.targets == "sm_100f|sm_110f|sm_120f"
+            && record.targets
+                == "sm_100a|sm_100f|sm_103a|sm_103f|sm_110a|sm_110f|sm_120a|sm_120f|sm_121a|sm_121f"
             && record
                 .source_record
                 .as_deref()
                 .is_some_and(|source| source.starts_with("int_nvvm_bf16x2_to_"))
     }));
+
+    let mut missing_format = test_fp8_bf16x2_conversion_admission();
+    missing_format.fp8_formats.pop();
+    assert!(expand_packed_conversion_fp8_bf16x2_admission(&missing_format).is_err());
+
+    let mut reversed_formats = test_fp8_bf16x2_conversion_admission();
+    reversed_formats.fp8_formats.reverse();
+    assert!(expand_packed_conversion_fp8_bf16x2_admission(&reversed_formats).is_err());
+
+    let mut without_relu = test_fp8_bf16x2_conversion_admission();
+    without_relu.relu_variants = false;
+    assert!(expand_packed_conversion_fp8_bf16x2_admission(&without_relu).is_err());
+
+    let mut wrong_count = test_fp8_bf16x2_conversion_admission();
+    wrong_count.product_count = 2;
+    assert!(expand_packed_conversion_fp8_bf16x2_admission(&wrong_count).is_err());
+
+    let mut executed = test_fp8_bf16x2_conversion_admission();
+    executed.runtime_validation = RuntimeValidation::Executed;
+    assert!(expand_packed_conversion_fp8_bf16x2_admission(&executed).is_err());
 }
 
 #[test]

@@ -82,6 +82,7 @@ pub struct OverlayShardFile {
     pub packed_conversion_fp8: Option<PackedConversionFp8Admission>,
     #[serde(default)]
     pub packed_conversion_fp8_bf16x2: Option<PackedConversionFp8Bf16x2Admission>,
+    #[serde(default)]
     pub packed_conversion_fp8_f16x2: Option<PackedConversionFp8F16x2Admission>,
     #[serde(default)]
     pub scalar_conversion: Option<ScalarConversionAdmission>,
@@ -508,8 +509,9 @@ pub enum PackedConversionFp8Format {
 
 /// Compact admission for packing `bf16x2` into `e4m3x2` or `e5m2x2`.
 ///
-/// Pack only. The imported reverse conversions are block-scaled
-/// (`scale_n2_ue8m0`) and are not part of this family.
+/// Pack only. The pinned LLVM import has no unscaled unpack record for
+/// `bf16x2`; its reverse records are the block-scaled `scale_n2_ue8m0` forms.
+/// The PTX ISA 9.2 unpack forms are a later admission.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackedConversionFp8Bf16x2Admission {

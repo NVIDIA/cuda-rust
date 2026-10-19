@@ -83,6 +83,12 @@ jobs:
           - package: oxide-tile-export
           # The Tile IR bytecode writer for those descriptions. Pure Rust.
           - package: oxide-tilebc
+          # The linkage provider ABI and runtime. The -sys crate generates its
+          # bindings from the Tile IR compiler's header, which the build reads
+          # from TILEIR_LINKAGE_PROVIDER_INCLUDE_DIR; without it the build fails
+          # with instructions, so these lanes need that directory provisioned.
+          - package: oxide-tile-provider-sys
+          - package: oxide-tile-provider
           - package: reserved-oxide-symbols
           # trybuild compile-fail suite for ThreadIndex / DisjointSlice safety
           - package: cuda-device

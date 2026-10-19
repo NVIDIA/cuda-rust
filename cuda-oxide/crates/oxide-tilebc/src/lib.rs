@@ -46,6 +46,7 @@
 //! assert_eq!(&interface[8..12], &[13, 5, 1, 0]);
 //! ```
 
+pub mod describe;
 mod encoding;
 mod model;
 mod text;
@@ -66,6 +67,10 @@ pub enum Error {
     /// Preview content needs bytecode 13.5 or newer.
     #[error("bytecode version {0} is older than 13.5, the first with public-preview content")]
     Version(BytecodeVersion),
+    /// A `#[tile_export]` description cannot be turned into a library; the
+    /// message names the export and the rule.
+    #[error("{0}")]
+    Description(String),
 }
 
 #[cfg(test)]

@@ -1,0 +1,27 @@
+schema = 1
+
+# The Tile IR linkage provider C ABI header this crate's bindings are generated
+# from. The header is read at build time from TILEIR_LINKAGE_PROVIDER_INCLUDE_DIR
+# and is never copied into this repository: it carries NVIDIA's proprietary
+# notice, ships in no CUDA toolkit and in no public repository, and its own
+# text says it is in-tree, pre-release and without compatibility guarantees.
+# The hash below is the pin; build.rs refuses a header that does not match it
+# unless TILEIR_LINKAGE_PROVIDER_UNPINNED=1 is set.
+[linkage_provider_api]
+header = "tile_ir/linkage_provider/LinkageProviderAPI.h"
+abi_version = "0.0.1"
+sha256 = "0646ccc8b857eb1a4db77869cf728028b635200663f8252bd7799a031804e60c"
+public_output_allowed = false
+
+# Where the pinned bytes were taken from. The source of truth is the NVVM
+# compiler tree (llvm-solid, path nvidia/dkg/tile_ir/...), which the dynamic
+# kernel generator repository mirrors through rotation syncs; the hash was
+# recorded from that mirror. The header was last changed by the sync of
+# 2026-08-26 and is byte-identical on the dkg_next branch as of 2026-10-17.
+repository = "https://gitlab-master.nvidia.com/dlarch-fastkernels/dynamic-kernel-generator.git"
+revision = "b3f067d4db6ecac574dd5f1ba5ab0e9d2f05fdbf"
+header_revision = "6a953e22174ca4a4cf73e9502149d8600762337e"
+
+# The assembler the pinned header was checked against: it reports the same ABI
+# version at load time and names the same callback records in its diagnostics.
+checked_against = "CUDA 13.6 development toolkit, tileiras build 39136670"

@@ -1,0 +1,16 @@
+[package]
+name = "oxide-tile-provider-sys"
+version = "0.2.1"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Raw bindings to the Tile IR linkage provider C ABI, generated at build time from the compiler's header"
+readme = "README.md"
+links = "tileir_linkage_provider_api"
+
+[dependencies]
+
+[build-dependencies]
+bindgen = { workspace = true }
+sha2 = { workspace = true }

@@ -153,6 +153,8 @@ cuda-oxide is split into focused crates. Here is every one and its role:
 | `oxide-artifacts`    | Architecture-neutral embedded device artifact metadata                                 |
 | `oxide-tile-export`  | Export descriptions shared by `cuda-macros`, the backend and `cargo-oxide`; part of the Tile IR interop work, not released yet |
 | `oxide-tilebc`       | Tile IR bytecode writer for those export descriptions |
+| `oxide-tile-provider-sys` | Raw bindings to the Tile IR linkage provider C ABI, generated from the compiler's header at build time |
+| `oxide-tile-provider` | Runtime of a tile library that is a linkage provider: answers the assembler's callbacks from embedded descriptions and device code |
 | `dialect-iket`       | pliron dialect modelling in-kernel event tracing                                       |
 | `iket-lower`         | `dialect-iket` profiles + instrumentation lowering                                     |
 | `dialect-ptx`        | pliron dialect modelling structured PTX                                                |

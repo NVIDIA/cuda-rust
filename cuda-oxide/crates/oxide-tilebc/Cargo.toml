@@ -9,6 +9,7 @@ description = "Tile IR bytecode writer for the tile library descriptions cuda-ox
 readme = "README.md"
 
 [dependencies]
+oxide-tile-export = { workspace = true }
 thiserror = { workspace = true }
 
 [lints.rust]

@@ -129,11 +129,15 @@ a CTA-shared pointer by type, so the locality holds wherever the pointer came
 from, including through helper functions:
 
 ```rust
-cp_async_bulk_tensor_2d_g2s_cta(
-    SharedArray::shared_ptr(&raw mut TILE).cast::<u8>(),
-    tensor_map, tile_x, tile_y,
-    &raw mut BAR,
-);
+// SAFETY: TILE and BAR are `static mut` shared-memory objects of this kernel,
+// and the copy completes on BAR before any thread reads TILE.
+unsafe {
+    cp_async_bulk_tensor_2d_g2s_cta(
+        SharedArray::shared_ptr(&raw mut TILE).cast::<u8>(),
+        tensor_map, tile_x, tile_y,
+        &raw mut BAR,
+    );
+}
 ```
 
 On SM12x this form matters for performance: ptxas implements a non-multicast

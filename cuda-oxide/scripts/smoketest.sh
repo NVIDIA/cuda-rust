@@ -125,7 +125,7 @@ NO_LAUNCH_EXAMPLES=(wgmma_mma_bf16)
 # emitted before opt folds and reorders it. The optimized build still runs and
 # still decides the verdict; these get one extra CUDA_OXIDE_NO_OPT=1 build
 # afterwards purely to produce the artifacts the shape check reads.
-NO_OPT_SHAPE_EXAMPLES=(const_bool_dead_branch)
+NO_OPT_SHAPE_EXAMPLES=(const_bool_dead_branch shared_memory_helper)
 
 # This example intentionally configures a cubin artifact in Cargo metadata.
 # Its supported project route necessarily includes NVVM IR + libNVVM +

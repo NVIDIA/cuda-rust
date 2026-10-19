@@ -13,8 +13,9 @@ unsafe fn helper(smem: *mut u8, offset: usize) -> u64 {
 }
 ```
 
-Every build also runs the same probe through `SharedPtr`, a CTA-shared
-pointer typed as such:
+The no-feature build also runs the same probe through `SharedPtr`, a
+CTA-shared pointer typed as such (the feature builds fail MIR verification
+before any probe runs):
 
 ```rust
 let smem = DynamicSharedArray::<u32, 1024>::shared_ptr();
@@ -43,10 +44,26 @@ this file:
 
 | Helper | Required code shape |
 | --- | --- |
-| `shared_ptr_probe` | first parameter is `ptr addrspace(3)` |
+| `shared_ptr_probe` | first parameter is `ptr addrspace(3)`, and its call site passes one |
 | `write_pair` | both `Pair` fields arrive as `ptr addrspace(3)` parameters |
 | `select_slot` | return type is `ptr addrspace(3)` |
-| whole module | no `cvta.to.shared` in the PTX |
+| `shared_ptr_probe` in PTX | a `.func` that the kernel calls once, with `mbarrier.init.shared` inside its body |
+| whole module | no `cvta.to.shared` and no `isspacep` in the PTX |
+
+The PTX half reads the unoptimized build. `scripts/smoketest.sh` lists this
+example in `NO_OPT_SHAPE_EXAMPLES`, so after the optimized build decides the
+verdict it rebuilds once with `CUDA_OXIDE_NO_OPT=1` and runs the script on
+those artifacts. To run the script by hand, build the same way first:
+
+```bash
+CUDA_OXIDE_NO_OPT=1 cargo oxide build shared_memory_helper
+bash crates/rustc-codegen-cuda/examples/shared_memory_helper/verify-code-shape.sh
+```
+
+Without the surviving `.func`, a module-wide search for `cvta.to.shared`
+proves little: an optimized build inlines the helper, and the generic-pointer
+control compiles to the same instructions. The call into the `.func` is where
+a generic pointer would have needed a conversion.
 
 The launch supplies 2048 dynamic shared bytes. Four independent CTAs each use
 one thread. Nine launches cover three data offsets and three input values,

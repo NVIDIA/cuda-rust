@@ -419,11 +419,11 @@ pub(crate) const MAX_NATURAL_ALIGN: u64 = 16;
 /// alignment. When the claims already reach the cap and rustc asks for more,
 /// the anchor is a no-op field.
 pub(super) fn alignment_anchor_type(ctx: &mut Context, abi_align: u64) -> TypeHandle {
-    let anchor_align = abi_align.clamp(1, MAX_NATURAL_ALIGN);
     debug_assert!(
-        anchor_align.is_power_of_two(),
+        abi_align.is_power_of_two(),
         "alignment anchor needs a power-of-two ABI alignment, got {abi_align}"
     );
+    let anchor_align = abi_align.clamp(1, MAX_NATURAL_ALIGN);
     let bits =
         u32::try_from(anchor_align * 8).expect("anchor is at most 16 bytes, so at most 128 bits");
     let anchor_int: TypeHandle = IntegerType::get(ctx, bits, Signedness::Signless).into();

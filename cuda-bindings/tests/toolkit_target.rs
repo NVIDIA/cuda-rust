@@ -64,7 +64,7 @@ fn every_candidate_is_a_linux_directory_for_its_own_arch() {
     }
 }
 
-/// Builds a throwaway toolkit tree containing a `cuda.h` at each given
+/// Builds a throwaway toolkit tree containing both required headers at each given
 /// relative directory, and returns its root. No temp-dir crate: this package
 /// takes no new dependencies.
 fn fake_toolkit(tag: &str, include_dirs: &[&str]) -> std::path::PathBuf {
@@ -78,6 +78,7 @@ fn fake_toolkit(tag: &str, include_dirs: &[&str]) -> std::path::PathBuf {
         let full = root.join(dir);
         std::fs::create_dir_all(&full).expect("create fake toolkit dir");
         std::fs::write(full.join("cuda.h"), b"/* fake */\n").expect("write fake cuda.h");
+        std::fs::write(full.join("curand.h"), b"/* fake */\n").expect("write fake curand.h");
     }
     root
 }
@@ -126,6 +127,70 @@ fn top_level_include_wins_over_any_targets_tree() {
     let candidates = resolve_toolkit_include_candidates(&root, None, "x86_64", "linux");
     let selected = select_include_dir(&candidates).expect("standard layout must resolve");
     assert_eq!(selected, &root.join("include"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn incomplete_include_directory_is_rejected() {
+    for layout in ["include", "targets/sbsa-linux/include"] {
+        for missing in ["cuda.h", "curand.h"] {
+            let root = fake_toolkit("incomplete", &[layout]);
+            std::fs::remove_file(root.join(layout).join(missing)).unwrap();
+            let candidates = resolve_toolkit_include_candidates(&root, None, "aarch64", "linux");
+            assert!(
+                select_include_dir(&candidates).is_none(),
+                "a toolkit missing {missing} in {layout} must not be accepted"
+            );
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+}
+
+#[test]
+fn incomplete_include_directory_is_skipped_for_a_complete_target() {
+    let root = fake_toolkit(
+        "partial-standard",
+        &["include", "targets/sbsa-linux/include"],
+    );
+    std::fs::remove_file(root.join("include/curand.h")).unwrap();
+    let candidates = resolve_toolkit_include_candidates(&root, None, "aarch64", "linux");
+    assert_eq!(
+        select_include_dir(&candidates),
+        Some(&root.join("targets/sbsa-linux/include"))
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn headers_from_different_include_directories_cannot_form_a_toolkit() {
+    let root = fake_toolkit("split-headers", &["include", "targets/sbsa-linux/include"]);
+    std::fs::remove_file(root.join("include/curand.h")).unwrap();
+    std::fs::remove_file(root.join("targets/sbsa-linux/include/cuda.h")).unwrap();
+    let candidates = resolve_toolkit_include_candidates(&root, None, "aarch64", "linux");
+    assert!(select_include_dir(&candidates).is_none());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn incomplete_override_does_not_fall_back_to_complete_host_headers() {
+    let root = fake_toolkit(
+        "partial-override",
+        &["include", "targets/sbsa-linux/include"],
+    );
+    std::fs::remove_file(root.join("targets/sbsa-linux/include/curand.h")).unwrap();
+    let candidates =
+        resolve_toolkit_include_candidates(&root, Some("sbsa-linux"), "x86_64", "linux");
+    assert!(select_include_dir(&candidates).is_none());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn required_headers_must_be_files() {
+    let root = fake_toolkit("header-directory", &["include"]);
+    std::fs::remove_file(root.join("include/curand.h")).unwrap();
+    std::fs::create_dir(root.join("include/curand.h")).unwrap();
+    let candidates = resolve_toolkit_include_candidates(&root, None, "x86_64", "linux");
+    assert!(select_include_dir(&candidates).is_none());
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -179,7 +244,7 @@ fn env_override_beats_the_top_level_include() {
 #[test]
 fn wrong_env_override_fails_instead_of_falling_back() {
     // The override is existence-probed, not trusted: a typo must surface as
-    // the "does not contain cuda.h" error listing what was probed, never as
+    // the missing-header error listing what was probed, never as
     // a silent fallback to the top-level include or another architecture's
     // tree, even on a standard install where `include/` exists.
     let root = fake_toolkit("override-bad", &["include", "targets/sbsa-linux/include"]);

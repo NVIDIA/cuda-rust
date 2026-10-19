@@ -133,7 +133,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 }
 
 /// A validated CUDA toolkit: its install root and the include directory that
-/// actually contains `cuda.h` (`{root}/include` for standard installs,
+/// actually contains `cuda.h` and `curand.h` (`{root}/include` for standard installs,
 /// `{root}/targets/<dir>/include` for redistributable and Tegra/sbsa layouts
 /// that ship no top-level `include/`).
 struct ResolvedToolkit {
@@ -242,10 +242,10 @@ fn default_cuda_toolkit_candidates() -> &'static [PathBuf] {
 }
 
 /// Validates a toolkit root: probes the standard `include/` and the
-/// `targets/<dir>/include/` layouts for `cuda.h` (only the directories
+/// `targets/<dir>/include/` layouts for `cuda.h` and `curand.h` (only the directories
 /// [`build_include_candidates`] yields for the build target's own
 /// architecture, never all of `targets/*`), then checks the version floor.
-/// Returns the version and the include directory that contains `cuda.h`.
+/// Returns the version and the include directory containing both headers.
 fn validate_cuda_toolkit(cuda_toolkit: &Path) -> Result<(u32, PathBuf), String> {
     if !cuda_toolkit.is_dir() {
         return Err(format!("{} is not a directory", cuda_toolkit.display()));
@@ -255,10 +255,18 @@ fn validate_cuda_toolkit(cuda_toolkit: &Path) -> Result<(u32, PathBuf), String> 
     let Some(include_dir) = select_include_dir(&candidates) else {
         let probed: Vec<String> = candidates
             .iter()
-            .map(|dir| format!("    {}", dir.join("cuda.h").display()))
+            .map(|dir| {
+                let missing = REQUIRED_CUDA_HEADERS
+                    .iter()
+                    .copied()
+                    .filter(|header| !dir.join(header).is_file())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("    {}: missing {missing}", dir.display())
+            })
             .collect();
         return Err(format!(
-            "{} does not contain cuda.h. Probed:\n{}",
+            "{} has no include directory containing both cuda.h and curand.h. Probed:\n{}",
             cuda_toolkit.display(),
             probed.join("\n")
         ));

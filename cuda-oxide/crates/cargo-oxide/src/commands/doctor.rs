@@ -361,7 +361,7 @@ pub(super) fn backend_source_check(
 /// Validate the development environment.
 ///
 /// Checks for: Rust nightly toolchain, `rust-toolchain.toml`, the codegen
-/// backend `.so` (informational), CUDA headers (`cuda.h`), CUDA toolkit
+/// backend `.so` (informational), CUDA headers (`cuda.h`, `curand.h`), CUDA toolkit
 /// (`nvcc`, libNVVM, nvJitLink, libdevice), LLVM (`llc`), clang/libclang,
 /// the NVIDIA driver / GPU (informational), and optionally `cuda-gdb` /
 /// `compute-sanitizer`.
@@ -444,11 +444,11 @@ pub fn doctor(ctx: &Context) {
         doctor_report_backend_source(ctx);
     }
 
-    // 4. CUDA headers (cuda.h). The host `cuda-bindings` crate cannot build
+    // 4. CUDA headers (cuda.h and curand.h). The host `cuda-bindings` crate cannot build
     // without them; cargo-oxide itself deliberately can, which is what makes
     // this check reachable on a toolkit-less machine instead of dying inside
     // cuda-bindings' build script (issue #87).
-    print!("CUDA headers (cuda.h)... ");
+    print!("CUDA headers (cuda.h, curand.h)... ");
     let target_dir_override = std::env::var("CUDA_TOOLKIT_TARGET_DIR").ok();
     let toolkit_choice = resolve_cuda_toolkit(
         |key| std::env::var_os(key),
@@ -462,7 +462,9 @@ pub fn doctor(ctx: &Context) {
     );
     match (
         &toolkit_choice.source,
-        header_candidates.iter().find(|path| path.is_file()),
+        header_candidates
+            .iter()
+            .find(|path| path.is_file() && path.with_file_name("curand.h").is_file()),
     ) {
         (ToolkitSource::Explicit(var), Some(found)) => {
             println!("✓ {} (via {var})", found.display());
@@ -478,9 +480,10 @@ pub fn doctor(ctx: &Context) {
                 "✗ no usable CUDA toolkit; nearest root probed was `{}`",
                 toolkit_choice.root.display()
             );
-            eprintln!("  Probed for cuda.h:");
+            eprintln!("  Probed for cuda.h and curand.h:");
             for candidate in &header_candidates {
                 eprintln!("    {}", candidate.display());
+                eprintln!("    {}", candidate.with_file_name("curand.h").display());
             }
             // The rejections are the point when more than one toolkit is
             // installed: a root can be turned down for a missing header or
@@ -492,7 +495,7 @@ pub fn doctor(ctx: &Context) {
                     eprintln!("    {reason}");
                 }
             }
-            eprintln!("  Host crates (cuda-bindings) cannot build without cuda.h. Set");
+            eprintln!("  Host crates (cuda-bindings) need both cuda.h and curand.h. Set");
             eprintln!("  CUDA_TOOLKIT_PATH or CUDA_HOME to a CUDA 13.0+ toolkit install");
             eprintln!("  root; when neither is set, these roots are tried in order:");
             for candidate in DEFAULT_TOOLKIT_CANDIDATES {
@@ -857,7 +860,7 @@ pub(super) struct ToolkitChoice {
 
 /// Resolve the CUDA toolkit the way the host `cuda-bindings` build script
 /// does: each variable in turn, then the fixed candidate list, accepting the
-/// first root that carries a `cuda.h` at or above the version floor.
+/// first root that carries both required headers and clears the version floor.
 ///
 /// Mirrors BY HAND `resolve_cuda_toolkit`, `find_default_cuda_toolkit` and
 /// `validate_cuda_toolkit` in the shared `cuda-bindings` build script, which
@@ -869,8 +872,8 @@ pub(super) struct ToolkitChoice {
 /// The previous mirror had drifted to "first set variable, else
 /// `/usr/local/cuda`", which is wrong in three ways that matter on a machine
 /// with more than one toolkit installed (#1265): there is a candidate list
-/// before that last entry, each candidate must actually contain a `cuda.h`
-/// new enough to clear the floor, and a variable set to an empty string is an
+/// before that last entry, each candidate must contain `cuda.h` and `curand.h`
+/// with a CUDA version at or above the floor, and an empty environment variable is an
 /// error rather than a reason to look elsewhere. Doctor reported a healthy
 /// toolkit while the build resolved a different one and then failed on a
 /// header, which is precisely the case doctor exists to explain.
@@ -958,7 +961,7 @@ pub(super) fn cuda_toolkit_root(mut get_env: impl FnMut(&str) -> Option<String>)
 }
 
 /// Accept `root` as a toolkit exactly as `validate_cuda_toolkit` does: it
-/// must be a directory holding a `cuda.h` in one of the layouts
+/// must be a directory holding `cuda.h` and `curand.h` together in one of the layouts
 /// [`cuda_header_candidates`] lists, and that header's `CUDA_VERSION` must
 /// clear [`MIN_CUDA_VERSION`].
 pub(super) fn validate_cuda_toolkit(
@@ -975,8 +978,29 @@ pub(super) fn validate_cuda_toolkit(
         std::env::consts::ARCH,
         std::env::consts::OS,
     );
-    let Some(header) = candidates.iter().find(|path| path.is_file()) else {
-        return Err(format!("{} does not contain cuda.h", root.display()));
+    let Some(header) = candidates
+        .iter()
+        .find(|path| path.is_file() && path.with_file_name("curand.h").is_file())
+    else {
+        let probed = candidates
+            .iter()
+            .map(|cuda_h| {
+                let missing = ["cuda.h", "curand.h"]
+                    .into_iter()
+                    .filter(|header| !cuda_h.with_file_name(header).is_file())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "    {}: missing {missing}",
+                    cuda_h.parent().unwrap().display()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(format!(
+            "{} has no include directory containing both cuda.h and curand.h. Probed:\n{probed}",
+            root.display()
+        ));
     };
     let contents = std::fs::read_to_string(header)
         .map_err(|error| format!("{} could not be read: {error}", header.display()))?;

@@ -15,7 +15,7 @@ use pliron::builtin::types::{IntegerType, Signedness};
 use pliron::context::Context;
 use pliron::r#type::TypeHandle;
 
-use super::layout::{make_enum_filler_type, mir_type_contains_i1};
+use super::layout::{alignment_anchor_type, make_enum_filler_type, mir_type_contains_i1};
 use super::pointer_storage::{
     PointerOverlapRejection, analyze_pointer_overlap, llvm_type_contains_pointer,
 };
@@ -507,14 +507,14 @@ pub(crate) fn build_enum_slot_map(
         ));
     }
     if natural_align < required_align {
-        // Raise the storage's natural alignment with a zero-length anchor;
-        // it occupies no bytes, so the claim slots only shift by one.
-        // NVPTX scalar alignment tops out at 16 bytes. Cap the anchor before
-        // converting alignment to bit width; stronger Rust ABI alignment is
-        // carried explicitly by memory operations.
-        let anchor_align = required_align.min(16);
-        let anchor_int = IntegerType::get(ctx, (anchor_align * 8) as u32, Signedness::Signless);
-        let anchor: TypeHandle = llvm_types::ArrayType::get(ctx, anchor_int.into(), 0).into();
+        // The byte claims alone can under-align the storage, e.g. when the
+        // only claim is an i8 niche carrier inside a 4-aligned enum. Raise
+        // the struct's alignment with a zero-length anchor, the same helper
+        // union storage uses; it occupies no bytes, so every slot index
+        // simply shifts by one. The anchor is capped at 16 bytes (see
+        // `alignment_anchor_type`); Rust alignment above that is stamped on
+        // the memory operations typed as the enum.
+        let anchor = alignment_anchor_type(ctx, required_align);
         llvm_fields.insert(0, anchor);
         for slot in &mut slot_of_claim {
             *slot += 1;

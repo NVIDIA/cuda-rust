@@ -390,6 +390,46 @@ pub(crate) fn mir_type_abi_align(ctx: &Context, mir_ty: TypeHandle) -> Option<u6
     None
 }
 
+/// Widest natural alignment, in bytes, that cuda-oxide's LLVM layout model
+/// gives any scalar: the alignment of `i128`.
+///
+/// Natural alignment is the alignment LLVM derives from a type alone, with
+/// no `align` attribute on the operation. The three data layout strings the
+/// exporter emits stop at `i128:128`, [`llvm_type_size_align`] gives every
+/// wider integer this alignment, and the exporter's `natural_alignment`
+/// declines above it. llc's default NVPTX data layout goes further
+/// (`i256:256`), so a type whose natural alignment came from a wider integer
+/// made `opt` (16) and llc (32) disagree and raised nothing cuda-oxide relies
+/// on. Rust alignment above this bound rides on the memory operations.
+pub(crate) const MAX_NATURAL_ALIGN: u64 = 16;
+
+/// Zero-length field that raises an aggregate's natural alignment to
+/// `abi_align` capped at [`MAX_NATURAL_ALIGN`]: `[0 x iN]`, where `N` is
+/// eight times that byte count. It occupies no bytes, so inserting it at
+/// slot 0 only shifts the other slots by one.
+///
+/// Union and enum storage insert it when the byte claims alone under-align
+/// the storage, for example an `i8` tag inside a `repr(align(8))` enum. The
+/// cap is what keeps the anchor valid: the width grows with the alignment,
+/// so an uncapped anchor passed LLVM's 2^23-bit integer limit from
+/// `repr(align(2097152))` up and wrapped to `i0` at `repr(align(536870912))`.
+/// Above the cap the anchor would buy no alignment anyway (see
+/// [`MAX_NATURAL_ALIGN`]); every alloca, load, store, spill, kernel parameter
+/// and return typed as the enum or union itself is stamped with the Rust
+/// alignment. When the claims already reach the cap and rustc asks for more,
+/// the anchor is a no-op field.
+pub(super) fn alignment_anchor_type(ctx: &mut Context, abi_align: u64) -> TypeHandle {
+    let anchor_align = abi_align.clamp(1, MAX_NATURAL_ALIGN);
+    debug_assert!(
+        anchor_align.is_power_of_two(),
+        "alignment anchor needs a power-of-two ABI alignment, got {abi_align}"
+    );
+    let bits =
+        u32::try_from(anchor_align * 8).expect("anchor is at most 16 bytes, so at most 128 bits");
+    let anchor_int: TypeHandle = IntegerType::get(ctx, bits, Signedness::Signless).into();
+    llvm_types::ArrayType::get(ctx, anchor_int, 0).into()
+}
+
 /// LLVM natural-layout `(size, align)` of an exported LLVM type, in bytes.
 ///
 /// Mirrors LLVM's default data layout for nvptx64 (scalars align to their
@@ -402,8 +442,9 @@ pub(crate) fn llvm_type_size_align(ctx: &Context, ty: TypeHandle) -> Option<(u64
 
     if let Some(int_ty) = ty_ref.downcast_ref::<IntegerType>() {
         let size = (int_ty.width() as u64).div_ceil(8);
-        // i8 → 1, i16 → 2, i32 → 4, i64 → 8, i128 → 16.
-        return Some((size, size.next_power_of_two().min(16)));
+        // i8 → 1, i16 → 2, i32 → 4, i64 → 8, i128 → 16; wider integers stay
+        // at 16, see `MAX_NATURAL_ALIGN`.
+        return Some((size, size.next_power_of_two().min(MAX_NATURAL_ALIGN)));
     }
     if ty_ref.is::<llvm_types::HalfType>() {
         return Some((2, 2));

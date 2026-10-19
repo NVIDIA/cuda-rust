@@ -12,7 +12,8 @@ use crate::model::{
     MaskEncoding, MbarrierExtendedAdmission, MbarrierExtendedOperation, MovmatrixAdapter,
     MovmatrixParticipation, OverlayBackendLowering, OverlayFile, OverlayIntrinsic,
     PackedAluAdapter, PackedAluFormat, PackedAluOperation, PackedConversionAdapter,
-    PackedConversionDestinationFormat, PackedConversionFp8Admission, PackedConversionFp8Direction,
+    PackedConversionDestinationFormat, PackedConversionFp8Admission,
+    PackedConversionFp8Bf16x2Admission, PackedConversionFp8Direction,
     PackedConversionFp8F16x2Admission, PackedConversionFp8Format, PackedConversionRounding,
     PackedConversionSaturation, PackedConversionSourceFormat, PreSm70MemberMaskRule, PrmtAdmission,
     PrmtMode, RegisterMmaAccumulator, RegisterMmaAmpereFloatAdmission, RegisterMmaF8F6F4Admission,
@@ -725,9 +726,9 @@ pub(super) fn packed_conversion_policy(
     record.memory = "none".into();
     record.convergent = false;
     record.execution_scope = "thread".into();
-    let (minimum_ptx, minimum_sm) = packed_conversion_floor(&conversion);
+    let (minimum_ptx, minimum_sm, _targets) = packed_conversion_floor(&conversion);
     record.minimum_ptx = minimum_ptx.into();
-    record.minimum_sm = Some(minimum_sm.into());
+    record.minimum_sm = minimum_sm.map(str::to_owned);
     record.ptx_result = format!("u{result_width}");
     record.ptx_isa_section = "9.7.9.22 Data Movement and Conversion Instructions: cvt".into();
     record.ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cvt".into();
@@ -740,7 +741,7 @@ pub(super) fn packed_conversion_policy(
             evidence_profile: "test".into(),
             targets: None,
             minimum_ptx: Some(minimum_ptx.into()),
-            minimum_sm: Some(minimum_sm.into()),
+            minimum_sm: minimum_sm.map(str::to_owned),
         })
         .collect();
     let modifiers = packed_conversion_ptx_modifiers(&conversion);
@@ -1406,6 +1407,20 @@ pub(super) fn test_fp8_conversion_admission() -> PackedConversionFp8Admission {
             PackedConversionSaturation::Satfinite,
             PackedConversionSaturation::SatfiniteRelu,
         ],
+        product_count: 4,
+    }
+}
+
+pub(super) fn test_fp8_bf16x2_conversion_admission() -> PackedConversionFp8Bf16x2Admission {
+    PackedConversionFp8Bf16x2Admission {
+        llvm_evidence_profile: "llvm-test".into(),
+        libnvvm_evidence_profile: "libnvvm-test".into(),
+        runtime_validation: RuntimeValidation::Unexecuted,
+        fp8_formats: vec![
+            PackedConversionFp8Format::E4m3x2,
+            PackedConversionFp8Format::E5m2x2,
+        ],
+        relu_variants: true,
         product_count: 4,
     }
 }

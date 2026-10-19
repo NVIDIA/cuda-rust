@@ -200,6 +200,12 @@ fn convert_global_alloc_places_in_global_or_constant_addrspace() {
             .starts_with("__device_global_"),
         "ordinary device globals get the __device_global_ prefix"
     );
+    // The host writes constant memory after load: it stays rooted and must not
+    // be folded to its initializer. Private device globals stay ordinary.
+    assert!(global_addr_const.is_retained(&ctx));
+    assert!(global_addr_const.is_host_written(&ctx));
+    assert!(!global_addr_global.is_retained(&ctx));
+    assert!(!global_addr_global.is_host_written(&ctx));
 }
 
 #[test]

@@ -1254,25 +1254,47 @@ fn translate_call(
         return Ok(result);
     }
 
-    // Handle diverging calls (calls that never return, like unwrap_failed, panic, etc.)
-    // These have no target block because the function never returns.
+    // `Call { target: None }` means there is no normal successor. rustc
+    // clears the target when the destination type is visibly uninhabited:
+    // `!`, `core::convert::Infallible`, an empty enum. That does not mean the
+    // callee can be erased. An emitted Rust function with such a return type
+    // may do observable work before it diverges. When the resolved instance
+    // is in this pipeline run's emitted-function set, keep the call and let
+    // `emit_function_call` end the block with `mir.unreachable`, which is
+    // what rustc's own backend emits for a call without a destination.
     //
-    // The callee is dropped and replaced by an immediate trap. That applies
-    // to every `-> !` callee reaching this point, including a user
-    // `#[device]` fn that legitimately diverges (e.g. `loop {}`); full Rust
-    // fidelity would emit the call for resolvable callees the way
-    // `translate_function_item_call` does. Dropping the call is a
-    // pre-existing semantic: the trap only makes it safe, where the bare
-    // `unreachable` previously emitted here was UB that let `opt` delete
-    // the whole panic path.
-    //
-    // Panic entry points additionally never get here with any statements
-    // translated ahead of them: `block::translate_block` recognizes the same
-    // shape via [`is_dropped_panic_call`] and emits the trap directly.
+    // Every other diverging call keeps the pre-existing trap fallback. That
+    // covers callees the collector skipped, such as core helpers without MIR
+    // and local `-> !` bodies that are nothing but a panic, and a call
+    // through a function pointer, whose `func` operand is not a constant and
+    // so resolves no instance. Panic entry points never reach this arm: for
+    // a callee whose path matches `is_panic_entry_path`,
+    // `block::translate_block` lowers the whole block to the trap through
+    // `is_dropped_panic_call` before any call is classified. Keep this arm
+    // before the unsupported-intrinsic and libm checks below so the trapped
+    // cases take the same path as before.
     if target_usize.is_none() {
-        // This is a diverging call (returns !) - emit trap + unreachable
-        // Examples: unwrap_failed(), panic!(), abort()
-        return Ok(emit_trap_unreachable_after(ctx, block_ptr, prev_op, loc));
+        let resolved_instance = match func {
+            mir::Operand::Constant(constant)
+                if *constant.const_.kind() == ConstantKind::ZeroSized =>
+            {
+                match constant.const_.ty().kind() {
+                    rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::FnDef(
+                        fn_def,
+                        substs,
+                    )) => rustc_public::mir::mono::Instance::resolve(fn_def, &substs).ok(),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+
+        if !resolved_instance
+            .as_ref()
+            .is_some_and(crate::translator::facts::is_emitted_function)
+        {
+            return Ok(emit_trap_unreachable_after(ctx, block_ptr, prev_op, loc));
+        }
     }
 
     // A call to a rustc intrinsic that no dispatch arm above recognized can

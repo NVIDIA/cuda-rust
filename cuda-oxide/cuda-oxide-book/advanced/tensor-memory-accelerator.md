@@ -188,6 +188,18 @@ The lifecycle is: `Uninit` → `init()` → `Ready` → `arrive()` / `wait()` �
 `inval()` → `Invalidated`. The type system prevents calling `wait` on an
 uninitialized barrier or `arrive` on an invalidated one.
 
+```{figure} images/mbarrier-thread-election.svg
+:align: center
+:width: 100%
+
+Which thread runs `mbarrier.init`. Every thread calls `init_by(count, id)` and `inval_by(id)`,
+and the thread whose block-linear id (`x + blockDim.x * (y + blockDim.y * z)`, the numbering
+`thread_rank()` uses) equals `id` runs the instruction; `init()` and `inval()` pass 0, thread
+(0, 0, 0). Comparing `threadIdx.x` alone named one thread only in a 1D block: in a (32, 4, 1)
+block selector 0 ran the instruction on four threads and selector 127 on none, so the launch
+failed with error 719.
+```
+
 ### Key barrier rules
 
 | Rule                                                  | Why                                                                            |

@@ -259,9 +259,19 @@ impl<'a> ModuleExportState<'a> {
             } else {
                 "global"
             };
+            // Host-written storage (`#[constant]`): the initializer is only the
+            // load-time image. Without this, whole-program LTO (libNVVM
+            // `-gen-lto` + nvJitLink `-lto`) internalizes the never-stored
+            // global, folds its loads to the initializer and drops the symbol
+            // the host looks up with `cuModuleGetGlobal`.
+            let externally_initialized = if global.is_host_written(self.ctx) {
+                "externally_initialized "
+            } else {
+                ""
+            };
             write!(
                 output,
-                "@{name} = addrspace({address_space}) {storage_keyword} "
+                "@{name} = addrspace({address_space}) {externally_initialized}{storage_keyword} "
             )
             .unwrap();
             self.export_type(ty, output)?;
@@ -1071,14 +1081,6 @@ impl<'a> ModuleExportState<'a> {
             .iter(self.ctx)
             .next();
 
-        // Check for alwaysinline attribute (from #[inline(always)]).
-        // Emitted as a function attribute keyword between the parameter
-        // list and the body open brace.
-        let alwaysinline_key: pliron::identifier::Identifier = "alwaysinline".try_into().unwrap();
-        let is_alwaysinline = attrs
-            .get::<pliron::builtin::attributes::StringAttr>(&alwaysinline_key)
-            .is_some();
-
         if let Some(entry_block) = entry_block_opt {
             let func_loc = func.get_operation().deref(self.ctx).loc().clone();
             let debug_name = ops::debug_function_name(self.ctx, func.get_operation())
@@ -1160,12 +1162,9 @@ impl<'a> ModuleExportState<'a> {
             // gets its `bar.sync.aligned` pushed into a `tid`-dependent branch
             // and deadlocks. opt's FunctionAttrs strips `convergent` from
             // functions it proves never reach a convergent op.
-            // alwaysinline (from #[inline(always)]) and !dbg are independent:
-            // either, both, or neither can be present. Emit the inline keyword
-            // before the convergent attr group #0, then the debug scope.
-            if is_alwaysinline {
-                write!(output, " alwaysinline").unwrap();
-            }
+            // Function attributes (an `#[inline]` keyword among them, set by
+            // `mir-lower` in `llvm_func_attrs`) precede the convergent attr
+            // group #0, then the debug scope.
             if let Some(scope_id) = debug_scope {
                 writeln!(output, " #0 !dbg !{scope_id} {{").unwrap();
             } else {

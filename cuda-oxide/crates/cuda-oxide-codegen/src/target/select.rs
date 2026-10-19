@@ -252,18 +252,32 @@ pub fn validate_target_for_llvm_major(
     Ok(())
 }
 
+/// Refuses a PTX ISA requirement that the LLVM backend cannot honor.
+///
+/// Each PTX feature the compiler can request has an LLVM floor: `+ptx90` needs
+/// LLVM 22 and `+ptx91` needs LLVM 23. An older llc does not fail on a feature
+/// it lacks; LLVM 22 ignores `+ptx91` with a warning and emits PTX 8.8, so the
+/// build would pass and the module would fail to load. The gate refuses such a
+/// backend at compile time instead. An unknown backend version cannot prove
+/// support and is refused whenever a floor applies.
 pub(crate) fn validate_ptx_isa_for_llvm_major(
     requirement: PtxIsaRequirement,
     llc_major: Option<u32>,
 ) -> Result<(), String> {
-    if requirement >= PtxIsaRequirement::new(90) && llc_major.is_none_or(|major| major < 22) {
-        let backend = llc_major.map_or_else(
-            || "an LLVM backend with an unknown version".to_string(),
-            |major| format!("LLVM {major}"),
-        );
-        return Err(format!(
-            "PTX 9.0 or newer requires LLVM 22 or newer; {backend} does not support the required PTX feature"
-        ));
+    // Newest floor first, so the message names the rule that applies.
+    const LLVM_FLOORS: [(u16, u32, &str); 2] = [(91, 23, "9.1"), (90, 22, "9.0")];
+    for (spelling, llvm_major, label) in LLVM_FLOORS {
+        if requirement >= PtxIsaRequirement::new(spelling)
+            && llc_major.is_none_or(|major| major < llvm_major)
+        {
+            let backend = llc_major.map_or_else(
+                || "an LLVM backend with an unknown version".to_string(),
+                |major| format!("LLVM {major}"),
+            );
+            return Err(format!(
+                "PTX {label} or newer requires LLVM {llvm_major} or newer; {backend} does not support the required PTX feature"
+            ));
+        }
     }
     Ok(())
 }

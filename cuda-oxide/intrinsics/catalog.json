@@ -11,8 +11,8 @@
   },
   "inputs": {
     "imported_sha256": "54d47b8e281dd953dc95fe16f834ff38164d9809171c9a1af097231b0bc45cab",
-    "overlay_sha256": "08f7a25510022bf48902cb4889b9f711a1cff31d1c5e8ce21c669d61afbb0310",
-    "abi_ledger_sha256": "fc378e74ef6da50df31de62c3fafcb3264dfb414034e5852147359fcad4184eb",
+    "overlay_sha256": "9a9ba81bc0e7a27a16ccf6a5254123c36ad98b47a8829bbc222cfb77173ff31e",
+    "abi_ledger_sha256": "0e8cec7fdd52ad28ff4365bea512101aef06f29ad7781dcde6b867ad93a0a5bc",
     "evidence_sha256": [
       "cuda-12.0-libnvvm-12.0.140-ex2-f16.json:7102ea7d567ff2d2eb75a0384148d2e5eb6e605c26a5b98c71371fa3c46adef6",
       "cuda-12.9-libnvvm-12.9.86-f32x2.json:bc5bb505677989affa9ac1044da772b4eb349700dc65e16f09fffffa1f5c493e",
@@ -68,6 +68,7 @@
       "cuda-13.3-libnvvm-13.3.33-wgmma-control.json:6afe57cb717496e040ed81f12d28f1b8a3fe3603e98180626de4bfb265d02c61",
       "cuda-13.3-libnvvm-13.3.33.json:683386bf1139bff78c82da76c4b985c17f8c7d0e1e02f80689a54ccb066f044f",
       "cuda-13.3-libnvvm-13.3.73-execution-control.json:f66216bc7aaccca9ea66fc557e19fdeeaac8c277781f669ee969e727e203aac5",
+      "cuda-13.3-libnvvm-13.3.73-packed-conversion-fp8-bf16x2.json:7cc62aa25f9d696eaefcaedf104f53da9d08f24385f18d1539308f34d56d38f8",
       "cuda-13.3-libnvvm-13.3.73-register-mma-mxf8f6f4-f32.json:e437bf84570f4df0a28a743a132e0b93f359f9431d1af03b443f324f62b715ba",
       "cuda-13.3-libnvvm-13.3.73-sparse-mma-fp8.json:8a57d207ffd510b8c1bb40643bdb828d3d22e5d1c5ab24e1bc1b697538e9bc21",
       "cuda-13.3-libnvvm-13.3.73-tma-descriptor-control.json:ac44f485122404f9a900cfb94bff658160a6c23d9e2f8ef74bb751f044b848fc",
@@ -88,6 +89,7 @@
       "rust-llvm-23.1.3-aab11ee0-integer-minmax.json:94bfd0d84bf57737acda19278a10cb566c25677c5688e6a918c83da822100480",
       "rust-llvm-23.1.3-aab11ee0-mbarrier-basic.json:193966219733100689a43dfde7e9f8aba1f3e3ba2cf80b14bd4893504f900489",
       "rust-llvm-23.1.3-aab11ee0-mbarrier-extended.json:c92addb73ebd8ef4f3bb2d5902a9e7f280ba898d10b54682d44f26cd2968fcd8",
+      "rust-llvm-23.1.3-aab11ee0-packed-conversion-fp8-bf16x2.json:2e4a3ce7e895c4a39ea9fccd7b9580ce5e87d2e900cc5ea5853588d836bd12e3",
       "rust-llvm-23.1.3-aab11ee0-packed-conversion-fp8-f16x2.json:20124138104fe9f71a583a73cb8656c7d91aa10366e9e041499e024578c1a2e3",
       "rust-llvm-23.1.3-aab11ee0-packed-conversion-fp8.json:42561b5ee707545ccabe2b3b78de12a31614893611e0deccbb498a3ba2967fd1",
       "rust-llvm-23.1.3-aab11ee0-prmt.json:c77aaaa7fed2d55c2319e286f092bc440e34ef6e6aaf08abe712a3179745d990",
@@ -45202,6 +45204,397 @@
       "summary": "Converts one f32 value with rn and returns raw TF32 bits."
     },
     {
+      "id": "cvt_rn_satfinite_e4m3x2_bf16x2",
+      "operation_key": "packed.convert.bf16x2.e4m3x2.nearest_even.satfinite",
+      "family": "packed_conversion",
+      "source": {
+        "kind": "llvm_imported",
+        "source_record": "int_nvvm_bf16x2_to_e4m3x2_rn_satfinite"
+      },
+      "selections": [],
+      "rust": {
+        "abi_id": "i1030",
+        "module": "convert",
+        "name": "cvt_rn_satfinite_e4m3x2_bf16x2",
+        "arguments": [
+          "u32"
+        ],
+        "result": "u16",
+        "safe": true,
+        "must_use": false,
+        "safe_allowlist_reason": "This conversion has no caller obligations.",
+        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1030",
+        "public_path": "cuda_intrinsics::convert::cvt_rn_satfinite_e4m3x2_bf16x2",
+        "compatibility_paths": [
+          "cuda_device::convert::cvt_rn_satfinite_e4m3x2_bf16x2"
+        ]
+      },
+      "dialect": {
+        "op_type": "CvtRnSatfiniteE4m3x2Bf16x2Op",
+        "op_name": "nvvm.cvt_rn_satfinite_e4m3x2_bf16x2",
+        "operands": [
+          "i32"
+        ],
+        "results": [
+          "i16"
+        ]
+      },
+      "llvm": {
+        "symbol": "llvm.nvvm.bf16x2.to.e4m3x2.rn.satfinite",
+        "arguments": [
+          "v2bf16"
+        ],
+        "results": [
+          "i16"
+        ],
+        "properties": [
+          "IntrNoCreateUndefOrPoison",
+          "IntrNoMem",
+          "IntrSpeculatable"
+        ],
+        "result_facts": {
+          "no_undef": false,
+          "range": null
+        }
+      },
+      "semantics": {
+        "pure": true,
+        "memory": "none",
+        "convergent": false,
+        "execution_scope": "thread"
+      },
+      "target": {
+        "minimum_ptx": "9.1",
+        "hardware": {
+          "kind": "any_of",
+          "alternatives": [
+            {
+              "kind": "exact_architecture",
+              "sm": 100
+            },
+            {
+              "kind": "family_target",
+              "sm": 100
+            },
+            {
+              "kind": "exact_architecture",
+              "sm": 103
+            },
+            {
+              "kind": "family_target",
+              "sm": 103
+            },
+            {
+              "kind": "exact_architecture",
+              "sm": 110
+            },
+            {
+              "kind": "family_target",
+              "sm": 110
+            },
+            {
+              "kind": "exact_architecture",
+              "sm": 120
+            },
+            {
+              "kind": "family_target",
+              "sm": 120
+            },
+            {
+              "kind": "exact_architecture",
+              "sm": 121
+            },
+            {
+              "kind": "family_target",
+              "sm": 121
+            }
+          ]
+        },
+        "ptx_result": "u16",
+        "targets": "sm_100a|sm_100f|sm_103a|sm_103f|sm_110a|sm_110f|sm_120a|sm_120f|sm_121a|sm_121f",
+        "ptx_isa_version": "9.3",
+        "ptx_isa_section": "9.7.9.22 Data Movement and Conversion Instructions: cvt",
+        "ptx_isa_url": "https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cvt"
+      },
+      "backend": {
+        "profile": "rust-llvm-23.1.3-aab11ee0",
+        "version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+        "sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+        "status": "validated",
+        "target_triple": "nvptx64-nvidia-cuda",
+        "gpu_target": "sm_120f",
+        "ptx_feature": "+ptx91"
+      },
+      "backend_lowerings": [
+        {
+          "backend": "llvm_nvptx",
+          "mechanism": "inline_ptx",
+          "evidence_profile": "rust-llvm-23.1.3-aab11ee0",
+          "target": {
+            "minimum_ptx": "9.1",
+            "hardware": {
+              "kind": "any_of",
+              "alternatives": [
+                {
+                  "kind": "exact_architecture",
+                  "sm": 100
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 100
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 103
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 103
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 110
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 110
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 120
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 120
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 121
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 121
+                }
+              ]
+            }
+          },
+          "version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+          "sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+          "artifact_path": null,
+          "build_id_prefix": null,
+          "status": "validated",
+          "stages": [
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate typed LLVM declaration probes",
+              "stage": "declaration_canonicalization",
+              "mechanism": "typed_nvvm",
+              "outcome": "succeeded",
+              "detail": "Recorded with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): llvm-as and llvm-dis canonicalized the 189-byte declaration-only fixture (SHA-256 eed732da3bb65f7612f2146d1c60ae15fbace894a167c2fde5a4960cb450c262) to a 447-byte module (SHA-256 037d22467fb57cf069c0ab49b3d503e190446292c119acda734bd80445e2cedf) whose declaration of @llvm.nvvm.bf16x2.to.e4m3x2.rn.satfinite over <2 x bfloat> with an i16 result carries speculatable and memory(none), the attributes the imported IntrSpeculatable and IntrNoMem properties require.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate probes for the recorded lowering mechanism",
+              "stage": "backend_codegen",
+              "mechanism": "typed_nvvm",
+              "outcome": "succeeded",
+              "detail": "Recorded with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): llc -march=nvptx64 -mcpu=sm_120f -mattr=+ptx91 lowered the 367-byte typed fixture (SHA-256 6c31c3240a710f61269c924f0f9efe46537f417c3ce954fdc99402ad8336595f), one call of @llvm.nvvm.bf16x2.to.e4m3x2.rn.satfinite on a dynamic <2 x bfloat> argument, to 745-byte PTX (SHA-256 e012440161e64091eec89c929a50d9d7567fccf63f87f5d17822a8b3447112d6; .version 9.1, .target sm_120f) holding one cvt.rn.satfinite.e4m3x2.bf16x2 with register operands.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate PTX outputs assembled for the recorded target",
+              "stage": "ptx_assembly",
+              "mechanism": "typed_nvvm",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 ptxas assembled the typed-route PTX at sm_120f into a 2,240-byte cubin (SHA-256 ca980ee914906d30713cf21fb303b36ab9266b98c76fc0637ac71dee040e294d). ptxas keeps no code for an unreferenced non-entry function, so this cubin is byte-identical to the inline route's; the relocatable objects from ptxas -c keep the function, and both routes carry the same F2FP.SATFINITE.E4M3.BF16 instruction.",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+              "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+              "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate probes for the recorded lowering mechanism",
+              "stage": "backend_codegen",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "Recorded with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): llc -march=nvptx64 -mcpu=sm_120f -mattr=+ptx91 lowered the 210-byte inline-PTX fixture (SHA-256 9f11d88381826f98151d13a0f04189bab6f6870223472c1a55c2980303df5dbf; the body of intrinsics/probes/cvt_rn_satfinite_e4m3x2_bf16x2.ll without its comment header) to 749-byte PTX (SHA-256 67affa4ebac67d992e18927e0c99d3f12a131aba71bb7eec020ba0b0cc1d3e43; .version 9.1, .target sm_120f) holding one cvt.rn.satfinite.e4m3x2.bf16x2 with the =h,r constraint: one packed i32 source and an i16 result.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate PTX outputs assembled for the recorded target",
+              "stage": "ptx_assembly",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 ptxas assembled the inline-route PTX at sm_120f into a 2,240-byte cubin (SHA-256 ca980ee914906d30713cf21fb303b36ab9266b98c76fc0637ac71dee040e294d), byte-identical to the typed route's cubin. The same PTX retargeted to sm_120 is rejected with \"Feature 'cvt.e4m3x2.bf16x2' not supported on .target 'sm_120'\".",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+              "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+              "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+            }
+          ]
+        },
+        {
+          "backend": "lib_nvvm",
+          "mechanism": "inline_ptx",
+          "evidence_profile": "cuda-13.3-libnvvm-13.3.73",
+          "target": {
+            "minimum_ptx": "9.1",
+            "hardware": {
+              "kind": "any_of",
+              "alternatives": [
+                {
+                  "kind": "exact_architecture",
+                  "sm": 100
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 100
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 103
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 103
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 110
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 110
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 120
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 120
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 121
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 121
+                }
+              ]
+            }
+          },
+          "version": "CUDA toolkit 13.3; nvcc/libNVVM release V13.3.73",
+          "sha256": "e55af1135e987372355d19d66cb74e1a1e99c32ac98ffad14fb567eef16e4f77",
+          "artifact_path": "/usr/local/cuda-13.3/nvvm/lib64/libnvvm.so.4.0.0",
+          "build_id_prefix": "88b802",
+          "status": "validated",
+          "stages": [
+            {
+              "targets": [
+                "compute_120f",
+                "ptx93"
+              ],
+              "representation": "pure inline PTX with a single packed source operand",
+              "stage": "backend_codegen",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 libNVVM compiled the 1,807-byte NVVM IR fixture (SHA-256 83e41481b170703c62b0ff63f647cb04b4e3e9b4c12b7c16a9fe6ad2d0a64bc9; four kernels pinned through llvm.used, each one inline-PTX call with a single packed i32 source operand) with -arch=compute_120f to 2,485-byte PTX (SHA-256 858cee379e200e21b36c1fbe0b76af425f37cc4057300ac9da7d0be9d873b62d; .version 9.3, .target sm_120f) retaining all four instructions verbatim, and with -gen-lto to 3,228-byte LTOIR (SHA-256 8c47b71a4f042ccb6713381bd52c58c4d05e74d910b16f19cade2d0c688e4ce4).",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx93"
+              ],
+              "representation": "libNVVM-emitted bf16x2 to packed-FP8 PTX",
+              "stage": "ptx_assembly",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 ptxas assembled the libNVVM PTX at sm_120f into a 13,768-byte cubin (SHA-256 f0a9b794cfd3da2368b5576e6bd99f747d82c0f2d7d60dfb5fa1c2241f925076) whose SASS holds one F2FP.SATFINITE[.RELU].{E4M3,E5M2}.BF16 per kernel, F2FP.SATFINITE.E4M3.BF16 for this form. The same fixture compiled for compute_120 is rejected at sm_120 with \"Feature 'cvt.e4m3x2.bf16x2' not supported on .target 'sm_120'\".",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+              "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+              "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx93"
+              ],
+              "representation": "libNVVM LTOIR retaining all four bf16x2 to packed-FP8 conversions",
+              "stage": "device_link",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 nvJitLink linked the sm_120f LTOIR with -lto into a 13,896-byte cubin (SHA-256 d11dba66e56c2124a3ce2b8f9ef6c5c54a8930a9ac20ec32735b64e3355d0b71) that keeps all four kernels and their F2FP instructions. Linking the same LTOIR for sm_120 fails with the ptxas feature error.",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda-13.3/lib64/libnvJitLink.so.13.3.33",
+              "tool_version": "CUDA 13.3 nvJitLink 13.3.33",
+              "tool_sha256": "3ba1e744347cd68617b862eccfd98b125482e882b7a6319f42abc9a768513db8"
+            }
+          ]
+        }
+      ],
+      "packed_conversion": {
+        "source_format": "bf16x2",
+        "destination_format": "e4m3x2",
+        "rounding": "nearest_even",
+        "saturation": "satfinite",
+        "adapter": "identity"
+      },
+      "lowering": "generated_packed_conversion_inline_ptx",
+      "expected_ptx": {
+        "mnemonic": "cvt",
+        "modifiers": [
+          "rn",
+          "satfinite",
+          "e4m3x2",
+          "bf16x2"
+        ],
+        "operands": [
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "register"
+          }
+        ]
+      },
+      "summary": "Converts packed bf16x2 to packed e4m3x2 with nearest-even finite saturation, preserving half order."
+    },
+    {
       "id": "cvt_rn_satfinite_e4m3x2_f16x2",
       "operation_key": "packed.convert.f16x2.e4m3x2.nearest_even.satfinite",
       "family": "packed_conversion",
@@ -45772,6 +46165,397 @@
         ]
       },
       "summary": "Converts two f32 values to packed e4m3x2 with nearest-even finite saturation and the first argument in the low byte."
+    },
+    {
+      "id": "cvt_rn_satfinite_e5m2x2_bf16x2",
+      "operation_key": "packed.convert.bf16x2.e5m2x2.nearest_even.satfinite",
+      "family": "packed_conversion",
+      "source": {
+        "kind": "llvm_imported",
+        "source_record": "int_nvvm_bf16x2_to_e5m2x2_rn_satfinite"
+      },
+      "selections": [],
+      "rust": {
+        "abi_id": "i1032",
+        "module": "convert",
+        "name": "cvt_rn_satfinite_e5m2x2_bf16x2",
+        "arguments": [
+          "u32"
+        ],
+        "result": "u16",
+        "safe": true,
+        "must_use": false,
+        "safe_allowlist_reason": "This conversion has no caller obligations.",
+        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1032",
+        "public_path": "cuda_intrinsics::convert::cvt_rn_satfinite_e5m2x2_bf16x2",
+        "compatibility_paths": [
+          "cuda_device::convert::cvt_rn_satfinite_e5m2x2_bf16x2"
+        ]
+      },
+      "dialect": {
+        "op_type": "CvtRnSatfiniteE5m2x2Bf16x2Op",
+        "op_name": "nvvm.cvt_rn_satfinite_e5m2x2_bf16x2",
+        "operands": [
+          "i32"
+        ],
+        "results": [
+          "i16"
+        ]
+      },
+      "llvm": {
+        "symbol": "llvm.nvvm.bf16x2.to.e5m2x2.rn.satfinite",
+        "arguments": [
+          "v2bf16"
+        ],
+        "results": [
+          "i16"
+        ],
+        "properties": [
+          "IntrNoCreateUndefOrPoison",
+          "IntrNoMem",
+          "IntrSpeculatable"
+        ],
+        "result_facts": {
+          "no_undef": false,
+          "range": null
+        }
+      },
+      "semantics": {
+        "pure": true,
+        "memory": "none",
+        "convergent": false,
+        "execution_scope": "thread"
+      },
+      "target": {
+        "minimum_ptx": "9.1",
+        "hardware": {
+          "kind": "any_of",
+          "alternatives": [
+            {
+              "kind": "exact_architecture",
+              "sm": 100
+            },
+            {
+              "kind": "family_target",
+              "sm": 100
+            },
+            {
+              "kind": "exact_architecture",
+              "sm": 103
+            },
+            {
+              "kind": "family_target",
+              "sm": 103
+            },
+            {
+              "kind": "exact_architecture",
+              "sm": 110
+            },
+            {
+              "kind": "family_target",
+              "sm": 110
+            },
+            {
+              "kind": "exact_architecture",
+              "sm": 120
+            },
+            {
+              "kind": "family_target",
+              "sm": 120
+            },
+            {
+              "kind": "exact_architecture",
+              "sm": 121
+            },
+            {
+              "kind": "family_target",
+              "sm": 121
+            }
+          ]
+        },
+        "ptx_result": "u16",
+        "targets": "sm_100a|sm_100f|sm_103a|sm_103f|sm_110a|sm_110f|sm_120a|sm_120f|sm_121a|sm_121f",
+        "ptx_isa_version": "9.3",
+        "ptx_isa_section": "9.7.9.22 Data Movement and Conversion Instructions: cvt",
+        "ptx_isa_url": "https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cvt"
+      },
+      "backend": {
+        "profile": "rust-llvm-23.1.3-aab11ee0",
+        "version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+        "sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+        "status": "validated",
+        "target_triple": "nvptx64-nvidia-cuda",
+        "gpu_target": "sm_120f",
+        "ptx_feature": "+ptx91"
+      },
+      "backend_lowerings": [
+        {
+          "backend": "llvm_nvptx",
+          "mechanism": "inline_ptx",
+          "evidence_profile": "rust-llvm-23.1.3-aab11ee0",
+          "target": {
+            "minimum_ptx": "9.1",
+            "hardware": {
+              "kind": "any_of",
+              "alternatives": [
+                {
+                  "kind": "exact_architecture",
+                  "sm": 100
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 100
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 103
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 103
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 110
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 110
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 120
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 120
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 121
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 121
+                }
+              ]
+            }
+          },
+          "version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+          "sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+          "artifact_path": null,
+          "build_id_prefix": null,
+          "status": "validated",
+          "stages": [
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate typed LLVM declaration probes",
+              "stage": "declaration_canonicalization",
+              "mechanism": "typed_nvvm",
+              "outcome": "succeeded",
+              "detail": "Recorded with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): llvm-as and llvm-dis canonicalized the 189-byte declaration-only fixture (SHA-256 dcf348779f9dde49249381b61a3141b1d36f5665ecbb2bc53ebc0be7e430c075) to a 447-byte module (SHA-256 63eaec75fcb9115321790aa90787b46064e7d007952182040a761407edb5f60c) whose declaration of @llvm.nvvm.bf16x2.to.e5m2x2.rn.satfinite over <2 x bfloat> with an i16 result carries speculatable and memory(none), the attributes the imported IntrSpeculatable and IntrNoMem properties require.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate probes for the recorded lowering mechanism",
+              "stage": "backend_codegen",
+              "mechanism": "typed_nvvm",
+              "outcome": "succeeded",
+              "detail": "Recorded with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): llc -march=nvptx64 -mcpu=sm_120f -mattr=+ptx91 lowered the 367-byte typed fixture (SHA-256 7b4acbf67e3c0f83b1099150d70876603349db6db1b1502dce79da9b702b04f6), one call of @llvm.nvvm.bf16x2.to.e5m2x2.rn.satfinite on a dynamic <2 x bfloat> argument, to 745-byte PTX (SHA-256 3334d10e01ea5e8f531e764a85e85f87cc2d0bc378f9bb38f9ef8a934ac54614; .version 9.1, .target sm_120f) holding one cvt.rn.satfinite.e5m2x2.bf16x2 with register operands.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate PTX outputs assembled for the recorded target",
+              "stage": "ptx_assembly",
+              "mechanism": "typed_nvvm",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 ptxas assembled the typed-route PTX at sm_120f into a 2,240-byte cubin (SHA-256 ca980ee914906d30713cf21fb303b36ab9266b98c76fc0637ac71dee040e294d). ptxas keeps no code for an unreferenced non-entry function, so this cubin is byte-identical to the inline route's; the relocatable objects from ptxas -c keep the function, and both routes carry the same F2FP.SATFINITE.E5M2.BF16 instruction.",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+              "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+              "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate probes for the recorded lowering mechanism",
+              "stage": "backend_codegen",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "Recorded with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): llc -march=nvptx64 -mcpu=sm_120f -mattr=+ptx91 lowered the 210-byte inline-PTX fixture (SHA-256 fff4ab63076b1daff9772ebd8744e62bebb0f71d8c9b573111157b2125c4e96b; the body of intrinsics/probes/cvt_rn_satfinite_e5m2x2_bf16x2.ll without its comment header) to 749-byte PTX (SHA-256 bdfc6e8b024796f9b5081893885b7d3a34fb36bc97e07fad8481bab56b9eab79; .version 9.1, .target sm_120f) holding one cvt.rn.satfinite.e5m2x2.bf16x2 with the =h,r constraint: one packed i32 source and an i16 result.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate PTX outputs assembled for the recorded target",
+              "stage": "ptx_assembly",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 ptxas assembled the inline-route PTX at sm_120f into a 2,240-byte cubin (SHA-256 ca980ee914906d30713cf21fb303b36ab9266b98c76fc0637ac71dee040e294d), byte-identical to the typed route's cubin. The same PTX retargeted to sm_120 is rejected with \"Feature 'cvt.e5m2x2.bf16x2' not supported on .target 'sm_120'\".",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+              "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+              "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+            }
+          ]
+        },
+        {
+          "backend": "lib_nvvm",
+          "mechanism": "inline_ptx",
+          "evidence_profile": "cuda-13.3-libnvvm-13.3.73",
+          "target": {
+            "minimum_ptx": "9.1",
+            "hardware": {
+              "kind": "any_of",
+              "alternatives": [
+                {
+                  "kind": "exact_architecture",
+                  "sm": 100
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 100
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 103
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 103
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 110
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 110
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 120
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 120
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 121
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 121
+                }
+              ]
+            }
+          },
+          "version": "CUDA toolkit 13.3; nvcc/libNVVM release V13.3.73",
+          "sha256": "e55af1135e987372355d19d66cb74e1a1e99c32ac98ffad14fb567eef16e4f77",
+          "artifact_path": "/usr/local/cuda-13.3/nvvm/lib64/libnvvm.so.4.0.0",
+          "build_id_prefix": "88b802",
+          "status": "validated",
+          "stages": [
+            {
+              "targets": [
+                "compute_120f",
+                "ptx93"
+              ],
+              "representation": "pure inline PTX with a single packed source operand",
+              "stage": "backend_codegen",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 libNVVM compiled the 1,807-byte NVVM IR fixture (SHA-256 83e41481b170703c62b0ff63f647cb04b4e3e9b4c12b7c16a9fe6ad2d0a64bc9; four kernels pinned through llvm.used, each one inline-PTX call with a single packed i32 source operand) with -arch=compute_120f to 2,485-byte PTX (SHA-256 858cee379e200e21b36c1fbe0b76af425f37cc4057300ac9da7d0be9d873b62d; .version 9.3, .target sm_120f) retaining all four instructions verbatim, and with -gen-lto to 3,228-byte LTOIR (SHA-256 8c47b71a4f042ccb6713381bd52c58c4d05e74d910b16f19cade2d0c688e4ce4).",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx93"
+              ],
+              "representation": "libNVVM-emitted bf16x2 to packed-FP8 PTX",
+              "stage": "ptx_assembly",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 ptxas assembled the libNVVM PTX at sm_120f into a 13,768-byte cubin (SHA-256 f0a9b794cfd3da2368b5576e6bd99f747d82c0f2d7d60dfb5fa1c2241f925076) whose SASS holds one F2FP.SATFINITE[.RELU].{E4M3,E5M2}.BF16 per kernel, F2FP.SATFINITE.E5M2.BF16 for this form. The same fixture compiled for compute_120 is rejected at sm_120 with \"Feature 'cvt.e4m3x2.bf16x2' not supported on .target 'sm_120'\".",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+              "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+              "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx93"
+              ],
+              "representation": "libNVVM LTOIR retaining all four bf16x2 to packed-FP8 conversions",
+              "stage": "device_link",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 nvJitLink linked the sm_120f LTOIR with -lto into a 13,896-byte cubin (SHA-256 d11dba66e56c2124a3ce2b8f9ef6c5c54a8930a9ac20ec32735b64e3355d0b71) that keeps all four kernels and their F2FP instructions. Linking the same LTOIR for sm_120 fails with the ptxas feature error.",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda-13.3/lib64/libnvJitLink.so.13.3.33",
+              "tool_version": "CUDA 13.3 nvJitLink 13.3.33",
+              "tool_sha256": "3ba1e744347cd68617b862eccfd98b125482e882b7a6319f42abc9a768513db8"
+            }
+          ]
+        }
+      ],
+      "packed_conversion": {
+        "source_format": "bf16x2",
+        "destination_format": "e5m2x2",
+        "rounding": "nearest_even",
+        "saturation": "satfinite",
+        "adapter": "identity"
+      },
+      "lowering": "generated_packed_conversion_inline_ptx",
+      "expected_ptx": {
+        "mnemonic": "cvt",
+        "modifiers": [
+          "rn",
+          "satfinite",
+          "e5m2x2",
+          "bf16x2"
+        ],
+        "operands": [
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "register"
+          }
+        ]
+      },
+      "summary": "Converts packed bf16x2 to packed e5m2x2 with nearest-even finite saturation, preserving half order."
     },
     {
       "id": "cvt_rn_satfinite_e5m2x2_f16x2",
@@ -46346,6 +47130,398 @@
       "summary": "Converts two f32 values to packed e5m2x2 with nearest-even finite saturation and the first argument in the low byte."
     },
     {
+      "id": "cvt_rn_satfinite_relu_e4m3x2_bf16x2",
+      "operation_key": "packed.convert.bf16x2.e4m3x2.nearest_even.satfinite.relu",
+      "family": "packed_conversion",
+      "source": {
+        "kind": "llvm_imported",
+        "source_record": "int_nvvm_bf16x2_to_e4m3x2_rn_relu_satfinite"
+      },
+      "selections": [],
+      "rust": {
+        "abi_id": "i1031",
+        "module": "convert",
+        "name": "cvt_rn_satfinite_relu_e4m3x2_bf16x2",
+        "arguments": [
+          "u32"
+        ],
+        "result": "u16",
+        "safe": true,
+        "must_use": false,
+        "safe_allowlist_reason": "This conversion has no caller obligations.",
+        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1031",
+        "public_path": "cuda_intrinsics::convert::cvt_rn_satfinite_relu_e4m3x2_bf16x2",
+        "compatibility_paths": [
+          "cuda_device::convert::cvt_rn_satfinite_relu_e4m3x2_bf16x2"
+        ]
+      },
+      "dialect": {
+        "op_type": "CvtRnSatfiniteReluE4m3x2Bf16x2Op",
+        "op_name": "nvvm.cvt_rn_satfinite_relu_e4m3x2_bf16x2",
+        "operands": [
+          "i32"
+        ],
+        "results": [
+          "i16"
+        ]
+      },
+      "llvm": {
+        "symbol": "llvm.nvvm.bf16x2.to.e4m3x2.rn.relu.satfinite",
+        "arguments": [
+          "v2bf16"
+        ],
+        "results": [
+          "i16"
+        ],
+        "properties": [
+          "IntrNoCreateUndefOrPoison",
+          "IntrNoMem",
+          "IntrSpeculatable"
+        ],
+        "result_facts": {
+          "no_undef": false,
+          "range": null
+        }
+      },
+      "semantics": {
+        "pure": true,
+        "memory": "none",
+        "convergent": false,
+        "execution_scope": "thread"
+      },
+      "target": {
+        "minimum_ptx": "9.1",
+        "hardware": {
+          "kind": "any_of",
+          "alternatives": [
+            {
+              "kind": "exact_architecture",
+              "sm": 100
+            },
+            {
+              "kind": "family_target",
+              "sm": 100
+            },
+            {
+              "kind": "exact_architecture",
+              "sm": 103
+            },
+            {
+              "kind": "family_target",
+              "sm": 103
+            },
+            {
+              "kind": "exact_architecture",
+              "sm": 110
+            },
+            {
+              "kind": "family_target",
+              "sm": 110
+            },
+            {
+              "kind": "exact_architecture",
+              "sm": 120
+            },
+            {
+              "kind": "family_target",
+              "sm": 120
+            },
+            {
+              "kind": "exact_architecture",
+              "sm": 121
+            },
+            {
+              "kind": "family_target",
+              "sm": 121
+            }
+          ]
+        },
+        "ptx_result": "u16",
+        "targets": "sm_100a|sm_100f|sm_103a|sm_103f|sm_110a|sm_110f|sm_120a|sm_120f|sm_121a|sm_121f",
+        "ptx_isa_version": "9.3",
+        "ptx_isa_section": "9.7.9.22 Data Movement and Conversion Instructions: cvt",
+        "ptx_isa_url": "https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cvt"
+      },
+      "backend": {
+        "profile": "rust-llvm-23.1.3-aab11ee0",
+        "version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+        "sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+        "status": "validated",
+        "target_triple": "nvptx64-nvidia-cuda",
+        "gpu_target": "sm_120f",
+        "ptx_feature": "+ptx91"
+      },
+      "backend_lowerings": [
+        {
+          "backend": "llvm_nvptx",
+          "mechanism": "inline_ptx",
+          "evidence_profile": "rust-llvm-23.1.3-aab11ee0",
+          "target": {
+            "minimum_ptx": "9.1",
+            "hardware": {
+              "kind": "any_of",
+              "alternatives": [
+                {
+                  "kind": "exact_architecture",
+                  "sm": 100
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 100
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 103
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 103
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 110
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 110
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 120
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 120
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 121
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 121
+                }
+              ]
+            }
+          },
+          "version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+          "sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+          "artifact_path": null,
+          "build_id_prefix": null,
+          "status": "validated",
+          "stages": [
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate typed LLVM declaration probes",
+              "stage": "declaration_canonicalization",
+              "mechanism": "typed_nvvm",
+              "outcome": "succeeded",
+              "detail": "Recorded with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): llvm-as and llvm-dis canonicalized the 194-byte declaration-only fixture (SHA-256 318784297cbf5626850918899261c40db020b1cf755939c774dbdfcc0f4e67f2) to a 462-byte module (SHA-256 5237fee14f66ec4f52406118999e5656f0624e15918febf001630cd8c142f522) whose declaration of @llvm.nvvm.bf16x2.to.e4m3x2.rn.relu.satfinite over <2 x bfloat> with an i16 result carries speculatable and memory(none), the attributes the imported IntrSpeculatable and IntrNoMem properties require.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate probes for the recorded lowering mechanism",
+              "stage": "backend_codegen",
+              "mechanism": "typed_nvvm",
+              "outcome": "succeeded",
+              "detail": "Recorded with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): llc -march=nvptx64 -mcpu=sm_120f -mattr=+ptx91 lowered the 382-byte typed fixture (SHA-256 f374f8c786899f7e794a325136a9b411add44e6ca053a0d5a659ce2b62fcc013), one call of @llvm.nvvm.bf16x2.to.e4m3x2.rn.relu.satfinite on a dynamic <2 x bfloat> argument, to 780-byte PTX (SHA-256 ed6663e57024ca9435b851169d11a9a4fee64eb7f94899ef02f20d3d886839dc; .version 9.1, .target sm_120f) holding one cvt.rn.satfinite.relu.e4m3x2.bf16x2 with register operands.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate PTX outputs assembled for the recorded target",
+              "stage": "ptx_assembly",
+              "mechanism": "typed_nvvm",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 ptxas assembled the typed-route PTX at sm_120f into a 2,240-byte cubin (SHA-256 ca980ee914906d30713cf21fb303b36ab9266b98c76fc0637ac71dee040e294d). ptxas keeps no code for an unreferenced non-entry function, so this cubin is byte-identical to the inline route's; the relocatable objects from ptxas -c keep the function, and both routes carry the same F2FP.SATFINITE.RELU.E4M3.BF16 instruction.",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+              "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+              "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate probes for the recorded lowering mechanism",
+              "stage": "backend_codegen",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "Recorded with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): llc -march=nvptx64 -mcpu=sm_120f -mattr=+ptx91 lowered the 220-byte inline-PTX fixture (SHA-256 dd4c8e4f33b8463bc6adf33bf59fe47cb6054daea21b7cf3a84dd634fb0f201f; the body of intrinsics/probes/cvt_rn_satfinite_relu_e4m3x2_bf16x2.ll without its comment header) to 784-byte PTX (SHA-256 3cfe93699632a0d050f21ba46f5e94dba53fa7b9f2ffbb369c1bc06190b7ce80; .version 9.1, .target sm_120f) holding one cvt.rn.satfinite.relu.e4m3x2.bf16x2 with the =h,r constraint: one packed i32 source and an i16 result.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate PTX outputs assembled for the recorded target",
+              "stage": "ptx_assembly",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 ptxas assembled the inline-route PTX at sm_120f into a 2,240-byte cubin (SHA-256 ca980ee914906d30713cf21fb303b36ab9266b98c76fc0637ac71dee040e294d), byte-identical to the typed route's cubin. The same PTX retargeted to sm_120 is rejected with \"Feature 'cvt.e4m3x2.bf16x2' not supported on .target 'sm_120'\".",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+              "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+              "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+            }
+          ]
+        },
+        {
+          "backend": "lib_nvvm",
+          "mechanism": "inline_ptx",
+          "evidence_profile": "cuda-13.3-libnvvm-13.3.73",
+          "target": {
+            "minimum_ptx": "9.1",
+            "hardware": {
+              "kind": "any_of",
+              "alternatives": [
+                {
+                  "kind": "exact_architecture",
+                  "sm": 100
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 100
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 103
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 103
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 110
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 110
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 120
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 120
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 121
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 121
+                }
+              ]
+            }
+          },
+          "version": "CUDA toolkit 13.3; nvcc/libNVVM release V13.3.73",
+          "sha256": "e55af1135e987372355d19d66cb74e1a1e99c32ac98ffad14fb567eef16e4f77",
+          "artifact_path": "/usr/local/cuda-13.3/nvvm/lib64/libnvvm.so.4.0.0",
+          "build_id_prefix": "88b802",
+          "status": "validated",
+          "stages": [
+            {
+              "targets": [
+                "compute_120f",
+                "ptx93"
+              ],
+              "representation": "pure inline PTX with a single packed source operand",
+              "stage": "backend_codegen",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 libNVVM compiled the 1,807-byte NVVM IR fixture (SHA-256 83e41481b170703c62b0ff63f647cb04b4e3e9b4c12b7c16a9fe6ad2d0a64bc9; four kernels pinned through llvm.used, each one inline-PTX call with a single packed i32 source operand) with -arch=compute_120f to 2,485-byte PTX (SHA-256 858cee379e200e21b36c1fbe0b76af425f37cc4057300ac9da7d0be9d873b62d; .version 9.3, .target sm_120f) retaining all four instructions verbatim, and with -gen-lto to 3,228-byte LTOIR (SHA-256 8c47b71a4f042ccb6713381bd52c58c4d05e74d910b16f19cade2d0c688e4ce4).",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx93"
+              ],
+              "representation": "libNVVM-emitted bf16x2 to packed-FP8 PTX",
+              "stage": "ptx_assembly",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 ptxas assembled the libNVVM PTX at sm_120f into a 13,768-byte cubin (SHA-256 f0a9b794cfd3da2368b5576e6bd99f747d82c0f2d7d60dfb5fa1c2241f925076) whose SASS holds one F2FP.SATFINITE[.RELU].{E4M3,E5M2}.BF16 per kernel, F2FP.SATFINITE.RELU.E4M3.BF16 for this form. The same fixture compiled for compute_120 is rejected at sm_120 with \"Feature 'cvt.e4m3x2.bf16x2' not supported on .target 'sm_120'\".",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+              "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+              "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx93"
+              ],
+              "representation": "libNVVM LTOIR retaining all four bf16x2 to packed-FP8 conversions",
+              "stage": "device_link",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 nvJitLink linked the sm_120f LTOIR with -lto into a 13,896-byte cubin (SHA-256 d11dba66e56c2124a3ce2b8f9ef6c5c54a8930a9ac20ec32735b64e3355d0b71) that keeps all four kernels and their F2FP instructions. Linking the same LTOIR for sm_120 fails with the ptxas feature error.",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda-13.3/lib64/libnvJitLink.so.13.3.33",
+              "tool_version": "CUDA 13.3 nvJitLink 13.3.33",
+              "tool_sha256": "3ba1e744347cd68617b862eccfd98b125482e882b7a6319f42abc9a768513db8"
+            }
+          ]
+        }
+      ],
+      "packed_conversion": {
+        "source_format": "bf16x2",
+        "destination_format": "e4m3x2",
+        "rounding": "nearest_even",
+        "saturation": "satfinite_relu",
+        "adapter": "identity"
+      },
+      "lowering": "generated_packed_conversion_inline_ptx",
+      "expected_ptx": {
+        "mnemonic": "cvt",
+        "modifiers": [
+          "rn",
+          "satfinite",
+          "relu",
+          "e4m3x2",
+          "bf16x2"
+        ],
+        "operands": [
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "register"
+          }
+        ]
+      },
+      "summary": "Converts packed bf16x2 to packed e4m3x2 with nearest-even finite saturation and ReLU, preserving half order."
+    },
+    {
       "id": "cvt_rn_satfinite_relu_e4m3x2_f16x2",
       "operation_key": "packed.convert.f16x2.e4m3x2.nearest_even.satfinite.relu",
       "family": "packed_conversion",
@@ -46918,6 +48094,398 @@
         ]
       },
       "summary": "Converts two f32 values to packed e4m3x2 with nearest-even finite saturation, ReLU, and the first argument in the low byte."
+    },
+    {
+      "id": "cvt_rn_satfinite_relu_e5m2x2_bf16x2",
+      "operation_key": "packed.convert.bf16x2.e5m2x2.nearest_even.satfinite.relu",
+      "family": "packed_conversion",
+      "source": {
+        "kind": "llvm_imported",
+        "source_record": "int_nvvm_bf16x2_to_e5m2x2_rn_relu_satfinite"
+      },
+      "selections": [],
+      "rust": {
+        "abi_id": "i1033",
+        "module": "convert",
+        "name": "cvt_rn_satfinite_relu_e5m2x2_bf16x2",
+        "arguments": [
+          "u32"
+        ],
+        "result": "u16",
+        "safe": true,
+        "must_use": false,
+        "safe_allowlist_reason": "This conversion has no caller obligations.",
+        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1033",
+        "public_path": "cuda_intrinsics::convert::cvt_rn_satfinite_relu_e5m2x2_bf16x2",
+        "compatibility_paths": [
+          "cuda_device::convert::cvt_rn_satfinite_relu_e5m2x2_bf16x2"
+        ]
+      },
+      "dialect": {
+        "op_type": "CvtRnSatfiniteReluE5m2x2Bf16x2Op",
+        "op_name": "nvvm.cvt_rn_satfinite_relu_e5m2x2_bf16x2",
+        "operands": [
+          "i32"
+        ],
+        "results": [
+          "i16"
+        ]
+      },
+      "llvm": {
+        "symbol": "llvm.nvvm.bf16x2.to.e5m2x2.rn.relu.satfinite",
+        "arguments": [
+          "v2bf16"
+        ],
+        "results": [
+          "i16"
+        ],
+        "properties": [
+          "IntrNoCreateUndefOrPoison",
+          "IntrNoMem",
+          "IntrSpeculatable"
+        ],
+        "result_facts": {
+          "no_undef": false,
+          "range": null
+        }
+      },
+      "semantics": {
+        "pure": true,
+        "memory": "none",
+        "convergent": false,
+        "execution_scope": "thread"
+      },
+      "target": {
+        "minimum_ptx": "9.1",
+        "hardware": {
+          "kind": "any_of",
+          "alternatives": [
+            {
+              "kind": "exact_architecture",
+              "sm": 100
+            },
+            {
+              "kind": "family_target",
+              "sm": 100
+            },
+            {
+              "kind": "exact_architecture",
+              "sm": 103
+            },
+            {
+              "kind": "family_target",
+              "sm": 103
+            },
+            {
+              "kind": "exact_architecture",
+              "sm": 110
+            },
+            {
+              "kind": "family_target",
+              "sm": 110
+            },
+            {
+              "kind": "exact_architecture",
+              "sm": 120
+            },
+            {
+              "kind": "family_target",
+              "sm": 120
+            },
+            {
+              "kind": "exact_architecture",
+              "sm": 121
+            },
+            {
+              "kind": "family_target",
+              "sm": 121
+            }
+          ]
+        },
+        "ptx_result": "u16",
+        "targets": "sm_100a|sm_100f|sm_103a|sm_103f|sm_110a|sm_110f|sm_120a|sm_120f|sm_121a|sm_121f",
+        "ptx_isa_version": "9.3",
+        "ptx_isa_section": "9.7.9.22 Data Movement and Conversion Instructions: cvt",
+        "ptx_isa_url": "https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cvt"
+      },
+      "backend": {
+        "profile": "rust-llvm-23.1.3-aab11ee0",
+        "version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+        "sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+        "status": "validated",
+        "target_triple": "nvptx64-nvidia-cuda",
+        "gpu_target": "sm_120f",
+        "ptx_feature": "+ptx91"
+      },
+      "backend_lowerings": [
+        {
+          "backend": "llvm_nvptx",
+          "mechanism": "inline_ptx",
+          "evidence_profile": "rust-llvm-23.1.3-aab11ee0",
+          "target": {
+            "minimum_ptx": "9.1",
+            "hardware": {
+              "kind": "any_of",
+              "alternatives": [
+                {
+                  "kind": "exact_architecture",
+                  "sm": 100
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 100
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 103
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 103
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 110
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 110
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 120
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 120
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 121
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 121
+                }
+              ]
+            }
+          },
+          "version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+          "sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+          "artifact_path": null,
+          "build_id_prefix": null,
+          "status": "validated",
+          "stages": [
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate typed LLVM declaration probes",
+              "stage": "declaration_canonicalization",
+              "mechanism": "typed_nvvm",
+              "outcome": "succeeded",
+              "detail": "Recorded with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): llvm-as and llvm-dis canonicalized the 194-byte declaration-only fixture (SHA-256 12c7df1f1031c28863d8993452d940b6ed6affc024534d32de66272e70490048) to a 462-byte module (SHA-256 5cfbd96861014107c50c79030418eb8400ee1e6ec25dfc0d6679739e8997de5f) whose declaration of @llvm.nvvm.bf16x2.to.e5m2x2.rn.relu.satfinite over <2 x bfloat> with an i16 result carries speculatable and memory(none), the attributes the imported IntrSpeculatable and IntrNoMem properties require.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate probes for the recorded lowering mechanism",
+              "stage": "backend_codegen",
+              "mechanism": "typed_nvvm",
+              "outcome": "succeeded",
+              "detail": "Recorded with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): llc -march=nvptx64 -mcpu=sm_120f -mattr=+ptx91 lowered the 382-byte typed fixture (SHA-256 531ef4ab3bc1e551c3a2b5fc5d646a67f522a454b64cb47bcd0ac7617c73a1d3), one call of @llvm.nvvm.bf16x2.to.e5m2x2.rn.relu.satfinite on a dynamic <2 x bfloat> argument, to 780-byte PTX (SHA-256 460efd987919d91caf04ca68e9223b4d22c4d37872164593799122bd0ea8d764; .version 9.1, .target sm_120f) holding one cvt.rn.satfinite.relu.e5m2x2.bf16x2 with register operands.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate PTX outputs assembled for the recorded target",
+              "stage": "ptx_assembly",
+              "mechanism": "typed_nvvm",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 ptxas assembled the typed-route PTX at sm_120f into a 2,240-byte cubin (SHA-256 ca980ee914906d30713cf21fb303b36ab9266b98c76fc0637ac71dee040e294d). ptxas keeps no code for an unreferenced non-entry function, so this cubin is byte-identical to the inline route's; the relocatable objects from ptxas -c keep the function, and both routes carry the same F2FP.SATFINITE.RELU.E5M2.BF16 instruction.",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+              "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+              "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate probes for the recorded lowering mechanism",
+              "stage": "backend_codegen",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "Recorded with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): llc -march=nvptx64 -mcpu=sm_120f -mattr=+ptx91 lowered the 220-byte inline-PTX fixture (SHA-256 052e0049faabfaae45bfd2f5e74607a3a39c2f40cd108c6656a00104c933e207; the body of intrinsics/probes/cvt_rn_satfinite_relu_e5m2x2_bf16x2.ll without its comment header) to 784-byte PTX (SHA-256 8946110f2d12fa0239e4132675f8f6facd71e80dfbba7e6cf40d010cdba91e96; .version 9.1, .target sm_120f) holding one cvt.rn.satfinite.relu.e5m2x2.bf16x2 with the =h,r constraint: one packed i32 source and an i16 result.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx91"
+              ],
+              "representation": "separate PTX outputs assembled for the recorded target",
+              "stage": "ptx_assembly",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 ptxas assembled the inline-route PTX at sm_120f into a 2,240-byte cubin (SHA-256 ca980ee914906d30713cf21fb303b36ab9266b98c76fc0637ac71dee040e294d), byte-identical to the typed route's cubin. The same PTX retargeted to sm_120 is rejected with \"Feature 'cvt.e5m2x2.bf16x2' not supported on .target 'sm_120'\".",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+              "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+              "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+            }
+          ]
+        },
+        {
+          "backend": "lib_nvvm",
+          "mechanism": "inline_ptx",
+          "evidence_profile": "cuda-13.3-libnvvm-13.3.73",
+          "target": {
+            "minimum_ptx": "9.1",
+            "hardware": {
+              "kind": "any_of",
+              "alternatives": [
+                {
+                  "kind": "exact_architecture",
+                  "sm": 100
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 100
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 103
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 103
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 110
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 110
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 120
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 120
+                },
+                {
+                  "kind": "exact_architecture",
+                  "sm": 121
+                },
+                {
+                  "kind": "family_target",
+                  "sm": 121
+                }
+              ]
+            }
+          },
+          "version": "CUDA toolkit 13.3; nvcc/libNVVM release V13.3.73",
+          "sha256": "e55af1135e987372355d19d66cb74e1a1e99c32ac98ffad14fb567eef16e4f77",
+          "artifact_path": "/usr/local/cuda-13.3/nvvm/lib64/libnvvm.so.4.0.0",
+          "build_id_prefix": "88b802",
+          "status": "validated",
+          "stages": [
+            {
+              "targets": [
+                "compute_120f",
+                "ptx93"
+              ],
+              "representation": "pure inline PTX with a single packed source operand",
+              "stage": "backend_codegen",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 libNVVM compiled the 1,807-byte NVVM IR fixture (SHA-256 83e41481b170703c62b0ff63f647cb04b4e3e9b4c12b7c16a9fe6ad2d0a64bc9; four kernels pinned through llvm.used, each one inline-PTX call with a single packed i32 source operand) with -arch=compute_120f to 2,485-byte PTX (SHA-256 858cee379e200e21b36c1fbe0b76af425f37cc4057300ac9da7d0be9d873b62d; .version 9.3, .target sm_120f) retaining all four instructions verbatim, and with -gen-lto to 3,228-byte LTOIR (SHA-256 8c47b71a4f042ccb6713381bd52c58c4d05e74d910b16f19cade2d0c688e4ce4).",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx93"
+              ],
+              "representation": "libNVVM-emitted bf16x2 to packed-FP8 PTX",
+              "stage": "ptx_assembly",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 ptxas assembled the libNVVM PTX at sm_120f into a 13,768-byte cubin (SHA-256 f0a9b794cfd3da2368b5576e6bd99f747d82c0f2d7d60dfb5fa1c2241f925076) whose SASS holds one F2FP.SATFINITE[.RELU].{E4M3,E5M2}.BF16 per kernel, F2FP.SATFINITE.RELU.E5M2.BF16 for this form. The same fixture compiled for compute_120 is rejected at sm_120 with \"Feature 'cvt.e4m3x2.bf16x2' not supported on .target 'sm_120'\".",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+              "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+              "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+            },
+            {
+              "targets": [
+                "sm_120f",
+                "ptx93"
+              ],
+              "representation": "libNVVM LTOIR retaining all four bf16x2 to packed-FP8 conversions",
+              "stage": "device_link",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 nvJitLink linked the sm_120f LTOIR with -lto into a 13,896-byte cubin (SHA-256 d11dba66e56c2124a3ce2b8f9ef6c5c54a8930a9ac20ec32735b64e3355d0b71) that keeps all four kernels and their F2FP instructions. Linking the same LTOIR for sm_120 fails with the ptxas feature error.",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda-13.3/lib64/libnvJitLink.so.13.3.33",
+              "tool_version": "CUDA 13.3 nvJitLink 13.3.33",
+              "tool_sha256": "3ba1e744347cd68617b862eccfd98b125482e882b7a6319f42abc9a768513db8"
+            }
+          ]
+        }
+      ],
+      "packed_conversion": {
+        "source_format": "bf16x2",
+        "destination_format": "e5m2x2",
+        "rounding": "nearest_even",
+        "saturation": "satfinite_relu",
+        "adapter": "identity"
+      },
+      "lowering": "generated_packed_conversion_inline_ptx",
+      "expected_ptx": {
+        "mnemonic": "cvt",
+        "modifiers": [
+          "rn",
+          "satfinite",
+          "relu",
+          "e5m2x2",
+          "bf16x2"
+        ],
+        "operands": [
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "register"
+          }
+        ]
+      },
+      "summary": "Converts packed bf16x2 to packed e5m2x2 with nearest-even finite saturation and ReLU, preserving half order."
     },
     {
       "id": "cvt_rn_satfinite_relu_e5m2x2_f16x2",

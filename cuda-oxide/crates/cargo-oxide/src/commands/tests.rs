@@ -69,6 +69,16 @@ fn is_sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
+fn strings(args: &[&str]) -> Vec<String> {
+    args.iter().map(|arg| arg.to_string()).collect()
+}
+
+fn command_args(cmd: &Command) -> Vec<String> {
+    cmd.get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect()
+}
+
 /// `cargo_passthrough_command` with an empty ambient
 /// `CUDA_OXIDE_MATERIALIZE_CUBIN`.
 ///
@@ -86,18 +96,19 @@ fn passthrough_command_for_test(
     cargo_passthrough_command_with_env(ctx, cargo_subcommand, opts, cargo_args, None)
 }
 
+/// Run one passthrough command on a scratch workspace and report which units
+/// Cargo reused, by target name. A test harness carries a ` (test)` suffix so
+/// it never shadows the library it was built from.
 fn cargo_artifact_freshness(
     ctx: &Context,
+    cargo_subcommand: CargoPassthroughSubcommand,
     opts: &CargoPassthroughOptions<'_>,
+    cargo_args: &[&str],
     materializer_provenance: Option<&str>,
 ) -> BTreeMap<String, bool> {
-    let mut cmd = passthrough_command_for_test(
-        ctx,
-        CargoPassthroughSubcommand::Build,
-        opts,
-        &["--message-format=json-render-diagnostics".to_string()],
-    )
-    .unwrap();
+    let mut args = strings(&["--message-format=json-render-diagnostics"]);
+    args.extend(strings(cargo_args));
+    let mut cmd = passthrough_command_for_test(ctx, cargo_subcommand, opts, &args).unwrap();
     if let Some(provenance) = materializer_provenance {
         // Exercise a non-canonical spelling accepted by the backend. The
         // macro must still track exact provenance rather than keying that
@@ -118,10 +129,13 @@ fn cargo_artifact_freshness(
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .filter(|message| message["reason"] == "compiler-artifact")
         .filter_map(|message| {
-            Some((
-                message["target"]["name"].as_str()?.to_string(),
-                message["fresh"].as_bool()?,
-            ))
+            let name = message["target"]["name"].as_str()?;
+            let key = if message["profile"]["test"].as_bool()? {
+                format!("{name} (test)")
+            } else {
+                name.to_string()
+            };
+            Some((key, message["fresh"].as_bool()?))
         })
         .collect()
 }
@@ -1216,15 +1230,23 @@ fn interop_build_keeps_debug_assertions_and_device_debug_independent() {
             append_full_debug_rustflags(&mut encoded, &cmd, None);
             let flags = decoded_rustflags(&encoded);
 
-            assert!(flags.contains(&"-Copt-level=3"));
-            assert!(flags.contains(&if assertions {
+            let pins: Vec<String> = options
+                .codegen_profile()
+                .pinned_options()
+                .iter()
+                .map(|pin| pin.rustc_flag())
+                .collect();
+            let assertions_flag = if assertions {
                 "-Cdebug-assertions=on"
             } else {
                 "-Cdebug-assertions=off"
-            }));
-            if assertions {
-                assert!(flags.contains(&"-Coverflow-checks=off"));
-            }
+            };
+            assert_eq!(
+                pins,
+                ["-Copt-level=3", assertions_flag, "-Coverflow-checks=off"]
+            );
+            // Without incoming overrides the pins stay in the Cargo profile.
+            assert!(!flags.iter().any(|flag| pins.iter().any(|pin| pin == flag)));
             assert_eq!(has_full_debug_cfg(&flags), debug == DeviceDebug::Full);
             for required in FULL_DEBUG_MIR_RUSTFLAGS {
                 assert_eq!(flags.contains(required), debug == DeviceDebug::Full);
@@ -2003,12 +2025,12 @@ fn build_passthrough_retains_release_profile_and_required_flags() {
     assert_eq!(flags[0], "-Lnative=/nix/store/cuda-cudart/lib");
     assert!(flags.contains(&"-Copt-level=0"));
     assert!(flags.contains(&"-Zcodegen-backend=llvm"));
+    // Only the overridden option is re-pinned; debug-assertions stays in the profile.
     assert_eq!(
-        &flags[flags.len() - 6..],
+        &flags[flags.len() - 5..],
         [
             "-Zcodegen-backend=/tmp/librustc_codegen_cuda.so",
             "-Copt-level=3",
-            "-Cdebug-assertions=off",
             "-Zmir-enable-passes=-JumpThreading",
             "-Zalways-encode-mir",
             "-Csymbol-mangling-version=v0",
@@ -2069,8 +2091,9 @@ fn encoded_rustflags_preserve_configured_flag_boundaries_and_spaces() {
             .any(|pair| pair == ["--cfg", "model=\"alpha beta\""])
     );
     assert_eq!(&flags[2..4], ["-L", "native=/nix/store/cuda-cudart/lib"]);
+    // Backend, then the three required -Z/-C invariants (no incoming pin overrides).
     assert_eq!(
-        flags[flags.len() - 6],
+        flags[flags.len() - 4],
         "-Zcodegen-backend=/tmp/backend path/librustc_codegen_cuda.so"
     );
 }
@@ -2149,9 +2172,20 @@ fn debug_profile_retains_release_defaults_and_adds_debuginfo() {
     );
     let flags = decoded_rustflags(&rustflags);
 
-    assert!(flags.contains(&"-Copt-level=3"));
-    assert!(flags.contains(&"-Cdebug-assertions=off"));
-    assert!(flags.contains(&"-Cdebuginfo=2"));
+    assert_eq!(
+        CodegenProfilePolicy::ReleaseLikeWithDebugInfo
+            .pinned_options()
+            .iter()
+            .map(|pin| pin.rustc_flag())
+            .collect::<Vec<_>>(),
+        [
+            "-Copt-level=3",
+            "-Cdebug-assertions=off",
+            "-Coverflow-checks=off",
+            "-Cdebuginfo=2"
+        ]
+    );
+    assert!(!flags.iter().any(|flag| flag.starts_with("-Cdebuginfo")));
     assert!(flags.contains(&"-Zmir-enable-passes=-JumpThreading"));
     assert!(flags.contains(&"-Zalways-encode-mir"));
     assert!(flags.contains(&"-Csymbol-mangling-version=v0"));
@@ -2570,16 +2604,325 @@ fn build_passthrough_debug_assertions_select_the_wrapper_profile() {
     let flags = decoded_rustflags(&encoded);
 
     assert_eq!(
-        &flags[flags.len() - 6..],
+        &flags[flags.len() - 3..],
         [
-            "-Copt-level=3",
-            "-Cdebug-assertions=on",
-            "-Coverflow-checks=off",
             "-Zmir-enable-passes=-JumpThreading",
             "-Zalways-encode-mir",
             "-Csymbol-mangling-version=v0",
         ]
     );
+    for base in ["RELEASE", "DEV"] {
+        for (key, value) in [
+            ("OPT_LEVEL", "3"),
+            ("DEBUG_ASSERTIONS", "true"),
+            ("OVERFLOW_CHECKS", "false"),
+        ] {
+            assert_eq!(
+                command_env(&cmd, &format!("CARGO_PROFILE_{base}_{key}")).as_deref(),
+                Some(value)
+            );
+        }
+    }
+}
+
+/// A release-like build and `test -- --release` must hand rustc the same
+/// rustflags, or Cargo rebuilds every crate between them.
+#[test]
+fn build_and_test_passthrough_share_rustflags() {
+    let ctx = test_context(OxideConfig::default());
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: None,
+        features: None,
+        cargo_target_dir: None,
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+    let rustflags = |subcommand| {
+        let cmd = passthrough_command_for_test(&ctx, subcommand, &opts, &[]).unwrap();
+        command_env(&cmd, "CARGO_ENCODED_RUSTFLAGS").unwrap()
+    };
+    assert_eq!(
+        rustflags(CargoPassthroughSubcommand::Build),
+        rustflags(CargoPassthroughSubcommand::Test)
+    );
+    let test =
+        passthrough_command_for_test(&ctx, CargoPassthroughSubcommand::Test, &opts, &[]).unwrap();
+    assert!(
+        !test
+            .get_envs()
+            .any(|(key, _)| key.to_string_lossy().starts_with("CARGO_PROFILE_"))
+    );
+}
+
+#[test]
+fn codegen_option_names_cover_every_rustc_spelling() {
+    let flags: Vec<String> = [
+        "-Copt-level=0",
+        "-C",
+        "debug-assertions=on",
+        "--codegen",
+        "overflow-checks=on",
+        "--codegen=debuginfo=1",
+        "-O",
+        "-g",
+        "-Copt_level=1",
+        "-Cdebug-assertions",
+        "-Ccodegen-units=1",
+        "-Lnative=/lib",
+        "--cfg",
+        "feature=\"x\"",
+        "-C",
+    ]
+    .map(String::from)
+    .into();
+    assert_eq!(
+        codegen_option_names(&flags),
+        [
+            "opt-level",
+            "debug-assertions",
+            "overflow-checks",
+            "debuginfo",
+            "opt-level",
+            "debuginfo",
+            "opt-level",
+            "debug-assertions",
+            "codegen-units"
+        ]
+    );
+}
+
+/// `--profile` is read in both forms from the Cargo arguments; the last one
+/// counts and arguments after `--` belong to the program.
+#[test]
+fn selected_cargo_profile_reads_both_forms_before_the_separator() {
+    assert_eq!(
+        selected_cargo_profile(&strings(&["--profile", "release-lto", "-p", "app"])),
+        Some("release-lto")
+    );
+    assert_eq!(
+        selected_cargo_profile(&strings(&["-p", "app", "--profile=ci"])),
+        Some("ci")
+    );
+    assert_eq!(
+        selected_cargo_profile(&strings(&["--profile", "first", "--profile=second"])),
+        Some("second")
+    );
+    assert_eq!(
+        selected_cargo_profile(&strings(&["--release", "--", "--profile", "ignored"])),
+        None
+    );
+    assert_eq!(selected_cargo_profile(&strings(&["--profile"])), None);
+}
+
+/// Pins reach the two base profiles through the environment and nothing
+/// else: a selected `release-lto` must not add `CARGO_PROFILE_RELEASE_LTO_*`,
+/// which Cargo reads as `profile.release.lto` and rejects.
+#[test]
+fn profile_pins_stay_on_the_base_profiles() {
+    let ctx = test_context(OxideConfig::default());
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: None,
+        features: None,
+        cargo_target_dir: None,
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+    let cmd = passthrough_command_for_test(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &opts,
+        &strings(&["--profile", "release-lto"]),
+    )
+    .unwrap();
+    let mut expected = BTreeMap::new();
+    for base in ["RELEASE", "DEV"] {
+        for (key, value) in [
+            ("OPT_LEVEL", "3"),
+            ("DEBUG_ASSERTIONS", "false"),
+            ("OVERFLOW_CHECKS", "false"),
+        ] {
+            expected.insert(format!("CARGO_PROFILE_{base}_{key}"), value.to_string());
+        }
+    }
+    let profile_env: BTreeMap<String, String> = cmd
+        .get_envs()
+        .filter_map(|(key, value)| {
+            let key = key.to_string_lossy();
+            key.starts_with("CARGO_PROFILE_").then(|| {
+                let value = value.map(|value| value.to_string_lossy().into_owned());
+                (key.into_owned(), value.unwrap_or_default())
+            })
+        })
+        .collect();
+    assert_eq!(profile_env, expected);
+
+    let mut debug = Command::new("cargo");
+    debug.args(["build", "--release"]);
+    apply_profile_pins(&mut debug, CodegenProfilePolicy::ReleaseLikeWithDebugInfo);
+    for base in ["RELEASE", "DEV"] {
+        assert_eq!(
+            command_env(&debug, &format!("CARGO_PROFILE_{base}_DEBUG")).as_deref(),
+            Some("2")
+        );
+    }
+
+    let mut test = Command::new("cargo");
+    test.args(["test", "--profile=bench"]);
+    apply_profile_pins(&mut test, CodegenProfilePolicy::CargoSelected);
+    assert_eq!(test.get_envs().count(), 0);
+}
+
+/// A profile other than `release` or `dev` takes the pins as `--config`
+/// arguments placed before the user's Cargo arguments, in both `--profile`
+/// forms. Base profiles and `cargo oxide test` add none.
+#[test]
+fn custom_profile_pins_travel_as_config_arguments() {
+    let ctx = test_context(OxideConfig::default());
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: None,
+        features: None,
+        cargo_target_dir: None,
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+    let pins = strings(&[
+        "--config",
+        "profile.release-lto.opt-level=3",
+        "--config",
+        "profile.release-lto.debug-assertions=false",
+        "--config",
+        "profile.release-lto.overflow-checks=false",
+    ]);
+    for cargo_args in [
+        strings(&["--profile", "release-lto", "-p", "app"]),
+        strings(&["-p", "app", "--profile=release-lto"]),
+    ] {
+        let cmd = passthrough_command_for_test(
+            &ctx,
+            CargoPassthroughSubcommand::Build,
+            &opts,
+            &cargo_args,
+        )
+        .unwrap();
+        let expected: Vec<String> = strings(&["build"])
+            .into_iter()
+            .chain(pins.iter().cloned())
+            .chain(cargo_args.iter().cloned())
+            .collect();
+        assert_eq!(command_args(&cmd), expected);
+    }
+    for cargo_args in [
+        strings(&[]),
+        strings(&["--release"]),
+        strings(&["--profile", "release"]),
+        strings(&["--profile=dev"]),
+    ] {
+        let cmd = passthrough_command_for_test(
+            &ctx,
+            CargoPassthroughSubcommand::Build,
+            &opts,
+            &cargo_args,
+        )
+        .unwrap();
+        let expected: Vec<String> = strings(&["build"])
+            .into_iter()
+            .chain(cargo_args.iter().cloned())
+            .collect();
+        assert_eq!(command_args(&cmd), expected);
+    }
+
+    let test = passthrough_command_for_test(
+        &ctx,
+        CargoPassthroughSubcommand::Test,
+        &opts,
+        &strings(&["--profile", "release-lto"]),
+    )
+    .unwrap();
+    assert_eq!(
+        command_args(&test),
+        strings(&["test", "--profile", "release-lto"])
+    );
+
+    let with_assertions = CargoPassthroughOptions {
+        debug_assertions: true,
+        ..opts
+    };
+    let cmd = passthrough_command_for_test(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &with_assertions,
+        &strings(&["--profile=ci"]),
+    )
+    .unwrap();
+    assert_eq!(
+        command_args(&cmd),
+        strings(&[
+            "build",
+            "--config",
+            "profile.ci.opt-level=3",
+            "--config",
+            "profile.ci.debug-assertions=true",
+            "--config",
+            "profile.ci.overflow-checks=false",
+            "--profile=ci",
+        ])
+    );
+}
+
+/// `profile_config_args` writes every pinned key as a manifest writes it,
+/// adds the debug-info pin for the debug route, and leaves base profiles,
+/// pin-free policies and names Cargo would reject alone.
+#[test]
+fn profile_config_args_use_manifest_keys() {
+    assert_eq!(
+        profile_config_args(
+            CodegenProfilePolicy::ReleaseLikeWithDebugInfo,
+            "release-lto"
+        ),
+        strings(&[
+            "--config",
+            "profile.release-lto.opt-level=3",
+            "--config",
+            "profile.release-lto.debug-assertions=false",
+            "--config",
+            "profile.release-lto.overflow-checks=false",
+            "--config",
+            "profile.release-lto.debug=2",
+        ])
+    );
+    for (policy, profile) in [
+        (CodegenProfilePolicy::ReleaseLike, "release"),
+        (CodegenProfilePolicy::ReleaseLike, "dev"),
+        (CodegenProfilePolicy::CargoSelected, "release-lto"),
+        (CodegenProfilePolicy::ReleaseLike, "my profile"),
+        (CodegenProfilePolicy::ReleaseLike, ""),
+    ] {
+        assert!(
+            profile_config_args(policy, profile).is_empty(),
+            "{policy:?} {profile:?}"
+        );
+    }
 }
 
 #[test]
@@ -2776,13 +3119,13 @@ device-owner = { path = "../device-owner" }
         debug_assertions: false,
     };
 
-    let cold = cargo_artifact_freshness(&ctx, &base, None);
+    let cold = cargo_artifact_freshness(&ctx, CargoPassthroughSubcommand::Build, &base, &[], None);
     assert_eq!(cold.get("shared_dep"), Some(&false));
     assert_eq!(cold.get("tracked_macro"), Some(&false));
     assert_eq!(cold.get("device_owner"), Some(&false));
     assert_eq!(cold.get("device-consumer"), Some(&false));
 
-    let warm = cargo_artifact_freshness(&ctx, &base, None);
+    let warm = cargo_artifact_freshness(&ctx, CargoPassthroughSubcommand::Build, &base, &[], None);
     assert_eq!(warm.get("shared_dep"), Some(&true));
     assert_eq!(warm.get("tracked_macro"), Some(&true));
     assert_eq!(warm.get("device_owner"), Some(&true));
@@ -2792,7 +3135,13 @@ device-owner = { path = "../device-owner" }
         arch: Some("sm_90"),
         ..base
     };
-    let arch_switch = cargo_artifact_freshness(&ctx, &different_arch, None);
+    let arch_switch = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &different_arch,
+        &[],
+        None,
+    );
     assert_eq!(arch_switch.get("shared_dep"), Some(&true));
     assert_eq!(arch_switch.get("tracked_macro"), Some(&true));
     assert_eq!(arch_switch.get("device_owner"), Some(&false));
@@ -2802,13 +3151,25 @@ device-owner = { path = "../device-owner" }
         emit_nvvm_ir: true,
         ..different_arch
     };
-    let output_switch = cargo_artifact_freshness(&ctx, &different_output, None);
+    let output_switch = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &different_output,
+        &[],
+        None,
+    );
     assert_eq!(output_switch.get("shared_dep"), Some(&true));
     assert_eq!(output_switch.get("tracked_macro"), Some(&true));
     assert_eq!(output_switch.get("device_owner"), Some(&false));
     assert_eq!(output_switch.get("device-consumer"), Some(&false));
 
-    let repeated_output = cargo_artifact_freshness(&ctx, &different_output, None);
+    let repeated_output = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &different_output,
+        &[],
+        None,
+    );
     assert_eq!(repeated_output.get("shared_dep"), Some(&true));
     assert_eq!(repeated_output.get("tracked_macro"), Some(&true));
     assert_eq!(repeated_output.get("device_owner"), Some(&true));
@@ -2816,7 +3177,9 @@ device-owner = { path = "../device-owner" }
 
     let provenance_switch = cargo_artifact_freshness(
         &ctx,
+        CargoPassthroughSubcommand::Build,
         &different_output,
+        &[],
         Some("11d91fbe164094f6242d44103d0fb01968b96c6d8f48f124eac8fa73a307a657"),
     );
     assert_eq!(provenance_switch.get("shared_dep"), Some(&true));
@@ -2826,7 +3189,9 @@ device-owner = { path = "../device-owner" }
 
     let changed_provenance = cargo_artifact_freshness(
         &ctx,
+        CargoPassthroughSubcommand::Build,
         &different_output,
+        &[],
         Some("5b11618c2e44027877d0cd4d0cfd10afed5ef262876791e483ec58f4c5569139"),
     );
     assert_eq!(changed_provenance.get("shared_dep"), Some(&true));
@@ -2835,6 +3200,203 @@ device-owner = { path = "../device-owner" }
     assert_eq!(changed_provenance.get("device-consumer"), Some(&false));
 
     std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A workspace of one library and one binary that depends on it, for probing
+/// real Cargo. `profiles` is appended to the workspace manifest. The binary
+/// computes `u8::MAX + 1`, which panics under overflow checks, so running it
+/// shows whether the `overflow-checks = false` pin reached the final crate.
+fn write_shared_dependency_workspace(root: &Path, profiles: &str) {
+    for path in [root.join("shared-dep/src"), root.join("app/src")] {
+        fs::create_dir_all(path).unwrap();
+    }
+    fs::write(
+        root.join("Cargo.toml"),
+        format!(
+            r#"[workspace]
+resolver = "3"
+members = ["shared-dep", "app"]
+{profiles}"#
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.join("shared-dep/Cargo.toml"),
+        r#"[package]
+name = "shared-dep"
+version = "0.0.0"
+edition = "2024"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("shared-dep/src/lib.rs"),
+        "pub fn shared_value() -> u32 { 42 }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("app/Cargo.toml"),
+        r#"[package]
+name = "app"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+shared-dep = { path = "../shared-dep" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("app/src/main.rs"),
+        r#"fn main() {
+    assert_eq!(shared_dep::shared_value(), 42);
+    let value: u8 = std::hint::black_box(u8::MAX);
+    assert_eq!(value + 1, 0, "overflow checks reached the binary");
+}
+"#,
+    )
+    .unwrap();
+}
+
+fn scratch_workspace_context(root: &Path) -> Context {
+    Context {
+        workspace_root: root.to_path_buf(),
+        codegen_crate: root.join("unused-codegen-source"),
+        examples_dir: root.join("unused-examples"),
+        backend_so: PathBuf::from("llvm"),
+        is_workspace: false,
+        config: OxideConfig::default(),
+    }
+}
+
+/// Pins equal to the release defaults keep `build -- --release` and
+/// `test -- --release` on one artifact set: the shared dependency is reused
+/// when the two alternate. Carried in rustflags, the same pins changed every
+/// unit's cache key, so the switch recompiled the whole graph and left a
+/// second copy of each artifact behind.
+#[test]
+fn release_build_and_test_reuse_each_others_dependencies() {
+    let root = unique_temp_dir("cargo_oxide_release_build_test_reuse");
+    let target = root.join("target");
+    write_shared_dependency_workspace(&root, "");
+    let ctx = scratch_workspace_context(&root);
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: Some("sm_80"),
+        features: None,
+        cargo_target_dir: Some(&target),
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+
+    let build = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &opts,
+        &["--release"],
+        None,
+    );
+    assert_eq!(build.get("shared_dep"), Some(&false));
+    assert_eq!(build.get("app"), Some(&false));
+
+    let test = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Test,
+        &opts,
+        &["--release", "--no-run"],
+        None,
+    );
+    assert_eq!(
+        test.get("shared_dep"),
+        Some(&true),
+        "test -- --release must reuse the release build's dependency"
+    );
+    assert_eq!(test.get("app (test)"), Some(&false));
+
+    let rebuild = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &opts,
+        &["--release"],
+        None,
+    );
+    assert_eq!(rebuild.get("shared_dep"), Some(&true));
+    assert_eq!(rebuild.get("app"), Some(&true));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// A custom profile with a dash in its name builds in both `--profile` forms,
+/// and the pins beat the keys the profile sets itself: `release-lto` asks for
+/// overflow checks and `opt-level = 1`, yet the binary wraps instead of
+/// panicking. Carried in the environment, the same pins became
+/// `CARGO_PROFILE_RELEASE_LTO_*`, which Cargo reads as `profile.release.lto`
+/// and rejects before compiling.
+#[test]
+fn dashed_custom_profile_builds_with_the_pins_in_force() {
+    let root = unique_temp_dir("cargo_oxide_custom_profile_pins");
+    let target = root.join("target");
+    write_shared_dependency_workspace(
+        &root,
+        r#"
+[profile.release-lto]
+inherits = "release"
+opt-level = 1
+overflow-checks = true
+"#,
+    );
+    let ctx = scratch_workspace_context(&root);
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: Some("sm_80"),
+        features: None,
+        cargo_target_dir: Some(&target),
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+
+    let built = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &opts,
+        &["--profile", "release-lto"],
+        None,
+    );
+    assert_eq!(built.get("app"), Some(&false));
+    let status = Command::new(target.join("release-lto").join("app"))
+        .status()
+        .expect("failed to run the custom-profile binary");
+    assert!(
+        status.success(),
+        "overflow checks reached the custom-profile binary: {status}"
+    );
+
+    let rebuilt = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &opts,
+        &["--profile=release-lto"],
+        None,
+    );
+    assert_eq!(
+        rebuilt.get("app"),
+        Some(&true),
+        "both --profile forms must resolve to one configuration"
+    );
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

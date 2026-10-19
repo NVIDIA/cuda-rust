@@ -1085,7 +1085,8 @@ fn packed_conversion_impls(catalog: &CatalogFile) -> String {
                 )
                 .unwrap();
             }
-            PackedConversionSourceFormat::E4m3x2
+            PackedConversionSourceFormat::Bf16x2
+            | PackedConversionSourceFormat::E4m3x2
             | PackedConversionSourceFormat::E5m2x2
             | PackedConversionSourceFormat::F16x2 => {
                 debug_assert_eq!(conversion.adapter, PackedConversionAdapter::Identity);

@@ -71,9 +71,11 @@ require_entry_shape test_dsmem_ring_exchange \
 require_entry_shape test_dsmem_mapped_store \
     "cluster-shared remote store" 'st\.shared::cluster\.'
 
-# LLVM opt -O2 inlines the private #[inline(never)] helper because noinline is
-# not propagated, so this check reads the pre-opt cluster.ll; the optimized PTX
-# does not retain the call.
+# The private #[inline(never)] helper reaches LLVM as `noinline`, but opt -O2
+# still removes the call: the helper returns its only argument unchanged, so
+# opt marks that argument `returned` and forwards it at the call site. This
+# check therefore reads the pre-opt cluster.ll; the optimized PTX does not
+# retain the call.
 require_ll_shape "tuple round-trip LLVM call" \
     'call \{ ptr, i64 \} @bounce_cluster_pair\('
 require_ll_shape "cluster-shared pointer normalized before tuple construction" \

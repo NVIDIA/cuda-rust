@@ -481,7 +481,7 @@ pub fn recorded_ptx_floor(arch: &CudaArch) -> Result<u16, UnsupportedTargetError
 }
 
 /// Discrete PTX ISA feature spellings supported by the pinned LLVM backend.
-pub const PTX_ISA_SPELLINGS: &[u16] = &[62, 65, 70, 71, 73, 78, 80, 86, 87, 88, 90];
+pub const PTX_ISA_SPELLINGS: &[u16] = &[62, 65, 70, 71, 73, 78, 80, 86, 87, 88, 90, 91];
 
 /// A proof-carrying member of the supported PTX ISA spelling vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -528,6 +528,7 @@ impl PtxSpelling {
             87 => "+ptx87",
             88 => "+ptx88",
             90 => "+ptx90",
+            91 => "+ptx91",
             _ => unreachable!(),
         }
     }
@@ -670,7 +671,8 @@ mod tests {
         assert_eq!(spelling_feature(74), None);
         assert_eq!(PtxSpelling::from_spelling(74), None);
         assert_eq!(PtxSpelling::round_up(74).map(PtxSpelling::get), Some(78));
-        assert_eq!(PtxSpelling::round_up(91), None);
+        assert_eq!(PtxSpelling::round_up(91).map(PtxSpelling::get), Some(91));
+        assert_eq!(PtxSpelling::round_up(92), None);
     }
 
     #[test]

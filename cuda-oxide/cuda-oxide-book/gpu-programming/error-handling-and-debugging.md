@@ -51,6 +51,10 @@ pub fn debug_kernel(data: &[f32], mut out: DisjointSlice<f32>) {
 }
 ```
 
+A placeholder without a type character prints its argument by type: the
+`usize` index above goes out as `%llu` and the `f32` element as `%f`, while
+`{:x}` or `{:.2f}` cast the argument to the C type they name.
+
 ### Important details
 
 - **Flush requires sync.** Output is buffered on the GPU and only appears on

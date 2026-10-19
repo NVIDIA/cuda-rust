@@ -14,7 +14,7 @@ use crate::launch_attrs::{
 };
 use quote::{format_ident, quote};
 use reserved_oxide_symbols::INSTANTIATE_PREFIX;
-use syn::{ItemFn, Stmt, parse_quote, visit_mut::VisitMut};
+use syn::{Expr, ItemFn, Stmt, parse_quote, spanned::Spanned, visit_mut::VisitMut};
 
 #[test]
 fn generated_kernel_siblings_preserve_qualified_paths_and_generics() {
@@ -264,6 +264,32 @@ fn unroll_n_on_for_loop_injects_factor_n_marker() {
         !out.contains("#[unroll"),
         "attribute should be removed:\n{out}"
     );
+}
+
+#[test]
+fn unroll_marker_takes_the_position_of_its_attribute() {
+    // `parse_str` keeps real lines; `parse_quote!` gives every span line 0.
+    let cases = [
+        ("fn k() {\n    #[unroll]\n    while true {}\n}", 2, 4),
+        (
+            "fn k() {\n\n    #[unroll(4)]\n    for _ in 0..8 {}\n}",
+            3,
+            4,
+        ),
+        ("fn k() {\n  #[unroll(2)]\n  loop { break; }\n}", 2, 2),
+    ];
+    for (source, line, column) in cases {
+        let mut func: ItemFn = syn::parse_str(source).expect("test source parses");
+        rewrite_loop_unroll_attrs(&mut func).expect("valid unroll attribute");
+        let marker = match &func.block.stmts[0] {
+            Stmt::Expr(Expr::While(l), _) => &l.body.stmts[0],
+            Stmt::Expr(Expr::ForLoop(l), _) => &l.body.stmts[0],
+            Stmt::Expr(Expr::Loop(l), _) => &l.body.stmts[0],
+            other => panic!("expected a loop, got {}", quote!(#other)),
+        };
+        let start = marker.span().start();
+        assert_eq!((start.line, start.column), (line, column), "{source}");
+    }
 }
 
 #[test]

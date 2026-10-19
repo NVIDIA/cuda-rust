@@ -26,7 +26,7 @@ use crate::error::{TranslationErr, TranslationResult};
 use crate::pipeline::StatementDebugInfoMap;
 use crate::translator::location::span_to_location;
 use crate::translator::values::{self, SlotAddrSpaceMap, ValueMap};
-use dialect_mir::attributes::ReferenceParamValidityAttr;
+use dialect_mir::attributes::{InlineIntentAttr, ReferenceParamValidityAttr};
 use dialect_mir::ops::MirFuncOp;
 use dialect_mir::types::address_space;
 use llvm_export::export::DebugKind;
@@ -1880,8 +1880,8 @@ fn emit_entry_allocas(
 /// * `rustc_mono_successors` - Exact per-block successor edges computed by
 ///   rustc's monomorphization rules under the device runtime-check policy
 /// * `is_kernel` - Add `gpu_kernel` attribute for kernel entry points
-/// * `is_inline_always` - Add `alwaysinline` attribute (non-kernel functions
-///   marked `#[inline(always)]` in rustc)
+/// * `inline` - The `#[inline]` request, recorded as [`InlineIntentAttr`] on
+///   non-kernel functions (`set_inline_intent_attr`)
 /// * `override_name` - Custom export name (defaults to instance name)
 pub fn translate_body(
     ctx: &mut Context,
@@ -1890,7 +1890,7 @@ pub fn translate_body(
     rustc_mir_block_count: usize,
     rustc_mono_successors: &[Vec<usize>],
     is_kernel: bool,
-    is_inline_always: bool,
+    inline: Option<InlineIntentAttr>,
     override_name: Option<&str>,
     legaliser: &mut Legaliser,
     debug_kind: DebugKind,
@@ -2380,7 +2380,7 @@ pub fn translate_body(
         llvm_export::ops::set_debug_source_scope_map(ctx, op_ptr, scope_map);
     }
 
-    set_alwaysinline_attr_from_flag(ctx, &mir_func_op, is_kernel, is_inline_always);
+    set_inline_intent_attr(ctx, &mir_func_op, is_kernel, inline);
 
     // Get the function body region (region 0)
     let region_ptr = op_ptr.deref(ctx).get_region(0);
@@ -2514,24 +2514,20 @@ fn function_debug_name(instance: &mono::Instance, is_kernel: bool, export_name: 
     }
 }
 
-/// Propagate `#[inline(always)]` as an LLVM `alwaysinline` function
-/// attribute. Kernel entry points are excluded because they're `.entry` in PTX
-/// and never callees, so marking them `alwaysinline` would be a no-op at best
-/// and rejected by LLVM at worst.
-fn set_alwaysinline_attr_from_flag(
+/// Record the `#[inline]` request on the MIR function (`MirFuncOp::set_inline_intent`;
+/// `mir-lower` makes it the LLVM function attribute). Kernel entry points are
+/// excluded because they're `.entry` in PTX and never callees, so there is no
+/// call the request could apply to.
+fn set_inline_intent_attr(
     ctx: &mut Context,
     mir_func_op: &MirFuncOp,
     is_kernel: bool,
-    is_inline_always: bool,
+    inline: Option<InlineIntentAttr>,
 ) {
-    if is_inline_always && !is_kernel {
-        let attr = pliron::builtin::attributes::StringAttr::new("true".to_string());
-        let key: Identifier = "alwaysinline".try_into().unwrap();
-        mir_func_op
-            .get_operation()
-            .deref_mut(ctx)
-            .attributes
-            .set(key, attr);
+    if let Some(intent) = inline
+        && !is_kernel
+    {
+        mir_func_op.set_inline_intent(ctx, intent);
     }
 }
 
@@ -2747,78 +2743,83 @@ pub fn cuda_oxide_device_generated_kernel(mut wrapped: Wrapper<u16>) -> u32 {
     }
 
     #[test]
-    fn inline_always_flag_reaches_llvm_func_attr_before_export() {
-        let mut ctx = Context::new();
-        crate::translator::register_dialects(&mut ctx);
+    fn inline_intent_reaches_llvm_func_attr_before_export() {
+        for (intent, keyword) in [
+            (InlineIntentAttr::Hint, "inlinehint"),
+            (InlineIntentAttr::Always, "alwaysinline"),
+            (InlineIntentAttr::Never, "noinline"),
+        ] {
+            let mut ctx = Context::new();
+            crate::translator::register_dialects(&mut ctx);
 
-        let module = ModuleOp::new(&mut ctx, "test_module".try_into().unwrap());
-        let module_op = module.get_operation();
-        let module_region = module_op.deref(&ctx).get_region(0);
-        let module_block = {
-            let existing = {
-                let region = module_region.deref(&ctx);
-                region.iter(&ctx).next()
+            let module = ModuleOp::new(&mut ctx, "test_module".try_into().unwrap());
+            let module_op = module.get_operation();
+            let module_region = module_op.deref(&ctx).get_region(0);
+            let module_block = {
+                let existing = {
+                    let region = module_region.deref(&ctx);
+                    region.iter(&ctx).next()
+                };
+                if let Some(block) = existing {
+                    block
+                } else {
+                    let block = BasicBlock::new(&mut ctx, None, vec![]);
+                    block.insert_at_back(module_region, &ctx);
+                    block
+                }
             };
-            if let Some(block) = existing {
-                block
-            } else {
-                let block = BasicBlock::new(&mut ctx, None, vec![]);
-                block.insert_at_back(module_region, &ctx);
-                block
-            }
-        };
 
-        let func_type = FunctionType::get(&ctx, vec![], vec![]);
-        let func_type_attr = TypeAttr::new(func_type.into());
-        let mir_func = {
-            let op = Operation::new(
+            let func_type = FunctionType::get(&ctx, vec![], vec![]);
+            let func_type_attr = TypeAttr::new(func_type.into());
+            let mir_func = {
+                let op = Operation::new(
+                    &mut ctx,
+                    MirFuncOp::get_concrete_op_info(),
+                    vec![],
+                    vec![],
+                    vec![],
+                    1,
+                );
+                let func = MirFuncOp::new(&mut ctx, op, func_type_attr);
+                func.set_symbol_name(&mut ctx, "inline_helper".try_into().unwrap());
+                func
+            };
+
+            set_inline_intent_attr(&mut ctx, &mir_func, false, Some(intent));
+            llvm_export::ops::set_debug_function_name(
                 &mut ctx,
-                MirFuncOp::get_concrete_op_info(),
-                vec![],
-                vec![],
-                vec![],
-                1,
+                mir_func.get_operation(),
+                "source_crate::inline_helper",
             );
-            let func = MirFuncOp::new(&mut ctx, op, func_type_attr);
-            func.set_symbol_name(&mut ctx, "inline_helper".try_into().unwrap());
-            func
-        };
+            mir_func.get_operation().insert_at_back(module_block, &ctx);
 
-        set_alwaysinline_attr_from_flag(&mut ctx, &mir_func, false, true);
-        llvm_export::ops::set_debug_function_name(
-            &mut ctx,
-            mir_func.get_operation(),
-            "source_crate::inline_helper",
-        );
-        mir_func.get_operation().insert_at_back(module_block, &ctx);
+            mir_lower::register(&mut ctx);
+            mir_lower::lower_mir_to_llvm(&mut ctx, module_op).expect("lowering succeeds");
 
-        mir_lower::register(&mut ctx);
-        mir_lower::lower_mir_to_llvm(&mut ctx, module_op).expect("lowering succeeds");
+            let llvm_func = {
+                let block = module_region.deref(&ctx).iter(&ctx).next().unwrap();
+                block
+                    .deref(&ctx)
+                    .iter(&ctx)
+                    .find_map(|op| Operation::get_op::<llvm_export::ops::FuncOp>(op, &ctx))
+                    .expect("lowered LLVM function")
+            };
 
-        let llvm_func = {
-            let block = module_region.deref(&ctx).iter(&ctx).next().unwrap();
-            block
-                .deref(&ctx)
-                .iter(&ctx)
-                .find_map(|op| Operation::get_op::<llvm_export::ops::FuncOp>(op, &ctx))
-                .expect("lowered LLVM function")
-        };
-
-        let key: Identifier = "alwaysinline".try_into().unwrap();
-        assert!(
-            llvm_func
-                .get_operation()
-                .deref(&ctx)
-                .attributes
-                .0
-                .contains_key(&key),
-            "`is_inline_always` must become an LLVM dialect alwaysinline attribute before export",
-        );
-        assert_eq!(
-            llvm_export::ops::debug_function_name(&ctx, llvm_func.get_operation()).as_deref(),
-            Some("source_crate::inline_helper"),
-            "MIR-to-LLVM lowering must preserve the source-facing function name",
-        );
+            let keywords: Vec<String> = llvm_func
+                .get_attr_llvm_func_attrs(&ctx)
+                .map(|attrs| attrs.iter().map(|(name, _)| name.to_string()).collect())
+                .unwrap_or_default();
+            assert_eq!(
+                keywords,
+                [keyword],
+                "{intent:?} must become its one LLVM function attribute before export",
+            );
+            assert_eq!(
+                llvm_export::ops::debug_function_name(&ctx, llvm_func.get_operation()).as_deref(),
+                Some("source_crate::inline_helper"),
+                "MIR-to-LLVM lowering must preserve the source-facing function name",
+            );
+        }
     }
 
     /// Exercise `debug_fragment` against composite `VarDebugInfo` produced by

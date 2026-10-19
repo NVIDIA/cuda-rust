@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-use super::fixtures::{PTX87_EXACT_SM120A, PTX88, PTX90, PTX91_FUTURE, TCGEN_F16, TCGEN_I8};
+use super::fixtures::{PTX87_EXACT_SM120A, PTX88, PTX90, PTX92_FUTURE, TCGEN_F16, TCGEN_I8};
 use crate::generated::GeneratedModuleRequirements;
 use crate::generated_intrinsic_targets::{
     GeneratedHardwareAlternative, GeneratedHardwareTarget, GeneratedIntrinsicBackend,
@@ -482,10 +482,28 @@ fn generated_ptx88_and_ptx90_floors_are_preserved() {
     assert!(validate_ptx_isa_for_llvm_major(PtxIsaRequirement::new(90), Some(21)).is_err());
     validate_ptx_isa_for_llvm_major(PtxIsaRequirement::new(90), Some(22)).unwrap();
 
-    let generated = GeneratedModuleRequirements::from_targets(vec![&PTX91_FUTURE]);
+    // PTX 9.1 is requestable and needs LLVM 23. LLVM 22 ignores `+ptx91` and
+    // emits PTX 8.8, so the gate has to refuse it at compile time.
+    assert_eq!(
+        ptx_isa_requirement_for_floor(91, "test", "test").unwrap(),
+        PtxIsaRequirement::new(91)
+    );
+    assert_eq!(
+        required_ptx_feature(&"sm_120f".parse().unwrap(), PtxIsaRequirement::new(91)).unwrap(),
+        Some("+ptx91")
+    );
+    assert!(validate_ptx_isa_for_llvm_major(PtxIsaRequirement::new(91), None).is_err());
+    let error = validate_ptx_isa_for_llvm_major(PtxIsaRequirement::new(91), Some(22)).unwrap_err();
+    assert!(
+        error.contains("PTX 9.1 or newer requires LLVM 23 or newer"),
+        "{error}"
+    );
+    validate_ptx_isa_for_llvm_major(PtxIsaRequirement::new(91), Some(23)).unwrap();
+
+    let generated = GeneratedModuleRequirements::from_targets(vec![&PTX92_FUTURE]);
     let error = generated_ptx_isa_requirement(&generated).unwrap_err();
 
-    assert!(error.contains("requires PTX 9.1"), "{error}");
+    assert!(error.contains("requires PTX 9.2"), "{error}");
     assert!(
         error.contains("newer than cuda-oxide can request"),
         "{error}"

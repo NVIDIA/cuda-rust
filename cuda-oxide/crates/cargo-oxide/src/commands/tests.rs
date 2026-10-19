@@ -6294,7 +6294,7 @@ cuda_tile.module @tilelib_relu {
 
 #[test]
 fn tilelib_relu_descriptions_print_as_the_upstream_modules() {
-    let library = TileLibrary::from_descriptions(&tilelib_relu_descriptions())
+    let library = TileLibrary::from_descriptions(&tilelib_relu_descriptions(), false)
         .unwrap()
         .library("tilelib_relu");
     library.verify().unwrap();
@@ -6333,36 +6333,36 @@ fn fragmaps_follow_the_synchronization_and_the_footprint() {
     // One invocation per element; a footprint of F gives N/F invocations of
     // F contiguous elements.
     assert_eq!(
-        fragmap(TileSync::None, 128, 1).unwrap(),
+        oxide_tilebc::describe::fragmap(TileSync::None, 128.into(), 1).unwrap(),
         Layout::flat(&[128, 1, 1], &[1, 0, 0])
     );
     assert_eq!(
-        fragmap(TileSync::None, 128, 4).unwrap(),
+        oxide_tilebc::describe::fragmap(TileSync::None, 128.into(), 4).unwrap(),
         Layout::flat(&[32, 1, 4], &[4, 0, 1])
     );
     // A warp per invocation: 32 participants, one element each, or F
     // contiguous elements each with adjacent lanes adjacent in the tile.
     assert_eq!(
-        fragmap(TileSync::Warp, 128, 1).unwrap(),
+        oxide_tilebc::describe::fragmap(TileSync::Warp, 128.into(), 1).unwrap(),
         Layout::flat(&[4, 32, 1], &[32, 1, 0])
     );
     assert_eq!(
-        fragmap(TileSync::Warp, 256, 4).unwrap(),
+        oxide_tilebc::describe::fragmap(TileSync::Warp, 256.into(), 4).unwrap(),
         Layout::flat(&[2, 32, 4], &[128, 4, 1])
     );
     // The footprint must divide the tile size.
     assert!(
-        fragmap(TileSync::None, 128, 3)
+        oxide_tilebc::describe::fragmap(TileSync::None, 128.into(), 3)
             .unwrap_err()
             .contains("does not divide")
     );
     assert!(
-        fragmap(TileSync::Warp, 64, 4)
+        oxide_tilebc::describe::fragmap(TileSync::Warp, 64.into(), 4)
             .unwrap_err()
             .contains("multiple of 128")
     );
     assert!(
-        fragmap(TileSync::None, 128, 0)
+        oxide_tilebc::describe::fragmap(TileSync::None, 128.into(), 0)
             .unwrap_err()
             .contains("positive")
     );
@@ -6376,7 +6376,7 @@ fn fragmaps_follow_the_synchronization_and_the_footprint() {
         param.footprint = 4;
         param.by_value = false;
     }
-    let library = TileLibrary::from_descriptions(&descriptions)
+    let library = TileLibrary::from_descriptions(&descriptions, false)
         .unwrap()
         .library("lib");
     library.verify().unwrap();
@@ -6401,7 +6401,7 @@ fn fragmaps_follow_the_synchronization_and_the_footprint() {
     // description is refused before the verifier would reject the fragmaps.
     descriptions[1].params[1].footprint = 1;
     descriptions[1].params[1].by_value = true;
-    let error = TileLibrary::from_descriptions(&descriptions).unwrap_err();
+    let error = TileLibrary::from_descriptions(&descriptions, false).unwrap_err();
     assert!(
         error.contains("`x` (footprint 4) and `factor` (footprint 1) differ"),
         "{error}"
@@ -6418,14 +6418,14 @@ fn a_bf16_scalar_passed_by_value_adds_the_frontend_abi_entry() {
     for param in &mut relu.params {
         param.elem = TileElem::BF16;
     }
-    let (_, implementation) = describe_export(relu).unwrap();
+    let (_, implementation) = oxide_tilebc::describe::export(relu).unwrap();
     assert_eq!(
         implementation.frontend_abi,
         vec![("bf16".to_string(), "i16".to_string())]
     );
     // No `sync` means no clause at all, not an explicit `synchronization<none>`.
     assert_eq!(implementation.synchronization, None);
-    let library = TileLibrary::from_descriptions(&descriptions[..1])
+    let library = TileLibrary::from_descriptions(&descriptions[..1], false)
         .unwrap()
         .library("lib");
     library.verify().unwrap();
@@ -6439,7 +6439,7 @@ fn a_bf16_scalar_passed_by_value_adds_the_frontend_abi_entry() {
     // A bf16 behind a pointer travels as a pointer and needs no entry.
     let scale = &mut descriptions[1];
     scale.params[0].elem = TileElem::BF16;
-    let (_, implementation) = describe_export(scale).unwrap();
+    let (_, implementation) = oxide_tilebc::describe::export(scale).unwrap();
     assert!(implementation.frontend_abi.is_empty());
 
     // Unsigned Rust integers are the signless Tile IR integers.
@@ -6447,7 +6447,7 @@ fn a_bf16_scalar_passed_by_value_adds_the_frontend_abi_entry() {
     for param in &mut warp_sum.params {
         param.elem = TileElem::U32;
     }
-    let (func, implementation) = describe_export(warp_sum).unwrap();
+    let (func, implementation) = oxide_tilebc::describe::export(warp_sum).unwrap();
     assert_eq!(func.args[0].ty.element, oxide_tilebc::ScalarType::I32);
     assert_eq!(
         implementation.args[1].fragment.element,
@@ -6928,4 +6928,80 @@ fn test_host_linker_reads_project_config_env_and_returns_err() {
     });
     let err = host_linker_rustflags(&ctx).unwrap_err();
     assert!(err.contains("unsupported CUDA_OXIDE_LINKER value"), "{err}");
+}
+
+// =============================================================================
+// cargo oxide tilelib --provider
+// =============================================================================
+
+#[test]
+fn a_static_library_leaves_parametric_exports_out_and_says_so() {
+    let mut descriptions = tilelib_relu_descriptions();
+    descriptions[0].shape = None;
+    let library = TileLibrary::from_descriptions(&descriptions, false).unwrap();
+    assert_eq!(library.funcs.len(), 2);
+    assert_eq!(library.skipped, vec!["relu".to_string()]);
+    // The provider form ships every export, the parametric one as such.
+    let library = TileLibrary::from_descriptions(&descriptions, true).unwrap();
+    assert_eq!(library.funcs.len(), 3);
+    assert!(library.skipped.is_empty());
+    let text = library.library("lib").interface_text();
+    assert!(text.contains("@relu<[N: index]>"), "{text}");
+    assert!(
+        text.contains("@scale_in_place(%x: !cuda_tile.tile<128xf32>"),
+        "{text}"
+    );
+    // Nothing left for a static library is an error that names the way out.
+    for description in &mut descriptions {
+        description.shape = None;
+    }
+    let error = TileLibrary::from_descriptions(&descriptions, false).unwrap_err();
+    assert!(error.contains("--provider"), "{error}");
+}
+
+#[test]
+fn the_generated_provider_crate_names_everything_it_needs() {
+    let manifest = provider_manifest("tilelib_relu", Path::new("/ws/crates/oxide-tile-provider"));
+    for needle in [
+        "name = \"tilelib_relu-provider\"",
+        "name = \"tilelib_relu_provider\"",
+        "crate-type = [\"cdylib\"]",
+        "oxide-tile-provider = { path = \"/ws/crates/oxide-tile-provider\" }",
+        "[workspace]",
+    ] {
+        assert!(manifest.contains(needle), "{needle}\n{manifest}");
+    }
+    let source = provider_lib_source(
+        "tilelib_relu",
+        oxide_tilebc::BytecodeVersion::new(13, 6),
+        true,
+    );
+    for needle in [
+        "oxide_tile_provider::define_provider! {",
+        "name: \"tilelib_relu\",",
+        "descriptions: include_str!(\"../tilelib_relu.tileexports.json\"),",
+        "bytecode_version: (13, 6),",
+        "nvvm_ir: include_str!(\"../tilelib_relu.ll\"),",
+        "fma_contraction: true,",
+    ] {
+        assert!(source.contains(needle), "{needle}\n{source}");
+    }
+    assert_eq!(provider_lib_name("my-lib"), "my_lib_provider");
+    let paths = TileLibraryPaths::new(Path::new("/crate"), "my-lib", None);
+    assert_eq!(
+        provider_tile_lib_command(
+            Path::new("/opt/cuda/bin/tileiras"),
+            &paths,
+            Path::new("/crate/target/oxide-provider/my_lib/target/release/libmy_lib_provider.so"),
+        ),
+        vec![
+            "/opt/cuda/bin/tileiras".to_string(),
+            "--preview-create-tile-lib".to_string(),
+            "--preview-interface=/crate/my_lib.iface.tilebc".to_string(),
+            "--preview-implementation=/crate/target/oxide-provider/my_lib/target/release/libmy_lib_provider.so"
+                .to_string(),
+            "-o".to_string(),
+            "/crate/my_lib.tilelib".to_string(),
+        ]
+    );
 }

@@ -13,7 +13,7 @@ use super::*;
 
 const GIT_REPO: &str = "https://github.com/NVIDIA/cuda-rust.git";
 
-const RUST_TOOLCHAIN_TOML: &str = r#"[toolchain]
+pub(super) const RUST_TOOLCHAIN_TOML: &str = r#"[toolchain]
 channel = "1.99.1"
 components = ["rust-src", "rustc-dev", "rust-analyzer", "clippy", "rustfmt", "llvm-tools"]
 "#;

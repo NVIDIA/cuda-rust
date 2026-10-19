@@ -484,12 +484,17 @@ impl LoopUnrollAttrVisitor {
         Some((factor, attr.span()))
     }
 
-    /// Build the `__unroll_config::<FACTOR>()` marker statement at `span`, the
-    /// `#[unroll]` attribute's, so diagnostics about the loop point at it.
+    /// Build the `__unroll_config::<FACTOR>()` marker statement. The call
+    /// carries `span`, the `#[unroll]` attribute's, so diagnostics about the
+    /// loop point at the attribute. The braces around the factor keep the
+    /// macro's own span. On the attribute's span rustc treats them as written
+    /// by the user, and its `unused_braces` lint then reports every literal
+    /// factor with a fix-it that deletes the attribute.
     fn marker_stmt(factor: &ConstU32Expr, span: proc_macro2::Span) -> Stmt {
         let expr = &factor.expr;
+        let factor_arg = quote! { { #expr } };
         syn::parse_quote_spanned! {span=>
-            cuda_device::thread::__unroll_config::<{ #expr }>();
+            cuda_device::thread::__unroll_config::<#factor_arg>();
         }
     }
 }

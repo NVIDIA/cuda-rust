@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 950 340" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+    
+    <!-- Arrow markers -->
+    <marker id="arrow-white" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M 0 0.5 L 5 3 L 0 5.5" fill="none" stroke="#ffffff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="950" height="340" fill="#0d1117"/>
+  <rect width="950" height="340" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="475" y="38" text-anchor="middle" font-size="24" font-weight="700" fill="#ffffff" letter-spacing="-0.5">Lazy Computation Graph</text>
+  <line x1="325" y1="50" x2="625" y2="50" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+  <text x="475" y="72" text-anchor="middle" font-size="14" font-weight="500" fill="#8b949e">DeviceOps compose into graphs that run on .await</text>
+
+  <!-- Input nodes (stacked vertically on left) -->
+  <g transform="translate(40, 115)">
+    <!-- randn([m,k]) - X -->
+    <rect x="0" y="0" width="110" height="40" rx="8" fill="#f97583"/>
+    <text x="55" y="17" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="10" font-weight="600" fill="#ffffff">randn([m,k])</text>
+    <text x="55" y="32" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">X</text>
+    
+    <!-- randn([k,n]) - Y -->
+    <rect x="0" y="55" width="110" height="40" rx="8" fill="#79c0ff"/>
+    <text x="55" y="72" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="10" font-weight="600" fill="#ffffff">randn([k,n])</text>
+    <text x="55" y="87" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">Y</text>
+    
+    <!-- zeros([m,n]) - Output buffer -->
+    <rect x="0" y="110" width="110" height="40" rx="8" fill="#d2a8ff"/>
+    <text x="55" y="127" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="10" font-weight="600" fill="#ffffff">zeros([m,n])</text>
+    <text x="55" y="142" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">Z buffer</text>
+  </g>
+
+  <!-- Single converging arrow from inputs to matmul -->
+  <g>
+    <!-- Horizontal lines from each input -->
+    <line x1="150" y1="135" x2="190" y2="135" stroke="#ffffff" stroke-width="1.5"/>
+    <line x1="150" y1="190" x2="190" y2="190" stroke="#ffffff" stroke-width="1.5"/>
+    <line x1="150" y1="245" x2="190" y2="245" stroke="#ffffff" stroke-width="1.5"/>
+    
+    <!-- Vertical connector -->
+    <line x1="190" y1="135" x2="190" y2="245" stroke="#ffffff" stroke-width="1.5"/>
+    
+    <!-- Single arrow to matmul -->
+    <line x1="190" y1="190" x2="250" y2="190" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+  </g>
+
+  <!-- Matmul node -->
+  <g transform="translate(260, 165)">
+    <rect x="0" y="0" width="110" height="50" rx="8" fill="#56d364"/>
+    <text x="55" y="22" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">matmul</text>
+    <text x="55" y="40" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">Z = X @ Y</text>
+  </g>
+
+  <!-- Arrow to activation -->
+  <line x1="370" y1="190" x2="420" y2="190" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+
+  <!-- Activation node -->
+  <g transform="translate(430, 165)">
+    <rect x="0" y="0" width="110" height="50" rx="8" fill="#ffa657"/>
+    <text x="55" y="22" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">activation</text>
+    <text x="55" y="40" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">ReLU / GELU</text>
+  </g>
+
+  <!-- Arrow to normalize -->
+  <line x1="540" y1="190" x2="590" y2="190" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+
+  <!-- Normalize node -->
+  <g transform="translate(600, 165)">
+    <rect x="0" y="0" width="110" height="50" rx="8" fill="#79c0ff"/>
+    <text x="55" y="22" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">normalize</text>
+    <text x="55" y="40" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">LayerNorm</text>
+  </g>
+
+  <!-- Arrow to output -->
+  <line x1="710" y1="190" x2="760" y2="190" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+
+  <!-- Output node -->
+  <g transform="translate(770, 165)">
+    <rect x="0" y="0" width="90" height="50" rx="8" fill="#76B900"/>
+    <text x="45" y="22" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">output</text>
+    <text x="45" y="40" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="11" font-weight="600" fill="#ffffff">.await</text>
+  </g>
+
+  <!-- Legend - brighter text -->
+  <g transform="translate(75, 280)">
+    <rect x="0" y="0" width="800" height="40" rx="6" fill="#161b22"/>
+    
+    <text x="25" y="25" font-size="12" font-weight="600" fill="#c9d1d9">Graph is built lazily</text>
+    <text x="185" y="25" font-size="14" font-weight="700" fill="#ffffff">→</text>
+    <text x="210" y="25" font-size="12" font-weight="600" fill="#c9d1d9">Operations can be fused</text>
+    <text x="400" y="25" font-size="14" font-weight="700" fill="#ffffff">→</text>
+    <text x="425" y="25" font-size="12" font-weight="600" fill="#c9d1d9">Memory reused</text>
+    <text x="560" y="25" font-size="14" font-weight="700" fill="#ffffff">→</text>
+    <text x="585" y="25" font-size="12" font-weight="600" fill="#c9d1d9">Executes on</text>
+    <text x="680" y="25" font-family="'RobotoMono', monospace" font-size="12" font-weight="700" fill="#76B900">.await</text>
+  </g>
+
+</svg>

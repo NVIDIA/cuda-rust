@@ -1,0 +1,19 @@
+[package]
+name = "cutile-kernels"
+# Internal kernel corpus; never published (semver-checks skips publish = false).
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Reusable cuTile Rust kernels."
+readme = "README.md"
+
+[dependencies]
+cutile = { workspace = true }
+cutile-compiler = { workspace = true }
+
+[lints]
+workspace = true

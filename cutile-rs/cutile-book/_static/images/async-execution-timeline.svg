@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 640" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Arrow markers -->
+    <marker id="arrow-white" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#ffffff"/>
+    </marker>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+    
+    <!-- Idle pattern -->
+    <pattern id="idle-pattern" patternUnits="userSpaceOnUse" width="10" height="10">
+      <path d="M-2,2 l4,-4 M0,10 l10,-10 M8,12 l4,-4" style="stroke:#484f58; stroke-width:0.8"/>
+    </pattern>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="640" fill="#0d1117"/>
+  <rect width="900" height="640" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="450" y="40" text-anchor="middle" font-size="24" font-weight="600" fill="#ffffff" letter-spacing="-0.5">Sync vs Async Execution</text>
+  <line x1="300" y1="54" x2="600" y2="54" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+
+  <!-- ==================== SYNC EXECUTION (Top) ==================== -->
+  <g transform="translate(50, 90)">
+    <!-- Container -->
+    <rect width="800" height="185" rx="10" fill="#161b22"/>
+    <rect width="800" height="185" rx="10" fill="none" stroke="#ff7b72" stroke-width="2" stroke-dasharray="6,4"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="796" height="36" rx="8" fill="#3d1f1f"/>
+    <text x="400" y="26" text-anchor="middle" font-size="15" font-weight="700" fill="#ff7b72">❌ Sync Execution: CPU waits for GPU</text>
+    
+    <!-- CPU Track -->
+    <g transform="translate(30, 60)">
+      <text x="0" y="22" font-size="13" font-weight="700" fill="#79c0ff">CPU</text>
+      
+      <!-- Setup -->
+      <rect x="55" y="0" width="70" height="34" rx="5" fill="#79c0ff"/>
+      <text x="90" y="22" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">setup</text>
+      
+      <!-- Launch -->
+      <rect x="135" y="0" width="65" height="34" rx="5" fill="#79c0ff"/>
+      <text x="167" y="22" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">launch</text>
+      
+      <!-- IDLE (waiting) -->
+      <rect x="210" y="0" width="320" height="34" rx="5" fill="url(#idle-pattern)"/>
+      <rect x="210" y="0" width="320" height="34" rx="5" fill="none" stroke="#ff7b72" stroke-width="2" stroke-dasharray="4,2"/>
+      <text x="370" y="22" text-anchor="middle" font-size="13" font-weight="700" fill="#ff7b72">⏳ IDLE — waiting for GPU</text>
+      
+      <!-- Result -->
+      <rect x="540" y="0" width="60" height="34" rx="5" fill="#79c0ff"/>
+      <text x="570" y="22" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">result</text>
+    </g>
+    
+    <!-- GPU Track -->
+    <g transform="translate(30, 115)">
+      <text x="0" y="22" font-size="13" font-weight="700" fill="#56d364">GPU</text>
+      
+      <!-- Kernel execution -->
+      <rect x="210" y="0" width="320" height="34" rx="5" fill="#56d364"/>
+      <text x="370" y="22" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">kernel execution</text>
+    </g>
+    
+    <!-- Sync connection lines - properly aligned -->
+    <g stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.5" fill="none">
+      <!-- Launch to GPU start -->
+      <path d="M 230 94 L 230 105 L 240 115"/>
+      <!-- GPU end to Result -->
+      <path d="M 560 115 L 560 105 L 560 94"/>
+    </g>
+    
+    <!-- Timeline axis -->
+    <g transform="translate(30, 165)">
+      <path d="M 55 0 L 620 0" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+      <text x="640" y="5" font-size="12" font-weight="700" fill="#ffffff">time</text>
+    </g>
+  </g>
+
+  <!-- ==================== ASYNC EXECUTION (Bottom) ==================== -->
+  <g transform="translate(50, 310)">
+    <!-- Container -->
+    <rect width="800" height="210" rx="10" fill="#161b22"/>
+    <rect width="800" height="210" rx="10" fill="none" stroke="#76B900" stroke-width="2.5"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="796" height="36" rx="8" fill="#1a2a1a"/>
+    <text x="400" y="26" text-anchor="middle" font-size="15" font-weight="700" fill="#76B900">✓ Async Execution: CPU continues working</text>
+    
+    <!-- CPU Track -->
+    <g transform="translate(30, 65)">
+      <text x="0" y="22" font-size="13" font-weight="700" fill="#79c0ff">CPU</text>
+      
+      <!-- Setup -->
+      <rect x="55" y="0" width="70" height="34" rx="5" fill="#79c0ff"/>
+      <text x="90" y="22" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">setup</text>
+      
+      <!-- Launch -->
+      <rect x="135" y="0" width="65" height="34" rx="5" fill="#79c0ff"/>
+      <text x="167" y="22" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">launch</text>
+      
+      <!-- Other work blocks (during GPU) -->
+      <rect x="210" y="0" width="105" height="34" rx="5" fill="#ffa657"/>
+      <text x="262" y="22" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">prep batch 2</text>
+      
+      <rect x="325" y="0" width="80" height="34" rx="5" fill="#d2a8ff"/>
+      <text x="365" y="22" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">logging</text>
+      
+      <rect x="415" y="0" width="75" height="34" rx="5" fill="#e3b341"/>
+      <text x="452" y="22" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">metrics</text>
+      
+      <!-- Await -->
+      <rect x="500" y="0" width="55" height="34" rx="5" fill="#79c0ff"/>
+      <text x="527" y="22" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">await</text>
+      
+      <!-- Result -->
+      <rect x="565" y="0" width="55" height="34" rx="5" fill="#79c0ff"/>
+      <text x="592" y="22" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">result</text>
+    </g>
+    
+    <!-- GPU Track -->
+    <g transform="translate(30, 125)">
+      <text x="0" y="22" font-size="13" font-weight="700" fill="#56d364">GPU</text>
+      
+      <!-- Kernel execution -->
+      <rect x="210" y="0" width="345" height="34" rx="5" fill="#56d364"/>
+      <text x="382" y="22" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">kernel execution</text>
+    </g>
+    
+    <!-- Async connection lines - properly aligned -->
+    <g stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.5" fill="none">
+      <!-- Launch to GPU start -->
+      <path d="M 230 99 L 230 115 L 240 125"/>
+      <!-- GPU end to await/result -->
+      <path d="M 585 125 L 585 115 L 585 99"/>
+    </g>
+    
+    <!-- Timeline axis -->
+    <g transform="translate(30, 180)">
+      <path d="M 55 0 L 640 0" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+      <text x="660" y="5" font-size="12" font-weight="700" fill="#ffffff">time</text>
+    </g>
+  </g>
+
+  <!-- Benefit callout - separate box outside the green container -->
+  <g transform="translate(660, 545)">
+    <rect width="190" height="80" rx="8" fill="#21262d"/>
+    <rect width="190" height="80" rx="8" fill="none" stroke="#76B900" stroke-width="1.5"/>
+    <text x="95" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#76B900">⚡ CPU keeps working!</text>
+    <text x="95" y="50" text-anchor="middle" font-size="12" font-weight="600" fill="#c9d1d9">Prepare next batch</text>
+    <text x="95" y="68" text-anchor="middle" font-size="11" font-weight="500" fill="#8b949e">while GPU computes</text>
+  </g>
+
+</svg>

@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 660" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+    
+    <!-- Arrow markers -->
+    <marker id="arrow-right" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M 0 0 L 10 4 L 0 8 L 2.5 4 Z" fill="#ffffff"/>
+    </marker>
+    <marker id="arrow-right-green" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M 0 0 L 10 4 L 0 8 L 2.5 4 Z" fill="#56d364"/>
+    </marker>
+    <marker id="arrow-left-green" markerWidth="10" markerHeight="8" refX="1" refY="4" orient="auto">
+      <path d="M 10 0 L 0 4 L 10 8 L 7.5 4 Z" fill="#56d364"/>
+    </marker>
+    <marker id="arrow-left-gray" markerWidth="10" markerHeight="8" refX="1" refY="4" orient="auto">
+      <path d="M 10 0 L 0 4 L 10 8 L 7.5 4 Z" fill="#8b949e"/>
+    </marker>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="920" height="660" fill="#0d1117"/>
+  <rect width="920" height="660" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="400" y="38" text-anchor="middle" font-size="24" font-weight="700" fill="#ffffff" letter-spacing="-0.5">DeviceOp Execution Flow</text>
+  <line x1="230" y1="50" x2="570" y2="50" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+  <text x="400" y="72" text-anchor="middle" font-size="14" font-weight="500" fill="#8b949e">What happens when you .await a DeviceOp</text>
+
+  <!-- Column Headers -->
+  <g transform="translate(0, 95)">
+    <rect x="50" y="0" width="130" height="35" rx="6" fill="#f97583"/>
+    <text x="115" y="23" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">Your Code</text>
+    
+    <rect x="210" y="0" width="140" height="35" rx="6" fill="#79c0ff"/>
+    <text x="280" y="23" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">Tokio Runtime</text>
+    
+    <rect x="380" y="0" width="130" height="35" rx="6" fill="#d2a8ff"/>
+    <text x="445" y="23" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">cuTile Rust</text>
+    
+    <rect x="540" y="0" width="100" height="35" rx="6" fill="#56d364"/>
+    <text x="590" y="23" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">GPU</text>
+  </g>
+
+  <!-- Vertical lifelines -->
+  <line x1="115" y1="145" x2="115" y2="600" stroke="#f97583" stroke-width="2" stroke-dasharray="4,4" opacity="0.4"/>
+  <line x1="280" y1="145" x2="280" y2="600" stroke="#79c0ff" stroke-width="2" stroke-dasharray="4,4" opacity="0.4"/>
+  <line x1="445" y1="145" x2="445" y2="600" stroke="#d2a8ff" stroke-width="2" stroke-dasharray="4,4" opacity="0.4"/>
+  <line x1="590" y1="145" x2="590" y2="600" stroke="#56d364" stroke-width="2" stroke-dasharray="4,4" opacity="0.4"/>
+
+  <!-- Step 1: .await -->
+  <g transform="translate(0, 160)">
+    <circle cx="40" cy="20" r="16" fill="#f97583"/>
+    <text x="40" y="25" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">1</text>
+    
+    <rect x="65" y="0" width="100" height="40" rx="6" fill="#f97583"/>
+    <text x="115" y="25" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="12" font-weight="700" fill="#ffffff">.await</text>
+    
+    <!-- Arrow to Tokio -->
+    <line x1="165" y1="20" x2="208" y2="20" stroke="#ffffff" stroke-width="2" marker-end="url(#arrow-right)"/>
+  </g>
+
+  <!-- Step 2: into_future() -->
+  <g transform="translate(0, 220)">
+    <circle cx="40" cy="20" r="16" fill="#79c0ff"/>
+    <text x="40" y="25" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">2</text>
+    
+    <rect x="210" y="0" width="140" height="40" rx="6" fill="#79c0ff"/>
+    <text x="280" y="18" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="11" font-weight="700" fill="#ffffff">into_future()</text>
+    <text x="280" y="33" text-anchor="middle" font-size="10" font-weight="500" fill="#ffffff">(immediate)</text>
+    
+    <!-- Arrow to cuTile Rust -->
+    <line x1="350" y1="20" x2="378" y2="20" stroke="#ffffff" stroke-width="2" marker-end="url(#arrow-right)"/>
+  </g>
+
+  <!-- Step 3: DevicePolicy::schedule() -->
+  <g transform="translate(0, 290)">
+    <circle cx="40" cy="20" r="16" fill="#d2a8ff"/>
+    <text x="40" y="25" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">3</text>
+    
+    <rect x="380" y="0" width="130" height="40" rx="6" fill="#d2a8ff"/>
+    <text x="445" y="18" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="10" font-weight="700" fill="#ffffff">DevicePolicy</text>
+    <text x="445" y="33" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="10" font-weight="700" fill="#ffffff">::schedule()</text>
+  </g>
+  
+  <!-- Return arrow from DevicePolicy to Tokio (L-shape: UP then LEFT) - drawn separately -->
+  <g>
+    <!-- Vertical line going UP from DevicePolicy to Tokio's row -->
+    <line x1="365" y1="310" x2="365" y2="260" stroke="#8b949e" stroke-width="1.5"/>
+    <!-- Horizontal line going LEFT to Tokio column -->
+    <line x1="365" y1="260" x2="352" y2="260" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrow-left-gray)"/>
+    <text x="370" y="282" text-anchor="start" font-size="10" font-weight="600" fill="#c9d1d9">returns</text>
+    <text x="370" y="294" text-anchor="start" font-size="10" font-weight="600" fill="#c9d1d9">DeviceFuture</text>
+  </g>
+
+  <!-- Step 4: First poll() -->
+  <g transform="translate(0, 370)">
+    <circle cx="40" cy="20" r="16" fill="#79c0ff"/>
+    <text x="40" y="25" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">4</text>
+    
+    <rect x="210" y="0" width="140" height="40" rx="6" fill="#79c0ff"/>
+    <text x="280" y="18" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="11" font-weight="700" fill="#ffffff">first poll()</text>
+    <text x="280" y="33" text-anchor="middle" font-size="10" font-weight="500" fill="#ffffff">triggers execution</text>
+    
+    <!-- Arrow to cuTile Rust -->
+    <line x1="350" y1="20" x2="378" y2="20" stroke="#ffffff" stroke-width="2" marker-end="url(#arrow-right)"/>
+  </g>
+
+  <!-- Step 5: execute() -->
+  <g transform="translate(0, 430)">
+    <circle cx="40" cy="20" r="16" fill="#d2a8ff"/>
+    <text x="40" y="25" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">5</text>
+    
+    <rect x="380" y="0" width="130" height="40" rx="6" fill="#d2a8ff"/>
+    <text x="445" y="25" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="11" font-weight="700" fill="#ffffff">execute()</text>
+    
+    <!-- Arrow to GPU -->
+    <line x1="510" y1="20" x2="538" y2="20" stroke="#56d364" stroke-width="2" marker-end="url(#arrow-right-green)"/>
+    
+    <!-- GPU Work box -->
+    <rect x="540" y="0" width="100" height="40" rx="6" fill="#56d364"/>
+    <text x="590" y="18" text-anchor="middle" font-size="11" font-weight="700" fill="#ffffff">GPU work</text>
+    <text x="590" y="33" text-anchor="middle" font-size="10" font-weight="500" fill="#ffffff">starts!</text>
+  </g>
+
+  <!-- Step 6: Subsequent polls -->
+  <g transform="translate(0, 500)">
+    <circle cx="40" cy="20" r="16" fill="#79c0ff"/>
+    <text x="40" y="25" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">6</text>
+    
+    <rect x="210" y="0" width="140" height="40" rx="6" fill="#161b22"/>
+    <rect x="210" y="0" width="140" height="40" rx="6" fill="none" stroke="#79c0ff" stroke-width="1.5"/>
+    <text x="280" y="18" text-anchor="middle" font-size="11" font-weight="600" fill="#c9d1d9">subsequent</text>
+    <text x="280" y="33" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="10" font-weight="600" fill="#79c0ff">poll()</text>
+    
+    <!-- Bidirectional arrow to GPU -->
+    <line x1="350" y1="20" x2="538" y2="20" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="6,3"/>
+    <text x="444" y="12" text-anchor="middle" font-size="9" font-weight="500" fill="#8b949e">check completion</text>
+  </g>
+
+  <!-- Step 7: Ready! -->
+  <g transform="translate(0, 580)">
+    <circle cx="40" cy="20" r="16" fill="#56d364"/>
+    <text x="40" y="25" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">7</text>
+    
+    <rect x="65" y="0" width="100" height="40" rx="6" fill="#56d364"/>
+    <text x="115" y="25" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">Ready! ✓</text>
+  </g>
+  
+  <!-- Return arrow from GPU to Ready (L-shape: DOWN then LEFT) - drawn separately -->
+  <g>
+    <!-- Vertical line going DOWN from GPU work box -->
+    <line x1="590" y1="470" x2="590" y2="600" stroke="#56d364" stroke-width="2"/>
+    <!-- Horizontal line going LEFT to Your Code column -->
+    <line x1="590" y1="600" x2="167" y2="600" stroke="#56d364" stroke-width="2" marker-end="url(#arrow-left-green)"/>
+    <text x="380" y="592" text-anchor="middle" font-size="11" font-weight="600" fill="#56d364">Poll::Ready(result)</text>
+  </g>
+
+  <!-- Key insight box - LARGER -->
+  <g transform="translate(680, 140)">
+    <rect width="220" height="200" rx="10" fill="#76B900"/>
+    <text x="110" y="35" text-anchor="middle" font-size="18" font-weight="700" fill="#ffffff">Key Insight</text>
+    
+    <line x1="25" y1="52" x2="195" y2="52" stroke="#ffffff" stroke-width="1" opacity="0.3"/>
+    
+    <text x="25" y="82" font-size="14" font-weight="600" fill="#ffffff">GPU work starts at</text>
+    <text x="25" y="105" font-size="14" font-weight="600" fill="#ffffff">step 5 (execute),</text>
+    <text x="25" y="128" font-size="14" font-weight="700" fill="#ffffff">not at .await!</text>
+    
+    <line x1="25" y1="148" x2="195" y2="148" stroke="#ffffff" stroke-width="1" opacity="0.3"/>
+    
+    <text x="25" y="175" font-size="13" font-weight="500" fill="#ffffff">The first poll()</text>
+    <text x="25" y="195" font-size="13" font-weight="500" fill="#ffffff">triggers actual work.</text>
+  </g>
+
+</svg>

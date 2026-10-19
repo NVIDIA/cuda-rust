@@ -1,0 +1,17 @@
+# Reviewed cluster address mapping and remote shared-memory read operations.
+
+schema = 39
+family = "cluster_memory"
+
+[cluster_memory]
+llvm_evidence_profile = "rust-llvm-23.1.3-aab11ee0-cluster-memory"
+libnvvm_evidence_profile = "cuda-13.3-libnvvm-13.3.33-cluster-memory"
+runtime_validation = "unexecuted"
+
+[[cluster_memory.variant]]
+abi_id = "i0320"
+operation = "map_shared_rank"
+
+[[cluster_memory.variant]]
+abi_id = "i0321"
+operation = "read_u32"

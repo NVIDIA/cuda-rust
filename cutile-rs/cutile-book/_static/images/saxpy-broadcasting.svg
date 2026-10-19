@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 440" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 700;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Bd.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Arrow marker -->
+    <marker id="arrow-white" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M 0 0.5 L 5 3 L 0 5.5" fill="none" stroke="#ffffff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="440" fill="#0d1117"/>
+  <rect width="900" height="440" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="450" y="38" text-anchor="middle" font-size="24" font-weight="500" fill="#ffffff" letter-spacing="-0.5">Broadcasting: Scalar → Tile</text>
+  <line x1="280" y1="50" x2="620" y2="50" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+  <text x="450" y="72" text-anchor="middle" font-size="14" fill="#8b949e">Replicate a single value to match a tile's shape</text>
+
+  <!-- ==================== LEFT: Scalar ==================== -->
+  <g transform="translate(80, 100)">
+    <!-- Container -->
+    <rect width="160" height="170" rx="10" fill="#161b22"/>
+    <rect width="160" height="170" rx="10" fill="none" stroke="#ffffff" stroke-width="2"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="156" height="36" rx="8" fill="#1c2128"/>
+    <text x="80" y="26" text-anchor="middle" font-size="14" font-weight="500" fill="#c9d1d9">Scalar</text>
+    
+    <!-- Single value box - centered -->
+    <g transform="translate(40, 55)">
+      <rect width="80" height="80" rx="10" fill="#ffa657"/>
+      <text x="40" y="50" text-anchor="middle" font-size="28" font-weight="700" fill="#ffffff">2.0</text>
+    </g>
+    
+    <!-- Label -->
+    <text x="80" y="158" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="12" fill="#8b949e">a: f32</text>
+  </g>
+
+  <!-- Arrow with label -->
+  <g transform="translate(255, 175)">
+    <rect x="0" y="-15" width="140" height="30" rx="6" fill="#21262d"/>
+    <text x="70" y="5" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="11" fill="#76B900">.broadcast([4,4])</text>
+    <path d="M 150 0 L 195 0" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+  </g>
+
+  <!-- ==================== RIGHT: Broadcast Tile ==================== -->
+  <g transform="translate(465, 100)">
+    <!-- Container -->
+    <rect width="360" height="260" rx="10" fill="#161b22"/>
+    <rect width="360" height="260" rx="10" fill="none" stroke="#ffffff" stroke-width="2"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="356" height="36" rx="8" fill="#1c2128"/>
+    <text x="180" y="26" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="14" font-weight="500" fill="#c9d1d9" letter-spacing="1">Tile&lt;f32, [4, 4]&gt;</text>
+    
+    <!-- 4x4 Grid of values -->
+    <g transform="translate(15, 50)">
+      <!-- Row 0 -->
+      <rect x="0" y="0" width="78" height="38" rx="6" fill="#56d364"/>
+      <text x="39" y="26" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">2.0</text>
+      
+      <rect x="83" y="0" width="78" height="38" rx="6" fill="#56d364"/>
+      <text x="122" y="26" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">2.0</text>
+      
+      <rect x="166" y="0" width="78" height="38" rx="6" fill="#56d364"/>
+      <text x="205" y="26" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">2.0</text>
+      
+      <rect x="249" y="0" width="78" height="38" rx="6" fill="#56d364"/>
+      <text x="288" y="26" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">2.0</text>
+      
+      <!-- Row 1 -->
+      <rect x="0" y="43" width="78" height="38" rx="6" fill="#56d364"/>
+      <text x="39" y="69" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">2.0</text>
+      
+      <rect x="83" y="43" width="78" height="38" rx="6" fill="#56d364"/>
+      <text x="122" y="69" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">2.0</text>
+      
+      <rect x="166" y="43" width="78" height="38" rx="6" fill="#56d364"/>
+      <text x="205" y="69" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">2.0</text>
+      
+      <rect x="249" y="43" width="78" height="38" rx="6" fill="#56d364"/>
+      <text x="288" y="69" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">2.0</text>
+      
+      <!-- Row 2 -->
+      <rect x="0" y="86" width="78" height="38" rx="6" fill="#56d364"/>
+      <text x="39" y="112" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">2.0</text>
+      
+      <rect x="83" y="86" width="78" height="38" rx="6" fill="#56d364"/>
+      <text x="122" y="112" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">2.0</text>
+      
+      <rect x="166" y="86" width="78" height="38" rx="6" fill="#56d364"/>
+      <text x="205" y="112" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">2.0</text>
+      
+      <rect x="249" y="86" width="78" height="38" rx="6" fill="#56d364"/>
+      <text x="288" y="112" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">2.0</text>
+      
+      <!-- Row 3 -->
+      <rect x="0" y="129" width="78" height="38" rx="6" fill="#56d364"/>
+      <text x="39" y="155" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">2.0</text>
+      
+      <rect x="83" y="129" width="78" height="38" rx="6" fill="#56d364"/>
+      <text x="122" y="155" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">2.0</text>
+      
+      <rect x="166" y="129" width="78" height="38" rx="6" fill="#56d364"/>
+      <text x="205" y="155" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">2.0</text>
+      
+      <rect x="249" y="129" width="78" height="38" rx="6" fill="#56d364"/>
+      <text x="288" y="155" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">2.0</text>
+    </g>
+    
+    <!-- Label - positioned at bottom with proper spacing -->
+    <text x="180" y="245" text-anchor="middle" font-size="13" font-weight="500" fill="#c9d1d9">16 elements (4 × 4), all identical</text>
+  </g>
+
+  <!-- Bottom insight box - properly spaced and centered -->
+  <g transform="translate(80, 385)">
+    <rect width="740" height="40" rx="10" fill="#161b22"/>
+    <rect width="740" height="40" rx="10" fill="none" stroke="#ffffff" stroke-width="2"/>
+    <text x="370" y="26" text-anchor="middle" font-size="13" fill="#c9d1d9">
+      <tspan fill="#8b949e">💡 </tspan>
+      <tspan fill="#c9d1d9">Broadcasting is </tspan>
+      <tspan fill="#76B900" font-weight="600">conceptual</tspan>
+      <tspan fill="#c9d1d9"> — no memory allocated! The compiler generates efficient code.</tspan>
+    </text>
+  </g>
+
+</svg>

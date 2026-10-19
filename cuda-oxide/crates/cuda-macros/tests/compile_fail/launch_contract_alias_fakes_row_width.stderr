@@ -1,0 +1,15 @@
+error[E0271]: type mismatch resolving `<Index2D<64> as SpaceLayout>::Data == u32`
+  --> tests/compile_fail/launch_contract_alias_fakes_row_width.rs:40:29
+   |
+40 |     let _ = unsafe { module.alias_fakes_row_width(stream, cfg, cuda_host::RowWidth::new(out, 64)) };
+   |                             ^^^^^^^^^^^^^^^^^^^^^ expected `u32`, found `()`
+   |
+   = note: required for `cuda_device::DisjointSlice<'__cuda_oxide_disjoint, f32, Index2D<64>>` to implement `for<'__cuda_oxide_disjoint> cuda_device::disjoint::__LaunchContractDisjointSliceAbi<f32, true>`
+note: required by a bound in `LoadedModule::alias_fakes_row_width`
+  --> tests/compile_fail/launch_contract_alias_fakes_row_width.rs:17:1
+   |
+17 | #[cuda_module]
+   | ^^^^^^^^^^^^^^ required by this bound in `LoadedModule::alias_fakes_row_width`
+...
+22 |     pub fn alias_fakes_row_width(mut out: DisjointSlice<f32, Runtime2DIndex>) {
+   = note: this error originates in the attribute macro `cuda_module` (in Nightly builds, run with -Z macro-backtrace for more info)

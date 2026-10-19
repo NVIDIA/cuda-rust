@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 950 520" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <!-- Load NVIDIA font from CDN -->
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 700;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Bd.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 500;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Medium.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Filters -->
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Arrow marker -->
+    <marker id="arrow-white" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M 0 0.5 L 5 3 L 0 5.5" fill="none" stroke="#ffffff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    
+    <marker id="arrow-green" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M 0 0.5 L 5 3 L 0 5.5" fill="none" stroke="#76B900" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="950" height="520" fill="#0d1117"/>
+  <rect width="950" height="520" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="475" y="35" text-anchor="middle" font-size="24" font-weight="500" fill="#ffffff" letter-spacing="-0.5">How load_tile_like Works</text>
+  <line x1="300" y1="47" x2="650" y2="47" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+  
+  <!-- Subtitle -->
+  <text x="475" y="72" text-anchor="middle" font-size="13" fill="#8b949e">Tile (3, 2) loads its corresponding 4×4 region from the full tensor</text>
+
+  <!-- ==================== LEFT: Full Tensor X ==================== -->
+  <g transform="translate(40, 100)">
+    <text x="140" y="0" text-anchor="middle" font-size="14" font-weight="600" fill="#8b949e">Full tensor X (32×32)</text>
+    
+    <!-- Large square representing tensor -->
+    <rect x="30" y="15" width="260" height="260" rx="10" fill="#161b22"/>
+    <rect x="30" y="15" width="260" height="260" rx="10" fill="none" stroke="#ffffff" stroke-width="2"/>
+    
+    <!-- Background grid pattern (8x8 of tiles) - BRIGHTER -->
+    <g transform="translate(35, 20)">
+      <!-- Faint grid lines - BRIGHTER -->
+      <g stroke="#484f58" stroke-width="1">
+        <line x1="31.25" y1="0" x2="31.25" y2="250"/>
+        <line x1="62.5" y1="0" x2="62.5" y2="250"/>
+        <line x1="93.75" y1="0" x2="93.75" y2="250"/>
+        <line x1="125" y1="0" x2="125" y2="250"/>
+        <line x1="156.25" y1="0" x2="156.25" y2="250"/>
+        <line x1="187.5" y1="0" x2="187.5" y2="250"/>
+        <line x1="218.75" y1="0" x2="218.75" y2="250"/>
+        
+        <line x1="0" y1="31.25" x2="250" y2="31.25"/>
+        <line x1="0" y1="62.5" x2="250" y2="62.5"/>
+        <line x1="0" y1="93.75" x2="250" y2="93.75"/>
+        <line x1="0" y1="125" x2="250" y2="125"/>
+        <line x1="0" y1="156.25" x2="250" y2="156.25"/>
+        <line x1="0" y1="187.5" x2="250" y2="187.5"/>
+        <line x1="0" y1="218.75" x2="250" y2="218.75"/>
+      </g>
+      
+      <!-- Highlighted tile at position (3, 2) - x=3, y=2 -->
+      <rect x="93.75" y="62.5" width="31.25" height="31.25" rx="4" fill="#76B900" opacity="0.5" filter="url(#glow)"/>
+      <rect x="93.75" y="62.5" width="31.25" height="31.25" rx="4" fill="none" stroke="#76B900" stroke-width="3"/>
+      
+      <!-- Label pointing to the highlighted region -->
+      <text x="109" y="84" text-anchor="middle" font-size="11" font-weight="700" fill="#ffffff">3,2</text>
+    </g>
+    
+    <!-- Coordinate labels - WITH MORE SPACING -->
+    <text x="160" y="328" text-anchor="middle" font-size="14" font-weight="600" fill="#c9d1d9">x →</text>
+    <text x="-5" y="155" text-anchor="middle" font-size="14" font-weight="600" fill="#c9d1d9" transform="rotate(-90, -5, 155)">y →</text>
+    
+    <!-- x indices - WHITE and PROPERLY ALIGNED with MORE SPACING -->
+    <g font-size="12" fill="#ffffff" font-weight="500" text-anchor="middle">
+      <text x="51" y="298">0</text>
+      <text x="82" y="298">1</text>
+      <text x="113" y="298">2</text>
+      <text x="144" y="298" fill="#76B900" font-weight="700">3</text>
+      <text x="176" y="298">4</text>
+      <text x="207" y="298">5</text>
+      <text x="238" y="298">6</text>
+      <text x="269" y="298">7</text>
+    </g>
+    
+    <!-- y indices - WHITE and PROPERLY ALIGNED -->
+    <g font-size="12" fill="#ffffff" font-weight="500" text-anchor="end">
+      <text x="22" y="40">0</text>
+      <text x="22" y="71">1</text>
+      <text x="22" y="102" fill="#76B900" font-weight="700">2</text>
+      <text x="22" y="133">3</text>
+      <text x="22" y="165">4</text>
+      <text x="22" y="196">5</text>
+      <text x="22" y="227">6</text>
+      <text x="22" y="258">7</text>
+    </g>
+  </g>
+
+  <!-- Arrow - BETTER POSITIONED -->
+  <g transform="translate(345, 235)">
+    <text x="70" y="-20" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">
+      <tspan>load_tile_like(</tspan><tspan fill="#79c0ff" font-weight="700">x</tspan><tspan>, </tspan><tspan fill="#ffa657" font-weight="700">z</tspan><tspan>)</tspan>
+    </text>
+    <path d="M 0 0 L 130 0" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+  </g>
+
+  <!-- ==================== RIGHT: What This Tile Loads - BETTER SPACED ==================== -->
+  <g transform="translate(500, 100)">
+    <text x="210" y="0" text-anchor="middle" font-size="14" font-weight="600" fill="#8b949e">What Tile (3, 2) loads</text>
+    
+    <!-- Container -->
+    <rect x="0" y="15" width="420" height="260" rx="10" fill="#161b22"/>
+    <rect x="0" y="15" width="420" height="260" rx="10" fill="none" stroke="#ffffff" stroke-width="2"/>
+    
+    <!-- Large highlighted tile representation - BETTER SPACED -->
+    <g transform="translate(25, 40)">
+      <rect width="175" height="175" rx="10" fill="#76B900" opacity="0.3" filter="url(#glow)"/>
+      <rect width="175" height="175" rx="10" fill="none" stroke="#76B900" stroke-width="3"/>
+      
+      <!-- 4x4 grid inside -->
+      <g stroke="#76B900" stroke-width="0.5" opacity="0.5">
+        <line x1="43.75" y1="0" x2="43.75" y2="175"/>
+        <line x1="87.5" y1="0" x2="87.5" y2="175"/>
+        <line x1="131.25" y1="0" x2="131.25" y2="175"/>
+        <line x1="0" y1="43.75" x2="175" y2="43.75"/>
+        <line x1="0" y1="87.5" x2="175" y2="87.5"/>
+        <line x1="0" y1="131.25" x2="175" y2="131.25"/>
+      </g>
+      
+      <!-- Checkmark -->
+      <text x="87" y="95" text-anchor="middle" font-size="45" fill="#76B900">✓</text>
+      
+      <!-- Label -->
+      <text x="87" y="145" text-anchor="middle" font-size="16" font-weight="600" fill="#ffffff">4×4 loaded</text>
+    </g>
+    
+    <!-- Info panel - BETTER SPACED -->
+    <g transform="translate(220, 40)">
+      <rect width="180" height="175" rx="8" fill="#21262d"/>
+      
+      <text x="90" y="28" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Automatic Calculation</text>
+      <line x1="15" y1="40" x2="165" y2="40" stroke="#30363d" stroke-width="1"/>
+      
+      <g font-size="12" fill="#c9d1d9">
+        <text x="18" y="65">Tile position:</text>
+        <text x="162" y="65" text-anchor="end" font-family="'RobotoMono', monospace" fill="#76B900" font-weight="500">( 3, 2 )</text>
+        
+        <text x="18" y="92">Tile size:</text>
+        <text x="162" y="92" text-anchor="end" font-family="'RobotoMono', monospace" fill="#79c0ff" font-weight="500">4 × 4</text>
+        
+        <text x="18" y="119">Start offset:</text>
+        <text x="162" y="119" text-anchor="end" font-family="'RobotoMono', monospace" fill="#ffa657" font-weight="500">( 12, 8 )</text>
+        
+        <text x="18" y="146">End offset:</text>
+        <text x="162" y="146" text-anchor="end" font-family="'RobotoMono', monospace" fill="#ffa657" font-weight="500">( 15, 11 )</text>
+      </g>
+      
+      <line x1="15" y1="158" x2="165" y2="158" stroke="#30363d" stroke-width="1"/>
+      <text x="90" y="172" text-anchor="middle" font-size="10" fill="#6e7681">3×4=12, 2×4=8</text>
+    </g>
+    
+    <!-- Bottom description -->
+    <text x="210" y="245" text-anchor="middle" font-size="12" fill="#8b949e">Based on output partition's position</text>
+  </g>
+
+  <!-- Bottom explanation - MUCH FURTHER DOWN and BIGGER -->
+  <g transform="translate(50, 470)">
+    <rect x="0" y="0" width="850" height="42" rx="8" fill="#21262d"/>
+    <text x="425" y="28" text-anchor="middle" font-size="17" fill="#ffffff">
+      <tspan font-family="'RobotoMono', monospace" fill="#76B900" font-weight="600">load_tile_like</tspan>
+      <tspan fill="#ffffff"> automatically calculates which region to load based on the output tile's grid position</tspan>
+    </text>
+  </g>
+
+</svg>

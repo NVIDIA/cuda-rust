@@ -1,0 +1,30 @@
+# Build outputs
+_build/
+book/
+public/
+
+# Python virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# CI
+.gitlab-ci.yml
+
+# macOS
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/

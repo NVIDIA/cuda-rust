@@ -1,9 +1,9 @@
-# Contributing to cuda-oxide
+# Contributing to CUDA Rust
 
-Thank you for your interest in contributing to cuda-oxide! This document
+Thank you for your interest in contributing to CUDA Rust! This document
 explains the contribution process and requirements.
 
-cuda-oxide is licensed under the [Apache License, Version 2.0](LICENSE).
+CUDA Rust is licensed under the [Apache License, Version 2.0](LICENSE).
 
 ## Community
 
@@ -19,11 +19,12 @@ If you are unsure whether something is worth a full issue or PR, the Discord
 - [Signing Your Commits](#signing-your-commits)
 - [Contribution Process](#contribution-process)
 - [Code Requirements](#code-requirements)
+- [AI-Assisted Contributions](#ai-assisted-contributions)
 - [IP Review Process](#ip-review-process)
 
 ## Developer Certificate of Origin
 
-cuda-oxide requires the Developer Certificate of Origin (DCO) process for all
+CUDA Rust requires the Developer Certificate of Origin (DCO) process for all
 contributions. The DCO is a lightweight mechanism to certify that you wrote or
 otherwise have the right to submit the code you are contributing.
 
@@ -111,31 +112,59 @@ Your `Signed-off-by` name and email must match your Git configuration
 Pull requests that do not meet the requirements below or lack proper DCO
 sign-off will not be merged.
 
+### Branch and pull request naming
+
+Prefix branches and pull request titles with the kind of change. Branches use
+`/` as the separator and titles use `:`, lowercase: `fix/kernel-launch-sync`
+and `fix: resolve kernel launch sync race`.
+
+| Prefix | Use for |
+| --- | --- |
+| `feat` | New features |
+| `fix` | Bug fixes |
+| `docs` | Documentation changes |
+| `refactor` | Code changes with no behavior change |
+| `perf` | Performance improvements with no functional change |
+| `test` | Test additions or changes |
+| `build` | Build system and dependency changes |
+| `ci` | CI changes |
+| `chore` | Maintenance tasks |
+
+A scope in parentheses is welcome when a change is confined to one component,
+for example `docs(cutile-rs): ...`.
+
 ## Code Requirements
 
-### Toolchain
+### Toolchains
+
+The shared host crates at the repository root use the root stable pin.
+Each product has its own workspace and toolchain under `cuda-oxide/` or
+`cutile-rs/`. The setup commands below cover cuda-oxide; the Tile checks have
+their own section further down.
 
 cuda-oxide requires the Rust nightly toolchain with `rustc_private` support.
-See the [README](README.md) for setup instructions.
+See the [cuda-oxide README](cuda-oxide/README.md) for setup instructions.
 
-The repository includes a `flake.nix` that provides a fully reproducible development
-environment (CUDA 13, LLVM 22, Clang, pinned Rust nightly). If you have Nix with
-flakes enabled, `nix develop` is the quickest way to get everything in place.
+`cuda-oxide/flake.nix` provides the CUDA 13, LLVM 22, Clang, and pinned nightly
+development environment. From the repository root, run `cd cuda-oxide` and
+then `nix develop` with flakes enabled. Container setup is documented in
+[cuda-oxide/.devcontainer/README.md](cuda-oxide/.devcontainer/README.md).
 
-### Running the checks
+### Running the cuda-oxide checks
 
-Most of CI is one command. The repository ships a `Justfile` that mirrors the
+Most of CI is one command. The SIMT tree ships a `Justfile` that mirrors the
 workflows:
 
 ```bash
-just check
+just -f cuda-oxide/Justfile check
 ```
 
 It needs a CUDA toolkit (13.0 or newer, with the cuRAND headers), `cargo-deny`,
 and `python3` on `PATH`; it does not need a GPU or a driver: the shared
 `cuda-bindings` crate loads `libcuda` at run time, so test binaries load without
 one. Individual recipes exist for each piece, and
-`just --list` shows them with a one-line description each.
+`just -f cuda-oxide/Justfile --list` shows them with a one-line description
+each.
 
 A few CI jobs deliberately stay outside `just check` -- ones that need the
 codegen backend, a Python virtualenv, or GitHub's own infrastructure. The
@@ -143,15 +172,36 @@ codegen backend, a Python virtualenv, or GitHub's own infrastructure. The
 step when a workflow changes; the commands below are the ones worth knowing by
 hand even so.
 
+### Running the cutile-rs checks
+
+cutile-rs builds on the stable toolchain pinned in `cutile-rs/rust-toolchain.toml`
+and needs a CUDA 13.2 or newer toolkit with the Tile IR assembler, `tileiras`;
+the [cutile-rs book](https://nvidia.github.io/cuda-rust/cutile/) covers setup.
+Its test scripts locate the Tile workspace from their own path and reach the
+shared host crates at the repository root on their own, so they can be run
+from anywhere:
+
+```bash
+cutile-rs/scripts/run_cpu_tests.sh   # CPU and assembler tests; needs the toolkit, not a GPU
+cutile-rs/scripts/run_gpu_tests.sh   # GPU integration tests
+cutile-rs/scripts/run_all.sh         # both of the above, then the examples and benchmarks
+```
+
+Run `cutile-rs/scripts/run_all.sh` before marking a Tile pull request ready
+for review.
+CI runs the same suites in `.github/workflows/cutile-rs.yml`. Because the Tile
+lanes use NVIDIA self-hosted runners, that workflow triggers on the
+`pull-request/<n>` branches that copy-pr-bot mirrors rather than on the pull
+request itself.
+
 ### Formatting and Style
 
-- Run `cargo oxide fmt` before submitting. All code must be formatted with
-  `rustfmt`. Use `cargo oxide fmt` rather than a bare `cargo fmt`: the codegen
-  backend, every example and the `cuda-macros` device-only test fixture are
-  each their own workspace, so `cargo fmt` at the repository root reaches none
-  of them, while the `fmt` CI job checks all four scopes and will fail on code
-  you never had a chance to format. `cargo oxide fmt` mirrors that job, nested
-  example workspaces included.
+- Run `(cd cuda-oxide && cargo oxide fmt)` before submitting. All code must be
+  formatted with `rustfmt`. Use `cargo oxide fmt` rather than a bare
+  `cargo fmt`: the stable host workspace, SIMT workspace, codegen backend,
+  examples, and the `cuda-macros` device-only fixture are separate formatting
+  scopes. The command mirrors the `fmt` CI job, including the parent host
+  workspace in this merged repository and nested example workspaces.
 - Run clippy and address any warnings where reasonable. There is no single
   command covering its scopes, and it has more of them than `fmt`: the two
   workspaces below, plus one run per example, plus the nested example
@@ -160,8 +210,8 @@ hand even so.
   running by hand are:
 
   ```bash
-  cargo clippy --workspace --all-targets -- -D warnings
-  (cd crates/rustc-codegen-cuda && cargo clippy --all-targets -- -D warnings)
+  (cd cuda-oxide && cargo clippy --workspace --all-targets -- -D warnings)
+  (cd cuda-oxide/crates/rustc-codegen-cuda && cargo clippy --all-targets -- -D warnings)
   ```
 - Follow existing code patterns and conventions in the crate you are
   modifying.
@@ -188,9 +238,10 @@ HTML; `;` for LLVM IR), never the wording.
 Preserve existing copyright notices. Add a copyright notice only when you are
 the copyright holder or are authorized to name the holder. Vendored and other
 third-party files must keep their upstream license and copyright notices, and
-must be attributed in `THIRD_PARTY_NOTICES` at the repository root.
+must retain their attribution. Embedded cuda-oxide dependencies are recorded
+in `cuda-oxide/THIRD_PARTY_NOTICES`.
 
-CI enforces this: `scripts/check-spdx-headers.sh` fails on any tracked source
+CI enforces this: `cuda-oxide/scripts/check-spdx-headers.sh` fails on any tracked source
 file missing the header (the `cargo-deny / every source file carries the SPDX
 header` job). Third-party subtrees and OSRB-reviewed exceptions are listed in
 that script.
@@ -198,14 +249,15 @@ that script.
 ### Testing
 
 - Compiler pipeline changes should be validated against the existing examples
-  in `crates/rustc-codegen-cuda/examples/`.
+  in `cuda-oxide/crates/rustc-codegen-cuda/examples/`.
 - New GPU intrinsics should include a corresponding example demonstrating
   correct behavior.
 - Dialect changes should include appropriate tests in the crate's `tests/`
   directory.
 - A new example must print a `SUCCESS`/`PASS`/`Complete` marker once it has
-  verified its results, or `scripts/smoketest.sh` reports it as
-  `FAIL (no success marker)`. `scripts/check-example-smoketest-contract.sh`
+  verified its results, or `cuda-oxide/scripts/smoketest.sh` reports it as
+  `FAIL (no success marker)`.
+  `cuda-oxide/scripts/check-example-smoketest-contract.sh`
   checks that without a GPU, along with the `*_EXAMPLES` arrays in
   `smoketest.sh`; CI runs it as the `status-guard / smoketest example contract`
   job.
@@ -227,20 +279,29 @@ error's `Display` names the library candidates the loader tried.
 - New dependencies must use permissive licenses (MIT, Apache-2.0, BSD, ISC,
   Zlib, or similar).
 - No GPL, AGPL, SSPL, or other copyleft-licensed dependencies.
-- If adding a new dependency, update `dependency-licenses.csv` accordingly.
-  `scripts/check-dependency-licenses.sh` reports anything the workspace
+- If adding a new dependency, update `cuda-oxide/dependency-licenses.csv`
+  accordingly. `cuda-oxide/scripts/check-dependency-licenses.sh` reports
+  anything the workspace
   declares but that file does not record; CI runs it as the
   `cargo-deny / license-manifest` job. It checks presence, not versions, so a
   routine version bump needs no CSV edit.
 - The same applies to an example that pulls third-party code. Each example
-  under `crates/rustc-codegen-cuda/examples/` is its own workspace, so
+  under `cuda-oxide/crates/rustc-codegen-cuda/examples/` is its own workspace, so
   `cargo deny check` does not resolve it; the script reads the example lock
   files directly and asks for a row per third-party crate. Examples that
   depend only on first-party crates by path need nothing.
 
+## AI-Assisted Contributions
+
+- **You are responsible:** Review and understand all AI-generated code before submitting it.
+- **Verify correctness:** AI-generated code may contain bugs or security issues. Run the applicable tests and review the diff carefully.
+- **No AI-generated sensitive content:** Do not use AI to generate security policies, legal, or license text.
+
+See [AGENTS.md](AGENTS.md) for instructions for coding agents working in this repository.
+
 ## IP Review Process
 
-All contributions to cuda-oxide are subject to NVIDIA's IP review process.
+All contributions to CUDA Rust are subject to NVIDIA's IP review process.
 Maintainers will ensure that contributions are reviewed in accordance with
 NVIDIA's open source policies before merging.
 

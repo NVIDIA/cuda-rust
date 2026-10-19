@@ -1,0 +1,25 @@
+error[E0277]: the trait bound `for<'__cuda_oxide_disjoint> cuda_device::DisjointSlice<'__cuda_oxide_disjoint, u32>: cuda_device::disjoint::__LaunchContractDisjointSlice<u32, 2>` is not satisfied
+  --> tests/compile_fail/launch_contract_misleading_index_alias.rs:19:20
+   |
+19 |     let _ = module.prepare_misleading_name(cuda_core::LaunchConfig2D::new(
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+   = help: the trait `for<'__cuda_oxide_disjoint> cuda_device::disjoint::__LaunchContractDisjointSlice<u32, 2>` is not implemented for `cuda_device::DisjointSlice<'__cuda_oxide_disjoint, u32>`
+   = help: the following other types implement trait `cuda_device::disjoint::__LaunchContractDisjointSlice<Element, DOMAIN>`:
+             `cuda_device::DisjointSlice<'_, T, LinearTiles<N>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
+             `cuda_device::DisjointSlice<'_, T, RowMajorTiles<ROWS, COLS, ROW_STRIDE>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 2>`
+             `cuda_device::DisjointSlice<'_, T, Runtime2DIndex>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
+             `cuda_device::DisjointSlice<'_, T, Runtime2DIndex>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 2>`
+             `cuda_device::DisjointSlice<'_, T, RuntimeRowMajorTiles<ROWS, COLS>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 2>`
+             `cuda_device::DisjointSlice<'_, T, WarpIndex>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
+             `cuda_device::DisjointSlice<'_, T, cuda_device::Index2D<ROW_STRIDE>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
+             `cuda_device::DisjointSlice<'_, T, cuda_device::Index2D<ROW_STRIDE>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 2>`
+             `cuda_device::DisjointSlice<'_, T>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
+note: required by a bound in `LoadedModule::prepare_misleading_name`
+  --> tests/compile_fail/launch_contract_misleading_index_alias.rs:7:1
+   |
+ 7 | #[cuda_module]
+   | ^^^^^^^^^^^^^^ required by this bound in `LoadedModule::prepare_misleading_name`
+...
+13 |     pub fn misleading_name(mut out: DisjointSlice<u32, Index2D>) {
+   = note: this error originates in the attribute macro `cuda_module` (in Nightly builds, run with -Z macro-backtrace for more info)

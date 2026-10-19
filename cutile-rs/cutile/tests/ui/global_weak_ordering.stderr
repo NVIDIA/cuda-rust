@@ -1,0 +1,41 @@
+error[E0277]: the trait bound `cutile::_core::ordering::Weak: AtomicLoadMode` is not satisfied
+ --> tests/ui/global_weak_ordering.rs:8:17
+  |
+8 |     global.load(ordering::Weak, scope::Device);
+  |            ---- ^^^^^^^^^^^^^^ the trait `AtomicLoadMode` is not implemented for `cutile::_core::ordering::Weak`
+  |            |
+  |            required by a bound introduced by this call
+  |
+help: the following other types implement trait `AtomicLoadMode`
+ --> src/_core.rs
+  |
+  |     impl AtomicLoadMode for Relaxed {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `cutile::_core::ordering::Relaxed`
+  |     impl AtomicLoadMode for Acquire {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `cutile::_core::ordering::Acquire`
+note: required by a bound in `cutile::core::Global_0::<A>::load`
+ --> src/_core.rs
+  |
+  |         pub fn load<O: ordering::AtomicLoadMode, Sc: scope::GlobalScope>(
+  |                        ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Global_0::<A>::load`
+
+error[E0277]: the trait bound `cutile::_core::ordering::Weak: AtomicStoreMode` is not satisfied
+ --> tests/ui/global_weak_ordering.rs:9:25
+  |
+9 |     global.store(value, ordering::Weak, scope::Device);
+  |            -----        ^^^^^^^^^^^^^^ the trait `AtomicStoreMode` is not implemented for `cutile::_core::ordering::Weak`
+  |            |
+  |            required by a bound introduced by this call
+  |
+help: the following other types implement trait `AtomicStoreMode`
+ --> src/_core.rs
+  |
+  |     impl AtomicStoreMode for Relaxed {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `cutile::_core::ordering::Relaxed`
+  |     impl AtomicStoreMode for Release {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `cutile::_core::ordering::Release`
+note: required by a bound in `cutile::core::Global_0::<A>::store`
+ --> src/_core.rs
+  |
+  |         pub fn store<O: ordering::AtomicStoreMode, Sc: scope::GlobalScope>(
+  |                         ^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Global_0::<A>::store`

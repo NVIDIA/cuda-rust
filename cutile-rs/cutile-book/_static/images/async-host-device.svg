@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Arrow markers -->
+    <marker id="arrow-white" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M 0 0 L 10 4 L 0 8 L 2.5 4 Z" fill="#ffffff"/>
+    </marker>
+
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="520" fill="#0d1117"/>
+  <rect width="900" height="520" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="450" y="38" text-anchor="middle" font-size="24" font-weight="600" fill="#ffffff" letter-spacing="-0.5">Host-Device Async Execution</text>
+  <line x1="280" y1="50" x2="620" y2="50" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+  <text x="450" y="72" text-anchor="middle" font-size="14" fill="#8b949e">CPU orchestrates, GPU executes — they work in parallel</text>
+
+  <!-- ==================== SYNC EXECUTION (TOP) ==================== -->
+  <g transform="translate(50, 95)">
+    <!-- Container -->
+    <rect width="800" height="130" rx="10" fill="#161b22"/>
+    <rect width="800" height="130" rx="10" fill="none" stroke="#f97583" stroke-width="2"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="796" height="32" rx="8" fill="#1c2128"/>
+    <text x="30" y="24" font-size="14" font-weight="600" fill="#f97583">✗ Sync Execution: CPU waits for GPU</text>
+    
+    <!-- Timeline -->
+    <g transform="translate(70, 48)">
+      <!-- CPU Timeline -->
+      <text x="0" y="15" font-size="12" font-weight="600" fill="#79c0ff">CPU</text>
+      
+      <!-- CPU blocks -->
+      <rect x="50" y="0" width="55" height="28" rx="4" fill="#79c0ff"/>
+      <text x="77" y="18" text-anchor="middle" font-size="10" font-weight="600" fill="#ffffff">setup</text>
+      
+      <rect x="115" y="0" width="55" height="28" rx="4" fill="#79c0ff"/>
+      <text x="142" y="18" text-anchor="middle" font-size="10" font-weight="600" fill="#ffffff">launch</text>
+      
+      <!-- Idle block -->
+      <rect x="180" y="0" width="300" height="28" rx="4" fill="#f97583" opacity="0.3"/>
+      <rect x="180" y="0" width="300" height="28" rx="4" fill="none" stroke="#f97583" stroke-width="1" stroke-dasharray="4,4"/>
+      <text x="330" y="18" text-anchor="middle" font-size="10" font-weight="500" fill="#f97583">🔄 IDLE — waiting for GPU</text>
+      
+      <rect x="490" y="0" width="55" height="28" rx="4" fill="#79c0ff"/>
+      <text x="517" y="18" text-anchor="middle" font-size="10" font-weight="600" fill="#ffffff">result</text>
+      
+      <!-- GPU Timeline -->
+      <text x="0" y="58" font-size="12" font-weight="600" fill="#56d364">GPU</text>
+      
+      <rect x="180" y="43" width="300" height="28" rx="4" fill="#56d364"/>
+      <text x="330" y="61" text-anchor="middle" font-size="10" font-weight="600" fill="#ffffff">kernel execution</text>
+      
+      <!-- Time arrow -->
+      <line x1="50" y1="88" x2="560" y2="88" stroke="#8b949e" stroke-width="1" marker-end="url(#arrow-white)"/>
+      <text x="580" y="92" font-size="10" fill="#8b949e">time</text>
+    </g>
+  </g>
+
+  <!-- ==================== ASYNC EXECUTION (MIDDLE) ==================== -->
+  <g transform="translate(50, 245)">
+    <!-- Container -->
+    <rect width="800" height="155" rx="10" fill="#161b22"/>
+    <rect width="800" height="155" rx="10" fill="none" stroke="#56d364" stroke-width="2"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="796" height="32" rx="8" fill="#1c2128"/>
+    <text x="30" y="24" font-size="14" font-weight="600" fill="#56d364">✓ Async Execution: CPU continues working</text>
+    
+    <!-- Timeline -->
+    <g transform="translate(70, 48)">
+      <!-- CPU Timeline -->
+      <text x="0" y="15" font-size="12" font-weight="600" fill="#79c0ff">CPU</text>
+      
+      <!-- CPU blocks -->
+      <rect x="50" y="0" width="55" height="28" rx="4" fill="#79c0ff"/>
+      <text x="77" y="18" text-anchor="middle" font-size="10" font-weight="600" fill="#ffffff">setup</text>
+      
+      <rect x="115" y="0" width="55" height="28" rx="4" fill="#79c0ff"/>
+      <text x="142" y="18" text-anchor="middle" font-size="10" font-weight="600" fill="#ffffff">launch</text>
+      
+      <!-- Productive work blocks -->
+      <rect x="180" y="0" width="75" height="28" rx="4" fill="#ffa657"/>
+      <text x="217" y="18" text-anchor="middle" font-size="9" font-weight="600" fill="#ffffff">prep batch 2</text>
+      
+      <rect x="265" y="0" width="60" height="28" rx="4" fill="#ffa657"/>
+      <text x="295" y="18" text-anchor="middle" font-size="9" font-weight="600" fill="#ffffff">logging</text>
+      
+      <rect x="335" y="0" width="60" height="28" rx="4" fill="#ffa657"/>
+      <text x="365" y="18" text-anchor="middle" font-size="9" font-weight="600" fill="#ffffff">metrics</text>
+      
+      <rect x="405" y="0" width="45" height="28" rx="4" fill="#79c0ff"/>
+      <text x="427" y="18" text-anchor="middle" font-size="9" font-weight="600" fill="#ffffff">await</text>
+      
+      <rect x="460" y="0" width="55" height="28" rx="4" fill="#79c0ff"/>
+      <text x="487" y="18" text-anchor="middle" font-size="10" font-weight="600" fill="#ffffff">result</text>
+      
+      <!-- GPU Timeline -->
+      <text x="0" y="58" font-size="12" font-weight="600" fill="#56d364">GPU</text>
+      
+      <rect x="180" y="43" width="220" height="28" rx="4" fill="#56d364"/>
+      <text x="290" y="61" text-anchor="middle" font-size="10" font-weight="600" fill="#ffffff">kernel execution</text>
+      
+      <!-- Time arrow -->
+      <line x1="50" y1="88" x2="530" y2="88" stroke="#8b949e" stroke-width="1" marker-end="url(#arrow-white)"/>
+      <text x="550" y="92" font-size="10" fill="#8b949e">time</text>
+    </g>
+    
+    <!-- Benefit callout - positioned outside timeline area -->
+    <g transform="translate(600, 45)">
+      <rect width="170" height="58" rx="8" fill="#21262d"/>
+      <rect width="170" height="58" rx="8" fill="none" stroke="#76B900" stroke-width="1"/>
+      <text x="85" y="20" text-anchor="middle" font-size="11" font-weight="600" fill="#76B900">⚡ CPU keeps working!</text>
+      <text x="85" y="38" text-anchor="middle" font-size="10" fill="#c9d1d9">Prepare next batch</text>
+      <text x="85" y="52" text-anchor="middle" font-size="10" fill="#c9d1d9">while GPU computes</text>
+    </g>
+  </g>
+
+  <!-- ==================== CODE COMPARISON (BOTTOM) ==================== -->
+  <g transform="translate(50, 420)">
+    <!-- Sync code -->
+    <rect width="380" height="38" rx="6" fill="#21262d"/>
+    <rect width="380" height="38" rx="6" fill="none" stroke="#30363d" stroke-width="1"/>
+    <text x="20" y="24" font-family="'RobotoMono', monospace" font-size="11">
+      <tspan fill="#f97583">// Sync:</tspan>
+      <tspan fill="#ffffff"> kernel(x, y)</tspan>
+      <tspan fill="#79c0ff">.sync_on</tspan>
+      <tspan fill="#ffffff">(&amp;stream)</tspan>
+    </text>
+    
+    <!-- Async code -->
+    <g transform="translate(420, 0)">
+      <rect width="380" height="38" rx="6" fill="#21262d"/>
+      <rect width="380" height="38" rx="6" fill="none" stroke="#30363d" stroke-width="1"/>
+      <text x="20" y="24" font-family="'RobotoMono', monospace" font-size="11">
+        <tspan fill="#56d364">// Async:</tspan>
+        <tspan fill="#ffffff"> kernel(x, y)</tspan>
+        <tspan fill="#79c0ff">.await</tspan>
+      </text>
+    </g>
+  </g>
+
+</svg>

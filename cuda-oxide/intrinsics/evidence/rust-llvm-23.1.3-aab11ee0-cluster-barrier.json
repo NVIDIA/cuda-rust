@@ -1,0 +1,140 @@
+{
+  "schema": 6,
+  "backend_profile": "rust-llvm-23.1.3-aab11ee0",
+  "backend_kind": "llvm_nvptx",
+  "llvm_revision": "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019",
+  "backend_version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+  "backend_sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+  "defaults": {
+    "llvm_arguments": [],
+    "llvm_results": [],
+    "concrete_llvm_arguments": [],
+    "concrete_llvm_results": [],
+    "target_triple": "nvptx64-nvidia-cuda",
+    "gpu_target": "sm_90",
+    "ptx_feature": "+ptx80",
+    "status": "validated",
+    "declaration_attributes_canonicalized": true,
+    "runtime_validation": "unexecuted"
+  },
+  "fixtures": [
+    {
+      "id": "cluster_barrier_base_typed_probe",
+      "coverage_count": 4,
+      "stages": [
+        {
+          "targets": ["sm_90"],
+          "representation": "separate typed LLVM declaration probes",
+          "stage": "declaration_canonicalization",
+          "mechanism": "typed_nvvm",
+          "outcome": "succeeded",
+          "detail": "Revalidated 4 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): canonical typed declarations and their exact imported attributes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 709ac5ee2e1dd7825ecc0de9afa6ac275df2df2edeadc6775491baa136592e22."
+        },
+        {
+          "targets": ["sm_90", "ptx78"],
+          "representation": "separate probes for the recorded lowering mechanism",
+          "stage": "backend_codegen",
+          "mechanism": "typed_nvvm",
+          "outcome": "succeeded",
+          "detail": "Revalidated 4 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 0e1e88cd16c49e09653b14a27a2bc796381aa018d17067a47b7983db21ae09f3."
+        },
+        {
+          "targets": ["sm_90", "ptx78"],
+          "representation": "separate PTX outputs assembled for the recorded target",
+          "stage": "ptx_assembly",
+          "mechanism": "typed_nvvm",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "Revalidated 4 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 7d7c3f4ea8fcd98c2c86bed72381ab990ad0e38ec3f9ca467a4dfc2fae748b37.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        }
+      ]
+    },
+    {
+      "id": "cluster_barrier_relaxed_typed_probe",
+      "coverage_count": 2,
+      "stages": [
+        {
+          "targets": ["sm_90"],
+          "representation": "separate typed LLVM declaration probes",
+          "stage": "declaration_canonicalization",
+          "mechanism": "typed_nvvm",
+          "outcome": "succeeded",
+          "detail": "Revalidated 2 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): canonical typed declarations and their exact imported attributes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 5c5b7ef9743a0c36a3ad27cf3093c5d3160111a0acee880922a93dab4ce330a7."
+        },
+        {
+          "targets": ["sm_90", "ptx80"],
+          "representation": "separate probes for the recorded lowering mechanism",
+          "stage": "backend_codegen",
+          "mechanism": "typed_nvvm",
+          "outcome": "succeeded",
+          "detail": "Revalidated 2 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 462bdc8a89623f986fa9c307a069d444805dcb8644ef7f9793f45a48a5cc94c6."
+        },
+        {
+          "targets": ["sm_90", "ptx80"],
+          "representation": "separate PTX outputs assembled for the recorded target",
+          "stage": "ptx_assembly",
+          "mechanism": "typed_nvvm",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "Revalidated 2 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 5501565e9a498f7f5dba887004bc2cf506c57249b8a4a2e8fdebcefc8007b146.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        }
+      ]
+    }
+  ],
+  "matrices": [
+    {
+      "axes": [{"name": "operation", "values": ["arrive", "wait"]}],
+      "product_count": 2,
+      "fixtures": ["cluster_barrier_base_typed_probe"],
+      "template": {
+        "id": "barrier_cluster_${operation}",
+        "source_record": "int_nvvm_barrier_cluster_${operation}",
+        "llvm_symbol": "llvm.nvvm.barrier.cluster.${operation}",
+        "expected_ptx": {"mnemonic": "barrier", "modifiers": ["cluster", "${operation}"], "operands": []},
+        "facts": {}
+      }
+    },
+    {
+      "axes": [{"name": "operation", "values": ["arrive", "wait"]}],
+      "product_count": 2,
+      "fixtures": ["cluster_barrier_base_typed_probe"],
+      "template": {
+        "id": "barrier_cluster_${operation}_aligned",
+        "source_record": "int_nvvm_barrier_cluster_${operation}_aligned",
+        "llvm_symbol": "llvm.nvvm.barrier.cluster.${operation}.aligned",
+        "expected_ptx": {"mnemonic": "barrier", "modifiers": ["cluster", "${operation}", "aligned"], "operands": []},
+        "facts": {}
+      }
+    },
+    {
+      "axes": [{"name": "mode", "values": ["relaxed"]}],
+      "product_count": 1,
+      "fixtures": ["cluster_barrier_relaxed_typed_probe"],
+      "template": {
+        "id": "barrier_cluster_arrive_${mode}",
+        "source_record": "int_nvvm_barrier_cluster_arrive_${mode}",
+        "llvm_symbol": "llvm.nvvm.barrier.cluster.arrive.${mode}",
+        "expected_ptx": {"mnemonic": "barrier", "modifiers": ["cluster", "arrive", "${mode}"], "operands": []},
+        "facts": {}
+      }
+    },
+    {
+      "axes": [{"name": "mode", "values": ["relaxed"]}],
+      "product_count": 1,
+      "fixtures": ["cluster_barrier_relaxed_typed_probe"],
+      "template": {
+        "id": "barrier_cluster_arrive_${mode}_aligned",
+        "source_record": "int_nvvm_barrier_cluster_arrive_${mode}_aligned",
+        "llvm_symbol": "llvm.nvvm.barrier.cluster.arrive.${mode}.aligned",
+        "expected_ptx": {"mnemonic": "barrier", "modifiers": ["cluster", "arrive", "${mode}", "aligned"], "operands": []},
+        "facts": {}
+      }
+    }
+  ]
+}

@@ -7,10 +7,14 @@
 //!
 //! This module defines assertions, terminators, and branches for the MIR dialect.
 
+use std::ops::Range;
+
 use pliron::{
     builtin::{
+        attributes::OperandSegmentSizesAttr,
         op_interfaces::{
-            BranchOpInterface, IsTerminatorInterface, NResultsInterface, OperandSegmentInterface,
+            ATTR_KEY_OPERAND_SEGMENT_SIZES, BranchOpInterface, IsTerminatorInterface,
+            NResultsInterface, OperandSegmentInterface,
         },
         type_interfaces::FunctionTypeInterface,
         types::IntegerType,
@@ -18,7 +22,6 @@ use pliron::{
     common_traits::Verify,
     context::{Context, Ptr},
     derive::op_interface_impl,
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -146,41 +149,23 @@ impl MirGotoOp {
 
 impl Verify for MirGotoOp {
     fn verify(&self, ctx: &Context) -> Result<(), Error> {
-        let op = &*self.get_operation().deref(ctx);
-
-        if op.get_num_successors() != 1 {
-            return verify_err!(op.loc(), "MirGotoOp must have exactly 1 successor");
-        }
-        let succ = op.get_successor(0);
-        let succ_block = succ.deref(ctx);
-
-        if op.get_num_operands() != succ_block.get_num_arguments() {
-            return verify_err!(
-                op.loc(),
-                "MirGotoOp operand count must match successor argument count"
-            );
-        }
-
-        for i in 0..succ_block.get_num_arguments() {
-            let arg = succ_block.get_argument(i);
-            let opd = op.get_operand(i);
-            if opd.get_type(ctx) != arg.get_type(ctx) {
-                return verify_err!(
-                    op.loc(),
-                    "MirGotoOp operand type mismatch with successor argument"
-                );
-            }
-        }
-
-        Ok(())
+        <Self as BranchOpInterface>::verify(self, ctx)
     }
 }
 
 #[op_interface_impl]
 impl BranchOpInterface for MirGotoOp {
-    fn successor_operands(&self, ctx: &Context, succ_idx: usize) -> Vec<Value> {
+    fn verify_successor_operand_layout(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        if op.get_num_successors() != 1 {
+            return verify_err!(op.loc(), "MirGotoOp must have exactly 1 successor");
+        }
+        Ok(())
+    }
+
+    fn successor_operand_range(&self, ctx: &Context, succ_idx: usize) -> Range<usize> {
         assert!(succ_idx == 0, "MirGotoOp has exactly one successor");
-        self.get_operation().deref(ctx).operands().collect()
+        0..self.get_operation().deref(ctx).get_num_operands()
     }
 
     fn add_successor_operand(&self, ctx: &mut Context, succ_idx: usize, operand: Value) -> usize {
@@ -218,13 +203,14 @@ impl BranchOpInterface for MirGotoOp {
 ///
 /// # Verification
 ///
+/// - Exactly three operand segments, with one condition operand.
 /// - Condition must be `i1`.
 /// - Must have exactly 2 successors.
 /// - Operand types must match successor block argument types.
 #[pliron_op(
     name = "mir.cond_br",
     format,
-    interfaces = [NResultsInterface<0>, IsTerminatorInterface, OperandSegmentInterface]
+    interfaces = [NResultsInterface<0>, IsTerminatorInterface]
 )]
 pub struct MirCondBranchOp;
 
@@ -237,20 +223,10 @@ impl MirCondBranchOp {
 
 impl Verify for MirCondBranchOp {
     fn verify(&self, ctx: &Context) -> Result<(), Error> {
-        let op = &*self.get_operation().deref(ctx);
-
-        if op.get_num_successors() != 2 {
-            return verify_err!(op.loc(), "MirCondBranchOp must have exactly 2 successors");
-        }
-        let true_block = op.get_successor(0).deref(ctx);
-        let false_block = op.get_successor(1).deref(ctx);
-
-        if op.get_num_operands() < 1 {
-            return verify_err!(
-                op.loc(),
-                "MirCondBranchOp must have at least 1 operand (condition)"
-            );
-        }
+        // Validate segment metadata before reading operands. The shared branch
+        // verifier also checks each segment against its target block arguments.
+        <Self as BranchOpInterface>::verify(self, ctx)?;
+        let op = self.get_operation().deref(ctx);
         let cond = op.get_operand(0);
         let cond_ty = cond.get_type(ctx);
         let cond_ty_obj = cond_ty.deref(ctx);
@@ -263,55 +239,83 @@ impl Verify for MirCondBranchOp {
             return verify_err!(op.loc(), "MirCondBranchOp condition must be integer type");
         }
 
-        let expected_args = 1 + true_block.get_num_arguments() + false_block.get_num_arguments();
-        if op.get_num_operands() != expected_args {
+        Ok(())
+    }
+}
+
+#[op_interface_impl]
+impl OperandSegmentInterface for MirCondBranchOp {
+    fn expected_num_segments(&self, _ctx: &Context) -> Option<usize> {
+        // Condition, true successor arguments, false successor arguments.
+        Some(3)
+    }
+
+    fn verify(op: &dyn Op, ctx: &Context) -> Result<(), Error> {
+        let op = op.get_operation().deref(ctx);
+        let Some(sizes) = op
+            .attributes
+            .get::<OperandSegmentSizesAttr>(&ATTR_KEY_OPERAND_SEGMENT_SIZES)
+        else {
+            return verify_err!(op.loc(), "MirCondBranchOp requires operand segment sizes");
+        };
+        if sizes.0.len() != 3 {
             return verify_err!(
                 op.loc(),
-                "MirCondBranchOp operand count must match condition + successors arguments"
+                "MirCondBranchOp must have exactly 3 operand segments"
             );
         }
-
-        let mut op_idx = 1;
-        for i in 0..true_block.get_num_arguments() {
-            let arg = true_block.get_argument(i);
-            let opd = op.get_operand(op_idx);
-            if opd.get_type(ctx) != arg.get_type(ctx) {
-                return verify_err!(
-                    op.loc(),
-                    "MirCondBranchOp true successor argument type mismatch"
-                );
-            }
-            op_idx += 1;
+        // Pliron 0.19's default verifier sums in u32 without checking overflow.
+        // Keep its range arithmetic valid even for untrusted segment metadata.
+        let Some(total) = sizes
+            .0
+            .iter()
+            .try_fold(0u32, |sum, size| sum.checked_add(*size))
+        else {
+            return verify_err!(
+                op.loc(),
+                "MirCondBranchOp operand segment total overflows u32"
+            );
+        };
+        if usize::try_from(total).ok() != Some(op.get_num_operands()) {
+            return verify_err!(
+                op.loc(),
+                "MirCondBranchOp operand segment total must match operand count"
+            );
         }
-
-        for i in 0..false_block.get_num_arguments() {
-            let arg = false_block.get_argument(i);
-            let opd = op.get_operand(op_idx);
-            if opd.get_type(ctx) != arg.get_type(ctx) {
-                return verify_err!(
-                    op.loc(),
-                    "MirCondBranchOp false successor argument type mismatch"
-                );
-            }
-            op_idx += 1;
-        }
-
         Ok(())
     }
 }
 
 #[op_interface_impl]
 impl BranchOpInterface for MirCondBranchOp {
-    fn successor_operands(&self, ctx: &Context, succ_idx: usize) -> Vec<Value> {
+    fn verify_successor_operand_layout(&self, ctx: &Context) -> Result<(), Error> {
+        // Interface verification can run before the operation's own verifier.
+        // Check every precondition of segment_range here, before it is called.
+        <Self as OperandSegmentInterface>::verify(self, ctx)?;
+        let op = self.get_operation().deref(ctx);
+        if op.get_num_successors() != 2 {
+            return verify_err!(op.loc(), "MirCondBranchOp must have exactly 2 successors");
+        }
+        if self.segment_size(ctx, 0) != 1 {
+            return verify_err!(
+                op.loc(),
+                "MirCondBranchOp must have exactly 1 condition operand"
+            );
+        }
+        Ok(())
+    }
+
+    fn successor_operand_range(&self, ctx: &Context, succ_idx: usize) -> Range<usize> {
         assert!(
             succ_idx == 0 || succ_idx == 1,
             "MirCondBranchOp has exactly two successors"
         );
-        // Segment 0 = condition, segment 1 = true args, segment 2 = false args
-        self.get_segment(ctx, succ_idx + 1)
+        // Segment 0 = condition, segment 1 = true args, segment 2 = false args.
+        self.segment_range(ctx, succ_idx + 1)
     }
 
     fn add_successor_operand(&self, ctx: &mut Context, succ_idx: usize, operand: Value) -> usize {
+        assert!(succ_idx < 2, "MirCondBranchOp has exactly two successors");
         self.push_to_segment(ctx, succ_idx + 1, operand)
     }
 
@@ -321,6 +325,7 @@ impl BranchOpInterface for MirCondBranchOp {
         succ_idx: usize,
         opd_idx: usize,
     ) -> Value {
+        assert!(succ_idx < 2, "MirCondBranchOp has exactly two successors");
         self.remove_from_segment(ctx, succ_idx + 1, opd_idx)
     }
 }

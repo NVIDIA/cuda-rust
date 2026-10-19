@@ -210,16 +210,31 @@ pub mod ops {
 
     /// Kernel-entry parameter validity proven at the Rust MIR import boundary.
     ///
-    /// Presence proves `nonnull`; the payload is the rustc ABI alignment of
-    /// the pointee represented by this physical LLVM parameter. It deliberately
-    /// carries no aliasing, readonly, or dereferenceability promise.
+    /// Presence proves `nonnull`; each field transports an independently
+    /// proven promise for this physical LLVM parameter. A zero byte count
+    /// records no dereferenceability promise.
     #[pliron_attr(
         name = "llvm.kernel_reference_param_validity",
-        format = "$0",
+        format,
         verifier = "succ"
     )]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    pub struct KernelReferenceParamValidityAttr(pub u64);
+    pub struct KernelReferenceParamValidityAttr {
+        pub pointee_alignment: u64,
+        pub no_alias: bool,
+        pub dereferenceable_bytes: u64,
+    }
+
+    impl KernelReferenceParamValidityAttr {
+        /// Non-nullness and alignment, without additional reference promises.
+        pub const fn new(pointee_alignment: u64) -> Self {
+            Self {
+                pointee_alignment,
+                no_alias: false,
+                dereferenceable_bytes: 0,
+            }
+        }
+    }
 
     fn kernel_reference_param_validity_key(index: usize) -> Identifier {
         Identifier::try_new(reserved_oxide_symbols::kernel_reference_param_validity_key(
@@ -271,10 +286,10 @@ pub mod ops {
                     "kernel reference parameter validity attribute `{key_text}` has the wrong attribute type"
                 ));
             };
-            if validity.0 == 0 || !validity.0.is_power_of_two() {
+            if validity.pointee_alignment == 0 || !validity.pointee_alignment.is_power_of_two() {
                 return Err(format!(
                     "kernel reference parameter {index} alignment must be a non-zero power of two, found {}",
-                    validity.0
+                    validity.pointee_alignment
                 ));
             }
             result.push((index, validity));

@@ -79,19 +79,31 @@ pub struct MutabilityAttr(pub bool);
 /// Proven validity facts for one Rust-reference kernel parameter.
 ///
 /// Presence of this attribute means the source argument is a Rust reference
-/// proven non-null by `rustc_public`. The payload is the pointee alignment in
-/// bytes; it must be a non-zero power of two. LLVM `align 1` is redundant and
+/// proven non-null by `rustc_public`. Pointee alignment is in bytes and must
+/// be a non-zero power of two. LLVM `align 1` is redundant and
 /// is omitted during export, but retaining `1` here keeps the proof complete.
 ///
 /// The attribute is stored on `mir.func` under a source-argument-indexed key.
-/// It intentionally carries no aliasing or dereferenceability promise.
-#[pliron_attr(
-    name = "mir.reference_param_validity",
-    format = "$0",
-    verifier = "succ"
-)]
+/// Additional promises are independently proven by the importer. A zero
+/// dereferenceable byte count records no dereferenceability promise.
+#[pliron_attr(name = "mir.reference_param_validity", format, verifier = "succ")]
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
-pub struct ReferenceParamValidityAttr(pub u64);
+pub struct ReferenceParamValidityAttr {
+    pub pointee_alignment: u64,
+    pub no_alias: bool,
+    pub dereferenceable_bytes: u64,
+}
+
+impl ReferenceParamValidityAttr {
+    /// Non-nullness and alignment, without additional reference promises.
+    pub const fn new(pointee_alignment: u64) -> Self {
+        Self {
+            pointee_alignment,
+            no_alias: false,
+            dereferenceable_bytes: 0,
+        }
+    }
+}
 
 /// Structural field index for aggregate access ops
 /// (`mir.extract_field`, `mir.insert_field`, `mir.field_addr`, `mir.enum_payload`).

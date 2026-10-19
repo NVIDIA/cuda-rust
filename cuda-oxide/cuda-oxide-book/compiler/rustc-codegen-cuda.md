@@ -215,7 +215,7 @@ takes the `#[kernel]` macro's base name and, for generic and closure-
 generic instantiations, appends `_TID_<hex32>` where `<hex32>` is
 rustc's 128-bit type-id hash of the concrete generated kernel function item.
 That `FnDef` contains ordered type and const arguments. The host launcher
-computes the same hash through the `core::intrinsics::type_id` intrinsic
+computes the same hash through the `core::intrinsics::reflection::type_id` intrinsic
 (wrapped by `cuda_host::type_id_u128_of_val`), so both sides agree
 byte-for-byte within one unified build. Non-generic kernels keep their bare
 base name.

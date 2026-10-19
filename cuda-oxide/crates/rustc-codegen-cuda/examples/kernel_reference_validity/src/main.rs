@@ -6,8 +6,8 @@
 //! End-to-end LLVM-IR coverage for rustc-proven kernel reference validity.
 //!
 //! Build with `cargo oxide build kernel_reference_validity`, then run the host
-//! binary (or `cargo oxide run kernel_reference_validity`) to inspect the
-//! generated `.ll` parameter lines and execute valid slice-launch controls.
+//! binary (or `cargo oxide run kernel_reference_validity`) for valid launches.
+//! `verify-code-shape.sh` checks frontend attributes and optimized PTX loads.
 
 use cuda_device::{DisjointSlice, cuda_module, kernel, launch_contract, thread};
 
@@ -21,6 +21,19 @@ unsafe impl cuda_core::DeviceCopy for AlignedZst {}
 #[derive(Clone, Copy)]
 pub struct ByValue {
     pub pointer: *const f32,
+}
+
+#[repr(C, align(16))]
+pub struct GridConstants {
+    pub values: [u32; 4],
+}
+
+/// # Safety
+/// `output` must point to writable, aligned `u32` storage outside `constants`.
+/// Concurrent invocations must not race on that storage.
+#[kernel]
+pub unsafe fn grid_constant(#[grid_constant] constants: &GridConstants, output: *mut u32) {
+    unsafe { *output = constants.values[0] };
 }
 
 #[kernel]
@@ -41,6 +54,18 @@ pub fn align_one(_value: &u8) {}
 #[kernel]
 pub fn aligned_zst(_value: &AlignedZst) {}
 
+// Interior mutability and pinning must follow rustc's flags, not `&` spelling.
+#[kernel]
+pub fn atomic_ref(_value: &core::sync::atomic::AtomicU32) {}
+
+pub struct PinnedValue {
+    pub value: u32,
+    pub pin: core::marker::PhantomPinned,
+}
+
+#[kernel]
+pub fn pinned_ref(_value: &mut PinnedValue) {}
+
 #[kernel]
 pub fn raw_pointer(_value: *const f32) {}
 
@@ -59,96 +84,62 @@ pub fn nvvm_slice(input: &[f32], mut output: DisjointSlice<f32>) {
     }
 }
 
+/// With a valid shared input, the raw write cannot change the value read.
+/// LLVM can reuse the first load once the reference guarantees reach it.
+///
+/// # Safety
+/// `scratch` and `output` must be writable, aligned `u32` pointers outside
+/// `input`. Concurrent invocations must not race on their writes.
+#[kernel]
+pub unsafe fn read_across_write(input: &u32, scratch: *mut u32, output: *mut u32) {
+    unsafe {
+        let before = read_input(input);
+        *scratch = 13;
+        *output = before.wrapping_add(read_input(input));
+    }
+}
+
+// Preserve two reads through MIR optimization; LLVM sees the reference facts
+// on the entry parameter when it later optimizes these calls.
+#[inline(never)]
+unsafe fn read_input(input: *const u32) -> u32 {
+    unsafe { *input }
+}
+
+/// Even an immutable input must be read twice when both reads are volatile.
+/// Explicit `readonly` plus `noalias` made NVPTX lose `volatile` and allowed
+/// ptxas to merge the reads. Withholding `readonly` preserves both accesses.
+///
+/// # Safety
+/// `output` must be writable, aligned, outside `input`, and owned by this thread.
+#[kernel]
+pub unsafe fn volatile_direct(input: &u32, output: *mut u32) {
+    let before = unsafe { core::ptr::read_volatile(input) };
+    let after = unsafe { core::ptr::read_volatile(input) };
+    unsafe { *output = before.wrapping_add(after) };
+}
+
+/// The same guarantee must survive calls that LLVM later inlines.
+///
+/// # Safety
+/// `output` must be writable, aligned, outside `input`, and owned by this thread.
+#[kernel]
+pub unsafe fn volatile_helper(input: &u32, output: *mut u32) {
+    unsafe { *output = read_volatile_input(input).wrapping_add(read_volatile_input(input)) };
+}
+
+#[inline(never)]
+fn read_volatile_input(input: &u32) -> u32 {
+    // SAFETY: the reference is aligned and initialized; reading does not mutate it.
+    unsafe { core::ptr::read_volatile(input) }
+}
+
 #[kernel]
 pub fn by_value(_value: ByValue) {}
 
 #[allow(improper_ctypes_definitions)]
 #[kernel]
 pub extern "C" fn c_reference(_value: &f32) {}
-
-fn kernel_header<'a>(llvm_ir: &'a str, name: &str) -> Result<&'a str, Box<dyn std::error::Error>> {
-    let needle = format!("@{name}(");
-    llvm_ir
-        .lines()
-        .find(|line| line.trim_start().starts_with("define ") && line.contains(&needle))
-        .ok_or_else(|| format!("missing LLVM kernel definition `{name}`").into())
-}
-
-fn require_reference_attrs(
-    llvm_ir: &str,
-    name: &str,
-    alignment: u64,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let header = kernel_header(llvm_ir, name)?;
-    let expected = format!("nonnull align {alignment}");
-    if !header.contains(&expected) {
-        return Err(format!(
-            "kernel `{name}` is missing `{expected}` on its reference parameter:\n{header}"
-        )
-        .into());
-    }
-    Ok(())
-}
-
-fn require_nonnull_without_alignment(
-    llvm_ir: &str,
-    name: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let header = kernel_header(llvm_ir, name)?;
-    if !header.contains("nonnull") || header.contains(" align ") {
-        return Err(format!(
-            "kernel `{name}` must carry nonnull without a redundant align-1 attribute:\n{header}"
-        )
-        .into());
-    }
-    Ok(())
-}
-
-fn require_single_slice_pointer_fact(
-    llvm_ir: &str,
-    name: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let header = kernel_header(llvm_ir, name)?;
-    if header.matches("nonnull").count() != 1 || header.matches("align 4").count() != 1 {
-        return Err(format!(
-            "kernel `{name}` must annotate only the slice data pointer:\n{header}"
-        )
-        .into());
-    }
-    Ok(())
-}
-
-fn require_bare(llvm_ir: &str, name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let header = kernel_header(llvm_ir, name)?;
-    if header.contains("nonnull") || header.contains(" align ") {
-        return Err(format!(
-            "kernel `{name}` unexpectedly acquired Rust-reference validity:\n{header}"
-        )
-        .into());
-    }
-    Ok(())
-}
-
-fn verify_generated_llvm_ir() -> Result<(), Box<dyn std::error::Error>> {
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("kernel_reference_validity.ll");
-    let llvm_ir = std::fs::read_to_string(&path)?;
-
-    require_reference_attrs(&llvm_ir, "shared_ref", 4)?;
-    require_reference_attrs(&llvm_ir, "unique_ref", 4)?;
-    require_single_slice_pointer_fact(&llvm_ir, "shared_slice")?;
-    require_single_slice_pointer_fact(&llvm_ir, "unique_slice")?;
-    require_single_slice_pointer_fact(&llvm_ir, "nvvm_slice")?;
-    require_nonnull_without_alignment(&llvm_ir, "align_one")?;
-    require_reference_attrs(&llvm_ir, "aligned_zst", 16)?;
-
-    require_bare(&llvm_ir, "raw_pointer")?;
-    require_bare(&llvm_ir, "disjoint_slice")?;
-    require_bare(&llvm_ir, "by_value")?;
-    require_bare(&llvm_ir, "c_reference")?;
-
-    Ok(())
-}
 
 #[repr(C, align(32))]
 #[derive(Clone, Copy)]
@@ -163,6 +154,16 @@ unsafe impl cuda_core::DeviceCopy for AlignedValue {}
 #[cuda_module]
 mod execution {
     use super::*;
+
+    #[kernel]
+    #[launch_contract(domain = 1, block = (32, 1, 1))]
+    pub fn add_inputs(a: &[f32], b: &[f32], mut output: DisjointSlice<f32>) {
+        let index = thread::index_1d();
+        let i = index.get();
+        if let Some(out) = output.get_mut(index) {
+            *out = a[i] + b[i];
+        }
+    }
 
     #[kernel]
     #[launch_contract(domain = 1, block = (1, 1, 1))]
@@ -196,6 +197,19 @@ fn verify_launch_packets() -> Result<(), Box<dyn std::error::Error>> {
     let stream = with_cuda_context(0, |ctx| ctx.default_stream())?;
     let prepared = module.prepare_inspect_values(LaunchConfig1D::new(1, 1, 0))?;
     let prepared_zst = module.prepare_inspect_zsts(LaunchConfig1D::new(1, 1, 0))?;
+
+    // Two read-only parameters may share the same allocation across threads.
+    // Only the DisjointSlice output requires disjoint writable elements.
+    let values: Vec<f32> = (0..64).map(|i| i as f32).collect();
+    let input = DeviceBuffer::from_host(&stream, &values)?;
+    let mut output = DeviceBuffer::<f32>::zeroed(&stream, values.len())?;
+    let add = module.prepare_add_inputs(LaunchConfig1D::new(2, 32, 0))?;
+    module.add_inputs(&stream, &add, &input, &input, &mut output)?;
+    assert_eq!(
+        output.to_host_vec(&stream)?,
+        values.iter().map(|value| value * 2.0).collect::<Vec<_>>(),
+        "aliased read-only inputs with disjoint parallel output"
+    );
 
     for values in [vec![], vec![AlignedValue { values: [37; 8] }; 2]] {
         let input = DeviceBuffer::from_host(&stream, &values)?;
@@ -261,10 +275,9 @@ fn verify_launch_packets() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    verify_generated_llvm_ir()?;
     verify_launch_packets()?;
     println!(
-        "SUCCESS: kernel reference validity checked in IR and sync/borrowed/owned async GPU launches"
+        "SUCCESS: kernel reference validity checked in sync/borrowed/owned async GPU launches"
     );
     Ok(())
 }

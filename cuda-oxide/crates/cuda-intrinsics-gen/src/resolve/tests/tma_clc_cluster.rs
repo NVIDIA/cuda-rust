@@ -632,12 +632,12 @@ fn compact_cluster_barrier_admission_and_semantics_fail_closed() {
 fn cluster_barrier_evidence_validates_both_backend_routes() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut admission = test_cluster_barrier_admission();
-    admission.llvm_evidence_profile = "rust-llvm-23.1.0-16696adc".into();
+    admission.llvm_evidence_profile = "rust-llvm-23.1.3-aab11ee0".into();
     admission.libnvvm_evidence_profile = "cuda-13.3-libnvvm-13.3.33-cluster-barrier".into();
     let policies = expand_cluster_barrier_admission(&admission).unwrap();
     let evidence_files = vec![
         read_evidence_file(
-            &repo_root.join("intrinsics/evidence/rust-llvm-23.1.0-16696adc-cluster-barrier.json"),
+            &repo_root.join("intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-cluster-barrier.json"),
         )
         .unwrap(),
         read_evidence_file(
@@ -646,7 +646,7 @@ fn cluster_barrier_evidence_validates_both_backend_routes() {
         .unwrap(),
     ];
     let indexed =
-        index_evidence(&evidence_files, "16696adcd119e6ba9cc175207d984d7021211acb").unwrap();
+        index_evidence(&evidence_files, "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019").unwrap();
 
     for policy in &policies {
         for lowering in &policy.backend_lowerings {
@@ -670,7 +670,7 @@ fn cluster_barrier_evidence_validates_both_backend_routes() {
     }
     let indexed = index_evidence(
         &missing_typed_failure,
-        "16696adcd119e6ba9cc175207d984d7021211acb",
+        "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019",
     )
     .unwrap();
     let policy = &policies[0];

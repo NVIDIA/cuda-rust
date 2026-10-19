@@ -1987,6 +1987,9 @@ mod tests {
             0o755,
             "the installed backend must take the built file's mode"
         );
+        // Closed first: a network filesystem keeps a replaced file under a
+        // hidden name while a handle to it is open.
+        drop(loaded);
         assert_eq!(
             unexpected_cache_entries(&cache),
             Vec::<String>::new(),

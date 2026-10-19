@@ -108,8 +108,9 @@ fn emit_tma_g2s_impl(
         return input_err!(
             loc.clone(),
             TranslationErr::unsupported(format!(
-                "cp_async_bulk_tensor_{}d_g2s expects {} arguments, got {}",
+                "cp_async_bulk_tensor_{}d_g2s{} expects {} arguments, got {}",
                 dims,
+                if cta { "_cta" } else { "" },
                 expected_args,
                 args.len()
             ))

@@ -475,6 +475,28 @@ pub(crate) fn llvm_type_size_align(ctx: &Context, ty: TypeHandle) -> Option<(u64
     None
 }
 
+/// Storage alignment a value of `mir_ty` needs, in bytes.
+///
+/// Two layouts answer this. The MIR aggregate carries rustc's ABI alignment,
+/// including a `repr(align(N))` raise that the converted LLVM type cannot
+/// express. The converted LLVM type `llvm_ty` carries the natural alignment
+/// of every leaf, including LLVM-dialect leaves such as the `llvm.array` the
+/// importer uses for opaque descriptors, which no MIR layout describes.
+/// Storage must satisfy both, so the larger answer wins. `None` only when
+/// neither layout knows the type.
+pub(crate) fn required_storage_align(
+    ctx: &Context,
+    mir_ty: TypeHandle,
+    llvm_ty: TypeHandle,
+) -> Option<u64> {
+    let rust_align = mir_type_abi_align(ctx, mir_ty);
+    let llvm_align = llvm_type_size_align(ctx, llvm_ty).map(|(_, align)| align);
+    match (rust_align, llvm_align) {
+        (Some(rust), Some(llvm)) => Some(rust.max(llvm)),
+        (rust, llvm) => rust.or(llvm),
+    }
+}
+
 /// The one walk defining natural (non-packed) LLVM struct placement: each
 /// field starts at the running offset rounded up to its own alignment.
 ///
@@ -575,5 +597,54 @@ mod tests {
             None,
             "the NVPTX data layout does not define a 24-bit vector alignment"
         );
+    }
+
+    #[test]
+    fn required_storage_align_takes_the_larger_of_rust_abi_and_llvm_natural() {
+        let mut ctx = make_ctx();
+
+        // An LLVM-dialect leaf, as the importer emits for opaque descriptors:
+        // no MIR layout describes it, so the LLVM natural layout answers.
+        let i64 = llvm_int(&mut ctx, 64);
+        let llvm_array: TypeHandle = llvm_types::ArrayType::get(&ctx, i64, 16).into();
+        assert_eq!(
+            required_storage_align(&ctx, llvm_array, llvm_array),
+            Some(8)
+        );
+
+        // A `repr(align(32))` tuple whose converted LLVM type is 1-aligned:
+        // the Rust raise wins.
+        let byte = mir_uint(&mut ctx, 8);
+        let marker: TypeHandle = MirStructType::get_with_full_layout(
+            &mut ctx,
+            "Align32".into(),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            0,
+            32,
+        )
+        .into();
+        let tuple: TypeHandle = MirTupleType::get_with_layout(
+            &mut ctx,
+            vec![marker, byte],
+            vec![0, 1],
+            vec![0, 0],
+            32,
+            32,
+        )
+        .into();
+        let i8 = llvm_int(&mut ctx, 8);
+        assert_eq!(required_storage_align(&ctx, tuple, i8), Some(32));
+
+        // A plain byte array carries no Rust raise; the LLVM element answers.
+        let bytes: TypeHandle = MirArrayType::get(&mut ctx, byte, 4).into();
+        let llvm_bytes: TypeHandle = llvm_types::ArrayType::get(&ctx, i8, 4).into();
+        assert_eq!(required_storage_align(&ctx, bytes, llvm_bytes), Some(1));
+
+        // Neither layout knows a void: fail closed.
+        let void: TypeHandle = llvm_types::VoidType::get(&ctx).into();
+        assert_eq!(required_storage_align(&ctx, byte, void), None);
     }
 }

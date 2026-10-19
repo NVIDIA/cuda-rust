@@ -9,7 +9,7 @@ use super::common::{anyhow_to_pliron, counter_named_global};
 use crate::context::{
     SharedGlobalDeclaration, SharedGlobalKind, SharedGlobalRecord, SharedGlobalsMap,
 };
-use crate::convert::types::{convert_type, llvm_type_size_align};
+use crate::convert::types::{convert_type, llvm_type_size_align, required_storage_align};
 use crate::helpers;
 use llvm_export::ops as llvm;
 use llvm_export::ops::GlobalOpExt;
@@ -97,17 +97,18 @@ pub fn convert_shared_alloc_dc(
     // can reach the declaration record or the emitted global.
     let llvm_elem_type = convert_type(ctx, mir_elem_type).map_err(anyhow_to_pliron)?;
 
-    if alignment != 0 && !alignment.is_power_of_two() {
-        return Err(anyhow_to_pliron(anyhow::anyhow!(
-            "mir.shared_alloc alignment must be a power of two, found {}",
-            alignment
-        )));
-    }
-    let required_alignment = dialect_mir::types::required_type_alignment(ctx, mir_elem_type)
+    // Storage is never declared below the element's ABI alignment: a smaller
+    // request is raised, a larger one is honored. The verifier has already
+    // rejected a request that is not a power of two.
+    let required_alignment = required_storage_align(ctx, mir_elem_type, llvm_elem_type)
         .ok_or_else(|| {
-            anyhow_to_pliron(anyhow::anyhow!(
-                "cannot determine required alignment for mir.shared_alloc element type"
-            ))
+            let elem_display = mir_elem_type.deref(ctx).disp(ctx).to_string();
+            pliron::create_error!(
+                op.deref(ctx).loc(),
+                pliron::result::ErrorKind::VerificationFailed,
+                "mir.shared_alloc element type `{elem_display}` has no known ABI alignment; \
+                 refusing to guess the storage alignment"
+            )
         })?;
     let alignment = alignment.max(required_alignment);
 

@@ -250,6 +250,42 @@ fn shared_alloc_alignment_preserves_mir_over_alignment() {
     );
 }
 
+/// The importer hands an opaque descriptor to the dialect as a bare
+/// `llvm.array`. No MIR layout describes that leaf, so the LLVM natural
+/// layout must supply the storage alignment instead of failing closed.
+#[test]
+fn shared_alloc_alignment_covers_llvm_array_element() {
+    let mut ctx = make_ctx();
+    let (module_ptr, block) = build_kernel(&mut ctx, vec![], vec![]);
+    let i64_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Signless).into();
+    let descriptor_ty: TypeHandle = ArrayType::get(&ctx, i64_ty, 16).into();
+
+    append_shared_alloc_typed(
+        &mut ctx,
+        block,
+        "llvm-array-element",
+        descriptor_ty,
+        1,
+        None,
+        1,
+    );
+    append_mir_return(&mut ctx, block, vec![]);
+
+    crate::lower_mir_to_llvm(&mut ctx, module_ptr).expect("lowering failed");
+
+    let top = module_top_block(&ctx, module_ptr);
+    let global = top
+        .deref(&ctx)
+        .iter(&ctx)
+        .find_map(|op| Operation::get_op::<llvm::GlobalOp>(op, &ctx))
+        .expect("expected shared global");
+    assert_eq!(
+        global.get_alignment(&ctx),
+        Some(8),
+        "an llvm.array element takes its storage alignment from the LLVM natural layout"
+    );
+}
+
 #[test]
 fn shared_alloc_repeated_debug_identity_is_attached_once() {
     let mut ctx = make_ctx();
@@ -790,6 +826,39 @@ fn extern_shared_alignment_uses_maximum_typed_requirement() {
         global.get_alignment(&ctx),
         Some(32),
         "one dynamic pool must satisfy the strongest typed alignment requirement"
+    );
+}
+
+/// The dynamic pool counterpart of `shared_alloc_alignment_covers_llvm_array_element`:
+/// a pointee the MIR side cannot classify still raises the pool.
+#[test]
+fn extern_shared_alignment_covers_llvm_array_pointee() {
+    let mut ctx = make_ctx();
+    let (module_ptr, block) = build_kernel(&mut ctx, vec![], vec![]);
+    let i64_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Signless).into();
+    let descriptor_ty: TypeHandle = ArrayType::get(&ctx, i64_ty, 16).into();
+
+    append_extern_shared_typed(&mut ctx, block, descriptor_ty, 1, 0);
+    append_mir_return(&mut ctx, block, vec![]);
+
+    crate::lower_mir_to_llvm(&mut ctx, module_ptr).expect("lowering failed");
+
+    let top = module_top_block(&ctx, module_ptr);
+    let global = top
+        .deref(&ctx)
+        .iter(&ctx)
+        .filter_map(|op| Operation::get_op::<llvm::GlobalOp>(op, &ctx))
+        .find(|global| {
+            global
+                .get_symbol_name(&ctx)
+                .to_string()
+                .starts_with("__dynamic_smem_")
+        })
+        .expect("expected dynamic shared-memory global");
+    assert_eq!(
+        global.get_alignment(&ctx),
+        Some(8),
+        "an llvm.array pointee takes its pool alignment from the LLVM natural layout"
     );
 }
 

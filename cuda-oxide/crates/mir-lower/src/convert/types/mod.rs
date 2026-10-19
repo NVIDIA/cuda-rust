@@ -135,6 +135,7 @@ pub(crate) use global_layout::{
 pub(crate) use layout::{
     llvm_byte_faithful_twin, llvm_type_contains_i1, llvm_type_is_byte_faithful,
     llvm_type_size_align, mir_element_stride, mir_type_abi_align, natural_struct_layout,
+    required_storage_align,
 };
 pub(crate) use pointer_storage::{
     llvm_packed_struct_contains_pointer_in_address_space,

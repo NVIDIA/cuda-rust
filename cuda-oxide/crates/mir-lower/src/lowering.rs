@@ -30,11 +30,12 @@
 use crate::context::{DynamicSmemAlignmentMap, SharedGlobalsMap};
 use crate::convert::types::{
     StructLayoutInfo, build_struct_slot_map, convert_function_type, convert_type, is_kernel_func,
-    is_zero_sized_type, llvm_type_size_align, mir_type_abi_align, transparent_scalar_field,
+    is_zero_sized_type, llvm_type_size_align, mir_type_abi_align, required_storage_align,
+    transparent_scalar_field,
 };
 
 use dialect_mir::ops::MirFuncOp;
-use dialect_mir::types::{MirDisjointSliceType, MirSliceType, MirStructType};
+use dialect_mir::types::{MirDisjointSliceType, MirPtrType, MirSliceType, MirStructType};
 use llvm_export::ops as llvm;
 use pliron::{
     basic_block::BasicBlock,
@@ -46,6 +47,7 @@ use pliron::{
         rewriter::Rewriter,
     },
     linked_list::ContainsLinkedList,
+    location::Location,
     op::Op,
     operation::Operation,
     result::Result,
@@ -1267,57 +1269,64 @@ fn insert_op_sequentially(
 /// Compute the maximum dynamic shared memory alignment across all
 /// `MirExternSharedOp` operations in a function.
 ///
+/// Each reference is first raised to the storage alignment of its pointee
+/// type, so the one pool satisfies its strongest typed use; the caller
+/// folds in the launch contract. The verifier has already rejected a
+/// requested alignment that is not a non-zero power of two.
+///
 /// This pre-pass must run BEFORE `inline_region` moves the blocks, since
 /// it iterates the MIR blocks directly. The result is stored in
 /// [`DynamicSmemAlignmentMap`] so that later per-op converters can
 /// create the global with the correct alignment.
 fn compute_max_dynamic_smem_alignment(
-    ctx: &Context,
+    ctx: &mut Context,
     mir_blocks: &[Ptr<BasicBlock>],
 ) -> Result<Option<u64>> {
-    let mut max_alignment: Option<u64> = None;
-
+    // Collect first: converting a pointee type needs the context mutably,
+    // which the block iteration cannot hold.
+    let mut references: Vec<(u64, TypeHandle, Location)> = Vec::new();
     for mir_block in mir_blocks {
         for op in mir_block.deref(ctx).iter(ctx) {
             let op_id = Operation::get_opid(op, ctx);
-            if op_id == dialect_mir::ops::MirExternSharedOp::get_opid_static() {
-                let extern_shared = dialect_mir::ops::MirExternSharedOp::new(op);
-                let requested_alignment = extern_shared.get_alignment_value(ctx);
-
-                if requested_alignment == 0 || !requested_alignment.is_power_of_two() {
-                    return Err(anyhow_to_pliron(anyhow::anyhow!(
-                        "mir.extern_shared alignment must be a non-zero power of two, found {}",
-                        requested_alignment
-                    )));
-                }
-
-                let result_ty = op.deref(ctx).get_result(0).get_type(ctx);
-                let result_ty_ref = result_ty.deref(ctx);
-                let ptr_ty = result_ty_ref
-                    .downcast_ref::<dialect_mir::types::MirPtrType>()
-                    .ok_or_else(|| {
-                        anyhow_to_pliron(anyhow::anyhow!(
-                            "mir.extern_shared result is not a MIR pointer"
-                        ))
-                    })?;
-
-                let required_alignment = dialect_mir::types::required_type_alignment(
-                    ctx,
-                    ptr_ty.pointee,
-                )
-                .ok_or_else(|| {
-                    anyhow_to_pliron(anyhow::anyhow!(
-                        "cannot determine required alignment for mir.extern_shared pointee type"
-                    ))
-                })?;
-                let alignment = requested_alignment.max(required_alignment);
-
-                max_alignment = Some(match max_alignment {
-                    Some(current_max) => current_max.max(alignment),
-                    None => alignment,
-                });
+            if op_id != dialect_mir::ops::MirExternSharedOp::get_opid_static() {
+                continue;
             }
+            let extern_shared = dialect_mir::ops::MirExternSharedOp::new(op);
+            let requested_alignment = extern_shared.get_alignment_value(ctx);
+            let op_ref = op.deref(ctx);
+            let result_ty = op_ref.get_result(0).get_type(ctx);
+            let pointee = result_ty
+                .deref(ctx)
+                .downcast_ref::<MirPtrType>()
+                .map(|ptr_ty| ptr_ty.pointee)
+                .ok_or_else(|| {
+                    pliron::create_error!(
+                        op_ref.loc(),
+                        pliron::result::ErrorKind::VerificationFailed,
+                        "mir.extern_shared result is not a MIR pointer"
+                    )
+                })?;
+            references.push((requested_alignment, pointee, op_ref.loc().clone()));
         }
+    }
+
+    let mut max_alignment: Option<u64> = None;
+    for (requested_alignment, pointee, loc) in references {
+        let llvm_pointee = convert_type(ctx, pointee).map_err(|e| {
+            pliron::create_error!(&loc, pliron::result::ErrorKind::VerificationFailed, "{e}")
+        })?;
+        let required_alignment =
+            required_storage_align(ctx, pointee, llvm_pointee).ok_or_else(|| {
+                let pointee_display = pointee.deref(ctx).disp(ctx).to_string();
+                pliron::create_error!(
+                    &loc,
+                    pliron::result::ErrorKind::VerificationFailed,
+                    "mir.extern_shared pointee type `{pointee_display}` has no known ABI \
+                     alignment; refusing to guess the pool alignment"
+                )
+            })?;
+        let alignment = requested_alignment.max(required_alignment);
+        max_alignment = Some(max_alignment.map_or(alignment, |current| current.max(alignment)));
     }
 
     Ok(max_alignment)

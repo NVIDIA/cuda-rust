@@ -1458,19 +1458,35 @@ pub(in crate::resolve) fn expand_tma_admission(
     );
     ensure!(
         !admission.llvm_evidence_profile.trim().is_empty()
-            && !admission.libnvvm_evidence_profile.trim().is_empty()
-            && !admission.cta_llvm_evidence_profile.trim().is_empty()
-            && !admission.cta_libnvvm_evidence_profile.trim().is_empty(),
+            && !admission.libnvvm_evidence_profile.trim().is_empty(),
         "compact TMA admission requires both backend evidence profiles"
     );
+    let admits_cta_g2s = admission.admits_cta_g2s();
+    if admits_cta_g2s {
+        ensure!(
+            admission
+                .cta_llvm_evidence_profile
+                .as_deref()
+                .is_some_and(|profile| !profile.trim().is_empty())
+                && admission
+                    .cta_libnvvm_evidence_profile
+                    .as_deref()
+                    .is_some_and(|profile| !profile.trim().is_empty()),
+            "compact TMA admission with CTA-local G2S variants requires cta_llvm_evidence_profile and cta_libnvvm_evidence_profile"
+        );
+    }
+    let expected_operations = TMA_OPERATIONS
+        .into_iter()
+        .filter(|operation| admits_cta_g2s || !operation.is_cta_g2s())
+        .collect::<Vec<_>>();
     ensure!(
         admission
             .variants
             .iter()
             .map(|variant| variant.operation)
-            .eq(TMA_OPERATIONS),
+            .eq(expected_operations.iter().copied()),
         "compact TMA admission must list all {} operations in canonical order",
-        TMA_OPERATIONS.len()
+        expected_operations.len()
     );
 
     let mut records = admission
@@ -1485,12 +1501,18 @@ pub(in crate::resolve) fn expand_tma_admission(
                 recipe.abi_id
             );
             let llvm_evidence_profile = if recipe.operation.is_cta_g2s() {
-                &admission.cta_llvm_evidence_profile
+                admission
+                    .cta_llvm_evidence_profile
+                    .as_ref()
+                    .expect("validated TMA CTA-local LLVM evidence profile")
             } else {
                 &admission.llvm_evidence_profile
             };
             let libnvvm_evidence_profile = if recipe.operation.is_cta_g2s() {
-                &admission.cta_libnvvm_evidence_profile
+                admission
+                    .cta_libnvvm_evidence_profile
+                    .as_ref()
+                    .expect("validated TMA CTA-local libNVVM evidence profile")
             } else {
                 &admission.libnvvm_evidence_profile
             };

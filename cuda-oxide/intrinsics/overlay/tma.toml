@@ -1,6 +1,6 @@
 # Reviewed Tensor Memory Accelerator operations.
 
-schema = 62
+schema = 65
 family = "tma"
 
 [tma]

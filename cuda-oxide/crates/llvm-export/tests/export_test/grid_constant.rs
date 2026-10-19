@@ -23,6 +23,7 @@ use pliron::{
     },
     common_traits::Verify,
     context::Context,
+    identifier::Identifier,
     linked_list::ContainsLinkedList,
     op::Op,
     operation::Operation,
@@ -496,12 +497,10 @@ fn grid_constant_rejects_invalid_parameter_contracts() {
                     );
                 }
                 "incomplete" => {
-                    attrs.0.remove(
-                        &format!("{LLVM_GRID_CONSTANT_ALIGN_ATTR_PREFIX}0")
-                            .as_str()
-                            .try_into()
-                            .unwrap(),
-                    );
+                    let key =
+                        Identifier::try_new(format!("{LLVM_GRID_CONSTANT_ALIGN_ATTR_PREFIX}0"))
+                            .unwrap();
+                    attrs.0.remove(&key);
                 }
                 "wrong_attribute_kind" => {
                     attrs.set(

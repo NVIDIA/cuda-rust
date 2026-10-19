@@ -246,10 +246,11 @@ enum CollectDecision {
 // match. The mutual-exclusion guarantee between `DEVICE_PREFIX` and
 // `DEVICE_EXTERN_PREFIX` means we no longer need the historical
 // "test extern first" ordering dance that lived here previously.
+use oxide_tile_export::TileExportDesc;
 use reserved_oxide_symbols::{
-    device_extern_base_name, is_current_device_symbol, is_current_kernel_symbol,
+    device_base_name, device_extern_base_name, is_current_device_symbol, is_current_kernel_symbol,
     is_device_extern_symbol, is_device_symbol, is_kernel_symbol, is_legacy_kernel_symbol,
-    is_ptx_merge_required_marker, kernel_base_name,
+    is_ptx_merge_required_marker, is_tile_export_meta_symbol, kernel_base_name,
 };
 
 /// Sanitize a symbol name for use as a PTX identifier.
@@ -396,6 +397,12 @@ pub struct CollectionResult<'tcx> {
     /// dependency. Cubin materialization must reject this case until it can
     /// reproduce the same cross-crate linking semantics.
     pub requires_ptx_bundle_merge: bool,
+
+    /// `#[tile_export]` descriptions read from this crate's metadata
+    /// functions, sorted by implementation symbol. Each one's implementation
+    /// is a root in `functions`; the backend writes them to
+    /// `<crate>.tileexports.json` beside the device artifact.
+    pub tile_exports: Vec<TileExportDesc>,
 }
 
 /// Counts kernel functions across all codegen units.
@@ -916,6 +923,145 @@ impl DiscoveryCtx {
     }
 }
 
+/// Read every `#[tile_export]` description embedded in this crate.
+///
+/// The macro emits one host-only `#[no_mangle] fn
+/// cuda_oxide_tile_export_<hash>_<symbol>() -> &'static str` per export whose
+/// body returns the JSON description. That shape needs no file IO or side
+/// channel: `#[no_mangle]` items are always codegened, so the function is in
+/// the CGUs even though nothing calls it, and its description is a constant
+/// in MIR. The function is never compiled for the device; see the explicit
+/// skips in [`collect_device_functions`] and `process_call_operand`.
+///
+/// Malformed metadata is fatal rather than skipped: a description that does
+/// not parse or validate means the macro and this backend disagree, and a
+/// silently missing export would surface much later as a tile library
+/// without the symbol the caller asked for.
+fn collect_tile_exports<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    cgus: &[CodegenUnit<'tcx>],
+    verbose: bool,
+) -> Vec<TileExportDesc> {
+    let mut descs: Vec<TileExportDesc> = Vec::new();
+    let mut seen = HashSet::new();
+    for cgu in cgus {
+        for (item, _data) in cgu.items() {
+            let MonoItem::Fn(instance) = item else {
+                continue;
+            };
+            let def_id = instance.def_id();
+            let def_path = tcx.def_path_str(def_id);
+            if !is_tile_export_meta_symbol(&def_path) {
+                continue;
+            }
+            // Partitioning can place one item in several CGUs.
+            if !seen.insert(def_id) {
+                continue;
+            }
+            let Some(text) = tile_export_meta_text(tcx, *instance) else {
+                tcx.dcx().span_fatal(
+                    tcx.def_span(def_id),
+                    format!(
+                        "[rustc_codegen_cuda] `{def_path}` carries the reserved tile export \
+                         metadata prefix but does not return one constant string; only \
+                         `#[tile_export]` may define functions with this prefix"
+                    ),
+                );
+            };
+            let desc = TileExportDesc::from_json(&text).unwrap_or_else(|error| {
+                tcx.dcx().span_fatal(
+                    tcx.def_span(def_id),
+                    format!(
+                        "[rustc_codegen_cuda] tile export metadata in `{def_path}` is not a \
+                         description this backend understands ({error}); rebuild with \
+                         cuda-macros from the same cuda-oxide revision as the backend"
+                    ),
+                )
+            });
+            if let Err(error) = desc.validate() {
+                tcx.dcx().span_fatal(
+                    tcx.def_span(def_id),
+                    format!(
+                        "[rustc_codegen_cuda] tile export `{}` is invalid: {error}",
+                        desc.decl
+                    ),
+                );
+            }
+            if let Some(previous) = descs.iter().find(|other| other.symbol == desc.symbol) {
+                tcx.dcx().span_fatal(
+                    tcx.def_span(def_id),
+                    format!(
+                        "[rustc_codegen_cuda] tile exports `{}` and `{}` both use the \
+                         implementation symbol `{}`; give one of them a distinct `symbol`",
+                        previous.decl, desc.decl, desc.symbol
+                    ),
+                );
+            }
+            // The declaration name is what a cuTile caller resolves, so two
+            // exports sharing one would collide in the tile library; catch it
+            // here rather than when `cargo oxide tilelib` builds the modules.
+            if let Some(previous) = descs.iter().find(|other| other.decl == desc.decl) {
+                tcx.dcx().span_fatal(
+                    tcx.def_span(def_id),
+                    format!(
+                        "[rustc_codegen_cuda] tile exports `{}` and `{}` both declare the \
+                         name `{}` to cuTile; give one of them a distinct `name`",
+                        previous.symbol, desc.symbol, desc.decl
+                    ),
+                );
+            }
+            if verbose {
+                eprintln!(
+                    "[collector] Found tile export: {} -> {} (shape {:?}, {} params, sync {})",
+                    desc.decl,
+                    desc.symbol,
+                    desc.shape,
+                    desc.params.len(),
+                    desc.sync.tile_ir_name()
+                );
+            }
+            descs.push(desc);
+        }
+    }
+    // Stable output regardless of CGU partitioning.
+    descs.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+    descs
+}
+
+/// The constant `&str` a tile export metadata function returns.
+///
+/// The optimized body is `_0 = const "<json>"; return`, so the description is
+/// the constant operand assigned to `RETURN_PLACE`. The constant evaluates to
+/// a `ConstValue::Slice` (or `Indirect`) of UTF-8 bytes; `const_str_text`
+/// reads both representations. Anything else (no such assignment, a
+/// non-constant, or more than one) returns `None` and the caller reports it.
+fn tile_export_meta_text<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> Option<String> {
+    use rustc_middle::mir::{Operand, RETURN_PLACE, Rvalue, StatementKind};
+
+    let mir = tcx.instance_mir(instance.def);
+    let mut found = None;
+    for block in mir.basic_blocks.iter() {
+        for statement in &block.statements {
+            let StatementKind::Assign(assign) = &statement.kind else {
+                continue;
+            };
+            let (place, rvalue) = &**assign;
+            if place.as_local() != Some(RETURN_PLACE) {
+                continue;
+            }
+            // The second field is the retag marker, irrelevant to a constant.
+            let Rvalue::Use(Operand::Constant(constant), _) = rvalue else {
+                return None;
+            };
+            let text = const_str_text(tcx, constant)?;
+            if found.replace(text).is_some() {
+                return None;
+            }
+        }
+    }
+    found
+}
+
 /// Collects all device-reachable functions starting from kernel entry points.
 ///
 /// This is the main entry point for device function collection. It:
@@ -941,6 +1087,7 @@ pub fn collect_device_functions<'tcx>(
     verbose: bool,
 ) -> CollectionResult<'tcx> {
     let mut collector = DeviceCollector::new(tcx, verbose);
+    let tile_exports = collect_tile_exports(tcx, cgus, verbose);
     let mut requires_ptx_bundle_merge = cgus.iter().any(|cgu| {
         cgu.items().iter().any(|(item, _data)| match item {
             MonoItem::Static(def_id) => is_ptx_merge_required_marker(&tcx.def_path_str(*def_id)),
@@ -948,10 +1095,13 @@ pub fn collect_device_functions<'tcx>(
         })
     });
 
-    // Find all kernel entry points
+    // Find all kernel entry points. `#[tile_export]` metadata functions are
+    // host-only (their descriptions were read above) and never device code;
+    // the prefix cannot match a kernel, but say so here rather than rely on it.
     for cgu in cgus {
         for (item, _data) in cgu.items() {
             if let MonoItem::Fn(instance) = item
+                && !is_tile_export_meta_symbol(&tcx.def_path_str(instance.def_id()))
                 && is_kernel_function(tcx, instance.def_id())
             {
                 // Skip generic (non-monomorphized) instances.
@@ -1005,15 +1155,67 @@ pub fn collect_device_functions<'tcx>(
         }
     }
 
+    let has_kernels = !collector.worklist.is_empty();
+
+    // `#[tile_export]` implementations are roots whether or not the crate has
+    // kernels: no device code calls them, and the standalone scan below only
+    // runs for kernel-less crates. The description's `symbol` is the base
+    // name of the `#[device]` wrapper, which is also what the symbol becomes
+    // in the device artifact once llvm-export strips the device prefix.
+    for desc in &tile_exports {
+        let mut found = false;
+        for cgu in cgus {
+            for (item, _data) in cgu.items() {
+                let MonoItem::Fn(instance) = item else {
+                    continue;
+                };
+                let raw_name = tcx.def_path_str(instance.def_id());
+                if device_base_name(&raw_name) != Some(desc.symbol.as_str())
+                    || !is_device_function(tcx, instance.def_id())
+                    || !is_fully_monomorphized(tcx, *instance)
+                    // The macro rejects generics, so a generic device function
+                    // sharing the base name is not the implementation.
+                    || !instance.args.is_empty()
+                {
+                    continue;
+                }
+                let name = collector.fqdn(*instance);
+                let export_name = collector.compute_export_name(&name, *instance);
+                if verbose {
+                    eprintln!(
+                        "[collector] Found tile export implementation: {} -> {}",
+                        name, export_name
+                    );
+                }
+                collector.add_root(*instance, false, export_name);
+                found = true;
+            }
+        }
+        if !found {
+            tcx.dcx().fatal(format!(
+                "[rustc_codegen_cuda] tile export `{}` names the implementation symbol `{}`, \
+                 but this crate has no `#[device]` function with that name. `#[tile_export]` \
+                 generates the implementation next to the exported function; keep the two \
+                 together and do not rename the generated item",
+                desc.decl, desc.symbol
+            ));
+        }
+    }
+
     // Find standalone device function roots (Phase 2: device functions without kernels).
     // Only scan when there are NO kernels — when kernels exist, device functions are
-    // already collected transitively via the call graph walk.
-    if collector.worklist.is_empty() {
+    // already collected transitively via the call graph walk. Tile export
+    // implementations were rooted above and are skipped here so their export
+    // names are not computed twice.
+    if !has_kernels {
         for cgu in cgus {
             for (item, _data) in cgu.items() {
                 if let MonoItem::Fn(instance) = item
+                    // Host-only metadata, never device code (see the kernel scan).
+                    && !is_tile_export_meta_symbol(&tcx.def_path_str(instance.def_id()))
                     && is_device_function(tcx, instance.def_id())
                     && is_fully_monomorphized(tcx, *instance)
+                    && !collector.is_seen(*instance)
                 {
                     let raw_name = tcx.def_path_str(instance.def_id());
 
@@ -1045,6 +1247,7 @@ pub fn collect_device_functions<'tcx>(
     // Process the worklist to collect all reachable functions
     let mut result = collector.collect();
     result.requires_ptx_bundle_merge = requires_ptx_bundle_merge;
+    result.tile_exports = tile_exports;
     result
 }
 
@@ -1118,6 +1321,11 @@ impl<'tcx> DeviceCollector<'tcx> {
                 self.tcx.def_path_str_with_args(def_id, instance.args)
             )
         )
+    }
+
+    /// True once `instance` has been rooted or discovered.
+    fn is_seen(&self, instance: Instance<'tcx>) -> bool {
+        self.seen.contains(self.tcx.symbol_name(instance).name)
     }
 
     /// Adds a root function (kernel) to start collection from.
@@ -1254,6 +1462,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             functions: self.result,
             device_externs: self.device_externs,
             requires_ptx_bundle_merge: false,
+            tile_exports: Vec::new(),
         }
     }
 
@@ -1498,6 +1707,28 @@ impl<'tcx> DeviceCollector<'tcx> {
             return;
         };
         let fn_path = self.tcx.def_path_str(*def_id);
+
+        // `#[tile_export]` metadata functions are host-only: their body is
+        // the JSON description the collector already consumed. A device-side
+        // call means user code reached for the generated item. Refuse it
+        // here instead of skipping: a skipped call would leave a dangling
+        // symbol that fails later at module verification.
+        if is_tile_export_meta_symbol(&fn_path) {
+            self.tcx
+                .dcx()
+                .struct_span_fatal(
+                    call_span,
+                    format!(
+                        "device code in `{}` calls `{fn_path}`, a `#[tile_export]` metadata \
+                         function; it is host-only and holds the export's JSON description, \
+                         not device code",
+                        caller.export_name
+                    ),
+                )
+                .with_help("call the exported function itself, or its `<symbol>` wrapper")
+                .emit()
+        }
+
         if fn_path.contains("DynamicSharedArray")
             && (fn_path.contains("::get")
                 || fn_path.contains("::get_raw")

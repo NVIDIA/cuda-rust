@@ -331,7 +331,7 @@ mod tests {
     use pliron::builtin::types::{IntegerType, Signedness};
     use pliron::context::Context;
     use pliron::linked_list::ContainsLinkedList;
-    use pliron::location::{Located, Location, Source};
+    use pliron::location::{Location, Source};
     use pliron::op::Op;
     use pliron::operation::Operation;
     use pliron::r#type::{TypeHandle, Typed};
@@ -391,7 +391,7 @@ mod tests {
 
         let body = kernel_blocks(&ctx, module_ptr);
         let ret = find_first::<llvm::ReturnOp>(&ctx, &body).expect("expected llvm.return");
-        assert_eq!(ret.get_operation().deref(&ctx).loc(), expected);
+        assert_eq!(ret.get_operation().deref(&ctx).loc(), &expected);
     }
 
     #[test]
@@ -626,7 +626,7 @@ mod tests {
         let (module_ptr, entry) = build_kernel(&mut ctx, vec![i1_ty], vec![]);
         let cond = entry.deref(&ctx).get_argument(0);
         let assert_loc = Location::SrcPos {
-            src: Source::new_from_file(&mut ctx, PathBuf::from("kernel.rs")),
+            src: Source::new_from_file(&ctx, PathBuf::from("kernel.rs")),
             pos: combine::stream::position::SourcePosition {
                 line: 44,
                 column: 36,
@@ -661,7 +661,7 @@ mod tests {
         let llvm_br = find_first::<llvm::CondBrOp>(&ctx, &body).expect("expected llvm.cond_br");
         assert_eq!(
             llvm_br.get_operation().deref(&ctx).loc(),
-            assert_loc,
+            &assert_loc,
             "assert branch must keep the MIR assertion source location"
         );
         let false_succ = llvm_br.get_operation().deref(&ctx).get_successor(1);
@@ -688,7 +688,7 @@ mod tests {
         );
         assert_eq!(
             abort_ops[0].deref(&ctx).loc(),
-            assert_loc,
+            &assert_loc,
             "trap call must keep the MIR assertion source location"
         );
         assert!(
@@ -697,7 +697,7 @@ mod tests {
         );
         assert_eq!(
             abort_ops[1].deref(&ctx).loc(),
-            assert_loc,
+            &assert_loc,
             "unreachable must keep the MIR assertion source location"
         );
 
@@ -709,7 +709,7 @@ mod tests {
             .expect("llvm.trap must be declared in the module");
         assert_eq!(
             trap_decl.get_operation().deref(&ctx).loc(),
-            Location::Unknown,
+            &Location::Unknown,
             "the shared llvm.trap declaration must remain locationless"
         );
     }

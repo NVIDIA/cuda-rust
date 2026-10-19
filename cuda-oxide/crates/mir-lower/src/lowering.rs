@@ -419,7 +419,10 @@ fn kernel_reference_param_validities(
     mir_func: &MirFuncOp,
     parameter_layout: &[KernelParameterLayout],
     llvm_func_type: pliron::r#type::TypedHandle<llvm_export::types::FuncType>,
-) -> std::result::Result<Vec<(usize, u64)>, anyhow::Error> {
+) -> std::result::Result<
+    Vec<(usize, dialect_mir::attributes::ReferenceParamValidityAttr)>,
+    anyhow::Error,
+> {
     use pliron::builtin::type_interfaces::FunctionTypeInterface;
 
     let llvm_args = llvm_func_type.deref(ctx).arg_types().to_vec();
@@ -442,7 +445,7 @@ fn kernel_reference_param_validities(
                 "kernel source argument {source_index} carries reference validity but its first ABI component is not an LLVM pointer"
             ));
         }
-        result.push((llvm_index, validity.0));
+        result.push((llvm_index, validity));
     }
     Ok(result)
 }
@@ -450,14 +453,18 @@ fn kernel_reference_param_validities(
 fn propagate_kernel_reference_param_validities(
     ctx: &mut Context,
     llvm_func: &llvm::FuncOp,
-    validities: &[(usize, u64)],
+    validities: &[(usize, dialect_mir::attributes::ReferenceParamValidityAttr)],
 ) {
-    for &(index, alignment) in validities {
+    for &(index, validity) in validities {
         llvm::set_kernel_reference_param_validity(
             ctx,
             llvm_func.get_operation(),
             index,
-            llvm::KernelReferenceParamValidityAttr(alignment),
+            llvm::KernelReferenceParamValidityAttr {
+                pointee_alignment: validity.pointee_alignment,
+                no_alias: validity.no_alias,
+                dereferenceable_bytes: validity.dereferenceable_bytes,
+            },
         );
     }
 }
@@ -1599,7 +1606,7 @@ mod reference_param_validity_tests {
     use super::*;
     use dialect_mir::{
         attributes::ReferenceParamValidityAttr,
-        types::{MirPointerKind, MirPtrType, MirSliceType},
+        types::{MirArrayType, MirPointerKind, MirPtrType, MirSliceType},
     };
     use pliron::{
         builtin::{
@@ -1630,8 +1637,20 @@ mod reference_param_validity_tests {
             MirPtrType::get_generic_with_kind(&mut ctx, f32_ty, false, MirPointerKind::RawConst)
                 .into();
 
-        let mir_func_type =
-            FunctionType::get(&ctx, vec![shared_ref, shared_slice, raw_ptr], vec![]);
+        let zst: TypeHandle = MirArrayType::get(&mut ctx, f32_ty, 0).into();
+        let mir_func_type = FunctionType::get(
+            &ctx,
+            vec![
+                shared_ref,
+                zst,
+                shared_slice,
+                raw_ptr,
+                zst,
+                shared_slice,
+                shared_ref,
+            ],
+            vec![],
+        );
         let op = Operation::new(
             &mut ctx,
             MirFuncOp::get_concrete_op_info(),
@@ -1641,8 +1660,19 @@ mod reference_param_validity_tests {
             1,
         );
         let mir_func = MirFuncOp::new(&mut ctx, op, TypeAttr::new(mir_func_type.into()));
-        mir_func.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr(4));
-        mir_func.set_reference_param_validity(&mut ctx, 1, ReferenceParamValidityAttr(4));
+        let sized = ReferenceParamValidityAttr {
+            pointee_alignment: 4,
+            no_alias: true,
+            dereferenceable_bytes: 4,
+        };
+        let slice = ReferenceParamValidityAttr {
+            dereferenceable_bytes: 0,
+            ..sized
+        };
+        let aliasable = ReferenceParamValidityAttr::new(4);
+        for (source_index, validity) in [(0, sized), (2, slice), (5, aliasable), (6, sized)] {
+            mir_func.set_reference_param_validity(&mut ctx, source_index, validity);
+        }
 
         let llvm_func_type =
             convert_function_type(&mut ctx, mir_func_type, true).expect("kernel type lowers");
@@ -1651,14 +1681,52 @@ mod reference_param_validity_tests {
             kernel_reference_param_validities(&mut ctx, &mir_func, &layout, llvm_func_type)
                 .expect("reference validity mapping succeeds");
 
-        assert_eq!(mapped, vec![(0, 4), (1, 4)]);
+        assert_eq!(
+            mapped,
+            vec![(0, sized), (1, slice), (4, aliasable), (6, sized)]
+        );
+        let llvm_func =
+            llvm::FuncOp::new(&mut ctx, "transport".try_into().unwrap(), llvm_func_type);
+        propagate_kernel_reference_param_validities(&mut ctx, &llvm_func, &mapped);
+        let entries =
+            llvm::kernel_reference_param_validity_entries(&ctx, llvm_func.get_operation()).unwrap();
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    0,
+                    llvm::KernelReferenceParamValidityAttr {
+                        pointee_alignment: 4,
+                        no_alias: true,
+                        dereferenceable_bytes: 4,
+                    }
+                ),
+                (
+                    1,
+                    llvm::KernelReferenceParamValidityAttr {
+                        pointee_alignment: 4,
+                        no_alias: true,
+                        dereferenceable_bytes: 0,
+                    }
+                ),
+                (4, llvm::KernelReferenceParamValidityAttr::new(4)),
+                (
+                    6,
+                    llvm::KernelReferenceParamValidityAttr {
+                        pointee_alignment: 4,
+                        no_alias: true,
+                        dereferenceable_bytes: 4,
+                    }
+                ),
+            ]
+        );
 
         use pliron::builtin::type_interfaces::FunctionTypeInterface;
         let llvm_args = llvm_func_type.deref(&ctx).arg_types().to_vec();
         assert_eq!(
             llvm_args.len(),
-            4,
-            "slice lowers to data pointer + length while raw pointer stays one parameter"
+            7,
+            "slices expand, ZSTs disappear, and raw pointers stay bare"
         );
         assert!(
             llvm_args[0]
@@ -1896,9 +1964,9 @@ mod grid_constant_abi_tests {
             1,
         );
         let function = MirFuncOp::new(&mut ctx, op, TypeAttr::new(function_type.into()));
-        function.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr(1));
-        function.set_reference_param_validity(&mut ctx, 2, ReferenceParamValidityAttr(64));
-        function.set_reference_param_validity(&mut ctx, 4, ReferenceParamValidityAttr(64));
+        function.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr::new(1));
+        function.set_reference_param_validity(&mut ctx, 2, ReferenceParamValidityAttr::new(64));
+        function.set_reference_param_validity(&mut ctx, 4, ReferenceParamValidityAttr::new(64));
         record(&mut ctx, op, 2, payload, 64);
         record(&mut ctx, op, 4, payload, 64);
         let llvm_type = convert_function_type(&mut ctx, function_type, true).unwrap();
@@ -1920,7 +1988,14 @@ mod grid_constant_abi_tests {
         assert_eq!(llvm_type_size_align(&ctx, grid[0].pointee).unwrap().0, 128);
         let validities =
             kernel_reference_param_validities(&mut ctx, &function, &layout, llvm_type).unwrap();
-        assert_eq!(validities, vec![(0, 1), (2, 64), (4, 64)]);
+        assert_eq!(
+            validities,
+            vec![
+                (0, ReferenceParamValidityAttr::new(1)),
+                (2, ReferenceParamValidityAttr::new(64)),
+                (4, ReferenceParamValidityAttr::new(64)),
+            ]
+        );
 
         // A stale pointee annotation cannot silently change the launch packet size.
         record(&mut ctx, op, 2, byte, 64);

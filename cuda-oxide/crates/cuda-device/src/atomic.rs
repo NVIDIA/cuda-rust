@@ -201,8 +201,10 @@ macro_rules! define_integer_atomic {
             ///   atomic and non-atomic access to the same location is UB.
             /// * For block-scoped types, only threads in the same thread block
             ///   may access this memory.
-            /// * For system-scoped types, the memory must be reachable by both
-            ///   the GPU and the CPU (unified memory).
+            /// * The memory and concurrently accessing threads must support
+            ///   the chosen scope. System scope permits device memory accessed
+            ///   only by threads on one GPU; CPU or peer-GPU access must satisfy
+            ///   the [CUDA atomicity requirements](https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/cuda-cpp-memory-model.html#atomicity).
             #[inline(always)]
             pub const unsafe fn from_ptr<'a>(ptr: *mut $ty) -> &'a Self {
                 // SAFETY: `Self` is `#[repr(transparent)]` over `UnsafeCell<$ty>`,
@@ -388,7 +390,9 @@ macro_rules! define_float_atomic {
             ///   the entire lifetime `'a`.
             /// * No non-atomic accesses to `*ptr` may occur during `'a`.
             /// * Block-scoped: only same-block threads may access.
-            ///   System-scoped: memory must be reachable by GPU and CPU.
+            /// * The memory and concurrently accessing threads must support
+            ///   the chosen scope, as described on the integer atomic types.
+            ///   System scope permits device memory accessed only by one GPU.
             #[inline(always)]
             pub const unsafe fn from_ptr<'a>(ptr: *mut $ty) -> &'a Self {
                 // SAFETY: `Self` is `#[repr(transparent)]` over `UnsafeCell<$ty>`,

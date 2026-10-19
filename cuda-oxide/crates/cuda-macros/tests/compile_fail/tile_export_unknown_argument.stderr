@@ -1,0 +1,5 @@
+error: unknown #[tile_export] argument `shap`; accepted arguments are tile_shape, name, symbol, sync, arch
+ --> tests/compile_fail/tile_export_unknown_argument.rs:6:33
+  |
+6 | #[tile_export(tile_shape = 128, shap = 64)]
+  |                                 ^^^^

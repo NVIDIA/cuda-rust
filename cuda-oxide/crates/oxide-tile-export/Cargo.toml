@@ -1,0 +1,17 @@
+[package]
+name = "oxide-tile-export"
+version = "0.2.1"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Descriptions of Rust device functions exported to cuTile tile libraries"
+readme = "README.md"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints.rust]
+missing_docs = { level = "deny" }

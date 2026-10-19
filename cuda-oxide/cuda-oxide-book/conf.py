@@ -50,7 +50,7 @@ html_theme_options = {
     "icon_links": [
         {
             "name": "GitHub",
-            "url": "https://github.com/NVlabs/cuda-oxide",
+            "url": "https://github.com/NVIDIA/cuda-rust",
             "icon": "fa-brands fa-github",
             "type": "fontawesome",
         },

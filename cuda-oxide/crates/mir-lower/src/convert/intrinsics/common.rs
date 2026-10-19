@@ -643,7 +643,7 @@ mod tests {
 
     #[test]
     fn inline_asm_convergent_copies_the_source_op_location() {
-        use pliron::location::{Located, Location};
+        use pliron::location::Location;
 
         let mut ctx = make_ctx();
         let (module_ptr, entry) = build_test_func(&mut ctx, vec![]);
@@ -660,7 +660,7 @@ mod tests {
 
         let asms = find_body_ops::<llvm::InlineAsmOp>(&ctx, module_ptr);
         assert_eq!(asms.len(), 1);
-        assert_eq!(asms[0].get_operation().deref(&ctx).loc(), expected);
+        assert_eq!(asms[0].get_operation().deref(&ctx).loc(), &expected);
     }
 
     #[test]

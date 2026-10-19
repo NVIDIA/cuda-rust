@@ -17,7 +17,7 @@ use crate::translator::layout::{enum_tag_offset, enum_variant_field_offsets};
 use dialect_mir::ops::MirConstructEnumOp;
 use pliron::basic_block::BasicBlock;
 use pliron::context::{Context, Ptr};
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::r#type::TypeHandle;

@@ -15,7 +15,7 @@ use crate::translator::{rvalue, terminator::helpers, values::ValueMap};
 use dialect_nvvm::ops::{Dp2aS32Op, Dp2aU32Op, Dp4aS32Op, Dp4aU32Op};
 use pliron::basic_block::BasicBlock;
 use pliron::context::{Context, Ptr};
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::operation::Operation;
 use rustc_public::mir;
 

@@ -18,6 +18,8 @@ use pliron::operation::Operation;
 use pliron::r#type::TypeHandle;
 use pliron::value::Value;
 
+use crate::convert::types::MAX_NATURAL_ALIGN;
+
 pub(super) fn insert_indices(ctx: &Context, inserts: &[llvm::InsertValueOp]) -> Vec<Vec<u32>> {
     inserts.iter().map(|op| op.indices(ctx)).collect()
 }
@@ -82,7 +84,7 @@ pub(super) fn unit_niche_enum(
         .collect::<Vec<_>>();
     let discriminants = (0..inhabited.len() as u64).collect();
     let carrier_size = u64::from(carrier_width).div_ceil(8);
-    let carrier_align = carrier_size.next_power_of_two().min(16);
+    let carrier_align = carrier_size.next_power_of_two().min(MAX_NATURAL_ALIGN);
     MirEnumType::get_with_encoding(
         ctx,
         "UnitNiche".into(),

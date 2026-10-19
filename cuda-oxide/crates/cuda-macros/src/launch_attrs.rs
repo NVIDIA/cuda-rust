@@ -21,6 +21,7 @@ use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input, parse_quote,
     punctuated::Punctuated,
+    spanned::Spanned,
     visit::{self, Visit},
     visit_mut::{self, VisitMut},
 };
@@ -443,10 +444,13 @@ pub(crate) struct LoopUnrollAttrVisitor {
 
 impl LoopUnrollAttrVisitor {
     /// If `attrs` contains an outer `#[unroll]` / `#[unroll(N)]`, remove it and
-    /// return the parsed factor. Returns `None` when no `unroll` attribute is
-    /// present (leaving `attrs` untouched). Records a parse error and returns
-    /// `None` if the attribute is malformed.
-    fn take_unroll_factor(&mut self, attrs: &mut Vec<syn::Attribute>) -> Option<ConstU32Expr> {
+    /// return the parsed factor with the attribute's span. Returns `None` when
+    /// no `unroll` attribute is present (leaving `attrs` untouched). Records a
+    /// parse error and returns `None` if the attribute is malformed.
+    fn take_unroll_factor(
+        &mut self,
+        attrs: &mut Vec<syn::Attribute>,
+    ) -> Option<(ConstU32Expr, proc_macro2::Span)> {
         let idx = attrs
             .iter()
             .position(|attr| attr.path().is_ident("unroll"))?;
@@ -477,14 +481,20 @@ impl LoopUnrollAttrVisitor {
         if factor.literal_value.is_none() {
             self.const_expressions.push(factor.clone());
         }
-        Some(factor)
+        Some((factor, attr.span()))
     }
 
-    /// Build the `__unroll_config::<FACTOR>()` marker statement.
-    fn marker_stmt(factor: &ConstU32Expr) -> Stmt {
+    /// Build the `__unroll_config::<FACTOR>()` marker statement. The call
+    /// carries `span`, the `#[unroll]` attribute's, so diagnostics about the
+    /// loop point at the attribute. The braces around the factor keep the
+    /// macro's own span. On the attribute's span rustc treats them as written
+    /// by the user, and its `unused_braces` lint then reports every literal
+    /// factor with a fix-it that deletes the attribute.
+    fn marker_stmt(factor: &ConstU32Expr, span: proc_macro2::Span) -> Stmt {
         let expr = &factor.expr;
-        parse_quote! {
-            cuda_device::thread::__unroll_config::<{ #expr }>();
+        let factor_arg = quote! { { #expr } };
+        syn::parse_quote_spanned! {span=>
+            cuda_device::thread::__unroll_config::<#factor_arg>();
         }
     }
 }
@@ -496,18 +506,27 @@ impl VisitMut for LoopUnrollAttrVisitor {
         // else falls through to the default recursion below.
         match expr {
             Expr::ForLoop(for_loop) => {
-                if let Some(factor) = self.take_unroll_factor(&mut for_loop.attrs) {
-                    for_loop.body.stmts.insert(0, Self::marker_stmt(&factor));
+                if let Some((factor, span)) = self.take_unroll_factor(&mut for_loop.attrs) {
+                    for_loop
+                        .body
+                        .stmts
+                        .insert(0, Self::marker_stmt(&factor, span));
                 }
             }
             Expr::While(while_loop) => {
-                if let Some(factor) = self.take_unroll_factor(&mut while_loop.attrs) {
-                    while_loop.body.stmts.insert(0, Self::marker_stmt(&factor));
+                if let Some((factor, span)) = self.take_unroll_factor(&mut while_loop.attrs) {
+                    while_loop
+                        .body
+                        .stmts
+                        .insert(0, Self::marker_stmt(&factor, span));
                 }
             }
             Expr::Loop(loop_expr) => {
-                if let Some(factor) = self.take_unroll_factor(&mut loop_expr.attrs) {
-                    loop_expr.body.stmts.insert(0, Self::marker_stmt(&factor));
+                if let Some((factor, span)) = self.take_unroll_factor(&mut loop_expr.attrs) {
+                    loop_expr
+                        .body
+                        .stmts
+                        .insert(0, Self::marker_stmt(&factor, span));
                 }
             }
             _ => {}

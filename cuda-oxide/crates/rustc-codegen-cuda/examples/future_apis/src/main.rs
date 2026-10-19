@@ -11,10 +11,19 @@
 //!
 //! Run: cargo oxide run future_apis
 
+use cuda_device::cooperative_groups::{ThreadGroup, this_thread_block};
 use cuda_device::cusimd::CuSimd;
 use cuda_device::{Barrier, GeneralBarrier, ManagedBarrier, TmaBarrier, Uninit};
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;
+
+/// Block of the 2D barrier test: 4 rows of 32 threads, one warp per row.
+const BLOCK_2D_WIDTH: usize = 32;
+const BLOCK_2D_HEIGHT: usize = 4;
+const BLOCK_2D_THREADS: u32 = (BLOCK_2D_WIDTH * BLOCK_2D_HEIGHT) as u32;
+/// Block-linear id of thread (31, 3, 0), the last thread of the block, so the
+/// x and y terms of the id both count. No thread has `threadIdx.x` equal to it.
+const BARRIER_2D_THREAD: u32 = BLOCK_2D_THREADS - 1;
 
 // =============================================================================
 // CUSIMD KERNELS
@@ -231,6 +240,63 @@ mod kernels {
             *output_elem = sum; // Should be 3
         }
     }
+
+    /// Test kernel for `ManagedBarrier` in a 2D block of (32, 4, 1) threads.
+    ///
+    /// Every thread calls `init_by` and `inval_by`, as their contract asks:
+    /// both synchronize the whole block. The selector is the block-linear id
+    /// of thread (31, 3, 0), the last thread of the block, so the x and y
+    /// terms of the id both count. No thread has `threadIdx.x` equal to it,
+    /// so an election by `threadIdx.x` alone initializes nothing and the
+    /// launch fails with error 719.
+    ///
+    /// Thread 0 first fills the barrier word with all-ones. The store is a
+    /// determinism aid, not the detector: a missing init then faults on this
+    /// word instead of depending on what shared memory held at launch.
+    ///
+    /// Each thread writes 42 at its row-major 2D index when that index equals
+    /// its block rank, so the host also checks that `thread_rank()` numbers
+    /// the block x fastest, the same numbering the barrier election uses.
+    #[kernel]
+    pub fn test_managed_barrier_2d(
+        mut output: DisjointSlice<u32, thread::Index2D<BLOCK_2D_WIDTH>>,
+    ) {
+        static mut BAR: Barrier = Barrier::UNINIT;
+
+        let rank = this_thread_block().thread_rank() as usize;
+
+        // Determinism aid, not the detector: see the kernel docs above
+        if rank == 0 {
+            // SAFETY: BAR is this block's own shared memory, one 8-byte aligned
+            // u64 that nothing in this launch has made an mbarrier object yet;
+            // the sync below orders the store before init_by.
+            unsafe { *(&raw mut BAR as *mut u64) = u64::MAX };
+        }
+        thread::sync_threads();
+
+        // ALL threads create the Uninit handle (wraps the same shared static)
+        let bar = ManagedBarrier::<Uninit, GeneralBarrier>::from_static(&raw mut BAR);
+
+        // ALL threads call init_by - only linear thread 127 runs mbarrier.init
+        // init_by includes: fence + sync_threads; all threads get a Ready handle
+        let bar = unsafe { bar.init_by(BLOCK_2D_THREADS, BARRIER_2D_THREAD) };
+
+        // All threads arrive and wait
+        let token = bar.arrive();
+        bar.wait(token);
+
+        // ALL threads call inval_by - it synchronizes the block, then only
+        // linear thread 127 runs mbarrier.inval, then synchronizes again
+        let _dead = unsafe { bar.inval_by(BARRIER_2D_THREAD) };
+
+        // Write results - 42 when the row-major index is the block rank
+        if let Some(idx) = thread::index_2d::<BLOCK_2D_WIDTH>() {
+            let value = if idx.get() == rank { 42 } else { 1 };
+            if let Some(output_elem) = output.get_mut(idx) {
+                *output_elem = value;
+            }
+        }
+    }
 }
 
 // =============================================================================
@@ -431,6 +497,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  Results: {:?}", &output[..8.min(output.len())]);
             println!("✗ Double-buffered FAILED\n");
         }
+    }
+
+    // ====================================================================
+    // Test 6: ManagedBarrier in a 2D block
+    // ====================================================================
+    println!("--- Test 6: ManagedBarrier in a ({BLOCK_2D_WIDTH}, {BLOCK_2D_HEIGHT}, 1) block ---");
+    {
+        const N: usize = BLOCK_2D_WIDTH * BLOCK_2D_HEIGHT;
+        let mut output_dev = DeviceBuffer::<u32>::zeroed(&stream, N)?;
+
+        let cfg = LaunchConfig {
+            grid_dim: (1, 1, 1),
+            block_dim: (BLOCK_2D_WIDTH as u32, BLOCK_2D_HEIGHT as u32, 1),
+            shared_mem_bytes: 0,
+        };
+
+        // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
+        unsafe { module.test_managed_barrier_2d((stream).as_ref(), cfg, &mut output_dev) }?;
+        stream.synchronize()?;
+
+        let output: Vec<u32> = output_dev.to_host_vec(&stream)?;
+
+        // Every thread writes 42 once it passed the barrier and its block
+        // rank matched its row-major index. Any other value means the
+        // election this block layout exists to test went wrong, so it is an
+        // error, not a note.
+        if let Some(thread) = output.iter().position(|&v| v != 42) {
+            let got = output[thread];
+            println!("  Results: {:?}", &output[..8.min(output.len())]);
+            return Err(format!(
+                "ManagedBarrier 2D: thread {thread} wrote {got} instead of 42 in a ({BLOCK_2D_WIDTH}, {BLOCK_2D_HEIGHT}, 1) block"
+            )
+            .into());
+        }
+        println!("  All {N} threads wrote 42 in a ({BLOCK_2D_WIDTH}, {BLOCK_2D_HEIGHT}, 1) block");
+        println!("✓ ManagedBarrier 2D PASSED\n");
     }
 
     println!("=== ALL FUTURE APIS TESTS COMPLETED ===");

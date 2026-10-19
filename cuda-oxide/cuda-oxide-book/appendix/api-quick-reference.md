@@ -73,7 +73,7 @@ and 65,536 cloned operations. Larger requests warn and are not unrolled.
 ```rust
 use cuda_device::{gpu_assert, gpu_printf, ptx_asm};
 
-gpu_printf!("thread %d: val = %f\n", idx as i32, val as f64);
+gpu_printf!("thread {}: val = {}\n", idx, val);
 gpu_assert!(val.is_finite());
 gpu_assert!(val >= 0.0, "expected non-negative value");
 

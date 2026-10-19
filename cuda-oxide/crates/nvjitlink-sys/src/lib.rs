@@ -7,7 +7,24 @@
 //!
 //! nvJitLink links one or more LTOIR modules (and other input forms) into
 //! a final cubin or PTX. It is part of the CUDA Toolkit and ships at
-//! `<cuda>/lib64/libnvJitLink.so`.
+//! `<cuda>/lib64/libnvJitLink.so`. conda-forge and nixpkgs lay the toolkit
+//! out with `lib/` instead of `lib64/`, so both directories are probed.
+//!
+//! # Library discovery
+//!
+//! [`LibNvJitLink::load`] tries (in order):
+//! 1. `LIBNVJITLINK_PATH` env var, if set.
+//! 2. `<root>/lib64/libnvJitLink.so`, then `<root>/lib/libnvJitLink.so`, for
+//!    `<root>` in `CUDA_TOOLKIT_PATH`, `CUDA_HOME`, `CUDA_PATH`,
+//!    `/usr/local/cuda`, `/opt/cuda`.
+//! 3. The system loader (`libnvJitLink.so.13`, `libnvJitLink.so.12`,
+//!    `libnvJitLink.so`).
+//!
+//! Only the unversioned `libnvJitLink.so` name is probed under a root. A
+//! layout that ships only `libnvJitLink.so.13` is reached through the system
+//! loader, which does not say which file it mapped, so that load cannot be
+//! tied to one file on disk. Set `LIBNVJITLINK_PATH` to the file when the
+//! exact file matters, as it does for cubin materialization.
 //!
 //! # Symbol naming
 //!
@@ -729,12 +746,8 @@ fn open_library(tried: &mut Vec<String>, retain_exact_file: bool) -> Option<Open
         }
     }
 
-    for root in cuda_roots() {
-        let path = root.join("lib64/libnvJitLink.so");
-        tried.push(path.display().to_string());
-        if let Some(opened) = open_library_path(&path, retain_exact_file) {
-            return Some(opened);
-        }
+    if let Some(opened) = open_library_under_roots(&cuda_roots(), tried, retain_exact_file) {
+        return Some(opened);
     }
 
     for soname in [
@@ -752,6 +765,25 @@ fn open_library(tried: &mut Vec<String>, retain_exact_file: bool) -> Option<Open
         }
     }
 
+    None
+}
+
+/// Probe `library_candidates(roots)` in order and open the first path that
+/// loads. Every probed path is appended to `tried`, hits and misses alike, so
+/// `LibraryNotFound` can list them. The `LIBNVJITLINK_PATH` override and the
+/// SONAME fallback stay in `open_library`: this function sees only the roots
+/// it is given, so a test can hand it a directory of its own.
+fn open_library_under_roots(
+    roots: &[PathBuf],
+    tried: &mut Vec<String>,
+    retain_exact_file: bool,
+) -> Option<OpenedLibrary> {
+    for path in library_candidates(roots) {
+        tried.push(path.display().to_string());
+        if let Some(opened) = open_library_path(&path, retain_exact_file) {
+            return Some(opened);
+        }
+    }
     None
 }
 
@@ -790,6 +822,21 @@ fn open_library_path(path: &Path, retain_exact_file: bool) -> Option<OpenedLibra
         loaded_file: None,
         loaded_identity: None,
     })
+}
+
+/// The library paths probed under each CUDA root, in order: `lib64/` as in
+/// the CUDA Toolkit installer's layout, then `lib/` as in the conda-forge and
+/// nixpkgs layouts, which have no `lib64/`. Only the unversioned
+/// `libnvJitLink.so` name is probed: a root that ships only versioned names
+/// such as `libnvJitLink.so.13` is left to the SONAME step, and
+/// `LIBNVJITLINK_PATH` names such a file directly. Finding the exact file
+/// matters: a library found only by SONAME cannot be fingerprinted for cubin
+/// materialization.
+fn library_candidates(roots: &[PathBuf]) -> Vec<PathBuf> {
+    roots
+        .iter()
+        .flat_map(|root| ["lib64", "lib"].map(|dir| root.join(dir).join("libnvJitLink.so")))
+        .collect()
 }
 
 fn cuda_roots() -> Vec<PathBuf> {
@@ -920,6 +967,102 @@ mod tests {
         drop(opened);
         drop(old_library);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A fresh directory under the system temp dir, used as a CUDA root.
+    #[cfg(target_os = "linux")]
+    fn scratch_root(tag: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "nvjitlink-sys-{tag}-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        root
+    }
+
+    /// Build the probe DSO as `<root>/<dir>/libnvJitLink.so`.
+    #[cfg(target_os = "linux")]
+    fn place_probe_library(root: &Path, dir: &str, value: i32) -> PathBuf {
+        let directory = root.join(dir);
+        std::fs::create_dir(&directory).unwrap();
+        let library_path = directory.join("libnvJitLink.so");
+        compile_probe_library(&directory.join("probe.c"), &library_path, value);
+        library_path
+    }
+
+    #[cfg(target_os = "linux")]
+    fn probe_value(opened: &OpenedLibrary) -> c_int {
+        let probe: Symbol<unsafe extern "C" fn() -> c_int> =
+            unsafe { opened.library.get(b"cuda_oxide_probe") }.unwrap();
+        unsafe { probe() }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn file_identity(path: &Path) -> Option<LibraryFileIdentity> {
+        LibraryFileIdentity::capture_file(&File::open(path).unwrap())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn candidate_strings(root: &Path, dirs: &[&str]) -> Vec<String> {
+        dirs.iter()
+            .map(|dir| root.join(dir).join("libnvJitLink.so").display().to_string())
+            .collect()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn root_probe_loads_lib_when_lib64_is_absent() {
+        let root = scratch_root("root-lib");
+        let library_path = place_probe_library(&root, "lib", 7);
+        let expected_identity = file_identity(&library_path);
+        assert!(expected_identity.is_some());
+
+        let mut tried = Vec::new();
+        let opened = open_library_under_roots(std::slice::from_ref(&root), &mut tried, true)
+            .expect("lib/libnvJitLink.so is found when lib64/ is absent");
+
+        assert_eq!(probe_value(&opened), 7);
+        assert_eq!(opened.loaded_identity, expected_identity);
+        assert_eq!(tried, candidate_strings(&root, &["lib64", "lib"]));
+
+        drop(opened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn root_probe_prefers_lib64_over_lib() {
+        let root = scratch_root("root-both");
+        let lib64_path = place_probe_library(&root, "lib64", 1);
+        place_probe_library(&root, "lib", 2);
+        let lib64_identity = file_identity(&lib64_path);
+
+        let mut tried = Vec::new();
+        let opened = open_library_under_roots(std::slice::from_ref(&root), &mut tried, true)
+            .expect("lib64/libnvJitLink.so is found");
+
+        assert_eq!(probe_value(&opened), 1);
+        assert_eq!(opened.loaded_identity, lib64_identity);
+        assert_eq!(tried, candidate_strings(&root, &["lib64"]));
+
+        drop(opened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn root_probe_reports_both_candidates_for_an_empty_root() {
+        let root = scratch_root("root-empty");
+
+        let mut tried = Vec::new();
+        assert!(open_library_under_roots(std::slice::from_ref(&root), &mut tried, true).is_none());
+        assert_eq!(tried, candidate_strings(&root, &["lib64", "lib"]));
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1080,6 +1223,20 @@ mod tests {
         let prepared = normalize_input(InputType::Any, auto_detected, "auto").unwrap();
         assert!(matches!(&prepared, Cow::Borrowed(_)));
         assert_eq!(prepared.as_ref(), auto_detected);
+    }
+
+    #[test]
+    fn library_candidates_try_lib64_then_lib_under_each_root() {
+        let roots = [PathBuf::from("/cuda"), PathBuf::from("/conda")];
+        assert_eq!(
+            library_candidates(&roots),
+            vec![
+                PathBuf::from("/cuda/lib64/libnvJitLink.so"),
+                PathBuf::from("/cuda/lib/libnvJitLink.so"),
+                PathBuf::from("/conda/lib64/libnvJitLink.so"),
+                PathBuf::from("/conda/lib/libnvJitLink.so"),
+            ]
+        );
     }
 
     #[test]

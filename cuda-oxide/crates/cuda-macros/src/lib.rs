@@ -73,15 +73,49 @@ use syn::parse_macro_input;
 ///
 /// | Specifier | Description     | Example                                        |
 /// |-----------|-----------------|------------------------------------------------|
-/// | `{}`      | Default format  | `gpu_printf!("{}", 42)`                        |
+/// | `{}`      | By type (below) | `gpu_printf!("{}", 42)` → "42"                 |
 /// | `{:x}`    | Hex (lower)     | `gpu_printf!("{:x}", 255)` → "ff"              |
 /// | `{:X}`    | Hex (upper)     | `gpu_printf!("{:X}", 255)` → "FF"              |
 /// | `{:#x}`   | Hex with prefix | `gpu_printf!("{:#x}", 255)` → "0xff"           |
 /// | `{:o}`    | Octal           | `gpu_printf!("{:o}", 8)` → "10"                |
+/// | `{:d}`    | Signed decimal  | `gpu_printf!("{:d}", 42u8)` → "42"             |
 /// | `{:e}`    | Scientific      | `gpu_printf!("{:e}", 1000.0)` → "1.000000e+03" |
+/// | `{:c}`    | Character       | `gpu_printf!("{:c}", 'a')` → "a"               |
 /// | `{:.N}`   | Precision       | `gpu_printf!("{:.2}", 3.14159)` → "3.14"       |
 /// | `{:N}`    | Width           | `gpu_printf!("{:8}", 42)` → "      42"         |
 /// | `{:0N}`   | Zero-pad        | `gpu_printf!("{:08}", 42)` → "00000042"        |
+/// | `{:*}`    | Runtime width   | `gpu_printf!("{:*}", 8, 42)` → "      42"      |
+///
+/// A type character (`x`, `X`, `o`, `d`, `e`, `E`, `f`, `g`, `G`, `a`, `A`,
+/// `c`, `p`) picks the C conversion and casts the argument to the matching C
+/// type (`as u64`, `as i64`, `as f64`, `as i32`).
+///
+/// # Default conversions
+///
+/// A placeholder without a type character (`{}`, `{:8}`, `{:08}`, `{:.2}`)
+/// prints its argument by type. The argument has to implement
+/// `cuda_device::debug::GpuPrintfArg`:
+///
+/// | Argument type              | Conversion |
+/// |----------------------------|------------|
+/// | `i8`, `i16`, `i32`, `bool` | `%d`       |
+/// | `i64`, `isize`             | `%lld`     |
+/// | `u8`, `u16`, `u32`         | `%u`       |
+/// | `u64`, `usize`             | `%llu`     |
+/// | `f32`, `f64`               | `%f`       |
+/// | `*const T`, `*mut T`       | `%p`       |
+///
+/// An unsuffixed integer literal is an `i32` and an unsuffixed float literal
+/// an `f64`, as in the rest of Rust. Width, zero padding and precision keep
+/// their C meaning: `{:.2}` on a float prints two decimals, and on an integer
+/// it is the minimum number of digits (`{:.3}` on `-42` prints `-042`). The
+/// `+` and space flags need a signed integer or floating-point argument; on
+/// an unsigned or pointer argument they are a compile-time error.
+///
+/// Not accepted by a default placeholder: `char` (use `{:c}`), fieldless
+/// enums (cast with `as i32`), `i128` and `u128`. Runtime precision `{:.*}`
+/// is a compile-time error, because CUDA device printf takes `*` for the
+/// width only.
 ///
 /// # Returns
 ///

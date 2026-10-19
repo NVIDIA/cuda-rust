@@ -135,7 +135,12 @@ pub(crate) use global_layout::{
 pub(crate) use layout::{
     llvm_byte_faithful_twin, llvm_type_contains_i1, llvm_type_is_byte_faithful,
     llvm_type_size_align, mir_element_stride, mir_type_abi_align, natural_struct_layout,
+    required_storage_align,
 };
+// Outside this module the anchor cap is read only by test fixtures; a plain
+// re-export would trip `unused_imports` in non-test builds.
+#[cfg(test)]
+pub(crate) use layout::MAX_NATURAL_ALIGN;
 pub(crate) use pointer_storage::{
     llvm_packed_struct_contains_pointer_in_address_space,
     llvm_type_contains_pointer_in_address_space,

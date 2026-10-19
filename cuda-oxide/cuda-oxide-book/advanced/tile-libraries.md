@@ -280,6 +280,15 @@ selection.
 
 ## The provider form
 
+```{figure} images/tilelib-provider-linkage.svg
+:align: center
+:width: 100%
+
+The provider form. The library is a shared object the Tile compiler loads
+while a kernel compiles; it asks, per call site, which implementations exist,
+and once for their code, so one Rust body serves every tile size.
+```
+
 A declaration can be parametric in its tile size: `@relu_any<[N: index]>`
 takes tiles of `N` elements, and each call binds `N`. The Tile compiler then
 asks the library for one implementation symbol per size a kernel uses

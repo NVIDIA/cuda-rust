@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 800" width="1240" height="800" role="img"
+  aria-label="Direct linkage flow: Rust source becomes LTOIR plus two description bytecodes, packaged into a .tilelib that tileiras links with a Tile kernel's bytecode into one cubin">
+<style>
+  :root, svg { 
+  --bg: #f4f6f8; --fg: #1a232e; --muted: #5d6b7a; --line: #9aa7b4; --panel: #ffffff;
+  --meta: #0e7c72; --meta-fill: #d9f3ef; --code: #b4560a; --code-fill: #fdebd2;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+ }
+  @media (prefers-color-scheme: dark) { :root, svg { 
+  --bg: #0f151b; --fg: #e4ebf2; --muted: #9fb0c0; --line: #4d5b6a; --panel: #171f28;
+  --meta: #5fe3d2; --meta-fill: #0f3a37; --code: #f6b544; --code-fill: #3b2a0c;
+ } }
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--fg)"/></marker></defs>
+<rect x="0" y="0" width="1240" height="800" style="fill: var(--bg)"/>
+<text x="40" y="34" text-anchor="start" style="font: 600 17px var(--sans); fill: var(--fg)">Direct linkage: a Tile kernel calls a Rust function through a .tilelib</text>
+<text x="40" y="56" text-anchor="start" style="font: 400 12.5px var(--sans); fill: var(--muted)">cuda-oxide is the SIMT provider. It ships code plus a description; the Tile compiler matches, marshals and links.</text>
+<text x="40" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">RUST SIDE  (cuda-oxide)</text>
+<text x="620.0" y="92" text-anchor="middle" style="font: 600 11px var(--sans); fill: var(--muted)">TILE COMPILER  (tileiras, CUDA 13.5 or newer)</text>
+<text x="870" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">TILE SIDE  (Tile C++, cuTile Python or cutile-rs)</text>
+<rect x="40" y="108" width="330" height="64" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="54" y="134" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--meta)">#[tile_export(tile_shape = 128)]</text>
+<text x="54" y="156" text-anchor="start" style="font: 400 12px var(--mono); fill: var(--fg)">pub fn relu(x: f32) -&gt; f32 { .. }</text>
+<line x1="120" y1="172" x2="120" y2="210" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<text x="132" y="196" text-anchor="start" style="font: 400 11.5px var(--mono); fill: var(--muted)">cargo oxide tilelib relu --arch sm_120</text>
+<rect x="40" y="212" width="330" height="40" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="54" y="237" text-anchor="start" style="font: 600 12.5px var(--mono); fill: var(--fg)">relu.ltoir</text>
+<text x="356" y="237" text-anchor="end" style="font: 400 11px var(--sans); fill: var(--muted)">code: LLVM bitcode for nvJitLink</text>
+<rect x="40" y="260" width="330" height="40" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="54" y="285" text-anchor="start" style="font: 600 12.5px var(--mono); fill: var(--fg)">relu.iface.tilebc</text>
+<text x="356" y="285" text-anchor="end" style="font: 400 11px var(--sans); fill: var(--muted)">declaration: what can be called</text>
+<rect x="40" y="308" width="330" height="40" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="54" y="333" text-anchor="start" style="font: 600 12.5px var(--mono); fill: var(--fg)">relu.impl.tilebc</text>
+<text x="356" y="333" text-anchor="end" style="font: 400 11px var(--sans); fill: var(--muted)">implementation: how to call it</text>
+<line x1="120" y1="348" x2="120" y2="386" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<text x="132" y="372" text-anchor="start" style="font: 400 11.5px var(--mono); fill: var(--muted)">tileiras --preview-create-tile-lib</text>
+<rect x="40" y="388" width="330" height="96" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.6"/>
+<text x="54" y="410" text-anchor="start" style="font: 600 12.5px var(--mono); fill: var(--fg)">relu.tilelib</text>
+<text x="356" y="410" text-anchor="end" style="font: 400 11px var(--sans); fill: var(--muted)">one host object file</text>
+<rect x="54" y="422" width="8" height="12" rx="2" style="fill: var(--meta)"/>
+<text x="70" y="432" text-anchor="start" style="font: 400 11px var(--mono); fill: var(--fg)">.nvtlifc</text>
+<text x="150" y="432" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">declaration</text>
+<rect x="54" y="443" width="8" height="12" rx="2" style="fill: var(--meta)"/>
+<text x="70" y="453" text-anchor="start" style="font: 400 11px var(--mono); fill: var(--fg)">.nvtl.0</text>
+<text x="150" y="453" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">implementation</text>
+<rect x="54" y="464" width="8" height="12" rx="2" style="fill: var(--code)"/>
+<text x="70" y="474" text-anchor="start" style="font: 400 11px var(--mono); fill: var(--fg)">.nvtl.1</text>
+<text x="150" y="474" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">LTOIR</text>
+<rect x="455" y="212" width="330" height="272" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.6"/>
+<text x="469" y="236" text-anchor="start" style="font: 600 11.5px var(--mono); fill: var(--fg)">tileiras --preview=simt prog.tilebc</text>
+<text x="469" y="254" text-anchor="start" style="font: 600 11.5px var(--mono); fill: var(--fg)">         -l relu.tilelib -o kernel.cubin</text>
+<line x1="469" y1="266" x2="771" y2="266" style="stroke: var(--line); stroke-width: 1"/>
+<circle cx="479" cy="284" r="9" style="fill: var(--panel); stroke: var(--fg); stroke-width: 1.2"/>
+<text x="479" y="288" text-anchor="middle" style="font: 600 10.5px var(--sans); fill: var(--fg)">1</text>
+<text x="497" y="288" text-anchor="start" style="font: 400 12px var(--sans); fill: var(--fg)">splice the declaration from .nvtlifc</text>
+<text x="497" y="304" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">into the program</text>
+<circle cx="479" cy="334" r="9" style="fill: var(--panel); stroke: var(--fg); stroke-width: 1.2"/>
+<text x="479" y="338" text-anchor="middle" style="font: 600 10.5px var(--sans); fill: var(--fg)">2</text>
+<text x="497" y="338" text-anchor="start" style="font: 400 12px var(--sans); fill: var(--fg)">pick an implementation whose fragment</text>
+<text x="497" y="354" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">layout fits the call site</text>
+<circle cx="479" cy="384" r="9" style="fill: var(--panel); stroke: var(--fg); stroke-width: 1.2"/>
+<text x="479" y="388" text-anchor="middle" style="font: 600 10.5px var(--sans); fill: var(--fg)">3</text>
+<text x="497" y="388" text-anchor="start" style="font: 400 12px var(--sans); fill: var(--fg)">lower the boundary: spill the tile to</text>
+<text x="497" y="404" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">per-thread buffers, call relu_impl per invocation</text>
+<circle cx="479" cy="434" r="9" style="fill: var(--panel); stroke: var(--fg); stroke-width: 1.2"/>
+<text x="479" y="438" text-anchor="middle" style="font: 600 10.5px var(--sans); fill: var(--fg)">4</text>
+<text x="497" y="438" text-anchor="start" style="font: 400 12px var(--sans); fill: var(--fg)">nvJitLink: tile code + relu.ltoir</text>
+<text x="497" y="454" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">cross-module LTO, then SASS</text>
+<line x1="370" y1="436" x2="455" y2="436" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<text x="412.5" y="428" text-anchor="middle" style="font: 400 11px var(--mono); fill: var(--muted)">-l</text>
+<line x1="870" y1="240" x2="785" y2="240" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<text x="827.5" y="232" text-anchor="middle" style="font: 400 11px var(--sans); fill: var(--muted)">program</text>
+<line x1="620.0" y1="484" x2="620.0" y2="522" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<rect x="485" y="524" width="270" height="48" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.6"/>
+<text x="620.0" y="544" text-anchor="middle" style="font: 600 13px var(--sans); fill: var(--fg)">one cubin</text>
+<text x="620.0" y="562" text-anchor="middle" style="font: 400 11px var(--sans); fill: var(--muted)">tile kernel and relu_impl linked together</text>
+<rect x="870" y="108" width="330" height="70" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="884" y="130" text-anchor="start" style="font: 400 11.5px var(--mono); fill: var(--fg)">tp.foreign_call(tilelibs=(relu_lib,),</text>
+<text x="884" y="148" text-anchor="start" style="font: 400 11.5px var(--mono); fill: var(--fg)">  symbol_name="relu", inputs=(x, zeros),</text>
+<text x="884" y="166" text-anchor="start" style="font: 400 11.5px var(--mono); fill: var(--fg)">  output_types=((f32, (128,)),))</text>
+<line x1="1140" y1="178" x2="1140" y2="210" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<text x="1128" y="198" text-anchor="end" style="font: 400 11.5px var(--sans); fill: var(--muted)">the frontend emits</text>
+<rect x="870" y="212" width="330" height="56" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="884" y="234" text-anchor="start" style="font: 600 12.5px var(--mono); fill: var(--fg)">prog.tilebc</text>
+<text x="884" y="254" text-anchor="start" style="font: 400 11.5px var(--mono); fill: var(--fg)">preview$call @relu(%x, %out)</text>
+<rect x="870" y="292" width="330" height="56" rx="6" stroke-dasharray="4 3" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="884" y="314" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">The Tile frontend's half. It only emits the call</text>
+<text x="884" y="332" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">and passes the library on. It never sees Rust.</text>
+<line x1="40" y1="594" x2="1200" y2="594" style="stroke: var(--line); stroke-width: 1"/>
+<text x="40" y="616" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">THREE FILES, TWO KINDS</text>
+<rect x="40" y="630" width="10" height="14" rx="2" style="fill: var(--meta)"/>
+<text x="60" y="642" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--fg)">.tilebc</text>
+<text x="130" y="642" text-anchor="start" style="font: 400 12px var(--sans); fill: var(--fg)">metadata the Tile compiler reads: names, tile types, fragment layouts, scope.</text>
+<text x="60" y="660" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">No code inside. Written by oxide-tilebc from the #[tile_export] description.</text>
+<rect x="40" y="678" width="10" height="14" rx="2" style="fill: var(--code)"/>
+<text x="60" y="690" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--fg)">.ltoir</text>
+<text x="130" y="690" text-anchor="start" style="font: 400 12px var(--sans); fill: var(--fg)">the code: LLVM bitcode, finalized to SASS by nvJitLink at link time.</text>
+<text x="60" y="708" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">The Tile compiler never looks inside it. Our existing emit-ltoir pipeline.</text>
+<text x="660" y="616" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">THE ABI THE MACRO GENERATES</text>
+<text x="660" y="642" text-anchor="start" style="font: 400 12px var(--mono); fill: var(--fg)">fn relu(x: f32) -&gt; f32</text>
+<text x="830" y="642" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">becomes</text>
+<text x="890" y="642" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--fg)">extern "C" fn relu_impl(x: f32, out: *mut f32)</text>
+<text x="660" y="668" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">scalar in: by value  ·  out and inout: a pointer  ·  results travel through pointers</text>
+<text x="660" y="688" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">no logical thread id: threadIdx.x is the real one  ·  shared memory only through scratch</text>
+<text x="660" y="714" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">Later: a linkage provider .so answers the same two things on demand.</text>
+</svg>

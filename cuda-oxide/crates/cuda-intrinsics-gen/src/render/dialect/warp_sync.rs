@@ -19,7 +19,7 @@ use std::fmt::Write as _;
 pub(in crate::render) fn render_dialect_elect(catalog: &CatalogFile, hash: &str) -> String {
     let mut output = rust_header(catalog, hash);
     output.push_str(
-        "//! Generated warp leader-election operation.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::IntegerType,\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::{TypeHandle, Typed},\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\n",
+        "//! Generated warp leader-election operation.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::IntegerType,\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::{TypeHandle, Typed},\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\n",
     );
     for record in elect_intrinsics(catalog) {
         writeln!(output, "/// {}", record.summary).unwrap();
@@ -50,7 +50,7 @@ pub(in crate::render) fn render_dialect_elect(catalog: &CatalogFile, hash: &str)
 pub(in crate::render) fn render_dialect_sreg(catalog: &CatalogFile, hash: &str) -> String {
     let mut output = rust_header(catalog, hash);
     output.push_str(
-        "//! Structural NVVM operations for generated special-register reads.\n\nuse pliron::{\n    builtin::op_interfaces::{NOpdsInterface, NResultsInterface},\n    builtin::types::IntegerType,\n    common_traits::Verify,\n    context::{Context, Ptr},\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\n",
+        "//! Structural NVVM operations for generated special-register reads.\n\nuse pliron::{\n    builtin::op_interfaces::{NOpdsInterface, NResultsInterface},\n    builtin::types::IntegerType,\n    common_traits::Verify,\n    context::{Context, Ptr},\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\n",
     );
     for record in sregs(catalog) {
         let width = record.scalar_width().unwrap();
@@ -123,7 +123,7 @@ pub(in crate::render) fn render_dialect_sync(catalog: &CatalogFile, hash: &str) 
 pub(in crate::render) fn render_dialect_vote(catalog: &CatalogFile, hash: &str) -> String {
     let mut output = rust_header(catalog, hash);
     output.push_str(
-        "//! Structural operations for the generated `vote.sync` family.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_integer_width(ctx: &Context, ty: pliron::r#type::TypeHandle, width: u32) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == width)\n}\n\n",
+        "//! Structural operations for the generated `vote.sync` family.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_integer_width(ctx: &Context, ty: pliron::r#type::TypeHandle, width: u32) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == width)\n}\n\n",
     );
     for record in vote_intrinsics(catalog) {
         let result_width = match record.vote.as_ref().unwrap().mode {
@@ -178,7 +178,7 @@ pub(in crate::render) fn render_dialect_vote(catalog: &CatalogFile, hash: &str) 
 pub(in crate::render) fn render_dialect_active_mask(catalog: &CatalogFile, hash: &str) -> String {
     let mut output = rust_header(catalog, hash);
     output.push_str(
-        "//! Structural operation for the generated active warp mask.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\n",
+        "//! Structural operation for the generated active warp mask.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\n",
     );
     for record in active_masks(catalog) {
         debug_assert_eq!(
@@ -227,7 +227,6 @@ use pliron::{
     },
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -478,7 +477,6 @@ use pliron::{
     },
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -676,7 +674,6 @@ use pliron::{
     },
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -853,7 +850,7 @@ fn verify_mbarrier_extended(
 pub(in crate::render) fn render_dialect_warp_match(catalog: &CatalogFile, hash: &str) -> String {
     let mut output = rust_header(catalog, hash);
     output.push_str(
-        "//! Structural operations for the generated `match.sync` family.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_integer_width(ctx: &Context, ty: pliron::r#type::TypeHandle, width: u32) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == width)\n}\n\n",
+        "//! Structural operations for the generated `match.sync` family.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_integer_width(ctx: &Context, ty: pliron::r#type::TypeHandle, width: u32) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == width)\n}\n\n",
     );
     for record in warp_matches(catalog) {
         let warp_match = record.warp_match.as_ref().unwrap();
@@ -904,7 +901,7 @@ pub(in crate::render) fn render_dialect_warp_match(catalog: &CatalogFile, hash: 
 pub(in crate::render) fn render_dialect_warp_barrier(catalog: &CatalogFile, hash: &str) -> String {
     let mut output = rust_header(catalog, hash);
     output.push_str(
-        "//! Structural operation for generated warp synchronization.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::IntegerType,\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_i32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == 32)\n}\n\n",
+        "//! Structural operation for generated warp synchronization.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::IntegerType,\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_i32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == 32)\n}\n\n",
     );
     for record in warp_barriers(catalog) {
         debug_assert_eq!(
@@ -947,7 +944,7 @@ pub(in crate::render) fn render_dialect_warp_barrier(catalog: &CatalogFile, hash
 pub(in crate::render) fn render_dialect_warp_shuffle(catalog: &CatalogFile, hash: &str) -> String {
     let mut output = rust_header(catalog, hash);
     output.push_str(
-        "//! Structural operations for the generated `shfl.sync` family.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{FP32Type, IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_i32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == 32)\n}\n\nfn is_i64(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == 64)\n}\n\nfn is_f32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx).downcast_ref::<FP32Type>().is_some()\n}\n\n",
+        "//! Structural operations for the generated `shfl.sync` family.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{FP32Type, IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_i32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == 32)\n}\n\nfn is_i64(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == 64)\n}\n\nfn is_f32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx).downcast_ref::<FP32Type>().is_some()\n}\n\n",
     );
     for record in warp_shuffles(catalog) {
         let shuffle = record.warp_shuffle.as_ref().unwrap();
@@ -1024,7 +1021,7 @@ pub(in crate::render) fn render_dialect_warp_shuffle(catalog: &CatalogFile, hash
 pub(in crate::render) fn render_dialect_dotprod(catalog: &CatalogFile, hash: &str) -> String {
     let mut output = rust_header(catalog, hash);
     output.push_str(
-        "//! Structural operations for generated packed integer dot products.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_i32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == 32)\n}\n\n",
+        "//! Structural operations for generated packed integer dot products.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_i32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == 32)\n}\n\n",
     );
     for record in dot_products(catalog) {
         let signedness = match record.rust.result.as_str() {
@@ -1080,11 +1077,11 @@ pub(in crate::render) fn render_dialect_redux(catalog: &CatalogFile, hash: &str)
     let has_f32 = redux(catalog).any(|record| record.dialect.results == ["f32"]);
     if has_f32 {
         output.push_str(
-            "//! Structural NVVM operations for the closed generated `redux.sync` family.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{FP32Type, IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_i32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == 32)\n}\n\nfn is_f32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx).downcast_ref::<FP32Type>().is_some()\n}\n\n",
+            "//! Structural NVVM operations for the closed generated `redux.sync` family.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{FP32Type, IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_i32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == 32)\n}\n\nfn is_f32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx).downcast_ref::<FP32Type>().is_some()\n}\n\n",
         );
     } else {
         output.push_str(
-            "//! Structural NVVM operations for the closed generated `redux.sync` family.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_i32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == 32)\n}\n\n",
+            "//! Structural NVVM operations for the closed generated `redux.sync` family.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_i32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == 32)\n}\n\n",
         );
     }
     for record in redux(catalog) {

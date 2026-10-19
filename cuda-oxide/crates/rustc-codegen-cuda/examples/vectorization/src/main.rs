@@ -155,6 +155,136 @@ mod view_kernels {
         empty.as_mut_ptr()
     }
 
+    /// Regression coverage for a 16-byte enum filler beside a pointer niche.
+    ///
+    /// The `[u64; 2]` payload occupies 16 bytes before the slice pointer. Enum
+    /// storage must represent that filler without obscuring the slice pointer's
+    /// global address space; otherwise the final vector load becomes generic
+    /// `ld.v4.*` instead of `ld.global.v4.*`.
+    #[kernel]
+    pub fn f32x4_view_copy_through_wide_option(
+        input: &[f32],
+        mut output: DisjointSlice<f32>,
+        lo: u64,
+        hi: u64,
+    ) {
+        let i = thread::index_1d().get();
+
+        let out_len = output.len();
+        let out_flat = unsafe { core::slice::from_raw_parts_mut(output.as_mut_ptr(), out_len) };
+
+        let Some(input_quads) = vector::as_vectors::<F32x4>(input) else {
+            return;
+        };
+
+        let Some(out_quads) = vector::as_vectors_mut::<F32x4>(out_flat) else {
+            return;
+        };
+
+        let cookie = [lo, hi];
+
+        let wrapped = if lo == u64::MAX {
+            None
+        } else {
+            Some((cookie, input_quads))
+        };
+
+        let Some((_cookie, quads)) = wrapped else {
+            return;
+        };
+
+        if i < quads.len() && i < out_quads.len() {
+            out_quads[i] = quads[i];
+        }
+    }
+
+    /// Regression coverage for a 16-byte enum filler beside a mutable pointer niche.
+    ///
+    /// This mirrors `f32x4_view_copy_through_wide_option`, but places the output
+    /// slice behind the wide enum payload. Losing its address space would turn the
+    /// vector store into generic `st.v4.*` instead of `st.global.v4.*`.
+    #[kernel]
+    pub fn f32x4_view_store_through_wide_option(
+        input: &[f32],
+        mut output: DisjointSlice<f32>,
+        lo: u64,
+        hi: u64,
+    ) {
+        let i = thread::index_1d().get();
+
+        let Some(input_quads) = vector::as_vectors::<F32x4>(input) else {
+            return;
+        };
+
+        let out_len = output.len();
+        let out_flat = unsafe { core::slice::from_raw_parts_mut(output.as_mut_ptr(), out_len) };
+
+        let Some(out_quads) = vector::as_vectors_mut::<F32x4>(out_flat) else {
+            return;
+        };
+
+        let cookie = [lo, hi];
+
+        let wrapped = if lo == u64::MAX {
+            None
+        } else {
+            Some((cookie, out_quads))
+        };
+
+        let Some((_cookie, out_quads)) = wrapped else {
+            return;
+        };
+
+        if i < input_quads.len() && i < out_quads.len() {
+            out_quads[i] = input_quads[i];
+        }
+    }
+
+    /// Regression coverage for a 24-byte enum filler beside a pointer niche.
+    ///
+    /// `[u64; 3]` leaves 24 unclaimed bytes before the slice pointer. Typed
+    /// as `[3 x i64]` the enum storage is 5 leaves, under the block-argument
+    /// scalarizer's budget of 16, so the `Some`/`None` join splits into
+    /// scalar phis. As `[24 x i8]` it was 26 leaves, the join stayed one
+    /// aggregate phi, and the vector load lost its global window the same
+    /// way the 16-byte case did.
+    #[kernel]
+    pub fn f32x4_view_copy_through_24_byte_option(
+        input: &[f32],
+        mut output: DisjointSlice<f32>,
+        lo: u64,
+        hi: u64,
+    ) {
+        let i = thread::index_1d().get();
+
+        let out_len = output.len();
+        let out_flat = unsafe { core::slice::from_raw_parts_mut(output.as_mut_ptr(), out_len) };
+
+        let Some(input_quads) = vector::as_vectors::<F32x4>(input) else {
+            return;
+        };
+
+        let Some(out_quads) = vector::as_vectors_mut::<F32x4>(out_flat) else {
+            return;
+        };
+
+        let cookie = [lo, hi, lo ^ hi];
+
+        let wrapped = if lo == u64::MAX {
+            None
+        } else {
+            Some((cookie, input_quads))
+        };
+
+        let Some((_cookie, quads)) = wrapped else {
+            return;
+        };
+
+        if i < quads.len() && i < out_quads.len() {
+            out_quads[i] = quads[i];
+        }
+    }
+
     /// Copy one `F32x4` quad per thread between flat `f32` buffers through
     /// checked [`vector::as_vectors`] views. The quad is moved whole, never
     /// decomposed into lanes, so both the load and the store fuse into
@@ -250,6 +380,53 @@ fn main() {
         .expect("f32x4_view_copy launch");
     let flat_round_trip = flat_out.to_host_vec(&stream).expect("flat readback") == flat;
 
+    // The wide-option kernels route the same copy through
+    // `Option<([u64; 2], &[F32x4])>` and `Option<([u64; 3], &[F32x4])>`: a
+    // 16- or 24-byte payload beside the slice pointer. Launch each into a
+    // fresh zeroed buffer and check the round trip, then take the `None` arm
+    // once (`lo == u64::MAX`) and check that the output stays untouched.
+    let wide_option_output = |launch: &dyn Fn(&mut DeviceBuffer<f32>)| -> Vec<f32> {
+        let mut out = DeviceBuffer::<f32>::zeroed(&stream, N * 4).expect("wide-option output");
+        launch(&mut out);
+        out.to_host_vec(&stream).expect("wide-option readback")
+    };
+    // SAFETY (each launch below): launch shape/resources match the kernel;
+    // buffers cover its accesses.
+    let wide_copy_round_trip = wide_option_output(&|out| {
+        unsafe {
+            view_module.f32x4_view_copy_through_wide_option(&stream, cfg, &flat_in, out, 123, 456)
+        }
+        .expect("f32x4_view_copy_through_wide_option launch");
+    }) == flat;
+    let wide_store_round_trip = wide_option_output(&|out| {
+        unsafe {
+            view_module.f32x4_view_store_through_wide_option(&stream, cfg, &flat_in, out, 123, 456)
+        }
+        .expect("f32x4_view_store_through_wide_option launch");
+    }) == flat;
+    let wide_none_untouched = wide_option_output(&|out| {
+        unsafe {
+            view_module.f32x4_view_copy_through_wide_option(
+                &stream,
+                cfg,
+                &flat_in,
+                out,
+                u64::MAX,
+                456,
+            )
+        }
+        .expect("f32x4_view_copy_through_wide_option launch, None arm");
+    })
+    .iter()
+    .all(|v| *v == 0.0);
+    let option_24_round_trip = wide_option_output(&|out| {
+        unsafe {
+            view_module
+                .f32x4_view_copy_through_24_byte_option(&stream, cfg, &flat_in, out, 123, 456)
+        }
+        .expect("f32x4_view_copy_through_24_byte_option launch");
+    }) == flat;
+
     // Inspect the code we just launched: read the PTX back from the artifact
     // bundle embedded in this binary. Those are the same bytes `kernels::load`
     // handed to the driver, so the shape assertion can never diverge from what
@@ -268,6 +445,22 @@ fn main() {
     if !flat_round_trip {
         errors += 1;
         println!("  !! f32x4_view_copy round-trip copy mismatch");
+    }
+    if !wide_copy_round_trip {
+        errors += 1;
+        println!("  !! f32x4_view_copy_through_wide_option round-trip copy mismatch");
+    }
+    if !wide_store_round_trip {
+        errors += 1;
+        println!("  !! f32x4_view_store_through_wide_option round-trip copy mismatch");
+    }
+    if !wide_none_untouched {
+        errors += 1;
+        println!("  !! f32x4_view_copy_through_wide_option wrote output through the None arm");
+    }
+    if !option_24_round_trip {
+        errors += 1;
+        println!("  !! f32x4_view_copy_through_24_byte_option round-trip copy mismatch");
     }
 
     if let Some(ptx) = &ptx {
@@ -322,6 +515,32 @@ fn main() {
                     println!(
                         "  !! f32x4_view_copy: no 128-bit {dir}.global vector op \
                          (the 128-bit access is there, but in the generic window)"
+                    );
+                }
+            }
+        }
+
+        // A wide enum payload next to the slice pointer must not hide the
+        // pointer's global address space from NVPTX address-space inference.
+        // The enum storage has to stay under the block-argument scalarizer's
+        // leaf budget: a typed filler (`[2 x i64]`, `[3 x i64]`) does, a byte
+        // array (`[16 x i8]`, `[24 x i8]`) does not, and then the merged
+        // pointer rides an aggregate phi that `InferAddressSpaces` cannot
+        // see through. The copy kernels take the input slice through the
+        // enum (load side); the store kernel takes the output slice.
+        for (kernel, dir, filler) in [
+            ("f32x4_view_copy_through_wide_option", "ld", "16-byte"),
+            ("f32x4_view_store_through_wide_option", "st", "16-byte"),
+            ("f32x4_view_copy_through_24_byte_option", "ld", "24-byte"),
+        ] {
+            let body = kernel_body(&document, kernel);
+            match find_128bit_global(body, dir) {
+                Some(line) => println!("{kernel}: {line}"),
+                None => {
+                    errors += 1;
+                    let access = if dir == "ld" { "load" } else { "store" };
+                    println!(
+                        "  !! {kernel}: {filler} enum filler lost the 128-bit global {access}"
                     );
                 }
             }

@@ -7,6 +7,14 @@ rustc-ice-*.txt
 # Generated PTX/LLVM files
 *.ptx
 *.ll
+# Tile export descriptions written next to them
+*.tileexports.json
+# Tile library descriptions and the library itself (cargo oxide tilelib)
+*.tilebc
+*.tilelib
+*.tilelib.mlir
+# Mock Tile-compiler callers that tile library examples generate when they run
+examples/*/mock/
 
 # Implementation log (internal notes)
 IMPLEMENTATION.md

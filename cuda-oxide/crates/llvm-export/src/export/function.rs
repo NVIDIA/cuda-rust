@@ -16,14 +16,13 @@ use pliron::{
     attribute::Attribute,
     basic_block::BasicBlock,
     builtin::{
-        attributes::{FPDoubleAttr, FPSingleAttr, IntegerAttr, TypeAttr},
-        op_interfaces::{BranchOpInterface, SymbolOpInterface},
+        attributes::{FPDoubleAttr, FPSingleAttr, IntegerAttr, OperandSegmentSizesAttr, TypeAttr},
+        op_interfaces::{ATTR_KEY_OPERAND_SEGMENT_SIZES, BranchOpInterface, SymbolOpInterface},
         type_interfaces::FunctionTypeInterface,
         types::IntegerType,
     },
-    context::Ptr,
+    context::{Context, Ptr},
     linked_list::ContainsLinkedList,
-    location::Located,
     op::Op,
     operation::Operation,
     printable::Printable,
@@ -59,6 +58,42 @@ fn sanitize_comment(text: &str) -> String {
     text.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()
+}
+
+/// Check conditional-branch layout before Pliron's infallible range accessors.
+///
+/// Public export callers need not have verified the source module. Pliron 0.19
+/// also sums segment sizes as u32 without checking overflow, so validate the
+/// complete layout here before it can index or allocate from malformed counts.
+fn validate_conditional_branch_layout(ctx: &Context, branch: &ops::CondBrOp) -> Result<(), String> {
+    let operation = branch.get_operation().deref(ctx);
+    let sizes = operation
+        .attributes
+        .get::<OperandSegmentSizesAttr>(&ATTR_KEY_OPERAND_SEGMENT_SIZES)
+        .ok_or_else(|| {
+            "conditional branch requires an operand-segment-sizes attribute".to_owned()
+        })?;
+    if !matches!(sizes.0.as_slice(), [1, _, _]) {
+        return Err(
+            "conditional branch requires three operand segments with exactly one condition"
+                .to_owned(),
+        );
+    }
+    let total = sizes
+        .0
+        .iter()
+        .try_fold(0_u32, |total, size| total.checked_add(*size))
+        .ok_or_else(|| "conditional branch operand segment total overflows u32".to_owned())?;
+    if total as usize != operation.get_num_operands() {
+        return Err(format!(
+            "conditional branch operand segments describe {total} values, but it has {} operands",
+            operation.get_num_operands()
+        ));
+    }
+    if operation.get_num_successors() != 2 {
+        return Err("conditional branch requires exactly two successors".to_owned());
+    }
+    Ok(())
 }
 
 /// Spell only the facts already proven at the import boundary. Shared by
@@ -1045,7 +1080,7 @@ impl<'a> ModuleExportState<'a> {
             .is_some();
 
         if let Some(entry_block) = entry_block_opt {
-            let func_loc = func.get_operation().deref(self.ctx).loc();
+            let func_loc = func.get_operation().deref(self.ctx).loc().clone();
             let debug_name = ops::debug_function_name(self.ctx, func.get_operation())
                 .unwrap_or_else(|| fixed_func_name.clone());
             let debug_scope =
@@ -1349,6 +1384,7 @@ impl<'a> ModuleExportState<'a> {
                         validate_edge(block, dest, &args)?;
                         pred_map.entry(dest).or_default().push((block, args));
                     } else if let Some(branch) = term_dyn.downcast_ref::<ops::CondBrOp>() {
+                        validate_conditional_branch_layout(self.ctx, branch)?;
                         let succs: Vec<_> = term.deref(self.ctx).successors().collect();
                         let true_dest = succs[0];
                         let false_dest = succs[1];

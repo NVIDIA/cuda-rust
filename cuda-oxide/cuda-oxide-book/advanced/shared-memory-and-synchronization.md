@@ -285,7 +285,7 @@ return values, struct fields and generic code, so instructions that take it
 use their shared-memory forms without converting a generic address.
 
 ```rust
-use cuda_device::{DynamicSharedArray, SharedArray, SharedPtr};
+use cuda_device::{DynamicSharedArray, SharedArray, SharedPtr, kernel, thread};
 
 #[inline(never)]
 unsafe fn fill(tile: SharedPtr<f32>, i: usize, value: f32) {
@@ -294,23 +294,44 @@ unsafe fn fill(tile: SharedPtr<f32>, i: usize, value: f32) {
 }
 
 static mut TILE: SharedArray<f32, 256> = SharedArray::UNINIT;
-let tile: SharedPtr<f32> = SharedArray::shared_ptr(&raw mut TILE);
-let pool: SharedPtr<u8> = DynamicSharedArray::<u8, 128>::shared_ptr_at(1024);
-unsafe { fill(tile, thread::threadIdx_x() as usize, 1.0) };
+
+#[kernel]
+pub fn fill_tile() {
+    // SAFETY: TILE is a `static mut SharedArray` of this kernel.
+    let tile: SharedPtr<f32> = unsafe { SharedArray::shared_ptr(&raw mut TILE) };
+    // The same type for dynamic shared memory, 1024 bytes into the pool.
+    let pool: SharedPtr<u8> = DynamicSharedArray::<u8, 128>::shared_ptr_at(1024);
+    // SAFETY: the launch supplies more than 1024 dynamic shared bytes, and
+    // each thread writes its own slot of TILE.
+    unsafe {
+        fill(tile, thread::threadIdx_x() as usize, 1.0);
+        pool.as_ptr().write(0);
+    }
+}
 ```
 
 | Operation                              | Result                                              |
 |:---------------------------------------|:----------------------------------------------------|
-| `SharedArray::shared_ptr(&raw mut S)`  | `SharedPtr<T>` to the first element of `S`          |
+| `unsafe SharedArray::shared_ptr(&raw mut S)` | `SharedPtr<T>` to the first element of `S`, a `static mut` of this kernel |
 | `DynamicSharedArray::<T>::shared_ptr()` / `shared_ptr_at(bytes)` | Like `get()` / `offset(bytes)` |
 | `unsafe SharedPtr::from_raw(p)`        | Asserts that generic `p` points into this block's shared memory |
 | `add`, `offset`, `byte_add`, `cast`    | Pointer arithmetic that keeps the type              |
 | `as_ptr()`                             | The generic `*mut T`, for loads, stores and raw-pointer APIs |
 | `addr_u32()`                           | The 32-bit `.shared::cta` address, for `_shared_u32` forms |
 
-`SharedPtr` cannot be a kernel parameter: the host has no shared-memory
-address to pass. Pointers from `cluster::map_shared_rank` may name another
-block's shared memory and are not `SharedPtr`s.
+`SharedPtr` cannot be a kernel parameter, bare or inside a struct or array:
+the host has no shared-memory address to pass, and the compiler refuses the
+signature. Pointers from `cluster::map_shared_rank` may name another block's
+shared memory and are not `SharedPtr`s.
+
+Inside aggregates the usual shared-pointer limits apply. A union or a
+`MaybeUninit<SharedPtr<T>>` fails closed under the union storage rules, and a
+`repr(packed)` struct that holds one follows the packed-carrier limits; both
+are listed in [Supported Features](../appendix/supported-features.md). On the
+libNVVM route a shared pointer is 4 bytes wide, so a struct that mixes a
+`SharedPtr` with a narrower field, such as `{ p: SharedPtr<u8>, x: u32 }`, is
+not yet supported in arrays or in shared memory. That gap predates
+`SharedPtr` and applies to `*mut Barrier` fields in the same way.
 
 ---
 

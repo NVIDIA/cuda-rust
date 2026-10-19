@@ -67,8 +67,8 @@ all CI: example compilation, additional example lint scopes, book builds, and
 CodeQL have separate jobs. Read the recipe and relevant workflow when choosing
 validation for a change.
 
-For Tile and shared-host changes, follow `cutile-rs/CONTRIBUTING.md` and
-`.github/workflows/cutile-rs.yml`. The CPU and assembler suite in
+For Tile and shared-host changes, follow the cutile-rs section of
+`CONTRIBUTING.md` and `.github/workflows/cutile-rs.yml`. The CPU and assembler suite in
 `cutile-rs/scripts/run_cpu_tests.sh` runs with `cutile-rs/` as its working
 directory and includes the CPU-safe shared-host tests. CPU-only does not mean
 toolkit-free: some suites require CUDA headers and the Tile IR assembler. GPU tests have a separate

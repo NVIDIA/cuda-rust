@@ -39,7 +39,6 @@ use pliron::{
     common_traits::Verify,
     context::{Context, Ptr},
     derive::{op_interface, op_interface_impl},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,

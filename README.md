@@ -1,5 +1,10 @@
 # CUDA Rust
 
+<p align="center">
+  <a href="https://github.com/NVIDIA/cuda-rust/actions/workflows/ci-status.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/NVIDIA/cuda-rust/ci-status.yml?label=build"></a>
+  <a href="https://nvidia.github.io/cuda-rust/"><img alt="Docs" src="https://img.shields.io/badge/docs-latest-blue.svg"></a>
+</p>
+
 CUDA Rust is NVIDIA's CUDA platform for Rust. It provides
 host-side crates for working with the CUDA driver and device-side crates and
 tools for writing GPU kernels in idiomatic Rust.
@@ -81,14 +86,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for commit sign-off requirements, pull re
 ## License
 
 CUDA Rust is licensed under the [Apache License 2.0](./LICENSE). The root
-`LICENSE` covers the whole repository. Each component also includes a copy with
-its sources and built artifacts.
-
-| Component | License | License file |
-| --- | --- | --- |
-| `cuda-oxide` | Apache-2.0 | root [`LICENSE`](./LICENSE) |
-| `cutile-rs` | Apache-2.0 | [`cutile-rs/LICENSE`](./cutile-rs/LICENSE) |
-| `cuda-bindings`, `cuda-core`, `cuda-core-derive`, `cuda-async` | Apache-2.0 | root [`LICENSE`](./LICENSE) |
+`LICENSE` covers the whole repository: cuda-oxide, cutile-rs, and the shared
+host crates. Every published crate declares `license = "Apache-2.0"`.
 
 Third-party attributions are listed in
 [`cuda-oxide/THIRD_PARTY_NOTICES`](./cuda-oxide/THIRD_PARTY_NOTICES).

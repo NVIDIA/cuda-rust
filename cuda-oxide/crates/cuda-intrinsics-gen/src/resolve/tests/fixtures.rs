@@ -1471,7 +1471,7 @@ pub(super) fn test_wgmma_control_admission() -> WgmmaControlAdmission {
 
 pub(super) fn test_special_register_admission() -> SpecialRegisterAdmission {
     SpecialRegisterAdmission {
-        llvm_evidence_profile: "rust-llvm-23.1.0-16696adc".into(),
+        llvm_evidence_profile: "rust-llvm-23.1.3-aab11ee0".into(),
         libnvvm_evidence_profile: "cuda-13.3-libnvvm-13.3.33".into(),
         runtime_validation: RuntimeValidation::Unexecuted,
         registers: REVIEWED_SPECIAL_REGISTERS.into(),

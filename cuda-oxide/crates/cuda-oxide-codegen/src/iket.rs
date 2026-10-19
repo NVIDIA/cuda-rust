@@ -37,7 +37,6 @@ use pliron::{
     },
     context::{Context, Ptr},
     linked_list::ContainsLinkedList,
-    location::Located,
     op::{Op, op_cast},
     operation::Operation,
     r#type::Typed,

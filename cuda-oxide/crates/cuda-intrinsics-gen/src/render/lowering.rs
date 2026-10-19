@@ -2237,9 +2237,6 @@ fn lowering_shard_imports(catalog: &CatalogFile, body: &str, shard_file: bool) -
     {
         output.push_str("use pliron::irbuild::rewriter::Rewriter;\n");
     }
-    if body.contains(".loc()") || body.contains(".set_loc(") {
-        output.push_str("use pliron::location::Located;\n");
-    }
     if body.contains("::get_concrete_op_info(") || body.contains(".get_operation()") {
         output.push_str("use pliron::op::Op;\n");
     }

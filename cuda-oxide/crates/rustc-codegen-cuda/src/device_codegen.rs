@@ -103,6 +103,7 @@ use rustc_middle::mir::interpret::{AllocId, GlobalAlloc, Scalar};
 use rustc_middle::mir::visit::Visitor;
 use rustc_middle::mir::{ConstOperand, ConstValue, Location};
 use rustc_middle::mono::MonoItem;
+use rustc_middle::ty::consts::ConstExt;
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
 use rustc_middle::ty::{EarlyBinder, Instance, InstanceKind, ShimKind, TypingEnv};
 use rustc_middle::ty::{Ty, TyCtxt, TyKind};
@@ -217,7 +218,7 @@ fn rustc_ty_to_device_extern_type<'tcx>(
                     "failed to compute layout for repr(transparent) device-extern type `{ty}`: {err:?}"
                 )
             })?;
-            let peeled = layout.peel_transparent_wrappers(&layout_cx);
+            let peeled = layout.peel_transparent_wrappers_from_non_1zst(&layout_cx);
 
             // A transparent type with no peelable non-1ZST field is not a
             // scalar/pointer wrapper that this device-extern ABI can represent.
@@ -1070,10 +1071,7 @@ pub fn generate_device_code<'tcx>(
         .iter()
         .map(|func| {
             let def_id = func.instance.def_id();
-            matches!(
-                tcx.codegen_fn_attrs(def_id).inline,
-                rustc_hir::attrs::InlineAttr::Always | rustc_hir::attrs::InlineAttr::Force { .. }
-            )
+            tcx.codegen_fn_attrs(def_id).inline.always()
         })
         .collect();
     let device_mono_reachability: Vec<crate::collector::DeviceMonoReachability> = functions

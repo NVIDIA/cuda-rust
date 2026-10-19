@@ -25,16 +25,15 @@ use pliron::{
     common_traits::Verify,
     context::{Context, Ptr},
     identifier::Identifier,
-    indented_block, input_err,
+    input_err,
     irfmt::{
         parsers::{spaced, type_parser},
         printers::op::{region, typed_symb_op_header},
     },
     linked_list::ContainsLinkedList,
-    location::Located,
     op::{Op, OpObj},
     operation::Operation,
-    parsable::{Parsable, ParseResult, StateStream},
+    parsable::{Parsable, ParseResult, StateStream, StreamLocation},
     printable::{Printable, State, indented_nl},
     region::Region,
     result::Error,
@@ -66,7 +65,7 @@ fn reference_param_validity_key(index: usize) -> Identifier {
 /// |----------------|-----------|------------------------------------|
 /// | `sym_name`     | StringAttr| Function name (from SymbolOpInterface) |
 /// | `mir_func_type`| TypeAttr  | Function type (mir.func_type)      |
-/// | `reference_param_validity_N` | ReferenceParamValidityAttr | Proven nonnull/alignment for source argument `N` on a kernel entry |
+/// | `reference_param_validity_N` | ReferenceParamValidityAttr | Proven reference facts for source argument `N` on a kernel entry |
 /// ```
 ///
 /// # Verification
@@ -116,8 +115,9 @@ impl MirFuncOp {
 
     /// Record rustc-proven validity for one source-level kernel argument.
     ///
-    /// Presence proves `nonnull`; the payload carries the rustc ABI alignment
-    /// of the pointee. The source argument index is deliberately retained until
+    /// Presence proves `nonnull`; the payload carries the pointee alignment
+    /// and independently proven aliasing and size facts.
+    /// The source argument index is deliberately retained until
     /// kernel ABI lowering decides which physical LLVM parameter represents it.
     pub fn set_reference_param_validity(
         &self,
@@ -170,10 +170,9 @@ impl Printable for MirFuncOp {
             .retain(|key, _| key != &*ATTR_KEY_MIR_FUNC_TYPE && key != &ATTR_KEY_SYM_NAME);
 
         if !attributes_to_print_separately.0.is_empty() {
-            indented_block!(state, {
-                write!(f, "{}", indented_nl(state))?;
-                attributes_to_print_separately.fmt(ctx, state, f)?;
-            });
+            let _indent = state.indent();
+            write!(f, "{}", indented_nl(state))?;
+            attributes_to_print_separately.fmt(ctx, state, f)?;
         }
         write!(f, " ")?;
         region(self).fmt(ctx, state, f)?;
@@ -201,19 +200,25 @@ impl Parsable for MirFuncOp {
             vec![],
             vec![],
             vec![],
-            1,
+            // Region::parser creates the body region itself.
+            0,
         );
         let mut parser = (
             spaced(token('@').with(Identifier::parser(()))).skip(spaced(token(':'))),
             spaced(type_parser()),
-            spaced(AttributeDict::parser(())),
+            spaced(optional(AttributeDict::parser(()))),
             spaced(optional(Region::parser(op))),
         );
         parser
             .parse_stream(state_stream)
-            .map(|(fname, fty, attrs, _region)| -> OpObj {
+            .map(|(fname, fty, attrs, region)| -> OpObj {
                 let ctx = &mut state_stream.state.ctx;
-                op.deref_mut(ctx).attributes = attrs;
+                // Declarations still have one empty region, matching the
+                // function operation's OneRegionInterface contract.
+                if region.is_none() {
+                    Operation::add_region(op, ctx);
+                }
+                op.deref_mut(ctx).attributes = attrs.unwrap_or_default();
                 let ty_attr = TypeAttr::new(fty);
                 let opop = MirFuncOp { op };
                 opop.set_symbol_name(ctx, fname);
@@ -285,12 +290,12 @@ impl Verify for MirFuncOp {
                     key_text
                 );
             };
-            if validity.0 == 0 || !validity.0.is_power_of_two() {
+            if validity.pointee_alignment == 0 || !validity.pointee_alignment.is_power_of_two() {
                 return verify_err!(
                     op.loc(),
                     "MirFuncOp reference validity alignment on argument {} must be a non-zero power of two, found {}",
                     index,
-                    validity.0
+                    validity.pointee_alignment
                 );
             }
 

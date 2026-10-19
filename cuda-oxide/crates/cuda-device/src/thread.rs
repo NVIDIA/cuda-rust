@@ -1415,6 +1415,24 @@ const fn validate_unroll_factor(factor: u32) {
 mod tests {
     use super::block_linear_thread_id;
 
+    /// Number of threads in a `(dx, dy, dz)` block whose block-linear id is
+    /// `selected`. `ManagedBarrier::init_by` and `inval_by` make this
+    /// comparison on the device, one thread at a time.
+    fn threads_selected_by(block_dim: (u32, u32, u32), selected: u32) -> u32 {
+        let (dx, dy, dz) = block_dim;
+        let mut hits = 0;
+        for tz in 0..dz {
+            for ty in 0..dy {
+                for tx in 0..dx {
+                    if block_linear_thread_id(tx, ty, tz, dx, dy) == selected {
+                        hits += 1;
+                    }
+                }
+            }
+        }
+        hits
+    }
+
     #[test]
     fn a_1d_block_numbers_threads_by_x() {
         for tx in 0..256 {
@@ -1451,5 +1469,23 @@ mod tests {
         assert_eq!(expected, dx * dy * dz);
         // One step along z skips a whole x-y plane.
         assert_eq!(block_linear_thread_id(0, 0, 1, dx, dy), dx * dy);
+    }
+
+    #[test]
+    fn every_in_range_id_selects_one_thread() {
+        for block_dim in [(64, 1, 1), (32, 4, 1), (8, 4, 2), (16, 2, 2), (24, 3, 1)] {
+            let (dx, dy, dz) = block_dim;
+            let threads = dx * dy * dz;
+            for selected in 0..threads {
+                assert_eq!(
+                    threads_selected_by(block_dim, selected),
+                    1,
+                    "block {block_dim:?} id {selected}"
+                );
+            }
+            // An id at or past the thread count selects nobody, which is why
+            // init_by and inval_by require the selector to be in range.
+            assert_eq!(threads_selected_by(block_dim, threads), 0);
+        }
     }
 }

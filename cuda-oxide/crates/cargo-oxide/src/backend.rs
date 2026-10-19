@@ -1300,14 +1300,18 @@ fn install_backend_into(
 ) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(cache_dir)?;
     let so_path = cache_dir.join("librustc_codegen_cuda.so");
-    // Drop the old record before the copy and write the new one after it, so
-    // the only intermediate state is "no record", which counts as stale: a
-    // copy interrupted halfway can never be handed out under the old commit.
-    record_source_rev(cache_dir, None);
     let temporary = temporary_backend_path(cache_dir);
-    if let Err(error) =
-        std::fs::copy(built_so, &temporary).and_then(|_| std::fs::rename(&temporary, &so_path))
-    {
+    if let Err(error) = std::fs::copy(built_so, &temporary) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    // The copy leaves the old `.so` and its record untouched, so a copy that
+    // fails costs nothing. Drop the old record just before the rename and
+    // write the new one after it, so the only intermediate state is "no
+    // record", which counts as stale: the new `.so` is never handed out under
+    // the old commit.
+    record_source_rev(cache_dir, None);
+    if let Err(error) = std::fs::rename(&temporary, &so_path) {
         let _ = std::fs::remove_file(&temporary);
         return Err(error);
     }
@@ -1946,14 +1950,16 @@ mod tests {
         );
     }
 
+    /// The copy fails before anything in the cache changes, so the backend
+    /// and the commit recorded for it both stay.
     #[test]
     fn a_failed_install_keeps_the_cached_backend() {
         let dir = tempdir();
         let cache = dir.join("cache");
         let source = dir.join("built.so");
         std::fs::write(&source, b"built").unwrap();
-        let installed =
-            install_backend_into(&cache, &source, &dir, None).expect("install must succeed");
+        let installed = install_backend_into(&cache, &source, &dir, Some("aaaa1111"))
+            .expect("install must succeed");
 
         let error = install_backend_into(&cache, &dir.join("missing.so"), &dir, None)
             .expect_err("installing a build that does not exist must fail");
@@ -1962,6 +1968,11 @@ mod tests {
             std::fs::read(&installed).unwrap(),
             b"built",
             "a failed install must keep the cached backend"
+        );
+        assert_eq!(
+            recorded_source_rev(&cache).as_deref(),
+            Some("aaaa1111"),
+            "a failed copy must keep the record of the backend that is still there"
         );
         assert_eq!(
             unexpected_cache_entries(&cache),

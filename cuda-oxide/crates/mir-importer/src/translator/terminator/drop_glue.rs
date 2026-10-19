@@ -8,8 +8,8 @@
 //! This module provides two capabilities:
 //!
 //! 1. **No-op analysis** ([`drop_glue_is_noop`]): a conservative static proof
-//!    that dropping a value does nothing observable, allowing the `Drop`
-//!    terminator to be lowered as a plain branch (fast path).
+//!    that dropping a value does nothing observable and returns, allowing
+//!    the `Drop` terminator to be lowered as a plain branch (fast path).
 //!
 //! 2. **Drop glue emission** (`emit_drop_glue`): when the no-op proof fails,
 //!    emits a device-side call to the monomorphized `drop_in_place::<T>`
@@ -41,6 +41,11 @@
 //!
 //! Anything else (writes through pointers, asserts, inline asm, calls we
 //! cannot resolve or whose body we cannot see) fails the proof.
+//!
+//! The proof also requires the glue to return. A reachable control-flow
+//! cycle, or a call back into an instance that is already under proof,
+//! fails it even when every statement is harmless: erasing a call that
+//! may never return would let the code after the drop execute.
 //!
 //! The walk follows constant `switchInt` discriminants, so branches that
 //! the compiler has already folded shut (for example checks behind the

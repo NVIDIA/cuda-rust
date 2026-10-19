@@ -576,7 +576,7 @@ pub(crate) fn expand_tile_export(args: TileExportArgs, input: ItemFn) -> syn::Re
         version: CURRENT_VERSION,
         decl,
         symbol,
-        shape: vec![shape],
+        shape: Some(vec![shape]),
         params,
         sync,
         arch,

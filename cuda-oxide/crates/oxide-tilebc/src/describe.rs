@@ -33,7 +33,7 @@ pub fn library(name: impl Into<String>, exports: &[TileExportDesc]) -> Result<Li
 }
 
 /// The library the descriptions make with every declaration parametric in
-/// its extent, verified.
+/// its extent, whatever extents they name, verified.
 pub fn parametric_library(
     name: impl Into<String>,
     exports: &[TileExportDesc],
@@ -58,19 +58,25 @@ fn build_library(
     Ok(library)
 }
 
-/// One export as its static declaration and implementation, at the extent
-/// the description names.
+/// One export as the description asks for it: a static declaration and
+/// implementation at the extent it names, or the parametric form when it
+/// names none.
 pub fn export(desc: &TileExportDesc) -> Result<(Declaration, Implementation), Error> {
-    desc.validate()
-        .map_err(|error| Error::Description(format!("export `{}`: {error}", desc.decl)))?;
-    build(desc, Expr::Int(desc.shape[0]))
+    match desc.static_extent() {
+        Some(extent) => {
+            desc.validate()
+                .map_err(|error| Error::Description(format!("export `{}`: {error}", desc.decl)))?;
+            build(desc, Expr::Int(extent))
+        }
+        None => parametric_export(desc),
+    }
 }
 
 /// One export as a parametric declaration `@decl<[N: index]>` over tiles of
 /// `N` elements, with the implementation `@symbol<[N: index]> implements
 /// @decl<[N]>` whose fragmaps are expressions in `N`.
 ///
-/// The description's own extent is ignored; the shape-free rules are
+/// An extent the description names is ignored; the shape-free rules are
 /// checked on a copy with a probe extent that every layout divides.
 pub fn parametric_export(desc: &TileExportDesc) -> Result<(Declaration, Implementation), Error> {
     let footprint = desc
@@ -78,7 +84,7 @@ pub fn parametric_export(desc: &TileExportDesc) -> Result<(Declaration, Implemen
         .first()
         .map_or(1, |param| i64::from(param.footprint.max(1)));
     let mut probe = desc.clone();
-    probe.shape = vec![64 * footprint];
+    probe.shape = Some(vec![64 * footprint]);
     probe
         .validate()
         .map_err(|error| Error::Description(format!("export `{}`: {error}", desc.decl)))?;
@@ -249,7 +255,7 @@ mod tests {
             version: oxide_tile_export::CURRENT_VERSION,
             decl: "relu".into(),
             symbol: "relu_impl".into(),
-            shape: vec![128],
+            shape: Some(vec![128]),
             params: vec![
                 TileParamDesc {
                     name: "x".into(),
@@ -319,7 +325,7 @@ mod tests {
     fn warp_sync_needs_whole_warps() {
         let mut desc = relu();
         desc.sync = TileSync::Warp;
-        desc.shape = vec![100];
+        desc.shape = Some(vec![100]);
         let error = export(&desc).unwrap_err().to_string();
         assert!(error.contains("multiple of 32"), "{error}");
         assert!(fragmap(TileSync::Warp, 128.into(), 1).is_ok());

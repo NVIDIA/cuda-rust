@@ -9,6 +9,7 @@ description = "Runtime for cuda-oxide tile libraries that are linkage providers:
 readme = "README.md"
 
 [dependencies]
+cuda-artifact-finalizer = { workspace = true }
 oxide-tile-provider-sys = { workspace = true }
 oxide-tile-export = { workspace = true }
 oxide-tilebc = { workspace = true }

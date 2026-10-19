@@ -13,13 +13,25 @@ use oxide_tilebc::{BytecodeVersion, describe};
 #[derive(Debug, Clone)]
 pub enum DeviceCode {
     /// LTOIR compiled ahead of time, defining every export's implementation
-    /// symbol. `arch` is the compute capability it was compiled for, when
-    /// known; a kernel for another architecture is refused.
+    /// symbol under exactly that name. It serves static declarations only:
+    /// the compiler asks for a mangled symbol per instantiation of a
+    /// parametric one, and finished LTOIR cannot grow a new name. `arch` is
+    /// the compute capability it was compiled for, when known.
     Ltoir {
         /// The LTOIR bytes.
         bytes: Vec<u8>,
         /// `sm_120` and the like, or `None` when unknown.
         arch: Option<String>,
+    },
+    /// The crate's NVVM IR, compiled by the provider when the assembler asks
+    /// for code: the symbols the compiler names are added as thin wrappers
+    /// around the bodies and the whole module is compiled for the kernel's
+    /// architecture with the toolkit's libNVVM.
+    NvvmIr {
+        /// The textual NVVM IR `cargo oxide` wrote next to the crate.
+        text: String,
+        /// Whether FMA contraction was requested when the IR was built.
+        fma_contraction: bool,
     },
 }
 
@@ -56,6 +68,12 @@ pub enum PayloadError {
         /// The repeated name.
         name: String,
     },
+    /// A parametric export came with finished LTOIR, which cannot serve it.
+    #[error(
+        "export `{0}` names no tile_shape, so the compiler will ask for one symbol per tile \
+         extent; embed the crate's NVVM IR instead of finished LTOIR to serve it"
+    )]
+    ParametricNeedsIr(String),
     /// The descriptions do not make a valid library.
     #[error(transparent)]
     Library(#[from] oxide_tilebc::Error),
@@ -91,6 +109,9 @@ impl Payload {
                     });
                 }
             }
+            if export.is_parametric() && matches!(code, DeviceCode::Ltoir { .. }) {
+                return Err(PayloadError::ParametricNeedsIr(export.decl.clone()));
+            }
         }
         // Every description is checked once here, so the callbacks can treat
         // the exports as valid.
@@ -113,9 +134,29 @@ impl Payload {
         self.exports.iter().find(|export| export.symbol == symbol)
     }
 
+    /// The export behind a symbol the compiler asks for at `instantiate`.
+    ///
+    /// A static export is asked for under its own symbol. A parametric one
+    /// is asked for under the name the compiler gave the instantiation: the
+    /// symbol, `__` and the bound parameters (`relu_impl__N256`), with a
+    /// `_k` suffix when the same instantiation recurs in another execution
+    /// context. The longest export symbol that is the requested name or a
+    /// prefix of it followed by `_` wins.
+    pub fn export_for_requested(&self, requested: &str) -> Option<&TileExportDesc> {
+        self.exports
+            .iter()
+            .filter(|export| {
+                requested
+                    .strip_prefix(export.symbol.as_str())
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('_'))
+            })
+            .max_by_key(|export| export.symbol.len())
+    }
+
     /// The implementation catalog for these declarations: a Tile IR module
     /// holding only their `preview$extern_impl` descriptions, which is what
-    /// `provide_impls` returns.
+    /// `provide_impls` returns. A parametric export is described in its
+    /// parametric form, a static one at its extent.
     pub fn catalog(&self, decls: &[&str]) -> Result<Vec<u8>, PayloadError> {
         let selected: Vec<TileExportDesc> = self
             .exports
@@ -146,6 +187,11 @@ pub(crate) mod tests {
                   {"name":"warp_sum_out","elem":"f32","access":"out","footprint":1,"by_value":false}],
         "sync":"warp","arch":[]}]"#;
 
+    /// The same two exports without extents: parametric declarations.
+    pub(crate) fn parametric_json() -> String {
+        RELU_JSON.replace("\"shape\":[128],", "")
+    }
+
     pub(crate) fn payload() -> Payload {
         Payload::from_parts(
             "relu_lib",
@@ -154,6 +200,19 @@ pub(crate) mod tests {
             DeviceCode::Ltoir {
                 bytes: b"not really ltoir".to_vec(),
                 arch: Some("sm_120".into()),
+            },
+        )
+        .unwrap()
+    }
+
+    pub(crate) fn parametric_payload() -> Payload {
+        Payload::from_parts(
+            "relu_lib",
+            &parametric_json(),
+            BytecodeVersion::new(13, 6),
+            DeviceCode::NvvmIr {
+                text: "; not really IR\n".into(),
+                fma_contraction: true,
             },
         )
         .unwrap()
@@ -172,6 +231,29 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn requested_symbols_map_back_to_exports() {
+        let payload = parametric_payload();
+        for (requested, decl) in [
+            ("relu_impl", "relu"),
+            ("relu_impl__N256", "relu"),
+            ("relu_impl__N128_1", "relu"),
+            ("warp_sum_impl__N64", "warp_sum"),
+        ] {
+            assert_eq!(
+                payload.export_for_requested(requested).unwrap().decl,
+                decl,
+                "{requested}"
+            );
+        }
+        assert!(
+            payload
+                .export_for_requested("relu_implementation")
+                .is_none()
+        );
+        assert!(payload.export_for_requested("gelu_impl__N128").is_none());
+    }
+
+    #[test]
     fn a_catalog_holds_only_the_asked_declarations() {
         let payload = payload();
         let relu_only = payload.catalog(&["relu"]).unwrap();
@@ -187,43 +269,44 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn duplicates_and_bad_json_are_refused() {
+    fn parametric_catalogs_carry_the_parameter() {
+        let payload = parametric_payload();
+        let catalog = payload.catalog(&["relu"]).unwrap();
+        // The string table names the parameter and the type table holds `index`.
+        assert!(String::from_utf8_lossy(&catalog).contains('N'));
+        assert!(
+            catalog.windows(2).any(|pair| pair == [0xD6, 0x01]),
+            "index type entry"
+        );
+    }
+
+    #[test]
+    fn duplicates_bad_json_and_ltoir_for_parametric_exports_are_refused() {
         let twice = RELU_JSON.replacen("\"decl\":\"warp_sum\"", "\"decl\":\"relu\"", 1);
-        let error = Payload::from_parts(
-            "lib",
-            &twice,
-            BytecodeVersion::new(13, 6),
-            DeviceCode::Ltoir {
-                bytes: vec![],
-                arch: None,
-            },
-        )
-        .unwrap_err()
-        .to_string();
+        let ltoir = || DeviceCode::Ltoir {
+            bytes: vec![],
+            arch: None,
+        };
+        let error = Payload::from_parts("lib", &twice, BytecodeVersion::new(13, 6), ltoir())
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("share the declaration `relu`"), "{error}");
         assert!(matches!(
-            Payload::from_parts(
-                "lib",
-                "[]",
-                BytecodeVersion::new(13, 6),
-                DeviceCode::Ltoir {
-                    bytes: vec![],
-                    arch: None
-                }
-            ),
+            Payload::from_parts("lib", "[]", BytecodeVersion::new(13, 6), ltoir()),
             Err(PayloadError::Empty)
         ));
         assert!(matches!(
-            Payload::from_parts(
-                "lib",
-                "nope",
-                BytecodeVersion::new(13, 6),
-                DeviceCode::Ltoir {
-                    bytes: vec![],
-                    arch: None
-                }
-            ),
+            Payload::from_parts("lib", "nope", BytecodeVersion::new(13, 6), ltoir()),
             Err(PayloadError::Descriptions(_))
         ));
+        let error = Payload::from_parts(
+            "lib",
+            &parametric_json(),
+            BytecodeVersion::new(13, 6),
+            ltoir(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("names no tile_shape"), "{error}");
     }
 }

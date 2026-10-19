@@ -32,8 +32,8 @@
 //!     name: "relu",
 //!     descriptions: include_str!("relu.tileexports.json"),
 //!     bytecode_version: (13, 5),
-//!     ltoir: include_bytes!("relu.ltoir"),
-//!     arch: "sm_120",
+//!     nvvm_ir: include_str!("relu.ll"),
+//!     fma_contraction: true,
 //! }
 //! ```
 //!
@@ -42,6 +42,7 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod codegen;
 mod error;
 mod ffi;
 mod module;
@@ -54,11 +55,39 @@ pub use oxide_tilebc::BytecodeVersion;
 pub use payload::{DeviceCode, Payload, PayloadError};
 
 /// Define `tileir_create_linkage_provider` for a `cdylib` crate from embedded
-/// descriptions and LTOIR. `bytecode_version` is the version the assembler
-/// this library is built for calls current, the one `cargo oxide tilelib`
-/// read from `tileiras --list-versions`.
+/// descriptions and device code. `bytecode_version` is the version the
+/// assembler this library is built for calls current, the one `cargo oxide
+/// tilelib` read from `tileiras --list-versions`.
+///
+/// Two forms: `nvvm_ir` embeds the crate's NVVM IR, which the provider
+/// compiles for the kernel's architecture when asked and which serves
+/// parametric exports; `ltoir` embeds finished LTOIR for static exports only.
+///
+/// ```ignore
+/// oxide_tile_provider::define_provider! {
+///     name: "relu",
+///     descriptions: include_str!("relu.tileexports.json"),
+///     bytecode_version: (13, 5),
+///     nvvm_ir: include_str!("relu.ll"),
+///     fma_contraction: true,
+/// }
+/// ```
 #[macro_export]
 macro_rules! define_provider {
+    (
+        name: $name:expr,
+        descriptions: $descriptions:expr,
+        bytecode_version: ($major:expr, $minor:expr),
+        nvvm_ir: $ir:expr,
+        fma_contraction: $fma:expr $(,)?
+    ) => {
+        $crate::define_provider!(@entry $name, $descriptions, ($major, $minor), {
+            $crate::DeviceCode::NvvmIr {
+                text: String::from($ir),
+                fma_contraction: $fma,
+            }
+        });
+    };
     (
         name: $name:expr,
         descriptions: $descriptions:expr,
@@ -66,6 +95,14 @@ macro_rules! define_provider {
         ltoir: $ltoir:expr,
         arch: $arch:expr $(,)?
     ) => {
+        $crate::define_provider!(@entry $name, $descriptions, ($major, $minor), {
+            $crate::DeviceCode::Ltoir {
+                bytes: ($ltoir).to_vec(),
+                arch: Some(String::from($arch)),
+            }
+        });
+    };
+    (@entry $name:expr, $descriptions:expr, ($major:expr, $minor:expr), $code:block) => {
         /// The entry point the Tile IR assembler looks up after `dlopen`.
         ///
         /// # Safety
@@ -82,10 +119,7 @@ macro_rules! define_provider {
                         $name,
                         $descriptions,
                         $crate::BytecodeVersion::new($major, $minor),
-                        $crate::DeviceCode::Ltoir {
-                            bytes: ($ltoir).to_vec(),
-                            arch: Some(String::from($arch)),
-                        },
+                        $code,
                     )
                 })
             }

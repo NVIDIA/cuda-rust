@@ -6165,7 +6165,7 @@ fn tilelib_relu_descriptions() -> Vec<oxide_tile_export::TileExportDesc> {
             version: oxide_tile_export::CURRENT_VERSION,
             decl: "relu".into(),
             symbol: "relu_impl".into(),
-            shape: vec![128],
+            shape: Some(vec![128]),
             params: vec![
                 param("x", TileAccess::In, true),
                 param("relu_out", TileAccess::Out, false),
@@ -6177,7 +6177,7 @@ fn tilelib_relu_descriptions() -> Vec<oxide_tile_export::TileExportDesc> {
             version: oxide_tile_export::CURRENT_VERSION,
             decl: "scale_in_place".into(),
             symbol: "scale_in_place_impl".into(),
-            shape: vec![128],
+            shape: Some(vec![128]),
             params: vec![
                 param("x", TileAccess::InOut, false),
                 param("factor", TileAccess::In, true),
@@ -6189,7 +6189,7 @@ fn tilelib_relu_descriptions() -> Vec<oxide_tile_export::TileExportDesc> {
             version: oxide_tile_export::CURRENT_VERSION,
             decl: "warp_sum".into(),
             symbol: "warp_sum_impl".into(),
-            shape: vec![128],
+            shape: Some(vec![128]),
             params: vec![
                 param("x", TileAccess::In, true),
                 param("warp_sum_out", TileAccess::Out, false),

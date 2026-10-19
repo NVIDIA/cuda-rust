@@ -24,6 +24,7 @@ use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use crate::codegen::{self, Wrapper};
 use crate::error::{ErrorStorage, view};
 use crate::module::{CodeBufferSpec, ModuleStorage};
 use crate::payload::{DeviceCode, Payload, PayloadError};
@@ -114,7 +115,16 @@ pub unsafe fn entry(
                 .payload
                 .exports
                 .iter()
-                .map(|export| format!("{} -> {}", export.decl, export.symbol))
+                .map(|export| format!(
+                    "{} -> {}{}",
+                    export.decl,
+                    export.symbol,
+                    if export.is_parametric() {
+                        " (parametric)"
+                    } else {
+                        ""
+                    }
+                ))
                 .collect::<Vec<_>>()
                 .join(", ")
         )
@@ -429,9 +439,12 @@ enum Failure {
 
 /// Serve the selected calls from the payload's device code.
 ///
-/// With precompiled LTOIR every selected implementation symbol must be one
-/// the code defines, and the kernel's architecture must be the one the code
-/// was compiled for.
+/// Every selected implementation symbol must belong to one of the exports
+/// (its own symbol, or the compiler's name for one of its instantiations).
+/// Finished LTOIR serves only the symbols it defines, for the architecture
+/// it was compiled for. NVVM IR is compiled here for the kernel's
+/// architecture, with a wrapper for every requested name that is not a body
+/// symbol.
 ///
 /// # Safety
 /// `calls` must be records the assembler filled in.
@@ -442,8 +455,9 @@ unsafe fn instantiate_calls(
     let payload = &provider.payload;
     let mut failures = Vec::new();
     let mut call_symbols = Vec::with_capacity(calls.len());
+    let mut wrappers: Vec<Wrapper<'_>> = Vec::new();
     let mut symbols: Vec<String> = Vec::new();
-    let mut arch_mismatch: Option<String> = None;
+    let mut archs: Vec<String> = Vec::new();
     for (index, call) in calls.iter().enumerate() {
         // SAFETY: as documented.
         let Some(call) = (unsafe { resolved(call) }) else {
@@ -455,21 +469,30 @@ unsafe fn instantiate_calls(
         };
         provider.log(|| {
             format!(
-                "instantiate: call {index} wants `{}` for @{}<[{}]>({}) on {} (scope {}, {} warps per CTA)",
+                "instantiate: call {index} wants `{}` for @{}<[{}]>({}) on {} (scope {}, {} \
+                 warps per CTA)",
                 call.symbol,
                 call.decl,
                 call.const_args.join(", "),
-                call.args.iter().map(ToString::to_string).collect::<Vec<_>>().join(", "),
-                if call.arch.is_empty() { "any arch" } else { &call.arch },
+                call.args
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if call.arch.is_empty() {
+                    "any arch"
+                } else {
+                    &call.arch
+                },
                 call.scope.0,
                 call.warps_per_cta
             )
         });
-        if payload.export_for_symbol(&call.symbol).is_none() {
+        let Some(export) = payload.export_for_requested(&call.symbol) else {
             failures.push((
                 index,
                 format!(
-                    "no precompiled implementation is named `{}`; this provider defines {}",
+                    "no export of this library is behind `{}`; it defines {}",
                     call.symbol,
                     payload
                         .symbols()
@@ -479,18 +502,29 @@ unsafe fn instantiate_calls(
                 ),
             ));
             continue;
+        };
+        if matches!(payload.code, DeviceCode::Ltoir { .. }) && call.symbol != export.symbol {
+            failures.push((
+                index,
+                format!(
+                    "`{}` is an instantiation of `{}`, but this library carries finished LTOIR, \
+                     which defines only that name; rebuild it from NVVM IR to serve parametric \
+                     exports",
+                    call.symbol, export.symbol
+                ),
+            ));
+            continue;
         }
-        if let DeviceCode::Ltoir {
-            arch: Some(arch), ..
-        } = &payload.code
-            && !call.arch.is_empty()
-            && !arch_matches(arch, &call.arch)
-        {
-            arch_mismatch = Some(call.arch.clone());
+        if !call.arch.is_empty() && !archs.contains(&call.arch) {
+            archs.push(call.arch.clone());
         }
         if !symbols.contains(&call.symbol) {
             symbols.push(call.symbol.clone());
         }
+        wrappers.push(Wrapper {
+            symbol: call.symbol.clone(),
+            export,
+        });
         call_symbols.push((index, call.symbol));
     }
     if !failures.is_empty() {
@@ -503,33 +537,85 @@ unsafe fn instantiate_calls(
             failures,
         ));
     }
-    if let (
-        Some(wanted),
-        DeviceCode::Ltoir {
-            arch: Some(have), ..
-        },
-    ) = (&arch_mismatch, &payload.code)
-    {
+    if archs.len() > 1 {
         return Err(Failure::Generic(
             TileIRLPResult::TILEIR_LP_ERROR,
             format!(
-                "the kernel targets {wanted} but this library's device code was compiled for {have}; \
-                 rebuild the library with --arch {wanted}"
+                "the selected calls target {} architectures ({}); one library serves one \
+                 architecture per compilation",
+                archs.len(),
+                archs.join(", ")
             ),
         ));
     }
-    let DeviceCode::Ltoir { bytes, .. } = &payload.code;
-    provider.log(|| {
-        format!(
-            "instantiate: returning {} bytes of LTOIR exporting {}",
-            bytes.len(),
-            symbols.join(", ")
-        )
-    });
+    let (data, name) = match &payload.code {
+        DeviceCode::Ltoir { bytes, arch } => {
+            if let (Some(have), Some(wanted)) = (arch, archs.first())
+                && !arch_matches(have, wanted)
+            {
+                return Err(Failure::Generic(
+                    TileIRLPResult::TILEIR_LP_ERROR,
+                    format!(
+                        "the kernel targets {wanted} but this library's device code was compiled \
+                         for {have}; rebuild the library with --arch {wanted}"
+                    ),
+                ));
+            }
+            provider.log(|| {
+                format!(
+                    "instantiate: returning {} bytes of precompiled LTOIR exporting {}",
+                    bytes.len(),
+                    symbols.join(", ")
+                )
+            });
+            (bytes.clone(), format!("{}.ltoir", payload.name))
+        }
+        DeviceCode::NvvmIr {
+            text,
+            fma_contraction,
+        } => {
+            let Some(arch) = archs.first() else {
+                return Err(Failure::Generic(
+                    TileIRLPResult::TILEIR_LP_ERROR,
+                    "the compiler named no architecture for the selected calls, so the device \
+                     code cannot be compiled"
+                        .to_string(),
+                ));
+            };
+            let host_root = codegen::host_toolkit_root();
+            let (compiler, source) = codegen::compiler(host_root.as_deref()).map_err(|error| {
+                Failure::Generic(
+                    TileIRLPResult::TILEIR_LP_ERROR,
+                    format!("instantiate: {error}"),
+                )
+            })?;
+            let ir = codegen::with_wrappers(text, &wrappers);
+            let module_name = format!("{}.ll", payload.name);
+            let started = std::time::Instant::now();
+            let ltoir = codegen::compile(&compiler, &module_name, &ir, arch, *fma_contraction)
+                .map_err(|error| {
+                    Failure::Generic(
+                        TileIRLPResult::TILEIR_LP_ERROR,
+                        format!("instantiate: {error}"),
+                    )
+                })?;
+            provider.log(|| {
+                format!(
+                    "instantiate: compiled {} bytes of NVVM IR to {} bytes of LTOIR for {arch} \
+                     with libNVVM from {source} in {:.0?}, exporting {}",
+                    ir.len(),
+                    ltoir.len(),
+                    started.elapsed(),
+                    symbols.join(", ")
+                )
+            });
+            (ltoir, format!("{}.{arch}.ltoir", payload.name))
+        }
+    };
     Ok(ModuleStorage::build(
         vec![CodeBufferSpec {
-            name: format!("{}.ltoir", payload.name),
-            data: bytes.clone(),
+            name,
+            data,
             output_type: TileIROutputType::TILEIR_OUTPUT_LTO_IR,
             symbols,
         }],
@@ -613,7 +699,7 @@ unsafe extern "C" fn destroy(handle: TileIRLinkageProviderHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::payload::tests::payload;
+    use crate::payload::tests::{parametric_payload, payload};
     use crate::sys::{
         TileIRDataType, TileIRDataTypeKind, TileIRDim, TileIRDim__bindgen_ty_1, TileIRDimKind,
         TileIRExecutionContext, TileIRExecutionScope, TileIRForeignDecl, TileIRForeignImpl,
@@ -621,12 +707,16 @@ mod tests {
     };
     use crate::view::text;
 
-    fn instance() -> TileIRLinkageProviderInstance {
+    fn instance_of(payload: Payload) -> TileIRLinkageProviderInstance {
         let mut instance = TileIRLinkageProviderInstance::default();
         // SAFETY: `instance` is writable.
-        let result = unsafe { entry(ABI_VERSION, &mut instance, || Ok(payload())) };
+        let result = unsafe { entry(ABI_VERSION, &mut instance, || Ok(payload)) };
         assert_eq!(result, TileIRLPResult::TILEIR_LP_SUCCESS);
         instance
+    }
+
+    fn instance() -> TileIRLinkageProviderInstance {
+        instance_of(payload())
     }
 
     fn tile(dims: &[TileIRDim]) -> TileIRForeignType {
@@ -644,6 +734,23 @@ mod tests {
         TileIRDim {
             kind: TileIRDimKind::TILEIR_DIM_CONCRETE,
             __bindgen_anon_1: TileIRDim__bindgen_ty_1 { value },
+        }
+    }
+
+    fn context(arch: &'static str) -> TileIRExecutionContext {
+        TileIRExecutionContext {
+            scope: TileIRExecutionScope::TILEIR_EXEC_SCOPE_THREAD,
+            num_warps_per_cta: 4,
+            num_ctas_per_cga: -1,
+            architecture: view(arch),
+        }
+    }
+
+    fn make_impl(symbol: &'static str) -> TileIRForeignImpl {
+        TileIRForeignImpl {
+            symbol: view(symbol),
+            decl_symbol: view("relu"),
+            execution_context_constraints: context(""),
         }
     }
 
@@ -766,19 +873,9 @@ mod tests {
         let instance = instance();
         let dims = [concrete(128)];
         let types = [tile(&dims)];
-        let context = |arch: &'static str| TileIRExecutionContext {
-            scope: TileIRExecutionScope::TILEIR_EXEC_SCOPE_THREAD,
-            num_warps_per_cta: 4,
-            num_ctas_per_cga: -1,
-            architecture: view(arch),
-        };
-        let make_impl = |symbol: &'static str| TileIRForeignImpl {
-            symbol: view(symbol),
-            decl_symbol: view("relu"),
-            execution_context_constraints: context(""),
-        };
         let known = make_impl("relu_impl");
-        let unknown = make_impl("relu_impl__N256");
+        let unknown = make_impl("gelu_impl__N256");
+        let instantiation = make_impl("relu_impl__N256");
         let call = |selected: &TileIRForeignImpl, arch: &'static str| TileIRResolvedCall {
             decl: std::ptr::null(),
             impl_: selected,
@@ -792,7 +889,7 @@ mod tests {
         let mut error: *mut TileIRLPError = std::ptr::null_mut();
         // SAFETY: all records are live locals.
         unsafe {
-            let calls = [call(&known, "sm_120"), call(&known, "sm_120a")];
+            let calls = [call(&known, "sm_120a"), call(&known, "sm_120a")];
             let result = instance.vtable.instantiate.unwrap()(
                 instance.handle,
                 calls.as_ptr(),
@@ -815,7 +912,12 @@ mod tests {
             assert_eq!(text(&*buffer.symbols), "relu_impl");
             instance.vtable.free_module.unwrap()(module);
 
-            let calls = [call(&known, "sm_120"), call(&unknown, "sm_120")];
+            // An unknown export and, for finished LTOIR, an instantiation.
+            let calls = [
+                call(&known, "sm_120"),
+                call(&unknown, "sm_120"),
+                call(&instantiation, "sm_120"),
+            ];
             let result = instance.vtable.instantiate.unwrap()(
                 instance.handle,
                 calls.as_ptr(),
@@ -826,9 +928,12 @@ mod tests {
             assert_eq!(result, TileIRLPResult::TILEIR_LP_ERROR_UNRESOLVED_CALLS);
             assert!(module.is_null());
             let unresolved = (*error).__bindgen_anon_1.unresolved_calls;
-            assert_eq!(unresolved.num_calls, 1);
-            assert_eq!((*unresolved.calls).call_index, 1);
-            assert!(text(&(*unresolved.calls).reason).contains("relu_impl__N256"));
+            assert_eq!(unresolved.num_calls, 2);
+            let entries = std::slice::from_raw_parts(unresolved.calls, unresolved.num_calls);
+            assert_eq!(entries[0].call_index, 1);
+            assert!(text(&entries[0].reason).contains("gelu_impl__N256"));
+            assert_eq!(entries[1].call_index, 2);
+            assert!(text(&entries[1].reason).contains("finished LTOIR"));
             instance.vtable.free_error.unwrap()(error);
 
             let calls = [call(&known, "sm_100")];
@@ -852,6 +957,40 @@ mod tests {
             );
             assert_eq!(result, TileIRLPResult::TILEIR_LP_SUCCESS);
             assert!(module.is_null());
+            instance.vtable.destroy.unwrap()(instance.handle);
+        }
+    }
+
+    #[test]
+    fn parametric_payloads_refuse_mixed_architectures_before_compiling() {
+        let instance = instance_of(parametric_payload());
+        let dims = [concrete(256)];
+        let types = [tile(&dims)];
+        let selected = make_impl("relu_impl__N256");
+        let call = |arch: &'static str| TileIRResolvedCall {
+            decl: std::ptr::null(),
+            impl_: &selected,
+            resolved_execution_context: context(arch),
+            const_arguments: std::ptr::null(),
+            num_const_arguments: 0,
+            arguments: types.as_ptr(),
+            num_arguments: 1,
+        };
+        let mut module: *mut TileIRForeignModule = std::ptr::null_mut();
+        let mut error: *mut TileIRLPError = std::ptr::null_mut();
+        // SAFETY: live locals.
+        unsafe {
+            let calls = [call("sm_120a"), call("sm_100a")];
+            let result = instance.vtable.instantiate.unwrap()(
+                instance.handle,
+                calls.as_ptr(),
+                calls.len(),
+                &mut module,
+                &mut error,
+            );
+            assert_eq!(result, TileIRLPResult::TILEIR_LP_ERROR);
+            assert!(text(&(*error).message).contains("2 architectures"));
+            instance.vtable.free_error.unwrap()(error);
             instance.vtable.destroy.unwrap()(instance.handle);
         }
     }

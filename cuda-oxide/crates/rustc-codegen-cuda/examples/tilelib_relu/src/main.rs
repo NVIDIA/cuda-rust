@@ -219,6 +219,12 @@ fn read_descriptions(dir: &Path) -> Fallible<Vec<TileExportDesc>> {
 /// The target and compile policy recorded with the NVVM IR. The link must use
 /// the same architecture and FMA setting as the build, or nvJitLink rejects
 /// the input or changes the arithmetic.
+/// The tile extent the mock caller runs an export at: the one it names, or
+/// 128 for a parametric export, whose body is the same at every extent.
+fn demo_extent(desc: &TileExportDesc) -> i64 {
+    desc.static_extent().unwrap_or(128)
+}
+
 fn read_build_policy(dir: &Path) -> Fallible<FinalizationOptions> {
     let target_path = dir.join(format!("{CRATE}.target"));
     let text = std::fs::read_to_string(&target_path)
@@ -350,7 +356,7 @@ fn caller_source(exports: &[TileExportDesc]) -> Fallible<String> {
             out,
             "// {}: {} elements, footprint {footprint}, sync {}",
             desc.decl,
-            desc.shape[0],
+            demo_extent(desc),
             desc.sync.tile_ir_name()
         )?;
         writeln!(
@@ -531,7 +537,7 @@ fn check_export(
     module: &Arc<CudaModule>,
     desc: &TileExportDesc,
 ) -> Fallible<()> {
-    let n = usize::try_from(desc.shape[0])?;
+    let n = usize::try_from(demo_extent(desc))?;
     let footprint = usize::try_from(desc.params[0].footprint)?;
     if n % footprint != 0 {
         return Err(format!(

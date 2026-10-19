@@ -1201,6 +1201,7 @@ dependencies = [
 name = "oxide-tile-provider"
 version = "0.2.1"
 dependencies = [
+ "cuda-artifact-finalizer",
  "oxide-tile-export",
  "oxide-tile-provider-sys",
  "oxide-tilebc",

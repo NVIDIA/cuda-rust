@@ -387,7 +387,13 @@ pub(super) fn describe_export(
     desc: &TileExportDesc,
 ) -> Result<(Declaration, Implementation), String> {
     desc.validate().map_err(|error| error.to_string())?;
-    let tile_size = desc.shape[0];
+    let Some(tile_size) = desc.static_extent() else {
+        return Err(format!(
+            "export `{}` names no tile_shape; a parametric export can only be shipped by a \
+             linkage provider",
+            desc.decl
+        ));
+    };
     // Every parameter is a fragment of a tile of the same shape and the
     // fragmaps of one implementation share their invocation count, so the
     // footprints have to agree: a 4-element window beside a scalar would
@@ -411,7 +417,7 @@ pub(super) fn describe_export(
         let access = access(param.access);
         args.push(TileArg::new(
             param.name.clone(),
-            TileType::new(desc.shape.clone(), element),
+            TileType::new(vec![tile_size], element),
             access,
         ));
         let footprint = i64::from(param.footprint);

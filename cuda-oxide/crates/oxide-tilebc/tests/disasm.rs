@@ -64,7 +64,7 @@ fn exports() -> Vec<TileExportDesc> {
         version: oxide_tile_export::CURRENT_VERSION,
         decl: "relu".into(),
         symbol: "relu_impl".into(),
-        shape: vec![128],
+        shape: Some(vec![128]),
         params: vec![
             scalar("x", TileAccess::In, true),
             scalar("relu_out", TileAccess::Out, false),

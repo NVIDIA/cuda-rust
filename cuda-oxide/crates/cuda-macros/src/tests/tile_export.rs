@@ -61,7 +61,7 @@ fn scalar_in_and_returned_out_follow_the_table() {
     desc.validate().unwrap();
     assert_eq!(desc.decl, "relu");
     assert_eq!(desc.symbol, "relu_impl");
-    assert_eq!(desc.shape, vec![128]);
+    assert_eq!(desc.shape, Some(vec![128]));
     assert_eq!(desc.sync, TileSync::None);
     assert!(desc.arch.is_empty());
     assert_eq!(desc.params.len(), 2);

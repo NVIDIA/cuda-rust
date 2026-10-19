@@ -1350,86 +1350,6 @@ mod device_global_key_tests {
     }
 }
 
-#[cfg(test)]
-mod shared_alignment_verifier_tests {
-    use super::*;
-    use pliron::utils::apint::APInt;
-    use pliron::{
-        builtin::{
-            attributes::{IntegerAttr, TypeAttr},
-            types::{IntegerType, Signedness},
-        },
-        common_traits::Verify,
-        operation::Operation,
-    };
-    use std::num::NonZeroUsize;
-
-    fn u64_attr(ctx: &Context, value: u64) -> IntegerAttr {
-        IntegerAttr::new(
-            IntegerType::get(ctx, 64, Signedness::Unsigned),
-            APInt::from_u64(value, NonZeroUsize::new(64).unwrap()),
-        )
-    }
-
-    fn shared_alloc(ctx: &mut Context, alignment: u64) -> MirSharedAllocOp {
-        let elem_ty: TypeHandle = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
-        let result_ty = MirPtrType::get_shared(ctx, elem_ty, true);
-        let op = Operation::new(
-            ctx,
-            MirSharedAllocOp::get_concrete_op_info(),
-            vec![result_ty.into()],
-            vec![],
-            vec![],
-            0,
-        );
-        let alloc = MirSharedAllocOp::new(op);
-        alloc.set_attr_elem_type(ctx, TypeAttr::new(elem_ty));
-        alloc.set_attr_size(ctx, u64_attr(ctx, 1));
-        alloc.set_alignment_value(ctx, alignment);
-        alloc
-    }
-
-    fn extern_shared(ctx: &mut Context, alignment: u64) -> MirExternSharedOp {
-        let elem_ty: TypeHandle = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
-        let result_ty = MirPtrType::get_shared(ctx, elem_ty, true);
-        let op = Operation::new(
-            ctx,
-            MirExternSharedOp::get_concrete_op_info(),
-            vec![result_ty.into()],
-            vec![],
-            vec![],
-            0,
-        );
-        let extern_shared = MirExternSharedOp::new(op);
-        extern_shared.set_alignment_value(ctx, alignment);
-        extern_shared
-    }
-
-    #[test]
-    fn shared_alloc_rejects_non_power_of_two_alignment() {
-        let mut ctx = Context::new();
-        crate::register(&mut ctx);
-
-        let invalid = shared_alloc(&mut ctx, 3);
-        assert!(invalid.verify(&ctx).is_err());
-
-        let valid = shared_alloc(&mut ctx, 8);
-        assert!(valid.verify(&ctx).is_ok());
-    }
-
-    #[test]
-    fn extern_shared_rejects_non_power_of_two_alignment() {
-        let mut ctx = Context::new();
-        crate::register(&mut ctx);
-
-        let invalid = extern_shared(&mut ctx, 3);
-        assert!(invalid.verify(&ctx).is_err());
-
-        let valid = extern_shared(&mut ctx, 8);
-        assert!(valid.verify(&ctx).is_ok());
-    }
-}
-
 // ============================================================================
 // MirExternSharedOp
 // ============================================================================
@@ -1454,10 +1374,10 @@ mod shared_alignment_verifier_tests {
 /// # Attributes
 ///
 /// ```text
-/// | Name               | Type        | Description                                    |
-/// |--------------------|-------------|------------------------------------------------|
-/// | `byte_offset`      | IntegerAttr | Byte offset from start of dynamic smem         |
-/// | `extern_alignment` | IntegerAttr | Requested minimum alignment for this reference |
+/// | Name                 | Type        | Description                                    |
+/// |----------------------|-------------|------------------------------------------------|
+/// | `extern_byte_offset` | IntegerAttr | Byte offset from start of dynamic smem         |
+/// | `extern_alignment`   | IntegerAttr | Requested minimum alignment for this reference |
 /// ```
 ///
 /// # Results
@@ -1575,6 +1495,105 @@ impl Verify for MirExternSharedOp {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod shared_alignment_verifier_tests {
+    use super::*;
+    use pliron::utils::apint::APInt;
+    use pliron::{
+        builtin::{
+            attributes::{IntegerAttr, TypeAttr},
+            types::{IntegerType, Signedness},
+        },
+        common_traits::Verify,
+        operation::Operation,
+    };
+    use std::num::NonZeroUsize;
+
+    fn u64_attr(ctx: &Context, value: u64) -> IntegerAttr {
+        IntegerAttr::new(
+            IntegerType::get(ctx, 64, Signedness::Unsigned),
+            APInt::from_u64(value, NonZeroUsize::new(64).unwrap()),
+        )
+    }
+
+    fn shared_alloc(ctx: &mut Context, alignment: u64) -> MirSharedAllocOp {
+        let elem_ty: TypeHandle = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
+        let result_ty = MirPtrType::get_shared(ctx, elem_ty, true);
+        let op = Operation::new(
+            ctx,
+            MirSharedAllocOp::get_concrete_op_info(),
+            vec![result_ty.into()],
+            vec![],
+            vec![],
+            0,
+        );
+        let alloc = MirSharedAllocOp::new(op);
+        alloc.set_attr_elem_type(ctx, TypeAttr::new(elem_ty));
+        alloc.set_attr_size(ctx, u64_attr(ctx, 1));
+        alloc.set_alignment_value(ctx, alignment);
+        alloc
+    }
+
+    fn extern_shared(ctx: &mut Context, alignment: u64) -> MirExternSharedOp {
+        let elem_ty: TypeHandle = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
+        let result_ty = MirPtrType::get_shared(ctx, elem_ty, true);
+        let op = Operation::new(
+            ctx,
+            MirExternSharedOp::get_concrete_op_info(),
+            vec![result_ty.into()],
+            vec![],
+            vec![],
+            0,
+        );
+        let extern_shared = MirExternSharedOp::new(op);
+        extern_shared.set_alignment_value(ctx, alignment);
+        extern_shared
+    }
+
+    /// The rejection must name the op and the offending value: that line is
+    /// what the user sees at the use site.
+    fn assert_rejected(result: Result<(), Error>, expected: &str) {
+        let error = result.expect_err("an invalid alignment must fail verification");
+        let message = error.to_string();
+        assert!(
+            message.contains(expected),
+            "expected `{expected}` in the diagnostic, got: {message}"
+        );
+    }
+
+    #[test]
+    fn shared_alloc_rejects_non_power_of_two_alignment() {
+        let mut ctx = Context::new();
+        crate::register(&mut ctx);
+
+        assert_rejected(
+            shared_alloc(&mut ctx, 3).verify(&ctx),
+            "MirSharedAllocOp alignment must be a non-zero power of two, found 3",
+        );
+        assert_rejected(
+            shared_alloc(&mut ctx, 0).verify(&ctx),
+            "MirSharedAllocOp alignment must be a non-zero power of two, found 0",
+        );
+        assert!(shared_alloc(&mut ctx, 8).verify(&ctx).is_ok());
+    }
+
+    #[test]
+    fn extern_shared_rejects_non_power_of_two_alignment() {
+        let mut ctx = Context::new();
+        crate::register(&mut ctx);
+
+        assert_rejected(
+            extern_shared(&mut ctx, 3).verify(&ctx),
+            "MirExternSharedOp alignment must be a non-zero power of two, found 3",
+        );
+        assert_rejected(
+            extern_shared(&mut ctx, 0).verify(&ctx),
+            "MirExternSharedOp alignment must be a non-zero power of two, found 0",
+        );
+        assert!(extern_shared(&mut ctx, 8).verify(&ctx).is_ok());
     }
 }
 

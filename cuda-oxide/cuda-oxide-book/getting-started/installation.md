@@ -290,6 +290,15 @@ cargo +nightly-2026-10-11 install --git https://github.com/NVIDIA/cuda-rust.git 
 
 On first run, `cargo-oxide` will automatically fetch and build the codegen backend. Subsequent runs reuse the cached build.
 
+```{figure} images/backend-install-by-rename.svg
+:align: center
+:width: 100%
+
+Installing the cached backend by rename. Every `rustc` that compiles a kernel maps the one shared `.so`.
+The installer copies a new build to a sibling temporary and renames it over the name, so running
+compilers keep the old inode and a compiler that starts during the install opens a complete file.
+```
+
 To discover the examples available in a cuda-oxide checkout:
 
 ```bash

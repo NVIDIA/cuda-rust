@@ -9,7 +9,7 @@ Demonstrates Thread Block Clusters, a Hopper feature that enables direct shared 
 1. **test_cluster_compile_time**: Compile-time cluster configuration with `#[cluster_launch]`
 2. **test_cluster_intrinsics**: Cluster special registers (ctaid, nctaid, rank, size)
 3. **test_cluster_sync**: Cluster-wide synchronization
-4. **test_dsmem_ring_exchange**: Distributed shared memory read through `map_shared_rank` + dereference
+4. **test_dsmem_ring_exchange**: Distributed shared memory read through `map_shared_rank` + dereference, with the mapped pointer also round-tripped through a `(ptr, rank)` tuple and a device fn (`bounce_cluster_pair`) and compared against the direct read
 5. **test_dsmem_reduction**: All-to-one reduction using `dsmem_read_u32`
 6. **test_dsmem_mapped_store**: Distributed shared memory write through `map_shared_rank_mut` + dereference
 

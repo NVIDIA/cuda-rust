@@ -14,7 +14,6 @@ use pliron::{
     },
     common_traits::Verify,
     context::Context,
-    location::Located,
     op::Op,
     printable::Printable,
     result::Error,

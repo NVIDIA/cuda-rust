@@ -18,7 +18,6 @@ use pliron::{
     derive::op_interface_impl,
     identifier::Identifier,
     irbuild::{inserter::Inserter, rewriter::Rewriter},
-    location::Located,
     op::Op,
     operation::Operation,
     opts::mem2reg::{

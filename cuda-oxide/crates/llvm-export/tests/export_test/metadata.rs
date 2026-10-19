@@ -20,7 +20,6 @@ use pliron::{
     context::Context,
     identifier::Identifier,
     linked_list::ContainsLinkedList,
-    location::Located,
     op::Op,
     utils::apint::APInt,
 };

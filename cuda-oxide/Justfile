@@ -61,7 +61,7 @@ test:
         -p cuda-intrinsics-gen -p cuda-target-spec -p cuda-intrinsics -p llvm-export \
         -p dialect-mir -p dialect-nvvm -p mir-importer -p mir-lower \
         -p mir-transforms -p nvvm-transforms -p reserved-oxide-symbols \
-        -p cuda-device -p libnvvm-sys -p nvjitlink-sys \
+        -p oxide-tile-export -p oxide-tilebc -p cuda-device -p libnvvm-sys -p nvjitlink-sys \
         -p cuda-artifact-finalizer -p cargo-oxide \
         -p dialect-iket -p iket-lower -p ptx-parse -p dialect-ptx \
         -p ptx-schedule

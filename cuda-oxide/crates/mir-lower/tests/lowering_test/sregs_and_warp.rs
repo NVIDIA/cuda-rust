@@ -12,7 +12,7 @@ use pliron::builtin::op_interfaces::{
 use pliron::builtin::ops::ModuleOp;
 use pliron::context::Context;
 use pliron::linked_list::ContainsLinkedList;
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 
@@ -196,7 +196,7 @@ fn test_intrinsic_insertion() -> Result<(), anyhow::Error> {
                                 if symbol.to_string() == "llvm_nvvm_read_ptx_sreg_tid_x"
                         ) {
                             found_intrinsic_call = true;
-                            assert_eq!(call.get_operation().deref(&ctx).loc(), expected_location);
+                            assert_eq!(call.get_operation().deref(&ctx).loc(), &expected_location);
                         }
                     }
                 }

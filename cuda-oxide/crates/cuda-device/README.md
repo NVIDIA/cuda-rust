@@ -184,16 +184,15 @@ pub fn debug_kernel(data: &[f32]) {
     let idx = thread::index_1d();
     let value = data[idx.get()];
 
-    gpu_printf!(
-        "thread %d: val = %f\n",
-        idx.get() as i32,
-        value as f64
-    );
+    gpu_printf!("thread {}: val = {}\n", idx.get(), value);
     gpu_assert!(value >= 0.0, "expected non-negative value");
 }
 ```
 
-`gpu_printf!` compiles to device-side `vprintf` with C vararg promotion.
+`gpu_printf!` compiles to device-side `vprintf` with C vararg promotion. A
+placeholder without a type character prints its argument by type (`%llu` for
+the `usize` index, `%f` for the `f32` value); `{:x}`, `{:.2f}` and the other C
+type characters cast the argument instead.
 
 `gpu_assert!(condition)` uses `trap()` when the condition is false. The
 string-literal message form, `gpu_assert!(condition, "message")`, calls CUDA's

@@ -329,6 +329,40 @@ Choose a factor that matches the structure of the algorithm—often a pipeline
 depth or another small natural group—and benchmark the result. Removing
 `#[unroll]` should always remain an easy comparison.
 
+---
+
+## Keeping a loop rolled with `#[nounroll]`
+
+The unroll pass only acts on `#[unroll]` requests, but LLVM, libNVVM, and ptxas
+have their own unrollers. ptxas in particular fully unrolls small
+constant-trip-count loops even when the PTX keeps them rolled. `#[nounroll]`
+asks all three to leave a loop alone. It does not go through the unroll pass:
+
+1. The macro inserts a different marker, and `mir-importer` emits a
+   `mir.nounroll_hint` operation inside the loop.
+2. The hint survives MIR preparation. The unroll pass ignores it, so unrolling
+   an enclosing loop copies the hint along with the inner loop.
+3. Just before lowering, after the last transform that can reshape loops, each
+   hint is mapped to its innermost loop. The loop's back-edges are joined
+   through one latch block, and the hint is removed.
+4. Lowering marks that latch's branch, and the LLVM IR exporter attaches
+   `!llvm.loop` metadata with `llvm.loop.unroll.disable` to it. The NVPTX
+   backend prints `.pragma "nounroll";` at the loop header; libNVVM reads the
+   same metadata.
+
+Step 3 also runs in full-debug builds, which skip MIR preparation. A hint that
+is not inside any loop is dropped with a warning that names the attribute's
+`file:line:column`. A hint in unreachable code is dropped silently. WGMMA
+counted-loop fusion replaces a K loop with one operation that generates its own
+PTX loop. It moves a `#[nounroll]` request onto that operation, whose loop
+header then starts with `.pragma "nounroll";`, and leaves the original blocks
+unreachable.
+
+Like `#[unroll]`, the hint is mapped to the innermost loop around it. A loop
+whose body never repeats, such as `loop { ...; break; }`, produces no loop in
+MIR. If it sits inside another loop, the request applies to that enclosing
+loop.
+
 To inspect the pass's analysis, build verbosely:
 
 ```bash

@@ -389,6 +389,37 @@ Unrolling trades larger generated code for fewer branches and more
 optimization opportunities. Use it for small or performance-critical loops,
 and measure the result.
 
+### Keeping a loop rolled
+
+ptxas fully unrolls small loops with a constant trip count on its own, even
+when the PTX keeps them rolled, and then schedules every iteration's loads at
+once. That can raise register pressure enough to spill. Put `#[nounroll]` on a
+loop to keep it rolled:
+
+```rust
+let mut tap = 0;
+#[nounroll]
+while tap < 4 {
+    acc += weight(tap) * input(i + tap);
+    tap += 1;
+}
+```
+
+The compiler attaches `llvm.loop.unroll.disable` metadata to the loop, so LLVM
+and libNVVM leave it rolled, and the NVPTX backend emits `.pragma "nounroll";`
+at the loop header, which ptxas honors. This works on any loop the compiler
+sees as a loop, including `for` loops over iterators, and in full-debug
+builds.
+
+`#[nounroll]` applies only to the loop that carries it and takes no arguments.
+A loop cannot carry both `#[unroll]` and `#[nounroll]`. A `#[nounroll]` loop
+inside a loop that `#[unroll]` or `#[unroll(N)]` unrolls is copied into each
+unrolled body, and every copy stays rolled.
+
+Put the annotation on a loop that repeats. A loop whose body always leaves it,
+such as `loop { ...; break; }`, compiles to straight-line code. Inside another
+loop, the request then applies to the enclosing loop.
+
 :::{seealso}
 For how the compiler analyzes and rewrites annotated loops, including the
 stage-index peephole, see [Compiler Optimizations](../compiler/compiler-optimizations.md).

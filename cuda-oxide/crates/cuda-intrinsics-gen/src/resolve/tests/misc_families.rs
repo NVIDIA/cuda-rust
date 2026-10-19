@@ -233,7 +233,7 @@ fn active_debug_control_sources_parse_and_prove_both_backend_routes() {
 
     let evidence = vec![
         read_evidence_file(
-            &repo_root.join("intrinsics/evidence/rust-llvm-23.1.0-16696adc-debug-control.json"),
+            &repo_root.join("intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-debug-control.json"),
         )
         .unwrap(),
         read_evidence_file(
@@ -241,7 +241,7 @@ fn active_debug_control_sources_parse_and_prove_both_backend_routes() {
         )
         .unwrap(),
     ];
-    let indexed = index_evidence(&evidence, "16696adcd119e6ba9cc175207d984d7021211acb").unwrap();
+    let indexed = index_evidence(&evidence, "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019").unwrap();
     for record in &records {
         let routes = resolve_backend_lowerings(record, &indexed).unwrap();
         assert_eq!(routes.len(), 2);

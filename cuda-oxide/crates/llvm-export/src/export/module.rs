@@ -16,7 +16,6 @@ use pliron::{
     },
     context::Context,
     linked_list::ContainsLinkedList,
-    location::Located,
     op::Op,
     operation::Operation,
     r#type::{TypeHandle, Typed},
@@ -208,7 +207,7 @@ fn prepare_debug_shared_function_scopes(
         let raw_name = function.get_symbol_name(state.ctx);
         let owner = super::function::exported_function_name(raw_name.as_ref());
         if state.debug_shared_function_scopes.contains_key(&owner) {
-            let loc = function.get_operation().deref(state.ctx).loc();
+            let loc = function.get_operation().deref(state.ctx).loc().clone();
             let debug_name = ops::debug_function_name(state.ctx, function.get_operation())
                 .unwrap_or_else(|| owner.clone());
             state.debug_subprogram_for_function(&debug_name, &owner, &loc);

@@ -50,7 +50,7 @@ html_theme_options = {
     "icon_links": [
         {
             "name": "GitHub",
-            "url": "https://github.com/NVlabs/cuda-oxide",
+            "url": "https://github.com/NVIDIA/cuda-rust",
             "icon": "fa-brands fa-github",
             "type": "fontawesome",
         },
@@ -103,4 +103,4 @@ html_js_files = [
 pygments_style = 'default'
 html_show_sourcelink = False
 html_title = "cuda-oxide"
-html_baseurl = "https://nvlabs.github.io/cuda-oxide/"
+html_baseurl = "https://nvidia.github.io/cuda-rust/cuda-oxide/"

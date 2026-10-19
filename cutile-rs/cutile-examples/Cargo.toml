@@ -1,0 +1,51 @@
+[package]
+name = "cutile-examples"
+description = "Various cuTile Rust usage examples."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[features]
+# Enables the autotune example (cutile's experimental tuning API).
+experimental-tune = ["cutile/experimental-tune"]
+# CPU reference implementations (candle) used by a few examples to check
+# results. Off by default so the workspace build never depends on a
+# third-party CPU math stack: candle's `gemm-f16` needs the `fullfp16`
+# target feature on aarch64 and fails to assemble on the generic target
+# (DGX Spark). Build those examples with
+# `RUSTFLAGS="-C target-cpu=native" cargo run --features reference-cpu ...`.
+reference-cpu = ["dep:candle-core", "dep:candle-nn"]
+
+[[example]]
+name = "autotune"
+required-features = ["experimental-tune"]
+
+[[example]]
+name = "flash_attention"
+required-features = ["reference-cpu"]
+
+[[example]]
+name = "async_gemm"
+required-features = ["reference-cpu"]
+
+[dependencies]
+cutile-compiler = { workspace = true }
+cutile-ir = { workspace = true }
+cuda-bindings = { workspace = true }
+cuda-core = { workspace = true }
+cuda-async = { workspace = true }
+candle-core = { workspace = true, optional = true }
+candle-nn = { workspace = true, optional = true }
+
+[lints]
+workspace = true
+
+# Used by the example targets only.
+[dev-dependencies]
+cutile = { workspace = true }
+tokio = { workspace = true }

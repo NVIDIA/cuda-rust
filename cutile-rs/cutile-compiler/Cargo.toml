@@ -1,0 +1,33 @@
+[package]
+name = "cutile-compiler"
+description = "Crate for compiling kernels authored in cuTile Rust to executable kernels."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["cutile", "compiler", "gpu"]
+
+[features]
+default = []
+
+[dependencies]
+syn = { workspace = true }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+regex = { workspace = true }
+uuid = { workspace = true }
+prettyplease = { workspace = true }
+half = { workspace = true }
+anyhow = { workspace = true }
+stacker = { workspace = true }
+cuda-core = { workspace = true }
+cuda-async = { workspace = true }
+cutile-ir = { workspace = true }
+linkme = { workspace = true }
+sha2 = { workspace = true }
+
+[lints]
+workspace = true

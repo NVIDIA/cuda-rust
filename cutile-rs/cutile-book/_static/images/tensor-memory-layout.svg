@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 480">
+  <defs>
+    <!-- Small elegant arrow -->
+    <marker id="arrow-white" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M 0 0 L 6 3 L 0 6" fill="none" stroke="#ffffff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="700" height="480" fill="#0d1117"/>
+  
+  <!-- Title -->
+  <text x="350" y="35" text-anchor="middle" fill="#ffffff" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="700">Tensor Memory Layout (Row-Major)</text>
+  
+  <!-- Logical 2D View Section -->
+  <text x="175" y="70" text-anchor="middle" fill="#c9d1d9" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="600">Logical 2D Tensor [M, N]</text>
+  
+  <!-- 2D Grid -->
+  <g transform="translate(55, 90)">
+    <!-- Row 0 -->
+    <rect x="0" y="0" width="55" height="40" fill="#79c0ff" rx="3"/>
+    <text x="27.5" y="25" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="11" font-weight="700">(0,0)</text>
+    
+    <rect x="60" y="0" width="55" height="40" fill="#79c0ff" rx="3"/>
+    <text x="87.5" y="25" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="11" font-weight="700">(0,1)</text>
+    
+    <rect x="120" y="0" width="55" height="40" fill="#79c0ff" rx="3"/>
+    <text x="147.5" y="25" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="11" font-weight="700">(0,2)</text>
+    
+    <rect x="180" y="0" width="55" height="40" fill="#79c0ff" rx="3"/>
+    <text x="207.5" y="25" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="11" font-weight="700">(0,3)</text>
+    
+    <!-- Row label -->
+    <text x="265" y="25" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="11">Row 0</text>
+    
+    <!-- Row 1 -->
+    <rect x="0" y="48" width="55" height="40" fill="#56d364" rx="3"/>
+    <text x="27.5" y="73" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="11" font-weight="700">(1,0)</text>
+    
+    <rect x="60" y="48" width="55" height="40" fill="#56d364" rx="3"/>
+    <text x="87.5" y="73" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="11" font-weight="700">(1,1)</text>
+    
+    <rect x="120" y="48" width="55" height="40" fill="#56d364" rx="3"/>
+    <text x="147.5" y="73" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="11" font-weight="700">(1,2)</text>
+    
+    <rect x="180" y="48" width="55" height="40" fill="#56d364" rx="3"/>
+    <text x="207.5" y="73" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="11" font-weight="700">(1,3)</text>
+    
+    <!-- Row label -->
+    <text x="265" y="73" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="11">Row 1</text>
+    
+    <!-- Row 2 -->
+    <rect x="0" y="96" width="55" height="40" fill="#d2a8ff" rx="3"/>
+    <text x="27.5" y="121" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="11" font-weight="700">(2,0)</text>
+    
+    <rect x="60" y="96" width="55" height="40" fill="#d2a8ff" rx="3"/>
+    <text x="87.5" y="121" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="11" font-weight="700">(2,1)</text>
+    
+    <rect x="120" y="96" width="55" height="40" fill="#d2a8ff" rx="3"/>
+    <text x="147.5" y="121" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="11" font-weight="700">(2,2)</text>
+    
+    <rect x="180" y="96" width="55" height="40" fill="#d2a8ff" rx="3"/>
+    <text x="207.5" y="121" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="11" font-weight="700">(2,3)</text>
+    
+    <!-- Row label -->
+    <text x="265" y="121" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="11">Row 2</text>
+  </g>
+  
+  <!-- Legend -->
+  <g transform="translate(500, 90)">
+    <rect x="0" y="0" width="14" height="14" fill="#79c0ff" rx="2"/>
+    <text x="22" y="11" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="11">Row 0</text>
+    
+    <rect x="0" y="22" width="14" height="14" fill="#56d364" rx="2"/>
+    <text x="22" y="33" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="11">Row 1</text>
+    
+    <rect x="0" y="44" width="14" height="14" fill="#d2a8ff" rx="2"/>
+    <text x="22" y="55" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="11">Row 2</text>
+  </g>
+  
+  <!-- Key insight box -->
+  <rect x="430" y="160" width="250" height="55" fill="#161b22" stroke="#30363d" stroke-width="1" rx="4"/>
+  <text x="445" y="180" fill="#58a6ff" font-family="system-ui, sans-serif" font-size="11" font-weight="700">Key Insight</text>
+  <text x="445" y="198" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="10">Consecutive row elements are</text>
+  <text x="445" y="210" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="10">adjacent in memory → coalesced access</text>
+  
+  <!-- Sleek arrow from 2D to 1D -->
+  <path d="M 350 250 L 350 305" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" marker-end="url(#arrow-white)"/>
+  <text x="370" y="285" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="11">Flatten</text>
+  
+  <!-- Physical Memory Section -->
+  <text x="350" y="345" text-anchor="middle" fill="#c9d1d9" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="600">Physical Memory Layout (Contiguous)</text>
+  
+  <!-- 1D Memory Strip -->
+  <g transform="translate(30, 365)">
+    <!-- Row 0 elements -->
+    <rect x="0" y="0" width="50" height="35" fill="#79c0ff" rx="2"/>
+    <text x="25" y="22" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">(0,0)</text>
+    
+    <rect x="52" y="0" width="50" height="35" fill="#79c0ff" rx="2"/>
+    <text x="77" y="22" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">(0,1)</text>
+    
+    <rect x="104" y="0" width="50" height="35" fill="#79c0ff" rx="2"/>
+    <text x="129" y="22" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">(0,2)</text>
+    
+    <rect x="156" y="0" width="50" height="35" fill="#79c0ff" rx="2"/>
+    <text x="181" y="22" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">(0,3)</text>
+    
+    <!-- Row 1 elements -->
+    <rect x="208" y="0" width="50" height="35" fill="#56d364" rx="2"/>
+    <text x="233" y="22" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">(1,0)</text>
+    
+    <rect x="260" y="0" width="50" height="35" fill="#56d364" rx="2"/>
+    <text x="285" y="22" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">(1,1)</text>
+    
+    <rect x="312" y="0" width="50" height="35" fill="#56d364" rx="2"/>
+    <text x="337" y="22" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">(1,2)</text>
+    
+    <rect x="364" y="0" width="50" height="35" fill="#56d364" rx="2"/>
+    <text x="389" y="22" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">(1,3)</text>
+    
+    <!-- Row 2 elements -->
+    <rect x="416" y="0" width="50" height="35" fill="#d2a8ff" rx="2"/>
+    <text x="441" y="22" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">(2,0)</text>
+    
+    <rect x="468" y="0" width="50" height="35" fill="#d2a8ff" rx="2"/>
+    <text x="493" y="22" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="9" font-weight="700">(2,1)</text>
+    
+    <!-- Continuation indicator -->
+    <text x="545" y="22" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="14" font-weight="700">...</text>
+    
+    <!-- Address labels -->
+    <text x="25" y="55" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">addr 0</text>
+    <text x="181" y="55" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">addr 3</text>
+    <text x="233" y="55" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">addr 4</text>
+    <text x="389" y="55" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">addr 7</text>
+    <text x="441" y="55" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">addr 8</text>
+  </g>
+</svg>

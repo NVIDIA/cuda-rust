@@ -1,0 +1,94 @@
+name: Bug Report
+description: Something compiled wrong, crashed, or produced bad PTX
+title: "[BUG]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug! Please fill out the information below to help us diagnose and fix the issue.
+
+        Not sure if this is a bug? Ask in [#help on Discord](https://discord.gg/ZUEr4AhH5C) first.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear, one-paragraph description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Error / actual behavior
+      description: What actually happens? Include the full error message, wrong output, panic, and/or stack trace.
+      placeholder: Paste the error output here.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should happen instead?
+    validations:
+      required: false
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction example
+      description: Paste the smallest kernel + host code that triggers the issue. This greatly helps us fix it faster.
+      render: rust
+    validations:
+      required: false
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+      description: What OS are you running?
+      placeholder: e.g., Ubuntu 22.04, Windows 11, etc.
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and GPU Architecture
+      description: What GPU and architecture are you using?
+      placeholder: e.g., NVIDIA A100 (sm_80), RTX 4090, H100, NVIDIA B200 (sm_100)
+    validations:
+      required: true
+  - type: input
+    id: cuda_driver
+    attributes:
+      label: CUDA driver version
+      placeholder: e.g., 560.35.03
+    validations:
+      required: false
+  - type: textarea
+    id: doctor
+    attributes:
+      label: cargo oxide doctor
+      description: Paste the output of `cargo oxide doctor`. It reports the GPU and driver, the toolchain and its components, the resolved `llc`, libNVVM, nvJitLink and libdevice, and the backend it would load. If `doctor` itself fails, fill the fields below.
+      render: text
+    validations:
+      required: false
+  - type: input
+    id: rustc
+    attributes:
+      label: rustc version
+      description: Output of `rustc --version --verbose`
+      placeholder: rustc 1.xx.x (...)
+    validations:
+      required: false
+  - type: input
+    id: llc
+    attributes:
+      label: llc version
+      description: Output of `llc --version` or `llc-22 --version`
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Attach `.ll` / `.ptx` files if the pipeline produces them before failing. Links to related issues or PRs are welcome.
+    validations:
+      required: false

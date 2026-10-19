@@ -1,0 +1,7 @@
+# Pin stable so CI and developer checkouts use the same compiler and lint set.
+# Run workspace Clippy before updating. The reactor-verification CI job pins
+# nightly separately for native f16, Miri, and ThreadSanitizer.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

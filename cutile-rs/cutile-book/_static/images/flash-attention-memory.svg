@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 400" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+    
+    <!-- Diagonal pattern for N×N matrix -->
+    <pattern id="danger-pattern" patternUnits="userSpaceOnUse" width="10" height="10">
+      <path d="M-2,2 l4,-4 M0,10 l10,-10 M8,12 l4,-4" style="stroke:#ff7b72; stroke-width:1"/>
+    </pattern>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="400" fill="#0d1117"/>
+  <rect width="900" height="400" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="450" y="38" text-anchor="middle" font-size="24" font-weight="600" fill="#ffffff" letter-spacing="-0.5">The N² Memory Problem in Attention</text>
+  <line x1="280" y1="52" x2="620" y2="52" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+
+  <!-- ==================== Q × K^T visualization ==================== -->
+  <g transform="translate(50, 85)">
+    <!-- Q matrix -->
+    <g transform="translate(0, 0)">
+      <rect width="60" height="180" rx="6" fill="#79c0ff"/>
+      <text x="30" y="95" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">Q</text>
+      <text x="30" y="-10" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">(N × d)</text>
+    </g>
+    
+    <!-- × symbol -->
+    <text x="90" y="95" text-anchor="middle" font-size="24" font-weight="600" fill="#ffffff">×</text>
+    
+    <!-- K^T matrix -->
+    <g transform="translate(110, 55)">
+      <rect width="180" height="60" rx="6" fill="#56d364"/>
+      <text x="90" y="38" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">Kᵀ</text>
+      <text x="90" y="-10" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">(d × N)</text>
+    </g>
+    
+    <!-- = symbol -->
+    <text x="320" y="95" text-anchor="middle" font-size="24" font-weight="600" fill="#ffffff">=</text>
+    
+    <!-- Result N×N matrix -->
+    <g transform="translate(350, 0)">
+      <rect width="180" height="180" rx="6" fill="url(#danger-pattern)" opacity="0.3"/>
+      <rect width="180" height="180" rx="6" fill="none" stroke="#ff7b72" stroke-width="3"/>
+      <text x="90" y="85" text-anchor="middle" font-size="18" font-weight="700" fill="#ff7b72">N × N</text>
+      <text x="90" y="108" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Attention Scores</text>
+      <text x="90" y="-10" text-anchor="middle" font-size="12" font-weight="600" fill="#ff7b72">O(N²) memory!</text>
+    </g>
+  </g>
+
+  <!-- ==================== Calculation Example ==================== -->
+  <g transform="translate(570, 85)">
+    <rect width="300" height="180" rx="10" fill="#161b22"/>
+    <rect width="300" height="180" rx="10" fill="none" stroke="#ffffff" stroke-width="1.5"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="296" height="32" rx="8" fill="#3d1f1f"/>
+    <text x="150" y="24" text-anchor="middle" font-size="14" font-weight="600" fill="#ff7b72">📊 Example: N = 65,536</text>
+    
+    <!-- Calculations -->
+    <g transform="translate(20, 55)">
+      <text font-size="13" font-weight="600" fill="#ffffff">
+        <tspan x="0" y="0">Q @ Kᵀ produces:</tspan>
+        <tspan x="0" y="22" font-family="'RobotoMono', monospace" fill="#ff7b72">65,536 × 65,536 = 4.3B elements</tspan>
+      </text>
+      
+      <text font-size="13" font-weight="600" fill="#ffffff">
+        <tspan x="0" y="55">At fp32 (4 bytes each):</tspan>
+        <tspan x="0" y="77" font-family="'RobotoMono', monospace" fill="#ff7b72">4.3B × 4 bytes = 16 GB</tspan>
+      </text>
+      
+      <text font-size="13" font-weight="600" fill="#ffffff">
+        <tspan x="0" y="110">Just for ONE intermediate result!</tspan>
+      </text>
+    </g>
+  </g>
+
+  <!-- Bottom insight box -->
+  <g transform="translate(50, 295)">
+    <rect width="800" height="90" rx="10" fill="#161b22"/>
+    <rect width="800" height="90" rx="10" fill="none" stroke="#ffffff" stroke-width="1.5"/>
+    
+    <!-- Left: Standard Attention -->
+    <g transform="translate(20, 18)">
+      <rect width="360" height="55" rx="8" fill="#3d1f1f"/>
+      <rect width="360" height="55" rx="8" fill="none" stroke="#ff7b72" stroke-width="1.5"/>
+      <text x="180" y="22" text-anchor="middle" font-size="14" font-weight="700" fill="#ff7b72">❌ Standard Attention</text>
+      <text x="180" y="43" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Must store full N×N matrix → Memory: O(N²)</text>
+    </g>
+    
+    <!-- vs -->
+    <text x="400" y="50" text-anchor="middle" font-size="15" font-weight="600" fill="#ffffff">vs</text>
+    
+    <!-- Right: Flash Attention -->
+    <g transform="translate(420, 18)">
+      <rect width="360" height="55" rx="8" fill="#1a2a1a"/>
+      <rect width="360" height="55" rx="8" fill="none" stroke="#76B900" stroke-width="1.5"/>
+      <text x="180" y="22" text-anchor="middle" font-size="14" font-weight="700" fill="#76B900">✓ Fused Attention</text>
+      <text x="180" y="43" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Process tile-by-tile, never store N×N → Memory: O(N)</text>
+    </g>
+  </g>
+
+</svg>

@@ -1,0 +1,16 @@
+CUTILE_JIT_TIMING module=creation function=full key=dce8ed0ce12ad8e8 stage1_ms=7.847 stage2_ms=41.604 stage3_ms=2.343 generics=f16,128
+CUTILE_JIT_TIMING module=kernels function=gemm key=13302cbd172eee5f stage1_ms=22.566 stage2_ms=130.179 stage3_ms=0.445 generics=f16,128,128,64
+CUTILE_JIT_TIMING module=kernels function=gemm_safe key=9aa8d7461adbe857 stage1_ms=23.444 stage2_ms=181.752 stage3_ms=2.174 generics=f16,128,128,64
+CUTILE_JIT_TIMING module=kernels function=gemm_static key=1e64954821d9001b stage1_ms=21.680 stage2_ms=145.759 stage3_ms=0.463 generics=f16,128,128,64,128,128,128
+CUTILE_JIT_TIMING module=kernels function=gemm_static key=1fee0e4ecb725558 stage1_ms=23.035 stage2_ms=241.175 stage3_ms=0.462 generics=f16,128,128,64,256,256,256
+CUTILE_JIT_TIMING module=kernels function=gemm_static key=726270174aeeeefe stage1_ms=19.283 stage2_ms=128.300 stage3_ms=0.544 generics=f16,128,128,64,512,512,512
+CUTILE_JIT_TIMING module=kernels function=gemm_static key=1c3b8157a4374709 stage1_ms=19.784 stage2_ms=128.026 stage3_ms=0.446 generics=f16,128,128,64,1024,1024,1024
+CUTILE_JIT_TIMING module=kernels function=gemm key=1fc0687944a16d8d stage1_ms=22.958 stage2_ms=525.282 stage3_ms=0.567 generics=f16,256,256,128
+CUTILE_JIT_TIMING module=kernels function=gemm_safe key=8655a0a5169547f8 stage1_ms=21.479 stage2_ms=556.224 stage3_ms=0.498 generics=f16,256,256,128
+CUTILE_JIT_TIMING module=kernels function=gemm_static key=1379effb0fafb433 stage1_ms=18.909 stage2_ms=502.781 stage3_ms=0.594 generics=f16,256,256,128,2048,2048,2048
+CUTILE_JIT_TIMING module=kernels function=gemm key=d36a695694d7c0a4 stage1_ms=20.981 stage2_ms=237.139 stage3_ms=0.476 generics=f16,128,256,128
+CUTILE_JIT_TIMING module=kernels function=gemm_safe key=5b36abbb3c24f0ab stage1_ms=23.698 stage2_ms=339.983 stage3_ms=0.669 generics=f16,128,256,128
+CUTILE_JIT_TIMING module=kernels function=gemm_static key=d7679709336fa57a stage1_ms=19.269 stage2_ms=233.182 stage3_ms=0.456 generics=f16,128,256,128,4096,4096,4096
+CUTILE_JIT_TIMING module=kernels function=gemm_static key=8debbc4db375a0ee stage1_ms=21.201 stage2_ms=235.630 stage3_ms=0.453 generics=f16,128,256,128,8192,8192,8192
+CUTILE_JIT_TIMING module=kernels function=gemm_static key=eeeb80845a63abb5 stage1_ms=23.124 stage2_ms=546.172 stage3_ms=0.474 generics=f16,256,256,128,16384,16384,16384
+CUTILE_JIT_TIMING module=kernels function=gemm_static key=c05adee2ab4b554 stage1_ms=18.941 stage2_ms=250.322 stage3_ms=0.465 generics=f16,128,256,128,32768,32768,32768

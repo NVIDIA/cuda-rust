@@ -1,0 +1,28 @@
+# Build artifacts
+/target/
+
+# ICE (Internal Compiler Error) debug files
+rustc-ice-*.txt
+
+# Generated PTX/LLVM files
+*.ptx
+*.ll
+# Tile export descriptions written next to them
+*.tileexports.json
+# Tile library descriptions and the library itself (cargo oxide tilelib)
+*.tilebc
+*.tilelib
+*.tilelib.mlir
+# Mock Tile-compiler callers that tile library examples generate when they run
+examples/*/mock/
+
+# Implementation log (internal notes)
+IMPLEMENTATION.md
+# design doc
+rustc-codegen-cuda-plan.md
+
+# Test files and their compiled outputs
+test_cuda_backend.rs
+test_cuda_backend
+*.unoptimized.ll
+*.unoptimized.ptx

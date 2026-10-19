@@ -1,0 +1,23 @@
+error[E0080]: evaluation panicked: Swizzle<B, M, S> requires M + B <= S, otherwise applying it twice does not restore the original offset
+ --> $RUST/core/src/panic.rs
+  |
+  |           $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `cuda_device::swizzle::Swizzle::<5, 0, 4>::INVOLUTION` failed here
+  |
+ ::: src/swizzle.rs
+  |
+  |   impl<const B: usize, const M: usize, const S: usize> Swizzle<B, M, S> {
+  |       /// Compile-time check that the swizzle is an involution.
+  |       const INVOLUTION: () = assert!(
+  |  ____________________________-
+  | |         M + B <= S,
+  | |         "Swizzle<B, M, S> requires M + B <= S, otherwise applying it twice does \
+  | |          not restore the original offset"
+  | |     );
+  | |_____- in this macro invocation
+
+note: erroneous constant encountered
+ --> src/swizzle.rs
+  |
+  |         let () = Self::INVOLUTION;
+  |                  ^^^^^^^^^^^^^^^^

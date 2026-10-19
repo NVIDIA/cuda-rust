@@ -1,0 +1,5 @@
+error: function name `cuda_oxide_device_evil` starts with the reserved cuda-oxide prefix `cuda_oxide_`; rename your function — this namespace is reserved for cuda-oxide internal symbol mangling (see cuda-oxide/crates/reserved-oxide-symbols)
+ --> tests/compile_fail/device_reserved_name.rs:7:4
+  |
+7 | fn cuda_oxide_device_evil() {}
+  |    ^^^^^^^^^^^^^^^^^^^^^^

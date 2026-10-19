@@ -1,0 +1,5 @@
+error: `#[derive(DeviceCopy)]` cannot be applied to enums: `DeviceCopy` requires every bit pattern (including the all-zero pattern written by `DeviceBuffer::zeroed`) to be a valid value, but an enum's discriminant leaves most byte patterns invalid, so a zeroed or device-written buffer could materialize an out-of-range discriminant (undefined behavior). If you can guarantee every device-produced byte pattern is a valid variant, write `unsafe impl DeviceCopy for ... {}` by hand.
+  --> tests/derive_device_copy/fail_enum.rs:12:6
+   |
+12 | enum Tag {
+   |      ^^^

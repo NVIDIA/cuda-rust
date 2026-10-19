@@ -8,10 +8,10 @@
 
 ## Testing
 
-<!-- How did you verify this? Paste relevant `cargo oxide run` / `just check`
-output, or smoketest results. -->
-- [ ] `just check` passes (the local mirror of CI: fmt, clippy, tests, guards, docs)
-- [ ] `cargo oxide run <example>` passes, or `scripts/smoketest.sh -o '^<example>$'`
+<!-- How did you verify this? Paste relevant `cargo oxide run` /
+`just -f cuda-oxide/Justfile check` output, or smoketest results. -->
+- [ ] `just -f cuda-oxide/Justfile check` passes (the local mirror of CI: fmt, clippy, tests, guards, docs)
+- [ ] `cargo oxide run <example>` passes, or `cuda-oxide/scripts/smoketest.sh -o '^<example>$'`
 - [ ] New example added (if applicable)
 
 ## Checklist

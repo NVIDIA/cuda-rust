@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Configuration file for `copy-pr-bot` GitHub App
+# https://docs.gha-runners.nvidia.com/apps/copy-pr-bot/
+#
+# NVIDIA self-hosted runners reject workflows triggered by pull_request events.
+# copy-pr-bot mirrors trusted PRs to pull-request/<n> branches so those
+# workflows can run on push.
+
+enabled: true
+# Auto-sync ready PRs so CI starts immediately; draft PRs are manually triggered.
+auto_sync_draft: false
+auto_sync_ready: true

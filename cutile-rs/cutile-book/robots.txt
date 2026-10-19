@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://nvidia.github.io/cuda-rust/cutile/sitemap.xml

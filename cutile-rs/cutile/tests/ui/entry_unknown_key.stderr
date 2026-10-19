@@ -1,0 +1,5 @@
+error: unknown `#[cutile::entry]` key `prnt_ir`; expected one of `print_ir`, `dump_mlir_dir`, `unchecked_accesses`, `deny_in_kernel_checks`, `preconditions`, `optimization_hints`
+ --> tests/ui/entry_unknown_key.rs:8:21
+  |
+8 |     #[cutile::entry(prnt_ir = true)]
+  |                     ^^^^^^^

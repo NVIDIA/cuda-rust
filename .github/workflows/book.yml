@@ -1,14 +1,27 @@
-name: Deploy cuda-oxide Book
+name: Deploy CUDA Rust Docs
 
+# Path-filtered lane: only documentation sources can change what this builds.
 on:
   push:
     branches: [main]
+    paths:
+      - 'cuda-oxide/cuda-oxide-book/**'
+      - 'cutile-rs/cutile-book/**'
+      - 'cutile-rs/scripts/build_versioned_book.sh'
+      - 'docs/**'
+      - '.github/workflows/book.yml'
   # Validate the book on PRs too. The build job alone runs there; `deploy` is
   # gated below, so a pull request never publishes. Without this the book was
   # only ever built after merge, so a PR that broke it could not be caught by
   # review or by CI.
   pull_request:
     branches: [main]
+    paths:
+      - 'cuda-oxide/cuda-oxide-book/**'
+      - 'cutile-rs/cutile-book/**'
+      - 'cutile-rs/scripts/build_versioned_book.sh'
+      - 'docs/**'
+      - '.github/workflows/book.yml'
   workflow_dispatch:
 
 # Only checkout rights by default. The Pages deployment permissions live on
@@ -22,6 +35,8 @@ permissions:
 # Scope this to the ref, and keep the single-deploy guarantee on the deploy job
 # itself. Superseded PR runs are cancelled; pushes to main are not, so a
 # publish in flight is never interrupted.
+# The group deliberately has no commit SHA. Parallel builds on main would let
+# a slower older commit deploy after a newer one and replace the published site.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -29,42 +44,52 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # A pip install plus one sphinx-build; the job settles in ~2 minutes. Every
-    # other workflow in the repo bounds its jobs, and an unbounded one that
-    # hangs -- a wedged install, a sphinx that never returns -- burns to the
-    # 6-hour default instead of failing.
-    timeout-minutes: 15
+    # An umbrella page plus two Sphinx books. Bound the job so a
+    # wedged install or a sphinx that never returns fails instead of burning to
+    # the 6-hour default.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          # cutile-rs versioned docs check out historical `cutile-rs/v*` tags
+          # via git worktrees; a shallow clone is not enough for that.
+          fetch-depth: 0
+          fetch-tags: true
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.13"
           cache: pip
-          cache-dependency-path: cuda-oxide-book/requirements.txt
+          # One install covers both books; keep cutile-rs/cutile-book/requirements.txt
+          # in sync with cuda-oxide/cuda-oxide-book/requirements.txt for local `make setup`.
+          cache-dependency-path: |
+            cuda-oxide/cuda-oxide-book/requirements.txt
+            cutile-rs/cutile-book/requirements.txt
 
       - name: Install dependencies
-        run: pip install -r cuda-oxide-book/requirements.txt
+        run: pip install -r cuda-oxide/cuda-oxide-book/requirements.txt
 
-      # `-W` matches the Rust docs gate, which builds under
-      # RUSTDOCFLAGS="-D warnings". Without it a broken cross-reference, a
-      # malformed directive or a page dropped from a toctree still exits 0 and
-      # publishes. `--keep-going` reports every warning in one run instead of
-      # stopping at the first.
-      - name: Build Sphinx site
-        run: >-
-          sphinx-build -W --keep-going -b html
-          cuda-oxide-book cuda-oxide-book/_build/html
+      # Build the landing page and both books into one Pages artifact. The
+      # script applies -W --keep-going to current docs and preserves the
+      # Tile version switcher and historical tags on main.
+      - name: Build CUDA Rust documentation
+        run: |
+          # Unset CUTILE_DOCS_TAGS → build every tag matching the pattern.
+          # Empty CUTILE_DOCS_TAGS → current tree only (fast PR check).
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            export CUTILE_DOCS_TAGS=""
+          fi
+          bash docs/build_all_docs.sh
 
       # Only `deploy` consumes this, and `deploy` is skipped on pull requests,
       # so uploading it there produces an artifact nothing can ever read. A PR's
-      # job is to prove `sphinx-build -W` succeeds, which the step above already
+      # job is to prove both Sphinx builds succeed, which the steps above already
       # did; gate the upload on the same condition `deploy` uses so the two
       # cannot drift apart.
       - if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: cuda-oxide-book/_build/html
+          path: docs/build/html
 
   deploy:
     needs: build

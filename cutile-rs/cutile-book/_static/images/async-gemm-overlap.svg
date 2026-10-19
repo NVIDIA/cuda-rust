@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Arrow markers -->
+    <marker id="arrow-white" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#ffffff" fill-opacity="0.7"/>
+    </marker>
+    <marker id="arrow-flow" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto">
+      <polygon points="0 0, 6 2.5, 0 5" fill="#76B900" fill-opacity="0.8"/>
+    </marker>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="520" fill="#0d1117"/>
+  <rect width="900" height="520" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="450" y="40" text-anchor="middle" font-size="24" font-weight="600" fill="#ffffff" letter-spacing="-0.5">Overlapping Kernel Compilation with Data Prep</text>
+  <line x1="250" y1="54" x2="650" y2="54" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+
+  <!-- ==================== SEQUENTIAL (Top) ==================== -->
+  <g transform="translate(50, 90)">
+    <!-- Container -->
+    <rect width="800" height="145" rx="10" fill="#161b22"/>
+    <rect width="800" height="145" rx="10" fill="none" stroke="#ff7b72" stroke-width="2" stroke-dasharray="6,4"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="796" height="34" rx="8" fill="#3d1f1f"/>
+    <text x="400" y="25" text-anchor="middle" font-size="15" font-weight="700" fill="#ff7b72">❌ Sequential: Compile THEN prepare data</text>
+    
+    <!-- Timeline blocks -->
+    <g transform="translate(40, 55)">
+      <!-- Compile kernel -->
+      <rect x="0" y="0" width="260" height="40" rx="6" fill="#d2a8ff"/>
+      <text x="130" y="26" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">🔨 Compile kernel (~500ms)</text>
+      
+      <!-- Prepare data -->
+      <rect x="270" y="0" width="140" height="40" rx="6" fill="#ffa657"/>
+      <text x="340" y="26" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">📦 Prepare data</text>
+      
+      <!-- Launch -->
+      <rect x="420" y="0" width="85" height="40" rx="6" fill="#79c0ff"/>
+      <text x="462" y="26" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">🚀 Launch</text>
+      
+      <!-- Compute -->
+      <rect x="515" y="0" width="110" height="40" rx="6" fill="#56d364"/>
+      <text x="570" y="26" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">⚡ Compute</text>
+    </g>
+    
+    <!-- Total time indicator - moved lower with more space -->
+    <g transform="translate(40, 115)">
+      <path d="M 0 0 L 585 0" stroke="#ff7b72" stroke-width="1.5" stroke-opacity="0.7"/>
+      <path d="M 0 -6 L 0 6" stroke="#ff7b72" stroke-width="1.5"/>
+      <path d="M 585 -6 L 585 6" stroke="#ff7b72" stroke-width="1.5"/>
+      <text x="292" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="#ff7b72">Total: ~750ms 🐢</text>
+    </g>
+  </g>
+
+  <!-- ==================== OVERLAPPED (Bottom) ==================== -->
+  <g transform="translate(50, 265)">
+    <!-- Container -->
+    <rect width="800" height="235" rx="10" fill="#161b22"/>
+    <rect width="800" height="235" rx="10" fill="none" stroke="#76B900" stroke-width="2.5"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="796" height="34" rx="8" fill="#1a2a1a"/>
+    <text x="400" y="25" text-anchor="middle" font-size="15" font-weight="700" fill="#76B900">✓ Overlapped: Compile AND prepare data simultaneously</text>
+    
+    <!-- Compile track -->
+    <g transform="translate(40, 60)">
+      <text x="0" y="24" font-size="12" font-weight="700" fill="#d2a8ff">Compile:</text>
+      <rect x="80" y="0" width="260" height="40" rx="6" fill="#d2a8ff"/>
+      <text x="210" y="26" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">🔨 Compile kernel (~500ms)</text>
+    </g>
+    
+    <!-- Data prep track (parallel) -->
+    <g transform="translate(40, 115)">
+      <text x="0" y="24" font-size="12" font-weight="700" fill="#ffa657">Data:</text>
+      <rect x="80" y="0" width="140" height="40" rx="6" fill="#ffa657"/>
+      <text x="150" y="26" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">📦 Prepare data</text>
+    </g>
+    
+    <!-- Sync point indicator - with spacing after compile end -->
+    <g transform="translate(395, 55)">
+      <path d="M 0 0 L 0 105" stroke="#76B900" stroke-width="1.5" stroke-dasharray="5,4" stroke-opacity="0.5"/>
+      <text x="-35" y="85" font-size="11" font-weight="700" fill="#76B900" fill-opacity="0.85">sync</text>
+    </g>
+    
+    <!-- Post-sync blocks -->
+    <g transform="translate(415, 85)">
+      <!-- Both ready indicator -->
+      <rect x="0" y="0" width="90" height="36" rx="6" fill="#76B900"/>
+      <text x="45" y="24" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">Both ready!</text>
+      
+      <!-- Launch -->
+      <rect x="100" y="0" width="85" height="36" rx="6" fill="#79c0ff"/>
+      <text x="142" y="24" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">🚀 Launch</text>
+      
+      <!-- Compute -->
+      <rect x="195" y="0" width="110" height="36" rx="6" fill="#56d364"/>
+      <text x="250" y="24" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">⚡ Compute</text>
+    </g>
+    
+    <!-- Total time indicator - with proper spacing -->
+    <g transform="translate(120, 180)">
+      <path d="M 0 0 L 485 0" stroke="#76B900" stroke-width="1.5" stroke-opacity="0.7"/>
+      <path d="M 0 -6 L 0 6" stroke="#76B900" stroke-width="1.5"/>
+      <path d="M 485 -6 L 485 6" stroke="#76B900" stroke-width="1.5"/>
+      <text x="242" y="22" text-anchor="middle" font-size="12" font-weight="700" fill="#76B900">Total: ~600ms ⚡ (saved ~150ms)</text>
+    </g>
+    
+    <!-- Formula box - repositioned with better spacing -->
+    <g transform="translate(640, 145)">
+      <rect width="145" height="65" rx="6" fill="#21262d"/>
+      <rect width="145" height="65" rx="6" fill="none" stroke="#76B900" stroke-width="1.5"/>
+      <text x="72" y="26" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">Time = max(compile,</text>
+      <text x="72" y="48" text-anchor="middle" font-size="12" font-weight="600" fill="#e3b341">data_prep)</text>
+      <text x="72" y="60" text-anchor="middle" font-size="10" font-weight="500" fill="#8b949e">not sum!</text>
+    </g>
+  </g>
+
+</svg>

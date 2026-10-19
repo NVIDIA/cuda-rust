@@ -1,0 +1,63 @@
+[package]
+name = "cutile-benchmarks"
+description = "cuTile Rust benchmarks."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[features]
+# Run each benchmark once to verify execution without measuring performance.
+# Usage: cargo bench -p cutile-benchmarks --features smoke-test
+smoke-test = []
+
+[dev-dependencies]
+cutile = { workspace = true }
+criterion = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+
+[[bench]]
+name = "gemm"
+harness = false
+
+[[bench]]
+name = "fmha"
+harness = false
+
+[[bench]]
+name = "fmha_causal"
+harness = false
+
+[[bench]]
+name = "softmax"
+harness = false
+
+[[bench]]
+name = "rmsnorm"
+harness = false
+
+[[bench]]
+name = "execution_lock"
+harness = false
+
+[[bench]]
+name = "launch_overhead"
+harness = false
+
+[[bench]]
+name = "host_overhead"
+harness = false
+
+[dependencies]
+tokio = { workspace = true }
+cutile-compiler = { workspace = true }
+cuda-async = { workspace = true }
+cuda-core = { workspace = true }
+
+[lints]
+workspace = true

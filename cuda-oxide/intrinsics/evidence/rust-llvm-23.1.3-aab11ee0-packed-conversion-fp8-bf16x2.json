@@ -296,7 +296,7 @@
           "mechanism": "inline_ptx",
           "outcome": "succeeded",
           "artifact_kind": "cubin",
-          "detail": "CUDA 13.3 ptxas assembled the inline-route PTX at sm_120f into a 2,240-byte cubin (SHA-256 ca980ee914906d30713cf21fb303b36ab9266b98c76fc0637ac71dee040e294d), byte-identical to the typed route's cubin. The same PTX retargeted to sm_120 is rejected with \"Feature 'cvt.e4m3x2.bf16x2' not supported on .target 'sm_120'\".",
+          "detail": "CUDA 13.3 ptxas assembled the inline-route PTX at sm_120f into a 2,240-byte cubin (SHA-256 ca980ee914906d30713cf21fb303b36ab9266b98c76fc0637ac71dee040e294d), byte-identical to the typed route's cubin. The same PTX retargeted to sm_120 is rejected with \"Feature 'cvt.e5m2x2.bf16x2' not supported on .target 'sm_120'\".",
           "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
           "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
           "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
@@ -401,7 +401,7 @@
           "mechanism": "inline_ptx",
           "outcome": "succeeded",
           "artifact_kind": "cubin",
-          "detail": "CUDA 13.3 ptxas assembled the inline-route PTX at sm_120f into a 2,240-byte cubin (SHA-256 ca980ee914906d30713cf21fb303b36ab9266b98c76fc0637ac71dee040e294d), byte-identical to the typed route's cubin. The same PTX retargeted to sm_120 is rejected with \"Feature 'cvt.e4m3x2.bf16x2' not supported on .target 'sm_120'\".",
+          "detail": "CUDA 13.3 ptxas assembled the inline-route PTX at sm_120f into a 2,240-byte cubin (SHA-256 ca980ee914906d30713cf21fb303b36ab9266b98c76fc0637ac71dee040e294d), byte-identical to the typed route's cubin. The same PTX retargeted to sm_120 is rejected with \"Feature 'cvt.e5m2x2.bf16x2' not supported on .target 'sm_120'\".",
           "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
           "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
           "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"

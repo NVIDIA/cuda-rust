@@ -1,0 +1,258 @@
+{
+  "schema": 5,
+  "backend_profile": "rust-llvm-23.1.3-aab11ee0",
+  "backend_kind": "llvm_nvptx",
+  "llvm_revision": "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019",
+  "backend_version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+  "backend_sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+  "records": [
+    {
+      "id": "mma_sp_ordered_metadata_m16n8k32_s32_s8",
+      "source_record": "int_nvvm_mma_sp_ordered_metadata_m16n8k32_row_col_s8",
+      "llvm_symbol": "llvm.nvvm.mma.sp.ordered.metadata.m16n8k32.row.col.s8",
+      "llvm_arguments": ["i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32"],
+      "llvm_results": ["i32", "i32", "i32", "i32"],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "sm_80",
+      "ptx_feature": "+ptx85",
+      "status": "validated",
+      "stages": [{
+        "targets": ["sm_80", "ptx85"],
+        "representation": "separate probes for the recorded lowering mechanism",
+        "stage": "backend_codegen",
+        "mechanism": "inline_ptx",
+        "outcome": "succeeded",
+        "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 6fd14bda0a191ba64fe0a74811fd81acef22dae9a7364c814feb5dc6b82f25b6."
+      }, {
+        "targets": ["sm_80", "ptx85"],
+        "representation": "separate PTX outputs assembled for the recorded target",
+        "stage": "ptx_assembly",
+        "mechanism": "inline_ptx",
+        "outcome": "succeeded",
+        "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 33a756465fa9b33d89f2b1ab0da1d5ce7a1f0e8293d97888b8db3e9cdc7a1f4a.",
+        "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+        "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+        "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+      }],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {"mnemonic": "mma", "modifiers": ["sp::ordered_metadata", "sync", "aligned", "m16n8k32", "row", "col", "s32", "s8", "s8", "s32"], "operands": [{"kind": "register_list", "length": 4}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 4}, {"kind": "register"}, {"kind": "immediate"}]}
+    },
+    {
+      "id": "mma_sp_ordered_metadata_m16n8k32_s32_s8_u8",
+      "source_record": "int_nvvm_mma_sp_ordered_metadata_m16n8k32_row_col_s8_u8",
+      "llvm_symbol": "llvm.nvvm.mma.sp.ordered.metadata.m16n8k32.row.col.s8.u8",
+      "llvm_arguments": ["i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32"],
+      "llvm_results": ["i32", "i32", "i32", "i32"],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "sm_80",
+      "ptx_feature": "+ptx85",
+      "status": "validated",
+      "stages": [{
+        "targets": ["sm_80", "ptx85"],
+        "representation": "separate probes for the recorded lowering mechanism",
+        "stage": "backend_codegen",
+        "mechanism": "inline_ptx",
+        "outcome": "succeeded",
+        "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 64edac3534d432072fb0cb9ee94ae758f539d41f98556515b3c8269967feb7a6."
+      }, {
+        "targets": ["sm_80", "ptx85"],
+        "representation": "separate PTX outputs assembled for the recorded target",
+        "stage": "ptx_assembly",
+        "mechanism": "inline_ptx",
+        "outcome": "succeeded",
+        "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 9111691371ac05725c5828e7342d57b2c0dc17a189490d5fe06a4e499c657703.",
+        "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+        "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+        "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+      }],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {"mnemonic": "mma", "modifiers": ["sp::ordered_metadata", "sync", "aligned", "m16n8k32", "row", "col", "s32", "s8", "u8", "s32"], "operands": [{"kind": "register_list", "length": 4}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 4}, {"kind": "register"}, {"kind": "immediate"}]}
+    },
+    {
+      "id": "mma_sp_ordered_metadata_m16n8k32_s32_u8",
+      "source_record": "int_nvvm_mma_sp_ordered_metadata_m16n8k32_row_col_u8",
+      "llvm_symbol": "llvm.nvvm.mma.sp.ordered.metadata.m16n8k32.row.col.u8",
+      "llvm_arguments": ["i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32"],
+      "llvm_results": ["i32", "i32", "i32", "i32"],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "sm_80",
+      "ptx_feature": "+ptx85",
+      "status": "validated",
+      "stages": [{
+        "targets": ["sm_80", "ptx85"],
+        "representation": "separate probes for the recorded lowering mechanism",
+        "stage": "backend_codegen",
+        "mechanism": "inline_ptx",
+        "outcome": "succeeded",
+        "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 cd7e55a90134cfc35729cd87003a44c454b151e8910822841d1d18f0c9ebc1a2."
+      }, {
+        "targets": ["sm_80", "ptx85"],
+        "representation": "separate PTX outputs assembled for the recorded target",
+        "stage": "ptx_assembly",
+        "mechanism": "inline_ptx",
+        "outcome": "succeeded",
+        "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 c1566d75ad4047bc212b72c1d4e10c883b8616bb4276963654b1d5a2086c2aa8.",
+        "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+        "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+        "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+      }],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {"mnemonic": "mma", "modifiers": ["sp::ordered_metadata", "sync", "aligned", "m16n8k32", "row", "col", "s32", "u8", "u8", "s32"], "operands": [{"kind": "register_list", "length": 4}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 4}, {"kind": "register"}, {"kind": "immediate"}]}
+    },
+    {
+      "id": "mma_sp_ordered_metadata_m16n8k32_s32_u8_s8",
+      "source_record": "int_nvvm_mma_sp_ordered_metadata_m16n8k32_row_col_u8_s8",
+      "llvm_symbol": "llvm.nvvm.mma.sp.ordered.metadata.m16n8k32.row.col.u8.s8",
+      "llvm_arguments": ["i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32"],
+      "llvm_results": ["i32", "i32", "i32", "i32"],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "sm_80",
+      "ptx_feature": "+ptx85",
+      "status": "validated",
+      "stages": [{
+        "targets": ["sm_80", "ptx85"],
+        "representation": "separate probes for the recorded lowering mechanism",
+        "stage": "backend_codegen",
+        "mechanism": "inline_ptx",
+        "outcome": "succeeded",
+        "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 12003882bbbb7dab7f4bec48ce3a009d0b9d08e185f69fb277afceef476fb7c9."
+      }, {
+        "targets": ["sm_80", "ptx85"],
+        "representation": "separate PTX outputs assembled for the recorded target",
+        "stage": "ptx_assembly",
+        "mechanism": "inline_ptx",
+        "outcome": "succeeded",
+        "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 e0029151f55c5f3974fcf5c52523d22289796d7bfbd8fa74916f3cee0a82459d.",
+        "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+        "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+        "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+      }],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {"mnemonic": "mma", "modifiers": ["sp::ordered_metadata", "sync", "aligned", "m16n8k32", "row", "col", "s32", "u8", "s8", "s32"], "operands": [{"kind": "register_list", "length": 4}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 4}, {"kind": "register"}, {"kind": "immediate"}]}
+    },
+    {
+      "id": "mma_sp_ordered_metadata_m16n8k32_s32_s8_satfinite",
+      "source_record": "int_nvvm_mma_sp_ordered_metadata_m16n8k32_row_col_satfinite_s8",
+      "llvm_symbol": "llvm.nvvm.mma.sp.ordered.metadata.m16n8k32.row.col.satfinite.s8",
+      "llvm_arguments": ["i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32"],
+      "llvm_results": ["i32", "i32", "i32", "i32"],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "sm_80",
+      "ptx_feature": "+ptx85",
+      "status": "validated",
+      "stages": [{
+        "targets": ["sm_80", "ptx85"],
+        "representation": "separate probes for the recorded lowering mechanism",
+        "stage": "backend_codegen",
+        "mechanism": "inline_ptx",
+        "outcome": "succeeded",
+        "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 0097b025872046cef28efa3c9f463bf8993bb9c41da22afc8477efc2a17a4ac3."
+      }, {
+        "targets": ["sm_80", "ptx85"],
+        "representation": "separate PTX outputs assembled for the recorded target",
+        "stage": "ptx_assembly",
+        "mechanism": "inline_ptx",
+        "outcome": "succeeded",
+        "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 75f59d33a1fc63c903fefc73ee06a31dfa1364d3a5dedcaa5cda933152cc92d2.",
+        "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+        "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+        "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+      }],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {"mnemonic": "mma", "modifiers": ["sp::ordered_metadata", "sync", "aligned", "m16n8k32", "row", "col", "satfinite", "s32", "s8", "s8", "s32"], "operands": [{"kind": "register_list", "length": 4}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 4}, {"kind": "register"}, {"kind": "immediate"}]}
+    },
+    {
+      "id": "mma_sp_ordered_metadata_m16n8k32_s32_s8_u8_satfinite",
+      "source_record": "int_nvvm_mma_sp_ordered_metadata_m16n8k32_row_col_satfinite_s8_u8",
+      "llvm_symbol": "llvm.nvvm.mma.sp.ordered.metadata.m16n8k32.row.col.satfinite.s8.u8",
+      "llvm_arguments": ["i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32"],
+      "llvm_results": ["i32", "i32", "i32", "i32"],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "sm_80",
+      "ptx_feature": "+ptx85",
+      "status": "validated",
+      "stages": [{
+        "targets": ["sm_80", "ptx85"],
+        "representation": "separate probes for the recorded lowering mechanism",
+        "stage": "backend_codegen",
+        "mechanism": "inline_ptx",
+        "outcome": "succeeded",
+        "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 b93a06888a9596b56f9ec7dec0e30eb7a87767aa6c4bab12aac88b0c80e4c7e0."
+      }, {
+        "targets": ["sm_80", "ptx85"],
+        "representation": "separate PTX outputs assembled for the recorded target",
+        "stage": "ptx_assembly",
+        "mechanism": "inline_ptx",
+        "outcome": "succeeded",
+        "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 6fb8d4d5c0e41f500f6c523bd132db310bb25628a68ae9cb1331f0a890017d87.",
+        "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+        "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+        "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+      }],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {"mnemonic": "mma", "modifiers": ["sp::ordered_metadata", "sync", "aligned", "m16n8k32", "row", "col", "satfinite", "s32", "s8", "u8", "s32"], "operands": [{"kind": "register_list", "length": 4}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 4}, {"kind": "register"}, {"kind": "immediate"}]}
+    },
+    {
+      "id": "mma_sp_ordered_metadata_m16n8k32_s32_u8_satfinite",
+      "source_record": "int_nvvm_mma_sp_ordered_metadata_m16n8k32_row_col_satfinite_u8",
+      "llvm_symbol": "llvm.nvvm.mma.sp.ordered.metadata.m16n8k32.row.col.satfinite.u8",
+      "llvm_arguments": ["i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32"],
+      "llvm_results": ["i32", "i32", "i32", "i32"],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "sm_80",
+      "ptx_feature": "+ptx85",
+      "status": "validated",
+      "stages": [{
+        "targets": ["sm_80", "ptx85"],
+        "representation": "separate probes for the recorded lowering mechanism",
+        "stage": "backend_codegen",
+        "mechanism": "inline_ptx",
+        "outcome": "succeeded",
+        "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 c30b514d66dd4ef7d3898ed560a1144be98a172ef526ce4388beaf1f7c7dbd44."
+      }, {
+        "targets": ["sm_80", "ptx85"],
+        "representation": "separate PTX outputs assembled for the recorded target",
+        "stage": "ptx_assembly",
+        "mechanism": "inline_ptx",
+        "outcome": "succeeded",
+        "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 766d57b5690df60d31209316dc540cfc2f8c31c303b3b3fae6d523385f764f40.",
+        "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+        "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+        "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+      }],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {"mnemonic": "mma", "modifiers": ["sp::ordered_metadata", "sync", "aligned", "m16n8k32", "row", "col", "satfinite", "s32", "u8", "u8", "s32"], "operands": [{"kind": "register_list", "length": 4}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 4}, {"kind": "register"}, {"kind": "immediate"}]}
+    },
+    {
+      "id": "mma_sp_ordered_metadata_m16n8k32_s32_u8_s8_satfinite",
+      "source_record": "int_nvvm_mma_sp_ordered_metadata_m16n8k32_row_col_satfinite_u8_s8",
+      "llvm_symbol": "llvm.nvvm.mma.sp.ordered.metadata.m16n8k32.row.col.satfinite.u8.s8",
+      "llvm_arguments": ["i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32"],
+      "llvm_results": ["i32", "i32", "i32", "i32"],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "sm_80",
+      "ptx_feature": "+ptx85",
+      "status": "validated",
+      "stages": [{
+        "targets": ["sm_80", "ptx85"],
+        "representation": "separate probes for the recorded lowering mechanism",
+        "stage": "backend_codegen",
+        "mechanism": "inline_ptx",
+        "outcome": "succeeded",
+        "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 c10be1e6711b2a58cbe3fa9cf60de15556b9496ba056edee6036a3c20b8dd2d6."
+      }, {
+        "targets": ["sm_80", "ptx85"],
+        "representation": "separate PTX outputs assembled for the recorded target",
+        "stage": "ptx_assembly",
+        "mechanism": "inline_ptx",
+        "outcome": "succeeded",
+        "detail": "Revalidated 1 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 5c07f0d6c2eea06bdaa939cf307a9323910485971dd341374537c4067524534c.",
+        "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+        "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+        "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+      }],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {"mnemonic": "mma", "modifiers": ["sp::ordered_metadata", "sync", "aligned", "m16n8k32", "row", "col", "satfinite", "s32", "u8", "s8", "s32"], "operands": [{"kind": "register_list", "length": 4}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 4}, {"kind": "register"}, {"kind": "immediate"}]}
+    }
+  ]
+}

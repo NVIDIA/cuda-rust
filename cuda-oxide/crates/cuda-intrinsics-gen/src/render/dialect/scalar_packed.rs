@@ -26,7 +26,7 @@ pub(in crate::render) fn render_dialect_integer_minmax(
 ) -> String {
     let mut output = rust_header(catalog, hash);
     output.push_str(
-        "//! Structural operations for generated extended integer min/max.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_i32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == 32)\n}\n\n",
+        "//! Structural operations for generated extended integer min/max.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_i32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == 32)\n}\n\n",
     );
     for record in integer_minmaxes(catalog) {
         let signedness = if record.rust.result == "i32" {
@@ -91,7 +91,6 @@ use pliron::{
     },
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -282,7 +281,7 @@ pub(super) fn register(ctx: &mut Context) {
 pub(in crate::render) fn render_dialect_packed_alu(catalog: &CatalogFile, hash: &str) -> String {
     let mut output = rust_header(catalog, hash);
     output.push_str(
-        "//! Structural operations for generated packed floating-point arithmetic.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_integer_width(\n    ctx: &Context,\n    ty: pliron::r#type::TypeHandle,\n    width: u32,\n) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == width)\n}\n\n",
+        "//! Structural operations for generated packed floating-point arithmetic.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_integer_width(\n    ctx: &Context,\n    ty: pliron::r#type::TypeHandle,\n    width: u32,\n) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == width)\n}\n\n",
     );
     for record in packed_alus(catalog) {
         let arity = record.rust.arguments.len();
@@ -344,7 +343,7 @@ pub(in crate::render) fn render_dialect_packed_conversion(
 ) -> String {
     let mut output = rust_header(catalog, hash);
     output.push_str(
-        "//! Structural operation for generated packed conversion.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{FP32Type, IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_f32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx).downcast_ref::<FP32Type>().is_some()\n}\n\nfn is_integer_width(\n    ctx: &Context,\n    ty: pliron::r#type::TypeHandle,\n    width: u32,\n) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == width)\n}\n\n",
+        "//! Structural operation for generated packed conversion.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::{FP32Type, IntegerType, Signedness},\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::Typed,\n    value::Value,\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\nfn is_f32(ctx: &Context, ty: pliron::r#type::TypeHandle) -> bool {\n    ty.deref(ctx).downcast_ref::<FP32Type>().is_some()\n}\n\nfn is_integer_width(\n    ctx: &Context,\n    ty: pliron::r#type::TypeHandle,\n    width: u32,\n) -> bool {\n    ty.deref(ctx)\n        .downcast_ref::<IntegerType>()\n        .is_some_and(|integer| integer.width() == width)\n}\n\n",
     );
     for record in packed_conversions(catalog) {
         let result_width = packed_conversion_result_width(record);
@@ -444,7 +443,6 @@ use pliron::{
     },
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -585,7 +583,6 @@ use pliron::{
     builtin::{op_interfaces::NResultsInterface, types::{FP32Type, FP64Type}},
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -755,7 +752,6 @@ use pliron::{
     builtin::{op_interfaces::{NOpdsInterface, NResultsInterface}, types::{FP32Type, FP64Type, IntegerType, Signedness}},
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -914,7 +910,6 @@ use pliron::{
     },
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -1089,7 +1084,6 @@ use pliron::{
     },
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,

@@ -178,6 +178,7 @@ advanced/warp-level-programming
 advanced/tensor-memory-accelerator
 advanced/matrix-multiply-accelerators
 advanced/cluster-programming
+advanced/tile-libraries
 ```
 
 ```{toctree}

@@ -3183,9 +3183,6 @@ fn importer_shard_imports(
         output.push_str("use pliron::input_err;\n");
     }
     let mut location_items = Vec::new();
-    if body.contains(".set_loc(") {
-        location_items.push("Located");
-    }
     if dispatch_signature || uses_identifier(body, "Location") {
         location_items.push("Location");
     }

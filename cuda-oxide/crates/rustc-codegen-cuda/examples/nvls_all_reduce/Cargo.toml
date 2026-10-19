@@ -12,6 +12,6 @@ license = "Apache-2.0"
 #   cargo oxide run nvls_all_reduce
 
 [dependencies]
-cuda-core = { path = "../../../../../cuda-core", version = "0.4.0" }
+cuda-core = { path = "../../../../../cuda-core" }
 cuda-device = { path = "../../../cuda-device" }
 cuda-host = { path = "../../../cuda-host" }

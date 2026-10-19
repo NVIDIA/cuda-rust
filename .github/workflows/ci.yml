@@ -28,9 +28,11 @@ on:
       - 'Cargo.lock'
       - '.github/workflows/**'
 
+# Each commit on main gets its own group, so it starts at once. Any other ref
+# still shares one group and cancels the older run.
 concurrency:
-  group: ci-gate-${{ github.ref_name }}
-  cancel-in-progress: true
+  group: ci-gate-${{ github.ref_name }}${{ github.ref_name == 'main' && format('-{0}', github.sha) || '' }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 # Every other workflow in the repo pins this rather than inheriting whatever the
 # repository default happens to be. This one is a pure caller today, so the four

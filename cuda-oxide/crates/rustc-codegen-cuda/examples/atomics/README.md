@@ -14,7 +14,7 @@ Atomic operations require **LLVM 22 or newer** for correct syncscope
 generation. Without it, scopes (`.gpu`, `.cta`, `.sys`) will be missing
 from generated PTX.
 
-The pinned Rust toolchain (`nightly-2026-08-28`) ships LLVM 23 with NVPTX
+The pinned Rust toolchain (`nightly-2026-10-11`) ships LLVM 23 with NVPTX
 enabled via the `llvm-tools` component, so the default onboarding path
 already satisfies this requirement:
 
@@ -83,7 +83,7 @@ CUDA_OXIDE_VERBOSE=1 cargo oxide run atomics
 
 ### Floating-point add lowering
 
-With the pinned `nightly-2026-08-28` toolchain's LLVM 23 NVPTX defaults,
+With the pinned `nightly-2026-10-11` toolchain's LLVM 23 NVPTX defaults,
 `atomic_f32_fetch_add_test` uses a compare-and-swap (CAS) loop for global memory.
 Generic-address-space `f32` adds also use a loop; shared `f32` and `f64` adds
 still use native instructions on supported targets. For example:

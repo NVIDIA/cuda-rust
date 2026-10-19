@@ -441,7 +441,7 @@ generated beside the kernel function.
 ### Complete example
 
 The
-[`policy_config`](https://github.com/NVlabs/cuda-oxide/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/policy_config)
+[`policy_config`](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/policy_config)
 example defines two policies for one generic kernel and verifies that they
 produce:
 

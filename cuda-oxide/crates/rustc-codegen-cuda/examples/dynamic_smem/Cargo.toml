@@ -19,4 +19,4 @@ cuda-device = { path = "../../../cuda-device" }
 # Host-side utilities (CudaKernel trait, etc.)
 cuda-host = { path = "../../../cuda-host" }
 
-cuda-core = { path = "../../../../../cuda-core", version = "0.4.0" }
+cuda-core = { path = "../../../../../cuda-core" }

@@ -54,10 +54,12 @@ mod kernels {
     /// `fence.acq_rel.sys` / `llvm.nvvm.membar.sys`, and the fused-fence
     /// SeqCst forms `fence.sc.gpu; st.release.gpu.b32` and `fence.sc.gpu;
     /// ld.acquire.gpu.b32`.
+    // These buffers are atomically mutated. Raw writable pointers avoid the
+    // immutability promise that &[u32] and &[u64] would give the compiler.
     #[kernel]
     pub fn publish_and_observe(
-        flags: &[u32],
-        wide: &[u64],
+        flags: *mut u32,
+        wide: *mut u64,
         mut observed: DisjointSlice<u32>,
         mut observed_wide: DisjointSlice<u64>,
         mut fence_ok: DisjointSlice<u32>,
@@ -70,12 +72,10 @@ mod kernels {
 
         // SAFETY: `tid` and `next` are both < N, the buffers have N elements,
         // and every access to them in this kernel is atomic.
-        let mine = unsafe { DeviceAtomicU32::from_ptr((flags.as_ptr() as *mut u32).add(tid)) };
-        let mine_wide = unsafe { DeviceAtomicU64::from_ptr((wide.as_ptr() as *mut u64).add(tid)) };
-        let neighbour =
-            unsafe { DeviceAtomicU32::from_ptr((flags.as_ptr() as *mut u32).add(next)) };
-        let neighbour_wide =
-            unsafe { DeviceAtomicU64::from_ptr((wide.as_ptr() as *mut u64).add(next)) };
+        let mine = unsafe { DeviceAtomicU32::from_ptr(flags.add(tid)) };
+        let mine_wide = unsafe { DeviceAtomicU64::from_ptr(wide.add(tid)) };
+        let neighbour = unsafe { DeviceAtomicU32::from_ptr(flags.add(next)) };
+        let neighbour_wide = unsafe { DeviceAtomicU64::from_ptr(wide.add(next)) };
 
         // Publish. The release store is what an acquire reader synchronises with.
         mine.store(tid as u32 + 1, AtomicOrdering::Release);
@@ -122,20 +122,27 @@ mod kernels {
     }
 }
 
+// The unsafe launch owns writable-buffer access until stream completion.
+fn atomic_storage<T>(buffer: &mut DeviceBuffer<T>) -> *mut T {
+    buffer.cu_deviceptr() as *mut T
+}
+
 fn main() {
     println!("=== Scoped atomic load/store and fences ===\n");
 
     let ctx = CudaContext::new(0).expect("Failed to create CUDA context");
     let stream = ctx.default_stream();
 
-    let flags = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
-    let wide = DeviceBuffer::<u64>::zeroed(&stream, N).unwrap();
+    let mut flags = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
+    let mut wide = DeviceBuffer::<u64>::zeroed(&stream, N).unwrap();
     let mut observed = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
     let mut observed_wide = DeviceBuffer::<u64>::zeroed(&stream, N).unwrap();
     let mut fence_ok = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
 
     let module = kernels::load(&ctx).expect("Failed to load embedded CUDA module");
-    // SAFETY: one block of N threads, and every buffer has N elements.
+    // SAFETY: one block of N threads, every buffer has N elements, and buffers
+    // stay alive through completion. Flags/wide have no non-atomic accesses
+    // while the kernel runs; output copies synchronize the same stream.
     unsafe {
         module.publish_and_observe(
             &stream,
@@ -144,8 +151,8 @@ fn main() {
                 block_dim: (N as u32, 1, 1),
                 shared_mem_bytes: 0,
             },
-            &flags,
-            &wide,
+            atomic_storage(&mut flags),
+            atomic_storage(&mut wide),
             &mut observed,
             &mut observed_wide,
             &mut fence_ok,

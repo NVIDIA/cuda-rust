@@ -40,6 +40,9 @@ quote = { workspace = true }
 syn = { workspace = true }
 proc-macro2 = { workspace = true }
 reserved-oxide-symbols = { workspace = true }
+# `#[tile_export]` builds its description with the shared vocabulary and embeds
+# it as JSON at expansion time; the serialization goes through that crate.
+oxide-tile-export = { workspace = true }
 
 [dev-dependencies]
 trybuild = "1"

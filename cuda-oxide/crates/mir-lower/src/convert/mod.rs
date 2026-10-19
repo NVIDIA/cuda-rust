@@ -28,7 +28,6 @@
 
 use pliron::{
     context::{Context, Ptr},
-    location::Located,
     operation::Operation,
 };
 
@@ -38,7 +37,9 @@ pub(crate) fn preserve_location(
     source: Ptr<Operation>,
     lowered: Ptr<Operation>,
 ) -> Ptr<Operation> {
-    lowered.deref_mut(ctx).set_loc(source.deref(ctx).loc());
+    lowered
+        .deref_mut(ctx)
+        .set_loc(source.deref(ctx).loc().clone());
     lowered
 }
 

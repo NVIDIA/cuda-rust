@@ -1,0 +1,411 @@
+{
+  "schema": 1,
+  "date": "2026-10-11",
+  "summary": {
+    "primary_captures": 1699,
+    "primary_intrinsic_ids": 1029,
+    "primary_terminal_captures": 1506,
+    "initial_candidate_failures": 192,
+    "initial_renderer_panics": 148,
+    "initial_invalid_target_requests": 44,
+    "primary_split_target_captures": 56,
+    "auxiliary_captures": 377,
+    "auxiliary_typed_declarations": 187,
+    "auxiliary_typed_codegen": 116,
+    "auxiliary_typed_assemblies": 66,
+    "auxiliary_inline_codegen": 4,
+    "auxiliary_inline_assemblies": 4,
+    "stage_groups": 770,
+    "stage_artifact_proofs": 3753,
+    "historical_stage_groups_not_revalidated": 38,
+    "failures": 0,
+    "unique_artifacts": 4899,
+    "persisted_auxiliary_inputs": 307
+  },
+  "tools": {
+    "llvm-as": {
+      "path": "/home/nihalp/.rustup/toolchains/nightly-2026-10-11-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-as",
+      "sha256": "6a7d24f098fe0df8a735e269cbf407a2322ae04b84cb4898c77367da898a1cb3",
+      "version": "LLVM version 23.1.3-rust-1.101.0-nightly"
+    },
+    "llvm-dis": {
+      "path": "/home/nihalp/.rustup/toolchains/nightly-2026-10-11-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-dis",
+      "sha256": "e2dfff788815d3f75709cf4fbbf237b98764b52baa191159f9100888197e934e",
+      "version": "LLVM version 23.1.3-rust-1.101.0-nightly"
+    },
+    "llc": {
+      "path": "/home/nihalp/.rustup/toolchains/nightly-2026-10-11-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/llc",
+      "sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+      "version": "LLVM version 23.1.3-rust-1.101.0-nightly"
+    },
+    "ptxas": {
+      "path": "/usr/local/cuda-13.3/bin/ptxas",
+      "sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc",
+      "version": "Cuda compilation tools, release 13.3, V13.3.73",
+      "build": "cuda_13.3.r13.3/compiler.38244171_0"
+    },
+    "llvm-tblgen": {
+      "path": "/tmp/cudaoxide-intrinsics-tblgen-build-20261011/bin/llvm-tblgen",
+      "version": "LLVM version 23.1.3",
+      "sha256": "f9e28cd046b8084efed066634a239076763ac7a7a6bde932b58e2cb439c25564"
+    },
+    "llvm-tblgen-22": {
+      "name": "llvm-tblgen-22",
+      "version_line": "Ubuntu LLVM version 22.1.8",
+      "sha256": "dbe41ce85b55b137b846da027f34bdeb260d25b907059a39927eea6aee4cae96",
+      "enforce_sha256": false,
+      "provenance": "Ubuntu package binary used only for a byte-for-byte dump comparison; it reproduced the Intrinsics.td dump hash exactly. The NVPTX.td dump uses LLVM 23-only TableGen operators (!sort in Target.td) that pre-23 binaries reject, so no independent binary was available for that dump"
+    }
+  },
+  "source": {
+    "llvm_repository": "https://github.com/rust-lang/llvm-project.git",
+    "llvm_revision": "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019",
+    "llvm_git_tree": "743426f16c6d14d89426972b8aad1540e5d25ab0",
+    "rust_commit": "6f5da406b56c2db6607202b63daee73aa8c61297",
+    "dump_hashes": {
+      "intrinsics_sha256": "c0fb05eda32f2fe89ba600d4d2dc882e0bf54d5aa60b5e5f8601eb87a9881408",
+      "nvptx_sha256": "492011cd3c20fbd888a2fa05e7eb5d894c0db79270c5bf6dbda0b6648d3c6582",
+      "normalized_imported_sha256": "54d47b8e281dd953dc95fe16f834ff38164d9809171c9a1af097231b0bc45cab"
+    },
+    "normalized_declarations": 2633,
+    "old_llvm_revision": "16696adcd119e6ba9cc175207d984d7021211acb",
+    "old_rust_commit": "e457a7b0d326d67b4322ef0d11bd715cfaeda48f",
+    "generator_source_hashes": {
+      "probe.rs": "a2649d3ef94dcb7141ccabc435381009a555de5d67bfcf9c5295b99827ac4e89",
+      "render/probes.rs": "7eebba64372259c55f1fde06230a911e3930700d63f9ced486cf9d703207aba0",
+      "render/mod.rs": "aa1fdc47c98fa1430c0640ab2da6db574ad0a57179c0f1c79aca988729888a82",
+      "resolve/driver.rs": "2dad1922e2017535e81b7b4f0527c87dcc8e830243b8bc3ed852725f0f4eb65d"
+    },
+    "full_catalog_input_sha256": "016c9d9b55b84d99d56fe2690dce4b3ba7ded5318890996a7459a142ddb5edf7",
+    "candidate_catalog_inputs": {
+      "imported_sha256": "54d47b8e281dd953dc95fe16f834ff38164d9809171c9a1af097231b0bc45cab",
+      "overlay_sha256": "ecc7d0d7d70db737303abb6271666c67e3757a2727ba2191946a6d4e66e9f717",
+      "abi_ledger_sha256": "fc378e74ef6da50df31de62c3fafcb3264dfb414034e5852147359fcad4184eb",
+      "evidence_sha256": []
+    },
+    "primary_body_derivation": "Every primary input is byte-for-byte the corresponding committed intrinsics/probes/{id}.ll (or {id}.llvm_nvptx.ll), after restoring the catalog SHA-256 comment from captures column 7 and LLVM revision comment from primary_header_llvm_revisions. All 1699 inputs were reconstructed and hash-checked."
+  },
+  "primary_header_llvm_revisions": {
+    "primary_candidate": "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019",
+    "primary_full_catalog": "16696adcd119e6ba9cc175207d984d7021211acb"
+  },
+  "tables": {
+    "artifacts.jsonl": [
+      "sha256",
+      "bytes"
+    ],
+    "captures.jsonl": [
+      "intrinsic_id",
+      "mode_index",
+      "stage_index",
+      "codegen_gpu",
+      "ptx_feature",
+      "terminal_gpu_or_null",
+      "artifact_indices_by_kind",
+      "render_catalog_sha256_or_null",
+      "initial_candidate_exit_code"
+    ],
+    "stages.jsonl": [
+      "evidence_file_index",
+      "json_pointer",
+      "stage_index",
+      "ledger_sha256",
+      "proofs_as_capture_index_and_artifact_kind_index"
+    ],
+    "inputs.jsonl": [
+      "llvm_ir_artifact_index",
+      "exact_utf8_source"
+    ]
+  },
+  "indexing": "All indexes are zero-based. A JSONL row index is its zero-based line number. Null artifact indices mean that stage did not produce that artifact.",
+  "artifact_kinds": [
+    "llvm_ir",
+    "llvm_bitcode",
+    "canonical_llvm_ir",
+    "ptx",
+    "cubin"
+  ],
+  "stage_kinds": [
+    "all",
+    "declaration_canonicalization",
+    "backend_codegen",
+    "ptx_assembly"
+  ],
+  "capture_modes": [
+    "primary_candidate",
+    "primary_full_catalog",
+    "auxiliary_typed",
+    "auxiliary_inline"
+  ],
+  "evidence_files": [
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-blackwell-ldmatrix.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-clc.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-cluster-barrier.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-cluster-memory.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-cluster-sreg.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-cp-async-mbarrier.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-cp-async.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-debug-control.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-elect.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-execution-control.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-extended-minmax.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-f32x2.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-integer-minmax.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-mbarrier-basic.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-mbarrier-extended.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-packed-conversion-fp8-f16x2.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-packed-conversion-fp8.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-prmt.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-register-mma-ampere-float.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-register-mma-b1.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-register-mma-f8f6f4-f16.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-register-mma-f8f6f4-f32.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-register-mma-fp8.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-register-mma-int4-m16.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-register-mma-int4-m8.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-register-mma-int8-m8.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-register-mma-int8.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-register-mma-mxf8f6f4-f32.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-register-mma.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-scalar-arithmetic.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-scalar-conversion.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-scalar-math.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-sparse-mma-fp8.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-sparse-mma-int8-m16n8k64.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-sparse-mma-int8.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-sparse-mma-ordered-ampere-float.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-sparse-mma-ordered-f8f6f4-f16.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-sparse-mma-ordered-f8f6f4-f32.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-sparse-mma-ordered-int4-m16n8k128.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-sparse-mma-ordered-int4-m16n8k64.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-sparse-mma-ordered-int8-m16n8k64.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-sparse-mma-ordered-int8.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-sparse-mma-standard-int4.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-special-registers.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-stmatrix.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-tcgen05-control.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-tcgen05-cp.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-tcgen05-ld.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-tcgen05-ldst-offset.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-tcgen05-mma.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-tcgen05-st.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-tcgen05.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-threadfence.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-tma-descriptor-control.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-tma-reduce.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-tma.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-wgmma-control.json",
+    "intrinsics/evidence/rust-llvm-23.1.3-aab11ee0.json"
+  ],
+  "original_profile_rename": {
+    "from": "rust-llvm-23.1.0-16696adc",
+    "to": "rust-llvm-23.1.3-aab11ee0"
+  },
+  "ledger_digest_recipe": "For each stage proof, dereference capture -> artifact index -> SHA-256. Sort triples (intrinsic_id, artifact_kind, SHA-256); SHA256 of concatenated UTF-8 lines \"{intrinsic_id} {artifact_kind} {sha256}\\n\" is ledger_sha256.",
+  "original_paths": {
+    "validation_root": "/tmp/cudaoxide-attr-20261011-validation",
+    "candidate_run_root": "/tmp/cudaoxide-intrinsics-rebaseline-20261011",
+    "primary_candidate": {
+      "original_prefix": "{candidate_run_root}/target/intrinsics/probes/{id}.candidate",
+      "suffixes": [
+        ".ll",
+        ".bc",
+        ".canonical.ll",
+        ".ptx",
+        ".cubin"
+      ],
+      "retained_prefix": "{validation_root}/intrinsics-primary-refresh/{id}/{codegen_gpu}-{ptx_without_plus}/{id}.candidate"
+    },
+    "primary_full_catalog": {
+      "render_prefix": "{validation_root}/intrinsics-primary-refresh/{id}/full-catalog-rendered/",
+      "render_names": [
+        "source.ll",
+        "{id}.bc",
+        "{id}.canonical.ll"
+      ],
+      "output_prefix": "{validation_root}/intrinsics-primary-refresh/{id}/{terminal_gpu_or_codegen_gpu}-{ptx_without_plus}/full-catalog/output",
+      "output_suffixes": [
+        ".ptx",
+        ".cubin"
+      ]
+    },
+    "auxiliary_typed": {
+      "prefix": "{validation_root}/auxiliary-typed/{id}.{stage_kind}{target_suffix}/{id}",
+      "target_suffix": "empty for declaration_canonicalization; otherwise .{codegen_gpu}.{ptx_without_plus}",
+      "suffixes": [
+        ".ll",
+        ".bc",
+        ".canonical.ll",
+        ".ptx",
+        ".cubin"
+      ]
+    },
+    "auxiliary_inline": {
+      "prefix": "{validation_root}/auxiliary-inline/{id}/",
+      "names": [
+        "source.ll",
+        null,
+        null,
+        "output.ptx",
+        "output.cubin"
+      ]
+    }
+  },
+  "compiler_commands": {
+    "llvm-as": [
+      "{llvm-as}",
+      "{original_llvm_ir_path}",
+      "-o",
+      "{original_llvm_bitcode_path}"
+    ],
+    "llvm-dis": [
+      "{llvm-dis}",
+      "{original_llvm_bitcode_path}",
+      "-o",
+      "{original_canonical_llvm_ir_path}"
+    ],
+    "llc": [
+      "{llc}",
+      "{original_llvm_ir_path}",
+      "-march=nvptx64",
+      "-mcpu={codegen_gpu}",
+      "-mattr={ptx_feature}",
+      "-o",
+      "{original_ptx_path}"
+    ],
+    "ptxas": [
+      "{ptxas}",
+      "-arch={terminal_gpu}",
+      "{original_ptx_path}",
+      "-o",
+      "{original_cubin_path}"
+    ]
+  },
+  "validation": {
+    "declarations": "Original crates/cuda-intrinsics-gen/src/probe.rs::assert_intrinsic_declaration_canonicalizes, including imported attribute checks.",
+    "ptx": "Original crates/cuda-intrinsics-gen/src/probe.rs::validate_probe_instructions, including exact pure instructions and selector checks.",
+    "capture_scaffolding": "Candidate CLI where supported; a temporary wrapper called original render::render_probe and probe validators for full-catalog fallback and auxiliary checks. The wrapper is not required to reproduce compilation: primary sources derive exactly from committed probes; every auxiliary source is retained here.",
+    "path_sensitive_artifacts": "llvm-as receives the original source path without a source_filename override; llvm-dis receives the original bitcode path. ModuleID/source_filename therefore affect recorded canonical IR and bitcode hashes. Restore original paths for byte-for-byte hash reproduction; use other paths for equivalent validation."
+  },
+  "extraction_commands": {
+    "checkout": [
+      "git",
+      "clone",
+      "https://github.com/rust-lang/llvm-project.git",
+      "{LLVM_SRC}"
+    ],
+    "revision": [
+      "git",
+      "-C",
+      "{LLVM_SRC}",
+      "checkout",
+      "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019"
+    ],
+    "configure": [
+      "cmake",
+      "-S",
+      "{LLVM_SRC}/llvm",
+      "-B",
+      "{LLVM_BUILD}",
+      "-G",
+      "Unix Makefiles",
+      "-DCMAKE_BUILD_TYPE=Release",
+      "-DLLVM_TARGETS_TO_BUILD=NVPTX",
+      "-DLLVM_ENABLE_PROJECTS=",
+      "-DLLVM_INCLUDE_TESTS=OFF",
+      "-DLLVM_INCLUDE_BENCHMARKS=OFF",
+      "-DLLVM_INCLUDE_EXAMPLES=OFF"
+    ],
+    "build": [
+      "cmake",
+      "--build",
+      "{LLVM_BUILD}",
+      "--target",
+      "llvm-tblgen",
+      "-j8"
+    ],
+    "intrinsics_dump": [
+      "{llvm-tblgen}",
+      "--dump-json",
+      "-I",
+      "{LLVM_SRC}/llvm/include",
+      "{LLVM_SRC}/llvm/include/llvm/IR/Intrinsics.td",
+      "-o",
+      "{intrinsics.json}"
+    ],
+    "nvptx_dump": [
+      "{llvm-tblgen}",
+      "--dump-json",
+      "-I",
+      "{LLVM_SRC}/llvm/include",
+      "-I",
+      "{LLVM_SRC}/llvm/lib/Target/NVPTX",
+      "{LLVM_SRC}/llvm/lib/Target/NVPTX/NVPTX.td",
+      "-o",
+      "{nvptx.json}"
+    ],
+    "normalize": [
+      "cargo",
+      "run",
+      "-p",
+      "cuda-intrinsics-gen",
+      "--",
+      "extract",
+      "--intrinsics-json",
+      "{intrinsics.json}",
+      "--nvptx-json",
+      "{nvptx.json}"
+    ]
+  },
+  "capture_checkout_commands": [
+    [
+      "git",
+      "clone",
+      "--shared",
+      "--no-checkout",
+      "/home/nihalp/prod/llvm-project",
+      "/tmp/cudaoxide-intrinsics-llvm-20261011"
+    ],
+    [
+      "git",
+      "-C",
+      "/tmp/cudaoxide-intrinsics-llvm-20261011",
+      "fetch",
+      "--depth=1",
+      "https://github.com/rust-lang/llvm-project.git",
+      "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019"
+    ],
+    [
+      "git",
+      "-C",
+      "/tmp/cudaoxide-intrinsics-llvm-20261011",
+      "checkout",
+      "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019"
+    ]
+  ],
+  "capture_extraction_paths": {
+    "LLVM_SRC": "/tmp/cudaoxide-intrinsics-llvm-20261011",
+    "LLVM_BUILD": "/tmp/cudaoxide-intrinsics-tblgen-build-20261011",
+    "intrinsics.json": "/tmp/cudaoxide-attr-20261011-validation/intrinsics-new-tblgen.json",
+    "nvptx.json": "/tmp/cudaoxide-attr-20261011-validation/intrinsics-new-nvptx-tblgen.json"
+  },
+  "checkout_note": "capture_checkout_commands records the local shared-checkout/fetch procedure; extraction_commands.checkout is a normalized public reproduction alternative. The configured generator and flags, compiler command argument order, and dump flags are the recorded capture settings.",
+  "table_hashes": {
+    "artifacts.jsonl": {
+      "sha256": "1f8b4b89f31500306c3db1cb1e0e8a665411b4df1bc68e08f3fb2781a0fccb11",
+      "bytes": 359939
+    },
+    "captures.jsonl": {
+      "sha256": "a0c3cc1e541399d2148fc1628ed1a738b8000a365503ac6c24c820d40fb0fe2d",
+      "bytes": 302046
+    },
+    "stages.jsonl": {
+      "sha256": "a399a1c3b5d7443631f60197cfe64201006a297701b6dbebb43b91d887462ef8",
+      "bytes": 107285
+    },
+    "inputs.jsonl": {
+      "sha256": "e42c4045df2a5113f3aee5e3ef560856f2ed73a4e5b11f1a48d0b76b1e7d6dc2",
+      "bytes": 112765
+    }
+  }
+}

@@ -385,6 +385,102 @@ fn test_mir_func_verify() {
     );
 }
 
+/// Function attributes must remain parseable without leaking their indentation
+/// into the function body or later operations.
+#[test]
+fn function_attributes_print_and_parse_with_scoped_indentation() {
+    use pliron::{
+        builtin::op_interfaces::SymbolOpInterface,
+        linked_list::ContainsLinkedList,
+        parsable::parse_from_str,
+        printable::{Printable, State},
+    };
+
+    let mut ctx = Context::new();
+    dialect_mir::register(&mut ctx);
+    let ty = FunctionType::get(&ctx, vec![], vec![]);
+    let op = Operation::new(
+        &mut ctx,
+        MirFuncOp::get_concrete_op_info(),
+        vec![],
+        vec![],
+        vec![],
+        1,
+    );
+    let function = MirFuncOp::new(&mut ctx, op, TypeAttr::new(ty.into()));
+    function.set_symbol_name(&mut ctx, "roundtrip".try_into().unwrap());
+    op.deref_mut(&ctx).attributes.set(
+        "note".try_into().unwrap(),
+        StringAttr::new("quoted \"text\"\nnext line\\tail".into()),
+    );
+    let entry = BasicBlock::new(&mut ctx, None, vec![]);
+    entry.insert_at_back(op.deref(&ctx).get_region(0), &ctx);
+    let return_op = Operation::new(
+        &mut ctx,
+        dialect_mir::ops::MirReturnOp::get_concrete_op_info(),
+        vec![],
+        vec![],
+        vec![],
+        0,
+    );
+    return_op.insert_at_back(entry, &ctx);
+    op.verify(&ctx).unwrap();
+    let state = State::default();
+    state.set_indent_width(4);
+    let printed = function.print(&ctx, &state).to_string();
+    assert_eq!(state.current_indent(), 0);
+    assert!(printed.contains("\n    ["), "{printed}");
+
+    let mut parsed_ctx = Context::new();
+    dialect_mir::register(&mut parsed_ctx);
+    let parsed = parse_from_str(Operation::top_level_parser(), &mut parsed_ctx, &printed)
+        .expect("printed function attributes must parse");
+    assert_eq!(parsed.deref(&parsed_ctx).num_regions(), 1);
+    assert!(
+        parsed
+            .deref(&parsed_ctx)
+            .get_region(0)
+            .deref(&parsed_ctx)
+            .get_head()
+            .is_some()
+    );
+    assert_eq!(
+        parsed
+            .deref(&parsed_ctx)
+            .attributes
+            .get::<StringAttr>(&"note".try_into().unwrap()),
+        op.deref(&ctx)
+            .attributes
+            .get::<StringAttr>(&"note".try_into().unwrap()),
+    );
+    parsed
+        .verify(&parsed_ctx)
+        .expect("parsed function must verify");
+}
+
+/// Parsing a declaration supplies its empty body once; printing it without
+/// extra attributes must still produce a valid function on the next parse.
+#[test]
+fn function_declaration_without_attributes_round_trips() {
+    use pliron::{parsable::parse_from_str, printable::Printable};
+
+    let mut ctx = Context::new();
+    dialect_mir::register(&mut ctx);
+    let ty = FunctionType::get(&ctx, vec![], vec![]);
+    let text = format!("mir.func @declaration : {} []", ty.disp(&ctx));
+    let parsed = parse_from_str(Operation::top_level_parser(), &mut ctx, &text).unwrap();
+    assert_eq!(parsed.deref(&ctx).num_regions(), 1);
+    parsed.verify(&ctx).unwrap();
+    let printed = parsed.disp(&ctx).to_string();
+
+    let mut parsed_ctx = Context::new();
+    dialect_mir::register(&mut parsed_ctx);
+    let reparsed = parse_from_str(Operation::top_level_parser(), &mut parsed_ctx, &printed)
+        .expect("function without extra attributes must parse");
+    assert_eq!(reparsed.deref(&parsed_ctx).num_regions(), 1);
+    reparsed.verify(&parsed_ctx).unwrap();
+}
+
 #[test]
 fn test_mir_assign_verify() {
     let mut ctx = Context::new();
@@ -510,43 +606,50 @@ fn test_mir_func_reference_param_validity_verify() {
     };
 
     let valid = make_func(&mut ctx, true);
-    valid.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr(4));
-    valid.set_reference_param_validity(&mut ctx, 1, ReferenceParamValidityAttr(4));
+    valid.set_reference_param_validity(
+        &mut ctx,
+        0,
+        ReferenceParamValidityAttr {
+            dereferenceable_bytes: 4,
+            ..ReferenceParamValidityAttr::new(4)
+        },
+    );
+    valid.set_reference_param_validity(&mut ctx, 1, ReferenceParamValidityAttr::new(4));
     assert!(
         valid.verify(&ctx).is_ok(),
         "Rust reference facts on kernel source arguments are valid"
     );
 
     let non_kernel = make_func(&mut ctx, false);
-    non_kernel.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr(4));
+    non_kernel.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr::new(4));
     assert!(
         non_kernel.verify(&ctx).is_err(),
         "reference validity is kernel-entry-only"
     );
 
     let raw = make_func(&mut ctx, true);
-    raw.set_reference_param_validity(&mut ctx, 2, ReferenceParamValidityAttr(4));
+    raw.set_reference_param_validity(&mut ctx, 2, ReferenceParamValidityAttr::new(4));
     assert!(
         raw.verify(&ctx).is_err(),
         "raw pointers cannot carry Rust-reference validity"
     );
 
     let scalar = make_func(&mut ctx, true);
-    scalar.set_reference_param_validity(&mut ctx, 3, ReferenceParamValidityAttr(4));
+    scalar.set_reference_param_validity(&mut ctx, 3, ReferenceParamValidityAttr::new(4));
     assert!(
         scalar.verify(&ctx).is_err(),
         "non-pointer parameters cannot carry Rust-reference validity"
     );
 
     let bad_alignment = make_func(&mut ctx, true);
-    bad_alignment.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr(3));
+    bad_alignment.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr::new(3));
     assert!(
         bad_alignment.verify(&ctx).is_err(),
         "alignment must be a non-zero power of two"
     );
 
     let out_of_range = make_func(&mut ctx, true);
-    out_of_range.set_reference_param_validity(&mut ctx, 9, ReferenceParamValidityAttr(4));
+    out_of_range.set_reference_param_validity(&mut ctx, 9, ReferenceParamValidityAttr::new(4));
     assert!(
         out_of_range.verify(&ctx).is_err(),
         "source argument index must be in range"

@@ -24,44 +24,75 @@ pub(super) fn make_padding_type(ctx: &mut Context, size: u64) -> TypeHandle {
 /// Storage for `size` bytes of enum filler at byte `offset`: bytes the payload
 /// occupies that no typed slot claims.
 ///
-/// `[N x i8]` is byte-exact but costs one leaf *per byte* everywhere a payload
-/// value is built, merged, or taken apart. `Option<&[T]>` is the shape that
-/// shows it: the niche carrier claims the pointer, the length is left to an
-/// 8-byte filler, and building the value then decomposes that length into
-/// eight `i8` `insertvalue`s, every block merge carries eight `phi i8`, and
-/// reading it back is a chain of `prmt` byte permutes with the aggregate
-/// spilled to `.local` in between. Measured on sm_86, it costs the *pointer*
-/// too: it rides through the same byte soup, `InferAddressSpaces` can no
-/// longer follow it, and the access lands in the generic window (`ld.v2.b64`)
-/// instead of `ld.global.v2.b64`.
+/// The filler is a vehicle, not a claim. Nothing reads it field-wise: a
+/// payload without a typed slot round-trips through memory as a whole
+/// aggregate, and both ends of that round trip are byte-exact. What the
+/// filler's type does decide is the leaf count of the enum struct, where a
+/// leaf is one scalar field left after every array and nested struct is
+/// flattened.
 ///
-/// One integer of the same width is the same bytes in one leaf. It is only
-/// legal where it moves nothing:
+/// The leaf count matters because of `scalarize_block_args`. pliron's
+/// `mem2reg` turns an enum local into a block argument of the whole struct,
+/// and that pass splits such an argument into scalar block arguments only
+/// while the struct has at most `MAX_LEAVES` (16) leaves: `collect_leaves`
+/// refuses the 17th leaf and any array over 16 elements. A `[N x i8]` filler
+/// costs one leaf per byte. `Option<&[T]>` leaves its length to an 8-byte
+/// filler, and as `[8 x i8]` that length was eight `i8` `insertvalue`s, eight
+/// `phi i8` at every merge, and a chain of `prmt` byte permutes with the
+/// aggregate spilled to `.local` in between. `Option<([u64; 2], &[T])>`
+/// stored as `{ [16 x i8], ptr, i64 }` is 18 leaves, so its `Some`/`None`
+/// join stays one aggregate phi; `opt` cannot take that apart,
+/// `InferAddressSpaces` cannot follow the pointer through the `extractvalue`,
+/// and the access lands in the generic window (`ld.v2.b64`) instead of
+/// `ld.global.v2.b64`. Stored as `{ [2 x i64], ptr, i64 }` it is 4 leaves,
+/// the join becomes scalar phis, and the pointer keeps its address space.
 ///
-/// - the width is 2, 4 or 8 bytes, so the integer is byte-faithful (a multiple
-///   of 8 bits, hence no padding of its own). 16 is deliberately excluded:
-///   `i128` is legal LLVM but lowers to register pairs on NVPTX, so widening
-///   that far trades one win for another cost and wants its own measurement;
-/// - `offset` is a multiple of the width, so LLVM inserts no gap ahead of the
-///   field and every later field keeps its byte offset;
-/// - the width does not exceed the enum's alignment, or the struct's natural
-///   alignment would rise above rustc's.
+/// The rule: take the widest width among 8, 4 and 2 bytes that divides both
+/// `size` and `offset` and does not exceed the enum's alignment; the filler
+/// is that integer when it covers `size` alone, else an array of it. rustc
+/// types its own padding by the same rule (`type_padding_filler`: the largest
+/// of i64, i32 and i16 whose alignment fits). Each condition keeps the layout
+/// fixed:
 ///
-/// Anything else keeps the byte array. The filler is a *vehicle*, not a claim:
-/// nothing reads it field-wise, because a payload that has no typed slot
-/// round-trips through memory as a whole aggregate, and both ends of that
-/// round trip are byte-exact. `build_enum_slot_map`'s own size and alignment
-/// assertions — hard errors, not debug checks — backstop all three conditions.
+/// - the width divides `size`, so the array covers the same bytes;
+/// - `offset` is a multiple of the width, so the natural struct walk inserts
+///   no gap ahead of the field and every later field keeps its byte offset;
+/// - the width does not exceed the enum's alignment, so the struct's natural
+///   alignment never rises above rustc's.
+///
+/// `i128` is left out: it would impose 16-byte natural alignment, where
+/// `[2 x i64]` carries the same 16 bytes at alignment 8.
+///
+/// One integer word may cover payload bytes plus Rust padding. Those padding
+/// bits are read as undef, the same assumption the 8-byte rule already makes
+/// when one `i64` covers a small field and its tail padding.
+///
+/// What stays a byte array: a run no width divides, such as the 23 bytes at
+/// offset 1 behind a `bool` carrier in `Option<(bool, [u64; 2])>`, and every
+/// filler of a byte-aligned enum. What still exceeds the leaf budget even when
+/// typed: a filler above 14 i64 words (112 bytes) beside a pointer and a
+/// length, since 14 + 2 is the last count that fits. Both keep an aggregate
+/// phi and the generic access that comes with it; the `bool` carrier case
+/// also keeps its `.local` spill. The budget itself is the follow-up.
+/// `build_enum_slot_map`'s size and alignment checks are hard errors and
+/// backstop every case.
 pub(super) fn make_enum_filler_type(
     ctx: &mut Context,
     offset: u64,
     size: u64,
     abi_align: u64,
 ) -> TypeHandle {
-    if matches!(size, 2 | 4 | 8) && offset.is_multiple_of(size) && size <= abi_align.max(1) {
-        let width = u32::try_from(size * 8).expect("size is at most 8, so width is at most 64");
-        return IntegerType::get(ctx, width, Signedness::Signless).into();
+    for width in [8u64, 4, 2] {
+        if size.is_multiple_of(width) && offset.is_multiple_of(width) && width <= abi_align {
+            let bits = u32::try_from(width * 8).expect("width is at most 8, so at most 64 bits");
+            let int_ty: TypeHandle = IntegerType::get(ctx, bits, Signedness::Signless).into();
+            if size == width {
+                return int_ty;
+            }
+            return llvm_types::ArrayType::get(ctx, int_ty, size / width).into();
+        }
     }
+
     make_padding_type(ctx, size)
 }
 

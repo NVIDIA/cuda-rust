@@ -223,6 +223,7 @@ convenience. The table is the whole `pub use cuda_macros::{...}` list in
 | `#[pure]`                | Mark as pure (no side effects)                                                         |
 | `#[readonly]`            | Mark as read-only                                                                      |
 | `#[constant]`            | Place a `ConstantMemory<T>` static in constant memory, plus a host `set_<name>` setter |
+| `#[tile_export]`         | Export a device function to cuTile through a tile library                             |
 | `gpu_printf!`            | Device-side printf                                                                     |
 | `ptx_asm!`               | Unsafe CUDA inline PTX                                                                 |
 

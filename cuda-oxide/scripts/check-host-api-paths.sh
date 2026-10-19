@@ -37,7 +37,7 @@ GIT_ROOT="$(git rev-parse --show-toplevel)"
 # Files whose host-API spellings a reader copies. `git ls-files` paths are
 # repository-relative; grep them from the git root.
 mapfile -t files < <(git -C "${GIT_ROOT}" ls-files \
-    README.md CONTRIBUTING.md \
+    README.md cuda-oxide/README.md CONTRIBUTING.md \
     'cuda-oxide/cuda-oxide-book/*.md' 'cuda-oxide/cuda-oxide-book/**/*.md' \
     'cuda-oxide/crates/*/README.md' \
     'cuda-oxide/crates/rustc-codegen-cuda/examples/*/README.md' \

@@ -14,6 +14,9 @@
 //! - Tcgen05SmemDescriptor / Tcgen05InstructionDescriptor builders
 //! - tcgen05_mma_ws_f16()
 //! - tcgen05_cp_smem_to_tmem() / tcgen05_ld_16x256b_pure()
+//! - TmemGuard::alloc() / dealloc() and alloc_by(3) / dealloc_by(3) in a
+//!   (32, 4, 1) block, one TMEM allocation per kernel, selecting the warp by
+//!   block-linear thread id
 //!
 //! **cta_group::2 (CTA pairs):**
 //! - tcgen05_alloc_cg2() / tcgen05_dealloc_cg2()
@@ -35,10 +38,11 @@ use cuda_device::barrier::Barrier;
 use cuda_device::shared::{SharedArray, cvta_generic_to_shared_offset};
 use cuda_device::tcgen05::{
     self, Tcgen05AccumulatorType, Tcgen05ElementType, Tcgen05InstructionDescriptor,
-    Tcgen05MmaShape, Tcgen05SmemDescriptor, Tcgen05SwizzleMode, tcgen05_alloc, tcgen05_alloc_cg2,
-    tcgen05_commit, tcgen05_commit_multicast_cg2, tcgen05_cp_smem_to_tmem, tcgen05_dealloc,
-    tcgen05_dealloc_cg2, tcgen05_fence_after_thread_sync, tcgen05_fence_before_thread_sync,
-    tcgen05_ld_16x256b_pure, tcgen05_load_wait, tcgen05_mma_f16_cg2, tcgen05_mma_ws_f16,
+    Tcgen05MmaShape, Tcgen05SmemDescriptor, Tcgen05SwizzleMode, TmemGuard, TmemUninit,
+    tcgen05_alloc, tcgen05_alloc_cg2, tcgen05_commit, tcgen05_commit_multicast_cg2,
+    tcgen05_cp_smem_to_tmem, tcgen05_dealloc, tcgen05_dealloc_cg2, tcgen05_fence_after_thread_sync,
+    tcgen05_fence_before_thread_sync, tcgen05_ld_16x256b_pure, tcgen05_load_wait,
+    tcgen05_mma_f16_cg2, tcgen05_mma_ws_f16,
 };
 use cuda_device::{CuSimd, DisjointSlice, cluster, cluster_launch, kernel, thread, warp};
 use cuda_host::cuda_module;
@@ -116,6 +120,67 @@ mod kernels {
             if warp_id == 0 && tmem_addr != 0xDEADBEEF {
                 tcgen05_dealloc(tmem_addr, 32);
             }
+        }
+    }
+
+    /// `TmemGuard::alloc()` and `dealloc()` in a (32, 4, 1) block.
+    ///
+    /// Every thread calls both. The guard selects the allocating warp by
+    /// block-linear thread id, so only warp 0, the y == 0 row, runs
+    /// `tcgen05.alloc` and `tcgen05.dealloc`; under a `threadIdx.x / 32`
+    /// selection all four rows would allocate. Thread (0, 0, 0) stores the
+    /// TMEM address to `output[0]`.
+    ///
+    /// The kernel allocates once. The CUTLASS TMEM allocator requires
+    /// repeated allocations in one CTA to come from the same warp, so the
+    /// warp 3 case lives in its own kernel, `tmem_guard_2d_warp3_test`.
+    #[kernel]
+    pub unsafe fn tmem_guard_2d_test(mut output: DisjointSlice<u32>) {
+        static mut TMEM_SLOT: SharedArray<u32, 1, 4> = SharedArray::UNINIT;
+
+        unsafe {
+            let first = thread::threadIdx_x() == 0 && thread::threadIdx_y() == 0;
+            let slot = &raw mut TMEM_SLOT as *mut u32;
+
+            if first {
+                *slot = 0xDEADBEEF;
+            }
+            thread::sync_threads();
+
+            // Block-linear warp 0 allocates and frees.
+            let tmem = TmemGuard::<TmemUninit, 32>::from_static(slot).alloc();
+            if first {
+                *output.get_unchecked_mut(0) = tmem.raw_address();
+            }
+            let _done = tmem.dealloc();
+        }
+    }
+
+    /// `TmemGuard::alloc_by(3)` and `dealloc_by(3)` in a (32, 4, 1) block.
+    ///
+    /// The same block as `tmem_guard_2d_test`, with the job handed to
+    /// block-linear warp 3, the y == 3 row. Thread (0, 0, 0) stores the TMEM
+    /// address to `output[1]`, next to the warp 0 result. One allocation per
+    /// kernel, for the reason given on `tmem_guard_2d_test`.
+    #[kernel]
+    pub unsafe fn tmem_guard_2d_warp3_test(mut output: DisjointSlice<u32>) {
+        static mut TMEM_SLOT: SharedArray<u32, 1, 4> = SharedArray::UNINIT;
+
+        unsafe {
+            let first = thread::threadIdx_x() == 0 && thread::threadIdx_y() == 0;
+            let slot = &raw mut TMEM_SLOT as *mut u32;
+
+            if first {
+                *slot = 0xDEADBEEF;
+            }
+            thread::sync_threads();
+
+            // Block-linear warp 3 allocates and frees.
+            let tmem = TmemGuard::<TmemUninit, 32>::from_static(slot).alloc_by(3);
+            if first {
+                *output.get_unchecked_mut(1) = tmem.raw_address();
+            }
+            let _done = tmem.dealloc_by(3);
         }
     }
 
@@ -867,6 +932,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     run_tcgen05_alloc_test(&stream, &module)?;
     run_tcgen05_commit_test(&stream, &module)?;
     run_tcgen05_mma_minimal_test(&stream, &module)?;
+    run_tmem_guard_2d_test(&stream, &module)?;
 
     println!("\n--- CTA Pair (cta_group::2) Tests ---\n");
     run_tcgen05_alloc_cg2_test(&stream, &module)?;
@@ -995,6 +1061,43 @@ fn run_tcgen05_alloc_test(
             host_output[0]
         );
     }
+
+    Ok(())
+}
+
+fn run_tmem_guard_2d_test(
+    stream: &Arc<CudaStream>,
+    module: &kernels::LoadedModule,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("--- Test: TmemGuard in a (32, 4, 1) block ---\n");
+
+    let mut output = DeviceBuffer::<u32>::zeroed(stream, 2)?;
+    let cfg = LaunchConfig {
+        block_dim: (32, 4, 1),
+        grid_dim: (1, 1, 1),
+        shared_mem_bytes: 0,
+    };
+
+    // One TMEM allocation per kernel: warp 0 in the first launch, warp 3 in
+    // the second. Both kernels write into `output`, at index 0 and index 1.
+    println!("Launching tmem_guard_2d_test kernel...");
+    unsafe { module.tmem_guard_2d_test((stream).as_ref(), cfg, &mut output) }?;
+    println!("Launching tmem_guard_2d_warp3_test kernel...");
+    unsafe { module.tmem_guard_2d_warp3_test((stream).as_ref(), cfg, &mut output) }?;
+
+    stream.synchronize()?;
+
+    let host_output = output.to_host_vec(stream)?;
+    println!("TMEM address (warp 0): 0x{:08x}", host_output[0]);
+    println!("TMEM address (warp 3): 0x{:08x}", host_output[1]);
+
+    // A slot that still holds the sentinel means the selected warp never ran
+    // tcgen05.alloc. This is the 2D block the guard's warp selection exists for,
+    // so it is a failure, not a note.
+    if host_output.contains(&0xDEADBEEF) {
+        return Err("TmemGuard left a TMEM slot holding the sentinel in a (32, 4, 1) block".into());
+    }
+    println!("✓ TmemGuard allocated and freed from block-linear warps 0 and 3, one kernel each\n");
 
     Ok(())
 }

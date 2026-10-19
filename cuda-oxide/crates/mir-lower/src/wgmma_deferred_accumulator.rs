@@ -89,7 +89,6 @@ use pliron::{
         rewriter::{IRRewriter, Rewriter},
     },
     linked_list::ContainsLinkedList,
-    location::Located,
     op::{Op, op_cast},
     operation::Operation,
     opts::simplify_cfg::remove_blocks_inside_op,
@@ -1309,7 +1308,7 @@ fn apply_value_plan(
     row_type: TypeHandle,
     element_type: TypeHandle,
 ) {
-    let loc = fence.deref(ctx).loc();
+    let loc = fence.deref(ctx).loc().clone();
     let rows = linear_accumulator_rows(kind);
     let accumulator_count = rows * ACCUMULATOR_COLUMNS;
     debug_assert!(
@@ -1411,7 +1410,7 @@ fn apply_pipelined_counted_loop_plan(ctx: &mut Context, plan: PipelinedCountedLo
     );
     debug_assert_eq!(exit.deref(ctx).get_num_arguments(), 0);
 
-    let loc = fence.deref(ctx).loc();
+    let loc = fence.deref(ctx).loc().clone();
     let mut element_pointers = Vec::with_capacity(slot_count);
     let mut all_accumulator_values = Vec::with_capacity(slot_count * ACCUMULATOR_LEN);
     for slot in 0..slot_count {
@@ -1501,7 +1500,7 @@ fn apply_counted_loop_plan(ctx: &mut Context, plan: CountedLoopPlan) {
     );
     debug_assert_eq!(exit.deref(ctx).get_num_arguments(), 0);
 
-    let loc = fence.deref(ctx).loc();
+    let loc = fence.deref(ctx).loc().clone();
     let (element_pointers, accumulator_values) = load_accumulator_values_before(
         ctx,
         preheader_terminator,
@@ -1570,7 +1569,7 @@ fn apply_pointer_fallback(
     descriptors: Vec<Value>,
 ) {
     let group = WgmmaMmaGroupM64N64K16F32Bf16Op::build(ctx, accumulator, descriptors);
-    group.deref_mut(ctx).set_loc(fence.deref(ctx).loc());
+    group.deref_mut(ctx).set_loc(fence.deref(ctx).loc().clone());
     group.insert_before(ctx, wait);
     erase_original_sequence(ctx, fence, mmas, commit, wait);
 }
@@ -2124,7 +2123,7 @@ fn apply_pipeline_plan(ctx: &mut Context, plan: PipelinePlan) {
     let final_wait = *waits
         .last()
         .expect("pipeline plan has a final wait_group<0>");
-    let loc = fence.deref(ctx).loc();
+    let loc = fence.deref(ctx).loc().clone();
     let mut slot_types = Vec::with_capacity(accumulators.len());
     let mut all_accumulator_values = Vec::with_capacity(accumulators.len() * ACCUMULATOR_LEN);
 

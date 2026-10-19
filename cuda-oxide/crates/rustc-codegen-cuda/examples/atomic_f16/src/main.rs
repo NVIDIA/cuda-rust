@@ -19,8 +19,12 @@ use cuda_host::cuda_module;
 mod kernels {
     use super::*;
 
+    // Atomic storage arrives as a raw writable pointer: &[f16] would promise
+    // immutable elements even after a cast to an atomic.
+    // The unsafe launch keeps storage alive and excludes non-atomic access.
+
     #[kernel]
-    pub fn device_hist_f16(hist: &[f16], mut old: DisjointSlice<f16>, n: u32, nbins: u32) {
+    pub fn device_hist_f16(hist: *mut f16, mut old: DisjointSlice<f16>, n: u32, nbins: u32) {
         let gid = thread::index_1d();
         let i = gid.get();
         if i >= n as usize {
@@ -28,7 +32,7 @@ mod kernels {
         }
 
         let bin = i % nbins as usize;
-        let cell = unsafe { &*(hist.as_ptr().add(bin) as *const DeviceAtomicF16) };
+        let cell = unsafe { DeviceAtomicF16::from_ptr(hist.add(bin)) };
         let prev = cell.fetch_add(1.0f16, AtomicOrdering::Relaxed);
         if let Some(out_elem) = old.get_mut(gid) {
             *out_elem = prev;
@@ -36,10 +40,10 @@ mod kernels {
     }
 
     #[kernel]
-    pub fn block_hist_f16(hist: &[f16], mut old: DisjointSlice<f16>) {
+    pub fn block_hist_f16(hist: *mut f16, mut old: DisjointSlice<f16>) {
         let gid = thread::index_1d();
         let block = thread::blockIdx_x() as usize;
-        let cell = unsafe { &*(hist.as_ptr().add(block) as *const BlockAtomicF16) };
+        let cell = unsafe { BlockAtomicF16::from_ptr(hist.add(block)) };
         let prev = cell.fetch_add(1.0f16, AtomicOrdering::Relaxed);
         if let Some(out_elem) = old.get_mut(gid) {
             *out_elem = prev;
@@ -47,9 +51,9 @@ mod kernels {
     }
 
     #[kernel]
-    pub fn device_sub_f16(counter: &[f16], mut old: DisjointSlice<f16>) {
+    pub fn device_sub_f16(counter: *mut f16, mut old: DisjointSlice<f16>) {
         let gid = thread::index_1d();
-        let cell = unsafe { &*(counter.as_ptr() as *const DeviceAtomicF16) };
+        let cell = unsafe { DeviceAtomicF16::from_ptr(counter) };
         let prev = cell.fetch_sub(1.0f16, AtomicOrdering::Relaxed);
         if let Some(out_elem) = old.get_mut(gid) {
             *out_elem = prev;
@@ -57,9 +61,11 @@ mod kernels {
     }
 
     #[kernel]
-    pub fn system_add_f16(counter: &[f16], mut old: DisjointSlice<f16>) {
+    pub fn system_add_f16(counter: *mut f16, mut old: DisjointSlice<f16>) {
         let gid = thread::index_1d();
-        let cell = unsafe { &*(counter.as_ptr() as *const SystemAtomicF16) };
+        // SAFETY: the live, aligned device allocation is accessed atomically
+        // only by this GPU; system scope does not require concurrent CPU access.
+        let cell = unsafe { SystemAtomicF16::from_ptr(counter) };
         let prev = cell.fetch_add(1.0f16, AtomicOrdering::Relaxed);
         if let Some(out_elem) = old.get_mut(gid) {
             *out_elem = prev;
@@ -67,13 +73,13 @@ mod kernels {
     }
 
     #[kernel]
-    pub fn device_swap_f16(cell: &[f16], vals: &[f16], mut old: DisjointSlice<f16>, n: u32) {
+    pub fn device_swap_f16(cell: *mut f16, vals: &[f16], mut old: DisjointSlice<f16>, n: u32) {
         let gid = thread::index_1d();
         let i = gid.get();
         if i >= n as usize {
             return;
         }
-        let cell = unsafe { &*(cell.as_ptr() as *const DeviceAtomicF16) };
+        let cell = unsafe { DeviceAtomicF16::from_ptr(cell) };
         let prev = cell.swap(vals[i], AtomicOrdering::Relaxed);
         if let Some(out_elem) = old.get_mut(gid) {
             *out_elem = prev;
@@ -81,19 +87,25 @@ mod kernels {
     }
 
     #[kernel]
-    pub fn device_store_load_f16(cells: &[f16], mut out: DisjointSlice<f16>, n: u32) {
+    pub fn device_store_load_f16(cells: *mut f16, mut out: DisjointSlice<f16>, n: u32) {
         let gid = thread::index_1d();
         let i = gid.get();
         if i >= n as usize {
             return;
         }
-        let cell = unsafe { &*(cells.as_ptr().add(i) as *const DeviceAtomicF16) };
+        let cell = unsafe { DeviceAtomicF16::from_ptr(cells.add(i)) };
         let seen = cell.load(AtomicOrdering::Acquire);
         cell.store(seen + 1.0f16, AtomicOrdering::Release);
         if let Some(out_elem) = out.get_mut(gid) {
             *out_elem = seen;
         }
     }
+}
+
+// Request writable-buffer authority without creating a Rust slice over the
+// device allocation. Callers keep it alive and synchronize before host reads.
+fn atomic_storage<T>(buffer: &mut DeviceBuffer<T>) -> *mut T {
+    buffer.cu_deviceptr() as *mut T
 }
 
 fn main() {
@@ -122,14 +134,15 @@ fn run_device_hist(
 ) {
     println!("--- DeviceAtomicF16 histogram: n={n}, bins={nbins} ---");
 
-    let hist = DeviceBuffer::<f16>::zeroed(stream, nbins as usize).unwrap();
+    let mut hist = DeviceBuffer::<f16>::zeroed(stream, nbins as usize).unwrap();
     let mut old = DeviceBuffer::<f16>::zeroed(stream, n as usize).unwrap();
-    // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
+    // SAFETY: buffers cover all accesses and stay alive until synchronization.
+    // Atomic storage has no concurrent non-atomic accesses.
     unsafe {
         module.device_hist_f16(
             stream,
             LaunchConfig::for_num_elems(n),
-            &hist,
+            atomic_storage(&mut hist),
             &mut old,
             n,
             nbins,
@@ -158,12 +171,20 @@ fn run_device_sub(module: &kernels::LoadedModule, stream: &cuda_core::CudaStream
     println!("--- DeviceAtomicF16 fetch_sub: n={n} ---");
 
     let initial = vec![n as f16];
-    let counter = DeviceBuffer::from_host(stream, &initial).unwrap();
+    let mut counter = DeviceBuffer::from_host(stream, &initial).unwrap();
     let mut old = DeviceBuffer::<f16>::zeroed(stream, n as usize).unwrap();
 
-    // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
-    unsafe { module.device_sub_f16(stream, LaunchConfig::for_num_elems(n), &counter, &mut old) }
-        .expect("Kernel launch failed");
+    // SAFETY: buffers cover all accesses and stay alive until synchronization.
+    // Atomic storage has no concurrent non-atomic accesses.
+    unsafe {
+        module.device_sub_f16(
+            stream,
+            LaunchConfig::for_num_elems(n),
+            atomic_storage(&mut counter),
+            &mut old,
+        )
+    }
+    .expect("Kernel launch failed");
 
     stream.synchronize().unwrap();
 
@@ -180,12 +201,20 @@ fn run_device_sub(module: &kernels::LoadedModule, stream: &cuda_core::CudaStream
 fn run_system_add(module: &kernels::LoadedModule, stream: &cuda_core::CudaStream, n: u32) {
     println!("--- SystemAtomicF16 fetch_add: n={n} ---");
 
-    let counter = DeviceBuffer::<f16>::zeroed(stream, 1).unwrap();
+    let mut counter = DeviceBuffer::<f16>::zeroed(stream, 1).unwrap();
     let mut old = DeviceBuffer::<f16>::zeroed(stream, n as usize).unwrap();
 
-    // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
-    unsafe { module.system_add_f16(stream, LaunchConfig::for_num_elems(n), &counter, &mut old) }
-        .expect("Kernel launch failed");
+    // SAFETY: buffers cover all accesses and stay alive until synchronization.
+    // Atomic storage has no concurrent non-atomic accesses.
+    unsafe {
+        module.system_add_f16(
+            stream,
+            LaunchConfig::for_num_elems(n),
+            atomic_storage(&mut counter),
+            &mut old,
+        )
+    }
+    .expect("Kernel launch failed");
 
     stream.synchronize().unwrap();
 
@@ -205,17 +234,18 @@ fn run_system_add(module: &kernels::LoadedModule, stream: &cuda_core::CudaStream
 fn run_device_swap(module: &kernels::LoadedModule, stream: &cuda_core::CudaStream, n: u32) {
     println!("--- DeviceAtomicF16 swap: n={n} ---");
 
-    let cell = DeviceBuffer::<f16>::zeroed(stream, 1).unwrap();
+    let mut cell = DeviceBuffer::<f16>::zeroed(stream, 1).unwrap();
     let host_vals: Vec<f16> = (1..=n).map(|v| v as f16).collect();
     let vals = DeviceBuffer::from_host(stream, &host_vals).unwrap();
     let mut old = DeviceBuffer::<f16>::zeroed(stream, n as usize).unwrap();
 
-    // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
+    // SAFETY: buffers cover all accesses and stay alive until synchronization.
+    // Atomic storage has no concurrent non-atomic accesses.
     unsafe {
         module.device_swap_f16(
             stream,
             LaunchConfig::for_num_elems(n),
-            &cell,
+            atomic_storage(&mut cell),
             &vals,
             &mut old,
             n,
@@ -249,12 +279,19 @@ fn run_device_store_load(module: &kernels::LoadedModule, stream: &cuda_core::Cud
     println!("--- DeviceAtomicF16 load/store: n={n} ---");
 
     let host_init: Vec<f16> = (0..n).map(|v| v as f16).collect();
-    let cells = DeviceBuffer::from_host(stream, &host_init).unwrap();
+    let mut cells = DeviceBuffer::from_host(stream, &host_init).unwrap();
     let mut out = DeviceBuffer::<f16>::zeroed(stream, n as usize).unwrap();
 
-    // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
+    // SAFETY: buffers cover all accesses and stay alive until synchronization.
+    // Atomic storage has no concurrent non-atomic accesses.
     unsafe {
-        module.device_store_load_f16(stream, LaunchConfig::for_num_elems(n), &cells, &mut out, n)
+        module.device_store_load_f16(
+            stream,
+            LaunchConfig::for_num_elems(n),
+            atomic_storage(&mut cells),
+            &mut out,
+            n,
+        )
     }
     .expect("Kernel launch failed");
 
@@ -289,7 +326,7 @@ fn run_block_hist(
         "--- BlockAtomicF16 histogram: blocks={blocks}, threads/block={threads_per_block} ---"
     );
 
-    let hist = DeviceBuffer::<f16>::zeroed(stream, blocks as usize).unwrap();
+    let mut hist = DeviceBuffer::<f16>::zeroed(stream, blocks as usize).unwrap();
     let mut old =
         DeviceBuffer::<f16>::zeroed(stream, (blocks * threads_per_block) as usize).unwrap();
     let cfg = LaunchConfig {
@@ -298,8 +335,10 @@ fn run_block_hist(
         shared_mem_bytes: 0,
     };
 
-    // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
-    unsafe { module.block_hist_f16(stream, cfg, &hist, &mut old) }.expect("Kernel launch failed");
+    // SAFETY: buffers cover all accesses and stay alive until synchronization.
+    // Atomic storage has no concurrent non-atomic accesses.
+    unsafe { module.block_hist_f16(stream, cfg, atomic_storage(&mut hist), &mut old) }
+        .expect("Kernel launch failed");
 
     stream.synchronize().unwrap();
 

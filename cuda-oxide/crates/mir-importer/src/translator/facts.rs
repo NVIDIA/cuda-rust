@@ -446,60 +446,93 @@ pub(crate) use pointer_origin::*;
 
 /// Validity facts that are safe to expose on a Rust-reference kernel parameter.
 ///
-/// Presence of this fact proves non-nullness. `pointee_alignment` is rustc's
-/// ABI alignment for the pointee represented by the physical data pointer.
-/// No aliasing, lifetime, or dereferenceability guarantee is encoded here.
+/// Presence proves non-nullness. Alignment comes from the pointee layout;
+/// aliasing and dereferenceability come only from rustc's argument ABI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ReferenceParamValidity {
     pub(crate) pointee_alignment: u64,
+    pub(crate) no_alias: bool,
+    pub(crate) dereferenceable_bytes: u64,
 }
 
-/// Return validity facts for the currently audited Rust-reference kernel scope.
+/// Return typed rustc facts for a source Rust-ABI kernel reference argument.
 ///
-/// The only accepted evidence is the typed `rustc_public` type/layout API:
+/// Match the source index before physical ABI flattening: ignored ZST arguments
+/// still occupy an `FnAbi` position. A sized reference uses its direct pointer
+/// attributes; a slice uses the first member of its scalar pair. In particular,
+/// an indirect by-value aggregate's carrier attributes never describe a Rust
+/// reference or its backing allocation.
 ///
-/// * `RigidTy::Ref` proves that the source value is a Rust reference and thus
-///   that its data pointer is non-null.
-/// * a sized pointee's `Ty::layout()` supplies its ABI alignment;
-/// * for `&[T]` / `&mut [T]`, the physical data pointer points at `T`, so the
-///   element layout supplies the alignment.
-///
-/// Other DSTs, raw pointers, ADTs such as `DisjointSlice`, and any type whose
-/// required typed layout is unavailable fail closed with no fact.
+/// `RigidTy::Ref` proves non-nullness. Sized pointee layouts and slice element
+/// layouts supply alignment. Other DSTs, raw pointers, and by-value ADTs such as
+/// `DisjointSlice` produce no fact. Unsupported reference pass modes and source
+/// argument mismatches are errors rather than guesses about the ABI mapping.
 pub(crate) fn reference_param_validity(
     ty: &rustc_public::ty::Ty,
-) -> Option<ReferenceParamValidity> {
+    fn_abi: &rustc_public::abi::FnAbi,
+    source_index: usize,
+) -> Result<Option<ReferenceParamValidity>, String> {
+    use rustc_public::abi::PassMode;
     use rustc_public::ty::{RigidTy, TyKind};
 
-    // Reuse #1186's typed pointer-origin oracle rather than independently
-    // recognizing reference provenance here. Raw pointers are therefore
-    // rejected by the same rustc_public-derived classification that mints
-    // concrete MIR pointer kinds.
-    let (pointee, origin) = pointer_origin_of_ty(ty)?;
-    if !origin.is_reference() {
-        return None;
+    let argument = fn_abi.args.get(source_index).ok_or_else(|| {
+        format!("kernel source argument index {source_index} is absent from rustc FnAbi")
+    })?;
+    if argument.ty != *ty {
+        return Err(format!(
+            "kernel source argument {source_index} type does not match rustc FnAbi"
+        ));
     }
 
-    let alignment = match pointee.kind() {
-        TyKind::RigidTy(RigidTy::Slice(element)) => {
-            let shape = element.layout().ok()?.shape();
-            if !shape.is_sized() {
-                return None;
-            }
-            shape.abi_align
-        }
+    // Reuse the typed pointer-origin oracle so reference provenance is never
+    // independently inferred from an ABI attribute or pointer-shaped carrier.
+    let Some((pointee, origin)) = pointer_origin_of_ty(ty) else {
+        return Ok(None);
+    };
+    if !origin.is_reference() {
+        return Ok(None);
+    }
+
+    let (layout_ty, is_slice) = match pointee.kind() {
+        TyKind::RigidTy(RigidTy::Slice(element)) => (element, true),
+        _ => (pointee, false),
+    };
+    let Ok(layout) = layout_ty.layout() else {
+        return Ok(None);
+    };
+    let shape = layout.shape();
+    if !shape.is_sized() || shape.abi_align == 0 || !shape.abi_align.is_power_of_two() {
+        return Ok(None);
+    }
+
+    let attrs = match (&argument.mode, is_slice) {
+        (PassMode::Direct(attrs), false) | (PassMode::Pair(attrs, _), true) => attrs,
         _ => {
-            let shape = pointee.layout().ok()?.shape();
-            if !shape.is_sized() {
-                return None;
-            }
-            shape.abi_align
+            return Err(format!(
+                "kernel reference argument {source_index} has an unsupported rustc FnAbi pass mode"
+            ));
         }
     };
-
-    (alignment != 0 && alignment.is_power_of_two()).then_some(ReferenceParamValidity {
-        pointee_alignment: alignment,
-    })
+    let flags = attrs.regular();
+    // Do not consume rustc's `read_only`: NVPTX (including libNVVM) can lower
+    // volatile reads through a readonly + noalias kernel parameter to cached
+    // non-volatile loads. Let the optimizer infer read-only access from the
+    // body instead; volatile accesses prevent that inference.
+    //
+    // LLVM before 23 (including legacy libNVVM consumers) treats parameter
+    // dereferenceability as lasting for the whole call. rustc's NoFree is the
+    // proof needed by all supported consumers; producer LLVM version alone is
+    // insufficient. Zero covers both ZST pointees and unknown slice lengths.
+    let dereferenceable_bytes = if flags.no_free {
+        attrs.pointee_size().bytes() as u64
+    } else {
+        0
+    };
+    Ok(Some(ReferenceParamValidity {
+        pointee_alignment: shape.abi_align,
+        no_alias: flags.no_alias,
+        dereferenceable_bytes,
+    }))
 }
 
 // ============================================================================
@@ -880,8 +913,9 @@ pub fn kernel_caller(value: &u32) { another_kernel(value); }
         );
     }
 
-    #[test]
-    fn reference_param_validity_uses_only_typed_rustc_public_facts() {
+    fn reference_validity_fixture(
+        opt_level: u8,
+    ) -> (Vec<Option<ReferenceParamValidity>>, Vec<String>) {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time before unix epoch")
@@ -896,6 +930,9 @@ pub fn kernel_caller(value: &u32) { another_kernel(value); }
         std::fs::write(
             &fixture,
             r#"
+use core::cell::UnsafeCell;
+use core::marker::PhantomPinned;
+
 #[repr(align(16))]
 pub struct AlignedZst;
 
@@ -903,7 +940,18 @@ pub struct ByValue {
     pub pointer: *const f32,
 }
 
+pub struct LargeByValue {
+    pub values: [u64; 8],
+}
+
+pub struct Pinned {
+    pub value: u32,
+    pub marker: PhantomPinned,
+}
+
+#[track_caller]
 pub fn reference_validity(
+    _ignored: AlignedZst,
     _shared: &f32,
     _unique: &mut f32,
     _slice: &[f32],
@@ -912,6 +960,13 @@ pub fn reference_validity(
     _zst: &AlignedZst,
     _raw: *const f32,
     _by_value: ByValue,
+    _cell: &UnsafeCell<f32>,
+    _mutable_cell: &mut UnsafeCell<f32>,
+    _pinned: &mut Pinned,
+    _pinned_shared: &Pinned,
+    _cell_slice: &[UnsafeCell<f32>],
+    _pinned_slice: &mut [Pinned],
+    _indirect: LargeByValue,
 ) {}
 "#,
         )
@@ -935,30 +990,57 @@ pub fn reference_validity(
             "--crate-name=reference_validity_fixture".to_string(),
             "--emit=metadata".to_string(),
             "-Zmir-opt-level=0".to_string(),
+            format!("-Copt-level={opt_level}"),
             format!("--out-dir={}", root.display()),
             format!("--sysroot={sysroot}"),
             fixture.display().to_string(),
         ];
 
-        let facts = std::thread::Builder::new()
+        let result = std::thread::Builder::new()
             .stack_size(64 * 1024 * 1024)
             .spawn(move || {
                 rustc_public::run!(&args, || {
-                    use rustc_public::CrateDef;
+                    use rustc_public::abi::PassMode;
+                    use rustc_public::mir::mono;
 
-                    let body = rustc_public::all_local_items()
+                    let item = rustc_public::all_local_items()
                         .into_iter()
                         .find(|item| item.name().ends_with("::reference_validity"))
-                        .and_then(|item| item.body())
-                        .expect("fixture function body");
-                    let facts = body
-                        .locals()
+                        .expect("fixture function");
+                    let instance = mono::Instance::try_from(item).expect("fixture instance");
+                    let body = instance.body().expect("fixture function body");
+                    let fn_abi = instance.fn_abi().expect("fixture function ABI");
+                    let source_types = body.locals()[1..17]
                         .iter()
-                        .skip(1)
-                        .take(8)
-                        .map(|decl| reference_param_validity(&decl.ty))
+                        .map(|decl| decl.ty)
                         .collect::<Vec<_>>();
-                    std::ops::ControlFlow::<(), _>::Continue(facts)
+                    let facts = source_types
+                        .iter()
+                        .enumerate()
+                        .map(|(index, ty)| {
+                            reference_param_validity(ty, &fn_abi, index)
+                                .expect("source parameter matches ABI")
+                        })
+                        .collect::<Vec<_>>();
+
+                    // Reusing a neighboring argument after dropping an ignored
+                    // ZST or flattening a slice must not mint reference facts.
+                    let mut errors = vec![
+                        reference_param_validity(&source_types[1], &fn_abi, 0).unwrap_err(),
+                        reference_param_validity(&source_types[1], &fn_abi, fn_abi.args.len())
+                            .unwrap_err(),
+                    ];
+                    let mut wrong_mode = fn_abi.clone();
+                    wrong_mode.args[1].mode = fn_abi.args[15].mode.clone();
+                    assert!(matches!(wrong_mode.args[1].mode, PassMode::Indirect { .. }));
+                    errors.push(
+                        reference_param_validity(&source_types[1], &wrong_mode, 1).unwrap_err(),
+                    );
+                    wrong_mode.args[3].mode = fn_abi.args[1].mode.clone();
+                    errors.push(
+                        reference_param_validity(&source_types[3], &wrong_mode, 3).unwrap_err(),
+                    );
+                    std::ops::ControlFlow::<(), _>::Continue((facts, errors))
                 })
             })
             .unwrap()
@@ -967,31 +1049,59 @@ pub fn reference_validity(
             .expect("in-process fixture compilation succeeds");
 
         std::fs::remove_dir_all(&root).ok();
+        result
+    }
 
+    #[test]
+    fn reference_param_validity_consumes_typed_rustc_abi_facts() {
+        let (facts, errors) = reference_validity_fixture(3);
+        let observed = facts
+            .into_iter()
+            .map(|fact| {
+                fact.map(|fact| {
+                    (
+                        fact.pointee_alignment,
+                        fact.no_alias,
+                        fact.dereferenceable_bytes,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
         assert_eq!(
-            facts,
+            observed,
             vec![
-                Some(ReferenceParamValidity {
-                    pointee_alignment: 4,
-                }),
-                Some(ReferenceParamValidity {
-                    pointee_alignment: 4,
-                }),
-                Some(ReferenceParamValidity {
-                    pointee_alignment: 4,
-                }),
-                Some(ReferenceParamValidity {
-                    pointee_alignment: 4,
-                }),
-                Some(ReferenceParamValidity {
-                    pointee_alignment: 1,
-                }),
-                Some(ReferenceParamValidity {
-                    pointee_alignment: 16,
-                }),
-                None,
-                None,
+                None,                // ignored by-value ZST
+                Some((4, true, 4)),  // &f32
+                Some((4, true, 4)),  // &mut f32
+                Some((4, true, 0)),  // &[f32]: unknown length
+                Some((4, true, 0)),  // &mut [f32]
+                Some((1, true, 1)),  // &u8
+                Some((16, true, 0)), // aligned reference to a ZST
+                None,                // raw pointer
+                None,                // direct by-value ADT
+                Some((4, false, 0)), // &UnsafeCell<f32>
+                Some((4, true, 4)),  // &mut UnsafeCell<f32>
+                Some((4, false, 0)), // &mut !Unpin
+                Some((4, true, 4)),  // shared frozen !Unpin
+                Some((4, false, 0)), // &[UnsafeCell<f32>]
+                Some((4, false, 0)), // &mut [!Unpin]
+                None,                // indirect by-value carrier
             ]
         );
+        assert!(errors[0].contains("type"), "{}", errors[0]);
+        assert!(errors[1].contains("index"), "{}", errors[1]);
+        assert!(errors[2].contains("pass mode"), "{}", errors[2]);
+        assert!(errors[3].contains("pass mode"), "{}", errors[3]);
+    }
+
+    #[test]
+    fn reference_param_validity_retains_conservative_unoptimized_abi_facts() {
+        let (facts, _) = reference_validity_fixture(0);
+        assert_eq!(facts.iter().flatten().count(), 12);
+        for fact in facts.into_iter().flatten() {
+            assert!(!fact.no_alias);
+            assert_eq!(fact.dereferenceable_bytes, 0);
+            assert!(fact.pointee_alignment.is_power_of_two());
+        }
     }
 }

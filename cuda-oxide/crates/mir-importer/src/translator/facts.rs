@@ -116,8 +116,15 @@ pub(crate) fn set_emitted_functions(names: std::collections::BTreeSet<String>) {
 /// Whether this exact monomorphized Rust instance will have a `mir.func`
 /// definition in the module being translated.
 pub(crate) fn is_emitted_function(instance: &mir::mono::Instance) -> bool {
-    let identity = instance.mangled_name().to_string();
-    EMITTED_FUNCTIONS.with(|set| set.borrow().contains(&identity))
+    is_emitted_name(&instance.mangled_name())
+}
+
+/// Whether `mangled_name`, rustc's linkage identity of one monomorphized
+/// function, is in the current run's emitted-function set. The name-based
+/// form lets the set's replace-not-merge contract be tested without a rustc
+/// session.
+pub(crate) fn is_emitted_name(mangled_name: &str) -> bool {
+    EMITTED_FUNCTIONS.with(|set| set.borrow().contains(mangled_name))
 }
 
 /// Validate the source reference and the fully specialized read-only storage
@@ -1124,5 +1131,28 @@ pub fn reference_validity(
             assert_eq!(fact.dereferenceable_bytes, 0);
             assert!(fact.pointee_alignment.is_power_of_two());
         }
+    }
+
+    /// `set_emitted_functions` replaces the previous run's set instead of
+    /// merging into it. A name left over from an earlier rustc invocation on
+    /// the same thread would keep a diverging call to a function this run
+    /// never emits, and the module would reference an undefined symbol.
+    #[test]
+    fn emitted_function_set_is_replaced_per_run() {
+        let first_run = std::collections::BTreeSet::from(["first_run_die".to_string()]);
+        set_emitted_functions(first_run);
+        assert!(is_emitted_name("first_run_die"));
+        assert!(!is_emitted_name("second_run_spin"));
+
+        let second_run = std::collections::BTreeSet::from(["second_run_spin".to_string()]);
+        set_emitted_functions(second_run);
+        assert!(is_emitted_name("second_run_spin"));
+        assert!(
+            !is_emitted_name("first_run_die"),
+            "an entry from the previous run must not survive the replacement"
+        );
+
+        set_emitted_functions(std::collections::BTreeSet::new());
+        assert!(!is_emitted_name("second_run_spin"));
     }
 }

@@ -1254,15 +1254,25 @@ fn translate_call(
         return Ok(result);
     }
 
-    // `Call { target: None }` means there is no normal successor. It does not
-    // mean an emitted callee can be erased: a collected Rust `-> !` function
-    // may perform observable work before it diverges. Preserve that call and
-    // let `emit_function_call` terminate the caller with `mir.unreachable`.
+    // `Call { target: None }` means there is no normal successor. rustc
+    // clears the target when the destination type is visibly uninhabited:
+    // `!`, `core::convert::Infallible`, an empty enum. That does not mean the
+    // callee can be erased. An emitted Rust function with such a return type
+    // may do observable work before it diverges. When the resolved instance
+    // is in this pipeline run's emitted-function set, keep the call and let
+    // `emit_function_call` end the block with `mir.unreachable`, which is
+    // what rustc's own backend emits for a call without a destination.
     //
-    // For every diverging callee that is not part of this pipeline run's
-    // emitted-function set, retain the pre-existing trap fallback. Keep this
-    // before the unsupported-intrinsic and libm checks below so non-emitted
-    // diverging calls still take the same path as before this fix.
+    // Every other diverging call keeps the pre-existing trap fallback. That
+    // covers callees the collector skipped, such as core helpers without MIR
+    // and local `-> !` bodies that are nothing but a panic, and a call
+    // through a function pointer, whose `func` operand is not a constant and
+    // so resolves no instance. Panic entry points never reach this arm: for
+    // a callee whose path matches `is_panic_entry_path`,
+    // `block::translate_block` lowers the whole block to the trap through
+    // `is_dropped_panic_call` before any call is classified. Keep this arm
+    // before the unsupported-intrinsic and libm checks below so the trapped
+    // cases take the same path as before.
     if target_usize.is_none() {
         let resolved_instance = match func {
             mir::Operand::Constant(constant)

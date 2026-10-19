@@ -148,6 +148,17 @@ Aggregate, nested-array and `f16` elements at natural alignment declare
 their natural alignment in PTX (`.align 4` for `[f32; N]`, `.align 2` for
 `f16`). Older releases printed a blanket `.align 8` for them.
 
+```{figure} images/shared-memory-alignment.svg
+:align: center
+:width: 100%
+
+Shared-memory storage alignment. The verifier rejects an `ALIGN` that is not a non-zero power
+of two at the use site, and lowering declares every static array and the dynamic pool at the
+larger of the request and the element's ABI alignment. `SharedArray<u64, 2, 1>` is declared
+`.align 8` and a `#[repr(C, align(16))]` element at natural alignment `.align 16`, where older
+releases declared `.align 1` and `.align 8` and the kernel could fault with `misaligned address`.
+```
+
 ### The API surface
 
 ```rust

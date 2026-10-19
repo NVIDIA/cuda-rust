@@ -255,9 +255,9 @@ mod tests {
         assert_eq!(section(&bytes, 2), expected);
 
         // The fragment type entry at 13.5: tagged symbolic shape holding one
-        // integer per dimension (the 13.5 assembler requires full rank), static shape
-        // [1], element f32 (index 0), local, (1):(1), (128, 1, 1):(1, 0, 0),
-        // alignment 1.
+        // integer per dimension (the 13.5 assembler requires full rank),
+        // static shape [1], element f32 (index 0), local, (1):(1),
+        // (128, 1, 1):(1, 0, 0), alignment 1.
         let types = section(&bytes, 5);
         let entries = &types[4 + 4 * 3..];
         assert_eq!(

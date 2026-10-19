@@ -140,6 +140,17 @@ On SM12x this form matters for performance: ptxas implements a non-multicast
 `.shared::cluster` TMA load it cannot prove CTA-local with a runtime check and
 a system call, which also makes it ignore `setmaxnreg`.
 
+```{figure} images/tma-cta-local.svg
+:align: center
+:width: 100%
+
+The two G2S destination forms. Left, the cluster form converts a generic `*mut u8` to the cluster
+window, and on sm_120a ptxas adds a runtime CTA check whose call makes it ignore `setmaxnreg`.
+Middle, `SharedPtr<T>` keeps the shared address space in its type across helper parameters, struct
+fields and return values. Right, `cp_async_bulk_tensor_2d_g2s_cta` takes a `SharedPtr<u8>` and emits
+the `.shared::cta` form with no address conversion, so the kernel keeps `setmaxnreg` and its 168 registers.
+```
+
 ### Only one thread issues the copy
 
 TMA copies are **not** collective operations across the block. Exactly

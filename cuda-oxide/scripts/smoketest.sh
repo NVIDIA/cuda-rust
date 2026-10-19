@@ -1455,6 +1455,7 @@ run_cargo() {
         local unresolved_sparse_f16_re='llvm\.nvvm\.mma\.sp\.ordered\.metadata\.m16n8k64\.row\.col\.kind\.f8f6f4\.f16\.'
         local unresolved_standard_fp8_re='llvm\.nvvm\.mma\.m16n8k(16|32)\.row\.col\.f(16|32)\.(e4m3|e5m2)\.'
         local fp8_re='cvt\.rn\.satfinite(\.relu)?\.(e4m3x2|e5m2x2)\.f32'
+        local bf16x2_fp8_re='cvt\.rn\.satfinite(\.relu)?\.(e4m3x2|e5m2x2)\.bf16x2'
         local tf32_re='cvt\.(rna|rn|rz)(\.relu)?(\.satfinite)?\.tf32\.f32'
         local ldmatrix_re='ldmatrix\.sync\.aligned\.(m16n16\.x(1|2)\.trans\.shared\.(b8|b8x16\.(b4x16_p64|b6x16_p32))|m8n16\.x(1|2|4)\.shared\.b8x16\.(b4x16_p64|b6x16_p32))'
         local instruction_count unique_instruction_count
@@ -1464,6 +1465,7 @@ run_cargo() {
         local standard_fp8_f32_instruction_count unique_standard_fp8_f32_instruction_count
         local standard_fp8_f16_instruction_count unique_standard_fp8_f16_instruction_count
         local fp8_count unique_fp8_count
+        local bf16x2_fp8_count unique_bf16x2_fp8_count
         local tf32_count unique_tf32_count
         local ldmatrix_count unique_ldmatrix_count
         instruction_count="$(grep -oE "${instruction_re}" "${llvm_ptx}" 2>/dev/null | wc -l)"
@@ -1480,12 +1482,17 @@ run_cargo() {
         unique_standard_fp8_f16_instruction_count="$(grep -oE "${standard_fp8_f16_instruction_re}" "${llvm_ptx}" 2>/dev/null | sort -u | wc -l)"
         fp8_count="$(grep -oE "${fp8_re}" "${llvm_ptx}" 2>/dev/null | wc -l)"
         unique_fp8_count="$(grep -oE "${fp8_re}" "${llvm_ptx}" 2>/dev/null | sort -u | wc -l)"
+        bf16x2_fp8_count="$(grep -oE "${bf16x2_fp8_re}" "${llvm_ptx}" 2>/dev/null | wc -l)"
+        unique_bf16x2_fp8_count="$(grep -oE "${bf16x2_fp8_re}" "${llvm_ptx}" 2>/dev/null | sort -u | wc -l)"
         tf32_count="$(grep -oE "${tf32_re}" "${llvm_ptx}" 2>/dev/null | wc -l)"
         unique_tf32_count="$(grep -oE "${tf32_re}" "${llvm_ptx}" 2>/dev/null | sort -u | wc -l)"
         ldmatrix_count="$(grep -oE "${ldmatrix_re}" "${llvm_ptx}" 2>/dev/null | wc -l)"
         unique_ldmatrix_count="$(grep -oE "${ldmatrix_re}" "${llvm_ptx}" 2>/dev/null | sort -u | wc -l)"
+        # The header's .version is the floor of the newest form in the
+        # module: PTX 9.1 since the bf16x2 to packed-FP8 conversions joined
+        # the example (the ldmatrix and kind::f8f6f4 MMA forms need 8.7).
         if [[ ! -s "${llvm_ptx}" ]] \
-            || ! grep -qx '\.version 8\.7' "${llvm_ptx}" \
+            || ! grep -qx '\.version 9\.1' "${llvm_ptx}" \
             || ! grep -qx '\.target sm_120a' "${llvm_ptx}" \
             || [[ ${instruction_count} -ne 25 || ${unique_instruction_count} -ne 25 ]] \
             || [[ ${sparse_f16_instruction_count} -ne 25 || ${unique_sparse_f16_instruction_count} -ne 25 ]] \
@@ -1494,6 +1501,7 @@ run_cargo() {
             || [[ ${standard_fp8_f32_instruction_count} -ne 8 || ${unique_standard_fp8_f32_instruction_count} -ne 8 ]] \
             || [[ ${standard_fp8_f16_instruction_count} -ne 8 || ${unique_standard_fp8_f16_instruction_count} -ne 8 ]] \
             || [[ ${fp8_count} -ne 4 || ${unique_fp8_count} -ne 4 ]] \
+            || [[ ${bf16x2_fp8_count} -ne 4 || ${unique_bf16x2_fp8_count} -ne 4 ]] \
             || [[ ${tf32_count} -ne 10 || ${unique_tf32_count} -ne 10 ]] \
             || [[ ${ldmatrix_count} -ne 12 || ${unique_ldmatrix_count} -ne 12 ]] \
             || grep -qE "${unresolved_sparse_f16_re}|${unresolved_dense_f32_re}|${unresolved_dense_f16_re}|${unresolved_standard_fp8_re}" "${llvm_ptx}"; then
@@ -1516,8 +1524,10 @@ run_cargo() {
         fi
         local nvvm_ll="crates/rustc-codegen-cuda/examples/${ex}/${ex}.ll"
         local inline_fp8_re='call i16 asm "cvt\.rn\.satfinite(\.relu)?\.(e4m3x2|e5m2x2)\.f32 \$0, \$2, \$1;", "=h,f,f"'
+        local inline_bf16x2_fp8_re='call i16 asm "cvt\.rn\.satfinite(\.relu)?\.(e4m3x2|e5m2x2)\.bf16x2 \$0, \$1;", "=h,r"'
         local inline_tf32_re='call i32 asm "cvt\.(rna|rn|rz)(\.relu)?(\.satfinite)?\.tf32\.f32 \$0, \$1;", "=r,f"'
         local inline_fp8_count unique_inline_fp8_count
+        local inline_bf16x2_fp8_count unique_inline_bf16x2_fp8_count
         local inline_tf32_count unique_inline_tf32_count
         local inline_ldmatrix_count unique_inline_ldmatrix_count
         local inline_sparse_f16_count unique_inline_sparse_f16_count
@@ -1527,6 +1537,8 @@ run_cargo() {
         local inline_standard_fp8_f16_count unique_inline_standard_fp8_f16_count
         inline_fp8_count="$(grep -oE "${inline_fp8_re}" "${nvvm_ll}" 2>/dev/null | wc -l)"
         unique_inline_fp8_count="$(grep -oE "${inline_fp8_re}" "${nvvm_ll}" 2>/dev/null | sort -u | wc -l)"
+        inline_bf16x2_fp8_count="$(grep -oE "${inline_bf16x2_fp8_re}" "${nvvm_ll}" 2>/dev/null | wc -l)"
+        unique_inline_bf16x2_fp8_count="$(grep -oE "${inline_bf16x2_fp8_re}" "${nvvm_ll}" 2>/dev/null | sort -u | wc -l)"
         inline_tf32_count="$(grep -oE "${inline_tf32_re}" "${nvvm_ll}" 2>/dev/null | wc -l)"
         unique_inline_tf32_count="$(grep -oE "${inline_tf32_re}" "${nvvm_ll}" 2>/dev/null | sort -u | wc -l)"
         inline_ldmatrix_count="$(grep -oE "${ldmatrix_re}" "${nvvm_ll}" 2>/dev/null | wc -l)"
@@ -1543,6 +1555,7 @@ run_cargo() {
         unique_inline_standard_fp8_f16_count="$(grep -oE "${standard_fp8_f16_instruction_re}" "${nvvm_ll}" 2>/dev/null | sort -u | wc -l)"
         if [[ ! -s "${nvvm_ll}" ]] \
             || [[ ${inline_fp8_count} -ne 4 || ${unique_inline_fp8_count} -ne 4 ]] \
+            || [[ ${inline_bf16x2_fp8_count} -ne 4 || ${unique_inline_bf16x2_fp8_count} -ne 4 ]] \
             || [[ ${inline_tf32_count} -ne 10 || ${unique_inline_tf32_count} -ne 10 ]] \
             || [[ ${inline_ldmatrix_count} -ne 12 || ${unique_inline_ldmatrix_count} -ne 12 ]] \
             || [[ ${inline_sparse_f16_count} -ne 25 || ${unique_inline_sparse_f16_count} -ne 25 ]] \

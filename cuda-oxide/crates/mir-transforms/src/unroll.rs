@@ -63,7 +63,7 @@ use pliron::irbuild::{
     rewriter::IRRewriter,
 };
 use pliron::linked_list::ContainsLinkedList;
-use pliron::location::{Located, Location, Source};
+use pliron::location::{Location, Source};
 use pliron::op::{Op, op_cast};
 use pliron::operation::Operation;
 use pliron::opts::constants::sccp::sccp;
@@ -123,7 +123,7 @@ fn hint_location(ctx: &Context, op: Ptr<Operation>) -> Option<String> {
             pos,
         } => Some(format!(
             "{}:{}:{}",
-            pliron::uniqued_any::get(ctx, path).display(),
+            pliron::uniqued_any::get(ctx, *path).display(),
             pos.line,
             pos.column
         )),
@@ -1694,7 +1694,7 @@ mod tests {
     };
     use pliron::combine::stream::position::SourcePosition;
     use pliron::context::Context;
-    use pliron::location::{Located, Location, Source};
+    use pliron::location::{Location, Source};
     use pliron::op::Op;
 
     #[test]

@@ -229,6 +229,21 @@ It is not elegant, but it is exactly how C compilers have handled tagged unions
 for decades. LLVM's optimizer is quite good at cleaning up the redundant
 insertvalue/extractvalue chains.
 
+An enum whose tag and payload bytes under-align its storage, a `repr(align(N))`
+enum for example, also gets a zero-length integer array at slot 0 as an alignment
+anchor. The anchor adds no bytes and is capped at 16 bytes; the Rust alignment
+itself is stamped on every alloca, load and store of the enum.
+
+```{figure} images/enum-alignment-anchor.svg
+:align: center
+:width: 100%
+
+The enum alignment anchor. A zero-length integer array at slot 0 raises the storage type's natural
+alignment without adding bytes. Its width used to be `align * 8` with no bound, which LLVM rejects
+from align 2^21 up and which wraps to `i0` at 2^29. It is now capped at `[0 x i128]`, as union
+storage has been since #610, while the Rust alignment rides on every memory operation.
+```
+
 ---
 
 ## GPU Intrinsic Conversion

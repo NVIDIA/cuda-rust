@@ -303,11 +303,11 @@ they become `call` instructions to `@llvm.nvvm.*` intrinsics.
 
 ### Architecture Coverage
 
-At catalog SHA-256 `265fb9fd` (the stamp in every `ops/generated/` file
-header), the dialect holds 580 operations across 42 modules, and they come
+At catalog SHA-256 `7e6b4b4b` (the stamp in every `ops/generated/` file
+header), the dialect holds 585 operations across 42 modules, and they come
 from two different places. The split is the first thing to know about it,
 because it decides where -- and whether -- you would add one. If the header
-stamp no longer starts with `265fb9fd`, the counts on this page predate the
+stamp no longer starts with `7e6b4b4b`, the counts on this page predate the
 catalog you are reading.
 
 **Hand-written**, directly under `cuda-oxide/crates/dialect-nvvm/src/ops/`. These are the
@@ -327,13 +327,13 @@ describe. There are seven modules and 26 operations:
 **Generated**, under `ops/generated/`, from `intrinsics/catalog.json` by
 `cuda-intrinsics-gen`. Every file there opens with `// @generated ... DO NOT
 EDIT.`, and editing one by hand is undone by the next generator run. This is
-the large majority -- 35 modules and 554 operations, resolved from 1033 catalog
+the large majority -- 35 modules and 559 operations, resolved from 1038 catalog
 entries, since several intrinsics can share one structural op:
 
 | Area                        | Modules                                                                       | Ops |
 | :-------------------------- | :---------------------------------------------------------------------------- | --: |
 | Tensor Core Gen 5 + TMEM    | `tcgen05`                                                                     | 210 |
-| Tensor Memory Accelerator   | `tma`                                                                         | 111 |
+| Tensor Memory Accelerator   | `tma`                                                                         | 116 |
 | Special registers           | `sreg`                                                                        |  44 |
 | Packed (SIMD-in-register)   | `packed_alu`, `packed_conversion`, `packed_atomic`                            |  55 |
 | Async copy and barriers     | `cp_async`, `mbarrier_extended`, `mbarrier_basic`, `sync`                     |  35 |

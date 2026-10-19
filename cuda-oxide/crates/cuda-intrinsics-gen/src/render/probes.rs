@@ -84,12 +84,17 @@ fn render_tma_probe(catalog: &CatalogFile, record: &CatalogIntrinsic, hash: &str
         let is_g2s = matches!(
             operation,
             TmaOperation::G2sTile1d
+                | TmaOperation::G2sCtaTile1d
                 | TmaOperation::G2sTile2d
+                | TmaOperation::G2sCtaTile2d
                 | TmaOperation::G2sTile2dMulticast
                 | TmaOperation::G2sTile2dMulticastCg2
                 | TmaOperation::G2sTile3d
+                | TmaOperation::G2sCtaTile3d
                 | TmaOperation::G2sTile4d
+                | TmaOperation::G2sCtaTile4d
                 | TmaOperation::G2sTile5d
+                | TmaOperation::G2sCtaTile5d
         );
         let coordinates = std::iter::repeat_n("i32", dimensions)
             .collect::<Vec<_>>()
@@ -103,6 +108,14 @@ fn render_tma_probe(catalog: &CatalogFile, record: &CatalogIntrinsic, hash: &str
             .collect::<Vec<_>>()
             .join(", ");
         if is_g2s {
+            let cta = matches!(
+                operation,
+                TmaOperation::G2sCtaTile1d
+                    | TmaOperation::G2sCtaTile2d
+                    | TmaOperation::G2sCtaTile3d
+                    | TmaOperation::G2sCtaTile4d
+                    | TmaOperation::G2sCtaTile5d
+            );
             let multicast = matches!(
                 operation,
                 TmaOperation::G2sTile2dMulticast | TmaOperation::G2sTile2dMulticastCg2
@@ -112,11 +125,19 @@ fn render_tma_probe(catalog: &CatalogFile, record: &CatalogIntrinsic, hash: &str
             } else {
                 format!(", {coordinates}")
             };
-            writeln!(
-                output,
-                "declare void @{symbol}(ptr addrspace(7), ptr addrspace(3), ptr{declaration_coordinates}, i16, i64, i1, i1, i32) #0\n"
-            )
-            .unwrap();
+            if cta {
+                writeln!(
+                    output,
+                    "declare void @{symbol}(ptr addrspace(3), ptr addrspace(3), ptr{declaration_coordinates}, i64, i1) #0\n"
+                )
+                .unwrap();
+            } else {
+                writeln!(
+                    output,
+                    "declare void @{symbol}(ptr addrspace(7), ptr addrspace(3), ptr{declaration_coordinates}, i16, i64, i1, i1, i32) #0\n"
+                )
+                .unwrap();
+            }
             let parameters = if coordinate_parameters.is_empty() {
                 String::new()
             } else {
@@ -129,9 +150,15 @@ fn render_tma_probe(catalog: &CatalogFile, record: &CatalogIntrinsic, hash: &str
                 record.id
             )
             .unwrap();
-            output.push_str(
-                "  %dst = addrspacecast ptr %dst_generic to ptr addrspace(7)\n  %barrier = addrspacecast ptr %barrier_generic to ptr addrspace(3)\n",
-            );
+            if cta {
+                output.push_str(
+                    "  %dst = addrspacecast ptr %dst_generic to ptr addrspace(3)\n  %barrier = addrspacecast ptr %barrier_generic to ptr addrspace(3)\n",
+                );
+            } else {
+                output.push_str(
+                    "  %dst = addrspacecast ptr %dst_generic to ptr addrspace(7)\n  %barrier = addrspacecast ptr %barrier_generic to ptr addrspace(3)\n",
+                );
+            }
             let arguments = if coordinate_arguments.is_empty() {
                 String::new()
             } else {
@@ -143,11 +170,19 @@ fn render_tma_probe(catalog: &CatalogFile, record: &CatalogIntrinsic, hash: &str
             } else {
                 0
             };
-            writeln!(
-                output,
-                "  call void @{symbol}(ptr addrspace(7) %dst, ptr addrspace(3) %barrier, ptr %tensor_map{arguments}, i16 {mask}, i64 0, i1 {multicast}, i1 false, i32 {group}) #0"
-            )
-            .unwrap();
+            if cta {
+                writeln!(
+                    output,
+                    "  call void @{symbol}(ptr addrspace(3) %dst, ptr addrspace(3) %barrier, ptr %tensor_map{arguments}, i64 0, i1 false) #0"
+                )
+                .unwrap();
+            } else {
+                writeln!(
+                    output,
+                    "  call void @{symbol}(ptr addrspace(7) %dst, ptr addrspace(3) %barrier, ptr %tensor_map{arguments}, i16 {mask}, i64 0, i1 {multicast}, i1 false, i32 {group}) #0"
+                )
+                .unwrap();
+            }
         } else {
             let declaration_coordinates = if coordinates.is_empty() {
                 String::new()

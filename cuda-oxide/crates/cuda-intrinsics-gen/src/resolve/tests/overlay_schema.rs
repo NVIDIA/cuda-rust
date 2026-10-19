@@ -49,7 +49,7 @@ fn overlay_manifest_loads_sorted_family_shards() {
         read_overlay(&repo_root, &repo_root.join("intrinsics/overlay.toml")).unwrap();
     assert_eq!(overlay.schema, OVERLAY_SCHEMA);
     assert_eq!(overlay.shards.len(), 67);
-    assert_eq!(overlay.intrinsics.len(), 1033);
+    assert_eq!(overlay.intrinsics.len(), 1038);
     assert_eq!(
         overlay
             .intrinsics
@@ -343,6 +343,17 @@ fn overlay_shard_schema_range_is_composable_and_new_fields_fail_closed() {
             .unwrap_err()
             .to_string()
             .contains("requires overlay shard schema 47")
+    );
+    let mut cta_tma = shard(TMA_CTA_SHARD_SCHEMA, None, None);
+    cta_tma.family = "tma".into();
+    cta_tma.tma = Some(test_tma_admission());
+    validate_overlay_shard_schema(&cta_tma, path).unwrap();
+    cta_tma.schema -= 1;
+    assert!(
+        validate_overlay_shard_schema(&cta_tma, path)
+            .unwrap_err()
+            .to_string()
+            .contains("compact TMA CTA-local G2S admission requires overlay shard schema 65")
     );
 
     let mut sparse_f16_mma = shard(SPARSE_MMA_F8F6F4_F16_SHARD_SCHEMA, None, None);

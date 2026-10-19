@@ -65,6 +65,43 @@ fn sanitize_comment(text: &str) -> String {
 /// Public export callers need not have verified the source module. Pliron 0.19
 /// also sums segment sizes as u32 without checking overflow, so validate the
 /// complete layout here before it can index or allocate from malformed counts.
+/// Looks for a pointer into shared (address space 3) or local (address space
+/// 5) memory inside a kernel parameter type, through struct fields and array
+/// elements. On a hit it returns the address space and appends the path that
+/// reaches the pointer to `path`: `.N` for struct field `N` and `[0]` for an
+/// array element (every element has the same type, so the first stands for
+/// all of them). A bare pointer leaves `path` empty.
+fn device_only_pointer_in(ctx: &Context, ty: TypeHandle, path: &mut String) -> Option<u32> {
+    let ty_ref = ty.deref(ctx);
+    if let Some(pointer) = ty_ref.downcast_ref::<PointerType>() {
+        let space = pointer.address_space();
+        return matches!(space, 3 | 5).then_some(space);
+    }
+    if let Some(array) = ty_ref.downcast_ref::<ArrayType>() {
+        let mark = path.len();
+        path.push_str("[0]");
+        if let Some(space) = device_only_pointer_in(ctx, array.elem_type(), path) {
+            return Some(space);
+        }
+        path.truncate(mark);
+        return None;
+    }
+    if let Some(structure) = ty_ref.downcast_ref::<StructType>() {
+        if structure.is_opaque() {
+            return None;
+        }
+        for (field_index, field) in structure.fields().enumerate() {
+            let mark = path.len();
+            path.push_str(&format!(".{field_index}"));
+            if let Some(space) = device_only_pointer_in(ctx, field, path) {
+                return Some(space);
+            }
+            path.truncate(mark);
+        }
+    }
+    None
+}
+
 fn validate_conditional_branch_layout(ctx: &Context, branch: &ops::CondBrOp) -> Result<(), String> {
     let operation = branch.get_operation().deref(ctx);
     let sizes = operation
@@ -999,23 +1036,40 @@ impl<'a> ModuleExportState<'a> {
         // parameter type today; if a frontend type ever surfaces it at a
         // kernel boundary, it needs a new arm here for the same reason as
         // plain shared.
+        //
+        // The check looks through struct fields and array elements as well.
+        // A struct or array parameter reaches the kernel as the bytes the
+        // host wrote, so a shared or local pointer inside one is as
+        // impossible to supply as a bare one. Before this recursion a
+        // `struct { p: SharedPtr<f32>, n: u32 }` parameter compiled and the
+        // kernel applied `cvta.shared.u64` to host bytes.
         if is_kernel {
             for (index, arg_ty) in func_ty.arg_types().iter().enumerate() {
-                let arg_ref = arg_ty.deref(self.ctx);
-                let Some(pointer) = arg_ref.downcast_ref::<PointerType>() else {
+                let mut path = String::new();
+                let Some(address_space) = device_only_pointer_in(self.ctx, *arg_ty, &mut path)
+                else {
                     continue;
                 };
-                let space = match pointer.address_space() {
-                    3 => "shared",
-                    5 => "local",
-                    _ => continue,
+                let space = if address_space == 3 {
+                    "shared"
+                } else {
+                    "local"
                 };
+                let reason = format!(
+                    "{space} memory is allocated by the device at launch, so the host has no \
+                     address to pass, and the driver refuses a module whose entry declares one"
+                );
+                if path.is_empty() {
+                    return Err(format!(
+                        "kernel `@{fixed_func_name}` parameter {index} is a pointer into {space} \
+                         memory (address space {address_space}); {reason}"
+                    ));
+                }
+                // The field path keeps this message apart from the bare form,
+                // so a fixture can pin the nested case on its own.
                 return Err(format!(
-                    "kernel `@{fixed_func_name}` parameter {index} is a pointer into {space} \
-                     memory (address space {}); {space} memory is allocated by the device at \
-                     launch, so the host has no address to pass, and the driver refuses a \
-                     module whose entry declares one",
-                    pointer.address_space()
+                    "kernel `@{fixed_func_name}` parameter {index} holds a pointer into {space} \
+                     memory (address space {address_space}) at field path `{path}`; {reason}"
                 ));
             }
         }

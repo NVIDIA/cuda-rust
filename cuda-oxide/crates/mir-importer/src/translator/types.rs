@@ -364,6 +364,14 @@ fn translate_pointer_like(
             let elem = shared_array_element_type(ctx, &substs, "SharedArray")?;
             Ok(facts::mint_shared_ptr_type(ctx, elem, origin).into())
         }
+        rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::Adt(adt_def, substs))
+            if is_cuda_device_adt(&adt_def, "SharedSlot") =>
+        {
+            // `*mut SharedSlot<T>` is the field of `SharedPtr<T>`: a pointer
+            // to a `T` in CTA-shared memory, by its type.
+            let elem = shared_array_element_type(ctx, &substs, "SharedSlot")?;
+            Ok(facts::mint_shared_ptr_type(ctx, elem, origin).into())
+        }
         rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::Adt(adt_def, _substs))
             if is_cuda_device_adt(&adt_def, "Barrier") =>
         {
@@ -718,6 +726,14 @@ pub fn translate_type(
                 // ThreadIndex is a newtype around usize - translate to usize
                 // The type safety is enforced at the Rust level, not the IR level
                 Ok(get_usize_type(ctx).into())
+            } else if is_cuda_device_adt(&adt_def, "SharedPtr") {
+                // `SharedPtr<T> { ptr: *mut SharedSlot<T> }` is a scalar-lowered
+                // newtype: the value is its field, a CTA-shared (`addrspace(3)`)
+                // pointer to `T`. Params, returns, locals and fields of type
+                // `SharedPtr<T>` are therefore shared pointers by type, across
+                // function boundaries.
+                let elem = shared_array_element_type(ctx, &substs, "SharedPtr")?;
+                Ok(facts::mint_shared_ptr_type(ctx, elem, facts::abi_shared_ptr_field()).into())
             } else if is_cuda_device_adt(&adt_def, "RangeToken") {
                 Ok(dialect_iket::types::IketRangeTokenType::get(ctx).into())
             } else if is_cuda_device_adt(&adt_def, "SharedArray") {

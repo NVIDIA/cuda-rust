@@ -165,7 +165,7 @@ pub(super) fn build_provider(
 
     for (name, text) in [
         ("Cargo.toml", provider_manifest(stem, &runtime_path)),
-        ("rust-toolchain.toml", RUST_TOOLCHAIN_TOML.to_string()),
+        ("rust-toolchain.toml", scaffold_rust_toolchain().to_string()),
         (
             "src/lib.rs",
             provider_lib_source(stem, version, compile_options.fma_contraction_enabled()),

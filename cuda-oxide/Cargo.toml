@@ -122,11 +122,12 @@ oxide-tile-export = { path = "crates/oxide-tile-export" }
 # tile library's interface and implementation halves with it. Pure Rust, so
 # cargo-oxide stays toolkit-free.
 oxide-tilebc = { path = "crates/oxide-tilebc" }
-# Linkage provider: the Tile IR compiler's C ABI (bound at build time from a
-# header outside the tree; see crates/oxide-tile-provider-sys/README.md) and
-# the runtime a tile library's provider shared object is built from.
+# Linkage provider: the Tile IR compiler's C ABI, bound at build time from a
+# header outside the tree (see crates/oxide-tile-provider-sys/README.md). The
+# runtime that uses it, crates/oxide-tile-provider, is not a dependency of any
+# member: `cargo oxide tilelib --provider` generates a crate that depends on
+# it by path.
 oxide-tile-provider-sys = { path = "crates/oxide-tile-provider-sys" }
-oxide-tile-provider = { path = "crates/oxide-tile-provider" }
 ptx-parse = { path = "crates/ptx-parse" }
 ptx-schedule = { path = "crates/ptx-schedule" }
 

@@ -103,10 +103,13 @@ def third_party(lock):
             found.add((name.group(1), version.group(1), source.group(1)))
     return found, parsed
 
+# Crates that tooling generates under an example target directory are build
+# products with their own locks, not example workspaces; skip them.
 locks = sorted(
     (root, lock)
     for root in example_roots
     for lock in glob.glob(os.path.join(root, "**", "Cargo.lock"), recursive=True)
+    if "target" not in os.path.relpath(lock, root).split(os.sep)
 )
 on_disk = {
     os.path.relpath(lock, root).split(os.sep)[0]
@@ -172,7 +175,11 @@ for manifest in sorted(groups.values()):
 ' "${POLICY_EXEMPT_EXAMPLES[@]}" --roots "${EXAMPLE_ROOTS[@]}")"
 
 total="$(printf '%s\n' "${representatives}" | grep -c .)"
+<<<<<<< HEAD
 locks="$(find "${EXAMPLE_ROOTS[@]}" -name Cargo.lock | grep -c .)"
+=======
+locks="$(find "${EXAMPLES_ROOT}" -name target -prune -o -name Cargo.lock -print | grep -c .)"
+>>>>>>> 8a7bffe315 (chore(cuda-oxide): keep the guards clear of generated provider crates)
 echo "Checking deny.toml over ${total} representative example workspaces" \
     "across ${locks} example lock files."
 

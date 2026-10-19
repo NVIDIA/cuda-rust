@@ -24,4 +24,4 @@ header_revision = "6a953e22174ca4a4cf73e9502149d8600762337e"
 
 # The assembler the pinned header was checked against: it reports the same ABI
 # version at load time and names the same callback records in its diagnostics.
-checked_against = "CUDA 13.6 development toolkit, tileiras build 39136670"
+checked_against = "CUDA 13.5.40 release toolkit (2026-10-17) and the CUDA 13.6 development toolkit, tileiras build 39136670; both load the provider at ABI 0.0.1"

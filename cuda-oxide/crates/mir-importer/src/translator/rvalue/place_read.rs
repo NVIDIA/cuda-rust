@@ -117,6 +117,14 @@ pub fn translate_place(
 /// Projecting that field is therefore the identity. Without this, the place
 /// walkers would read the pointer value of a `SharedPtr` nested in another
 /// place, such as `(region.base).ptr`, as the address of an aggregate.
+///
+/// `ThreadIndex`, the other scalar-lowered newtype, needs no strip. Its scalar
+/// is an integer, and `dialect-mir` and `mir-lower` already treat
+/// `extract_field` on an integer scalar as the identity. The iterative place
+/// walker in `place_iter.rs` takes any pointer-typed current value as an
+/// address to load from, so only a newtype whose scalar is itself a pointer is
+/// misread. Follow-up: have that walker track whether its current value is an
+/// address or a value, then drop this strip.
 pub(crate) fn strip_shared_ptr_field_projections<'a>(
     body: &mir::Body,
     place: &'a mir::Place,

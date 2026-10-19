@@ -577,7 +577,6 @@ pub fn emit_sincos(
     use dialect_mir::ops::{MirCallOp, MirConstructTupleOp};
     use pliron::builtin::attributes::StringAttr;
     use pliron::input_err;
-    use pliron::location::Located;
     use pliron::op::Op;
 
     // Destination tuple type and its scalar element type. Typed from the

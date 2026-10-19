@@ -22,7 +22,7 @@ use dialect_mir::ops::{
 use pliron::basic_block::BasicBlock;
 use pliron::builtin::types::{IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::printable::Printable;
@@ -171,9 +171,10 @@ pub(super) fn emit_slice_len_extract(
 /// `ConstantIndex { offset, from_end: true }` on a runtime-length slice.
 ///
 /// rustc defines the offset as 1-based from the end, so the index is
-/// `slice_len - offset`. The MIR pattern-length test dominates this place,
-/// therefore the subtraction cannot underflow on an executed path.
-fn emit_from_end_slice_index(
+/// `slice_len - offset`. rustc's MIR validator rejects a from-end index whose
+/// `offset` exceeds `min_length`, and the MIR pattern-length test dominates
+/// this place, therefore the subtraction cannot underflow on an executed path.
+pub(super) fn emit_from_end_slice_index(
     ctx: &mut Context,
     slice_len: Value,
     offset: u64,
@@ -593,11 +594,14 @@ pub(super) fn emit_array_subslice_value(
 /// out an address that cannot honor the storage coercion.
 /// `Subslice` is handled for both sized arrays and slice fat pointers. Array
 /// subslices keep an in-memory address; slice subslices advance the data
-/// pointer and rebuild metadata as `len - (from + to)`, and can continue into
-/// element Index/forward-ConstantIndex projections. From-end `ConstantIndex`
-/// is accepted only when the immediately preceding fat-slice deref supplied
-/// runtime length metadata; other bases (including a from-end index after a
-/// Subslice) punt instead of guessing a length.
+/// pointer and rebuild metadata as `len - (from + to)`. Element Index and
+/// ConstantIndex projections can continue from that rebuilt slice. A from-end
+/// ConstantIndex uses the rebuilt slice's runtime length metadata, so its index
+/// is computed relative to the subslice rather than the original fat slice.
+/// Two cases still return `Ok(None)` on purpose: a slice `Subslice` that does
+/// not directly follow a fat Deref (a nested `Subslice`, or a `Subslice` after
+/// a slice-tail `Field`), and a from-end `ConstantIndex` on a base that
+/// carries no slice length.
 ///
 /// Returns `Ok(Some((addr, last_op)))` on success, `Ok(None)` if the
 /// projection chain contains an element this helper doesn't know how to
@@ -779,9 +783,7 @@ fn translate_place_addr_from_slot(
 
                             match &projection[proj_idx + 2] {
                                 mir::ProjectionElem::Index(_)
-                                | mir::ProjectionElem::ConstantIndex {
-                                    from_end: false, ..
-                                } => {
+                                | mir::ProjectionElem::ConstantIndex { .. } => {
                                     let Some(data_ptr_ty) =
                                         erased_slice_data_pointer_type(ctx, subslice, elem_ty)
                                     else {
@@ -804,6 +806,22 @@ fn translate_place_addr_from_slot(
                                     current = extract_ptr.deref(ctx).get_result(0);
                                     current_prev_op = Some(extract_ptr);
                                     current_is_slice_data = true;
+                                    current_slice_len = if matches!(
+                                        &projection[proj_idx + 2],
+                                        mir::ProjectionElem::ConstantIndex { from_end: true, .. }
+                                    ) {
+                                        let (len, len_op) = emit_slice_len_extract(
+                                            ctx,
+                                            subslice,
+                                            block_ptr,
+                                            current_prev_op,
+                                            loc.clone(),
+                                        );
+                                        current_prev_op = Some(len_op);
+                                        Some(len)
+                                    } else {
+                                        None
+                                    };
                                     consumed_slice_subslice = true;
                                     continue;
                                 }
@@ -1342,6 +1360,7 @@ fn translate_place_addr_from_slot(
                 if *from_end && consumed_slice_subslice {
                     consumed_slice_subslice = false;
                     current_is_slice_data = true;
+                    current_slice_len = entered_slice_len;
                     continue;
                 }
                 // A slice Subslice must be lowered while the fat-pointer

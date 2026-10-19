@@ -285,7 +285,7 @@ The other three are not needed to build: `rust-analyzer` powers IDE support, `cl
 **For use outside the repo** (your own projects), install it with the pinned nightly toolchain:
 
 ```bash
-cargo +nightly-2026-10-11 install --git https://github.com/NVlabs/cuda-oxide.git cargo-oxide
+cargo +nightly-2026-10-11 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
 ```
 
 On first run, `cargo-oxide` will automatically fetch and build the codegen backend. Subsequent runs reuse the cached build.
@@ -327,6 +327,7 @@ The full set, as `cargo oxide --help` reports it:
 | `fuzz-schedule` | Find schedule-sensitive failures by perturbing an example's generated PTX |
 | `test` | Run Cargo tests through the cuda-oxide backend |
 | `emit-ltoir` | Compile a crate's device code to a binary LTOIR artifact in one step |
+| `tilelib` | Package a crate's `#[tile_export]` functions as a cuTile tile library |
 | `pipeline` | Show the full compilation pipeline (MIR -> PTX/NVVM IR) with verbose output |
 | `debug` | Build with debug info and launch `cuda-gdb` |
 | `list` | List the examples bundled with the cuda-oxide workspace |

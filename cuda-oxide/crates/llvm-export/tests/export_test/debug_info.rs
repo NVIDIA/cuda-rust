@@ -30,7 +30,7 @@ use pliron::{
     context::Context,
     identifier::Identifier,
     linked_list::ContainsLinkedList,
-    location::{Located, Location},
+    location::Location,
     op::Op,
     utils::apint::APInt,
 };

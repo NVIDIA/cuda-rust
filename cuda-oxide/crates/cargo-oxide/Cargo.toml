@@ -23,6 +23,8 @@ cuda-artifact-finalizer = { workspace = true }
 libnvvm-sys = { workspace = true }
 nvjitlink-sys = { workspace = true }
 oxide-artifacts = { workspace = true }
+oxide-tile-export = { workspace = true }
+oxide-tilebc = { workspace = true }
 ptx-parse = { workspace = true }
 ptx-schedule = { workspace = true }
 reserved-oxide-symbols = { workspace = true }

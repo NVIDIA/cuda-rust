@@ -80,7 +80,7 @@ pub enum CmpPred {
 impl CmpPred {
     /// The opposite test: the one that is true exactly when this one is false.
     /// (`<` becomes `>=`, and so on.)
-    fn negate(self) -> CmpPred {
+    pub(crate) fn negate(self) -> CmpPred {
         match self {
             CmpPred::Lt => CmpPred::Ge,
             CmpPred::Le => CmpPred::Gt,
@@ -191,7 +191,7 @@ pub(crate) fn edge_operands(
 /// value underneath and whether the number peeled off was odd (so `!!x` reports
 /// "not negated" and `!x` reports "negated"). Used so a guard written `!(i < n)`
 /// is understood the same as `i >= n`.
-fn unwrap_not(ctx: &Context, mut v: Value) -> (Value, bool) {
+pub(crate) fn unwrap_not(ctx: &Context, mut v: Value) -> (Value, bool) {
     let mut negated = false;
     while let Some(def) = v.defining_op() {
         if Operation::get_op::<MirNotOp>(def, ctx).is_some() {
@@ -206,7 +206,7 @@ fn unwrap_not(ctx: &Context, mut v: Value) -> (Value, bool) {
 
 /// If `op` is a comparison (`<`, `<=`, `>`, `>=`), return which one it is and
 /// its two sides (left, right); `None` for any other op.
-fn match_cmp(ctx: &Context, op: Ptr<Operation>) -> Option<(CmpPred, Value, Value)> {
+pub(crate) fn match_cmp(ctx: &Context, op: Ptr<Operation>) -> Option<(CmpPred, Value, Value)> {
     let pred = if Operation::get_op::<MirLtOp>(op, ctx).is_some() {
         CmpPred::Lt
     } else if Operation::get_op::<MirLeOp>(op, ctx).is_some() {

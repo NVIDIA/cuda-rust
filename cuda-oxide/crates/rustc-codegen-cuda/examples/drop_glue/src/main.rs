@@ -70,6 +70,30 @@ impl Drop for RecursiveDrop {
     }
 }
 
+// Precision control for the proof. An effect-free destructor whose two
+// branches join back together returns on every path, so the proof must keep
+// accepting it and lower the drop to a plain branch. The callees have visible
+// empty bodies; `#[inline(never)]` keeps the diamond in the destructor's MIR.
+#[inline(never)]
+fn left_noop() {}
+
+#[inline(never)]
+fn right_noop() {}
+
+#[allow(dead_code)]
+struct DiamondDrop(u8);
+
+impl Drop for DiamondDrop {
+    #[inline(never)]
+    fn drop(&mut self) {
+        if self.0 == 0 {
+            left_noop()
+        } else {
+            right_noop()
+        }
+    }
+}
+
 #[cuda_module]
 mod kernels {
     use super::*;
@@ -125,6 +149,29 @@ mod kernels {
 
             // Semantically unreachable.
             slot.write(0x4444_4444);
+        }
+    }
+
+    /// Compile-only precision control: an effect-free `if`/`else` inside
+    /// `Drop::drop` joins back together, so the proof must still erase the
+    /// drop. The post-drop store goes to a second slot so neither store is
+    /// dead and both stay visible in the optimized PTX.
+    #[kernel]
+    pub fn reconverging_drop_probe(mut out: DisjointSlice<u32>) {
+        if thread::index_1d().get() != 0 {
+            return;
+        }
+
+        unsafe {
+            let slot = out.as_mut_ptr();
+            slot.write(0x5555_5555);
+
+            {
+                let _guard = DiamondDrop(thread::index_1d().get() as u8);
+            }
+
+            // Reachable: the destructor returns.
+            slot.add(1).write(0x6666_6666);
         }
     }
 

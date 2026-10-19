@@ -273,6 +273,8 @@ that not all threads take. Every thread in the block must reach the same
 control flow, restructure so the barrier is outside the branch.
 :::
 
+(compiler-ordering-around-the-barrier)=
+
 ### Compiler ordering around the barrier
 
 The hardware guarantee above covers visibility between threads. A second
@@ -288,14 +290,15 @@ that the compiler treats as reading and writing all memory:
 | Access form                                              | Kept on its side of `sync_threads()` | Notes |
 | :------------------------------------------------------- | :----------------------------------- | :---- |
 | `SharedArray` indexing, `S[i]`                           | Yes | A plain load or store in address space 3. |
-| `SharedArray::as_raw_mut_ptr(&raw mut S)`                | Yes | The same instructions as indexing. Prefer it to `as_mut_ptr()`. That method needs `&mut S`, and the `static_mut_refs` lint rejects it under edition 2024. |
+| `SharedArray::as_raw_mut_ptr(&raw mut S)`                | Yes | The same instructions as indexing. Prefer it to `as_mut_ptr()` and `as_ptr()`. Those methods borrow `S`, and the `static_mut_refs` lint rejects a borrow of a `static mut` under edition 2024. |
 | `DynamicSharedArray::<T>::get()` and `offset()`          | Yes | A plain load or store through the returned pointer. |
-| `ptx_asm!` with no options                               | Yes | The call is `asm sideeffect` with no memory attribute. The PTX keeps it in order against the barrier and other side-effecting asm. ptxas may drop a snippet with an unused result from the SASS. |
-| `ptx_asm!` with `clobber("memory")`                      | Yes | Adds `~{memory}` to the constraint string. The order matches the row above in the current lowering. Without the clobber that order comes from the `sideeffect` flag alone. That flag declares no memory access. Add it to every snippet that loads or stores through an address. |
+| `ptx_asm!` with no options                               | Yes | The call is `asm sideeffect` with no memory attribute. The PTX keeps it in order against the barrier, plain loads and stores, and other side-effecting asm. ptxas may drop a snippet with an unused result from the SASS. |
+| `ptx_asm!` with `clobber("memory")`                      | Yes | Adds `~{memory}` to the constraint string. The order matches the row above in the current lowering. Without the clobber that order comes from the `sideeffect` flag alone. That flag does not tell the compiler that the snippet touches memory. Add it to every snippet that loads or stores through an address. |
 | `ptx_asm!` with `options(register_only)`                 | No | The call has no `sideeffect` flag. The compiler may move it across memory operations and the barrier, and deletes it when its result is unused. Use it for snippets that touch registers only. |
 | `cp_async_*` copies, `cp_async_commit_group()`, `cp_async_wait_group(n)` | Yes, but see below | Issue, commit and wait stay in order. The barrier does not wait for the copy to land. |
-| A `&T` to a slot another thread writes, live across the barrier | No | rustc merges reads through it before either backend runs. See below. |
-| A `&UnsafeCell<T>` or a reference to a `BlockAtomic*` type | Yes | Each read reloads the slot. |
+| A `&T` or `&[T]` to slots another thread writes, live across the barrier | No | rustc merges reads through it before either backend runs. See below. |
+| A `&UnsafeCell<T>` to such a slot | Yes | A plain load that is re-read after each barrier. Two adjacent reads with nothing between them may still become one load. |
+| A reference to a `BlockAtomic*` type | Yes | Each `load()` is side-effecting asm with a memory clobber. The compiler keeps every one. |
 
 The indexing, `as_raw_mut_ptr`, `DynamicSharedArray` and both side-effecting
 `ptx_asm!` rows were checked on both backends with a producer and consumer
@@ -342,9 +345,11 @@ unsafe {
 thread::sync_threads(); // other threads may now read `dst`
 ```
 
-A test kernel that drops `cp_async_wait_group(0)` and reads a neighbour's slot
-after the barrier returned the stale value in all 128 threads on sm_120. The
-same kernel with the wait returned the copied value in all 128.
+Reading the destination before the copy completes is undefined behaviour. A
+test kernel that drops `cp_async_wait_group(0)` and reads a neighbour's slot
+after the barrier can return the stale value: in a plain run on sm_120 all 128
+threads did, and under compute-sanitizer every copy had landed first. The same
+kernel with the wait returned the copied value in all 128 threads.
 
 #### Share a slot through a reference only with `UnsafeCell`
 
@@ -353,12 +358,16 @@ that the target does not change while the reference is live. rustc merges two
 reads through it into one load before either backend runs. In a test kernel
 each thread read its neighbour's slot through a `&u32`, passed two barriers
 while the neighbour wrote a new value, and read again. The second read
-returned the old value in all 128 threads on both backends. Keeping such a
-reference live across a barrier while another thread writes the target is
-undefined behaviour.
+returned the old value in all 128 threads on both backends. A `&[T]` built
+over the tile with `from_raw_parts` is the same case: two indexed reads across
+the barrier compile to one load. Keeping such a reference live across a barrier
+while another thread writes the target is undefined behaviour. So is a `&mut T`
+to such a slot: the other thread's write breaks its exclusive access, even
+though no pass merges reads through it today.
 
-A `&UnsafeCell<T>` or a reference to a `BlockAtomic*` type reloads at each
-read. The same kernel with either form read the new value in all 128 threads.
+A `&UnsafeCell<T>` is re-read after each barrier, and every `BlockAtomic*`
+load is an instruction the compiler keeps. The same kernel with either form
+read the new value in all 128 threads.
 Share a slot through one of these, or read through a raw pointer after each
 barrier. The tip under "Declaration rules" gives the same reason for
 `SharedArray` wrapping `UnsafeCell`.

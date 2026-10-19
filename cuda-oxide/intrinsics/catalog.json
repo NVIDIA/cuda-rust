@@ -11,8 +11,8 @@
   },
   "inputs": {
     "imported_sha256": "54d47b8e281dd953dc95fe16f834ff38164d9809171c9a1af097231b0bc45cab",
-    "overlay_sha256": "1c92502edd54de3fca6e7ab332654262ef9ecd27b60210550f7c856e51e31fa9",
-    "abi_ledger_sha256": "ce40abc882afa0a313cc657758fd07aef21dd98338d8015f9cccf4edf85eb83f",
+    "overlay_sha256": "0281537302b94701ca292cc476ad6ed2fbc8e74f4350381382ebb0cfa1256f8c",
+    "abi_ledger_sha256": "dd4ce9543a61fbb9d2d80b48fb26447716be5bf05440713d6868c082606ee9d1",
     "evidence_sha256": [
       "cuda-12.0-libnvvm-12.0.140-ex2-f16.json:7102ea7d567ff2d2eb75a0384148d2e5eb6e605c26a5b98c71371fa3c46adef6",
       "cuda-12.9-libnvvm-12.9.86-f32x2.json:bc5bb505677989affa9ac1044da772b4eb349700dc65e16f09fffffa1f5c493e",
@@ -18578,7 +18578,7 @@
         }
       ],
       "rust": {
-        "abi_id": "i1030",
+        "abi_id": "i1034",
         "module": "tma",
         "name": "cp_async_bulk_tensor_1d_g2s_cta",
         "arguments": [
@@ -18591,7 +18591,7 @@
         "safe": false,
         "must_use": false,
         "safe_allowlist_reason": null,
-        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1030",
+        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1034",
         "public_path": "cuda_intrinsics::tma::cp_async_bulk_tensor_1d_g2s_cta",
         "compatibility_paths": [
           "cuda_device::tma::cp_async_bulk_tensor_1d_g2s_cta"
@@ -19389,7 +19389,7 @@
         }
       ],
       "rust": {
-        "abi_id": "i1031",
+        "abi_id": "i1035",
         "module": "tma",
         "name": "cp_async_bulk_tensor_2d_g2s_cta",
         "arguments": [
@@ -19403,7 +19403,7 @@
         "safe": false,
         "must_use": false,
         "safe_allowlist_reason": null,
-        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1031",
+        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1035",
         "public_path": "cuda_intrinsics::tma::cp_async_bulk_tensor_2d_g2s_cta",
         "compatibility_paths": [
           "cuda_device::tma::cp_async_bulk_tensor_2d_g2s_cta"
@@ -20819,7 +20819,7 @@
         }
       ],
       "rust": {
-        "abi_id": "i1032",
+        "abi_id": "i1036",
         "module": "tma",
         "name": "cp_async_bulk_tensor_3d_g2s_cta",
         "arguments": [
@@ -20834,7 +20834,7 @@
         "safe": false,
         "must_use": false,
         "safe_allowlist_reason": null,
-        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1032",
+        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1036",
         "public_path": "cuda_intrinsics::tma::cp_async_bulk_tensor_3d_g2s_cta",
         "compatibility_paths": [
           "cuda_device::tma::cp_async_bulk_tensor_3d_g2s_cta"
@@ -21648,7 +21648,7 @@
         }
       ],
       "rust": {
-        "abi_id": "i1033",
+        "abi_id": "i1037",
         "module": "tma",
         "name": "cp_async_bulk_tensor_4d_g2s_cta",
         "arguments": [
@@ -21664,7 +21664,7 @@
         "safe": false,
         "must_use": false,
         "safe_allowlist_reason": null,
-        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1033",
+        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1037",
         "public_path": "cuda_intrinsics::tma::cp_async_bulk_tensor_4d_g2s_cta",
         "compatibility_paths": [
           "cuda_device::tma::cp_async_bulk_tensor_4d_g2s_cta"
@@ -22486,7 +22486,7 @@
         }
       ],
       "rust": {
-        "abi_id": "i1034",
+        "abi_id": "i1038",
         "module": "tma",
         "name": "cp_async_bulk_tensor_5d_g2s_cta",
         "arguments": [
@@ -22503,7 +22503,7 @@
         "safe": false,
         "must_use": false,
         "safe_allowlist_reason": null,
-        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1034",
+        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1038",
         "public_path": "cuda_intrinsics::tma::cp_async_bulk_tensor_5d_g2s_cta",
         "compatibility_paths": [
           "cuda_device::tma::cp_async_bulk_tensor_5d_g2s_cta"

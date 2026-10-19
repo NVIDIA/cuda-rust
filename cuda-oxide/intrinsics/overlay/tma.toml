@@ -17,7 +17,7 @@ abi_id = "i0328"
 operation = "g2s_tile1d"
 
 [[tma.variant]]
-abi_id = "i1030"
+abi_id = "i1034"
 operation = "g2s_cta_tile1d"
 
 [[tma.variant]]
@@ -25,7 +25,7 @@ abi_id = "i0329"
 operation = "g2s_tile2d"
 
 [[tma.variant]]
-abi_id = "i1031"
+abi_id = "i1035"
 operation = "g2s_cta_tile2d"
 
 [[tma.variant]]
@@ -41,7 +41,7 @@ abi_id = "i0332"
 operation = "g2s_tile3d"
 
 [[tma.variant]]
-abi_id = "i1032"
+abi_id = "i1036"
 operation = "g2s_cta_tile3d"
 
 [[tma.variant]]
@@ -49,7 +49,7 @@ abi_id = "i0333"
 operation = "g2s_tile4d"
 
 [[tma.variant]]
-abi_id = "i1033"
+abi_id = "i1037"
 operation = "g2s_cta_tile4d"
 
 [[tma.variant]]
@@ -57,7 +57,7 @@ abi_id = "i0334"
 operation = "g2s_tile5d"
 
 [[tma.variant]]
-abi_id = "i1034"
+abi_id = "i1038"
 operation = "g2s_cta_tile5d"
 
 [[tma.variant]]

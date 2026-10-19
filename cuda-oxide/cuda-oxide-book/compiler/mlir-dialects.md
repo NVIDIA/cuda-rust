@@ -303,11 +303,11 @@ they become `call` instructions to `@llvm.nvvm.*` intrinsics.
 
 ### Architecture Coverage
 
-At catalog SHA-256 `27a44de2` (the stamp in every `ops/generated/` file
+At catalog SHA-256 `fa1e911b` (the stamp in every `ops/generated/` file
 header), the dialect holds 581 operations across 42 modules, and they come
 from two different places. The split is the first thing to know about it,
 because it decides where -- and whether -- you would add one. If the header
-stamp no longer starts with `27a44de2`, the counts on this page predate the
+stamp no longer starts with `fa1e911b`, the counts on this page predate the
 catalog you are reading.
 
 **Hand-written**, directly under `cuda-oxide/crates/dialect-nvvm/src/ops/`. These are the

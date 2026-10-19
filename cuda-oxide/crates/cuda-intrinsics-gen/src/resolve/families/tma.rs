@@ -415,7 +415,7 @@ pub(in crate::resolve) fn tma_recipe(operation: TmaOperation) -> TmaRecipe {
             "nvvm.cp_async_bulk_tensor_g2s_tile_1d",
         ),
         TmaOperation::G2sCtaTile1d => (
-            "i1030",
+            "i1034",
             "cp_async_bulk_tensor_1d_g2s_cta",
             "memory.copy.async.bulk.tensor.g2s.cta.tile.1d",
             "int_nvvm_cp_async_bulk_tensor_g2s_cta_tile_1d",
@@ -433,7 +433,7 @@ pub(in crate::resolve) fn tma_recipe(operation: TmaOperation) -> TmaRecipe {
             "nvvm.cp_async_bulk_tensor_g2s_tile_2d",
         ),
         TmaOperation::G2sCtaTile2d => (
-            "i1031",
+            "i1035",
             "cp_async_bulk_tensor_2d_g2s_cta",
             "memory.copy.async.bulk.tensor.g2s.cta.tile.2d",
             "int_nvvm_cp_async_bulk_tensor_g2s_cta_tile_2d",
@@ -469,7 +469,7 @@ pub(in crate::resolve) fn tma_recipe(operation: TmaOperation) -> TmaRecipe {
             "nvvm.cp_async_bulk_tensor_g2s_tile_3d",
         ),
         TmaOperation::G2sCtaTile3d => (
-            "i1032",
+            "i1036",
             "cp_async_bulk_tensor_3d_g2s_cta",
             "memory.copy.async.bulk.tensor.g2s.cta.tile.3d",
             "int_nvvm_cp_async_bulk_tensor_g2s_cta_tile_3d",
@@ -487,7 +487,7 @@ pub(in crate::resolve) fn tma_recipe(operation: TmaOperation) -> TmaRecipe {
             "nvvm.cp_async_bulk_tensor_g2s_tile_4d",
         ),
         TmaOperation::G2sCtaTile4d => (
-            "i1033",
+            "i1037",
             "cp_async_bulk_tensor_4d_g2s_cta",
             "memory.copy.async.bulk.tensor.g2s.cta.tile.4d",
             "int_nvvm_cp_async_bulk_tensor_g2s_cta_tile_4d",
@@ -505,7 +505,7 @@ pub(in crate::resolve) fn tma_recipe(operation: TmaOperation) -> TmaRecipe {
             "nvvm.cp_async_bulk_tensor_g2s_tile_5d",
         ),
         TmaOperation::G2sCtaTile5d => (
-            "i1034",
+            "i1038",
             "cp_async_bulk_tensor_5d_g2s_cta",
             "memory.copy.async.bulk.tensor.g2s.cta.tile.5d",
             "int_nvvm_cp_async_bulk_tensor_g2s_cta_tile_5d",

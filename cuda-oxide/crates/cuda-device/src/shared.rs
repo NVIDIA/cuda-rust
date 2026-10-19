@@ -240,12 +240,23 @@ impl<T, const N: usize, const ALIGN: usize> SharedArray<T, N, ALIGN> {
     /// result keeps the array's CTA-shared address space in its type, so it
     /// stays a shared-memory pointer when it is passed to helper functions.
     ///
+    /// # Safety
+    ///
+    /// `shared` must point to a `static mut SharedArray` in the current CUDA
+    /// kernel, normally obtained with `&raw mut`. The returned pointer is valid
+    /// only within that kernel. This requirement is what makes the type's
+    /// claim true: a `SharedPtr` built from any other pointer hands
+    /// [`SharedPtr::addr_u32`] an address outside the shared window, where the
+    /// conversion yields an unspecified value. Callers must keep concurrent
+    /// accesses disjoint and use the CUDA synchronization required before
+    /// reading data written by another thread.
+    ///
     /// ```rust,ignore
     /// static mut TILE: SharedArray<u8, 4096, 128> = SharedArray::UNINIT;
-    /// let tile: SharedPtr<u8> = SharedArray::shared_ptr(&raw mut TILE);
+    /// let tile: SharedPtr<u8> = unsafe { SharedArray::shared_ptr(&raw mut TILE) };
     /// ```
     #[inline(always)]
-    pub fn shared_ptr(shared: *mut Self) -> SharedPtr<T> {
+    pub unsafe fn shared_ptr(shared: *mut Self) -> SharedPtr<T> {
         SharedPtr {
             ptr: shared as *mut SharedSlot<T>,
         }
@@ -629,9 +640,9 @@ pub struct SharedSlot<T>(T);
 /// through calls to helper functions, and emits the `.shared::cta` forms of
 /// instructions that take it without converting a generic address.
 ///
-/// It is created from shared memory the CTA owns, with
-/// [`SharedArray::shared_ptr`] or [`DynamicSharedArray::shared_ptr`], or from
-/// a generic pointer with the `unsafe` [`SharedPtr::from_raw`]. Like a raw
+/// It is created from shared memory the CTA owns, with the `unsafe`
+/// [`SharedArray::shared_ptr`] or the safe [`DynamicSharedArray::shared_ptr`],
+/// or from a generic pointer with the `unsafe` [`SharedPtr::from_raw`]. Like a raw
 /// pointer, it may dangle; dereferencing it goes through [`SharedPtr::as_ptr`]
 /// and `unsafe` code.
 ///
@@ -649,7 +660,7 @@ pub struct SharedSlot<T>(T);
 ///     unsafe { tile.add(i).as_ptr().write(value) };
 /// }
 ///
-/// let tile = SharedArray::shared_ptr(&raw mut TILE);
+/// let tile = unsafe { SharedArray::shared_ptr(&raw mut TILE) };
 /// store(tile, thread::threadIdx_x() as usize, 1.0);
 /// ```
 #[repr(transparent)]

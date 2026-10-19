@@ -63,7 +63,10 @@ checks the optimized PTX. For the diverging probes the pre-drop store
 remains and is immediately followed by an unconditional self-loop, while
 the unreachable post-drop store is absent. For the reconverging probe both
 stores remain. The PTX adjacency holds because `opt -O2` inlines the
-retained glue; `#[inline(never)]` is not propagated as `noinline`.
+retained glue and the destructors. They carry no inline attribute, since
+`#[inline(never)]` reaches LLVM as `noinline` and would keep them real PTX
+functions; MIR inlining is off for this crate instead (`Cargo.toml`), so the
+importer still sees each destructor's own MIR.
 
 These kernels are compiled but **never launched by `main`**. Do not launch
 the diverging probes manually: their destructors intentionally never

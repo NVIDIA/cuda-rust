@@ -42,12 +42,13 @@ impl Drop for DropMarker {
 }
 
 // Compile-only regression probes. These destructors intentionally never return;
-// their kernels are generated but never launched by `main`.
+// their kernels are generated but never launched by `main`. MIR inlining is
+// off for this crate (see Cargo.toml) so each destructor reaches the importer
+// with its own MIR.
 #[allow(dead_code)]
 struct LoopingDrop(u8);
 
 impl Drop for LoopingDrop {
-    #[inline(never)]
     #[allow(clippy::empty_loop)]
     fn drop(&mut self) {
         loop {}
@@ -55,7 +56,6 @@ impl Drop for LoopingDrop {
 }
 
 #[allow(unconditional_recursion)]
-#[inline(never)]
 fn recursive_noop() {
     recursive_noop();
 }
@@ -64,7 +64,6 @@ fn recursive_noop() {
 struct RecursiveDrop(u8);
 
 impl Drop for RecursiveDrop {
-    #[inline(never)]
     fn drop(&mut self) {
         recursive_noop();
     }
@@ -73,18 +72,17 @@ impl Drop for RecursiveDrop {
 // Precision control for the proof. An effect-free destructor whose two
 // branches join back together returns on every path, so the proof must keep
 // accepting it and lower the drop to a plain branch. The callees have visible
-// empty bodies; `#[inline(never)]` keeps the diamond in the destructor's MIR.
-#[inline(never)]
+// empty bodies. MIR inlining is off for this crate (see Cargo.toml), which
+// keeps the diamond in the destructor's MIR; `#[inline(never)]` would reach
+// LLVM as `noinline` and keep these helpers real PTX functions.
 fn left_noop() {}
 
-#[inline(never)]
 fn right_noop() {}
 
 #[allow(dead_code)]
 struct DiamondDrop(u8);
 
 impl Drop for DiamondDrop {
-    #[inline(never)]
     fn drop(&mut self) {
         if self.0 == 0 {
             left_noop()

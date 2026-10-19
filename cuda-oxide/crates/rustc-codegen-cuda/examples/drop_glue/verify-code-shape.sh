@@ -100,10 +100,12 @@ def require_store(body, value, name, label="pre-drop"):
     return store.end()
 
 # The PTX adjacency below holds because `opt -O2` inlines the retained glue
-# and the destructor into the kernel: `#[inline(never)]` is not propagated as
-# `noinline`, as the cluster example's shape check also notes. The
-# drop_glue.ll assertion is the one that tracks the importer's own decision;
-# this check confirms what LLVM made of the call it kept.
+# and the destructor into the kernel. The destructors carry no inline
+# attribute: `#[inline(never)]` reaches LLVM as `noinline` and would keep them
+# real PTX functions, so the kernel would call them instead. MIR inlining is
+# off for this crate (Cargo.toml) so the importer still sees each destructor's
+# own MIR. The drop_glue.ll assertion is the one that tracks the importer's
+# own decision; this check confirms what LLVM made of the call it kept.
 def require_nonreturning_loop(body, after_store, name):
     # Both optimized probes lower to a store followed by an unconditional
     # self-loop. Tie the loop to that store's continuation: an unrelated

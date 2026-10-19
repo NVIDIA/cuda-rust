@@ -80,7 +80,8 @@ use core::ops::{Index, IndexMut};
 ///
 /// - `T`: Element type (f32, f64, i32, etc.)
 /// - `N`: Array size (must be known at compile time)
-/// - `ALIGN`: Alignment in bytes (0 = natural alignment, 128 for TMA destinations)
+/// - `ALIGN`: Alignment in bytes. `0` means natural alignment; any other value
+///   must be a power of two (128 for TMA destinations).
 ///
 /// # Alignment
 ///
@@ -95,6 +96,18 @@ use core::ops::{Index, IndexMut};
 /// // TMA destination - 128-byte alignment required
 /// static mut TMA_TILE: SharedArray<f32, 256, 128> = SharedArray::UNINIT;
 /// ```
+///
+/// The contract the compiler enforces:
+///
+/// - `ALIGN` is `0` or a non-zero power of two. Anything else is a compile
+///   error that names the use site.
+/// - Storage is never declared below `align_of::<T>()`. A request below it is
+///   raised silently, as `#[repr(align(N))]` raises a struct; a larger request
+///   is honored. So `SharedArray<u64, 2, 1>` is declared at 8 bytes, and a
+///   `#[repr(C, align(16))]` element at natural alignment is declared at 16.
+/// - Aggregate, nested-array and `f16` elements at natural alignment declare
+///   their natural alignment in PTX (`.align 4` for `[f32; N]`, `.align 2` for
+///   `f16`). Older releases printed a blanket `.align 8` for them.
 ///
 /// # Soundness: `!Sync`
 ///
@@ -305,7 +318,8 @@ pub fn __dynamic_shared_alignment<const ALIGN: usize>() {
 /// # Type Parameters
 ///
 /// - `T`: Element type for the returned pointer
-/// - `ALIGN`: Base alignment in bytes (default: 16, matching nvcc)
+/// - `ALIGN`: Base alignment in bytes (default: 16, matching nvcc). Must be a
+///   non-zero power of two.
 ///
 /// # Alignment
 ///
@@ -330,6 +344,18 @@ pub fn __dynamic_shared_alignment<const ALIGN: usize>() {
 /// - `16` (default): Matches nvcc, suitable for most use cases
 /// - `128`: Required for TMA (Tensor Memory Accelerator) operations
 /// - `256`: Cache-line friendly for some architectures
+///
+/// The contract the compiler enforces:
+///
+/// - `ALIGN` is a non-zero power of two. Anything else, including `0`, is a
+///   compile error that names the use site.
+/// - A kernel has one dynamic pool. It is declared at the strongest typed
+///   requirement over the kernel's `get`, `get_raw` and `offset` uses, each
+///   taken as the larger of its `ALIGN` and `align_of::<T>()`, combined with
+///   the launch contract's alignment. `DynamicSharedArray::<u64, 1>::get()`
+///   alone declares the pool at 8 bytes.
+/// - The declaration aligns the pool base. Keeping an `offset(byte_offset)`
+///   result aligned for `T` is still the caller's responsibility.
 ///
 /// # Usage
 ///
@@ -484,8 +510,9 @@ impl<T, const ALIGN: usize> DynamicSharedArray<T, ALIGN> {
     /// Ensure `byte_offset` is properly aligned for type `T`. For example,
     /// `f32` requires 4-byte alignment, `f64` requires 8-byte alignment.
     ///
-    /// The base of dynamic shared memory is aligned to `ALIGN` bytes (default 16),
-    /// so to get an N-byte aligned pointer, ensure `byte_offset % N == 0`.
+    /// The base of dynamic shared memory is aligned to at least `ALIGN` bytes
+    /// (default 16) and never below `align_of::<T>()`, so to get an N-byte
+    /// aligned pointer, ensure `byte_offset % N == 0`.
     #[inline(never)]
     pub fn offset(byte_offset: usize) -> *mut T {
         // The byte_offset is used by the compiler to compute the pointer.

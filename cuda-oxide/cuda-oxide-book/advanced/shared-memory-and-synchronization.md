@@ -123,7 +123,7 @@ undefined until threads write to them.
 | :-------- | :-------------------------------------------------------------------------------- |
 | `T`       | Element type (`f32`, `u32`, etc.)                                                 |
 | `N`       | Number of elements (fixed at compile time)                                        |
-| `ALIGN`   | Byte alignment (default 0 = natural alignment; use 128 for TMA destinations)      |
+| `ALIGN`   | Byte alignment: 0 (natural) or a power of two; use 128 for TMA destinations       |
 
 :::{tip}
 `SharedArray` is `!Sync` by design — it wraps `UnsafeCell`, which prevents
@@ -131,6 +131,22 @@ the compiler from assuming immutability across threads. This is correct:
 shared memory is inherently mutable by all threads in the block, and the
 programmer is responsible for synchronization.
 :::
+
+### Alignment rules
+
+`ALIGN` is `0` (natural alignment) or a non-zero power of two. Any other
+value is a compile error that names the use site.
+
+Storage is never declared below `align_of::<T>()`. A smaller request is
+raised silently, the way `#[repr(align(N))]` raises a struct; a larger
+request is honored. `SharedArray<u64, 2, 1>` is therefore declared at 8
+bytes, and a `#[repr(C, align(16))]` element at natural alignment is
+declared at 16. Without the raise, a `u64` array declared at 1 byte could be
+packed right behind a byte array and fault with `misaligned address`.
+
+Aggregate, nested-array and `f16` elements at natural alignment declare
+their natural alignment in PTX (`.align 4` for `[f32; N]`, `.align 2` for
+`f16`). Older releases printed a blanket `.align 8` for them.
 
 ### The API surface
 
@@ -232,6 +248,15 @@ total does not exceed `shared_mem_bytes` — there are no runtime guards.
 `DynamicSharedArray` defaults to 16-byte alignment. For TMA operations
 (Hopper+), use `DynamicSharedArray<f32, 128>` to get the required
 128-byte alignment. The alignment is encoded in the PTX `.align` directive.
+
+`ALIGN` must be a non-zero power of two; `0` is a compile error that names
+the use site. A kernel has one dynamic pool, and the compiler declares it at
+the strongest typed requirement over the kernel's `get`, `get_raw` and
+`offset` uses, each taken as the larger of its `ALIGN` and
+`align_of::<T>()`, combined with the launch contract's alignment.
+`DynamicSharedArray::<u64, 1>::get()` alone declares the pool at 8 bytes.
+The declaration aligns the pool base only; keeping an `offset(byte_offset)`
+result aligned for `T` is still the caller's job.
 
 ---
 

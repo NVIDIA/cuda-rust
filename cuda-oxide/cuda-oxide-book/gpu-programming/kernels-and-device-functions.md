@@ -513,6 +513,14 @@ In practice this means:
   once the call is dropped. Reach for `gpu_printf!` before the check when you
   need to see the values, or `gpu_assert!` for an explicit check.
 
+A device function declared `-> !` with a real body is different. It never
+returns to its caller, for example because it writes an error code and then
+runs `loop {}`. The compiler calls it like any other function and places
+`unreachable` after the call, so the work it does before diverging is kept.
+Three cases still lower to the device trap instead: the panic entry points in
+`core::panicking`, a `-> !` body that is nothing but a panic, and a call
+through a function pointer.
+
 :::{seealso}
 The [Error Handling and Debugging](error-handling-and-debugging.md) chapter
 covers `gpu_printf!`, `gpu_assert!`, and `cargo oxide debug` for diagnosing

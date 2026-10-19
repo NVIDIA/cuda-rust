@@ -28,6 +28,42 @@ use crate::resolve::policy::*;
 use crate::resolve::targets::validate_arch_introduction_floor;
 
 #[test]
+fn scalar_arithmetic_llvm_floor_is_independent_of_libnvvm_evidence() {
+    let admission = ScalarArithmeticAdmission {
+        llvm_evidence_profile: "llvm-scalar-arithmetic".into(),
+        libnvvm_evidence_profile: "libnvvm-scalar-arithmetic".into(),
+        runtime_validation: RuntimeValidation::Unexecuted,
+        variants: canonical_scalar_arithmetic_variants()
+            .into_iter()
+            .enumerate()
+            .map(
+                |(index, variant)| crate::model::ScalarArithmeticAdmissionVariant {
+                    abi_id: format!("i{:04}", 390 + index),
+                    format: variant.0,
+                    operation: variant.1,
+                    rounding: variant.2,
+                    subnormal: variant.3,
+                    saturation: variant.4,
+                },
+            )
+            .collect(),
+    };
+    let records = expand_scalar_arithmetic_admission(&admission).unwrap();
+    assert_eq!(records.len(), 64);
+    for record in records {
+        assert_eq!(record.minimum_ptx, "2.0", "{}", record.id);
+        assert_eq!(record.minimum_sm.as_deref(), Some("sm_20"), "{}", record.id);
+        for lowering in record.backend_lowerings {
+            let (ptx, sm) = match lowering.backend {
+                IntrinsicBackend::LlvmNvptx => ("3.2", "sm_20"),
+                IntrinsicBackend::LibNvvm => ("6.3", "sm_75"),
+            };
+            assert_eq!(lowering.minimum_ptx.as_deref(), Some(ptx), "{}", record.id);
+            assert_eq!(lowering.minimum_sm.as_deref(), Some(sm), "{}", record.id);
+        }
+    }
+}
+#[test]
 fn compact_prmt_admission_requires_every_mode_and_reserved_abi_id() {
     assert_eq!(
         expand_prmt_admission(&test_prmt_admission()).unwrap().len(),

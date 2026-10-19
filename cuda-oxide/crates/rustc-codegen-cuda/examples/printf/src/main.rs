@@ -14,6 +14,8 @@
 //! - Format specifiers: hex, octal, scientific, compact
 //! - Flags: left-justify, sign, alternate, zero-pad
 //! - Width and precision
+//! - Default conversions chosen from the argument type: `{}` on a `u64`
+//!   above `i64::MAX`, on floats, on a slice element and on a raw pointer
 //!
 //! Run: cargo oxide run printf
 
@@ -61,9 +63,9 @@ mod kernels {
             let small: f64 = 0.000123;
 
             gpu_printf!("=== Float Tests ===\n");
-            gpu_printf!("f32 default: {:.6f}\n", pi);
-            gpu_printf!("f64 default: {:.6f}\n", e);
-            gpu_printf!("Precision .2: {:.2f}\n", pi);
+            gpu_printf!("f32 default: {}\n", pi);
+            gpu_printf!("f64 default: {}\n", e);
+            gpu_printf!("Precision .2: {:.2}\n", pi);
             gpu_printf!("Precision .6: {:.6f}\n", pi);
             gpu_printf!("Scientific (lower): {:e}\n", large);
             gpu_printf!("Scientific (upper): {:E}\n", large);
@@ -165,6 +167,36 @@ mod kernels {
             gpu_printf!("false: {}\n", f);
         }
     }
+
+    /// Test kernel: Conversions chosen from the argument type
+    ///
+    /// A placeholder without a type character prints its argument by type:
+    /// `%llu` for a `u64`, `%f` for a float, `%p` for a raw pointer. Each
+    /// line here once printed through `%lld`, so a `u64` above `i64::MAX`
+    /// came out negative and a float as a truncated integer.
+    #[kernel]
+    pub fn test_default_conversions(data: &[f32]) {
+        let tid = thread::index_1d().get();
+
+        if tid == 0 {
+            let max: u64 = u64::MAX;
+            let pi: f32 = 3.141_592_7;
+            let e: f64 = 2.718281828;
+            let small: u64 = 42;
+            let signed: i32 = -42;
+            let first: *const f32 = data.as_ptr();
+
+            gpu_printf!("=== Default Conversion Tests ===\n");
+            gpu_printf!("u64::MAX: {}\n", max);
+            gpu_printf!("f32 binding: {}\n", pi);
+            gpu_printf!("f64 binding: {}\n", e);
+            gpu_printf!("data[{}]: {}\n", tid, data[tid]);
+            gpu_printf!("Precision .2 on f32: {:.2}\n", pi);
+            gpu_printf!("Zero-pad u64: {:08}\n", small);
+            gpu_printf!("Pointer: {}\n", first);
+            gpu_printf!("Mixed: {} {} {} {:.2} {:x}\n", signed, pi, max, e, 255u32);
+        }
+    }
 }
 
 // =============================================================================
@@ -253,6 +285,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
     unsafe { module.test_booleans((stream).as_ref(), cfg) }?;
     stream.synchronize()?;
+    println!();
+
+    // ====================================================================
+    // Test 8: Conversions chosen from the argument type
+    // ====================================================================
+    println!("--- Test 8: Default conversions ---");
+    {
+        let data: Vec<f32> = vec![1.1, 2.2, 3.3, 4.4];
+        let data_dev = DeviceBuffer::from_host(&stream, &data)?;
+
+        // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
+        unsafe { module.test_default_conversions((stream).as_ref(), cfg, &data_dev) }?;
+        stream.synchronize()?;
+    }
     println!();
 
     println!("=== ALL PRINTF TESTS PASSED ===");

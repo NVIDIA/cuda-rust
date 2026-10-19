@@ -191,6 +191,30 @@ pub fn magnitude(x: f32, y: f32) -> f32 {
 | Callable from device code| Yes                     | Yes                                 | Yes                    |
 | Annotation required      | Always                  | Only for standalone/cross-crate/FFI | Never                  |
 
+### Inlining helpers
+
+A helper's `#[inline]` request reaches the GPU the same way it reaches the host
+backend. `#[inline]` becomes the LLVM `inlinehint`, `#[inline(always)]`
+becomes `alwaysinline`, and `#[inline(never)]` becomes `noinline`, so a helper
+marked `never` stays a separate `.func` in the PTX and is reached with a real
+`call.uni`. One exception: the `#[inline(never)]` that `#[device]` adds to a
+helper with its own type or const parameters is a host-side collector boundary,
+not a device intent, so it is not carried and const-generic arguments keep
+folding into the kernel.
+
+```{figure} images/inline-intent-mapping.svg
+:align: center
+:width: 100%
+
+How an inline request reaches the GPU. Left, one helper of each kind from the
+`inline_intent` example. Middle, the request recorded on `mir.func` as a typed
+`inline_intent` attribute and lowered to the LLVM function attribute in one
+place. Right, what opt and llc make of it: `call.uni` for the `noinline`
+helpers, no function left for the `alwaysinline` one, and the const-generic
+factor folded to an immediate. Before this mapping only `alwaysinline`
+survived, and LLVM inlined a `never` helper anyway.
+```
+
 ## What Rust works on the GPU
 
 cuda-oxide compiles standard Rust through `rustc` -- it is not a subset

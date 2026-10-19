@@ -352,6 +352,9 @@ unroll that loop.
 Partial unrolling also requires a counted-up loop: the counter must have a
 positive step, use `<` or `<=`, and compare against a limit that does not change
 inside the loop. The compiler warns and does not unroll unsupported requests.
+Every warning about a loop that was not unrolled names the `#[unroll]`
+attribute it refers to as `file:line:column` on a `-->` line, so a kernel with
+several annotated loops shows which one was left alone.
 
 To keep generated code bounded, one annotation may create at most 1,024 body
 copies, 8,192 cloned basic blocks, and 65,536 cloned operations. A larger

@@ -786,9 +786,10 @@ fn generated_m16n8k8_mma_floors_admit_turing_only_for_fp16() {
         }
     }
 
-    // mma_m16n8k8_f32_bf16 and mma_m16n8k8_f32_tf32 keep the Ampere floor even
-    // though LLVM selects them at sm_75
-    for marker in ["v1:i0522", "v1:i0107"] {
+    // The three sm_80 members of the admission (m16n8k4 TF32, m16n8k8 BF16,
+    // m16n8k16 F16) and the m16n8k8 TF32 form keep the Ampere floor, although
+    // LLVM selects the BF16 and TF32 m16n8k8 forms at sm_75.
+    for marker in ["v1:i0520", "v1:i0522", "v1:i0524", "v1:i0107"] {
         let target = generated_intrinsic_target_by_marker(marker).unwrap();
         for backend in backends {
             let generated =

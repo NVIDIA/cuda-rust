@@ -1181,6 +1181,13 @@ pub fn generate_device_code<'tcx>(
                     (((func, (export_name, is_kernel)), debug_source_scopes), inline),
                     reachability,
                 )| {
+                    // A dependency can instantiate a marked helper before a
+                    // kernel supplies its block contract. Keep its Rust MIR
+                    // for that consumer, but do not emit an unplanned checked
+                    // marker here. Independent standalone functions remain.
+                    if libraries.deferred.contains(&func.instance) {
+                        return None;
+                    }
                     // Use rustc_internal::stable() to convert the Instance.
                     // This is the key bridge between rustc_middle and rustc_public types.
                     let stable_instance = rustc_internal::stable(func.instance);

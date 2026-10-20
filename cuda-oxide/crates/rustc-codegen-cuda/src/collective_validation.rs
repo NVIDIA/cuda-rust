@@ -87,15 +87,23 @@ fn operand(value: &mir::Operand, state: &State) -> Fact {
     }
 }
 fn address(place: &mir::Place, state: &State) -> Fact {
+    let mut local = place.local;
     let mut fields = Vec::new();
-    for projection in &place.projection {
+    for (index, projection) in place.projection.iter().enumerate() {
         match projection {
             mir::ProjectionElem::Field(index, _) => fields.push(*index),
-            mir::ProjectionElem::Deref if fields.is_empty() => return state[place.local].clone(),
+            mir::ProjectionElem::Deref => match local_read(state, local, &fields) {
+                Fact::Local(base, path) => {
+                    local = base;
+                    fields = path;
+                }
+                fact if index + 1 == place.projection.len() => return fact,
+                _ => return Fact::Varying,
+            },
             _ => return Fact::Varying,
         }
     }
-    Fact::Local(place.local, fields)
+    Fact::Local(local, fields)
 }
 fn rvalue(value: &mir::Rvalue, state: &State) -> Fact {
     match value {
@@ -163,16 +171,23 @@ fn write(place: &mir::Place, value: Fact, state: &mut State, borrowed: &HashSet<
     for projection in &place.projection {
         match projection {
             mir::ProjectionElem::Field(index, _) => fields.push(*index),
-            mir::ProjectionElem::Deref if fields.is_empty() => {
-                if let Fact::Local(base, path) = &state[local] {
-                    local = *base;
-                    fields = path.clone();
+            mir::ProjectionElem::Deref => {
+                if let Fact::Local(base, path) = local_read(state, local, &fields) {
+                    local = base;
+                    fields = path;
                 } else {
                     invalidate_borrows(state, borrowed);
                     return;
                 }
             }
             _ => {
+                if place
+                    .projection
+                    .iter()
+                    .any(|projection| matches!(projection, mir::ProjectionElem::Deref))
+                {
+                    invalidate_borrows(state, borrowed);
+                }
                 state[local] = Fact::Varying;
                 return;
             }
@@ -206,11 +221,11 @@ fn call_fact(fact: Fact, state: &State) -> Fact {
     resolve(fact, state, &mut HashSet::new())
 }
 
-// Callee-owned addresses are not caller-local indices. This bounded analysis
-// does not prove the lifetime/provenance of references newly created by a helper.
+// Worklist bottom and callee-owned addresses are not caller facts. This bounded
+// analysis does not prove references newly created by a helper.
 fn return_fact(fact: Fact) -> Fact {
     match fact {
-        Fact::Local(..) => Fact::Varying,
+        Fact::Unset | Fact::Local(..) => Fact::Varying,
         Fact::Fields(values) => Fact::Fields(values.into_iter().map(return_fact).collect()),
         Fact::Referent(value) => Fact::Referent(Box::new(return_fact(*value))),
         other => other,
@@ -358,11 +373,27 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         if body.blocks.len() != supplied.block_count {
             return Err("checked collective MIR bridge block count mismatch".into());
         }
-        let edges = mir_importer::checked_collective_successors(
+        let mut edges = mir_importer::checked_collective_successors(
             &body,
             supplied.block_count,
             &supplied.successors,
         )?;
+        // Exhaustive enum matches retain an impossible `otherwise` arm in
+        // MIR. It cannot execute in a defined Rust program and must not make
+        // the real arms appear to bypass their reconvergence point.
+        for (block, data) in body.blocks.iter().enumerate() {
+            if let mir::TerminatorKind::SwitchInt { targets, .. } = &data.terminator.kind {
+                let otherwise = targets.otherwise();
+                if body.blocks[otherwise].statements.is_empty()
+                    && matches!(
+                        body.blocks[otherwise].terminator.kind,
+                        mir::TerminatorKind::Unreachable
+                    )
+                {
+                    edges[block].retain(|target| *target != otherwise);
+                }
+            }
+        }
         let live = reachable(&edges, 0, None);
         let joins = joins(&edges);
         let mut incoming: Vec<Option<State>> = vec![None; body.blocks.len()];
@@ -406,7 +437,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 {
                     if edges[block]
                         .iter()
-                        .any(|target| reachable(&edges, *target, None).contains(&block))
+                        .any(|target| reachable(&edges, *target, joins[block]).contains(&block))
                     {
                         varying_cycles.insert(block);
                     }
@@ -520,7 +551,10 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             }
         }
         self.stack.pop();
-        Ok(returned)
+        // Worklist bottom is not evidence about a call's result. In
+        // particular, importer-rewritten host-panic placeholders have no
+        // Rust Return block but can produce lane-varying device values.
+        Ok(return_fact(returned))
     }
     fn statements(
         &self,

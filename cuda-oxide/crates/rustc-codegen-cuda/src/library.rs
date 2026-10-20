@@ -181,6 +181,8 @@ struct BatchResponse {
 #[derive(Default)]
 pub(crate) struct FinalizedLibraries<'tcx> {
     pub calls: Vec<(CallSite<'tcx>, String, mir_importer::LibraryCallPlan)>,
+    /// Checked helpers need a concrete kernel before their calls can be lowered.
+    pub deferred: HashSet<Instance<'tcx>>,
     /// Original Rust instances mapped to their emitted names for each checked root.
     pub contexts: BTreeMap<String, HashMap<Instance<'tcx>, String>>,
     pub redirects: mir_importer::CallTargetRedirects,
@@ -485,6 +487,7 @@ pub(crate) fn finalize<'tcx>(
     type ProviderBatch<'a, 'tcx> = Vec<(Request, Vec<RootedCall<'a, 'tcx>>)>;
     let mut batches: BTreeMap<(String, PathBuf), ProviderBatch<'_, 'tcx>> = BTreeMap::new();
     let affected = checked_helper_ancestors(collection);
+    result.deferred = affected.clone();
     for root in collection.functions.iter().filter(|f| f.is_kernel) {
         let reached = reachable_instances(collection, root.instance);
         let calls: Vec<_> = collection
@@ -521,17 +524,25 @@ pub(crate) fn finalize<'tcx>(
                         .codegen_fn_attrs(function.instance.def_id())
                         .contains_extern_indicator()
                     {
-                        tcx.dcx().span_fatal(tcx.def_span(function.instance.def_id()),
-                            "checked collective helper with a fixed external symbol requires an explicit root binding");
+                        tcx.dcx()
+                            .struct_span_fatal(
+                                tcx.def_span(function.instance.def_id()),
+                                "fixed external symbols are not supported on checked collective helper paths",
+                            )
+                            .with_note(format!("helper is reachable from kernel {}", root.export_name))
+                            .with_help("remove the helper's #[no_mangle] or #[export_name] attribute")
+                            .emit();
                     }
                     format!(
-                        "__cuda_oxide_context_{}_{}_{}",
+                        "{}{}_{}_{}",
+                        reserved_oxide_symbols::LIBRARY_CONTEXT_PREFIX,
                         root_symbol.len(),
                         root_symbol,
                         tcx.symbol_name(function.instance).name
                     )
                 };
                 context.insert(function.instance, name);
+                result.deferred.remove(&function.instance);
             }
             for function in &collection.functions {
                 let Some(caller) = context.get(&function.instance) else {
@@ -603,6 +614,21 @@ pub(crate) fn finalize<'tcx>(
             } else {
                 batch.push((request, vec![(call, &root.export_name)]));
             }
+        }
+    }
+    // No later kernel context can make a mixed raw/checked path valid.
+    // Diagnose it before a dependency emits an unplanned raw descendant.
+    for helper in &result.deferred {
+        let reached = reachable_instances(collection, *helper);
+        if let Some(call) = collection
+            .library_calls
+            .iter()
+            .find(|call| call.kind == MarkerKind::Raw && reached.contains(&call.site.caller))
+        {
+            tcx.dcx().span_fatal(
+                call.span,
+                "raw and checked library calls cannot be mixed in one checked helper path",
+            );
         }
     }
     let mut finalized = HashMap::new();

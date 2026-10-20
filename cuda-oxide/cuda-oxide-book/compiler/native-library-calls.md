@@ -63,9 +63,20 @@ The same generic helper and marker site may serve kernels with different exact
 block shapes. The compiler emits helper bodies for each root and routes their
 calls to the corresponding native specialization and scratch plan, including
 through intermediate helpers. No block-size type argument or inlining promise
-is required. Device statics keep their original shared identity. Helpers with
-fixed external symbols need an explicit root binding and are diagnosed by this
-route; unsupported indirect checked calls retain their existing diagnostics.
+is required. A dependency may instantiate a marked generic helper before a
+kernel supplies its contract; the compiler retains its MIR and defers that
+checked path's device emission until a concrete root is available. Independent
+standalone device functions still emit normally.
+
+Device statics keep their original shared identity. Helpers with
+fixed external symbols (`#[no_mangle]` or `#[export_name]`) are unsupported on
+checked helper paths, including single-root paths. Remove those attributes to
+allow root-specific naming. Unsupported indirect checked calls retain their
+existing diagnostics.
+
+Each checked root receives its own helper body, including roots with equal
+block shapes. Calls within one root share that body; separate storage bindings
+are not modeled here.
 
 ## Host request and response
 

@@ -80,6 +80,10 @@ pub const LIBRARY_CALL_V1: &str = "cuda_oxide_library_v1_246e25db_call";
 /// Full-block marker whose controls and participation require compiler proof.
 pub const LIBRARY_CHECKED_BLOCK_CALL_V1: &str = "cuda_oxide_library_v1_246e25db_checked_block_call";
 
+/// Final emitted identity for a helper specialized to one checked kernel root.
+/// Embedded Rust symbols may contain device prefixes and must not be stripped.
+pub const LIBRARY_CONTEXT_PREFIX: &str = "cuda_oxide_library_context_246e25db_";
+
 /// Optional comma-separated filter selecting crates that may own device code.
 pub const DEVICE_CODEGEN_CRATE_ENV: &str = "CUDA_OXIDE_DEVICE_CODEGEN_CRATE";
 

@@ -517,6 +517,7 @@ pub fn run_pipeline(
         BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &[],
     )
 }
 
@@ -555,6 +556,7 @@ fn redirect_helper_calls(
 
 /// Run the pipeline with compiler-validated, monomorphized library calls.
 /// Call plans and redirects use the exact emitted caller identity.
+#[allow(clippy::too_many_arguments)]
 pub fn run_pipeline_with_libraries(
     functions: &[CollectedFunction],
     device_externs: &[DeviceExternDecl],
@@ -563,6 +565,7 @@ pub fn run_pipeline_with_libraries(
     libraries: BTreeMap<crate::LibraryCallSite, crate::LibraryCallPlan>,
     library_roots: &BTreeMap<String, oxide_artifacts::KernelLaunchFacts>,
     redirects: &crate::CallTargetRedirects,
+    retained_functions: &[String],
 ) -> Result<CompilationResult, PipelineError> {
     crate::library::set_calls(libraries);
     // Install the driver-resolved lang-item ids and emitted-function identities
@@ -595,6 +598,7 @@ pub fn run_pipeline_with_libraries(
         .unwrap_or_else(|_| "kernel".try_into().unwrap());
     let module = pliron::builtin::ops::ModuleOp::new(&mut ctx, module_name);
     let module_op_ptr = module.get_operation();
+    llvm_export::export::retain_functions(&mut ctx, &module, retained_functions);
 
     let mut legaliser = Legaliser::default();
     let mut kernel_launch_bounds = BTreeMap::new();

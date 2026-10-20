@@ -1341,6 +1341,7 @@ pub fn generate_device_code<'tcx>(
             library_calls,
             &libraries.roots,
             &libraries.redirects,
+            &libraries.retained_functions,
         )
     });
 

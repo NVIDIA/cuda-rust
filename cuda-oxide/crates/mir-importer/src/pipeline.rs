@@ -501,11 +501,45 @@ pub fn run_pipeline(
         known_defs,
         BTreeMap::new(),
         &BTreeMap::new(),
+        &BTreeMap::new(),
     )
 }
 
+// Redirect typed calls after ordinary call/closure ABI lowering, before any
+// verification or resource traversal. Do not rewrite static/global identities.
+fn redirect_helper_calls(
+    ctx: &mut Context,
+    op: pliron::context::Ptr<Operation>,
+    targets: &BTreeMap<String, String>,
+) {
+    if let Some(call) = Operation::get_op::<dialect_mir::ops::MirCallOp>(op, ctx) {
+        let replacement = call
+            .get_attr_callee(ctx)
+            .and_then(|callee| targets.get(&String::from((*callee).clone())).cloned());
+        if let Some(replacement) = replacement {
+            call.set_attr_callee(
+                ctx,
+                pliron::builtin::attributes::StringAttr::new(replacement),
+            );
+        }
+    }
+    let children: Vec<_> = op
+        .deref(ctx)
+        .regions()
+        .flat_map(|region| {
+            region
+                .deref(ctx)
+                .iter(ctx)
+                .flat_map(|block| block.deref(ctx).iter(ctx))
+        })
+        .collect();
+    for child in children {
+        redirect_helper_calls(ctx, child, targets);
+    }
+}
+
 /// Run the pipeline with compiler-validated, monomorphized library calls.
-/// The map keys are resolved instance mangled names, not source spellings.
+/// Call plans and redirects use the exact emitted caller identity.
 pub fn run_pipeline_with_libraries(
     functions: &[CollectedFunction],
     device_externs: &[DeviceExternDecl],
@@ -513,6 +547,7 @@ pub fn run_pipeline_with_libraries(
     known_defs: crate::translator::facts::KnownDefs,
     libraries: BTreeMap<crate::LibraryCallSite, crate::LibraryCallPlan>,
     library_roots: &BTreeMap<String, oxide_artifacts::KernelLaunchFacts>,
+    redirects: &crate::CallTargetRedirects,
 ) -> Result<CompilationResult, PipelineError> {
     crate::library::set_calls(libraries);
     // Install the driver-resolved lang-item ids and emitted-function identities
@@ -582,6 +617,28 @@ pub fn run_pipeline_with_libraries(
             // Use .disp(&ctx) for rich error formatting with location and backtrace
             PipelineError::Translation(format!("{}: {}", func.export_name, e.disp(&ctx)))
         })?;
+
+        if let Some(targets) = redirects.get(&func.export_name) {
+            let mut resolved = BTreeMap::new();
+            for (original, emitted) in targets {
+                if device_externs
+                    .iter()
+                    .any(|decl| decl.export_name == *original)
+                    || !functions
+                        .iter()
+                        .any(|function| function.export_name == *emitted)
+                {
+                    return Err(PipelineError::Translation(format!(
+                        "invalid contextual helper target {original} -> {emitted}"
+                    )));
+                }
+                resolved.insert(
+                    legaliser.legalise(original).to_string(),
+                    legaliser.legalise(emitted).to_string(),
+                );
+            }
+            redirect_helper_calls(&mut ctx, func_op_ptr, &resolved);
+        }
 
         if let Some(plan) = library_roots.get(&func.export_name) {
             crate::kernel_resources::apply_library_block(&mut ctx, func_op_ptr, plan).map_err(

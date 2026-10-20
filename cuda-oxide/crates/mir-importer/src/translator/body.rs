@@ -2552,7 +2552,7 @@ pub fn translate_body(
             legaliser,
             entry_prev_op,
             block_debug_info,
-            crate::library::get_call(&instance.mangled_name(), idx).as_ref(),
+            crate::library::get_call(&name_str, idx).as_ref(),
         )?;
         blocks_processed.insert(idx);
     }

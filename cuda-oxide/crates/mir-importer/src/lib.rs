@@ -115,6 +115,6 @@ pub use translator::terminator::drop_glue::{drop_glue_is_noop, drop_instance_is_
 pub use translator::terminator::{is_dropped_panic_call, is_panic_entry_path};
 
 mod library;
-pub use library::{LibraryCallPlan, LibraryCallSite};
+pub use library::{CallTargetRedirects, LibraryCallPlan, LibraryCallSite};
 pub use pipeline::run_pipeline_with_libraries;
 pub use translator::body::{checked_collective_successors, kernel_exact_block};

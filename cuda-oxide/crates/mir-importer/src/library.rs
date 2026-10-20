@@ -25,7 +25,11 @@ use pliron::r#type::Typed;
 use pliron::utils::apint::APInt;
 use rustc_public::mir;
 
-/// A terminator in one concrete emitted Rust body.
+/// Internal call targets, keyed by emitted caller and original collected callee
+/// export name. Values name the same Rust body in that caller's root context.
+pub type CallTargetRedirects = BTreeMap<String, BTreeMap<String, String>>;
+
+/// A terminator in one concrete emitted Rust body (not the original Instance).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LibraryCallSite {
     pub caller: String,

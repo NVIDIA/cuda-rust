@@ -180,7 +180,10 @@ struct BatchResponse {
 
 #[derive(Default)]
 pub(crate) struct FinalizedLibraries<'tcx> {
-    pub calls: Vec<(CallSite<'tcx>, mir_importer::LibraryCallPlan)>,
+    pub calls: Vec<(CallSite<'tcx>, String, mir_importer::LibraryCallPlan)>,
+    /// Original Rust instances mapped to their emitted names for each checked root.
+    pub contexts: BTreeMap<String, HashMap<Instance<'tcx>, String>>,
+    pub redirects: mir_importer::CallTargetRedirects,
     pub declarations: Vec<mir_importer::DeviceExternDecl>,
     pub inputs: Vec<(String, Vec<u8>)>,
     pub roots: BTreeMap<String, KernelLaunchFacts>,
@@ -481,7 +484,7 @@ pub(crate) fn finalize<'tcx>(
     type RootedCall<'a, 'tcx> = (&'a LibraryCall<'tcx>, &'a str);
     type ProviderBatch<'a, 'tcx> = Vec<(Request, Vec<RootedCall<'a, 'tcx>>)>;
     let mut batches: BTreeMap<(String, PathBuf), ProviderBatch<'_, 'tcx>> = BTreeMap::new();
-    let mut site_shapes = HashMap::new();
+    let affected = checked_helper_ancestors(collection);
     for root in collection.functions.iter().filter(|f| f.is_kernel) {
         let reached = reachable_instances(collection, root.instance);
         let calls: Vec<_> = collection
@@ -503,6 +506,56 @@ pub(crate) fn finalize<'tcx>(
                     root.export_name
                 ));
             }
+        }
+        if checked_shapes.contains_key(&root.export_name) {
+            let root_symbol = tcx.symbol_name(root.instance).name;
+            let mut context = HashMap::new();
+            for function in &collection.functions {
+                if !reached.contains(&function.instance) || !affected.contains(&function.instance) {
+                    continue;
+                }
+                let name = if function.is_kernel {
+                    function.export_name.clone()
+                } else {
+                    if tcx
+                        .codegen_fn_attrs(function.instance.def_id())
+                        .contains_extern_indicator()
+                    {
+                        tcx.dcx().span_fatal(tcx.def_span(function.instance.def_id()),
+                            "checked collective helper with a fixed external symbol requires an explicit root binding");
+                    }
+                    format!(
+                        "__cuda_oxide_context_{}_{}_{}",
+                        root_symbol.len(),
+                        root_symbol,
+                        tcx.symbol_name(function.instance).name
+                    )
+                };
+                context.insert(function.instance, name);
+            }
+            for function in &collection.functions {
+                let Some(caller) = context.get(&function.instance) else {
+                    continue;
+                };
+                let redirects = result.redirects.entry(caller.clone()).or_default();
+                for edge in collection
+                    .call_edges
+                    .iter()
+                    .filter(|e| e.caller == function.instance)
+                {
+                    let Some(target) = context.get(&edge.callee) else {
+                        continue;
+                    };
+                    if let Some(callee) = collection
+                        .functions
+                        .iter()
+                        .find(|f| f.instance == edge.callee)
+                    {
+                        redirects.insert(callee.export_name.clone(), target.clone());
+                    }
+                }
+            }
+            result.contexts.insert(root.export_name.clone(), context);
         }
         for call in calls {
             let args = call.instance.args;
@@ -533,17 +586,6 @@ pub(crate) fn finalize<'tcx>(
                     1,
                 ]
             };
-            let site = (call.site.caller, call.site.block);
-            if let Some((previous, previous_root)) =
-                site_shapes.insert(site, (block, root.export_name.clone()))
-                && previous != block
-            {
-                tcx.dcx().span_fatal(call.span, format!(
-                    "shared helper {} requires conflicting exact block shapes: {previous_root} {previous:?} and {} {block:?}; use distinct helper sites for these roots until contextual helper specialization is supported",
-                    tcx.def_path_str(call.site.caller.def_id()),
-                    root.export_name
-                ));
-            }
             let request = Request {
                 operation: registration.operation,
                 algorithm: registration.algorithm,
@@ -632,7 +674,21 @@ pub(crate) fn finalize<'tcx>(
                     scratch_bytes,
                     scratch_alignment,
                 };
-                let site = (call.site.caller, call.site.block);
+                let caller = result
+                    .contexts
+                    .get(root)
+                    .and_then(|context| context.get(&call.site.caller))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        collection
+                            .functions
+                            .iter()
+                            .find(|f| f.instance == call.site.caller)
+                            .expect("collected library caller")
+                            .export_name
+                            .clone()
+                    });
+                let site = (caller.clone(), call.site.block);
                 if let Some(previous) = finalized.insert(site, spec.symbol.clone()) {
                     if previous != spec.symbol {
                         return Err(
@@ -640,7 +696,7 @@ pub(crate) fn finalize<'tcx>(
                         );
                     }
                 } else {
-                    result.calls.push((call.site, plan));
+                    result.calls.push((call.site, caller, plan));
                 }
                 let facts = KernelLaunchFacts {
                     exact_block: Some((request.block[0], request.block[1], request.block[2])),
@@ -664,6 +720,29 @@ pub(crate) fn finalize<'tcx>(
         }
     }
     Ok(result)
+}
+
+/// Only bodies that can reach a checked marker need root-specific emission.
+fn checked_helper_ancestors<'tcx>(collection: &CollectionResult<'tcx>) -> HashSet<Instance<'tcx>> {
+    let mut affected = HashSet::new();
+    let mut pending: Vec<_> = collection
+        .library_calls
+        .iter()
+        .filter(|call| call.kind == MarkerKind::CheckedBlock)
+        .map(|call| call.site.caller)
+        .collect();
+    while let Some(instance) = pending.pop() {
+        if affected.insert(instance) {
+            pending.extend(
+                collection
+                    .call_edges
+                    .iter()
+                    .filter(|edge| edge.callee == instance)
+                    .map(|edge| edge.caller),
+            );
+        }
+    }
+    affected
 }
 
 pub(crate) fn reachable_instances<'tcx>(

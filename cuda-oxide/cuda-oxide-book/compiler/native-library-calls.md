@@ -52,6 +52,21 @@ generic `unsigned char*` scratch parameter at native argument index two.
 Small signed and unsigned integer values retain their native extension rules.
 The native function returns `void`.
 
+## Checked block helpers
+
+`cuda_device::library::checked_block_call_v1` derives its block shape from the
+kernel's exact launch contract and checks supported participation and uniform
+memory/control arguments. It remains unsafe for the memory, native ABI and
+scratch reuse obligations described below.
+
+The same generic helper and marker site may serve kernels with different exact
+block shapes. The compiler emits helper bodies for each root and routes their
+calls to the corresponding native specialization and scratch plan, including
+through intermediate helpers. No block-size type argument or inlining promise
+is required. Device statics keep their original shared identity. Helpers with
+fixed external symbols need an explicit root binding and are diagnosed by this
+route; unsupported indirect checked calls retain their existing diagnostics.
+
 ## Host request and response
 
 For each `(provider, executable)` pair, the compiler invokes the executable

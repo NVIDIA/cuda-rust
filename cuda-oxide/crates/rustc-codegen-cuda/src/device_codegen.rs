@@ -1215,6 +1215,38 @@ pub fn generate_device_code<'tcx>(
             )
             .collect();
 
+        // Reuse each original MIR body and its sidecars; only emitted helper
+        // identity depends on the checked root. Static identities are unchanged.
+        let mut contextual_names: HashMap<String, Vec<String>> = HashMap::new();
+        for context in libraries.contexts.values() {
+            for (instance, name) in context {
+                let stable: rustc_public::mir::mono::Instance = rustc_internal::stable(*instance);
+                contextual_names
+                    .entry(stable.mangled_name())
+                    .or_default()
+                    .push(name.clone());
+            }
+        }
+        let stable_functions: Vec<_> = stable_functions
+            .into_iter()
+            .flat_map(|function| {
+                if !function.is_kernel
+                    && let Some(names) = contextual_names.get(&function.instance.mangled_name())
+                {
+                    names
+                        .iter()
+                        .map(|name| {
+                            let mut emitted = function.clone();
+                            emitted.export_name = name.clone();
+                            emitted
+                        })
+                        .collect()
+                } else {
+                    vec![function]
+                }
+            })
+            .collect();
+
         // Check for NVVM IR mode (set by cargo oxide --emit-nvvm-ir)
         let emit_nvvm_ir = std::env::var("CUDA_OXIDE_EMIT_NVVM_IR").is_ok();
 
@@ -1284,11 +1316,10 @@ pub fn generate_device_code<'tcx>(
         let library_calls = libraries
             .calls
             .iter()
-            .map(|(site, plan)| {
-                let caller: rustc_public::mir::mono::Instance = rustc_internal::stable(site.caller);
+            .map(|(site, caller, plan)| {
                 (
                     mir_importer::LibraryCallSite {
-                        caller: caller.mangled_name().to_string(),
+                        caller: caller.clone(),
                         block: site.block.index(),
                     },
                     plan.clone(),
@@ -1302,6 +1333,7 @@ pub fn generate_device_code<'tcx>(
             known_defs,
             library_calls,
             &libraries.roots,
+            &libraries.redirects,
         )
     });
 

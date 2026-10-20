@@ -25,6 +25,7 @@ const MAX_LTO: usize = 256 * 1024 * 1024;
 pub(crate) enum MarkerKind {
     Raw,
     CheckedBlock,
+    Callback,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +73,7 @@ pub(crate) fn marker_definitions(tcx: TyCtxt<'_>) -> HashMap<DefId, MarkerKind> 
             for item in tcx.module_children(module) {
                 let kind = match item.ident.name.as_str() {
                     reserved_oxide_symbols::LIBRARY_CALL_V1 => MarkerKind::Raw,
+                    reserved_oxide_symbols::LIBRARY_CALLBACK_CALL_V1 => MarkerKind::Callback,
                     reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_CALL_V1 => {
                         MarkerKind::CheckedBlock
                     }
@@ -109,7 +111,7 @@ enum Scalar {
     Float(u16),
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(
     tag = "kind",
     content = "scalar",
@@ -137,6 +139,15 @@ struct Request {
     dtype: Scalar,
     block: [u32; 3],
     items_per_thread: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    callback: Option<Callback>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
+struct Callback {
+    symbol: String,
+    arguments: Vec<Argument>,
+    result: Scalar,
 }
 
 #[derive(Debug, Deserialize)]
@@ -187,6 +198,7 @@ pub(crate) struct FinalizedLibraries<'tcx> {
     pub declarations: Vec<mir_importer::DeviceExternDecl>,
     pub inputs: Vec<(String, Vec<u8>)>,
     pub roots: BTreeMap<String, KernelLaunchFacts>,
+    pub retained_functions: Vec<String>,
 }
 
 fn scalar(ty: Ty<'_>) -> Result<Scalar, String> {
@@ -224,6 +236,152 @@ fn argument(ty: Ty<'_>) -> Result<Argument, String> {
         }),
         _ => Ok(Argument::Value(scalar(ty)?)),
     }
+}
+
+/// Resolve the selected witness without ever coercing it to a runtime pointer.
+pub(crate) fn callback_instance<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    marker: Instance<'tcx>,
+) -> Result<Instance<'tcx>, String> {
+    let environment = marker.args.type_at(3);
+    match environment.kind() {
+        TyKind::FnDef(..) => {}
+        TyKind::Closure(_, args) => {
+            if args.as_closure().kind() != rustc_middle::ty::ClosureKind::Fn {
+                return Err("callback environment must be an immutable Fn closure".into());
+            }
+            for capture in rustc_middle::ty::UpvarArgs::Closure(args).upvar_tys() {
+                scalar(capture).map_err(|_| format!(
+                    "callback capture `{capture}` must be a fixed-width numeric scalar captured by value"))?;
+            }
+        }
+        _ => {
+            return Err(
+                "callback environment must be a function item or scalar-capturing closure".into(),
+            );
+        }
+    }
+    if scalar(marker.args.type_at(0))? != Scalar::Signed(32) {
+        return Err("callback version one supports i32 only".into());
+    }
+    let witness = marker.args.type_at(4);
+    let TyKind::FnDef(def, args) = witness.kind() else {
+        return Err(
+            "callback thunk must be a function item, not a closure or function pointer".into(),
+        );
+    };
+    let args = args
+        .no_bound_vars()
+        .ok_or("callback thunk has unresolved bound arguments")?;
+    let instance = Instance::try_resolve(tcx, TypingEnv::fully_monomorphized(), *def, args)
+        .map_err(|_| "cannot resolve callback thunk")?
+        .ok_or("cannot resolve callback thunk")?;
+    let sig = tcx.fn_sig(*def).instantiate(tcx, args).skip_binder();
+    let correct_pointer = matches!(sig.inputs().first().map(|ty| ty.kind()),
+        Some(TyKind::RawPtr(pointee, mutability)) if !mutability.is_mut() && *pointee == environment);
+    if !matches!(sig.abi(), rustc_abi::ExternAbi::C { unwind: false })
+        || sig.safety().is_safe()
+        || sig.c_variadic()
+        || sig.inputs().len() != 3
+        || !correct_pointer
+        || sig.inputs()[1..].iter().any(|ty| *ty != tcx.types.i32)
+        || sig.output() != tcx.types.i32
+    {
+        return Err("callback thunk requires unsafe extern \"C\" fn(*const Environment, i32, i32) -> i32 without unwinding".into());
+    }
+    Ok(instance)
+}
+
+/// A bounded scalar-only boundary, not a general effect analysis. Inspect the
+/// actual monomorphized reachable bodies, including callable receiver edges.
+fn validate_callback_body<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    collection: &CollectionResult<'tcx>,
+    thunk: Instance<'tcx>,
+) -> Result<(), String> {
+    for instance in reachable_instances(collection, thunk) {
+        let def = instance.def_id();
+        if tcx.crate_name(def.krate).as_str() == "cuda_device" {
+            return Err(format!(
+                "scalar callback cannot reach CUDA resource or collective operation `{}`",
+                tcx.def_path_str(def)
+            ));
+        }
+        if tcx.is_foreign_item(def) {
+            return Err("scalar callback cannot reach a foreign function".into());
+        }
+        if tcx.intrinsic(def).is_some() {
+            return Err("scalar callback cannot reach an unqualified compiler intrinsic".into());
+        }
+        if !tcx.is_mir_available(def) {
+            // Fn trait dispatch is represented by a separate concrete receiver
+            // edge. Other opaque bodies cannot establish the scalar-only limit.
+            if tcx
+                .trait_of_assoc(def)
+                .is_some_and(|id| tcx.fn_trait_kind_from_def_id(id).is_some())
+            {
+                continue;
+            }
+            return Err(format!(
+                "scalar callback body is unavailable for `{}`",
+                tcx.def_path_str(def)
+            ));
+        }
+        let body = tcx.instance_mir(instance.def);
+        for local in &body.local_decls {
+            let ty = instance.instantiate_mir_and_normalize_erasing_regions(
+                tcx,
+                TypingEnv::fully_monomorphized(),
+                rustc_middle::ty::EarlyBinder::bind(tcx, local.ty),
+            );
+            for argument in ty.walk() {
+                if let Some(ty) = argument.as_type()
+                    && let TyKind::Adt(def, _) = ty.kind()
+                    && tcx.crate_name(def.did().krate).as_str() == "cuda_device"
+                {
+                    return Err(format!(
+                        "scalar callback cannot contain CUDA resource type `{ty}`"
+                    ));
+                }
+            }
+        }
+        let reachable = crate::collector::device_mono_reachable_as_bitset(body, tcx, instance);
+        for (index, block) in body.basic_blocks.iter_enumerated() {
+            if !reachable.contains(index) {
+                continue;
+            }
+            match &block.terminator().kind {
+                TerminatorKind::InlineAsm { .. } => {
+                    return Err("scalar callback cannot contain inline assembly".into());
+                }
+                TerminatorKind::Call { func, .. } => {
+                    let ty = instance.instantiate_mir_and_normalize_erasing_regions(
+                        tcx,
+                        TypingEnv::fully_monomorphized(),
+                        rustc_middle::ty::EarlyBinder::bind(tcx, func.ty(body, tcx)),
+                    );
+                    let TyKind::FnDef(callee, _) = ty.kind() else {
+                        return Err("scalar callback cannot contain an indirect call".into());
+                    };
+                    if tcx.crate_name(callee.krate).as_str() == "cuda_device"
+                        || tcx.is_foreign_item(*callee)
+                    {
+                        return Err(format!(
+                            "scalar callback cannot reach CUDA resources or foreign calls: `{}`",
+                            tcx.def_path_str(*callee)
+                        ));
+                    }
+                    if tcx.intrinsic(*callee).is_some() {
+                        return Err(
+                            "scalar callback cannot reach an unqualified compiler intrinsic".into(),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 fn read_registration<'tcx>(tcx: TyCtxt<'tcx>, witness: Ty<'tcx>) -> Result<Registration, String> {
@@ -282,8 +440,14 @@ fn read_registration<'tcx>(tcx: TyCtxt<'tcx>, witness: Ty<'tcx>) -> Result<Regis
 fn decode_response(
     bytes: &[u8],
     expected_count: usize,
+    version: u32,
 ) -> Result<(BatchResponse, Vec<u8>), String> {
-    if bytes.len() < 24 || &bytes[..8] != b"OXDLIB01" {
+    let magic = if version == 2 {
+        b"OXDLIB02"
+    } else {
+        b"OXDLIB01"
+    };
+    if bytes.len() < 24 || &bytes[..8] != magic {
         return Err("invalid or truncated library response frame".into());
     }
     let header_len = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
@@ -297,7 +461,7 @@ fn decode_response(
     }
     let response: BatchResponse = serde_json::from_slice(&bytes[24..header_end])
         .map_err(|e| format!("invalid library response JSON: {e}"))?;
-    if response.version != 1 || response.specializations.len() != expected_count {
+    if response.version != version || response.specializations.len() != expected_count {
         return Err(
             "library response version or specialization count does not match request".into(),
         );
@@ -360,7 +524,7 @@ fn invoke(
         return Err("library request exceeds 1 MiB".into());
     }
     let mut child = Command::new(executable)
-        .arg("--oxide-library-request-v1")
+        .arg(format!("--oxide-library-request-v{}", request.version))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -396,7 +560,7 @@ fn invoke(
             "native library provider failed with {status}; see its stderr diagnostics"
         ));
     }
-    decode_response(&bytes, request.requests.len())
+    decode_response(&bytes, request.requests.len(), request.version)
 }
 
 fn extern_scalar(scalar: &Scalar) -> mir_importer::DeviceExternType {
@@ -427,7 +591,7 @@ fn call_arguments(call: &LibraryCall<'_>) -> Result<Vec<Argument>, String> {
     let TyKind::Tuple(uniform) = args.type_at(2).kind() else {
         return Err("library arguments must be a tuple".into());
     };
-    if call.kind == MarkerKind::Raw {
+    if call.kind != MarkerKind::CheckedBlock {
         return uniform.iter().map(argument).collect();
     }
     let TyKind::Tuple(payload) = args.type_at(3).kind() else {
@@ -483,7 +647,7 @@ pub(crate) fn finalize<'tcx>(
         .ok_or("library calls require CUDA_HOME or CUDA_PATH")?;
     type RootedCall<'a, 'tcx> = (&'a LibraryCall<'tcx>, &'a str);
     type ProviderBatch<'a, 'tcx> = Vec<(Request, Vec<RootedCall<'a, 'tcx>>)>;
-    let mut batches: BTreeMap<(String, PathBuf), ProviderBatch<'_, 'tcx>> = BTreeMap::new();
+    let mut batches: BTreeMap<(String, PathBuf, u32), ProviderBatch<'_, 'tcx>> = BTreeMap::new();
     let affected = checked_helper_ancestors(collection);
     for root in collection.functions.iter().filter(|f| f.is_kernel) {
         let reached = reachable_instances(collection, root.instance);
@@ -579,9 +743,13 @@ pub(crate) fn finalize<'tcx>(
                 checked_shapes[&root.export_name]
             } else {
                 [
-                    positive(3)
-                        .map_err(str::to_owned)
-                        .unwrap_or_else(|error| report(error)),
+                    positive(if call.kind == MarkerKind::Callback {
+                        5
+                    } else {
+                        3
+                    })
+                    .map_err(str::to_owned)
+                    .unwrap_or_else(|error| report(error)),
                     1,
                     1,
                 ]
@@ -591,12 +759,40 @@ pub(crate) fn finalize<'tcx>(
                 algorithm: registration.algorithm,
                 dtype: scalar(args.type_at(0)).unwrap_or_else(|error| report(error)),
                 block,
-                items_per_thread: positive(4)
-                    .map_err(str::to_owned)
-                    .unwrap_or_else(|error| report(error)),
+                items_per_thread: positive(if call.kind == MarkerKind::Callback {
+                    6
+                } else {
+                    4
+                })
+                .map_err(str::to_owned)
+                .unwrap_or_else(|error| report(error)),
+                callback: if call.kind == MarkerKind::Callback {
+                    let thunk =
+                        callback_instance(tcx, call.instance).unwrap_or_else(|error| report(error));
+                    validate_callback_body(tcx, collection, thunk)
+                        .unwrap_or_else(|error| report(error));
+                    let function = collection
+                        .functions
+                        .iter()
+                        .find(|f| f.instance == thunk)
+                        .unwrap_or_else(|| report("callback thunk was not collected".into()));
+                    result.retained_functions.push(function.export_name.clone());
+                    Some(Callback {
+                        symbol: llvm_export::export::exported_function_name(&function.export_name),
+                        arguments: vec![
+                            Argument::ConstPointer(Scalar::Unsigned(8)),
+                            Argument::Value(Scalar::Signed(32)),
+                            Argument::Value(Scalar::Signed(32)),
+                        ],
+                        result: Scalar::Signed(32),
+                    })
+                } else {
+                    None
+                },
             };
+            let version = if request.callback.is_some() { 2 } else { 1 };
             let batch = batches
-                .entry((registration.provider, registration.executable))
+                .entry((registration.provider, registration.executable, version))
                 .or_default();
             if let Some((_, calls)) = batch.iter_mut().find(|(existing, _)| *existing == request) {
                 calls.push((call, &root.export_name));
@@ -607,13 +803,13 @@ pub(crate) fn finalize<'tcx>(
     }
     let mut finalized = HashMap::new();
     let mut all_symbols = HashSet::new();
-    for ((provider, executable), batch) in batches {
+    for ((provider, executable, version), batch) in batches {
         let requests: Vec<_> = batch.iter().map(|(request, _)| request.clone()).collect();
         let batch_span = batch[0].1[0].0.span;
         let (response, lto) = invoke(
             &executable,
             &BatchRequest {
-                version: 1,
+                version,
                 target: &target,
                 cuda_root: cuda_root.clone(),
                 requests: &requests,
@@ -647,6 +843,12 @@ pub(crate) fn finalize<'tcx>(
                     0,
                 ),
             );
+            if request.callback.is_some() {
+                params.push(mir_importer::DeviceExternType::pointer_to(
+                    mir_importer::DeviceExternType::Integer(8),
+                    0,
+                ));
+            }
             result.declarations.push(mir_importer::DeviceExternDecl {
                 export_name: spec.symbol.clone(),
                 param_types: params,
@@ -671,6 +873,7 @@ pub(crate) fn finalize<'tcx>(
                     symbol: spec.symbol.clone(),
                     marker: tcx.symbol_name(call.instance).name.to_string(),
                     checked_block: call.kind == MarkerKind::CheckedBlock,
+                    callback: call.kind == MarkerKind::Callback,
                     scratch_bytes,
                     scratch_alignment,
                 };
@@ -799,16 +1002,16 @@ mod tests {
     #[test]
     fn response_frame_retains_bytes_and_rejects_truncation_or_trailing_data() {
         let bytes = frame(&response());
-        assert_eq!(decode_response(&bytes, 1).unwrap().1, [1, 2, 3]);
+        assert_eq!(decode_response(&bytes, 1, 1).unwrap().1, [1, 2, 3]);
         for end in [0, 8, 16, 23, bytes.len() - 1] {
-            assert!(decode_response(&bytes[..end], 1).is_err());
+            assert!(decode_response(&bytes[..end], 1, 1).is_err());
         }
         let mut trailing = bytes.clone();
         trailing.push(0);
-        assert!(decode_response(&trailing, 1).is_err());
+        assert!(decode_response(&trailing, 1, 1).is_err());
         let mut empty_lto = bytes;
         empty_lto[16..24].copy_from_slice(&0_u64.to_le_bytes());
-        assert!(decode_response(&empty_lto, 1).is_err());
+        assert!(decode_response(&empty_lto, 1, 1).is_err());
     }
 
     #[test]
@@ -827,7 +1030,7 @@ mod tests {
             let mut value_response = response();
             value_response["specializations"][0][field] = value;
             assert!(
-                decode_response(&frame(&value_response), 1).is_err(),
+                decode_response(&frame(&value_response), 1, 1).is_err(),
                 "{field}"
             );
         }
@@ -838,10 +1041,24 @@ mod tests {
             .as_array_mut()
             .unwrap()
             .push(second);
-        assert!(decode_response(&frame(&duplicate), 2).is_err());
-        assert!(decode_response(&frame(&response()), 2).is_err());
+        assert!(decode_response(&frame(&duplicate), 2, 1).is_err());
+        assert!(decode_response(&frame(&response()), 2, 1).is_err());
         let mut version = response();
         version["version"] = 2.into();
-        assert!(decode_response(&frame(&version), 1).is_err());
+        assert!(decode_response(&frame(&version), 1, 1).is_err());
+    }
+    #[test]
+    fn callback_batch_requires_v2_frame_and_header() {
+        let mut value = response();
+        value["version"] = 2.into();
+        let mut bytes = frame(&value);
+        assert!(decode_response(&bytes, 1, 2).is_err());
+        bytes[..8].copy_from_slice(b"OXDLIB02");
+        assert!(decode_response(&bytes, 1, 2).is_ok());
+        assert!(decode_response(&bytes, 1, 1).is_err());
+        value["version"] = 1.into();
+        let mut bytes = frame(&value);
+        bytes[..8].copy_from_slice(b"OXDLIB02");
+        assert!(decode_response(&bytes, 1, 2).is_err());
     }
 }

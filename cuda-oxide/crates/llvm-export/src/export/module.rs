@@ -47,6 +47,24 @@ fn validate_export_config(config: &dyn ExportBackendConfig) -> Result<(), String
     Ok(())
 }
 
+const RETAINED_FUNCTIONS: &str = "cuda_oxide_retained_functions";
+
+/// Retain selected definitions consumed by native code in the same artifact.
+/// Names use the collector's identity; export applies its ordinary normalization.
+/// The module survives MIR lowering, so no per-function attribute copy is needed.
+pub fn retain_functions(ctx: &mut Context, module: &ModuleOp, names: &[String]) {
+    use pliron::builtin::attributes::{StringAttr, VecAttr};
+    module.get_operation().deref_mut(ctx).attributes.set(
+        RETAINED_FUNCTIONS.try_into().unwrap(),
+        VecAttr::new(
+            names
+                .iter()
+                .map(|name| StringAttr::new(name.clone()).into())
+                .collect(),
+        ),
+    );
+}
+
 fn index_module_symbols(
     state: &mut ModuleExportState<'_>,
     module: &ModuleOp,
@@ -55,7 +73,34 @@ fn index_module_symbols(
     let Some(block) = region.iter(state.ctx).next() else {
         return Ok(());
     };
+    let mut retained = std::collections::HashSet::new();
+    {
+        use pliron::builtin::attributes::{StringAttr, VecAttr};
+        let operation = module.get_operation().deref(state.ctx);
+        if let Some(names) = operation
+            .attributes
+            .get::<VecAttr>(&RETAINED_FUNCTIONS.try_into().unwrap())
+        {
+            for name in names.0.iter() {
+                let name = name
+                    .downcast_ref::<StringAttr>()
+                    .ok_or("invalid retained function name")?;
+                retained.insert(String::from(name.clone()));
+            }
+        }
+    }
     for operation in block.deref(state.ctx).iter(state.ctx) {
+        if let Some(function) = Operation::get_op::<ops::FuncOp>(operation, state.ctx) {
+            let name = function.get_symbol_name(state.ctx).to_string();
+            if retained.remove(&name) {
+                if function.get_entry_block(state.ctx).is_none() {
+                    return Err(format!("retained callback `{name}` has no definition"));
+                }
+                state
+                    .device_functions
+                    .push(super::function::exported_function_name(&name));
+            }
+        }
         if let Some(global) = Operation::get_op::<ops::GlobalOp>(operation, state.ctx) {
             let symbol = global.get_symbol_name(state.ctx).to_string();
             let value_type = global.get_type(state.ctx);
@@ -124,6 +169,11 @@ fn index_module_symbols(
                 state.function_definitions.insert(exported_name);
             }
         }
+    }
+    if !retained.is_empty() {
+        return Err(format!(
+            "retained callback definitions are missing: {retained:?}"
+        ));
     }
     Ok(())
 }

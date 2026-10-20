@@ -93,3 +93,44 @@ pub unsafe fn cuda_oxide_library_v1_246e25db_checked_block_call<
 }
 
 pub use cuda_oxide_library_v1_246e25db_checked_block_call as checked_block_call_v1;
+
+/// Invoke a synchronous native operation with a compiler-rooted scalar callback.
+///
+/// The thunk must be a function item with signature
+/// `unsafe extern "C" fn(*const Environment, i32, i32) -> i32`.
+/// `Environment` is a function item or an immutable closure capturing fixed-width
+/// numeric scalars by value. The first version supports `T = i32` only.
+/// The compiler retains the exact thunk and supplies its symbol to the provider;
+/// neither witness is passed as a runtime function pointer.
+///
+/// # Safety
+///
+/// All requirements of [`call_v1`] apply. Every participant must use the same
+/// callable specialization and capture values. The provider may synchronously
+/// pass the opaque environment pointer back to the thunk, but must not inspect,
+/// mutate, retain, free, or publish it. The environment remains live throughout
+/// the native call. The callback must not perform collectives, synchronization,
+/// shared-memory access, foreign calls, or indirect calls. This raw boundary
+/// does not prove capture-value uniformity or pointer ownership.
+#[inline(never)]
+pub unsafe fn cuda_oxide_library_v1_246e25db_call_with_callback<
+    T: Copy,
+    Registration: Fn() -> &'static str + Copy,
+    Args: Copy,
+    Environment: Copy,
+    Thunk: Copy,
+    const BLOCK_THREADS: usize,
+    const ITEMS_PER_THREAD: usize,
+>(
+    _registration: Registration,
+    _args: Args,
+    _thunk: Thunk,
+    _environment: &Environment,
+) {
+    unsafe extern "C" {
+        fn cuda_oxide_callback_call_requires_supported_backend();
+    }
+    unsafe { cuda_oxide_callback_call_requires_supported_backend() }
+}
+
+pub use cuda_oxide_library_v1_246e25db_call_with_callback as call_with_callback_v1;

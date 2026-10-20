@@ -10,8 +10,8 @@ use crate::error::{TranslationErr, TranslationResult};
 use crate::translator::terminator::helpers;
 use crate::translator::values::{ValueMap, establish_declared_pointer_type};
 use crate::translator::{facts, rvalue, types};
-use dialect_mir::attributes::{FieldIndexAttr, MirPointerKindAuthorityAttr};
-use dialect_mir::ops::{MirExternSharedOp, MirExtractFieldOp};
+use dialect_mir::attributes::{FieldIndexAttr, MirCastKindAttr, MirPointerKindAuthorityAttr};
+use dialect_mir::ops::{MirCastOp, MirExternSharedOp, MirExtractFieldOp};
 use dialect_mir::types::{MirPtrType, MirTupleType};
 use pliron::basic_block::BasicBlock;
 use pliron::builtin::attributes::IntegerAttr;
@@ -45,6 +45,8 @@ pub struct LibraryCallPlan {
     pub marker: String,
     /// Split uniform/payload operands of the checked full-block marker.
     pub checked_block: bool,
+    /// A synchronous callback appends its borrowed opaque environment.
+    pub callback: bool,
     /// Size of the assigned shared scratch view in bytes.
     pub scratch_bytes: u32,
     /// Required alignment of the shared scratch base.
@@ -85,8 +87,9 @@ pub(crate) fn translate_call(
     blocks: &[Ptr<BasicBlock>],
     loc: Location,
 ) -> TranslationResult<Ptr<Operation>> {
-    let tuples: &[mir::Operand] = match (plan.checked_block, args) {
-        (false, [_, _]) | (true, [_, _, _]) => &args[1..],
+    let tuples: &[mir::Operand] = match (plan.checked_block, plan.callback, args) {
+        (false, false, [_, _]) | (true, false, [_, _, _]) => &args[1..],
+        (false, true, [_, _, _, _]) => &args[1..2],
         _ => {
             return input_err!(
                 loc,
@@ -186,7 +189,7 @@ pub(crate) fn translate_call(
     helpers::insert_op(ctx, op, block, last);
     let internal_scratch = op.deref(ctx).get_result(0);
     let raw_shared = facts::mint_shared_ptr_type(ctx, byte, facts::abi_library_scratch()).into();
-    let (scratch_value, last) = establish_declared_pointer_type(
+    let (scratch_value, mut last) = establish_declared_pointer_type(
         ctx,
         internal_scratch,
         raw_shared,
@@ -199,6 +202,45 @@ pub(crate) fn translate_call(
         2,
         facts::mint_generic_ptr_type(ctx, byte, facts::abi_library_scratch()).into(),
     );
+    if plan.callback {
+        let (environment, previous) =
+            rvalue::translate_operand(ctx, body, &args[3], values, block, last, loc.clone())?;
+        // The environment's Rust layout stays private to the thunk. This one
+        // validated ABI boundary converts &Environment to an opaque *const u8;
+        // it neither grants mutation nor fabricates a Rust reference.
+        let origin = facts::pointer_origin_of_raw_ptr(mir::RawPtrKind::Const);
+        let pointee = environment
+            .get_type(ctx)
+            .deref(ctx)
+            .downcast_ref::<MirPtrType>()
+            .expect("validated environment reference")
+            .pointee;
+        let raw_environment = facts::mint_generic_ptr_type(ctx, pointee, origin).into();
+        let (environment, previous) = establish_declared_pointer_type(
+            ctx,
+            environment,
+            raw_environment,
+            block,
+            previous,
+            MirPointerKindAuthorityAttr::RawAddress,
+        );
+        let opaque = facts::mint_generic_ptr_type(ctx, byte, origin).into();
+        let cast_op = Operation::new(
+            ctx,
+            MirCastOp::get_concrete_op_info(),
+            vec![opaque],
+            vec![environment],
+            vec![],
+            0,
+        );
+        cast_op.deref_mut(ctx).set_loc(loc.clone());
+        let cast = MirCastOp::new(cast_op);
+        cast.set_attr_cast_kind(ctx, MirCastKindAttr::PtrToPtr);
+        helpers::insert_op(ctx, cast_op, block, previous);
+        last = Some(cast_op);
+        arguments.push(cast_op.deref(ctx).get_result(0));
+        declared.push(opaque);
+    }
     let signature = FunctionType::get(ctx, declared, vec![]).into();
     let unit = MirTupleType::get(ctx, vec![]).into();
     helpers::emit_function_call_values(

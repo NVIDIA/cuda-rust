@@ -116,6 +116,65 @@ avoids a second read of a mutable LTO file during finalization. The registration
 macro tracks native inputs before rustc emits dep-info;
 manual registration getters must arrange equivalent dependency tracking.
 
+## Synchronous scalar callbacks
+
+`call_with_callback_v1` accepts the ordinary registration and runtime tuple,
+followed by a thunk function item and an immutable `&Environment`. Its generic
+parameters are `T, Registration, Args, Environment, Thunk, BLOCK_THREADS,
+ITEMS_PER_THREAD`. The initial callback ABI supports `T = i32`:
+
+```rust,ignore
+unsafe extern "C" fn thunk<F: Fn(i32, i32) -> i32 + Copy>(
+    environment: *const F, left: i32, right: i32,
+) -> i32 {
+    unsafe { (&*environment)(left, right) }
+}
+
+unsafe {
+    cuda_device::library::call_with_callback_v1::<i32, _, _, F, _, B, ITEMS>(
+        registration, arguments, thunk::<F>, &operation,
+    );
+}
+```
+
+The compiler requires the actual function-item type with this exact non-unwinding
+C signature; runtime function pointers and closure-valued thunk witnesses are
+rejected. The environment may be a function item or an `Fn` closure capturing
+fixed-width numeric scalars by value. Reference, pointer and aggregate captures
+are rejected. Rust owns the layout and keeps the immutable environment live for
+the entire synchronous call. Native code only carries its opaque address back to
+the thunk; it must not inspect, mutate, retain, free or publish that address.
+
+The compiler discovers and retains the selected thunk even when no Rust call
+invokes it directly. Its definition joins the kernel roots for optimization and
+linking. Callback bodies may call ordinary scalar Rust helpers. CUDA resource
+operations/types, foreign or indirect calls, inline assembly and unqualified
+compiler intrinsics are rejected transitively. Resource-bearing callbacks need
+an explicit root/storage binding and are outside this version. This raw marker
+also requires block-uniform callable specialization and capture values; it does
+not prove them, and lane-private environment addresses need not be equal.
+
+Callback calls use a separate batch invoked with `--oxide-library-request-v2`.
+The registration and input-query protocols stay at version one. The request and
+response JSON use `version: 2`, and the response prefix is `OXDLIB02`; all existing
+length, layout and ordering checks apply. Each request adds `callback`:
+
+```json
+{"symbol":"actual_emitted_thunk", "arguments":[
+  {"kind":"const_pointer","scalar":{"kind":"unsigned","bits":8}},
+  {"kind":"value","scalar":{"kind":"signed","bits":32}},
+  {"kind":"value","scalar":{"kind":"signed","bits":32}}
+], "result":{"kind":"signed","bits":32}}
+```
+
+The symbol is the compiler's final emitted identity. The byte-pointer spelling
+is opaque and uses generic address space zero; it conveys no closure layout.
+The native operation receives scratch at index two and the environment pointer
+as its last argument. Its response `arguments` describes only the explicit Rust
+tuple, excluding both compiler-inserted pointers. Native request deduplication
+includes the callback descriptor, while runtime capture values do not affect
+specialization identity. Rust body changes remain ordinary Rust build inputs.
+
 ## Native input dependencies
 
 The registration macro tracks its environment variable, the provider executable,

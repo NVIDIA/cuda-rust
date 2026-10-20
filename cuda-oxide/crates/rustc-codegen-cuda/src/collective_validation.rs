@@ -3,7 +3,8 @@
 
 //! Bounded, per-call-context checks for the checked full-block library marker.
 use crate::collector::{CollectionResult, device_mono_reachability};
-use crate::library::{EdgeKind, reachable_instances};
+use crate::library::storage::{self, Event, Plan, Policy, Site, Trace};
+use crate::library::{EdgeKind, MarkerKind, reachable_instances};
 use rustc_middle::ty::{Instance, TyCtxt};
 use rustc_public::{mir, rustc_internal};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -14,6 +15,8 @@ enum Fact {
     Uniform,
     Kernel(String),
     Resource(String),
+    Descriptor(Site, Policy),
+    Reservation(Site),
     Local(usize, Vec<usize>),
     Referent(Box<Fact>),
     Fields(Vec<Fact>),
@@ -21,7 +24,14 @@ enum Fact {
 }
 impl Fact {
     fn uniform(&self) -> bool {
-        matches!(self, Self::Uniform | Self::Kernel(_) | Self::Resource(_))
+        matches!(
+            self,
+            Self::Uniform
+                | Self::Kernel(_)
+                | Self::Resource(_)
+                | Self::Descriptor(..)
+                | Self::Reservation(_)
+        )
     }
     fn merge(&self, other: &Self) -> Self {
         if self == other {
@@ -45,7 +55,7 @@ impl Fact {
     }
     fn has_resource(&self) -> bool {
         match self {
-            Self::Resource(_) => true,
+            Self::Resource(_) | Self::Descriptor(..) | Self::Reservation(_) => true,
             Self::Referent(value) => value.has_resource(),
             Self::Fields(values) => values.iter().any(Self::has_resource),
             _ => false,
@@ -53,12 +63,26 @@ impl Fact {
     }
     fn invalidate_borrow(&mut self) {
         match self {
-            Self::Resource(_) => {}
+            Self::Resource(_) | Self::Descriptor(..) | Self::Reservation(_) => {}
             Self::Referent(value) if value.has_resource() => value.invalidate_borrow(),
             Self::Fields(values) if values.iter().any(Self::has_resource) => {
                 values.iter_mut().for_each(Self::invalidate_borrow);
             }
             _ => *self = Self::Varying,
+        }
+    }
+    fn descriptor(&self) -> Option<(Site, Policy)> {
+        match self {
+            Self::Descriptor(origin, policy) => Some((origin.clone(), policy.clone())),
+            Self::Referent(value) => value.descriptor(),
+            _ => None,
+        }
+    }
+    fn reservation(&self) -> Option<Site> {
+        match self {
+            Self::Reservation(site) => Some(site.clone()),
+            Self::Referent(value) => value.reservation(),
+            _ => None,
         }
     }
     fn resource_origin(&self) -> Option<&str> {
@@ -81,7 +105,7 @@ impl Fact {
             Self::Kernel(origin) | Self::Resource(origin) => {
                 Self::Kernel(format!("{origin}.{index}"))
             }
-            Self::Uniform => Self::Uniform,
+            Self::Uniform | Self::Reservation(_) => Self::Uniform,
             _ => Self::Varying,
         }
     }
@@ -100,10 +124,33 @@ fn merge_pending(into: &mut Pending, other: &Pending) -> bool {
     }
     changed
 }
+#[derive(Clone, Default)]
+struct Epochs {
+    dirty: BTreeSet<Site>,
+    live: BTreeMap<Site, Site>,
+    used: BTreeMap<Site, BTreeSet<Policy>>,
+}
+impl Epochs {
+    fn merge(&mut self, other: &Self) -> bool {
+        let before = (self.dirty.len(), self.live.len());
+        self.dirty.extend(other.dirty.iter().cloned());
+        self.live
+            .extend(other.live.iter().map(|(a, b)| (a.clone(), b.clone())));
+        let mut changed = before != (self.dirty.len(), self.live.len());
+        for (origin, policies) in &other.used {
+            let current = self.used.entry(origin.clone()).or_default();
+            let before = current.len();
+            current.extend(policies.iter().cloned());
+            changed |= before != current.len();
+        }
+        changed
+    }
+}
 #[derive(Clone)]
 struct State {
     locals: Vec<Fact>,
     pending: Pending,
+    epochs: Epochs,
 }
 impl std::ops::Deref for State {
     type Target = Vec<Fact>;
@@ -345,6 +392,10 @@ struct Analyzer<'a, 'tcx> {
     root: &'a str,
     stack: Vec<Instance<'tcx>>,
     resource_root: bool,
+    storage_root: bool,
+    path: Site,
+    trace: &'a mut Trace<'tcx>,
+    plan: Option<&'a mut Plan>,
 }
 impl<'tcx> Analyzer<'_, 'tcx> {
     fn error(&self, instance: Instance<'tcx>, block: usize, message: &str) -> String {
@@ -401,12 +452,13 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         validate: bool,
         entry_varying: bool,
         pending: Pending,
-    ) -> Result<(Fact, Pending), String> {
+        epochs: Epochs,
+    ) -> Result<(Fact, Pending, Epochs), String> {
         if self.stack.contains(&instance) {
             return if validate {
                 Err(self.error(instance, 0, "recursive helper participation is unsupported"))
             } else {
-                Ok((Fact::Varying, pending))
+                Ok((Fact::Varying, pending, epochs))
             };
         }
         if matches!(instance.def, rustc_middle::ty::InstanceKind::Intrinsic(_)) {
@@ -415,6 +467,9 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 0,
                 "intrinsic is outside the supported checked block subset",
             ));
+        }
+        if validate {
+            self.trace.contexts.insert(self.path.clone(), instance);
         }
         let stable: mir::mono::Instance = rustc_internal::stable(instance);
         let Some(body) = stable.body() else {
@@ -425,7 +480,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                     "call without MIR cannot prove collective participation",
                 ))
             } else {
-                Ok((Fact::Varying, pending))
+                Ok((Fact::Varying, pending, epochs))
             };
         };
         let supplied = device_mono_reachability(self.tcx, instance);
@@ -459,6 +514,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         let mut entry = State {
             locals: vec![Fact::Unset; body.locals().len()],
             pending,
+            epochs,
         };
         for (local, fact) in entry.iter_mut().skip(1).zip(arguments) {
             *local = fact;
@@ -482,7 +538,12 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         let limit = body
             .blocks
             .len()
-            .saturating_mul(body.locals().len() + 4)
+            .saturating_mul(
+                body.locals().len()
+                    + self.collection.library_calls.len() * 4
+                    + self.plan.as_ref().map_or(0, |p| p.sites.len() * 4)
+                    + 4,
+            )
             .max(8);
         let mut settled = false;
         for _ in 0..limit {
@@ -531,6 +592,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 for &target in &edges[block] {
                     if let Some(previous) = &mut incoming[target] {
                         changed |= merge_pending(&mut previous.pending, &state.pending);
+                        changed |= previous.epochs.merge(&state.epochs);
                         for (old, new) in previous.iter_mut().zip(state.locals.iter()) {
                             let merged = old.merge(new);
                             if merged != *old {
@@ -567,11 +629,12 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         }
         let mut returned = Fact::Unset;
         let mut returned_pending = Pending::new();
+        let mut returned_epochs = Epochs::default();
         for &block in &live {
             let Some(mut state) = incoming[block].clone() else {
                 continue;
             };
-            if validate && self.resource_root {
+            if validate && (self.resource_root || self.storage_root) {
                 self.check_resource_mutation(&body, instance, block, &state)?;
             }
             self.statements(&body, block, &mut state, divergent[block], &borrowed);
@@ -616,13 +679,14 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             ) {
                 returned = returned.merge(&return_fact(state[0].clone()));
                 merge_pending(&mut returned_pending, &state.pending);
+                returned_epochs.merge(&state.epochs);
             }
         }
         self.stack.pop();
         // Worklist bottom is not evidence about a call's result. In
         // particular, importer-rewritten host-panic placeholders have no
         // Rust Return block but can produce lane-varying device values.
-        Ok((return_fact(returned), returned_pending))
+        Ok((return_fact(returned), returned_pending, returned_epochs))
     }
     fn check_resource_mutation(
         &self,
@@ -661,7 +725,9 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 if let Ok(ty) = prefix.ty(body.locals()) {
                     let mut ty = rustc_internal::internal(self.tcx, ty);
                     loop {
-                        if crate::library::resource_parameter(self.tcx, ty) {
+                        if crate::library::resource_parameter(self.tcx, ty)
+                            || storage::storage_handle_type(self.tcx, ty)
+                        {
                             carrier = true;
                             break;
                         }
@@ -741,8 +807,177 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             .iter()
             .find(|c| c.site.caller == instance && c.site.block.index() == block)
         {
+            let mut site = self.path.clone();
+            site.push(block);
+            if call.kind.storage() {
+                if validate && divergent {
+                    return Err(self.error(
+                        instance,
+                        block,
+                        "storage operation is reached through lane-varying control flow",
+                    ));
+                }
+                let mut origin = None;
+                let mut policy = Policy::default();
+                let result = match call.kind {
+                    MarkerKind::StorageNew => {
+                        policy = storage::new_policy(self.tcx, call)?;
+                        Fact::Descriptor(site.clone(), policy.clone())
+                    }
+                    MarkerKind::StorageReconfigure => {
+                        let descriptor = call_fact(operand(&args[0], state), state).descriptor();
+                        if let Some((old, _)) = descriptor {
+                            origin = Some(old.clone());
+                            policy = storage::policy(self.tcx, call.instance.args.type_at(1))?;
+                            if validate
+                                && state.epochs.used.get(&old).is_some_and(|used| {
+                                    used.iter().any(|previous| *previous != policy)
+                                })
+                            {
+                                return Err(self.error(
+                                    instance,
+                                    block,
+                                    "storage policy cannot change after use",
+                                ));
+                            }
+                            Fact::Descriptor(old, policy.clone())
+                        } else if validate {
+                            return Err(self.error(
+                                instance,
+                                block,
+                                "storage reconfiguration has ambiguous descriptor origin",
+                            ));
+                        } else {
+                            Fact::Varying
+                        }
+                    }
+                    MarkerKind::StorageReserve | MarkerKind::CheckedBlockStorage => {
+                        let index = if call.kind == MarkerKind::StorageReserve {
+                            0
+                        } else {
+                            2
+                        };
+                        let fact = call_fact(operand(&args[index], state), state);
+                        if let Some((id, p)) = fact.descriptor() {
+                            origin = Some(id);
+                            policy = p;
+                        } else if call.kind == MarkerKind::CheckedBlockStorage
+                            && matches!(call.instance.args.type_at(3).kind(),rustc_middle::ty::TyKind::Tuple(fields) if fields.is_empty())
+                        {
+                        } else if validate {
+                            return Err(self.error(
+                                instance,
+                                block,
+                                "storage use has no unambiguous descriptor origin",
+                            ));
+                        }
+                        if call.kind == MarkerKind::StorageReserve {
+                            Fact::Reservation(site.clone())
+                        } else {
+                            Fact::Fields(vec![])
+                        }
+                    }
+                    MarkerKind::StorageRelease => {
+                        if let Some(reservation) =
+                            call_fact(operand(&args[0], state), state).reservation()
+                        {
+                            if let Some(region) = state.epochs.live.remove(&reservation) {
+                                state.epochs.dirty.insert(region);
+                            } else if validate && self.plan.is_some() {
+                                return Err(self.error(
+                                    instance,
+                                    block,
+                                    "storage release has no live reservation",
+                                ));
+                            }
+                        } else if validate {
+                            return Err(self.error(
+                                instance,
+                                block,
+                                "storage release has ambiguous reservation origin",
+                            ));
+                        }
+                        Fact::Fields(vec![])
+                    }
+                    _ => unreachable!(),
+                };
+                if matches!(
+                    call.kind,
+                    MarkerKind::StorageReserve | MarkerKind::CheckedBlockStorage
+                ) && let Some(origin) = &origin
+                {
+                    state
+                        .epochs
+                        .used
+                        .entry(origin.clone())
+                        .or_default()
+                        .insert(policy.clone());
+                }
+                if validate {
+                    self.trace.events.insert(
+                        site.clone(),
+                        Event {
+                            call: call.site,
+                            kind: call.kind,
+                            origin,
+                            policy,
+                        },
+                    );
+                }
+                if let Some(binding) = self.plan.as_mut().and_then(|p| p.sites.get_mut(&site)) {
+                    if validate
+                        && state
+                            .epochs
+                            .live
+                            .values()
+                            .any(|region| *region == binding.region)
+                    {
+                        return Err(format!(
+                            "checked block collective in {}: storage use overlaps a live reservation at {site:?}",
+                            self.root
+                        ));
+                    }
+                    if state.epochs.dirty.contains(&binding.region) {
+                        if binding.implicit {
+                            binding.before = true;
+                            state.pending.clear();
+                            state.epochs.dirty.clear();
+                        } else if validate {
+                            return Err(format!(
+                                "checked block collective in {}: explicit storage reuse requires a full-block barrier at {site:?}",
+                                self.root
+                            ));
+                        }
+                    }
+                    state.epochs.dirty.insert(binding.region.clone());
+                    if call.kind == MarkerKind::StorageReserve {
+                        state
+                            .epochs
+                            .live
+                            .insert(site.clone(), binding.region.clone());
+                    }
+                }
+                if !call.kind.native() {
+                    // Markers cannot mutate the descriptor; preserve its provenance.
+                    write(destination, result, state, borrowed);
+                    return Ok(());
+                }
+            }
+            if validate && !call.kind.storage() {
+                self.trace.events.insert(
+                    site.clone(),
+                    Event {
+                        call: call.site,
+                        kind: call.kind,
+                        origin: None,
+                        policy: Policy::default(),
+                    },
+                );
+            }
             if validate {
-                if !call.kind.checked() || (self.resource_root && !call.kind.resource()) {
+                if !call.kind.checked()
+                    || (self.resource_root && !call.kind.resource() && !call.kind.storage())
+                {
                     return Err(self.error(
                         instance,
                         block,
@@ -757,7 +992,13 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                     ));
                 }
                 let uniform = args
-                    .get(if call.kind.resource() { 2 } else { 1 })
+                    .get(if call.kind == MarkerKind::CheckedBlockStorage {
+                        3
+                    } else if call.kind.resource() {
+                        2
+                    } else {
+                        1
+                    })
                     .map(|arg| operand(arg, state))
                     .unwrap_or(Fact::Varying);
                 let Fact::Fields(fields) = uniform else {
@@ -780,7 +1021,10 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 if let Some(origin) = witness.resource_origin() {
                     let write = crate::library::resource_write(call);
                     let old = state.pending.get(origin).copied().unwrap_or(0);
-                    if validate && (old & 2 != 0 || (write && old != 0)) {
+                    if validate
+                        && (!self.storage_root || self.plan.is_some())
+                        && (old & 2 != 0 || (write && old != 0))
+                    {
                         return Err(self.error(
                             instance,
                             block,
@@ -797,6 +1041,15 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                     ));
                 }
             }
+            if self
+                .plan
+                .as_ref()
+                .and_then(|plan| plan.sites.get(&site))
+                .is_some_and(|binding| binding.after)
+            {
+                state.pending.clear();
+                state.epochs.dirty.clear();
+            }
             // Native providers may mutate the payload, including a scalar
             // subsequently used as a control. Do not retain borrowed facts.
             invalidate_borrows(state, borrowed);
@@ -809,6 +1062,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             || (krate.as_str() == "cuda_intrinsics" && path.ends_with("::i0034"));
         if is_sync {
             state.pending.clear();
+            state.epochs.dirty.clear();
             if validate && divergent {
                 return Err(self.error(
                     instance,
@@ -885,9 +1139,19 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             .iter()
             .map(|arg| call_fact(operand(arg, state), state))
             .collect();
-        let (mut result, pending) =
-            self.analyze(callee, facts, validate, divergent, state.pending.clone())?;
+        self.path.push(block);
+        let analyzed = self.analyze(
+            callee,
+            facts,
+            validate,
+            divergent,
+            state.pending.clone(),
+            state.epochs.clone(),
+        );
+        self.path.pop();
+        let (mut result, pending, epochs) = analyzed?;
         state.pending = pending;
+        state.epochs = epochs;
         if divergent {
             result = result.taint();
         }
@@ -899,12 +1163,18 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         Ok(())
     }
 }
+pub(crate) struct Validation<'tcx> {
+    pub shapes: BTreeMap<String, [u32; 3]>,
+    pub traces: BTreeMap<String, Trace<'tcx>>,
+}
 pub(crate) fn validate<'tcx>(
     tcx: TyCtxt<'tcx>,
     collection: &CollectionResult<'tcx>,
-) -> Result<BTreeMap<String, [u32; 3]>, String> {
+    mut plans: Option<&mut BTreeMap<String, Plan>>,
+) -> Result<Validation<'tcx>, String> {
     rustc_internal::run(tcx, || {
         let mut shapes = BTreeMap::new();
+        let mut traces = BTreeMap::new();
         for root in collection.functions.iter().filter(|f| f.is_kernel) {
             let reached = reachable_instances(collection, root.instance);
             if !collection.library_calls.iter().any(|c| c.kind.checked() && reached.contains(&c.site.caller)) { continue; }
@@ -921,10 +1191,13 @@ pub(crate) fn validate<'tcx>(
                 } else if matches!(ty.kind(), TyKind::Bool | TyKind::Int(_) | TyKind::Uint(_) | TyKind::Float(_)) { Fact::Uniform }
                 else { Fact::Kernel(format!("{}:{arg}", root.export_name)) }
             }).collect();
-            let mut analyzer = Analyzer { tcx, collection, root: &root.export_name, stack: Vec::new(), resource_root };
-            analyzer.analyze(root.instance, arguments, true, false, Pending::new())?;
+            let storage_root=collection.library_calls.iter().any(|c| c.kind.storage() && reached.contains(&c.site.caller));
+            let trace=traces.entry(root.export_name.clone()).or_insert_with(Trace::default);
+            let plan=plans.as_mut().and_then(|plans|plans.get_mut(&root.export_name));
+            let mut analyzer = Analyzer { tcx, collection, root: &root.export_name, stack: Vec::new(), resource_root,storage_root,path:Vec::new(),trace,plan };
+            analyzer.analyze(root.instance, arguments, true, false, Pending::new(),Epochs::default())?;
             shapes.insert(root.export_name.clone(), shape);
         }
-        Ok(shapes)
+        Ok(Validation{shapes,traces})
     }).map_err(|error| format!("cannot enter collective MIR analysis: {error:?}"))?
 }

@@ -14,6 +14,8 @@ use pliron::linked_list::ContainsLinkedList;
 use pliron::operation::Operation;
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(crate) const PLANNED_ROOT: &str = "cuda_oxide_planned_storage_root";
+
 pub(crate) const FIXED_SHARED_BYTES: &str = "cuda_oxide_fixed_shared_bytes";
 pub(crate) const INFERRED_SHARED: &str = "cuda_oxide_inferred_shared";
 
@@ -83,12 +85,16 @@ struct FunctionResources {
     callees: Vec<String>,
 }
 
-fn scan(ctx: &Context, op: Ptr<Operation>, resources: &mut FunctionResources) {
-    if let Some(shared) = Operation::get_op::<MirExternSharedOp>(op, ctx) {
+fn scan(ctx: &Context, op: Ptr<Operation>, resources: &mut FunctionResources, native_only: bool) {
+    if let Some(shared) = Operation::get_op::<MirExternSharedOp>(op, ctx)
+        && !(native_only && planned_root(ctx, op).is_some())
+    {
         match integer_attr(ctx, op, FIXED_SHARED_BYTES) {
             Some(bytes) => {
                 resources.fixed = true;
-                resources.bytes = resources.bytes.max(bytes);
+                resources.bytes = resources
+                    .bytes
+                    .max(shared.get_byte_offset_value(ctx).saturating_add(bytes));
                 resources.alignment = resources.alignment.max(shared.get_alignment_value(ctx));
             }
             None => resources.unconstrained = true,
@@ -102,7 +108,7 @@ fn scan(ctx: &Context, op: Ptr<Operation>, resources: &mut FunctionResources) {
     for region in op.deref(ctx).regions() {
         for block in region.deref(ctx).iter(ctx) {
             for child in block.deref(ctx).iter(ctx) {
-                scan(ctx, child, resources);
+                scan(ctx, child, resources, native_only);
             }
         }
     }
@@ -123,7 +129,7 @@ pub(crate) fn collect(
                         alignment: integer_attr(ctx, op, "dynamic_shared_alignment").unwrap_or(1),
                         ..Default::default()
                     };
-                    scan(ctx, op, &mut resources);
+                    scan(ctx, op, &mut resources, false);
                     functions.insert(function.get_symbol_name(ctx).to_string(), (op, resources));
                 }
             }
@@ -182,4 +188,90 @@ pub(crate) fn collect(
         facts.insert(kernel, layout);
     }
     Ok(facts)
+}
+
+fn planned_root(ctx: &Context, op: Ptr<Operation>) -> Option<String> {
+    let key: pliron::identifier::Identifier = PLANNED_ROOT.try_into().unwrap();
+    op.deref(ctx)
+        .attributes
+        .get::<pliron::builtin::attributes::StringAttr>(&key)
+        .map(|value| String::from((*value).clone()))
+}
+fn walk(ctx: &Context, op: Ptr<Operation>, result: &mut Vec<Ptr<Operation>>) {
+    result.push(op);
+    for region in op.deref(ctx).regions() {
+        for block in region.deref(ctx).iter(ctx) {
+            for child in block.deref(ctx).iter(ctx) {
+                walk(ctx, child, result);
+            }
+        }
+    }
+}
+/// Ordinary fixed views alias a prefix. Relocate only compiler-planned regions
+/// after that prefix, before alignment propagation and final launch facts.
+pub(crate) fn relocate_planned(
+    ctx: &mut Context,
+    module: Ptr<Operation>,
+    roots: &BTreeMap<String, KernelLaunchFacts>,
+) -> Result<(), String> {
+    let mut operations = Vec::new();
+    walk(ctx, module, &mut operations);
+    let planned: BTreeSet<_> = operations
+        .iter()
+        .filter_map(|op| planned_root(ctx, *op))
+        .collect();
+    if planned.is_empty() {
+        return Ok(());
+    }
+    let mut functions = BTreeMap::new();
+    for &op in &operations {
+        if let Some(function) = MirFuncOp::wrap(ctx, op) {
+            let mut local = FunctionResources::default();
+            scan(ctx, op, &mut local, true);
+            functions.insert(function.get_symbol_name(ctx).to_string(), local);
+        }
+    }
+    let mut bases = BTreeMap::new();
+    for root in planned {
+        let plan = roots
+            .get(&root)
+            .ok_or("planned storage root has no finalized layout")?;
+        let mut visited = BTreeSet::new();
+        let mut pending = vec![root.clone()];
+        let mut bytes = 0;
+        while let Some(name) = pending.pop() {
+            if !visited.insert(name.clone()) {
+                continue;
+            }
+            let Some(local) = functions.get(&name) else {
+                continue;
+            };
+            if local.unconstrained {
+                return Err(format!(
+                    "{root}: planned storage cannot include an unconstrained native dynamic shared view"
+                ));
+            }
+            bytes = bytes.max(local.bytes);
+            pending.extend(local.callees.iter().cloned());
+        }
+        let align = u64::from(plan.dynamic_shared_alignment);
+        let base = bytes
+            .checked_add(align - 1)
+            .map(|n| n & !(align - 1))
+            .ok_or("native prefix and storage plan overflow")?;
+        let end = base
+            .checked_add(u64::from(plan.dynamic_shared_bytes))
+            .ok_or("native prefix and storage plan overflow")?;
+        u32::try_from(end).map_err(|_| "native prefix and storage plan exceed u32")?;
+        bases.insert(root, base);
+    }
+    for op in operations {
+        if let Some(root) = planned_root(ctx, op) {
+            let shared = Operation::get_op::<MirExternSharedOp>(op, ctx)
+                .ok_or("planned storage tag is not on a shared view")?;
+            let offset = bases[&root] + shared.get_byte_offset_value(ctx);
+            shared.set_byte_offset_value(ctx, offset);
+        }
+    }
+    Ok(())
 }

@@ -968,7 +968,7 @@ fn translate_call(
     let target_usize = target.map(|t| t);
 
     // Extract function info
-    let (pattern_name, call_name, substs_args, type_substs) = extract_func_info(func, &loc)?;
+    let (pattern_name, mut call_name, substs_args, type_substs) = extract_func_info(func, &loc)?;
     let loc = call_debug_location(pattern_name.as_deref(), loc);
 
     if let mir::Operand::Constant(constant) = func
@@ -983,19 +983,23 @@ fn translate_call(
                 TranslationErr::invalid_op("library call site changed after validation")
             );
         }
-        return crate::library::translate_call(
-            ctx,
-            body,
-            plan,
-            args,
-            destination,
-            &target_usize,
-            block_ptr,
-            prev_op,
-            value_map,
-            block_map,
-            loc,
-        );
+        if plan.operation == crate::LibraryOperation::Redirect {
+            call_name = Some(plan.symbol.clone());
+        } else {
+            return crate::library::translate_call(
+                ctx,
+                body,
+                plan,
+                args,
+                destination,
+                &target_usize,
+                block_ptr,
+                prev_op,
+                value_map,
+                block_map,
+                loc,
+            );
+        }
     }
 
     if let mir::Operand::Constant(constant) = func
@@ -1006,6 +1010,12 @@ fn translate_call(
             def.def_id().name().as_str(),
             reserved_oxide_symbols::LIBRARY_CALL_V1
                 | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_CALL_V1
+                | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_RESOURCE_CALL_V1
+                | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_STORAGE_CALL_V1
+                | reserved_oxide_symbols::LIBRARY_STORAGE_NEW_V1
+                | reserved_oxide_symbols::LIBRARY_STORAGE_RECONFIGURE_V1
+                | reserved_oxide_symbols::LIBRARY_STORAGE_RESERVE_V1
+                | reserved_oxide_symbols::LIBRARY_STORAGE_RELEASE_V1
         )
     {
         return input_err!(

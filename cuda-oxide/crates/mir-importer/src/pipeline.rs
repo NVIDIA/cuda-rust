@@ -697,6 +697,8 @@ pub fn run_pipeline_with_libraries(
 
     // Facts need the same helper alignment as lowering. This max-only call-graph
     // propagation is idempotent; lowering also runs it for its other callers.
+    crate::kernel_resources::relocate_planned(&mut ctx, module_op_ptr, library_roots)
+        .map_err(PipelineError::Translation)?;
     mir_lower::propagate_kernel_dynamic_shared_alignments(&mut ctx, module_op_ptr);
     let kernel_launch_facts = crate::kernel_resources::collect(
         &ctx,

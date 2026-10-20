@@ -83,9 +83,57 @@ checked helper paths, including single-root paths. Remove those attributes to
 allow root-specific naming. Unsupported indirect checked calls retain their
 existing diagnostics.
 
-Each checked root receives its own helper body, including roots with equal
-block shapes. Calls within one root share that body; separate storage bindings
-are not modeled here.
+Each checked root receives its own helper context, including roots with equal
+block shapes. Planned storage additionally distinguishes static call sites
+within a root when their assigned offsets or synchronization differ. Helpers
+with identical finalized bindings share one emitted body in that root.
+
+## Planned full-block storage
+
+`checked_block_storage_call_v1` extends the typed memory-witness boundary with
+one storage operand: `()` selects managed reuse, while `&mut StorageDescriptor`
+selects an explicit policy. These internal, unsafe integration types do not
+provide a public collective API or safe arbitrary shared-memory references.
+
+`storage_new_v1::<CAPACITY, ALIGN, AUTO_SYNC, EXCLUSIVE>()` creates a descriptor
+origin. Zero capacity or alignment requests inference. Each rooted static
+constructor call is distinct; repeating it in a loop preserves that origin.
+Moves and direct helper calls preserve identity. Consuming
+`storage_reconfigure_v1::<Old, New>` preserves the origin and selects a policy
+before use. Incompatible policies and ambiguous descriptor choices fail
+compilation.
+
+Shared uses occupy one maximum-sized region. Exclusive uses receive separate
+aligned regions per rooted static call site; repeated loop iterations reuse
+the same site. Explicit capacity must fit the **complete** descriptor plan,
+including exclusive padding. Its full capacity contributes to launch facts.
+Distinct descriptors receive disjoint allocations. The compiler uses validated
+provider extents and alignments; native specialization identity is unchanged.
+
+For scratchful calls, omitted storage inserts a block barrier before possible
+reuse. Explicit manual storage requires the caller's block barrier. Explicit
+`AUTO_SYNC=true` inserts a trailing barrier after every scratchful call.
+Scratch-free operations allocate no region and gain no storage barrier. A
+real full-block barrier also orders the current full-block output-resource
+epochs. Different storage descriptors alone do not order output reuse.
+
+`storage_reserve_v1::<T, _, N, ALIGN>(&mut descriptor)` reserves an actual Rust
+`[T; N]` layout for one of the ten fixed-width integer/float scalar types.
+It returns a non-Copy `StorageReservation<T, N>` with `as_mut_ptr`, never a Rust
+reference or slice. Raw accesses require initialization, bounds and aliasing
+proof from the unsafe caller. Overlapping live reservations and primitive uses
+are rejected. Different exclusive sites may remain live together.
+`storage_release_v1(view)` consumes the handle but emits no barrier: synchronize
+after release before overlapping reuse. A barrier while the view is live does
+not release it, and dropping or forgetting it is not completion. Reservations
+cannot use automatic trailing synchronization.
+
+Ordinary `DynamicSharedArray::get_fixed` views retain their aliased base prefix.
+Planned regions follow that prefix with their required alignment. Unknown
+`get/get_raw/offset` views are rejected in a planned root. The existing artifact
+launch facts carry the total extent and exact block geometry. This boundary is
+full-block and synchronous; warp partitions and resource callbacks require
+separate binding support.
 
 ## Host request and response
 
@@ -180,11 +228,12 @@ contracts or maximum bounds are errors. The compiled artifact carries the
 resulting facts to launch preparation; `dynamic_shared = inferred` with
 `LaunchConfig3D::auto_shared` uses the compiled byte count.
 
-This version aliases all library scratch views at the dynamic shared base,
+The raw and participation-only markers alias library scratch views at the dynamic shared base,
 using the maximum required size and alignment. The caller must complete each
 use before conflicting reuse. Mixing native dynamic shared views
-with library calls is rejected. No barrier, allocation token or borrow-based
-completion is supplied by the marker.
+with these markers is rejected. They supply no barrier, allocation token or
+borrow-based completion. The planned full-block boundary above has explicit
+allocation and synchronization rules.
 
 The library wrapper must enforce pointer validity, alignment, capacity,
 initialization, nonaliasing, collective participation and resource reuse for

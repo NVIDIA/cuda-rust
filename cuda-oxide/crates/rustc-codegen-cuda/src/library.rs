@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::collector::CollectionResult;
 
+pub(crate) mod storage;
+
 const MAX_HEADER: usize = 1024 * 1024;
 const MAX_LTO: usize = 256 * 1024 * 1024;
 
@@ -26,15 +28,47 @@ pub(crate) enum MarkerKind {
     Raw,
     CheckedBlock,
     CheckedBlockResource,
+    CheckedBlockStorage,
+    StorageNew,
+    StorageReconfigure,
+    StorageReserve,
+    StorageRelease,
 }
 
 impl MarkerKind {
     pub(crate) fn checked(self) -> bool {
-        matches!(self, Self::CheckedBlock | Self::CheckedBlockResource)
+        matches!(
+            self,
+            Self::CheckedBlock
+                | Self::CheckedBlockResource
+                | Self::CheckedBlockStorage
+                | Self::StorageNew
+                | Self::StorageReconfigure
+                | Self::StorageReserve
+                | Self::StorageRelease
+        )
+    }
+
+    pub(crate) fn native(self) -> bool {
+        matches!(
+            self,
+            Self::Raw | Self::CheckedBlock | Self::CheckedBlockResource | Self::CheckedBlockStorage
+        )
+    }
+
+    pub(crate) fn storage(self) -> bool {
+        matches!(
+            self,
+            Self::CheckedBlockStorage
+                | Self::StorageNew
+                | Self::StorageReconfigure
+                | Self::StorageReserve
+                | Self::StorageRelease
+        )
     }
 
     pub(crate) fn resource(self) -> bool {
-        self == Self::CheckedBlockResource
+        matches!(self, Self::CheckedBlockResource | Self::CheckedBlockStorage)
     }
 }
 
@@ -89,6 +123,19 @@ pub(crate) fn marker_definitions(tcx: TyCtxt<'_>) -> HashMap<DefId, MarkerKind> 
                     reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_RESOURCE_CALL_V1 => {
                         MarkerKind::CheckedBlockResource
                     }
+                    reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_STORAGE_CALL_V1 => {
+                        MarkerKind::CheckedBlockStorage
+                    }
+                    reserved_oxide_symbols::LIBRARY_STORAGE_NEW_V1 => MarkerKind::StorageNew,
+                    reserved_oxide_symbols::LIBRARY_STORAGE_RECONFIGURE_V1 => {
+                        MarkerKind::StorageReconfigure
+                    }
+                    reserved_oxide_symbols::LIBRARY_STORAGE_RESERVE_V1 => {
+                        MarkerKind::StorageReserve
+                    }
+                    reserved_oxide_symbols::LIBRARY_STORAGE_RELEASE_V1 => {
+                        MarkerKind::StorageRelease
+                    }
                     _ => continue,
                 };
                 if let Some(def) = item.res.opt_def_id() {
@@ -100,7 +147,7 @@ pub(crate) fn marker_definitions(tcx: TyCtxt<'_>) -> HashMap<DefId, MarkerKind> 
     definitions
 }
 
-fn device_type(tcx: TyCtxt<'_>, name: &str) -> Option<DefId> {
+fn device_type(tcx: TyCtxt<'_>, module_name: &str, name: &str) -> Option<DefId> {
     for &krate in tcx.crates(()) {
         if tcx.crate_name(krate).as_str() != "cuda_device" {
             continue;
@@ -112,7 +159,7 @@ fn device_type(tcx: TyCtxt<'_>, name: &str) -> Option<DefId> {
         let module = tcx
             .module_children(root)
             .iter()
-            .find(|item| item.ident.name.as_str() == "disjoint")?
+            .find(|item| item.ident.name.as_str() == module_name)?
             .res
             .opt_def_id()?;
         return tcx
@@ -129,7 +176,7 @@ pub(crate) fn collective_carrier<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Optio
     let TyKind::Adt(def, args) = ty.kind() else {
         return None;
     };
-    if Some(def.did()) != device_type(tcx, "DisjointSlice") {
+    if Some(def.did()) != device_type(tcx, "disjoint", "DisjointSlice") {
         return None;
     }
     let mut types = args.types();
@@ -137,7 +184,7 @@ pub(crate) fn collective_carrier<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Optio
     let TyKind::Adt(space, args) = types.next()?.kind() else {
         return None;
     };
-    if Some(space.did()) != device_type(tcx, "CollectiveTiles") {
+    if Some(space.did()) != device_type(tcx, "disjoint", "CollectiveTiles") {
         return None;
     }
     Some((element, args.const_at(0).try_to_target_usize(tcx)?))
@@ -152,7 +199,11 @@ pub(crate) fn resource_parameter<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool 
 pub(crate) fn resource_write(call: &LibraryCall<'_>) -> bool {
     call.instance
         .args
-        .const_at(6)
+        .const_at(if call.kind == MarkerKind::CheckedBlockStorage {
+            7
+        } else {
+            6
+        })
         .try_to_leaf()
         .and_then(|value| value.try_to_bool().ok())
         .expect("validated resource access")
@@ -161,7 +212,11 @@ pub(crate) fn resource_write(call: &LibraryCall<'_>) -> bool {
 fn validate_resource<'tcx>(tcx: TyCtxt<'tcx>, call: &LibraryCall<'tcx>) -> Result<(), String> {
     let args = call.instance.args;
     let write = args
-        .const_at(6)
+        .const_at(if call.kind == MarkerKind::CheckedBlockStorage {
+            7
+        } else {
+            6
+        })
         .try_to_leaf()
         .and_then(|value| value.try_to_bool().ok())
         .ok_or("resource access mode is not constant")?;
@@ -287,7 +342,7 @@ pub(crate) struct FinalizedLibraries<'tcx> {
     /// Checked helpers need a concrete kernel before their calls can be lowered.
     pub deferred: HashSet<Instance<'tcx>>,
     /// Original Rust instances mapped to their emitted names for each checked root.
-    pub contexts: BTreeMap<String, HashMap<Instance<'tcx>, String>>,
+    pub contexts: BTreeMap<String, Vec<(Instance<'tcx>, String)>>,
     pub redirects: mir_importer::CallTargetRedirects,
     pub declarations: Vec<mir_importer::DeviceExternDecl>,
     pub inputs: Vec<(String, Vec<u8>)>,
@@ -529,7 +584,13 @@ fn extern_argument(argument: &Argument) -> mir_importer::DeviceExternType {
 
 fn call_arguments(call: &LibraryCall<'_>) -> Result<Vec<Argument>, String> {
     let args = call.instance.args;
-    let first = if call.kind.resource() { 3 } else { 2 };
+    let first = if call.kind == MarkerKind::CheckedBlockStorage {
+        4
+    } else if call.kind.resource() {
+        3
+    } else {
+        2
+    };
     let TyKind::Tuple(uniform) = args.type_at(first).kind() else {
         return Err("library arguments must be a tuple".into());
     };
@@ -574,13 +635,17 @@ pub(crate) fn finalize<'tcx>(
     }
     // Structural checks precede both the proof and external compilation.
     for call in &collection.library_calls {
-        call_arguments(call).unwrap_or_else(|error| tcx.dcx().span_fatal(call.span, error));
+        storage::validate(tcx, call).unwrap_or_else(|error| tcx.dcx().span_fatal(call.span, error));
+        if call.kind.native() {
+            call_arguments(call).unwrap_or_else(|error| tcx.dcx().span_fatal(call.span, error));
+        }
         if call.kind.resource() {
             validate_resource(tcx, call)
                 .unwrap_or_else(|error| tcx.dcx().span_fatal(call.span, error));
         }
     }
-    let checked_shapes = crate::collective_validation::validate(tcx, collection)?;
+    let validation = crate::collective_validation::validate(tcx, collection, None)?;
+    let checked_shapes = &validation.shapes;
     let target = std::env::var("CUDA_OXIDE_TARGET")
         .map_err(|_| "library calls require an explicit CUDA target")?;
     let target = target
@@ -606,8 +671,10 @@ pub(crate) fn finalize<'tcx>(
         if calls.is_empty() {
             continue;
         }
+        let storage_root = calls.iter().any(|call| call.kind.storage());
         for instance in &reached {
-            if tcx.crate_name(instance.def_id().krate).as_str() == "cuda_device"
+            if !storage_root
+                && tcx.crate_name(instance.def_id().krate).as_str() == "cuda_device"
                 && tcx
                     .def_path_str(instance.def_id())
                     .contains("DynamicSharedArray")
@@ -674,9 +741,11 @@ pub(crate) fn finalize<'tcx>(
                     }
                 }
             }
-            result.contexts.insert(root.export_name.clone(), context);
+            result
+                .contexts
+                .insert(root.export_name.clone(), context.into_iter().collect());
         }
-        for call in calls {
+        for call in calls.into_iter().filter(|call| call.kind.native()) {
             let args = call.instance.args;
             let report = |error: String| -> ! {
                 tcx.dcx()
@@ -710,9 +779,15 @@ pub(crate) fn finalize<'tcx>(
                 algorithm: registration.algorithm,
                 dtype: scalar(args.type_at(0)).unwrap_or_else(|error| report(error)),
                 block,
-                items_per_thread: positive(if call.kind.resource() { 5 } else { 4 })
-                    .map_err(str::to_owned)
-                    .unwrap_or_else(|error| report(error)),
+                items_per_thread: positive(if call.kind == MarkerKind::CheckedBlockStorage {
+                    6
+                } else if call.kind.resource() {
+                    5
+                } else {
+                    4
+                })
+                .map_err(str::to_owned)
+                .unwrap_or_else(|error| report(error)),
             };
             let batch = batches
                 .entry((registration.provider, registration.executable))
@@ -792,7 +867,7 @@ pub(crate) fn finalize<'tcx>(
                 },
             });
             for (call, root) in calls {
-                if call.kind.resource() && !spec.scratch_free {
+                if call.kind == MarkerKind::CheckedBlockResource && !spec.scratch_free {
                     tcx.dcx().span_fatal(
                         call.span,
                         "resource-checked block calls currently require a scratch-free provider",
@@ -808,6 +883,12 @@ pub(crate) fn finalize<'tcx>(
                 }
                 let _ = spec.mutates_payload;
                 let plan = mir_importer::LibraryCallPlan {
+                    operation: mir_importer::LibraryOperation::Native,
+                    storage_witness: call.kind == MarkerKind::CheckedBlockStorage,
+                    scratch_offset: 0,
+                    planned_root: None,
+                    barrier_before: false,
+                    barrier_after: false,
                     symbol: spec.symbol.clone(),
                     marker: tcx.symbol_name(call.instance).name.to_string(),
                     checked_block: call.kind.checked(),
@@ -818,8 +899,12 @@ pub(crate) fn finalize<'tcx>(
                 let caller = result
                     .contexts
                     .get(root)
-                    .and_then(|context| context.get(&call.site.caller))
-                    .cloned()
+                    .and_then(|context| {
+                        context
+                            .iter()
+                            .find(|(instance, _)| *instance == call.site.caller)
+                            .map(|(_, name)| name.clone())
+                    })
                     .unwrap_or_else(|| {
                         collection
                             .functions
@@ -860,6 +945,7 @@ pub(crate) fn finalize<'tcx>(
             }
         }
     }
+    storage::finalize(tcx, collection, validation, &mut result)?;
     Ok(result)
 }
 

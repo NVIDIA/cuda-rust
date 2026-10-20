@@ -11,10 +11,13 @@ use crate::translator::terminator::helpers;
 use crate::translator::values::{ValueMap, establish_declared_pointer_type};
 use crate::translator::{facts, rvalue, types};
 use dialect_mir::attributes::{FieldIndexAttr, MirPointerKindAuthorityAttr};
-use dialect_mir::ops::{MirExternSharedOp, MirExtractFieldOp};
-use dialect_mir::types::{MirPtrType, MirTupleType};
+use dialect_mir::ops::{
+    MirConstantOp, MirExternSharedOp, MirExtractFieldOp, MirInsertFieldOp, MirUndefOp,
+};
+use dialect_mir::types::{MirPtrType, MirStructType, MirTupleType};
+use dialect_nvvm::ops::Barrier0Op;
 use pliron::basic_block::BasicBlock;
-use pliron::builtin::attributes::IntegerAttr;
+use pliron::builtin::attributes::{IntegerAttr, StringAttr};
 use pliron::builtin::types::{FunctionType, IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
 use pliron::input_err;
@@ -36,9 +39,26 @@ pub struct LibraryCallSite {
     pub block: usize,
 }
 
+/// Compiler-owned operation at one exact MIR terminator.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LibraryOperation {
+    Native,
+    StorageNew,
+    StorageReconfigure,
+    StorageReserve,
+    StorageRelease,
+    Redirect,
+}
+
 /// One monomorphized call whose Rust tuple and provider ABI already agree.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LibraryCallPlan {
+    pub operation: LibraryOperation,
+    pub storage_witness: bool,
+    pub scratch_offset: u32,
+    pub planned_root: Option<String>,
+    pub barrier_before: bool,
+    pub barrier_after: bool,
     /// Exact external symbol emitted by the native provider.
     pub symbol: String,
     /// Expected marker identity at this exact MIR terminator.
@@ -51,6 +71,25 @@ pub struct LibraryCallPlan {
     pub scratch_bytes: u32,
     /// Required alignment of the shared scratch base.
     pub scratch_alignment: u32,
+}
+
+impl LibraryCallPlan {
+    pub fn internal(operation: LibraryOperation, marker: String) -> Self {
+        Self {
+            operation,
+            marker,
+            symbol: String::new(),
+            storage_witness: false,
+            scratch_offset: 0,
+            planned_root: None,
+            barrier_before: false,
+            barrier_after: false,
+            checked_block: false,
+            resource_witness: false,
+            scratch_bytes: 0,
+            scratch_alignment: 1,
+        }
+    }
 }
 
 thread_local! {
@@ -87,14 +126,38 @@ pub(crate) fn translate_call(
     blocks: &[Ptr<BasicBlock>],
     loc: Location,
 ) -> TranslationResult<Ptr<Operation>> {
-    let tuples: &[mir::Operand] = match (plan.checked_block, plan.resource_witness, args) {
-        (false, false, [_, _]) | (true, false, [_, _, _]) => &args[1..],
-        (true, true, [_, _, _, _]) => &args[2..],
-        _ => {
-            return input_err!(
-                loc,
-                TranslationErr::invalid_op("library marker operand count changed after validation")
-            );
+    if plan.operation != LibraryOperation::Native {
+        return translate_storage(
+            ctx,
+            body,
+            plan,
+            destination,
+            target,
+            block,
+            previous,
+            values,
+            blocks,
+            loc,
+        );
+    }
+    let mut previous = previous;
+    if plan.barrier_before {
+        previous = Some(barrier(ctx, block, previous, loc.clone()));
+    }
+    let tuples: &[mir::Operand] = if plan.storage_witness && args.len() == 5 {
+        &args[3..]
+    } else {
+        match (plan.checked_block, plan.resource_witness, args) {
+            (false, false, [_, _]) | (true, false, [_, _, _]) => &args[1..],
+            (true, true, [_, _, _, _]) => &args[2..],
+            _ => {
+                return input_err!(
+                    loc,
+                    TranslationErr::invalid_op(
+                        "library marker operand count changed after validation"
+                    )
+                );
+            }
         }
     };
     let mut declared = Vec::new();
@@ -171,7 +234,7 @@ pub(crate) fn translate_call(
     );
     op.deref_mut(ctx).set_loc(loc.clone());
     let scratch = MirExternSharedOp::new(op);
-    scratch.set_byte_offset_value(ctx, 0);
+    scratch.set_byte_offset_value(ctx, u64::from(plan.scratch_offset));
     scratch.set_alignment_value(ctx, u64::from(plan.scratch_alignment));
     let layout_ty = IntegerType::get(ctx, 64, Signedness::Unsigned);
     op.deref_mut(ctx).attributes.set(
@@ -186,6 +249,7 @@ pub(crate) fn translate_call(
             ),
         ),
     );
+    tag_planned(ctx, op, plan);
     helpers::insert_op(ctx, op, block, last);
     let internal_scratch = op.deref(ctx).get_result(0);
     let raw_shared = facts::mint_shared_ptr_type(ctx, byte, facts::abi_library_scratch()).into();
@@ -204,7 +268,7 @@ pub(crate) fn translate_call(
     );
     let signature = FunctionType::get(ctx, declared, vec![]).into();
     let unit = MirTupleType::get(ctx, vec![]).into();
-    helpers::emit_function_call_values(
+    let goto = helpers::emit_function_call_values(
         ctx,
         body,
         &plan.symbol,
@@ -217,6 +281,182 @@ pub(crate) fn translate_call(
         last,
         values,
         blocks,
+        loc.clone(),
+    )?;
+    if plan.barrier_after {
+        let sync = barrier_op(ctx, loc);
+        sync.insert_before(ctx, goto);
+    }
+    Ok(goto)
+}
+
+fn barrier_op(ctx: &mut Context, loc: Location) -> Ptr<Operation> {
+    let op = Operation::new(
+        ctx,
+        Barrier0Op::get_concrete_op_info(),
+        vec![],
+        vec![],
+        vec![],
+        0,
+    );
+    op.deref_mut(ctx).set_loc(loc);
+    helpers::set_generated_intrinsic_marker(ctx, op, "v1:i0034");
+    op
+}
+fn barrier(
+    ctx: &mut Context,
+    block: Ptr<BasicBlock>,
+    previous: Option<Ptr<Operation>>,
+    loc: Location,
+) -> Ptr<Operation> {
+    let op = barrier_op(ctx, loc);
+    helpers::insert_op(ctx, op, block, previous);
+    op
+}
+fn tag_planned(ctx: &mut Context, op: Ptr<Operation>, plan: &LibraryCallPlan) {
+    if let Some(root) = &plan.planned_root {
+        op.deref_mut(ctx).attributes.set(
+            crate::kernel_resources::PLANNED_ROOT.try_into().unwrap(),
+            StringAttr::new(root.clone()),
+        );
+    }
+}
+#[allow(clippy::too_many_arguments)]
+fn translate_storage(
+    ctx: &mut Context,
+    body: &mir::Body,
+    plan: &LibraryCallPlan,
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block: Ptr<BasicBlock>,
+    previous: Option<Ptr<Operation>>,
+    values: &mut ValueMap,
+    blocks: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    let result_ty = types::translate_destination_type(ctx, body, destination, &loc)?;
+    let (prepared, mut previous) = helpers::prepare_destination_write(
+        ctx,
+        body,
+        destination,
+        values,
+        block,
+        previous,
+        loc.clone(),
+    )?;
+    let result = if plan.operation == LibraryOperation::StorageRelease {
+        let op = MirUndefOp::new(ctx, result_ty).get_operation();
+        helpers::insert_op(ctx, op, block, previous);
+        previous = Some(op);
+        op.deref(ctx).get_result(0)
+    } else {
+        let field = result_ty
+            .deref(ctx)
+            .downcast_ref::<MirStructType>()
+            .and_then(|ty| ty.get_field_type(0))
+            .ok_or_else(|| {
+                pliron::input_error!(
+                    loc.clone(),
+                    TranslationErr::invalid_op("storage result must have one private field")
+                )
+            })?;
+        let value = if plan.operation == LibraryOperation::StorageReserve {
+            let pointee = field
+                .deref(ctx)
+                .downcast_ref::<MirPtrType>()
+                .ok_or_else(|| {
+                    pliron::input_error!(
+                        loc.clone(),
+                        TranslationErr::invalid_op("reservation field must be a raw pointer")
+                    )
+                })?
+                .pointee;
+            let shared = MirPtrType::get_shared(ctx, pointee, true).into();
+            let op = Operation::new(
+                ctx,
+                MirExternSharedOp::get_concrete_op_info(),
+                vec![shared],
+                vec![],
+                vec![],
+                0,
+            );
+            op.deref_mut(ctx).set_loc(loc.clone());
+            let shared = MirExternSharedOp::new(op);
+            shared.set_byte_offset_value(ctx, u64::from(plan.scratch_offset));
+            shared.set_alignment_value(ctx, u64::from(plan.scratch_alignment));
+            let ty = IntegerType::get(ctx, 64, Signedness::Unsigned);
+            op.deref_mut(ctx).attributes.set(
+                crate::kernel_resources::FIXED_SHARED_BYTES
+                    .try_into()
+                    .unwrap(),
+                IntegerAttr::new(
+                    ty,
+                    APInt::from_u64(
+                        u64::from(plan.scratch_bytes),
+                        std::num::NonZeroUsize::new(64).unwrap(),
+                    ),
+                ),
+            );
+            tag_planned(ctx, op, plan);
+            helpers::insert_op(ctx, op, block, previous);
+            let internal = op.deref(ctx).get_result(0);
+            let (value, last) = establish_declared_pointer_type(
+                ctx,
+                internal,
+                field,
+                block,
+                Some(op),
+                MirPointerKindAuthorityAttr::RawAddress,
+            );
+            previous = last;
+            value
+        } else {
+            let ty = IntegerType::get(ctx, 8, Signedness::Unsigned);
+            let op = Operation::new(
+                ctx,
+                MirConstantOp::get_concrete_op_info(),
+                vec![field],
+                vec![],
+                vec![],
+                0,
+            );
+            MirConstantOp::new(op).set_attr_value(
+                ctx,
+                IntegerAttr::new(
+                    ty,
+                    APInt::from_u64(0, std::num::NonZeroUsize::new(8).unwrap()),
+                ),
+            );
+            helpers::insert_op(ctx, op, block, previous);
+            previous = Some(op);
+            op.deref(ctx).get_result(0)
+        };
+        let undef = MirUndefOp::new(ctx, result_ty).get_operation();
+        helpers::insert_op(ctx, undef, block, previous);
+        let undef_value = undef.deref(ctx).get_result(0);
+        let op = Operation::new(
+            ctx,
+            MirInsertFieldOp::get_concrete_op_info(),
+            vec![result_ty],
+            vec![undef_value, value],
+            vec![],
+            0,
+        );
+        MirInsertFieldOp::new(op).set_attr_insert_index(ctx, FieldIndexAttr(0));
+        helpers::insert_op(ctx, op, block, Some(undef));
+        previous = Some(op);
+        op.deref(ctx).get_result(0)
+    };
+    helpers::emit_prepared_result_and_goto(
+        ctx,
+        prepared,
+        result,
+        target,
+        block,
+        previous.unwrap(),
+        values,
+        blocks,
         loc,
+        "storage marker requires a continuation",
     )
 }

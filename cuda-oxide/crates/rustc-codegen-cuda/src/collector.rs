@@ -354,27 +354,20 @@ pub struct DeviceExternDecl {
 
 /// NVVM attributes for device extern declarations.
 ///
-/// NOTE: These attributes are currently **not emitted** to the LLVM IR output.
-/// When linking LTOIR via nvJitLink, the external library's LTOIR already contains
-/// proper attributes (convergent, nounwind, memory, etc.) on the function DEFINITIONS.
-/// nvJitLink uses the definition's attributes during LTO, making attributes on our
-/// declarations redundant.
-///
-/// The `#[convergent]`, `#[pure]`, and `#[readonly]` Rust attributes are still parsed
-/// but their values are not used in code generation. This struct is retained for
-/// potential future use or debugging.
+/// Convergence is emitted on the declaration before libNVVM optimization.
+/// Memory-effect annotations remain inactive; they are not inferred from external
+/// definitions that become available only during LTO.
 #[derive(Debug, Clone, Default)]
 pub struct DeviceExternAttrs {
-    /// Function is convergent (all threads must execute together).
-    /// NOTE: Not currently emitted - external LTOIR has proper convergent attrs.
+    /// Function has convergence requirements for its participating threads.
     pub is_convergent: bool,
 
     /// Function is pure (no side effects, result depends only on inputs).
-    /// NOTE: Not currently emitted - external LTOIR has proper memory attrs.
+    /// Inactive for Rust source annotations.
     pub is_pure: bool,
 
     /// Function is read-only (only reads memory, doesn't write).
-    /// NOTE: Not currently emitted - external LTOIR has proper memory attrs.
+    /// Inactive for Rust source annotations.
     pub is_readonly: bool,
 }
 
@@ -1523,7 +1516,12 @@ impl<'tcx> DeviceCollector<'tcx> {
                 .next()
                 .is_some()
         };
-        attrs.is_convergent = check("convergent");
+        attrs.is_convergent = rustc_attr_ir::find_attr!(
+            self.tcx, def_id, Doc(doc)
+            if doc.aliases.contains_key(&Symbol::intern(
+                reserved_oxide_symbols::DEVICE_EXTERN_CONVERGENT_MARKER
+            ))
+        );
         attrs.is_pure = check("pure");
         attrs.is_readonly = check("readonly");
 

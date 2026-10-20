@@ -1493,3 +1493,18 @@ fn non_generic_kernel_lookups_never_consult_the_divergence_diagnosis() {
         "non-generic lookups must keep the ordinary error path: {expanded}"
     );
 }
+
+#[test]
+fn inferred_shared_contract_rejects_a_separate_alignment_promise() {
+    let module: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            #[launch_contract(domain = 1, block = (32, 1, 1), dynamic_shared = inferred,
+                dynamic_shared_alignment = 128)]
+            pub fn map() {}
+        }
+    };
+    let error =
+        expand_cuda_module(module).expect_err("inferred alignment belongs to the compiler layout");
+    assert!(error.to_string().contains("inferred"));
+}

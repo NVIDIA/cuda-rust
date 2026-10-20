@@ -649,8 +649,23 @@ pub fn launch_bounds(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// the rest of the declared contract without preparation.
 ///
 /// Dynamic shared memory may be fixed with `dynamic_shared = BYTES` or bounded
-/// with `dynamic_shared_range = (MIN, MAX)`. The byte extent remains an author
-/// contract because arbitrary pointer arithmetic cannot be inferred. When the
+/// with `dynamic_shared_range = (MIN, MAX)`. With `dynamic_shared = inferred`,
+/// the compiler records the complete byte extent and alignment of unsafe
+/// `DynamicSharedArray::get_fixed` views, including calls through helpers.
+/// These views alias one dynamic base region; their extents combine by maximum,
+/// not by addition. Mixing inferred views with unconstrained `get`, `get_raw`,
+/// or `offset` access is rejected. Prepared launches require the matching
+/// compiled artifact facts; `LaunchConfig1D::auto_shared` (and its 2D/3D
+/// counterparts) selects the recorded byte count. An explicit byte count is
+/// still checked before launch. Inferred alignment comes from the compiled
+/// layouts, so it cannot be combined with `dynamic_shared_alignment`.
+/// Inference follows Rust views through direct calls. Unsafe external code,
+/// indirect calls and inline assembly may use the dynamic base only within a
+/// fixed view declared on that path; their accesses are not analyzed. An inferred
+/// kernel with no declared views records zero bytes.
+///
+/// For raw dynamic pointers, the byte extent remains an author contract because
+/// arbitrary pointer arithmetic cannot be inferred. When the
 /// maximum is non-zero, the macro injects a compiler marker whose call is
 /// removed before code generation. The declared `dynamic_shared_alignment`
 /// therefore becomes a minimum alignment in generated PTX without adding

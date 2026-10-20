@@ -94,6 +94,7 @@ extern crate rustc_span;
 pub const DEVICE_RUNTIME_CHECKS_VALUE: bool = false;
 
 pub mod error;
+mod kernel_resources;
 pub mod pipeline;
 // Crate-internal: every caller reaches the translator through `pipeline`, and
 // the handful of predicates outsiders need are re-exported below. Keeping the

@@ -659,7 +659,6 @@ impl CodegenBackend for CudaCodegenBackend {
                 materialize::validate_collection(
                     materialization_request.as_ref(),
                     !collection_result.device_externs.is_empty(),
-                    collection_result.requires_ptx_bundle_merge,
                 )
                 .unwrap_or_else(|error| {
                     tcx.dcx().fatal(format!(

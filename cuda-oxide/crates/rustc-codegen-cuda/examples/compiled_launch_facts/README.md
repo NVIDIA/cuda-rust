@@ -20,12 +20,14 @@ From `cuda-oxide/`, run with an architecture supported by your device:
 cargo oxide run compiled_launch_facts --arch sm_120
 cargo oxide run compiled_launch_facts --arch sm_120 --features generic
 cargo oxide run compiled_launch_facts --arch sm_120 --materialize-cubin
+cargo oxide run compiled_launch_facts --arch sm_120 --features generic --materialize-cubin
 scripts/check-compiled-launch-facts.sh sm_120
 ```
 
 The script also checks that an inferred kernel containing an unconstrained raw
-dynamic view fails to compile. Generic kernels use the existing PTX loader;
-generic materialization remains unsupported. Explicit raw pointer access,
+dynamic view fails to compile. Generic kernels load either the merged PTX set or a single materialized native
+artifact containing their concrete specializations. Multiple native artifacts or
+mixed native/PTX bundles are rejected to preserve one module's device globals. Explicit raw pointer access,
 initialization, bounds, aliasing, and synchronization remain the responsibility
 of the unsafe device code. No synchronization is inserted by `get_fixed`.
 Inference follows Rust views through direct calls. Dynamic-base accesses in

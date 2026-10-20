@@ -100,11 +100,6 @@ pub(crate) enum MaterializeError {
     ProvenanceMismatch { expected: String, actual: String },
 
     #[error(
-        "build-time cubin materialization does not yet support generic #[cuda_module] loading because it merges PTX bundles across crates at run time"
-    )]
-    RequiresPtxBundleMerge,
-
-    #[error(
         "build-time cubin materialization of #[device] extern declarations requires their definitions; supply ordered --link-ltoir inputs"
     )]
     HasDeviceExterns,
@@ -213,14 +208,10 @@ fn validate_tool_identity_handshake(
 pub(crate) fn validate_collection(
     request: Option<&MaterializationRequest>,
     has_device_externs: bool,
-    requires_ptx_bundle_merge: bool,
 ) -> Result<(), MaterializeError> {
     let Some(request) = request else {
         return Ok(());
     };
-    if requires_ptx_bundle_merge {
-        return Err(MaterializeError::RequiresPtxBundleMerge);
-    }
     if has_device_externs && request.external_inputs.is_empty() && request.library_inputs.is_empty()
     {
         return Err(MaterializeError::HasDeviceExterns);
@@ -507,23 +498,16 @@ mod tests {
             library_inputs: Vec::new(),
             external_inputs: Vec::new(),
         };
+        assert!(validate_collection(Some(&request), false).is_ok());
         assert!(matches!(
-            validate_collection(Some(&request), false, true),
-            Err(MaterializeError::RequiresPtxBundleMerge)
-        ));
-        assert!(matches!(
-            validate_collection(Some(&request), true, false),
+            validate_collection(Some(&request), true),
             Err(MaterializeError::HasDeviceExterns)
         ));
-        assert!(validate_collection(None, true, true).is_ok());
+        assert!(validate_collection(None, true).is_ok());
         request
             .external_inputs
             .push(("definition.ltoir".into(), vec![1]));
-        assert!(validate_collection(Some(&request), true, false).is_ok());
-        assert!(matches!(
-            validate_collection(Some(&request), true, true),
-            Err(MaterializeError::RequiresPtxBundleMerge)
-        ));
+        assert!(validate_collection(Some(&request), true).is_ok());
     }
 
     #[test]

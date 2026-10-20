@@ -20,6 +20,12 @@ enum Fact {
     Local(usize, Vec<usize>),
     Referent(Box<Fact>),
     Fields(Vec<Fact>),
+    // Fields are conditional on their presence in the active variant. The
+    // tag's uniformity is independent of every payload field's uniformity.
+    Enum {
+        tag_uniform: bool,
+        fields: Vec<Fact>,
+    },
     Varying,
 }
 impl Fact {
@@ -43,12 +49,48 @@ impl Fact {
             (Self::Fields(a), Self::Fields(b)) if a.len() == b.len() => {
                 Self::Fields(a.iter().zip(b).map(|(a, b)| a.merge(b)).collect())
             }
+            (
+                Self::Enum {
+                    tag_uniform: a,
+                    fields: af,
+                },
+                Self::Enum {
+                    tag_uniform: b,
+                    fields: bf,
+                },
+            ) => Self::Enum {
+                tag_uniform: *a && *b,
+                fields: (0..af.len().max(bf.len()))
+                    .map(|i| self.field(i).merge(&other.field(i)))
+                    .collect(),
+            },
+            (
+                Self::Enum {
+                    tag_uniform,
+                    fields,
+                },
+                Self::Uniform | Self::Kernel(_),
+            )
+            | (
+                Self::Uniform | Self::Kernel(_),
+                Self::Enum {
+                    tag_uniform,
+                    fields,
+                },
+            ) => Self::Enum {
+                tag_uniform: *tag_uniform,
+                fields: fields.iter().map(|f| f.merge(&Self::Uniform)).collect(),
+            },
             _ => Self::Varying,
         }
     }
     fn taint(self) -> Self {
         match self {
             Self::Fields(v) => Self::Fields(v.into_iter().map(Self::taint).collect()),
+            Self::Enum { fields, .. } => Self::Enum {
+                tag_uniform: false,
+                fields: fields.into_iter().map(Self::taint).collect(),
+            },
             Self::Local(..) => self,
             _ => Self::Varying,
         }
@@ -57,7 +99,9 @@ impl Fact {
         match self {
             Self::Resource(_) | Self::Descriptor(..) | Self::Reservation(_) => true,
             Self::Referent(value) => value.has_resource(),
-            Self::Fields(values) => values.iter().any(Self::has_resource),
+            Self::Fields(values) | Self::Enum { fields: values, .. } => {
+                values.iter().any(Self::has_resource)
+            }
             _ => false,
         }
     }
@@ -67,6 +111,13 @@ impl Fact {
             Self::Referent(value) if value.has_resource() => value.invalidate_borrow(),
             Self::Fields(values) if values.iter().any(Self::has_resource) => {
                 values.iter_mut().for_each(Self::invalidate_borrow);
+            }
+            Self::Enum {
+                tag_uniform,
+                fields,
+            } if fields.iter().any(Self::has_resource) => {
+                *tag_uniform = false;
+                fields.iter_mut().for_each(Self::invalidate_borrow);
             }
             _ => *self = Self::Varying,
         }
@@ -95,13 +146,18 @@ impl Fact {
     fn invalidate_referents(&mut self) {
         match self {
             Self::Referent(_) => self.invalidate_borrow(),
-            Self::Fields(fields) => fields.iter_mut().for_each(Self::invalidate_referents),
+            Self::Fields(fields) | Self::Enum { fields, .. } => {
+                fields.iter_mut().for_each(Self::invalidate_referents);
+            }
             _ => {}
         }
     }
     fn field(&self, index: usize) -> Self {
         match self {
             Self::Fields(v) => v.get(index).cloned().unwrap_or(Self::Varying),
+            // A field absent from this constructed variant cannot be read by
+            // a defined downcast. At joins it adds no varying payload value.
+            Self::Enum { fields, .. } => fields.get(index).cloned().unwrap_or(Self::Uniform),
             Self::Kernel(origin) | Self::Resource(origin) => {
                 Self::Kernel(format!("{origin}.{index}"))
             }
@@ -214,8 +270,32 @@ fn rvalue(value: &mir::Rvalue, state: &State) -> Fact {
         mir::Rvalue::Use(v, _) | mir::Rvalue::Cast(_, v, _) => operand(v, state),
         mir::Rvalue::CopyForDeref(p) => read(p, state),
         mir::Rvalue::Ref(_, _, p) | mir::Rvalue::AddressOf(_, p) => address(p, state),
-        mir::Rvalue::Aggregate(_, values) => {
-            Fact::Fields(values.iter().map(|v| operand(v, state)).collect())
+        mir::Rvalue::Aggregate(kind, values) => {
+            let fields = values.iter().map(|v| operand(v, state)).collect();
+            if matches!(kind, mir::AggregateKind::Adt(def, ..) if def.kind() == rustc_public::ty::AdtKind::Enum)
+            {
+                Fact::Enum {
+                    tag_uniform: true,
+                    fields,
+                }
+            } else {
+                Fact::Fields(fields)
+            }
+        }
+        mir::Rvalue::Discriminant(place) => {
+            let value = read(place, state);
+            if matches!(
+                value,
+                Fact::Enum {
+                    tag_uniform: true,
+                    ..
+                }
+            ) || value.uniform()
+            {
+                Fact::Uniform
+            } else {
+                Fact::Varying
+            }
         }
         mir::Rvalue::Repeat(v, _) => operand(v, state),
         mir::Rvalue::UnaryOp(_, v) => {
@@ -352,6 +432,16 @@ fn call_fact(fact: Fact, state: &State) -> Fact {
                     .map(|value| resolve(value, state, visiting))
                     .collect(),
             ),
+            Fact::Enum {
+                tag_uniform,
+                fields,
+            } => Fact::Enum {
+                tag_uniform,
+                fields: fields
+                    .into_iter()
+                    .map(|value| resolve(value, state, visiting))
+                    .collect(),
+            },
             other => other,
         }
     }
@@ -364,6 +454,13 @@ fn return_fact(fact: Fact) -> Fact {
     match fact {
         Fact::Unset | Fact::Local(..) => Fact::Varying,
         Fact::Fields(values) => Fact::Fields(values.into_iter().map(return_fact).collect()),
+        Fact::Enum {
+            tag_uniform,
+            fields,
+        } => Fact::Enum {
+            tag_uniform,
+            fields: fields.into_iter().map(return_fact).collect(),
+        },
         Fact::Referent(value) => Fact::Referent(Box::new(return_fact(*value))),
         other => other,
     }
@@ -743,8 +840,10 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 "bulk memory mutation is unsupported in resource-checked roots",
             ));
         }
-        let mir::StatementKind::Assign(place, _) = &statement.kind else {
-            return Ok(());
+        let place = match &statement.kind {
+            mir::StatementKind::Assign(place, _)
+            | mir::StatementKind::SetDiscriminant { place, .. } => place,
+            _ => return Ok(()),
         };
         if !place
             .projection
@@ -795,6 +894,10 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                     state,
                     borrowed,
                 );
+            } else if let mir::StatementKind::SetDiscriminant { place, .. } = &statement.kind {
+                // Split tag writes are outside this bounded construction
+                // analysis. They must not retain an earlier tag/payload proof.
+                write(place, Fact::Varying, state, borrowed);
             }
         }
         Ok(())

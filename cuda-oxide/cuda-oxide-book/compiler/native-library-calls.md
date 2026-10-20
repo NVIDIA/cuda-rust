@@ -34,13 +34,14 @@ reads the constant without running Rust device code. A Cargo build script can
 embed the string with `cargo::rustc-env` and serve as the already-built native
 provider. Read it through the registration macro so Cargo tracks native inputs:
 
-```rust,ignore
+```rust
 fn registration() -> &'static str {
     cuda_device::library::registration!("MY_LIBRARY_REGISTRATION")
 }
 ```
 
-The macro expands to the same constant string. The provider executable must
+The macro requires nonempty provider, operation and algorithm names and expands
+to the same constant string. The provider executable must
 recognize its protocol arguments before its ordinary Cargo build-script behavior.
 
 Registration fields are:
@@ -197,8 +198,10 @@ these dependencies in the library crate; Cargo propagates its rebuild to
 consumers and concrete generic kernel instantiations. The compiler has no
 library-specific header layout or native cache.
 
-Cargo's timestamp freshness rules apply. Edits that preserve timestamps can
-remain undetected; clean/rebuild the affected crates after such external changes.
+Cargo's timestamp freshness rules apply. Replacements with unchanged or older
+timestamps can remain undetected, including restored files or a symlink switched
+to an older installation at the same path. Clean/rebuild affected crates after
+such external changes.
 The `native_library` example tracks its provider, CUDA tools/headers, host compiler
 driver and relevant environment. It assumes the host compiler's installed system
 headers and libraries remain unchanged during a build; its declarations are not

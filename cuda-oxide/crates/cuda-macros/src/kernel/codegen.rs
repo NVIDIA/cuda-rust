@@ -139,8 +139,8 @@ pub(crate) fn generic_kernel_no_instantiation_tokens(
                 /// is bound to the generic parameter `F` at the call site
                 /// without moving the closure — the caller still needs the
                 /// closure value to push as the kernel argument right
-                /// after. Then forces rustc to emit a CGU entry for the
-                /// concrete `#kernel_name::<...>` instantiation. Returns
+                /// after. Retains the concrete `#kernel_name::<...>`
+                /// function-item type for device collection. Returns
                 /// the PTX export name produced by the kernel's
                 /// `GenericCudaKernel::ptx_name()` impl, which is the
                 /// single source of truth for the on-wire name on the

@@ -27,6 +27,7 @@ cross_crate_kernel/
 
 ```bash
 cargo oxide run cross_crate_kernel
+cargo oxide run cross_crate_kernel --arch sm_120 --materialize-cubin
 ```
 
 The built executable can compare its own lookup names against generated PTX

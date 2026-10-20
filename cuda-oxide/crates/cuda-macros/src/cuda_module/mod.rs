@@ -135,9 +135,9 @@ pub(crate) fn expand_cuda_module_inner(
         let cfg_attrs = &kernel.effective_cfg_attrs;
         Some(quote! {
             #(#cfg_attrs)*
-            // Consumed by the codegen collector. This enabled generic kernel
-            // requires run-time PTX bundle merging, which ahead-of-time cubin
-            // materialization cannot represent yet.
+            // Retain the existing generic-module identity marker consumed by
+            // the collector. PTX builds merge bundles; materialized builds
+            // require one complete native artifact at load time.
             #[doc(hidden)]
             #[used]
             #[allow(dead_code, non_upper_case_globals)]
@@ -190,8 +190,21 @@ pub(crate) fn expand_cuda_module_inner(
             let mut __cuda_oxide_has_enabled_generic_kernel = false;
             #(#enable_generic_loader_statements)*
             let module = if __cuda_oxide_has_enabled_generic_kernel {
-                let _ = name; // merged load ignores the crate-name hint
-                ::cuda_host::load_all_ptx_bundles_merged(ctx)?
+                let _ = name; // monomorphizations can belong to the consuming crate
+                // This identifies the host image; artifact object retention is
+                // still handled by the compiler's existing embedding path.
+                #[cfg(any(target_os = "linux", target_os = "android"))]
+                {
+                    static __CUDA_OXIDE_GENERIC_IMAGE: u8 = 0;
+                    ::cuda_host::load_generic_embedded_module_from_anchor(
+                        ctx,
+                        &__CUDA_OXIDE_GENERIC_IMAGE,
+                    )?
+                }
+                #[cfg(not(any(target_os = "linux", target_os = "android")))]
+                {
+                    ::cuda_host::load_generic_embedded_module(ctx)?
+                }
             } else {
                 #embedded_module_loader
             };
@@ -232,8 +245,9 @@ pub(crate) fn expand_cuda_module_inner(
             /// For a non-generic module, the selected package bundle must be
             /// the artifact compiled from this `cuda_module`; package names are
             /// not yet unique across all library and binary targets. For a
-            /// generic module, the merged PTX set must contain each matching
-            /// specialization and no conflicting entry definition.
+            /// generic module, the selected native artifact or merged PTX set
+            /// must contain each matching specialization and no conflicting
+            /// entry definition.
             pub unsafe fn load_async(
                 device_id: usize,
             ) -> ::core::result::Result<LoadedModule, ::cuda_host::cuda_async::simt::error::DeviceError> {
@@ -285,8 +299,9 @@ pub(crate) fn expand_cuda_module_inner(
             /// For a non-generic module, the selected package bundle must be
             /// the artifact compiled from this `cuda_module`; package names are
             /// not yet unique across all library and binary targets. For a
-            /// generic module, the merged PTX set must contain each matching
-            /// specialization and no conflicting entry definition.
+            /// generic module, the selected native artifact or merged PTX set
+            /// must contain each matching specialization and no conflicting
+            /// entry definition.
             pub unsafe fn load(
                 ctx: &::std::sync::Arc<::cuda_core::CudaContext>,
             ) -> ::core::result::Result<LoadedModule, ::cuda_host::EmbeddedModuleError> {

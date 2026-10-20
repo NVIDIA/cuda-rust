@@ -373,7 +373,7 @@ cargo oxide emit-ltoir my_kernels --arch sm_90
 
 Every command takes `--help`, which lists the flags each one accepts.
 
-For non-generic kernels that call external device functions, `--materialize-cubin`
+For kernels that call external device functions, `--materialize-cubin`
 links their CUDA LTO-IR definitions during the ordinary Cargo build. Pass each
 input with `--link-ltoir` after the subcommand, in link order:
 
@@ -426,3 +426,9 @@ If everything is configured correctly, this compiles a Rust kernel to PTX, launc
 - `cuda.h not found` -- Set `CUDA_TOOLKIT_PATH` to your CUDA install root, or ensure `/usr/local/cuda/include/cuda.h` exists.
 - `rust-src` / `llvm-tools` component missing -- Run `rustup component add rust-src llvm-tools --toolchain nightly-2026-10-11`.
 :::
+
+Generic `#[cuda_module]` loaders support materialization when all required concrete
+specializations are in one embedded native artifact. They retain exact symbol
+lookup and compiled launch facts in one CUDA module. Multiple native artifacts
+or mixed native/PTX bundles are rejected because separate module loads would not
+preserve shared device globals. PTX-only builds continue to merge their bundles.

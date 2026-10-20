@@ -398,8 +398,8 @@ pub struct CollectionResult<'tcx> {
     ///
     /// This is true for a `#[cuda_module]` containing a generic kernel and
     /// for a concrete specialization of a generic kernel imported from a
-    /// dependency. Cubin materialization must reject this case until it can
-    /// reproduce the same cross-crate linking semantics.
+    /// dependency. Materialized loading instead requires one complete native
+    /// artifact; this existing marker remains the generic-module classification.
     pub requires_ptx_bundle_merge: bool,
 
     /// `#[tile_export]` descriptions read from this crate's metadata
@@ -1128,9 +1128,8 @@ pub fn collect_device_functions<'tcx>(
 
                 // A downstream monomorphization of a generic kernel may be
                 // present even when the defining crate's private module
-                // marker is not. Such modules use the all-PTX-bundles loader,
-                // so strict ahead-of-time cubin materialization cannot safely
-                // compile only this crate's artifact.
+                // marker is not. Keep its generic-module classification even
+                // when only the consuming crate has concrete kernel entries.
                 requires_ptx_bundle_merge |= tcx
                     .generics_of(instance.def_id())
                     .requires_monomorphization(tcx);

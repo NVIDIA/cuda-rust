@@ -22,10 +22,5 @@ if "${oxide[@]}" run compiled_launch_facts --arch "$arch" --features invalid-raw
 fi
 grep -F 'inferred dynamic shared memory cannot include unconstrained' "$log"
 
-# Generic materialization remains unsupported; do not silently change loaders.
-if "${oxide[@]}" run compiled_launch_facts --arch "$arch" --features generic --materialize-cubin >"$log" 2>&1; then
-    echo "error: generic materialization unexpectedly succeeded" >&2
-    exit 1
-fi
-grep -E 'generic.*materializ|materializ.*generic' "$log"
+"${oxide[@]}" run compiled_launch_facts --arch "$arch" --features generic --materialize-cubin
 echo 'PASS: compiled launch facts and incomplete-plan rejection'

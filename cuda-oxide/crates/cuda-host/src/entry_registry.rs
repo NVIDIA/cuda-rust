@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Retained PTX entry names for merged modules, and the host/device
+//! Retained entry names for loaded artifacts and merged PTX, and the host/device
 //! type-identity divergence diagnosis built on them.
 //!
 //! # Why this exists
@@ -20,7 +20,8 @@
 //! opaque `DriverError(500, "named symbol not found")`.
 //!
 //! To make that failure self-explaining, [`crate::load_all_ptx_bundles_merged`]
-//! retains the `.entry` names it already parses out of the merged PTX. When a
+//! retains the `.entry` names it already parses out of the merged PTX. Native
+//! generic loading retains exact entry names from its artifact metadata. When a
 //! generic-kernel lookup later misses, the macro-generated launch paths call
 //! [`diagnose_generic_kernel_load_error`] /
 //! [`panic_generic_kernel_load_failed`]: if the module holds the same base
@@ -119,8 +120,13 @@ fn merged_module_entries() -> &'static EntryRegistry<CudaModule> {
 /// driver was happy with.
 pub(crate) fn register_merged_module_entries(module: &Arc<CudaModule>, merged_ptx: &str) {
     if let Some(entries) = entry_names_from_ptx(merged_ptx) {
-        merged_module_entries().register(module, entries);
+        register_module_entries(module, entries);
     }
+}
+
+/// Retains exact entry names from a loaded artifact or parsed merged PTX.
+pub(crate) fn register_module_entries(module: &Arc<CudaModule>, entries: Vec<String>) {
+    merged_module_entries().register(module, entries);
 }
 
 /// Parses PTX text and returns the names of its `.entry` kernels.

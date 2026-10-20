@@ -65,7 +65,10 @@ pub fn emit_ltoir(
                 eprintln!("Error: {error}");
                 std::process::exit(1);
             });
-    clean_generated_files(&ir_dir, example);
+    clean_generated_files(&ir_dir, example, &ctx.link_ltoir).unwrap_or_else(|error| {
+        eprintln!("Error: {error}");
+        std::process::exit(2);
+    });
 
     // Step 1: build in NVVM IR mode so the backend writes `<crate>.ll` as
     // libNVVM-ready NVVM IR. codegen_build exits on build failure. Pass

@@ -465,7 +465,7 @@ pub(crate) fn finalize<'tcx>(
     }
     // Structural checks precede both the proof and external compilation.
     for call in &collection.library_calls {
-        call_arguments(call)?;
+        call_arguments(call).unwrap_or_else(|error| tcx.dcx().span_fatal(call.span, error));
     }
     let checked_shapes = crate::collective_validation::validate(tcx, collection)?;
     let target = std::env::var("CUDA_OXIDE_TARGET")
@@ -499,15 +499,19 @@ pub(crate) fn finalize<'tcx>(
                     .contains("DynamicSharedArray")
             {
                 return Err(format!(
-                    "kernel {} mixes library scratch with an unplanned native dynamic shared view",
+                    "kernel {} mixes library scratch with a native dynamic shared view",
                     root.export_name
                 ));
             }
         }
         for call in calls {
             let args = call.instance.args;
-            let registration = read_registration(tcx, args.type_at(1))
-                .map_err(|e| format!("{e} at {:?}", call.span))?;
+            let report = |error: String| -> ! {
+                tcx.dcx()
+                    .span_fatal(call.span, format!("native device library: {error}"))
+            };
+            let registration =
+                read_registration(tcx, args.type_at(1)).unwrap_or_else(|error| report(error));
             let positive = |index| {
                 let value = args
                     .const_at(index)
@@ -521,26 +525,33 @@ pub(crate) fn finalize<'tcx>(
             let block = if call.kind == MarkerKind::CheckedBlock {
                 checked_shapes[&root.export_name]
             } else {
-                [positive(3)?, 1, 1]
+                [
+                    positive(3)
+                        .map_err(str::to_owned)
+                        .unwrap_or_else(|error| report(error)),
+                    1,
+                    1,
+                ]
             };
             let site = (call.site.caller, call.site.block);
             if let Some((previous, previous_root)) =
                 site_shapes.insert(site, (block, root.export_name.clone()))
                 && previous != block
             {
-                return Err(format!(
-                    "shared helper {} at {:?} requires conflicting exact block shapes: {previous_root} {previous:?} and {} {block:?}; use distinct helper sites for these roots until contextual helper specialization is supported",
+                tcx.dcx().span_fatal(call.span, format!(
+                    "shared helper {} requires conflicting exact block shapes: {previous_root} {previous:?} and {} {block:?}; use distinct helper sites for these roots until contextual helper specialization is supported",
                     tcx.def_path_str(call.site.caller.def_id()),
-                    call.span,
                     root.export_name
                 ));
             }
             let request = Request {
                 operation: registration.operation,
                 algorithm: registration.algorithm,
-                dtype: scalar(args.type_at(0))?,
+                dtype: scalar(args.type_at(0)).unwrap_or_else(|error| report(error)),
                 block,
-                items_per_thread: positive(4)?,
+                items_per_thread: positive(4)
+                    .map_err(str::to_owned)
+                    .unwrap_or_else(|error| report(error)),
             };
             let batch = batches
                 .entry((registration.provider, registration.executable))
@@ -556,6 +567,7 @@ pub(crate) fn finalize<'tcx>(
     let mut all_symbols = HashSet::new();
     for ((provider, executable), batch) in batches {
         let requests: Vec<_> = batch.iter().map(|(request, _)| request.clone()).collect();
+        let batch_span = batch[0].1[0].0.span;
         let (response, lto) = invoke(
             &executable,
             &BatchRequest {
@@ -564,7 +576,11 @@ pub(crate) fn finalize<'tcx>(
                 cuda_root: cuda_root.clone(),
                 requests: &requests,
             },
-        )?;
+        )
+        .unwrap_or_else(|error| {
+            tcx.dcx()
+                .span_fatal(batch_span, format!("native device library: {error}"))
+        });
         let identity: String = response
             .batch_identity
             .iter()
@@ -600,9 +616,10 @@ pub(crate) fn finalize<'tcx>(
                 },
             });
             for (call, root) in calls {
-                let actual = call_arguments(call)?;
+                let actual = call_arguments(call)
+                    .unwrap_or_else(|error| tcx.dcx().span_fatal(call.span, error));
                 if actual != spec.arguments {
-                    return Err(format!(
+                    tcx.dcx().span_fatal(call.span, format!(
                         "library runtime tuple for {} disagrees with provider ABI: actual {actual:?}, expected {:?}",
                         spec.symbol, spec.arguments
                     ));
@@ -632,9 +649,10 @@ pub(crate) fn finalize<'tcx>(
                 };
                 if let Some(current) = result.roots.get_mut(root) {
                     if current.exact_block != facts.exact_block {
-                        return Err(format!(
-                            "kernel {root} has conflicting exact library block shapes"
-                        ));
+                        tcx.dcx().span_fatal(
+                            call.span,
+                            format!("kernel {root} has conflicting exact library block shapes"),
+                        );
                     }
                     current.dynamic_shared_bytes = current.dynamic_shared_bytes.max(scratch_bytes);
                     current.dynamic_shared_alignment =

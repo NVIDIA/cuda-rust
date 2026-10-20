@@ -961,11 +961,30 @@ fn raw() -> u32 { __cuda_oxide_intrinsic_abi_v1::i0266() }
                             {
                                 let (target, ir) = compile("compatibility", target, hint).unwrap();
                                 assert_eq!(target, "sm_80");
-                                for register in ["ctaid", "nctaid"] {
-                                    for axis in ["x", "y", "z"] {
-                                        assert!(ir.contains(&format!(
+                                for (register_index, register) in
+                                    ["ctaid", "nctaid"].iter().enumerate()
+                                {
+                                    for (axis_index, axis) in ["x", "y", "z"].iter().enumerate() {
+                                        let instruction = format!(
                                             "call i32 @llvm.nvvm.read.ptx.sreg.{register}.{axis}()"
-                                        )));
+                                        );
+                                        let value = ir
+                                            .lines()
+                                            .find_map(|line| {
+                                                line.contains(&instruction).then(|| {
+                                                    line.trim().split_once(" = ").unwrap().0
+                                                })
+                                            })
+                                            .expect("compatibility register read");
+                                        let slot = 6 + register_index * 3 + axis_index;
+                                        assert!(
+                                            ir.lines().any(|line| {
+                                                line.contains("insertvalue")
+                                                    && line
+                                                        .contains(&format!("i32 {value}, {slot}"))
+                                            }),
+                                            "{ir}"
+                                        );
                                     }
                                 }
                                 assert!(!ir.contains("sreg.cluster"));

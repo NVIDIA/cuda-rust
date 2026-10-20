@@ -124,7 +124,7 @@ followed by a thunk function item and an immutable `&Environment`. Its generic
 parameters are `T, Registration, Args, Environment, Thunk, BLOCK_THREADS,
 ITEMS_PER_THREAD`. The initial callback ABI supports `T = i32`:
 
-```rust,ignore
+```rust
 unsafe extern "C" fn thunk<F: Fn(i32, i32) -> i32 + Copy>(
     environment: *const F, left: i32, right: i32,
 ) -> i32 {

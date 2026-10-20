@@ -345,6 +345,9 @@ enum Commands {
         #[arg(long)]
         unchecked_indexing: bool,
     },
+    // Hidden until the CUDA 13.5 toolkit is announced: the feature needs that
+    // assembler and gets documented when it ships.
+    #[command(hide = true)]
     /// Package a crate's `#[tile_export]` functions as a cuTile tile library.
     ///
     /// Runs `emit-ltoir`, checks that the LTOIR defines every implementation

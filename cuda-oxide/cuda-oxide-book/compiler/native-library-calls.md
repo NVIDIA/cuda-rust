@@ -102,7 +102,7 @@ resulting facts to launch preparation; `dynamic_shared = inferred` with
 
 This version aliases all library scratch views at the dynamic shared base,
 using the maximum required size and alignment. The caller must complete each
-use before conflicting reuse. Mixing unplanned native dynamic shared views
+use before conflicting reuse. Mixing native dynamic shared views
 with library calls is rejected. No barrier, allocation token or borrow-based
 completion is supplied by the marker.
 
@@ -111,3 +111,8 @@ initialization, nonaliasing, collective participation and resource reuse for
 its native implementation. Convergent declarations preserve optimization
 constraints; they do not prove participation or make the wrapper safe. The
 marker is an unsafe compiler boundary, not a safe collective operation.
+
+The provider reads the complete request through stdin EOF before writing its
+response. Reserve stdout for the binary response frame and use stderr for
+diagnostics. The compiler waits for provider completion; provider execution has
+the same trust boundary as a dependency's Cargo build script.

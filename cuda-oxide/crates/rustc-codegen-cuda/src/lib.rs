@@ -634,7 +634,7 @@ impl CodegenBackend for CudaCodegenBackend {
                         "native library calls require `cargo oxide build --materialize-cubin`",
                     );
                 }
-                let libraries =
+                let mut libraries =
                     library::finalize(tcx, &collection_result).unwrap_or_else(|error| {
                         tcx.dcx().fatal(format!("native device library: {error}"))
                     });
@@ -652,7 +652,7 @@ impl CodegenBackend for CudaCodegenBackend {
                 // list or path is needed, and output-path checks still apply to
                 // the file inputs received from cargo-oxide.
                 if let Some(request) = &mut materialization_request {
-                    request.add_library_inputs(libraries.inputs.clone());
+                    request.add_library_inputs(std::mem::take(&mut libraries.inputs));
                 }
 
                 materialize::validate_collection(

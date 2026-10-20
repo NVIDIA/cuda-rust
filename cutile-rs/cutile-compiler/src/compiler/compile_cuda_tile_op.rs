@@ -3078,7 +3078,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     let mut data = crate::compiler::compile_expression::encode_literal_bytes(
                         &lit_value,
                         &elem_ty_str,
-                    );
+                    )
+                    .map_err(|error| self.jit_error(&call_expr.args[i].span(), &error))?;
                     // A scalar f4 tile is not a legal type, even when used
                     // only as a constant-pool carrier. Keep the real tile
                     // type and pack both nibbles of the splat byte.

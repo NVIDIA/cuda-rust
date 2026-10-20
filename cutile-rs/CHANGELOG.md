@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve `false` and the full `u8`/`u16`/`u32`/`u64` range when encoding
+  constants, scalar literals, and global initializers. Integer values outside
+  the Tile IR width now report a JIT error instead of becoming zero; scalar
+  literals outside the i32 range no longer panic during bounds tracking.
+
 ### Changed
 
 - cuTile Rust now lives in the [NVIDIA/cuda-rust](https://github.com/NVIDIA/cuda-rust)

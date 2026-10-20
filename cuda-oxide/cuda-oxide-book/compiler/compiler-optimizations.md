@@ -161,6 +161,11 @@ while i < 8 {
 The pass gives the eight copies counter values `0` through `7`. Constant
 propagation can then fold expressions derived from those literals.
 
+The bound does not have to be a literal. The pass folds integer arithmetic on
+constants before it reads the trip count, so `while i < N / 8` unrolls in each
+instantiation of a function with a const generic `N`. Casts and
+overflow-checked arithmetic in the bound are not yet folded.
+
 ### Partial unrolling
 
 `#[unroll(4)]` also works when the limit is a runtime value:
@@ -255,8 +260,9 @@ The source attribute travels through the compiler in six stages:
    and inserts an internal marker call at the start of that loop.
 2. `mir-importer` recognizes the call and emits a `mir.unroll_hint` operation.
    The marker produces no runtime code.
-3. `LoopInfo` finds the enclosing loop, while induction analysis finds its
-   counter, start, step, bound, and—when possible—trip count.
+3. Constant propagation folds constant expressions, such as a bound written
+   `N / 8`. `LoopInfo` then finds the enclosing loop, while induction analysis
+   finds its counter, start, step, bound, and—when possible—trip count.
 4. The pass normalizes supported control flow. It joins multiple `continue`
    paths into one path back to the loop header and routes supported
    loop-carried values out of a fully unrolled loop.

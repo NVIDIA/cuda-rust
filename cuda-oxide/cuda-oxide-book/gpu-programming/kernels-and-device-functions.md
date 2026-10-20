@@ -347,7 +347,9 @@ pub fn sum_four(mut out: DisjointSlice<u32>) {
 The pass currently recognizes explicit counted `while` loops and range `for`
 loops (`for i in a..b` and `(a..b).rev()`) over any integer counter, including
 `isize`. Other iterator loops, such as `a..=b` or `.step_by(k)`, are not yet
-recognized.
+recognized. The bound can be integer arithmetic on constants, such as `N / 8`
+with a const generic `N`. Casts and overflow-checked arithmetic in the bound
+are not yet folded.
 
 Use `#[unroll(N)]`, where `N >= 2`, when the trip count is only known at runtime.
 The loop then does `N` iterations' work per trip. A small remainder loop handles

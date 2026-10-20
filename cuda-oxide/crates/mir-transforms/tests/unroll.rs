@@ -17,7 +17,7 @@ use common::{
     OffsetBound, RangeBound, RangeForLoop, RangeForShape, StepForm, counted_loop,
     counted_loop_from_step, early_exit_counted_loop, early_exit_with_direct_liveout, i32t, mir_ctx,
     multi_latch_counted_loop, multiple_exit_counted_loop, nested_counted_loop, offset_counted_loop,
-    range_for_loop, u32t,
+    range_for_loop, shared_bound_nested_loop, u32t,
 };
 use dialect_mir::ops::{
     MirAddOp, MirBitAndOp, MirCallOp, MirCheckedAddOp, MirCheckedSubOp, MirCondBranchOp,
@@ -284,6 +284,53 @@ fn nested_inner_and_outer_full_unroll_innermost_first() {
         0,
         "both fully unrolled loops should be gone"
     );
+}
+
+/// A bound written `N / 16` for a const generic `N` arrives as a division of
+/// two constants. rustc's GVN computes it once, in the outer header, and both
+/// exit tests and the code after the nest read it. Each loop still has a
+/// constant trip count, so both unroll and the sum folds to a constant.
+#[test]
+fn full_unroll_folds_a_constant_division_bound_shared_by_a_nest() {
+    let mut ctx = mir_ctx();
+    let lp = shared_bound_nested_loop(&mut ctx, 64, 16); // both loops run 4 times
+
+    for body in [lp.outer_body, lp.inner_body] {
+        MirUnrollHintOp::new(&mut ctx, 0)
+            .get_operation()
+            .insert_at_front(body, &ctx);
+    }
+
+    let mut analyses = AnalysisManager::default();
+    unroll_annotated_loops(lp.module, &mut ctx, &mut analyses).expect("unroll pass succeeds");
+
+    pliron::operation::verify_operation(lp.module, &ctx).expect("valid IR after unrolling");
+    assert_eq!(loop_count(&ctx, lp.region), 0, "both loops are unrolled");
+    assert_eq!(sole_return_constant(&ctx, lp.region), Some(4 * 6 + 4));
+}
+
+/// The outer header computes the shared bound that the inner loop reads. Once
+/// folded, it is a constant and cannot block unrolling the outer loop alone.
+#[test]
+fn full_unroll_of_an_outer_loop_whose_body_reads_its_folded_bound() {
+    let mut ctx = mir_ctx();
+    let lp = shared_bound_nested_loop(&mut ctx, 48, 16); // both loops run 3 times
+
+    MirUnrollHintOp::new(&mut ctx, 0)
+        .get_operation()
+        .insert_at_front(lp.outer_body, &ctx);
+
+    let mut analyses = AnalysisManager::default();
+    unroll_annotated_loops(lp.module, &mut ctx, &mut analyses).expect("unroll pass succeeds");
+
+    pliron::operation::verify_operation(lp.module, &ctx).expect("valid IR after unrolling");
+    let info = loop_info(&ctx, lp.region);
+    assert!(
+        !info.loops().iter().any(|l| l.header == lp.outer_header),
+        "the outer loop is unrolled"
+    );
+    assert_eq!(info.loops().len(), 3, "one inner loop per outer copy");
+    assert_eq!(run_function(&ctx, lp.region, &[]), 3 * 3 + 3);
 }
 
 #[test]

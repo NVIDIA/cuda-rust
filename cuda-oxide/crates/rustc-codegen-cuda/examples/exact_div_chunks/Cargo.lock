@@ -188,6 +188,8 @@ dependencies = [
  "proc-macro2",
  "quote",
  "reserved-oxide-symbols",
+ "serde",
+ "serde_json",
  "syn",
 ]
 

@@ -29,7 +29,7 @@
 //! so the same switch that turns host emission on also adds the `cuda-host`
 //! dependency that resolves it.
 
-#![feature(proc_macro_def_site, proc_macro_tracked_env)]
+#![feature(proc_macro_def_site, proc_macro_tracked_env, proc_macro_tracked_path)]
 
 mod common;
 mod cuda_module;
@@ -37,6 +37,7 @@ mod device;
 mod kernel;
 mod launch;
 mod launch_attrs;
+mod library;
 mod printf;
 mod ptx_asm;
 mod tile_export;
@@ -1248,4 +1249,17 @@ pub fn cuda_launch_async(input: TokenStream) -> TokenStream {
     track_codegen_environment();
     let input = parse_macro_input!(input as CudaLaunchAsyncInput);
     expand_cuda_launch_async(input).into()
+}
+
+/// Embed a native library registration from a tracked environment variable.
+///
+/// Re-exported as `cuda_device::library::registration!`. Tracks the provider
+/// executable and, during CUBIN materialization, its declared native inputs.
+/// Ordinary host and documentation builds do not query CUDA toolkit inputs.
+#[proc_macro]
+pub fn library_registration(input: TokenStream) -> TokenStream {
+    let variable = parse_macro_input!(input as syn::LitStr);
+    library::expand(&variable)
+        .unwrap_or_else(|error| syn::Error::new(variable.span(), error).to_compile_error())
+        .into()
 }

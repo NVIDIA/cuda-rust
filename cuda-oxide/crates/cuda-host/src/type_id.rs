@@ -65,7 +65,10 @@ pub fn type_id_u128<T: ?Sized>() -> u128 {
 /// hashes the concrete `kernel::<T, 4>` function-item type rather than its
 /// coerced function-pointer signature. Keeping the item uncoerced is important:
 /// the item type retains both the function definition and its generic arguments.
-#[inline]
+// The device collector recovers generic kernel roots from this helper's
+// concrete function-item type argument. Keep the call through MIR collection;
+// reifying a function pointer instead would also emit the kernel body on host.
+#[inline(never)]
 pub fn type_id_u128_of_val<T: ?Sized>(_: &T) -> u128 {
     type_id_u128::<T>()
 }

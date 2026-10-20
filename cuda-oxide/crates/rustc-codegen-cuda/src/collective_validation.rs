@@ -3,7 +3,7 @@
 
 //! Bounded, per-call-context checks for the checked full-block library marker.
 use crate::collector::{CollectionResult, device_mono_reachability};
-use crate::library::{EdgeKind, MarkerKind, reachable_instances};
+use crate::library::{EdgeKind, reachable_instances};
 use rustc_middle::ty::{Instance, TyCtxt};
 use rustc_public::{mir, rustc_internal};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -13,6 +13,7 @@ enum Fact {
     Unset,
     Uniform,
     Kernel(String),
+    Resource(String),
     Local(usize, Vec<usize>),
     Referent(Box<Fact>),
     Fields(Vec<Fact>),
@@ -20,7 +21,7 @@ enum Fact {
 }
 impl Fact {
     fn uniform(&self) -> bool {
-        matches!(self, Self::Uniform | Self::Kernel(_))
+        matches!(self, Self::Uniform | Self::Kernel(_) | Self::Resource(_))
     }
     fn merge(&self, other: &Self) -> Self {
         if self == other {
@@ -42,9 +43,34 @@ impl Fact {
             _ => Self::Varying,
         }
     }
+    fn has_resource(&self) -> bool {
+        match self {
+            Self::Resource(_) => true,
+            Self::Referent(value) => value.has_resource(),
+            Self::Fields(values) => values.iter().any(Self::has_resource),
+            _ => false,
+        }
+    }
+    fn invalidate_borrow(&mut self) {
+        match self {
+            Self::Resource(_) => {}
+            Self::Referent(value) if value.has_resource() => value.invalidate_borrow(),
+            Self::Fields(values) if values.iter().any(Self::has_resource) => {
+                values.iter_mut().for_each(Self::invalidate_borrow);
+            }
+            _ => *self = Self::Varying,
+        }
+    }
+    fn resource_origin(&self) -> Option<&str> {
+        match self {
+            Self::Resource(origin) => Some(origin),
+            Self::Referent(value) => value.resource_origin(),
+            _ => None,
+        }
+    }
     fn invalidate_referents(&mut self) {
         match self {
-            Self::Referent(_) => *self = Self::Varying,
+            Self::Referent(_) => self.invalidate_borrow(),
             Self::Fields(fields) => fields.iter_mut().for_each(Self::invalidate_referents),
             _ => {}
         }
@@ -52,13 +78,44 @@ impl Fact {
     fn field(&self, index: usize) -> Self {
         match self {
             Self::Fields(v) => v.get(index).cloned().unwrap_or(Self::Varying),
-            Self::Kernel(origin) => Self::Kernel(format!("{origin}.{index}")),
+            Self::Kernel(origin) | Self::Resource(origin) => {
+                Self::Kernel(format!("{origin}.{index}"))
+            }
             Self::Uniform => Self::Uniform,
             _ => Self::Varying,
         }
     }
 }
-type State = Vec<Fact>;
+// Pending access bits: read=1, write=2. Joining paths retains every possible
+// access; a proved full-block barrier clears them. This is not a lifetime token.
+type Pending = BTreeMap<String, u8>;
+fn merge_pending(into: &mut Pending, other: &Pending) -> bool {
+    let mut changed = false;
+    for (origin, bits) in other {
+        let old = into.entry(origin.clone()).or_default();
+        if *old | bits != *old {
+            *old |= bits;
+            changed = true;
+        }
+    }
+    changed
+}
+#[derive(Clone)]
+struct State {
+    locals: Vec<Fact>,
+    pending: Pending,
+}
+impl std::ops::Deref for State {
+    type Target = Vec<Fact>;
+    fn deref(&self) -> &Self::Target {
+        &self.locals
+    }
+}
+impl std::ops::DerefMut for State {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.locals
+    }
+}
 fn local_read(state: &State, local: usize, fields: &[usize]) -> Fact {
     fields
         .iter()
@@ -151,7 +208,7 @@ fn write_fields(target: &mut Fact, fields: &[usize], value: Fact) {
 fn invalidate_borrows(state: &mut State, borrowed: &HashSet<usize>) {
     for (local, fact) in state.iter_mut().enumerate() {
         if borrowed.contains(&local) {
-            *fact = Fact::Varying;
+            fact.invalidate_borrow();
         } else {
             fact.invalidate_referents();
         }
@@ -272,6 +329,7 @@ struct Analyzer<'a, 'tcx> {
     collection: &'a CollectionResult<'tcx>,
     root: &'a str,
     stack: Vec<Instance<'tcx>>,
+    resource_root: bool,
 }
 impl<'tcx> Analyzer<'_, 'tcx> {
     fn error(&self, instance: Instance<'tcx>, block: usize, message: &str) -> String {
@@ -327,12 +385,13 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         arguments: Vec<Fact>,
         validate: bool,
         entry_varying: bool,
-    ) -> Result<Fact, String> {
+        pending: Pending,
+    ) -> Result<(Fact, Pending), String> {
         if self.stack.contains(&instance) {
             return if validate {
                 Err(self.error(instance, 0, "recursive helper participation is unsupported"))
             } else {
-                Ok(Fact::Varying)
+                Ok((Fact::Varying, pending))
             };
         }
         if matches!(instance.def, rustc_middle::ty::InstanceKind::Intrinsic(_)) {
@@ -351,7 +410,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                     "call without MIR cannot prove collective participation",
                 ))
             } else {
-                Ok(Fact::Varying)
+                Ok((Fact::Varying, pending))
             };
         };
         let supplied = device_mono_reachability(self.tcx, instance);
@@ -366,7 +425,10 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         let live = reachable(&edges, 0, None);
         let joins = joins(&edges);
         let mut incoming: Vec<Option<State>> = vec![None; body.blocks.len()];
-        let mut entry = vec![Fact::Unset; body.locals().len()];
+        let mut entry = State {
+            locals: vec![Fact::Unset; body.locals().len()],
+            pending,
+        };
         for (local, fact) in entry.iter_mut().skip(1).zip(arguments) {
             *local = fact;
         }
@@ -437,7 +499,8 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 )?;
                 for &target in &edges[block] {
                     if let Some(previous) = &mut incoming[target] {
-                        for (old, new) in previous.iter_mut().zip(&state) {
+                        changed |= merge_pending(&mut previous.pending, &state.pending);
+                        for (old, new) in previous.iter_mut().zip(state.locals.iter()) {
                             let merged = old.merge(new);
                             if merged != *old {
                                 *old = merged;
@@ -472,10 +535,14 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             ));
         }
         let mut returned = Fact::Unset;
+        let mut returned_pending = Pending::new();
         for &block in &live {
             let Some(mut state) = incoming[block].clone() else {
                 continue;
             };
+            if validate && self.resource_root {
+                self.check_resource_mutation(&body, instance, block, &state)?;
+            }
             self.statements(&body, block, &mut state, divergent[block], &borrowed);
             if validate {
                 if matches!(
@@ -517,10 +584,67 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 mir::TerminatorKind::Return
             ) {
                 returned = returned.merge(&return_fact(state[0].clone()));
+                merge_pending(&mut returned_pending, &state.pending);
             }
         }
         self.stack.pop();
-        Ok(returned)
+        Ok((returned, returned_pending))
+    }
+    fn check_resource_mutation(
+        &self,
+        body: &mir::Body,
+        instance: Instance<'tcx>,
+        block: usize,
+        state: &State,
+    ) -> Result<(), String> {
+        for statement in &body.blocks[block].statements {
+            if matches!(
+                statement.kind,
+                mir::StatementKind::Intrinsic(mir::NonDivergingIntrinsic::CopyNonOverlapping(_))
+            ) {
+                return Err(self.error(
+                    instance,
+                    block,
+                    "bulk memory mutation is unsupported in resource-checked roots",
+                ));
+            }
+            let mir::StatementKind::Assign(place, _) = &statement.kind else {
+                continue;
+            };
+            if !place
+                .projection
+                .iter()
+                .any(|p| matches!(p, mir::ProjectionElem::Deref))
+            {
+                continue;
+            }
+            for length in 0..=place.projection.len() {
+                let prefix = mir::Place {
+                    local: place.local,
+                    projection: place.projection[..length].to_vec(),
+                };
+                let mut carrier = false;
+                if let Ok(ty) = prefix.ty(body.locals()) {
+                    let mut ty = rustc_internal::internal(self.tcx, ty);
+                    loop {
+                        if crate::library::resource_parameter(self.tcx, ty) {
+                            carrier = true;
+                            break;
+                        }
+                        match ty.kind() {
+                            rustc_middle::ty::TyKind::Ref(_, inner, _)
+                            | rustc_middle::ty::TyKind::RawPtr(inner, _) => ty = *inner,
+                            _ => break,
+                        }
+                    }
+                }
+                if carrier || read(&prefix, state).has_resource() {
+                    return Err(self.error(instance, block,
+                        "mutation through a reference to a resource descriptor is unsupported; forward or move the carrier"));
+                }
+            }
+        }
+        Ok(())
     }
     fn statements(
         &self,
@@ -584,11 +708,11 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             .find(|c| c.site.caller == instance && c.site.block.index() == block)
         {
             if validate {
-                if call.kind != MarkerKind::CheckedBlock {
+                if !call.kind.checked() || (self.resource_root && !call.kind.resource()) {
                     return Err(self.error(
                         instance,
                         block,
-                        "raw and checked library calls cannot be mixed in one checked root",
+                        if self.resource_root { "untracked and resource-checked library calls cannot be mixed in one checked root" } else { "raw and checked library calls cannot be mixed in one checked root" },
                     ));
                 }
                 if divergent {
@@ -599,7 +723,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                     ));
                 }
                 let uniform = args
-                    .get(1)
+                    .get(if call.kind.resource() { 2 } else { 1 })
                     .map(|arg| operand(arg, state))
                     .unwrap_or(Fact::Varying);
                 let Fact::Fields(fields) = uniform else {
@@ -617,6 +741,28 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                     ));
                 }
             }
+            if call.kind.resource() {
+                let witness = call_fact(operand(&args[1], state), state);
+                if let Some(origin) = witness.resource_origin() {
+                    let write = crate::library::resource_write(call);
+                    let old = state.pending.get(origin).copied().unwrap_or(0);
+                    if validate && (old & 2 != 0 || (write && old != 0)) {
+                        return Err(self.error(
+                            instance,
+                            block,
+                            "conflicting collective resource access requires a full-block barrier",
+                        ));
+                    }
+                    *state.pending.entry(origin.to_owned()).or_default() |=
+                        if write { 2 } else { 1 };
+                } else if validate {
+                    return Err(self.error(
+                        instance,
+                        block,
+                        "resource witness has no unambiguous kernel allocation origin",
+                    ));
+                }
+            }
             // Native providers may mutate the payload, including a scalar
             // subsequently used as a control. Do not retain borrowed facts.
             invalidate_borrows(state, borrowed);
@@ -628,6 +774,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         let is_sync = (krate.as_str() == "cuda_device" && path.ends_with("::sync_threads"))
             || (krate.as_str() == "cuda_intrinsics" && path.ends_with("::i0034"));
         if is_sync {
+            state.pending.clear();
             if validate && divergent {
                 return Err(self.error(
                     instance,
@@ -704,7 +851,9 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             .iter()
             .map(|arg| call_fact(operand(arg, state), state))
             .collect();
-        let mut result = self.analyze(callee, facts, validate, divergent)?;
+        let (mut result, pending) =
+            self.analyze(callee, facts, validate, divergent, state.pending.clone())?;
+        state.pending = pending;
         if divergent {
             result = result.taint();
         }
@@ -724,19 +873,22 @@ pub(crate) fn validate<'tcx>(
         let mut shapes = BTreeMap::new();
         for root in collection.functions.iter().filter(|f| f.is_kernel) {
             let reached = reachable_instances(collection, root.instance);
-            if !collection.library_calls.iter().any(|c| c.kind == MarkerKind::CheckedBlock && reached.contains(&c.site.caller)) { continue; }
+            if !collection.library_calls.iter().any(|c| c.kind.checked() && reached.contains(&c.site.caller)) { continue; }
             let stable: mir::mono::Instance = rustc_internal::stable(root.instance); let reach = device_mono_reachability(tcx, root.instance);
             let shape = mir_importer::kernel_exact_block(&stable, reach.block_count, &reach.successors)?
                 .ok_or_else(|| format!("checked block collective root {} requires #[launch_contract(block = (...))] with an exact shape", root.export_name))?;
-            let body = tcx.instance_mir(root.instance.def);
-            let arguments = (1..=body.arg_count).map(|arg| {
+            let body = stable.body().ok_or("checked root has no MIR body")?;
+            let resource_root = collection.library_calls.iter().any(|c| c.kind.resource() && reached.contains(&c.site.caller));
+            let arguments = (1..=body.arg_locals().len()).map(|arg| {
                 use rustc_middle::ty::TyKind;
-                let ty = body.local_decls[rustc_middle::mir::Local::from_usize(arg)].ty;
-                if matches!(ty.kind(), TyKind::Bool | TyKind::Int(_) | TyKind::Uint(_) | TyKind::Float(_)) { Fact::Uniform }
+                let ty = rustc_internal::internal(tcx, body.locals()[arg].ty);
+                if resource_root && crate::library::resource_parameter(tcx, ty) {
+                    Fact::Resource(format!("{}:{arg}", root.export_name))
+                } else if matches!(ty.kind(), TyKind::Bool | TyKind::Int(_) | TyKind::Uint(_) | TyKind::Float(_)) { Fact::Uniform }
                 else { Fact::Kernel(format!("{}:{arg}", root.export_name)) }
             }).collect();
-            let mut analyzer = Analyzer { tcx, collection, root: &root.export_name, stack: Vec::new() };
-            analyzer.analyze(root.instance, arguments, true, false)?;
+            let mut analyzer = Analyzer { tcx, collection, root: &root.export_name, stack: Vec::new(), resource_root };
+            analyzer.analyze(root.instance, arguments, true, false, Pending::new())?;
             shapes.insert(root.export_name.clone(), shape);
         }
         Ok(shapes)

@@ -45,6 +45,8 @@ pub struct LibraryCallPlan {
     pub marker: String,
     /// Split uniform/payload operands of the checked full-block marker.
     pub checked_block: bool,
+    /// An additional typed memory witness, consumed only by compiler checks.
+    pub resource_witness: bool,
     /// Size of the assigned shared scratch view in bytes.
     pub scratch_bytes: u32,
     /// Required alignment of the shared scratch base.
@@ -85,8 +87,9 @@ pub(crate) fn translate_call(
     blocks: &[Ptr<BasicBlock>],
     loc: Location,
 ) -> TranslationResult<Ptr<Operation>> {
-    let tuples: &[mir::Operand] = match (plan.checked_block, args) {
-        (false, [_, _]) | (true, [_, _, _]) => &args[1..],
+    let tuples: &[mir::Operand] = match (plan.checked_block, plan.resource_witness, args) {
+        (false, false, [_, _]) | (true, false, [_, _, _]) => &args[1..],
+        (true, true, [_, _, _, _]) => &args[2..],
         _ => {
             return input_err!(
                 loc,

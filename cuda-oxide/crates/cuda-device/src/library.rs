@@ -75,3 +75,44 @@ pub unsafe fn cuda_oxide_library_v1_246e25db_checked_block_call<
 }
 
 pub use cuda_oxide_library_v1_246e25db_checked_block_call as checked_block_call_v1;
+
+/// Invoke a scratch-free full-block operation with a typed memory witness.
+///
+/// The compiler accepts `&[T]` for reads, a reference to
+/// `DisjointSlice<T, CollectiveTiles<C>>` for reads, and a mutable reference to
+/// that carrier for writes. It tracks the original kernel allocation through
+/// helpers and requires a full-block barrier before conflicting reuse.
+/// The witness is not passed to the native function. `uniform` and `payload`
+/// have the same roles as [`checked_block_call_v1`].
+///
+/// # Safety
+///
+/// The native pointer and accessed range must describe `memory`. The wrapper
+/// must validate capacity, canonical group ownership, arithmetic, and bounds
+/// before forming that pointer. Native memory effects must stay within that
+/// range and the lane-local payload; `WRITE = false` forbids writes to `memory`.
+/// The recipe, payload initialization and native ABI must be correct. Compiler
+/// provenance and participation checks do not verify these obligations of the
+/// unsafe wrapper implementation.
+#[inline(never)]
+pub unsafe fn cuda_oxide_library_v1_246e25db_checked_block_resource_call<
+    T: Copy,
+    Registration: Fn() -> &'static str + Copy,
+    Memory,
+    UniformArgs: Copy,
+    PayloadArgs: Copy,
+    const ITEMS: usize,
+    const WRITE: bool,
+>(
+    _registration: Registration,
+    _memory: Memory,
+    _uniform: UniformArgs,
+    _payload: PayloadArgs,
+) {
+    unsafe extern "C" {
+        fn cuda_oxide_checked_block_resource_call_requires_supported_backend();
+    }
+    unsafe { cuda_oxide_checked_block_resource_call_requires_supported_backend() }
+}
+
+pub use cuda_oxide_library_v1_246e25db_checked_block_resource_call as checked_block_resource_call_v1;

@@ -490,11 +490,12 @@ fn decode_response(
         if !matches!(
             spec.arguments.first(),
             Some(Argument::ConstPointer(_) | Argument::MutPointer(_))
-        ) || !matches!(spec.arguments.get(1), Some(Argument::MutPointer(_)))
-        {
+        ) || !matches!(
+            spec.arguments.get(1),
+            Some(Argument::ConstPointer(_) | Argument::MutPointer(_))
+        ) {
             return Err(
-                "library ABI requires memory and mutable payload pointers before scratch slot 2"
-                    .into(),
+                "library ABI requires memory and payload pointers before scratch slot 2".into(),
             );
         }
         for argument in &spec.arguments {
@@ -614,10 +615,12 @@ fn call_arguments(call: &LibraryCall<'_>) -> Result<Vec<Argument>, String> {
         .collect::<Result<Vec<_>, _>>()?;
     if !matches!(uniform.first(), Some(Argument::ConstPointer(t) | Argument::MutPointer(t)) if *t == dtype)
         || !uniform[1..].iter().all(|a| matches!(a, Argument::Value(_)))
-        || !matches!(payload.first(), Some(Argument::MutPointer(t)) if *t == dtype)
-        || !payload.iter().all(|a| matches!(a, Argument::MutPointer(_)))
+        || !matches!(payload.first(), Some(Argument::ConstPointer(t) | Argument::MutPointer(t)) if *t == dtype)
+        || !payload
+            .iter()
+            .all(|a| matches!(a, Argument::ConstPointer(_) | Argument::MutPointer(_)))
     {
-        return Err("checked block call requires (memory pointer, scalar controls...) and (mutable payload pointers...) with matching element types".into());
+        return Err("checked block call requires (memory pointer, scalar controls...) and (payload pointers...) with matching element types".into());
     }
     Ok(uniform[..1]
         .iter()
@@ -1053,6 +1056,13 @@ mod tests {
                 serde_json::json!({"size": 4294967296_u64, "alignment": 1}),
             ),
             ("arguments", serde_json::json!([])),
+            (
+                "arguments",
+                serde_json::json!([
+                    {"kind": "const_pointer", "scalar": {"kind": "signed", "bits": 32}},
+                    {"kind": "value", "scalar": {"kind": "signed", "bits": 32}}
+                ]),
+            ),
         ] {
             let mut value_response = response();
             value_response["specializations"][0][field] = value;
@@ -1073,5 +1083,25 @@ mod tests {
         let mut version = response();
         version["version"] = 2.into();
         assert!(decode_response(&frame(&version), 1).is_err());
+    }
+
+    #[test]
+    fn response_preserves_const_payload_pointer_mutability() {
+        let mut value = response();
+        value["specializations"][0]["arguments"][1]["kind"] = "const_pointer".into();
+        value["specializations"][0]["mutates_payload"] = false.into();
+        let (decoded, _) = decode_response(&frame(&value), 1).unwrap();
+        assert_eq!(
+            decoded.specializations[0].arguments[1],
+            Argument::ConstPointer(Scalar::Signed(32))
+        );
+        assert_ne!(
+            decoded.specializations[0].arguments,
+            decode_response(&frame(&response()), 1)
+                .unwrap()
+                .0
+                .specializations[0]
+                .arguments
+        );
     }
 }

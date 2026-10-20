@@ -14,6 +14,7 @@ use dialect_mir::attributes::{FieldIndexAttr, MirPointerKindAuthorityAttr};
 use dialect_mir::ops::{MirExternSharedOp, MirExtractFieldOp};
 use dialect_mir::types::{MirPtrType, MirTupleType};
 use pliron::basic_block::BasicBlock;
+use pliron::builtin::attributes::IntegerAttr;
 use pliron::builtin::types::{FunctionType, IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
 use pliron::input_err;
@@ -21,6 +22,7 @@ use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::r#type::Typed;
+use pliron::utils::apint::APInt;
 use rustc_public::mir;
 
 /// One monomorphized call whose Rust tuple and provider ABI already agree.
@@ -28,6 +30,8 @@ use rustc_public::mir;
 pub struct LibraryCallPlan {
     /// Exact external symbol emitted by the native provider.
     pub symbol: String,
+    /// Size of the assigned shared scratch view in bytes.
+    pub scratch_bytes: u32,
     /// Required alignment of the shared scratch base.
     pub scratch_alignment: u32,
 }
@@ -129,6 +133,19 @@ pub(crate) fn translate_call(
     let scratch = MirExternSharedOp::new(op);
     scratch.set_byte_offset_value(ctx, 0);
     scratch.set_alignment_value(ctx, u64::from(plan.scratch_alignment));
+    let layout_ty = IntegerType::get(ctx, 64, Signedness::Unsigned);
+    op.deref_mut(ctx).attributes.set(
+        crate::kernel_resources::FIXED_SHARED_BYTES
+            .try_into()
+            .unwrap(),
+        IntegerAttr::new(
+            layout_ty,
+            APInt::from_u64(
+                u64::from(plan.scratch_bytes),
+                std::num::NonZeroUsize::new(64).unwrap(),
+            ),
+        ),
+    );
     helpers::insert_op(ctx, op, block, last);
     let internal_scratch = op.deref(ctx).get_result(0);
     let raw_shared = facts::mint_shared_ptr_type(ctx, byte, facts::abi_library_scratch()).into();

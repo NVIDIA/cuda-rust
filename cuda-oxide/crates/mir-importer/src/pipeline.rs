@@ -500,6 +500,7 @@ pub fn run_pipeline(
         config,
         known_defs,
         BTreeMap::new(),
+        &BTreeMap::new(),
     )
 }
 
@@ -511,6 +512,7 @@ pub fn run_pipeline_with_libraries(
     config: &PipelineConfig,
     known_defs: crate::translator::facts::KnownDefs,
     libraries: BTreeMap<String, crate::LibraryCallPlan>,
+    library_roots: &BTreeMap<String, oxide_artifacts::KernelLaunchFacts>,
 ) -> Result<CompilationResult, PipelineError> {
     crate::library::set_calls(libraries);
     // Install the driver-resolved lang-item ids and emitted-function identities
@@ -580,6 +582,12 @@ pub fn run_pipeline_with_libraries(
             // Use .disp(&ctx) for rich error formatting with location and backtrace
             PipelineError::Translation(format!("{}: {}", func.export_name, e.disp(&ctx)))
         })?;
+
+        if let Some(plan) = library_roots.get(&func.export_name) {
+            crate::kernel_resources::apply_library_block(&mut ctx, func_op_ptr, plan).map_err(
+                |error| PipelineError::Translation(format!("{}: {error}", func.export_name)),
+            )?;
+        }
 
         if config.debug_kind.variables_enabled() {
             attach_debug_global_variables(&mut ctx, func_op_ptr, &config.debug_global_variables);

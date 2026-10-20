@@ -8,6 +8,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+use oxide_artifacts::KernelLaunchFacts;
 use rustc_hir::def_id::{CRATE_DEF_INDEX, DefId};
 use rustc_middle::mir::{Operand, RETURN_PLACE, Rvalue, StatementKind, TerminatorKind};
 use rustc_middle::ty::consts::ConstExt;
@@ -149,19 +150,12 @@ struct BatchResponse {
     specializations: Vec<Specialization>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct RootPlan {
-    pub block: [u32; 3],
-    pub scratch_bytes: u32,
-    pub scratch_alignment: u32,
-}
-
 #[derive(Default)]
 pub(crate) struct FinalizedLibraries<'tcx> {
     pub calls: Vec<(Instance<'tcx>, mir_importer::LibraryCallPlan)>,
     pub declarations: Vec<mir_importer::DeviceExternDecl>,
     pub inputs: Vec<(String, Vec<u8>)>,
-    pub roots: BTreeMap<String, RootPlan>,
+    pub roots: BTreeMap<String, KernelLaunchFacts>,
 }
 
 fn scalar(ty: Ty<'_>) -> Result<Scalar, String> {
@@ -511,15 +505,20 @@ pub(crate) fn finalize<'tcx>(
                 let _ = spec.mutates_payload; // Metadata, not permission to read payload.
                 let plan = mir_importer::LibraryCallPlan {
                     symbol: spec.symbol.clone(),
+                    scratch_bytes,
                     scratch_alignment,
                 };
                 if finalized
                     .insert(
                         call.instance,
-                        RootPlan {
-                            block: request.block,
-                            scratch_bytes,
-                            scratch_alignment,
+                        KernelLaunchFacts {
+                            exact_block: Some((
+                                request.block[0],
+                                request.block[1],
+                                request.block[2],
+                            )),
+                            dynamic_shared_bytes: scratch_bytes,
+                            dynamic_shared_alignment: scratch_alignment,
                         },
                     )
                     .is_none()
@@ -532,24 +531,26 @@ pub(crate) fn finalize<'tcx>(
     for root in collection.functions.iter().filter(|f| f.is_kernel) {
         let mut visited = HashSet::new();
         let mut pending = vec![root.instance];
-        let mut root_plan: Option<RootPlan> = None;
+        let mut root_plan: Option<KernelLaunchFacts> = None;
         while let Some(instance) = pending.pop() {
             if !visited.insert(instance) {
                 continue;
             }
             if let Some(plan) = finalized.get(&instance) {
                 if let Some(current) = &mut root_plan {
-                    if current.block != plan.block {
+                    if current.exact_block != plan.exact_block {
                         return Err(format!(
                             "kernel {} has conflicting exact library block shapes",
                             root.export_name
                         ));
                     }
-                    current.scratch_bytes = current.scratch_bytes.max(plan.scratch_bytes);
-                    current.scratch_alignment =
-                        current.scratch_alignment.max(plan.scratch_alignment);
+                    current.dynamic_shared_bytes =
+                        current.dynamic_shared_bytes.max(plan.dynamic_shared_bytes);
+                    current.dynamic_shared_alignment = current
+                        .dynamic_shared_alignment
+                        .max(plan.dynamic_shared_alignment);
                 } else {
-                    root_plan = Some(plan.clone());
+                    root_plan = Some(*plan);
                 }
             }
             pending.extend(

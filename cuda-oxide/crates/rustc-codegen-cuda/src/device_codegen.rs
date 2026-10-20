@@ -1295,6 +1295,7 @@ pub fn generate_device_code<'tcx>(
             &pipeline_config,
             known_defs,
             library_calls,
+            &libraries.roots,
         )
     });
 

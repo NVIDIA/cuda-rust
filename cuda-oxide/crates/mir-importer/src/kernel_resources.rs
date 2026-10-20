@@ -25,6 +25,54 @@ fn integer_attr(ctx: &Context, op: Ptr<Operation>, name: &str) -> Option<u64> {
         .map(|value| value.value().to_u64())
 }
 
+/// Apply the exact geometry required by reachable native library operations.
+/// Scratch extents are recorded on their actual shared-memory accesses and
+/// collected together with ordinary Rust views below.
+pub(crate) fn apply_library_block(
+    ctx: &mut Context,
+    entry: Ptr<Operation>,
+    plan: &KernelLaunchFacts,
+) -> Result<(), String> {
+    use pliron::builtin::types::{IntegerType, Signedness};
+    use pliron::utils::apint::APInt;
+
+    let Some((x, y, z)) = plan.exact_block else {
+        return Err("native library root is missing its exact block shape".into());
+    };
+    let required = u64::from(x) * u64::from(y) * u64::from(z);
+    if let Some(maximum) = integer_attr(ctx, entry, "maxntid")
+        && required > maximum
+    {
+        return Err(format!(
+            "native library exact block ({x}, {y}, {z}) exceeds launch_bounds maximum {maximum}"
+        ));
+    }
+    let axes = [("reqntid_x", x), ("reqntid_y", y), ("reqntid_z", z)];
+    for (name, dimension) in axes {
+        if let Some(existing) = integer_attr(ctx, entry, name)
+            && existing != u64::from(dimension)
+        {
+            return Err(format!(
+                "native library exact block ({x}, {y}, {z}) conflicts with kernel launch contract"
+            ));
+        }
+    }
+    let ty = IntegerType::get(ctx, 64, Signedness::Unsigned);
+    for (name, dimension) in axes {
+        entry.deref_mut(ctx).attributes.set(
+            name.try_into().unwrap(),
+            IntegerAttr::new(
+                ty,
+                APInt::from_u64(
+                    u64::from(dimension),
+                    std::num::NonZeroUsize::new(64).unwrap(),
+                ),
+            ),
+        );
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 struct FunctionResources {
     inferred: bool,

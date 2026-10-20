@@ -642,7 +642,9 @@ impl CodegenBackend for CudaCodegenBackend {
                     for (kernel, plan) in &libraries.roots {
                         eprintln!(
                             "[library] {kernel}: exact block {:?}, scratch {} bytes aligned {}",
-                            plan.block, plan.scratch_bytes, plan.scratch_alignment
+                            plan.exact_block,
+                            plan.dynamic_shared_bytes,
+                            plan.dynamic_shared_alignment
                         );
                     }
                 }

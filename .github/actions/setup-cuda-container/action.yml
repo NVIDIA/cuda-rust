@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+---
+name: Set up the CUDA devel container
+description: >-
+  Installs the host packages the nvidia/cuda devel image lacks, marks the
+  workspace safe for git, and installs rustup. The caller checks the
+  repository out first: a local action is resolved from the workspace, so
+  this action cannot be the job's first step. The image already contains
+  the CUDA toolkit. Later steps pick up rust-toolchain.toml from their
+  working directory.
+
+runs:
+  using: composite
+  steps:
+    - name: Install host packages
+      shell: bash
+      run: |
+        apt-get update -qq
+        apt-get install -y -qq --no-install-recommends \
+          build-essential ca-certificates curl git pkg-config libclang-dev wget
+
+    - name: Mark the workspace as a safe git directory
+      shell: bash
+      run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+    - name: Install Rust
+      shell: bash
+      run: |
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+          | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+        echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
+        # Root rust-toolchain.toml is the stable pin. cuda-oxide/ selects the
+        # nightly when a later step sets that working directory.
+        "${HOME}/.cargo/bin/rustup" show
+        (cd cuda-oxide && "${HOME}/.cargo/bin/rustup" show)

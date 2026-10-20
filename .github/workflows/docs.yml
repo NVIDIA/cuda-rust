@@ -3,19 +3,12 @@ name: docs
 
 # Path-filtered SIMT lane (same roots as ci.yml).
 on:
+  # Self-hosted runners reject pull_request. copy-pr-bot mirrors trusted PRs
+  # to pull-request/<n>, and this workflow triggers on that push.
   push:
-    branches: [main]
-    paths:
-      - 'cuda-oxide/**'
-      - 'cuda-bindings/**'
-      - 'cuda-core/**'
-      - 'cuda-core-derive/**'
-      - 'cuda-async/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/**'
-  pull_request:
-    branches: [main]
+    branches:
+      - main
+      - "pull-request/[0-9]+"
     paths:
       - 'cuda-oxide/**'
       - 'cuda-bindings/**'
@@ -35,33 +28,42 @@ concurrency:
 permissions:
   contents: read
 
+# A container job's default shell is dash; these steps use bash.
+defaults:
+  run:
+    shell: bash
+
 # Gate rustdoc and doctests, which the `unit-tests` job does not cover (it runs
 # `--lib --tests`, excluding doctests, and never builds docs). Keeps broken
 # intra-doc links and uncompilable doc examples from accumulating silently.
 jobs:
   rustdoc-and-doctests:
     name: cargo doc + doctests
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    # `cargo doc` compiles cuda-bindings' build-time bindgen, which needs
+    # cuda.h. The devel image is CUDA 13.3.1, the same pin the toolkit
+    # install used, and it has no rustup.
+    container:
+      image: nvidia/cuda:13.3.1-devel-ubuntu24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    env:
+      CUDA_TOOLKIT_PATH: /usr/local/cuda
     timeout-minutes: 30
     steps:
+      # A local action is loaded from the workspace, so checkout comes first.
+      # The CUDA image has no git; without it checkout stores a tarball.
+      - name: Install git
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends ca-certificates git
       - name: Clone repository
         uses: actions/checkout@v4
-
-      - name: Install CUDA toolkit
-        # `cargo doc --workspace` compiles cuda-bindings' build-time bindgen,
-        # which needs `cuda.h`. Same toolkit pin as the unit-tests job.
-        uses: Jimver/cuda-toolkit@0ca15bb027fc96f7f61ddbb9c5221d699da06bdb  # v0.2.36
-        id: cuda-toolkit
-        with:
-          cuda: "13.3.1"
-          method: network
-          sub-packages: '["nvcc", "cudart-dev"]'
-          non-cuda-sub-packages: '["libcurand-dev"]'
+      - uses: ./.github/actions/setup-cuda-container
 
       - name: Build docs (warning-free) and run doctests
         working-directory: cuda-oxide
         env:
-          CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           RUSTDOCFLAGS: "-D warnings"
         run: |
           sysroot="$(rustc --print sysroot)"

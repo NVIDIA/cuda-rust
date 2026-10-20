@@ -431,13 +431,11 @@ fn generate_generic_cuda_kernel_impl(
 
         /// Retains this concrete kernel specialization and returns its PTX entry name.
         ///
-        /// The reify cast is what makes rustc collect the monomorphized kernel
-        /// item for the device backend; `black_box` keeps the otherwise unused
-        /// cast from being optimized away without touching any pointer.
+        /// The type-hash helper retains the concrete kernel function-item type
+        /// for device collection without emitting its body on the host.
         #(#cfg_attrs)*
         #[inline(never)]
         #vis fn #ptx_name_fn #generics () -> &'static str #where_clause {
-            ::core::hint::black_box(#kernel_name #kernel_turbofish as *const ());
             <#marker_type as ::cuda_host::GenericCudaKernel>::ptx_name()
         }
     }

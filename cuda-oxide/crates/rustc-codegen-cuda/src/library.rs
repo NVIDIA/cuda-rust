@@ -1324,14 +1324,14 @@ mod tests {
         let mut value = response();
         value["specializations"][0]["arguments"][1]["kind"] = "const_pointer".into();
         value["specializations"][0]["mutates_payload"] = false.into();
-        let (decoded, _) = decode_response(&frame(&value), 1).unwrap();
+        let (decoded, _) = decode_response(&frame(&value), 1, 1).unwrap();
         assert_eq!(
             decoded.specializations[0].arguments[1],
             Argument::ConstPointer(Scalar::Signed(32))
         );
         assert_ne!(
             decoded.specializations[0].arguments,
-            decode_response(&frame(&response()), 1)
+            decode_response(&frame(&response()), 1, 1)
                 .unwrap()
                 .0
                 .specializations[0]

@@ -32,6 +32,13 @@ pub(crate) struct MaterializationRequest {
     expected_provenance: [u8; 32],
     tool_identity_handshake: cuda_artifact_finalizer::MaterializerHandshakeV1,
     external_inputs: Vec<(String, Vec<u8>)>,
+    library_inputs: Vec<(String, Vec<u8>)>,
+}
+
+impl MaterializationRequest {
+    pub(crate) fn add_library_inputs(&mut self, inputs: Vec<(String, Vec<u8>)>) {
+        self.library_inputs.extend(inputs);
+    }
 }
 
 /// Cubin bytes plus ptxas resource diagnostics from the final link.
@@ -156,6 +163,7 @@ pub(crate) fn request_from_env() -> Result<Option<MaterializationRequest>, Mater
         expected_provenance,
         tool_identity_handshake: handshake,
         external_inputs,
+        library_inputs: Vec::new(),
     }))
 }
 
@@ -213,7 +221,8 @@ pub(crate) fn validate_collection(
     if requires_ptx_bundle_merge {
         return Err(MaterializeError::RequiresPtxBundleMerge);
     }
-    if has_device_externs && request.external_inputs.is_empty() {
+    if has_device_externs && request.external_inputs.is_empty() && request.library_inputs.is_empty()
+    {
         return Err(MaterializeError::HasDeviceExterns);
     }
     Ok(())
@@ -293,6 +302,7 @@ fn link_inputs<'a>(
             request
                 .external_inputs
                 .iter()
+                .chain(&request.library_inputs)
                 .map(|(name, bytes)| NamedInput::new(name, bytes)),
         )
         .collect()
@@ -471,6 +481,7 @@ mod tests {
         let request = MaterializationRequest {
             expected_provenance: handshake.provenance_sha256,
             tool_identity_handshake: handshake,
+            library_inputs: Vec::new(),
             external_inputs: vec![(
                 input.to_str().unwrap().to_owned(),
                 b"external input".to_vec(),
@@ -493,6 +504,7 @@ mod tests {
         let mut request = MaterializationRequest {
             expected_provenance: handshake.provenance_sha256,
             tool_identity_handshake: handshake,
+            library_inputs: Vec::new(),
             external_inputs: Vec::new(),
         };
         assert!(matches!(

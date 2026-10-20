@@ -329,6 +329,7 @@ extern crate rustc_codegen_llvm;
 mod collector;
 mod device_codegen;
 mod generated_intrinsics;
+mod library;
 mod materialize;
 
 use rustc_codegen_ssa::traits::CodegenBackend;
@@ -610,7 +611,7 @@ impl CodegenBackend for CudaCodegenBackend {
 
             // Step 2: If device code exists, compile via cuda-oxide
             let _device_result = if has_device_code {
-                let materialization_request =
+                let mut materialization_request =
                     materialize::request_from_env().unwrap_or_else(|error| {
                         tcx.dcx().fatal(format!(
                             "[rustc_codegen_cuda] Invalid cubin materialization request: {error}"
@@ -626,6 +627,31 @@ impl CodegenBackend for CudaCodegenBackend {
                     mono_partitions.codegen_units,
                     self.config.verbose,
                 );
+
+                if !collection_result.library_calls.is_empty() && materialization_request.is_none()
+                {
+                    tcx.dcx().fatal(
+                        "native library calls require `cargo oxide build --materialize-cubin`",
+                    );
+                }
+                let libraries =
+                    library::finalize(tcx, &collection_result).unwrap_or_else(|error| {
+                        tcx.dcx().fatal(format!("native device library: {error}"))
+                    });
+                if self.config.verbose {
+                    for (kernel, plan) in &libraries.roots {
+                        eprintln!(
+                            "[library] {kernel}: exact block {:?}, scratch {} bytes aligned {}",
+                            plan.block, plan.scratch_bytes, plan.scratch_alignment
+                        );
+                    }
+                }
+                // The provider returns owned bytes. No consumer-created artifact
+                // list or path is needed, and output-path checks still apply to
+                // the file inputs received from cargo-oxide.
+                if let Some(request) = &mut materialization_request {
+                    request.add_library_inputs(libraries.inputs.clone());
+                }
 
                 materialize::validate_collection(
                     materialization_request.as_ref(),
@@ -710,6 +736,7 @@ impl CodegenBackend for CudaCodegenBackend {
                             tcx,
                             device_functions,
                             &collection_result.device_externs,
+                            &libraries,
                             &device_config,
                         )
                     }));

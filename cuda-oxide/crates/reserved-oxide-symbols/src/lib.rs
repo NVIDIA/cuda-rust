@@ -75,6 +75,9 @@ pub const MATERIALIZER_HANDSHAKE_ENV: &str = "CUDA_OXIDE_INTERNAL_MATERIALIZER_H
 /// Ordered, content-bound external LTO-IR files supplied by cargo-oxide.
 pub const EXTERNAL_LTOIR_ENV: &str = "CUDA_OXIDE_INTERNAL_EXTERNAL_LTOIR_V1";
 
+/// Definition name in `cuda_device::library`; consumers resolve its actual DefId.
+pub const LIBRARY_CALL_V1: &str = "cuda_oxide_library_v1_246e25db_call";
+
 /// Optional comma-separated filter selecting crates that may own device code.
 pub const DEVICE_CODEGEN_CRATE_ENV: &str = "CUDA_OXIDE_DEVICE_CODEGEN_CRATE";
 

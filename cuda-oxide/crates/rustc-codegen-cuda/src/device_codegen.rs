@@ -916,6 +916,7 @@ pub fn generate_device_code<'tcx>(
     tcx: TyCtxt<'tcx>,
     functions: &[CollectedFunction<'tcx>],
     device_externs: &[DeviceExternDecl],
+    libraries: &crate::library::FinalizedLibraries<'tcx>,
     config: &DeviceCodegenConfig,
 ) -> Result<DeviceCodegenResult, DeviceCodegenError> {
     use rustc_public::rustc_internal;
@@ -961,7 +962,7 @@ pub fn generate_device_code<'tcx>(
 
     // Convert device externs to mir-importer format
     // We extract signature info from rustc here since we have access to TyCtxt
-    let stable_device_externs: Vec<mir_importer::DeviceExternDecl> = device_externs
+    let mut stable_device_externs: Vec<mir_importer::DeviceExternDecl> = device_externs
         .iter()
         .map(|decl| {
             // Get function signature from rustc
@@ -1020,6 +1021,8 @@ pub fn generate_device_code<'tcx>(
             })
         })
         .collect::<Result<_, _>>()?;
+
+    stable_device_externs.extend(libraries.declarations.clone());
 
     let output_dir = config.output_dir.clone();
     let output_name = config.output_name.clone();
@@ -1278,11 +1281,20 @@ pub fn generate_device_code<'tcx>(
         // Run the cuda-oxide pipeline!
         // Rust MIR → `dialect-mir` → mem2reg → unroll → LLVM dialect → LLVM IR → PTX.
         // Device externs are emitted as `declare` statements in LLVM IR
-        mir_importer::run_pipeline(
+        let library_calls = libraries
+            .calls
+            .iter()
+            .map(|(instance, plan)| {
+                let instance: rustc_public::mir::mono::Instance = rustc_internal::stable(*instance);
+                (instance.mangled_name().to_string(), plan.clone())
+            })
+            .collect();
+        mir_importer::run_pipeline_with_libraries(
             &stable_functions,
             &stable_device_externs,
             &pipeline_config,
             known_defs,
+            library_calls,
         )
     });
 

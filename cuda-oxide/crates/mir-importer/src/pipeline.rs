@@ -494,6 +494,25 @@ pub fn run_pipeline(
     config: &PipelineConfig,
     known_defs: crate::translator::facts::KnownDefs,
 ) -> Result<CompilationResult, PipelineError> {
+    run_pipeline_with_libraries(
+        functions,
+        device_externs,
+        config,
+        known_defs,
+        BTreeMap::new(),
+    )
+}
+
+/// Run the pipeline with compiler-validated, monomorphized library calls.
+/// The map keys are resolved instance mangled names, not source spellings.
+pub fn run_pipeline_with_libraries(
+    functions: &[CollectedFunction],
+    device_externs: &[DeviceExternDecl],
+    config: &PipelineConfig,
+    known_defs: crate::translator::facts::KnownDefs,
+    libraries: BTreeMap<String, crate::LibraryCallPlan>,
+) -> Result<CompilationResult, PipelineError> {
+    crate::library::set_calls(libraries);
     // Install the driver-resolved lang-item ids and emitted-function identities
     // for this run. Replace (rather than merge) both thread-local sets so
     // stale state from a previous run on this thread cannot survive.

@@ -1007,15 +1007,18 @@ fn translate_call(
             constant.const_.ty().kind()
         && def.krate().name == "cuda_device"
         && matches!(
-            def.def_id().name().as_str(),
-            reserved_oxide_symbols::LIBRARY_CALL_V1
-                | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_CALL_V1
-                | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_RESOURCE_CALL_V1
-                | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_STORAGE_CALL_V1
-                | reserved_oxide_symbols::LIBRARY_STORAGE_NEW_V1
-                | reserved_oxide_symbols::LIBRARY_STORAGE_RECONFIGURE_V1
-                | reserved_oxide_symbols::LIBRARY_STORAGE_RESERVE_V1
-                | reserved_oxide_symbols::LIBRARY_STORAGE_RELEASE_V1
+            def.def_id().name().as_str().rsplit("::").next(),
+            Some(
+                reserved_oxide_symbols::LIBRARY_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_CALLBACK_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_RESOURCE_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_STORAGE_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_STORAGE_NEW_V1
+                    | reserved_oxide_symbols::LIBRARY_STORAGE_RECONFIGURE_V1
+                    | reserved_oxide_symbols::LIBRARY_STORAGE_RESERVE_V1
+                    | reserved_oxide_symbols::LIBRARY_STORAGE_RELEASE_V1
+            )
         )
     {
         return input_err!(
@@ -3482,6 +3485,118 @@ fn try_dispatch_intrinsic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unplanned_library_markers_report_at_the_qualified_call_site() {
+        use crate::{CollectedFunction, PipelineConfig, run_pipeline};
+        use rustc_public::mir::mono::Instance;
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_unplanned_library_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let fixture = root.join("markers.rs");
+        std::fs::write(
+            &fixture,
+            r#"
+mod library {
+    #[inline(never)]
+    pub fn cuda_oxide_library_v1_246e25db_call() {}
+    #[inline(never)]
+    pub fn cuda_oxide_library_v1_246e25db_call_with_callback() {}
+}
+pub fn raw() { library::cuda_oxide_library_v1_246e25db_call(); }
+pub fn callback() { library::cuda_oxide_library_v1_246e25db_call_with_callback(); }
+"#,
+        )
+        .unwrap();
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let sysroot = std::process::Command::new(rustc)
+            .args(["--print", "sysroot"])
+            .output()
+            .unwrap();
+        assert!(sysroot.status.success());
+        let sysroot = String::from_utf8(sysroot.stdout).unwrap();
+        for crate_name in ["cuda_device", "ordinary_markers"] {
+            let args = vec![
+                "rustc".to_string(),
+                "--edition=2024".to_string(),
+                "--crate-type=rlib".to_string(),
+                format!("--crate-name={crate_name}"),
+                "--emit=metadata".to_string(),
+                "-Zmir-opt-level=0".to_string(),
+                format!("--out-dir={}", root.display()),
+                format!("--sysroot={}", sysroot.trim()),
+                fixture.display().to_string(),
+            ];
+            let output_dir = root.join(crate_name);
+            std::thread::Builder::new()
+                .stack_size(64 * 1024 * 1024)
+                .spawn(move || {
+                    rustc_public::run!(&args, || {
+                        for entry in ["raw", "callback"] {
+                            let functions: Vec<_> = rustc_public::all_local_items()
+                                .into_iter()
+                                .filter(|item| {
+                                    item.name() == format!("{crate_name}::{entry}")
+                                        || (crate_name == "ordinary_markers"
+                                            && item.name().contains("::library::"))
+                                })
+                                .map(|item| {
+                                    let instance = Instance::try_from(item).unwrap();
+                                    let body = instance.body().unwrap();
+                                    CollectedFunction {
+                                        instance,
+                                        rustc_mir_block_count: body.blocks.len(),
+                                        rustc_mono_successors: body
+                                            .blocks
+                                            .iter()
+                                            .map(|block| block.terminator.successors())
+                                            .collect(),
+                                        is_kernel: false,
+                                        export_name: item.name(),
+                                        debug_source_scopes: None,
+                                        statement_debug_info: None,
+                                        inline: None,
+                                    }
+                                })
+                                .collect();
+                            let config = PipelineConfig {
+                                output_dir: output_dir.clone(),
+                                output_name: entry.to_string(),
+                                emit_nvvm_ir: true,
+                                target_arch: Some("sm_120".to_string()),
+                                ..PipelineConfig::default()
+                            };
+                            let result = run_pipeline(&functions, &[], &config, Default::default());
+                            if crate_name == "cuda_device" {
+                                let error = result.err().expect("unplanned marker must fail");
+                                assert!(
+                                    error.to_string().contains(
+                                        "native library marker has no validated call-site plan"
+                                    ),
+                                    "{error}"
+                                );
+                            } else {
+                                result.expect("same spelling in another crate is an ordinary call");
+                            }
+                        }
+                        std::ops::ControlFlow::<(), _>::Continue(())
+                    })
+                })
+                .unwrap()
+                .join()
+                .unwrap()
+                .expect("in-process fixture compilation succeeds");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn foreign_signature_rejects_c_variadic_before_claiming_an_exact_abi() {

@@ -1328,11 +1328,14 @@ pub(in crate::resolve) fn validate_sparse_mma_policy(
                 mma.a_element,
                 SparseMmaElement::F16 | SparseMmaElement::Bf16 | SparseMmaElement::Tf32
             ) {
+                // The imported PTX predicate is the metadata floor: standard
+                // forms are PTX >= 7.1 and ordered forms stay PTX >= 8.5.
+                let ptx_predicate = match mma.metadata {
+                    SparseMmaMetadata::Standard => "Subtarget->getPTXVersion() >= 71",
+                    SparseMmaMetadata::Ordered => "Subtarget->getPTXVersion() >= 85",
+                };
                 declaration.selections[0].predicates
-                    == [
-                        "Subtarget->getSmVersion() >= 80",
-                        "Subtarget->getPTXVersion() >= 85",
-                    ]
+                    == ["Subtarget->getSmVersion() >= 80", ptx_predicate]
             } else if is_sparse_mma_fp8_f32(mma) {
                 // The upstream NVPTX selection for the plain SM89 FP8 forms
                 // carries the Ampere floor and the Ada/PTX 8.4 floor as four

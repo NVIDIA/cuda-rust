@@ -45,6 +45,7 @@ shards = [
     "overlay/scalar_arithmetic.toml",
     "overlay/scalar_conversion.toml",
     "overlay/scalar_math.toml",
+    "overlay/sparse_mma_ampere_float.toml",
     "overlay/sparse_mma_fp8_f32.toml",
     "overlay/sparse_mma_int4_m16n8k128.toml",
     "overlay/sparse_mma_int4_m16n8k64.toml",

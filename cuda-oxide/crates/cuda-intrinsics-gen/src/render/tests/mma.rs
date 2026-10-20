@@ -347,7 +347,7 @@ fn register_mma_rendering_preserves_apis_order_convergence_and_variants() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = crate::resolve::resolve(&repo_root).unwrap();
     validate_renderable(&catalog).unwrap();
-    assert_eq!(catalog.intrinsics.len(), 1038);
+    assert_eq!(catalog.intrinsics.len(), 1046);
     let records: Vec<_> = register_mmas(&catalog).collect();
     assert_eq!(records.len(), 154);
     let generated_records = records
@@ -887,7 +887,7 @@ fn sparse_mma_rendering_enforces_selector_and_keeps_family_distinct() {
         .iter()
         .filter(|record| record.sparse_mma.as_ref().unwrap().shape == SparseMmaShape::M16n8k128)
         .count();
-    assert_eq!((records.len(), k32, k64, k128), (126, 19, 86, 16));
+    assert_eq!((records.len(), k32, k64, k128), (134, 22, 86, 16));
     let standard_k64 = records
         .iter()
         .copied()
@@ -1049,7 +1049,7 @@ fn sparse_mma_rendering_enforces_selector_and_keeps_family_distinct() {
     }
 
     let compatibility = render_compat_sparse_mma(&catalog, "test-hash");
-    assert_eq!(compatibility.matches("pub unsafe fn ").count(), 126);
+    assert_eq!(compatibility.matches("pub unsafe fn ").count(), 134);
     assert!(
         compatibility
             .contains("c: [i32; 4], a: [u32; 2], b: [u32; 2], metadata: u32, selector: u32")
@@ -1150,7 +1150,7 @@ fn sparse_mma_rendering_enforces_selector_and_keeps_family_distinct() {
     assert!(targets.contains("GeneratedSparseMmaOverflow::NotApplicable"));
     assert!(targets.contains("GeneratedHardwareAlternative::ExactArchitecture(120)"));
 
-    assert_eq!(raw.matches(SPARSE_MMA_STANDARD_METADATA_RULE).count(), 32);
+    assert_eq!(raw.matches(SPARSE_MMA_STANDARD_METADATA_RULE).count(), 34);
     assert_eq!(raw.matches(SPARSE_MMA_ORDERED_METADATA_RULE).count(), 92);
     assert_eq!(
         raw.matches(SPARSE_MMA_ORDERED_TF32_METADATA_RULE).count(),
@@ -1160,7 +1160,7 @@ fn sparse_mma_rendering_enforces_selector_and_keeps_family_distinct() {
         compatibility
             .matches(SPARSE_MMA_STANDARD_METADATA_RULE)
             .count(),
-        32
+        34
     );
     assert_eq!(
         compatibility
@@ -1224,7 +1224,7 @@ fn sparse_mma_rendering_enforces_selector_and_keeps_family_distinct() {
     assert!(reference.contains("LLVM source record uses A, B, C, metadata, selector order"));
     assert_eq!(
         reference.matches(SPARSE_MMA_STANDARD_METADATA_RULE).count(),
-        32
+        34
     );
     assert_eq!(
         reference.matches(SPARSE_MMA_ORDERED_METADATA_RULE).count(),

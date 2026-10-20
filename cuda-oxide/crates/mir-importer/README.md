@@ -151,6 +151,16 @@ The pipeline inspects which intrinsics the code uses and selects a target:
 
 Override with `CUDA_OXIDE_TARGET=<target>`.
 
+From `cuda-oxide/`, run the source-to-NVVM-IR cluster-query regression with:
+
+```sh
+cargo test -p mir-importer cluster_query_lowering_preserves_target_selection_and_raw_floors
+```
+
+It checks pre-sm90 compatibility lowering, conditional device-hint pinning,
+and the raw intrinsic target floor using the pinned Rust toolchain. It requires
+neither a GPU nor CUDA compiler tools.
+
 ## Public API
 
 ### Types

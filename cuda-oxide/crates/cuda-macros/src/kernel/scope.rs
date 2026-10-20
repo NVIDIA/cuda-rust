@@ -584,13 +584,18 @@ pub(crate) fn is_kernel_configuration_marker(statement: &Stmt) -> bool {
         || segments[0].ident != "cuda_device"
         || !matches!(segments[0].arguments, PathArguments::None)
         || !matches!(segments[1].arguments, PathArguments::None)
-        || !matches!(segments[2].arguments, PathArguments::AngleBracketed(_))
     {
         return false;
     }
 
     let module = &segments[1].ident;
     let marker = &segments[2].ident;
+    if module == "shared" && marker == "__dynamic_shared_inferred" {
+        return !unsafe_wrapped && matches!(segments[2].arguments, PathArguments::None);
+    }
+    if !matches!(segments[2].arguments, PathArguments::AngleBracketed(_)) {
+        return false;
+    }
     if unsafe_wrapped {
         module == "thread"
             && (marker == "__launch_contract_config" || marker == "__grid_constant_config")

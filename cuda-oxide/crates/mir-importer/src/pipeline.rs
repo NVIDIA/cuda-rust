@@ -181,6 +181,8 @@ pub struct CompilationResult {
     pub allow_fma_contraction: bool,
     /// Per-kernel source launch bounds preserved for post-link diagnostics.
     pub kernel_launch_bounds: BTreeMap<String, KernelLaunchBounds>,
+    /// Finalized resource requirements, keyed by concrete exported kernel name.
+    pub kernel_launch_facts: BTreeMap<String, oxide_artifacts::KernelLaunchFacts>,
 }
 
 /// Configuration for the compilation pipeline.
@@ -588,6 +590,19 @@ pub fn run_pipeline(
         append_to_module(&ctx, module_op_ptr, func_op_ptr);
     }
 
+    // Facts need the same helper alignment as lowering. This max-only call-graph
+    // propagation is idempotent; lowering also runs it for its other callers.
+    mir_lower::propagate_kernel_dynamic_shared_alignments(&mut ctx, module_op_ptr);
+    let kernel_launch_facts = crate::kernel_resources::collect(
+        &ctx,
+        module_op_ptr,
+        functions
+            .iter()
+            .filter(|function| function.is_kernel)
+            .map(|function| function.export_name.clone()),
+    )
+    .map_err(PipelineError::Translation)?;
+
     let ll_path = config.output_dir.join(format!("{}.ll", config.output_name));
     let ptx_path = config
         .output_dir
@@ -634,6 +649,7 @@ pub fn run_pipeline(
                 target: generated.target,
                 allow_fma_contraction: config.allow_fma_contraction,
                 kernel_launch_bounds,
+                kernel_launch_facts,
             })
         }
         ModuleArtifactKind::Ptx => Ok(CompilationResult {
@@ -644,6 +660,7 @@ pub fn run_pipeline(
             target: generated.target,
             allow_fma_contraction: config.allow_fma_contraction,
             kernel_launch_bounds,
+            kernel_launch_facts,
         }),
     }
 }

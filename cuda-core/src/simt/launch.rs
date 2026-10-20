@@ -64,6 +64,9 @@ mod sealed {
 pub trait KernelLaunchConfig: sealed::Sealed + Copy {
     #[doc(hidden)]
     fn __raw(self) -> LaunchConfig;
+
+    #[doc(hidden)]
+    fn __auto_shared(self) -> bool;
 }
 
 /// A one-dimensional launch configuration.
@@ -73,10 +76,20 @@ pub trait KernelLaunchConfig: sealed::Sealed + Copy {
 pub struct LaunchConfig1D {
     grid_x: u32,
     block_x: u32,
-    shared_mem_bytes: u32,
+    shared_mem_bytes: Option<u32>,
 }
 
 impl LaunchConfig1D {
+    /// Uses the kernel's prepared resource requirement for dynamic shared memory.
+    /// A range contract selects its minimum, raised by compiled facts if present.
+    pub const fn auto_shared(grid_x: u32, block_x: u32) -> Self {
+        Self {
+            grid_x,
+            block_x,
+            shared_mem_bytes: None,
+        }
+    }
+
     /// Creates a one-dimensional launch configuration.
     ///
     /// Zero dimensions are reported when the configuration is prepared for a
@@ -85,7 +98,7 @@ impl LaunchConfig1D {
         Self {
             grid_x,
             block_x,
-            shared_mem_bytes,
+            shared_mem_bytes: Some(shared_mem_bytes),
         }
     }
 }
@@ -93,11 +106,15 @@ impl LaunchConfig1D {
 impl sealed::Sealed for LaunchConfig1D {}
 
 impl KernelLaunchConfig for LaunchConfig1D {
+    fn __auto_shared(self) -> bool {
+        self.shared_mem_bytes.is_none()
+    }
+
     fn __raw(self) -> LaunchConfig {
         LaunchConfig {
             grid_dim: (self.grid_x, 1, 1),
             block_dim: (self.block_x, 1, 1),
-            shared_mem_bytes: self.shared_mem_bytes,
+            shared_mem_bytes: self.shared_mem_bytes.unwrap_or(0),
         }
     }
 }
@@ -109,16 +126,26 @@ impl KernelLaunchConfig for LaunchConfig1D {
 pub struct LaunchConfig2D {
     grid: (u32, u32),
     block: (u32, u32),
-    shared_mem_bytes: u32,
+    shared_mem_bytes: Option<u32>,
 }
 
 impl LaunchConfig2D {
+    /// Uses the kernel's prepared resource requirement for dynamic shared memory.
+    /// A range contract selects its minimum, raised by compiled facts if present.
+    pub const fn auto_shared(grid: (u32, u32), block: (u32, u32)) -> Self {
+        Self {
+            grid,
+            block,
+            shared_mem_bytes: None,
+        }
+    }
+
     /// Creates a two-dimensional launch configuration.
     pub const fn new(grid: (u32, u32), block: (u32, u32), shared_mem_bytes: u32) -> Self {
         Self {
             grid,
             block,
-            shared_mem_bytes,
+            shared_mem_bytes: Some(shared_mem_bytes),
         }
     }
 }
@@ -126,11 +153,15 @@ impl LaunchConfig2D {
 impl sealed::Sealed for LaunchConfig2D {}
 
 impl KernelLaunchConfig for LaunchConfig2D {
+    fn __auto_shared(self) -> bool {
+        self.shared_mem_bytes.is_none()
+    }
+
     fn __raw(self) -> LaunchConfig {
         LaunchConfig {
             grid_dim: (self.grid.0, self.grid.1, 1),
             block_dim: (self.block.0, self.block.1, 1),
-            shared_mem_bytes: self.shared_mem_bytes,
+            shared_mem_bytes: self.shared_mem_bytes.unwrap_or(0),
         }
     }
 }
@@ -140,16 +171,26 @@ impl KernelLaunchConfig for LaunchConfig2D {
 pub struct LaunchConfig3D {
     grid: (u32, u32, u32),
     block: (u32, u32, u32),
-    shared_mem_bytes: u32,
+    shared_mem_bytes: Option<u32>,
 }
 
 impl LaunchConfig3D {
+    /// Uses the kernel's prepared resource requirement for dynamic shared memory.
+    /// A range contract selects its minimum, raised by compiled facts if present.
+    pub const fn auto_shared(grid: (u32, u32, u32), block: (u32, u32, u32)) -> Self {
+        Self {
+            grid,
+            block,
+            shared_mem_bytes: None,
+        }
+    }
+
     /// Creates a three-dimensional launch configuration.
     pub const fn new(grid: (u32, u32, u32), block: (u32, u32, u32), shared_mem_bytes: u32) -> Self {
         Self {
             grid,
             block,
-            shared_mem_bytes,
+            shared_mem_bytes: Some(shared_mem_bytes),
         }
     }
 }
@@ -157,11 +198,15 @@ impl LaunchConfig3D {
 impl sealed::Sealed for LaunchConfig3D {}
 
 impl KernelLaunchConfig for LaunchConfig3D {
+    fn __auto_shared(self) -> bool {
+        self.shared_mem_bytes.is_none()
+    }
+
     fn __raw(self) -> LaunchConfig {
         LaunchConfig {
             grid_dim: self.grid,
             block_dim: self.block,
-            shared_mem_bytes: self.shared_mem_bytes,
+            shared_mem_bytes: self.shared_mem_bytes.unwrap_or(0),
         }
     }
 }
@@ -188,6 +233,9 @@ pub enum BlockRequirement {
 /// The dynamic shared-memory sizes accepted by a kernel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DynamicSharedMemoryRequirement {
+    /// Use the finalized allocation and alignment from this concrete kernel's
+    /// compiled artifact. Preparation fails when those facts are absent.
+    Inferred,
     /// The launch must allocate exactly `bytes` bytes.
     Exact {
         /// Required bytes per block.
@@ -428,6 +476,11 @@ pub enum LaunchContractError {
         block: u32,
         /// Number of coordinate values required on this axis.
         positions: u64,
+    },
+    /// An inferred contract was loaded without compiled resource facts.
+    MissingCompiledLaunchFacts {
+        /// Kernel being prepared.
+        kernel: &'static str,
     },
     /// A shared-memory alignment was not a nonzero power of two.
     InvalidSharedMemoryAlignment {
@@ -671,6 +724,8 @@ impl Display for LaunchContractError {
                 f,
                 "{kernel}: Grid.{axis:?} {grid} * Block.{axis:?} {block} requires {positions} coordinates, exceeding the u32 range"
             ),
+            Self::MissingCompiledLaunchFacts { kernel } => write!(f,
+                "{kernel}: compiled launch facts are missing; rebuild this kernel with the CUDA compiler"),
             Self::InvalidSharedMemoryAlignment { kernel, alignment } => write!(
                 f,
                 "{kernel}: dynamic shared-memory alignment {alignment} is not a nonzero power of two"
@@ -893,15 +948,25 @@ impl<C: KernelLaunchContract> PreparedLaunch<C> {
     ///
     /// `C::SPEC` must truthfully describe the compiled device function,
     /// including its rank, fixed block assumptions, shared-memory layout, and
-    /// launch mode. cuda-oxide's macros generate that marker and uphold this
-    /// relationship.
+    /// launch mode. Any `function.launch_facts()` must truthfully describe this
+    /// exact loaded image and entry; inferred contracts obtain their allocation
+    /// from those facts. cuda-oxide's macros and matching artifact loader uphold
+    /// this relationship.
     #[doc(hidden)]
     pub unsafe fn __prepare(
         function: CudaFunction,
         config: C::Config,
     ) -> Result<Self, LaunchContractError> {
-        let raw = config.__raw();
-        validate_static(C::SPEC, raw)?;
+        let spec = resolve_compiled_spec(C::SPEC, function.launch_facts())?;
+        let mut raw = config.__raw();
+        if config.__auto_shared() {
+            raw.shared_mem_bytes = match spec.dynamic_shared_memory {
+                DynamicSharedMemoryRequirement::Exact { bytes, .. } => bytes,
+                DynamicSharedMemoryRequirement::Range { min_bytes, .. } => min_bytes,
+                DynamicSharedMemoryRequirement::Inferred => unreachable!("resolved above"),
+            };
+        }
+        validate_static(spec, raw)?;
 
         let context = function.context();
         let limits = context.launch_limits()?;
@@ -909,17 +974,17 @@ impl<C: KernelLaunchContract> PreparedLaunch<C> {
         let static_shared = function.static_shared_memory_bytes()?;
         let function_max_dynamic = function.max_dynamic_shared_memory_bytes()?;
 
-        validate_live_shape(C::SPEC, raw, limits, function_max_threads)?;
+        validate_live_shape(spec, raw, limits, function_max_threads)?;
 
         // Configure the immutable contract maximum, not this particular
         // launch's chosen size. Concurrent preparations of two range values
         // therefore write the same function attribute and cannot lower the
         // maximum underneath an already prepared launch.
-        let contract_dynamic_max = dynamic_shared_memory_max(C::SPEC.dynamic_shared_memory);
+        let contract_dynamic_max = dynamic_shared_memory_max(spec.dynamic_shared_memory);
         let total_shared =
-            shared_memory_total(C::SPEC.kernel_name, static_shared, contract_dynamic_max)?;
+            shared_memory_total(spec.kernel_name, static_shared, contract_dynamic_max)?;
         if validate_shared_memory_limit(
-            C::SPEC.kernel_name,
+            spec.kernel_name,
             total_shared,
             limits.max_shared_memory_per_block,
             false,
@@ -927,10 +992,10 @@ impl<C: KernelLaunchContract> PreparedLaunch<C> {
         .is_err()
         {
             let opt_in_max = context.max_opt_in_shared_memory_per_block()?;
-            validate_shared_memory_limit(C::SPEC.kernel_name, total_shared, opt_in_max, true)?;
+            validate_shared_memory_limit(spec.kernel_name, total_shared, opt_in_max, true)?;
         }
 
-        if let Some(required) = C::SPEC.min_compute_capability {
+        if let Some(required) = spec.min_compute_capability {
             let (major, minor) = context.compute_capability()?;
             let actual = (
                 u32::try_from(major).map_err(|_| {
@@ -940,23 +1005,20 @@ impl<C: KernelLaunchContract> PreparedLaunch<C> {
                     DriverError(cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE)
                 })?,
             );
-            validate_compute_capability(C::SPEC.kernel_name, required, actual)?;
+            validate_compute_capability(spec.kernel_name, required, actual)?;
         }
 
-        if let Some(cluster) = C::SPEC.cluster {
-            validate_cluster_support(C::SPEC.kernel_name, context.supports_cluster_launch()?)?;
+        if let Some(cluster) = spec.cluster {
+            validate_cluster_support(spec.kernel_name, context.supports_cluster_launch()?)?;
             validate_required_cluster(
-                C::SPEC.kernel_name,
+                spec.kernel_name,
                 cluster,
                 function.required_cluster_dimensions()?,
             )?;
         }
 
-        if C::SPEC.cooperative {
-            validate_cooperative_support(
-                C::SPEC.kernel_name,
-                context.supports_cooperative_launch()?,
-            )?;
+        if spec.cooperative {
+            validate_cooperative_support(spec.kernel_name, context.supports_cooperative_launch()?)?;
         }
 
         // Perform the only persistent function mutation after all checks that
@@ -973,15 +1035,15 @@ impl<C: KernelLaunchContract> PreparedLaunch<C> {
         // `cuOccupancyMaxActiveClusters`.
         let mut clustered_resident_blocks: Option<u64> = None;
 
-        if let Some(cluster) = C::SPEC.cluster {
+        if let Some(cluster) = spec.cluster {
             let max_cluster_size = function.max_potential_cluster_size(
                 raw.grid_dim,
                 raw.block_dim,
                 raw.shared_mem_bytes,
             )?;
             let cluster_blocks =
-                shape_product(C::SPEC.kernel_name, LaunchDimension::Cluster, cluster)?;
-            validate_cluster_size(C::SPEC.kernel_name, cluster_blocks, max_cluster_size)?;
+                shape_product(spec.kernel_name, LaunchDimension::Cluster, cluster)?;
+            validate_cluster_size(spec.kernel_name, cluster_blocks, max_cluster_size)?;
 
             let active_clusters = match function.max_active_clusters(
                 raw.grid_dim,
@@ -994,13 +1056,13 @@ impl<C: KernelLaunchContract> PreparedLaunch<C> {
                     if error.0 == cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_CLUSTER_SIZE =>
                 {
                     return Err(LaunchContractError::ClusterShapeUnsupported {
-                        kernel: C::SPEC.kernel_name,
+                        kernel: spec.kernel_name,
                         cluster,
                     });
                 }
                 Err(error) => return Err(error.into()),
             };
-            validate_cluster_residency(C::SPEC.kernel_name, cluster, active_clusters)?;
+            validate_cluster_residency(spec.kernel_name, cluster, active_clusters)?;
             // Deliberate error reuse: `active_clusters * cluster_blocks` is a
             // device-capacity product over the cluster dimension, and
             // `DimensionProductOverflow { Cluster }` is the closest existing
@@ -1012,19 +1074,19 @@ impl<C: KernelLaunchContract> PreparedLaunch<C> {
                 u64::from(active_clusters)
                     .checked_mul(cluster_blocks)
                     .ok_or(LaunchContractError::DimensionProductOverflow {
-                        kernel: C::SPEC.kernel_name,
+                        kernel: spec.kernel_name,
                         dimension: LaunchDimension::Cluster,
                     })?,
             );
         }
 
-        if C::SPEC.cooperative {
-            let blocks = shape_product(C::SPEC.kernel_name, LaunchDimension::Grid, raw.grid_dim)?;
+        if spec.cooperative {
+            let blocks = shape_product(spec.kernel_name, LaunchDimension::Grid, raw.grid_dim)?;
             let resident_capacity = if let Some(capacity) = clustered_resident_blocks {
                 capacity
             } else {
                 let block_threads =
-                    shape_product(C::SPEC.kernel_name, LaunchDimension::Block, raw.block_dim)?;
+                    shape_product(spec.kernel_name, LaunchDimension::Block, raw.block_dim)?;
                 let active_per_sm = function.max_active_blocks_per_multiprocessor(
                     block_threads as u32,
                     raw.shared_mem_bytes,
@@ -1032,7 +1094,7 @@ impl<C: KernelLaunchContract> PreparedLaunch<C> {
                 let multiprocessors = context.multiprocessor_count()?;
                 u64::from(active_per_sm) * u64::from(multiprocessors)
             };
-            validate_cooperative_residency(C::SPEC.kernel_name, blocks, resident_capacity)?;
+            validate_cooperative_residency(spec.kernel_name, blocks, resident_capacity)?;
         }
 
         Ok(Self {
@@ -1070,6 +1132,85 @@ impl<C: KernelLaunchContract> PreparedLaunch<C> {
             })
         }
     }
+}
+
+fn resolve_compiled_spec(
+    mut spec: LaunchContractSpec,
+    facts: Option<oxide_artifacts::KernelLaunchFacts>,
+) -> Result<LaunchContractSpec, LaunchContractError> {
+    let Some(facts) = facts else {
+        return if spec.dynamic_shared_memory == DynamicSharedMemoryRequirement::Inferred {
+            Err(LaunchContractError::MissingCompiledLaunchFacts {
+                kernel: spec.kernel_name,
+            })
+        } else {
+            Ok(spec)
+        };
+    };
+    if let Some(required) = facts.exact_block {
+        match spec.block {
+            BlockRequirement::Exact(declared) if declared != required => {
+                return Err(LaunchContractError::BlockShapeMismatch {
+                    kernel: spec.kernel_name,
+                    required,
+                    actual: declared,
+                });
+            }
+            BlockRequirement::MaxThreads(max) => {
+                let actual = shape_product(spec.kernel_name, LaunchDimension::Block, required)?;
+                if actual > u64::from(max) {
+                    return Err(LaunchContractError::BlockThreadsExceedContract {
+                        kernel: spec.kernel_name,
+                        actual,
+                        max,
+                    });
+                }
+            }
+            _ => {}
+        }
+        spec.block = BlockRequirement::Exact(required);
+    }
+    spec.dynamic_shared_memory = match spec.dynamic_shared_memory {
+        DynamicSharedMemoryRequirement::Inferred => DynamicSharedMemoryRequirement::Exact {
+            bytes: facts.dynamic_shared_bytes,
+            min_alignment: facts.dynamic_shared_alignment,
+        },
+        DynamicSharedMemoryRequirement::Exact {
+            bytes,
+            min_alignment,
+        } => {
+            if bytes < facts.dynamic_shared_bytes {
+                return Err(LaunchContractError::DynamicSharedMemoryExactMismatch {
+                    kernel: spec.kernel_name,
+                    required: facts.dynamic_shared_bytes,
+                    actual: bytes,
+                });
+            }
+            DynamicSharedMemoryRequirement::Exact {
+                bytes,
+                min_alignment: min_alignment.max(facts.dynamic_shared_alignment),
+            }
+        }
+        DynamicSharedMemoryRequirement::Range {
+            min_bytes,
+            max_bytes,
+            min_alignment,
+        } => {
+            if max_bytes < facts.dynamic_shared_bytes {
+                return Err(LaunchContractError::DynamicSharedMemoryExactMismatch {
+                    kernel: spec.kernel_name,
+                    required: facts.dynamic_shared_bytes,
+                    actual: max_bytes,
+                });
+            }
+            DynamicSharedMemoryRequirement::Range {
+                min_bytes: min_bytes.max(facts.dynamic_shared_bytes),
+                max_bytes,
+                min_alignment: min_alignment.max(facts.dynamic_shared_alignment),
+            }
+        }
+    };
+    Ok(spec)
 }
 
 fn validate_static(
@@ -1111,6 +1252,11 @@ fn validate_static(
     }
 
     match spec.dynamic_shared_memory {
+        DynamicSharedMemoryRequirement::Inferred => {
+            return Err(LaunchContractError::MissingCompiledLaunchFacts {
+                kernel: spec.kernel_name,
+            })
+        }
         DynamicSharedMemoryRequirement::Exact {
             bytes,
             min_alignment,
@@ -1250,6 +1396,9 @@ fn shared_memory_total(
 
 const fn dynamic_shared_memory_max(requirement: DynamicSharedMemoryRequirement) -> u32 {
     match requirement {
+        DynamicSharedMemoryRequirement::Inferred => {
+            panic!("inferred requirements must be resolved before validation")
+        }
         DynamicSharedMemoryRequirement::Exact { bytes, .. } => bytes,
         DynamicSharedMemoryRequirement::Range { max_bytes, .. } => max_bytes,
     }
@@ -1480,6 +1629,120 @@ mod tests {
             max_grid_dim: (u32::MAX, 65_535, 65_535),
             max_shared_memory_per_block: 48 * 1024,
         }
+    }
+
+    #[test]
+    fn compiled_facts_resolve_inference_and_enforce_shape_and_size() {
+        let source = LaunchContractSpec::new(
+            "fixed",
+            BlockRequirement::MaxThreads(32),
+            DynamicSharedMemoryRequirement::Inferred,
+        );
+        assert!(matches!(
+            resolve_compiled_spec(source, None),
+            Err(LaunchContractError::MissingCompiledLaunchFacts { .. })
+        ));
+        let facts = oxide_artifacts::KernelLaunchFacts {
+            exact_block: Some((8, 4, 1)),
+            dynamic_shared_bytes: 512,
+            dynamic_shared_alignment: 64,
+        };
+        let effective = resolve_compiled_spec(source, Some(facts)).unwrap();
+        let config = LaunchConfig {
+            grid_dim: (1, 1, 1),
+            block_dim: (8, 4, 1),
+            shared_mem_bytes: 512,
+        };
+        assert!(validate_static(effective, config).is_ok());
+        assert!(matches!(
+            validate_static(
+                effective,
+                LaunchConfig {
+                    block_dim: (32, 1, 1),
+                    ..config
+                }
+            ),
+            Err(LaunchContractError::BlockShapeMismatch { .. })
+        ));
+        assert!(matches!(
+            validate_static(
+                effective,
+                LaunchConfig {
+                    shared_mem_bytes: 511,
+                    ..config
+                }
+            ),
+            Err(LaunchContractError::DynamicSharedMemoryExactMismatch { .. })
+        ));
+        let empty = resolve_compiled_spec(
+            source,
+            Some(oxide_artifacts::KernelLaunchFacts {
+                dynamic_shared_bytes: 0,
+                ..facts
+            }),
+        )
+        .unwrap();
+        assert!(validate_static(
+            empty,
+            LaunchConfig {
+                shared_mem_bytes: 0,
+                ..config
+            }
+        )
+        .is_ok());
+        assert!(LaunchConfig2D::auto_shared((1, 1), (8, 4)).__auto_shared());
+        assert!(!LaunchConfig2D::new((1, 1), (8, 4), 0).__auto_shared());
+    }
+
+    #[test]
+    fn compiled_facts_strengthen_explicit_contracts() {
+        let facts = oxide_artifacts::KernelLaunchFacts {
+            exact_block: Some((8, 4, 1)),
+            dynamic_shared_bytes: 128,
+            dynamic_shared_alignment: 64,
+        };
+        let resolve = |block, memory| {
+            resolve_compiled_spec(LaunchContractSpec::new("fixed", block, memory), Some(facts))
+        };
+        let block = BlockRequirement::MaxThreads(32);
+        let exact = |bytes| DynamicSharedMemoryRequirement::Exact {
+            bytes,
+            min_alignment: 16,
+        };
+        for bytes in [0, 127] {
+            assert!(matches!(
+                resolve(block, exact(bytes)),
+                Err(LaunchContractError::DynamicSharedMemoryExactMismatch { .. })
+            ));
+        }
+        assert_eq!(
+            resolve(block, exact(256)).unwrap().dynamic_shared_memory,
+            DynamicSharedMemoryRequirement::Exact {
+                bytes: 256,
+                min_alignment: 64,
+            }
+        );
+        let range = |max_bytes| DynamicSharedMemoryRequirement::Range {
+            min_bytes: 32,
+            max_bytes,
+            min_alignment: 16,
+        };
+        assert!(matches!(
+            resolve(block, range(127)),
+            Err(LaunchContractError::DynamicSharedMemoryExactMismatch { .. })
+        ));
+        assert_eq!(
+            resolve(block, range(256)).unwrap().dynamic_shared_memory,
+            DynamicSharedMemoryRequirement::Range {
+                min_bytes: 128,
+                max_bytes: 256,
+                min_alignment: 64,
+            }
+        );
+        assert!(matches!(
+            resolve(BlockRequirement::MaxThreads(16), exact(128)),
+            Err(LaunchContractError::BlockThreadsExceedContract { .. })
+        ));
     }
 
     #[test]

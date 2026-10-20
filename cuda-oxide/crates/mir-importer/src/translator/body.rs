@@ -527,6 +527,27 @@ fn detect_dynamic_shared_alignment(
     None
 }
 
+fn has_inferred_dynamic_shared(
+    body: &mir::Body,
+    reachable: &std::collections::BTreeSet<usize>,
+) -> bool {
+    reachable.iter().any(|&index| {
+        let mir::TerminatorKind::Call {
+            func: mir::Operand::Constant(constant),
+            ..
+        } = &body.blocks[index].terminator.kind
+        else {
+            return false;
+        };
+        let TyKind::RigidTy(RigidTy::FnDef(def_id, _)) = constant.const_.ty().kind() else {
+            return false;
+        };
+        def_id.krate().name.as_str() == "cuda_device"
+            && (def_id.name() == "__dynamic_shared_inferred"
+                || def_id.name().ends_with("::__dynamic_shared_inferred"))
+    })
+}
+
 /// Return the non-unwind successors of a block's terminator.
 ///
 /// [`mir::Terminator::successors`] includes unwind cleanup blocks alongside
@@ -2345,6 +2366,22 @@ pub fn translate_body(
                 );
             }
         }
+    }
+
+    if has_inferred_dynamic_shared(body, &reachable) {
+        use pliron::builtin::{
+            attributes::IntegerAttr,
+            types::{IntegerType, Signedness},
+        };
+        use pliron::utils::apint::APInt;
+        let ty = IntegerType::get(ctx, 32, Signedness::Unsigned);
+        mir_func_op.get_operation().deref_mut(ctx).attributes.set(
+            crate::kernel_resources::INFERRED_SHARED.try_into().unwrap(),
+            IntegerAttr::new(
+                ty,
+                APInt::from_u32(1, std::num::NonZeroUsize::new(32).unwrap()),
+            ),
+        );
     }
 
     // Attribute macros may run before `#[kernel]`. Generic expansion forwards

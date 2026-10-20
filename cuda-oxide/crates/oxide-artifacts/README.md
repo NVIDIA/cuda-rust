@@ -56,7 +56,7 @@ Artifact Blob
  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  |       Payload Count           |        Entry Count            |
  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |        Compile Options (v2) / Reserved Zero (v1)              |
+ |        Compile Options (v2/v3) / Reserved Zero (v1)              |
  |                                                               |
  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  |                         Bundle Name ...                      /
@@ -74,14 +74,14 @@ Artifact Blob
 
 Header size is currently 32 bytes. The final field occupies bytes 24 through
 31 (the half-open range `[24, 32)`) and is a 64-bit compile-options bitset in
-version 2. Bit 0 disables FMA contraction; unknown option bits are rejected.
+versions 2 and 3. Bit 0 disables FMA contraction; unknown option bits are rejected.
 Version-1 bundles define the same bytes as reserved zero and use the historical
 default policy, where FMA contraction is allowed.
 
-Version 2 is the latest supported format. For backward compatibility, the
-writer still emits version 1 when the compile-options bitset is zero. It emits
-version 2 only when a bundle carries a non-default compile policy, ensuring
-that an older reader rejects policy it would otherwise silently ignore.
+Version 3 carries finalized kernel launch facts. Bundles without launch facts
+retain their existing encoding: version 1 for default compile policy and version
+2 for non-default compile policy. A reader that does not support version 3
+rejects those bundles before loading code with unknown launch requirements.
 
 ```text
 Payload Record (24 bytes)
@@ -111,7 +111,7 @@ Payload kind values:
 - `0x0200`: cubin
 
 ```text
-Entry Record (24 bytes)
+Entry Record (24 bytes in v1/v2; 48 bytes in v3)
 
   0                   1                   2                   3
   0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -135,8 +135,31 @@ Entry kind values:
 - `2`: device function
 
 If bit 0 of `Flags` is set, `Metadata` is present and interpreted by the
-consumer for that entry kind. No metadata interpretation is currently required
-for PTX kernel loading.
+consumer for that entry kind. This opaque metadata is independent of typed
+launch facts.
+
+Version 3 adds the following fields to every entry record:
+
+| Byte offset | Field | Type |
+| --- | --- | --- |
+| 24 | Exact block X | u32 |
+| 28 | Exact block Y | u32 |
+| 32 | Exact block Z | u32 |
+| 36 | Finalized dynamic shared-memory bytes per block | u32 |
+| 40 | Dynamic shared-memory alignment | u32 |
+| 44 | Reserved zero | u32 |
+
+Flag bit 1 indicates that launch facts are present; bit 2 indicates an exact
+block shape and requires bit 1. Facts are valid only for kernel entries. Exact
+block dimensions must be nonzero and alignment must be a nonzero power of two.
+Unknown version-3 entry flags are rejected. Absent fields are written as zero.
+
+Each record describes its concrete entry symbol, including separate generic
+monomorphizations. A zero-byte allocation is distinct from absent facts. The
+byte count excludes static shared memory and driver-reserved memory. The
+producer supplies a finalized allocation and a matching generated alignment;
+the container validates their representation but does not derive requirements
+from device code or prove that the producer's claims are true.
 
 ## Object Storage
 
@@ -154,11 +177,11 @@ cubin from embedded NVVM IR/LTOIR before loading.
 
 ## Constraints
 
-- The latest supported format version is `2`; default-policy bundles are still
-  emitted as version `1` for backward compatibility.
+- The latest supported format version is `3`; bundles without launch facts
+  retain their version `1` or `2` encoding.
 - All numeric fields are little-endian.
 - The blob header is fixed at 32 bytes.
-- Payload and entry records are fixed at 24 bytes each.
+- Payload records are 24 bytes; entry records are 24 bytes in v1/v2 and 48 in v3.
 - String and payload offsets are 32-bit, so a single blob must fit in `u32::MAX`
   bytes.
 - String lengths and record counts are 16-bit.

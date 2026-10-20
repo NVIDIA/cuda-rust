@@ -1,0 +1,17 @@
+[package]
+name = "compiled_launch_facts"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace]
+
+[features]
+generic = []
+invalid-raw = []
+
+[dependencies]
+cuda-device = { path = "../../../cuda-device" }
+cuda-host = { path = "../../../cuda-host", features = ["async"] }
+cuda-core = { path = "../../../../../cuda-core" }
+cuda-async = { path = "../../../../../cuda-async" }

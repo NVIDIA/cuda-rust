@@ -178,8 +178,11 @@ fn validate_resource<'tcx>(tcx: TyCtxt<'tcx>, call: &LibraryCall<'tcx>) -> Resul
     } else {
         let (element, capacity) = collective_carrier(tcx, *inner)
             .ok_or("resource witness requires DisjointSlice<T, CollectiveTiles<C>>")?;
-        if capacity == 0 || (write && *mutability != rustc_hir::Mutability::Mut) {
-            return Err("resource writes require a mutable carrier with positive capacity".into());
+        if capacity == 0 {
+            return Err("resource carriers require positive capacity".into());
+        }
+        if write && *mutability != rustc_hir::Mutability::Mut {
+            return Err("resource writes require a mutable carrier witness".into());
         }
         element
     };

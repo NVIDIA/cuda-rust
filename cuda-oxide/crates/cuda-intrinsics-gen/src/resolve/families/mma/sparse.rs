@@ -6,11 +6,11 @@
 use crate::model::{
     BackendLoweringMechanism, ImportedIntrinsic, IntrinsicBackend, OverlayBackendLowering,
     OverlayIntrinsic, RuntimeValidation, SparseMma, SparseMmaAccumulator, SparseMmaAdapter,
-    SparseMmaCompatibilitySource, SparseMmaElement, SparseMmaF8F6F4Admission,
-    SparseMmaF8F6F4F16Admission, SparseMmaFp8F32Admission, SparseMmaIntegerAdmission,
-    SparseMmaLayout, SparseMmaLlvmAdapter, SparseMmaMetadata, SparseMmaOrderedAmpereFloatAdmission,
-    SparseMmaOrderedAmpereFloatVariant, SparseMmaOverflow, SparseMmaParticipation,
-    SparseMmaSelector, SparseMmaShape,
+    SparseMmaAmpereFloatAdmission, SparseMmaAmpereFloatVariant, SparseMmaCompatibilitySource,
+    SparseMmaElement, SparseMmaF8F6F4Admission, SparseMmaF8F6F4F16Admission,
+    SparseMmaFp8F32Admission, SparseMmaIntegerAdmission, SparseMmaLayout, SparseMmaLlvmAdapter,
+    SparseMmaMetadata, SparseMmaOverflow, SparseMmaParticipation, SparseMmaSelector,
+    SparseMmaShape,
 };
 use crate::ptx::{InstructionPattern, OperandPattern};
 use anyhow::{Context, Result, ensure};
@@ -449,18 +449,35 @@ pub(in crate::resolve) fn sparse_mma_identity(mma: &SparseMma) -> SparseMmaIdent
             (SparseMmaAccumulator::F32, SparseMmaElement::Tf32) => "tf32",
             _ => unreachable!("closed Ampere float recipe rejects this combination"),
         };
+        let metadata_id_prefix = match mma.metadata {
+            SparseMmaMetadata::Standard => "",
+            SparseMmaMetadata::Ordered => "ordered_metadata_",
+        };
+        let metadata_symbol_prefix = match mma.metadata {
+            SparseMmaMetadata::Standard => "",
+            SparseMmaMetadata::Ordered => "ordered.metadata.",
+        };
+        let metadata_key = match mma.metadata {
+            SparseMmaMetadata::Standard => "standard_metadata",
+            SparseMmaMetadata::Ordered => "ordered_metadata",
+        };
         return SparseMmaIdentity {
-            id: format!("mma_sp_ordered_metadata_{shape}_{accumulator}_{a_element}"),
+            id: format!("mma_sp_{metadata_id_prefix}{shape}_{accumulator}_{a_element}"),
             operation_key: format!(
-                "matrix.mma.sp.{shape}.row.col.{accumulator}.{a_element}.{b_element}.{accumulator}.not_applicable.ordered_metadata"
+                "matrix.mma.sp.{shape}.row.col.{accumulator}.{a_element}.{b_element}.{accumulator}.not_applicable.{metadata_key}"
             ),
             source_record: format!(
-                "int_nvvm_mma_sp_ordered_metadata_{shape}_row_col_{}",
+                "int_nvvm_mma_sp_{metadata_id_prefix}{shape}_row_col_{}",
                 llvm_suffix.replace('.', "_")
             ),
-            llvm_symbol: format!("llvm.nvvm.mma.sp.ordered.metadata.{shape}.row.col.{llvm_suffix}"),
+            llvm_symbol: format!(
+                "llvm.nvvm.mma.sp.{metadata_symbol_prefix}{shape}.row.col.{llvm_suffix}"
+            ),
             ptx_modifiers: vec![
-                "sp::ordered_metadata",
+                match mma.metadata {
+                    SparseMmaMetadata::Standard => "sp",
+                    SparseMmaMetadata::Ordered => "sp::ordered_metadata",
+                },
                 "sync",
                 "aligned",
                 shape,
@@ -563,9 +580,9 @@ pub(in crate::resolve) fn sparse_mma_recipe(mma: &SparseMma) -> Option<SparseMma
         sparse_mma_carrier_recipe(mma.shape, mma.a_element, mma.b_element)?
     };
 
-    // The plain SM89 FP8 forms are the only F32-accumulator sparse family that
-    // admits standard (non-block-scale) sparsity metadata. Every other floating
-    // sparse family stays pinned to ordered metadata.
+    // Plain SM89 FP8 (standard metadata, no `kind::f8f6f4`) returns here.
+    // Ampere-float accepts both metadata modes below. `kind::f8f6f4` stays
+    // ordered-only.
     if is_sparse_mma_fp8_f32(mma) {
         let scalar_contract = mma.accumulator == SparseMmaAccumulator::F32
             && mma.overflow == SparseMmaOverflow::NotApplicable
@@ -590,9 +607,10 @@ pub(in crate::resolve) fn sparse_mma_recipe(mma: &SparseMma) -> Option<SparseMma
 
     let scalar_contract = match carrier.accumulator {
         SparseMmaAccumulator::F16 | SparseMmaAccumulator::F32 => {
+            let metadata_ok = ampere_float || mma.metadata == SparseMmaMetadata::Ordered;
             mma.accumulator == carrier.accumulator
                 && mma.overflow == SparseMmaOverflow::NotApplicable
-                && mma.metadata == SparseMmaMetadata::Ordered
+                && metadata_ok
         }
         SparseMmaAccumulator::S32 => {
             mma.accumulator == SparseMmaAccumulator::S32
@@ -627,11 +645,16 @@ pub(in crate::resolve) fn sparse_mma_minimum_ptx(mma: &SparseMma) -> &'static st
     if is_sparse_mma_fp8_f32(mma) {
         return "8.4";
     }
+    // Every standard Ampere-float import is PTX >= 7.1 and sm_80. Ordered
+    // forms keep the 8.5 spelling. The floor is the metadata axis, not a form.
     if matches!(
         mma.a_element,
         SparseMmaElement::F16 | SparseMmaElement::Bf16 | SparseMmaElement::Tf32
     ) {
-        return "8.5";
+        return match mma.metadata {
+            SparseMmaMetadata::Ordered => "8.5",
+            SparseMmaMetadata::Standard => "7.1",
+        };
     }
     if matches!(
         mma.accumulator,
@@ -669,63 +692,63 @@ pub(in crate::resolve) fn sparse_mma_ptx_section(_: SparseMmaMetadata) -> &'stat
     "9.7.15.6.3 Multiply-and-Accumulate Instruction: mma.sp"
 }
 
-// The eight reviewed forms in ledger order (i1017..i1024). The admission
-// must list exactly these, in this order, so ABI identity stays stable.
-pub(in crate::resolve) const SPARSE_MMA_ORDERED_AMPERE_FLOAT_VARIANTS:
-    [SparseMmaOrderedAmpereFloatVariant; 8] = [
-    SparseMmaOrderedAmpereFloatVariant {
+// The eight reviewed forms in ABI order. Ordered records bind ledger ids
+// i1018..=i1025. The admission must list exactly these, in this order, for
+// both metadata modes.
+pub(in crate::resolve) const SPARSE_MMA_AMPERE_FLOAT_VARIANTS: [SparseMmaAmpereFloatVariant; 8] = [
+    SparseMmaAmpereFloatVariant {
         shape: SparseMmaShape::M16n8k8,
         accumulator: SparseMmaAccumulator::F32,
         element: SparseMmaElement::Tf32,
     },
-    SparseMmaOrderedAmpereFloatVariant {
+    SparseMmaAmpereFloatVariant {
         shape: SparseMmaShape::M16n8k16,
         accumulator: SparseMmaAccumulator::F32,
         element: SparseMmaElement::Tf32,
     },
-    SparseMmaOrderedAmpereFloatVariant {
+    SparseMmaAmpereFloatVariant {
         shape: SparseMmaShape::M16n8k16,
         accumulator: SparseMmaAccumulator::F32,
         element: SparseMmaElement::Bf16,
     },
-    SparseMmaOrderedAmpereFloatVariant {
+    SparseMmaAmpereFloatVariant {
         shape: SparseMmaShape::M16n8k16,
         accumulator: SparseMmaAccumulator::F16,
         element: SparseMmaElement::F16,
     },
-    SparseMmaOrderedAmpereFloatVariant {
+    SparseMmaAmpereFloatVariant {
         shape: SparseMmaShape::M16n8k16,
         accumulator: SparseMmaAccumulator::F32,
         element: SparseMmaElement::F16,
     },
-    SparseMmaOrderedAmpereFloatVariant {
+    SparseMmaAmpereFloatVariant {
         shape: SparseMmaShape::M16n8k32,
         accumulator: SparseMmaAccumulator::F32,
         element: SparseMmaElement::Bf16,
     },
-    SparseMmaOrderedAmpereFloatVariant {
+    SparseMmaAmpereFloatVariant {
         shape: SparseMmaShape::M16n8k32,
         accumulator: SparseMmaAccumulator::F16,
         element: SparseMmaElement::F16,
     },
-    SparseMmaOrderedAmpereFloatVariant {
+    SparseMmaAmpereFloatVariant {
         shape: SparseMmaShape::M16n8k32,
         accumulator: SparseMmaAccumulator::F32,
         element: SparseMmaElement::F16,
     },
 ];
 
-pub(in crate::resolve) fn expand_sparse_mma_ordered_ampere_float_admission(
-    admission: &SparseMmaOrderedAmpereFloatAdmission,
+pub(in crate::resolve) fn expand_sparse_mma_ampere_float_admission(
+    admission: &SparseMmaAmpereFloatAdmission,
 ) -> Result<Vec<OverlayIntrinsic>> {
     ensure!(
         !admission.llvm_evidence_profile.trim().is_empty()
             && !admission.libnvvm_evidence_profile.trim().is_empty(),
-        "ordered Ampere floating sparse MMA admission requires both backend evidence profiles"
+        "Ampere floating sparse MMA admission requires both backend evidence profiles"
     );
     ensure!(
-        admission.variants == SPARSE_MMA_ORDERED_AMPERE_FLOAT_VARIANTS,
-        "ordered Ampere floating sparse MMA admission must retain the eight reviewed variants in ABI order"
+        admission.variants == SPARSE_MMA_AMPERE_FLOAT_VARIANTS,
+        "Ampere floating sparse MMA admission must retain the eight reviewed variants in ABI order"
     );
 
     admission
@@ -740,7 +763,7 @@ pub(in crate::resolve) fn expand_sparse_mma_ordered_ampere_float_admission(
                 a_layout: SparseMmaLayout::Row,
                 b_layout: SparseMmaLayout::Col,
                 overflow: SparseMmaOverflow::NotApplicable,
-                metadata: SparseMmaMetadata::Ordered,
+                metadata: admission.metadata,
                 selector: SparseMmaSelector::ImmediateZero,
                 participation:
                     SparseMmaParticipation::AllWarpLanesSameInstructionAndQualifiersNoExitedLanes,
@@ -750,29 +773,36 @@ pub(in crate::resolve) fn expand_sparse_mma_ordered_ampere_float_admission(
                 runtime_validation: admission.runtime_validation,
             };
             let carrier = sparse_mma_ampere_float_carrier_recipe(&mma).context(
-                "ordered Ampere floating sparse MMA admission uses an unsupported carrier",
+                "Ampere floating sparse MMA admission uses an unsupported carrier",
             )?;
             mma.selector = carrier.selector;
             mma.adapter = carrier.adapter;
             mma.llvm_adapter = carrier.llvm_adapter;
             let recipe = sparse_mma_recipe(&mma).context(
-                "ordered Ampere floating sparse MMA admission requests a variant outside the closed recipe set",
+                "Ampere floating sparse MMA admission requests a variant outside the closed recipe set",
             )?;
+            let element = sparse_mma_element_name(variant.element);
+            let accumulator = match variant.accumulator {
+                SparseMmaAccumulator::F16 => "packed f16",
+                SparseMmaAccumulator::F32 => "f32",
+                SparseMmaAccumulator::S32 => unreachable!(),
+            };
+            // Ordered wording stays byte-for-byte the admitted catalog sentence.
+            let summary = match admission.metadata {
+                SparseMmaMetadata::Ordered => format!(
+                    "Multiplies warp-distributed ordered sparse {element} A and B fragments and adds a {accumulator} accumulator."
+                ),
+                SparseMmaMetadata::Standard => format!(
+                    "Multiplies warp-distributed sparse {element} A and B fragments and adds a {accumulator} accumulator."
+                ),
+            };
             Ok(sparse_mma_overlay_record(
                 String::new(),
                 mma,
                 recipe,
                 &admission.llvm_evidence_profile,
                 &admission.libnvvm_evidence_profile,
-                format!(
-                    "Multiplies warp-distributed ordered sparse {} A and B fragments and adds a {} accumulator.",
-                    sparse_mma_element_name(variant.element),
-                    match variant.accumulator {
-                        SparseMmaAccumulator::F16 => "packed f16",
-                        SparseMmaAccumulator::F32 => "f32",
-                        SparseMmaAccumulator::S32 => unreachable!(),
-                    },
-                ),
+                summary,
             ))
         })
         .collect()
@@ -1298,11 +1328,14 @@ pub(in crate::resolve) fn validate_sparse_mma_policy(
                 mma.a_element,
                 SparseMmaElement::F16 | SparseMmaElement::Bf16 | SparseMmaElement::Tf32
             ) {
+                // The imported PTX predicate is the metadata floor: standard
+                // forms are PTX >= 7.1 and ordered forms stay PTX >= 8.5.
+                let ptx_predicate = match mma.metadata {
+                    SparseMmaMetadata::Standard => "Subtarget->getPTXVersion() >= 71",
+                    SparseMmaMetadata::Ordered => "Subtarget->getPTXVersion() >= 85",
+                };
                 declaration.selections[0].predicates
-                    == [
-                        "Subtarget->getSmVersion() >= 80",
-                        "Subtarget->getPTXVersion() >= 85",
-                    ]
+                    == ["Subtarget->getSmVersion() >= 80", ptx_predicate]
             } else if is_sparse_mma_fp8_f32(mma) {
                 // The upstream NVPTX selection for the plain SM89 FP8 forms
                 // carries the Ampere floor and the Ada/PTX 8.4 floor as four

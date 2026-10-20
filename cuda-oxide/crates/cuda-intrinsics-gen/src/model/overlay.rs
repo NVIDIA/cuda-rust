@@ -75,7 +75,7 @@ pub struct OverlayShardFile {
     #[serde(default)]
     pub sparse_mma_fp8_f32: Option<SparseMmaFp8F32Admission>,
     #[serde(default)]
-    pub sparse_mma_ordered_ampere_float: Option<SparseMmaOrderedAmpereFloatAdmission>,
+    pub sparse_mma_ampere_float: Option<SparseMmaAmpereFloatAdmission>,
     #[serde(default)]
     pub prmt: Option<PrmtAdmission>,
     #[serde(default)]
@@ -780,21 +780,24 @@ pub struct SparseMmaFp8F32Admission {
     pub product_count: usize,
 }
 
-/// Compact admission for the reviewed ordered-metadata Ampere floating sparse MMA forms.
+/// Compact admission for the reviewed Ampere floating sparse MMA forms.
+/// `metadata` selects standard or ordered sparsity; identity and the PTX floor
+/// are derived from that axis.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SparseMmaOrderedAmpereFloatAdmission {
+pub struct SparseMmaAmpereFloatAdmission {
     pub llvm_evidence_profile: String,
     pub libnvvm_evidence_profile: String,
     pub runtime_validation: RuntimeValidation,
+    pub metadata: SparseMmaMetadata,
     #[serde(rename = "variant")]
-    pub variants: Vec<SparseMmaOrderedAmpereFloatVariant>,
+    pub variants: Vec<SparseMmaAmpereFloatVariant>,
 }
 
-/// One reviewed ordered-metadata Ampere floating sparse MMA form.
+/// One reviewed Ampere floating sparse MMA form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SparseMmaOrderedAmpereFloatVariant {
+pub struct SparseMmaAmpereFloatVariant {
     pub shape: SparseMmaShape,
     pub accumulator: SparseMmaAccumulator,
     pub element: SparseMmaElement,

@@ -290,11 +290,11 @@ fn compact_sparse_ordered_ampere_float_admission_is_closed_and_ledger_bound() {
     let path = repo_root.join("intrinsics/overlay/sparse_mma_ordered_ampere_float.toml");
     let bytes = fs::read(&path).unwrap();
     let shard: OverlayShardFile = toml::from_slice(&bytes).unwrap();
-    let admission = shard.sparse_mma_ordered_ampere_float.unwrap();
+    let admission = shard.sparse_mma_ampere_float.unwrap();
 
     // Executed runtime validation is admitted for this family (GPU evidence backs it).
     assert_eq!(admission.runtime_validation, RuntimeValidation::Executed);
-    let records = expand_sparse_mma_ordered_ampere_float_admission(&admission).unwrap();
+    let records = expand_sparse_mma_ampere_float_admission(&admission).unwrap();
     assert_eq!(records.len(), 8);
     assert!(records.iter().all(|record| record.abi_id.is_empty()));
     assert!(records.iter().all(|record| {
@@ -372,15 +372,351 @@ fn compact_sparse_ordered_ampere_float_admission_is_closed_and_ledger_bound() {
 
     let mut reordered = admission.clone();
     reordered.variants.swap(0, 1);
-    assert!(expand_sparse_mma_ordered_ampere_float_admission(&reordered).is_err());
+    assert!(expand_sparse_mma_ampere_float_admission(&reordered).is_err());
 
     let mut missing = admission.clone();
     missing.variants.pop();
-    assert!(expand_sparse_mma_ordered_ampere_float_admission(&missing).is_err());
+    assert!(expand_sparse_mma_ampere_float_admission(&missing).is_err());
 
     let mut missing_evidence = admission;
     missing_evidence.llvm_evidence_profile.clear();
-    assert!(expand_sparse_mma_ordered_ampere_float_admission(&missing_evidence).is_err());
+    assert!(expand_sparse_mma_ampere_float_admission(&missing_evidence).is_err());
+}
+
+#[test]
+fn ampere_float_sparse_mma_derives_identity_ptx_floor_and_carrier_from_metadata() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let path = repo_root.join("intrinsics/overlay/sparse_mma_ordered_ampere_float.toml");
+    let shard: OverlayShardFile = toml::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let ordered_admission = shard.sparse_mma_ampere_float.unwrap();
+    assert_eq!(ordered_admission.metadata, SparseMmaMetadata::Ordered);
+
+    let ordered = expand_sparse_mma_ampere_float_admission(&ordered_admission).unwrap();
+    assert_eq!(ordered.len(), 8);
+    assert!(ordered.iter().all(|record| record.abi_id.is_empty()));
+    let mut bound = overlay_file(ordered.clone());
+    bind_pinned_abi_ids(&repo_root, &mut bound);
+    assert_eq!(
+        bound
+            .intrinsics
+            .iter()
+            .map(|record| record.abi_id.clone())
+            .collect::<Vec<_>>(),
+        (1018..=1025)
+            .map(|id| format!("i{id:04}"))
+            .collect::<Vec<_>>()
+    );
+
+    let mut standard_admission = ordered_admission;
+    standard_admission.metadata = SparseMmaMetadata::Standard;
+    let standard = expand_sparse_mma_ampere_float_admission(&standard_admission).unwrap();
+    assert_eq!(standard.len(), 8);
+    assert!(standard.iter().all(|record| record.abi_id.is_empty()));
+
+    // shape, accumulator, element, llvm source suffix, selector, register width.
+    // The suffix is the LLVM tail, not the id tail: f16 forms use f16_f16 / f32_f32.
+    let forms = [
+        (
+            "m16n8k8",
+            "f32",
+            "tf32",
+            "tf32",
+            SparseMmaSelector::ImmediateZeroThroughThree,
+            2usize,
+        ),
+        (
+            "m16n8k16",
+            "f32",
+            "tf32",
+            "tf32",
+            SparseMmaSelector::ImmediateZeroOrOne,
+            4,
+        ),
+        (
+            "m16n8k16",
+            "f32",
+            "bf16",
+            "bf16",
+            SparseMmaSelector::ImmediateZeroThroughThree,
+            2,
+        ),
+        (
+            "m16n8k16",
+            "f16",
+            "f16",
+            "f16_f16",
+            SparseMmaSelector::ImmediateZeroThroughThree,
+            2,
+        ),
+        (
+            "m16n8k16",
+            "f32",
+            "f16",
+            "f32_f32",
+            SparseMmaSelector::ImmediateZeroThroughThree,
+            2,
+        ),
+        (
+            "m16n8k32",
+            "f32",
+            "bf16",
+            "bf16",
+            SparseMmaSelector::ImmediateZeroOrOne,
+            4,
+        ),
+        (
+            "m16n8k32",
+            "f16",
+            "f16",
+            "f16_f16",
+            SparseMmaSelector::ImmediateZeroOrOne,
+            4,
+        ),
+        (
+            "m16n8k32",
+            "f32",
+            "f16",
+            "f32_f32",
+            SparseMmaSelector::ImmediateZeroOrOne,
+            4,
+        ),
+    ];
+    for (index, (shape, accumulator, element, suffix, selector, registers)) in
+        forms.into_iter().enumerate()
+    {
+        let ordered_record = &ordered[index];
+        let standard_record = &standard[index];
+        let llvm_suffix = suffix.replace('_', ".");
+        let ordered_id = format!("mma_sp_ordered_metadata_{shape}_{accumulator}_{element}");
+        let standard_id = format!("mma_sp_{shape}_{accumulator}_{element}");
+        let ordered_source = format!("int_nvvm_mma_sp_ordered_metadata_{shape}_row_col_{suffix}");
+        let standard_source = format!("int_nvvm_mma_sp_{shape}_row_col_{suffix}");
+        let ordered_symbol =
+            format!("llvm.nvvm.mma.sp.ordered.metadata.{shape}.row.col.{llvm_suffix}");
+        let standard_symbol = format!("llvm.nvvm.mma.sp.{shape}.row.col.{llvm_suffix}");
+        let ordered_key = format!(
+            "matrix.mma.sp.{shape}.row.col.{accumulator}.{element}.{element}.{accumulator}.not_applicable.ordered_metadata"
+        );
+        let standard_key = format!(
+            "matrix.mma.sp.{shape}.row.col.{accumulator}.{element}.{element}.{accumulator}.not_applicable.standard_metadata"
+        );
+        let tail = [
+            "sync",
+            "aligned",
+            shape,
+            "row",
+            "col",
+            accumulator,
+            element,
+            element,
+            accumulator,
+        ];
+        let modifiers = |head: &str| {
+            std::iter::once(head.to_owned())
+                .chain(tail.iter().map(|part| (*part).to_owned()))
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(ordered_record.id, ordered_id);
+        assert_eq!(
+            ordered_record.source_record.as_deref(),
+            Some(ordered_source.as_str())
+        );
+        assert_eq!(
+            ordered_record.llvm_symbol.as_deref(),
+            Some(ordered_symbol.as_str())
+        );
+        assert_eq!(ordered_record.operation_key, ordered_key);
+        assert_eq!(
+            ordered_record.expected_ptx.modifiers,
+            modifiers("sp::ordered_metadata")
+        );
+        assert_eq!(ordered_record.minimum_ptx, "8.5");
+        assert_eq!(ordered_record.minimum_sm.as_deref(), Some("sm_80"));
+        assert_eq!(ordered_record.targets, "all");
+
+        assert_eq!(standard_record.id, standard_id);
+        assert_eq!(
+            standard_record.source_record.as_deref(),
+            Some(standard_source.as_str())
+        );
+        assert_eq!(
+            standard_record.llvm_symbol.as_deref(),
+            Some(standard_symbol.as_str())
+        );
+        assert_eq!(standard_record.operation_key, standard_key);
+        assert_eq!(standard_record.expected_ptx.modifiers, modifiers("sp"));
+        assert_eq!(standard_record.minimum_ptx, "7.1");
+        assert_eq!(standard_record.minimum_sm.as_deref(), Some("sm_80"));
+        assert_eq!(standard_record.targets, "all");
+        assert!(standard_record.abi_id.is_empty());
+
+        let ordered_mma = ordered_record.sparse_mma.as_ref().unwrap();
+        let standard_mma = standard_record.sparse_mma.as_ref().unwrap();
+        assert_eq!(ordered_mma.metadata, SparseMmaMetadata::Ordered);
+        assert_eq!(standard_mma.metadata, SparseMmaMetadata::Standard);
+        assert_eq!(ordered_mma.selector, selector);
+        assert_eq!(standard_mma.selector, ordered_mma.selector);
+        assert_eq!(standard_mma.adapter, ordered_mma.adapter);
+        assert_eq!(standard_mma.llvm_adapter, ordered_mma.llvm_adapter);
+        assert_eq!(
+            standard_record.rust_arguments,
+            ordered_record.rust_arguments
+        );
+        assert_eq!(
+            standard_record.llvm_arguments,
+            ordered_record.llvm_arguments
+        );
+        assert_eq!(
+            standard_record.rust_arguments[1],
+            format!("[u32; {registers}]")
+        );
+        assert_eq!(
+            standard_record.rust_arguments[2],
+            format!("[u32; {registers}]")
+        );
+        assert!(sparse_mma_recipe(standard_mma).is_some());
+    }
+
+    // Plain 16-bit bf16 m16n8k16 stays the 2-register, selector 0-3 carrier.
+    let standard_bf16 = &standard[2];
+    assert_eq!(standard_bf16.id, "mma_sp_m16n8k16_f32_bf16");
+    assert_eq!(
+        standard_bf16.sparse_mma.as_ref().unwrap().selector,
+        SparseMmaSelector::ImmediateZeroThroughThree
+    );
+    assert_eq!(standard_bf16.rust_arguments[1], "[u32; 2]");
+
+    let mut forced_f8f6f4 = expand_sparse_mma_f8f6f4_admission(&test_f8f6f4_admission())
+        .unwrap()
+        .remove(0)
+        .sparse_mma
+        .unwrap();
+    assert_eq!(forced_f8f6f4.a_element, SparseMmaElement::E2m1);
+    assert_eq!(forced_f8f6f4.metadata, SparseMmaMetadata::Ordered);
+    assert!(sparse_mma_recipe(&forced_f8f6f4).is_some());
+    forced_f8f6f4.metadata = SparseMmaMetadata::Standard;
+    assert!(sparse_mma_recipe(&forced_f8f6f4).is_none());
+
+    let mut forced_f16 =
+        expand_sparse_mma_f8f6f4_f16_admission(&test_sparse_mma_f8f6f4_f16_admission())
+            .unwrap()
+            .remove(0)
+            .sparse_mma
+            .unwrap();
+    forced_f16.metadata = SparseMmaMetadata::Standard;
+    assert!(sparse_mma_recipe(&forced_f16).is_none());
+
+    let plain_fp8 = expand_sparse_mma_fp8_f32_admission(&test_sparse_mma_fp8_f32_admission())
+        .unwrap()
+        .remove(0);
+    assert_eq!(plain_fp8.id, "mma_sp_m16n8k64_f32_e4m3_e4m3_f32");
+    assert_eq!(
+        plain_fp8.sparse_mma.as_ref().unwrap().metadata,
+        SparseMmaMetadata::Standard
+    );
+    assert!(sparse_mma_recipe(plain_fp8.sparse_mma.as_ref().unwrap()).is_some());
+}
+
+#[test]
+fn standard_ampere_float_shard_admits_eight_forms_and_leaves_ordered_abi() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let path = repo_root.join("intrinsics/overlay/sparse_mma_ampere_float.toml");
+    let shard: OverlayShardFile = toml::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(shard.schema, SPARSE_MMA_AMPERE_FLOAT_SHARD_SCHEMA);
+    assert_eq!(shard.family, "sparse_mma");
+    let admission = shard.sparse_mma_ampere_float.unwrap();
+    assert_eq!(admission.metadata, SparseMmaMetadata::Standard);
+    assert_eq!(admission.runtime_validation, RuntimeValidation::Executed);
+    assert_eq!(admission.llvm_evidence_profile, "rust-llvm-23.1.3-aab11ee0");
+    assert_eq!(
+        admission.libnvvm_evidence_profile,
+        "cuda-13.3-libnvvm-13.3.33"
+    );
+
+    let records = expand_sparse_mma_ampere_float_admission(&admission).unwrap();
+    assert_eq!(records.len(), 8);
+    let expected = [
+        (
+            "mma_sp_m16n8k8_f32_tf32",
+            "int_nvvm_mma_sp_m16n8k8_row_col_tf32",
+        ),
+        (
+            "mma_sp_m16n8k16_f32_tf32",
+            "int_nvvm_mma_sp_m16n8k16_row_col_tf32",
+        ),
+        (
+            "mma_sp_m16n8k16_f32_bf16",
+            "int_nvvm_mma_sp_m16n8k16_row_col_bf16",
+        ),
+        (
+            "mma_sp_m16n8k16_f16_f16",
+            "int_nvvm_mma_sp_m16n8k16_row_col_f16_f16",
+        ),
+        (
+            "mma_sp_m16n8k16_f32_f16",
+            "int_nvvm_mma_sp_m16n8k16_row_col_f32_f32",
+        ),
+        (
+            "mma_sp_m16n8k32_f32_bf16",
+            "int_nvvm_mma_sp_m16n8k32_row_col_bf16",
+        ),
+        (
+            "mma_sp_m16n8k32_f16_f16",
+            "int_nvvm_mma_sp_m16n8k32_row_col_f16_f16",
+        ),
+        (
+            "mma_sp_m16n8k32_f32_f16",
+            "int_nvvm_mma_sp_m16n8k32_row_col_f32_f32",
+        ),
+    ];
+    for (record, (id, source)) in records.iter().zip(expected) {
+        assert_eq!(record.id, id);
+        assert_eq!(record.source_record.as_deref(), Some(source));
+        assert_eq!(
+            record.expected_ptx.modifiers.first().map(String::as_str),
+            Some("sp")
+        );
+        assert_ne!(
+            record.expected_ptx.modifiers.first().map(String::as_str),
+            Some("sp::ordered_metadata")
+        );
+        assert_eq!(record.minimum_ptx, "7.1");
+        assert_eq!(record.minimum_sm.as_deref(), Some("sm_80"));
+        assert!(record.abi_id.is_empty());
+    }
+
+    let mut bound = overlay_file(records);
+    bind_pinned_abi_ids(&repo_root, &mut bound);
+    assert_eq!(
+        bound
+            .intrinsics
+            .iter()
+            .map(|record| record.abi_id.clone())
+            .collect::<Vec<_>>(),
+        (1039..=1046)
+            .map(|id| format!("i{id:04}"))
+            .collect::<Vec<_>>()
+    );
+
+    let ordered_path = repo_root.join("intrinsics/overlay/sparse_mma_ordered_ampere_float.toml");
+    let ordered_shard: OverlayShardFile =
+        toml::from_slice(&fs::read(&ordered_path).unwrap()).unwrap();
+    let ordered =
+        expand_sparse_mma_ampere_float_admission(&ordered_shard.sparse_mma_ampere_float.unwrap())
+            .unwrap();
+    let mut ordered_bound = overlay_file(ordered);
+    bind_pinned_abi_ids(&repo_root, &mut ordered_bound);
+    assert_eq!(
+        ordered_bound
+            .intrinsics
+            .iter()
+            .map(|record| record.abi_id.clone())
+            .collect::<Vec<_>>(),
+        (1018..=1025)
+            .map(|id| format!("i{id:04}"))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -1594,7 +1930,7 @@ fn pinned_sparse_mma_records_close_shape_specific_selectors_and_ranges() {
         .iter()
         .filter(|record| record.family == "sparse_mma")
         .collect::<Vec<_>>();
-    assert_eq!(records.len(), 126);
+    assert_eq!(records.len(), 134);
     assert_eq!(
         records
             .iter()
@@ -1603,6 +1939,7 @@ fn pinned_sparse_mma_records_close_shape_specific_selectors_and_ranges() {
         (163..=251)
             .chain(525..=549)
             .chain(1018..=1029)
+            .chain(1039..=1046)
             .map(|id| format!("i{id:04}"))
             .collect::<BTreeSet<_>>()
     );
@@ -1631,10 +1968,10 @@ fn pinned_sparse_mma_records_close_shape_specific_selectors_and_ranges() {
         assert!(derived_source_records.insert(identity.source_record.clone()));
         assert!(derived_llvm_symbols.insert(identity.llvm_symbol.clone()));
     }
-    assert_eq!(derived_ids.len(), 126);
-    assert_eq!(derived_operation_keys.len(), 126);
-    assert_eq!(derived_source_records.len(), 126);
-    assert_eq!(derived_llvm_symbols.len(), 126);
+    assert_eq!(derived_ids.len(), 134);
+    assert_eq!(derived_operation_keys.len(), 134);
+    assert_eq!(derived_source_records.len(), 134);
+    assert_eq!(derived_llvm_symbols.len(), 134);
 
     let integer_records = records
         .iter()

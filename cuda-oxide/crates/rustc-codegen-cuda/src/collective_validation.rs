@@ -61,7 +61,7 @@ impl Fact {
             ) => Self::Enum {
                 tag_uniform: *a && *b,
                 fields: (0..af.len().max(bf.len()))
-                    .map(|i| self.field(i).merge(&other.field(i)))
+                    .map(|i| self.variant_field(i).merge(&other.variant_field(i)))
                     .collect(),
             },
             (
@@ -155,14 +155,19 @@ impl Fact {
     fn field(&self, index: usize) -> Self {
         match self {
             Self::Fields(v) => v.get(index).cloned().unwrap_or(Self::Varying),
-            // A field absent from this constructed variant cannot be read by
-            // a defined downcast. At joins it adds no varying payload value.
-            Self::Enum { fields, .. } => fields.get(index).cloned().unwrap_or(Self::Uniform),
             Self::Kernel(origin) | Self::Resource(origin) => {
                 Self::Kernel(format!("{origin}.{index}"))
             }
             Self::Uniform | Self::Reservation(_) => Self::Uniform,
             _ => Self::Varying,
+        }
+    }
+    fn variant_field(&self, index: usize) -> Self {
+        match self {
+            // This conditional analysis fact is only valid at enum joins or
+            // after a Downcast. It never reads an inactive variant's bytes.
+            Self::Enum { fields, .. } => fields.get(index).cloned().unwrap_or(Self::Uniform),
+            _ => self.field(index),
         }
     }
 }
@@ -226,8 +231,10 @@ fn local_read(state: &State, local: usize, fields: &[usize]) -> Fact {
 }
 fn read(place: &mir::Place, state: &State) -> Fact {
     let mut fact = state[place.local].clone();
+    let mut downcast = false;
     for projection in &place.projection {
         fact = match projection {
+            mir::ProjectionElem::Field(index, _) if downcast => fact.variant_field(*index),
             mir::ProjectionElem::Field(index, _) => fact.field(*index),
             mir::ProjectionElem::Deref => match fact {
                 Fact::Local(local, fields) => local_read(state, local, &fields),
@@ -237,6 +244,7 @@ fn read(place: &mir::Place, state: &State) -> Fact {
             mir::ProjectionElem::Downcast(_) => fact,
             _ => Fact::Varying,
         };
+        downcast = matches!(projection, mir::ProjectionElem::Downcast(_));
     }
     fact
 }

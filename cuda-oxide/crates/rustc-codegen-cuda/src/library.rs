@@ -25,6 +25,17 @@ const MAX_LTO: usize = 256 * 1024 * 1024;
 pub(crate) enum MarkerKind {
     Raw,
     CheckedBlock,
+    CheckedBlockResource,
+}
+
+impl MarkerKind {
+    pub(crate) fn checked(self) -> bool {
+        matches!(self, Self::CheckedBlock | Self::CheckedBlockResource)
+    }
+
+    pub(crate) fn resource(self) -> bool {
+        self == Self::CheckedBlockResource
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,6 +86,9 @@ pub(crate) fn marker_definitions(tcx: TyCtxt<'_>) -> HashMap<DefId, MarkerKind> 
                     reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_CALL_V1 => {
                         MarkerKind::CheckedBlock
                     }
+                    reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_RESOURCE_CALL_V1 => {
+                        MarkerKind::CheckedBlockResource
+                    }
                     _ => continue,
                 };
                 if let Some(def) = item.res.opt_def_id() {
@@ -84,6 +98,95 @@ pub(crate) fn marker_definitions(tcx: TyCtxt<'_>) -> HashMap<DefId, MarkerKind> 
         }
     }
     definitions
+}
+
+fn device_type(tcx: TyCtxt<'_>, name: &str) -> Option<DefId> {
+    for &krate in tcx.crates(()) {
+        if tcx.crate_name(krate).as_str() != "cuda_device" {
+            continue;
+        }
+        let root = DefId {
+            krate,
+            index: CRATE_DEF_INDEX,
+        };
+        let module = tcx
+            .module_children(root)
+            .iter()
+            .find(|item| item.ident.name.as_str() == "disjoint")?
+            .res
+            .opt_def_id()?;
+        return tcx
+            .module_children(module)
+            .iter()
+            .find(|item| item.ident.name.as_str() == name)
+            .and_then(|item| item.res.opt_def_id());
+    }
+    None
+}
+
+/// Genuine collective carrier, independent of aliases or source spelling.
+pub(crate) fn collective_carrier<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<(Ty<'tcx>, u64)> {
+    let TyKind::Adt(def, args) = ty.kind() else {
+        return None;
+    };
+    if Some(def.did()) != device_type(tcx, "DisjointSlice") {
+        return None;
+    }
+    let mut types = args.types();
+    let element = types.next()?;
+    let TyKind::Adt(space, args) = types.next()?.kind() else {
+        return None;
+    };
+    if Some(space.did()) != device_type(tcx, "CollectiveTiles") {
+        return None;
+    }
+    Some((element, args.const_at(0).try_to_target_usize(tcx)?))
+}
+
+pub(crate) fn resource_parameter<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    collective_carrier(tcx, ty).is_some()
+        || matches!(ty.kind(), TyKind::Ref(_, inner, rustc_hir::Mutability::Not)
+            if matches!(inner.kind(), TyKind::Slice(_)))
+}
+
+pub(crate) fn resource_write(call: &LibraryCall<'_>) -> bool {
+    call.instance
+        .args
+        .const_at(6)
+        .try_to_leaf()
+        .and_then(|value| value.try_to_bool().ok())
+        .expect("validated resource access")
+}
+
+fn validate_resource<'tcx>(tcx: TyCtxt<'tcx>, call: &LibraryCall<'tcx>) -> Result<(), String> {
+    let args = call.instance.args;
+    let write = args
+        .const_at(6)
+        .try_to_leaf()
+        .and_then(|value| value.try_to_bool().ok())
+        .ok_or("resource access mode is not constant")?;
+    let TyKind::Ref(_, inner, mutability) = args.type_at(2).kind() else {
+        return Err(
+            "resource witness must borrow a genuine collective carrier or read-only slice".into(),
+        );
+    };
+    let element = if let TyKind::Slice(element) = inner.kind()
+        && !write
+        && *mutability == rustc_hir::Mutability::Not
+    {
+        *element
+    } else {
+        let (element, capacity) = collective_carrier(tcx, *inner)
+            .ok_or("resource witness requires DisjointSlice<T, CollectiveTiles<C>>")?;
+        if capacity == 0 || (write && *mutability != rustc_hir::Mutability::Mut) {
+            return Err("resource writes require a mutable carrier with positive capacity".into());
+        }
+        element
+    };
+    if element != args.type_at(0) {
+        return Err("resource witness element type disagrees with the library element type".into());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -426,13 +529,14 @@ fn extern_argument(argument: &Argument) -> mir_importer::DeviceExternType {
 
 fn call_arguments(call: &LibraryCall<'_>) -> Result<Vec<Argument>, String> {
     let args = call.instance.args;
-    let TyKind::Tuple(uniform) = args.type_at(2).kind() else {
+    let first = if call.kind.resource() { 3 } else { 2 };
+    let TyKind::Tuple(uniform) = args.type_at(first).kind() else {
         return Err("library arguments must be a tuple".into());
     };
     if call.kind == MarkerKind::Raw {
         return uniform.iter().map(argument).collect();
     }
-    let TyKind::Tuple(payload) = args.type_at(3).kind() else {
+    let TyKind::Tuple(payload) = args.type_at(first + 1).kind() else {
         return Err("checked block payload must be a tuple".into());
     };
     let dtype = scalar(args.type_at(0))?;
@@ -471,6 +575,10 @@ pub(crate) fn finalize<'tcx>(
     // Structural checks precede both the proof and external compilation.
     for call in &collection.library_calls {
         call_arguments(call).unwrap_or_else(|error| tcx.dcx().span_fatal(call.span, error));
+        if call.kind.resource() {
+            validate_resource(tcx, call)
+                .unwrap_or_else(|error| tcx.dcx().span_fatal(call.span, error));
+        }
     }
     let checked_shapes = crate::collective_validation::validate(tcx, collection)?;
     let target = std::env::var("CUDA_OXIDE_TARGET")
@@ -586,7 +694,7 @@ pub(crate) fn finalize<'tcx>(
                     .filter(|v| *v != 0)
                     .ok_or("library extent must fit nonzero u32")
             };
-            let block = if call.kind == MarkerKind::CheckedBlock {
+            let block = if call.kind.checked() {
                 checked_shapes[&root.export_name]
             } else {
                 [
@@ -602,7 +710,7 @@ pub(crate) fn finalize<'tcx>(
                 algorithm: registration.algorithm,
                 dtype: scalar(args.type_at(0)).unwrap_or_else(|error| report(error)),
                 block,
-                items_per_thread: positive(4)
+                items_per_thread: positive(if call.kind.resource() { 5 } else { 4 })
                     .map_err(str::to_owned)
                     .unwrap_or_else(|error| report(error)),
             };
@@ -684,6 +792,12 @@ pub(crate) fn finalize<'tcx>(
                 },
             });
             for (call, root) in calls {
+                if call.kind.resource() && !spec.scratch_free {
+                    tcx.dcx().span_fatal(
+                        call.span,
+                        "resource-checked block calls currently require a scratch-free provider",
+                    );
+                }
                 let actual = call_arguments(call)
                     .unwrap_or_else(|error| tcx.dcx().span_fatal(call.span, error));
                 if actual != spec.arguments {
@@ -696,7 +810,8 @@ pub(crate) fn finalize<'tcx>(
                 let plan = mir_importer::LibraryCallPlan {
                     symbol: spec.symbol.clone(),
                     marker: tcx.symbol_name(call.instance).name.to_string(),
-                    checked_block: call.kind == MarkerKind::CheckedBlock,
+                    checked_block: call.kind.checked(),
+                    resource_witness: call.kind.resource(),
                     scratch_bytes,
                     scratch_alignment,
                 };
@@ -754,7 +869,7 @@ fn checked_helper_ancestors<'tcx>(collection: &CollectionResult<'tcx>) -> HashSe
     let mut pending: Vec<_> = collection
         .library_calls
         .iter()
-        .filter(|call| call.kind == MarkerKind::CheckedBlock)
+        .filter(|call| call.kind.checked())
         .map(|call| call.site.caller)
         .collect();
     while let Some(instance) = pending.pop() {

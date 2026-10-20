@@ -82,7 +82,7 @@ pub use constant::{ConstantMemory, ConstantMemoryValue};
 pub use cusimd::{CuSimd, Float2, Float4, TmemRegs4, TmemRegs32};
 #[doc(hidden)]
 pub use disjoint::{__LaunchContractDisjointSlice, __LaunchContractDisjointSliceAbi};
-pub use disjoint::{DisjointSlice, SpaceLayout};
+pub use disjoint::{CollectiveTiles, DisjointSlice, SpaceLayout};
 pub use fence::*;
 pub use shared::{DynamicSharedArray, SharedArray, SharedPtr};
 pub use tcgen05::{

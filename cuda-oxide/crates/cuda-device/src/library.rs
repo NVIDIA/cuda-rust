@@ -11,7 +11,7 @@
 /// getter. Materialized builds query the provider for file, directory and
 /// environment dependencies before rustc emits dep-info. Host checks and rustdoc
 /// do not query CUDA inputs. Cargo's timestamp freshness rules still apply;
-/// content changes preserving timestamps are not detected by this macro.
+/// replacements with unchanged or older timestamps may not be detected.
 ///
 /// This snippet requires a build script to set `MY_LIBRARY_REGISTRATION`; the
 /// `native_library` example compiles and runs the same registration pattern.

@@ -142,6 +142,7 @@ fn cargo_artifact_freshness(
 
 fn test_context(config: OxideConfig) -> Context {
     Context {
+        link_ltoir: Vec::new(),
         workspace_root: PathBuf::from("/tmp/cargo-oxide-test-workspace"),
         codegen_crate: PathBuf::from("/tmp/cargo-oxide-test-codegen"),
         examples_dir: PathBuf::from("/tmp/cargo-oxide-test-examples"),
@@ -447,7 +448,7 @@ fn generated_file_cleanup_preserves_ltoir_cubin_cache() {
     std::fs::create_dir_all(cached_cubin.parent().unwrap()).unwrap();
     std::fs::write(&cached_cubin, b"persistent cache entry").unwrap();
 
-    clean_generated_files(&root, "my-kernel");
+    clean_generated_files(&root, "my-kernel", &[]).unwrap();
 
     for extension in ["ptx", "ll", "ltoir", "cubin", "target"] {
         assert!(!root.join(format!("my_kernel.{extension}")).exists());
@@ -487,6 +488,7 @@ edition = "2024"
     std::fs::write(&cached_cubin, b"persistent cache").unwrap();
 
     let ctx = Context {
+        link_ltoir: Vec::new(),
         workspace_root: root.clone(),
         codegen_crate: root.clone(),
         examples_dir: root.clone(),
@@ -540,6 +542,7 @@ edition = "2024"
     std::fs::write(example_dir.join("demo.ptx"), b"generated").unwrap();
 
     let ctx = Context {
+        link_ltoir: Vec::new(),
         workspace_root: root.clone(),
         codegen_crate: codegen_crate.clone(),
         examples_dir,
@@ -586,6 +589,7 @@ edition = "2024"
     symlink(&external, root.join("target")).unwrap();
 
     let ctx = Context {
+        link_ltoir: Vec::new(),
         workspace_root: root.clone(),
         codegen_crate: root.clone(),
         examples_dir: root.clone(),
@@ -3097,6 +3101,7 @@ device-owner = { path = "../device-owner" }
     .unwrap();
 
     let ctx = Context {
+        link_ltoir: Vec::new(),
         workspace_root: root.clone(),
         codegen_crate: root.join("unused-codegen-source"),
         examples_dir: root.join("unused-examples"),
@@ -3260,6 +3265,7 @@ shared-dep = { path = "../shared-dep" }
 
 fn scratch_workspace_context(root: &Path) -> Context {
     Context {
+        link_ltoir: Vec::new(),
         workspace_root: root.to_path_buf(),
         codegen_crate: root.join("unused-codegen-source"),
         examples_dir: root.join("unused-examples"),
@@ -3539,6 +3545,7 @@ fn passthrough_fingerprint_tracks_output_affecting_settings() {
     let materialized = MaterializationMode {
         prepared: Some(PreparedMaterialization {
             provenance_sha256_hex: "ab".repeat(32),
+            external_ltoir_json: "[]".to_string(),
             tool_identity_handshake_json: "{\"version\":1}".to_string(),
         }),
     };
@@ -3554,6 +3561,96 @@ fn passthrough_fingerprint_tracks_output_affecting_settings() {
         ),
         "exact CUDA-tool provenance must change Cargo's rustc fingerprint"
     );
+}
+
+#[test]
+fn cleanup_preserves_all_artifacts_when_a_link_input_overlaps() {
+    let root = unique_temp_dir("cargo_oxide_input_output_overlap");
+    fs::create_dir_all(&root).unwrap();
+    let first_output = root.join("my_kernel.ptx");
+    let input = root.join("my_kernel.ltoir");
+    fs::write(&first_output, b"previous output").unwrap();
+    fs::write(&input, b"external input").unwrap();
+
+    let error =
+        clean_generated_files(&root, "my-kernel", std::slice::from_ref(&input)).unwrap_err();
+    assert!(error.contains("move the external input"), "{error}");
+    assert_eq!(fs::read(&input).unwrap(), b"external input");
+    assert_eq!(fs::read(&first_output).unwrap(), b"previous output");
+
+    #[cfg(unix)]
+    for hard_link in [false, true] {
+        let alias = root.join("external.ltoir");
+        if hard_link {
+            fs::hard_link(&input, &alias).unwrap();
+        } else {
+            std::os::unix::fs::symlink(&input, &alias).unwrap();
+        }
+        assert!(clean_generated_files(&root, "my-kernel", std::slice::from_ref(&alias)).is_err());
+        assert_eq!(fs::read(&alias).unwrap(), b"external input");
+        assert_eq!(fs::read(&first_output).unwrap(), b"previous output");
+        fs::remove_file(alias).unwrap();
+    }
+
+    let separate = root.join("separate.ltoir");
+    fs::rename(&input, &separate).unwrap();
+    clean_generated_files(&root, "my-kernel", std::slice::from_ref(&separate)).unwrap();
+    assert!(!first_output.exists());
+    assert_eq!(fs::read(&separate).unwrap(), b"external input");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn external_ltoir_order_and_contents_change_the_codegen_fingerprint() {
+    let ctx = test_context(OxideConfig::default());
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: Some("sm_120"),
+        features: None,
+        cargo_target_dir: None,
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: true,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+    let root = unique_temp_dir("cargo_oxide_external_ltoir");
+    fs::create_dir_all(&root).unwrap();
+    let first = root.join("first.ltoir");
+    let second = root.join("second.ltoir");
+    fs::write(&first, b"first").unwrap();
+    fs::write(&second, b"other").unwrap();
+    let fingerprint = |paths: &[&Path]| {
+        let inputs: Vec<_> = paths
+            .iter()
+            .map(|path| cuda_artifact_finalizer::LtoirFile::capture(path).unwrap())
+            .collect();
+        let mode = MaterializationMode {
+            prepared: Some(PreparedMaterialization {
+                provenance_sha256_hex: "ab".repeat(32),
+                tool_identity_handshake_json: "{}".into(),
+                external_ltoir_json: serde_json::to_string(&inputs).unwrap(),
+            }),
+        };
+        passthrough_codegen_fingerprint_with_env(
+            &ctx,
+            &opts,
+            None,
+            Some("sm_120"),
+            &mode,
+            &BTreeMap::new(),
+        )
+    };
+    let original = fingerprint(&[&first, &second]);
+    assert_eq!(original, fingerprint(&[&first, &second]));
+    assert_ne!(original, fingerprint(&[&second, &first]));
+    fs::write(&first, b"later").unwrap();
+    assert_ne!(original, fingerprint(&[&first, &second]));
+    assert_ne!(original, fingerprint(&[&second]));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -3770,6 +3867,7 @@ fn materialization_forces_nvvm_ir_and_exact_provenance_handshake() {
     let materialization = MaterializationMode {
         prepared: Some(PreparedMaterialization {
             provenance_sha256_hex: "42".repeat(32),
+            external_ltoir_json: "[]".to_string(),
             tool_identity_handshake_json: "{\"version\":1}".to_string(),
         }),
     };
@@ -5213,6 +5311,7 @@ fn read_ptx_artifact_reports_missing_file() {
 #[test]
 fn nvvm_ir_requested_reads_project_configuration() {
     let ctx = Context {
+        link_ltoir: Vec::new(),
         workspace_root: PathBuf::from("/tmp/project"),
         codegen_crate: PathBuf::from("/tmp/project"),
         examples_dir: PathBuf::from("/tmp/project"),
@@ -5230,6 +5329,7 @@ fn nvvm_ir_requested_reads_project_configuration() {
 #[test]
 fn nvvm_ir_requested_accepts_disabled_project_configuration() {
     let ctx = Context {
+        link_ltoir: Vec::new(),
         workspace_root: PathBuf::from("/tmp/project"),
         codegen_crate: PathBuf::from("/tmp/project"),
         examples_dir: PathBuf::from("/tmp/project"),
@@ -5247,6 +5347,7 @@ fn nvvm_ir_requested_accepts_disabled_project_configuration() {
 #[test]
 fn nvvm_ir_requested_env_disable_overrides_enabled_project_configuration() {
     let ctx = Context {
+        link_ltoir: Vec::new(),
         workspace_root: PathBuf::from("/tmp/project"),
         codegen_crate: PathBuf::from("/tmp/project"),
         examples_dir: PathBuf::from("/tmp/project"),
@@ -6382,7 +6483,7 @@ fn tilelib_artifacts_are_cleaned_between_builds() {
     for file in &files {
         std::fs::write(file, b"stale").unwrap();
     }
-    clean_generated_files(&root, "my-lib");
+    clean_generated_files(&root, "my-lib", &[]).unwrap();
     for file in &files {
         assert!(!file.exists(), "{} survived the clean", file.display());
     }

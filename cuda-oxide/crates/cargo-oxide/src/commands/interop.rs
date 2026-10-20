@@ -573,7 +573,10 @@ fn build_interop_device_crate(
     }
 
     let artifact_name = interop_device_artifact_name(&manifest_path, device_crate);
-    clean_generated_files(&artifact_dir, &artifact_name);
+    clean_generated_files(&artifact_dir, &artifact_name, &ctx.link_ltoir).unwrap_or_else(|error| {
+        eprintln!("Error: {error}");
+        std::process::exit(2);
+    });
     if let Some(target) = &binary_target {
         touch_source_file(&target.source_path);
     } else {

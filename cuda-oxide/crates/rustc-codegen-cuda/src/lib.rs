@@ -628,7 +628,7 @@ impl CodegenBackend for CudaCodegenBackend {
                 );
 
                 materialize::validate_collection(
-                    materialization_request,
+                    materialization_request.as_ref(),
                     !collection_result.device_externs.is_empty(),
                     collection_result.requires_ptx_bundle_merge,
                 )
@@ -664,6 +664,16 @@ impl CodegenBackend for CudaCodegenBackend {
                         dump_mir_dialect: self.config.dump_mir_dialect,
                         dump_llvm_dialect: self.config.dump_llvm_dialect,
                     };
+                materialize::validate_output_paths(
+                    materialization_request.as_ref(),
+                    &device_config.output_dir,
+                    &device_config.output_name,
+                )
+                .unwrap_or_else(|error| {
+                    tcx.dcx().fatal(format!(
+                        "[rustc_codegen_cuda] Cannot write device artifacts: {error}"
+                    ))
+                });
 
                 // Run the cuda-oxide pipeline, catching backend panics and
                 // re-emitting them as a cuda-oxide diagnostic. A panic

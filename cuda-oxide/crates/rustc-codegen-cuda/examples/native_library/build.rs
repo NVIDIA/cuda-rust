@@ -91,9 +91,44 @@ fn serve() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn serve_inputs() -> Result<(), Box<dyn std::error::Error>> {
+    let mut bytes = Vec::new();
+    std::io::stdin()
+        .take(1024 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    assert!(bytes.len() <= 1024 * 1024);
+    let request: Value = serde_json::from_slice(&bytes)?;
+    assert_eq!(request["version"], 1);
+    let cuda = std::path::Path::new(request["cuda_root"].as_str().ok_or("missing toolkit")?);
+    let host = std::env::var_os("CUDAHOSTCXX").unwrap_or_else(|| "g++".into());
+    let host = std::path::PathBuf::from(host);
+    let host = if host.is_absolute() {
+        host
+    } else {
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .map(|directory| directory.join(&host))
+            .find(|path| path.is_file())
+            .ok_or("cannot locate native host compiler")?
+    };
+    // The example tracks CUDA tools/headers and the host compiler driver.
+    // The host compiler's installed system headers/libraries are assumed stable.
+    serde_json::to_writer(
+        std::io::stdout().lock(),
+        &json!({
+            "version":1,
+            "paths":[cuda.join("bin"), cuda.join("nvvm"), cuda.join("include"), host],
+            "environment":["CUDAHOSTCXX", "PATH", "NVCC_PREPEND_FLAGS", "NVCC_APPEND_FLAGS",
+                           "CPATH", "CPLUS_INCLUDE_PATH", "GCC_EXEC_PREFIX", "COMPILER_PATH"]
+        }),
+    )?;
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if std::env::args().nth(1).as_deref() == Some("--oxide-library-request-v1") {
-        return serve();
+    match std::env::args().nth(1).as_deref() {
+        Some("--oxide-library-request-v1") => return serve(),
+        Some("--oxide-library-inputs-v1") => return serve_inputs(),
+        _ => {}
     }
     println!("cargo::rerun-if-changed=build.rs");
     let registration = json!({

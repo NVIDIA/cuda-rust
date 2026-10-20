@@ -4,7 +4,7 @@
 #![no_std]
 
 fn registration() -> &'static str {
-    env!("FIXTURE_REGISTRATION")
+    cuda_device::library::registration!("FIXTURE_REGISTRATION")
 }
 
 /// Load a complete block tile through a native provider in a dependency crate.

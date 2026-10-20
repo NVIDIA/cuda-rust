@@ -196,12 +196,20 @@ name = "cuda-target-spec"
 version = "0.1.0"
 
 [[package]]
+name = "device-ffi-collectives"
+version = "0.1.0"
+dependencies = [
+ "cuda-device",
+]
+
+[[package]]
 name = "device_ffi_test"
 version = "0.1.0"
 dependencies = [
  "cuda-core",
  "cuda-device",
  "cuda-host",
+ "device-ffi-collectives",
 ]
 
 [[package]]

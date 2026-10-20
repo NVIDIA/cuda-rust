@@ -1015,10 +1015,14 @@ pub fn tile_export(attr: TokenStream, item: TokenStream) -> TokenStream {
 // NVVM Attributes for Device FFI
 // ============================================================================
 
-/// Marks a device function as convergent.
+/// Marks an external device function declaration as convergent.
 ///
-/// Convergent functions must be called by all threads in a warp/block together.
-/// This prevents the optimizer from moving calls across control flow boundaries.
+/// LLVM forbids transformations that add control dependencies to the call,
+/// including before external device definitions are linked. The annotation
+/// does not make threads reach the call or guarantee reconvergence. Callers
+/// must satisfy the function's warp or block participation requirements.
+/// Every declaration of the same symbol reachable in a device module must
+/// agree on this annotation; conflicting declarations are rejected.
 ///
 /// # When to Use
 ///
@@ -1039,77 +1043,32 @@ pub fn tile_export(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// # Generated LLVM IR
 ///
 /// ```llvm
-/// declare float @cub_block_reduce_sum(float, ptr) #0
-/// attributes #0 = { convergent nounwind }
+/// declare float @cub_block_reduce_sum(float, ptr) convergent
 /// ```
 #[proc_macro_attribute]
 pub fn convergent(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    // This is a marker attribute - just pass through the item unchanged.
-    // The collector will read this attribute and apply the LLVM convergent attribute.
-    item
+    // The procedural attribute disappears during expansion. A doc alias is
+    // retained in metadata even for private foreign items, unlike doc comments.
+    let marker = reserved_oxide_symbols::DEVICE_EXTERN_CONVERGENT_MARKER;
+    let item = proc_macro2::TokenStream::from(item);
+    quote::quote!(#[doc(alias = #marker)] #item).into()
 }
 
-/// Marks a device function as pure (no side effects).
+/// Compatibility annotation for a pure device function.
 ///
-/// Pure functions only depend on their inputs and have no side effects.
-/// This enables aggressive optimizations like CSE and dead code elimination.
-///
-/// # When to Use
-///
-/// - Math functions that don't access memory
-/// - Functions that compute results purely from input arguments
-///
-/// # Example
-///
-/// ```ignore
-/// #[device]
-/// extern "C" {
-///     #[pure]
-///     fn fast_rsqrt(x: f32) -> f32;
-/// }
-/// ```
-///
-/// # Generated LLVM IR
-///
-/// ```llvm
-/// declare float @fast_rsqrt(float) #0
-/// attributes #0 = { nounwind readnone }
-/// ```
+/// This annotation is currently inactive: it records no compiler effect and
+/// emits no LLVM memory-effect attributes.
 #[proc_macro_attribute]
 pub fn pure(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    // Marker attribute - collector will read and apply LLVM readnone attribute
     item
 }
 
-/// Marks a device function as read-only.
+/// Compatibility annotation for a read-only device function.
 ///
-/// Read-only functions may read memory but never write to it.
-/// This enables optimizations like load hoisting and caching.
-///
-/// # When to Use
-///
-/// - Lookup table functions
-/// - Functions that only read from input arrays
-///
-/// # Example
-///
-/// ```ignore
-/// #[device]
-/// extern "C" {
-///     #[readonly]
-///     fn lookup_table(table: *const f32, idx: i32) -> f32;
-/// }
-/// ```
-///
-/// # Generated LLVM IR
-///
-/// ```llvm
-/// declare float @lookup_table(ptr, i32) #0
-/// attributes #0 = { nounwind readonly }
-/// ```
+/// This annotation is currently inactive: it records no compiler effect and
+/// emits no LLVM memory-effect attributes.
 #[proc_macro_attribute]
 pub fn readonly(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    // Marker attribute - collector will read and apply LLVM readonly attribute
     item
 }
 

@@ -5,6 +5,24 @@
 //!
 //! This module is an unsafe compiler integration point, not a collective API.
 
+/// Read a Cargo-provided registration and track its native build dependencies.
+///
+/// Pass the environment variable name as a string literal inside the registration
+/// getter. Materialized builds query the provider for file, directory and
+/// environment dependencies before rustc emits dep-info. Host checks and rustdoc
+/// do not query CUDA inputs. Cargo's timestamp freshness rules still apply;
+/// content changes preserving timestamps are not detected by this macro.
+///
+/// This snippet requires a build script to set `MY_LIBRARY_REGISTRATION`; the
+/// `native_library` example compiles and runs the same registration pattern.
+///
+/// ```ignore
+/// fn registration() -> &'static str {
+///     cuda_device::library::registration!("MY_LIBRARY_REGISTRATION")
+/// }
+/// ```
+pub use cuda_macros::library_registration as registration;
+
 /// Invoke a library recipe identified by a constant registration getter.
 ///
 /// Call this marker directly inside a wrapper; the marker itself is not a
@@ -21,7 +39,7 @@
 /// The caller must meet the provider's pointer, lifetime, initialization,
 /// participation, and launch-geometry requirements. Library scratch views in
 /// one kernel alias one dynamic shared base; the caller must synchronize before
-/// reusing it. This version does not permit mixing unplanned native dynamic
+/// reusing it. This version does not permit mixing native dynamic
 /// shared views with library calls. It returns no allocation or ownership token.
 #[inline(never)]
 pub unsafe fn cuda_oxide_library_v1_246e25db_call<

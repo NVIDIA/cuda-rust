@@ -53,13 +53,15 @@ Registration fields are:
 | `executable` | Absolute path to the built host provider |
 | `operation`, `algorithm` | Opaque recipe names interpreted by that provider |
 
-The runtime tuple starts with a const or mutable memory pointer and a mutable
-payload pointer. Remaining fields are supported fixed-width numeric values or
+The runtime tuple starts with memory and payload pointers, each const or mutable.
+Remaining fields are supported fixed-width numeric values or
 raw pointers. The provider declares the exact ordered types and pointer
 mutability; the compiler compares them with the Rust tuple. It inserts a
 generic `unsigned char*` scratch parameter at native argument index two.
 Small signed and unsigned integer values retain their native extension rules.
 The native function returns `void`.
+An operation that only reads its payload can accept const pointers derived
+from shared Rust borrows. The native provider must honor that declaration.
 
 ## Checked block helpers
 

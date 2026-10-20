@@ -61,8 +61,9 @@ pub use cuda_oxide_library_v1_246e25db_call as call_v1;
 ///
 /// The exact block shape comes from the root kernel's launch contract.
 /// `uniform` is `(memory_pointer, scalar_controls...)`; `payload` contains
-/// lane-local mutable payload pointers. The compiler checks all call contexts
-/// before reconstructing the provider's ordinary scalar/pointer ABI.
+/// lane-local const or mutable payload pointers matching the provider ABI.
+/// The compiler checks all call contexts before reconstructing the provider's
+/// ordinary scalar/pointer ABI.
 ///
 /// # Safety
 ///

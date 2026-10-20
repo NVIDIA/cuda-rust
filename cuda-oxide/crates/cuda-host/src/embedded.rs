@@ -158,6 +158,8 @@ pub fn load_all_ptx_bundles_merged(
 /// Empty anchor-only bundles do not participate in payload selection.
 ///
 /// `anchor` must belong to the host image whose artifacts are to be loaded.
+/// Generated loaders anchor the defining crate's host code; the instantiating
+/// crate must be linked into that same image. This applies to PTX builds too.
 /// Image discovery has the same platform and file-identity requirements as
 /// [`load_embedded_module_from_anchor`]. Entry lookup uses the exact concrete
 /// symbol name and retains each entry's compiled launch facts.

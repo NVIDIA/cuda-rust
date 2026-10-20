@@ -248,6 +248,9 @@ pub(crate) fn expand_cuda_module_inner(
             /// generic module, the selected native artifact or merged PTX set
             /// must contain each matching specialization and no conflicting
             /// entry definition.
+            /// On Linux, the defining crate's loader and the crate instantiating
+            /// generic kernels must be linked into the same host image. Native
+            /// and PTX discovery read that mapped image, with no fallback.
             pub unsafe fn load_async(
                 device_id: usize,
             ) -> ::core::result::Result<LoadedModule, ::cuda_host::cuda_async::simt::error::DeviceError> {
@@ -302,6 +305,9 @@ pub(crate) fn expand_cuda_module_inner(
             /// generic module, the selected native artifact or merged PTX set
             /// must contain each matching specialization and no conflicting
             /// entry definition.
+            /// On Linux, the defining crate's loader and the crate instantiating
+            /// generic kernels must be linked into the same host image. Native
+            /// and PTX discovery read that mapped image, with no fallback.
             pub unsafe fn load(
                 ctx: &::std::sync::Arc<::cuda_core::CudaContext>,
             ) -> ::core::result::Result<LoadedModule, ::cuda_host::EmbeddedModuleError> {
@@ -327,6 +333,9 @@ pub(crate) fn expand_cuda_module_inner(
             /// Every selected kernel must have the exact ABI and resource
             /// semantics declared by this `cuda_module`. A matching symbol
             /// name alone is not sufficient.
+            /// Generic instantiations must share the defining crate's host
+            /// image. On Linux, discovery reads that mapped image, without
+            /// falling back to the executable; the name hint is ignored.
             pub unsafe fn load_named(
                 ctx: &::std::sync::Arc<::cuda_core::CudaContext>,
                 name: &str,
@@ -339,6 +348,9 @@ pub(crate) fn expand_cuda_module_inner(
         }
     } else {
         quote! {
+            /// Generic instantiations must share the defining crate's host
+            /// image. On Linux, discovery reads that mapped image, without
+            /// falling back to the executable; the name hint is ignored.
             pub fn load_named(
                 ctx: &::std::sync::Arc<::cuda_core::CudaContext>,
                 name: &str,

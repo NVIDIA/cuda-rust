@@ -62,8 +62,7 @@ const TYPE_ID_HASH_LEN: usize = 32;
 /// One retained record: the (weakly held) owning module and its entry names.
 type RetainedEntries<T> = (Weak<T>, Arc<Vec<String>>);
 
-/// Process-wide map from a loaded module to the PTX `.entry` names it was
-/// built from.
+/// Process-wide map from a loaded module to its retained kernel entry names.
 ///
 /// Keyed by allocation identity of the owning [`Arc`]: a [`Weak`] pins the
 /// allocation (not the value), so pointer equality against a live `Arc` is
@@ -179,7 +178,7 @@ fn divergent_entries_in(entries: &[String], requested: &str) -> Vec<String> {
 /// name but carry a different `_TID_` type-identity hash.
 ///
 /// Empty when `requested` is not a `_TID_` name, when `module` was not loaded
-/// through [`crate::load_all_ptx_bundles_merged`], or when no same-base entry
+/// through a generic native or merged-PTX loader, or when no same-base entry
 /// exists; i.e. whenever the miss is an ordinary miss.
 pub fn divergent_type_id_entries(module: &Arc<CudaModule>, requested: &str) -> Vec<String> {
     match merged_module_entries().entries_for(module) {

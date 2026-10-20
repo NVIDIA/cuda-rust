@@ -23,4 +23,11 @@ fi
 grep -F 'inferred dynamic shared memory cannot include unconstrained' "$log"
 
 "${oxide[@]}" run compiled_launch_facts --arch "$arch" --features generic --materialize-cubin
-echo 'PASS: compiled launch facts and incomplete-plan rejection'
+"${oxide[@]}" run cross_crate_kernel --arch "$arch" --features native-ambiguity
+if "${oxide[@]}" run cross_crate_kernel --arch "$arch" --materialize-cubin --features native-ambiguity >"$log" 2>&1; then
+    echo "error: generic loading accepted separate native artifacts" >&2
+    exit 1
+fi
+grep -F 'IncompatibleGenericArtifacts' "$log"
+grep -F 'kernel-lib' "$log"
+echo 'PASS: compiled launch facts, incomplete-plan and native-ambiguity rejection'

@@ -432,3 +432,12 @@ specializations are in one embedded native artifact. They retain exact symbol
 lookup and compiled launch facts in one CUDA module. Multiple native artifacts
 or mixed native/PTX bundles are rejected because separate module loads would not
 preserve shared device globals. PTX-only builds continue to merge their bundles.
+
+On Linux, generic loaders read the mapped image containing the defining crate's
+host loader code. Link the crate that instantiates the kernels into that same
+image. This applies to both native and PTX loading and requires readable
+`/proc/self/maps` and `/proc/self/map_files`; a missing or replaced mapped file
+is an error. The loader does not fall back to the process executable.
+A concrete kernel compiled in a dependency can create a second native artifact;
+keep native specializations in one emitting crate. A missing specialization in
+an otherwise selected artifact fails at kernel lookup.

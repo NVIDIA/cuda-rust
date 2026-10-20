@@ -1,5 +1,10 @@
 # Cross-Crate Kernel Example
 
+The `native-ambiguity` feature adds a concrete library kernel. With
+`--materialize-cubin`, this produces separate library and consumer CUBINs;
+the generic loader reports their incompatible topology. The compiled launch
+facts script exercises this expected rejection.
+
 This example demonstrates **defining type- and const-generic kernels in a
 library crate** and instantiating them from a binary crate.
 

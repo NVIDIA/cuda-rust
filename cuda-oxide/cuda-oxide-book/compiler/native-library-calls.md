@@ -208,8 +208,9 @@ the thunk; it must not inspect, mutate, retain, free or publish that address.
 The compiler discovers and retains the selected thunk even when no Rust call
 invokes it directly. Its definition joins the kernel roots for optimization and
 linking. Callback bodies may call ordinary scalar Rust helpers. CUDA resource
-operations/types, foreign or indirect calls, inline assembly and unqualified
-compiler intrinsics are rejected transitively. Resource-bearing callbacks need
+operations/types (including generated CUDA intrinsics), foreign or indirect
+calls, inline assembly and unqualified compiler intrinsics are rejected
+transitively. Resource-bearing callbacks need
 an explicit root/storage binding and are outside this version. This raw marker
 also requires block-uniform callable specialization and capture values; it does
 not prove them, and lane-private environment addresses need not be equal.

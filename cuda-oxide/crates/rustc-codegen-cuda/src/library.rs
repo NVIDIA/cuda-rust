@@ -12,7 +12,7 @@ use oxide_artifacts::KernelLaunchFacts;
 use rustc_hir::def_id::{CRATE_DEF_INDEX, DefId};
 use rustc_middle::mir::{BasicBlock, Operand, RETURN_PLACE, Rvalue, StatementKind, TerminatorKind};
 use rustc_middle::ty::consts::ConstExt;
-use rustc_middle::ty::{Instance, Ty, TyCtxt, TyKind, TypingEnv};
+use rustc_middle::ty::{Instance, InstanceKind, ShimKind, Ty, TyCtxt, TyKind, TypingEnv};
 use rustc_span::Span;
 use serde::{Deserialize, Serialize};
 
@@ -466,9 +466,14 @@ fn validate_callback_body<'tcx>(
     collection: &CollectionResult<'tcx>,
     thunk: Instance<'tcx>,
 ) -> Result<(), String> {
+    let is_cuda_definition = |def: DefId| {
+        let name = tcx.crate_name(def.krate);
+        name.as_str() == "cuda_device"
+            || crate::generated_intrinsics::is_generated_intrinsic_crate(name.as_str())
+    };
     for instance in reachable_instances(collection, thunk) {
         let def = instance.def_id();
-        if tcx.crate_name(def.krate).as_str() == "cuda_device" {
+        if is_cuda_definition(def) {
             return Err(format!(
                 "scalar callback cannot reach CUDA resource or collective operation `{}`",
                 tcx.def_path_str(def)
@@ -480,12 +485,21 @@ fn validate_callback_body<'tcx>(
         if tcx.intrinsic(def).is_some() {
             return Err("scalar callback cannot reach an unqualified compiler intrinsic".into());
         }
+        if matches!(instance.def, InstanceKind::Virtual(..))
+            || matches!(instance.def, InstanceKind::Shim(ShimKind::FnPtr(_, receiver))
+                if !matches!(receiver.kind(), TyKind::FnDef(..)))
+        {
+            return Err("scalar callback cannot contain an indirect call".into());
+        }
         if !tcx.is_mir_available(def) {
-            // Fn trait dispatch is represented by a separate concrete receiver
-            // edge. Other opaque bodies cannot establish the scalar-only limit.
-            if tcx
-                .trait_of_assoc(def)
-                .is_some_and(|id| tcx.fn_trait_kind_from_def_id(id).is_some())
+            // Only these shims have a concrete receiver body separately rooted
+            // by the collector. A trait method alone does not identify a body.
+            if matches!(instance.def, InstanceKind::Shim(ShimKind::FnPtr(_, receiver))
+                if matches!(receiver.kind(), TyKind::FnDef(..)))
+                || matches!(
+                    instance.def,
+                    InstanceKind::Shim(ShimKind::ClosureOnce { .. })
+                )
             {
                 continue;
             }
@@ -504,7 +518,7 @@ fn validate_callback_body<'tcx>(
             for argument in ty.walk() {
                 if let Some(ty) = argument.as_type()
                     && let TyKind::Adt(def, _) = ty.kind()
-                    && tcx.crate_name(def.did().krate).as_str() == "cuda_device"
+                    && is_cuda_definition(def.did())
                 {
                     return Err(format!(
                         "scalar callback cannot contain CUDA resource type `{ty}`"
@@ -530,9 +544,7 @@ fn validate_callback_body<'tcx>(
                     let TyKind::FnDef(callee, _) = ty.kind() else {
                         return Err("scalar callback cannot contain an indirect call".into());
                     };
-                    if tcx.crate_name(callee.krate).as_str() == "cuda_device"
-                        || tcx.is_foreign_item(*callee)
-                    {
+                    if is_cuda_definition(*callee) || tcx.is_foreign_item(*callee) {
                         return Err(format!(
                             "scalar callback cannot reach CUDA resources or foreign calls: `{}`",
                             tcx.def_path_str(*callee)

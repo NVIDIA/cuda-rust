@@ -268,6 +268,62 @@ pub(super) struct CargoExecutableArtifact {
     pub(super) path: PathBuf,
 }
 
+/// Infer the artifact stem for a standalone project from Cargo's targets.
+/// Keep the package-named target when present, as for workspace examples;
+/// otherwise a sole binary or library target supplies its own crate name.
+pub fn standalone_crate_name(manifest_dir: &Path) -> Result<String, String> {
+    let metadata = cargo_metadata(manifest_dir)?;
+    let manifest_path = manifest_dir.join("Cargo.toml");
+    let manifest_path = manifest_path
+        .canonicalize()
+        .map_err(|error| format!("could not resolve {}: {error}", manifest_path.display()))?;
+    let packages = metadata
+        .get("packages")
+        .and_then(|packages| packages.as_array())
+        .ok_or_else(|| "Cargo metadata did not include packages".to_string())?;
+    let selected = cargo_selected_packages(&metadata, packages, &manifest_path)?;
+    let [package] = selected.as_slice() else {
+        return Err("run from a single Cargo package to select its device artifact".to_string());
+    };
+    let package_name = cargo_package_name(package)?;
+    let targets = package
+        .get("targets")
+        .and_then(|targets| targets.as_array())
+        .ok_or_else(|| "Cargo metadata did not include package targets".to_string())?;
+    let mut names: Vec<_> = targets
+        .iter()
+        .filter(|target| {
+            target
+                .get("kind")
+                .and_then(|kind| kind.as_array())
+                .is_some_and(|kinds| {
+                    kinds.iter().any(|kind| {
+                        matches!(
+                            kind.as_str(),
+                            Some("bin" | "lib" | "rlib" | "staticlib" | "cdylib" | "dylib")
+                        )
+                    })
+                })
+        })
+        .filter_map(|target| target.get("name").and_then(|name| name.as_str()))
+        .map(artifact_stem)
+        .collect();
+    names.sort();
+    names.dedup();
+    let package_stem = artifact_stem(package_name);
+    if names.contains(&package_stem) {
+        return Ok(package_stem);
+    }
+    if let [name] = names.as_slice() {
+        return Ok(name.clone());
+    }
+    Err(format!(
+        "could not choose a device artifact for package `{package_name}`; \
+         pass the binary or library target name explicitly (available: {})",
+        names.join(", ")
+    ))
+}
+
 pub(super) fn cargo_executable_selection(
     manifest_dir: &Path,
     explicit_bin: Option<&str>,
@@ -365,7 +421,7 @@ fn cargo_package_manifest_matches(package: &serde_json::Value, manifest_path: &P
         .is_some_and(|path| path == manifest_path)
 }
 
-fn cargo_metadata(manifest_dir: &Path) -> Result<serde_json::Value, String> {
+pub(super) fn cargo_metadata(manifest_dir: &Path) -> Result<serde_json::Value, String> {
     let output = Command::new("cargo")
         .args(["metadata", "--format-version=1", "--no-deps"])
         .current_dir(manifest_dir)

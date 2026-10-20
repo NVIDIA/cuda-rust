@@ -430,6 +430,127 @@ fn emit_ltoir_paths_use_normalized_crate_stem() {
 }
 
 #[test]
+fn standalone_artifact_name_comes_from_cargo_targets() {
+    for (target, source, expected) in [
+        ("", "src/main.rs", "device_export"),
+        (
+            "[[bin]]\nname = \"custom-bin\"\npath = \"src/main.rs\"\n",
+            "src/main.rs",
+            "custom_bin",
+        ),
+        (
+            "[lib]\nname = \"custom_library\"\n",
+            "src/lib.rs",
+            "custom_library",
+        ),
+    ] {
+        let root = unique_temp_dir("directory_unrelated_to_package");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"device-export\"\nversion = \"0.1.0\"\n\
+                 edition = \"2024\"\n[workspace]\n{target}"
+            ),
+        )
+        .unwrap();
+        std::fs::write(root.join(source), "fn main() {}\n").unwrap();
+
+        let name = standalone_crate_name(&root).unwrap();
+        assert_eq!(name, expected);
+        assert_eq!(
+            emitted_ll_path(&root, &name),
+            root.join(format!("{expected}.ll"))
+        );
+        assert_eq!(
+            default_ltoir_path(&root, &name),
+            root.join(format!("{expected}.ltoir"))
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn standalone_artifact_name_preserves_package_target_and_rejects_ambiguity() {
+    let root = unique_temp_dir("cargo_oxide_artifact_multi_target");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(root.join("src/other.rs"), "fn main() {}\n").unwrap();
+    for name in ["device-export", "other-package"] {
+        std::fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n\
+                 edition = \"2024\"\ndefault-run = \"other\"\n[workspace]\n\
+                 [[bin]]\nname = \"device-export\"\npath = \"src/main.rs\"\n\
+                 [[bin]]\nname = \"other\"\npath = \"src/other.rs\"\n"
+            ),
+        )
+        .unwrap();
+        let result = standalone_crate_name(&root);
+        if name == "device-export" {
+            // `cargo build` builds both bins; default-run does not select the IR.
+            assert_eq!(result.unwrap(), "device_export");
+        } else {
+            let error = result.unwrap_err();
+            assert!(
+                error.contains("pass the binary or library target name explicitly"),
+                "{error}"
+            );
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn standalone_artifact_name_uses_workspace_package_selection() {
+    let root = unique_temp_dir("cargo_oxide_artifact_workspace");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"first\", \"second\"]\ndefault-members = [\"first\"]\nresolver = \"3\"\n",
+    )
+    .unwrap();
+    for member in ["first", "second"] {
+        let dir = root.join(member);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"{member}-package\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+    }
+    assert_eq!(standalone_crate_name(&root).unwrap(), "first_package");
+    let member = root.join("second");
+    assert_eq!(standalone_crate_name(&member).unwrap(), "second_package");
+    let ctx = test_context(OxideConfig::default());
+    let (build_ctx, ir_dir) = ltoir_build_context(&ctx, &member, None).unwrap();
+    assert_eq!(ir_dir, member);
+    assert_eq!(
+        project_config_env(&build_ctx, "CUDA_OXIDE_PTX_DIR"),
+        member.to_str()
+    );
+
+    // An explicit relative backend override retains Cargo workspace semantics,
+    // even though this command was invoked from a different selected member.
+    let mut ctx = ctx;
+    ctx.config
+        .env
+        .push(("CUDA_OXIDE_PTX_DIR".into(), "configured-ir".into()));
+    let (_, configured) = ltoir_build_context(&ctx, &member, None).unwrap();
+    assert_eq!(
+        configured,
+        root.canonicalize().unwrap().join("configured-ir")
+    );
+    let (_, inherited) = ltoir_build_context(&ctx, &member, Some("inherited-ir".into())).unwrap();
+    assert_eq!(inherited, root.canonicalize().unwrap().join("inherited-ir"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn generated_file_cleanup_preserves_ltoir_cubin_cache() {
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

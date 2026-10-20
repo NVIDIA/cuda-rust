@@ -143,7 +143,8 @@ impl Fact {
             // This conditional analysis fact is only valid at enum joins or
             // after a Downcast. It never reads an inactive variant's bytes.
             Self::Enum { fields, .. } => fields.get(index).cloned().unwrap_or(Self::Uniform),
-            _ => self.field(index),
+            Self::Uniform | Self::Kernel(_) | Self::Resource(_) => self.field(index),
+            _ => Self::Varying,
         }
     }
 }

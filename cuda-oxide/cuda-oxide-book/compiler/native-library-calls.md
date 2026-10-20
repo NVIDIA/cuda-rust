@@ -32,8 +32,16 @@ contain one return block and one assignment of that constant to its result.
 Closures, function pointers and computed getters are rejected. The compiler
 reads the constant without running Rust device code. A Cargo build script can
 embed the string with `cargo::rustc-env` and serve as the already-built native
-provider. It must recognize the provider argument before its ordinary Cargo
-build-script behavior.
+provider. Read it through the registration macro so Cargo tracks native inputs:
+
+```rust,ignore
+fn registration() -> &'static str {
+    cuda_device::library::registration!("MY_LIBRARY_REGISTRATION")
+}
+```
+
+The macro expands to the same constant string. The provider executable must
+recognize its protocol arguments before its ordinary Cargo build-script behavior.
 
 Registration fields are:
 
@@ -89,8 +97,51 @@ identities and ABI mismatches fail compilation.
 
 The production provider is responsible for truthful layouts and identities
 covering its sources, headers, recipes and toolchain. Returning owned bytes
-avoids a second read of a mutable LTO file during finalization. Cargo/provider
-invalidation must still arrange recompilation when those inputs change.
+avoids a second read of a mutable LTO file during finalization. The registration
+macro tracks native inputs before rustc emits dep-info;
+manual registration getters must arrange equivalent dependency tracking.
+
+## Native input dependencies
+
+The registration macro tracks its environment variable, the provider executable,
+CUDA_HOME/CUDA_PATH selection, and the device compilation settings. During CUBIN
+materialization it invokes the provider with `--oxide-library-inputs-v1`. Ordinary
+host builds and rustdoc do not query toolkit inputs or require installed CUDA.
+
+The input query reads stdin through EOF. Its JSON request is
+`{"version":1,"cuda_root":"/selected/toolkit","target":"compute_120"}`.
+Stdout is one JSON response with `version: 1`, `paths` (absolute file or directory
+paths) and `environment` (additional environment variable names). Requests and
+responses are limited to 1 MiB. Diagnostics go to stderr; failures exit nonzero.
+Unknown fields, invalid versions, relative/missing paths and invalid environment
+names are errors. The query declares dependencies without compiling native code.
+
+The library owns this inventory, including sources, headers, compiler tools and
+any environment affecting their selection or behavior. Directories are tracked
+recursively so adding a header also causes recompilation. The macro records
+these dependencies in the library crate; Cargo propagates its rebuild to
+consumers and concrete generic kernel instantiations. The compiler has no
+library-specific header layout or native cache.
+
+Cargo's timestamp freshness rules apply. Edits that preserve timestamps can
+remain undetected; clean/rebuild the affected crates after such external changes.
+The `native_library` example tracks its provider, CUDA tools/headers, host compiler
+driver and relevant environment. It assumes the host compiler's installed system
+headers and libraries remain unchanged during a build; its declarations are not
+a general inventory of an arbitrary C++ toolchain.
+
+## Debug information
+
+Providers choose the debug information in their LTO-IR; the compiler preserves
+it during linking. With CUDA 13.3, Rust `--lineinfo` and native nvcc
+`--generate-line-info` can be combined, retaining both source line tables.
+Rust `--device-debug` also works with a provider built without debug information,
+as exercised by the `native_library` full-debug smoke route.
+
+CUDA 13.3 rejects nvcc `-G` with `-dlto`. Linking Rust full debug with native line
+information also fails in nvJitLink when it sees more than one debug compilation
+unit. Select a supported combination explicitly; provider metadata is not
+silently stripped to make these combinations link.
 
 ## Resources and unsafe obligations
 

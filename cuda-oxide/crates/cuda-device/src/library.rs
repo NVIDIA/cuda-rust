@@ -5,6 +5,24 @@
 //!
 //! This module is an unsafe compiler integration point, not a collective API.
 
+/// Read a Cargo-provided registration and track its native build dependencies.
+///
+/// Pass the environment variable name as a string literal inside the registration
+/// getter. Materialized builds query the provider for file, directory and
+/// environment dependencies before rustc emits dep-info. Host checks and rustdoc
+/// do not query CUDA inputs. Cargo's timestamp freshness rules still apply;
+/// content changes preserving timestamps are not detected by this macro.
+///
+/// This snippet requires a build script to set `MY_LIBRARY_REGISTRATION`; the
+/// `native_library` example compiles and runs the same registration pattern.
+///
+/// ```ignore
+/// fn registration() -> &'static str {
+///     cuda_device::library::registration!("MY_LIBRARY_REGISTRATION")
+/// }
+/// ```
+pub use cuda_macros::library_registration as registration;
+
 /// Invoke a library recipe identified by a constant registration getter.
 ///
 /// Call this marker directly inside a wrapper; the marker itself is not a

@@ -373,7 +373,7 @@ fn module_inner(
             pub mod #name {
                 #![allow(nonstandard_style)]
                 #![allow(dead_code)]
-                #![allow(unused_variables)]
+                #![allow(unused_variables, unreachable_code, unused_mut)]
                 // Kernel source is a Rust subset with its own idioms (`a = a + b`,
                 // explicit closures for reduce regions, trailing `return`); clippy's
                 // host-Rust style lints do not apply to it.
@@ -389,7 +389,9 @@ fn module_inner(
     } else {
         quote! {
             pub mod #name {
+                #![allow(nonstandard_style)]
                 #![allow(dead_code)]
+                #![allow(unused_variables, unreachable_code, unused_mut)]
                 // Kernel source is a Rust subset with its own idioms; see above.
                 #![allow(clippy::all)]
                 // Entry point dependencies.

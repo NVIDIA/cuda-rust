@@ -4,7 +4,7 @@
  */
 
 #![allow(non_snake_case)]
-//! Thread Block Cluster intrinsics for Hopper (sm_90+).
+//! Thread block cluster queries and Hopper (sm_90+) cluster operations.
 //!
 //! Thread Block Clusters are a new hierarchy level introduced in NVIDIA Hopper
 //! that groups multiple thread blocks together. Blocks within a cluster can:
@@ -25,8 +25,23 @@
 //!
 //! # Hardware Requirements
 //!
-//! - Minimum: sm_90 (Hopper: H100, H200)
+//! - Native cluster operations require sm_90 (Hopper: H100, H200)
 //! - Blackwell (sm_100/sm_120) extends cluster capabilities
+//!
+//! # Queries on earlier targets
+//!
+//! When compiling for a known target below sm90, the position and dimension
+//! queries in this module treat each block as its own cluster. Block coordinates
+//! and [`block_rank`] are zero; cluster dimensions and [`cluster_size`] are one.
+//! [`cluster_idx`] returns the linear block index, and [`num_clusters`] returns
+//! the number of blocks in the grid.
+//!
+//! An explicit target (for example, `cargo oxide build --arch sm_80`) takes
+//! precedence over a detected device. If a pre-sm90 device hint selects these
+//! semantics, the compiler binds that target and rejects incompatible operations.
+//! Without a target or device hint, queries retain native sm90+ requirements.
+//! Raw `cuda_intrinsics` cluster queries, synchronization, and distributed shared
+//! memory operations always retain their hardware requirements.
 //!
 //! # Cluster Dimensions
 //!
@@ -76,7 +91,7 @@
 ///
 /// # PTX
 ///
-/// Lowers to: `mov.u32 %r, %cluster_ctaid.x`
+/// On sm90+: `mov.u32 %r, %cluster_ctaid.x`. On earlier targets: zero.
 #[inline(never)]
 pub fn cluster_ctaidX() -> u32 {
     unreachable!("cluster_ctaidX called outside CUDA kernel context")
@@ -88,7 +103,7 @@ pub fn cluster_ctaidX() -> u32 {
 ///
 /// # PTX
 ///
-/// Lowers to: `mov.u32 %r, %cluster_ctaid.y`
+/// On sm90+: `mov.u32 %r, %cluster_ctaid.y`. On earlier targets: zero.
 #[inline(never)]
 pub fn cluster_ctaidY() -> u32 {
     unreachable!("cluster_ctaidY called outside CUDA kernel context")
@@ -100,7 +115,7 @@ pub fn cluster_ctaidY() -> u32 {
 ///
 /// # PTX
 ///
-/// Lowers to: `mov.u32 %r, %cluster_ctaid.z`
+/// On sm90+: `mov.u32 %r, %cluster_ctaid.z`. On earlier targets: zero.
 #[inline(never)]
 pub fn cluster_ctaidZ() -> u32 {
     unreachable!("cluster_ctaidZ called outside CUDA kernel context")
@@ -117,7 +132,7 @@ pub fn cluster_ctaidZ() -> u32 {
 ///
 /// # PTX
 ///
-/// Lowers to: `mov.u32 %r, %cluster_nctaid.x`
+/// On sm90+: `mov.u32 %r, %cluster_nctaid.x`. On earlier targets: one.
 #[inline(never)]
 pub fn cluster_nctaidX() -> u32 {
     unreachable!("cluster_nctaidX called outside CUDA kernel context")
@@ -127,7 +142,7 @@ pub fn cluster_nctaidX() -> u32 {
 ///
 /// # PTX
 ///
-/// Lowers to: `mov.u32 %r, %cluster_nctaid.y`
+/// On sm90+: `mov.u32 %r, %cluster_nctaid.y`. On earlier targets: one.
 #[inline(never)]
 pub fn cluster_nctaidY() -> u32 {
     unreachable!("cluster_nctaidY called outside CUDA kernel context")
@@ -137,7 +152,7 @@ pub fn cluster_nctaidY() -> u32 {
 ///
 /// # PTX
 ///
-/// Lowers to: `mov.u32 %r, %cluster_nctaid.z`
+/// On sm90+: `mov.u32 %r, %cluster_nctaid.z`. On earlier targets: one.
 #[inline(never)]
 pub fn cluster_nctaidZ() -> u32 {
     unreachable!("cluster_nctaidZ called outside CUDA kernel context")
@@ -157,7 +172,8 @@ include!("generated/cluster_sreg.rs");
 /// # PTX
 ///
 /// Lowers to documented `%clusterid.{x,y,z}` / `%nclusterid.{x,y}` reads and
-/// computes `x + y * nx + z * nx * ny`.
+/// computes `x + y * nx + z * nx * ny`. Below sm90, uses ordinary block
+/// coordinates and grid dimensions in the same expression.
 #[inline(always)]
 pub fn cluster_idx() -> u32 {
     let x = __cluster_idxX();
@@ -173,6 +189,7 @@ pub fn cluster_idx() -> u32 {
 /// # PTX
 ///
 /// Lowers to documented `%nclusterid.{x,y,z}` reads and computes `nx * ny * nz`.
+/// Below sm90, uses ordinary grid dimensions instead.
 #[inline(always)]
 pub fn num_clusters() -> u32 {
     __cluster_grid_dimX() * __cluster_grid_dimY() * __cluster_grid_dimZ()

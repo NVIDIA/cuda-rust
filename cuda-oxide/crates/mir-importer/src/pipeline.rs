@@ -450,6 +450,21 @@ fn backend_options_for(config: &PipelineConfig) -> BackendOptions {
     backend_options
 }
 
+/// Select single-block-cluster semantics only for a known pre-sm90 target.
+/// Invalid inputs are still diagnosed by the shared backend validator.
+fn cluster_query_fallback_target(options: &BackendOptions) -> Option<String> {
+    if let Some(target) = &options.target_arch {
+        let target = cuda_oxide_codegen::experimental::Target::parse(target).ok()?;
+        return (target.capability() < 90).then(|| target.sm());
+    }
+    match &options.device_arch_hint {
+        Some(DeviceArchHint::Valid(arch)) if arch.as_ref().capability() < 90 => {
+            Some(arch.as_ref().sm())
+        }
+        _ => None,
+    }
+}
+
 /// Runs the full compilation pipeline on collected functions.
 ///
 /// # Pipeline Steps
@@ -505,6 +520,10 @@ pub fn run_pipeline(
 
     prepare_output_dir(&config.output_dir)?;
 
+    let mut backend_options = backend_options_for(config);
+    let cluster_query_target = cluster_query_fallback_target(&backend_options);
+    let mut used_cluster_query_fallback = false;
+
     let mut ctx = Context::new();
 
     // Step 1: Register dialects
@@ -541,7 +560,7 @@ pub fn run_pipeline(
             .body()
             .ok_or_else(|| PipelineError::NoBody(func.export_name.clone()))?;
 
-        let func_op_ptr = crate::translator::body::translate_body(
+        let (func_op_ptr, used_fallback) = crate::translator::body::translate_body(
             &mut ctx,
             &body,
             &func.instance,
@@ -554,11 +573,13 @@ pub fn run_pipeline(
             config.debug_kind,
             func.debug_source_scopes.as_ref(),
             func.statement_debug_info.as_ref(),
+            cluster_query_target.is_some(),
         )
         .map_err(|e| {
             // Use .disp(&ctx) for rich error formatting with location and backtrace
             PipelineError::Translation(format!("{}: {}", func.export_name, e.disp(&ctx)))
         })?;
+        used_cluster_query_fallback |= used_fallback;
 
         if config.debug_kind.variables_enabled() {
             attach_debug_global_variables(&mut ctx, func_op_ptr, &config.debug_global_variables);
@@ -594,7 +615,15 @@ pub fn run_pipeline(
         .join(format!("{}.ptx", config.output_name));
     let stale_artifacts = stale_compilation_artifact_paths(&config.output_dir, &config.output_name);
 
-    let backend_options = backend_options_for(config);
+    // Like IKET materialization, target-dependent query lowering must bind an
+    // advisory device hint before later feature-based target selection. A
+    // higher-floor operation must reject this target, not silently retarget
+    // a module whose cluster queries already use single-block semantics.
+    if used_cluster_query_fallback && backend_options.target_arch.is_none() {
+        backend_options.target_arch = cluster_query_target;
+        backend_options.target_arch_source =
+            "the device hint, pinned by pre-sm90 cluster query fallback";
+    }
 
     let request = ModulePipelineRequest::for_rust_pipeline(
         device_externs,
@@ -763,6 +792,28 @@ mod tests {
     use super::*;
     use llvm_export::ops::DebugLocalTypeKind;
     use std::fs;
+
+    #[test]
+    fn cluster_query_fallback_requires_a_known_pre90_target() {
+        for (explicit, hint, expected) in [
+            (None, None, None),
+            (None, Some("sm_80"), Some("sm_80")),
+            (None, Some("sm_120"), None),
+            (None, Some("invalid"), None),
+            (Some("sm_80"), Some("sm_120"), Some("sm_80")),
+            (Some("sm_120"), Some("sm_80"), None),
+            (Some("invalid"), Some("sm_80"), None),
+        ] {
+            let mut options = BackendOptions::default();
+            options.target_arch = explicit.map(str::to_owned);
+            options.device_arch_hint = hint.map(|hint| DeviceArchHint::parse(hint.to_owned()));
+            assert_eq!(
+                cluster_query_fallback_target(&options).as_deref(),
+                expected,
+                "explicit={explicit:?}, hint={hint:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_pipeline_config_default_values() {

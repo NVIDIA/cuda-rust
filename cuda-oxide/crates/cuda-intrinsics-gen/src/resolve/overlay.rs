@@ -113,7 +113,7 @@ pub(super) fn read_overlay(
         let sparse_mma_f8f6f4_admission = shard.sparse_mma_f8f6f4_f32.take();
         let sparse_mma_f8f6f4_f16_admission = shard.sparse_mma_f8f6f4_f16.take();
         let sparse_mma_fp8_f32_admission = shard.sparse_mma_fp8_f32.take();
-        let sparse_mma_ampere_float_admission = shard.sparse_mma_ordered_ampere_float.take();
+        let sparse_mma_ampere_float_admission = shard.sparse_mma_ampere_float.take();
         let prmt_admission = shard.prmt.take();
         let packed_conversion_fp8_admission = shard.packed_conversion_fp8.take();
         let packed_conversion_fp8_bf16x2_admission = shard.packed_conversion_fp8_bf16x2.take();
@@ -239,9 +239,9 @@ pub(super) fn read_overlay(
         if let Some(admission) = sparse_mma_ampere_float_admission {
             ensure!(
                 shard.family == "sparse_mma" && shard.intrinsics.is_empty(),
-                "compact ordered Ampere floating sparse MMA admission must be the only content of a sparse_mma shard"
+                "compact Ampere floating sparse MMA admission must be the only content of a sparse_mma shard"
             );
-            shard.intrinsics = expand_sparse_mma_ordered_ampere_float_admission(&admission)?;
+            shard.intrinsics = expand_sparse_mma_ampere_float_admission(&admission)?;
         }
         if let Some(admission) = prmt_admission {
             ensure!(
@@ -438,9 +438,9 @@ pub(super) fn validate_overlay_shard_schema_with_max(
         SPARSE_MMA_F8F6F4_F16_SHARD_SCHEMA
     );
     ensure!(
-        shard.sparse_mma_ordered_ampere_float.is_none()
+        shard.sparse_mma_ampere_float.is_none()
             || shard.schema >= SPARSE_MMA_AMPERE_FLOAT_SHARD_SCHEMA,
-        "compact ordered Ampere floating sparse MMA admission requires overlay shard schema {}",
+        "compact Ampere floating sparse MMA admission requires overlay shard schema {}",
         SPARSE_MMA_AMPERE_FLOAT_SHARD_SCHEMA
     );
     ensure!(

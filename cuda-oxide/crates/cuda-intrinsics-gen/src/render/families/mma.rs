@@ -363,6 +363,11 @@ pub(in crate::render) const SPARSE_MMA_STANDARD_METADATA_RULE: &str = "Every 4-b
 pub(in crate::render) const SPARSE_MMA_ORDERED_METADATA_RULE: &str = "Every 4-bit metadata group must be `0x4`, `0x8`, `0x9`, `0xc`, `0xd`, or `0xe`; any other value is undefined behavior.";
 pub(in crate::render) const SPARSE_MMA_ORDERED_TF32_METADATA_RULE: &str =
     "Every 4-bit metadata group must be `0x4` or `0xe`; any other value is undefined behavior.";
+// The ISA lists twelve codes (any two distinct 2-bit indices; 0x0, 0x5, 0xa,
+// 0xf are undefined). The six ascending codes are 0x4, 0x8, 0x9, 0xc, 0xd,
+// 0xe, and sm_120 also honors 0x6. This is the supported set for plain
+// 16-bit forms.
+pub(in crate::render) const SPARSE_MMA_STANDARD_F16_BF16_METADATA_RULE: &str = "Every 4-bit metadata group must be `0x4`, `0x6`, `0x8`, `0x9`, `0xc`, `0xd`, or `0xe`; any other value is undefined behavior.";
 
 pub(in crate::render) fn sparse_mma_metadata_rule(mma: &SparseMma) -> &'static str {
     match (mma.metadata, mma.a_element) {
@@ -371,6 +376,9 @@ pub(in crate::render) fn sparse_mma_metadata_rule(mma: &SparseMma) -> &'static s
         // https://docs.nvidia.com/cuda/archive/12.4.1/parallel-thread-execution/index.html#warp-level-sparse-matrix-storage
         (SparseMmaMetadata::Standard, SparseMmaElement::E4m3 | SparseMmaElement::E5m2) => {
             SPARSE_MMA_ORDERED_METADATA_RULE
+        }
+        (SparseMmaMetadata::Standard, SparseMmaElement::F16 | SparseMmaElement::Bf16) => {
+            SPARSE_MMA_STANDARD_F16_BF16_METADATA_RULE
         }
         (SparseMmaMetadata::Standard, _) => SPARSE_MMA_STANDARD_METADATA_RULE,
         (SparseMmaMetadata::Ordered, SparseMmaElement::Tf32) => {

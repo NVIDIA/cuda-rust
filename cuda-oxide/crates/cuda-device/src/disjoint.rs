@@ -82,12 +82,12 @@ pub trait SpaceLayout: space_layout_sealed::Sealed {
 
 /// Collective-only storage with a fixed ownership grain per physical thread.
 ///
-/// Use as the space of a kernel's `DisjointSlice<T, CollectiveTiles<ITEMS>>`.
+/// Use as the space of a kernel's `DisjointSlice<T, CollectiveTiles<CAPACITY>>`.
 /// It has the ordinary pointer/length launch packet, but no safe lane or tile
-/// reference accessors. Compiler-checked library wrappers validate that each
-/// operation stays inside its group's canonical tile and that conflicting
-/// accesses are separated by explicit completion. The capacity remains fixed
-/// when an operation uses a different item count.
+/// reference accessors. Library wrappers check each operation's bounds and
+/// canonical tile at runtime, trapping on failure. The compiler checks that
+/// conflicting accesses are separated by explicit completion. The capacity
+/// remains fixed when an operation uses a different item count.
 ///
 /// This type supplies no participation, bounds or synchronization proof by
 /// itself. Raw access retains the corresponding unsafe obligations.

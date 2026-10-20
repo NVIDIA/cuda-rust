@@ -5,7 +5,7 @@
 use crate::collector::{CollectionResult, device_mono_reachability};
 use crate::library::storage::{self, Event, Plan, Policy, Site, Trace};
 use crate::library::{EdgeKind, MarkerKind, reachable_instances};
-use rustc_middle::ty::{Instance, TyCtxt};
+use rustc_middle::ty::{Instance, Ty, TyCtxt, TyKind, TypingEnv};
 use rustc_public::{mir, rustc_internal};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -268,6 +268,39 @@ fn invalidate_borrows(state: &mut State, borrowed: &HashSet<usize>) {
             fact.invalidate_referents();
         }
     }
+}
+// A joined reference can lose its target fact while retaining its concrete
+// aggregate type. Descriptor replacement must still reject before preserving
+// any borrowed Resource facts across that write.
+fn contains_resource_descriptor<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    let mut pending = vec![ty];
+    let mut visited = HashSet::new();
+    while let Some(ty) = pending.pop() {
+        if !visited.insert(ty) {
+            continue;
+        }
+        if crate::library::resource_parameter(tcx, ty) || storage::storage_handle_type(tcx, ty) {
+            return true;
+        }
+        match ty.kind() {
+            TyKind::Ref(_, inner, _)
+            | TyKind::RawPtr(inner, _)
+            | TyKind::Array(inner, _)
+            | TyKind::Slice(inner) => pending.push(*inner),
+            TyKind::Tuple(fields) => pending.extend(fields.iter()),
+            TyKind::Adt(def, args) => {
+                pending.extend(def.all_fields().map(|field| {
+                    tcx.normalize_erasing_regions(
+                        TypingEnv::fully_monomorphized(),
+                        field.ty(tcx, args),
+                    )
+                }));
+            }
+            TyKind::Closure(_, args) => pending.push(args.as_closure().tupled_upvars_ty()),
+            _ => {}
+        }
+    }
+    false
 }
 fn write(place: &mir::Place, value: Fact, state: &mut State, borrowed: &HashSet<usize>) {
     let mut local = place.local;
@@ -552,7 +585,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 let Some(mut state) = incoming[block].clone() else {
                     continue;
                 };
-                self.statements(&body, block, &mut state, divergent[block], &borrowed);
+                self.statements(&body, block, &mut state, divergent[block], &borrowed, None)?;
                 if let mir::TerminatorKind::SwitchInt { discr, .. } =
                     &body.blocks[block].terminator.kind
                     && !operand(discr, &state).uniform()
@@ -634,10 +667,14 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             let Some(mut state) = incoming[block].clone() else {
                 continue;
             };
-            if validate && (self.resource_root || self.storage_root) {
-                self.check_resource_mutation(&body, instance, block, &state)?;
-            }
-            self.statements(&body, block, &mut state, divergent[block], &borrowed);
+            self.statements(
+                &body,
+                block,
+                &mut state,
+                divergent[block],
+                &borrowed,
+                (validate && (self.resource_root || self.storage_root)).then_some(instance),
+            )?;
             if validate {
                 if matches!(
                     body.blocks[block].terminator.kind,
@@ -693,55 +730,46 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         body: &mir::Body,
         instance: Instance<'tcx>,
         block: usize,
+        statement: &mir::Statement,
         state: &State,
     ) -> Result<(), String> {
-        for statement in &body.blocks[block].statements {
-            if matches!(
-                statement.kind,
-                mir::StatementKind::Intrinsic(mir::NonDivergingIntrinsic::CopyNonOverlapping(_))
-            ) {
-                return Err(self.error(
+        if matches!(
+            statement.kind,
+            mir::StatementKind::Intrinsic(mir::NonDivergingIntrinsic::CopyNonOverlapping(_))
+        ) {
+            return Err(self.error(
+                instance,
+                block,
+                "bulk memory mutation is unsupported in resource-checked roots",
+            ));
+        }
+        let mir::StatementKind::Assign(place, _) = &statement.kind else {
+            return Ok(());
+        };
+        if !place
+            .projection
+            .iter()
+            .any(|p| matches!(p, mir::ProjectionElem::Deref))
+        {
+            return Ok(());
+        }
+        for length in 0..=place.projection.len() {
+            let prefix = mir::Place {
+                local: place.local,
+                projection: place.projection[..length].to_vec(),
+            };
+            let ty = prefix.ty(body.locals()).map_err(|error| {
+                self.error(
                     instance,
                     block,
-                    "bulk memory mutation is unsupported in resource-checked roots",
-                ));
-            }
-            let mir::StatementKind::Assign(place, _) = &statement.kind else {
-                continue;
-            };
-            if !place
-                .projection
-                .iter()
-                .any(|p| matches!(p, mir::ProjectionElem::Deref))
-            {
-                continue;
-            }
-            for length in 0..=place.projection.len() {
-                let prefix = mir::Place {
-                    local: place.local,
-                    projection: place.projection[..length].to_vec(),
-                };
-                let mut carrier = false;
-                if let Ok(ty) = prefix.ty(body.locals()) {
-                    let mut ty = rustc_internal::internal(self.tcx, ty);
-                    loop {
-                        if crate::library::resource_parameter(self.tcx, ty)
-                            || storage::storage_handle_type(self.tcx, ty)
-                        {
-                            carrier = true;
-                            break;
-                        }
-                        match ty.kind() {
-                            rustc_middle::ty::TyKind::Ref(_, inner, _)
-                            | rustc_middle::ty::TyKind::RawPtr(inner, _) => ty = *inner,
-                            _ => break,
-                        }
-                    }
-                }
-                if carrier || read(&prefix, state).has_resource() {
-                    return Err(self.error(instance, block,
+                    &format!("cannot resolve a resource mutation target type: {error:?}"),
+                )
+            })?;
+            let carrier =
+                contains_resource_descriptor(self.tcx, rustc_internal::internal(self.tcx, ty));
+            if carrier || read(&prefix, state).has_resource() {
+                return Err(self.error(instance, block,
                         "mutation through a reference to a resource descriptor is unsupported; forward or move the carrier"));
-                }
             }
         }
         Ok(())
@@ -753,8 +781,12 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         state: &mut State,
         divergent: bool,
         borrowed: &HashSet<usize>,
-    ) {
+        validate: Option<Instance<'tcx>>,
+    ) -> Result<(), String> {
         for statement in &body.blocks[block].statements {
+            if let Some(instance) = validate {
+                self.check_resource_mutation(body, instance, block, statement, state)?;
+            }
             if let mir::StatementKind::Assign(place, value) = &statement.kind {
                 let value = rvalue(value, state);
                 write(
@@ -765,6 +797,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 );
             }
         }
+        Ok(())
     }
     #[allow(clippy::too_many_arguments)]
     fn call(

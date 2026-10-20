@@ -539,9 +539,9 @@ printf "%scuda-oxide smoketest%s @ %s%s%s (%s)\n" "${C_BOLD}" "${C_RESET}" "${C_
 printf "GPU: %s\n" "${gpu_info}"
 printf "LTOIR arch: %s (modern: %s)\n" "${LTOIR_ARCH}" "${LTOIR_MODERN_ARCH}"
 if [[ ${COMPILE_ONLY} -eq 1 ]]; then
-    printf "Mode: compile-only (device artifacts only; nothing is executed)\n"
+    printf "Mode: compile-only (device artifacts only; no kernels execute)\n"
 elif [[ ${FULL_DEBUG} -eq 1 ]]; then
-    printf "Mode: full-debug compile census (direct LLVM plus explicit configured routes; nothing is executed)\n"
+    printf "Mode: full-debug compile census (direct LLVM plus explicit configured routes; no kernels execute)\n"
 fi
 if [[ -n "${ONLY}" ]]; then printf "Filter --only: %s\n" "${ONLY}"; fi
 if [[ -n "${SKIP}" ]]; then printf "Filter --skip: %s\n" "${SKIP}"; fi
@@ -1282,12 +1282,18 @@ full_debug_relocatable_ffi_verdict() {
 # Its host-only check extracts that exact CUBIN without loading the CUDA driver.
 native_library_cubin_verdict() {
     local log="$1" target="${LTOIR_ARCH}" cubin elf_reader sections dwarf symbol
+    local binary="${CARGO_TARGET_DIR}/release/native_library"
+    # cargo oxide builds with the example as cwd; Cargo resolves relative
+    # target directories there, while this verdict runs from the repo root.
+    if [[ "${CARGO_TARGET_DIR}" != /* ]]; then
+        binary="${repo_root}/crates/rustc-codegen-cuda/examples/native_library/${binary}"
+    fi
     local -a args=("--check-artifact")
     if [[ ${FULL_DEBUG} -eq 1 ]]; then target="${LTOIR_MODERN_ARCH}"; fi
     cubin="$(mktemp "${TMPDIR:-/tmp}/native-library.XXXXXX.cubin")" || return 1
     args+=("${target}" "${cubin}")
     if [[ ${FULL_DEBUG} -eq 1 ]]; then args+=("--full-debug"); fi
-    if ! "${CARGO_TARGET_DIR}/release/native_library" "${args[@]}" >>"${log}" 2>&1; then
+    if ! "${binary}" "${args[@]}" >>"${log}" 2>&1; then
         rm -f "${cubin}"
         echo "FAIL (native library embedded CUBIN check failed)"
         return 1

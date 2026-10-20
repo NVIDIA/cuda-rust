@@ -416,8 +416,12 @@ pub(crate) fn finalize<'tcx>(
     let mut batches: BTreeMap<(String, PathBuf), ProviderBatch<'_, 'tcx>> = BTreeMap::new();
     for call in &collection.library_calls {
         let args = call.instance.args;
-        let registration = read_registration(tcx, args.type_at(1))
-            .map_err(|e| format!("{e} at {:?}", call.span))?;
+        let report = |error: String| -> ! {
+            tcx.dcx()
+                .span_fatal(call.span, format!("native device library: {error}"))
+        };
+        let registration =
+            read_registration(tcx, args.type_at(1)).unwrap_or_else(|error| report(error));
         let positive = |index| {
             let value = args
                 .const_at(index)
@@ -431,9 +435,17 @@ pub(crate) fn finalize<'tcx>(
         let request = Request {
             operation: registration.operation,
             algorithm: registration.algorithm,
-            dtype: scalar(args.type_at(0))?,
-            block: [positive(3)?, 1, 1],
-            items_per_thread: positive(4)?,
+            dtype: scalar(args.type_at(0)).unwrap_or_else(|error| report(error)),
+            block: [
+                positive(3)
+                    .map_err(str::to_owned)
+                    .unwrap_or_else(|error| report(error)),
+                1,
+                1,
+            ],
+            items_per_thread: positive(4)
+                .map_err(str::to_owned)
+                .unwrap_or_else(|error| report(error)),
         };
         let batch = batches
             .entry((registration.provider, registration.executable))
@@ -448,6 +460,7 @@ pub(crate) fn finalize<'tcx>(
     let mut all_symbols = HashSet::new();
     for ((provider, executable), batch) in batches {
         let requests: Vec<_> = batch.iter().map(|(request, _)| request.clone()).collect();
+        let batch_span = batch[0].1[0].span;
         let (response, lto) = invoke(
             &executable,
             &BatchRequest {
@@ -456,7 +469,11 @@ pub(crate) fn finalize<'tcx>(
                 cuda_root: cuda_root.clone(),
                 requests: &requests,
             },
-        )?;
+        )
+        .unwrap_or_else(|error| {
+            tcx.dcx()
+                .span_fatal(batch_span, format!("native device library: {error}"))
+        });
         let identity: String = response
             .batch_identity
             .iter()
@@ -493,11 +510,18 @@ pub(crate) fn finalize<'tcx>(
             });
             for call in calls {
                 let TyKind::Tuple(fields) = call.instance.args.type_at(2).kind() else {
-                    return Err("library Args must be a tuple of scalars and raw pointers".into());
+                    tcx.dcx().span_fatal(
+                        call.span,
+                        "library Args must be a tuple of scalars and raw pointers",
+                    );
                 };
-                let actual = fields.iter().map(argument).collect::<Result<Vec<_>, _>>()?;
+                let actual = fields
+                    .iter()
+                    .map(argument)
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap_or_else(|error| tcx.dcx().span_fatal(call.span, error));
                 if actual != spec.arguments {
-                    return Err(format!(
+                    tcx.dcx().span_fatal(call.span, format!(
                         "library runtime tuple for {} disagrees with provider ABI: actual {actual:?}, expected {:?}",
                         spec.symbol, spec.arguments
                     ));
@@ -539,10 +563,13 @@ pub(crate) fn finalize<'tcx>(
             if let Some(plan) = finalized.get(&instance) {
                 if let Some(current) = &mut root_plan {
                     if current.exact_block != plan.exact_block {
-                        return Err(format!(
-                            "kernel {} has conflicting exact library block shapes",
-                            root.export_name
-                        ));
+                        tcx.dcx().span_fatal(
+                            tcx.def_span(root.instance.def_id()),
+                            format!(
+                                "kernel {} has conflicting exact library block shapes",
+                                root.export_name
+                            ),
+                        );
                     }
                     current.dynamic_shared_bytes =
                         current.dynamic_shared_bytes.max(plan.dynamic_shared_bytes);
@@ -568,7 +595,7 @@ pub(crate) fn finalize<'tcx>(
                     && path.contains("DynamicSharedArray")
                 {
                     return Err(format!(
-                        "kernel {} mixes library scratch with an unplanned native dynamic shared view",
+                        "kernel {} mixes library scratch with a native dynamic shared view",
                         root.export_name
                     ));
                 }

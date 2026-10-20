@@ -21,7 +21,7 @@
 /// The caller must meet the provider's pointer, lifetime, initialization,
 /// participation, and launch-geometry requirements. Library scratch views in
 /// one kernel alias one dynamic shared base; the caller must synchronize before
-/// reusing it. This version does not permit mixing unplanned native dynamic
+/// reusing it. This version does not permit mixing native dynamic
 /// shared views with library calls. It returns no allocation or ownership token.
 #[inline(never)]
 pub unsafe fn cuda_oxide_library_v1_246e25db_call<

@@ -402,7 +402,50 @@ pub struct CollectionResult<'tcx> {
     pub tile_exports: Vec<TileExportDesc>,
 }
 
-/// Counts kernel functions across all codegen units.
+/// Recovers a kernel root from a direct mono item or its host naming helper.
+///
+/// The noinline type-hash helper retains the concrete `FnDef` without taking a
+/// function pointer. This lets us compile its body for the device without also
+/// requiring host codegen of device-only calls. Other type hashes are unrelated
+/// to device collection; inspect only this helper's immediate type argument.
+fn kernel_root_instance<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> Option<Instance<'tcx>> {
+    let def_id = instance.def_id();
+    if is_kernel_function(tcx, def_id) {
+        return Some(instance);
+    }
+    // Use definition ownership, not a diagnostic path: rustc may print the
+    // public reexport as `cuda_host::type_id_u128_of_val`.
+    if tcx.crate_name(def_id.krate).as_str() != "cuda_host"
+        || tcx.opt_item_name(def_id)?.as_str() != "type_id_u128_of_val"
+    {
+        return None;
+    }
+    let module = tcx.opt_parent(def_id)?;
+    if tcx.opt_item_name(module)?.as_str() != "type_id" || !tcx.opt_parent(module)?.is_crate_root()
+    {
+        return None;
+    }
+    let [arg] = instance.args.as_slice() else {
+        return None;
+    };
+    let TyKind::FnDef(def_id, args) = *arg.as_type()?.kind() else {
+        return None;
+    };
+    if !is_kernel_function(tcx, def_id) {
+        return None;
+    }
+    let args = args
+        .no_bound_vars()
+        .expect("FnDef args in a monomorphized naming helper carry no late-bound vars");
+    Instance::try_resolve(tcx, TypingEnv::fully_monomorphized(), def_id, args)
+        .ok()
+        .flatten()
+}
+
+/// Counts kernel roots across all codegen units, including host naming helpers.
 ///
 /// This is a quick scan to determine if device compilation is needed.
 /// Returns 0 if no kernels are found, allowing the backend to skip device codegen entirely.
@@ -414,8 +457,8 @@ pub fn count_kernels_in_cgus<'tcx>(tcx: TyCtxt<'tcx>, cgus: &[CodegenUnit<'tcx>]
     for cgu in cgus {
         for (item, _data) in cgu.items() {
             if let MonoItem::Fn(instance) = item
-                && is_kernel_function(tcx, instance.def_id())
-                && is_fully_monomorphized(tcx, *instance)
+                && let Some(instance) = kernel_root_instance(tcx, *instance)
+                && is_fully_monomorphized(tcx, instance)
             {
                 count += 1;
             }
@@ -460,7 +503,9 @@ pub fn unsupported_codegen_protocol_root_in_cgus<'tcx>(
             let MonoItem::Fn(instance) = item else {
                 return None;
             };
-            let def_id = instance.def_id();
+            let def_id = kernel_root_instance(tcx, *instance)
+                .unwrap_or(*instance)
+                .def_id();
             let item_name = tcx.opt_item_name(def_id)?;
             unsupported_codegen_protocol_root(item_name.as_str()).then(|| tcx.def_path_str(def_id))
         })
@@ -1102,13 +1147,13 @@ pub fn collect_device_functions<'tcx>(
         for (item, _data) in cgu.items() {
             if let MonoItem::Fn(instance) = item
                 && !is_tile_export_meta_symbol(&tcx.def_path_str(instance.def_id()))
-                && is_kernel_function(tcx, instance.def_id())
+                && let Some(instance) = kernel_root_instance(tcx, *instance)
             {
                 // Skip generic (non-monomorphized) instances.
                 // For generic kernels like scale<T>, the CGU contains both:
                 // - The generic definition (scale<T>) - skip this
                 // - Concrete instantiations (scale::<f32>) - process this
-                if !is_fully_monomorphized(tcx, *instance) {
+                if !is_fully_monomorphized(tcx, instance) {
                     if verbose {
                         let name = tcx.def_path_str(instance.def_id());
                         eprintln!(
@@ -1143,13 +1188,13 @@ pub fn collect_device_functions<'tcx>(
                 // concrete kernel function-item type. The host-side
                 // `ptx_name()` emitted by `#[kernel]` / `#[cuda_module]`
                 // computes the same string from the same `FnDef` type.
-                let export_name = compute_kernel_export_name(tcx, *instance, &base_name);
+                let export_name = compute_kernel_export_name(tcx, instance, &base_name);
 
                 if verbose {
                     eprintln!("[collector] Found kernel: {} -> {}", name, export_name);
                 }
 
-                collector.add_root(*instance, true, export_name);
+                collector.add_root(instance, true, export_name);
             }
         }
     }

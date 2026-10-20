@@ -1203,6 +1203,12 @@ fn resolve_example_name(name: Option<String>, ctx: &commands::Context, subcomman
         return n;
     }
     if !ctx.is_workspace {
+        if subcommand == "emit-ltoir" {
+            return commands::standalone_crate_name(&ctx.workspace_root).unwrap_or_else(|error| {
+                eprintln!("Error: {error}");
+                std::process::exit(1);
+            });
+        }
         return std::env::current_dir()
             .ok()
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))

@@ -322,6 +322,18 @@ links against. It builds the crate in NVVM IR mode, then runs the emitted
 `compute_XX`, or a bare `XX`. The default output path is `<crate-dir>/<crate>.ltoir`;
 `-o/--output` overrides it.
 
+For a standalone project, omit `<crate>` to use its Cargo target name. The
+directory name may differ from the package name, and hyphens in the target name
+become underscores in artifact filenames. A package-named target is preferred;
+otherwise the package must have one binary or library target, or its target name
+must be supplied explicitly. The positional `<crate>` is this Cargo target name;
+`default-run` does not select artifacts. This also applies when invoked from a
+member of a user Cargo workspace: that member supplies the target, and the IR
+and default LTO-IR output are placed in the invocation directory. An explicit
+`CUDA_OXIDE_PTX_DIR` selects the intermediate IR directory for both writing and
+reading; relative values are resolved from the Cargo workspace root. The process
+environment takes precedence over project configuration.
+
 ```bash
 cargo oxide emit-ltoir standalone_device_fn --arch sm_100
 cargo oxide emit-ltoir my_simt_crate --arch sm_120 -o build/simt.ltoir

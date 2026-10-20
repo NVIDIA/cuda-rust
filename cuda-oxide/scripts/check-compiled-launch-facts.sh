@@ -22,10 +22,12 @@ if "${oxide[@]}" run compiled_launch_facts --arch "$arch" --features invalid-raw
 fi
 grep -F 'inferred dynamic shared memory cannot include unconstrained' "$log"
 
-# Generic materialization remains unsupported; do not silently change loaders.
-if "${oxide[@]}" run compiled_launch_facts --arch "$arch" --features generic --materialize-cubin >"$log" 2>&1; then
-    echo "error: generic materialization unexpectedly succeeded" >&2
+"${oxide[@]}" run compiled_launch_facts --arch "$arch" --features generic --materialize-cubin
+"${oxide[@]}" run cross_crate_kernel --arch "$arch" --features native-ambiguity
+if "${oxide[@]}" run cross_crate_kernel --arch "$arch" --materialize-cubin --features native-ambiguity >"$log" 2>&1; then
+    echo "error: generic loading accepted separate native artifacts" >&2
     exit 1
 fi
-grep -E 'generic.*materializ|materializ.*generic' "$log"
-echo 'PASS: compiled launch facts and incomplete-plan rejection'
+grep -F 'IncompatibleGenericArtifacts' "$log"
+grep -F 'kernel-lib' "$log"
+echo 'PASS: compiled launch facts, incomplete-plan and native-ambiguity rejection'

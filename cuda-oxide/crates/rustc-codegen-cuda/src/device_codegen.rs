@@ -1284,9 +1284,15 @@ pub fn generate_device_code<'tcx>(
         let library_calls = libraries
             .calls
             .iter()
-            .map(|(instance, plan)| {
-                let instance: rustc_public::mir::mono::Instance = rustc_internal::stable(*instance);
-                (instance.mangled_name().to_string(), plan.clone())
+            .map(|(site, plan)| {
+                let caller: rustc_public::mir::mono::Instance = rustc_internal::stable(site.caller);
+                (
+                    mir_importer::LibraryCallSite {
+                        caller: caller.mangled_name().to_string(),
+                        block: site.block.index(),
+                    },
+                    plan.clone(),
+                )
             })
             .collect();
         mir_importer::run_pipeline_with_libraries(

@@ -511,7 +511,7 @@ pub fn run_pipeline_with_libraries(
     device_externs: &[DeviceExternDecl],
     config: &PipelineConfig,
     known_defs: crate::translator::facts::KnownDefs,
-    libraries: BTreeMap<String, crate::LibraryCallPlan>,
+    libraries: BTreeMap<crate::LibraryCallSite, crate::LibraryCallPlan>,
     library_roots: &BTreeMap<String, oxide_artifacts::KernelLaunchFacts>,
 ) -> Result<CompilationResult, PipelineError> {
     crate::library::set_calls(libraries);

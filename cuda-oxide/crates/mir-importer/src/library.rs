@@ -25,11 +25,22 @@ use pliron::r#type::Typed;
 use pliron::utils::apint::APInt;
 use rustc_public::mir;
 
+/// A terminator in one concrete emitted Rust body.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LibraryCallSite {
+    pub caller: String,
+    pub block: usize,
+}
+
 /// One monomorphized call whose Rust tuple and provider ABI already agree.
 #[derive(Clone, Debug)]
 pub struct LibraryCallPlan {
     /// Exact external symbol emitted by the native provider.
     pub symbol: String,
+    /// Expected marker identity at this exact MIR terminator.
+    pub marker: String,
+    /// Split uniform/payload operands of the checked full-block marker.
+    pub checked_block: bool,
     /// Size of the assigned shared scratch view in bytes.
     pub scratch_bytes: u32,
     /// Required alignment of the shared scratch base.
@@ -37,15 +48,23 @@ pub struct LibraryCallPlan {
 }
 
 thread_local! {
-    static CALLS: RefCell<BTreeMap<String, LibraryCallPlan>> = const { RefCell::new(BTreeMap::new()) };
+    static CALLS: RefCell<BTreeMap<LibraryCallSite, LibraryCallPlan>> = const { RefCell::new(BTreeMap::new()) };
 }
 
-pub(crate) fn set_calls(calls: BTreeMap<String, LibraryCallPlan>) {
+pub(crate) fn set_calls(calls: BTreeMap<LibraryCallSite, LibraryCallPlan>) {
     CALLS.with(|current| *current.borrow_mut() = calls);
 }
 
-pub(crate) fn get_call(instance: &str) -> Option<LibraryCallPlan> {
-    CALLS.with(|calls| calls.borrow().get(instance).cloned())
+pub(crate) fn get_call(caller: &str, block: usize) -> Option<LibraryCallPlan> {
+    CALLS.with(|calls| {
+        calls
+            .borrow()
+            .get(&LibraryCallSite {
+                caller: caller.to_string(),
+                block,
+            })
+            .cloned()
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -62,59 +81,73 @@ pub(crate) fn translate_call(
     blocks: &[Ptr<BasicBlock>],
     loc: Location,
 ) -> TranslationResult<Ptr<Operation>> {
-    let [_, tuple] = args else {
-        return input_err!(
-            loc,
-            TranslationErr::unsupported(
-                "library marker requires a registration and argument tuple"
-            )
-        );
-    };
-    let tuple_ty = match tuple.ty(body.locals()) {
-        Ok(ty) => ty,
-        Err(e) => {
+    let tuples: &[mir::Operand] = match (plan.checked_block, args) {
+        (false, [_, _]) | (true, [_, _, _]) => &args[1..],
+        _ => {
             return input_err!(
                 loc,
-                TranslationErr::unsupported(format!("invalid library argument tuple: {e:?}"))
+                TranslationErr::invalid_op("library marker operand count changed after validation")
             );
         }
     };
-    let rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::Tuple(fields)) =
-        tuple_ty.kind()
-    else {
-        return input_err!(
-            loc,
-            TranslationErr::unsupported("library arguments must be a tuple")
-        );
-    };
-    let mut declared = fields
-        .iter()
-        .map(|ty| types::translate_type(ctx, ty))
-        .collect::<TranslationResult<Vec<_>>>()?;
-    let (tuple_value, mut last) =
-        rvalue::translate_operand(ctx, body, tuple, values, block, previous, loc.clone())?;
-    let tuple_handle = tuple_value.get_type(ctx);
-    let field_types = tuple_handle
-        .deref(ctx)
-        .downcast_ref::<MirTupleType>()
-        .expect("validated library tuple")
-        .get_types()
-        .to_vec();
+    let mut declared = Vec::new();
     let mut arguments = Vec::new();
-    for (index, ty) in field_types.into_iter().enumerate() {
-        let op = Operation::new(
-            ctx,
-            MirExtractFieldOp::get_concrete_op_info(),
-            vec![ty],
-            vec![tuple_value],
-            vec![],
-            0,
+    let mut last = previous;
+    let mut uniform_len = 0;
+    for tuple in tuples {
+        let tuple_ty = tuple.ty(body.locals()).map_err(|e| {
+            pliron::input_error!(
+                loc.clone(),
+                TranslationErr::unsupported(format!("invalid library tuple: {e:?}"))
+            )
+        })?;
+        let rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::Tuple(fields)) =
+            tuple_ty.kind()
+        else {
+            return input_err!(
+                loc,
+                TranslationErr::unsupported("library arguments must be tuples")
+            );
+        };
+        declared.extend(
+            fields
+                .iter()
+                .map(|ty| types::translate_type(ctx, ty))
+                .collect::<TranslationResult<Vec<_>>>()?,
         );
-        op.deref_mut(ctx).set_loc(loc.clone());
-        MirExtractFieldOp::new(op).set_attr_index(ctx, FieldIndexAttr(index as u32));
-        helpers::insert_op(ctx, op, block, last);
-        last = Some(op);
-        arguments.push(op.deref(ctx).get_result(0));
+        let (tuple_value, previous) =
+            rvalue::translate_operand(ctx, body, tuple, values, block, last, loc.clone())?;
+        last = previous;
+        let handle = tuple_value.get_type(ctx);
+        let field_types = handle
+            .deref(ctx)
+            .downcast_ref::<MirTupleType>()
+            .expect("validated library tuple")
+            .get_types()
+            .to_vec();
+        for (index, ty) in field_types.into_iter().enumerate() {
+            let op = Operation::new(
+                ctx,
+                MirExtractFieldOp::get_concrete_op_info(),
+                vec![ty],
+                vec![tuple_value],
+                vec![],
+                0,
+            );
+            op.deref_mut(ctx).set_loc(loc.clone());
+            MirExtractFieldOp::new(op).set_attr_index(ctx, FieldIndexAttr(index as u32));
+            helpers::insert_op(ctx, op, block, last);
+            last = Some(op);
+            arguments.push(op.deref(ctx).get_result(0));
+        }
+        if uniform_len == 0 {
+            uniform_len = fields.len();
+        }
+    }
+    if plan.checked_block {
+        // [memory, controls..., payload...] -> [memory, payload..., controls...]
+        declared[1..].rotate_left(uniform_len - 1);
+        arguments[1..].rotate_left(uniform_len - 1);
     }
     // The unsafe marker grants a raw scratch address. Keep the internal shared
     // pointer through construction, then adapt only its address space at the

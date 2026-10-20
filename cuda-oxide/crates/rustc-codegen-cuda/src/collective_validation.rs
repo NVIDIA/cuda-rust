@@ -1,0 +1,744 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Bounded, per-call-context checks for the checked full-block library marker.
+use crate::collector::{CollectionResult, device_mono_reachability};
+use crate::library::{EdgeKind, MarkerKind, reachable_instances};
+use rustc_middle::ty::{Instance, TyCtxt};
+use rustc_public::{mir, rustc_internal};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Fact {
+    Unset,
+    Uniform,
+    Kernel(String),
+    Local(usize, Vec<usize>),
+    Referent(Box<Fact>),
+    Fields(Vec<Fact>),
+    Varying,
+}
+impl Fact {
+    fn uniform(&self) -> bool {
+        matches!(self, Self::Uniform | Self::Kernel(_))
+    }
+    fn merge(&self, other: &Self) -> Self {
+        if self == other {
+            return self.clone();
+        }
+        match (self, other) {
+            (Self::Unset, value) | (value, Self::Unset) => value.clone(),
+            (Self::Uniform, Self::Kernel(_)) | (Self::Kernel(_), Self::Uniform) => Self::Uniform,
+            (Self::Fields(a), Self::Fields(b)) if a.len() == b.len() => {
+                Self::Fields(a.iter().zip(b).map(|(a, b)| a.merge(b)).collect())
+            }
+            _ => Self::Varying,
+        }
+    }
+    fn taint(self) -> Self {
+        match self {
+            Self::Fields(v) => Self::Fields(v.into_iter().map(Self::taint).collect()),
+            Self::Local(..) => self,
+            _ => Self::Varying,
+        }
+    }
+    fn invalidate_referents(&mut self) {
+        match self {
+            Self::Referent(_) => *self = Self::Varying,
+            Self::Fields(fields) => fields.iter_mut().for_each(Self::invalidate_referents),
+            _ => {}
+        }
+    }
+    fn field(&self, index: usize) -> Self {
+        match self {
+            Self::Fields(v) => v.get(index).cloned().unwrap_or(Self::Varying),
+            Self::Kernel(origin) => Self::Kernel(format!("{origin}.{index}")),
+            Self::Uniform => Self::Uniform,
+            _ => Self::Varying,
+        }
+    }
+}
+type State = Vec<Fact>;
+fn local_read(state: &State, local: usize, fields: &[usize]) -> Fact {
+    fields
+        .iter()
+        .fold(state[local].clone(), |fact, index| fact.field(*index))
+}
+fn read(place: &mir::Place, state: &State) -> Fact {
+    let mut fact = state[place.local].clone();
+    for projection in &place.projection {
+        fact = match projection {
+            mir::ProjectionElem::Field(index, _) => fact.field(*index),
+            mir::ProjectionElem::Deref => match fact {
+                Fact::Local(local, fields) => local_read(state, local, &fields),
+                Fact::Referent(value) => *value,
+                _ => Fact::Varying,
+            },
+            mir::ProjectionElem::Downcast(_) => fact,
+            _ => Fact::Varying,
+        };
+    }
+    fact
+}
+fn operand(value: &mir::Operand, state: &State) -> Fact {
+    match value {
+        mir::Operand::Copy(p) | mir::Operand::Move(p) => read(p, state),
+        mir::Operand::Constant(_) | mir::Operand::RuntimeChecks(_) => Fact::Uniform,
+    }
+}
+fn address(place: &mir::Place, state: &State) -> Fact {
+    let mut fields = Vec::new();
+    for projection in &place.projection {
+        match projection {
+            mir::ProjectionElem::Field(index, _) => fields.push(*index),
+            mir::ProjectionElem::Deref if fields.is_empty() => return state[place.local].clone(),
+            _ => return Fact::Varying,
+        }
+    }
+    Fact::Local(place.local, fields)
+}
+fn rvalue(value: &mir::Rvalue, state: &State) -> Fact {
+    match value {
+        mir::Rvalue::Use(v, _) | mir::Rvalue::Cast(_, v, _) => operand(v, state),
+        mir::Rvalue::CopyForDeref(p) => read(p, state),
+        mir::Rvalue::Ref(_, _, p) | mir::Rvalue::AddressOf(_, p) => address(p, state),
+        mir::Rvalue::Aggregate(_, values) => {
+            Fact::Fields(values.iter().map(|v| operand(v, state)).collect())
+        }
+        mir::Rvalue::Repeat(v, _) => operand(v, state),
+        mir::Rvalue::UnaryOp(_, v) => {
+            if operand(v, state).uniform() {
+                Fact::Uniform
+            } else {
+                Fact::Varying
+            }
+        }
+        mir::Rvalue::BinaryOp(op, a, b) => {
+            let a = operand(a, state);
+            let b = operand(b, state);
+            if matches!(op, mir::BinOp::Offset) && a.uniform() && b.uniform() {
+                a
+            } else if a.uniform() && b.uniform() {
+                Fact::Uniform
+            } else {
+                Fact::Varying
+            }
+        }
+        mir::Rvalue::CheckedBinaryOp(_, a, b) => {
+            let f = if operand(a, state).uniform() && operand(b, state).uniform() {
+                Fact::Uniform
+            } else {
+                Fact::Varying
+            };
+            Fact::Fields(vec![f.clone(), f])
+        }
+        _ => Fact::Varying,
+    }
+}
+fn write_fields(target: &mut Fact, fields: &[usize], value: Fact) {
+    if let Some((index, rest)) = fields.split_first() {
+        if let Fact::Fields(values) = target
+            && let Some(field) = values.get_mut(*index)
+        {
+            write_fields(field, rest, value);
+            return;
+        }
+        *target = Fact::Varying;
+    } else {
+        *target = value;
+    }
+}
+fn invalidate_borrows(state: &mut State, borrowed: &HashSet<usize>) {
+    for (local, fact) in state.iter_mut().enumerate() {
+        if borrowed.contains(&local) {
+            *fact = Fact::Varying;
+        } else {
+            fact.invalidate_referents();
+        }
+    }
+}
+fn write(place: &mir::Place, value: Fact, state: &mut State, borrowed: &HashSet<usize>) {
+    let mut local = place.local;
+    let mut fields = Vec::new();
+    for projection in &place.projection {
+        match projection {
+            mir::ProjectionElem::Field(index, _) => fields.push(*index),
+            mir::ProjectionElem::Deref if fields.is_empty() => {
+                if let Fact::Local(base, path) = &state[local] {
+                    local = *base;
+                    fields = path.clone();
+                } else {
+                    invalidate_borrows(state, borrowed);
+                    return;
+                }
+            }
+            _ => {
+                state[local] = Fact::Varying;
+                return;
+            }
+        }
+    }
+    write_fields(&mut state[local], &fields, value);
+}
+// Local indices belong to one MIR body. Resolve the entire reference graph
+// before crossing a call boundary; a nested Local must never index the callee.
+fn call_fact(fact: Fact, state: &State) -> Fact {
+    fn resolve(fact: Fact, state: &State, visiting: &mut HashSet<usize>) -> Fact {
+        match fact {
+            Fact::Local(local, fields) => {
+                if !visiting.insert(local) {
+                    return Fact::Varying;
+                }
+                let value = resolve(local_read(state, local, &fields), state, visiting);
+                visiting.remove(&local);
+                Fact::Referent(Box::new(value))
+            }
+            Fact::Referent(value) => Fact::Referent(Box::new(resolve(*value, state, visiting))),
+            Fact::Fields(values) => Fact::Fields(
+                values
+                    .into_iter()
+                    .map(|value| resolve(value, state, visiting))
+                    .collect(),
+            ),
+            other => other,
+        }
+    }
+    resolve(fact, state, &mut HashSet::new())
+}
+
+// Callee-owned addresses are not caller-local indices. This bounded analysis
+// does not prove the lifetime/provenance of references newly created by a helper.
+fn return_fact(fact: Fact) -> Fact {
+    match fact {
+        Fact::Local(..) => Fact::Varying,
+        Fact::Fields(values) => Fact::Fields(values.into_iter().map(return_fact).collect()),
+        Fact::Referent(value) => Fact::Referent(Box::new(return_fact(*value))),
+        other => other,
+    }
+}
+fn reachable(edges: &[Vec<usize>], start: usize, stop: Option<usize>) -> BTreeSet<usize> {
+    let mut result = BTreeSet::new();
+    let mut pending = vec![start];
+    while let Some(block) = pending.pop() {
+        if Some(block) != stop && result.insert(block) {
+            pending.extend(edges[block].iter().copied());
+        }
+    }
+    result
+}
+fn joins(edges: &[Vec<usize>]) -> Vec<Option<usize>> {
+    let exit = edges.len();
+    let all: BTreeSet<_> = (0..=exit).collect();
+    let mut post = vec![all; exit + 1];
+    post[exit] = BTreeSet::from([exit]);
+    loop {
+        let mut changed = false;
+        for block in (0..exit).rev() {
+            let targets = if edges[block].is_empty() {
+                vec![exit]
+            } else {
+                edges[block].clone()
+            };
+            let mut next = post[targets[0]].clone();
+            for target in &targets[1..] {
+                next = next.intersection(&post[*target]).copied().collect();
+            }
+            next.insert(block);
+            if next != post[block] {
+                post[block] = next;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    (0..exit)
+        .map(|block| {
+            post[block]
+                .iter()
+                .copied()
+                .filter(|v| *v != block && *v != exit)
+                .find(|candidate| {
+                    post[block].iter().all(|other| {
+                        *other == block || *other == *candidate || post[*candidate].contains(other)
+                    })
+                })
+        })
+        .collect()
+}
+struct Analyzer<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
+    collection: &'a CollectionResult<'tcx>,
+    root: &'a str,
+    stack: Vec<Instance<'tcx>>,
+}
+impl<'tcx> Analyzer<'_, 'tcx> {
+    fn error(&self, instance: Instance<'tcx>, block: usize, message: &str) -> String {
+        format!(
+            "checked block collective in {}: {message}; {} MIR block {block}",
+            self.root,
+            self.tcx.def_path_str(instance.def_id())
+        )
+    }
+    fn callee(&self, instance: Instance<'tcx>, block: usize) -> Option<(Instance<'tcx>, EdgeKind)> {
+        self.collection
+            .call_edges
+            .iter()
+            .find(|e| e.caller == instance && e.block.index() == block)
+            .map(|e| (e.callee, e.kind))
+    }
+    fn intrinsic(&self, instance: Instance<'tcx>) -> Option<Fact> {
+        let path = self.tcx.def_path_str(instance.def_id());
+        let krate = self.tcx.crate_name(instance.def_id().krate);
+        if !crate::generated_intrinsics::is_generated_intrinsic_placeholder(krate.as_str(), &path) {
+            return None;
+        }
+        let uniform = matches!(
+            path.rsplit("::").next().unwrap_or(""),
+            "blockDim_x"
+                | "blockDim_y"
+                | "blockDim_z"
+                | "blockIdx_x"
+                | "blockIdx_y"
+                | "blockIdx_z"
+                | "gridDim_x"
+                | "gridDim_y"
+                | "gridDim_z"
+                | "i0003"
+                | "i0007"
+                | "i0011"
+                | "i0002"
+                | "i0006"
+                | "i0010"
+                | "i0004"
+                | "i0008"
+                | "i0012"
+        );
+        Some(if uniform {
+            Fact::Uniform
+        } else {
+            Fact::Varying
+        })
+    }
+    fn analyze(
+        &mut self,
+        instance: Instance<'tcx>,
+        arguments: Vec<Fact>,
+        validate: bool,
+        entry_varying: bool,
+    ) -> Result<Fact, String> {
+        if self.stack.contains(&instance) {
+            return if validate {
+                Err(self.error(instance, 0, "recursive helper participation is unsupported"))
+            } else {
+                Ok(Fact::Varying)
+            };
+        }
+        if matches!(instance.def, rustc_middle::ty::InstanceKind::Intrinsic(_)) {
+            return Err(self.error(
+                instance,
+                0,
+                "intrinsic is outside the supported checked block subset",
+            ));
+        }
+        let stable: mir::mono::Instance = rustc_internal::stable(instance);
+        let Some(body) = stable.body() else {
+            return if validate {
+                Err(self.error(
+                    instance,
+                    0,
+                    "call without MIR cannot prove collective participation",
+                ))
+            } else {
+                Ok(Fact::Varying)
+            };
+        };
+        let supplied = device_mono_reachability(self.tcx, instance);
+        if body.blocks.len() != supplied.block_count {
+            return Err("checked collective MIR bridge block count mismatch".into());
+        }
+        let edges = mir_importer::checked_collective_successors(
+            &body,
+            supplied.block_count,
+            &supplied.successors,
+        )?;
+        let live = reachable(&edges, 0, None);
+        let joins = joins(&edges);
+        let mut incoming: Vec<Option<State>> = vec![None; body.blocks.len()];
+        let mut entry = vec![Fact::Unset; body.locals().len()];
+        for (local, fact) in entry.iter_mut().skip(1).zip(arguments) {
+            *local = fact;
+        }
+        incoming[0] = Some(entry);
+        let mut divergent = vec![entry_varying; body.blocks.len()];
+        let mut varying_cycles = BTreeSet::new();
+        let mut borrowed = HashSet::new();
+        for &block in &live {
+            for statement in &body.blocks[block].statements {
+                if let mir::StatementKind::Assign(
+                    _,
+                    mir::Rvalue::Ref(_, _, p) | mir::Rvalue::AddressOf(_, p),
+                ) = &statement.kind
+                {
+                    borrowed.insert(p.local);
+                }
+            }
+        }
+        self.stack.push(instance);
+        let limit = body
+            .blocks
+            .len()
+            .saturating_mul(body.locals().len() + 4)
+            .max(8);
+        let mut settled = false;
+        for _ in 0..limit {
+            let mut changed = false;
+            for &block in &live {
+                let Some(mut state) = incoming[block].clone() else {
+                    continue;
+                };
+                self.statements(&body, block, &mut state, divergent[block], &borrowed);
+                if let mir::TerminatorKind::SwitchInt { discr, .. } =
+                    &body.blocks[block].terminator.kind
+                    && !operand(discr, &state).uniform()
+                    && edges[block].len() > 1
+                {
+                    if edges[block]
+                        .iter()
+                        .any(|target| reachable(&edges, *target, None).contains(&block))
+                    {
+                        varying_cycles.insert(block);
+                    }
+                    for &target in &edges[block] {
+                        let region = reachable(&edges, target, joins[block]);
+                        for &member in &region {
+                            if !divergent[member] {
+                                divergent[member] = true;
+                                changed = true;
+                            }
+                            if edges[member].iter().any(|next| {
+                                region.contains(next)
+                                    && reachable(&edges, *next, joins[block]).contains(&member)
+                            }) {
+                                varying_cycles.insert(block);
+                            }
+                        }
+                    }
+                }
+                self.call(
+                    &body,
+                    instance,
+                    block,
+                    &mut state,
+                    false,
+                    divergent[block],
+                    &borrowed,
+                )?;
+                for &target in &edges[block] {
+                    if let Some(previous) = &mut incoming[target] {
+                        for (old, new) in previous.iter_mut().zip(&state) {
+                            let merged = old.merge(new);
+                            if merged != *old {
+                                *old = merged;
+                                changed = true;
+                            }
+                        }
+                    } else {
+                        incoming[target] = Some(state.clone());
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                settled = true;
+                break;
+            }
+        }
+        if !settled {
+            self.stack.pop();
+            return Err(self.error(
+                instance,
+                0,
+                "value analysis did not converge in its bounded subset",
+            ));
+        }
+        if validate && let Some(&block) = varying_cycles.first() {
+            self.stack.pop();
+            return Err(self.error(
+                instance,
+                block,
+                "lane-varying cycle cannot prove collective participation",
+            ));
+        }
+        let mut returned = Fact::Unset;
+        for &block in &live {
+            let Some(mut state) = incoming[block].clone() else {
+                continue;
+            };
+            self.statements(&body, block, &mut state, divergent[block], &borrowed);
+            if validate {
+                if matches!(
+                    body.blocks[block].terminator.kind,
+                    mir::TerminatorKind::Unreachable
+                ) {
+                    return Err(self.error(
+                        instance,
+                        block,
+                        "unreachable terminator is not a proved whole-kernel abort",
+                    ));
+                }
+                if matches!(
+                    body.blocks[block].terminator.kind,
+                    mir::TerminatorKind::InlineAsm { .. }
+                ) || (matches!(
+                    body.blocks[block].terminator.kind,
+                    mir::TerminatorKind::Drop { .. }
+                ) && self.callee(instance, block).is_some())
+                {
+                    return Err(self.error(
+                        instance,
+                        block,
+                        "inline assembly or nontrivial destructor participation is unsupported",
+                    ));
+                }
+                self.call(
+                    &body,
+                    instance,
+                    block,
+                    &mut state,
+                    true,
+                    divergent[block],
+                    &borrowed,
+                )?;
+            }
+            if matches!(
+                body.blocks[block].terminator.kind,
+                mir::TerminatorKind::Return
+            ) {
+                returned = returned.merge(&return_fact(state[0].clone()));
+            }
+        }
+        self.stack.pop();
+        Ok(returned)
+    }
+    fn statements(
+        &self,
+        body: &mir::Body,
+        block: usize,
+        state: &mut State,
+        divergent: bool,
+        borrowed: &HashSet<usize>,
+    ) {
+        for statement in &body.blocks[block].statements {
+            if let mir::StatementKind::Assign(place, value) = &statement.kind {
+                let value = rvalue(value, state);
+                write(
+                    place,
+                    if divergent { value.taint() } else { value },
+                    state,
+                    borrowed,
+                );
+            }
+        }
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn call(
+        &mut self,
+        body: &mir::Body,
+        instance: Instance<'tcx>,
+        block: usize,
+        state: &mut State,
+        validate: bool,
+        divergent: bool,
+        borrowed: &HashSet<usize>,
+    ) -> Result<(), String> {
+        let mir::TerminatorKind::Call {
+            args,
+            destination,
+            target,
+            ..
+        } = &body.blocks[block].terminator.kind
+        else {
+            return Ok(());
+        };
+        if mir_importer::is_dropped_panic_call(&body.blocks[block].terminator) {
+            return Ok(());
+        }
+        let Some((callee, kind)) = self.callee(instance, block) else {
+            if validate {
+                return Err(self.error(
+                    instance,
+                    block,
+                    "unresolved call cannot prove collective participation",
+                ));
+            }
+            invalidate_borrows(state, borrowed);
+            write(destination, Fact::Varying, state, borrowed);
+            return Ok(());
+        };
+        if let Some(call) = self
+            .collection
+            .library_calls
+            .iter()
+            .find(|c| c.site.caller == instance && c.site.block.index() == block)
+        {
+            if validate {
+                if call.kind != MarkerKind::CheckedBlock {
+                    return Err(self.error(
+                        instance,
+                        block,
+                        "raw and checked library calls cannot be mixed in one checked root",
+                    ));
+                }
+                if divergent {
+                    return Err(self.error(
+                        instance,
+                        block,
+                        "operation is reached through lane-varying control flow",
+                    ));
+                }
+                let uniform = args
+                    .get(1)
+                    .map(|arg| operand(arg, state))
+                    .unwrap_or(Fact::Varying);
+                let Fact::Fields(fields) = uniform else {
+                    return Err(self.error(
+                        instance,
+                        block,
+                        "uniform argument tuple has unsupported provenance",
+                    ));
+                };
+                if fields.iter().any(|f| !f.uniform()) {
+                    return Err(self.error(
+                        instance,
+                        block,
+                        "memory carrier or scalar control is not proved block-uniform",
+                    ));
+                }
+            }
+            // Native providers may mutate the payload, including a scalar
+            // subsequently used as a control. Do not retain borrowed facts.
+            invalidate_borrows(state, borrowed);
+            write(destination, Fact::Fields(vec![]), state, borrowed);
+            return Ok(());
+        }
+        let path = self.tcx.def_path_str(callee.def_id());
+        let krate = self.tcx.crate_name(callee.def_id().krate);
+        let is_sync = (krate.as_str() == "cuda_device" && path.ends_with("::sync_threads"))
+            || (krate.as_str() == "cuda_intrinsics" && path.ends_with("::i0034"));
+        if is_sync {
+            if validate && divergent {
+                return Err(self.error(
+                    instance,
+                    block,
+                    "block barrier is reached through lane-varying control flow",
+                ));
+            }
+            write(destination, Fact::Fields(vec![]), state, borrowed);
+            return Ok(());
+        }
+        if let Some(fact) = self.intrinsic(callee) {
+            let name = path.rsplit("::").next().unwrap_or("");
+            if validate
+                && !fact.uniform()
+                && !matches!(
+                    name,
+                    "threadIdx_x" | "threadIdx_y" | "threadIdx_z" | "i0001" | "i0005" | "i0009"
+                )
+            {
+                return Err(self.error(
+                    instance,
+                    block,
+                    "intrinsic is outside the supported checked block subset",
+                ));
+            }
+            write(
+                destination,
+                if divergent { fact.taint() } else { fact },
+                state,
+                borrowed,
+            );
+            return Ok(());
+        }
+        if matches!(callee.def, rustc_middle::ty::InstanceKind::Intrinsic(_)) {
+            let name = path.rsplit("::").next().unwrap_or("");
+            if matches!(
+                name,
+                "integer_min"
+                    | "integer_max"
+                    | "unchecked_add"
+                    | "unchecked_sub"
+                    | "unchecked_mul"
+                    | "arith_offset"
+            ) {
+                let fact = if args.iter().all(|arg| operand(arg, state).uniform()) {
+                    if name == "arith_offset" {
+                        operand(&args[0], state)
+                    } else {
+                        Fact::Uniform
+                    }
+                } else {
+                    Fact::Varying
+                };
+                write(
+                    destination,
+                    if divergent { fact.taint() } else { fact },
+                    state,
+                    borrowed,
+                );
+                return Ok(());
+            }
+        }
+        if target.is_none() && mir_importer::is_panic_entry_path(&path) {
+            return Ok(());
+        }
+        if kind != EdgeKind::Direct && validate {
+            return Err(self.error(
+                instance,
+                block,
+                "indirect or destructor collective context is unsupported",
+            ));
+        }
+        let facts = args
+            .iter()
+            .map(|arg| call_fact(operand(arg, state), state))
+            .collect();
+        let mut result = self.analyze(callee, facts, validate, divergent)?;
+        if divergent {
+            result = result.taint();
+        }
+        // Unknown pointers can alias a borrowed local even when their concrete
+        // target was lost at a join. This subset has no interprocedural alias or
+        // mutation summary: invalidate all borrowed facts after ordinary calls.
+        invalidate_borrows(state, borrowed);
+        write(destination, result, state, borrowed);
+        Ok(())
+    }
+}
+pub(crate) fn validate<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    collection: &CollectionResult<'tcx>,
+) -> Result<BTreeMap<String, [u32; 3]>, String> {
+    rustc_internal::run(tcx, || {
+        let mut shapes = BTreeMap::new();
+        for root in collection.functions.iter().filter(|f| f.is_kernel) {
+            let reached = reachable_instances(collection, root.instance);
+            if !collection.library_calls.iter().any(|c| c.kind == MarkerKind::CheckedBlock && reached.contains(&c.site.caller)) { continue; }
+            let stable: mir::mono::Instance = rustc_internal::stable(root.instance); let reach = device_mono_reachability(tcx, root.instance);
+            let shape = mir_importer::kernel_exact_block(&stable, reach.block_count, &reach.successors)?
+                .ok_or_else(|| format!("checked block collective root {} requires #[launch_contract(block = (...))] with an exact shape", root.export_name))?;
+            let body = tcx.instance_mir(root.instance.def);
+            let arguments = (1..=body.arg_count).map(|arg| {
+                use rustc_middle::ty::TyKind;
+                let ty = body.local_decls[rustc_middle::mir::Local::from_usize(arg)].ty;
+                if matches!(ty.kind(), TyKind::Bool | TyKind::Int(_) | TyKind::Uint(_) | TyKind::Float(_)) { Fact::Uniform }
+                else { Fact::Kernel(format!("{}:{arg}", root.export_name)) }
+            }).collect();
+            let mut analyzer = Analyzer { tcx, collection, root: &root.export_name, stack: Vec::new() };
+            analyzer.analyze(root.instance, arguments, true, false)?;
+            shapes.insert(root.export_name.clone(), shape);
+        }
+        Ok(shapes)
+    }).map_err(|error| format!("cannot enter collective MIR analysis: {error:?}"))?
+}

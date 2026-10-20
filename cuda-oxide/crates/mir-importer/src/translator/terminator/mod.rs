@@ -112,6 +112,7 @@ pub fn translate_terminator(
     block_map: &[Ptr<BasicBlock>],
     rustc_mono_successors: &[usize],
     legaliser: &mut Legaliser,
+    library_call: Option<&crate::LibraryCallPlan>,
 ) -> TranslationResult<Ptr<Operation>> {
     let loc = span_to_location(ctx, term.source_info.span);
 
@@ -155,6 +156,7 @@ pub fn translate_terminator(
             block_map,
             loc,
             legaliser,
+            library_call,
         ),
 
         mir::TerminatorKind::SwitchInt { discr, targets } => match rustc_mono_successors {
@@ -957,6 +959,7 @@ fn translate_call(
     block_map: &[Ptr<BasicBlock>],
     loc: Location,
     legaliser: &mut Legaliser,
+    library_call: Option<&crate::LibraryCallPlan>,
 ) -> TranslationResult<Ptr<Operation>> {
     // See comment in translate_assert for rationale.
     let _ = unwind;
@@ -972,12 +975,18 @@ fn translate_call(
         && let rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::FnDef(def, substs)) =
             constant.const_.ty().kind()
         && let Ok(instance) = rustc_public::mir::mono::Instance::resolve(def, &substs)
-        && let Some(plan) = crate::library::get_call(instance.mangled_name().as_str())
+        && let Some(plan) = library_call
     {
+        if instance.mangled_name().as_str() != plan.marker {
+            return input_err!(
+                loc,
+                TranslationErr::invalid_op("library call site changed after validation")
+            );
+        }
         return crate::library::translate_call(
             ctx,
             body,
-            &plan,
+            plan,
             args,
             destination,
             &target_usize,
@@ -986,6 +995,22 @@ fn translate_call(
             value_map,
             block_map,
             loc,
+        );
+    }
+
+    if let mir::Operand::Constant(constant) = func
+        && let rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::FnDef(def, _)) =
+            constant.const_.ty().kind()
+        && def.krate().name == "cuda_device"
+        && matches!(
+            def.def_id().name().as_str(),
+            reserved_oxide_symbols::LIBRARY_CALL_V1
+                | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_CALL_V1
+        )
+    {
+        return input_err!(
+            loc,
+            TranslationErr::invalid_op("native library marker has no validated call-site plan")
         );
     }
 

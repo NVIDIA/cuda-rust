@@ -77,6 +77,8 @@ pub const EXTERNAL_LTOIR_ENV: &str = "CUDA_OXIDE_INTERNAL_EXTERNAL_LTOIR_V1";
 
 /// Definition name in `cuda_device::library`; consumers resolve its actual DefId.
 pub const LIBRARY_CALL_V1: &str = "cuda_oxide_library_v1_246e25db_call";
+/// Full-block marker whose controls and participation require compiler proof.
+pub const LIBRARY_CHECKED_BLOCK_CALL_V1: &str = "cuda_oxide_library_v1_246e25db_checked_block_call";
 
 /// Optional comma-separated filter selecting crates that may own device code.
 pub const DEVICE_CODEGEN_CRATE_ENV: &str = "CUDA_OXIDE_DEVICE_CODEGEN_CRATE";

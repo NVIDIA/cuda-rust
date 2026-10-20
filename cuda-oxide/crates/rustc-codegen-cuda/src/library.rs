@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 
 use oxide_artifacts::KernelLaunchFacts;
 use rustc_hir::def_id::{CRATE_DEF_INDEX, DefId};
-use rustc_middle::mir::{Operand, RETURN_PLACE, Rvalue, StatementKind, TerminatorKind};
+use rustc_middle::mir::{BasicBlock, Operand, RETURN_PLACE, Rvalue, StatementKind, TerminatorKind};
 use rustc_middle::ty::consts::ConstExt;
 use rustc_middle::ty::{Instance, Ty, TyCtxt, TyKind, TypingEnv};
 use rustc_span::Span;
@@ -21,16 +21,39 @@ use crate::collector::CollectionResult;
 const MAX_HEADER: usize = 1024 * 1024;
 const MAX_LTO: usize = 256 * 1024 * 1024;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MarkerKind {
+    Raw,
+    CheckedBlock,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EdgeKind {
+    Direct,
+    Callable,
+    Drop,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CallSite<'tcx> {
+    pub caller: Instance<'tcx>,
+    pub block: BasicBlock,
+    pub callee: Instance<'tcx>,
+    pub kind: EdgeKind,
+}
+
 #[derive(Debug)]
 pub(crate) struct LibraryCall<'tcx> {
     pub instance: Instance<'tcx>,
+    pub site: CallSite<'tcx>,
+    pub kind: MarkerKind,
     pub span: Span,
 }
 
 /// Resolve definitions through the actual dependency module, then compare DefIds
 /// at call sites. A user function with the same spelling is an ordinary function.
-pub(crate) fn marker_definitions(tcx: TyCtxt<'_>) -> HashSet<DefId> {
-    let mut definitions = HashSet::new();
+pub(crate) fn marker_definitions(tcx: TyCtxt<'_>) -> HashMap<DefId, MarkerKind> {
+    let mut definitions = HashMap::new();
     for &krate in tcx.crates(()) {
         if tcx.crate_name(krate).as_str() != "cuda_device" {
             continue;
@@ -47,10 +70,15 @@ pub(crate) fn marker_definitions(tcx: TyCtxt<'_>) -> HashSet<DefId> {
                 continue;
             };
             for item in tcx.module_children(module) {
-                if item.ident.name.as_str() == reserved_oxide_symbols::LIBRARY_CALL_V1
-                    && let Some(def) = item.res.opt_def_id()
-                {
-                    definitions.insert(def);
+                let kind = match item.ident.name.as_str() {
+                    reserved_oxide_symbols::LIBRARY_CALL_V1 => MarkerKind::Raw,
+                    reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_CALL_V1 => {
+                        MarkerKind::CheckedBlock
+                    }
+                    _ => continue,
+                };
+                if let Some(def) = item.res.opt_def_id() {
+                    definitions.insert(def, kind);
                 }
             }
         }
@@ -152,7 +180,7 @@ struct BatchResponse {
 
 #[derive(Default)]
 pub(crate) struct FinalizedLibraries<'tcx> {
-    pub calls: Vec<(Instance<'tcx>, mir_importer::LibraryCallPlan)>,
+    pub calls: Vec<(CallSite<'tcx>, mir_importer::LibraryCallPlan)>,
     pub declarations: Vec<mir_importer::DeviceExternDecl>,
     pub inputs: Vec<(String, Vec<u8>)>,
     pub roots: BTreeMap<String, KernelLaunchFacts>,
@@ -391,7 +419,42 @@ fn extern_argument(argument: &Argument) -> mir_importer::DeviceExternType {
     }
 }
 
-/// Finalize all call identities once, while retaining every root's reachability.
+fn call_arguments(call: &LibraryCall<'_>) -> Result<Vec<Argument>, String> {
+    let args = call.instance.args;
+    let TyKind::Tuple(uniform) = args.type_at(2).kind() else {
+        return Err("library arguments must be a tuple".into());
+    };
+    if call.kind == MarkerKind::Raw {
+        return uniform.iter().map(argument).collect();
+    }
+    let TyKind::Tuple(payload) = args.type_at(3).kind() else {
+        return Err("checked block payload must be a tuple".into());
+    };
+    let dtype = scalar(args.type_at(0))?;
+    let uniform = uniform
+        .iter()
+        .map(argument)
+        .collect::<Result<Vec<_>, _>>()?;
+    let payload = payload
+        .iter()
+        .map(argument)
+        .collect::<Result<Vec<_>, _>>()?;
+    if !matches!(uniform.first(), Some(Argument::ConstPointer(t) | Argument::MutPointer(t)) if *t == dtype)
+        || !uniform[1..].iter().all(|a| matches!(a, Argument::Value(_)))
+        || !matches!(payload.first(), Some(Argument::MutPointer(t)) if *t == dtype)
+        || !payload.iter().all(|a| matches!(a, Argument::MutPointer(_)))
+    {
+        return Err("checked block call requires (memory pointer, scalar controls...) and (mutable payload pointers...) with matching element types".into());
+    }
+    Ok(uniform[..1]
+        .iter()
+        .chain(&payload)
+        .chain(&uniform[1..])
+        .cloned()
+        .collect())
+}
+
+/// Finalize provider requests independently from rooted call-site proofs.
 pub(crate) fn finalize<'tcx>(
     tcx: TyCtxt<'tcx>,
     collection: &CollectionResult<'tcx>,
@@ -400,6 +463,11 @@ pub(crate) fn finalize<'tcx>(
     if collection.library_calls.is_empty() {
         return Ok(result);
     }
+    // Structural checks precede both the proof and external compilation.
+    for call in &collection.library_calls {
+        call_arguments(call)?;
+    }
+    let checked_shapes = crate::collective_validation::validate(tcx, collection)?;
     let target = std::env::var("CUDA_OXIDE_TARGET")
         .map_err(|_| "library calls require an explicit CUDA target")?;
     let target = target
@@ -410,38 +478,78 @@ pub(crate) fn finalize<'tcx>(
         .or_else(|| std::env::var_os("CUDA_PATH"))
         .map(PathBuf::from)
         .ok_or("library calls require CUDA_HOME or CUDA_PATH")?;
-    // BTreeMap gives deterministic invocation order. Request order is first
-    // encounter order, and the response explicitly carries each request index.
-    type ProviderBatch<'a, 'tcx> = Vec<(Request, Vec<&'a LibraryCall<'tcx>>)>;
+    type RootedCall<'a, 'tcx> = (&'a LibraryCall<'tcx>, &'a str);
+    type ProviderBatch<'a, 'tcx> = Vec<(Request, Vec<RootedCall<'a, 'tcx>>)>;
     let mut batches: BTreeMap<(String, PathBuf), ProviderBatch<'_, 'tcx>> = BTreeMap::new();
-    for call in &collection.library_calls {
-        let args = call.instance.args;
-        let registration = read_registration(tcx, args.type_at(1))
-            .map_err(|e| format!("{e} at {:?}", call.span))?;
-        let positive = |index| {
-            let value = args
-                .const_at(index)
-                .try_to_target_usize(tcx)
-                .ok_or("library extent is not a concrete usize")?;
-            u32::try_from(value)
-                .ok()
-                .filter(|v| *v != 0)
-                .ok_or("library extent must fit nonzero u32")
-        };
-        let request = Request {
-            operation: registration.operation,
-            algorithm: registration.algorithm,
-            dtype: scalar(args.type_at(0))?,
-            block: [positive(3)?, 1, 1],
-            items_per_thread: positive(4)?,
-        };
-        let batch = batches
-            .entry((registration.provider, registration.executable))
-            .or_default();
-        if let Some((_, calls)) = batch.iter_mut().find(|(existing, _)| *existing == request) {
-            calls.push(call);
-        } else {
-            batch.push((request, vec![call]));
+    let mut site_shapes = HashMap::new();
+    for root in collection.functions.iter().filter(|f| f.is_kernel) {
+        let reached = reachable_instances(collection, root.instance);
+        let calls: Vec<_> = collection
+            .library_calls
+            .iter()
+            .filter(|c| reached.contains(&c.site.caller))
+            .collect();
+        if calls.is_empty() {
+            continue;
+        }
+        for instance in &reached {
+            if tcx.crate_name(instance.def_id().krate).as_str() == "cuda_device"
+                && tcx
+                    .def_path_str(instance.def_id())
+                    .contains("DynamicSharedArray")
+            {
+                return Err(format!(
+                    "kernel {} mixes library scratch with an unplanned native dynamic shared view",
+                    root.export_name
+                ));
+            }
+        }
+        for call in calls {
+            let args = call.instance.args;
+            let registration = read_registration(tcx, args.type_at(1))
+                .map_err(|e| format!("{e} at {:?}", call.span))?;
+            let positive = |index| {
+                let value = args
+                    .const_at(index)
+                    .try_to_target_usize(tcx)
+                    .ok_or("library extent is not a concrete usize")?;
+                u32::try_from(value)
+                    .ok()
+                    .filter(|v| *v != 0)
+                    .ok_or("library extent must fit nonzero u32")
+            };
+            let block = if call.kind == MarkerKind::CheckedBlock {
+                checked_shapes[&root.export_name]
+            } else {
+                [positive(3)?, 1, 1]
+            };
+            let site = (call.site.caller, call.site.block);
+            if let Some((previous, previous_root)) =
+                site_shapes.insert(site, (block, root.export_name.clone()))
+                && previous != block
+            {
+                return Err(format!(
+                    "shared helper {} at {:?} requires conflicting exact block shapes: {previous_root} {previous:?} and {} {block:?}; use distinct helper sites for these roots until contextual helper specialization is supported",
+                    tcx.def_path_str(call.site.caller.def_id()),
+                    call.span,
+                    root.export_name
+                ));
+            }
+            let request = Request {
+                operation: registration.operation,
+                algorithm: registration.algorithm,
+                dtype: scalar(args.type_at(0))?,
+                block,
+                items_per_thread: positive(4)?,
+            };
+            let batch = batches
+                .entry((registration.provider, registration.executable))
+                .or_default();
+            if let Some((_, calls)) = batch.iter_mut().find(|(existing, _)| *existing == request) {
+                calls.push((call, &root.export_name));
+            } else {
+                batch.push((request, vec![(call, &root.export_name)]));
+            }
         }
     }
     let mut finalized = HashMap::new();
@@ -491,92 +599,73 @@ pub(crate) fn finalize<'tcx>(
                     is_readonly: false,
                 },
             });
-            for call in calls {
-                let TyKind::Tuple(fields) = call.instance.args.type_at(2).kind() else {
-                    return Err("library Args must be a tuple of scalars and raw pointers".into());
-                };
-                let actual = fields.iter().map(argument).collect::<Result<Vec<_>, _>>()?;
+            for (call, root) in calls {
+                let actual = call_arguments(call)?;
                 if actual != spec.arguments {
                     return Err(format!(
                         "library runtime tuple for {} disagrees with provider ABI: actual {actual:?}, expected {:?}",
                         spec.symbol, spec.arguments
                     ));
                 }
-                let _ = spec.mutates_payload; // Metadata, not permission to read payload.
+                let _ = spec.mutates_payload;
                 let plan = mir_importer::LibraryCallPlan {
                     symbol: spec.symbol.clone(),
+                    marker: tcx.symbol_name(call.instance).name.to_string(),
+                    checked_block: call.kind == MarkerKind::CheckedBlock,
                     scratch_bytes,
                     scratch_alignment,
                 };
-                if finalized
-                    .insert(
-                        call.instance,
-                        KernelLaunchFacts {
-                            exact_block: Some((
-                                request.block[0],
-                                request.block[1],
-                                request.block[2],
-                            )),
-                            dynamic_shared_bytes: scratch_bytes,
-                            dynamic_shared_alignment: scratch_alignment,
-                        },
-                    )
-                    .is_none()
-                {
-                    result.calls.push((call.instance, plan));
+                let site = (call.site.caller, call.site.block);
+                if let Some(previous) = finalized.insert(site, spec.symbol.clone()) {
+                    if previous != spec.symbol {
+                        return Err(
+                            "library call site has conflicting provider specializations".into()
+                        );
+                    }
+                } else {
+                    result.calls.push((call.site, plan));
+                }
+                let facts = KernelLaunchFacts {
+                    exact_block: Some((request.block[0], request.block[1], request.block[2])),
+                    dynamic_shared_bytes: scratch_bytes,
+                    dynamic_shared_alignment: scratch_alignment,
+                };
+                if let Some(current) = result.roots.get_mut(root) {
+                    if current.exact_block != facts.exact_block {
+                        return Err(format!(
+                            "kernel {root} has conflicting exact library block shapes"
+                        ));
+                    }
+                    current.dynamic_shared_bytes = current.dynamic_shared_bytes.max(scratch_bytes);
+                    current.dynamic_shared_alignment =
+                        current.dynamic_shared_alignment.max(scratch_alignment);
+                } else {
+                    result.roots.insert(root.to_string(), facts);
                 }
             }
         }
     }
-    for root in collection.functions.iter().filter(|f| f.is_kernel) {
-        let mut visited = HashSet::new();
-        let mut pending = vec![root.instance];
-        let mut root_plan: Option<KernelLaunchFacts> = None;
-        while let Some(instance) = pending.pop() {
-            if !visited.insert(instance) {
-                continue;
-            }
-            if let Some(plan) = finalized.get(&instance) {
-                if let Some(current) = &mut root_plan {
-                    if current.exact_block != plan.exact_block {
-                        return Err(format!(
-                            "kernel {} has conflicting exact library block shapes",
-                            root.export_name
-                        ));
-                    }
-                    current.dynamic_shared_bytes =
-                        current.dynamic_shared_bytes.max(plan.dynamic_shared_bytes);
-                    current.dynamic_shared_alignment = current
-                        .dynamic_shared_alignment
-                        .max(plan.dynamic_shared_alignment);
-                } else {
-                    root_plan = Some(*plan);
-                }
-            }
+    Ok(result)
+}
+
+pub(crate) fn reachable_instances<'tcx>(
+    collection: &CollectionResult<'tcx>,
+    root: Instance<'tcx>,
+) -> HashSet<Instance<'tcx>> {
+    let mut reached = HashSet::new();
+    let mut pending = vec![root];
+    while let Some(instance) = pending.pop() {
+        if reached.insert(instance) {
             pending.extend(
                 collection
                     .call_edges
                     .iter()
-                    .filter(|(caller, _)| *caller == instance)
-                    .map(|(_, callee)| *callee),
+                    .filter(|site| site.caller == instance)
+                    .map(|site| site.callee),
             );
         }
-        if let Some(plan) = root_plan {
-            for instance in visited {
-                let path = tcx.def_path_str(instance.def_id());
-                if tcx.crate_name(instance.def_id().krate).as_str() == "cuda_device"
-                    && path.contains("DynamicSharedArray")
-                {
-                    return Err(format!(
-                        "kernel {} mixes library scratch with an unplanned native dynamic shared view",
-                        root.export_name
-                    ));
-                }
-            }
-            result.roots.insert(root.export_name.clone(), plan);
-        }
     }
-    Ok(result)
+    reached
 }
 
 #[cfg(test)]

@@ -38,3 +38,40 @@ pub unsafe fn cuda_oxide_library_v1_246e25db_call<
 }
 
 pub use cuda_oxide_library_v1_246e25db_call as call_v1;
+
+/// Invoke a full-block library operation with compiler-checked participation.
+///
+/// The exact block shape comes from the root kernel's launch contract.
+/// `uniform` is `(memory_pointer, scalar_controls...)`; `payload` contains
+/// lane-local mutable payload pointers. The compiler checks all call contexts
+/// before reconstructing the provider's ordinary scalar/pointer ABI.
+///
+/// # Safety
+///
+/// The caller supplies the correct provider recipe, live aligned memory and
+/// payload pointers, sufficient capacity, and the provider's initialization and
+/// aliasing requirements. Group checks do not prove bounds or exclusive memory
+/// ownership. Scratch aliases the kernel's dynamic shared base; the caller must
+/// synchronize before conflicting scratch or output reuse. Completion never
+/// follows from ending a Rust borrow or running a destructor.
+#[inline(never)]
+pub unsafe fn cuda_oxide_library_v1_246e25db_checked_block_call<
+    T: Copy,
+    Registration: Fn() -> &'static str + Copy,
+    UniformArgs: Copy,
+    PayloadArgs: Copy,
+    const ITEMS_PER_THREAD: usize,
+>(
+    _registration: Registration,
+    _uniform: UniformArgs,
+    _payload: PayloadArgs,
+) {
+    // A backend which does not recognize this version must fail to link rather
+    // than silently compiling a panic/trap as the collective implementation.
+    unsafe extern "C" {
+        fn cuda_oxide_checked_block_call_requires_supported_backend();
+    }
+    unsafe { cuda_oxide_checked_block_call_requires_supported_backend() }
+}
+
+pub use cuda_oxide_library_v1_246e25db_checked_block_call as checked_block_call_v1;

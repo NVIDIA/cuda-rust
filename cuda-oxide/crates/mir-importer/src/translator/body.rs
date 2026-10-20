@@ -392,6 +392,46 @@ fn detect_contract_block_config(
     Ok(detected)
 }
 
+/// Read the same exact root shape used by kernel translation, before library
+/// specialization. Validate the internal/public MIR bridge before scanning.
+pub fn kernel_exact_block(
+    instance: &mono::Instance,
+    block_count: usize,
+    successors: &[Vec<usize>],
+) -> Result<Option<[u32; 3]>, String> {
+    let body = instance.body().ok_or("kernel has no MIR body")?;
+    validate_monomorphized_successors(&body, block_count, successors)?;
+    let reachable = compute_reachable_blocks(&body, successors);
+    Ok(detect_contract_block_config(&body, &reachable)?.map(|shape| [shape.x, shape.y, shape.z]))
+}
+
+/// Device CFG for checked collectives, using exactly the importer's unwind and
+/// bounds-check policies. Checked calls may not rely on elided bounds checks.
+pub fn checked_collective_successors(
+    body: &mir::Body,
+    block_count: usize,
+    successors: &[Vec<usize>],
+) -> Result<Vec<Vec<usize>>, String> {
+    validate_monomorphized_successors(body, block_count, successors)?;
+    let reachable = compute_reachable_blocks(body, successors);
+    if detect_unchecked_indexing_config(body, &reachable)? || unchecked_indexing_env_enabled() {
+        return Err("checked block collectives do not support unchecked indexing; retain runtime bounds checks".into());
+    }
+    Ok(body
+        .blocks
+        .iter()
+        .zip(successors)
+        .map(|(block, exact)| {
+            let normal = non_unwind_successors(block);
+            exact
+                .iter()
+                .copied()
+                .filter(|target| normal.contains(target))
+                .collect()
+        })
+        .collect())
+}
+
 /// Rejects an exact block shape that needs more threads than
 /// `#[launch_bounds]` allows.
 ///
@@ -2512,6 +2552,7 @@ pub fn translate_body(
             legaliser,
             entry_prev_op,
             block_debug_info,
+            crate::library::get_call(&instance.mangled_name(), idx).as_ref(),
         )?;
         blocks_processed.insert(idx);
     }

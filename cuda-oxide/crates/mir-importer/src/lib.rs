@@ -112,8 +112,9 @@ pub use pipeline::{
 };
 pub use translator::facts::KnownDefs;
 pub use translator::terminator::drop_glue::{drop_glue_is_noop, drop_instance_is_noop};
-pub use translator::terminator::is_panic_entry_path;
+pub use translator::terminator::{is_dropped_panic_call, is_panic_entry_path};
 
 mod library;
-pub use library::LibraryCallPlan;
+pub use library::{LibraryCallPlan, LibraryCallSite};
 pub use pipeline::run_pipeline_with_libraries;
+pub use translator::body::{checked_collective_successors, kernel_exact_block};

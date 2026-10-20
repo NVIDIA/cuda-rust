@@ -66,6 +66,7 @@ pub fn translate_block(
     legaliser: &mut Legaliser,
     entry_prev_op: Option<Ptr<Operation>>,
     statement_debug_info: Option<&StatementDebugInfoBlock>,
+    library_call: Option<&crate::LibraryCallPlan>,
 ) -> TranslationResult<()> {
     let mut prev_op: Option<Ptr<Operation>> = entry_prev_op;
 
@@ -125,6 +126,7 @@ pub fn translate_block(
         block_map,
         rustc_mono_successors,
         legaliser,
+        library_call,
     )?;
 
     Ok(())

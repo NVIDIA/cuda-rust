@@ -1131,6 +1131,31 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         }
         if matches!(callee.def, rustc_middle::ty::InstanceKind::Intrinsic(_)) {
             let name = path.rsplit("::").next().unwrap_or("");
+            if self.tcx.item_name(callee.def_id()) == rustc_span::sym::assert_inhabited
+                && matches!(krate.as_str(), "core" | "std")
+            {
+                // This genuine nullary intrinsic is a unit no-op only when
+                // rustc proves the concrete type inhabited. It says nothing
+                // about the initialization or uniformity of any payload.
+                let inhabited = callee.args.len() == 1
+                    && callee.args.types().next().is_some_and(|ty| {
+                        self.tcx
+                            .layout_of(TypingEnv::fully_monomorphized().as_query_input(ty))
+                            .is_ok_and(|layout| !layout.is_uninhabited())
+                    });
+                let unit = destination
+                    .ty(body.locals())
+                    .is_ok_and(|ty| rustc_internal::internal(self.tcx, ty).is_unit());
+                if !args.is_empty() || !unit || !inhabited {
+                    return Err(self.error(
+                        instance,
+                        block,
+                        "assert_inhabited requires a proved inhabited concrete type and a nullary unit call",
+                    ));
+                }
+                write(destination, Fact::Fields(vec![]), state, borrowed);
+                return Ok(());
+            }
             if matches!(
                 name,
                 "integer_min"

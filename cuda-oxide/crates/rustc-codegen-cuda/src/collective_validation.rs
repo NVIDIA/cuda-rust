@@ -266,6 +266,16 @@ fn address(place: &mir::Place, state: &State) -> Fact {
                     local = base;
                     fields = path;
                 }
+                Fact::Referent(_) if index + 1 < place.projection.len() => {
+                    // A caller-owned wrapper can retain a genuine resource
+                    // through a field borrow, including a returned reborrow.
+                    let value = read(place, state);
+                    return if value.has_resource() {
+                        Fact::Referent(Box::new(value))
+                    } else {
+                        Fact::Varying
+                    };
+                }
                 fact if index + 1 == place.projection.len() => return fact,
                 _ => return Fact::Varying,
             },

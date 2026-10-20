@@ -77,6 +77,10 @@ pub struct ValueMap {
     /// When set, `translate_assert` elides `AssertMessage::BoundsCheck`
     /// terminators (out-of-bounds indexing becomes UB, like `get_unchecked`).
     unchecked_indexing: bool,
+    /// The pipeline selected single-block-cluster semantics for this body.
+    pub(crate) pre90_cluster_queries: bool,
+    /// A compatibility query actually used those semantics.
+    pub(crate) used_cluster_query_fallback: bool,
 }
 
 impl ValueMap {
@@ -87,6 +91,8 @@ impl ValueMap {
             statement_debug_spills: vec![false; num_locals],
             debug_variables: false,
             unchecked_indexing: false,
+            pre90_cluster_queries: false,
+            used_cluster_query_fallback: false,
         }
     }
 

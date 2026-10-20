@@ -452,6 +452,21 @@ fn backend_options_for(config: &PipelineConfig) -> BackendOptions {
     backend_options
 }
 
+/// Select single-block-cluster semantics only for a known pre-sm90 target.
+/// Invalid inputs are still diagnosed by the shared backend validator.
+fn cluster_query_fallback_target(options: &BackendOptions) -> Option<String> {
+    if let Some(target) = &options.target_arch {
+        let target = cuda_oxide_codegen::experimental::Target::parse(target).ok()?;
+        return (target.capability() < 90).then(|| target.sm());
+    }
+    match &options.device_arch_hint {
+        Some(DeviceArchHint::Valid(arch)) if arch.as_ref().capability() < 90 => {
+            Some(arch.as_ref().sm())
+        }
+        _ => None,
+    }
+}
+
 /// Runs the full compilation pipeline on collected functions.
 ///
 /// # Pipeline Steps
@@ -563,6 +578,10 @@ pub fn run_pipeline_with_libraries(
 
     prepare_output_dir(&config.output_dir)?;
 
+    let mut backend_options = backend_options_for(config);
+    let cluster_query_target = cluster_query_fallback_target(&backend_options);
+    let mut used_cluster_query_fallback = false;
+
     let mut ctx = Context::new();
 
     // Step 1: Register dialects
@@ -599,7 +618,7 @@ pub fn run_pipeline_with_libraries(
             .body()
             .ok_or_else(|| PipelineError::NoBody(func.export_name.clone()))?;
 
-        let func_op_ptr = crate::translator::body::translate_body(
+        let (func_op_ptr, used_fallback) = crate::translator::body::translate_body(
             &mut ctx,
             &body,
             &func.instance,
@@ -612,11 +631,13 @@ pub fn run_pipeline_with_libraries(
             config.debug_kind,
             func.debug_source_scopes.as_ref(),
             func.statement_debug_info.as_ref(),
+            cluster_query_target.is_some(),
         )
         .map_err(|e| {
             // Use .disp(&ctx) for rich error formatting with location and backtrace
             PipelineError::Translation(format!("{}: {}", func.export_name, e.disp(&ctx)))
         })?;
+        used_cluster_query_fallback |= used_fallback;
 
         if let Some(targets) = redirects.get(&func.export_name) {
             let mut resolved = BTreeMap::new();
@@ -693,7 +714,15 @@ pub fn run_pipeline_with_libraries(
         .join(format!("{}.ptx", config.output_name));
     let stale_artifacts = stale_compilation_artifact_paths(&config.output_dir, &config.output_name);
 
-    let backend_options = backend_options_for(config);
+    // Like IKET materialization, target-dependent query lowering must bind an
+    // advisory device hint before later feature-based target selection. A
+    // higher-floor operation must reject this target, not silently retarget
+    // a module whose cluster queries already use single-block semantics.
+    if used_cluster_query_fallback && backend_options.target_arch.is_none() {
+        backend_options.target_arch = cluster_query_target;
+        backend_options.target_arch_source =
+            "the device hint, pinned by pre-sm90 cluster query fallback";
+    }
 
     let request = ModulePipelineRequest::for_rust_pipeline(
         device_externs,
@@ -866,6 +895,247 @@ mod tests {
     use super::*;
     use llvm_export::ops::DebugLocalTypeKind;
     use std::fs;
+
+    #[test]
+    fn cluster_query_fallback_requires_a_known_pre90_target() {
+        for (explicit, hint, expected) in [
+            (None, None, None),
+            (None, Some("sm_80"), Some("sm_80")),
+            (None, Some("sm_120"), None),
+            (None, Some("invalid"), None),
+            (Some("sm_80"), Some("sm_120"), Some("sm_80")),
+            (Some("sm_120"), Some("sm_80"), None),
+            (Some("invalid"), Some("sm_80"), None),
+        ] {
+            let mut options = BackendOptions::default();
+            options.target_arch = explicit.map(str::to_owned);
+            options.device_arch_hint = hint.map(|hint| DeviceArchHint::parse(hint.to_owned()));
+            assert_eq!(
+                cluster_query_fallback_target(&options).as_deref(),
+                expected,
+                "explicit={explicit:?}, hint={hint:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cluster_query_lowering_preserves_target_selection_and_raw_floors() {
+        const CHILD: &str = "CUDA_OXIDE_TEST_CLUSTER_QUERY_PIPELINE";
+        if std::env::var_os(CHILD).is_none() {
+            // Hint-only cases must not inherit an explicit target. Keep
+            // environment changes out of the parallel test process.
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "pipeline::tests::cluster_query_lowering_preserves_target_selection_and_raw_floors",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env_remove("CUDA_OXIDE_TARGET")
+                .env_remove("CUDA_OXIDE_DEVICE_ARCH")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_cluster_queries_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let fixture = root.join("queries.rs");
+        // These non-inlined placeholders reproduce the defining paths at the
+        // importer boundary. Their bodies are not collected: actual dispatch
+        // must replace each call, never execute the sentinel value.
+        fs::write(
+            &fixture,
+            r#"
+#![allow(dead_code, non_snake_case)]
+macro_rules! queries {
+    ($($name:ident),*) => {$(
+        #[inline(never)] pub fn $name() -> u32 { 99 }
+    )*};
+}
+mod cluster {
+    queries!(cluster_ctaidX, cluster_ctaidY, cluster_ctaidZ,
+             cluster_nctaidX, cluster_nctaidY, cluster_nctaidZ,
+             __cluster_idxX, __cluster_idxY, __cluster_idxZ,
+             __cluster_grid_dimX, __cluster_grid_dimY, __cluster_grid_dimZ);
+}
+mod warp {
+    #[inline(never)] pub fn elect_sync(_: u32) -> (u32, bool) { (99, false) }
+}
+mod __cuda_oxide_intrinsic_abi_v1 { queries!(i0266); }
+fn compatibility() -> (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) {
+    use cluster::*;
+    (cluster_ctaidX(), cluster_ctaidY(), cluster_ctaidZ(),
+     cluster_nctaidX(), cluster_nctaidY(), cluster_nctaidZ(),
+     __cluster_idxX(), __cluster_idxY(), __cluster_idxZ(),
+     __cluster_grid_dimX(), __cluster_grid_dimY(), __cluster_grid_dimZ())
+}
+fn compatibility_and_elect() -> (u32, u32) {
+    (cluster::cluster_nctaidX(), warp::elect_sync(u32::MAX).0)
+}
+fn elect_only() -> u32 { warp::elect_sync(u32::MAX).0 }
+fn raw() -> u32 { __cuda_oxide_intrinsic_abi_v1::i0266() }
+"#,
+        )
+        .unwrap();
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let sysroot = std::process::Command::new(rustc)
+            .args(["--print", "sysroot"])
+            .output()
+            .unwrap();
+        assert!(sysroot.status.success());
+        let sysroot = String::from_utf8(sysroot.stdout).unwrap();
+
+        for crate_name in ["cuda_device", "cuda_intrinsics"] {
+            let args = vec![
+                "rustc".to_string(),
+                "--edition=2024".to_string(),
+                "--crate-type=rlib".to_string(),
+                format!("--crate-name={crate_name}"),
+                "--emit=metadata".to_string(),
+                "-Zmir-opt-level=0".to_string(),
+                format!("--out-dir={}", root.display()),
+                format!("--sysroot={}", sysroot.trim()),
+                fixture.display().to_string(),
+            ];
+            let output_dir = root.join(crate_name);
+            std::thread::Builder::new()
+                .stack_size(64 * 1024 * 1024)
+                .spawn(move || {
+                    rustc_public::run!(&args, || {
+                        use rustc_public::CrateDef as _;
+
+                        let compile = |name: &str, target: Option<&str>, hint: Option<&str>| {
+                            let item = rustc_public::all_local_items()
+                                .into_iter()
+                                .find(|item| item.name() == format!("{crate_name}::{name}"))
+                                .expect("fixture entry");
+                            let instance = Instance::try_from(item).unwrap();
+                            let body = instance.body().unwrap();
+                            let function = CollectedFunction {
+                                instance,
+                                rustc_mir_block_count: body.blocks.len(),
+                                // These monomorphic, branch-free fixtures have
+                                // no specialization-dependent dead successors.
+                                rustc_mono_successors: body
+                                    .blocks
+                                    .iter()
+                                    .map(|block| block.terminator.successors())
+                                    .collect(),
+                                is_kernel: false,
+                                export_name: name.to_string(),
+                                debug_source_scopes: None,
+                                statement_debug_info: None,
+                                inline: None,
+                            };
+                            let config = PipelineConfig {
+                                output_dir: output_dir.clone(),
+                                output_name: name.to_string(),
+                                verbose: false,
+                                emit_nvvm_ir: true,
+                                target_arch: target.map(str::to_string),
+                                device_arch_hint: hint
+                                    .map(|hint| DeviceArchHint::parse(hint.to_string())),
+                                ..PipelineConfig::default()
+                            };
+                            run_pipeline(&[function], &[], &config, Default::default())
+                                .map(|result| {
+                                    (result.target, fs::read_to_string(result.ll_path).unwrap())
+                                })
+                                .map_err(|error| error.to_string())
+                        };
+                        if crate_name == "cuda_device" {
+                            for (target, hint) in
+                                [(Some("sm_80"), Some("sm_120")), (None, Some("sm_80"))]
+                            {
+                                let (target, ir) = compile("compatibility", target, hint).unwrap();
+                                assert_eq!(target, "sm_80");
+                                for (register_index, register) in
+                                    ["ctaid", "nctaid"].iter().enumerate()
+                                {
+                                    for (axis_index, axis) in ["x", "y", "z"].iter().enumerate() {
+                                        let instruction = format!(
+                                            "call i32 @llvm.nvvm.read.ptx.sreg.{register}.{axis}()"
+                                        );
+                                        let value = ir
+                                            .lines()
+                                            .find_map(|line| {
+                                                line.contains(&instruction).then(|| {
+                                                    line.trim().split_once(" = ").unwrap().0
+                                                })
+                                            })
+                                            .expect("compatibility register read");
+                                        let slot = 6 + register_index * 3 + axis_index;
+                                        assert!(
+                                            ir.lines().any(|line| {
+                                                line.contains("insertvalue")
+                                                    && line
+                                                        .contains(&format!("i32 {value}, {slot}"))
+                                            }),
+                                            "{ir}"
+                                        );
+                                    }
+                                }
+                                assert!(!ir.contains("sreg.cluster"));
+                                assert!(!ir.contains("sreg.ncluster"));
+                                for index in 0..6 {
+                                    let value = u32::from(index >= 3);
+                                    assert!(
+                                        ir.lines().any(|line| {
+                                            line.contains("insertvalue")
+                                                && line.contains(&format!("i32 {value}, {index}"))
+                                        }),
+                                        "{ir}"
+                                    );
+                                }
+                            }
+                            let error = compile("compatibility_and_elect", None, Some("sm_80"))
+                                .expect_err("used fallback must pin the advisory hint");
+                            assert!(error.contains("sm_80") && error.contains("Sm90"), "{error}");
+                            let (target, _) = compile("elect_only", None, Some("sm_80")).unwrap();
+                            assert_eq!(target, "sm_90", "unused fallback must not pin the hint");
+                            let (target, ir) = compile("compatibility", None, None).unwrap();
+                            assert_eq!(target, "sm_90");
+                            assert!(
+                                ir.contains("call i32 @llvm.nvvm.read.ptx.sreg.cluster.nctaid.x()")
+                            );
+                        } else {
+                            let error = compile("raw", Some("sm_80"), None)
+                                .expect_err("raw intrinsics retain their native target floor");
+                            assert!(
+                                error.contains("v1:i0266") && error.contains("sm_90"),
+                                "{error}"
+                            );
+                            let (target, ir) = compile("raw", Some("sm_120"), None).unwrap();
+                            assert_eq!(target, "sm_120");
+                            assert!(
+                                ir.contains("call i32 @llvm.nvvm.read.ptx.sreg.cluster.nctaid.x()")
+                            );
+                        }
+                        std::ops::ControlFlow::<(), ()>::Continue(())
+                    })
+                })
+                .unwrap()
+                .join()
+                .unwrap()
+                .expect("in-process fixture compilation succeeds");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn test_pipeline_config_default_values() {

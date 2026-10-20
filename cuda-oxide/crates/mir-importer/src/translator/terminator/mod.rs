@@ -2749,6 +2749,22 @@ fn try_dispatch_intrinsic(
         return Ok(Some(operation));
     }
 
+    if let Some(operation) = intrinsics::cluster_query::try_dispatch(
+        ctx,
+        body,
+        name,
+        args,
+        destination,
+        target,
+        block_ptr,
+        prev_op,
+        value_map,
+        block_map,
+        loc.clone(),
+    )? {
+        return Ok(Some(operation));
+    }
+
     if let Some(operation) = intrinsics::generated::try_dispatch_generated_intrinsic(
         ctx,
         body,

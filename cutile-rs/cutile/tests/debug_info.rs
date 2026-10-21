@@ -124,6 +124,61 @@ fn helper_instructions_keep_exact_lines_and_call_sites() {
 }
 
 #[test]
+fn entry_wrapper_and_assumptions_use_the_user_signature() {
+    common::with_test_stack(|| {
+        use cutile_ir::bytecode::Opcode;
+
+        let signature_line = source_line(
+            include_str!("debug_info.rs"),
+            "fn source_kernel<const S: [i32; 1]>(out: &mut Tensor<i32, S>, x: i32) {",
+        );
+        let artifacts = compile(DebugInfoLevel::Full);
+        let mut wrapper_ops = 0;
+        let mut wrapper_assumes = 0;
+        let mut inline_ops = 0;
+        visit_ops(
+            artifacts.module(),
+            &artifacts.module().functions,
+            &mut |op| {
+                let mut location = &op.location;
+                while let Location::CallSite { caller, .. } = location {
+                    inline_ops += 1;
+                    location = caller;
+                }
+                // Constants built from synthesized types have a separate source
+                // span path. This test covers generated syntax and inline callers.
+                if op.opcode == Opcode::Constant
+                    && !matches!(op.location, Location::CallSite { .. })
+                {
+                    return;
+                }
+                if let Location::FileLineCol { filename, line, .. } = location {
+                    assert!(filename.ends_with("debug_info.rs"), "{location:?}");
+                    assert_eq!(*line, signature_line, "{:?}: {location:?}", op.opcode);
+                    if !matches!(op.location, Location::CallSite { .. }) {
+                        wrapper_ops += 1;
+                        wrapper_assumes += usize::from(op.opcode == Opcode::Assume);
+                    }
+                } else {
+                    panic!("missing wrapper origin: {location:?}");
+                }
+            },
+        );
+        assert!(wrapper_ops > 1);
+        assert!(wrapper_assumes > 0);
+        assert!(inline_ops > 0);
+
+        let dump = cutile_ir::decode_bytecode(&artifacts.bytecode().unwrap()).unwrap();
+        assert!(
+            dump.contains(&format!(
+                "line={signature_line}, name=\"source_kernel\", linkage=\"source_kernel_entry\""
+            )),
+            "{dump}"
+        );
+    });
+}
+
+#[test]
 fn explicit_debug_modes_override_build_default_and_change_cache_keys() {
     use cutile_compiler::cuda_tile_runtime_utils::TileirasOptions;
     use std::collections::HashSet;

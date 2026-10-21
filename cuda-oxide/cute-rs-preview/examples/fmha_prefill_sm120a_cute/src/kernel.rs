@@ -165,7 +165,7 @@ impl WarpTile {
             let mut sum = state.sum[ROW];
             sum += warp::shuffle_xor_f32(sum, 2);
             sum += warp::shuffle_xor_f32(sum, 1);
-            let scale = if sum == 0.0 || sum != sum { 1.0 }
+            let scale = if sum == 0.0 || sum.is_nan() { 1.0 }
                         else { float::rcp_approx_ftz_f32(sum) };
             self.rescale::<ROW>(scale);
             static_for!(N in [0, 1, 2, 3, 4, 5, 6, 7] {

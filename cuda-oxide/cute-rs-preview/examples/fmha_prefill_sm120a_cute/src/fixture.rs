@@ -97,7 +97,7 @@ pub fn make_inputs(
     zero_query: bool,
 ) -> (Vec<f16>, Vec<f16>, Vec<f16>) {
     let q = if zero_query {
-        vec![0.0 as f16; shape.q_elements()]
+        vec![0.0_f16; shape.q_elements()]
     } else {
         input(shape.q_elements(), Q_SEED, input_scale)
     };
@@ -247,12 +247,7 @@ mod tests {
                 .all(|(&a, &b)| a as f32 == b as f32 * 16.0)
         );
         assert_eq!(v16, v);
-        assert!(
-            make_inputs(shape, 16, true)
-                .0
-                .iter()
-                .all(|&x| x == 0.0 as f16)
-        );
+        assert!(make_inputs(shape, 16, true).0.iter().all(|&x| x == 0.0_f16));
     }
 
     /// Check causal masking and independent head indexing using uniform logits.
@@ -264,7 +259,7 @@ mod tests {
             heads: 2,
             causal: false,
         };
-        let zeros = vec![0.0 as f16; 256];
+        let zeros = vec![0.0_f16; 256];
         let values: Vec<f16> = [2.0, 10.0, 4.0, 14.0]
             .into_iter()
             .flat_map(|x| [x as f16; 64])
@@ -291,7 +286,7 @@ mod tests {
             heads: 1,
             causal: false,
         };
-        let q = vec![100.0 as f16; 64];
+        let q = vec![100.0_f16; 64];
         let k: Vec<f16> = [100.0, -100.0]
             .into_iter()
             .flat_map(|x| [x as f16; 64])
@@ -310,7 +305,7 @@ mod tests {
         let mut got: Vec<f16> = expected.iter().map(|&x| x as f16).collect();
         assert_eq!(verify(&got, &expected).unwrap().elements, 4);
         assert!(verify(&got[..3], &expected).is_err());
-        for bad in [f16::NAN, f16::INFINITY, f16::NEG_INFINITY, -0.03 as f16] {
+        for bad in [f16::NAN, f16::INFINITY, f16::NEG_INFINITY, -0.03_f16] {
             got[3] = bad;
             assert!(verify(&got, &expected).is_err());
         }

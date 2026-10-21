@@ -91,29 +91,52 @@ impl Nvfp4KvCache {
 
 /// Pre-allocated device scratch buffers for zero-allocation, stream-ordered 36-layer NVFP4 execution.
 struct Nvfp4Scratch {
+    /// Hidden states entering the first layer `[rows, HIDDEN]`; a run takes both hidden
+    /// buffers out of their options and alternates them as layer input and output.
     hidden_a: Option<DeviceBuffer<Bf16>>,
+    /// The other hidden-state buffer `[rows, HIDDEN]` of that alternation.
     hidden_b: Option<DeviceBuffer<Bf16>>,
+    /// Input RMSNorm output `[rows, HIDDEN]`, the operand of the Q/K/V projections.
     normalized: DeviceBuffer<Bf16>,
+    /// Query projection `[rows, Q_WIDTH]`.
     q: DeviceBuffer<Bf16>,
+    /// Key projection `[rows, KV_WIDTH]`.
     k: DeviceBuffer<Bf16>,
+    /// Value projection `[rows, KV_WIDTH]`.
     v: DeviceBuffer<Bf16>,
+    /// Per-head QK-normed queries `[rows, Q_WIDTH]`.
     qn: DeviceBuffer<Bf16>,
+    /// Per-head QK-normed keys `[rows, KV_WIDTH]`.
     kn: DeviceBuffer<Bf16>,
+    /// Rotated queries `[rows, Q_WIDTH]`.
     rot_q: DeviceBuffer<Bf16>,
+    /// Rotated keys `[rows, KV_WIDTH]`, appended to the layer's KV cache.
     rot_k: DeviceBuffer<Bf16>,
+    /// Split attention partial states `[rows, Q_HEADS, splits, STATE_SIZE]` in `f32`.
     partials: DeviceBuffer<f32>,
+    /// Merged attention output `[rows, Q_WIDTH]`.
     attended: DeviceBuffer<Bf16>,
+    /// Output projection `[rows, HIDDEN]`.
     projected: DeviceBuffer<Bf16>,
+    /// Layer input plus the attention output `[rows, HIDDEN]`.
     residual: DeviceBuffer<Bf16>,
+    /// Post-attention RMSNorm output `[rows, HIDDEN]`, the operand of the gate and up projections.
     post: DeviceBuffer<Bf16>,
+    /// Gate projection `[rows, INTERMEDIATE]`.
     gate: DeviceBuffer<Bf16>,
+    /// Up projection `[rows, INTERMEDIATE]`.
     up: DeviceBuffer<Bf16>,
+    /// `SiLU(gate)` `[rows, INTERMEDIATE]`.
     silu: DeviceBuffer<Bf16>,
+    /// `SiLU(gate) * up` `[rows, INTERMEDIATE]`, the operand of the down projection.
     product: DeviceBuffer<Bf16>,
+    /// Down projection `[rows, HIDDEN]`, added to `residual` to form the layer output.
     down: DeviceBuffer<Bf16>,
 }
 
 impl Nvfp4Scratch {
+    /// Allocate zeroed scratch for up to `max_rows` token rows and the attention splits of
+    /// `max_seq` cached tokens. Every buffer carries eight guard elements past its logical length.
     fn new(stream: &CudaStream, max_rows: usize, max_seq: usize) -> Result<Self> {
         let splits = max_seq.div_ceil(64);
         let partial_elems = max_rows * Q_HEADS * splits * crate::attention_kernel::STATE_SIZE + 8;

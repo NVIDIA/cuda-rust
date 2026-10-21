@@ -135,7 +135,7 @@ pub mod kernels {
         let tid = thread::threadIdx_x() as usize;
         let lane = tid % 32;
         let warp_id = tid / 32;
-        let splits = (seq_k as usize + 63) / 64;
+        let splits = (seq_k as usize).div_ceil(64);
         let split = thread::blockIdx_x() as usize % splits;
         let head = thread::blockIdx_x() as usize / splits;
         unsafe {
@@ -179,7 +179,7 @@ pub mod kernels {
                 });
                 dot += warp::shuffle_xor_f32(dot, 1);
                 dot += warp::shuffle_xor_f32(dot, 2);
-                if tid % 4 == 0 {
+                if tid.is_multiple_of(4) {
                     *scores.add(row) = if split * 64 + row < seq_k as usize {
                         dot
                     } else { f32::NEG_INFINITY };

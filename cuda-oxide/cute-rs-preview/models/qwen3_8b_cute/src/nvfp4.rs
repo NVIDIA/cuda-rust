@@ -41,7 +41,7 @@ use std::sync::Arc;
 #[must_use]
 #[inline(always)]
 pub fn f32_to_e4m3(value: f32) -> u8 {
-    if !(value > 0.0) {
+    if value.is_nan() || value <= 0.0 {
         return 0;
     }
     let clamped = if value > 448.0 { 448.0 } else { value };
@@ -177,19 +177,13 @@ pub mod kernels {
     /// Encode a non-negative `f32` scale into `E4M3FN` inside device code using IEEE bit fields.
     #[inline(always)]
     fn dev_f32_to_e4m3(value: f32) -> u8 {
-        if !(value > 0.0) {
+        if value.is_nan() || value <= 0.0 {
             return 0;
         }
         let clamped = if value > 448.0 { 448.0 } else { value };
         if clamped < (1.0 / 64.0) {
             let mant = ((clamped * 512.0) + 0.5) as u32;
-            let m = if mant < 1 {
-                1
-            } else if mant > 7 {
-                7
-            } else {
-                mant
-            };
+            let m = mant.clamp(1, 7);
             return m as u8;
         }
         let bits = clamped.to_bits();

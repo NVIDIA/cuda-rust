@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //! FP16 output swizzle shared by the device store path and exhaustive CPU layout checks.
 
+/// B64 swizzle in FP16 element units. Kernel callers use row<128, column<32.
+#[inline(always)]
+pub const fn output_offset(row: u32, column: u32) -> usize {
+    let plain = row * 32 + column;
+    (plain ^ ((plain >> 3) & 0x18)) as usize
+}
+
 #[cfg(test)]
 mod tests {
     //! Enumerate output positions to check complete coverage and contiguous vector-store chunks.
@@ -25,11 +32,4 @@ mod tests {
         assert_eq!(output_offset(2, 0), 72);
         assert_eq!(output_offset(7, 24), 224);
     }
-}
-
-/// B64 swizzle in FP16 element units. Kernel callers use row<128, column<32.
-#[inline(always)]
-pub const fn output_offset(row: u32, column: u32) -> usize {
-    let plain = row * 32 + column;
-    (plain ^ ((plain >> 3) & 0x18)) as usize
 }

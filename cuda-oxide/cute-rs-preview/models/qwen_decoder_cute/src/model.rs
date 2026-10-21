@@ -253,6 +253,14 @@ impl<const H: usize, const I: usize, const K: usize> DecoderCache<H, I, K> {
     pub fn len(&self) -> usize {
         self.state.len
     }
+    /// Report whether no common prefix has been published yet.
+    #[allow(
+        dead_code,
+        reason = "Pairs with `len` for library consumers; this binary never asks"
+    )]
+    pub fn is_empty(&self) -> bool {
+        self.state.len == 0
+    }
     /// Report whether a failed operation prevents reuse until `reset`.
     pub fn is_poisoned(&self) -> bool {
         self.state.poisoned

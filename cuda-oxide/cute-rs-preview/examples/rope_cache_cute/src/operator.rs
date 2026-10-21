@@ -219,6 +219,15 @@ impl<const K: usize, const D: usize> KvCache<K, D> {
         self.valid_tokens
     }
 
+    /// Report whether no completed append has published a token yet.
+    #[allow(
+        dead_code,
+        reason = "Pairs with `len` for model consumers; this standalone example never asks"
+    )]
+    pub fn is_empty(&self) -> bool {
+        self.valid_tokens == 0
+    }
+
     /// Return the fixed token capacity, excluding allocation guards.
     pub fn capacity(&self) -> usize {
         self.shape.capacity()

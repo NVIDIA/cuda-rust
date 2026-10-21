@@ -7,7 +7,7 @@ use crate::library::storage::{self, Event, Plan, Policy, Site, Trace};
 use crate::library::{EdgeKind, MarkerKind, Scope, call_scope, reachable_instances};
 use rustc_middle::ty::{Instance, Ty, TyCtxt, TyKind, TypingEnv};
 use rustc_public::{mir, rustc_internal};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Fact {
@@ -565,6 +565,8 @@ fn joins(edges: &[Vec<usize>]) -> Vec<Option<usize>> {
 struct Analyzer<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
     collection: &'a CollectionResult<'tcx>,
+    call_edges_by_site: &'a HashMap<(Instance<'tcx>, usize), usize>,
+    library_calls_by_site: &'a HashMap<(Instance<'tcx>, usize), usize>,
     root: &'a str,
     stack: Vec<Instance<'tcx>>,
     resource_root: bool,
@@ -582,11 +584,12 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         )
     }
     fn callee(&self, instance: Instance<'tcx>, block: usize) -> Option<(Instance<'tcx>, EdgeKind)> {
-        self.collection
-            .call_edges
-            .iter()
-            .find(|e| e.caller == instance && e.block.index() == block)
-            .map(|e| (e.callee, e.kind))
+        self.call_edges_by_site
+            .get(&(instance, block))
+            .map(|&index| {
+                let edge = &self.collection.call_edges[index];
+                (edge.callee, edge.kind)
+            })
     }
     fn intrinsic(&self, instance: Instance<'tcx>) -> Option<Fact> {
         let path = self.tcx.def_path_str(instance.def_id());
@@ -971,12 +974,8 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             write(destination, Fact::Varying, state, borrowed);
             return Ok(());
         };
-        if let Some(call) = self
-            .collection
-            .library_calls
-            .iter()
-            .find(|c| c.site.caller == instance && c.site.block.index() == block)
-        {
+        if let Some(&index) = self.library_calls_by_site.get(&(instance, block)) {
+            let call = &self.collection.library_calls[index];
             let mut site = self.path.clone();
             site.push(block);
             if call.kind.storage() {
@@ -1375,6 +1374,18 @@ pub(crate) fn validate<'tcx>(
     mut plans: Option<&mut BTreeMap<String, Plan>>,
 ) -> Result<Validation<'tcx>, String> {
     rustc_internal::run(tcx, || {
+        let mut call_edges_by_site = HashMap::with_capacity(collection.call_edges.len());
+        for (index, edge) in collection.call_edges.iter().enumerate() {
+            call_edges_by_site
+                .entry((edge.caller, edge.block.index()))
+                .or_insert(index);
+        }
+        let mut library_calls_by_site = HashMap::with_capacity(collection.library_calls.len());
+        for (index, call) in collection.library_calls.iter().enumerate() {
+            library_calls_by_site
+                .entry((call.site.caller, call.site.block.index()))
+                .or_insert(index);
+        }
         let mut shapes = BTreeMap::new();
         let mut traces = BTreeMap::new();
         for root in collection.functions.iter().filter(|f| f.is_kernel) {
@@ -1396,7 +1407,7 @@ pub(crate) fn validate<'tcx>(
             let storage_root=collection.library_calls.iter().any(|c| c.kind.storage() && reached.contains(&c.site.caller));
             let trace=traces.entry(root.export_name.clone()).or_insert_with(Trace::default);
             let plan=plans.as_mut().and_then(|plans|plans.get_mut(&root.export_name));
-            let mut analyzer = Analyzer { tcx, collection, root: &root.export_name, stack: Vec::new(), resource_root,storage_root,path:Vec::new(),trace,plan };
+            let mut analyzer = Analyzer { tcx, collection, call_edges_by_site: &call_edges_by_site, library_calls_by_site: &library_calls_by_site, root: &root.export_name, stack: Vec::new(), resource_root,storage_root,path:Vec::new(),trace,plan };
             analyzer.analyze(root.instance, arguments, true, Scope::Block, Pending::new(),Epochs::default())?;
             shapes.insert(root.export_name.clone(), shape);
         }

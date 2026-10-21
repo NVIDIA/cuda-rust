@@ -81,12 +81,7 @@ performs one complete invocation without timing. Use the comparison runner
 for the independent oracle check; adapter mode checks input sizes,
 page bounds, finite outputs and repeatability, and retains JSON on stdout.
 
-See [measurement notes](measurement-notes.md) for optimization details,
-correctness and sanitizer evidence, profiler interpretation and reproduction
-commands. [Optimized results](results/optimization-b200/README.md) retain all
-samples and provenance. The original [small](results/benchmark-b200-small.json)
-and [persistent](results/benchmark-b200-persistent.json) runs remain historical
-baselines. The shared [feature-gap roadmap](attention-feature-gaps.md) records
-additional attention functionality and compiler work. The shared
+The shared [feature-gap roadmap](attention-feature-gaps.md) records additional
+attention functionality and compiler work. The shared
 [architecture notes](attention-design.md) explain the two source schedules and
 the reusable API boundaries.

@@ -60,8 +60,8 @@ the options and the failure rules.
 | [`qwen3_8b_cute`](models/qwen3_8b_cute) | `sm_120a` | 36-layer Qwen3-8B decoder in BF16 and NVFP4 ([visual guide](models/qwen3_8b_cute/visual.md)) |
 
 `cargo oxide list` prints both tables. Each README gives the device requirement, one
-command and the expected result; the `reference/` folders hold measurements and
-validation evidence.
+command and the expected result; the `reference/` folders hold the comparison
+harnesses, the pinned reference sources and the validation commands.
 
 ## Read next
 

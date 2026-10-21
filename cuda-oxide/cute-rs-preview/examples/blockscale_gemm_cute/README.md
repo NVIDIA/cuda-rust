@@ -58,8 +58,8 @@ The Rust program builds deterministic inputs and computes a substantial CPU
 reference. Success means all **4,194,304 FP16 output bit patterns** match.
 It then reports CUDA-event median, p10, p90 and TFLOP/s from **100 warmups and
 31 single-launch samples**. This command runs Rust only; the
-[comparison instructions](reference/nsight-measurements.md#reproduce) run the
-separate CuTeDSL harness and require its Python dependencies.
+[CuTeDSL harness](reference/README.md) runs the separate comparison and
+requires its Python dependencies.
 
 ## CuTeDSL comparison
 
@@ -79,9 +79,7 @@ interval here; CuTeDSL has the shorter kernel duration.
 
 Clocks were unlocked and Rust ran first. The programs use different input
 fixtures; Rust starts a new process per round, while CuTeDSL keeps one process.
-These results do not establish a stable speed ranking. See the
-[methodology and evidence](reference/nsight-measurements.md) for round ranges,
-launch selection, versions and reproduction.
+These results do not establish a stable speed ranking.
 
 - [Reference sources, dependencies and provenance](reference/README.md)
 - [Separate Rust CTM example](../blockscale_gemm_ctm)

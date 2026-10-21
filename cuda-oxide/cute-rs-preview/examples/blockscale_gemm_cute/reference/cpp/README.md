@@ -49,41 +49,9 @@ same protocol; CUDA event intervals include submission gaps and are a separate
 metric. Compiler versions and generated resource usage remain relevant to the
 comparison. No SOL claim is made.
 
-## Local correctness and timing (2026-10-11)
+## Compare with the Rust CTM
 
-Both fresh executables passed all 4,194,304 bit-exact FP16 checks and replay
-checks with resident 170-CTA, forced 1-CTA, and forced 17-CTA grids. Both passed
-memcheck with tensor-operation checking and synccheck with zero errors.
-The C++ CPU physical-layout tests and 12 comparison-runner tests also passed.
-
-The comparison uses physical GPU 1, an RTX 5090, driver 615.71.09, and Nsight
-Systems 2026.3.2. Each implementation runs three rounds, serially in rotating
-order, with 100 warmups and 31 measured launches per round. Both use 170 CTAs,
-hot buffer reuse, no graphs, and unlocked clocks. The reported duration is
-Nsight kernel-active time, excluding host submission gaps. The runner requires
-exactly 132 kernel launches and full correctness in every timing process.
-
-| Implementation | Round medians (µs) | Median of round medians (µs) |
-| --- | --- | --- |
-| Rust primitives, CUTLASS compiler 4.7.0 | 11.712, 11.680, 11.648 | 11.680 |
-| C++ instruction primitives, nvcc 13.4.92 | 11.072, 11.072, 10.976 | 11.072 |
-
-Rust takes 5.5% longer in this experiment. This compares the two implementations
-and compiler pipelines; it does not isolate a language cost. Rust uses 128
-registers per thread and C++ uses 136; both have 8 bytes of stack and no local
-memory, with 86,016 bytes of dynamic shared memory plus 1,024 bytes of static
-alignment overhead per CTA. The differing instruction schedules and compilers
-need further investigation before attributing the timing gap.
-
-The Rust build uses `nightly-2026-10-11` after rebasing onto main `d141118c05`.
-Its cubin is byte-for-byte identical to the pre-rebase cubin, so the new
-parameter attributes have not improved this kernel's generated code. See the
-[Rust example](../../../blockscale_gemm_ctm#c-primitives-comparison-after-the-main-rebase-2026-10-11)
-for the current attribute-export boundary.
-
-[Recorded results](benchmark-results.json) retain the raw samples, source and
-binary hashes, compiler provenance, validation reports, and local trace paths.
-To reproduce, build both executables freshly and run:
+Build both executables freshly, then run the exact-oracle comparison runner:
 
 ```sh
 python3 ../../../blockscale_gemm_ctm/compare.py \
@@ -93,5 +61,5 @@ python3 ../../../blockscale_gemm_ctm/compare.py \
   --ctas 170 --rounds 3 --warmup 100 --samples 31
 ```
 
-The paths in `benchmark-results.json` describe the original measurement checkout
-before this reference was relocated. Source and artifact hashes are preserved.
+The runner requires 132 kernel launches and full correctness in every timing
+process and reports Nsight kernel-active time, excluding host submission gaps.

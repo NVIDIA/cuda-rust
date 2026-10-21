@@ -77,12 +77,6 @@ Clocks were unlocked and CuTeDSL ran first. Persistent decode drifted across
 windows: Nsight kernel sums ranged **48.297–62.647 µs** for CuTe-RS and
 **49.036–64.389 µs** for CuTeDSL. These medians do not establish a stable speed
 ranking. Small CuTeDSL event windows also varied from **18.132–40.883 µs**.
-[Nsight methodology, component timings and reproduction](reference/nsight-measurements.md)
-retain the full evidence. Earlier measurements using both timing orders and
-different warmups remain in the [historical notes](reference/measurement-notes.md).
 
-- [CTM migration: 9 passing B200 cases, sanitizers and compiler comparison](reference/results/ctm-migration/summary.json)
-- [CuTeDSL reference and setup](reference/README.md)
-- [Validation, profiling, benchmark commands, and detailed results](reference/measurement-notes.md)
-- [Historical correctness results](reference/results/optimization-b200/validation.json) · [Benchmark evidence](reference/results/optimization-b200/summary.json)
+- [CuTeDSL reference, setup and validation commands](reference/README.md)
 - [Shared attention feature-gap roadmap](reference/attention-feature-gaps.md)

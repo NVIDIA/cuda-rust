@@ -73,11 +73,9 @@ durations from a separate capture; TFLOP/s uses the CUDA-event median.
 Event intervals can include launch gaps; Nsight durations exclude gaps between
 kernels. Clocks were unlocked and Python ran first. These separate runs vary,
 so subtracting columns does not isolate overhead or establish a stable ranking.
-[Methodology, ranges and raw results](../fp16_gemm_256x352_cute/public_reference/performance.md)
-retain the evidence for both Rust versions.
 
 The Python reference has an unresolved group-two TMA memcheck diagnostic;
 see [validation and known limitation](../fp16_gemm_256x352_cute/public_reference/README.md#validation-and-known-limitation).
 
-- [CTM architecture, validation and historical results](public_reference/README.md)
+- [CTM architecture and validation](public_reference/README.md)
 - [Python setup, timing options and validation commands](../fp16_gemm_256x352_cute/public_reference/README.md)

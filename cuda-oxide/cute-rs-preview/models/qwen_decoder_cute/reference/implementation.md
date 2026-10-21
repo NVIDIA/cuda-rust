@@ -243,8 +243,8 @@ hashes, binary hash, request/policy/seeds, codec IDs, EOS/cap status, waveform
 hash and timing boundaries. `--benchmark MODEL_DIR REQUEST_JSON OUTPUT_DIR 20`
 retains weights across three warmups and twenty requests, requiring identical
 codes and waveform hashes. The first delivered buffer is the full waveform;
-incremental streaming is not implemented. See the [benchmark guide](benchmark.md)
-for qualified baselines, performance and quality limits.
+incremental streaming is not implemented. The reference runners are described
+in the [reference guide](README.md#reference-benchmark).
 
 One and two row projections follow the reduction order of the reference's
 cuBLAS kernel for that shape, chosen by `reference_linear.rs`: one-row shapes
@@ -252,12 +252,11 @@ use FP32 FMA chains over `k mod 16` (`k mod 32` for 1024→1024) merged by XOR
 offsets, the one-row 6144→2048 and two-row 3072→1024 shapes use tensor-core
 chains per K slice with FP32 slice sums in order, and the remaining two-row
 shapes keep the original tensor-core chain, which already matched the reference
-bit for bit. Bias is added in FP32 before the single BF16 rounding. The
-[bug note](bugs/decode-projection-rounding.md) records the probes and checks.
+bit for bit. Bias is added in FP32 before the single BF16 rounding.
 The tensor-core path uses aligned packed loads through CuTe partitions; a CuTe
 register tile stages 32 K16 operand pairs, and its fold retains ascending MMA
 accumulation and final BF16 rounding, with individual K16 steps for short
-remainders. See [projection measurements](benchmark.md#ordered-projection-prefetch).
+remainders.
 Shapes outside the plan table retain the original implementation. The
 `--decode-linear` regression checks 21,585 accuracy/bias values and 55,583
 exact-order bit comparisons: FMA-chain outputs against a host emulation of the
@@ -281,10 +280,8 @@ greedy Ryan acceptance sentence runs to the 127-frame cap, exactly as the
 official reference does with either SDPA backend; only the reference's optimized
 variants finish it. The cause of the earlier Vivian repetition was the
 tensor-core accumulation rounding toward zero at every MMA step, which pushed
-one predictor projection output across a BF16 rounding boundary; the
-[bug note](bugs/decode-projection-rounding.md) records it and the fix. The
-[Vivian investigation](vivian.md) records the causal chain and the rejected
-accuracy-only candidates that led there. Greedy pass/fail on these sentences is
+one predictor projection output across a BF16 rounding boundary. Greedy
+pass/fail on these sentences is
 decided by rounding noise in all implementations, so further accuracy changes
 are not a path to passing every sentence. Broad voice/style/language
 quality, speaker consistency, incremental delivery and SM100 execution remain

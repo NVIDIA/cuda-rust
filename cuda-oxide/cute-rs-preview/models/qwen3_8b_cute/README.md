@@ -73,5 +73,5 @@ python3 cute-rs-preview/models/qwen3_8b_cute/reference/benchmark_cutedsl.py --la
 | [`src/nvfp4.rs`](src/nvfp4.rs) | True NVFP4 (`E2M1` + `E4M3` scale, `SF_VEC = 16`) quantizer, canonical `(32, 4)` Blackwell scale-atom layout, and hardware-lowered `cute.scaled_view_load` (`nvgpu.cvt_fpext`) GPU projection kernels. |
 | [`src/checkpoint.rs`](src/checkpoint.rs) | Multi-shard `model.safetensors.index.json` loader for `Qwen/Qwen3-8B` plus fast GPU synthetic weight generator. |
 | [`src/benchmark.rs`](src/benchmark.rs) | `Qwen3Engine` executing both BF16 and NVFP4 stacks with KV caching, prefill/decode timing, and cosine-similarity verification. |
-| [`reference/benchmark_cutedsl.py`](reference/benchmark_cutedsl.py) | CuTeDSL (`cutlass.cute`) Python reference implementation and RTX 5090 benchmark harness (`reference/cutedsl_comparison.json`). |
+| [`reference/benchmark_cutedsl.py`](reference/benchmark_cutedsl.py) | CuTeDSL (`cutlass.cute`) Python reference implementation and RTX 5090 benchmark harness. |
 | [`visual.md`](visual.md) | Visual walkthrough with adaptive light/dark SVG diagrams. |

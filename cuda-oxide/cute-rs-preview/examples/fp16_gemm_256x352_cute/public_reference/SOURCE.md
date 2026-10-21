@@ -32,6 +32,5 @@ package, so a fresh checkout has the same public implementation.
 
 The [validation notes](README.md#validation-and-known-limitation) record passing
 SM100 numerical checks and the unresolved Python memcheck diagnostic.
-[Current performance results](performance.md) compare this public kernel with
-both Rust implementations. Earlier timings of the local reference are not
-measurements of this kernel.
+The example READMEs compare this public kernel with both Rust implementations.
+Earlier timings of the local reference are not measurements of this kernel.

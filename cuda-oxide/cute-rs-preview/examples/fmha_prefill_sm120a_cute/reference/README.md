@@ -1,9 +1,5 @@
 # CuTe DSL FlashAttention v2 reference
 
-For the current matched CUDA-event and Nsight Systems table, see
-[measurement methodology and reproduction](nsight-measurements.md).
-The older three-round profiler commands below reproduce the historical protocol.
-
 `flash_attention_v2.py` is an unchanged copy of the public CUTLASS 4.7 example:
 
 - Repository commit: `dcf215af68a2d08d305076c152a06f201728cd53`.
@@ -39,11 +35,10 @@ example's `.venv/bin/python`, the shared `cute-rs-preview/.venv/bin/python`, the
 See the [example README](../README.md) for direct-event comparisons.
 The main command with `--all-cases --warmup 100 --iters 31` prints direct
 CUDA-event medians for all four runtime/static and causal/noncausal cases.
-These intervals can include host launch/submission delays, unlike the archived
-Nsight kernel-active table. Comparing those two methods does not establish
-a regression. The historical table used 100 warmups, 31 samples and three
-alternating rounds; an event run with five warmups and 20 iterations also
-uses a different sampling protocol.
+These intervals can include host launch/submission delays, which Nsight Systems
+kernel durations exclude. Comparing those two methods does not establish a
+regression, and runs with different warmup and sample counts use different
+sampling protocols.
 
 `compare.py` retains the separate Nsight Systems profiling workflow and
 invokes the Rust binary with `--rust-only`. With Nsight Systems installed,
@@ -111,9 +106,23 @@ inputs and an independent CPU FP64 oracle. It supports the same `--seq-q`,
 `benchmark.py` is the same checked runner. The original script's own CLI above
 uses its upstream random input generator instead of the shared fixture.
 
-For matched Rust comparisons, validation commands, recorded results, and
-optimization history, see [measurement notes](measurement-notes.md). Commands
-in those notes run from the example directory unless stated otherwise.
+## Validation
 
-See the [historical profiling follow-up](profiling-notes.md) for the
-shared-memory load scheduling fix.
+`validate.py` in the example directory checks lengths 1, 64, 128, 192 and
+1024, both masks, unequal head-local inputs, rectangular noncausal shapes,
+large logits and zero queries. With `--reference` it also checks that the
+input hashes agree and compares every Rust and CuTeDSL output element,
+retaining per-case logs and JSON reports. From the example directory, with
+the shared environment's interpreter as `python`:
+
+```bash
+CUTE_DSL_ARCH=sm_120a python validate.py \
+  --binary /path/to/fmha_prefill_sm120a_cute --reference --output-dir /tmp/prefill-validation
+CUTE_DSL_ARCH=sm_120a python validate.py \
+  --binary /path/to/fmha_prefill_sm120a_cute --reference --shape-mode static \
+  --output-dir /tmp/prefill-static-validation
+python -m unittest discover -s reference -p test_fixture.py
+```
+
+`--rust-only` runs the Rust binary without the comparison; with `--warmup 0
+--iters 0` it performs two checked launches without timing.

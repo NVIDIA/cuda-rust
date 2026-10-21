@@ -28,8 +28,7 @@ B200 returned `CUBLAS_STATUS_NOT_SUPPORTED` for FP16 inputs and BF16 output.
 
 Historical throughput from another GPU, driver, or toolkit is not a valid
 baseline. Build and run the benchmark on the same host as every kernel trial;
-the originating B300 checkpoint is recorded in `../README.md`, and the B200
-presentation evidence is linked below.
+the originating B300 checkpoint is recorded in `../README.md`.
 
 ## Requirements
 
@@ -150,14 +149,3 @@ software-pipelined K-loop and TMA loads.
 - The `venv/` directory is gitignored — each machine creates its own.
 - The compiled `cublaslt_bench` binary is gitignored — rebuild from
   `cublaslt_bench.c` on each machine.
-
-## B200 presentation evidence (2026-10-01)
-
-[Comparison JSON](results/b200-2026-10-01/comparison.json) records the three
-individual shapes, top-8 and exhaustive-grid results, five raw final timing
-samples, algorithm configurations, and complete methodology/provenance.
-[Raw cuBLASLt output](results/b200-2026-10-01/cublas-final.log) and
-[raw Rust output](results/b200-2026-10-01/oxide.log) retain search counts and
-correctness results. [Reproduction commands](results/b200-2026-10-01/reproduce.sh)
-use the matching final timing protocol. Source hashes and the benchmark patch
-identify the uncommitted code used for this run; clocks were not locked.

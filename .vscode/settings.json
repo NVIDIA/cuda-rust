@@ -2,7 +2,6 @@
     // Project-level editor settings, tracked in git. Keep personal preferences
     // (fonts, colours, keybindings) in your VS Code User settings instead.
     "rust-analyzer.rustc.source": "discover",
-    // Keep nightly-only host features opt-in for the stable root workspace.
     "rust-analyzer.cargo.features": [],
     "rust-analyzer.procMacro.enable": true,
     "rust-analyzer.procMacro.attributes.enable": true,
@@ -12,29 +11,18 @@
     "files.exclude": {
         "**/target/flycheck*": true,
     },
-    // Compiler and CuTe examples have their own Cargo workspaces, so
-    // rust-analyzer needs explicit entries for the ones you are working on.
-    // Every path must exist on the checked-out branch, or rust-analyzer
-    // reports "Failed to load workspaces".
+    // Every example under cuda-oxide/crates/rustc-codegen-cuda/examples/ is its own cargo
+    // workspace, so rust-analyzer only sees the ones listed here. Add the ones
+    // you are working on. Every path must exist on the checked-out branch, or
+    // rust-analyzer reports "Failed to load workspaces".
     "rust-analyzer.linkedProjects": [
         "./Cargo.toml",
         "./cuda-oxide/Cargo.toml",
         "./cutile-rs/Cargo.toml",
         "./cuda-oxide/crates/rustc-codegen-cuda/Cargo.toml",
-        // "./cuda-oxide/crates/rustc-codegen-cuda/examples/debug_pointer_locals/Cargo.toml",
-        // "./cuda-oxide/crates/rustc-codegen-cuda/examples/gemm_sol_final/Cargo.toml",
-        // "./cuda-oxide/crates/rustc-codegen-cuda/examples/vecadd/Cargo.toml",
-        // "./cuda-oxide/crates/rustc-codegen-cuda/examples/abi_hmm/Cargo.toml",
-        // CuTe library crates are covered by cuda-oxide/Cargo.toml above.
-        "./cuda-oxide/cute-rs-preview/examples/elementwise_cute/Cargo.toml",
-        "./cuda-oxide/cute-rs-preview/examples/blockscale_gemm_cute/Cargo.toml",
-        "./cuda-oxide/cute-rs-preview/examples/blockscale_gemm_ctm/Cargo.toml",
-        // "./cuda-oxide/cute-rs-preview/examples/nvfp4_gemv_cute/Cargo.toml",
-        "./cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/Cargo.toml",
-        "./cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_ctm/Cargo.toml",
-        "./cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/Cargo.toml",
-        "./cuda-oxide/cute-rs-preview/examples/fmha_decode_sm120a_cute/Cargo.toml",
-        "./cuda-oxide/cute-rs-preview/examples/sm100_fmha_prefill_cute/Cargo.toml",
-        "./cuda-oxide/cute-rs-preview/examples/sm100_mla_decode_fp16_cute/Cargo.toml",
+        "./cuda-oxide/crates/rustc-codegen-cuda/examples/debug_pointer_locals/Cargo.toml",
+        "./cuda-oxide/crates/rustc-codegen-cuda/examples/gemm_sol_final/Cargo.toml",
+        "./cuda-oxide/crates/rustc-codegen-cuda/examples/vecadd/Cargo.toml",
+        "./cuda-oxide/crates/rustc-codegen-cuda/examples/abi_hmm/Cargo.toml",
     ],
 }

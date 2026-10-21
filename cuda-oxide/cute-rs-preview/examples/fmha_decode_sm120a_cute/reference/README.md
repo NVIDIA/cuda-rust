@@ -1,9 +1,5 @@
 # Dedicated CuTeDSL decode reference
 
-For the current matched CUDA-event and Nsight Systems table, see
-[measurement methodology and reproduction](nsight-measurements.md).
-The older three-round profiler commands below reproduce the historical protocol.
-
 `attention_decode.py` is authored in this repository using the public CUTLASS
 CuTeDSL API. It is **not an upstream CUTLASS kernel**. It implements the same
 one-query split-KV schedule as the Rust example: 64 cache rows per 128-thread
@@ -88,5 +84,13 @@ serially under Nsight Systems and distinguishes summed kernel-active time
 from the elapsed two-kernel span. `validate.py` covers short, ragged and long
 caches, multiple heads, uniform attention and large logits.
 
-See [measurement notes](measurement-notes.md) for validation commands, scheduling
-differences and the full benchmark evidence.
+Each implementation checks every output against an independent FP64 stable
+softmax with `abs(actual-expected) <= 2e-4 + 2e-3 * abs(expected)`, poisons
+the output and partial buffers before correctness launches, and requires a
+second launch to reproduce the output bit for bit. From the example directory,
+with the shared environment's interpreter as `python`:
+
+```bash
+CUTE_DSL_ARCH=sm_120a python reference/validate.py \
+  --binary /path/to/fmha_decode_sm120a_cute --reference --output-dir /tmp/decode-validation
+```

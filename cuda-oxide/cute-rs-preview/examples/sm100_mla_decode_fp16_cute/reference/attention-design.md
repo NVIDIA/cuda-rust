@@ -1,8 +1,7 @@
 # B200 attention architecture
 
-This design records the initial matched FP16 implementation. See the
-[validation report](../../sm100_fmha_prefill_cute/reference/initial-validation.md) for correctness, sanitizer,
-compiler and timing evidence, and each example README for supported profiles.
+This design records the initial matched FP16 implementation. See each example
+README for supported profiles and validation commands.
 
 The separate FMHA prefill and FP16 MLA decode examples target B200/SM100a.
 Kernel schedules and attention mathematics remain visible in Rust through
@@ -181,6 +180,4 @@ first-party source files use the repository NVIDIA/Apache-2.0 SPDX headers.
 
 See the [prefill reference guide](../../sm100_fmha_prefill_cute/reference/README.md)
 and [decode reference guide](README.md) for input contracts and reproduction.
-The [feature-gap roadmap](attention-feature-gaps.md) tracks supported extensions;
-[measurement notes](measurement-notes.md) describe the optimized decode pipeline
-and validation evidence.
+The [feature-gap roadmap](attention-feature-gaps.md) tracks supported extensions.

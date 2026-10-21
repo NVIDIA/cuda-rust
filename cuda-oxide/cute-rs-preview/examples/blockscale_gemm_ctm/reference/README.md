@@ -4,13 +4,11 @@ This is a port of cuda-oxide's [Rust CTM GEMM](../)
 using the actual `cutlass.experimental.primitives` API from CUTLASS 4.8.0.
 The kernel is written in Python, as exposed by that upstream API; the Rust
 implementation remains in `blockscale_gemm_ctm`. The older [C++ reference](../../blockscale_gemm_cute/reference/cpp/)
-reference uses custom CUDA C++ inline PTX and has separate historical results.
+reference uses custom CUDA C++ inline PTX.
 
-The entry README shows the current
-[Rust CTM versus this Python CTM comparison](ctm-python-measurements.md), with
-both CUDA-event and Nsight kernel timings on the same inputs. The
-[higher-level CuTeDSL comparison](nsight-measurements.md) is supplementary;
-the historical CTM measurements below remain separate.
+The entry README shows the Rust CTM versus Python CTM comparison, with both
+CUDA-event and Nsight kernel timings on the same inputs; `compare.py` in the
+example directory produces it.
 
 Both CTM kernels use M=N=2048, K=1024, packed E2M1 inputs, UE8M0 scales per
 32 K elements, FP32 accumulation, and FP16 output. Physical offsets, the
@@ -86,35 +84,3 @@ maximum suspension hint, while Rust omits that optional operand. Phase and
 ordering semantics match; emitted instructions and compiler optimizations can
 differ. Results compare these implementations/toolchains and do not isolate
 language overhead or establish SOL. No global compiler pin was changed.
-
-## Historical comparison (2026-10-11)
-
-These measurements precede the Rust source cleanup. See the
-[current paired comparison](ctm-python-measurements.md) for fresh results and
-[measurement notes](measurement-notes.md) for the optimization history.
-
-RTX 5090, physical GPU 1, 170 CTAs, Nsight Systems 2026.3.2. Three serial
-rounds with rotating order, 100 warmups and 31 samples per round; hot buffer
-reuse, no graphs, unlocked clocks. Both implementations passed the complete
-bit-exact oracle and replay check in every timing process. Both also passed
-170-, 1-, and 17-CTA checks, memcheck, and synccheck.
-
-| Implementation | Round medians (µs) | Median of round medians (µs) |
-| --- | --- | --- |
-| Rust CTM, CUTLASS compiler 4.7.0 | 11.680, 11.648, 11.616 | **11.648** |
-| CUTLASS primitives API, compiler 4.8.0 | 10.752, 10.752, 10.752 | **10.752** |
-
-Rust takes 8.33% longer in this comparison, subject to the toolchain/wait-hint
-qualifications above. Resource usage is 128 registers/8 stack bytes for Rust
-and 122 registers/0 stack bytes for CUTLASS. Matching shared-memory allocation
-is verified in both cubins. These results supersede using the custom-C++ row
-as evidence about CUTLASS CTM performance.
-
-[`benchmark-results.json`](benchmark-results.json) preserves every sample,
-commands, source and cubin hashes, compiler versions, fixture parity evidence,
-and correctness/sanitizer reports. Local raw traces are under
-`/tmp/cutlass-ctm-correction/timing/run-h2597zg8/`.
-
-The reference originally lived at `blockscale_gemm_cute/reference/ctm/`.
-Paths and hashes inside the recorded JSON preserve that measurement-time
-location; the executable and run instructions above use the current location.

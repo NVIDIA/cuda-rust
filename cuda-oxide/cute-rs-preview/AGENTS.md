@@ -38,7 +38,8 @@ correctness and competitive measured performance.
   constants. Explain shapes, units, ownership, readiness, rounding and error
   behavior where relevant. Unsafe APIs must state caller obligations; comments
   must not claim that types prove thread convergence or asynchronous completion.
-- Put detailed numerical contracts, validation evidence, debugging, profiling
-  and benchmark methodology in the workload's `reference/` folder, linked from
-  its README. Keep essential prerequisites and known user-visible limitations
-  in the entry README.
+- Put numerical contracts, comparison harnesses and reproduction commands in
+  the workload's `reference/` folder, linked from its README. Do not commit
+  measurement records: result JSON, traces, profiles, logs and SASS dumps
+  belong in a run's output directory outside the tree. Keep essential
+  prerequisites and known user-visible limitations in the entry README.

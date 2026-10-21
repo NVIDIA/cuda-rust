@@ -69,8 +69,4 @@ subtracting columns does not isolate host overhead. Clocks were unlocked and
 CuTeDSL ran first in each case. This single run per method does not establish
 a stable speed ranking.
 
-- [Nsight methodology, component timings, sequence spans and reproduction](reference/nsight-measurements.md)
-- [CuTeDSL reference and setup](reference/README.md)
-- [Validation and historical measurements](reference/measurement-notes.md)
-- [Compiler regression checks](reference/compiler-regression-results.json)
-- [CTM migration evidence](reference/ctm-migration-results.json)
+- [CuTeDSL reference, setup and validation commands](reference/README.md)

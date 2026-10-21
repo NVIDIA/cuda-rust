@@ -98,16 +98,15 @@ Each row uses 20 measured runs after three warmups on 2026-10-17 with the
 decode projections in the reference's reduction order. The recordings differ.
 Greedy decoding of the Ryan acceptance sentence runs to the 127-frame cap, for
 cuda-oxide and for the official reference alike; only the reference's optimized
-variants finish it. The [bug note](reference/bugs/decode-projection-rounding.md)
-records the cause, the fix and per-kernel timings.
+variants finish it.
 
-For reference comparisons, profiling and timing definitions, see the
-[benchmark guide](reference/benchmark.md). Shapes, numerical contracts,
-validation commands and recorded checks are in
+The reference runners behind the comparison rows are documented in the
+[reference guide](reference/README.md#reference-benchmark). Shapes, numerical
+contracts, validation commands and recorded checks are in
 [implementation and validation](reference/implementation.md).
 
-Greedy Vivian completes since the [reduction-order fix](reference/bugs/decode-projection-rounding.md);
-the [earlier investigation](reference/vivian.md) is kept as history. The greedy
+Greedy Vivian completes since the decode projections follow the reference's
+reduction order (`src/reference_linear.rs`). The greedy
 Ryan acceptance sentence caps at 127 frames, as the official reference does.
 Broader voice and language acceptance remains open. Audio is delivered as a
 complete waveform; incremental playback is not implemented.

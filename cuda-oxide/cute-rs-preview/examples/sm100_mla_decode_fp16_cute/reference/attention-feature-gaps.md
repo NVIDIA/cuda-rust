@@ -8,8 +8,8 @@ This follow-up audit covers the [FMHA prefill](../../sm100_fmha_prefill_cute/REA
 and [FP16 MLA decode](../README.md) examples
 against their pinned CUTLASS v4.7.0 references at commit
 `dcf215af68a2d08d305076c152a06f201728cd53`. It records remaining work after the
-initial matched FP16 profiles; see the [validation report](../../sm100_fmha_prefill_cute/reference/initial-validation.md)
-for the implemented configurations and their recorded results.
+initial matched FP16 profiles; the example READMEs list the implemented
+configurations.
 
 ## Capability gaps
 

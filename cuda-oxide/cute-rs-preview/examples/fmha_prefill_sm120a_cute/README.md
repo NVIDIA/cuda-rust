@@ -64,8 +64,5 @@ submission gaps. These are separate runs; subtracting columns does not isolate
 host overhead. Clocks were unlocked and CuTeDSL ran first in each case.
 This single run per method does not establish a stable speed ranking.
 
-- [Nsight methodology, evidence and reproduction](reference/nsight-measurements.md)
-- [Validation and historical measurements](reference/measurement-notes.md)
-- [Earlier profiling findings](reference/profiling-notes.md)
-- [CTM migration evidence](reference/ctm-migration-results.json)
+- [Reference setup and validation commands](reference/README.md)
 - [Dedicated decode example](../fmha_decode_sm120a_cute/README.md)

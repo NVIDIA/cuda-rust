@@ -27,10 +27,22 @@ CUDA_OXIDE_CUTLASS_OPT_LEVEL=2 \
 
 Success checks all **4,194,304 FP16 output bit patterns** against a substantial
 CPU oracle, checks repeated-launch output, and reports CUDA-event timings.
-This runs Rust only. The [comparison commands](reference/ctm-python-measurements.md#reproduce)
-run our Python CTM reference using CUTLASS Primitives and its Python dependencies.
-The [validation instructions](reference/measurement-notes.md#cleanup-and-source-optimizations-2026-10-11)
-cover 170-, 1- and 17-CTA grids plus memory/tensor and synchronization sanitizers.
+This runs Rust only. The [Python CTM reference](reference/README.md) runs the
+same GEMM through CUTLASS Primitives and needs its Python dependencies;
+`compare.py` beside this README times both under Nsight Systems. `validate.py`
+covers 170-, 1- and 17-CTA grids plus memory/tensor and synchronization
+sanitizers. From `cuda-oxide/`:
+
+```sh
+python3 scripts/check-primitives-api-compile.py --example blockscale \
+  --output-dir /tmp/primitives-blockscale-evidence
+python3 cute-rs-preview/examples/blockscale_gemm_ctm/validate.py \
+  --binary /path/to/blockscale_gemm_ctm --output-dir /tmp/blockscale-results --sanitizer
+```
+
+The first command builds a fresh executable through the CUTLASS compiler and
+records its manifest; use its `run-*/target/release/blockscale_gemm_ctm` as the
+binary.
 
 ## Rust CTM versus Python CTM
 
@@ -47,9 +59,7 @@ three round medians, with 100 warmups and 31 single-launch samples per round.
 Events include submission gaps; Nsight reports GEMM execution duration,
 including device stalls. Python rebuilds tensor-map descriptors per launch;
 Rust prepares them before timing. The two metrics come from separate runs,
-with rotating order and unlocked clocks. See [methods, ranges and evidence](reference/ctm-python-measurements.md).
+with rotating order and unlocked clocks.
 
 - [Python CTM API and validation](reference/README.md)
-- [Supplementary comparison with the higher-level CuTeDSL kernel](reference/nsight-measurements.md)
-- [Implementation, validation and benchmark history](reference/measurement-notes.md)
-- [Compiler-fix results](reference/compiler-fix-results.json)
+- [CuTe-RS counterpart](../blockscale_gemm_cute)

@@ -5,11 +5,6 @@ These are the comparison sources for [CuTe-RS](../) and the separate
 M=N=2048, K=1024, L=1, E2M1 inputs, UE8M0 scales per 32 K values,
 FP32 accumulation, and FP16 output on SM120a.
 
-For the current Rust (`cute-rs`) versus CuTeDSL comparison, see
-[CUDA-event and Nsight Systems measurements](nsight-measurements.md). That
-record uses CUTLASS 4.7.0 for both compilers and keeps its environment and
-measurements separate from the historical 4.6.2 results below.
-
 | Path | Implementation |
 | --- | --- |
 | [`dense_blockscaled_gemm_persistent_cooperative.py`](dense_blockscaled_gemm_persistent_cooperative.py) | Upstream Python CuTeDSL kernel. |
@@ -44,8 +39,8 @@ three rounds, 100 warmups and 31 single-kernel samples per round. Its generated
 gaps. Those values are not the Nsight kernel-active times in the comparison
 tables. Generated reports are ignored by Git.
 
-This command runs CuTeDSL only. The current measurement notes give the combined
-sequence for the Rust executable and CuTeDSL harness.
+This command runs CuTeDSL only; `cargo oxide run blockscale_gemm_cute` prints
+the Rust executable's own CUDA-event timing.
 
 To measure kernel-active time, profile the same harness:
 
@@ -99,8 +94,3 @@ use cuda-oxide's Apache-2.0 license.
 | --- | --- |
 | `dense_blockscaled_gemm_persistent_cooperative.py` | `e3e8503239716b4d68db7dfec4971dcff7b386470c8515c3d2cc8698c761540e` |
 | `blockscaled_gemm_dispatch.py` | `2d4ab5d6c150d938c0dbae3f63f5ddbbc9abf33975d66810cd6fd47a45ff3996` |
-
-The [CuTe/Rust comparison record](../../blockscale_gemm_ctm/benchmark-results.json)
-and [C++/Rust comparison record](cpp/benchmark-results.json) preserve the original
-measurements and hashes. Paths inside those records describe the checkout at
-measurement time, before this reorganization; they are historical provenance.

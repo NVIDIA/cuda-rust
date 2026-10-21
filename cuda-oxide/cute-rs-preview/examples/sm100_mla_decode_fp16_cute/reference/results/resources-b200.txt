@@ -1,8 +1,0 @@
-
-Resource usage:
- Common:
-  GLOBAL:0
- Function sm100_mla_decode_fp16_reduce_cute_rs:
-  REG:37 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:944 TEXTURE:0 SURFACE:0 SAMPLER:0
- Function sm100_mla_decode_fp16_cute_rs:
-  REG:168 STACK:16 SHARED:1024 LOCAL:0 CONSTANT[0]:1616 TEXTURE:0 SURFACE:0 SAMPLER:0

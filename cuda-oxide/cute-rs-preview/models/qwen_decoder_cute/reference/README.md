@@ -2,8 +2,8 @@
 
 See [implementation and validation](implementation.md) for Rust model contracts
 and diagnostic commands, [the execution walkthrough](execution.md) for the
-Talker's submission and wait boundaries, and [benchmarking](benchmark.md) for
-speed comparisons.
+Talker's submission and wait boundaries, and the
+[reference benchmark](#reference-benchmark) below for speed comparisons.
 
 `export_reference.py` runs the official model and writes inputs, intermediate
 results, caches, logits and generated codec IDs for the Rust implementation to
@@ -128,10 +128,7 @@ and 15 predictor decisions matched. The original failing report is retained as
 To distinguish local errors from accumulation, `QWEN_ISOLATE_LAYERS=1` supplies
 each layer with the official preceding-layer output on every decode step while
 building that layer's own cache. Its worst relative L2 was 0.007943. The full
-composition's worst was 0.046185. `compare_attention.py` replays identical saved
-predictor adapter inputs through the official implementations: SDPA reproduced
-its fixture bit-for-bit; eager reached 0.146235 hidden-state relative L2 and
-0.070052 logits relative L2, while retaining all 15 chosen codes.
+composition's worst was 0.046185.
 
 Before running a held-out prompt, the fixture regression limits are frozen at
 **0.01 relative L2 for isolated layers and 0.05 for propagated graphs**. Both
@@ -238,41 +235,32 @@ Local diagnostic artifacts are `/tmp/qwen-vivian-frame1-rust.json`,
 `/tmp/qwen-vivian-frame1-reference-margins.json`. These are diagnostic executions,
 not performance measurements or evidence that all speaker presets pass.
 
-## Nsight profile summary
+## Reference benchmark
 
-Capture a complete Rust request with `nsys profile --trace=cuda
---cuda-memory-usage=true --sample=none --cpuctxsw=none`, then export and summarize:
+`benchmark.py` times the official PyTorch runner and the optimized third-party
+runners with the same timing boundary as the Rust `--benchmark` mode. Run its
+self-test first, then the official mode against the pinned checkpoint, source
+and reference manifest:
 
 ```bash
-nsys export --type sqlite --output /tmp/qwen-rust-baseline.sqlite \
-  /tmp/qwen-rust-baseline.nsys-rep
-python3 cute-rs-preview/models/qwen_decoder_cute/reference/profile_report.py \
-  /tmp/qwen-rust-baseline.sqlite --output /tmp/qwen-rust-profile-summary.json
+python3 cute-rs-preview/models/qwen_decoder_cute/reference/benchmark.py --self-test
+
+/path/to/benchmark-venv/bin/python \
+  cute-rs-preview/models/qwen_decoder_cute/reference/benchmark.py \
+  --mode official --sdpa-backend math \
+  --model-dir /path/to/model \
+  --official-source /path/to/source \
+  --request /path/to/request.json \
+  --reference-manifest /path/to/reference-sdpa/manifest.json \
+  --warmups 3 --repeats 20 \
+  --output /tmp/qwen3-tts-benchmarks/official.json
 ```
 
-The script reads SQLite without modifying it, checks the required schema, and
-reports kernel/API time, launch shapes, copy volume and allocation lifetimes.
-Nsight reports embed the process environment; keep the raw report and database
-local and untracked. The JSON deliberately exports only selected metadata.
-CUDA ordinal-to-physical-GPU mapping is retained, including remapping through
-`CUDA_VISIBLE_DEVICES`.
-
-The initial 49-frame Rust capture on an RTX 5090 contains 101,562 kernels.
-`linear_bf16` accounts for 3.197 s of 3.641 s summed kernel execution; RMSNorm
-accounts for 0.278 s. The first-to-last-kernel interval is 5.034 s, with 3.719 s
-covered by recorded GPU work. This identifies token-at-a-time projection as the
-first optimization target, followed by temporary allocation and launch overhead.
-API synchronization time includes waiting for these kernels and cannot be added
-to GPU time or treated entirely as removable overhead.
-
-Matching all 114,650 allocation/free pairs gives an exact peak of
-**4,236,414,722 requested device bytes** (3.9455 GiB), with zero outstanding
-allocations at capture end. This excludes driver/module overhead and physical
-pool reservations; it is not total process VRAM. The parser declines to claim
-an exact peak for unmatched frees, duplicate live addresses, size mismatches,
-unknown operations or ambiguous simultaneous memory events. Profile timings
-include instrumentation and loading; acceptance latency comes from separate
-unprofiled warm measurements.
+For the hybrid runner, use the same arguments plus `--mode hybrid`,
+`--triton-source` and `--faster-source` pointing at the pinned third-party
+checkouts that the script verifies. `--sdpa-backend auto` qualifies the fastest
+available attention path; record it as a distinct configuration from the math
+backend.
 
 ## Optional seeded sampling
 
@@ -282,7 +270,4 @@ greedy mode when the optional request field is absent. Reports record the RNG
 version and SHA256-derived predictor seed; repeated-seed quality checks compare
 both codec IDs and waveform hashes.
 
-See [sampling settings and quality evidence](benchmark.md#optional-seeded-sampling).
-Sampling is tested separately from greedy correctness and performance. Its
-successful Vivian cases do not resolve the documented greedy Vivian divergence,
-and ASR transcript checks do not establish speaker consistency.
+Sampling is tested separately from greedy correctness and performance.

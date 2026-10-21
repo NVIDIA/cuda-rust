@@ -16,8 +16,8 @@ Direct instruction calls and workload-local fragment handling remain legacy
 migration work under the [CuTe kernel architecture](../../AGENTS.md). Tensor
 computation belongs in reusable `cute-rs` operations.
 
-The linked CTM migration reports record B200 validation. The measurements below
-also validate both implementations on the current branch. This kernel requires
+The measurements below validate both implementations on the current branch.
+This kernel requires
 SM100 hardware; the RTX 5090 / SM120 cannot execute it.
 
 - FP16 inputs/output, FP32 accumulation, and FP16 probabilities before PV.
@@ -75,12 +75,7 @@ The small-case event gap largely disappears in the kernel measurements.
 Profiler overhead means the two columns cannot be subtracted to isolate host
 overhead. Clocks were unlocked and CuTeDSL ran first; persistent cases drift
 across windows, so these medians alone do not establish a speed ranking.
-[Nsight methodology, ranges, raw samples and reproduction](reference/nsight-measurements.md)
-describe the measurements. Earlier event results remain in the
-[historical measurement notes](reference/measurement-notes.md#recorded-measurements).
 
-- [CTM migration: 8 passing B200 cases, sanitizers and compiler comparison](reference/results/ctm-migration/summary.json)
-- [CuTeDSL reference and setup](reference/README.md)
-- [Validation, benchmark commands, and detailed results](reference/measurement-notes.md)
+- [CuTeDSL reference, setup and validation commands](reference/README.md)
 - [Shared attention functionality and compiler gaps](../sm100_mla_decode_fp16_cute/reference/attention-feature-gaps.md)
 - [Dedicated MLA decode example](../sm100_mla_decode_fp16_cute/README.md)

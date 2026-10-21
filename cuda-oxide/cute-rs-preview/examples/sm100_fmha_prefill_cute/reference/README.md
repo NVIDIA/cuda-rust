@@ -51,7 +51,19 @@ The public source supports additional profiles; the shared
 separates omitted kernel/host functionality from compiler work. Unsupported
 flags and shapes are rejected before allocation.
 
-See [measurement notes](measurement-notes.md) for schedule details, validation,
-sanitizers, and timing reproduction; [initial validation](initial-validation.md)
-records the original joint prefill/decode checks. Raw evidence lives in
-[results/](results/).
+## Validation
+
+From `cuda-oxide/`, with the same Python runtime:
+
+```bash
+python -m unittest discover -s cute-rs-preview/examples/sm100_fmha_prefill_cute -p test_compare.py
+python cute-rs-preview/examples/sm100_fmha_prefill_cute/validate.py --rust-bin /path/to/binary
+python cute-rs-preview/examples/sm100_fmha_prefill_cute/validate.py --rust-bin /path/to/binary \
+  --case both-tails-gqa --sanitizer memcheck
+python cute-rs-preview/examples/sm100_fmha_prefill_cute/validate.py --rust-bin /path/to/binary \
+  --case kv-ring-wrap --sanitizer synccheck
+```
+
+Validation covers one-key attention, causal masks, GQA, tails, all stage-ring
+wraps, and more work tiles than resident SMs. Subprocess timeouts bound barrier
+failures.

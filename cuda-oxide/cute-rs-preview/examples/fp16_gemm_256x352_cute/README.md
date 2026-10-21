@@ -70,7 +70,6 @@ durations from a separate capture; TFLOP/s uses the CUDA-event median.
 Event intervals can include launch gaps; Nsight durations exclude gaps between
 kernels. Clocks were unlocked and Python ran first. These separate runs vary,
 so subtracting columns does not isolate overhead or establish a stable ranking.
-[Methodology, ranges and raw results](public_reference/performance.md) retain the evidence.
 
 <a id="regression-checks"></a>
 

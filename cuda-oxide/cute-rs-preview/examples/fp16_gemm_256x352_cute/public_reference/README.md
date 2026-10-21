@@ -63,9 +63,7 @@ Comparisons use direct CUDA events: one kernel launch per sample, followed by
 synchronization. Each event pair uses the actual launch stream. Python runs
 first; input export, correctness work and Rust process startup separate the
 implementations. The recorded post-timing clock snapshot is not a measurement
-of clock state throughout either timing interval. See
-[performance methodology and results](performance.md) for repeated runs and
-separate Nsight kernel durations.
+of clock state throughout either timing interval.
 
 Standalone Rust timing defaults to graph replay, with `--graph-launches`
 launches per sample. Use `--timing-mode direct --warmup 0 --iters 1` for exactly
@@ -78,18 +76,16 @@ this distinction.
 
 ## Validation and known limitation
 
-The [2026-10-18 review](results/public-validation-20261018/review.json) records
-six public Python cases (explicit streams and graph replay), six Rust CuTe
-cases, and four fractional/cancellation/bias-rounding comparisons. Numerical
-checks passed; the fractional Rust/Python outputs matched byte-for-byte.
-Rust CuTe memcheck and synccheck passed, as did Python synccheck.
+Six public Python cases (explicit streams and graph replay), six Rust CuTe
+cases, and four fractional/cancellation/bias-rounding comparisons pass their
+numerical checks; the fractional Rust/Python outputs match byte-for-byte.
+Rust CuTe memcheck and synccheck pass, as does Python synccheck.
 
 **The Python reference is not memcheck-clean.** Compute Sanitizer 2026.3 reported
 an invalid remote-shared write involving a group-two TMA peer barrier. A local
 self-multicast experiment removed that diagnostic, but is not applied to the
 checked-in kernel. A sanitizer compatibility issue is suspected, not confirmed.
-[The retained diagnostic](results/public-validation-20261018/python-memcheck.log)
-and review explain the unresolved result. Correctness passes do not resolve it.
+Correctness passes do not resolve it.
 
 From the CuTe example directory, after setup:
 

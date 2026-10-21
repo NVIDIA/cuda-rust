@@ -165,31 +165,52 @@ macro_rules! define_vector {
 
 define_vector!(
     /// Two `f32` in one 64-bit transaction.
-    F32x2, f32, 2, 8
+    F32x2,
+    f32,
+    2,
+    8
 );
 define_vector!(
     /// Four `f32` in one 128-bit transaction. The `float4` equivalent.
-    F32x4, f32, 4, 16
+    F32x4,
+    f32,
+    4,
+    16
 );
 define_vector!(
     /// Two `f64` in one 128-bit transaction.
-    F64x2, f64, 2, 16
+    F64x2,
+    f64,
+    2,
+    16
 );
 define_vector!(
     /// Two `u32` in one 64-bit transaction.
-    U32x2, u32, 2, 8
+    U32x2,
+    u32,
+    2,
+    8
 );
 define_vector!(
     /// Four `u32` in one 128-bit transaction.
-    U32x4, u32, 4, 16
+    U32x4,
+    u32,
+    4,
+    16
 );
 define_vector!(
     /// Four `u16` in one 64-bit transaction.
-    U16x4, u16, 4, 8
+    U16x4,
+    u16,
+    4,
+    8
 );
 define_vector!(
     /// Eight `u16` in one 128-bit transaction. The width packed f16 pairs use.
-    U16x8, u16, 8, 16
+    U16x8,
+    u16,
+    8,
+    16
 );
 
 /// View a flat slice as over-aligned vectors, or `None` if it does not divide.

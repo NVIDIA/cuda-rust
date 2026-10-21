@@ -80,7 +80,8 @@ use core::ops::{Index, IndexMut};
 ///
 /// - `T`: Element type (f32, f64, i32, etc.)
 /// - `N`: Array size (must be known at compile time)
-/// - `ALIGN`: Alignment in bytes (0 = natural alignment, 128 for TMA destinations)
+/// - `ALIGN`: Alignment in bytes. `0` means natural alignment; any other value
+///   must be a power of two (128 for TMA destinations).
 ///
 /// # Alignment
 ///
@@ -95,6 +96,18 @@ use core::ops::{Index, IndexMut};
 /// // TMA destination - 128-byte alignment required
 /// static mut TMA_TILE: SharedArray<f32, 256, 128> = SharedArray::UNINIT;
 /// ```
+///
+/// The contract the compiler enforces:
+///
+/// - `ALIGN` is `0` or a non-zero power of two. Anything else is a compile
+///   error that names the use site.
+/// - Storage is never declared below `align_of::<T>()`. A request below it is
+///   raised silently, as `#[repr(align(N))]` raises a struct; a larger request
+///   is honored. So `SharedArray<u64, 2, 1>` is declared at 8 bytes, and a
+///   `#[repr(C, align(16))]` element at natural alignment is declared at 16.
+/// - Aggregate, nested-array and `f16` elements at natural alignment declare
+///   their natural alignment in PTX (`.align 4` for `[f32; N]`, `.align 2` for
+///   `f16`). Older releases printed a blanket `.align 8` for them.
 ///
 /// # Soundness: `!Sync`
 ///
@@ -220,6 +233,34 @@ impl<T, const N: usize, const ALIGN: usize> SharedArray<T, N, ALIGN> {
         let _ = shared;
         unreachable!("SharedArray::as_raw_mut_ptr called outside CUDA kernel context")
     }
+
+    /// Returns a [`SharedPtr`] to the first element of a shared array.
+    ///
+    /// Unlike [`Self::as_raw_mut_ptr`], which returns a generic pointer, the
+    /// result keeps the array's CTA-shared address space in its type, so it
+    /// stays a shared-memory pointer when it is passed to helper functions.
+    ///
+    /// # Safety
+    ///
+    /// `shared` must point to a `static mut SharedArray` in the current CUDA
+    /// kernel, normally obtained with `&raw mut`. The returned pointer is valid
+    /// only within that kernel. This requirement is what makes the type's
+    /// claim true: a `SharedPtr` built from any other pointer hands
+    /// [`SharedPtr::addr_u32`] an address outside the shared window, where the
+    /// conversion yields an unspecified value. Callers must keep concurrent
+    /// accesses disjoint and use the CUDA synchronization required before
+    /// reading data written by another thread.
+    ///
+    /// ```rust,ignore
+    /// static mut TILE: SharedArray<u8, 4096, 128> = SharedArray::UNINIT;
+    /// let tile: SharedPtr<u8> = unsafe { SharedArray::shared_ptr(&raw mut TILE) };
+    /// ```
+    #[inline(always)]
+    pub unsafe fn shared_ptr(shared: *mut Self) -> SharedPtr<T> {
+        SharedPtr {
+            ptr: shared as *mut SharedSlot<T>,
+        }
+    }
 }
 
 impl<T, const N: usize, const ALIGN: usize> Index<usize> for SharedArray<T, N, ALIGN> {
@@ -305,7 +346,8 @@ pub fn __dynamic_shared_alignment<const ALIGN: usize>() {
 /// # Type Parameters
 ///
 /// - `T`: Element type for the returned pointer
-/// - `ALIGN`: Base alignment in bytes (default: 16, matching nvcc)
+/// - `ALIGN`: Base alignment in bytes (default: 16, matching nvcc). Must be a
+///   non-zero power of two.
 ///
 /// # Alignment
 ///
@@ -330,6 +372,18 @@ pub fn __dynamic_shared_alignment<const ALIGN: usize>() {
 /// - `16` (default): Matches nvcc, suitable for most use cases
 /// - `128`: Required for TMA (Tensor Memory Accelerator) operations
 /// - `256`: Cache-line friendly for some architectures
+///
+/// The contract the compiler enforces:
+///
+/// - `ALIGN` is a non-zero power of two. Anything else, including `0`, is a
+///   compile error that names the use site.
+/// - A kernel has one dynamic pool. It is declared at the strongest typed
+///   requirement over the kernel's `get`, `get_raw` and `offset` uses, each
+///   taken as the larger of its `ALIGN` and `align_of::<T>()`, combined with
+///   the launch contract's alignment. `DynamicSharedArray::<u64, 1>::get()`
+///   alone declares the pool at 8 bytes.
+/// - The declaration aligns the pool base. Keeping an `offset(byte_offset)`
+///   result aligned for `T` is still the caller's responsibility.
 ///
 /// # Usage
 ///
@@ -484,14 +538,33 @@ impl<T, const ALIGN: usize> DynamicSharedArray<T, ALIGN> {
     /// Ensure `byte_offset` is properly aligned for type `T`. For example,
     /// `f32` requires 4-byte alignment, `f64` requires 8-byte alignment.
     ///
-    /// The base of dynamic shared memory is aligned to `ALIGN` bytes (default 16),
-    /// so to get an N-byte aligned pointer, ensure `byte_offset % N == 0`.
+    /// The base of dynamic shared memory is aligned to at least `ALIGN` bytes
+    /// (default 16) and never below `align_of::<T>()`, so to get an N-byte
+    /// aligned pointer, ensure `byte_offset % N == 0`.
     #[inline(never)]
     pub fn offset(byte_offset: usize) -> *mut T {
         // The byte_offset is used by the compiler to compute the pointer.
         // This prevents the compiler from optimizing away the argument.
         let _ = byte_offset;
         unreachable!("DynamicSharedArray::offset called outside CUDA kernel context")
+    }
+
+    /// Like [`Self::get`], but returns a [`SharedPtr`], which keeps the
+    /// CTA-shared address space in its type.
+    #[inline(always)]
+    pub fn shared_ptr() -> SharedPtr<T> {
+        SharedPtr {
+            ptr: Self::get() as *mut SharedSlot<T>,
+        }
+    }
+
+    /// Like [`Self::offset`], but returns a [`SharedPtr`], which keeps the
+    /// CTA-shared address space in its type.
+    #[inline(always)]
+    pub fn shared_ptr_at(byte_offset: usize) -> SharedPtr<T> {
+        SharedPtr {
+            ptr: Self::offset(byte_offset) as *mut SharedSlot<T>,
+        }
     }
 }
 
@@ -544,6 +617,138 @@ pub unsafe fn cvta_generic_to_shared_offset(ptr: *const u8) -> u64 {
 pub unsafe fn cvta_generic_to_shared_u32(ptr: *const u8) -> u32 {
     let _ = ptr;
     unreachable!("cvta_generic_to_shared_u32 called outside CUDA kernel context")
+}
+
+// ============================================================================
+// SharedPtr - a pointer into the issuing CTA's shared memory, typed as such
+// ============================================================================
+
+/// The pointee of [`SharedPtr`]'s field. A pointer to `SharedSlot<T>` is a
+/// pointer into CTA-shared memory (`addrspace(3)`) by its type, as a pointer
+/// to [`SharedArray`] is; `repr(transparent)` gives it `T`'s size, so pointer
+/// arithmetic strides by `T`.
+#[doc(hidden)]
+#[repr(transparent)]
+pub struct SharedSlot<T>(T);
+
+/// A raw pointer into the shared memory of the issuing CTA (`.shared::cta`).
+///
+/// A `*mut T` in device code is a generic pointer, which may address global,
+/// local or shared memory, including another CTA's shared memory in the
+/// cluster. `SharedPtr<T>` instead carries its address space in its type: the
+/// compiler knows it is a CTA-shared pointer wherever it goes, including
+/// through calls to helper functions, and emits the `.shared::cta` forms of
+/// instructions that take it without converting a generic address.
+///
+/// It is created from shared memory the CTA owns, with the `unsafe`
+/// [`SharedArray::shared_ptr`] or the safe [`DynamicSharedArray::shared_ptr`],
+/// or from a generic pointer with the `unsafe` [`SharedPtr::from_raw`]. Like a raw
+/// pointer, it may dangle; dereferencing it goes through [`SharedPtr::as_ptr`]
+/// and `unsafe` code.
+///
+/// Pointers from [`crate::cluster::map_shared_rank`], which may name another
+/// CTA's shared memory, are not `SharedPtr`s.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// static mut TILE: SharedArray<f32, 256> = SharedArray::UNINIT;
+///
+/// fn store(tile: SharedPtr<f32>, i: usize, value: f32) {
+///     // `tile` is still a shared pointer here, although `store` is a
+///     // separate function.
+///     unsafe { tile.add(i).as_ptr().write(value) };
+/// }
+///
+/// let tile = unsafe { SharedArray::shared_ptr(&raw mut TILE) };
+/// store(tile, thread::threadIdx_x() as usize, 1.0);
+/// ```
+#[repr(transparent)]
+pub struct SharedPtr<T> {
+    ptr: *mut SharedSlot<T>,
+}
+
+impl<T> Clone for SharedPtr<T> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for SharedPtr<T> {}
+
+impl<T> SharedPtr<T> {
+    /// Converts a generic pointer to a `SharedPtr`, as CUDA C++'s
+    /// `__cvta_generic_to_shared` or CuTe's `make_smem_ptr` do.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point into the shared memory of the issuing CTA. A pointer
+    /// to global or local memory, or to another CTA's shared memory, gives an
+    /// unspecified address.
+    #[inline(always)]
+    pub unsafe fn from_raw(ptr: *mut T) -> Self {
+        Self {
+            ptr: ptr as *mut SharedSlot<T>,
+        }
+    }
+
+    /// The generic pointer to the same memory, for ordinary loads and stores
+    /// and for APIs that take raw pointers.
+    #[inline(always)]
+    pub fn as_ptr(self) -> *mut T {
+        self.ptr as *mut T
+    }
+
+    /// The pointer's 32-bit `.shared::cta` address, as taken by the
+    /// `_shared_u32` forms of CTA-shared instructions.
+    #[inline(always)]
+    pub fn addr_u32(self) -> u32 {
+        // SAFETY: `self` points into the issuing CTA's shared memory.
+        unsafe { cvta_generic_to_shared_u32(self.as_ptr() as *const u8) }
+    }
+
+    /// Reinterprets the pointee type, keeping the address space.
+    #[inline(always)]
+    pub fn cast<U>(self) -> SharedPtr<U> {
+        SharedPtr {
+            ptr: self.ptr as *mut SharedSlot<U>,
+        }
+    }
+
+    /// The pointer `count` elements of `T` further on, as `<*mut T>::add`.
+    ///
+    /// # Safety
+    ///
+    /// As for `<*mut T>::add`.
+    #[inline(always)]
+    pub unsafe fn add(self, count: usize) -> Self {
+        Self {
+            ptr: unsafe { self.ptr.add(count) },
+        }
+    }
+
+    /// The pointer `count` elements of `T` away, as `<*mut T>::offset`.
+    ///
+    /// # Safety
+    ///
+    /// As for `<*mut T>::offset`.
+    #[inline(always)]
+    pub unsafe fn offset(self, count: isize) -> Self {
+        Self {
+            ptr: unsafe { self.ptr.offset(count) },
+        }
+    }
+
+    /// The pointer `count` bytes further on, as `<*mut T>::byte_add`.
+    ///
+    /// # Safety
+    ///
+    /// As for `<*mut T>::byte_add`.
+    #[inline(always)]
+    pub unsafe fn byte_add(self, count: usize) -> Self {
+        unsafe { self.cast::<u8>().add(count).cast::<T>() }
+    }
 }
 
 include!("generated/shared_sreg.rs");

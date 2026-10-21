@@ -30,12 +30,17 @@ impl Tma {
 #[serde(rename_all = "snake_case")]
 pub enum TmaOperation {
     G2sTile1d,
+    G2sCtaTile1d,
     G2sTile2d,
+    G2sCtaTile2d,
     G2sTile2dMulticast,
     G2sTile2dMulticastCg2,
     G2sTile3d,
+    G2sCtaTile3d,
     G2sTile4d,
+    G2sCtaTile4d,
     G2sTile5d,
+    G2sCtaTile5d,
     S2gTile1d,
     S2gTile2d,
     S2gTile3d,
@@ -82,16 +87,28 @@ pub enum TmaOperation {
 }
 
 impl TmaOperation {
+    pub const fn is_cta_g2s(self) -> bool {
+        matches!(
+            self,
+            Self::G2sCtaTile1d
+                | Self::G2sCtaTile2d
+                | Self::G2sCtaTile3d
+                | Self::G2sCtaTile4d
+                | Self::G2sCtaTile5d
+        )
+    }
+
     pub const fn dimensions(self) -> Option<usize> {
         match self {
-            Self::G2sTile1d | Self::S2gTile1d => Some(1),
+            Self::G2sTile1d | Self::G2sCtaTile1d | Self::S2gTile1d => Some(1),
             Self::G2sTile2d
+            | Self::G2sCtaTile2d
             | Self::G2sTile2dMulticast
             | Self::G2sTile2dMulticastCg2
             | Self::S2gTile2d => Some(2),
-            Self::G2sTile3d | Self::S2gTile3d => Some(3),
-            Self::G2sTile4d | Self::S2gTile4d => Some(4),
-            Self::G2sTile5d | Self::S2gTile5d => Some(5),
+            Self::G2sTile3d | Self::G2sCtaTile3d | Self::S2gTile3d => Some(3),
+            Self::G2sTile4d | Self::G2sCtaTile4d | Self::S2gTile4d => Some(4),
+            Self::G2sTile5d | Self::G2sCtaTile5d | Self::S2gTile5d => Some(5),
             Self::Reduce
             | Self::CommitGroup
             | Self::WaitGroup

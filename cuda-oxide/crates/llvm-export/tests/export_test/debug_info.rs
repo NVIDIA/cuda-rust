@@ -30,7 +30,7 @@ use pliron::{
     context::Context,
     identifier::Identifier,
     linked_list::ContainsLinkedList,
-    location::{Located, Location},
+    location::Location,
     op::Op,
     utils::apint::APInt,
 };
@@ -830,6 +830,8 @@ fn full_debug_metadata_describes_as4_constant_with_semantic_rust_type() {
         4,
     );
     constant.set_address_space(&mut ctx, llvm_export::types::address_space::CONSTANT);
+    // `create_device_global` marks every `#[constant]` as host-written.
+    constant.mark_host_written(&mut ctx);
     constant.set_initializer_hex(&mut ctx, "00000000");
     llvm_export::ops::set_debug_global_variable(
         &mut ctx,
@@ -918,7 +920,8 @@ fn full_debug_metadata_describes_as4_constant_with_semantic_rust_type() {
         .find(|line| line.starts_with(&format!("@{linkage_name} = ")))
         .expect("constant-memory definition");
     assert!(
-        definition.contains("addrspace(4) global [4 x i8] c\"\\00\\00\\00\\00\"")
+        definition
+            .contains("addrspace(4) externally_initialized global [4 x i8] c\"\\00\\00\\00\\00\"")
             && definition.contains(", align 4, !dbg !"),
         "physical AS4 byte storage must retain a global debug attachment:\n{full}"
     );

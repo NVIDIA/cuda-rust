@@ -174,6 +174,58 @@ pub enum RustFloatMathIntrinsic {
 }
 
 impl RustFloatMathIntrinsic {
+    /// Resolve both the historical width-specific paths and the generic unary
+    /// intrinsics introduced by the pinned nightly. Generic calls carry their
+    /// width in rustc's monomorphized type arguments, never in a display name.
+    pub fn from_core_path_with_substs(
+        name: &str,
+        type_substs: &[rustc_public::ty::Ty],
+    ) -> Result<Option<Self>, String> {
+        use rustc_public::ty::{RigidTy, TyKind};
+
+        if let Some(intrinsic) = Self::from_core_path(name) {
+            return Ok(Some(intrinsic));
+        }
+        let float_ty = match type_substs {
+            [ty] => match ty.kind() {
+                TyKind::RigidTy(RigidTy::Float(float_ty)) => Some(float_ty),
+                _ => None,
+            },
+            _ => None,
+        };
+        Self::from_generic_core_path(name, float_ty)
+    }
+
+    fn from_generic_core_path(
+        name: &str,
+        float_ty: Option<rustc_public::ty::FloatTy>,
+    ) -> Result<Option<Self>, String> {
+        use rustc_public::ty::FloatTy;
+
+        // These exact declarations are `fn<T: FloatPrimitive>(T) -> T`.
+        // Reuse the existing f32/f64 placeholders and libdevice lowerings;
+        // unsupported widths must not be silently narrowed.
+        let (f32_intrinsic, f64_intrinsic) = match name {
+            "core::intrinsics::sin" | "std::intrinsics::sin" => (Self::SinF32, Self::SinF64),
+            "core::intrinsics::cos" | "std::intrinsics::cos" => (Self::CosF32, Self::CosF64),
+            "core::intrinsics::exp" | "std::intrinsics::exp" => (Self::ExpF32, Self::ExpF64),
+            "core::intrinsics::exp2" | "std::intrinsics::exp2" => (Self::Exp2F32, Self::Exp2F64),
+            "core::intrinsics::log" | "std::intrinsics::log" => (Self::LogF32, Self::LogF64),
+            "core::intrinsics::log2" | "std::intrinsics::log2" => (Self::Log2F32, Self::Log2F64),
+            "core::intrinsics::log10" | "std::intrinsics::log10" => {
+                (Self::Log10F32, Self::Log10F64)
+            }
+            _ => return Ok(None),
+        };
+        match float_ty {
+            Some(FloatTy::F32) => Ok(Some(f32_intrinsic)),
+            Some(FloatTy::F64) => Ok(Some(f64_intrinsic)),
+            _ => Err(format!(
+                "generic float intrinsic `{name}` requires one f32 or f64 type argument; found {float_ty:?}"
+            )),
+        }
+    }
+
     /// Recognize the libcore intrinsic path that survived into MIR.
     pub fn from_core_path(name: &str) -> Option<Self> {
         match name {
@@ -525,7 +577,6 @@ pub fn emit_sincos(
     use dialect_mir::ops::{MirCallOp, MirConstructTupleOp};
     use pliron::builtin::attributes::StringAttr;
     use pliron::input_err;
-    use pliron::location::Located;
     use pliron::op::Op;
 
     // Destination tuple type and its scalar element type. Typed from the
@@ -684,6 +735,61 @@ pub fn emit_rust_float_math_intrinsic(
 mod tests {
     use super::*;
     use dialect_mir::rust_intrinsics;
+
+    #[test]
+    fn generic_float_intrinsics_resolve_only_the_declared_float_type() {
+        use RustFloatMathIntrinsic as I;
+        use rustc_public::ty::FloatTy;
+        for (name, f32_variant, f64_variant) in [
+            ("sin", I::SinF32, I::SinF64),
+            ("cos", I::CosF32, I::CosF64),
+            ("exp", I::ExpF32, I::ExpF64),
+            ("exp2", I::Exp2F32, I::Exp2F64),
+            ("log", I::LogF32, I::LogF64),
+            ("log2", I::Log2F32, I::Log2F64),
+            ("log10", I::Log10F32, I::Log10F64),
+        ] {
+            for root in ["core", "std"] {
+                let path = format!("{root}::intrinsics::{name}");
+                assert_eq!(
+                    I::from_generic_core_path(&path, Some(FloatTy::F32)).unwrap(),
+                    Some(f32_variant)
+                );
+                assert_eq!(
+                    I::from_generic_core_path(&path, Some(FloatTy::F64)).unwrap(),
+                    Some(f64_variant)
+                );
+                for unsupported in [None, Some(FloatTy::F16), Some(FloatTy::F128)] {
+                    let error = I::from_generic_core_path(&path, unsupported).unwrap_err();
+                    assert!(
+                        error.contains("requires one f32 or f64 type argument"),
+                        "{error}"
+                    );
+                }
+            }
+        }
+        for path in [
+            "user::intrinsics::exp",
+            "user::core::intrinsics::sin",
+            "core::intrinsics::exp_m1",
+            "core::intrinsics::sqrt",
+            "core::intrinsics::expf32",
+        ] {
+            assert_eq!(
+                I::from_generic_core_path(path, Some(FloatTy::F32)).unwrap(),
+                None,
+                "{path}"
+            );
+        }
+        assert_eq!(
+            I::from_core_path("core::intrinsics::expf32"),
+            Some(I::ExpF32)
+        );
+        assert_eq!(
+            I::from_core_path("core::intrinsics::expf64"),
+            Some(I::ExpF64)
+        );
+    }
 
     /// `f32::max` / `f64::max` / `f32::min` / `f64::min` all lower to the
     /// `_nsz` flavor of the rustc maxNum/minNum intrinsics. Lock the four

@@ -26,9 +26,11 @@ on:
       - 'Cargo.lock'
       - '.github/workflows/**'
 
+# Each commit on main gets its own group, so it starts at once. Any other ref
+# still shares one group and cancels the older run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref_name }}${{ github.ref_name == 'main' && format('-{0}', github.sha) || '' }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 permissions:
   contents: read
@@ -48,7 +50,7 @@ jobs:
       - name: Install CUDA toolkit
         # `cargo doc --workspace` compiles cuda-bindings' build-time bindgen,
         # which needs `cuda.h`. Same toolkit pin as the unit-tests job.
-        uses: Jimver/cuda-toolkit@v0.2.35
+        uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76  # v0.2.35
         id: cuda-toolkit
         with:
           cuda: "13.1.1"

@@ -54,14 +54,14 @@ pub(super) static PTX90: GeneratedIntrinsicTarget = GeneratedIntrinsicTarget {
     selections: &[],
     llvm: None,
 };
-pub(super) static PTX91_FUTURE: GeneratedIntrinsicTarget = GeneratedIntrinsicTarget {
-    marker: "test:ptx91",
-    id: "ptx91_future",
+pub(super) static PTX92_FUTURE: GeneratedIntrinsicTarget = GeneratedIntrinsicTarget {
+    marker: "test:ptx92",
+    id: "ptx92_future",
     abi_id: "test",
-    dialect_op: "test.ptx91",
+    dialect_op: "test.ptx92",
     variant: GeneratedIntrinsicVariant::Scalar,
     requirement: GeneratedTargetRequirement {
-        minimum_ptx: GeneratedPtxVersion::from_encoded(91),
+        minimum_ptx: GeneratedPtxVersion::from_encoded(92),
         hardware: GeneratedHardwareTarget::All,
     },
     backend_requirements: &[],

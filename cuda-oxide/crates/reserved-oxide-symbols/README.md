@@ -17,7 +17,7 @@ Every symbol prefix here contains the magic component `246e25db_`, which is
 exists purely to make accidental collisions impossible — a user is
 never going to write `fn cuda_oxide_codegen_v1_cuda_oxide_kernel_246e25db_foo()` by accident.
 
-The crate owns these ten symbol constants. The `naming-guard` CI job keeps
+The crate owns these eleven symbol constants. The `naming-guard` CI job keeps
 reserved-prefix literals out of their consumers:
 
 | Constant                    | Value                                               | What it names |
@@ -27,6 +27,7 @@ reserved-prefix literals out of their consumers:
 | `DEVICE_EXTERN_PREFIX`      | `cuda_oxide_device_extern_246e25db_`                | `extern` device declarations |
 | `INSTANTIATE_PREFIX`        | `cuda_oxide_instantiate_246e25db_`                  | forced generic instantiations |
 | `CONSTANT_PREFIX`           | `cuda_oxide_const_246e25db_`                        | `#[constant]` statics, for `cuModuleGetGlobal` lookup |
+| `TILE_EXPORT_META_PREFIX`   | `cuda_oxide_tile_export_246e25db_`                  | host-only `#[tile_export]` metadata functions whose body returns the export's JSON description |
 | `KERNEL_SCOPE_LOCAL`        | `cuda_oxide_kernel_scope_246e25db`                  | the hidden thread-index scope token injected by `#[kernel]` / `#[device]` |
 | `ARTIFACT_ANCHOR_PREFIX`    | `cuda_oxide_artifact_anchor_246e25db_`              | the link anchor pinning a crate's `.oxart` section into the binary |
 | `PTX_MERGE_REQUIRED_PREFIX` | `cuda_oxide_ptx_merge_required_246e25db_`           | statics marking modules whose generic kernels need PTX-bundle merging |

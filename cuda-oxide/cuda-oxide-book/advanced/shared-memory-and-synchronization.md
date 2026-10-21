@@ -123,7 +123,7 @@ undefined until threads write to them.
 | :-------- | :-------------------------------------------------------------------------------- |
 | `T`       | Element type (`f32`, `u32`, etc.)                                                 |
 | `N`       | Number of elements (fixed at compile time)                                        |
-| `ALIGN`   | Byte alignment (default 0 = natural alignment; use 128 for TMA destinations)      |
+| `ALIGN`   | Byte alignment: 0 (natural) or a power of two; use 128 for TMA destinations       |
 
 :::{tip}
 `SharedArray` is `!Sync` by design — it wraps `UnsafeCell`, which prevents
@@ -131,6 +131,33 @@ the compiler from assuming immutability across threads. This is correct:
 shared memory is inherently mutable by all threads in the block, and the
 programmer is responsible for synchronization.
 :::
+
+### Alignment rules
+
+`ALIGN` is `0` (natural alignment) or a non-zero power of two. Any other
+value is a compile error that names the use site.
+
+Storage is never declared below `align_of::<T>()`. A smaller request is
+raised silently, the way `#[repr(align(N))]` raises a struct; a larger
+request is honored. `SharedArray<u64, 2, 1>` is therefore declared at 8
+bytes, and a `#[repr(C, align(16))]` element at natural alignment is
+declared at 16. Without the raise, a `u64` array declared at 1 byte could be
+packed right behind a byte array and fault with `misaligned address`.
+
+Aggregate, nested-array and `f16` elements at natural alignment declare
+their natural alignment in PTX (`.align 4` for `[f32; N]`, `.align 2` for
+`f16`). Older releases printed a blanket `.align 8` for them.
+
+```{figure} images/shared-memory-alignment.svg
+:align: center
+:width: 100%
+
+Shared-memory storage alignment. The verifier rejects an `ALIGN` that is not a non-zero power
+of two at the use site, and lowering declares every static array and the dynamic pool at the
+larger of the request and the element's ABI alignment. `SharedArray<u64, 2, 1>` is declared
+`.align 8` and a `#[repr(C, align(16))]` element at natural alignment `.align 16`, where older
+releases declared `.align 1` and `.align 8` and the kernel could fault with `misaligned address`.
+```
 
 ### The API surface
 
@@ -140,6 +167,7 @@ impl<T, const N: usize, const ALIGN: usize> SharedArray<T, N, ALIGN> {
     pub const fn len() -> usize;
     pub fn as_ptr(&self) -> *const T;
     pub fn as_mut_ptr(&mut self) -> *mut T;
+    pub unsafe fn as_raw_mut_ptr(shared: *mut Self) -> *mut T;
 }
 
 // Indexing (unsafe access via static mut)
@@ -233,6 +261,78 @@ total does not exceed `shared_mem_bytes` — there are no runtime guards.
 (Hopper+), use `DynamicSharedArray<f32, 128>` to get the required
 128-byte alignment. The alignment is encoded in the PTX `.align` directive.
 
+`ALIGN` must be a non-zero power of two; `0` is a compile error that names
+the use site. A kernel has one dynamic pool, and the compiler declares it at
+the strongest typed requirement over the kernel's `get`, `get_raw` and
+`offset` uses, each taken as the larger of its `ALIGN` and
+`align_of::<T>()`, combined with the launch contract's alignment.
+`DynamicSharedArray::<u64, 1>::get()` alone declares the pool at 8 bytes.
+The declaration aligns the pool base only; keeping an `offset(byte_offset)`
+result aligned for `T` is still the caller's job.
+
+### Typed shared pointers: `SharedPtr`
+
+`DynamicSharedArray::get()` and `SharedArray::as_mut_ptr()` return `*mut T`,
+which in device code is a *generic* pointer: it may address global, local or
+shared memory, including another block's shared memory in a cluster. Once
+such a pointer is passed to a helper function, the compiler no longer knows it
+points into this block's shared memory.
+
+`SharedPtr<T>` is a raw pointer into the issuing block's shared memory
+(`.shared::cta`) that carries that fact in its type. It lowers to an
+`addrspace(3)` pointer wherever it goes, including helper parameters and
+return values, struct fields and generic code, so instructions that take it
+use their shared-memory forms without converting a generic address.
+
+```rust
+use cuda_device::{DynamicSharedArray, SharedArray, SharedPtr, kernel, thread};
+
+#[inline(never)]
+unsafe fn fill(tile: SharedPtr<f32>, i: usize, value: f32) {
+    // Still a shared-memory pointer here, although `fill` is not inlined.
+    unsafe { tile.add(i).as_ptr().write(value) };
+}
+
+static mut TILE: SharedArray<f32, 256> = SharedArray::UNINIT;
+
+#[kernel]
+pub fn fill_tile() {
+    // SAFETY: TILE is a `static mut SharedArray` of this kernel.
+    let tile: SharedPtr<f32> = unsafe { SharedArray::shared_ptr(&raw mut TILE) };
+    // The same type for dynamic shared memory, 1024 bytes into the pool.
+    let pool: SharedPtr<u8> = DynamicSharedArray::<u8, 128>::shared_ptr_at(1024);
+    // SAFETY: the launch supplies more than 1024 dynamic shared bytes, and
+    // each thread writes its own slot of TILE.
+    unsafe {
+        fill(tile, thread::threadIdx_x() as usize, 1.0);
+        pool.as_ptr().write(0);
+    }
+}
+```
+
+| Operation                              | Result                                              |
+|:---------------------------------------|:----------------------------------------------------|
+| `unsafe SharedArray::shared_ptr(&raw mut S)` | `SharedPtr<T>` to the first element of `S`, a `static mut` of this kernel |
+| `DynamicSharedArray::<T>::shared_ptr()` / `shared_ptr_at(bytes)` | Like `get()` / `offset(bytes)` |
+| `unsafe SharedPtr::from_raw(p)`        | Asserts that generic `p` points into this block's shared memory |
+| `add`, `offset`, `byte_add`, `cast`    | Pointer arithmetic that keeps the type              |
+| `as_ptr()`                             | The generic `*mut T`, for loads, stores and raw-pointer APIs |
+| `addr_u32()`                           | The 32-bit `.shared::cta` address, for `_shared_u32` forms |
+
+`SharedPtr` cannot be a kernel parameter, bare or inside a struct or array:
+the host has no shared-memory address to pass, and the compiler refuses the
+signature. Pointers from `cluster::map_shared_rank` may name another block's
+shared memory and are not `SharedPtr`s.
+
+Inside aggregates the usual shared-pointer limits apply. A union or a
+`MaybeUninit<SharedPtr<T>>` fails closed under the union storage rules, and a
+`repr(packed)` struct that holds one follows the packed-carrier limits; both
+are listed in [Supported Features](../appendix/supported-features.md). On the
+libNVVM route a shared pointer is 4 bytes wide, so a struct that mixes a
+`SharedPtr` with a narrower field, such as `{ p: SharedPtr<u8>, x: u32 }`, is
+not yet supported in arrays or in shared memory. That gap predates
+`SharedPtr` and applies to `*mut Barrier` fields in the same way.
+
 ---
 
 ## Synchronization: sync_threads()
@@ -271,6 +371,105 @@ that not all threads take. Every thread in the block must reach the same
 `sync_threads()` call, or the kernel will deadlock. If you need divergent
 control flow, restructure so the barrier is outside the branch.
 :::
+
+(compiler-ordering-around-the-barrier)=
+
+### Compiler ordering around the barrier
+
+The hardware guarantee above covers visibility between threads. A second
+question is whether the compiler keeps your own accesses on the side of the
+barrier where you wrote them. Both backends emit the barrier as an operation
+that the compiler treats as reading and writing all memory:
+
+- The LLVM NVPTX route calls `llvm.nvvm.barrier.cta.sync.aligned.all`. The
+  call is `convergent` and has no `memory(...)` attribute.
+- The libNVVM route emits `bar.sync 0;` as `asm sideeffect` with a `~{memory}`
+  clobber.
+
+| Access form                                              | Kept on its side of `sync_threads()` | Notes |
+| :------------------------------------------------------- | :----------------------------------- | :---- |
+| `SharedArray` indexing, `S[i]`                           | Yes | A plain load or store in address space 3. |
+| `SharedArray::as_raw_mut_ptr(&raw mut S)`                | Yes | The same instructions as indexing. Prefer it to `as_mut_ptr()` and `as_ptr()`. Those methods borrow `S`, and the `static_mut_refs` lint rejects a borrow of a `static mut` under edition 2024. |
+| `DynamicSharedArray::<T>::get()` and `offset()`          | Yes | A plain load or store through the returned pointer. |
+| `ptx_asm!` with no options                               | Yes | The call is `asm sideeffect` with no memory attribute. The PTX keeps it in order against the barrier, plain loads and stores, and other side-effecting asm. ptxas may drop a snippet with an unused result from the SASS. |
+| `ptx_asm!` with `clobber("memory")`                      | Yes | Adds `~{memory}` to the constraint string. The order matches the row above in the current lowering. Without the clobber that order comes from the `sideeffect` flag alone. That flag does not tell the compiler that the snippet touches memory. Add it to every snippet that loads or stores through an address. |
+| `ptx_asm!` with `options(register_only)`                 | No | The call has no `sideeffect` flag. The compiler may move it across memory operations and the barrier, and deletes it when its result is unused. Use it for snippets that touch registers only. |
+| `cp_async_*` copies, `cp_async_commit_group()`, `cp_async_wait_group(n)` | Yes, but see below | Issue, commit and wait stay in order. The barrier does not wait for the copy to land. |
+| A `&T` or `&[T]` to slots another thread writes, live across the barrier | No | rustc merges reads through it before either backend runs. See below. |
+| A `&UnsafeCell<T>` to such a slot | Yes | A plain load that is re-read after each barrier. Two adjacent reads with nothing between them may still become one load. |
+| A reference to a `BlockAtomic*` type | Yes | Each `load()` is side-effecting asm with a memory clobber. The compiler keeps every one. |
+
+The indexing, `as_raw_mut_ptr`, `DynamicSharedArray` and both side-effecting
+`ptx_asm!` rows were checked on both backends with a producer and consumer
+kernel: store, barrier, load, barrier, store, barrier, load. The PTX keeps that
+order for each of them. It keeps the same order when the loads sit in a loop
+whose trip count is a kernel argument. A run on an RTX 5060 Laptop (sm_120)
+read the expected neighbour values. A `register_only` `ld.shared` whose result
+is unused leaves no instruction in the PTX. The same snippet with no options
+stays. The `cp.async` and reference rows have their own tests below.
+
+The table covers compiler ordering only. The rule under "When to sync" still
+decides where the barriers belong.
+
+#### Raw pointers across the barrier
+
+Each thread derives its pointer from the raw address of the allocation and
+creates no reference to the whole array. A thread writes its own slot
+before the barrier and reads a neighbour's slot after it:
+
+```rust
+static mut TILE: SharedArray<u32, 128> = SharedArray::UNINIT;
+
+let tid = thread::threadIdx_x() as usize;
+let tile = unsafe { SharedArray::as_raw_mut_ptr(&raw mut TILE) };
+unsafe { tile.add(tid).write(tid as u32 + 1) }; // this thread's slot
+thread::sync_threads();
+let next = unsafe { tile.add((tid + 1) % 128).read() }; // a neighbour's slot
+```
+
+A kernel built from this snippet read the neighbour's value in all 128 threads
+on both backends.
+
+#### `cp.async` needs a wait before the barrier
+
+`bar.sync` does not wait for a pending `cp.async`. Each thread waits for its
+own copies and then every thread meets at the barrier:
+
+```rust
+unsafe {
+    cp_async_ca_4(dst, src);
+    cp_async_commit_group();
+    cp_async_wait_group(0); // this thread's copies have landed
+}
+thread::sync_threads(); // other threads may now read `dst`
+```
+
+Reading the destination before the copy completes is undefined behaviour. A
+test kernel that drops `cp_async_wait_group(0)` and reads a neighbour's slot
+after the barrier can return the stale value: in a plain run on sm_120 all 128
+threads did, and under compute-sanitizer every copy had landed first. The same
+kernel with the wait returned the copied value in all 128 threads.
+
+#### Share a slot through a reference only with `UnsafeCell`
+
+When `T` has no interior mutability, a `&T` into shared memory tells rustc
+that the target does not change while the reference is live. rustc merges two
+reads through it into one load before either backend runs. In a test kernel
+each thread read its neighbour's slot through a `&u32`, passed two barriers
+while the neighbour wrote a new value, and read again. The second read
+returned the old value in all 128 threads on both backends. A `&[T]` built
+over the tile with `from_raw_parts` is the same case: two indexed reads across
+the barrier compile to one load. Keeping such a reference live across a barrier
+while another thread writes the target is undefined behaviour. So is a `&mut T`
+to such a slot: the other thread's write breaks its exclusive access, even
+though no pass merges reads through it today.
+
+A `&UnsafeCell<T>` is re-read after each barrier, and every `BlockAtomic*`
+load is an instruction the compiler keeps. The same kernel with either form
+read the new value in all 128 threads.
+Share a slot through one of these, or read through a raw pointer after each
+barrier. The tip under "Declaration rules" gives the same reason for
+`SharedArray` wrapping `UnsafeCell`.
 
 ---
 

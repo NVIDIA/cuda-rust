@@ -116,6 +116,7 @@ fn clc_compact_schema_is_reserved_for_aggregation() {
         sparse_mma_ordered_ampere_float: None,
         prmt: None,
         packed_conversion_fp8: None,
+        packed_conversion_fp8_bf16x2: None,
         packed_conversion_fp8_f16x2: None,
         scalar_conversion: None,
         scalar_arithmetic: None,
@@ -190,12 +191,17 @@ fn compact_tma_admission_matches_llvm_and_fails_closed() {
             .collect::<Vec<_>>(),
         [
             ("i0328", "cp_async_bulk_tensor_1d_g2s"),
+            ("i1034", "cp_async_bulk_tensor_1d_g2s_cta"),
             ("i0329", "cp_async_bulk_tensor_2d_g2s"),
+            ("i1035", "cp_async_bulk_tensor_2d_g2s_cta"),
             ("i0330", "cp_async_bulk_tensor_2d_g2s_multicast"),
             ("i0331", "cp_async_bulk_tensor_2d_g2s_multicast_cg2"),
             ("i0332", "cp_async_bulk_tensor_3d_g2s"),
+            ("i1036", "cp_async_bulk_tensor_3d_g2s_cta"),
             ("i0333", "cp_async_bulk_tensor_4d_g2s"),
+            ("i1037", "cp_async_bulk_tensor_4d_g2s_cta"),
             ("i0334", "cp_async_bulk_tensor_5d_g2s"),
+            ("i1038", "cp_async_bulk_tensor_5d_g2s_cta"),
             ("i0335", "cp_async_bulk_tensor_1d_s2g"),
             ("i0336", "cp_async_bulk_tensor_2d_s2g"),
             ("i0337", "cp_async_bulk_tensor_3d_s2g"),
@@ -277,7 +283,7 @@ fn compact_tma_admission_matches_llvm_and_fails_closed() {
     }
 
     assert_eq!(
-        parse_hardware_target(&records[3]).unwrap(),
+        parse_hardware_target(&records[5]).unwrap(),
         CatalogHardwareTarget::AnyOf {
             alternatives: vec![
                 CatalogHardwareAlternative::ExactArchitecture { sm: 100 },
@@ -317,6 +323,47 @@ fn compact_tma_admission_matches_llvm_and_fails_closed() {
     executed.runtime_validation = RuntimeValidation::Executed;
     assert!(expand_tma_admission(&executed).is_err());
 
+    let mut cta_without_profiles = test_tma_admission();
+    cta_without_profiles.cta_llvm_evidence_profile = None;
+    assert!(
+        expand_tma_admission(&cta_without_profiles)
+            .unwrap_err()
+            .to_string()
+            .contains("requires cta_llvm_evidence_profile and cta_libnvvm_evidence_profile")
+    );
+
+    let cta_count = TMA_OPERATIONS
+        .iter()
+        .filter(|operation| operation.is_cta_g2s())
+        .count();
+    let mut cluster_only = test_tma_admission();
+    cluster_only
+        .variants
+        .retain(|variant| !variant.operation.is_cta_g2s());
+    cluster_only.cta_llvm_evidence_profile = None;
+    cluster_only.cta_libnvvm_evidence_profile = None;
+    let cluster_only_records = expand_tma_admission(&cluster_only).unwrap();
+    assert_eq!(
+        cluster_only_records.len(),
+        TMA_OPERATIONS.len() - cta_count + tma_reduction_matrix().len()
+    );
+    assert!(
+        cluster_only_records
+            .iter()
+            .all(|record| !record.id.ends_with("_g2s_cta"))
+    );
+
+    let mut partial_cta = test_tma_admission();
+    partial_cta.variants.retain(|variant| {
+        !variant.operation.is_cta_g2s() || variant.operation == TmaOperation::G2sCtaTile2d
+    });
+    assert!(
+        expand_tma_admission(&partial_cta)
+            .unwrap_err()
+            .to_string()
+            .contains("canonical order")
+    );
+
     let declaration = declarations[records[0].source_record.as_deref().unwrap()];
     let mut wrong_adapter = records[0].clone();
     wrong_adapter.tma.as_mut().unwrap().adapter = TmaAdapter::NoOperands;
@@ -325,10 +372,17 @@ fn compact_tma_admission_matches_llvm_and_fails_closed() {
 
 #[test]
 fn tma_compact_schema_is_reserved_for_aggregation() {
-    let shard = |schema: u32, include_reductions: bool| {
+    let shard = |schema: u32, include_reductions: bool, include_cta: bool| {
         let mut admission = test_tma_admission();
         if !include_reductions {
             admission.reduce_variants.clear();
+        }
+        if !include_cta {
+            admission
+                .variants
+                .retain(|variant| !variant.operation.is_cta_g2s());
+            admission.cta_llvm_evidence_profile = None;
+            admission.cta_libnvvm_evidence_profile = None;
         }
         OverlayShardFile {
             schema,
@@ -349,6 +403,7 @@ fn tma_compact_schema_is_reserved_for_aggregation() {
             sparse_mma_ordered_ampere_float: None,
             prmt: None,
             packed_conversion_fp8: None,
+            packed_conversion_fp8_bf16x2: None,
             packed_conversion_fp8_f16x2: None,
             scalar_conversion: None,
             scalar_arithmetic: None,
@@ -371,14 +426,14 @@ fn tma_compact_schema_is_reserved_for_aggregation() {
     let path = Path::new("intrinsics/overlay/tma.toml");
 
     validate_overlay_shard_schema_with_max(
-        &shard(TMA_SHARD_SCHEMA, false),
+        &shard(TMA_SHARD_SCHEMA, false, false),
         path,
         TMA_REDUCTION_SHARD_SCHEMA,
     )
     .unwrap();
     assert!(
         validate_overlay_shard_schema_with_max(
-            &shard(TMA_SHARD_SCHEMA - 1, false),
+            &shard(TMA_SHARD_SCHEMA - 1, false, false),
             path,
             TMA_REDUCTION_SHARD_SCHEMA,
         )
@@ -388,20 +443,37 @@ fn tma_compact_schema_is_reserved_for_aggregation() {
     );
 
     validate_overlay_shard_schema_with_max(
-        &shard(TMA_REDUCTION_SHARD_SCHEMA, true),
+        &shard(TMA_REDUCTION_SHARD_SCHEMA, true, false),
         path,
         TMA_REDUCTION_SHARD_SCHEMA,
     )
     .unwrap();
     assert!(
         validate_overlay_shard_schema_with_max(
-            &shard(TMA_REDUCTION_SHARD_SCHEMA - 1, true),
+            &shard(TMA_REDUCTION_SHARD_SCHEMA - 1, true, false),
             path,
             TMA_REDUCTION_SHARD_SCHEMA,
         )
         .unwrap_err()
         .to_string()
         .contains("compact TMA reduction admission requires overlay shard schema 62")
+    );
+
+    validate_overlay_shard_schema_with_max(
+        &shard(TMA_CTA_SHARD_SCHEMA, true, true),
+        path,
+        TMA_CTA_SHARD_SCHEMA,
+    )
+    .unwrap();
+    assert!(
+        validate_overlay_shard_schema_with_max(
+            &shard(TMA_CTA_SHARD_SCHEMA - 1, true, true),
+            path,
+            TMA_CTA_SHARD_SCHEMA,
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("compact TMA CTA-local G2S admission requires overlay shard schema 65")
     );
 }
 
@@ -426,6 +498,7 @@ fn cluster_memory_compact_schema_is_reserved_and_fail_closed() {
         sparse_mma_ordered_ampere_float: None,
         prmt: None,
         packed_conversion_fp8: None,
+        packed_conversion_fp8_bf16x2: None,
         packed_conversion_fp8_f16x2: None,
         scalar_conversion: None,
         scalar_arithmetic: None,
@@ -632,12 +705,12 @@ fn compact_cluster_barrier_admission_and_semantics_fail_closed() {
 fn cluster_barrier_evidence_validates_both_backend_routes() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut admission = test_cluster_barrier_admission();
-    admission.llvm_evidence_profile = "rust-llvm-23.1.0-16696adc".into();
+    admission.llvm_evidence_profile = "rust-llvm-23.1.3-aab11ee0".into();
     admission.libnvvm_evidence_profile = "cuda-13.3-libnvvm-13.3.33-cluster-barrier".into();
     let policies = expand_cluster_barrier_admission(&admission).unwrap();
     let evidence_files = vec![
         read_evidence_file(
-            &repo_root.join("intrinsics/evidence/rust-llvm-23.1.0-16696adc-cluster-barrier.json"),
+            &repo_root.join("intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-cluster-barrier.json"),
         )
         .unwrap(),
         read_evidence_file(
@@ -646,7 +719,7 @@ fn cluster_barrier_evidence_validates_both_backend_routes() {
         .unwrap(),
     ];
     let indexed =
-        index_evidence(&evidence_files, "16696adcd119e6ba9cc175207d984d7021211acb").unwrap();
+        index_evidence(&evidence_files, "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019").unwrap();
 
     for policy in &policies {
         for lowering in &policy.backend_lowerings {
@@ -670,7 +743,7 @@ fn cluster_barrier_evidence_validates_both_backend_routes() {
     }
     let indexed = index_evidence(
         &missing_typed_failure,
-        "16696adcd119e6ba9cc175207d984d7021211acb",
+        "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019",
     )
     .unwrap();
     let policy = &policies[0];

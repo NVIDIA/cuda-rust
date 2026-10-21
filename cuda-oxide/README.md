@@ -164,7 +164,7 @@ From `cuda-oxide/`, `cargo oxide` works out of the box via a workspace alias.
 For use outside the repo (your own projects), install it with the pinned nightly toolchain:
 
 ```bash
-cargo +nightly-2026-08-28 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
+cargo +nightly-2026-10-11 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
 ```
 
 On first run, `cargo-oxide` will automatically fetch and build the codegen backend.
@@ -187,8 +187,8 @@ nix run 'github:NVIDIA/cuda-rust?dir=cuda-oxide#new' -- my-project
 ```bash
 # Toolchain installed automatically via rust-toolchain.toml
 # Manual install if needed:
-rustup toolchain install nightly-2026-08-28
-rustup component add rust-src rustc-dev rust-analyzer clippy rustfmt llvm-tools --toolchain nightly-2026-08-28
+rustup toolchain install nightly-2026-10-11
+rustup component add rust-src rustc-dev rust-analyzer clippy rustfmt llvm-tools --toolchain nightly-2026-10-11
 ```
 
 #### CUDA
@@ -335,6 +335,8 @@ cargo oxide run gemm_sol_final
 | `cuda-intrinsics-gen`     | Extractor and deterministic source generator for the intrinsics |
 | `cuda-artifact-finalizer` | Driver-independent NVVM IR, LTOIR, and PTX finalization         |
 | `oxide-artifacts`         | Architecture-neutral embedded device artifact metadata         |
+| `oxide-tile-export`       | Export descriptions shared by `cuda-macros`, the backend and `cargo-oxide`; part of the Tile IR interop work, not released yet |
+| `oxide-tilebc`            | Tile IR bytecode writer for those export descriptions |
 | `reserved-oxide-symbols`  | Workspace-private `cuda_oxide_*` symbol-name contract          |
 | `fuzzer`                  | Differential codegen fuzzer support (rustlantis adapter)       |
 | `ptx-schedule`            | PTX schedule-perturbation fuzzing (nanosleep injection campaigns) |
@@ -375,6 +377,6 @@ cuda-oxide is one of several Rust + GPU efforts under active development. Projec
 
 ## License
 
-cuda-oxide is licensed under the Apache License, Version 2.0: [LICENSE](LICENSE).
+cuda-oxide is licensed under the Apache License, Version 2.0: [LICENSE](../LICENSE).
 Third-party components retain the licenses stated in their files; see
 [dependency-licenses.csv](dependency-licenses.csv) for the tracked license inventory.

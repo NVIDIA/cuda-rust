@@ -1309,11 +1309,11 @@ mod tests {
 
     #[test]
     fn source_position_from_location_unwraps_named_locations() {
-        let mut ctx = Context::new();
+        let ctx = Context::new();
         let loc = Location::Named {
             name: "lowered".to_string(),
             child_loc: Box::new(Location::SrcPos {
-                src: Source::new_from_file(&mut ctx, PathBuf::from("/tmp/kernel.rs")),
+                src: Source::new_from_file(&ctx, PathBuf::from("/tmp/kernel.rs")),
                 pos: SourcePosition {
                     line: 12,
                     column: 4,

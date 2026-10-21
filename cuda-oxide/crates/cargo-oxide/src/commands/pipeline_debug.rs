@@ -68,9 +68,11 @@ pub fn codegen_show_pipeline(
         }
     }
     println!();
+    println!("Required settings (Cargo profile; also rustflags if yours override them):");
+    println!("  opt-level=3                 MIR optimization");
+    println!("  debug-assertions=off        Remove debug checks");
+    println!("  overflow-checks=off         Keep MIR free of overflow trap paths");
     println!("Required flags (applied via CARGO_ENCODED_RUSTFLAGS):");
-    println!("  -C opt-level=3              MIR optimization");
-    println!("  -C debug-assertions=off     Remove debug checks");
     println!("  -Z mir-enable-passes=-JumpThreading");
     println!("                              Prevent barrier duplication");
     println!("  -Z always-encode-mir        Emit MIR for all reachable device deps");
@@ -227,7 +229,6 @@ pub fn codegen_debug(
         &[],
         &fingerprint,
     );
-    cmd.env("CARGO_PROFILE_RELEASE_DEBUG", "2");
     apply_output_mode(&mut cmd, false, target_arch, &materialization);
     apply_device_arch_hint(&mut cmd, target_arch, detected_device_arch.as_deref());
     apply_ld_library_path(&mut cmd, ctx);

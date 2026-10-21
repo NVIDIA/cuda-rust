@@ -225,10 +225,18 @@ pub(super) fn cargo_passthrough_command_with_env(
         target_arch,
         &materialization,
     );
+    let policy = cargo_subcommand.codegen_profile(opts.debug_assertions);
     let mut cmd = Command::new("cargo");
     cmd.arg(cargo_subcommand.as_str());
     if let Some(features) = opts.features {
         cmd.args(["--features", features]);
+    }
+    // A profile other than `release` or `dev` may set a pinned key itself and
+    // cannot take the environment carrier, so it receives the pins as
+    // `--config` arguments. They go before the user's arguments: a later user
+    // `--config` for the same key still wins.
+    if let Some(profile) = selected_cargo_profile(cargo_args) {
+        cmd.args(profile_config_args(policy, profile));
     }
     cmd.args(cargo_args).current_dir(&ctx.workspace_root);
 
@@ -242,13 +250,7 @@ pub(super) fn cargo_passthrough_command_with_env(
         opts.unchecked_indexing,
         opts.device_debug,
     );
-    apply_codegen_configuration(
-        &mut cmd,
-        ctx,
-        cargo_subcommand.codegen_profile(opts.debug_assertions),
-        opts.device_cfgs,
-        &fingerprint,
-    )?;
+    apply_codegen_configuration(&mut cmd, ctx, policy, opts.device_cfgs, &fingerprint)?;
 
     if let Some(cargo_target_dir) = opts.cargo_target_dir {
         cmd.env("CARGO_TARGET_DIR", cargo_target_dir);

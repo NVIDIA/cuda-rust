@@ -240,7 +240,9 @@ pub(in crate::render) fn packed_conversion_is_closed_recipe(
     let adapter_matches = conversion.adapter
         == match conversion.source_format {
             Src::F32x2 => PackedConversionAdapter::ReverseHighLowOperands,
-            Src::E4m3x2 | Src::E5m2x2 | Src::F16x2 => PackedConversionAdapter::Identity,
+            Src::Bf16x2 | Src::E4m3x2 | Src::E5m2x2 | Src::F16x2 => {
+                PackedConversionAdapter::Identity
+            }
         };
 
     adapter_matches
@@ -285,6 +287,20 @@ pub(in crate::render) fn packed_conversion_is_closed_recipe(
                     Round::NearestEven,
                     Sat::SatfiniteRelu
                 )
+                | (Src::Bf16x2, Dst::E4m3x2, Round::NearestEven, Sat::Satfinite)
+                | (
+                    Src::Bf16x2,
+                    Dst::E4m3x2,
+                    Round::NearestEven,
+                    Sat::SatfiniteRelu
+                )
+                | (Src::Bf16x2, Dst::E5m2x2, Round::NearestEven, Sat::Satfinite)
+                | (
+                    Src::Bf16x2,
+                    Dst::E5m2x2,
+                    Round::NearestEven,
+                    Sat::SatfiniteRelu
+                )
                 | (Src::E4m3x2, Dst::F16x2, Round::NearestEven, Sat::None)
                 | (Src::E4m3x2, Dst::F16x2, Round::NearestEven, Sat::Relu)
                 | (Src::E5m2x2, Dst::F16x2, Round::NearestEven, Sat::None)
@@ -305,7 +321,7 @@ pub(in crate::render) fn packed_conversion_source(
 /// Register width of a single packed source operand.
 pub(in crate::render) fn packed_conversion_source_width(record: &CatalogIntrinsic) -> u32 {
     match packed_conversion_source(record) {
-        PackedConversionSourceFormat::F16x2 => 32,
+        PackedConversionSourceFormat::Bf16x2 | PackedConversionSourceFormat::F16x2 => 32,
         PackedConversionSourceFormat::E4m3x2 | PackedConversionSourceFormat::E5m2x2 => 16,
         PackedConversionSourceFormat::F32x2 => {
             unreachable!("f32x2 conversions do not have a single packed source")
@@ -319,7 +335,9 @@ pub(in crate::render) fn packed_conversion_rust_arguments(
 ) -> Vec<&'static str> {
     match packed_conversion_source(record) {
         PackedConversionSourceFormat::F32x2 => vec!["f32", "f32"],
-        PackedConversionSourceFormat::F16x2 => vec!["u32"],
+        PackedConversionSourceFormat::Bf16x2 | PackedConversionSourceFormat::F16x2 => {
+            vec!["u32"]
+        }
         PackedConversionSourceFormat::E4m3x2 | PackedConversionSourceFormat::E5m2x2 => vec!["u16"],
     }
 }
@@ -330,7 +348,9 @@ pub(in crate::render) fn packed_conversion_dialect_operands(
 ) -> Vec<&'static str> {
     match packed_conversion_source(record) {
         PackedConversionSourceFormat::F32x2 => vec!["f32", "f32"],
-        PackedConversionSourceFormat::F16x2 => vec!["i32"],
+        PackedConversionSourceFormat::Bf16x2 | PackedConversionSourceFormat::F16x2 => {
+            vec!["i32"]
+        }
         PackedConversionSourceFormat::E4m3x2 | PackedConversionSourceFormat::E5m2x2 => vec!["i16"],
     }
 }
@@ -372,7 +392,7 @@ pub(in crate::render) fn packed_conversion_constraint(record: &CatalogIntrinsic)
     ) {
         (16, PackedConversionSourceFormat::F32x2) => "=h,f,f",
         (32, PackedConversionSourceFormat::F32x2) => "=r,f,f",
-        (16, PackedConversionSourceFormat::F16x2) => "=h,r",
+        (16, PackedConversionSourceFormat::Bf16x2 | PackedConversionSourceFormat::F16x2) => "=h,r",
         (32, PackedConversionSourceFormat::E4m3x2 | PackedConversionSourceFormat::E5m2x2) => "=r,h",
         _ => unreachable!("closed packed-conversion result width and source format"),
     }
@@ -426,7 +446,8 @@ pub(in crate::render) fn packed_conversion_ptx_mnemonic(record: &CatalogIntrinsi
         conversion.adapter,
         match conversion.source_format {
             PackedConversionSourceFormat::F32x2 => PackedConversionAdapter::ReverseHighLowOperands,
-            PackedConversionSourceFormat::E4m3x2
+            PackedConversionSourceFormat::Bf16x2
+            | PackedConversionSourceFormat::E4m3x2
             | PackedConversionSourceFormat::E5m2x2
             | PackedConversionSourceFormat::F16x2 => PackedConversionAdapter::Identity,
         }

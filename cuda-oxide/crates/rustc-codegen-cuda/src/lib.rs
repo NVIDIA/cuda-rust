@@ -305,6 +305,7 @@
 // Import rustc internal crates
 extern crate rustc_abi;
 extern crate rustc_ast;
+extern crate rustc_attr_ir;
 extern crate rustc_codegen_ssa;
 extern crate rustc_data_structures;
 extern crate rustc_driver;
@@ -337,7 +338,7 @@ use rustc_middle::dep_graph::WorkProductMap;
 use rustc_middle::ty::TyCtxt;
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_session::config::OutputFilenames;
-use rustc_session::{IncrCompSession, Session};
+use rustc_session::{CodegenBackendInit, EarlySession, IncrCompSession, Session};
 use std::any::Any;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -461,12 +462,12 @@ impl CodegenBackend for CudaCodegenBackend {
         "cuda"
     }
 
-    fn init(&self, sess: &Session) {
+    fn init(&mut self, sess: &EarlySession) -> CodegenBackendInit {
         // Note: Don't log here - init() is called for ALL crates including dependencies.
         // We log in codegen_crate() only when there are kernels to compile.
 
         // Initialize the underlying LLVM backend
-        self.llvm_backend.init(sess);
+        self.llvm_backend.init(sess)
     }
 
     fn print_version(&self) {
@@ -481,7 +482,7 @@ impl CodegenBackend for CudaCodegenBackend {
         self.llvm_backend.target_cpu(sess)
     }
 
-    fn target_config(&self, sess: &Session) -> rustc_codegen_ssa::TargetConfig {
+    fn target_config(&self, sess: &EarlySession) -> rustc_codegen_ssa::TargetConfig {
         self.llvm_backend.target_config(sess)
     }
 
@@ -728,7 +729,7 @@ impl CodegenBackend for CudaCodegenBackend {
                         tcx.dcx().fatal(format!(
                             "[rustc_codegen_cuda] Internal compiler error in \
                              device codegen: {msg}. This is a bug in cuda-oxide. \
-                             Please file at https://github.com/NVlabs/cuda-oxide/issues"
+                             Please file at https://github.com/NVIDIA/cuda-rust/issues"
                         ));
                     }
                     Ok(Ok(result)) => {
@@ -771,6 +772,25 @@ impl CodegenBackend for CudaCodegenBackend {
                             tcx.dcx().fatal(
                                 "[rustc_codegen_cuda] Device codegen did not produce an embeddable artifact",
                             );
+                        }
+                        if !collection_result.tile_exports.is_empty() {
+                            match write_tile_export_descriptions(
+                                &device_config.output_dir,
+                                &device_config.output_name,
+                                &collection_result.tile_exports,
+                            ) {
+                                Ok(path) => {
+                                    if self.config.verbose {
+                                        eprintln!(
+                                            "[rustc_codegen_cuda] Tile export descriptions written: {}",
+                                            path.display()
+                                        );
+                                    }
+                                }
+                                Err(e) => tcx.dcx().fatal(format!(
+                                    "[rustc_codegen_cuda] Failed to write tile export descriptions: {e}"
+                                )),
+                            }
                         }
                         Some(result)
                     }
@@ -831,7 +851,6 @@ impl CodegenBackend for CudaCodegenBackend {
                 assembly: None,
                 llvm_ir: None,
                 global_asm_object: None,
-                links_from_incr_cache: Vec::new(),
             });
         }
         (compiled_modules, work_products)
@@ -848,6 +867,25 @@ impl CodegenBackend for CudaCodegenBackend {
         self.llvm_backend
             .link(sess, compiled_modules, crate_info, metadata, outputs);
     }
+}
+
+/// Write `<output_name>.tileexports.json` next to the `.ll`/`.ptx`: the JSON
+/// array of this crate's `#[tile_export]` descriptions. `cargo oxide tilelib`
+/// reads it to build the Tile IR interface and implementation modules; the
+/// device artifact itself carries nothing from it.
+fn write_tile_export_descriptions(
+    output_dir: &Path,
+    output_name: &str,
+    tile_exports: &[oxide_tile_export::TileExportDesc],
+) -> std::io::Result<PathBuf> {
+    let path = output_dir.join(format!(
+        "{output_name}.{}",
+        oxide_tile_export::DESCRIPTIONS_SUFFIX
+    ));
+    let mut text = oxide_tile_export::descriptions_to_json_pretty(tile_exports);
+    text.push('\n');
+    std::fs::write(&path, text)?;
+    Ok(path)
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -39,6 +39,7 @@ mod launch;
 mod launch_attrs;
 mod printf;
 mod ptx_asm;
+mod tile_export;
 
 #[cfg(test)]
 mod tests;
@@ -72,15 +73,49 @@ use syn::parse_macro_input;
 ///
 /// | Specifier | Description     | Example                                        |
 /// |-----------|-----------------|------------------------------------------------|
-/// | `{}`      | Default format  | `gpu_printf!("{}", 42)`                        |
+/// | `{}`      | By type (below) | `gpu_printf!("{}", 42)` → "42"                 |
 /// | `{:x}`    | Hex (lower)     | `gpu_printf!("{:x}", 255)` → "ff"              |
 /// | `{:X}`    | Hex (upper)     | `gpu_printf!("{:X}", 255)` → "FF"              |
 /// | `{:#x}`   | Hex with prefix | `gpu_printf!("{:#x}", 255)` → "0xff"           |
 /// | `{:o}`    | Octal           | `gpu_printf!("{:o}", 8)` → "10"                |
+/// | `{:d}`    | Signed decimal  | `gpu_printf!("{:d}", 42u8)` → "42"             |
 /// | `{:e}`    | Scientific      | `gpu_printf!("{:e}", 1000.0)` → "1.000000e+03" |
+/// | `{:c}`    | Character       | `gpu_printf!("{:c}", 'a')` → "a"               |
 /// | `{:.N}`   | Precision       | `gpu_printf!("{:.2}", 3.14159)` → "3.14"       |
 /// | `{:N}`    | Width           | `gpu_printf!("{:8}", 42)` → "      42"         |
 /// | `{:0N}`   | Zero-pad        | `gpu_printf!("{:08}", 42)` → "00000042"        |
+/// | `{:*}`    | Runtime width   | `gpu_printf!("{:*}", 8, 42)` → "      42"      |
+///
+/// A type character (`x`, `X`, `o`, `d`, `e`, `E`, `f`, `g`, `G`, `a`, `A`,
+/// `c`, `p`) picks the C conversion and casts the argument to the matching C
+/// type (`as u64`, `as i64`, `as f64`, `as i32`).
+///
+/// # Default conversions
+///
+/// A placeholder without a type character (`{}`, `{:8}`, `{:08}`, `{:.2}`)
+/// prints its argument by type. The argument has to implement
+/// `cuda_device::debug::GpuPrintfArg`:
+///
+/// | Argument type              | Conversion |
+/// |----------------------------|------------|
+/// | `i8`, `i16`, `i32`, `bool` | `%d`       |
+/// | `i64`, `isize`             | `%lld`     |
+/// | `u8`, `u16`, `u32`         | `%u`       |
+/// | `u64`, `usize`             | `%llu`     |
+/// | `f32`, `f64`               | `%f`       |
+/// | `*const T`, `*mut T`       | `%p`       |
+///
+/// An unsuffixed integer literal is an `i32` and an unsuffixed float literal
+/// an `f64`, as in the rest of Rust. Width, zero padding and precision keep
+/// their C meaning: `{:.2}` on a float prints two decimals, and on an integer
+/// it is the minimum number of digits (`{:.3}` on `-42` prints `-042`). The
+/// `+` and space flags need a signed integer or floating-point argument; on
+/// an unsigned or pointer argument they are a compile-time error.
+///
+/// Not accepted by a default placeholder: `char` (use `{:c}`), fieldless
+/// enums (cast with `as i32`), `i128` and `u128`. Runtime precision `{:.*}`
+/// is a compile-time error, because CUDA device printf takes `*` for the
+/// width only.
 ///
 /// # Returns
 ///
@@ -418,8 +453,10 @@ pub fn cuda_module(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `generic_const_exprs` feature. Partial factors must be in `2..=1024`; an
 /// invalid specialization fails compilation instead of becoming a no-op.
 ///
-/// The pass currently recognizes explicit counted `while` loops. Range-based
-/// `for` loops are not yet recognized.
+/// The pass currently recognizes explicit counted `while` loops and range `for`
+/// loops (`for i in a..b` and `(a..b).rev()`) over any integer counter,
+/// including `isize`. Other iterator loops, such as `a..=b` or `.step_by(k)`,
+/// are not yet recognized.
 ///
 /// Only the annotated loop is unrolled. Inner loops are copied intact unless
 /// they carry their own annotation. Several `continue` paths (multiple
@@ -817,11 +854,13 @@ pub fn cooperative_launch(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// # Loop unrolling
 ///
 /// Loop annotations work the same way in device function definitions as they do
-/// in kernels. Use an explicit counted `while` loop; range-based `for` loops are
-/// not yet recognized. Partial factors must be `N >= 2`. Multiple `continue`
-/// paths are supported; full unrolling preserves `break` and multiple exit
-/// targets. Partial unrolling requires a positive counter step, a `<` or `<=`
-/// test, an unchanging limit, and no exit besides the normal header test.
+/// in kernels. Use an explicit counted `while` loop or a range `for` loop
+/// (`for i in a..b` or `(a..b).rev()`, over any integer counter including
+/// `isize`); other iterator loops are not yet recognized. Partial
+/// factors must be `N >= 2`. Multiple `continue` paths are supported; full
+/// unrolling preserves `break` and multiple exit targets. Partial unrolling
+/// requires a positive counter step, a `<` or `<=` test, an unchanging limit,
+/// and no exit besides the normal header test.
 ///
 /// One annotation may create at most 1,024 body copies, 8,192 cloned basic
 /// blocks, and 65,536 cloned operations. Factors above 1,024 are rejected;
@@ -866,6 +905,110 @@ pub fn cooperative_launch(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn device(_attr: TokenStream, item: TokenStream) -> TokenStream {
     device::device_entry(_attr, item)
+}
+
+/// Exports a device function to cuTile programs through a tile library.
+///
+/// A cuTile kernel calls the function with `foreign_call`, naming the
+/// declaration; `cargo oxide tilelib` packages a crate's exports into the
+/// `.tilelib` that call resolves against. The attribute leaves the annotated
+/// function unchanged, so other device code keeps calling it, and generates
+/// two items next to it:
+///
+/// 1. `#[device] pub unsafe extern "C" fn <symbol>(...)`: the implementation
+///    the Tile IR call resolves to, on the native SIMT ABI below. It turns the
+///    pointer parameters back into the references the function takes, calls
+///    the function, and stores the return value through the trailing out
+///    pointer.
+/// 2. A host-only `#[no_mangle]` metadata function that returns the export's
+///    JSON description. The codegen backend reads the string out of its MIR,
+///    compiles the wrapper as a device root even when the crate also has
+///    kernels, and writes `<crate>.tileexports.json` next to the device
+///    artifact. The metadata function itself is never compiled for the device.
+///
+/// # Arguments
+///
+/// | Argument                    | Meaning                                         | Default           |
+/// |-----------------------------|-------------------------------------------------|-------------------|
+/// | `tile_shape = N`            | 1-D tile extent (required)                      | none              |
+/// | `name = "..."`              | declaration name the cuTile caller uses         | the function name |
+/// | `symbol = "..."`            | implementation symbol in the device artifact    | `<name>_impl`     |
+/// | `sync = "none"` / `"warp"`  | threads that must call the function together    | `"none"`          |
+/// | `arch = ["sm_120", ...]`    | compute capabilities the implementation supports| every architecture|
+///
+/// `tile_shape` is required because this version ships concrete implementations:
+/// a parametric one would need one mangled symbol per specialization in the
+/// device artifact. `sync = "warp"` needs a tile shape that is a multiple of 32
+/// times the parameter footprint, so every invocation group fills whole
+/// warps. `arch` is normally omitted, which matches every target; when given,
+/// names are compared after stripping `_` and lowercasing, and a portable name
+/// such as `"sm_120"` also matches the arch-conditional `sm_120a` the Tile
+/// compiler builds for.
+///
+/// # Signature
+///
+/// The function cannot be generic or take `self`, and every parameter is a
+/// plain identifier with one of these types, where `T` is one of `f16`,
+/// `f32`, `f64`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`:
+///
+/// | Rust parameter   | access  | footprint | ABI parameter |
+/// |------------------|---------|-----------|---------------|
+/// | `x: T`           | `in`    | 1         | `T` by value  |
+/// | `x: &T`          | `in`    | 1         | `*const T`    |
+/// | `x: &[T; N]`     | `in`    | N         | `*const T`    |
+/// | `x: &mut T`      | `inout` | 1         | `*mut T`      |
+/// | `x: &mut [T; N]` | `inout` | N         | `*mut T`      |
+///
+/// The footprint is the number of contiguous tile elements one invocation
+/// owns, and every parameter of one export has the same footprint: the
+/// fragmaps of one implementation share their invocation count, so
+/// `fn window(acc: &mut [i32; 4], bias: &i32)` is rejected and
+/// `bias: &[i32; 4]` is the accepted form.
+///
+/// A scalar return type `-> T` becomes an appended `out` parameter named
+/// `<fn>_out`, passed as `*mut T`. Returning nothing is accepted only when some
+/// parameter is `&mut`, because a declaration's results are its `out` and
+/// `inout` arguments. Slices, raw pointers, tuples, structs, and `bool` are
+/// not accepted. `bf16` is not an accepted element type either: `cuda-device`
+/// carries bf16 values as `u16` bit patterns, so pass such tiles as `u16`.
+///
+/// Thread identity inside the function is the hardware `threadIdx.x`. The
+/// function may not allocate shared memory; a scratch buffer is not part of
+/// this version of the description.
+///
+/// # Example
+///
+/// ```ignore
+/// use cuda_device::tile_export;
+///
+/// #[tile_export(tile_shape = 128)]
+/// pub fn relu(x: f32) -> f32 {
+///     if x > 0.0 { x } else { 0.0 }
+/// }
+///
+/// #[tile_export(tile_shape = 128, name = "scale_in_place", symbol = "scale_in_place_impl")]
+/// pub fn scale(x: &mut f32, factor: f32) {
+///     *x *= factor;
+/// }
+///
+/// #[tile_export(tile_shape = 128, sync = "warp", arch = ["sm_120"])]
+/// pub fn warp_sum(x: f32) -> f32 {
+///     // 32 lanes call this together, so shuffles are legal here.
+///     let mut total = x;
+///     let mut offset = 16;
+///     while offset > 0 {
+///         total += cuda_device::warp::shuffle_xor_f32_sync(u32::MAX, total, offset);
+///         offset /= 2;
+///     }
+///     total
+/// }
+/// ```
+///
+/// `relu` becomes `define void @relu_impl(float, ptr)` and `scale` becomes
+/// `define void @scale_in_place_impl(ptr, float)` in the device artifact.
+#[proc_macro_attribute]
+pub fn tile_export(attr: TokenStream, item: TokenStream) -> TokenStream {
+    tile_export::tile_export_entry(attr, item)
 }
 
 // ============================================================================

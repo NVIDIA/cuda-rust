@@ -1,3 +1,5 @@
+cargo-features = ["profile-rustflags"]
+
 [package]
 name = "kernel_reference_validity"
 version = "0.1.0"
@@ -8,6 +10,19 @@ license = "Apache-2.0"
 [workspace]
 
 [dependencies]
-cuda-core = { path = "../../../../../cuda-core", version = "0.4.0" }
+cuda-core = { path = "../../../../../cuda-core" }
 cuda-device = { path = "../../../cuda-device" }
 cuda-host = { path = "../../../cuda-host", features = ["async"] }
+
+# The `read_across_write` and `volatile_helper` kernels test that the reference
+# facts on an entry parameter still reach loads inside a helper that LLVM
+# inlines. At default release settings rustc's MIR inliner folds those small
+# helpers into the kernel first, so LLVM would never see a call. `#[inline(never)]`
+# is not the answer: since it is carried to LLVM as `noinline`, it would keep
+# the helper a real PTX function and the loads would leave the entry. Switching
+# MIR inlining off for this one crate keeps the calls for LLVM to inline.
+# Scoping the flag to this package keeps the shared dependency tree identical
+# to every other example; a global RUSTFLAGS entry would re-key every
+# dependency unit and force a full second dependency-tree build in CI.
+[profile.release.package.kernel_reference_validity]
+rustflags = ["-Zinline-mir=no"]

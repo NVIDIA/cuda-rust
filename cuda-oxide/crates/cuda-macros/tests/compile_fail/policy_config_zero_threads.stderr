@@ -1,6 +1,7 @@
 error[E0080]: evaluation panicked: launch_bounds maximum threads must be greater than zero
  --> $WORKSPACE/crates/cuda-device/src/thread.rs
   |
+  | pub fn __launch_bounds_config<const MAX_THREADS: u32, const MIN_BLOCKS: u32>() {
   |     const { validate_launch_bounds(MAX_THREADS) }
   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `cuda_device::__launch_bounds_config::<0, 0>::{constant#0}` failed inside this call
   |

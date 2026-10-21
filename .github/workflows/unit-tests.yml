@@ -68,6 +68,11 @@ jobs:
           # tests that cover the configuration actually built.
           - package: oxide-artifacts
             test_args: --all-targets --features object
+          # `#[tile_export]` descriptions and their validation rules, shared
+          # by cuda-macros, the backend and cargo-oxide. Pure Rust, no CUDA.
+          - package: oxide-tile-export
+          # The Tile IR bytecode writer for those descriptions. Pure Rust.
+          - package: oxide-tilebc
           - package: reserved-oxide-symbols
           # launch_requires_unsafe trybuild fixture dev-depends on
           # cuda-host/cuda-core, which transitively pull cuda-bindings
@@ -97,7 +102,7 @@ jobs:
 
       - name: Install CUDA toolkit
         if: matrix.needs_cuda
-        uses: Jimver/cuda-toolkit@v0.2.35
+        uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76  # v0.2.35
         id: cuda-toolkit
         with:
           cuda: "13.1.1"

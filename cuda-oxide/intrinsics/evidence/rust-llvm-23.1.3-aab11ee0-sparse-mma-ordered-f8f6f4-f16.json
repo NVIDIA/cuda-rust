@@ -1,0 +1,163 @@
+{
+  "schema": 6,
+  "backend_profile": "rust-llvm-23.1.3-aab11ee0",
+  "backend_kind": "llvm_nvptx",
+  "llvm_revision": "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019",
+  "backend_version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+  "backend_sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+  "defaults": {
+    "llvm_arguments": ["i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "v2f16", "v2f16", "i32", "i32"],
+    "llvm_results": ["v2f16", "v2f16"],
+    "target_triple": "nvptx64-nvidia-cuda",
+    "gpu_target": "sm_120a",
+    "ptx_feature": "+ptx87",
+    "status": "validated",
+    "runtime_validation": "unexecuted"
+  },
+  "fixtures": [
+    {
+      "id": "ordered_f8f6f4_f16_sm120a_ptx87",
+      "coverage_count": 25,
+      "stages": [
+        {
+          "targets": ["sm_120a", "ptx87"],
+          "representation": "separate typed LLVM declaration probes",
+          "stage": "declaration_canonicalization",
+          "mechanism": "typed_nvvm",
+          "outcome": "succeeded",
+          "detail": "Revalidated 25 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): canonical typed declarations and their exact imported attributes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 19ad9907fa56d1a1404de062e1f7dc12b4f350ecbebf57ec8f6066eeda0bfb3e."
+        },
+        {
+          "targets": ["sm_120a", "ptx87"],
+          "representation": "separate probes for the recorded lowering mechanism",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Revalidated 25 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 d76b0e1545a10cec1a2b5271a1e7452cf7c9338100ffbf99ec71ca618431f59f."
+        },
+        {
+          "targets": ["sm_120a", "ptx87"],
+          "representation": "separate PTX outputs assembled for the recorded target",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "Revalidated 25 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 d0d24002860e242490a1617db5a0d1d2915fb068c04b19f2a89a5906ffa15581.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        }
+      ]
+    },
+    {
+      "id": "ordered_f8f6f4_f16_sm120f_ptx88",
+      "coverage_count": 25,
+      "stages": [
+        {
+          "targets": ["sm_120f", "ptx88"],
+          "representation": "separate probes for the recorded lowering mechanism",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Revalidated 25 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 4a0c8f295a64cc1ecde5783756346c9b18e7905c168a615adc561cbc978fad3a."
+        },
+        {
+          "targets": ["sm_120f", "ptx88"],
+          "representation": "separate PTX outputs assembled for the recorded target",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "Revalidated 25 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 9f20b23371d0816f81e6fd93333205fc9f7f51efd426ad4484fcfca58938354e.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        }
+      ]
+    },
+    {
+      "id": "ordered_f8f6f4_f16_sm121a_ptx88",
+      "coverage_count": 25,
+      "stages": [
+        {
+          "targets": ["sm_121a", "ptx88"],
+          "representation": "separate probes for the recorded lowering mechanism",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Revalidated 25 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 d1e0fcc258a2f0c2c5a181faf61116dcb63ee8bb85a4db718a69646aeec59aec."
+        },
+        {
+          "targets": ["sm_121a", "ptx88"],
+          "representation": "separate PTX outputs assembled for the recorded target",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "Revalidated 25 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 61fc0290f75f2a55c7422fdaf4a8772869735b72ff43984a1c99d2a97925e1c8.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        }
+      ]
+    },
+    {
+      "id": "ordered_f8f6f4_f16_sm121f_ptx88",
+      "coverage_count": 25,
+      "stages": [
+        {
+          "targets": ["sm_121f", "ptx88"],
+          "representation": "separate probes for the recorded lowering mechanism",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Revalidated 25 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 13acdc81de54656db4df63483ce3b0e3a27b679bad246bb22192882bffe243a2."
+        },
+        {
+          "targets": ["sm_121f", "ptx88"],
+          "representation": "separate PTX outputs assembled for the recorded target",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "Revalidated 25 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 115294ab5b3a317f4978aa65942dc9feb2768f583896b85c61120f0a2b9cfcc2.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        }
+      ]
+    }
+  ],
+  "matrices": [
+    {
+      "axes": [
+        {"name": "a_element", "values": ["e2m1", "e2m3", "e3m2", "e4m3", "e5m2"]},
+        {"name": "b_element", "values": ["e2m1", "e2m3", "e3m2", "e4m3", "e5m2"]}
+      ],
+      "product_count": 25,
+      "fixtures": [
+        "ordered_f8f6f4_f16_sm120a_ptx87",
+        "ordered_f8f6f4_f16_sm120f_ptx88",
+        "ordered_f8f6f4_f16_sm121a_ptx88",
+        "ordered_f8f6f4_f16_sm121f_ptx88"
+      ],
+      "template": {
+        "id": "mma_sp_ordered_metadata_m16n8k64_kind_f8f6f4_f16_${a_element}_${b_element}_f16",
+        "source_record": "int_nvvm_mma_sp_ordered_metadata_m16n8k64_row_col_kind_f8f6f4_f16_${a_element}_${b_element}_f16",
+        "llvm_symbol": "llvm.nvvm.mma.sp.ordered.metadata.m16n8k64.row.col.kind.f8f6f4.f16.${a_element}.${b_element}.f16",
+        "expected_ptx": {
+          "mnemonic": "mma",
+          "modifiers": ["sp::ordered_metadata", "sync", "aligned", "m16n8k64", "row", "col", "kind::f8f6f4", "f16", "${a_element}", "${b_element}", "f16"],
+          "operands": [
+            {"kind": "register_list", "length": 2},
+            {"kind": "register_list", "length": 4},
+            {"kind": "register_list", "length": 4},
+            {"kind": "register_list", "length": 2},
+            {"kind": "register"},
+            {"kind": "immediate"}
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+[package]
+name = "oxide-tilebc"
+version = "0.2.1"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Tile IR bytecode writer for the tile library descriptions cuda-oxide ships"
+readme = "README.md"
+
+[dependencies]
+thiserror = { workspace = true }
+
+[lints.rust]
+missing_docs = { level = "deny" }

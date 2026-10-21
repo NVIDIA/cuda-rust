@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- 32- and 64-bit integer constants keep the full unsigned range. The literal
+  encoder parsed each width through its signed type with a silent zero on
+  failure, so `constant(0x8000_0010u32, ..)` reached the device as zero, and
+  an integer `T::ONE` (spelled `0x1` by the named-constant path) encoded as
+  zero as well. Out-of-range and unparsable literals are now errors naming
+  the literal
+- 16-bit floating-point constants decode by their target type. The
+  named-constant path spells `T::ONE` as raw-bits hex, and the decoder chose
+  the bit layout by string length, so every 4-digit spelling decoded as
+  `f16`; `bf16::ONE` (`0x3f80`) read through the `f16` layout is 1.875, which
+  every `constant(bf16::ONE, ..)` kernel added on the device.
+
 ### Changed
 
 - cuTile Rust now lives in the [NVIDIA/cuda-rust](https://github.com/NVIDIA/cuda-rust)

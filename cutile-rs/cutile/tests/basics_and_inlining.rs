@@ -719,3 +719,66 @@ fn inlined_ops_carry_call_site_debug_info() {
         );
     });
 }
+
+/// A `u32` constant above `i32::MAX` keeps its bytes through lowering. The
+/// encoder parsed 32-bit literals through `i32` with a silent zero on
+/// overflow, so `constant(0x8000_0010u32, ..)` reached the device as zero.
+/// Asserted at the byte level of the emitted constant pool, where the bug
+/// lived.
+#[test]
+fn a_high_bit_u32_constant_survives_lowering() {
+    common::with_test_stack(|| {
+        use cutile_ir::bytecode::Opcode;
+        use cutile_ir::ir::Attribute;
+        let module = cutile_compiler::compile_api::KernelCompiler::new(
+            high_bit_const_kernels::__module_ast_self,
+            "high_bit_const_kernels",
+            "store_high_bit",
+        )
+        .target("sm_120")
+        .strides(&[("out", &[1])])
+        .compile()
+        .expect("compilation failed")
+        .into_module();
+
+        fn walk(module: &cutile_ir::Module, op: cutile_ir::ir::OpId, found: &mut bool) {
+            let op_data = module.op(op);
+            if op_data.opcode == Opcode::Constant {
+                for (name, attr) in &op_data.attributes {
+                    if name == "value" {
+                        if let Attribute::DenseElements(d) = attr {
+                            if d.data == vec![0x10, 0x00, 0x00, 0x80] {
+                                *found = true;
+                            }
+                        }
+                    }
+                }
+            }
+            for &region in &op_data.regions {
+                for &block in &module.region(region).blocks {
+                    for &inner in &module.block(block).ops {
+                        walk(module, inner, found);
+                    }
+                }
+            }
+        }
+        let mut found = false;
+        for &function in &module.functions {
+            walk(&module, function, &mut found);
+        }
+        assert!(found, "0x8000_0010 must reach the IR byte-exactly");
+    });
+}
+
+#[cutile::module]
+mod high_bit_const_kernels {
+    use cutile::core::*;
+
+    #[cutile::entry()]
+    fn store_high_bit(out: &mut Tensor<u32, { [-1] }>) {
+        let bid: (i32, i32, i32) = get_tile_block_id();
+        let v: Tile<u32, { [64] }> = constant(0x8000_0010u32, shape![64]);
+        let mut part: PartitionMut<u32, { [64] }> = out.partition_mut(shape![64]);
+        let _t: Token = part.store(v, [bid.0]);
+    }
+}

@@ -399,7 +399,7 @@ fn module_inner(
                 use #tile_rust_crate_root::error::{*};
                 use #tile_rust_crate_root::DType;
                 use #tile_rust_crate_root::{tensor};
-                use #tile_rust_crate_root::tensor::{KernelInput, KernelInputStored, KernelOutput, KernelOutputStored, SpecializationBits};
+                use #tile_rust_crate_root::tensor::{KernelAtomic, KernelInput, KernelInputStored, KernelOutput, KernelOutputStored, SpecializationBits};
                 use #tile_rust_crate_root::tile_kernel::{*};
                 use #tile_rust_crate_root::cuda_async::error::{*};
                 use #tile_rust_crate_root::cuda_async::scheduling_policies::SchedulingPolicy;
@@ -880,7 +880,11 @@ pub fn kernel_launcher(
     for (ki_idx, ki_name) in kernel_input_info.type_param_names.iter().enumerate() {
         let elem = &kernel_input_info.element_type_names[ki_idx];
         struct_generics.params.push(
-            syn::parse_str::<GenericParam>(&format!("{ki_name}: KernelInput<{elem}>")).unwrap(),
+            syn::parse_str::<GenericParam>(&format!(
+                "{ki_name}: {}<{elem}>",
+                kernel_input_info.bound_names[ki_idx]
+            ))
+            .unwrap(),
         );
     }
     for (ko_idx, ko_name) in kernel_input_info.ko_type_param_names.iter().enumerate() {

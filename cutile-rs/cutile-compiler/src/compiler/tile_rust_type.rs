@@ -14,7 +14,6 @@ use crate::error::JITError;
 use crate::generics::{GenericVars, TypeInstance};
 use crate::types::*;
 use cutile_ir::ir::Type as TileIrType;
-use quote::ToTokens;
 use std::collections::HashMap;
 use syn::ItemImpl;
 
@@ -101,20 +100,6 @@ impl TileRustType {
                 self.kind
             )),
         }
-    }
-    pub(crate) fn get_cuda_tile_element_type_prefix(
-        &self,
-        primitives: &HashMap<(String, String), ItemImpl>,
-    ) -> Result<super::shared_utils::ElementTypePrefix, JITError> {
-        let cuda_elem_ty_str = self
-            .get_cuda_tile_element_type(primitives)?
-            .ok_or_else(|| {
-                JITError::generic_err(&format!(
-                    "unable to determine element type for `{}`",
-                    self.rust_ty.to_token_stream()
-                ))
-            })?;
-        super::shared_utils::ElementTypePrefix::new(&cuda_elem_ty_str)
     }
     pub(crate) fn get_cuda_tile_type_str(&self) -> Option<String> {
         self.cuda_tile_ty_str.clone()

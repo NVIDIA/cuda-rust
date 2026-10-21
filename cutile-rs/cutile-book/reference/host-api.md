@@ -474,6 +474,7 @@ If any kernel input is `&Tensor<T>` (borrowed), the operation is not
 |---|---|---|
 | `&Tensor<T, S>` | `Tensor<T>`, `Arc<Tensor<T>>`, `&Tensor<T>`, or `&TensorView<T>` | Same as input |
 | `&mut Tensor<T, S>` | `Partition<Tensor<T>>`, `Partition<&mut Tensor<T>>`, or their `MappedLaunchPartition<…>` forms from `.map(..)` | Same as input |
+| `&AddTensor<T, S>` … `&MinTensor<T, S>` | `Atomic<&mut Tensor<T>>` from `tensor.atomic()`, or `Atomic<Tensor<T>>` from `Atomic::owned(tensor)` | The backing `&mut Tensor<T>` / `Tensor<T>` |
 | Scalar (`f32`, `i32`, etc.) | Same scalar | Same scalar |
 | `*mut T`, `*const T` (unsafe only) | `DevicePointer<T>` | `DevicePointer<T>` |
 
@@ -510,6 +511,35 @@ Launchers return arguments in the same ownership form they received.
 |---|---|---|
 | `Partition<Tensor<T>>` (owned) | `Partition<Tensor<T>>` | Yes |
 | `Partition<&'a mut Tensor<T>>` (borrowed) | `Partition<&'a mut Tensor<T>>` | No — tensor is written in place |
+
+### Atomic destinations
+
+`Atomic<B>` supplies the exclusive host binding for a shared device-side atomic
+capability:
+
+| Input | Returned | How to build it |
+|---|---|---|
+| `Atomic<&'a mut Tensor<T>>` (borrowed) | `&'a mut Tensor<T>` | `tensor.atomic()` |
+| `Atomic<Tensor<T>>` (owned) | `Tensor<T>` | `Atomic::owned(tensor)` |
+
+A shared `Arc<Tensor<T>>` or `&Tensor<T>` is rejected. The launcher requires
+`KernelAtomic<T>`, implemented only by these two forms.
+
+```rust
+let mut out = api::zeros::<f32>(&[256, 256]).sync_on(&stream)?;
+split_k_atomic(out.atomic(), lhs, rhs)
+    .grid((2, 2, 4))
+    .sync_on(&stream)?;
+```
+
+Because an atomic parameter contributes no grid bound, the grid must come from
+another binding or from an explicit `.grid(..)`.
+
+Within a launch, same-operation atomic bindings may alias. Different
+operations, or an atomic binding with an ordinary tensor access, are rejected.
+The check is allocation-level, so disjoint regions of one allocation are also
+conservatively rejected. Cross-launch coordination remains the caller's
+responsibility.
 
 The borrowed form is created with `(&mut tensor).partition(shape)`:
 

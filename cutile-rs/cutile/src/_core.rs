@@ -109,6 +109,21 @@ pub mod atomic {
     pub struct Umax;
     pub struct Umin;
     pub struct Xchg;
+
+    /// Addition, with the Tile IR mode selected by the destination's element
+    /// type: `AddF` for floats, `Add` for integers.
+    pub struct Sum;
+
+    /// Maximum, with the comparison selected by the destination's element
+    /// type: `Max` for signed integers, `Umax` for unsigned. The Tile IR
+    /// scalar erases signedness, so the Rust element is the record of which
+    /// comparison was asked for. No float mode exists: Tile IR has no atomic
+    /// floating-point maximum.
+    pub struct Maximum;
+
+    /// Minimum, with the comparison selected by the destination's element
+    /// type: `Min` for signed integers, `Umin` for unsigned. See [`Maximum`].
+    pub struct Minimum;
     impl Mode for Add {}
     impl Mode for AddF {}
     impl Mode for And {}
@@ -119,6 +134,59 @@ pub mod atomic {
     impl Mode for Umax {}
     impl Mode for Umin {}
     impl Mode for Xchg {}
+    impl Mode for Sum {}
+    impl Mode for Maximum {}
+    impl Mode for Minimum {}
+
+    mod sealed_element {
+        pub trait Element {}
+    }
+
+    /// Elements Tile IR can add atomically.
+    ///
+    /// Narrows the element parameter of the add-aggregation types, so an
+    /// illegal element fails at the kernel signature rather than at the call
+    /// site. Sealed: an outside impl would emit IR the target verifier rejects.
+    pub trait AtomicAdd: super::core::ElementType + sealed_element::Element {}
+
+    impl sealed_element::Element for half::f16 {}
+    impl sealed_element::Element for half::bf16 {}
+    impl sealed_element::Element for f32 {}
+    impl sealed_element::Element for f64 {}
+
+    impl sealed_element::Element for i32 {}
+    impl sealed_element::Element for u32 {}
+    impl sealed_element::Element for i64 {}
+    impl sealed_element::Element for u64 {}
+
+    impl AtomicAdd for half::f16 {}
+    impl AtomicAdd for half::bf16 {}
+    impl AtomicAdd for f32 {}
+    impl AtomicAdd for f64 {}
+    impl AtomicAdd for i32 {}
+    impl AtomicAdd for u32 {}
+    impl AtomicAdd for i64 {}
+    impl AtomicAdd for u64 {}
+
+    /// Elements Tile IR can combine bitwise atomically. Integers only; the
+    /// operations are bit-pattern transforms, so signedness is irrelevant and
+    /// both spellings of each width are admitted.
+    pub trait AtomicBitwise: super::core::ElementType + sealed_element::Element {}
+
+    impl AtomicBitwise for i32 {}
+    impl AtomicBitwise for u32 {}
+    impl AtomicBitwise for i64 {}
+    impl AtomicBitwise for u64 {}
+
+    /// Elements Tile IR can compare atomically. Integers only; the element's
+    /// signedness selects the comparison (`Max` or `Umax`, `Min` or `Umin`),
+    /// which is why no unsigned-named method exists anywhere in the safe API.
+    pub trait AtomicOrd: super::core::ElementType + sealed_element::Element {}
+
+    impl AtomicOrd for i32 {}
+    impl AtomicOrd for u32 {}
+    impl AtomicOrd for i64 {}
+    impl AtomicOrd for u64 {}
 }
 
 /// Memory ordering, with per-op-family sub-traits restricting which variants
@@ -140,6 +208,10 @@ pub mod ordering {
     pub trait AtomicStoreMode: StoreMode + sealed::AtomicOrdering {}
     /// Atomic global read-modify-write orderings.
     pub trait GlobalAtomicMode: AtomicMode + sealed::AtomicOrdering {}
+    /// `atomic_red_view_tko`: `Relaxed` and nothing else. The IR verifier
+    /// requires `order == 1` for a view atomic, so the other three
+    /// [`AtomicMode`] variants are typeable today and always fail.
+    pub trait RedViewMode: AtomicMode {}
 
     pub struct Weak;
     pub struct Relaxed;
@@ -179,6 +251,7 @@ pub mod ordering {
     impl GlobalAtomicMode for Acquire {}
     impl GlobalAtomicMode for Release {}
     impl GlobalAtomicMode for AcqRel {}
+    impl RedViewMode for Relaxed {}
 }
 
 /// Memory scope for atomics and load/store ordering. Mirrors Tile IR
@@ -200,6 +273,13 @@ pub mod scope {
     impl sealed::GlobalScope for System {}
     impl GlobalScope for Device {}
     impl GlobalScope for System {}
+    /// `atomic_red_view_tko`: `TileBlock` or `Device`; the verifier rejects
+    /// `System`. Note that only `Device` makes *cross-program* collisions
+    /// coherent — `TileBlock` is legal and almost never what a shared
+    /// aggregation destination wants.
+    pub trait RedViewScope: Mode {}
+    impl RedViewScope for TileBlock {}
+    impl RedViewScope for Device {}
 }
 
 mod global_sealed {
@@ -357,6 +437,7 @@ pub mod core {
     /// Marker trait for valid `Tile<E, …>` / `Tensor<E, …>` element types.
     pub trait ElementType: Copy + Clone {
         const ZERO: Self;
+        const ONE: Self;
     }
 
     /// Rust byte marker for packed Tile IR sub-byte values.
@@ -368,58 +449,71 @@ pub mod core {
     #[cuda_tile::ty(name = "bf16")]
     impl ElementType for bf16 {
         const ZERO: Self = bf16::ZERO;
+        const ONE: Self = bf16::ONE;
     }
     #[cuda_tile::ty(name = "f16")]
     impl ElementType for f16 {
         const ZERO: Self = f16::ZERO;
+        const ONE: Self = f16::ONE;
     }
     #[cuda_tile::ty(name = "f32")]
     impl ElementType for f32 {
         const ZERO: Self = 0.0;
+        const ONE: Self = 1.0;
     }
     #[cuda_tile::ty(name = "i8")]
     impl ElementType for i8 {
         const ZERO: Self = 0;
+        const ONE: Self = 1;
     }
     impl ByteElement for i8 {}
 
     #[cuda_tile::ty(name = "i8")]
     impl ElementType for u8 {
         const ZERO: Self = 0;
+        const ONE: Self = 1;
     }
     impl ByteElement for u8 {}
 
     #[cuda_tile::ty(name = "i32")]
     impl ElementType for i32 {
         const ZERO: Self = 0;
+        const ONE: Self = 1;
     }
     #[cuda_tile::ty(name = "i32")]
     impl ElementType for u32 {
         const ZERO: Self = 0;
+        const ONE: Self = 1;
     }
     #[cuda_tile::ty(name = "i64")]
     impl ElementType for i64 {
         const ZERO: Self = 0;
+        const ONE: Self = 1;
     }
     #[cuda_tile::ty(name = "i64")]
     impl ElementType for u64 {
         const ZERO: Self = 0;
+        const ONE: Self = 1;
     }
     #[cuda_tile::ty(name = "f64")]
     impl ElementType for f64 {
         const ZERO: Self = 0.0;
+        const ONE: Self = 1.0;
     }
     #[cuda_tile::ty(name = "i16")]
     impl ElementType for i16 {
         const ZERO: Self = 0;
+        const ONE: Self = 1;
     }
     #[cuda_tile::ty(name = "i16")]
     impl ElementType for u16 {
         const ZERO: Self = 0;
+        const ONE: Self = 1;
     }
     #[cuda_tile::ty(name = "i1")]
     impl ElementType for bool {
         const ZERO: Self = false;
+        const ONE: Self = true;
     }
 
     // GPU-specific types: re-exported from cuda-core.
@@ -435,35 +529,43 @@ pub mod core {
     #[cuda_tile::ty(name = "tf32")]
     impl ElementType for tf32 {
         const ZERO: Self = tf32(0);
+        const ONE: Self = tf32(0x3F800000);
     }
     #[cuda_tile::ty(name = "f8e4m3fn")]
     impl ElementType for f8e4m3fn {
         const ZERO: Self = f8e4m3fn(0);
+        const ONE: Self = f8e4m3fn(0x38);
     }
     #[cuda_tile::ty(name = "f8e5m2")]
     impl ElementType for f8e5m2 {
         const ZERO: Self = f8e5m2(0);
+        const ONE: Self = f8e5m2(0x3C);
     }
     #[cuda_tile::ty(name = "f8e8m0fnu")]
     impl ElementType for f8e8m0fnu {
         const ZERO: Self = f8e8m0fnu(0);
+        const ONE: Self = f8e8m0fnu(0x7F);
     }
     #[cuda_tile::ty(name = "f8e5m3fnu")]
     impl ElementType for f8e5m3fnu {
         const ZERO: Self = f8e5m3fnu(0);
+        const ONE: Self = f8e5m3fnu(0x78);
     }
     #[cuda_tile::ty(name = "f4e2m1fn")]
     impl ElementType for f4e2m1fn {
         const ZERO: Self = f4e2m1fn(0);
+        const ONE: Self = f4e2m1fn(0x2);
     }
     #[cuda_tile::ty(name = "i8")]
     impl ElementType for f4e2m1fnx2 {
         const ZERO: Self = f4e2m1fnx2::from_bits(0);
+        const ONE: Self = f4e2m1fnx2::from_nibbles(0x2, 0x2);
     }
     impl ByteElement for f4e2m1fnx2 {}
     #[cuda_tile::ty(name = "i4")]
     impl ElementType for i4 {
         const ZERO: Self = i4(0);
+        const ONE: Self = i4(1);
     }
 
     /// Marker trait for scalar values that can be broadcast to tiles.
@@ -893,6 +995,476 @@ pub mod core {
         }
         pub fn load_tile<const R: [i32; N]>(&self, shape: Shape<R>, idx: [i32; N]) -> Tile<E, R> {
             load_tile(self, shape, idx)
+        }
+    }
+
+    /// Shared-reference capability for overlapping atomic addition.
+    /// The destination is initialized by the caller; ordinary aliases are not
+    /// allowed while the launch is in flight.
+    #[cuda_tile::ty(name="!cuda_tile.tensor_view",
+                    type_params=["{D}xE", "strides"],
+                    type_meta=["base", "shape", "strides", "token"])]
+    #[cuda_tile::variadic_struct(N = 6)]
+    pub struct AddTensor<E: atomic::AtomicAdd, const D: [i32; N]> {
+        _type: PhantomData<E>,
+    }
+
+    #[cuda_tile::variadic_impl(N = 6)]
+    impl<E: atomic::AtomicAdd, const S: [i32; N]> AddTensor<E, S> {
+        fn shape<'b>(&self) -> Shape<'b, S> {
+            get_add_tensor_shape_meta(self)
+        }
+
+        /// Creates an unpadded atomic partition. Tile extents must divide the
+        /// destination exactly on every axis.
+        pub fn partition<'a, const R: [i32; N]>(
+            &'a self,
+            tile: Shape<R>,
+        ) -> AddPartition<'a, E, R> {
+            require_add_tiles_divide_exactly(self, tile);
+            let token: Token = get_add_tensor_token(self);
+            // SAFETY: built from this capability's own base, shape and
+            // strides, starting from its current ordering token; unpadded,
+            // as the Tile IR atomic reduction requires.
+            let view: AddPartition<E, R> =
+                unsafe { make_add_partition_view(self, tile, padding::None, token) };
+            view
+        }
+    }
+
+    /// Tiled view returned by [`AddTensor::partition`].
+    #[cuda_tile::ty(name="!cuda_tile.partition_view",
+                    type_params=["tile"],
+                    type_params_optional=["padding_value", "tensor_view"],
+                    type_meta=["token", "tensor_view.shape()"])]
+    #[cuda_tile::variadic_struct(N = 6)]
+    pub struct AddPartition<'a, E: atomic::AtomicAdd, const D: [i32; N]> {
+        _type: PhantomData<E>,
+        _tensor: PhantomData<&'a ()>,
+    }
+
+    #[cuda_tile::variadic_impl(N = 6)]
+    impl<'a, E: atomic::AtomicAdd, const D: [i32; N]> AddPartition<'a, E, D> {
+        /// Atomically adds `value` at a checked tile `index`.
+        pub fn atomic_add(&self, index: [i32; N], value: Tile<E, D>) -> Token {
+            check_add_partition_access(self, index);
+            // SAFETY: ordered after this view's current token, bounds-checked
+            // above, and an aggregating mode this element type admits.
+            let done: Token = unsafe { self.atomic_add_unchecked(index, value) };
+            done
+        }
+
+        /// Atomically adds without checking `index`.
+        ///
+        /// ## Safety
+        ///
+        /// `index` must be in the partition grid, and the tile extent must
+        /// divide the destination extent on every axis.
+        pub unsafe fn atomic_add_unchecked(&self, index: [i32; N], value: Tile<E, D>) -> Token {
+            let token: Token = get_add_partition_token(self);
+            // SAFETY: the view token, bounds contract, and host alias contract
+            // are upheld by this capability.
+            let done: Token = unsafe {
+                atomic_red_view_raw(
+                    self,
+                    value,
+                    index,
+                    atomic::Sum,
+                    ordering::Relaxed,
+                    scope::Device,
+                    Some(token),
+                )
+            };
+            done
+        }
+    }
+
+    /// Shared-reference capability for overlapping atomic bitwise AND.
+    #[cuda_tile::ty(name="!cuda_tile.tensor_view",
+                    type_params=["{D}xE", "strides"],
+                    type_meta=["base", "shape", "strides", "token"])]
+    #[cuda_tile::variadic_struct(N = 6)]
+    pub struct AndTensor<E: atomic::AtomicBitwise, const D: [i32; N]> {
+        _type: PhantomData<E>,
+    }
+
+    #[cuda_tile::variadic_impl(N = 6)]
+    impl<E: atomic::AtomicBitwise, const S: [i32; N]> AndTensor<E, S> {
+        fn shape<'b>(&self) -> Shape<'b, S> {
+            get_and_tensor_shape_meta(self)
+        }
+
+        /// Creates an unpadded atomic partition. Tile extents must divide the
+        /// destination exactly on every axis.
+        pub fn partition<'a, const R: [i32; N]>(
+            &'a self,
+            tile: Shape<R>,
+        ) -> AndPartition<'a, E, R> {
+            require_and_tiles_divide_exactly(self, tile);
+            let token: Token = get_and_tensor_token(self);
+            // SAFETY: built from this capability's own base, shape and
+            // strides, starting from its current ordering token; unpadded,
+            // as the Tile IR atomic reduction requires.
+            let view: AndPartition<E, R> =
+                unsafe { make_and_partition_view(self, tile, padding::None, token) };
+            view
+        }
+    }
+
+    /// Tiled view returned by [`AndTensor::partition`].
+    #[cuda_tile::ty(name="!cuda_tile.partition_view",
+                    type_params=["tile"],
+                    type_params_optional=["padding_value", "tensor_view"],
+                    type_meta=["token", "tensor_view.shape()"])]
+    #[cuda_tile::variadic_struct(N = 6)]
+    pub struct AndPartition<'a, E: atomic::AtomicBitwise, const D: [i32; N]> {
+        _type: PhantomData<E>,
+        _tensor: PhantomData<&'a ()>,
+    }
+
+    #[cuda_tile::variadic_impl(N = 6)]
+    impl<'a, E: atomic::AtomicBitwise, const D: [i32; N]> AndPartition<'a, E, D> {
+        /// Atomically ANDs `value` at a checked tile `index`.
+        pub fn atomic_and(&self, index: [i32; N], value: Tile<E, D>) -> Token {
+            check_and_partition_access(self, index);
+            // SAFETY: ordered after this view's current token, bounds-checked
+            // above, and an aggregating mode this element type admits.
+            let done: Token = unsafe { self.atomic_and_unchecked(index, value) };
+            done
+        }
+
+        /// Atomically ANDs without checking `index`.
+        ///
+        /// # Safety
+        /// `index` must be in the partition grid and the tile must divide the
+        /// destination extent exactly.
+        pub unsafe fn atomic_and_unchecked(&self, index: [i32; N], value: Tile<E, D>) -> Token {
+            let token: Token = get_and_partition_token(self);
+            // SAFETY: the view token, bounds contract, and host alias contract
+            // are upheld by this capability.
+            let done: Token = unsafe {
+                atomic_red_view_raw(
+                    self,
+                    value,
+                    index,
+                    atomic::And,
+                    ordering::Relaxed,
+                    scope::Device,
+                    Some(token),
+                )
+            };
+            done
+        }
+    }
+
+    /// Shared-reference capability for overlapping atomic bitwise OR.
+    #[cuda_tile::ty(name="!cuda_tile.tensor_view",
+                    type_params=["{D}xE", "strides"],
+                    type_meta=["base", "shape", "strides", "token"])]
+    #[cuda_tile::variadic_struct(N = 6)]
+    pub struct OrTensor<E: atomic::AtomicBitwise, const D: [i32; N]> {
+        _type: PhantomData<E>,
+    }
+
+    #[cuda_tile::variadic_impl(N = 6)]
+    impl<E: atomic::AtomicBitwise, const S: [i32; N]> OrTensor<E, S> {
+        fn shape<'b>(&self) -> Shape<'b, S> {
+            get_or_tensor_shape_meta(self)
+        }
+
+        /// Creates an unpadded atomic partition. Tile extents must divide the
+        /// destination exactly on every axis.
+        pub fn partition<'a, const R: [i32; N]>(&'a self, tile: Shape<R>) -> OrPartition<'a, E, R> {
+            require_or_tiles_divide_exactly(self, tile);
+            let token: Token = get_or_tensor_token(self);
+            // SAFETY: built from this capability's own base, shape and
+            // strides, starting from its current ordering token; unpadded,
+            // as the Tile IR atomic reduction requires.
+            let view: OrPartition<E, R> =
+                unsafe { make_or_partition_view(self, tile, padding::None, token) };
+            view
+        }
+    }
+
+    /// Tiled view returned by [`OrTensor::partition`].
+    #[cuda_tile::ty(name="!cuda_tile.partition_view",
+                    type_params=["tile"],
+                    type_params_optional=["padding_value", "tensor_view"],
+                    type_meta=["token", "tensor_view.shape()"])]
+    #[cuda_tile::variadic_struct(N = 6)]
+    pub struct OrPartition<'a, E: atomic::AtomicBitwise, const D: [i32; N]> {
+        _type: PhantomData<E>,
+        _tensor: PhantomData<&'a ()>,
+    }
+
+    #[cuda_tile::variadic_impl(N = 6)]
+    impl<'a, E: atomic::AtomicBitwise, const D: [i32; N]> OrPartition<'a, E, D> {
+        /// Atomically ORs `value` at a checked tile `index`.
+        pub fn atomic_or(&self, index: [i32; N], value: Tile<E, D>) -> Token {
+            check_or_partition_access(self, index);
+            // SAFETY: ordered after this view's current token, bounds-checked
+            // above, and an aggregating mode this element type admits.
+            let done: Token = unsafe { self.atomic_or_unchecked(index, value) };
+            done
+        }
+
+        /// Atomically ORs without checking `index`.
+        ///
+        /// # Safety
+        /// `index` must be in the partition grid and the tile must divide the
+        /// destination extent exactly.
+        pub unsafe fn atomic_or_unchecked(&self, index: [i32; N], value: Tile<E, D>) -> Token {
+            let token: Token = get_or_partition_token(self);
+            // SAFETY: the view token, bounds contract, and host alias contract
+            // are upheld by this capability.
+            let done: Token = unsafe {
+                atomic_red_view_raw(
+                    self,
+                    value,
+                    index,
+                    atomic::Or,
+                    ordering::Relaxed,
+                    scope::Device,
+                    Some(token),
+                )
+            };
+            done
+        }
+    }
+
+    /// Shared-reference capability for overlapping atomic bitwise XOR.
+    #[cuda_tile::ty(name="!cuda_tile.tensor_view",
+                    type_params=["{D}xE", "strides"],
+                    type_meta=["base", "shape", "strides", "token"])]
+    #[cuda_tile::variadic_struct(N = 6)]
+    pub struct XorTensor<E: atomic::AtomicBitwise, const D: [i32; N]> {
+        _type: PhantomData<E>,
+    }
+
+    #[cuda_tile::variadic_impl(N = 6)]
+    impl<E: atomic::AtomicBitwise, const S: [i32; N]> XorTensor<E, S> {
+        fn shape<'b>(&self) -> Shape<'b, S> {
+            get_xor_tensor_shape_meta(self)
+        }
+
+        /// Creates an unpadded atomic partition. Tile extents must divide the
+        /// destination exactly on every axis.
+        pub fn partition<'a, const R: [i32; N]>(
+            &'a self,
+            tile: Shape<R>,
+        ) -> XorPartition<'a, E, R> {
+            require_xor_tiles_divide_exactly(self, tile);
+            let token: Token = get_xor_tensor_token(self);
+            // SAFETY: built from this capability's own base, shape and
+            // strides, starting from its current ordering token; unpadded,
+            // as the Tile IR atomic reduction requires.
+            let view: XorPartition<E, R> =
+                unsafe { make_xor_partition_view(self, tile, padding::None, token) };
+            view
+        }
+    }
+
+    /// Tiled view returned by [`XorTensor::partition`].
+    #[cuda_tile::ty(name="!cuda_tile.partition_view",
+                    type_params=["tile"],
+                    type_params_optional=["padding_value", "tensor_view"],
+                    type_meta=["token", "tensor_view.shape()"])]
+    #[cuda_tile::variadic_struct(N = 6)]
+    pub struct XorPartition<'a, E: atomic::AtomicBitwise, const D: [i32; N]> {
+        _type: PhantomData<E>,
+        _tensor: PhantomData<&'a ()>,
+    }
+
+    #[cuda_tile::variadic_impl(N = 6)]
+    impl<'a, E: atomic::AtomicBitwise, const D: [i32; N]> XorPartition<'a, E, D> {
+        /// Atomically XORs `value` at a checked tile `index`.
+        pub fn atomic_xor(&self, index: [i32; N], value: Tile<E, D>) -> Token {
+            check_xor_partition_access(self, index);
+            // SAFETY: ordered after this view's current token, bounds-checked
+            // above, and an aggregating mode this element type admits.
+            let done: Token = unsafe { self.atomic_xor_unchecked(index, value) };
+            done
+        }
+
+        /// Atomically XORs without checking `index`.
+        ///
+        /// # Safety
+        /// `index` must be in the partition grid and the tile must divide the
+        /// destination extent exactly.
+        pub unsafe fn atomic_xor_unchecked(&self, index: [i32; N], value: Tile<E, D>) -> Token {
+            let token: Token = get_xor_partition_token(self);
+            // SAFETY: the view token, bounds contract, and host alias contract
+            // are upheld by this capability.
+            let done: Token = unsafe {
+                atomic_red_view_raw(
+                    self,
+                    value,
+                    index,
+                    atomic::Xor,
+                    ordering::Relaxed,
+                    scope::Device,
+                    Some(token),
+                )
+            };
+            done
+        }
+    }
+
+    /// Shared-reference capability for overlapping atomic maximum. Signedness
+    /// follows the Rust element type; floating-point maximum is unsupported.
+    #[cuda_tile::ty(name="!cuda_tile.tensor_view",
+                    type_params=["{D}xE", "strides"],
+                    type_meta=["base", "shape", "strides", "token"])]
+    #[cuda_tile::variadic_struct(N = 6)]
+    pub struct MaxTensor<E: atomic::AtomicOrd, const D: [i32; N]> {
+        _type: PhantomData<E>,
+    }
+
+    #[cuda_tile::variadic_impl(N = 6)]
+    impl<E: atomic::AtomicOrd, const S: [i32; N]> MaxTensor<E, S> {
+        fn shape<'b>(&self) -> Shape<'b, S> {
+            get_max_tensor_shape_meta(self)
+        }
+
+        /// Creates an unpadded atomic partition. Tile extents must divide the
+        /// destination exactly on every axis.
+        pub fn partition<'a, const R: [i32; N]>(
+            &'a self,
+            tile: Shape<R>,
+        ) -> MaxPartition<'a, E, R> {
+            require_max_tiles_divide_exactly(self, tile);
+            let token: Token = get_max_tensor_token(self);
+            // SAFETY: built from this capability's own base, shape and
+            // strides, starting from its current ordering token; unpadded,
+            // as the Tile IR atomic reduction requires.
+            let view: MaxPartition<E, R> =
+                unsafe { make_max_partition_view(self, tile, padding::None, token) };
+            view
+        }
+    }
+
+    /// Tiled view returned by [`MaxTensor::partition`].
+    #[cuda_tile::ty(name="!cuda_tile.partition_view",
+                    type_params=["tile"],
+                    type_params_optional=["padding_value", "tensor_view"],
+                    type_meta=["token", "tensor_view.shape()"])]
+    #[cuda_tile::variadic_struct(N = 6)]
+    pub struct MaxPartition<'a, E: atomic::AtomicOrd, const D: [i32; N]> {
+        _type: PhantomData<E>,
+        _tensor: PhantomData<&'a ()>,
+    }
+
+    #[cuda_tile::variadic_impl(N = 6)]
+    impl<'a, E: atomic::AtomicOrd, const D: [i32; N]> MaxPartition<'a, E, D> {
+        /// Atomically takes the maximum with `value` at a checked tile `index`.
+        pub fn atomic_max(&self, index: [i32; N], value: Tile<E, D>) -> Token {
+            check_max_partition_access(self, index);
+            // SAFETY: ordered after this view's current token, bounds-checked
+            // above, and an aggregating mode this element type admits.
+            let done: Token = unsafe { self.atomic_max_unchecked(index, value) };
+            done
+        }
+
+        /// Atomically takes the maximum without checking `index`.
+        ///
+        /// # Safety
+        /// `index` must be in the partition grid and the tile must divide the
+        /// destination extent exactly.
+        pub unsafe fn atomic_max_unchecked(&self, index: [i32; N], value: Tile<E, D>) -> Token {
+            let token: Token = get_max_partition_token(self);
+            // SAFETY: the view token, bounds contract, and host alias contract
+            // are upheld by this capability.
+            let done: Token = unsafe {
+                atomic_red_view_raw(
+                    self,
+                    value,
+                    index,
+                    atomic::Maximum,
+                    ordering::Relaxed,
+                    scope::Device,
+                    Some(token),
+                )
+            };
+            done
+        }
+    }
+
+    /// Shared-reference capability for overlapping atomic minimum. Signedness
+    /// follows the Rust element type; floating-point minimum is unsupported.
+    #[cuda_tile::ty(name="!cuda_tile.tensor_view",
+                    type_params=["{D}xE", "strides"],
+                    type_meta=["base", "shape", "strides", "token"])]
+    #[cuda_tile::variadic_struct(N = 6)]
+    pub struct MinTensor<E: atomic::AtomicOrd, const D: [i32; N]> {
+        _type: PhantomData<E>,
+    }
+
+    #[cuda_tile::variadic_impl(N = 6)]
+    impl<E: atomic::AtomicOrd, const S: [i32; N]> MinTensor<E, S> {
+        fn shape<'b>(&self) -> Shape<'b, S> {
+            get_min_tensor_shape_meta(self)
+        }
+
+        /// Creates an unpadded atomic partition. Tile extents must divide the
+        /// destination exactly on every axis.
+        pub fn partition<'a, const R: [i32; N]>(
+            &'a self,
+            tile: Shape<R>,
+        ) -> MinPartition<'a, E, R> {
+            require_min_tiles_divide_exactly(self, tile);
+            let token: Token = get_min_tensor_token(self);
+            // SAFETY: built from this capability's own base, shape and
+            // strides, starting from its current ordering token; unpadded,
+            // as the Tile IR atomic reduction requires.
+            let view: MinPartition<E, R> =
+                unsafe { make_min_partition_view(self, tile, padding::None, token) };
+            view
+        }
+    }
+
+    /// Tiled view returned by [`MinTensor::partition`].
+    #[cuda_tile::ty(name="!cuda_tile.partition_view",
+                    type_params=["tile"],
+                    type_params_optional=["padding_value", "tensor_view"],
+                    type_meta=["token", "tensor_view.shape()"])]
+    #[cuda_tile::variadic_struct(N = 6)]
+    pub struct MinPartition<'a, E: atomic::AtomicOrd, const D: [i32; N]> {
+        _type: PhantomData<E>,
+        _tensor: PhantomData<&'a ()>,
+    }
+
+    #[cuda_tile::variadic_impl(N = 6)]
+    impl<'a, E: atomic::AtomicOrd, const D: [i32; N]> MinPartition<'a, E, D> {
+        /// Atomically takes the minimum with `value` at a checked tile `index`.
+        pub fn atomic_min(&self, index: [i32; N], value: Tile<E, D>) -> Token {
+            check_min_partition_access(self, index);
+            // SAFETY: ordered after this view's current token, bounds-checked
+            // above, and an aggregating mode this element type admits.
+            let done: Token = unsafe { self.atomic_min_unchecked(index, value) };
+            done
+        }
+
+        /// Atomically takes the minimum without checking `index`.
+        ///
+        /// # Safety
+        /// `index` must be in the partition grid and the tile must divide the
+        /// destination extent exactly.
+        pub unsafe fn atomic_min_unchecked(&self, index: [i32; N], value: Tile<E, D>) -> Token {
+            let token: Token = get_min_partition_token(self);
+            // SAFETY: the view token, bounds contract, and host alias contract
+            // are upheld by this capability.
+            let done: Token = unsafe {
+                atomic_red_view_raw(
+                    self,
+                    value,
+                    index,
+                    atomic::Minimum,
+                    ordering::Relaxed,
+                    scope::Device,
+                    Some(token),
+                )
+            };
+            done
         }
     }
 
@@ -1811,6 +2383,204 @@ pub mod core {
         unreachable!()
     }
 
+    /// Require that `tile` divides the `AddTensor` exactly on every axis.
+    ///
+    /// Emits one launch-time obligation per axis,
+    /// `dim(tensor, axis) % tile[axis] == 0`; obligations the JIT can
+    /// already discharge (a static shape that divides) cost nothing, and a
+    /// static shape that does not divide fails compilation. A safety
+    /// requirement, not a convenience: the partition index space is a
+    /// ceiling division and the atomic reduction's view is unpadded, with no
+    /// documented masking for partial-edge lanes.
+    #[cuda_tile::compiler_op(name = "require_tiles_divide_exactly")]
+    #[cuda_tile::variadic_op(N = 6)]
+    fn require_add_tiles_divide_exactly<
+        E: atomic::AtomicAdd,
+        const S: [i32; N],
+        const R: [i32; N],
+    >(
+        tensor: &AddTensor<E, S>,
+        tile: Shape<R>,
+    ) {
+        unreachable!()
+    }
+
+    /// Require that `tile` divides the `AndTensor` exactly on every axis.
+    ///
+    /// Emits one launch-time obligation per axis,
+    /// `dim(tensor, axis) % tile[axis] == 0`; obligations the JIT can
+    /// already discharge (a static shape that divides) cost nothing, and a
+    /// static shape that does not divide fails compilation. A safety
+    /// requirement, not a convenience: the partition index space is a
+    /// ceiling division and the atomic reduction's view is unpadded, with no
+    /// documented masking for partial-edge lanes.
+    #[cuda_tile::compiler_op(name = "require_tiles_divide_exactly")]
+    #[cuda_tile::variadic_op(N = 6)]
+    fn require_and_tiles_divide_exactly<
+        E: atomic::AtomicBitwise,
+        const S: [i32; N],
+        const R: [i32; N],
+    >(
+        tensor: &AndTensor<E, S>,
+        tile: Shape<R>,
+    ) {
+        unreachable!()
+    }
+
+    /// Require that `tile` divides the `OrTensor` exactly on every axis.
+    ///
+    /// Emits one launch-time obligation per axis,
+    /// `dim(tensor, axis) % tile[axis] == 0`; obligations the JIT can
+    /// already discharge (a static shape that divides) cost nothing, and a
+    /// static shape that does not divide fails compilation. A safety
+    /// requirement, not a convenience: the partition index space is a
+    /// ceiling division and the atomic reduction's view is unpadded, with no
+    /// documented masking for partial-edge lanes.
+    #[cuda_tile::compiler_op(name = "require_tiles_divide_exactly")]
+    #[cuda_tile::variadic_op(N = 6)]
+    fn require_or_tiles_divide_exactly<
+        E: atomic::AtomicBitwise,
+        const S: [i32; N],
+        const R: [i32; N],
+    >(
+        tensor: &OrTensor<E, S>,
+        tile: Shape<R>,
+    ) {
+        unreachable!()
+    }
+
+    /// Require that `tile` divides the `XorTensor` exactly on every axis.
+    ///
+    /// Emits one launch-time obligation per axis,
+    /// `dim(tensor, axis) % tile[axis] == 0`; obligations the JIT can
+    /// already discharge (a static shape that divides) cost nothing, and a
+    /// static shape that does not divide fails compilation. A safety
+    /// requirement, not a convenience: the partition index space is a
+    /// ceiling division and the atomic reduction's view is unpadded, with no
+    /// documented masking for partial-edge lanes.
+    #[cuda_tile::compiler_op(name = "require_tiles_divide_exactly")]
+    #[cuda_tile::variadic_op(N = 6)]
+    fn require_xor_tiles_divide_exactly<
+        E: atomic::AtomicBitwise,
+        const S: [i32; N],
+        const R: [i32; N],
+    >(
+        tensor: &XorTensor<E, S>,
+        tile: Shape<R>,
+    ) {
+        unreachable!()
+    }
+
+    /// Require that `tile` divides the `MaxTensor` exactly on every axis.
+    ///
+    /// Emits one launch-time obligation per axis,
+    /// `dim(tensor, axis) % tile[axis] == 0`; obligations the JIT can
+    /// already discharge (a static shape that divides) cost nothing, and a
+    /// static shape that does not divide fails compilation. A safety
+    /// requirement, not a convenience: the partition index space is a
+    /// ceiling division and the atomic reduction's view is unpadded, with no
+    /// documented masking for partial-edge lanes.
+    #[cuda_tile::compiler_op(name = "require_tiles_divide_exactly")]
+    #[cuda_tile::variadic_op(N = 6)]
+    fn require_max_tiles_divide_exactly<
+        E: atomic::AtomicOrd,
+        const S: [i32; N],
+        const R: [i32; N],
+    >(
+        tensor: &MaxTensor<E, S>,
+        tile: Shape<R>,
+    ) {
+        unreachable!()
+    }
+
+    /// Require that `tile` divides the `MinTensor` exactly on every axis.
+    ///
+    /// Emits one launch-time obligation per axis,
+    /// `dim(tensor, axis) % tile[axis] == 0`; obligations the JIT can
+    /// already discharge (a static shape that divides) cost nothing, and a
+    /// static shape that does not divide fails compilation. A safety
+    /// requirement, not a convenience: the partition index space is a
+    /// ceiling division and the atomic reduction's view is unpadded, with no
+    /// documented masking for partial-edge lanes.
+    #[cuda_tile::compiler_op(name = "require_tiles_divide_exactly")]
+    #[cuda_tile::variadic_op(N = 6)]
+    fn require_min_tiles_divide_exactly<
+        E: atomic::AtomicOrd,
+        const S: [i32; N],
+        const R: [i32; N],
+    >(
+        tensor: &MinTensor<E, S>,
+        tile: Shape<R>,
+    ) {
+        unreachable!()
+    }
+
+    /// [`check_partition_access`] for an `AddPartition`. Same compiler
+    /// handler; a separate declaration only because the view type differs.
+    #[cuda_tile::compiler_op(name = "check")]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub fn check_add_partition_access<E: atomic::AtomicAdd, const S: [i32; N]>(
+        part: &AddPartition<'_, E, S>,
+        index: [i32; N],
+    ) {
+        unreachable!()
+    }
+
+    /// [`check_partition_access`] for an `AndPartition`. Same compiler
+    /// handler; a separate declaration only because the view type differs.
+    #[cuda_tile::compiler_op(name = "check")]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub fn check_and_partition_access<E: atomic::AtomicBitwise, const S: [i32; N]>(
+        part: &AndPartition<'_, E, S>,
+        index: [i32; N],
+    ) {
+        unreachable!()
+    }
+
+    /// [`check_partition_access`] for an `OrPartition`. Same compiler
+    /// handler; a separate declaration only because the view type differs.
+    #[cuda_tile::compiler_op(name = "check")]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub fn check_or_partition_access<E: atomic::AtomicBitwise, const S: [i32; N]>(
+        part: &OrPartition<'_, E, S>,
+        index: [i32; N],
+    ) {
+        unreachable!()
+    }
+
+    /// [`check_partition_access`] for a `XorPartition`. Same compiler
+    /// handler; a separate declaration only because the view type differs.
+    #[cuda_tile::compiler_op(name = "check")]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub fn check_xor_partition_access<E: atomic::AtomicBitwise, const S: [i32; N]>(
+        part: &XorPartition<'_, E, S>,
+        index: [i32; N],
+    ) {
+        unreachable!()
+    }
+
+    /// [`check_partition_access`] for a `MaxPartition`. Same compiler
+    /// handler; a separate declaration only because the view type differs.
+    #[cuda_tile::compiler_op(name = "check")]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub fn check_max_partition_access<E: atomic::AtomicOrd, const S: [i32; N]>(
+        part: &MaxPartition<'_, E, S>,
+        index: [i32; N],
+    ) {
+        unreachable!()
+    }
+
+    /// [`check_partition_access`] for a `MinPartition`. Same compiler
+    /// handler; a separate declaration only because the view type differs.
+    #[cuda_tile::compiler_op(name = "check")]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub fn check_min_partition_access<E: atomic::AtomicOrd, const S: [i32; N]>(
+        part: &MinPartition<'_, E, S>,
+        index: [i32; N],
+    ) {
+        unreachable!()
+    }
+
     #[cuda_tile::compiler_op(name = "dim_new")]
     pub fn dim_new(size: i32) -> Dim {
         unreachable!()
@@ -2219,10 +2989,136 @@ pub mod core {
         unreachable!()
     }
 
+    /// Extract an `AddTensor`'s shape from its type metadata.
+    /// Internal to its `shape`.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "shape")]
+    fn get_add_tensor_shape_meta<'s, E: atomic::AtomicAdd, const S: [i32; N]>(
+        tensor: &AddTensor<E, S>,
+    ) -> Shape<'s, S> {
+        unreachable!()
+    }
+
+    /// Extract an `AndTensor`'s shape from its type metadata.
+    /// Internal to its `shape`.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "shape")]
+    fn get_and_tensor_shape_meta<'s, E: atomic::AtomicBitwise, const S: [i32; N]>(
+        tensor: &AndTensor<E, S>,
+    ) -> Shape<'s, S> {
+        unreachable!()
+    }
+
+    /// Extract an `OrTensor`'s shape from its type metadata.
+    /// Internal to its `shape`.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "shape")]
+    fn get_or_tensor_shape_meta<'s, E: atomic::AtomicBitwise, const S: [i32; N]>(
+        tensor: &OrTensor<E, S>,
+    ) -> Shape<'s, S> {
+        unreachable!()
+    }
+
+    /// Extract a `XorTensor`'s shape from its type metadata.
+    /// Internal to its `shape`.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "shape")]
+    fn get_xor_tensor_shape_meta<'s, E: atomic::AtomicBitwise, const S: [i32; N]>(
+        tensor: &XorTensor<E, S>,
+    ) -> Shape<'s, S> {
+        unreachable!()
+    }
+
+    /// Extract a `MaxTensor`'s shape from its type metadata.
+    /// Internal to its `shape`.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "shape")]
+    fn get_max_tensor_shape_meta<'s, E: atomic::AtomicOrd, const S: [i32; N]>(
+        tensor: &MaxTensor<E, S>,
+    ) -> Shape<'s, S> {
+        unreachable!()
+    }
+
+    /// Extract a `MinTensor`'s shape from its type metadata.
+    /// Internal to its `shape`.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "shape")]
+    fn get_min_tensor_shape_meta<'s, E: atomic::AtomicOrd, const S: [i32; N]>(
+        tensor: &MinTensor<E, S>,
+    ) -> Shape<'s, S> {
+        unreachable!()
+    }
+
     /// Extract a `Tensor`'s ordering token.
     #[cuda_tile::variadic_op(N = 6)]
     #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "token")]
     pub fn get_tensor_token<E: ElementType, const S: [i32; N]>(tensor: &Tensor<E, S>) -> Token {
+        unreachable!()
+    }
+
+    /// Extract an `AddTensor`'s ordering token. Internal to its
+    /// `partition`, which seeds the view it returns with the capability's
+    /// current token.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "token")]
+    fn get_add_tensor_token<E: atomic::AtomicAdd, const S: [i32; N]>(
+        tensor: &AddTensor<E, S>,
+    ) -> Token {
+        unreachable!()
+    }
+
+    /// Extract an `AndTensor`'s ordering token. Internal to its
+    /// `partition`, which seeds the view it returns with the capability's
+    /// current token.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "token")]
+    fn get_and_tensor_token<E: atomic::AtomicBitwise, const S: [i32; N]>(
+        tensor: &AndTensor<E, S>,
+    ) -> Token {
+        unreachable!()
+    }
+
+    /// Extract an `OrTensor`'s ordering token. Internal to its
+    /// `partition`, which seeds the view it returns with the capability's
+    /// current token.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "token")]
+    fn get_or_tensor_token<E: atomic::AtomicBitwise, const S: [i32; N]>(
+        tensor: &OrTensor<E, S>,
+    ) -> Token {
+        unreachable!()
+    }
+
+    /// Extract a `XorTensor`'s ordering token. Internal to its
+    /// `partition`, which seeds the view it returns with the capability's
+    /// current token.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "token")]
+    fn get_xor_tensor_token<E: atomic::AtomicBitwise, const S: [i32; N]>(
+        tensor: &XorTensor<E, S>,
+    ) -> Token {
+        unreachable!()
+    }
+
+    /// Extract a `MaxTensor`'s ordering token. Internal to its
+    /// `partition`, which seeds the view it returns with the capability's
+    /// current token.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "token")]
+    fn get_max_tensor_token<E: atomic::AtomicOrd, const S: [i32; N]>(
+        tensor: &MaxTensor<E, S>,
+    ) -> Token {
+        unreachable!()
+    }
+
+    /// Extract a `MinTensor`'s ordering token. Internal to its
+    /// `partition`, which seeds the view it returns with the capability's
+    /// current token.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "token")]
+    fn get_min_tensor_token<E: atomic::AtomicOrd, const S: [i32; N]>(
+        tensor: &MinTensor<E, S>,
+    ) -> Token {
         unreachable!()
     }
 
@@ -2299,6 +3195,60 @@ pub mod core {
     #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "token")]
     pub fn get_partition_token_mut<E: ElementType, const D: [i32; N]>(
         view: &PartitionMut<E, D>,
+    ) -> Token {
+        unreachable!()
+    }
+
+    /// Extract an `AddPartition`'s ordering token.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "token")]
+    fn get_add_partition_token<E: atomic::AtomicAdd, const D: [i32; N]>(
+        view: &AddPartition<'_, E, D>,
+    ) -> Token {
+        unreachable!()
+    }
+
+    /// Extract an `AndPartition`'s ordering token.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "token")]
+    fn get_and_partition_token<E: atomic::AtomicBitwise, const D: [i32; N]>(
+        view: &AndPartition<'_, E, D>,
+    ) -> Token {
+        unreachable!()
+    }
+
+    /// Extract an `OrPartition`'s ordering token.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "token")]
+    fn get_or_partition_token<E: atomic::AtomicBitwise, const D: [i32; N]>(
+        view: &OrPartition<'_, E, D>,
+    ) -> Token {
+        unreachable!()
+    }
+
+    /// Extract a `XorPartition`'s ordering token.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "token")]
+    fn get_xor_partition_token<E: atomic::AtomicBitwise, const D: [i32; N]>(
+        view: &XorPartition<'_, E, D>,
+    ) -> Token {
+        unreachable!()
+    }
+
+    /// Extract a `MaxPartition`'s ordering token.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "token")]
+    fn get_max_partition_token<E: atomic::AtomicOrd, const D: [i32; N]>(
+        view: &MaxPartition<'_, E, D>,
+    ) -> Token {
+        unreachable!()
+    }
+
+    /// Extract a `MinPartition`'s ordering token.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "return_type_meta_field", type_meta_field = "token")]
+    fn get_min_partition_token<E: atomic::AtomicOrd, const D: [i32; N]>(
+        view: &MinPartition<'_, E, D>,
     ) -> Token {
         unreachable!()
     }
@@ -3366,8 +4316,8 @@ pub mod core {
         V,
         I,
         M: atomic::Mode,
-        O: ordering::AtomicMode,
-        Sc: scope::Mode,
+        O: ordering::RedViewMode,
+        Sc: scope::RedViewScope,
     >(
         view: &V,
         value: Tile<E, S>,
@@ -3546,6 +4496,186 @@ pub mod core {
         unreachable!()
     }
 
+    /// Build an `AddTensor` capability from a base pointer, shape,
+    /// strides, and a token. Emitted by generated entry wrappers for
+    /// `&AddTensor<_, _>` parameters; the same Tile IR tensor view as
+    /// `make_tensor_view`, with the atomic-only Rust capability on top.
+    ///
+    /// # Safety
+    /// As for `make_tensor_view`: the layout must be valid and the storage
+    /// live for every access through the capability. In addition, the caller
+    /// must hold exclusive mutable authority over that storage — see
+    /// `AddTensor` for the full precondition list.
+    #[cuda_tile::op(name="cuda_tile.make_tensor_view", since="V13_2",
+                    params=["base", "shape.dims", "strides.dims"],
+                    has_variadic_params=true,
+                    output_type_params=["strides"],
+                    output_type_meta=["base", "shape", "strides", "token"]
+    )]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub unsafe fn make_add_tensor_view<
+        E: atomic::AtomicAdd,
+        const D: [i32; N],
+        const C: [i32; N],
+    >(
+        base: PointerTile<*mut E, { [] }>,
+        shape: Shape<D>,
+        strides: Array<C>,
+        token: Token,
+    ) -> AddTensor<E, D> {
+        unreachable!()
+    }
+
+    /// Build an `AndTensor` capability from a base pointer, shape,
+    /// strides, and a token. Emitted by generated entry wrappers for
+    /// `&AndTensor<_, _>` parameters; the same Tile IR tensor view as
+    /// `make_tensor_view`, with the atomic-only Rust capability on top.
+    ///
+    /// # Safety
+    /// As for `make_tensor_view`: the layout must be valid and the storage
+    /// live for every access through the capability. In addition, the caller
+    /// must hold exclusive mutable authority over that storage — see
+    /// `AndTensor` for the full precondition list.
+    #[cuda_tile::op(name="cuda_tile.make_tensor_view", since="V13_2",
+                    params=["base", "shape.dims", "strides.dims"],
+                    has_variadic_params=true,
+                    output_type_params=["strides"],
+                    output_type_meta=["base", "shape", "strides", "token"]
+    )]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub unsafe fn make_and_tensor_view<
+        E: atomic::AtomicBitwise,
+        const D: [i32; N],
+        const C: [i32; N],
+    >(
+        base: PointerTile<*mut E, { [] }>,
+        shape: Shape<D>,
+        strides: Array<C>,
+        token: Token,
+    ) -> AndTensor<E, D> {
+        unreachable!()
+    }
+
+    /// Build an `OrTensor` capability from a base pointer, shape,
+    /// strides, and a token. Emitted by generated entry wrappers for
+    /// `&OrTensor<_, _>` parameters; the same Tile IR tensor view as
+    /// `make_tensor_view`, with the atomic-only Rust capability on top.
+    ///
+    /// # Safety
+    /// As for `make_tensor_view`: the layout must be valid and the storage
+    /// live for every access through the capability. In addition, the caller
+    /// must hold exclusive mutable authority over that storage — see
+    /// `OrTensor` for the full precondition list.
+    #[cuda_tile::op(name="cuda_tile.make_tensor_view", since="V13_2",
+                    params=["base", "shape.dims", "strides.dims"],
+                    has_variadic_params=true,
+                    output_type_params=["strides"],
+                    output_type_meta=["base", "shape", "strides", "token"]
+    )]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub unsafe fn make_or_tensor_view<
+        E: atomic::AtomicBitwise,
+        const D: [i32; N],
+        const C: [i32; N],
+    >(
+        base: PointerTile<*mut E, { [] }>,
+        shape: Shape<D>,
+        strides: Array<C>,
+        token: Token,
+    ) -> OrTensor<E, D> {
+        unreachable!()
+    }
+
+    /// Build a `XorTensor` capability from a base pointer, shape,
+    /// strides, and a token. Emitted by generated entry wrappers for
+    /// `&XorTensor<_, _>` parameters; the same Tile IR tensor view as
+    /// `make_tensor_view`, with the atomic-only Rust capability on top.
+    ///
+    /// # Safety
+    /// As for `make_tensor_view`: the layout must be valid and the storage
+    /// live for every access through the capability. In addition, the caller
+    /// must hold exclusive mutable authority over that storage — see
+    /// `XorTensor` for the full precondition list.
+    #[cuda_tile::op(name="cuda_tile.make_tensor_view", since="V13_2",
+                    params=["base", "shape.dims", "strides.dims"],
+                    has_variadic_params=true,
+                    output_type_params=["strides"],
+                    output_type_meta=["base", "shape", "strides", "token"]
+    )]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub unsafe fn make_xor_tensor_view<
+        E: atomic::AtomicBitwise,
+        const D: [i32; N],
+        const C: [i32; N],
+    >(
+        base: PointerTile<*mut E, { [] }>,
+        shape: Shape<D>,
+        strides: Array<C>,
+        token: Token,
+    ) -> XorTensor<E, D> {
+        unreachable!()
+    }
+
+    /// Build a `MaxTensor` capability from a base pointer, shape,
+    /// strides, and a token. Emitted by generated entry wrappers for
+    /// `&MaxTensor<_, _>` parameters; the same Tile IR tensor view as
+    /// `make_tensor_view`, with the atomic-only Rust capability on top.
+    ///
+    /// # Safety
+    /// As for `make_tensor_view`: the layout must be valid and the storage
+    /// live for every access through the capability. In addition, the caller
+    /// must hold exclusive mutable authority over that storage — see
+    /// `MaxTensor` for the full precondition list.
+    #[cuda_tile::op(name="cuda_tile.make_tensor_view", since="V13_2",
+                    params=["base", "shape.dims", "strides.dims"],
+                    has_variadic_params=true,
+                    output_type_params=["strides"],
+                    output_type_meta=["base", "shape", "strides", "token"]
+    )]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub unsafe fn make_max_tensor_view<
+        E: atomic::AtomicOrd,
+        const D: [i32; N],
+        const C: [i32; N],
+    >(
+        base: PointerTile<*mut E, { [] }>,
+        shape: Shape<D>,
+        strides: Array<C>,
+        token: Token,
+    ) -> MaxTensor<E, D> {
+        unreachable!()
+    }
+
+    /// Build a `MinTensor` capability from a base pointer, shape,
+    /// strides, and a token. Emitted by generated entry wrappers for
+    /// `&MinTensor<_, _>` parameters; the same Tile IR tensor view as
+    /// `make_tensor_view`, with the atomic-only Rust capability on top.
+    ///
+    /// # Safety
+    /// As for `make_tensor_view`: the layout must be valid and the storage
+    /// live for every access through the capability. In addition, the caller
+    /// must hold exclusive mutable authority over that storage — see
+    /// `MinTensor` for the full precondition list.
+    #[cuda_tile::op(name="cuda_tile.make_tensor_view", since="V13_2",
+                    params=["base", "shape.dims", "strides.dims"],
+                    has_variadic_params=true,
+                    output_type_params=["strides"],
+                    output_type_meta=["base", "shape", "strides", "token"]
+    )]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub unsafe fn make_min_tensor_view<
+        E: atomic::AtomicOrd,
+        const D: [i32; N],
+        const C: [i32; N],
+    >(
+        base: PointerTile<*mut E, { [] }>,
+        shape: Shape<D>,
+        strides: Array<C>,
+        token: Token,
+    ) -> MinTensor<E, D> {
+        unreachable!()
+    }
+
     /// Build a read-only partition view. Prefer `tensor.partition(tile)`.
     ///
     /// Pass `padding::None` to omit the Tile IR `padding_value` type
@@ -3609,6 +4739,198 @@ pub mod core {
         padding_value: P,
         token: Token,
     ) -> PartitionMut<'a, E, TILE_SHAPE> {
+        unreachable!()
+    }
+
+    /// Build the tiled view an `AddTensor` operation addresses.
+    ///
+    /// Internal to `AddTensor::partition`. Declared non-`pub` to mark it
+    /// internal, but `#[cuda_tile::variadic_op]` emits a `pub` dispatch
+    /// wrapper regardless, so this is intent and not enforcement.
+    ///
+    /// # Safety
+    /// As for `make_partition_view_mut`. The returned view must be used
+    /// for this one atomic operation only: it carries no disjointness
+    /// promise, so an ordinary store through it would race the other
+    /// programs' atomics.
+    #[cuda_tile::op(name="cuda_tile.make_partition_view", since="V13_2",
+                    params=["tensor_view"],
+                    output_type_params=["tensor_view", "padding_value"],
+                    output_type_meta=["token", "tensor_view.shape()"]
+    )]
+    #[cuda_tile::variadic_op(N = 6)]
+    unsafe fn make_add_partition_view<
+        'a,
+        E: atomic::AtomicAdd,
+        const TENSOR_SHAPE: [i32; N],
+        const TILE_SHAPE: [i32; N],
+        P: padding::Mode,
+    >(
+        tensor_view: &AddTensor<E, TENSOR_SHAPE>,
+        shape: Shape<TILE_SHAPE>,
+        padding_value: P,
+        token: Token,
+    ) -> AddPartition<'a, E, TILE_SHAPE> {
+        unreachable!()
+    }
+
+    /// Build the tiled view an `AndTensor` operation addresses.
+    ///
+    /// Internal to `AndTensor::partition`. Declared non-`pub` to mark it
+    /// internal, but `#[cuda_tile::variadic_op]` emits a `pub` dispatch
+    /// wrapper regardless, so this is intent and not enforcement.
+    ///
+    /// # Safety
+    /// As for `make_partition_view_mut`. The returned view must be used
+    /// for this one atomic operation only: it carries no disjointness
+    /// promise, so an ordinary store through it would race the other
+    /// programs' atomics.
+    #[cuda_tile::op(name="cuda_tile.make_partition_view", since="V13_2",
+                    params=["tensor_view"],
+                    output_type_params=["tensor_view", "padding_value"],
+                    output_type_meta=["token", "tensor_view.shape()"]
+    )]
+    #[cuda_tile::variadic_op(N = 6)]
+    unsafe fn make_and_partition_view<
+        'a,
+        E: atomic::AtomicBitwise,
+        const TENSOR_SHAPE: [i32; N],
+        const TILE_SHAPE: [i32; N],
+        P: padding::Mode,
+    >(
+        tensor_view: &AndTensor<E, TENSOR_SHAPE>,
+        shape: Shape<TILE_SHAPE>,
+        padding_value: P,
+        token: Token,
+    ) -> AndPartition<'a, E, TILE_SHAPE> {
+        unreachable!()
+    }
+
+    /// Build the tiled view an `OrTensor` operation addresses.
+    ///
+    /// Internal to `OrTensor::partition`. Declared non-`pub` to mark it
+    /// internal, but `#[cuda_tile::variadic_op]` emits a `pub` dispatch
+    /// wrapper regardless, so this is intent and not enforcement.
+    ///
+    /// # Safety
+    /// As for `make_partition_view_mut`. The returned view must be used
+    /// for this one atomic operation only: it carries no disjointness
+    /// promise, so an ordinary store through it would race the other
+    /// programs' atomics.
+    #[cuda_tile::op(name="cuda_tile.make_partition_view", since="V13_2",
+                    params=["tensor_view"],
+                    output_type_params=["tensor_view", "padding_value"],
+                    output_type_meta=["token", "tensor_view.shape()"]
+    )]
+    #[cuda_tile::variadic_op(N = 6)]
+    unsafe fn make_or_partition_view<
+        'a,
+        E: atomic::AtomicBitwise,
+        const TENSOR_SHAPE: [i32; N],
+        const TILE_SHAPE: [i32; N],
+        P: padding::Mode,
+    >(
+        tensor_view: &OrTensor<E, TENSOR_SHAPE>,
+        shape: Shape<TILE_SHAPE>,
+        padding_value: P,
+        token: Token,
+    ) -> OrPartition<'a, E, TILE_SHAPE> {
+        unreachable!()
+    }
+
+    /// Build the tiled view a `XorTensor` operation addresses.
+    ///
+    /// Internal to `XorTensor::partition`. Declared non-`pub` to mark it
+    /// internal, but `#[cuda_tile::variadic_op]` emits a `pub` dispatch
+    /// wrapper regardless, so this is intent and not enforcement.
+    ///
+    /// # Safety
+    /// As for `make_partition_view_mut`. The returned view must be used
+    /// for this one atomic operation only: it carries no disjointness
+    /// promise, so an ordinary store through it would race the other
+    /// programs' atomics.
+    #[cuda_tile::op(name="cuda_tile.make_partition_view", since="V13_2",
+                    params=["tensor_view"],
+                    output_type_params=["tensor_view", "padding_value"],
+                    output_type_meta=["token", "tensor_view.shape()"]
+    )]
+    #[cuda_tile::variadic_op(N = 6)]
+    unsafe fn make_xor_partition_view<
+        'a,
+        E: atomic::AtomicBitwise,
+        const TENSOR_SHAPE: [i32; N],
+        const TILE_SHAPE: [i32; N],
+        P: padding::Mode,
+    >(
+        tensor_view: &XorTensor<E, TENSOR_SHAPE>,
+        shape: Shape<TILE_SHAPE>,
+        padding_value: P,
+        token: Token,
+    ) -> XorPartition<'a, E, TILE_SHAPE> {
+        unreachable!()
+    }
+
+    /// Build the tiled view a `MaxTensor` operation addresses.
+    ///
+    /// Internal to `MaxTensor::partition`. Declared non-`pub` to mark it
+    /// internal, but `#[cuda_tile::variadic_op]` emits a `pub` dispatch
+    /// wrapper regardless, so this is intent and not enforcement.
+    ///
+    /// # Safety
+    /// As for `make_partition_view_mut`. The returned view must be used
+    /// for this one atomic operation only: it carries no disjointness
+    /// promise, so an ordinary store through it would race the other
+    /// programs' atomics.
+    #[cuda_tile::op(name="cuda_tile.make_partition_view", since="V13_2",
+                    params=["tensor_view"],
+                    output_type_params=["tensor_view", "padding_value"],
+                    output_type_meta=["token", "tensor_view.shape()"]
+    )]
+    #[cuda_tile::variadic_op(N = 6)]
+    unsafe fn make_max_partition_view<
+        'a,
+        E: atomic::AtomicOrd,
+        const TENSOR_SHAPE: [i32; N],
+        const TILE_SHAPE: [i32; N],
+        P: padding::Mode,
+    >(
+        tensor_view: &MaxTensor<E, TENSOR_SHAPE>,
+        shape: Shape<TILE_SHAPE>,
+        padding_value: P,
+        token: Token,
+    ) -> MaxPartition<'a, E, TILE_SHAPE> {
+        unreachable!()
+    }
+
+    /// Build the tiled view a `MinTensor` operation addresses.
+    ///
+    /// Internal to `MinTensor::partition`. Declared non-`pub` to mark it
+    /// internal, but `#[cuda_tile::variadic_op]` emits a `pub` dispatch
+    /// wrapper regardless, so this is intent and not enforcement.
+    ///
+    /// # Safety
+    /// As for `make_partition_view_mut`. The returned view must be used
+    /// for this one atomic operation only: it carries no disjointness
+    /// promise, so an ordinary store through it would race the other
+    /// programs' atomics.
+    #[cuda_tile::op(name="cuda_tile.make_partition_view", since="V13_2",
+                    params=["tensor_view"],
+                    output_type_params=["tensor_view", "padding_value"],
+                    output_type_meta=["token", "tensor_view.shape()"]
+    )]
+    #[cuda_tile::variadic_op(N = 6)]
+    unsafe fn make_min_partition_view<
+        'a,
+        E: atomic::AtomicOrd,
+        const TENSOR_SHAPE: [i32; N],
+        const TILE_SHAPE: [i32; N],
+        P: padding::Mode,
+    >(
+        tensor_view: &MinTensor<E, TENSOR_SHAPE>,
+        shape: Shape<TILE_SHAPE>,
+        padding_value: P,
+        token: Token,
+    ) -> MinPartition<'a, E, TILE_SHAPE> {
         unreachable!()
     }
 

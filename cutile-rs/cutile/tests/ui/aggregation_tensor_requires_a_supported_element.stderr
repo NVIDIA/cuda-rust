@@ -1,0 +1,77 @@
+error[E0277]: the trait bound `i8: AtomicAdd` is not satisfied
+ --> tests/ui/aggregation_tensor_requires_a_supported_element.rs:6:1
+  |
+6 | #[cutile::module]
+  | ^^^^^^^^^^^^^^^^^ the trait `AtomicAdd` is not implemented for `i8`
+  |
+  = help: the following other types implement trait `AtomicAdd`:
+            f32
+            f64
+            i32
+            i64
+            u32
+            u64
+note: required by a bound in `cutile::core::AddTensor_2`
+ --> src/_core.rs
+  |
+  |     pub struct AddTensor<E: atomic::AtomicAdd, const D: [i32; N]> {
+  |                             ^^^^^^^^^^^^^^^^^ required by this bound in `AddTensor_2`
+  = note: this error originates in the attribute macro `cutile::module` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `partition` exists for reference `&cutile::core::AddTensor_2<i8, -1, -1>`, but its trait bounds were not satisfied
+  --> tests/ui/aggregation_tensor_requires_a_supported_element.rs:13:55
+   |
+13 |         let acc: AddPartition<i8, { [16, 16] }> = out.partition(shape![16, 16]);
+   |                                                       ^^^^^^^^^ method cannot be called on `&cutile::core::AddTensor_2<i8, -1, -1>` due to unsatisfied trait bounds
+   |
+  ::: src/_core.rs
+   |
+   |     pub struct AddTensor<E: atomic::AtomicAdd, const D: [i32; N]> {
+   |     ------------------------------------------------------------- doesn't satisfy `<_ as DeviceOp>::Output = _`, `_: DeviceOp`, `_: PartitionOp<_, AddTensor_2<i8, -1, -1>>` or `cutile::core::AddTensor_2<i8, -1, -1>: Iterator`
+   |
+   = note: the following trait bounds were not satisfied:
+           `i8: AtomicAdd`
+           `<&cutile::core::AddTensor_2<i8, -1, -1> as cutile::prelude::DeviceOp>::Output = _`
+           which is required by `&cutile::core::AddTensor_2<i8, -1, -1>: cutile::prelude::PartitionOp<_, &cutile::core::AddTensor_2<i8, -1, -1>>`
+           `&cutile::core::AddTensor_2<i8, -1, -1>: cutile::prelude::DeviceOp`
+           which is required by `&cutile::core::AddTensor_2<i8, -1, -1>: cutile::prelude::PartitionOp<_, &cutile::core::AddTensor_2<i8, -1, -1>>`
+           `<&&cutile::core::AddTensor_2<i8, -1, -1> as cutile::prelude::DeviceOp>::Output = _`
+           which is required by `&&cutile::core::AddTensor_2<i8, -1, -1>: cutile::prelude::PartitionOp<_, &&cutile::core::AddTensor_2<i8, -1, -1>>`
+           `&&cutile::core::AddTensor_2<i8, -1, -1>: cutile::prelude::DeviceOp`
+           which is required by `&&cutile::core::AddTensor_2<i8, -1, -1>: cutile::prelude::PartitionOp<_, &&cutile::core::AddTensor_2<i8, -1, -1>>`
+           `<&mut &cutile::core::AddTensor_2<i8, -1, -1> as cutile::prelude::DeviceOp>::Output = _`
+           which is required by `&mut &cutile::core::AddTensor_2<i8, -1, -1>: cutile::prelude::PartitionOp<_, &mut &cutile::core::AddTensor_2<i8, -1, -1>>`
+           `&mut &cutile::core::AddTensor_2<i8, -1, -1>: cutile::prelude::DeviceOp`
+           which is required by `&mut &cutile::core::AddTensor_2<i8, -1, -1>: cutile::prelude::PartitionOp<_, &mut &cutile::core::AddTensor_2<i8, -1, -1>>`
+           `&cutile::core::AddTensor_2<i8, -1, -1>: Iterator`
+           which is required by `&mut &cutile::core::AddTensor_2<i8, -1, -1>: Iterator`
+           `<cutile::core::AddTensor_2<i8, -1, -1> as cutile::prelude::DeviceOp>::Output = _`
+           which is required by `cutile::core::AddTensor_2<i8, -1, -1>: cutile::prelude::PartitionOp<_, cutile::core::AddTensor_2<i8, -1, -1>>`
+           `cutile::core::AddTensor_2<i8, -1, -1>: cutile::prelude::DeviceOp`
+           which is required by `cutile::core::AddTensor_2<i8, -1, -1>: cutile::prelude::PartitionOp<_, cutile::core::AddTensor_2<i8, -1, -1>>`
+           `<&mut cutile::core::AddTensor_2<i8, -1, -1> as cutile::prelude::DeviceOp>::Output = _`
+           which is required by `&mut cutile::core::AddTensor_2<i8, -1, -1>: cutile::prelude::PartitionOp<_, &mut cutile::core::AddTensor_2<i8, -1, -1>>`
+           `&mut cutile::core::AddTensor_2<i8, -1, -1>: cutile::prelude::DeviceOp`
+           which is required by `&mut cutile::core::AddTensor_2<i8, -1, -1>: cutile::prelude::PartitionOp<_, &mut cutile::core::AddTensor_2<i8, -1, -1>>`
+           `cutile::core::AddTensor_2<i8, -1, -1>: Iterator`
+           which is required by `&mut cutile::core::AddTensor_2<i8, -1, -1>: Iterator`
+
+error[E0277]: the trait bound `i8: AtomicAdd` is not satisfied
+ --> tests/ui/aggregation_tensor_requires_a_supported_element.rs:6:1
+  |
+6 | #[cutile::module]
+  | ^^^^^^^^^^^^^^^^^ the trait `AtomicAdd` is not implemented for `i8`
+  |
+  = help: the following other types implement trait `AtomicAdd`:
+            f32
+            f64
+            i32
+            i64
+            u32
+            u64
+note: required by a bound in `cutile::core::AddPartition_2`
+ --> src/_core.rs
+  |
+  |     pub struct AddPartition<'a, E: atomic::AtomicAdd, const D: [i32; N]> {
+  |                                    ^^^^^^^^^^^^^^^^^ required by this bound in `AddPartition_2`
+  = note: this error originates in the attribute macro `cutile::module` (in Nightly builds, run with -Z macro-backtrace for more info)

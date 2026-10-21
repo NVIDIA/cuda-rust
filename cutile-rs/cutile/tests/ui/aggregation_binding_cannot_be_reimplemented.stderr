@@ -1,0 +1,51 @@
+error[E0277]: the trait bound `SharedWrapper: tensor::atomic_sealed::Sealed` is not satisfied
+  --> tests/ui/aggregation_binding_cannot_be_reimplemented.rs:10:44
+   |
+10 | impl cutile::tensor::KernelAtomic<f32> for SharedWrapper {}
+   |                                            ^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `tensor::atomic_sealed::Sealed` is not implemented for `SharedWrapper`
+  --> tests/ui/aggregation_binding_cannot_be_reimplemented.rs:8:1
+   |
+ 8 | struct SharedWrapper(Arc<Tensor<f32>>);
+   | ^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `tensor::atomic_sealed::Sealed`
+  --> src/tensor.rs
+   |
+   |     impl<T: super::DType> Sealed for super::Atomic<super::Tensor<T>> {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `cutile::prelude::Atomic<cutile::prelude::Tensor<T>>`
+   |     impl<T: super::DType> Sealed for super::Atomic<&mut super::Tensor<T>> {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `cutile::prelude::Atomic<&mut cutile::prelude::Tensor<T>>`
+note: required by a bound in `KernelAtomic`
+  --> src/tensor.rs
+   |
+   | pub trait KernelAtomic<T: DType>: KernelInput<T> + atomic_sealed::Sealed {}
+   |                                                    ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `KernelAtomic`
+   = note: `KernelAtomic` is a "sealed trait", because to implement it you also need to implement `cutile::tensor::atomic_sealed::Sealed`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+   = help: the following types implement the trait:
+             cutile::prelude::Atomic<cutile::prelude::Tensor<T>>
+             cutile::prelude::Atomic<&mut cutile::prelude::Tensor<T>>
+
+error[E0277]: the trait bound `SharedWrapper: KernelInput<f32>` is not satisfied
+  --> tests/ui/aggregation_binding_cannot_be_reimplemented.rs:10:44
+   |
+10 | impl cutile::tensor::KernelAtomic<f32> for SharedWrapper {}
+   |                                            ^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `KernelInput<f32>` is not implemented for `SharedWrapper`
+  --> tests/ui/aggregation_binding_cannot_be_reimplemented.rs:8:1
+   |
+ 8 | struct SharedWrapper(Arc<Tensor<f32>>);
+   | ^^^^^^^^^^^^^^^^^^^^
+   = help: the following other types implement trait `KernelInput<T>`:
+             &'a cutile::prelude::Tensor<T>
+             &'a cutile::prelude::TensorView<'a, T>
+             Arc<cutile::prelude::Tensor<T>>
+             cutile::prelude::Atomic<&'a mut cutile::prelude::Tensor<T>>
+             cutile::prelude::Atomic<cutile::prelude::Tensor<T>>
+             cutile::prelude::Tensor<T>
+note: required by a bound in `KernelAtomic`
+  --> src/tensor.rs
+   |
+   | pub trait KernelAtomic<T: DType>: KernelInput<T> + atomic_sealed::Sealed {}
+   |                                   ^^^^^^^^^^^^^^ required by this bound in `KernelAtomic`

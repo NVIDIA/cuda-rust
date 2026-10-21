@@ -219,6 +219,25 @@ my_kernel(args).compile_options(CompileOptions::new().sanitize_memcheck(true)).s
   last decides.
 - `sanitize_memcheck(true)` passes `--sanitize=memcheck` for `compute-sanitizer --tool memcheck`.
 
+To switch an already-built application without changing its code, set these
+variables when running it. Each applies after the code's options, as if the
+matching setter were called last. They are read once per process:
+
+| Variable | Values | Acts like |
+| --- | --- | --- |
+| `CUTILE_JIT_DEBUG` | `none`, `line`, `full` | `debug_info(...)` |
+| `CUTILE_JIT_OPT_LEVEL` | `0`, `1`, `2`, `3` | `opt_level(n)` |
+| `CUTILE_JIT_SANITIZE` | `memcheck`, `none` | `sanitize_memcheck(...)` |
+
+```bash
+CUTILE_JIT_DEBUG=full cuda-gdb --args ./target/release/my_program
+CUTILE_JIT_SANITIZE=memcheck compute-sanitizer --tool memcheck ./target/release/my_program
+```
+
+An unset variable leaves the code's choice in place. An invalid value, or
+`CUTILE_JIT_DEBUG=full` together with `CUTILE_JIT_OPT_LEVEL`, fails JIT
+compilation with an error that names the variable.
+
 Full debug mode describes source locations and inline frames, not Rust
 variables or values. Tile IR currently supports control-flow debugging of
 unoptimized code but not inspection of user variables; see the
@@ -274,6 +293,7 @@ without a GPU:
 
 ```bash
 cargo test -p cutile --test debug_info
+cargo test -p cutile --test jit_env_overrides
 bash scripts/test_debug_defaults.sh
 ```
 

@@ -746,6 +746,7 @@ fn compile_and_load_kernel(
     key_str: &str,
 ) -> Result<CompiledKernel, Error> {
     let t0 = std::time::Instant::now();
+    let compile_options = &compile_options.with_jit_env_overrides()?;
 
     let stride_args_refs: Vec<(&str, &[i32])> = stride_args
         .iter()

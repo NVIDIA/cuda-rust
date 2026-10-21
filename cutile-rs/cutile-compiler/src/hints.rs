@@ -170,7 +170,9 @@ impl CodegenMode {
 /// `Full` for `debug = "line-tables-only"` or `"limited"`, not `Line`.
 /// `CUDA_RUST_DEBUG=none|line|full` overrides this default at build time;
 /// changing it when running an already-built app has no effect. Use
-/// [`Self::debug_info`] to override the default for one compilation.
+/// [`Self::debug_info`] to override the default for one compilation. At run
+/// time, the `CUTILE_JIT_*` variables in [`crate::jit_env`] override what the
+/// code selected.
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct CompileOptions {
     pub occupancy: Option<i32>,

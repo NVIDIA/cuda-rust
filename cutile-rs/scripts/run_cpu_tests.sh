@@ -58,6 +58,7 @@ for test_target in \
     flash_attention_compile \
     global_memory \
     integer_ops \
+    jit_env_overrides \
     kernel_compiler \
     load_tile_like_examples \
     macro_submodule \

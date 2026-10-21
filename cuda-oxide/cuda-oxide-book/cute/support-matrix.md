@@ -11,6 +11,15 @@ One glance: CuTeDSL 4.7 across its architectures against the cute-rs preview on 
 
 ## Targets
 
+```{figure} images/support-targets.svg
+:align: center
+:width: 100%
+
+The two targets the preview compiles for, and the ones it rejects.
+```
+
+:::{dropdown} Text version
+
 | Target | GPU | CuTeDSL 4.7 | cute-rs preview |
 | :--- | :--- | :--- | :--- |
 | `sm_80`, `sm_86`, `sm_87` | Ampere | yes | **rejected** |
@@ -21,11 +30,41 @@ One glance: CuTeDSL 4.7 across its architectures against the cute-rs preview on 
 | `sm_120a` | Blackwell GeForce, RTX 50 series | yes | **yes** |
 | `sm_120`, `sm_120f`, `sm_121a` | Blackwell GeForce, other variants | yes | **rejected** |
 
+:::
+
 The target check runs before any MLIR is built, and the error names the target. Within the pair, `tcgen05` operations need `sm_100a` and MXF4 register MMA needs `sm_120a`. `cargo oxide run` uses the detected GPU, so an RTX 5090 gets `sm_120a`; `cargo oxide build` needs `--arch`. Every CuTe kernel needs `CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir`; the native backend has no CuTe lowering.
 
 ## Feature areas
 
-"partial" means a fixed or narrower form of the feature exists; "n/a" means the feature does not apply to those targets. The figure above splits the cute-rs column by target.
+The figure at the top of the page is the feature table, with the cute-rs column split by target. Where each row is proven:
+
+- Layout algebra, static: cute-layout tests, elementwise_cute, blockscale_gemm_cute
+- Dynamic layouts, runtime shapes: fmha_prefill_sm120a_cute, fmha_decode_sm120a_cute
+- Tensors, partitions, tiled atoms: elementwise_cute, nvfp4_gemv_cute, blockscale_gemm_cute
+- TMA copies: blockscale_gemm_cute, fp16_gemm_256x352_cute, sm100_fmha_prefill_cute
+- cp.async, bulk, DSMEM copies: fmha_prefill_sm120a_cute
+- ldmatrix, stmatrix, atomics: blockscale_gemm_cute, ffn_cute, sm100_mla_decode_fp16_cute
+- tcgen05 MMA kinds: fp16_gemm_256x352_cute, sm100_fmha_prefill_cute, sm100_mla_decode_fp16_cute
+- Warp MMA kinds (mma.sync): blockscale_gemm_cute, ffn_cute, fmha_prefill_sm120a_cute
+- NVFP4 tensor cores (E4M3 scales): qwen3_8b_cute uses the CUDA-core path; no tensor-core producer
+- wgmma (Hopper): none
+- TMEM: fp16_gemm_256x352_cute, sm100_fmha_prefill_cute
+- Pipelines and barriers: blockscale_gemm_cute, fp16_gemm_256x352_cute, sm100_mla_decode_fp16_cute
+- Schedulers, persistence, PDL: blockscale_gemm_cute, sm100_fmha_prefill_cute
+- Clusters and multicast: fp16_gemm_256x352_cute, sm100_mla_decode_fp16_cute
+- Epilogue fusion (EFC): blockscale_gemm_cute, fp16_gemm_256x352_cute, swiglu_cute
+- Numerics and intrinsics: rmsnorm_cute, swiglu_cute, qwen_decoder_cute
+- Control flow, printf, debugging: every example
+- Host: JIT, torch, JAX, AOT export: every example; fp16_gemm_256x352_cute for CUDA graphs
+- Autotuning, Task Scheduling, IKET: none
+- Verification before codegen: dialect-cute verify tests, 48 cute-rs and 30 ctm-rs compile-fail cases
+- Grouped, MoE, mixed-input, FP8: none
+- Shipped kernel examples: the 14 crates under cute-rs-preview/examples
+- End-to-end models: qwen_decoder_cute, qwen3_8b_cute
+
+:::{dropdown} Text version of the feature table
+
+"partial" means a fixed or narrower form of the feature exists; "n/a" means the feature does not apply to those targets.
 
 | Feature area | CuTeDSL 4.7 | cute-rs preview | What the preview has |
 | :--- | :--- | :--- | :--- |
@@ -53,35 +92,18 @@ The target check runs before any MLIR is built, and the error names the target. 
 | Shipped kernel examples | yes | partial | 4 sm_100a and 10 sm_120a example crates versus 86 CuTeDSL kernel files |
 | End-to-end models | no | sm_100a no, sm_120a yes | Qwen3-TTS 1.7B and Qwen3-8B on sm_120a; CuTeDSL ships none |
 
-Where each row is proven:
-
-- Layout algebra, static: cute-layout tests, elementwise_cute, blockscale_gemm_cute
-- Dynamic layouts, runtime shapes: fmha_prefill_sm120a_cute, fmha_decode_sm120a_cute
-- Tensors, partitions, tiled atoms: elementwise_cute, nvfp4_gemv_cute, blockscale_gemm_cute
-- TMA copies: blockscale_gemm_cute, fp16_gemm_256x352_cute, sm100_fmha_prefill_cute
-- cp.async, bulk, DSMEM copies: fmha_prefill_sm120a_cute
-- ldmatrix, stmatrix, atomics: blockscale_gemm_cute, ffn_cute, sm100_mla_decode_fp16_cute
-- tcgen05 MMA kinds: fp16_gemm_256x352_cute, sm100_fmha_prefill_cute, sm100_mla_decode_fp16_cute
-- Warp MMA kinds (mma.sync): blockscale_gemm_cute, ffn_cute, fmha_prefill_sm120a_cute
-- NVFP4 tensor cores (E4M3 scales): qwen3_8b_cute uses the CUDA-core path; no tensor-core producer
-- wgmma (Hopper): none
-- TMEM: fp16_gemm_256x352_cute, sm100_fmha_prefill_cute
-- Pipelines and barriers: blockscale_gemm_cute, fp16_gemm_256x352_cute, sm100_mla_decode_fp16_cute
-- Schedulers, persistence, PDL: blockscale_gemm_cute, sm100_fmha_prefill_cute
-- Clusters and multicast: fp16_gemm_256x352_cute, sm100_mla_decode_fp16_cute
-- Epilogue fusion (EFC): blockscale_gemm_cute, fp16_gemm_256x352_cute, swiglu_cute
-- Numerics and intrinsics: rmsnorm_cute, swiglu_cute, qwen_decoder_cute
-- Control flow, printf, debugging: every example
-- Host: JIT, torch, JAX, AOT export: every example; fp16_gemm_256x352_cute for CUDA graphs
-- Autotuning, Task Scheduling, IKET: none
-- Verification before codegen: dialect-cute verify tests, 48 cute-rs and 30 ctm-rs compile-fail cases
-- Grouped, MoE, mixed-input, FP8: none
-- Shipped kernel examples: the 14 crates under cute-rs-preview/examples
-- End-to-end models: qwen_decoder_cute, qwen3_8b_cute
+:::
 
 ## Feature additions in CuTeDSL 4.4 to 4.7
 
-Beyond the per-architecture atoms, these are the things a CuTeDSL user relies on. The epilogue fusion row is the one most often asked about.
+```{figure} images/support-additions.svg
+:align: center
+:width: 100%
+
+What a CuTeDSL user relies on beyond the per-architecture atoms, and what the preview has instead. Epilogue fusion is the row most often asked about.
+```
+
+:::{dropdown} Text version, with the full comparison
 
 | Feature | CuTeDSL 4.7 | cute-rs preview | Status |
 | :--- | :--- | :--- | :--- |
@@ -107,6 +129,8 @@ Beyond the per-architecture atoms, these are the things a CuTeDSL user relies on
 | Convolution | TMA im2col copy atom; the 4.7 example tree ships no convolution kernel. | Implicit im2col on the BF16 mma.sync register path in the Qwen codec kernels; no TMA im2col. | partial |
 | Sub-byte types | Int4, FP4, two FP6 formats, packed carriers, MXF8F6F4 mixes. | FP4 and scale carriers for block-scaled GEMM and GEMV. No Int4, no FP6. | partial |
 | Primitives API (4.7, experimental) | A thin NVVM wrapper beneath CuTe for Tensor Core programming through SIMT. | ctm-rs: typed tcgen05, TMEM, TMA, mbarrier, cluster, cp.async and warp primitives for the shipped kernels. No atomics, reductions, wgmma or libdevice. | partial |
+
+:::
 
 ## What cute-rs adds
 

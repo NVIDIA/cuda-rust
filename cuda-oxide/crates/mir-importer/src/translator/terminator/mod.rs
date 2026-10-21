@@ -1011,6 +1011,7 @@ fn translate_call(
             Some(
                 reserved_oxide_symbols::LIBRARY_CALL_V1
                     | reserved_oxide_symbols::LIBRARY_CALLBACK_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_CHECKED_WARP_CALL_V1
                     | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_CALL_V1
                     | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_RESOURCE_CALL_V1
                     | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_STORAGE_CALL_V1
@@ -1024,6 +1025,45 @@ fn translate_call(
         return input_err!(
             loc,
             TranslationErr::invalid_op("native library marker has no validated call-site plan")
+        );
+    }
+
+    if is_cuda_device_fn(func)
+        && pattern_name.as_deref().is_some_and(|name| {
+            name == concat!(
+                "cuda_device::library::",
+                "cuda_oxide_library_v1_246e25db_warp_group_index"
+            )
+        })
+    {
+        let Some(rustc_public::ty::GenericArgKind::Const(width)) =
+            substs_args.as_ref().and_then(|args| args.0.first())
+        else {
+            return input_err!(
+                loc,
+                TranslationErr::invalid_op("Warp group query requires a concrete width")
+            );
+        };
+        let width = eval_usize_const(width, "Warp group width", Some(&loc))?;
+        if !args.is_empty() || width == 0 || width > 32 || !width.is_power_of_two() {
+            return input_err!(
+                loc,
+                TranslationErr::invalid_op(
+                    "Warp group query requires a power-of-two width in 1..=32 and no operands"
+                )
+            );
+        }
+        return crate::library::translate_warp_query(
+            ctx,
+            body,
+            width as u32,
+            destination,
+            &target_usize,
+            block_ptr,
+            prev_op,
+            value_map,
+            block_map,
+            loc,
         );
     }
 

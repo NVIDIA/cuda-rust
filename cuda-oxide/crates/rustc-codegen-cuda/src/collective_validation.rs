@@ -4,7 +4,7 @@
 //! Bounded, per-call-context checks for the checked full-block library marker.
 use crate::collector::{CollectionResult, device_mono_reachability};
 use crate::library::storage::{self, Event, Plan, Policy, Site, Trace};
-use crate::library::{EdgeKind, MarkerKind, reachable_instances};
+use crate::library::{EdgeKind, MarkerKind, Scope, call_scope, reachable_instances};
 use rustc_middle::ty::{Instance, Ty, TyCtxt, TyKind, TypingEnv};
 use rustc_public::{mir, rustc_internal};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -12,9 +12,9 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Fact {
     Unset,
-    Uniform,
-    Kernel(String),
-    Resource(String),
+    Uniform(Scope),
+    Kernel(String, Scope),
+    Resource(String, Scope),
     Descriptor(Site, Policy),
     Reservation(Site),
     Local(usize, Vec<usize>),
@@ -23,21 +23,23 @@ enum Fact {
     // Fields are conditional on their presence in the active variant. The
     // tag's uniformity is independent of every payload field's uniformity.
     Enum {
-        tag_uniform: bool,
+        tag_uniform: Scope,
         fields: Vec<Fact>,
     },
     Varying,
 }
 impl Fact {
-    fn uniform(&self) -> bool {
-        matches!(
-            self,
-            Self::Uniform
-                | Self::Kernel(_)
-                | Self::Resource(_)
-                | Self::Descriptor(..)
-                | Self::Reservation(_)
-        )
+    fn precision(&self) -> Option<Scope> {
+        match self {
+            Self::Uniform(scope) | Self::Kernel(_, scope) | Self::Resource(_, scope) => {
+                Some(*scope)
+            }
+            Self::Descriptor(..) | Self::Reservation(_) => Some(Scope::Block),
+            _ => None,
+        }
+    }
+    fn uniform_at(&self, scope: Scope) -> bool {
+        self.precision().is_some_and(|proved| proved >= scope)
     }
     fn merge(&self, other: &Self) -> Self {
         if self == other {
@@ -45,7 +47,15 @@ impl Fact {
         }
         match (self, other) {
             (Self::Unset, value) | (value, Self::Unset) => value.clone(),
-            (Self::Uniform, Self::Kernel(_)) | (Self::Kernel(_), Self::Uniform) => Self::Uniform,
+            (Self::Uniform(a), Self::Uniform(b))
+            | (Self::Uniform(a), Self::Kernel(_, b))
+            | (Self::Kernel(_, a), Self::Uniform(b)) => Self::Uniform((*a).min(*b)),
+            (Self::Kernel(a, x), Self::Kernel(b, y)) if a == b => {
+                Self::Kernel(a.clone(), (*x).min(*y))
+            }
+            (Self::Resource(a, x), Self::Resource(b, y)) if a == b => {
+                Self::Resource(a.clone(), (*x).min(*y))
+            }
             (Self::Fields(a), Self::Fields(b)) if a.len() == b.len() => {
                 Self::Fields(a.iter().zip(b).map(|(a, b)| a.merge(b)).collect())
             }
@@ -59,7 +69,7 @@ impl Fact {
                     fields: bf,
                 },
             ) => Self::Enum {
-                tag_uniform: *a && *b,
+                tag_uniform: (*a).min(*b),
                 fields: (0..af.len().max(bf.len()))
                     .map(|i| self.variant_field(i).merge(&other.variant_field(i)))
                     .collect(),
@@ -69,35 +79,46 @@ impl Fact {
                     tag_uniform,
                     fields,
                 },
-                Self::Uniform | Self::Kernel(_),
+                Self::Uniform(scope) | Self::Kernel(_, scope),
             )
             | (
-                Self::Uniform | Self::Kernel(_),
+                Self::Uniform(scope) | Self::Kernel(_, scope),
                 Self::Enum {
                     tag_uniform,
                     fields,
                 },
             ) => Self::Enum {
-                tag_uniform: *tag_uniform,
-                fields: fields.iter().map(|f| f.merge(&Self::Uniform)).collect(),
+                tag_uniform: (*tag_uniform).min(*scope),
+                fields: fields
+                    .iter()
+                    .map(|f| f.merge(&Self::Uniform(*scope)))
+                    .collect(),
             },
             _ => Self::Varying,
         }
     }
-    fn taint(self) -> Self {
+    fn taint(self, control: Scope) -> Self {
         match self {
-            Self::Fields(v) => Self::Fields(v.into_iter().map(Self::taint).collect()),
-            Self::Enum { fields, .. } => Self::Enum {
-                tag_uniform: false,
-                fields: fields.into_iter().map(Self::taint).collect(),
+            Self::Uniform(scope) => Self::Uniform(scope.min(control)),
+            Self::Kernel(origin, scope) => Self::Kernel(origin, scope.min(control)),
+            Self::Resource(origin, scope) => Self::Resource(origin, scope.min(control)),
+            Self::Fields(v) => Self::Fields(v.into_iter().map(|f| f.taint(control)).collect()),
+            Self::Enum {
+                tag_uniform,
+                fields,
+            } => Self::Enum {
+                tag_uniform: tag_uniform.min(control),
+                fields: fields.into_iter().map(|f| f.taint(control)).collect(),
             },
             Self::Local(..) => self,
+            Self::Referent(value) => Self::Referent(Box::new(value.taint(control))),
+            _ if control == Scope::Block => self,
             _ => Self::Varying,
         }
     }
     fn has_resource(&self) -> bool {
         match self {
-            Self::Resource(_) | Self::Descriptor(..) | Self::Reservation(_) => true,
+            Self::Resource(..) | Self::Descriptor(..) | Self::Reservation(_) => true,
             Self::Referent(value) => value.has_resource(),
             Self::Fields(values) | Self::Enum { fields: values, .. } => {
                 values.iter().any(Self::has_resource)
@@ -107,7 +128,7 @@ impl Fact {
     }
     fn invalidate_borrow(&mut self) {
         match self {
-            Self::Resource(_) | Self::Descriptor(..) | Self::Reservation(_) => {}
+            Self::Resource(..) | Self::Descriptor(..) | Self::Reservation(_) => {}
             Self::Referent(value) if value.has_resource() => value.invalidate_borrow(),
             Self::Fields(values) if values.iter().any(Self::has_resource) => {
                 values.iter_mut().for_each(Self::invalidate_borrow);
@@ -116,7 +137,7 @@ impl Fact {
                 tag_uniform,
                 fields,
             } if fields.iter().any(Self::has_resource) => {
-                *tag_uniform = false;
+                *tag_uniform = Scope::LANE;
                 fields.iter_mut().for_each(Self::invalidate_borrow);
             }
             _ => *self = Self::Varying,
@@ -138,7 +159,7 @@ impl Fact {
     }
     fn resource_origin(&self) -> Option<&str> {
         match self {
-            Self::Resource(origin) => Some(origin),
+            Self::Resource(origin, _) => Some(origin),
             Self::Referent(value) => value.resource_origin(),
             _ => None,
         }
@@ -155,10 +176,11 @@ impl Fact {
     fn field(&self, index: usize) -> Self {
         match self {
             Self::Fields(v) => v.get(index).cloned().unwrap_or(Self::Varying),
-            Self::Kernel(origin) | Self::Resource(origin) => {
-                Self::Kernel(format!("{origin}.{index}"))
+            Self::Kernel(origin, scope) | Self::Resource(origin, scope) => {
+                Self::Kernel(format!("{origin}.{index}"), *scope)
             }
-            Self::Uniform | Self::Reservation(_) => Self::Uniform,
+            Self::Uniform(scope) => Self::Uniform(*scope),
+            Self::Reservation(_) => Self::Uniform(Scope::Block),
             _ => Self::Varying,
         }
     }
@@ -166,22 +188,36 @@ impl Fact {
         match self {
             // This conditional analysis fact is only valid at enum joins or
             // after a Downcast. It never reads an inactive variant's bytes.
-            Self::Enum { fields, .. } => fields.get(index).cloned().unwrap_or(Self::Uniform),
-            Self::Uniform | Self::Kernel(_) | Self::Resource(_) => self.field(index),
+            Self::Enum { fields, .. } => fields
+                .get(index)
+                .cloned()
+                .unwrap_or(Self::Uniform(Scope::Block)),
+            Self::Uniform(_) | Self::Kernel(..) | Self::Resource(..) => self.field(index),
             _ => Self::Varying,
         }
     }
 }
-// Pending access bits: read=1, write=2. Joining paths retains every possible
-// access; a proved full-block barrier clears them. This is not a lifetime token.
-type Pending = BTreeMap<String, u8>;
+// Separate read/write completion prevents a fresh read from erasing the
+// completion of an older write. Keys are finite partitions, never runtime IDs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Access {
+    Read,
+    Write,
+}
+type Pending = BTreeMap<(String, Scope, Access), Scope>;
 fn merge_pending(into: &mut Pending, other: &Pending) -> bool {
     let mut changed = false;
-    for (origin, bits) in other {
-        let old = into.entry(origin.clone()).or_default();
-        if *old | bits != *old {
-            *old |= bits;
-            changed = true;
+    for (key, completion) in other {
+        match into.get_mut(key) {
+            Some(old) => {
+                let merged = (*old).min(*completion);
+                changed |= merged != *old;
+                *old = merged;
+            }
+            None => {
+                into.insert(key.clone(), *completion);
+                changed = true;
+            }
         }
     }
     changed
@@ -210,6 +246,7 @@ impl Epochs {
 }
 #[derive(Clone)]
 struct State {
+    ceiling: Scope,
     locals: Vec<Fact>,
     pending: Pending,
     epochs: Epochs,
@@ -252,7 +289,7 @@ fn read(place: &mir::Place, state: &State) -> Fact {
 fn operand(value: &mir::Operand, state: &State) -> Fact {
     match value {
         mir::Operand::Copy(p) | mir::Operand::Move(p) => read(p, state),
-        mir::Operand::Constant(_) | mir::Operand::RuntimeChecks(_) => Fact::Uniform,
+        mir::Operand::Constant(_) | mir::Operand::RuntimeChecks(_) => Fact::Uniform(Scope::Block),
     }
 }
 fn address(place: &mir::Place, state: &State) -> Fact {
@@ -294,7 +331,7 @@ fn rvalue(value: &mir::Rvalue, state: &State) -> Fact {
             if matches!(kind, mir::AggregateKind::Adt(def, ..) if def.kind() == rustc_public::ty::AdtKind::Enum)
             {
                 Fact::Enum {
-                    tag_uniform: true,
+                    tag_uniform: Scope::Block,
                     fields,
                 }
             } else {
@@ -303,43 +340,33 @@ fn rvalue(value: &mir::Rvalue, state: &State) -> Fact {
         }
         mir::Rvalue::Discriminant(place) => {
             let value = read(place, state);
-            if matches!(
-                value,
-                Fact::Enum {
-                    tag_uniform: true,
-                    ..
-                }
-            ) || value.uniform()
-            {
-                Fact::Uniform
+            if let Fact::Enum { tag_uniform, .. } = value {
+                Fact::Uniform(tag_uniform)
             } else {
-                Fact::Varying
+                value
+                    .precision()
+                    .map(Fact::Uniform)
+                    .unwrap_or(Fact::Varying)
             }
         }
         mir::Rvalue::Repeat(v, _) => operand(v, state),
-        mir::Rvalue::UnaryOp(_, v) => {
-            if operand(v, state).uniform() {
-                Fact::Uniform
-            } else {
-                Fact::Varying
-            }
-        }
+        mir::Rvalue::UnaryOp(_, v) => operand(v, state)
+            .precision()
+            .map(Fact::Uniform)
+            .unwrap_or(Fact::Varying),
         mir::Rvalue::BinaryOp(op, a, b) => {
             let a = operand(a, state);
             let b = operand(b, state);
-            if matches!(op, mir::BinOp::Offset) && a.uniform() && b.uniform() {
-                a
-            } else if a.uniform() && b.uniform() {
-                Fact::Uniform
-            } else {
-                Fact::Varying
+            match (a.precision(), b.precision()) {
+                (Some(x), Some(y)) if matches!(op, mir::BinOp::Offset) => a.taint(x.min(y)),
+                (Some(x), Some(y)) => Fact::Uniform(x.min(y)),
+                _ => Fact::Varying,
             }
         }
         mir::Rvalue::CheckedBinaryOp(_, a, b) => {
-            let f = if operand(a, state).uniform() && operand(b, state).uniform() {
-                Fact::Uniform
-            } else {
-                Fact::Varying
+            let f = match (operand(a, state).precision(), operand(b, state).precision()) {
+                (Some(x), Some(y)) => Fact::Uniform(x.min(y)),
+                _ => Fact::Varying,
             };
             Fact::Fields(vec![f.clone(), f])
         }
@@ -589,9 +616,9 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 | "i0012"
         );
         Some(if uniform {
-            Fact::Uniform
+            Fact::Uniform(Scope::Block)
         } else {
-            Fact::Varying
+            Fact::Uniform(Scope::LANE)
         })
     }
     fn analyze(
@@ -599,15 +626,15 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         instance: Instance<'tcx>,
         arguments: Vec<Fact>,
         validate: bool,
-        entry_varying: bool,
+        entry_control: Scope,
         pending: Pending,
         epochs: Epochs,
-    ) -> Result<(Fact, Pending, Epochs), String> {
+    ) -> Result<(Fact, Pending, Epochs, Scope), String> {
         if self.stack.contains(&instance) {
             return if validate {
                 Err(self.error(instance, 0, "recursive helper participation is unsupported"))
             } else {
-                Ok((Fact::Varying, pending, epochs))
+                Ok((Fact::Varying, pending, epochs, entry_control))
             };
         }
         if matches!(instance.def, rustc_middle::ty::InstanceKind::Intrinsic(_)) {
@@ -629,7 +656,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                     "call without MIR cannot prove collective participation",
                 ))
             } else {
-                Ok((Fact::Varying, pending, epochs))
+                Ok((Fact::Varying, pending, epochs, entry_control))
             };
         };
         let supplied = device_mono_reachability(self.tcx, instance);
@@ -661,6 +688,9 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         let joins = joins(&edges);
         let mut incoming: Vec<Option<State>> = vec![None; body.blocks.len()];
         let mut entry = State {
+            // Entry control reconverges at the caller; only a cycle lowers
+            // the persistent exit ceiling.
+            ceiling: Scope::Block,
             locals: vec![Fact::Unset; body.locals().len()],
             pending,
             epochs,
@@ -669,8 +699,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             *local = fact;
         }
         incoming[0] = Some(entry);
-        let mut divergent = vec![entry_varying; body.blocks.len()];
-        let mut varying_cycles = BTreeSet::new();
+        let mut control = vec![entry_control; body.blocks.len()];
         let mut borrowed = HashSet::new();
         for &block in &live {
             for statement in &body.blocks[block].statements {
@@ -693,6 +722,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                     + self.plan.as_ref().map_or(0, |p| p.sites.len() * 4)
                     + 4,
             )
+            .saturating_mul(Scope::HEIGHT)
             .max(8);
         let mut settled = false;
         for _ in 0..limit {
@@ -701,45 +731,42 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 let Some(mut state) = incoming[block].clone() else {
                     continue;
                 };
-                self.statements(&body, block, &mut state, divergent[block], &borrowed, None)?;
+                let scope = control[block].min(state.ceiling);
+                self.statements(&body, block, &mut state, scope, &borrowed, None)?;
                 if let mir::TerminatorKind::SwitchInt { discr, .. } =
                     &body.blocks[block].terminator.kind
-                    && !operand(discr, &state).uniform()
                     && edges[block].len() > 1
                 {
-                    if edges[block]
+                    let branch_scope = operand(discr, &state)
+                        .precision()
+                        .unwrap_or(Scope::LANE)
+                        .min(scope);
+                    let mut cycle = edges[block]
                         .iter()
-                        .any(|target| reachable(&edges, *target, joins[block]).contains(&block))
-                    {
-                        varying_cycles.insert(block);
-                    }
+                        .any(|target| reachable(&edges, *target, joins[block]).contains(&block));
                     for &target in &edges[block] {
                         let region = reachable(&edges, target, joins[block]);
                         for &member in &region {
-                            if !divergent[member] {
-                                divergent[member] = true;
-                                changed = true;
-                            }
-                            if edges[member].iter().any(|next| {
+                            let narrowed = control[member].min(branch_scope);
+                            changed |= narrowed != control[member];
+                            control[member] = narrowed;
+                            cycle |= edges[member].iter().any(|next| {
                                 region.contains(next)
                                     && reachable(&edges, *next, joins[block]).contains(&member)
-                            }) {
-                                varying_cycles.insert(block);
-                            }
+                            });
                         }
                     }
+                    if cycle {
+                        state.ceiling = state.ceiling.min(branch_scope);
+                    }
                 }
-                self.call(
-                    &body,
-                    instance,
-                    block,
-                    &mut state,
-                    false,
-                    divergent[block],
-                    &borrowed,
-                )?;
+                let scope = control[block].min(state.ceiling);
+                self.call(&body, instance, block, &mut state, false, scope, &borrowed)?;
                 for &target in &edges[block] {
                     if let Some(previous) = &mut incoming[target] {
+                        let ceiling = previous.ceiling.min(state.ceiling);
+                        changed |= ceiling != previous.ceiling;
+                        previous.ceiling = ceiling;
                         changed |= merge_pending(&mut previous.pending, &state.pending);
                         changed |= previous.epochs.merge(&state.epochs);
                         for (old, new) in previous.iter_mut().zip(state.locals.iter()) {
@@ -768,26 +795,20 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 "value analysis did not converge in its bounded subset",
             ));
         }
-        if validate && let Some(&block) = varying_cycles.first() {
-            self.stack.pop();
-            return Err(self.error(
-                instance,
-                block,
-                "lane-varying cycle cannot prove collective participation",
-            ));
-        }
         let mut returned = Fact::Unset;
+        let mut returned_ceiling = Scope::Block;
         let mut returned_pending = Pending::new();
         let mut returned_epochs = Epochs::default();
         for &block in &live {
             let Some(mut state) = incoming[block].clone() else {
                 continue;
             };
+            let scope = control[block].min(state.ceiling);
             self.statements(
                 &body,
                 block,
                 &mut state,
-                divergent[block],
+                scope,
                 &borrowed,
                 (validate && (self.resource_root || self.storage_root)).then_some(instance),
             )?;
@@ -816,20 +837,14 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                         "inline assembly or nontrivial destructor participation is unsupported",
                     ));
                 }
-                self.call(
-                    &body,
-                    instance,
-                    block,
-                    &mut state,
-                    true,
-                    divergent[block],
-                    &borrowed,
-                )?;
+                let scope = control[block].min(state.ceiling);
+                self.call(&body, instance, block, &mut state, true, scope, &borrowed)?;
             }
             if matches!(
                 body.blocks[block].terminator.kind,
                 mir::TerminatorKind::Return
             ) {
+                returned_ceiling = returned_ceiling.min(state.ceiling);
                 returned = returned.merge(&return_fact(state[0].clone()));
                 merge_pending(&mut returned_pending, &state.pending);
                 returned_epochs.merge(&state.epochs);
@@ -839,7 +854,12 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         // Worklist bottom is not evidence about a call's result. In
         // particular, importer-rewritten host-panic placeholders have no
         // Rust Return block but can produce lane-varying device values.
-        Ok((return_fact(returned), returned_pending, returned_epochs))
+        Ok((
+            return_fact(returned),
+            returned_pending,
+            returned_epochs,
+            returned_ceiling,
+        ))
     }
     fn check_resource_mutation(
         &self,
@@ -897,7 +917,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         body: &mir::Body,
         block: usize,
         state: &mut State,
-        divergent: bool,
+        control: Scope,
         borrowed: &HashSet<usize>,
         validate: Option<Instance<'tcx>>,
     ) -> Result<(), String> {
@@ -907,12 +927,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             }
             if let mir::StatementKind::Assign(place, value) = &statement.kind {
                 let value = rvalue(value, state);
-                write(
-                    place,
-                    if divergent { value.taint() } else { value },
-                    state,
-                    borrowed,
-                );
+                write(place, value.taint(control), state, borrowed);
             } else if let mir::StatementKind::SetDiscriminant { place, .. } = &statement.kind {
                 // Split tag writes are outside this bounded construction
                 // analysis. They must not retain an earlier tag/payload proof.
@@ -929,7 +944,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         block: usize,
         state: &mut State,
         validate: bool,
-        divergent: bool,
+        control: Scope,
         borrowed: &HashSet<usize>,
     ) -> Result<(), String> {
         let mir::TerminatorKind::Call {
@@ -965,7 +980,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             let mut site = self.path.clone();
             site.push(block);
             if call.kind.storage() {
-                if validate && divergent {
+                if validate && control < Scope::Block {
                     return Err(self.error(
                         instance,
                         block,
@@ -1139,7 +1154,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                         if self.resource_root { "untracked and resource-checked library calls cannot be mixed in one checked root" } else { "raw and checked library calls cannot be mixed in one checked root" },
                     ));
                 }
-                if divergent {
+                if control < call_scope(call) {
                     return Err(self.error(
                         instance,
                         block,
@@ -1163,11 +1178,15 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                         "uniform argument tuple has unsupported provenance",
                     ));
                 };
-                if fields.iter().any(|f| !f.uniform()) {
+                if fields.iter().any(|f| !f.uniform_at(call_scope(call))) {
                     return Err(self.error(
                         instance,
                         block,
-                        "memory carrier or scalar control is not proved block-uniform",
+                        if call_scope(call) == Scope::Block {
+                            "memory carrier or scalar control is not proved block-uniform"
+                        } else {
+                            "memory carrier or scalar control is not proved Warp-uniform"
+                        },
                     ));
                 }
             }
@@ -1175,19 +1194,25 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 let witness = call_fact(operand(&args[1], state), state);
                 if let Some(origin) = witness.resource_origin() {
                     let write = crate::library::resource_write(call);
-                    let old = state.pending.get(origin).copied().unwrap_or(0);
-                    if validate
-                        && (!self.storage_root || self.plan.is_some())
-                        && (old & 2 != 0 || (write && old != 0))
-                    {
+                    let scope = call_scope(call);
+                    let kind = if write { Access::Write } else { Access::Read };
+                    let conflict = state.pending.iter().any(
+                        |((old_origin, producer, old_kind), completion)| {
+                            old_origin == origin
+                                && (write || *old_kind == Access::Write)
+                                && *completion < (*producer).max(scope)
+                        },
+                    );
+                    if validate && (!self.storage_root || self.plan.is_some()) && conflict {
                         return Err(self.error(
                             instance,
                             block,
                             "conflicting collective resource access requires a full-block barrier",
                         ));
                     }
-                    *state.pending.entry(origin.to_owned()).or_default() |=
-                        if write { 2 } else { 1 };
+                    state
+                        .pending
+                        .insert((origin.to_owned(), scope, kind), Scope::LANE);
                 } else if validate {
                     return Err(self.error(
                         instance,
@@ -1213,12 +1238,21 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         }
         let path = self.tcx.def_path_str(callee.def_id());
         let krate = self.tcx.crate_name(callee.def_id().krate);
+        if let Some(width) = crate::library::warp_query_width(self.tcx, callee) {
+            write(
+                destination,
+                Fact::Uniform(Scope::Warp(width)).taint(control),
+                state,
+                borrowed,
+            );
+            return Ok(());
+        }
         let is_sync = (krate.as_str() == "cuda_device" && path.ends_with("::sync_threads"))
             || (krate.as_str() == "cuda_intrinsics" && path.ends_with("::i0034"));
         if is_sync {
             state.pending.clear();
             state.epochs.dirty.clear();
-            if validate && divergent {
+            if validate && control < Scope::Block {
                 return Err(self.error(
                     instance,
                     block,
@@ -1231,7 +1265,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         if let Some(fact) = self.intrinsic(callee) {
             let name = path.rsplit("::").next().unwrap_or("");
             if validate
-                && !fact.uniform()
+                && !fact.uniform_at(Scope::Block)
                 && !matches!(
                     name,
                     "threadIdx_x" | "threadIdx_y" | "threadIdx_z" | "i0001" | "i0005" | "i0009"
@@ -1243,12 +1277,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                     "intrinsic is outside the supported checked block subset",
                 ));
             }
-            write(
-                destination,
-                if divergent { fact.taint() } else { fact },
-                state,
-                borrowed,
-            );
+            write(destination, fact.taint(control), state, borrowed);
             return Ok(());
         }
         if matches!(callee.def, rustc_middle::ty::InstanceKind::Intrinsic(_)) {
@@ -1287,21 +1316,15 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                     | "unchecked_mul"
                     | "arith_offset"
             ) {
-                let fact = if args.iter().all(|arg| operand(arg, state).uniform()) {
-                    if name == "arith_offset" {
-                        operand(&args[0], state)
-                    } else {
-                        Fact::Uniform
-                    }
-                } else {
-                    Fact::Varying
+                let precision = args.iter().try_fold(Scope::Block, |scope, arg| {
+                    operand(arg, state).precision().map(|p| scope.min(p))
+                });
+                let fact = match precision {
+                    Some(scope) if name == "arith_offset" => operand(&args[0], state).taint(scope),
+                    Some(scope) => Fact::Uniform(scope),
+                    None => Fact::Varying,
                 };
-                write(
-                    destination,
-                    if divergent { fact.taint() } else { fact },
-                    state,
-                    borrowed,
-                );
+                write(destination, fact.taint(control), state, borrowed);
                 return Ok(());
             }
         }
@@ -1324,17 +1347,16 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             callee,
             facts,
             validate,
-            divergent,
+            control,
             state.pending.clone(),
             state.epochs.clone(),
         );
         self.path.pop();
-        let (mut result, pending, epochs) = analyzed?;
+        let (result, pending, epochs, ceiling) = analyzed?;
+        state.ceiling = state.ceiling.min(ceiling);
         state.pending = pending;
         state.epochs = epochs;
-        if divergent {
-            result = result.taint();
-        }
+        let result = result.taint(control);
         // Unknown pointers can alias a borrowed local even when their concrete
         // target was lost at a join. This subset has no interprocedural alias or
         // mutation summary: invalidate all borrowed facts after ordinary calls.
@@ -1367,15 +1389,15 @@ pub(crate) fn validate<'tcx>(
                 use rustc_middle::ty::TyKind;
                 let ty = rustc_internal::internal(tcx, body.locals()[arg].ty);
                 if resource_root && crate::library::resource_parameter(tcx, ty) {
-                    Fact::Resource(format!("{}:{arg}", root.export_name))
-                } else if matches!(ty.kind(), TyKind::Bool | TyKind::Int(_) | TyKind::Uint(_) | TyKind::Float(_)) { Fact::Uniform }
-                else { Fact::Kernel(format!("{}:{arg}", root.export_name)) }
+                    Fact::Resource(format!("{}:{arg}", root.export_name), Scope::Block)
+                } else if matches!(ty.kind(), TyKind::Bool | TyKind::Int(_) | TyKind::Uint(_) | TyKind::Float(_)) { Fact::Uniform(Scope::Block) }
+                else { Fact::Kernel(format!("{}:{arg}", root.export_name), Scope::Block) }
             }).collect();
             let storage_root=collection.library_calls.iter().any(|c| c.kind.storage() && reached.contains(&c.site.caller));
             let trace=traces.entry(root.export_name.clone()).or_insert_with(Trace::default);
             let plan=plans.as_mut().and_then(|plans|plans.get_mut(&root.export_name));
             let mut analyzer = Analyzer { tcx, collection, root: &root.export_name, stack: Vec::new(), resource_root,storage_root,path:Vec::new(),trace,plan };
-            analyzer.analyze(root.instance, arguments, true, false, Pending::new(),Epochs::default())?;
+            analyzer.analyze(root.instance, arguments, true, Scope::Block, Pending::new(),Epochs::default())?;
             shapes.insert(root.export_name.clone(), shape);
         }
         Ok(Validation{shapes,traces})

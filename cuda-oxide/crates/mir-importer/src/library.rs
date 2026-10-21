@@ -508,3 +508,89 @@ fn translate_storage(
         "storage marker requires a continuation",
     )
 }
+
+/// Pure canonical rank query, deliberately independent of validated native plans.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn translate_warp_query(
+    ctx: &mut Context,
+    body: &mir::Body,
+    width: u32,
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block: Ptr<BasicBlock>,
+    previous: Option<Ptr<Operation>>,
+    values: &mut ValueMap,
+    blocks: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    use dialect_mir::ops::{MirAddOp, MirDivOp, MirMulOp};
+    use dialect_nvvm::ops::{
+        ReadPtxSregNtidXOp, ReadPtxSregNtidYOp, ReadPtxSregTidXOp, ReadPtxSregTidYOp,
+        ReadPtxSregTidZOp,
+    };
+    let (prepared, mut previous) = helpers::prepare_destination_write(
+        ctx,
+        body,
+        destination,
+        values,
+        block,
+        previous,
+        loc.clone(),
+    )?;
+    let ty = IntegerType::get(ctx, 32, Signedness::Unsigned);
+    macro_rules! operation {
+        ($op:ty, $args:expr) => {{
+            let op = Operation::new(
+                ctx,
+                <$op>::get_concrete_op_info(),
+                vec![ty.into()],
+                $args,
+                vec![],
+                0,
+            );
+            op.deref_mut(ctx).set_loc(loc.clone());
+            helpers::insert_op(ctx, op, block, previous);
+            previous = Some(op);
+            op
+        }};
+    }
+    macro_rules! register {
+        ($op:ty, $marker:literal) => {{
+            let op = operation!($op, vec![]);
+            helpers::set_generated_intrinsic_marker(ctx, op, $marker);
+            op.deref(ctx).get_result(0)
+        }};
+    }
+    let x = register!(ReadPtxSregTidXOp, "v1:i0001");
+    let y = register!(ReadPtxSregTidYOp, "v1:i0005");
+    let z = register!(ReadPtxSregTidZOp, "v1:i0009");
+    let nx = register!(ReadPtxSregNtidXOp, "v1:i0003");
+    let ny = register!(ReadPtxSregNtidYOp, "v1:i0007");
+    let yz = operation!(MirMulOp, vec![ny, z]).deref(ctx).get_result(0);
+    let yz = operation!(MirAddOp, vec![y, yz]).deref(ctx).get_result(0);
+    let rank = operation!(MirMulOp, vec![nx, yz]).deref(ctx).get_result(0);
+    let rank = operation!(MirAddOp, vec![x, rank]).deref(ctx).get_result(0);
+    let constant = operation!(MirConstantOp, vec![]);
+    MirConstantOp::new(constant).set_attr_value(
+        ctx,
+        IntegerAttr::new(
+            ty,
+            APInt::from_u64(u64::from(width), std::num::NonZeroUsize::new(32).unwrap()),
+        ),
+    );
+    let divisor = constant.deref(ctx).get_result(0);
+    let division = operation!(MirDivOp, vec![rank, divisor]);
+    let result = division.deref(ctx).get_result(0);
+    helpers::emit_prepared_result_and_goto(
+        ctx,
+        prepared,
+        result,
+        target,
+        block,
+        previous.unwrap(),
+        values,
+        blocks,
+        loc,
+        "Warp query has no successor",
+    )
+}

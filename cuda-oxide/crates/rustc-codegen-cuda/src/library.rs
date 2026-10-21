@@ -29,6 +29,7 @@ pub(crate) enum MarkerKind {
     CheckedBlock,
     Callback,
     CheckedBlockResource,
+    CheckedWarp,
     CheckedBlockStorage,
     StorageNew,
     StorageReconfigure,
@@ -41,6 +42,7 @@ impl MarkerKind {
         matches!(
             self,
             Self::CheckedBlock
+                | Self::CheckedWarp
                 | Self::CheckedBlockResource
                 | Self::CheckedBlockStorage
                 | Self::StorageNew
@@ -56,6 +58,7 @@ impl MarkerKind {
             Self::Raw
                 | Self::Callback
                 | Self::CheckedBlock
+                | Self::CheckedWarp
                 | Self::CheckedBlockResource
                 | Self::CheckedBlockStorage
         )
@@ -73,7 +76,10 @@ impl MarkerKind {
     }
 
     pub(crate) fn resource(self) -> bool {
-        matches!(self, Self::CheckedBlockResource | Self::CheckedBlockStorage)
+        matches!(
+            self,
+            Self::CheckedBlockResource | Self::CheckedBlockStorage | Self::CheckedWarp
+        )
     }
 }
 
@@ -126,6 +132,7 @@ pub(crate) fn marker_definitions(tcx: TyCtxt<'_>) -> HashMap<DefId, MarkerKind> 
                     reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_CALL_V1 => {
                         MarkerKind::CheckedBlock
                     }
+                    reserved_oxide_symbols::LIBRARY_CHECKED_WARP_CALL_V1 => MarkerKind::CheckedWarp,
                     reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_RESOURCE_CALL_V1 => {
                         MarkerKind::CheckedBlockResource
                     }
@@ -177,6 +184,43 @@ fn device_type(tcx: TyCtxt<'_>, module_name: &str, name: &str) -> Option<DefId> 
     None
 }
 
+pub(crate) fn warp_query_width<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> Option<u32> {
+    if Some(instance.def_id())
+        != device_type(
+            tcx,
+            "library",
+            reserved_oxide_symbols::LIBRARY_WARP_GROUP_INDEX_V1,
+        )
+    {
+        return None;
+    }
+    instance
+        .args
+        .const_at(0)
+        .try_to_target_usize(tcx)
+        .and_then(|width| u32::try_from(width).ok())
+        .filter(|width| *width > 0 && *width <= 32 && width.is_power_of_two())
+}
+
+/// Closed collective partitions, ordered from lane-local to full block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Scope {
+    Warp(u32),
+    Block,
+}
+impl Scope {
+    pub(crate) const LANE: Self = Self::Warp(1);
+    pub(crate) const HEIGHT: usize = 7;
+}
+
+pub(crate) fn call_scope(call: &LibraryCall<'_>) -> Scope {
+    if call.kind == MarkerKind::CheckedWarp {
+        Scope::Warp(32)
+    } else {
+        Scope::Block
+    }
+}
+
 /// Genuine collective carrier, independent of aliases or source spelling.
 pub(crate) fn collective_carrier<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<(Ty<'tcx>, u64)> {
     let TyKind::Adt(def, args) = ty.kind() else {
@@ -205,11 +249,16 @@ pub(crate) fn resource_parameter<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool 
 pub(crate) fn resource_write(call: &LibraryCall<'_>) -> bool {
     call.instance
         .args
-        .const_at(if call.kind == MarkerKind::CheckedBlockStorage {
-            7
-        } else {
-            6
-        })
+        .const_at(
+            if matches!(
+                call.kind,
+                MarkerKind::CheckedBlockStorage | MarkerKind::CheckedWarp
+            ) {
+                7
+            } else {
+                6
+            },
+        )
         .try_to_leaf()
         .and_then(|value| value.try_to_bool().ok())
         .expect("validated resource access")
@@ -218,11 +267,16 @@ pub(crate) fn resource_write(call: &LibraryCall<'_>) -> bool {
 fn validate_resource<'tcx>(tcx: TyCtxt<'tcx>, call: &LibraryCall<'tcx>) -> Result<(), String> {
     let args = call.instance.args;
     let write = args
-        .const_at(if call.kind == MarkerKind::CheckedBlockStorage {
-            7
-        } else {
-            6
-        })
+        .const_at(
+            if matches!(
+                call.kind,
+                MarkerKind::CheckedBlockStorage | MarkerKind::CheckedWarp
+            ) {
+                7
+            } else {
+                6
+            },
+        )
         .try_to_leaf()
         .and_then(|value| value.try_to_bool().ok())
         .ok_or("resource access mode is not constant")?;
@@ -304,6 +358,8 @@ struct Request {
     dtype: Scalar,
     block: [u32; 3],
     items_per_thread: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warp_width: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     callback: Option<Callback>,
 }
@@ -972,7 +1028,9 @@ pub(crate) fn finalize<'tcx>(
                 items_per_thread: positive(
                     if matches!(
                         call.kind,
-                        MarkerKind::CheckedBlockStorage | MarkerKind::Callback
+                        MarkerKind::CheckedBlockStorage
+                            | MarkerKind::Callback
+                            | MarkerKind::CheckedWarp
                     ) {
                         6
                     } else if call.kind.resource() {
@@ -983,6 +1041,23 @@ pub(crate) fn finalize<'tcx>(
                 )
                 .map_err(str::to_owned)
                 .unwrap_or_else(|error| report(error)),
+                warp_width: if call.kind == MarkerKind::CheckedWarp {
+                    let width = positive(5)
+                        .map_err(str::to_owned)
+                        .unwrap_or_else(|error| report(error));
+                    if width != 32
+                        || block
+                            .iter()
+                            .copied()
+                            .try_fold(1_u32, u32::checked_mul)
+                            .is_none_or(|threads| threads == 0 || threads % 32 != 0)
+                    {
+                        report("checked Warp calls require width 32 and an exact block containing complete physical warps".into());
+                    }
+                    Some(width)
+                } else {
+                    None
+                },
                 callback: if call.kind == MarkerKind::Callback {
                     let thunk =
                         callback_instance(tcx, call.instance).unwrap_or_else(|error| report(error));
@@ -1092,7 +1167,11 @@ pub(crate) fn finalize<'tcx>(
                 },
             });
             for (call, root) in calls {
-                if call.kind == MarkerKind::CheckedBlockResource && !spec.scratch_free {
+                if matches!(
+                    call.kind,
+                    MarkerKind::CheckedBlockResource | MarkerKind::CheckedWarp
+                ) && !spec.scratch_free
+                {
                     tcx.dcx().span_fatal(
                         call.span,
                         "resource-checked block calls currently require a scratch-free provider",
@@ -1221,6 +1300,29 @@ pub(crate) fn reachable_instances<'tcx>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warp_request_extends_the_existing_block_wire_format() {
+        let mut request = Request {
+            operation: "load".into(),
+            algorithm: "direct".into(),
+            dtype: Scalar::Signed(32),
+            block: [8, 4, 2],
+            items_per_thread: 4,
+            warp_width: None,
+            callback: None,
+        };
+        // Existing strict providers must not receive a new null field.
+        let block = r#"{"operation":"load","algorithm":"direct","dtype":{"kind":"signed","bits":32},"block":[8,4,2],"items_per_thread":4}"#;
+        assert_eq!(serde_json::to_string(&request).unwrap(), block);
+        request.warp_width = Some(32);
+        let warp = serde_json::to_value(request).unwrap();
+        assert_eq!(warp["warp_width"], 32);
+        assert_eq!(warp["block"], serde_json::json!([8, 4, 2]));
+        // Callback thunks retain their separate unsafe contract and root path.
+        assert!(!MarkerKind::Callback.checked());
+        assert!(MarkerKind::CheckedWarp.checked());
+    }
 
     fn response() -> serde_json::Value {
         let scalar = serde_json::json!({"kind": "signed", "bits": 32});

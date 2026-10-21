@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-use super::fixtures::{PTX87_EXACT_SM120A, PTX88, PTX90, PTX91_FUTURE, TCGEN_F16, TCGEN_I8};
+use super::fixtures::{PTX87_EXACT_SM120A, PTX88, PTX90, PTX92_FUTURE, TCGEN_F16, TCGEN_I8};
 use crate::generated::GeneratedModuleRequirements;
 use crate::generated_intrinsic_targets::{
     GeneratedHardwareAlternative, GeneratedHardwareTarget, GeneratedIntrinsicBackend,
@@ -482,10 +482,28 @@ fn generated_ptx88_and_ptx90_floors_are_preserved() {
     assert!(validate_ptx_isa_for_llvm_major(PtxIsaRequirement::new(90), Some(21)).is_err());
     validate_ptx_isa_for_llvm_major(PtxIsaRequirement::new(90), Some(22)).unwrap();
 
-    let generated = GeneratedModuleRequirements::from_targets(vec![&PTX91_FUTURE]);
+    // PTX 9.1 is requestable and needs LLVM 23. LLVM 22 ignores `+ptx91` and
+    // emits PTX 8.8, so the gate has to refuse it at compile time.
+    assert_eq!(
+        ptx_isa_requirement_for_floor(91, "test", "test").unwrap(),
+        PtxIsaRequirement::new(91)
+    );
+    assert_eq!(
+        required_ptx_feature(&"sm_120f".parse().unwrap(), PtxIsaRequirement::new(91)).unwrap(),
+        Some("+ptx91")
+    );
+    assert!(validate_ptx_isa_for_llvm_major(PtxIsaRequirement::new(91), None).is_err());
+    let error = validate_ptx_isa_for_llvm_major(PtxIsaRequirement::new(91), Some(22)).unwrap_err();
+    assert!(
+        error.contains("PTX 9.1 or newer requires LLVM 23 or newer"),
+        "{error}"
+    );
+    validate_ptx_isa_for_llvm_major(PtxIsaRequirement::new(91), Some(23)).unwrap();
+
+    let generated = GeneratedModuleRequirements::from_targets(vec![&PTX92_FUTURE]);
     let error = generated_ptx_isa_requirement(&generated).unwrap_err();
 
-    assert!(error.contains("requires PTX 9.1"), "{error}");
+    assert!(error.contains("requires PTX 9.2"), "{error}");
     assert!(
         error.contains("newer than cuda-oxide can request"),
         "{error}"
@@ -748,5 +766,69 @@ fn generated_dot_product_floors_record_sm61_and_split_backend_support() {
             &"sm_75".parse().unwrap(),
             &libnvvm
         ));
+    }
+}
+
+#[test]
+fn generated_m16n8k8_mma_floors_admit_turing_only_for_fp16() {
+    use crate::generated_intrinsic_targets::{
+        GeneratedIntrinsicBackend, generated_intrinsic_target_by_marker,
+    };
+
+    let backends = [
+        GeneratedIntrinsicBackend::LlvmNvptx,
+        GeneratedIntrinsicBackend::LibNvvm,
+    ];
+    // mma_m16n8k8_f16_f16 and mma_m16n8k8_f32_f16
+    for marker in ["v1:i0521", "v1:i0523"] {
+        let target = generated_intrinsic_target_by_marker(marker).unwrap();
+        for backend in backends {
+            let generated =
+                GeneratedModuleRequirements::from_targets(vec![target]).for_backend(backend);
+            assert_eq!(
+                generated_ptx_isa_requirement(&generated).unwrap(),
+                PtxIsaRequirement::new(65),
+                "{marker} {backend:?}"
+            );
+            assert!(
+                !generated_target_satisfied(&"sm_72".parse().unwrap(), &generated),
+                "{marker} {backend:?}"
+            );
+            for arch in ["sm_75", "sm_80"] {
+                assert!(
+                    generated_target_satisfied(&arch.parse().unwrap(), &generated),
+                    "{marker} {backend:?} {arch}"
+                );
+            }
+            validate_generated_target(&"sm_75".parse().unwrap(), &generated).unwrap();
+        }
+    }
+
+    // The three sm_80 members of the admission (m16n8k4 TF32, m16n8k8 BF16,
+    // m16n8k16 F16) and the m16n8k8 TF32 form keep the Ampere floor, although
+    // LLVM selects the BF16 and TF32 m16n8k8 forms at sm_75.
+    for marker in ["v1:i0520", "v1:i0522", "v1:i0524", "v1:i0107"] {
+        let target = generated_intrinsic_target_by_marker(marker).unwrap();
+        for backend in backends {
+            let generated =
+                GeneratedModuleRequirements::from_targets(vec![target]).for_backend(backend);
+            assert_eq!(
+                generated_ptx_isa_requirement(&generated).unwrap(),
+                PtxIsaRequirement::new(70),
+                "{marker} {backend:?}"
+            );
+            assert!(
+                !generated_target_satisfied(&"sm_75".parse().unwrap(), &generated),
+                "{marker} {backend:?}"
+            );
+            assert!(
+                generated_target_satisfied(&"sm_80".parse().unwrap(), &generated),
+                "{marker} {backend:?}"
+            );
+            let error =
+                validate_generated_target(&"sm_75".parse().unwrap(), &generated).unwrap_err();
+            assert!(error.contains(target.id), "{error}");
+            assert!(error.contains("sm_80 or newer"), "{error}");
+        }
     }
 }

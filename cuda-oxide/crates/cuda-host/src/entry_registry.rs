@@ -195,7 +195,7 @@ fn type_id_divergence_message(
     format!(
         "generic kernel PTX entry `{requested}` was not found, but the loaded module DOES \
          contain `{base}` under a different type-identity hash: {found}. The host \
-         (core::intrinsics::type_id) and the device backend (tcx.type_id_hash) disagreed on \
+         (core::intrinsics::reflection::type_id) and the device backend (tcx.type_id_hash) disagreed on \
          the kernel's `_TID_` name, which means the TypeId-to-u128 extraction in \
          cuda_host::type_id is no longer value-correct on this toolchain. Host and device \
          code must be built by the same pinned nightly; re-verify the TypeId contract in \
@@ -329,7 +329,10 @@ mod tests {
             "{message}"
         );
         // The message must identify the two hash producers and the remedy.
-        assert!(message.contains("core::intrinsics::type_id"), "{message}");
+        assert!(
+            message.contains("core::intrinsics::reflection::type_id"),
+            "{message}"
+        );
         assert!(message.contains("tcx.type_id_hash"), "{message}");
         assert!(message.contains("same pinned nightly"), "{message}");
         assert!(message.contains("compute_kernel_export_name"), "{message}");

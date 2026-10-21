@@ -25,16 +25,15 @@ use pliron::{
     common_traits::Verify,
     context::{Context, Ptr},
     identifier::Identifier,
-    indented_block, input_err,
+    input_err,
     irfmt::{
         parsers::{spaced, type_parser},
         printers::op::{region, typed_symb_op_header},
     },
     linked_list::ContainsLinkedList,
-    location::Located,
     op::{Op, OpObj},
     operation::Operation,
-    parsable::{Parsable, ParseResult, StateStream},
+    parsable::{Parsable, ParseResult, StateStream, StreamLocation},
     printable::{Printable, State, indented_nl},
     region::Region,
     result::Error,
@@ -44,15 +43,23 @@ use pliron::{
 use pliron_derive::pliron_op;
 
 use crate::{
-    attributes::ReferenceParamValidityAttr,
+    attributes::{InlineIntentAttr, ReferenceParamValidityAttr},
     types::{MirPtrType, MirSliceType},
 };
 
 const REFERENCE_PARAM_VALIDITY_ATTR_PREFIX: &str = "reference_param_validity_";
 
+/// Operation attribute key carrying a `mir.func`'s [`InlineIntentAttr`].
+pub const INLINE_INTENT_ATTR_KEY: &str = "inline_intent";
+
 fn reference_param_validity_key(index: usize) -> Identifier {
     Identifier::try_new(format!("{REFERENCE_PARAM_VALIDITY_ATTR_PREFIX}{index}"))
         .expect("reference parameter validity attribute name is valid")
+}
+
+fn inline_intent_key() -> Identifier {
+    Identifier::try_new(INLINE_INTENT_ATTR_KEY.to_string())
+        .expect("inline intent attribute name is valid")
 }
 
 /// MIR function operation.
@@ -66,7 +73,8 @@ fn reference_param_validity_key(index: usize) -> Identifier {
 /// |----------------|-----------|------------------------------------|
 /// | `sym_name`     | StringAttr| Function name (from SymbolOpInterface) |
 /// | `mir_func_type`| TypeAttr  | Function type (mir.func_type)      |
-/// | `reference_param_validity_N` | ReferenceParamValidityAttr | Proven nonnull/alignment for source argument `N` on a kernel entry |
+/// | `reference_param_validity_N` | ReferenceParamValidityAttr | Proven reference facts for source argument `N` on a kernel entry |
+/// | `inline_intent` | InlineIntentAttr | The source function's `#[inline]` request; never on a kernel entry |
 /// ```
 ///
 /// # Verification
@@ -116,8 +124,9 @@ impl MirFuncOp {
 
     /// Record rustc-proven validity for one source-level kernel argument.
     ///
-    /// Presence proves `nonnull`; the payload carries the rustc ABI alignment
-    /// of the pointee. The source argument index is deliberately retained until
+    /// Presence proves `nonnull`; the payload carries the pointee alignment
+    /// and independently proven aliasing and size facts.
+    /// The source argument index is deliberately retained until
     /// kernel ABI lowering decides which physical LLVM parameter represents it.
     pub fn set_reference_param_validity(
         &self,
@@ -141,6 +150,24 @@ impl MirFuncOp {
             .deref(ctx)
             .attributes
             .get::<ReferenceParamValidityAttr>(&reference_param_validity_key(index))
+            .copied()
+    }
+
+    /// Record the source function's `#[inline]` request. `mir-lower` turns it
+    /// into the LLVM function attribute; kernels must carry none (verified).
+    pub fn set_inline_intent(&self, ctx: &mut Context, intent: InlineIntentAttr) {
+        self.get_operation()
+            .deref_mut(ctx)
+            .attributes
+            .set(inline_intent_key(), intent);
+    }
+
+    /// The recorded `#[inline]` request; `None` when the source had none.
+    pub fn inline_intent(&self, ctx: &Context) -> Option<InlineIntentAttr> {
+        self.get_operation()
+            .deref(ctx)
+            .attributes
+            .get::<InlineIntentAttr>(&inline_intent_key())
             .copied()
     }
 }
@@ -170,10 +197,9 @@ impl Printable for MirFuncOp {
             .retain(|key, _| key != &*ATTR_KEY_MIR_FUNC_TYPE && key != &ATTR_KEY_SYM_NAME);
 
         if !attributes_to_print_separately.0.is_empty() {
-            indented_block!(state, {
-                write!(f, "{}", indented_nl(state))?;
-                attributes_to_print_separately.fmt(ctx, state, f)?;
-            });
+            let _indent = state.indent();
+            write!(f, "{}", indented_nl(state))?;
+            attributes_to_print_separately.fmt(ctx, state, f)?;
         }
         write!(f, " ")?;
         region(self).fmt(ctx, state, f)?;
@@ -201,19 +227,25 @@ impl Parsable for MirFuncOp {
             vec![],
             vec![],
             vec![],
-            1,
+            // Region::parser creates the body region itself.
+            0,
         );
         let mut parser = (
             spaced(token('@').with(Identifier::parser(()))).skip(spaced(token(':'))),
             spaced(type_parser()),
-            spaced(AttributeDict::parser(())),
+            spaced(optional(AttributeDict::parser(()))),
             spaced(optional(Region::parser(op))),
         );
         parser
             .parse_stream(state_stream)
-            .map(|(fname, fty, attrs, _region)| -> OpObj {
+            .map(|(fname, fty, attrs, region)| -> OpObj {
                 let ctx = &mut state_stream.state.ctx;
-                op.deref_mut(ctx).attributes = attrs;
+                // Declarations still have one empty region, matching the
+                // function operation's OneRegionInterface contract.
+                if region.is_none() {
+                    Operation::add_region(op, ctx);
+                }
+                op.deref_mut(ctx).attributes = attrs.unwrap_or_default();
                 let ty_attr = TypeAttr::new(fty);
                 let opop = MirFuncOp { op };
                 opop.set_symbol_name(ctx, fname);
@@ -250,6 +282,31 @@ impl Verify for MirFuncOp {
         let is_kernel = op.attributes.get::<StringAttr>(&kernel_key).is_some();
         let inputs = interface.arg_types();
 
+        // An inline request only applies to callees. A kernel `.entry` is
+        // never called, so there is no call to inline and a request on it
+        // means nothing; LLVM itself accepts the keywords on a `ptx_kernel`.
+        // The key must also hold the dialect's own attribute type, so a
+        // request can never be read back as "none" by mistake.
+        let inline_intent_key = inline_intent_key();
+        if op.attributes.0.contains_key(&inline_intent_key)
+            && op
+                .attributes
+                .get::<InlineIntentAttr>(&inline_intent_key)
+                .is_none()
+        {
+            return verify_err!(
+                op.loc(),
+                "MirFuncOp inline intent attribute has the wrong attribute type"
+            );
+        }
+        if is_kernel && let Some(intent) = self.inline_intent(ctx) {
+            return verify_err!(
+                op.loc(),
+                "MirFuncOp inline intent {:?} is not valid on a kernel entry",
+                intent
+            );
+        }
+
         for (key, _) in &op.attributes.0 {
             let key_text = key.to_string();
             let Some(index_text) = key_text.strip_prefix(REFERENCE_PARAM_VALIDITY_ATTR_PREFIX)
@@ -285,12 +342,12 @@ impl Verify for MirFuncOp {
                     key_text
                 );
             };
-            if validity.0 == 0 || !validity.0.is_power_of_two() {
+            if validity.pointee_alignment == 0 || !validity.pointee_alignment.is_power_of_two() {
                 return verify_err!(
                     op.loc(),
                     "MirFuncOp reference validity alignment on argument {} must be a non-zero power of two, found {}",
                     index,
-                    validity.0
+                    validity.pointee_alignment
                 );
             }
 

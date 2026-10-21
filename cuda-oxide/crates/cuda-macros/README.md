@@ -412,10 +412,13 @@ typed owned async:
 
 ## `gpu_printf!` -- Device-Side Printf
 
-Compiles to CUDA's `vprintf` with C vararg promotion rules. Format string must use C-style specifiers.
+Compiles to CUDA's `vprintf` with C vararg promotion rules. A placeholder without a type
+character prints its argument by type (`%d` or `%lld` for signed integers, `%u` or `%llu`
+for unsigned, `%f` for floats, `%p` for raw pointers); a type character such as `{:x}` or
+`{:.2f}` keeps the C conversion you name.
 
 ```rust
-gpu_printf!("thread %d: val = %f\n", tid as i32, val as f64);
+gpu_printf!("thread {}: val = {}\n", tid, val);
 ```
 
 ## `ptx_asm!` -- Inline PTX

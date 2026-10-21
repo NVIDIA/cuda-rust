@@ -25,9 +25,11 @@ on:
       - "pull-request/[0-9]+"
   workflow_dispatch:
 
+# Each commit on main gets its own group, so it starts at once. Any other ref
+# still shares one group and cancels the older run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref_name }}${{ github.ref_name == 'main' && format('-{0}', github.sha) || '' }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 permissions:
   contents: read
@@ -39,8 +41,11 @@ defaults:
 
 jobs:
   # Tile lane gate: cutile-rs tree plus shared host crates. Skips when only
-  # cuda-oxide changes. When copy-pr-bot yields no detectable file diff, run
-  # anyway so the mirror push is never silently skipped.
+  # cuda-oxide (or any other non-tile path) changes. `any_changed` is a real
+  # filter: dorny/paths-filter sets an output only for filters declared here,
+  # and an undeclared name stays empty, which would make `!= 'true'` always
+  # succeed. When copy-pr-bot yields no detectable file diff, both outputs are
+  # false and the jobs run anyway so the mirror push is never silently skipped.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -50,7 +55,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad  # v3.0.4
         id: changes
         with:
           filters: |
@@ -65,6 +70,10 @@ jobs:
               - 'rust-toolchain.toml'
               - '.github/workflows/cutile-rs.yml'
               - '.github/copy-pr-bot.yaml'
+            # `*` covers a root file such as AGENTS.md. `**` covers every nested path.
+            any_changed:
+              - '*'
+              - '**'
 
   # Exercise the oldest Tile IR assembler, including its lack of
   # --list-versions. The separate 13.0 lane only checks shared host crates.
@@ -199,7 +208,7 @@ jobs:
 
       # Prebuilt binary instead of `cargo install` (which compiled the tool
       # from source on every run).
-      - uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
+      - uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
         with:
           tool: cargo-semver-checks
 

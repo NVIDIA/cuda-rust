@@ -1,0 +1,227 @@
+{
+  "schema": 6,
+  "backend_profile": "rust-llvm-23.1.3-aab11ee0",
+  "backend_kind": "llvm_nvptx",
+  "llvm_revision": "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019",
+  "backend_version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+  "backend_sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+  "defaults": {
+    "target_triple": "nvptx64-nvidia-cuda",
+    "gpu_target": "sm_80",
+    "ptx_feature": "+ptx70",
+    "status": "validated",
+    "declaration_attributes_canonicalized": true,
+    "runtime_validation": "unexecuted"
+  },
+  "fixtures": [
+    {
+      "id": "ampere_dense_float_mma_all",
+      "coverage_count": 3,
+      "stages": [
+        {
+          "targets": ["sm_80", "ptx70"],
+          "representation": "separate typed LLVM declaration probes",
+          "stage": "declaration_canonicalization",
+          "mechanism": "typed_nvvm",
+          "outcome": "succeeded",
+          "detail": "Revalidated 5 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): canonical typed declarations and their exact imported attributes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 7f7408de871f04f7b802723edce4d9ff6b805f77705eaa3167cd07096db1af3a."
+        },
+        {
+          "targets": ["sm_80", "ptx70"],
+          "representation": "separate probes for the recorded lowering mechanism",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Revalidated 5 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 680047c80107706d8c0efbc9bdae4b2bbf1b691bd8448c7fe94ae5590a342abe."
+        },
+        {
+          "targets": ["sm_80", "ptx70"],
+          "representation": "separate PTX outputs assembled for the recorded target",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "Revalidated 5 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 979c823fa344ced3e6a13cb42e0fe1380d5f120da81df94e11913a1601c360e4.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        }
+      ]
+    },
+    {
+      "id": "turing_dense_f16_mma_m16n8k8",
+      "coverage_count": 2,
+      "stages": [
+        {
+          "targets": ["sm_75", "ptx65"],
+          "representation": "two typed LLVM declarations and duplicate-call probes",
+          "stage": "declaration_canonicalization",
+          "mechanism": "typed_nvvm",
+          "outcome": "succeeded",
+          "detail": "The nightly-2026-10-11 sysroot llvm-as and llvm-dis (LLVM version 23.1.3-rust-1.101.0-nightly) canonicalized both FP16 m16n8k8 declarations to nocallback nounwind memory(none) without convergent. They ran in the fixture directory on the bare file names llvm_typed_declarations.ll and llvm_typed_declarations.bc, which llvm-dis prints as the module ID. The 1578-byte source has SHA-256 69324c6a717729ca3c51f4df2c124298a4774a62fa7eef9693619a6be07ab4e5, the 2416-byte bitcode 710db8e5d02334a41c90d327ed7160b8c1c517fd9dc7ff2b4ae672c9d97e355a and the 1848-byte canonical IR 58d6e99140e3b72c1761583d195424aaa2ea24bfb78d23a4fbe88846e0a8b8df. The same sysroot opt -O2 -S merged four typed calls to two (1787-byte output, SHA-256 ecbb29d8af5b7d47929293b70d179b9b784cf9ca413fc628f567c166bd72f1d3) and kept four convergent side-effecting inline calls as four (1510-byte source llvm_inline_duplicates.ll with SHA-256 6956b04f6bd51bfd9a2d34edd81b8e17bfc63e2a36ea02a722ed3d582fe7d27a; 1829-byte output with SHA-256 a6a6856cbfb184c6c0c9bea154f7bffd75b50f3866ed2ed77d31e38ce2268f42)."
+        },
+        {
+          "targets": ["sm_75", "ptx65"],
+          "representation": "two convergent side-effecting register-only inline PTX calls",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "The nightly-2026-10-11 sysroot llc (LLVM version 23.1.3-rust-1.101.0-nightly, SHA-256 7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449; rustc 6f5da406b56c2db6607202b63daee73aa8c61297, LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019) ran with -mtriple=nvptx64-nvidia-cuda -mcpu=sm_75 -mattr=+ptx65 on the 1549-byte kernel fixture llvm_inline_forms.ll with SHA-256 ffafdd6225e7e2897f8f45afc0505f041131c215702223c513f4005143e9835d. It emitted each FP16 m16n8k8 form once in 1712-byte PTX 6.5 / sm_75 output with SHA-256 65ec762767bd6cb663cdaef973f241e7709ad710c603f70ecf058643548b2a6a, byte-identical to the output first recorded under rust-llvm-23.1.0-16696adc."
+        },
+        {
+          "targets": ["sm_75", "ptx65"],
+          "representation": "aggregate inline-PTX FP16 MMA fixture at the Turing floor",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "CUDA 13.3 ptxas V13.3.73 assembled the 1712-byte sm_75 PTX with -arch=sm_75 into a 3496-byte cubin with SHA-256 35baf5545bcf5bcad947c01101f0550dfaeb7799dc906357a681ce4cedb461d7. Its cuobjdump SASS holds one HMMA.1688.F16 and one HMMA.1688.F32.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        }
+      ]
+    }
+  ],
+  "matrices": [
+    {
+      "axes": [{"name": "variant", "values": ["mma_m16n8k4_f32_tf32"]}],
+      "product_count": 1,
+      "fixtures": ["ampere_dense_float_mma_all"],
+      "template": {
+        "id": "${variant}",
+        "source_record": "int_nvvm_mma_m16n8k4_row_col_tf32",
+        "llvm_symbol": "llvm.nvvm.mma.m16n8k4.row.col.tf32",
+        "expected_ptx": {
+          "mnemonic": "mma",
+          "modifiers": ["sync", "aligned", "m16n8k4", "row", "col", "f32", "tf32", "tf32", "f32"],
+          "operands": [{"kind": "register_list", "length": 4}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 1}, {"kind": "register_list", "length": 4}]
+        },
+        "facts": {
+          "llvm_arguments": ["i32", "i32", "i32", "f32", "f32", "f32", "f32"],
+          "llvm_results": ["f32", "f32", "f32", "f32"],
+          "concrete_llvm_arguments": ["i32", "i32", "i32", "f32", "f32", "f32", "f32"],
+          "concrete_llvm_results": ["f32", "f32", "f32", "f32"],
+          "stages": [
+            {
+              "targets": ["sm_75", "ptx70"],
+              "representation": "m16n8k4 TF32 lower-hardware boundary",
+              "stage": "ptx_assembly",
+              "mechanism": "inline_ptx",
+              "outcome": "not_revalidated",
+              "detail": "Historical evidence recorded for Rust e457a7b0d326d67b4322ef0d11bd715cfaeda48f, LLVM 16696adcd119e6ba9cc175207d984d7021211acb (LLVM version 23.1.0-rust-1.100.0-nightly). Not revalidated by the 2026-10-11 refresh: Original outcome: failed. ptxas rejected the form below sm_80; the diagnostic SHA-256 is 73ef62d63bacc273dbfc152d2cb3acb93bfe3c744b3003e49cf66cd8a47e0b5d."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "axes": [{"name": "variant", "values": ["mma_m16n8k8_f16_f16"]}],
+      "product_count": 1,
+      "fixtures": ["turing_dense_f16_mma_m16n8k8"],
+      "template": {
+        "id": "${variant}",
+        "source_record": "int_nvvm_mma_m16n8k8_row_col_f16_f16",
+        "llvm_symbol": "llvm.nvvm.mma.m16n8k8.row.col.f16.f16",
+        "expected_ptx": {
+          "mnemonic": "mma",
+          "modifiers": ["sync", "aligned", "m16n8k8", "row", "col", "f16", "f16", "f16", "f16"],
+          "operands": [{"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 1}, {"kind": "register_list", "length": 2}]
+        },
+        "facts": {
+          "gpu_target": "sm_75",
+          "ptx_feature": "+ptx65",
+          "llvm_arguments": ["v2f16", "v2f16", "v2f16", "v2f16", "v2f16"],
+          "llvm_results": ["v2f16", "v2f16"],
+          "concrete_llvm_arguments": ["v2f16", "v2f16", "v2f16", "v2f16", "v2f16"],
+          "concrete_llvm_results": ["v2f16", "v2f16"]
+        }
+      }
+    },
+    {
+      "axes": [{"name": "variant", "values": ["mma_m16n8k8_f32_bf16"]}],
+      "product_count": 1,
+      "fixtures": ["ampere_dense_float_mma_all"],
+      "template": {
+        "id": "${variant}",
+        "source_record": "int_nvvm_mma_m16n8k8_row_col_bf16",
+        "llvm_symbol": "llvm.nvvm.mma.m16n8k8.row.col.bf16",
+        "expected_ptx": {
+          "mnemonic": "mma",
+          "modifiers": ["sync", "aligned", "m16n8k8", "row", "col", "f32", "bf16", "bf16", "f32"],
+          "operands": [{"kind": "register_list", "length": 4}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 1}, {"kind": "register_list", "length": 4}]
+        },
+        "facts": {
+          "llvm_arguments": ["i32", "i32", "i32", "f32", "f32", "f32", "f32"],
+          "llvm_results": ["f32", "f32", "f32", "f32"],
+          "concrete_llvm_arguments": ["i32", "i32", "i32", "f32", "f32", "f32", "f32"],
+          "concrete_llvm_results": ["f32", "f32", "f32", "f32"],
+          "stages": [
+            {
+              "targets": ["sm_75", "ptx70"],
+              "representation": "m16n8k8 BF16 imported-predicate boundary",
+              "stage": "ptx_assembly",
+              "mechanism": "inline_ptx",
+              "outcome": "not_revalidated",
+              "detail": "Historical evidence recorded for Rust e457a7b0d326d67b4322ef0d11bd715cfaeda48f, LLVM 16696adcd119e6ba9cc175207d984d7021211acb (LLVM version 23.1.0-rust-1.100.0-nightly). Not revalidated by the 2026-10-11 refresh: Original outcome: failed. LLVM selects this form at its imported sm_75/PTX 6.5 predicate, but ptxas rejects it even at PTX 7.0 because this BF16 m16n8k8 form requires sm_80. The PTX 7.0 diagnostic SHA-256 is 69f7da673aef781e3eb0c06d602ccab1fdc5d95e4b0d645d6e118fd55d0747c8."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "axes": [{"name": "variant", "values": ["mma_m16n8k8_f32_f16"]}],
+      "product_count": 1,
+      "fixtures": ["turing_dense_f16_mma_m16n8k8"],
+      "template": {
+        "id": "${variant}",
+        "source_record": "int_nvvm_mma_m16n8k8_row_col_f32_f32",
+        "llvm_symbol": "llvm.nvvm.mma.m16n8k8.row.col.f32.f32",
+        "expected_ptx": {
+          "mnemonic": "mma",
+          "modifiers": ["sync", "aligned", "m16n8k8", "row", "col", "f32", "f16", "f16", "f32"],
+          "operands": [{"kind": "register_list", "length": 4}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 1}, {"kind": "register_list", "length": 4}]
+        },
+        "facts": {
+          "gpu_target": "sm_75",
+          "ptx_feature": "+ptx65",
+          "llvm_arguments": ["v2f16", "v2f16", "v2f16", "f32", "f32", "f32", "f32"],
+          "llvm_results": ["f32", "f32", "f32", "f32"],
+          "concrete_llvm_arguments": ["v2f16", "v2f16", "v2f16", "f32", "f32", "f32", "f32"],
+          "concrete_llvm_results": ["f32", "f32", "f32", "f32"]
+        }
+      }
+    },
+    {
+      "axes": [{"name": "variant", "values": ["mma_m16n8k16_f16_f16"]}],
+      "product_count": 1,
+      "fixtures": ["ampere_dense_float_mma_all"],
+      "template": {
+        "id": "${variant}",
+        "source_record": "int_nvvm_mma_m16n8k16_row_col_f16_f16",
+        "llvm_symbol": "llvm.nvvm.mma.m16n8k16.row.col.f16.f16",
+        "expected_ptx": {
+          "mnemonic": "mma",
+          "modifiers": ["sync", "aligned", "m16n8k16", "row", "col", "f16", "f16", "f16", "f16"],
+          "operands": [{"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 4}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 2}]
+        },
+        "facts": {
+          "llvm_arguments": ["v2f16", "v2f16", "v2f16", "v2f16", "v2f16", "v2f16", "v2f16", "v2f16"],
+          "llvm_results": ["v2f16", "v2f16"],
+          "concrete_llvm_arguments": ["v2f16", "v2f16", "v2f16", "v2f16", "v2f16", "v2f16", "v2f16", "v2f16"],
+          "concrete_llvm_results": ["v2f16", "v2f16"],
+          "stages": [
+            {
+              "targets": ["sm_75", "ptx70"],
+              "representation": "m16n8k16 F16 lower-hardware boundary",
+              "stage": "ptx_assembly",
+              "mechanism": "inline_ptx",
+              "outcome": "not_revalidated",
+              "detail": "Historical evidence recorded for Rust e457a7b0d326d67b4322ef0d11bd715cfaeda48f, LLVM 16696adcd119e6ba9cc175207d984d7021211acb (LLVM version 23.1.0-rust-1.100.0-nightly). Not revalidated by the 2026-10-11 refresh: Original outcome: failed. ptxas rejected the form below sm_80; the diagnostic SHA-256 is f6582289bf7df33af5bf1c016ce0f73335a4a37ca257c42d201fe9cfefbe134c."
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

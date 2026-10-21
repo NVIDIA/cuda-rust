@@ -1068,6 +1068,52 @@ include!("generated/sreg.rs");
 include!("generated/register_control.rs");
 
 // =============================================================================
+// Block-Linear Thread Id
+// =============================================================================
+
+/// Position of a thread inside its block when the threads are numbered the
+/// way the hardware forms warps: `x` fastest, then `y`, then `z`.
+///
+/// ```text
+/// linear_tid = thread_idx_x + block_dim_x * (thread_idx_y + block_dim_y * thread_idx_z)
+/// ```
+///
+/// Each hardware warp holds 32 consecutive linear ids, so `linear_tid / 32`
+/// names the warp a thread belongs to in any block layout. Works for any
+/// block dim; [`crate::warp::warp_id`] is `threadIdx.x / 32` and only handles
+/// the 1D case. `blockDim.z` is not an input because `z` is the slowest axis.
+///
+/// The arguments are the three thread coordinates followed by the first two
+/// block extents. Pure and host-testable; [`block_linear_thread_id_here`]
+/// reads the special registers.
+#[must_use]
+#[inline(always)]
+pub(crate) const fn block_linear_thread_id(
+    thread_idx_x: u32,
+    thread_idx_y: u32,
+    thread_idx_z: u32,
+    block_dim_x: u32,
+    block_dim_y: u32,
+) -> u32 {
+    thread_idx_x + block_dim_x * (thread_idx_y + block_dim_y * thread_idx_z)
+}
+
+/// Block-linear id of the calling thread; see [`block_linear_thread_id`].
+///
+/// Reads `threadIdx` and `blockDim`, which exist only on the device. Host
+/// tests call [`block_linear_thread_id`] directly.
+#[inline(always)]
+pub(crate) fn block_linear_thread_id_here() -> u32 {
+    block_linear_thread_id(
+        threadIdx_x(),
+        threadIdx_y(),
+        threadIdx_z(),
+        blockDim_x(),
+        blockDim_y(),
+    )
+}
+
+// =============================================================================
 // Synchronization Intrinsics
 // =============================================================================
 
@@ -1328,8 +1374,10 @@ pub fn __unchecked_indexing_config<const ENABLED: bool>() {
 /// }
 /// ```
 ///
-/// The pass currently recognizes explicit counted `while` loops. Range-based
-/// `for` loops are not yet recognized.
+/// The pass currently recognizes explicit counted `while` loops and range `for`
+/// loops (`for i in a..b` and `(a..b).rev()`) over any integer counter,
+/// including `isize`. Other iterator loops, such as `a..=b` or `.step_by(k)`,
+/// are not yet recognized.
 ///
 /// Loops with several `continue` paths are supported. Full `#[unroll]` also
 /// preserves `break` paths and multiple exit targets. Partial `#[unroll(N)]`
@@ -1361,4 +1409,83 @@ const fn validate_unroll_factor(factor: u32) {
         factor == 0 || (factor >= 2 && factor <= 1024),
         "partial unroll factor must be in 2..=1024, or 0 for full unrolling"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::block_linear_thread_id;
+
+    /// Number of threads in a `(dx, dy, dz)` block whose block-linear id is
+    /// `selected`. `ManagedBarrier::init_by` and `inval_by` make this
+    /// comparison on the device, one thread at a time.
+    fn threads_selected_by(block_dim: (u32, u32, u32), selected: u32) -> u32 {
+        let (dx, dy, dz) = block_dim;
+        let mut hits = 0;
+        for tz in 0..dz {
+            for ty in 0..dy {
+                for tx in 0..dx {
+                    if block_linear_thread_id(tx, ty, tz, dx, dy) == selected {
+                        hits += 1;
+                    }
+                }
+            }
+        }
+        hits
+    }
+
+    #[test]
+    fn a_1d_block_numbers_threads_by_x() {
+        for tx in 0..256 {
+            assert_eq!(block_linear_thread_id(tx, 0, 0, 256, 1), tx);
+        }
+    }
+
+    #[test]
+    fn a_2d_block_counts_x_fastest_then_y() {
+        // (32, 4, 1): row y starts at linear id 32 * y, so each row is one warp.
+        for ty in 0..4 {
+            for tx in 0..32 {
+                assert_eq!(block_linear_thread_id(tx, ty, 0, 32, 4), tx + 32 * ty);
+            }
+        }
+        assert_eq!(block_linear_thread_id(0, 1, 0, 32, 4), 32);
+        assert_eq!(block_linear_thread_id(31, 3, 0, 32, 4), 127);
+    }
+
+    #[test]
+    fn a_3d_block_visits_every_id_once_in_x_y_z_order() {
+        // (8, 4, 2): 64 threads. Nested loops over z, then y, then x must
+        // produce 0, 1, 2, ... with no gap and no repeat.
+        let (dx, dy, dz) = (8, 4, 2);
+        let mut expected = 0;
+        for tz in 0..dz {
+            for ty in 0..dy {
+                for tx in 0..dx {
+                    assert_eq!(block_linear_thread_id(tx, ty, tz, dx, dy), expected);
+                    expected += 1;
+                }
+            }
+        }
+        assert_eq!(expected, dx * dy * dz);
+        // One step along z skips a whole x-y plane.
+        assert_eq!(block_linear_thread_id(0, 0, 1, dx, dy), dx * dy);
+    }
+
+    #[test]
+    fn every_in_range_id_selects_one_thread() {
+        for block_dim in [(64, 1, 1), (32, 4, 1), (8, 4, 2), (16, 2, 2), (24, 3, 1)] {
+            let (dx, dy, dz) = block_dim;
+            let threads = dx * dy * dz;
+            for selected in 0..threads {
+                assert_eq!(
+                    threads_selected_by(block_dim, selected),
+                    1,
+                    "block {block_dim:?} id {selected}"
+                );
+            }
+            // An id at or past the thread count selects nobody, which is why
+            // init_by and inval_by require the selector to be in range.
+            assert_eq!(threads_selected_by(block_dim, threads), 0);
+        }
+    }
 }

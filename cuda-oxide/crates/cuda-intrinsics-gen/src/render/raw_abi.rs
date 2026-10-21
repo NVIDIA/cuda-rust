@@ -331,6 +331,15 @@ pub(super) fn render_raw_abi(catalog: &CatalogFile, hash: &str) -> Result<String
             } else if let Some(tma) = &record.tma {
                 match tma.adapter {
                     TmaAdapter::G2sPointersCoordinatesBarrierInjectDefaults
+                        if tma.operation.is_cta_g2s() =>
+                    {
+                        output.push_str(
+                            "/// The destination and barrier must lie in the issuing CTA's own shared memory, and the tensor map must be a live descriptor for this dimensionality.\n\
+                             /// A generic destination or barrier pointer is converted with `cvta.to.shared`, so a cluster-shared pointer from `map_shared_rank` would yield a wrong local offset; copies into another CTA's shared memory use the cluster form.\n\
+                             /// Keep every object alive until the asynchronous copy completes. Only the designated issuing thread may start this transfer.\n",
+                        )
+                    }
+                    TmaAdapter::G2sPointersCoordinatesBarrierInjectDefaults
                     | TmaAdapter::G2sPointersCoordinatesBarrierMaskInjectDefaults => output
                         .push_str(
                             "/// The destination and barrier must be valid shared-memory objects, and the tensor map must be a live descriptor for this dimensionality.\n\

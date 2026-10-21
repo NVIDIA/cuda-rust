@@ -41,6 +41,57 @@ impl Drop for DropMarker {
     }
 }
 
+// Compile-only regression probes. These destructors intentionally never return;
+// their kernels are generated but never launched by `main`. MIR inlining is
+// off for this crate (see Cargo.toml) so each destructor reaches the importer
+// with its own MIR.
+#[allow(dead_code)]
+struct LoopingDrop(u8);
+
+impl Drop for LoopingDrop {
+    #[allow(clippy::empty_loop)]
+    fn drop(&mut self) {
+        loop {}
+    }
+}
+
+#[allow(unconditional_recursion)]
+fn recursive_noop() {
+    recursive_noop();
+}
+
+#[allow(dead_code)]
+struct RecursiveDrop(u8);
+
+impl Drop for RecursiveDrop {
+    fn drop(&mut self) {
+        recursive_noop();
+    }
+}
+
+// Precision control for the proof. An effect-free destructor whose two
+// branches join back together returns on every path, so the proof must keep
+// accepting it and lower the drop to a plain branch. The callees have visible
+// empty bodies. MIR inlining is off for this crate (see Cargo.toml), which
+// keeps the diamond in the destructor's MIR; `#[inline(never)]` would reach
+// LLVM as `noinline` and keep these helpers real PTX functions.
+fn left_noop() {}
+
+fn right_noop() {}
+
+#[allow(dead_code)]
+struct DiamondDrop(u8);
+
+impl Drop for DiamondDrop {
+    fn drop(&mut self) {
+        if self.0 == 0 {
+            left_noop()
+        } else {
+            right_noop()
+        }
+    }
+}
+
 #[cuda_module]
 mod kernels {
     use super::*;
@@ -54,6 +105,71 @@ mod kernels {
                 target: slot as *mut u32,
             };
             // `_m` drops at end of scope and writes `DROP_SENTINEL`.
+        }
+    }
+
+    /// Compile-only regression: a reachable CFG cycle inside Drop::drop
+    /// must not be classified as an erasable no-op.
+    #[kernel]
+    pub fn diverging_cfg_drop_probe(mut out: DisjointSlice<u32>) {
+        if thread::index_1d().get() != 0 {
+            return;
+        }
+
+        unsafe {
+            let slot = out.as_mut_ptr();
+            slot.write(0x1111_1111);
+
+            {
+                let _guard = LoopingDrop(0);
+            }
+
+            // Semantically unreachable.
+            slot.write(0x2222_2222);
+        }
+    }
+
+    /// Compile-only regression: recursive nontermination in a callee must
+    /// likewise prevent drop elision.
+    #[kernel]
+    pub fn diverging_recursive_drop_probe(mut out: DisjointSlice<u32>) {
+        if thread::index_1d().get() != 0 {
+            return;
+        }
+
+        unsafe {
+            let slot = out.as_mut_ptr();
+            slot.write(0x3333_3333);
+
+            {
+                let _guard = RecursiveDrop(0);
+            }
+
+            // Semantically unreachable.
+            slot.write(0x4444_4444);
+        }
+    }
+
+    /// Compile-only precision control: an effect-free `if`/`else` inside
+    /// `Drop::drop` joins back together, so the proof must still erase the
+    /// drop. The post-drop store goes to a second slot so neither store is
+    /// dead and both stay visible in the optimized PTX.
+    #[kernel]
+    pub fn reconverging_drop_probe(mut out: DisjointSlice<u32>) {
+        if thread::index_1d().get() != 0 {
+            return;
+        }
+
+        unsafe {
+            let slot = out.as_mut_ptr();
+            slot.write(0x5555_5555);
+
+            {
+                let _guard = DiamondDrop(thread::index_1d().get() as u8);
+            }
+
+            // Reachable: the destructor returns.
+            slot.add(1).write(0x6666_6666);
         }
     }
 

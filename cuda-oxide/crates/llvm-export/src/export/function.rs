@@ -16,14 +16,13 @@ use pliron::{
     attribute::Attribute,
     basic_block::BasicBlock,
     builtin::{
-        attributes::{FPDoubleAttr, FPSingleAttr, IntegerAttr, TypeAttr},
-        op_interfaces::{BranchOpInterface, SymbolOpInterface},
+        attributes::{FPDoubleAttr, FPSingleAttr, IntegerAttr, OperandSegmentSizesAttr, TypeAttr},
+        op_interfaces::{ATTR_KEY_OPERAND_SEGMENT_SIZES, BranchOpInterface, SymbolOpInterface},
         type_interfaces::FunctionTypeInterface,
         types::IntegerType,
     },
-    context::Ptr,
+    context::{Context, Ptr},
     linked_list::ContainsLinkedList,
-    location::Located,
     op::Op,
     operation::Operation,
     printable::Printable,
@@ -59,6 +58,103 @@ fn sanitize_comment(text: &str) -> String {
     text.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()
+}
+
+/// Check conditional-branch layout before Pliron's infallible range accessors.
+///
+/// Public export callers need not have verified the source module. Pliron 0.19
+/// also sums segment sizes as u32 without checking overflow, so validate the
+/// complete layout here before it can index or allocate from malformed counts.
+/// Looks for a pointer into shared (address space 3) or local (address space
+/// 5) memory inside a kernel parameter type, through struct fields and array
+/// elements. On a hit it returns the address space and appends the path that
+/// reaches the pointer to `path`: `.N` for struct field `N` and `[0]` for an
+/// array element (every element has the same type, so the first stands for
+/// all of them). A bare pointer leaves `path` empty.
+fn device_only_pointer_in(ctx: &Context, ty: TypeHandle, path: &mut String) -> Option<u32> {
+    let ty_ref = ty.deref(ctx);
+    if let Some(pointer) = ty_ref.downcast_ref::<PointerType>() {
+        let space = pointer.address_space();
+        return matches!(space, 3 | 5).then_some(space);
+    }
+    if let Some(array) = ty_ref.downcast_ref::<ArrayType>() {
+        let mark = path.len();
+        path.push_str("[0]");
+        if let Some(space) = device_only_pointer_in(ctx, array.elem_type(), path) {
+            return Some(space);
+        }
+        path.truncate(mark);
+        return None;
+    }
+    if let Some(structure) = ty_ref.downcast_ref::<StructType>() {
+        if structure.is_opaque() {
+            return None;
+        }
+        for (field_index, field) in structure.fields().enumerate() {
+            let mark = path.len();
+            path.push_str(&format!(".{field_index}"));
+            if let Some(space) = device_only_pointer_in(ctx, field, path) {
+                return Some(space);
+            }
+            path.truncate(mark);
+        }
+    }
+    None
+}
+
+fn validate_conditional_branch_layout(ctx: &Context, branch: &ops::CondBrOp) -> Result<(), String> {
+    let operation = branch.get_operation().deref(ctx);
+    let sizes = operation
+        .attributes
+        .get::<OperandSegmentSizesAttr>(&ATTR_KEY_OPERAND_SEGMENT_SIZES)
+        .ok_or_else(|| {
+            "conditional branch requires an operand-segment-sizes attribute".to_owned()
+        })?;
+    if !matches!(sizes.0.as_slice(), [1, _, _]) {
+        return Err(
+            "conditional branch requires three operand segments with exactly one condition"
+                .to_owned(),
+        );
+    }
+    let total = sizes
+        .0
+        .iter()
+        .try_fold(0_u32, |total, size| total.checked_add(*size))
+        .ok_or_else(|| "conditional branch operand segment total overflows u32".to_owned())?;
+    if total as usize != operation.get_num_operands() {
+        return Err(format!(
+            "conditional branch operand segments describe {total} values, but it has {} operands",
+            operation.get_num_operands()
+        ));
+    }
+    if operation.get_num_successors() != 2 {
+        return Err("conditional branch requires exactly two successors".to_owned());
+    }
+    Ok(())
+}
+
+/// Spell only the facts already proven at the import boundary. Shared by
+/// definitions and declarations, including the empty-region declaration path.
+fn export_reference_parameter_attrs(
+    validity: ops::KernelReferenceParamValidityAttr,
+    include_alignment: bool,
+    output: &mut String,
+) {
+    write!(output, " nonnull").unwrap();
+    if validity.pointee_alignment > 1 && include_alignment {
+        write!(output, " align {}", validity.pointee_alignment).unwrap();
+    }
+    if validity.no_alias {
+        write!(output, " noalias").unwrap();
+    }
+    if validity.dereferenceable_bytes > 0 {
+        write!(
+            output,
+            " dereferenceable({})",
+            validity.dereferenceable_bytes
+        )
+        .unwrap();
+    }
 }
 
 /// Final LLVM spelling of a pliron function symbol.
@@ -200,9 +296,19 @@ impl<'a> ModuleExportState<'a> {
             } else {
                 "global"
             };
+            // Host-written storage (`#[constant]`): the initializer is only the
+            // load-time image. Without this, whole-program LTO (libNVVM
+            // `-gen-lto` + nvJitLink `-lto`) internalizes the never-stored
+            // global, folds its loads to the initializer and drops the symbol
+            // the host looks up with `cuModuleGetGlobal`.
+            let externally_initialized = if global.is_host_written(self.ctx) {
+                "externally_initialized "
+            } else {
+                ""
+            };
             write!(
                 output,
-                "@{name} = addrspace({address_space}) {storage_keyword} "
+                "@{name} = addrspace({address_space}) {externally_initialized}{storage_keyword} "
             )
             .unwrap();
             self.export_type(ty, output)?;
@@ -799,7 +905,7 @@ impl<'a> ModuleExportState<'a> {
                     "kernel `@{fixed_func_name}` reference validity parameter {index} is not an LLVM pointer"
                 ));
             }
-            reference_param_validities[index] = Some(validity.0);
+            reference_param_validities[index] = Some(validity);
         }
 
         let is_declaration = func.get_operation().deref(self.ctx).regions().count() == 0;
@@ -930,23 +1036,40 @@ impl<'a> ModuleExportState<'a> {
         // parameter type today; if a frontend type ever surfaces it at a
         // kernel boundary, it needs a new arm here for the same reason as
         // plain shared.
+        //
+        // The check looks through struct fields and array elements as well.
+        // A struct or array parameter reaches the kernel as the bytes the
+        // host wrote, so a shared or local pointer inside one is as
+        // impossible to supply as a bare one. Before this recursion a
+        // `struct { p: SharedPtr<f32>, n: u32 }` parameter compiled and the
+        // kernel applied `cvta.shared.u64` to host bytes.
         if is_kernel {
             for (index, arg_ty) in func_ty.arg_types().iter().enumerate() {
-                let arg_ref = arg_ty.deref(self.ctx);
-                let Some(pointer) = arg_ref.downcast_ref::<PointerType>() else {
+                let mut path = String::new();
+                let Some(address_space) = device_only_pointer_in(self.ctx, *arg_ty, &mut path)
+                else {
                     continue;
                 };
-                let space = match pointer.address_space() {
-                    3 => "shared",
-                    5 => "local",
-                    _ => continue,
+                let space = if address_space == 3 {
+                    "shared"
+                } else {
+                    "local"
                 };
+                let reason = format!(
+                    "{space} memory is allocated by the device at launch, so the host has no \
+                     address to pass, and the driver refuses a module whose entry declares one"
+                );
+                if path.is_empty() {
+                    return Err(format!(
+                        "kernel `@{fixed_func_name}` parameter {index} is a pointer into {space} \
+                         memory (address space {address_space}); {reason}"
+                    ));
+                }
+                // The field path keeps this message apart from the bare form,
+                // so a fixture can pin the nested case on its own.
                 return Err(format!(
-                    "kernel `@{fixed_func_name}` parameter {index} is a pointer into {space} \
-                     memory (address space {}); {space} memory is allocated by the device at \
-                     launch, so the host has no address to pass, and the driver refuses a \
-                     module whose entry declares one",
-                    pointer.address_space()
+                    "kernel `@{fixed_func_name}` parameter {index} holds a pointer into {space} \
+                     memory (address space {address_space}) at field path `{path}`; {reason}"
                 ));
             }
         }
@@ -975,11 +1098,8 @@ impl<'a> ModuleExportState<'a> {
                 let grid_constant = grid_constant_params
                     .iter()
                     .find(|parameter| parameter.index == i);
-                if let Some(alignment) = reference_param_validities[i] {
-                    write!(output, " nonnull").unwrap();
-                    if alignment > 1 && grid_constant.is_none() {
-                        write!(output, " align {alignment}").unwrap();
-                    }
+                if let Some(validity) = reference_param_validities[i] {
+                    export_reference_parameter_attrs(validity, grid_constant.is_none(), output);
                 }
                 if let Some(parameter) = grid_constant {
                     self.export_grid_constant_parameter_attrs(
@@ -1015,16 +1135,8 @@ impl<'a> ModuleExportState<'a> {
             .iter(self.ctx)
             .next();
 
-        // Check for alwaysinline attribute (from #[inline(always)]).
-        // Emitted as a function attribute keyword between the parameter
-        // list and the body open brace.
-        let alwaysinline_key: pliron::identifier::Identifier = "alwaysinline".try_into().unwrap();
-        let is_alwaysinline = attrs
-            .get::<pliron::builtin::attributes::StringAttr>(&alwaysinline_key)
-            .is_some();
-
         if let Some(entry_block) = entry_block_opt {
-            let func_loc = func.get_operation().deref(self.ctx).loc();
+            let func_loc = func.get_operation().deref(self.ctx).loc().clone();
             let debug_name = ops::debug_function_name(self.ctx, func.get_operation())
                 .unwrap_or_else(|| fixed_func_name.clone());
             let debug_scope =
@@ -1046,15 +1158,9 @@ impl<'a> ModuleExportState<'a> {
             let block = entry_block.deref(self.ctx);
             let args = block.arguments();
             let mut entry_prologue = String::new();
-            // Kernel Rust references may carry importer-proven `nonnull` and
-            // pointee `align N`. Every other parameter remains bare.
-            //
-            // In particular this deliberately does NOT infer `noalias`,
-            // `readonly`, `dereferenceable`, or any validity fact from LLVM
-            // pointer shape. `DisjointSlice` and raw pointers therefore retain
-            // the conservative behavior required by their unsafe construction
-            // contracts. Future alias attributes need their own audited proof
-            // source rather than extending this mechanical export step.
+            // Kernel Rust references carry only importer-proven facts.
+            // LLVM pointer shape alone grants no reference promises, so raw
+            // pointers, slice metadata, and other parameters remain bare.
             for (i, arg) in args.enumerate() {
                 if i > 0 {
                     write!(output, ", ").unwrap();
@@ -1064,11 +1170,8 @@ impl<'a> ModuleExportState<'a> {
                 let grid_constant = grid_constant_params
                     .iter()
                     .find(|parameter| parameter.index == i);
-                if let Some(alignment) = reference_param_validities[i] {
-                    write!(output, " nonnull").unwrap();
-                    if alignment > 1 && grid_constant.is_none() {
-                        write!(output, " align {alignment}").unwrap();
-                    }
+                if let Some(validity) = reference_param_validities[i] {
+                    export_reference_parameter_attrs(validity, grid_constant.is_none(), output);
                 }
                 if let Some(parameter) = grid_constant {
                     self.export_grid_constant_parameter_attrs(
@@ -1113,12 +1216,9 @@ impl<'a> ModuleExportState<'a> {
             // gets its `bar.sync.aligned` pushed into a `tid`-dependent branch
             // and deadlocks. opt's FunctionAttrs strips `convergent` from
             // functions it proves never reach a convergent op.
-            // alwaysinline (from #[inline(always)]) and !dbg are independent:
-            // either, both, or neither can be present. Emit the inline keyword
-            // before the convergent attr group #0, then the debug scope.
-            if is_alwaysinline {
-                write!(output, " alwaysinline").unwrap();
-            }
+            // Function attributes (an `#[inline]` keyword among them, set by
+            // `mir-lower` in `llvm_func_attrs`) precede the convergent attr
+            // group #0, then the debug scope.
             if let Some(scope_id) = debug_scope {
                 writeln!(output, " #0 !dbg !{scope_id} {{").unwrap();
             } else {
@@ -1337,6 +1437,7 @@ impl<'a> ModuleExportState<'a> {
                         validate_edge(block, dest, &args)?;
                         pred_map.entry(dest).or_default().push((block, args));
                     } else if let Some(branch) = term_dyn.downcast_ref::<ops::CondBrOp>() {
+                        validate_conditional_branch_layout(self.ctx, branch)?;
                         let succs: Vec<_> = term.deref(self.ctx).successors().collect();
                         let true_dest = succs[0];
                         let false_dest = succs[1];
@@ -1409,11 +1510,8 @@ impl<'a> ModuleExportState<'a> {
                 let grid_constant = grid_constant_params
                     .iter()
                     .find(|parameter| parameter.index == i);
-                if let Some(alignment) = reference_param_validities[i] {
-                    write!(output, " nonnull").unwrap();
-                    if alignment > 1 && grid_constant.is_none() {
-                        write!(output, " align {alignment}").unwrap();
-                    }
+                if let Some(validity) = reference_param_validities[i] {
+                    export_reference_parameter_attrs(validity, grid_constant.is_none(), output);
                 }
                 if let Some(parameter) = grid_constant {
                     self.export_grid_constant_parameter_attrs(

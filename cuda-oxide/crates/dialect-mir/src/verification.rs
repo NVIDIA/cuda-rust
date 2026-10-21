@@ -10,7 +10,6 @@ use pliron::{
     builtin::ops::ConstantOp,
     context::{Context, Ptr},
     linked_list::ContainsLinkedList,
-    location::Located,
     operation::Operation,
     result::Result,
     r#type::Typed,

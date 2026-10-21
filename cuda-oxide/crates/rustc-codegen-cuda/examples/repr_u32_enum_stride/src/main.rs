@@ -41,6 +41,13 @@
  *                  memory-loaded `e as i32` must sign-extend to -1
  *   usize_enum     `#[repr(usize)]` tag is pointer-width (8 bytes)
  *
+ * One more shape checks alignment rather than the tag:
+ *
+ *   align32_enum   `#[repr(align(32))]`, a u8 tag plus 31 padding bytes. The
+ *                  LLVM storage type's alignment anchor is capped at 16, so
+ *                  the 32-byte stride and the `align 32` on the tag load
+ *                  must both come from rustc's layout
+ *
  * Build:
  *   cargo oxide run repr_u32_enum_stride
  */
@@ -115,6 +122,20 @@ pub enum UTag {
 
 // SAFETY: trivial repr(usize) POD, safe to copy device↔host.
 unsafe impl cuda_core::DeviceCopy for UTag {}
+
+/// Fieldless `#[repr(align(32))]` enum: a u8 tag followed by 31 padding
+/// bytes, so `*const Tag32` must stride by 32 over a byte buffer. The LLVM
+/// storage type carries a zero-length alignment anchor capped at 16 bytes;
+/// the 32 rides on the memory operations.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(align(32))]
+pub enum Tag32 {
+    A = 0,
+    B = 1,
+}
+
+// SAFETY: fieldless POD enum, safe to copy device↔host.
+unsafe impl cuda_core::DeviceCopy for Tag32 {}
 
 const N: usize = 4;
 
@@ -225,6 +246,23 @@ mod kernels {
             *slot = tag as u32;
         }
     }
+
+    /// `#[repr(align(32))]` stride test: the enum is one tag byte plus 31
+    /// padding bytes, so `*const Tag32` must stride by 32 over a byte buffer
+    /// and the tag load keeps its 32-byte alignment claim.
+    #[kernel]
+    pub fn read_via_align32_enum(input: &[u8], mut out: DisjointSlice<u32>) {
+        let idx = thread::index_1d();
+        let i = idx.get();
+        if i >= N {
+            return;
+        }
+        let base: *const Tag32 = input.as_ptr() as *const Tag32;
+        let tag = unsafe { *base.add(i) };
+        if let Some(slot) = out.get_mut(idx) {
+            *slot = tag as u32;
+        }
+    }
 }
 
 /// Run one kernel over `input`, compare against `expected`, report PASS/FAIL.
@@ -313,6 +351,24 @@ fn main() {
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
         unsafe { module.read_via_usize_enum(s, cfg, i, o) }.expect("launch")
     });
+
+    // #[repr(align(32))]: one tag byte at the start of each 32-byte slot;
+    // stride 32 over a byte buffer. Device allocations are 256-byte aligned,
+    // so the 32-byte alignment the tag load claims holds.
+    let align32_tags: [u8; N] = [0, 1, 1, 0];
+    let mut align32_in = vec![0u8; N * 32];
+    for (slot, &tag) in align32_tags.iter().enumerate() {
+        align32_in[slot * 32] = tag;
+    }
+    let align32_expected: Vec<u32> = align32_tags.iter().map(|&tag| u32::from(tag)).collect();
+    all_pass &= check(
+        "align32_enum",
+        &stream,
+        &align32_in,
+        &align32_expected,
+        // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
+        |s, cfg, i, o| unsafe { module.read_via_align32_enum(s, cfg, i, o) }.expect("launch"),
+    );
 
     println!();
     if all_pass {

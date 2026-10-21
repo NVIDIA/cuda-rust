@@ -12,7 +12,7 @@ extern crate self as cuda_device;
 
 pub use cuda_macros::{
     cluster_launch, constant, convergent, cooperative_launch, cuda_module, device, gpu_printf,
-    kernel, launch_bounds, launch_contract, ptx_asm, pure, readonly,
+    kernel, launch_bounds, launch_contract, ptx_asm, pure, readonly, tile_export,
 };
 
 // Re-export for convenience
@@ -82,7 +82,7 @@ pub use cusimd::{CuSimd, Float2, Float4, TmemRegs4, TmemRegs32};
 pub use disjoint::{__LaunchContractDisjointSlice, __LaunchContractDisjointSliceAbi};
 pub use disjoint::{DisjointSlice, SpaceLayout};
 pub use fence::*;
-pub use shared::{DynamicSharedArray, SharedArray};
+pub use shared::{DynamicSharedArray, SharedArray, SharedPtr};
 pub use tcgen05::{
     TensorMemoryHandle, TmemAddress, TmemDeallocated, TmemF32x4, TmemF32x32, TmemGuard, TmemReady,
     TmemUninit,

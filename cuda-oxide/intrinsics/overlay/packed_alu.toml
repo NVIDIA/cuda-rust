@@ -38,7 +38,7 @@ ptx_isa_section = "9.7.4.4 Half Precision Floating Point Instructions: fma"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-fma"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "7.0", minimum_sm = "sm_80" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "7.0", minimum_sm = "sm_80" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "7.0", minimum_sm = "sm_80" },
 ]
 packed_alu = { format = "bf16x2", native_minimum_sm = 80, operation = "fma", adapter = "direct_packed_u32" }
@@ -80,7 +80,7 @@ ptx_isa_section = "9.7.4.4 Half Precision Floating Point Instructions: fma"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-fma"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "7.0", minimum_sm = "sm_80" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "7.0", minimum_sm = "sm_80" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "7.0", minimum_sm = "sm_80" },
 ]
 packed_alu = { format = "bf16x2", native_minimum_sm = 80, operation = "fma_relu", adapter = "direct_packed_u32" }
@@ -119,7 +119,7 @@ ptx_isa_section = "9.7.4.1 Half Precision Floating Point Instructions: add"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-add"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "7.8", minimum_sm = "sm_90" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "7.8", minimum_sm = "sm_90" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "7.8", minimum_sm = "sm_90" },
 ]
 packed_alu = { format = "bf16x2", native_minimum_sm = 90, operation = "add", adapter = "direct_packed_u32" }
@@ -158,7 +158,7 @@ ptx_isa_section = "9.7.4.2 Half Precision Floating Point Instructions: sub"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-sub"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "7.8", minimum_sm = "sm_90" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "7.8", minimum_sm = "sm_90" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "7.8", minimum_sm = "sm_90" },
 ]
 packed_alu = { format = "bf16x2", native_minimum_sm = 90, operation = "sub", adapter = "direct_packed_u32" }
@@ -197,7 +197,7 @@ ptx_isa_section = "9.7.4.3 Half Precision Floating Point Instructions: mul"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-mul"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "7.8", minimum_sm = "sm_90" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "7.8", minimum_sm = "sm_90" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "7.8", minimum_sm = "sm_90" },
 ]
 packed_alu = { format = "bf16x2", native_minimum_sm = 90, operation = "mul", adapter = "direct_packed_u32" }
@@ -239,7 +239,7 @@ ptx_isa_section = "9.7.4.7 Half Precision Floating Point Instructions: min"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-min"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "7.0", minimum_sm = "sm_80" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "7.0", minimum_sm = "sm_80" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "7.0", minimum_sm = "sm_80" },
 ]
 packed_alu = { format = "bf16x2", native_minimum_sm = 80, operation = "min", adapter = "direct_packed_u32" }
@@ -281,7 +281,7 @@ ptx_isa_section = "9.7.4.8 Half Precision Floating Point Instructions: max"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-max"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "7.0", minimum_sm = "sm_80" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "7.0", minimum_sm = "sm_80" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "7.0", minimum_sm = "sm_80" },
 ]
 packed_alu = { format = "bf16x2", native_minimum_sm = 80, operation = "max", adapter = "direct_packed_u32" }
@@ -323,7 +323,7 @@ ptx_isa_section = "9.7.4.5 Half Precision Floating Point Instructions: neg"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-neg"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "7.0", minimum_sm = "sm_80" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "7.0", minimum_sm = "sm_80" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "7.0", minimum_sm = "sm_80" },
 ]
 packed_alu = { format = "bf16x2", native_minimum_sm = 80, operation = "neg", adapter = "direct_packed_u32" }
@@ -366,7 +366,7 @@ ptx_isa_section = "9.7.4.6 Half Precision Floating Point Instructions: abs"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-abs"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "7.0", minimum_sm = "sm_80" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "7.0", minimum_sm = "sm_80" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "7.0", minimum_sm = "sm_80" },
 ]
 packed_alu = { format = "bf16x2", native_minimum_sm = 80, operation = "abs", adapter = "direct_packed_u32" }
@@ -408,7 +408,7 @@ ptx_isa_section = "9.7.4.4 Half Precision Floating Point Instructions: fma"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-fma"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "6.0", minimum_sm = "sm_70" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "6.0", minimum_sm = "sm_70" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "4.2", minimum_sm = "sm_75" },
 ]
 packed_alu = { format = "f16x2", native_minimum_sm = 53, operation = "fma", adapter = "direct_packed_u32" }
@@ -450,7 +450,7 @@ ptx_isa_section = "9.7.4.4 Half Precision Floating Point Instructions: fma"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-fma"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "7.0", minimum_sm = "sm_80" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "7.0", minimum_sm = "sm_80" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "7.0", minimum_sm = "sm_80" },
 ]
 packed_alu = { format = "f16x2", native_minimum_sm = 80, operation = "fma_relu", adapter = "direct_packed_u32" }
@@ -489,7 +489,7 @@ ptx_isa_section = "9.7.4.1 Half Precision Floating Point Instructions: add"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-add"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "6.0", minimum_sm = "sm_70" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "6.0", minimum_sm = "sm_70" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "4.2", minimum_sm = "sm_75" },
 ]
 packed_alu = { format = "f16x2", native_minimum_sm = 53, operation = "add", adapter = "direct_packed_u32" }
@@ -528,7 +528,7 @@ ptx_isa_section = "9.7.4.2 Half Precision Floating Point Instructions: sub"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-sub"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "6.0", minimum_sm = "sm_70" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "6.0", minimum_sm = "sm_70" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "4.2", minimum_sm = "sm_75" },
 ]
 packed_alu = { format = "f16x2", native_minimum_sm = 53, operation = "sub", adapter = "direct_packed_u32" }
@@ -567,7 +567,7 @@ ptx_isa_section = "9.7.4.3 Half Precision Floating Point Instructions: mul"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-mul"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "6.0", minimum_sm = "sm_70" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "6.0", minimum_sm = "sm_70" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "4.2", minimum_sm = "sm_75" },
 ]
 packed_alu = { format = "f16x2", native_minimum_sm = 53, operation = "mul", adapter = "direct_packed_u32" }
@@ -609,7 +609,7 @@ ptx_isa_section = "9.7.4.7 Half Precision Floating Point Instructions: min"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-min"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "7.0", minimum_sm = "sm_80" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "7.0", minimum_sm = "sm_80" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "7.0", minimum_sm = "sm_80" },
 ]
 packed_alu = { format = "f16x2", native_minimum_sm = 80, operation = "min", adapter = "direct_packed_u32" }
@@ -651,7 +651,7 @@ ptx_isa_section = "9.7.4.8 Half Precision Floating Point Instructions: max"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-max"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "7.0", minimum_sm = "sm_80" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "7.0", minimum_sm = "sm_80" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "7.0", minimum_sm = "sm_80" },
 ]
 packed_alu = { format = "f16x2", native_minimum_sm = 80, operation = "max", adapter = "direct_packed_u32" }
@@ -690,7 +690,7 @@ ptx_isa_section = "9.7.4.5 Half Precision Floating Point Instructions: neg"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-neg"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "6.0", minimum_sm = "sm_70" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "6.0", minimum_sm = "sm_70" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "6.0", minimum_sm = "sm_75" },
 ]
 packed_alu = { format = "f16x2", native_minimum_sm = 53, operation = "neg", adapter = "direct_packed_u32" }
@@ -733,7 +733,7 @@ ptx_isa_section = "9.7.4.6 Half Precision Floating Point Instructions: abs"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-abs"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "6.5", minimum_sm = "sm_70" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "6.5", minimum_sm = "sm_70" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "6.5", minimum_sm = "sm_75" },
 ]
 packed_alu = { format = "f16x2", native_minimum_sm = 53, operation = "abs", adapter = "direct_packed_u32" }
@@ -775,7 +775,7 @@ ptx_isa_section = "9.7.4.4 Half Precision Floating Point Instructions: fma"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-fma"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "6.0", minimum_sm = "sm_70" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "6.0", minimum_sm = "sm_70" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "4.2", minimum_sm = "sm_75" },
 ]
 packed_alu = { format = "f16x2", native_minimum_sm = 53, operation = "fma_ftz", adapter = "direct_packed_u32" }
@@ -817,7 +817,7 @@ ptx_isa_section = "9.7.4.4 Half Precision Floating Point Instructions: fma"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-fma"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "6.0", minimum_sm = "sm_70" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "6.0", minimum_sm = "sm_70" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "4.2", minimum_sm = "sm_75" },
 ]
 packed_alu = { format = "f16x2", native_minimum_sm = 53, operation = "fma_sat", adapter = "direct_packed_u32" }
@@ -859,7 +859,7 @@ ptx_isa_section = "9.7.4.4 Half Precision Floating Point Instructions: fma"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-fma"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "6.0", minimum_sm = "sm_70" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "6.0", minimum_sm = "sm_70" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "4.2", minimum_sm = "sm_75" },
 ]
 packed_alu = { format = "f16x2", native_minimum_sm = 53, operation = "fma_ftz_sat", adapter = "direct_packed_u32" }
@@ -901,7 +901,7 @@ ptx_isa_section = "9.7.4.4 Half Precision Floating Point Instructions: fma"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#half-precision-floating-point-instructions-fma"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "7.0", minimum_sm = "sm_80" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "7.0", minimum_sm = "sm_80" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-13.3-libnvvm-13.3.33", minimum_ptx = "7.0", minimum_sm = "sm_80" },
 ]
 packed_alu = { format = "f16x2", native_minimum_sm = 80, operation = "fma_ftz_relu", adapter = "direct_packed_u32" }
@@ -940,7 +940,7 @@ ptx_isa_section = "9.7.3.1 Floating Point Instructions: add"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#floating-point-instructions-add"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "8.6", minimum_sm = "sm_100" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "8.6", minimum_sm = "sm_100" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-12.9-libnvvm-12.9.86-f32x2", minimum_ptx = "8.6", minimum_sm = "sm_100" },
 ]
 packed_alu = { format = "f32x2", native_minimum_sm = 100, operation = "add", adapter = "direct_packed_u64" }
@@ -979,7 +979,7 @@ ptx_isa_section = "9.7.3.1 Floating Point Instructions: add"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#floating-point-instructions-add"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "8.6", minimum_sm = "sm_100" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "8.6", minimum_sm = "sm_100" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-12.9-libnvvm-12.9.86-f32x2", minimum_ptx = "8.6", minimum_sm = "sm_100" },
 ]
 packed_alu = { format = "f32x2", native_minimum_sm = 100, operation = "add_ftz", adapter = "direct_packed_u64" }
@@ -1018,7 +1018,7 @@ ptx_isa_section = "9.7.3.2 Floating Point Instructions: sub"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#floating-point-instructions-sub"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "8.6", minimum_sm = "sm_100" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "8.6", minimum_sm = "sm_100" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-12.9-libnvvm-12.9.86-f32x2", minimum_ptx = "8.6", minimum_sm = "sm_100" },
 ]
 packed_alu = { format = "f32x2", native_minimum_sm = 100, operation = "sub", adapter = "direct_packed_u64" }
@@ -1057,7 +1057,7 @@ ptx_isa_section = "9.7.3.2 Floating Point Instructions: sub"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#floating-point-instructions-sub"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "8.6", minimum_sm = "sm_100" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "8.6", minimum_sm = "sm_100" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-12.9-libnvvm-12.9.86-f32x2", minimum_ptx = "8.6", minimum_sm = "sm_100" },
 ]
 packed_alu = { format = "f32x2", native_minimum_sm = 100, operation = "sub_ftz", adapter = "direct_packed_u64" }
@@ -1096,7 +1096,7 @@ ptx_isa_section = "9.7.3.3 Floating Point Instructions: mul"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#floating-point-instructions-mul"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "8.6", minimum_sm = "sm_100" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "8.6", minimum_sm = "sm_100" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-12.9-libnvvm-12.9.86-f32x2", minimum_ptx = "8.6", minimum_sm = "sm_100" },
 ]
 packed_alu = { format = "f32x2", native_minimum_sm = 100, operation = "mul", adapter = "direct_packed_u64" }
@@ -1135,7 +1135,7 @@ ptx_isa_section = "9.7.3.3 Floating Point Instructions: mul"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#floating-point-instructions-mul"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "8.6", minimum_sm = "sm_100" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "8.6", minimum_sm = "sm_100" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-12.9-libnvvm-12.9.86-f32x2", minimum_ptx = "8.6", minimum_sm = "sm_100" },
 ]
 packed_alu = { format = "f32x2", native_minimum_sm = 100, operation = "mul_ftz", adapter = "direct_packed_u64" }
@@ -1174,7 +1174,7 @@ ptx_isa_section = "9.7.3.4 Floating Point Instructions: fma"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#floating-point-instructions-fma"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "8.6", minimum_sm = "sm_100" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "8.6", minimum_sm = "sm_100" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-12.9-libnvvm-12.9.86-f32x2", minimum_ptx = "8.6", minimum_sm = "sm_100" },
 ]
 packed_alu = { format = "f32x2", native_minimum_sm = 100, operation = "fma", adapter = "direct_packed_u64" }
@@ -1213,7 +1213,7 @@ ptx_isa_section = "9.7.3.4 Floating Point Instructions: fma"
 ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#floating-point-instructions-fma"
 lowering = "generated_packed_alu_inline_ptx"
 backend_lowerings = [
-    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.0-16696adc", minimum_ptx = "8.6", minimum_sm = "sm_100" },
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0", minimum_ptx = "8.6", minimum_sm = "sm_100" },
     { backend = "lib_nvvm", mechanism = "inline_ptx", evidence_profile = "cuda-12.9-libnvvm-12.9.86-f32x2", minimum_ptx = "8.6", minimum_sm = "sm_100" },
 ]
 packed_alu = { format = "f32x2", native_minimum_sm = 100, operation = "fma_ftz", adapter = "direct_packed_u64" }

@@ -44,6 +44,148 @@ fn unit_variants(n: usize) -> Vec<EnumVariant> {
     (0..n).map(|i| EnumVariant::unit(format!("V{i}"))).collect()
 }
 
+/// The alignment anchor is `[0 x iN]` with `N = 8 * align` bits, so an
+/// unbounded anchor failed in two ways: from `repr(align(2^21))` up the
+/// width passed LLVM's 2^23-bit integer limit (`i8388608` is the last width
+/// LLVM accepts, `i8388609` the first it rejects), and at `repr(align(2^29))`
+/// the `u32` conversion wrapped to `i0`. `alignment_anchor_type` caps the
+/// anchor at `MAX_NATURAL_ALIGN` (16 bytes), which is where cuda-oxide's data
+/// layouts and layout model stop anyway; memory operations carry the stronger
+/// Rust ABI alignment explicitly. The 8 and 16 rows are the controls, 2^20 is
+/// the last width LLVM accepted, 2^21 the first it rejected, 2^29 the wrap.
+#[test]
+fn enum_conversion_handles_repr_align_bitwidth_boundary() {
+    use crate::convert::types::{llvm_type_size_align, mir_type_abi_align};
+
+    for (align, anchor_bits) in [
+        (8u64, 64),
+        (16, 128),
+        (32, 128),
+        (64, 128),
+        (1 << 20, 128),
+        (1 << 21, 128),
+        (1 << 29, 128),
+    ] {
+        let mut ctx = make_ctx();
+        let ty = make_enum_ty(&mut ctx, "AlignedEnum", 8, unit_variants(2), align, align);
+        let conv = convert_type(&mut ctx, ty).unwrap();
+        let array_ty: TypeHandle = MirArrayType::get(&mut ctx, ty, 3).into();
+        let conv_array = convert_type(&mut ctx, array_ty).unwrap();
+        let natural_align = u64::from(anchor_bits / 8);
+
+        assert_eq!(
+            llvm_type_size_align(&ctx, conv),
+            Some((align, natural_align)),
+            "enum with {align}-byte alignment keeps rustc size"
+        );
+        assert_eq!(
+            llvm_type_size_align(&ctx, conv_array),
+            Some((align * 3, natural_align)),
+            "enum array with {align}-byte alignment keeps rustc stride"
+        );
+        assert_eq!(mir_type_abi_align(&ctx, ty), Some(align));
+        assert_eq!(mir_type_abi_align(&ctx, array_ty), Some(align));
+
+        let conv_ref = conv.deref(&ctx);
+        let struct_ty = conv_ref
+            .downcast_ref::<StructType>()
+            .expect("converted enum is a struct");
+        let anchor_ty = struct_ty
+            .fields()
+            .next()
+            .expect("expected alignment anchor");
+        let anchor_ref = anchor_ty.deref(&ctx);
+        let anchor = anchor_ref
+            .downcast_ref::<ArrayType>()
+            .expect("alignment anchor is an array");
+        assert_eq!(anchor.size(), 0, "alignment anchor must occupy no bytes");
+        let anchor_int = anchor.elem_type();
+        let anchor_int_ref = anchor_int.deref(&ctx);
+        assert_eq!(
+            anchor_int_ref
+                .downcast_ref::<IntegerType>()
+                .expect("alignment anchor element is an integer")
+                .width(),
+            anchor_bits,
+            "enum with {align}-byte alignment uses a bounded integer anchor"
+        );
+    }
+}
+
+/// Lowering a reference to an over-aligned enum array keeps the Rust ABI
+/// alignment on the alloca and the store, while the storage type keeps
+/// rustc's size and stride at the capped 16-byte natural alignment. Enum
+/// sibling of `convert_ref_preserves_over_aligned_union_array_layout_and_alignment`
+/// in `access.rs`; 2^29 is the alignment whose anchor used to wrap to `i0`.
+#[test]
+fn convert_ref_preserves_over_aligned_enum_array_layout_and_alignment() {
+    for abi_align in [32u64, 64, 1 << 29] {
+        let mut ctx = make_ctx();
+        let enum_ty = make_enum_ty(
+            &mut ctx,
+            "AlignedEnum",
+            8,
+            unit_variants(2),
+            abi_align,
+            abi_align,
+        );
+        let array_ty: TypeHandle = MirArrayType::get(&mut ctx, enum_ty, 3).into();
+        let mir_ptr_ty =
+            MirPtrType::get_generic_with_kind(&mut ctx, array_ty, false, MirPointerKind::SharedRef);
+        let (module_ptr, block) = build_kernel(&mut ctx, vec![], vec![]);
+
+        let undef = mir::MirUndefOp::new(&mut ctx, array_ty);
+        undef.get_operation().insert_at_back(block, &ctx);
+        let value = undef.get_operation().deref(&ctx).get_result(0);
+        let ref_op = Operation::new(
+            &mut ctx,
+            mir::MirRefOp::get_concrete_op_info(),
+            vec![mir_ptr_ty.into()],
+            vec![value],
+            vec![],
+            0,
+        );
+        let mir_ref = mir::MirRefOp::new(ref_op);
+        mir_ref.set_mutable(&mut ctx, false);
+        mir_ref.set_pointer_kind_authority(&mut ctx, MirPointerKindAuthorityAttr::Reborrow);
+        ref_op.insert_at_back(block, &ctx);
+        append_mir_return(&mut ctx, block, vec![]);
+
+        crate::lower_mir_to_llvm(&mut ctx, module_ptr).expect("lowering failed");
+
+        let body = kernel_blocks(&ctx, module_ptr);
+        let alloca = find_first::<llvm::AllocaOp>(&ctx, &body).expect("expected llvm.alloca");
+        let store = find_first::<llvm::StoreOp>(&ctx, &body).expect("expected llvm.store");
+        let llvm_array_ty = alloca.result_pointee_type(&ctx);
+        let llvm_array_data = llvm_array_ty.deref(&ctx);
+        let llvm_array = llvm_array_data
+            .downcast_ref::<ArrayType>()
+            .expect("over-aligned enum array must remain an LLVM array");
+
+        assert_eq!(llvm_array.size(), 3);
+        assert_eq!(
+            crate::convert::types::llvm_type_size_align(&ctx, llvm_array.elem_type()),
+            Some((abi_align, 16)),
+            "enum aligned {abi_align} keeps rustc's size at the capped natural alignment"
+        );
+        assert_eq!(
+            crate::convert::types::llvm_type_size_align(&ctx, llvm_array_ty),
+            Some((abi_align * 3, 16)),
+            "enum array aligned {abi_align} keeps rustc's stride"
+        );
+        assert_eq!(
+            llvm_export::ops::op_alignment(&ctx, alloca.get_operation()),
+            Some(abi_align as u32),
+            "alloca of an enum array aligned {abi_align} carries the Rust alignment"
+        );
+        assert_eq!(
+            llvm_export::ops::op_alignment(&ctx, store.get_operation()),
+            Some(abi_align as u32),
+            "store of an enum array aligned {abi_align} carries the Rust alignment"
+        );
+    }
+}
+
 /// Converted enum allocation size must equal rustc's `total_size` for
 /// every memory-faithful tag shape: that size is what GEP strides by.
 #[test]

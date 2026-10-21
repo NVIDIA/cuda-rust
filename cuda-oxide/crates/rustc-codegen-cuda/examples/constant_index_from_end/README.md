@@ -28,8 +28,10 @@ The length must come from the fat value itself, never from the data
 pointer's pointee type. For `&[[u32; 3]]`, the pointee array length 3
 is the row width; the from-end index selects a row from the outer
 runtime-length slice, so subtracting from 3 would read the wrong row.
-From-end indexes without that fat-deref provenance (e.g. after a
-`Subslice`) still fail closed instead of guessing a length.
+A from-end index after a slice `Subslice` takes the rebuilt subslice
+length (the `subslice_projection` example covers that case). Other
+bases without fat-deref provenance still fail closed instead of
+guessing a length.
 
 ## Kernels
 

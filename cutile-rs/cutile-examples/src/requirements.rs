@@ -23,7 +23,7 @@ pub const BASELINE: Requirements = Requirements {
     feature: Feature::Baseline,
 };
 
-/// The NVFP4 and MXFP8 examples both use `mmaf_scaled`.
+/// The NVFP4, NVFP4 MoE and MXFP8 examples use `mmaf_scaled`.
 pub const BLOCK_SCALED_MMA: Requirements = Requirements {
     feature: Feature::ScaledMma,
 };
@@ -166,7 +166,7 @@ mod tests {
             }
             let name = path.file_stem().unwrap().to_str().unwrap();
             let requirement = match name {
-                "nvfp4" | "mxfp8" => "BLOCK_SCALED_MMA",
+                "nvfp4" | "nvfp4_moe" | "mxfp8" => "BLOCK_SCALED_MMA",
                 "pdl" => "PDL",
                 _ => "BASELINE",
             };

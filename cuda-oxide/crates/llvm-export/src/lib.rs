@@ -210,16 +210,31 @@ pub mod ops {
 
     /// Kernel-entry parameter validity proven at the Rust MIR import boundary.
     ///
-    /// Presence proves `nonnull`; the payload is the rustc ABI alignment of
-    /// the pointee represented by this physical LLVM parameter. It deliberately
-    /// carries no aliasing, readonly, or dereferenceability promise.
+    /// Presence proves `nonnull`; each field transports an independently
+    /// proven promise for this physical LLVM parameter. A zero byte count
+    /// records no dereferenceability promise.
     #[pliron_attr(
         name = "llvm.kernel_reference_param_validity",
-        format = "$0",
+        format,
         verifier = "succ"
     )]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    pub struct KernelReferenceParamValidityAttr(pub u64);
+    pub struct KernelReferenceParamValidityAttr {
+        pub pointee_alignment: u64,
+        pub no_alias: bool,
+        pub dereferenceable_bytes: u64,
+    }
+
+    impl KernelReferenceParamValidityAttr {
+        /// Non-nullness and alignment, without additional reference promises.
+        pub const fn new(pointee_alignment: u64) -> Self {
+            Self {
+                pointee_alignment,
+                no_alias: false,
+                dereferenceable_bytes: 0,
+            }
+        }
+    }
 
     fn kernel_reference_param_validity_key(index: usize) -> Identifier {
         Identifier::try_new(reserved_oxide_symbols::kernel_reference_param_validity_key(
@@ -271,10 +286,10 @@ pub mod ops {
                     "kernel reference parameter validity attribute `{key_text}` has the wrong attribute type"
                 ));
             };
-            if validity.0 == 0 || !validity.0.is_power_of_two() {
+            if validity.pointee_alignment == 0 || !validity.pointee_alignment.is_power_of_two() {
                 return Err(format!(
                     "kernel reference parameter {index} alignment must be a non-zero power of two, found {}",
-                    validity.0
+                    validity.pointee_alignment
                 ));
             }
             result.push((index, validity));
@@ -411,8 +426,14 @@ pub mod ops {
     const GLOBAL_SHARED_SOURCE_NAME_KEY: &str = "cuda_oxide_global_shared_source_name";
     /// Marks a `GlobalOp` as externally consumed even when device code does not
     /// reference it. The exporter adds marked globals to `@llvm.used`, keeping
-    /// profiler metadata alive through libNVVM and nvJitLink materialization.
+    /// profiler metadata and host-written constant memory alive through libNVVM
+    /// and nvJitLink materialization.
     const GLOBAL_RETAINED_KEY: &str = "cuda_oxide_global_retained";
+    /// Marks a `GlobalOp` whose contents the host writes after module load
+    /// (`cuModuleGetGlobal` + copy). The exporter renders it
+    /// `externally_initialized`, so no optimizer, including libNVVM/nvJitLink
+    /// LTO, may treat the initializer as the value device code reads.
+    const GLOBAL_HOST_WRITTEN_KEY: &str = "cuda_oxide_global_host_written";
 
     /// One pointer-width relocation inside an evaluated Rust static initializer.
     ///
@@ -2549,6 +2570,10 @@ pub mod ops {
         fn mark_retained(&self, ctx: &mut Context);
         /// Whether this global was explicitly marked as externally consumed.
         fn is_retained(&self, ctx: &Context) -> bool;
+        /// Declare that the host writes this global after module load.
+        fn mark_host_written(&self, ctx: &mut Context);
+        /// Whether the host writes this global after module load.
+        fn is_host_written(&self, ctx: &Context) -> bool;
     }
 
     impl GlobalOpExt for GlobalOp {
@@ -2664,6 +2689,25 @@ pub mod ops {
         fn is_retained(&self, ctx: &Context) -> bool {
             let key =
                 Identifier::try_new(GLOBAL_RETAINED_KEY.to_string()).expect("valid identifier");
+            self.get_operation()
+                .deref(ctx)
+                .attributes
+                .get::<pliron::builtin::attributes::UnitAttr>(&key)
+                .is_some()
+        }
+
+        fn mark_host_written(&self, ctx: &mut Context) {
+            let key =
+                Identifier::try_new(GLOBAL_HOST_WRITTEN_KEY.to_string()).expect("valid identifier");
+            self.get_operation()
+                .deref_mut(ctx)
+                .attributes
+                .set(key, pliron::builtin::attributes::UnitAttr);
+        }
+
+        fn is_host_written(&self, ctx: &Context) -> bool {
+            let key =
+                Identifier::try_new(GLOBAL_HOST_WRITTEN_KEY.to_string()).expect("valid identifier");
             self.get_operation()
                 .deref(ctx)
                 .attributes

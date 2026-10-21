@@ -4,7 +4,8 @@ THIRD PARTY NOTICES
 This file attributes third-party open source software whose source code is
 embedded in cuda-oxide.
 
-cuda-oxide's own code is licensed under Apache-2.0 (see LICENSE). Third-party
+cuda-oxide's own code is licensed under Apache-2.0 (see the LICENSE at the
+repository root). Third-party
 crates that cuda-oxide merely depends on through Cargo are not redistributed
 here and are therefore not listed below; their licenses are recorded in
 `dependency-licenses.csv` and enforced by `deny.toml`.
@@ -29,7 +30,7 @@ The upstream license texts are retained in place at
 carries its own identical copies at
 `crates/fuzzer/rustlantis/rangemap/LICENSE-APACHE` and
 `crates/fuzzer/rustlantis/rangemap/LICENSE-MIT`. The Apache-2.0 text is
-identical to the one in this directory (LICENSE). The MIT text is
+identical to the repository's root LICENSE. The MIT text is
 reproduced here:
 
     Permission is hereby granted, free of charge, to any

@@ -91,19 +91,17 @@ pub struct CollectedFunction {
     /// sidecar. Full debug uses supported events to keep affected pointer values
     /// in stack slots; other modes emit no extra code.
     pub statement_debug_info: Option<StatementDebugInfoMap>,
-    /// True if the function is marked `#[inline(always)]` in rustc's
-    /// `CodegenFnAttrs`. The stable_mir API does not expose inline hints, so
-    /// this is queried via `rustc_middle::TyCtxt::codegen_fn_attrs` in
-    /// `rustc-codegen-cuda` and threaded through.
+    /// The function's `#[inline]` request from rustc's `CodegenFnAttrs`. The
+    /// stable_mir API does not expose inline attributes, so this is queried via
+    /// `rustc_middle::TyCtxt::codegen_fn_attrs` in `rustc-codegen-cuda` and
+    /// threaded through.
     ///
-    /// When true, the LLVM `alwaysinline` attribute is emitted on the
-    /// function definition. The existing matched LLVM middle-end (`opt -O2`),
-    /// when available, can then honor the attribute before PTX generation;
-    /// this flag does not add a separate mandatory inliner pass.
-    ///
-    /// This preserves Rust's inline intent for device helpers and avoids
-    /// making helper boundaries depend entirely on later optimizer heuristics.
-    pub is_inline_always: bool,
+    /// `mir-lower` turns the request into the matching LLVM function attribute
+    /// on the definition, so the matched LLVM middle-end (`opt -O2`) honors it
+    /// before PTX generation; no separate inliner pass is added. This keeps
+    /// helper boundaries, `#[inline(never)]` ones included, from depending
+    /// entirely on optimizer heuristics.
+    pub inline: Option<dialect_mir::attributes::InlineIntentAttr>,
 }
 
 /// Per-function statement debug records aligned with the stable MIR body.
@@ -494,11 +492,16 @@ pub fn run_pipeline(
     config: &PipelineConfig,
     known_defs: crate::translator::facts::KnownDefs,
 ) -> Result<CompilationResult, PipelineError> {
-    // Install the driver-resolved lang-item ids for this run. Set (not
-    // merged) every entry: the ids are only valid inside the caller's
-    // `rustc_internal::run` context, so a stale set from a previous run on
-    // this thread must never survive.
+    // Install the driver-resolved lang-item ids and emitted-function identities
+    // for this run. Replace (rather than merge) both thread-local sets so
+    // stale state from a previous run on this thread cannot survive.
     crate::translator::facts::set_known_defs(known_defs);
+    crate::translator::facts::set_emitted_functions(
+        functions
+            .iter()
+            .map(|func| func.instance.mangled_name().to_string())
+            .collect(),
+    );
 
     prepare_output_dir(&config.output_dir)?;
 
@@ -545,7 +548,7 @@ pub fn run_pipeline(
             func.rustc_mir_block_count,
             &func.rustc_mono_successors,
             func.is_kernel,
-            func.is_inline_always,
+            func.inline,
             Some(&func.export_name),
             &mut legaliser,
             config.debug_kind,

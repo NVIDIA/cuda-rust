@@ -1,0 +1,23 @@
+[package]
+name = "shared_ptr_api"
+version = "0.1.0"
+edition = "2024"
+authors = ["NVIDIA Corporation"]
+license = "Apache-2.0"
+description = "SharedPtr through helper returns, references, closures, arrays, Option, shared storage and transmute"
+
+# Mark as standalone crate (not part of parent workspace)
+[workspace]
+
+# Build with:
+#   cargo oxide run shared_ptr_api
+
+[dependencies]
+# Device-side intrinsics (thread indexing, barriers, etc.)
+cuda-device = { path = "../../../cuda-device" }
+
+# Host-side utilities (CudaKernel trait, etc.)
+cuda-host = { path = "../../../cuda-host" }
+
+# Host-side CUDA runtime
+cuda-core = { path = "../../../../../cuda-core" }

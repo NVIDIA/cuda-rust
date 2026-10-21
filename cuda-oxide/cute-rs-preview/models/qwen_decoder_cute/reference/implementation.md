@@ -244,8 +244,7 @@ hash and timing boundaries. `--benchmark MODEL_DIR REQUEST_JSON OUTPUT_DIR 20`
 retains weights across three warmups and twenty requests, requiring identical
 codes and waveform hashes. The first delivered buffer is the full waveform;
 incremental streaming is not implemented. See the [benchmark guide](benchmark.md)
-for qualified baselines and [recorded results](../../../../docs/cuteir/feature-parity/qwen-acceptance-results.md)
-for performance and quality limits.
+for qualified baselines, performance and quality limits.
 
 One and two row projections follow the reduction order of the reference's
 cuBLAS kernel for that shape, chosen by `reference_linear.rs`: one-row shapes

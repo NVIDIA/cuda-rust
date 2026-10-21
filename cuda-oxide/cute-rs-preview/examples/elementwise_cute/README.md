@@ -79,11 +79,12 @@ eight values per tile.
 
 ## Run it
 
-You need the normal cuda-oxide toolchain and an NVIDIA GPU supported by the
-project. From the `cuda-oxide/` directory:
+You need the cuda-oxide toolchain, the pinned CUTLASS compiler
+(`cargo oxide toolchain install cutlass`) and an `sm_120a` or `sm_100a` GPU. From the
+`cuda-oxide/` directory:
 
 ```bash
-cargo oxide run elementwise_cute
+CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir cargo oxide run elementwise_cute --arch sm_120a
 ```
 
 A successful run confirms:

@@ -17,8 +17,8 @@
 //! assert_eq!(tile.fragment::<1, 7>().registers(), [0.0; 4]);
 //! ```
 //!
-//! Setup and examples are in `cuda-oxide/cute-rs-preview/ctm-rs/README.md`; its
-//! `docs/primitives-coverage.md` lists supported instruction contracts.
+//! Setup, coverage and the safety contract are in
+//! `cuda-oxide/cute-rs-preview/ctm-rs/README.md`.
 //! Enable `host` for `host::tma` descriptor encoding.
 //! Users of the reexported kernel macros must also depend directly on
 //! `cuda-device`: their expansions refer to `::cuda_device`.

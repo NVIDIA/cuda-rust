@@ -89,7 +89,7 @@ obligation explicit.
 The compiler preserves layout and pipeline information through verification
 and lowering:
 
-![CuTe compiler flow from Rust layouts through verified MLIR and CUTLASS to a CUDA cubin](../../../docs/assets/cutlass-translation-flow.svg)
+![The cute-rs stack from Rust types through verification to a CUDA cubin](../../../../cuda-oxide-book/cute/images/cute-rs-preview-stack-and-flow.svg)
 
 - [SM100 APIs](../../../cute-rs/src/sm100/mod.rs): `Sm100SharedTile`,
   `Sm100ClusterTmaCopy`, `Sm100TiledMma`, `Sm100TmemEpilogue`, and pipelines.

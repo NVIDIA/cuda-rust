@@ -197,7 +197,8 @@ CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir \
 
 Set `CUDA_OXIDE_CUTLASS_COMPILER` to an absolute
 `libCutlassCompiler.so` path only when intentionally overriding the managed
-installation.
+installation. The CuTe chapter's [Build with the CUTLASS Compiler](../cute/build-with-cutlass.md)
+page lists the two supported targets, the options and the failure rules.
 
 ---
 

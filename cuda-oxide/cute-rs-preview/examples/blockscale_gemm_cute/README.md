@@ -40,8 +40,8 @@ The compiler lowers this CuTe computation directly.
 
 ## Build and run
 
-This kernel requires an SM 12.x Blackwell GPU (`sm_120` or `sm_121`); build for
-`sm_120a`. Other GPUs skip execution and cannot validate this example.
+This kernel needs an `sm_120a` GPU such as the RTX 5090 and builds for `sm_120a`
+only. Other GPUs skip execution and cannot validate this example.
 From `cuda-oxide/`, install the pinned CUTLASS 4.7 compiler once, then run:
 
 ```bash

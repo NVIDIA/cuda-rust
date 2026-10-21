@@ -1,6 +1,6 @@
 # TMA Pipelines, Tensor Cores, and `ctm-rs` Interop
 
-Production Blackwell kernels combine multi-stage TMA pipelines, swizzled shared-memory views, and tensor-core MMA operations. Depending on the workload, you can express the entire schedule in **`cute-rs`** (`blockscale_gemm_cute`) or pair **`cute-rs`** with **`ctm-rs`** instruction primitives in the same kernel (`fp16_gemm_256x352_cute`, `sm100_fmha_prefill_cute`, `sm100_mla_decode_fp16_cute`).
+The Blackwell kernels in this preview combine multi-stage TMA pipelines, swizzled shared-memory views, and tensor-core MMA operations. Depending on the workload, you can express the entire schedule in **`cute-rs`** (`blockscale_gemm_cute`) or pair **`cute-rs`** with **`ctm-rs`** instruction primitives in the same kernel (`fp16_gemm_256x352_cute`, `sm100_fmha_prefill_cute`, `sm100_mla_decode_fp16_cute`).
 
 ---
 
@@ -58,8 +58,13 @@ In `fp16_gemm_256x352_cute`, `cute-rs` (teal) owns the 5-stage cluster TMA pipel
 ```
 
 ```rust
-// Producer warp (warp 5): all 32 lanes issue the cluster TMA copy via cute-rs
-let barrier = pipeline.producer_acquire_and_expect_tx(stage as u32, phase);
+// Producer warp (warp 5): acquire the stage, let one elected lane post the
+// expected bytes, then all 32 lanes issue the cluster TMA copies via cute-rs
+pipeline.producer_acquire(stage as u32, phase);
+if rank == 0 && warp::is_elected_sync(u32::MAX) {
+    pipeline.producer_expect(stage as u32);
+}
+let barrier = pipeline.full_barrier(stage as u32);
 Sm100ClusterTmaCopy::copy(a, &mut a_tile, row, kt * 64, barrier, rank);
 Sm100ClusterTmaCopy::copy(b0, &mut b0_tile, col, kt * 64, barrier, rank);
 Sm100ClusterTmaCopy::copy(b1, &mut b1_tile, col + 192, kt * 64, barrier, rank);
@@ -89,4 +94,4 @@ if warp_id == 0 {
 | **MXFP4 GEMV & Block-Scaled GEMM** | `cuda-oxide/cute-rs-preview/examples/{nvfp4_gemv,blockscale_gemm}_cute` | Packed FP4 + `UE8M0` scales, 3-stage TMA pipelines, and `*_ctm` counterparts. |
 | **SM100a 2-CTA GEMM & Attention** | `cuda-oxide/cute-rs-preview/examples/{fp16_gemm_256x352,sm100_fmha_prefill,sm100_mla_decode_fp16}_cute` | Two-CTA cluster TMA, TMEM, A-collector reuse, and FlashAttention / MLA decode. |
 | **Qwen3-8B (BF16 & NVFP4)** | `cuda-oxide/cute-rs-preview/models/qwen3_8b_cute` | 36-layer `Qwen/Qwen3-8B` (`H=4096, I=12288, GQA 32:8`) in BF16 and NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`) on RTX 5090 (`visual.md`). |
-| **End-to-End Qwen3-TTS Model** | `cuda-oxide/cute-rs-preview/models/qwen_decoder_cute` | Complete Talker + Predictor speech synthesis on SM120a (see `visual.md` inside that folder for a 14-SVG visual tour). |
+| **End-to-End Qwen3-TTS Model** | `cuda-oxide/cute-rs-preview/models/qwen_decoder_cute` | Complete Talker + Predictor speech synthesis on SM120a (see `visual.md` inside that folder for a visual tour). |

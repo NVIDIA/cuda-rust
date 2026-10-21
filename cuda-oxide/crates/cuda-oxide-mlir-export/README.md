@@ -1,58 +1,38 @@
 # cuda-oxide MLIR export
 
-This crate maps cuda-oxide operations to MLIR accepted by the pinned CUTLASS
-compiler. It retains the explicit builtin, MIR, NVVM, and CuTe mapping packs,
-source checks, typed translation plans, and consumer profiles. The generic
-printer comes from upstream `pliron-mlir-interop`:
+This crate maps cuda-oxide operations to MLIR accepted by the pinned CUTLASS 4.7
+compiler: explicit builtin, MIR, NVVM and CuTe mapping packs, source checks, typed
+translation plans and consumer profiles. The generic printer comes from upstream
+`pliron-mlir-interop`.
 
 ```text
-prepared source module
-        │ explicit mapping recipes and checked value/block connections
+shared Pliron module (dialect-mir, dialect-cute, dialect-nvvm)
+        │ CuTe whole-module verification and the architecture gate
         ▼
-typed target plan
-        │ local target operation/type/attribute adapters
+typed target plan            explicit mapping recipes, checked value and block connections
+        │ local ToMlirOp, ToMlirType and ToMlirAttr adapters
         ▼
-Pliron target graph
-        │ upstream GenericOp + MlirPrinter
+Pliron target graph  ──►  upstream GenericOp and MlirPrinter  ──►  MLIR text
+        │
         ▼
-MLIR text
+official CUTLASS 4.7 compiler  ──►  cubin, validated and embedded in the host binary
 ```
 
-The adapters implement upstream interfaces on locally owned types. They preserve
-target properties, discardable attributes, and source locations without changing
-the source module. `render_module` returns `Result<String, TranslationError>`;
-unsupported mappings and malformed target plans remain errors. The export
-manifest records the Pliron version, published printer version, and local adapter
-revision. The workspace pins crates.io `pliron-mlir-interop = "=0.1.0"` with
-Pliron `=0.20.0`. Attribute and argument-location compatibility stays in the
-adapter; no upstream source is vendored. See the
-[dependency and adapter contract](../../cute-rs-preview/docs/reference/pliron-mlir-interop.md)
-for details.
+`render_module` returns `Result<String, TranslationError>`; an unsupported mapping or a
+malformed plan is an error. The workspace pins crates.io `pliron-mlir-interop = "=0.1.0"`
+with Pliron `=0.20.0`; no upstream source is vendored. Two compatibility pieces live in
+the local adapter under `src/interop/`: typed discardable attributes render through the
+upstream `MlirPrinter` and pass to `GenericOp::attr_raw`, and block-argument locations are
+restored into complete block-header lines derived from the target graph, where each
+header must match a single block or export fails rather than dropping a location. The
+export manifest names this contract `pliron-mlir-interop-0.1.0+cuda-oxide.2`, so cached
+artifacts cannot reuse an older printer contract. MIR, CuTe and NVVM mappings stay local;
+upstream's bundled LLVM source-dialect translations are not used.
 
-The profile targets the official CUTLASS 4.7 compiler library. cuda-oxide installs the exact NVIDIA release archive, verifies both the archive and
-library digests, and loads that versioned library explicitly:
-
-```text
-shared high-level Pliron module
-                │
-                ▼
-    shared CuTe safety checks
-                │
-                ▼
- builtin + MIR + NVVM + CuTe recipes
-                │
-                ▼
- upstream pliron-mlir-interop
-                │
-                ▼
- official CUTLASS 4.7 compiler
-```
-
-The mapping packs translate CuTe operations after shared MIR preparation.
-The pinned library compiles the resulting MLIR, and the backend extracts and
-validates its cubin. cuda-oxide embeds and launches that cubin through its
-ordinary artifact loader. Set `CUDA_OXIDE_MLIR_OUTPUT=<file>` to keep the MLIR
-text for inspection; select `CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir` to compile it.
+cuda-oxide installs the exact CUTLASS release archive, verifies the archive and library
+digests, and loads that versioned library explicitly. The backend extracts and validates
+the cubin and embeds it for the ordinary launch path. Set `CUDA_OXIDE_MLIR_OUTPUT=<file>`
+to keep the MLIR text; select `CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir` to compile it.
 
 The SM100 primitive pack additionally maps two-CTA FP16 TCGen05 MMA with A
 collector selectors, tensor-memory allocation/load/commit/wait operations,
@@ -75,7 +55,7 @@ Real Rust fixtures also exercise checked arithmetic, padded tuple carriers,
 Direct/Single enum storage, static shared globals and Rust pointer-address
 semantics. Explicit NVVM shared offsets preserve AS3/AS7; Rust address casts
 convert named pointers to generic addresses first. See the
-[coverage and validation contract](../../cute-rs-preview/ctm-rs/docs/primitives-coverage.md).
+[ctm-rs README](../../cute-rs-preview/ctm-rs/README.md).
 
 See [`hoist_enum_scratch`](src/mir/checked.rs) for why enum scratch allocations
 move to the function entry while their loads and stores stay in place.

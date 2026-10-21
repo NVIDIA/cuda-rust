@@ -9,8 +9,8 @@
 //!
 //! Start with [`descriptors::DenseSharedF16`] for supported shapes and
 //! [`tmem::TmemGuard`] for allocation ownership. Issue, commit, wait and release
-//! remain explicit. The crate's `docs/primitives-coverage.md` gives a complete
-//! issue-site example and the supported compiler profiles.
+//! remain explicit. The crate README gives an issue-site example and the
+//! supported compiler profiles.
 
 pub mod descriptors;
 pub mod mma;

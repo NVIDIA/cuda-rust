@@ -126,6 +126,6 @@ The verifier checks what it can see in types and in the module. These stay with 
 
 ## Sources
 
-- CuTeDSL 4.7 at tag `v4.7.0` of the public CUTLASS repository: `python/CuTeDSL/cutlass`, the `examples/python/CuTeDSL` tree and `media/docs/pythonDSL`. CuTeDSL calls itself a public beta.
+- CuTeDSL 4.7 at tag `v4.7.0` of the public CUTLASS repository: the `python/CuTeDSL/cutlass` package, the `examples/python/CuTeDSL` tree and the Python DSL documentation. CuTeDSL calls itself a public beta.
 - The target gate: `crates/cuda-oxide-mlir-export/src/profile.rs`. The pinned compiler: `cargo oxide toolchain install cutlass` installs CUTLASS 4.7.0 and checks its digest.
 - The figure is generated from the same row data as this table; regenerate both when the compiler surface changes.

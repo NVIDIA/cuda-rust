@@ -179,9 +179,11 @@ projects/async-mlp-pipeline
 
 cute/overview
 cute/support-matrix
+cute/build-with-cutlass
 cute/cutedsl-comparison
 cute/layouts-and-tiling
 cute/gemm-and-pipelines
+cute/contracts
 ```
 
 ```{toctree}

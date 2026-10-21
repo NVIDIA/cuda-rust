@@ -1,109 +1,90 @@
-# CTM-style Rust primitives
+# ctm-rs: typed instruction primitives (preview)
 
-`ctm-rs` provides the instruction-level programming model for cuda-oxide:
-typed MMA operands, physical shared-memory formats, tensor maps, explicit
-barriers, and collective TMEM allocation. It depends on `cuda-device` for
-hardware intrinsics and common device types. It has no dependency on `cute-rs`
-or `cute-layout`; the compiler continues to use the existing NVVM dialect.
+`ctm-rs` is the instruction layer beneath `cute-rs`: typed MMA operands, physical
+shared-memory formats, tensor maps, explicit barriers and collective TMEM
+allocation over `cuda-device` intrinsics. It knows nothing about CuTe layouts.
 
-```rust,ignore
-use ctm_rs::{
-    memory::{Mxf4Tile128, SharedRegion},
-    mma::{Accumulator16x8, Mxf4A, Mxf4B, ScalePairA, ScalePairB},
-    tma::{Coordinates2D, TensorMap},
-};
+```text
+cute-rs       tensors, tiles, pipelines, tiled MMA     dialect-cute
+ctm-rs        instructions with typed operands        dialect-nvvm
+cuda-device   raw intrinsics
 ```
 
-The default crate is `no_std` and does not require CUDA host bindings. Enable
-the optional `host` feature for `ctm_rs::host::tma::encode_2d` and its checked
-driver descriptor encoding. That feature uses `cuda-core` directly.
+![ctm-rs at a glance](../../cuda-oxide-book/cute/images/ctm-rs-at-a-glance.svg)
 
-## Module navigation
+## What it covers
 
-CTM modules follow instruction families and their operand contracts:
+| Family | Operations | Targets |
+| --- | --- | --- |
+| Shared memory | `SharedRegion<F>` with checked alignment and capacity, typed CTA and cluster addresses | both |
+| TMA | 2D load, two-CTA multicast load, 2D store, descriptor prefetch, bulk commit and wait; host `encode_2d` behind the `host` feature | both; multicast on `sm_100a` |
+| Barriers and clusters | mbarrier init, arrive, expect-tx, parity wait; cluster arrive and wait, `mapa`, remote arrive, `CtaMask` | both |
+| tcgen05 | `TmemGuard` collective alloc and dealloc, F16 two-CTA MMA through `InstructionDescriptor`, 32x32b TMEM load and store, commit, fences | `sm_100a` |
+| Register MMA | m16n8k16 F16 and BF16 with F32 accumulate; m16n8k64 MXF4 with UE8M0 scales; ldmatrix x4, stmatrix x2 | both; MXF4 on `sm_120a` |
+| Async copy | 4-byte `cp.async`, noinc barrier arrive, commit and wait groups | both |
+| Warp | shuffle, elect, vote all, sum reduce, `setmaxnreg` | both |
+| Numerics | BF16 round-to-nearest convert, packed f32x2 add, mul and fma, approximate ex2, lg2, rcp, rsqrt and sin, trap | both |
+
+Not covered: other tcgen05 kinds and TMEM shapes, atomics and reductions, wgmma,
+libdevice, arbitrary physical layouts. An unsupported selector fails at export,
+not at run time.
+
+## What the types check, and what you own
+
+| Checked at compile time | Yours at every `unsafe` boundary |
+| --- | --- |
+| Operand roles, element formats, MMA shapes | Which lanes take part in a collective |
+| Descriptor fields and packed address ranges | Barrier phases and arrival counts |
+| Borrowed TMEM views and shared regions | Asynchronous completion before reuse |
+| Alignment and capacity of adopted storage | Collector fill and release order, pointer lifetimes |
+
+Destructors neither synchronize nor free hardware resources.
+
+## Use
+
+```rust,ignore
+use ctm_rs::{groups::CtaGroup2, tcgen05::{descriptors::*, mma::{self, collector_a}}};
+
+type Tile = DenseSharedF16<CtaGroup2, 256, 192, KMajor, KMajor>;
+let descriptor = InstructionDescriptor::<Tile>::new();
+// dst, a and b carry matching group, format and role types.
+mma::mma::<Tile, collector_a::Fill>(&dst, &a.k16::<0>(), &b.k16::<0>(), &descriptor, false);
+// Commit, wait and hand off to the consumers before reuse or readback.
+```
+
+[`fp16_gemm_256x352_ctm`](../examples/fp16_gemm_256x352_ctm) (`sm_100a`) and
+[`blockscale_gemm_ctm`](../examples/blockscale_gemm_ctm) (`sm_120a`) use ctm-rs alone
+through the primitives profile, `CUDA_OXIDE_MLIR_PROFILE=cutlass-primitives-mlir22`.
+The SM100 attention examples use it beside `cute-rs` in one module under the default
+profile.
+
+The crate is `no_std`. Kernel macros and canonical device types are reexported;
+crates that use them still depend on `cuda-device` directly because the macro
+expansions name it.
+
+## Modules
 
 | Modules | Responsibility |
 | --- | --- |
-| [`memory`](src/memory.rs), [`mma`](src/mma.rs) | Physical storage and typed MMA operands |
-| [`tcgen05`](src/tcgen05/mod.rs) | SM100 descriptors, MMA issue, TMEM ownership and completion |
-| [`async_copy`](src/async_copy.rs), [`tma`](src/tma.rs) | Shared-memory copies and tensor-map operations |
-| [`mbarrier`](src/mbarrier.rs), [`cluster`](src/cluster.rs), [`groups`](src/groups.rs) | Barrier readiness, cluster operations and CTA-group types |
-| [`warp`](src/warp.rs), `thread` | Warp collectives, hardware coordinates and register limits |
-| [`convert`](src/convert.rs), [`float`](src/float.rs), [`f32x2`](src/f32x2.rs), [`debug`](src/debug.rs) | Conversion, arithmetic and debugging primitives |
-| [`host::tma`](src/host/tma.rs) | Host tensor-map encoding behind the `host` feature |
+| `memory`, `mma` | storage formats and typed MMA operands |
+| `tcgen05` | descriptors, MMA issue, TMEM ownership and completion |
+| `async_copy`, `tma` | shared-memory copies and tensor-map operations |
+| `mbarrier`, `cluster`, `groups` | barrier readiness, cluster operations, CTA-group types |
+| `warp`, `thread` | collectives, coordinates, register limits |
+| `convert`, `float`, `f32x2`, `debug` | conversion, arithmetic and debugging |
+| `host::tma` | host tensor-map encoding behind the `host` feature |
 
-`tcgen05` separates descriptors, MMA and TMEM into child modules because their
-contracts differ. Tensor layout, partition and tile-level algorithms live in
-`cute-layout` and `cute-rs`; this crate retains the instruction-level boundary.
-
-Thread election, synchronization, instruction ordering, asynchronous completion,
-and cross-thread lifetimes remain explicit responsibilities of the kernel
-author. The Rust types check local operand roles, formats, shape choices, and
-borrowed resource lifetimes; they do not infer a collective execution schedule.
-
-## Migration from `cuda_device::primitives`
-
-Use `ctm_rs::{...}` instead of `cuda_device::primitives::{...}` and add `ctm-rs`
-as a dependency. The old module is removed to keep dependencies one-way.
-
-- Typed TMEM guards live at `ctm_rs::tcgen05::tmem::TmemGuard`. They expose
-  explicit `alloc_collective`/`dealloc_collective` operations and borrowed
-  views. They do not elect a warp or insert synchronization. The original
-  `cuda_device::TmemGuard` retains its existing convenience API separately.
-- Import `ctm_rs::mbarrier::BarrierAddressExt` for `shared_address()` on a ready
-  `cuda_device::ManagedBarrier`. Its returned address borrows the barrier;
-  an uninitialized barrier does not implement the adapter.
-- Host tensor-map encoding moves from `cuda_host::tma` to
-  `ctm_rs::host::tma`, behind `features = ["host"]`.
-
-CuTe examples express tensor computation through `cute-rs`. CTM instruction
-primitives implement those abstractions; thread coordinates, ABI storage and
-kernel macros may appear at kernel entry points. Add missing primitive
-interfaces here with their operand and safety contracts, then expose reusable
-tensor operations through `cute-rs`. The dedicated CTM examples demonstrate CTM
-without depending on the CuTe programming API. See the required CuTe kernel
-boundary in [AGENTS.md](../AGENTS.md).
-Keep the examples' direct `cuda-device` Cargo dependency: the reexported macros
-still name that crate in their expansions. It is an implementation dependency.
-
-The facade includes BF16 conversion, scalar and packed FP32 math, warp
-collectives, register-limit controls, traps, and asynchronous copy/completion
-operations. Packed FP32 registers have a distinct carrier type; shared-copy
-destinations carry their address space; completion adapters require a ready
-barrier. Collective participation and asynchronous lifetimes remain explicit
-unsafe obligations. Scoped thread indices and loop-unroll hints preserve their
-canonical compiler markers through reexports.
-
-The [coverage contract](docs/primitives-coverage.md) lists the implemented
-instruction subset, safety responsibilities, compiler profile, and limitations.
-Examples are the [SM120 block-scaled GEMM](../examples/blockscale_gemm_ctm)
-and [SM100 FP16 GEMM](../examples/fp16_gemm_256x352_ctm).
-
-CTM can also supply explicit instructions inside a CuTe kernel. The
-[SM100 prefill](../examples/sm100_fmha_prefill_cute) and
-[MLA decode](../examples/sm100_mla_decode_fp16_cute) examples retain structured
-CuTe layouts, MMA and TMA while using CTM for pipeline synchronization, TMEM
-transfers, packed arithmetic and execution control. These use `cutlass-mlir`,
-which accepts CuTe and NVVM operations together. Their CuTe operations do not
-all lower through Rust CTM calls. Kernel macros and canonical device types are
-reexported by CTM; callers still need `cuda-device` in their manifest because
-macro expansions refer to it internally.
-
-## Validation
+## Check
 
 From `cuda-oxide/` with its pinned nightly:
 
 ```sh
 cargo test -p ctm-rs --all-targets
 cargo test -p ctm-rs --all-targets --features host
-cargo test -p ctm-rs --doc
-python3 scripts/check-primitives-api-compile.py --example api --output-dir /tmp/ctm-api
-python3 scripts/check-primitives-api-compile.py --example blockscale --output-dir /tmp/ctm-blockscale
 python3 scripts/check-primitives-api-compile.py --example fp16 --output-dir /tmp/ctm-fp16
 ```
 
-Default tests cover physical layouts, register carriers, storage checks, and
-compile-time rejection of invalid contracts. Host tests validate descriptor
-arguments and driver-error handling. Compilation checks verify the actual
-instruction and parameter ABI through the CUTLASS consumer. GPU correctness
-and sanitizer commands live in each example's README.
+The tests cover formats, carriers, storage checks and compile-time rejection of
+invalid contracts. The compile check builds the fixtures through the CUTLASS
+consumer and records the MLIR and a validated cubin; it launches nothing. GPU
+correctness and sanitizer commands live in each example's README.

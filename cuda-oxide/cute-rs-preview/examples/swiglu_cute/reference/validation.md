@@ -61,5 +61,5 @@ empty-input policy, oracle values and numerical acceptance checks. They do
 not replace real device compilation, GPU numerical validation or memcheck.
 
 The example uses general Rust and CuTe compiler mappings; there is no SwiGLU-specific
-compiler hook. See [the CUTLASS backend documentation](../../../docs/translation.md)
+compiler hook. See [Build with the CUTLASS compiler](../../../../cuda-oxide-book/cute/build-with-cutlass.md)
 for compiler setup and MLIR inspection.

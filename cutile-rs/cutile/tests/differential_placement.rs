@@ -41,6 +41,7 @@ use cutile::compile_api::KernelCompiler;
 use cutile::prelude::*;
 use cutile::tensor::{IntoPartition, ToHostVec};
 use cutile_compiler::compiler::utils::CompileOptions;
+use cutile_compiler::hints::DebugInfoLevel;
 
 mod common;
 
@@ -313,7 +314,7 @@ fn hash_outputs(v: &[f32]) -> u64 {
 /// surfaces as an `Err` from a `sync()`.
 fn execute_case(name: &str) -> Result<Vec<f32>, String> {
     // Exercise placement optimizations even when Cargo enables device debug.
-    let options = CompileOptions::new().device_debug(false);
+    let options = CompileOptions::new().debug_info(DebugInfoLevel::None);
     fn e<E: std::fmt::Display>(err: E) -> String {
         err.to_string()
     }
@@ -495,7 +496,7 @@ fn differential_compile_runner() {
             .target("sm_120")
             .generics(vec![B.to_string()])
             .strides(&[("z", &[1]), ("x", &[1])])
-            .options(CompileOptions::default().device_debug(false))
+            .options(CompileOptions::default().debug_info(DebugInfoLevel::None))
             .compile()
             .unwrap_or_else(|err| panic!("compile {case}: {err}"));
         let counts = artifacts.check_counts();

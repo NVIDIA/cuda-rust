@@ -175,11 +175,7 @@ for manifest in sorted(groups.values()):
 ' "${POLICY_EXEMPT_EXAMPLES[@]}" --roots "${EXAMPLE_ROOTS[@]}")"
 
 total="$(printf '%s\n' "${representatives}" | grep -c .)"
-<<<<<<< HEAD
-locks="$(find "${EXAMPLE_ROOTS[@]}" -name Cargo.lock | grep -c .)"
-=======
-locks="$(find "${EXAMPLES_ROOT}" -name target -prune -o -name Cargo.lock -print | grep -c .)"
->>>>>>> 8a7bffe315 (chore(cuda-oxide): keep the guards clear of generated provider crates)
+locks="$(find "${EXAMPLE_ROOTS[@]}" -name target -prune -o -name Cargo.lock -print | grep -c .)"
 echo "Checking deny.toml over ${total} representative example workspaces" \
     "across ${locks} example lock files."
 

@@ -12,6 +12,7 @@
 //! transformer utilities. Raw-pointer and benchmark-oriented kernels live under
 //! `experimental`.
 
+pub mod aggregation;
 pub mod argmax;
 pub mod attention;
 pub mod embeddings;
@@ -21,6 +22,10 @@ pub mod norms;
 pub mod pointwise;
 pub mod positional;
 
+pub use aggregation::{
+    bitmask_or, embedding_backward_scatter_add, histogram, max_reduce, scatter_add, segment_sum,
+    weighted_histogram,
+};
 pub use argmax::{argmax_blocks_f16, argmax_reduce_blocks_to_u32, lm_head_argmax_blocks_f16};
 pub use attention::{
     flash_attn_causal_seq_dynpos_f16, flash_attn_causal_seq_f16, fmha_causal,

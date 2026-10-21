@@ -1307,10 +1307,12 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             }
         };
 
-        let elem_ty_prefix = ptr_value
+        let rust_elem = ptr_value
             .ty
-            .get_cuda_tile_element_type_prefix(self.modules.primitives())?;
-        let atomic_mode = AtomicMode::new(mode.as_str(), elem_ty_prefix)? as i64;
+            .get_instantiated_rust_element_type(self.modules.primitives())
+            .ok_or_else(|| self.jit_error(&call_expr.span(), "unable to determine element type"))?;
+        let atomic_mode = AtomicMode::resolve(mode.as_str(), &rust_elem)
+            .map_err(|e| self.jit_error(&call_expr.span(), &e))? as i64;
 
         let mut operands = vec![ptrs, arg];
         let mut mask_count: i64 = 0;
@@ -1644,10 +1646,12 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 )
             }
         };
-        let elem_ty_prefix = view_value
-            .ty
-            .get_cuda_tile_element_type_prefix(self.modules.primitives())?;
-        let atomic_mode = AtomicMode::new(mode.as_str(), elem_ty_prefix)? as i64;
+        let atomic_mode = self.resolve_view_atomic_mode(
+            mode.as_str(),
+            &view_value.ty,
+            &value_value.ty,
+            &call_expr.span(),
+        )?;
 
         let mut all_operands = vec![cuda_tile_view_value];
         all_operands.extend_from_slice(&index_values);
@@ -3900,6 +3904,33 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         Ok(Some(result))
     }
 
+    /// Resolves a mode marker from the destination view's Rust element, the
+    /// only record of signedness, and rejects a disagreeing contribution tile.
+    fn resolve_view_atomic_mode(
+        &self,
+        marker: &str,
+        view_ty: &super::tile_rust_type::TileRustType,
+        value_ty: &super::tile_rust_type::TileRustType,
+        span: &proc_macro2::Span,
+    ) -> Result<i64, JITError> {
+        let dest = view_ty
+            .get_instantiated_rust_element_type(self.modules.primitives())
+            .ok_or_else(|| self.jit_error(span, "unable to determine the view's element type"))?;
+        if let Some(contribution) =
+            value_ty.get_instantiated_rust_element_type(self.modules.primitives())
+        {
+            if contribution != dest {
+                return self.jit_error_result(
+                    span,
+                    &format!(
+                        "`{marker}` destination is `{dest}`, but contribution tile is `{contribution}`"
+                    ),
+                );
+            }
+        }
+        Ok(AtomicMode::resolve(marker, &dest).map_err(|e| self.jit_error(span, &e))? as i64)
+    }
+
     fn raw_integer_constant(
         &self,
         module: &mut Module,
@@ -4110,13 +4141,15 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         segments.push(indices.len() as i64);
         if is_atomic {
             let value = compile_value(module, ctx, "value")?;
-            let prefix = value
-                .ty
-                .get_cuda_tile_element_type_prefix(self.modules.primitives())?;
             let mode = super::shared_utils::extract_zst_type_name(argument("mode"), "mode")?;
             builder = builder.attr(
                 "mode",
-                Attribute::i32(AtomicMode::new(&mode, prefix)? as i64),
+                Attribute::i32(self.resolve_view_atomic_mode(
+                    &mode,
+                    &view.ty,
+                    &value.ty,
+                    &call.span(),
+                )?),
             );
             operands.push(
                 value

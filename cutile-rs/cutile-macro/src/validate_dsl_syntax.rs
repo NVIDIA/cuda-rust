@@ -115,6 +115,21 @@ pub fn validate_entry_point_parameters(item: &ItemFn) -> Result<(), Error> {
                 if type_name == "MappedPartitionMut" {
                     ty.err("MappedPartitionMut parameters are passed by value; use `mut z: MappedPartitionMut<...>`, not `&mut MappedPartitionMut<...>`.")?;
                 }
+                if matches!(
+                    type_name.as_str(),
+                    "AddTensor"
+                        | "AndTensor"
+                        | "OrTensor"
+                        | "XorTensor"
+                        | "MaxTensor"
+                        | "MinTensor"
+                ) {
+                    // A supported reference parameter. The capability is
+                    // shared by construction, and a `&mut` spelling is
+                    // rejected by launcher generation, which `process_items`
+                    // runs before this pass.
+                    continue;
+                }
                 if type_name != "Tensor" {
                     ty.err(&format!(
                         "References to `{}` as parameters are not supported. \

@@ -1,0 +1,85 @@
+error[E0277]: the trait bound `f32: AtomicOrd` is not satisfied
+ --> tests/ui/max_tensor_requires_an_ordered_element.rs:5:1
+  |
+5 | #[cutile::module]
+  | ^^^^^^^^^^^^^^^^^ the trait `AtomicOrd` is not implemented for `f32`
+  |
+help: the following other types implement trait `AtomicOrd`
+ --> src/_core.rs
+  |
+  |     impl AtomicOrd for i32 {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^ `i32`
+  |     impl AtomicOrd for u32 {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^ `u32`
+  |     impl AtomicOrd for i64 {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^ `i64`
+  |     impl AtomicOrd for u64 {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^ `u64`
+note: required by a bound in `cutile::core::MaxTensor_2`
+ --> src/_core.rs
+  |
+  |     pub struct MaxTensor<E: atomic::AtomicOrd, const D: [i32; N]> {
+  |                             ^^^^^^^^^^^^^^^^^ required by this bound in `MaxTensor_2`
+  = note: this error originates in the attribute macro `cutile::module` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `partition` exists for reference `&cutile::core::MaxTensor_2<f32, -1, -1>`, but its trait bounds were not satisfied
+  --> tests/ui/max_tensor_requires_an_ordered_element.rs:12:56
+   |
+12 |         let acc: MaxPartition<f32, { [16, 16] }> = out.partition(shape![16, 16]);
+   |                                                        ^^^^^^^^^ method cannot be called on `&cutile::core::MaxTensor_2<f32, -1, -1>` due to unsatisfied trait bounds
+   |
+  ::: src/_core.rs
+   |
+   |     pub struct MaxTensor<E: atomic::AtomicOrd, const D: [i32; N]> {
+   |     ------------------------------------------------------------- doesn't satisfy `<_ as DeviceOp>::Output = _`, `_: DeviceOp`, `_: PartitionOp<_, MaxTensor_2<f32, -1, -1>>` or `cutile::core::MaxTensor_2<f32, -1, -1>: Iterator`
+   |
+   = note: the following trait bounds were not satisfied:
+           `f32: AtomicOrd`
+           `<&cutile::core::MaxTensor_2<f32, -1, -1> as cutile::prelude::DeviceOp>::Output = _`
+           which is required by `&cutile::core::MaxTensor_2<f32, -1, -1>: cutile::prelude::PartitionOp<_, &cutile::core::MaxTensor_2<f32, -1, -1>>`
+           `&cutile::core::MaxTensor_2<f32, -1, -1>: cutile::prelude::DeviceOp`
+           which is required by `&cutile::core::MaxTensor_2<f32, -1, -1>: cutile::prelude::PartitionOp<_, &cutile::core::MaxTensor_2<f32, -1, -1>>`
+           `<&&cutile::core::MaxTensor_2<f32, -1, -1> as cutile::prelude::DeviceOp>::Output = _`
+           which is required by `&&cutile::core::MaxTensor_2<f32, -1, -1>: cutile::prelude::PartitionOp<_, &&cutile::core::MaxTensor_2<f32, -1, -1>>`
+           `&&cutile::core::MaxTensor_2<f32, -1, -1>: cutile::prelude::DeviceOp`
+           which is required by `&&cutile::core::MaxTensor_2<f32, -1, -1>: cutile::prelude::PartitionOp<_, &&cutile::core::MaxTensor_2<f32, -1, -1>>`
+           `<&mut &cutile::core::MaxTensor_2<f32, -1, -1> as cutile::prelude::DeviceOp>::Output = _`
+           which is required by `&mut &cutile::core::MaxTensor_2<f32, -1, -1>: cutile::prelude::PartitionOp<_, &mut &cutile::core::MaxTensor_2<f32, -1, -1>>`
+           `&mut &cutile::core::MaxTensor_2<f32, -1, -1>: cutile::prelude::DeviceOp`
+           which is required by `&mut &cutile::core::MaxTensor_2<f32, -1, -1>: cutile::prelude::PartitionOp<_, &mut &cutile::core::MaxTensor_2<f32, -1, -1>>`
+           `&cutile::core::MaxTensor_2<f32, -1, -1>: Iterator`
+           which is required by `&mut &cutile::core::MaxTensor_2<f32, -1, -1>: Iterator`
+           `<cutile::core::MaxTensor_2<f32, -1, -1> as cutile::prelude::DeviceOp>::Output = _`
+           which is required by `cutile::core::MaxTensor_2<f32, -1, -1>: cutile::prelude::PartitionOp<_, cutile::core::MaxTensor_2<f32, -1, -1>>`
+           `cutile::core::MaxTensor_2<f32, -1, -1>: cutile::prelude::DeviceOp`
+           which is required by `cutile::core::MaxTensor_2<f32, -1, -1>: cutile::prelude::PartitionOp<_, cutile::core::MaxTensor_2<f32, -1, -1>>`
+           `<&mut cutile::core::MaxTensor_2<f32, -1, -1> as cutile::prelude::DeviceOp>::Output = _`
+           which is required by `&mut cutile::core::MaxTensor_2<f32, -1, -1>: cutile::prelude::PartitionOp<_, &mut cutile::core::MaxTensor_2<f32, -1, -1>>`
+           `&mut cutile::core::MaxTensor_2<f32, -1, -1>: cutile::prelude::DeviceOp`
+           which is required by `&mut cutile::core::MaxTensor_2<f32, -1, -1>: cutile::prelude::PartitionOp<_, &mut cutile::core::MaxTensor_2<f32, -1, -1>>`
+           `cutile::core::MaxTensor_2<f32, -1, -1>: Iterator`
+           which is required by `&mut cutile::core::MaxTensor_2<f32, -1, -1>: Iterator`
+
+error[E0277]: the trait bound `f32: AtomicOrd` is not satisfied
+ --> tests/ui/max_tensor_requires_an_ordered_element.rs:5:1
+  |
+5 | #[cutile::module]
+  | ^^^^^^^^^^^^^^^^^ the trait `AtomicOrd` is not implemented for `f32`
+  |
+help: the following other types implement trait `AtomicOrd`
+ --> src/_core.rs
+  |
+  |     impl AtomicOrd for i32 {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^ `i32`
+  |     impl AtomicOrd for u32 {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^ `u32`
+  |     impl AtomicOrd for i64 {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^ `i64`
+  |     impl AtomicOrd for u64 {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^ `u64`
+note: required by a bound in `cutile::core::MaxPartition_2`
+ --> src/_core.rs
+  |
+  |     pub struct MaxPartition<'a, E: atomic::AtomicOrd, const D: [i32; N]> {
+  |                                    ^^^^^^^^^^^^^^^^^ required by this bound in `MaxPartition_2`
+  = note: this error originates in the attribute macro `cutile::module` (in Nightly builds, run with -Z macro-backtrace for more info)

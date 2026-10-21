@@ -113,6 +113,43 @@ impl AtomicMode {
         }
         Ok(result)
     }
+
+    /// Resolves a mode marker against a Rust element type.
+    pub fn resolve(marker: &str, rust_elem: &str) -> Result<Self, String> {
+        #[derive(Clone, Copy)]
+        enum Class {
+            Float,
+            Signed,
+            Unsigned,
+        }
+        use Class::{Float, Signed, Unsigned};
+        let class = match rust_elem {
+            "f16" | "bf16" | "f32" | "f64" => Float,
+            "i32" | "i64" => Signed,
+            "u32" | "u64" => Unsigned,
+            _ if matches!(marker, "Sum" | "Maximum" | "Minimum") => {
+                return Err(format!(
+                    "`{rust_elem}` has no atomic reduction modes, so `{marker}` cannot be resolved"
+                ))
+            }
+            _ => Float,
+        };
+        match (marker, class) {
+            ("Sum", Float) => Ok(AtomicMode::AddF),
+            ("Sum", Signed | Unsigned) => Ok(AtomicMode::Add),
+            ("Maximum", Signed) => Ok(AtomicMode::Max),
+            ("Maximum", Unsigned) => Ok(AtomicMode::UMax),
+            ("Minimum", Signed) => Ok(AtomicMode::Min),
+            ("Minimum", Unsigned) => Ok(AtomicMode::UMin),
+            ("Maximum" | "Minimum", Float) => Err(format!(
+                "`{marker}` has no atomic reduction mode for `{rust_elem}`"
+            )),
+            (concrete, _) => {
+                let prefix = ElementTypePrefix::new(rust_elem).map_err(|e| e.to_string())?;
+                AtomicMode::new(concrete, prefix).map_err(|e| e.to_string())
+            }
+        }
+    }
 }
 
 // Re-export from bounds.rs (canonical location shared with old compiler).

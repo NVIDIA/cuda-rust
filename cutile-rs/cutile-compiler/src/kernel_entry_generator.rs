@@ -25,10 +25,66 @@ use syn::punctuated::Punctuated;
 use syn::visit_mut::VisitMut;
 use syn::{Expr, FnArg, GenericArgument, ItemFn, ItemImpl, Lit, Stmt, Token};
 
+/// The six aggregation operation families, with the names each one
+/// contributes to generated code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AggregationKind {
+    Add,
+    And,
+    Or,
+    Xor,
+    Max,
+    Min,
+}
+
+impl AggregationKind {
+    fn from_type_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "AddTensor" => AggregationKind::Add,
+            "AndTensor" => AggregationKind::And,
+            "OrTensor" => AggregationKind::Or,
+            "XorTensor" => AggregationKind::Xor,
+            "MaxTensor" => AggregationKind::Max,
+            "MinTensor" => AggregationKind::Min,
+            _ => return None,
+        })
+    }
+    /// The capability's Rust type name, as spelled in the entry wrapper.
+    fn tensor_type(self) -> &'static str {
+        match self {
+            AggregationKind::Add => "AddTensor",
+            AggregationKind::And => "AndTensor",
+            AggregationKind::Or => "OrTensor",
+            AggregationKind::Xor => "XorTensor",
+            AggregationKind::Max => "MaxTensor",
+            AggregationKind::Min => "MinTensor",
+        }
+    }
+    /// The DSL view constructor the entry wrapper calls for this family.
+    fn make_view(self) -> &'static str {
+        match self {
+            AggregationKind::Add => "make_add_tensor_view",
+            AggregationKind::And => "make_and_tensor_view",
+            AggregationKind::Or => "make_or_tensor_view",
+            AggregationKind::Xor => "make_xor_tensor_view",
+            AggregationKind::Max => "make_max_tensor_view",
+            AggregationKind::Min => "make_min_tensor_view",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum TensorParamKind {
     Tensor,
-    MappedPartitionMut { map_shape: String },
+    /// One of the aggregation capabilities (`&AddTensor<_, _>` through
+    /// `&MinTensor<_, _>`): the same whole-tensor Tile IR view and the same
+    /// launcher ABI as an immutable `&Tensor`, wrapped in the atomic-only
+    /// Rust capability. Never partitioned by the entry wrapper — the atomic
+    /// operation builds its own view from the capability.
+    Aggregation(AggregationKind),
+    MappedPartitionMut {
+        map_shape: String,
+    },
 }
 
 struct TensorInput {
@@ -383,6 +439,14 @@ impl TensorInput {
                 ).unwrap();
                 statements.push(tensor_stmnt);
             }
+            TensorParamKind::Aggregation(kind) => {
+                let tensor = kind.tensor_type();
+                let make_view = kind.make_view();
+                let tensor_stmnt = syn::parse2::<syn::Stmt>(
+                    format!("let {var_name}: {tensor}<{element_type}, {shape_param}> = unsafe {{ {make_view}({final_ptr_var}, {final_shape_var}, {strides_array_var}, {token_var}) }};").parse().unwrap()
+                ).unwrap();
+                statements.push(tensor_stmnt);
+            }
             TensorParamKind::MappedPartitionMut { map_shape } => {
                 let tensor_var = format!("{var_name}_tensor");
                 let tensor_stmnt = syn::parse2::<syn::Stmt>(
@@ -430,6 +494,9 @@ fn get_tensor_param_kind(ty: &syn::Type) -> Result<TensorParamKind, JITError> {
     };
     match type_ident.to_string().as_str() {
         "Tensor" => Ok(TensorParamKind::Tensor),
+        name if AggregationKind::from_type_name(name).is_some() => Ok(
+            TensorParamKind::Aggregation(AggregationKind::from_type_name(name).unwrap()),
+        ),
         "MappedPartitionMut" => {
             let Some(map_shape) = type_generic_args.args.iter().nth(2) else {
                 return SourceLocation::unknown().jit_error_result(

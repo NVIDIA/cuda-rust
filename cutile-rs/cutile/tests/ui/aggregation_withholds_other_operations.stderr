@@ -1,0 +1,11 @@
+error[E0599]: no method named `atomic_max` found for struct `cutile::core::AddPartition_2<'a, E, D0, D1>` in the current scope
+  --> tests/ui/aggregation_withholds_other_operations.rs:13:32
+   |
+13 |         let _done: Token = acc.atomic_max([0i32, 0i32], ones);
+   |                                ^^^^^^^^^^
+   |
+help: there is a method `atomic_add` with a similar name
+   |
+13 -         let _done: Token = acc.atomic_max([0i32, 0i32], ones);
+13 +         let _done: Token = acc.atomic_add([0i32, 0i32], ones);
+   |

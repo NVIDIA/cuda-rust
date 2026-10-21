@@ -1088,6 +1088,93 @@ pub fn validate_grid_bounds(grid: (u32, u32, u32), bounds: &[GridBound]) -> Resu
     Ok(())
 }
 
+/// How one launch binds one allocation, including an aggregation operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AggregationOp {
+    Add,
+    And,
+    Or,
+    Xor,
+    Max,
+    Min,
+}
+
+impl AggregationOp {
+    fn as_str(self) -> &'static str {
+        match self {
+            AggregationOp::Add => "addition",
+            AggregationOp::And => "bitwise AND",
+            AggregationOp::Or => "bitwise OR",
+            AggregationOp::Xor => "bitwise XOR",
+            AggregationOp::Max => "maximum",
+            AggregationOp::Min => "minimum",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingAccess {
+    /// A whole-tensor read (`&Tensor`).
+    Read,
+    /// A tiled, disjoint write (`&mut Tensor`).
+    Write,
+    /// Overlapping atomic updates for the specified operation.
+    Atomic(AggregationOp),
+}
+
+/// Rejects an atomic/ordinary alias and mismatched aggregation operations.
+pub fn validate_binding_aliases(
+    bindings: &[(&str, crate::tensor::StorageId, BindingAccess)],
+) -> Result<(), Error> {
+    for (i, (name, id, access)) in bindings.iter().enumerate() {
+        for (other_name, other_id, other_access) in bindings.iter().skip(i + 1) {
+            if other_id != id {
+                continue;
+            }
+            match (access, other_access) {
+                (
+                    BindingAccess::Read | BindingAccess::Write,
+                    BindingAccess::Read | BindingAccess::Write,
+                ) => {}
+                (BindingAccess::Atomic(op), BindingAccess::Atomic(other_op)) if op == other_op => {}
+                // Allocation-level check; disjoint regions are rejected too.
+                (BindingAccess::Atomic(op), BindingAccess::Atomic(other_op)) => {
+                    return kernel_launch_error_result(&format!(
+                        "`{name}` and `{other_name}` are the same allocation, but \
+                         `{name}` aggregates by {} while `{other_name}` aggregates by \
+                         {}. The aggregation contract requires one operation per \
+                         allocation within a launch; bind a separate allocation, or \
+                         make both parameters the same operation.",
+                        op.as_str(),
+                        other_op.as_str()
+                    ));
+                }
+                (BindingAccess::Atomic(_), ordinary) | (ordinary, BindingAccess::Atomic(_)) => {
+                    let (atomic_name, ordinary_name) = if matches!(access, BindingAccess::Atomic(_))
+                    {
+                        (name, other_name)
+                    } else {
+                        (other_name, name)
+                    };
+                    let kind = match ordinary {
+                        BindingAccess::Read => "read",
+                        BindingAccess::Write => "written",
+                        BindingAccess::Atomic(_) => unreachable!("the ordinary side of the pair"),
+                    };
+                    return kernel_launch_error_result(&format!(
+                        "`{atomic_name}` and `{ordinary_name}` are the same allocation, but \
+                         `{atomic_name}` is bound atomically while `{ordinary_name}` is {kind} \
+                         ordinarily. The aggregation contract admits no ordinary access to \
+                         the same storage within the launch; bind a separate allocation, or \
+                         make both parameters the same aggregation operation."
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Runs the full set of launch-time checks before `cuLaunchKernel`: the
 /// built-in grid family (all partition grids match the launch grid) plus any
 /// compiler-emitted checks hoisted out of the device kernel.
@@ -2099,6 +2186,131 @@ mod launch_check_tests {
         // Exact bindings keep strict equality even alongside a prefix one.
         assert!(validate_grid_bounds((2, 1, 1), &[Exact((3, 1, 1)), AtMost((3, 1, 1))]).is_err());
         assert!(validate_grid_bounds((3, 1, 1), &[Exact((3, 1, 1)), AtMost((4, 1, 1))]).is_ok());
+    }
+
+    #[test]
+    fn an_atomic_binding_imposes_no_grid_bound() {
+        // The atomic capability contributes no `GridBound` at all, so a
+        // split-K grid with more programs than output tiles is admitted.
+        // That is the whole point: the exact-coverage bound a `&mut Tensor`
+        // output imposes would reject it.
+        assert_eq!(
+            infer_launch_grid((2, 2, 4), &[]).unwrap(),
+            (2, 2, 4),
+            "an explicit grid with no bindings to bound it must be accepted"
+        );
+        assert!(
+            infer_launch_grid((2, 2, 4), &[GridBound::Exact((2, 2, 1))]).is_err(),
+            "the same grid under a disjoint-output bound is a launch error"
+        );
+        // With no binding to define it, a grid is still required.
+        assert!(infer_launch_grid((0, 0, 0), &[]).is_err());
+    }
+
+    #[test]
+    fn atomic_and_ordinary_bindings_of_one_allocation_are_rejected() {
+        use crate::tensor::StorageId;
+        use AggregationOp::Add;
+        use BindingAccess::{Atomic, Read, Write};
+        // Distinct allocations: every combination is fine.
+        assert!(validate_binding_aliases(&[
+            ("out", StorageId::fake(1), Atomic(Add)),
+            ("src", StorageId::fake(2), Read)
+        ])
+        .is_ok());
+        assert!(validate_binding_aliases(&[
+            ("out", StorageId::fake(1), Atomic(Add)),
+            ("other", StorageId::fake(2), Write)
+        ])
+        .is_ok());
+        // Two same-operation bindings over one allocation are the
+        // capability's point.
+        assert!(validate_binding_aliases(&[
+            ("a", StorageId::fake(1), Atomic(Add)),
+            ("b", StorageId::fake(1), Atomic(Add))
+        ])
+        .is_ok());
+        // Ordinary combinations keep whatever rules already governed them.
+        assert!(validate_binding_aliases(&[
+            ("a", StorageId::fake(1), Read),
+            ("b", StorageId::fake(1), Write)
+        ])
+        .is_ok());
+
+        // One allocation bound both atomically and ordinarily is the race.
+        let err = validate_binding_aliases(&[
+            ("out", StorageId::fake(7), Atomic(Add)),
+            ("src", StorageId::fake(7), Read),
+        ])
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("out") && message.contains("src") && message.contains("read"),
+            "the error should name both parameters and the ordinary access: {message}"
+        );
+        // Order-independent: the atomic binding may come second.
+        assert!(validate_binding_aliases(&[
+            ("src", StorageId::fake(7), Read),
+            ("out", StorageId::fake(7), Atomic(Add))
+        ])
+        .is_err());
+        assert!(validate_binding_aliases(&[
+            ("dst", StorageId::fake(7), Write),
+            ("out", StorageId::fake(7), Atomic(Add))
+        ])
+        .is_err());
+        assert!(validate_binding_aliases(&[
+            ("out", StorageId::fake(7), Atomic(Add)),
+            ("dst", StorageId::fake(7), Write)
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn mixed_aggregation_operations_on_one_allocation_are_rejected() {
+        use crate::tensor::StorageId;
+        use AggregationOp::{Add, And, Max, Min, Or, Xor};
+        use BindingAccess::Atomic;
+        let ops = [Add, And, Or, Xor, Max, Min];
+        for (i, &op) in ops.iter().enumerate() {
+            // Same operation on one allocation: accepted, in either order.
+            assert!(validate_binding_aliases(&[
+                ("a", StorageId::fake(1), Atomic(op)),
+                ("b", StorageId::fake(1), Atomic(op))
+            ])
+            .is_ok());
+            // Different allocations: any pair of operations is accepted.
+            let next = ops[(i + 1) % ops.len()];
+            assert!(validate_binding_aliases(&[
+                ("a", StorageId::fake(1), Atomic(op)),
+                ("b", StorageId::fake(2), Atomic(next))
+            ])
+            .is_ok());
+            // Different operations on one allocation: rejected, in either
+            // order, with both parameters and both operations named.
+            for &other in ops.iter().filter(|&&other| other != op) {
+                let err = validate_binding_aliases(&[
+                    ("a", StorageId::fake(3), Atomic(op)),
+                    ("b", StorageId::fake(3), Atomic(other)),
+                ])
+                .unwrap_err();
+                let message = err.to_string();
+                assert!(
+                    message.contains("`a`")
+                        && message.contains("`b`")
+                        && message.contains("one operation per"),
+                    "the error should name both parameters and the contract: {message}"
+                );
+                assert!(
+                    validate_binding_aliases(&[
+                        ("b", StorageId::fake(3), Atomic(other)),
+                        ("a", StorageId::fake(3), Atomic(op))
+                    ])
+                    .is_err(),
+                    "rejection must not depend on binding order"
+                );
+            }
+        }
     }
 
     #[test]

@@ -27,4 +27,9 @@ fn ui() {
     t.compile_fail("tests/ui/entry_non_literal_value.rs");
     t.compile_fail("tests/ui/global_*.rs");
     t.compile_fail("tests/ui/unordered_partition_requires_unsafe.rs");
+    // The four `tests/ui/aggregation_tensor_*.rs` cases are registered in
+    // `tests/ui_aggregation.rs`, not here: that target is in CPU CI and this
+    // one cannot be (see that file's header). Registering them in both would
+    // build each case twice and give their expectations two places to be
+    // re-blessed from.
 }

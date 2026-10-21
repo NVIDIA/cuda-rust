@@ -1081,6 +1081,116 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 )
                 .map(Some)
             }
+            // Atomic views require exact, unpadded tiling.
+            "require_tiles_divide_exactly" => {
+                if call_expr.args.len() != 2 {
+                    return self.jit_error_result(
+                        &call_expr.span(),
+                        &format!(
+                            "`require_tiles_divide_exactly` expects 2 arguments, got {}",
+                            call_expr.args.len()
+                        ),
+                    );
+                }
+                let tensor = self
+                    .compile_expression(
+                        module,
+                        block_id,
+                        &call_expr.args[0],
+                        generic_vars,
+                        ctx,
+                        None,
+                    )?
+                    .ok_or_else(|| {
+                        self.jit_error(
+                            &call_expr.args[0].span(),
+                            "failed to compile the aggregation tensor",
+                        )
+                    })?;
+                let tile = self
+                    .compile_expression(
+                        module,
+                        block_id,
+                        &call_expr.args[1],
+                        generic_vars,
+                        ctx,
+                        None,
+                    )?
+                    .ok_or_else(|| {
+                        self.jit_error(
+                            &call_expr.args[1].span(),
+                            "failed to compile the tile shape",
+                        )
+                    })?;
+                let tile_shape =
+                    self.static_shape_from_value(&tile, generic_vars, &call_expr.args[1].span())?;
+                // The destination must be traceable to a kernel parameter.
+                let Some(origin) = tensor.tensor_origin.as_ref() else {
+                    return self.jit_error_result(
+                        &call_expr.args[0].span(),
+                        "an aggregation partition must come from a kernel parameter, so its \
+                         tiling can be checked against the destination's extents at launch",
+                    );
+                };
+                let Some(&param) = self.param_index.get(origin.as_str()) else {
+                    return self.jit_error_result(
+                        &call_expr.args[0].span(),
+                        &format!("`{origin}` is not a kernel parameter"),
+                    );
+                };
+                for (axis, &extent) in tile_shape.iter().enumerate() {
+                    if extent < 1 {
+                        return self.jit_error_result(
+                            &call_expr.args[1].span(),
+                            &format!("tile extent on axis {axis} must be positive, got {extent}"),
+                        );
+                    }
+                    let declared = match self.validator.params.get(param) {
+                        Some(cuda_async::device_context::ValidParamType::Tensor(tensor)) => {
+                            tensor.shape.get(axis).copied().filter(|&e| e >= 0)
+                        }
+                        _ => None,
+                    };
+                    if let Some(dim) = declared {
+                        if dim % extent != 0 {
+                            return self.jit_error_result(
+                                &call_expr.args[0].span(),
+                                &format!(
+                                    "`{origin}` axis {axis} has declared extent {dim}, which is \
+                                     not a multiple of the aggregation tile extent {extent}: an \
+                                     atomic reduction addresses an unpadded view, so a partial \
+                                     edge tile would aggregate outside the tensor"
+                                ),
+                            );
+                        }
+                        continue;
+                    }
+                    let predicate = cuda_async::predicate::Predicate::DivisibleBy {
+                        term: cuda_async::predicate::Term::atom(cuda_async::predicate::Atom::Dim {
+                            param,
+                            axis,
+                        }),
+                        divisor: i64::from(extent),
+                    };
+                    if !self.lower_obligation(
+                        predicate,
+                        format!(
+                            "`{origin}` axis {axis} must be a multiple of the aggregation tile \
+                             extent {extent}: an atomic reduction addresses an unpadded view, so \
+                             a partial edge tile would aggregate outside the tensor"
+                        ),
+                    ) {
+                        return self.jit_error_result(
+                            &call_expr.args[1].span(),
+                            &format!(
+                                "cannot establish that `{origin}` axis {axis} is a multiple of \
+                                 {extent} at launch time"
+                            ),
+                        );
+                    }
+                }
+                Ok(None)
+            }
             "check_bounded_partition_access" => self.compile_check_bounded_partition_access(
                 module,
                 block_id,
@@ -2437,14 +2547,20 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     // Both view types walk the same ladder over the same
                     // goals; they differ only in the Rust type of the
                     // receiver, which the checker never inspects.
-                    "check_partition_access" | "check_partition_access_mut" => self
-                        .compile_check_partition_access(
-                            module,
-                            block_id,
-                            call_expr,
-                            generic_vars,
-                            ctx,
-                        ),
+                    "check_partition_access"
+                    | "check_partition_access_mut"
+                    | "check_add_partition_access"
+                    | "check_and_partition_access"
+                    | "check_or_partition_access"
+                    | "check_xor_partition_access"
+                    | "check_max_partition_access"
+                    | "check_min_partition_access" => self.compile_check_partition_access(
+                        module,
+                        block_id,
+                        call_expr,
+                        generic_vars,
+                        ctx,
+                    ),
                     _ => self.jit_error_result(
                         &call_expr.span(),
                         &format!("Unexpected compiler_op call {}", call_expr_func_str),

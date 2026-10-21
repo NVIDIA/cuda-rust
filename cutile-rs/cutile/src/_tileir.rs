@@ -30,8 +30,8 @@ pub mod tileir {
         E: ElementType,
         const D: [i32; N],
         M: atomic::Mode,
-        O: ordering::AtomicMode,
-        Sc: scope::Mode,
+        O: ordering::RedViewMode,
+        Sc: scope::RedViewScope,
     >(
         view: &mut PartitionMut<E, D>,
         value: Tile<E, D>,

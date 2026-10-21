@@ -1,0 +1,20 @@
+error[E0277]: the trait bound `std::sync::Arc<cutile::prelude::Tensor<f32>>: KernelAtomic<f32>` is not satisfied
+  --> tests/ui/aggregation_tensor_needs_exclusive_host_authority.rs:21:13
+   |
+21 |     let _ = kernels::accumulate(out, src);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `KernelAtomic<f32>` is not implemented for `std::sync::Arc<cutile::prelude::Tensor<f32>>`
+   |
+help: the following other types implement trait `KernelAtomic<T>`
+  --> src/tensor.rs
+   |
+   | impl<T: DType> KernelAtomic<T> for Atomic<Tensor<T>> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `cutile::prelude::Atomic<cutile::prelude::Tensor<T>>`
+...
+   | impl<T: DType> KernelAtomic<T> for Atomic<&mut Tensor<T>> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `cutile::prelude::Atomic<&mut cutile::prelude::Tensor<T>>`
+note: required by a bound in `accumulate`
+  --> tests/ui/aggregation_tensor_needs_exclusive_host_authority.rs:6:1
+   |
+ 6 | #[cutile::module]
+   | ^^^^^^^^^^^^^^^^^ required by this bound in `accumulate`
+   = note: this error originates in the attribute macro `cutile::module` (in Nightly builds, run with -Z macro-backtrace for more info)

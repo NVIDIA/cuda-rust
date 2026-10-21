@@ -80,6 +80,10 @@
 //!
 //! - `&mut Tensor<T, S>` → `impl KernelOutput<T>` (accepts `Partition<Tensor<T>>` or `Partition<&mut Tensor<T>>`)
 //! - `&Tensor<T, S>` → `impl KernelInput<T>` (accepts `Tensor<T>`, `Arc<Tensor<T>>`, or `&Tensor<T>`)
+//! - `&AddTensor<T, S>` (and the other aggregation capabilities) → `impl KernelAtomic<T>` (accepts only `Atomic<&mut Tensor<T>>`
+//!   or `Atomic<Tensor<T>>`: exclusive host authority). Launches with the
+//!   `&Tensor` ABI and contributes no grid bound, so several programs may
+//!   target one output tile.
 //! - `*mut T` → `DevicePointer<T>` (unsafe only)
 //! - Scalars remain unchanged
 //!
@@ -89,7 +93,9 @@
 //! ## Grid Inference
 //!
 //! Launch grid dimensions are automatically inferred from partitioned tensors.
-//! If multiple partitions exist, their grids must match.
+//! If multiple partitions exist, their grids must match. Atomic parameters
+//! bound nothing, because overlap is the point. A kernel whose only
+//! destination is atomic needs an explicit `.grid(..)`.
 
 use cutile_compiler::kernel_naming::KernelNaming;
 use cutile_compiler::syn_utils::*;
@@ -105,6 +111,58 @@ use syn::{
 };
 
 use crate::error::{Error, SpannedError};
+
+/// The six aggregation operation families, by capability type name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AggregationKind {
+    Add,
+    And,
+    Or,
+    Xor,
+    Max,
+    Min,
+}
+
+impl AggregationKind {
+    const ALL: [AggregationKind; 6] = [
+        AggregationKind::Add,
+        AggregationKind::And,
+        AggregationKind::Or,
+        AggregationKind::Xor,
+        AggregationKind::Max,
+        AggregationKind::Min,
+    ];
+    fn tensor_type(self) -> &'static str {
+        match self {
+            AggregationKind::Add => "AddTensor",
+            AggregationKind::And => "AndTensor",
+            AggregationKind::Or => "OrTensor",
+            AggregationKind::Xor => "XorTensor",
+            AggregationKind::Max => "MaxTensor",
+            AggregationKind::Min => "MinTensor",
+        }
+    }
+    fn op_variant(self) -> &'static str {
+        match self {
+            AggregationKind::Add => "Add",
+            AggregationKind::And => "And",
+            AggregationKind::Or => "Or",
+            AggregationKind::Xor => "Xor",
+            AggregationKind::Max => "Max",
+            AggregationKind::Min => "Min",
+        }
+    }
+}
+
+/// The aggregation family of `&AddTensor<..>` through `&MinTensor<..>`, or
+/// `None` for any other reference type.
+fn aggregation_tensor_kind(ref_ty: &TypeReference) -> Option<AggregationKind> {
+    let (ident, _) = get_ident_generic_args(&Type::Reference(ref_ty.clone()));
+    let ident = ident?;
+    AggregationKind::ALL
+        .into_iter()
+        .find(|kind| ident == kind.tensor_type())
+}
 
 /// Classification of generic parameter types.
 ///
@@ -540,6 +598,10 @@ pub fn generate_kernel_launcher(
     // Track element type per param (Some for &Tensor params, None for others).
     let mut param_element_types: Vec<Option<String>> = vec![];
     let mut tensor_param_kinds: HashMap<String, TensorParamKind> = HashMap::new();
+    // One `(name, allocation identity, access)` triple per tensor parameter,
+    // in signature order. Only emitted into the launcher when some parameter
+    // is atomic — ordinary kernels keep byte-identical generated code.
+    let mut alias_binding_exprs: Vec<String> = vec![];
 
     let mut required_generics: RequiredGenerics = RequiredGenerics::new(&item.sig.generics);
     for (i, ty) in input_types.iter().enumerate() {
@@ -549,10 +611,13 @@ pub fn generate_kernel_launcher(
                 let res = get_tensor_code(i, var_name, ref_ty, &mut required_generics)?;
                 let tensor_kind = if ref_ty.mutability.is_some() {
                     TensorParamKind::Output
+                } else if let Some(kind) = aggregation_tensor_kind(ref_ty) {
+                    TensorParamKind::Aggregation { kind }
                 } else {
                     TensorParamKind::Input
                 };
                 tensor_param_kinds.insert(var_name.clone(), tensor_kind);
+                alias_binding_exprs.push(alias_binding_expr(var_name, tensor_kind));
                 arg_types.push(res.fn_arg.ty.as_ref().clone());
                 param_element_types.push(res.element_type_name);
                 stride_args.push(res.stride_expr_str);
@@ -569,6 +634,7 @@ pub fn generate_kernel_launcher(
                     let ref_ty: TypeReference = parse_quote!(&mut #path_ty);
                     let res = get_tensor_code(i, var_name, &ref_ty, &mut required_generics)?;
                     tensor_param_kinds.insert(var_name.clone(), TensorParamKind::Output);
+                    alias_binding_exprs.push(alias_binding_expr(var_name, TensorParamKind::Output));
                     arg_types.push(res.fn_arg.ty.as_ref().clone());
                     param_element_types.push(res.element_type_name);
                     stride_args.push(res.stride_expr_str);
@@ -678,15 +744,33 @@ pub fn generate_kernel_launcher(
     let mut ki_type_param_names: Vec<String> = vec![];
     let mut ki_element_type_names: Vec<String> = vec![];
     let mut ki_param_idx: Vec<Option<usize>> = vec![];
+    // The trait each KernelInput-family param is bounded by: `KernelInput`
+    // for an ordinary `&Tensor`, `KernelAtomic` for an aggregation capability. The
+    // plumbing (`Stored`, `Returned`, `prepare`, `recover`, `PrepareInput`)
+    // is shared through the supertrait; only the bound differs, which is
+    // what keeps a plain `Arc<Tensor<_>>` out of an atomic parameter.
+    let mut ki_bound_names: Vec<String> = vec![];
     // Build KernelOutput metadata: which params are &mut Tensor (Partition).
     let mut ko_type_param_names: Vec<String> = vec![];
     let mut ko_element_type_names: Vec<String> = vec![];
     let mut ko_param_idx: Vec<Option<usize>> = vec![];
     for (i, ty) in arg_types.iter().enumerate() {
         let ty_str = ty.to_token_stream().to_string();
-        if ty_str.starts_with("Arc <") {
+        let is_atomic = matches!(
+            tensor_param_kinds.get(&param_names[i]),
+            Some(TensorParamKind::Aggregation { .. })
+        );
+        if ty_str.starts_with("Arc <") || is_atomic {
             let idx = ki_type_param_names.len();
             ki_type_param_names.push(format!("_K{}", idx));
+            ki_bound_names.push(
+                if is_atomic {
+                    "KernelAtomic"
+                } else {
+                    "KernelInput"
+                }
+                .to_string(),
+            );
             ki_element_type_names.push(
                 param_element_types[i]
                     .clone()
@@ -735,6 +819,7 @@ pub fn generate_kernel_launcher(
     let kernel_input_info = KernelInputInfo {
         type_param_names: ki_type_param_names,
         element_type_names: ki_element_type_names,
+        bound_names: ki_bound_names,
         param_kernel_input_idx: ki_param_idx.clone(),
         ko_type_param_names: ko_type_param_names.clone(),
         ko_element_type_names: ko_element_type_names.clone(),
@@ -798,9 +883,10 @@ pub fn generate_kernel_launcher(
     let mut struct_generics = generic_params.clone();
     for (ki_idx, ki_name) in ki_info.type_param_names.iter().enumerate() {
         let elem = &ki_info.element_type_names[ki_idx];
-        struct_generics.params.push(
-            syn::parse_str::<GenericParam>(&format!("{ki_name}: KernelInput<{elem}>")).unwrap(),
-        );
+        let bound = &ki_info.bound_names[ki_idx];
+        struct_generics
+            .params
+            .push(syn::parse_str::<GenericParam>(&format!("{ki_name}: {bound}<{elem}>")).unwrap());
     }
     for (ko_idx, ko_name) in ki_info.ko_type_param_names.iter().enumerate() {
         let elem = &ki_info.ko_element_type_names[ko_idx];
@@ -1037,6 +1123,19 @@ pub fn generate_kernel_launcher(
     ));
     launcher_method.block.stmts.extend(validator_statements);
 
+    // One allocation bound both atomically and through an ordinary access in
+    // the same launch is a data race the kernel cannot order away; reject it
+    // before any GPU work. Ordinary kernels emit nothing here.
+    if tensor_param_kinds
+        .values()
+        .any(|kind| matches!(kind, TensorParamKind::Aggregation { .. }))
+    {
+        launcher_method.block.stmts.push(parse_stmt(format!(
+            "validate_binding_aliases(&[{}])?;",
+            alias_binding_exprs.join(",")
+        )));
+    }
+
     // Above the `!_compile_only` gate so warmup validates the grid too.
     launcher_method.block.stmts.push(parse_stmt(
         "if self._programmatic_dependent_launch { validate_programmatic_dependent_launch(ctx.get_device_id())?; }".to_string(),
@@ -1166,7 +1265,13 @@ pub fn generate_kernel_launcher(
         let function_param = format!("arg{}", i);
         let type_param_name = format!("_A{}", i);
         let arg_type_str = &arg_aliases[i];
-        let is_arc = arg_type_str.starts_with("Arc <");
+        // Both families take the `PrepareInput` path; `KernelAtomic` only
+        // narrows which host bindings the where clause accepts.
+        let is_arc = arg_type_str.starts_with("Arc <")
+            || matches!(
+                tensor_param_kinds.get(&param_names[i]),
+                Some(TensorParamKind::Aggregation { .. })
+            );
         is_arc_param.push(is_arc);
 
         launcher_direct.sig.inputs.push(FnArg::Typed(
@@ -1208,9 +1313,10 @@ pub fn generate_kernel_launcher(
             );
             let ki_idx = ki_param_idx[i].unwrap();
             let elem = &ki_info.element_type_names[ki_idx];
+            let bound = &ki_info.bound_names[ki_idx];
             where_clause.predicates.push(
                 syn::parse2::<WherePredicate>(
-                    format!("{}: KernelInput<{}>", intermediate_type, elem)
+                    format!("{}: {}<{}>", intermediate_type, bound, elem)
                         .parse()
                         .unwrap(),
                 )
@@ -1345,7 +1451,7 @@ pub fn generate_kernel_launcher(
 ///
 /// A parsed `Stmt` AST node
 fn parse_stmt(s: String) -> Stmt {
-    syn::parse::<Stmt>(s.parse().unwrap()).unwrap()
+    syn::parse_str::<Stmt>(&s).unwrap()
 }
 
 /// Parses a string into a Rust expression AST node.
@@ -1366,7 +1472,7 @@ fn parse_stmt(s: String) -> Stmt {
 /// Currently unused (marked with `#[allow(dead_code)]`).
 #[allow(dead_code)]
 fn parse_expr(s: String) -> Expr {
-    syn::parse::<Expr>(s.parse().unwrap()).unwrap()
+    syn::parse_str::<Expr>(&s).unwrap()
 }
 
 /// Metadata about KernelInput params for the struct definition in _module.rs.
@@ -1375,6 +1481,9 @@ pub struct KernelInputInfo {
     pub type_param_names: Vec<String>,
     /// Element type name for each KernelInput param, e.g., ["T", "SrcType"].
     pub element_type_names: Vec<String>,
+    /// The trait each KernelInput-family param is bounded by: `"KernelInput"`
+    /// for `&Tensor`, `"KernelAtomic"` for an aggregation capability.
+    pub bound_names: Vec<String>,
     /// For each param in the args tuple, the index into type_param_names (if it's
     /// a KernelInput param), or None (if it's a partition/scalar).
     pub param_kernel_input_idx: Vec<Option<usize>>,
@@ -1416,6 +1525,12 @@ struct TensorLaunchCode {
 enum TensorParamKind {
     Input,
     Output,
+    /// An aggregation capability: bound with exclusive host authority, launched
+    /// with the whole-tensor input ABI, and constraining the launch grid not
+    /// at all — several programs may target one output tile on purpose.
+    Aggregation {
+        kind: AggregationKind,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1600,10 +1715,32 @@ fn parse_precondition_axis_arg(expr: &Expr) -> Result<usize, Error> {
         .map_err(|err| crate::error::syn_err(lit_int.span(), &err.to_string()))
 }
 
+/// `(name, allocation identity, access)` for one tensor parameter, as the
+/// generated launcher spells it.
+fn alias_binding_expr(name: &str, kind: TensorParamKind) -> String {
+    match kind {
+        TensorParamKind::Input => {
+            format!(r#"("{name}", KernelInputStored::storage_id(&{name}), BindingAccess::Read)"#)
+        }
+        TensorParamKind::Aggregation { kind } => {
+            let op = kind.op_variant();
+            format!(
+                r#"("{name}", KernelInputStored::storage_id(&{name}), BindingAccess::Atomic(AggregationOp::{op}))"#
+            )
+        }
+        TensorParamKind::Output => {
+            format!(r#"("{name}", KernelOutputStored::storage_id(&{name}), BindingAccess::Write)"#)
+        }
+    }
+}
+
 fn precondition_shape_expr(name: &str, kind: TensorParamKind) -> TokenStream2 {
     let ident = Ident::new(name, Span::call_site());
     match kind {
-        TensorParamKind::Input => quote! { #ident.shape().to_vec() },
+        // Both bind the whole tensor; `shape()` is the same trait method.
+        TensorParamKind::Input | TensorParamKind::Aggregation { .. } => {
+            quote! { #ident.shape().to_vec() }
+        }
         TensorParamKind::Output => quote! { KernelOutputStored::shape_as_i32(&#ident) },
     }
 }
@@ -1743,8 +1880,25 @@ fn get_tensor_code(
         return ty.err("Expected a named type identifier for tensor parameter.");
     };
     let type_ident = type_ident.to_string();
-    if type_ident != "Tensor" && type_ident != "MappedPartitionMut" {
+    // An aggregation capability takes the immutable launch path throughout:
+    // the same pointer/shape/strides ABI, the same whole-tensor validation,
+    // and — deliberately — no launch-grid bound. Only the host binding type
+    // differs.
+    let is_atomic = AggregationKind::ALL
+        .into_iter()
+        .any(|kind| type_ident == kind.tensor_type());
+    if type_ident != "Tensor" && type_ident != "MappedPartitionMut" && !is_atomic {
         return ty.err(&format!("Expected Tensor type, got {}.", type_ident));
+    }
+    // The capability is shared by construction: every program in the launch
+    // holds it and the atomics resolve the collisions. `&mut` would promise
+    // the disjointness the operation deliberately does not have.
+    if is_atomic && ty.mutability.is_some() {
+        return ty.err(&format!(
+            "`&mut {type_ident}<..>` is not a kernel parameter type. Atomic \
+             updates go through a shared `&{type_ident}<..>`, like Rust's own \
+             atomics.",
+        ));
     }
     if type_ident == "MappedPartitionMut" && ty.mutability.is_none() {
         return ty.err("internal error: MappedPartitionMut launcher lowering must use mutable output metadata.");
@@ -1785,11 +1939,12 @@ fn get_tensor_code(
         .to_string();
     let tensor_type = if ty.mutability.is_some() {
         format!("tensor::Partition<tensor::Tensor<{dtype}>>")
+    } else if is_atomic {
+        format!("tensor::Atomic<tensor::Tensor<{dtype}>>")
     } else {
         format!("Arc<tensor::Tensor<{dtype}>>")
     };
-    let fn_arg =
-        syn::parse::<PatType>(format!("{var_name}: {tensor_type}").parse().unwrap()).unwrap();
+    let fn_arg = syn::parse_str::<PatType>(&format!("{var_name}: {tensor_type}")).unwrap();
     // Stride expr.
     let stride_expr_str = if ty.mutability.is_some() {
         format!(
@@ -2155,4 +2310,153 @@ pub fn infer_shape_params_from_tensor_type(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The generated launcher body for one kernel signature, as a string.
+    fn launcher_for(item: ItemFn) -> String {
+        let root = Ident::new("cutile", Span::call_site());
+        let (_generics, _arg_types, launcher, _info) =
+            generate_kernel_launcher(&item, "m", "k", "k_entry", "K", "KArgs", &root)
+                .expect("launcher generation failed");
+        launcher.to_string()
+    }
+
+    /// An `&mut Tensor` output binds a partition, and a partition defines the
+    /// launch grid exactly. This is the behaviour the atomic parameter must
+    /// *not* inherit; asserted here so the contrast below is meaningful.
+    #[test]
+    fn a_mutable_output_contributes_an_exact_grid_bound() {
+        let launcher = launcher_for(parse_quote! {
+            #[cutile::entry()]
+            fn k(out: &mut Tensor<f32, { [-1, -1] }>) {}
+        });
+        assert!(
+            launcher.contains("grid_bound"),
+            "a `&mut Tensor` output must bound the launch grid: {launcher}"
+        );
+    }
+
+    /// An atomic kernel may put several programs on one output tile on
+    /// purpose, so the capability contributes no grid bound: the generated
+    /// `infer_launch_grid` call gets an empty bound list, and the grid comes
+    /// from elsewhere (another binding, or an explicit `.grid(..)`).
+    #[test]
+    fn an_atomic_parameter_contributes_no_grid_bound() {
+        let launcher = launcher_for(parse_quote! {
+            #[cutile::entry()]
+            fn k(out: &AddTensor<f32, { [-1, -1] }>, src: &Tensor<f32, { [-1, -1] }>) {}
+        });
+        assert!(
+            launcher.contains("infer_launch_grid (& [])"),
+            "the atomic capability must impose no grid bound: {launcher}"
+        );
+        assert!(
+            !launcher.contains("grid_bound"),
+            "no binding in this kernel may bound the grid: {launcher}"
+        );
+    }
+
+    /// The atomic parameter is bound by `KernelAtomic`, not `KernelInput`:
+    /// that is what keeps a shared `Arc<Tensor<_>>` out of it while the
+    /// ordinary input next to it still accepts one.
+    #[test]
+    fn an_atomic_parameter_is_bounded_by_kernel_atomic() {
+        let launcher = launcher_for(parse_quote! {
+            #[cutile::entry()]
+            fn k(out: &AddTensor<f32, { [-1, -1] }>, src: &Tensor<f32, { [-1, -1] }>) {}
+        });
+        assert!(
+            launcher.contains("_K0 : KernelAtomic < f32 >"),
+            "the atomic parameter must carry the exclusive-authority bound: {launcher}"
+        );
+        assert!(
+            launcher.contains("_K1 : KernelInput < f32 >"),
+            "the ordinary input must keep its own bound: {launcher}"
+        );
+        assert!(
+            launcher.contains("tensor :: Atomic < tensor :: Tensor < f32 > >"),
+            "the atomic parameter must bind through `Atomic<..>`: {launcher}"
+        );
+    }
+
+    /// Alias validation is emitted only for kernels that have an atomic
+    /// parameter, and it records every tensor parameter's allocation
+    /// identity and access kind.
+    #[test]
+    fn alias_validation_is_emitted_only_for_atomic_kernels() {
+        let ordinary = launcher_for(parse_quote! {
+            #[cutile::entry()]
+            fn k(out: &mut Tensor<f32, { [-1, -1] }>, src: &Tensor<f32, { [-1, -1] }>) {}
+        });
+        assert!(
+            !ordinary.contains("validate_binding_aliases"),
+            "an ordinary kernel must emit no alias validation: {ordinary}"
+        );
+
+        let atomic = launcher_for(parse_quote! {
+            #[cutile::entry()]
+            fn k(
+                out: &AddTensor<f32, { [-1, -1] }>,
+                dst: &mut Tensor<f32, { [-1, -1] }>,
+                src: &Tensor<f32, { [-1, -1] }>,
+            ) {}
+        });
+        assert!(
+            atomic.contains("BindingAccess :: Atomic (AggregationOp :: Add)")
+                && atomic.contains("BindingAccess :: Write")
+                && atomic.contains("BindingAccess :: Read"),
+            "every tensor parameter's access kind and operation must be recorded: {atomic}"
+        );
+        assert!(
+            atomic.contains("KernelInputStored :: storage_id (& out)")
+                && atomic.contains("KernelOutputStored :: storage_id (& dst)")
+                && atomic.contains("KernelInputStored :: storage_id (& src)"),
+            "every tensor parameter's allocation identity must be recorded: {atomic}"
+        );
+    }
+
+    /// Every capability family's binding carries its own operation identity,
+    /// so the launch-time alias check can tell two different aggregations of
+    /// one allocation apart.
+    #[test]
+    fn every_aggregation_family_records_its_operation() {
+        for kind in AggregationKind::ALL {
+            let (tensor, op) = (kind.tensor_type(), kind.op_variant());
+            let elem = if tensor == "AddTensor" { "f32" } else { "i32" };
+            let item: ItemFn = syn::parse_str(&format!(
+                "#[cutile::entry()] fn k(out: &{tensor}<{elem}, {{ [-1, -1] }}>) {{}}"
+            ))
+            .unwrap();
+            let launcher = launcher_for(item);
+            let expected = format!("BindingAccess :: Atomic (AggregationOp :: {op})");
+            assert!(
+                launcher.contains(&expected),
+                "{tensor}: the binding must carry {op}: {launcher}"
+            );
+            assert!(
+                launcher.contains("KernelAtomic"),
+                "{tensor}: the exclusive-authority bound must be kept: {launcher}"
+            );
+        }
+    }
+
+    /// The capability is shared by construction; `&mut` would promise the
+    /// disjointness the atomic reduction deliberately does not have.
+    #[test]
+    fn a_mutable_atomic_reference_is_rejected() {
+        let item: ItemFn = parse_quote! {
+            #[cutile::entry()]
+            fn k(out: &mut AddTensor<f32, { [-1, -1] }>) {}
+        };
+        let root = Ident::new("cutile", Span::call_site());
+        let Err(err) = generate_kernel_launcher(&item, "m", "k", "k_entry", "K", "KArgs", &root)
+        else {
+            panic!("expected `&mut AddTensor<..>` to be rejected");
+        };
+        assert!(err.to_string().contains("`&mut AddTensor<..>`"), "{err}");
+    }
 }

@@ -235,6 +235,103 @@ fn kernel(
 - `tensor.partition_mut(shape)` — Create a mutable `PartitionMut` view (requires `&mut Tensor`; safe because every unproven store through the view is itself `unsafe`)
 - `unsafe tensor.partition_full_mut(shape)` — Create a mutable `PartitionMut` view over the full tensor, without the tile-block offset, for schedule-driven kernels
 
+### Aggregation capabilities
+
+Aggregation capabilities are for kernels in which multiple programs update the
+same output tile. Each capability names the only atomic operation allowed for
+that destination; this prevents two different reductions from being mixed on
+one allocation.
+
+| Tensor | Partition | Checked operation | Elements |
+| --- | --- | --- | --- |
+| `AddTensor` | `AddPartition` | `atomic_add` | `f16`, `bf16`, `f32`, `f64`, `i32`, `u32`, `i64`, `u64` |
+| `AndTensor` | `AndPartition` | `atomic_and` | `i32`, `u32`, `i64`, `u64` |
+| `OrTensor` | `OrPartition` | `atomic_or` | `i32`, `u32`, `i64`, `u64` |
+| `XorTensor` | `XorPartition` | `atomic_xor` | `i32`, `u32`, `i64`, `u64` |
+| `MaxTensor` | `MaxPartition` | `atomic_max` | `i32`, `u32`, `i64`, `u64` |
+| `MinTensor` | `MinPartition` | `atomic_min` | `i32`, `u32`, `i64`, `u64` |
+
+The element sets are sealed. `MaxTensor` and `MinTensor` select signed or
+unsigned comparison from the Rust element type. `AddTensor` uses floating-point
+or integer addition as appropriate. An aggregation parameter does not impose a
+launch-grid bound. A launch may not bind the same allocation as both an
+aggregation destination and an ordinary tensor, or as two different
+aggregation operations. On the host, create the required exclusive binding
+with `tensor.atomic()` or `Atomic::owned(tensor)`.
+
+`partition(tile)` requires the tile shape to divide the destination exactly on
+every axis and returns the matching partition type. Use
+`num_tiles(&partition, axis)` when deriving program indices. The checked
+operation validates its index and returns a completion `Token`; the
+`_unchecked` form is available only when the caller can prove the index is in
+range.
+
+```rust
+#[cutile::entry()]
+fn split_k_atomic(
+    out: &AddTensor<f32, { [-1, -1] }>,
+    lhs: &Tensor<f32, { [-1, -1] }>,
+    rhs: &Tensor<f32, { [-1, -1] }>,
+) {
+    let bid: (i32, i32, i32) = get_tile_block_id();
+    let (m, n, k) = (bid.0, bid.1, bid.2);
+
+    let lhs_part: Partition<f32, { [16, 32] }> = lhs.partition(shape![16, 32]);
+    let rhs_part: Partition<f32, { [32, 16] }> = rhs.partition(shape![32, 16]);
+    let a: Tile<f32, { [16, 32] }> = lhs_part.load([m, k]);
+    let b: Tile<f32, { [32, 16] }> = rhs_part.load([k, n]);
+    let zero: Tile<f32, { [16, 16] }> = constant(0.0f32, shape![16, 16]);
+
+    let acc: AddPartition<f32, { [16, 16] }> = out.partition(shape![16, 16]);
+    let _done: Token = acc.atomic_add([m, n], mma(a, b, zero));
+}
+```
+
+Launch this kernel with an explicit grid whose third axis is the split, for
+example `(tiles_m, tiles_n, k_splits)`. The destination must already contain
+the desired initial value. Common identities are `0` for addition, OR, and
+XOR; all bits set for AND; the minimum representable value for maximum (zero
+for unsigned maximum); and the maximum representable value for minimum.
+
+Do not access the destination through an ordinary tensor binding while the
+atomic launch is in flight. Dynamic extents and tile indices are checked before
+or during launch as appropriate; a statically ragged destination fails during
+kernel compilation. Floating-point addition is not reproducible because the
+interleaving is unspecified. Integer reductions are exact.
+
+Private partials and deterministic merges are ordinary kernels over `Tensor`,
+`Partition`, and `PartitionMut`; the aggregation capabilities are only the
+overlapping-update path.
+
+### Atomic destinations
+
+`Atomic<B>` supplies the exclusive host binding for a shared device-side atomic
+capability:
+
+| Input | Returned | How to build it |
+| --- | --- | --- |
+| `Atomic<&'a mut Tensor<T>>` (borrowed) | `&'a mut Tensor<T>` | `tensor.atomic()` |
+| `Atomic<Tensor<T>>` (owned) | `Tensor<T>` | `Atomic::owned(tensor)` |
+
+A shared `Arc<Tensor<T>>` or `&Tensor<T>` is rejected. The launcher requires
+`KernelAtomic<T>`, implemented only by these two forms.
+
+```rust
+let mut out = api::zeros::<f32>(&[256, 256]).sync_on(&stream)?;
+split_k_atomic(out.atomic(), lhs, rhs)
+    .grid((2, 2, 4))
+    .sync_on(&stream)?;
+```
+
+Because an atomic parameter contributes no grid bound, the grid must come from
+another binding or from an explicit `.grid(..)`.
+
+Within a launch, same-operation atomic bindings may alias. Different
+operations, or an atomic binding with an ordinary tensor access, are rejected.
+The check is allocation-level, so disjoint regions of one allocation are also
+conservatively rejected. Cross-launch coordination remains the caller's
+responsibility.
+
 ### Partition / PartitionMut
 
 `Partition<'a, E, const D: [i32; N]>` — A read-only partitioned view of a tensor, dividing it into tiles indexed by program ID.

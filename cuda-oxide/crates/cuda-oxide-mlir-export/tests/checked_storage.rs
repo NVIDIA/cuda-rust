@@ -194,21 +194,18 @@ fn shared_case(conflict: &str) -> Result<String, String> {
                 "key".into()
             }),
         );
-        a.set_alignment_value(
-            &mut ctx,
-            if conflict == "alignment" && i == 1 {
-                16
-            } else {
-                0
-            },
-        );
+        // An absent alignment means the element's natural alignment; the dialect
+        // rejects an explicit zero.
+        if conflict == "alignment" && i == 1 {
+            a.set_alignment_value(&mut ctx, 16);
+        }
     }
     append::<MirReturnOp>(&mut ctx, b, vec![], vec![]);
     render(&ctx, &m)
 }
-/// Check matching shared declarations merge, conflicting ones fail, and zero alignment uses the natural value.
+/// Check matching shared declarations merge, conflicting ones fail, and an absent alignment uses the natural value.
 #[test]
-fn shared_declarations_deduplicate_only_identical_storage_and_zero_means_natural() {
+fn shared_declarations_deduplicate_only_identical_storage_and_absent_alignment_means_natural() {
     let text = shared_case("same").unwrap();
     assert_eq!(text.matches("\"llvm.mlir.global\"").count(), 1);
     assert!(text.contains("alignment = 4 : i64"));

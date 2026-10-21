@@ -36,9 +36,11 @@ def probe_functions(text):
 
 
 def instruction_path(function):
+    # Block labels are whatever the printer assigns (Pliron names unnamed
+    # blocks block<N>v<M>); only the CFG edges matter.
     # The probes are acyclic. Checked failure paths return early; the longest
     # path exercises their successful issue sequence. Never use textual order.
-    pieces = re.split(r"^          \^(bb\d+)(?:\([^\n]*\))?:\n", function, flags=re.M)
+    pieces = re.split(r"^          \^([A-Za-z0-9_]+)(?:\([^\n]*\))?:\n", function, flags=re.M)
     blocks = dict(zip(pieces[1::2], pieces[2::2]))
     require(bool(blocks), "probe has no basic blocks")
     visiting = set()
@@ -48,12 +50,18 @@ def instruction_path(function):
         require(block not in visiting, "unexpected loop in instruction probe")
         visiting.add(block)
         body = blocks[block]
-        successors = re.findall(r"\^(bb\d+)", body)
+        successors = re.findall(r"\^([A-Za-z0-9_]+)", body)
         suffix = max((visit(s) for s in successors), key=len, default=[])
         visiting.remove(block)
         return body.splitlines() + suffix
 
     return visit(next(iter(blocks)))
+
+
+def unwrap_single_results(text):
+    """The published printer writes a single result type as `-> (T)`; the checks
+    below were written against `-> T`. Multi-result lists keep their parentheses."""
+    return re.sub(r"\) -> \(([^(),]+)\)", r") -> \1", text)
 
 
 def verify_attention_ir(lines):
@@ -111,7 +119,7 @@ def verify_attention_ir(lines):
                         ("llvm.nvvm.ex2.approx.ftz.f32", 2.5),
                         ("llvm.nvvm.rcp.approx.ftz.f", 4.0)]:
         line = one(f'intrin = "{name}"')
-        require(values(line) == [value] and '(f32) -> f32' in line,
+        require(values(line) == [value] and re.search(r"\(f32\) -> \(?f32\)?", line),
                 f"attention math input or exact modifier changed: {name}")
     shuffle = one('intrin = "llvm.nvvm.shfl.sync.bfly.f32"')
     args = operands(shuffle)
@@ -161,6 +169,7 @@ def verify_attention_ir(lines):
 
 
 def verify_ir(text, log, evidence):
+    text = unwrap_single_results(text)
     require(not re.search(r'"cute\.|!cute\.', text), "primitives input contains CuTe operations/types")
     functions = probe_functions(text)
     require(set(KERNELS) <= functions.keys(), "missing primitive probe function")
@@ -247,6 +256,7 @@ def verify_ir(text, log, evidence):
 
 
 def verify_gemm_ir(text, log, evidence, name):
+    text = unwrap_single_results(text)
     require(not re.search(r'"cute(?:_nvgpu)?\.|!cute(?:_nvgpu)?\.', text),
             "primitives GEMM contains CuTe operations/types")
     require('"nvvm.trap"' not in text and '"llvm.intr.trap"' in text,

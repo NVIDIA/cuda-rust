@@ -36,7 +36,7 @@ fn dense_mxf4_k64_rendering_preserves_registers_and_scale_selectors() {
     .unwrap()
     .catalog;
     let record = &catalog.intrinsics[0];
-    assert_eq!(intrinsic_marker(&catalog, record), "v1:i1030");
+    assert_eq!(intrinsic_marker(&catalog, record), "v1:i1039");
     assert_eq!(
         register_mma_template(record),
         "mma.sync.aligned.m16n8k64.row.col.kind::mxf4.block_scale.scale_vec::2X.f32.e2m1.e2m1.f32.ue8m0 {$0, $1, $2, $3}, {$8, $9, $10, $11}, {$12, $13}, {$4, $5, $6, $7}, $14, {$15, $16}, $17, {$18, $19};"
@@ -375,7 +375,7 @@ fn register_mma_rendering_preserves_apis_order_convergence_and_variants() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = crate::resolve::resolve(&repo_root).unwrap();
     validate_renderable(&catalog).unwrap();
-    assert_eq!(catalog.intrinsics.len(), 1033);
+    assert_eq!(catalog.intrinsics.len(), 1042);
     let records: Vec<_> = register_mmas(&catalog).collect();
     assert_eq!(records.len(), 155);
     let generated_records = records

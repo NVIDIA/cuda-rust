@@ -176,7 +176,7 @@ impl Fixture {
         operands.push(self.arg(17));
         operands.push(self.constant(16, 0));
         operands.push(self.constant(16, 0));
-        let op = self.append::<RegisterMmaOp>("v1:i1030", operands, vec![self.types[6]; 4]);
+        let op = self.append::<RegisterMmaOp>("v1:i1039", operands, vec![self.types[6]; 4]);
         let mma = RegisterMmaOp::new(op);
         mma.set_attr_nvvm_register_mma_shape(&self.ctx, RegisterMmaShapeAttr::M16n8k64);
         mma.set_attr_nvvm_register_mma_operation(&self.ctx, RegisterMmaOperationAttr::Multiply);
@@ -239,7 +239,7 @@ fn sm120_mxf4_rejects_other_variants_and_forged_identity() {
     assert!(
         f.translate()
             .unwrap_err()
-            .contains("expected intrinsic marker v1:i1030")
+            .contains("expected intrinsic marker v1:i1039")
     );
 }
 
@@ -339,7 +339,7 @@ fn fp16_mma_preserves_packed_a_b_and_f32_accumulator_order() {
 
     op.deref_mut(&f.ctx).attributes.set(
         "cuda_oxide_intrinsic_marker".try_into().unwrap(),
-        StringAttr::new("v1:i1030".into()),
+        StringAttr::new("v1:i1039".into()),
     );
     assert!(
         f.translate()

@@ -191,6 +191,7 @@ fn debug_control_compact_schema_is_reserved_for_aggregation() {
         sparse_mma_ordered_ampere_float: None,
         prmt: None,
         packed_conversion_fp8: None,
+        packed_conversion_fp8_bf16x2: None,
         packed_conversion_fp8_f16x2: None,
         scalar_conversion: None,
         scalar_arithmetic: None,
@@ -261,8 +262,8 @@ fn relaxed_cluster_arrival_and_wait_preserve_distinct_memory_contracts() {
             .expect("relaxed cluster wait is admitted");
     let arrival = mbarrier_extended_recipe(arrival);
     let wait = mbarrier_extended_recipe(wait);
-    assert_eq!(arrival.abi_id, "i1031");
-    assert_eq!(wait.abi_id, "i1032");
+    assert_eq!(arrival.abi_id, "i1040");
+    assert_eq!(wait.abi_id, "i1041");
     assert_eq!(arrival.id, "mbarrier_arrive_cluster_relaxed");
     assert_eq!(wait.id, "mbarrier_try_wait_parity_cluster_relaxed");
     assert_eq!(arrival.rust_arguments, ["u64"]);
@@ -300,7 +301,7 @@ fn restricted_acquire_fence_orders_cluster_shared_memory_only() {
         serde_json::from_str("\"fence_acquire_shared_cluster_cluster\"")
             .expect("restricted shared-memory acquire is admitted");
     let fence = mbarrier_extended_recipe(operation);
-    assert_eq!(fence.abi_id, "i1033");
+    assert_eq!(fence.abi_id, "i1042");
     assert_eq!(fence.id, "fence_acquire_shared_cluster_cluster");
     assert_eq!(fence.rust_arguments, [] as [&str; 0]);
     assert_eq!(fence.rust_result, "()");
@@ -327,7 +328,7 @@ fn compact_extended_mbarrier_admission_preserves_all_manual_contracts() {
             .map(|record| record.abi_id.as_str())
             .collect::<Vec<_>>(),
         (306..=316)
-            .chain([1031, 1032, 1033])
+            .chain([1040, 1041, 1042])
             .map(|id| format!("i{id:04}"))
             .collect::<Vec<_>>()
     );
@@ -527,6 +528,7 @@ fn wgmma_control_compact_schema_is_reserved_for_aggregation() {
         sparse_mma_ordered_ampere_float: None,
         prmt: None,
         packed_conversion_fp8: None,
+        packed_conversion_fp8_bf16x2: None,
         packed_conversion_fp8_f16x2: None,
         scalar_conversion: None,
         scalar_arithmetic: None,

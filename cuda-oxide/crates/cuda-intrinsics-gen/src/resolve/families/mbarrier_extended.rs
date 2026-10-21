@@ -205,7 +205,7 @@ pub(in crate::resolve) fn mbarrier_extended_recipe(
         },
         MbarrierExtendedOperation::ArriveRemoteClusterRelaxed => MbarrierExtendedRecipe {
             operation,
-            abi_id: "i1031",
+            abi_id: "i1040",
             id: "mbarrier_arrive_cluster_relaxed",
             operation_key: "barrier.mbarrier.arrive.shared.cluster.relaxed.cluster.raw_address",
             source_record: None,
@@ -371,7 +371,7 @@ pub(in crate::resolve) fn mbarrier_extended_recipe(
         },
         MbarrierExtendedOperation::TryWaitParityClusterRelaxed => MbarrierExtendedRecipe {
             operation,
-            abi_id: "i1032",
+            abi_id: "i1041",
             id: "mbarrier_try_wait_parity_cluster_relaxed",
             operation_key: "barrier.mbarrier.try_wait.parity.shared.cta.relaxed.cluster",
             source_record: Some(
@@ -581,7 +581,7 @@ pub(in crate::resolve) fn mbarrier_extended_recipe(
         }
         MbarrierExtendedOperation::FenceAcquireSharedClusterCluster => MbarrierExtendedRecipe {
             operation,
-            abi_id: "i1033",
+            abi_id: "i1042",
             id: "fence_acquire_shared_cluster_cluster",
             operation_key: "fence.acquire.sync_restrict.shared_cluster.cluster",
             source_record: Some("int_nvvm_fence_acquire_sync_restrict_space_cluster_scope_cluster"),

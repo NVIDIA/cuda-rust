@@ -4,7 +4,7 @@
  */
 
 use dialect_mir::{
-    attributes::{MirCastKindAttr, ReferenceParamValidityAttr},
+    attributes::{InlineIntentAttr, MirCastKindAttr, ReferenceParamValidityAttr},
     ops::{
         MirAddOp, MirAssignOp, MirCallOp, MirCastOp, MirCheckedAddOp, MirCmpOp, MirConstantOp,
         MirDivOp, MirEqOp, MirFuncOp, MirGeOp, MirGtOp, MirLeOp, MirLtOp, MirMulOp, MirNeOp,
@@ -653,5 +653,76 @@ fn test_mir_func_reference_param_validity_verify() {
     assert!(
         out_of_range.verify(&ctx).is_err(),
         "source argument index must be in range"
+    );
+}
+
+/// An inline request is a callee property: every request is valid on an
+/// ordinary function, none on a kernel entry, and a value of another attribute
+/// type under the key is an error rather than "no request".
+#[test]
+fn test_mir_func_inline_intent_verify() {
+    use dialect_mir::ops::INLINE_INTENT_ATTR_KEY;
+
+    let mut ctx = Context::new();
+    dialect_mir::register(&mut ctx);
+
+    let make_func = |ctx: &mut Context, kernel: bool| {
+        let func_ty = FunctionType::get(ctx, vec![], vec![]);
+        let op = Operation::new(
+            ctx,
+            MirFuncOp::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            1,
+        );
+        let func = MirFuncOp::new(ctx, op, TypeAttr::new(func_ty.into()));
+        if kernel {
+            func.get_operation().deref_mut(ctx).attributes.set(
+                "gpu_kernel".try_into().unwrap(),
+                StringAttr::new("true".to_string()),
+            );
+        }
+        let region = func.get_operation().deref(ctx).get_region(0);
+        BasicBlock::new(ctx, None, vec![]).insert_at_front(region, ctx);
+        func
+    };
+
+    for intent in InlineIntentAttr::ALL {
+        let helper = make_func(&mut ctx, false);
+        helper.set_inline_intent(&mut ctx, intent);
+        assert!(
+            helper.verify(&ctx).is_ok(),
+            "{intent:?} is valid on a callee"
+        );
+        assert_eq!(helper.inline_intent(&ctx), Some(intent));
+
+        let kernel = make_func(&mut ctx, true);
+        kernel.set_inline_intent(&mut ctx, intent);
+        assert!(
+            kernel.verify(&ctx).is_err(),
+            "{intent:?} must be rejected on a kernel entry"
+        );
+    }
+
+    let mistyped = make_func(&mut ctx, false);
+    mistyped.get_operation().deref_mut(&ctx).attributes.set(
+        INLINE_INTENT_ATTR_KEY.try_into().unwrap(),
+        StringAttr::new("noinline".to_string()),
+    );
+    assert_eq!(mistyped.inline_intent(&ctx), None);
+    assert!(
+        mistyped.verify(&ctx).is_err(),
+        "a value of another attribute type is an error, never read as no request"
+    );
+
+    let plain = make_func(&mut ctx, false);
+    assert_eq!(plain.inline_intent(&ctx), None);
+    assert!(plain.verify(&ctx).is_ok());
+
+    let plain_kernel = make_func(&mut ctx, true);
+    assert!(
+        plain_kernel.verify(&ctx).is_ok(),
+        "a kernel without an intent is valid"
     );
 }

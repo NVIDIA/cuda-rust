@@ -117,6 +117,13 @@ do not count toward that bound. Taking the in-place address of such a
 field (`u.ptr = p`, `&u.ptr`, `&mut u.ptr`) is refused with a diagnostic; build
 the union by value and read its fields by value.
 
+`SharedPtr<T>`, the typed shared pointer, follows the same limits: a union or a
+`MaybeUninit<SharedPtr<T>>` fails closed under these union storage rules, a
+`repr(packed)` struct that holds one follows the packed-carrier limits above, a
+kernel parameter that holds one bare or inside a struct or array is refused,
+and on the libNVVM route a struct that mixes one with a narrower field is not
+yet supported in arrays or in shared memory.
+
 Enum constants preserve payload relocations to device statics, including
 non-zero byte addends. This includes niche-encoded `Option<&T>` and
 direct-tagged enum layouts, both for direct thin-reference payloads and for
@@ -160,7 +167,7 @@ Anonymous promoted allocations remain unsupported.
 | Bi-directional LTOIR Support | **Full** | Rust kernels call CUDA C++ device functions **and** C++ calls Rust device functions. Via NVVM IR → libNVVM → LTOIR → nvJitLink. |
 | Device FFI (`extern "C"`) | **Full** | `#[device] extern "C" { fn ... }` declarations for external LTOIR functions. CUB/CCCL integration demonstrated. |
 | MathDx FFI (cuFFTDx / cuBLASDx) | **Full** | cuFFTDx (8/16/32-point thread-level FFT), cuBLASDx (32x32x32 block-level GEMM) via LTOIR. |
-| Tile interop | **Partial** | Inter-kernel interop works today: a [cutile-rs Tile kernel](https://github.com/NVIDIA/cuda-rust/tree/main/cutile-rs) and a cuda-oxide SIMT PTX kernel can run in one host process on the same CUDA stream over shared device tensors. Intra-kernel Tile interop is work in progress and tracked in [#96](https://github.com/NVlabs/cuda-oxide/issues/96). |
+| Tile interop | **Partial** | Inter-kernel interop works today: a [cutile-rs Tile kernel](https://github.com/NVIDIA/cuda-rust/tree/main/cutile-rs) and a cuda-oxide SIMT PTX kernel can run in one host process on the same CUDA stream over shared device tensors. Intra-kernel interop is tracked in [#96](https://github.com/NVlabs/cuda-oxide/issues/96). |
 | Cross-Crate Kernels | **Full** | Kernels and device functions defined in library crates with monomorphization at the binary crate use site. |
 
 ## Compiler: Functions
@@ -168,7 +175,7 @@ Anonymous promoted allocations remain unsupported.
 | Feature | Status | Description |
 |:--------|:-------|:------------|
 | `#[kernel]` Attribute | **Full** | Marks functions as GPU kernel entry points (`ptx_kernel` calling convention). Multiple kernels per file. |
-| `#[device]` Helper Functions | **Full** | Device-side helper functions callable from kernels. `#[inline(always)]` is preserved as the LLVM `alwaysinline` attribute (emitted alongside the convergent group and any `!dbg` scope), so `opt` honors the inline intent. |
+| `#[device]` Helper Functions | **Full** | Device-side helper functions callable from kernels. The `#[inline]` family reaches LLVM as the matching function attribute, as in rustc's own backend: `#[inline]` becomes `inlinehint`, `#[inline(always)]` becomes `alwaysinline` and `#[inline(never)]` becomes `noinline` (emitted alongside the convergent group and any `!dbg` scope), so `opt` and libNVVM honor the request. An `#[inline(never)]` helper is a real PTX function call. The one exception is the `#[inline(never)]` that `#[device]` adds to a helper with its own type or const parameters: it only keeps each copy visible to the device collector on the host side and is not carried to device code, so const-generic arguments keep folding into their kernels. |
 | Standalone `#[device]` Functions | **Full** | Device functions compiled without any kernel present. Clean export names for C++ consumption. |
 | Multi-Kernel Modules | **Full** | Multiple `#[kernel]` functions in a single source file compile to a single PTX module. |
 
@@ -192,7 +199,7 @@ Anonymous promoted allocations remain unsupported.
 
 | Feature | Status | Description |
 |:--------|:-------|:------------|
-| `ptx_asm!` Macro | **Partial** | CUDA inline PTX with `%0` operands, `in`, `out`, and `inout`; up to 16 output operands across `out` with `=`-prefixed constraints and `inout` with `+`-prefixed constraints; up to 16 explicit inputs; CUDA register constraints `h`, `r`, `l`, `q`, `f`, and `d`; immediate integer constraint `n`; compile-time string constraint `C`; `clobber("memory")`; and `options(register_only)` for pure register snippets. With multiple output operands, the macro writes tuple results back in declaration order. By default, snippets are treated as side-effecting and stay inside their current control flow. Use `options(register_only, may_diverge)` only for pure snippets that are safe to move across divergent control flow; **never** use it for `.sync` instructions or collectives. More than 16 output operands are not implemented yet. |
+| `ptx_asm!` Macro | **Partial** | CUDA inline PTX with `%0` operands, `in`, `out`, and `inout`; up to 16 output operands across `out` with `=`-prefixed constraints and `inout` with `+`-prefixed constraints; up to 16 explicit inputs; CUDA register constraints `h`, `r`, `l`, `q`, `f`, and `d`; immediate integer constraint `n`; compile-time string constraint `C`; `clobber("memory")`; and `options(register_only)` for pure register snippets. With multiple output operands, the macro writes tuple results back in declaration order. By default, snippets are treated as side-effecting and stay inside their current control flow. Use `options(register_only, may_diverge)` only for pure snippets that are safe to move across divergent control flow; **never** use it for `.sync` instructions or collectives. More than 16 output operands are not implemented yet. For how each option orders against `sync_threads()`, see {ref}`Compiler ordering around the barrier <compiler-ordering-around-the-barrier>`. |
 
 ---
 
@@ -304,6 +311,6 @@ Anonymous promoted allocations remain unsupported.
 | Dynamic Dispatch (`dyn Trait`) | **N/A** | Use generics with static dispatch. Haven't found a real need for this. |
 | Heap Allocation (`Box`, `Vec`) | **N/A** | CUDA has a device-side heap (`malloc`/`free` in kernels), and the compiler allows the `alloc` crate through -- but no device-side `#[global_allocator]` is wired up today. Even if it were, device `malloc` is extremely slow (serialized, fragmented, uncoalesced). Use slices and `SharedArray`. |
 | `String` / `format_args!` | **N/A** | Use `gpu_printf!` for formatted output. |
-| Panic / Unwinding | **N/A** | Panic paths exist in MIR but the compiler strips `core::panicking::*` and all unwind edges. The GPU hardware *can* support unwinding (absolute branches + per-thread call stack tracking post-Volta), but the CUDA toolchain (nvcc/ptxas) doesn't expose it today -- no landing pads survive to PTX. If a panic path is reached at runtime the GPU traps (same as `panic=abort`). NVIDIA has an active project to add C++ exception support to CUDA for automotive safety; the current cuda-oxide design is forward-compatible with that work. Use `gpu_assert!()` + `trap()` for explicit runtime checks today. |
+| Panic / Unwinding | **N/A** | Panic paths exist in MIR but the compiler strips `core::panicking::*` and all unwind edges. The GPU hardware *can* support unwinding (absolute branches + per-thread call stack tracking post-Volta), but the CUDA toolchain (nvcc/ptxas) doesn't expose it today -- no landing pads survive to PTX. If a panic path is reached at runtime the GPU traps (same as `panic=abort`). NVIDIA has an active project to add C++ exception support to CUDA for automotive safety; the current cuda-oxide design is forward-compatible with that work. Use `gpu_assert!()` + `trap()` for explicit runtime checks today. A device function declared `-> !` with a real body, such as an error store followed by `loop {}`, is called normally and the call is followed by `unreachable`; only panic entry points, `-> !` bodies that are nothing but a panic, and calls through function pointers lower to the trap. |
 | Standard Library (`std`/`alloc`) | **N/A** | `std` is forbidden. `alloc` is allowed by the collector but has no backing allocator. Only `core` is fully functional. `Option`, `Result`, iterators all work. |
 | Texture Memory | **N/A** | Lower priority given TMA availability on Hopper+. |

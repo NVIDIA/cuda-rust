@@ -231,9 +231,29 @@ pub(super) fn nvfp4_dot_k64(
             i += 1;
         }
     };
-    scale_group(&lhs.values_lo[0..8], &rhs.values_lo[0..8], lhs.scale0, rhs.scale0);
-    scale_group(&lhs.values_lo[8..16], &rhs.values_lo[8..16], lhs.scale1, rhs.scale1);
-    scale_group(&lhs.values_hi[0..8], &rhs.values_hi[0..8], lhs.scale2, rhs.scale2);
-    scale_group(&lhs.values_hi[8..16], &rhs.values_hi[8..16], lhs.scale3, rhs.scale3);
+    scale_group(
+        &lhs.values_lo[0..8],
+        &rhs.values_lo[0..8],
+        lhs.scale0,
+        rhs.scale0,
+    );
+    scale_group(
+        &lhs.values_lo[8..16],
+        &rhs.values_lo[8..16],
+        lhs.scale1,
+        rhs.scale1,
+    );
+    scale_group(
+        &lhs.values_hi[0..8],
+        &rhs.values_hi[0..8],
+        lhs.scale2,
+        rhs.scale2,
+    );
+    scale_group(
+        &lhs.values_hi[8..16],
+        &rhs.values_hi[8..16],
+        lhs.scale3,
+        rhs.scale3,
+    );
     acc
 }

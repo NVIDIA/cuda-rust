@@ -54,13 +54,13 @@ abi_id = "i0316"
 operation = "nanosleep"
 
 [[mbarrier_extended.variant]]
-abi_id = "i1031"
+abi_id = "i1040"
 operation = "arrive_remote_cluster_relaxed"
 
 [[mbarrier_extended.variant]]
-abi_id = "i1032"
+abi_id = "i1041"
 operation = "try_wait_parity_cluster_relaxed"
 
 [[mbarrier_extended.variant]]
-abi_id = "i1033"
+abi_id = "i1042"
 operation = "fence_acquire_shared_cluster_cluster"

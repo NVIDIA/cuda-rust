@@ -153,7 +153,7 @@ impl OperationTranslation for MmaTranslation {
         {
             return Err("SM120 register MMA mapping supports m16n8k64 MXF4 row/col E2M1 with F32 accumulation and UE8M0 scale_vec::2X, or m16n8k16 standard row/col matching F16 or BF16 with F32 accumulation only".into());
         }
-        require_input(&mut input, "v1:i1030", 16, 4)?;
+        require_input(&mut input, "v1:i1039", 16, 4)?;
         // Canonical source order is C, A, B, scales; NVVM uses A, B, C, scales.
         let operands = input.operands[4..10]
             .iter()

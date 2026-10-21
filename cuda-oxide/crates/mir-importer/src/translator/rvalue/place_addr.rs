@@ -64,6 +64,7 @@ pub(crate) fn translate_place_address(
     prev_op: Option<Ptr<Operation>>,
     loc: Location,
 ) -> TranslationResult<Option<(Value, Option<Ptr<Operation>>)>> {
+    let place = &*super::place_read::strip_shared_ptr_field_projections(body, place);
     let Some(slot) = value_map.get_slot(place.local) else {
         return Ok(None);
     };

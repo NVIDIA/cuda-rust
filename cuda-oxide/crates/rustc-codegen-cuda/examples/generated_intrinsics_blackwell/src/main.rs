@@ -5,11 +5,12 @@
 
 //! Coverage for generated high-target intrinsics.
 //!
-//! The packed-FP8 and TF32 conversions are launched and their results checked
-//! against the two formats, so the example reports what the device computed
-//! rather than that it compiled. Both are bit-exact, which leaves no tolerance
-//! to choose. The sparse MMA and TMA kernels stay compile-only: they need
-//! operands and descriptors an example cannot supply.
+//! The packed-FP8 conversions, from f32 pairs and from packed `bf16x2`, and
+//! the TF32 conversions are launched and their results checked against the
+//! formats, so the example reports what the device computed rather than that
+//! it compiled. All are bit-exact, which leaves no tolerance to choose. The
+//! sparse MMA and TMA kernels stay compile-only: they need operands and
+//! descriptors an example cannot supply.
 //!
 //! Compile-only in CI, since it pins `sm_120a` and no runner has that device.
 //! Run it on one and the conversions are verified:
@@ -22,10 +23,11 @@ use cuda_device::{
     DisjointSlice,
     barrier::Barrier,
     convert::{
-        cvt_rn_relu_satfinite_tf32_f32, cvt_rn_relu_tf32_f32, cvt_rn_satfinite_tf32_f32,
-        cvt_rn_tf32_f32, cvt_rna_satfinite_tf32_f32, cvt_rna_tf32_f32,
-        cvt_rz_relu_satfinite_tf32_f32, cvt_rz_relu_tf32_f32, cvt_rz_satfinite_tf32_f32,
-        cvt_rz_tf32_f32,
+        cvt_rn_relu_satfinite_tf32_f32, cvt_rn_relu_tf32_f32, cvt_rn_satfinite_e4m3x2_bf16x2,
+        cvt_rn_satfinite_e5m2x2_bf16x2, cvt_rn_satfinite_relu_e4m3x2_bf16x2,
+        cvt_rn_satfinite_relu_e5m2x2_bf16x2, cvt_rn_satfinite_tf32_f32, cvt_rn_tf32_f32,
+        cvt_rna_satfinite_tf32_f32, cvt_rna_tf32_f32, cvt_rz_relu_satfinite_tf32_f32,
+        cvt_rz_relu_tf32_f32, cvt_rz_satfinite_tf32_f32, cvt_rz_tf32_f32,
     },
     cuda_module, kernel, thread,
     tma::{self, TmaDescriptor},
@@ -50,6 +52,28 @@ mod kernels {
             cvt_rn_satfinite_relu_e4m3x2_f32(low, high),
             cvt_rn_satfinite_e5m2x2_f32(low, high),
             cvt_rn_satfinite_relu_e5m2x2_f32(low, high),
+        ];
+        let start = thread::index_1d().get() * values.len();
+        if start + values.len() <= output.len() {
+            for (offset, value) in values.into_iter().enumerate() {
+                // SAFETY: the bounds check covers this thread's unique slots.
+                unsafe { *output.get_unchecked_mut(start + offset) = value };
+            }
+        }
+    }
+
+    /// Keeps every generated `bf16x2` to packed-FP8 conversion in device code.
+    ///
+    /// Launched, and its four results checked against the two formats. The
+    /// source is one register holding two bf16 values, low half first, and
+    /// the low half lands in the low byte of the result.
+    #[kernel]
+    pub fn compile_bf16x2_fp8_conversions(mut output: DisjointSlice<u16>, packed: u32) {
+        let values = [
+            cvt_rn_satfinite_e4m3x2_bf16x2(packed),
+            cvt_rn_satfinite_relu_e4m3x2_bf16x2(packed),
+            cvt_rn_satfinite_e5m2x2_bf16x2(packed),
+            cvt_rn_satfinite_relu_e5m2x2_bf16x2(packed),
         ];
         let start = thread::index_1d().get() * values.len();
         if start + values.len() <= output.len() {
@@ -517,6 +541,53 @@ const FP8_CASES: [Fp8Case; 3] = [
     },
 ];
 
+/// One `bf16x2` case: the packed bf16 pair, low half in the low 16 bits, and
+/// what each of the four conversions must return.
+struct Bf16x2Case {
+    packed: u32,
+    e4m3: u16,
+    relu_e4m3: u16,
+    e5m2: u16,
+    relu_e5m2: u16,
+}
+
+/// bf16 keeps the f32 exponent with a 7-bit mantissa, so the values of the
+/// FP8 table are bf16-exact and the expected bytes carry over: 1.0 = 0x3f80,
+/// 2.0 = 0x4000, -1.0 = 0xbf80, 448.0 = 0x43e0, 0.0 = 0x0000. The last two
+/// cases add the bf16-only inputs: +inf (0x7f80) saturates to the largest
+/// finite value, and a quiet NaN (0x7fc0) becomes 0x7f in both formats.
+const BF16X2_CASES: [Bf16x2Case; 4] = [
+    Bf16x2Case {
+        packed: 0x4000_3f80,
+        e4m3: 0x4038,
+        relu_e4m3: 0x4038,
+        e5m2: 0x403c,
+        relu_e5m2: 0x403c,
+    },
+    // relu replaces the negative low lane with zero and leaves the high lane.
+    Bf16x2Case {
+        packed: 0x43e0_bf80,
+        e4m3: 0x7eb8,
+        relu_e4m3: 0x7e00,
+        e5m2: 0x5fbc,
+        relu_e5m2: 0x5f00,
+    },
+    Bf16x2Case {
+        packed: 0x0000_7f80,
+        e4m3: 0x007e,
+        relu_e4m3: 0x007e,
+        e5m2: 0x007b,
+        relu_e5m2: 0x007b,
+    },
+    Bf16x2Case {
+        packed: 0x3f80_7fc0,
+        e4m3: 0x387f,
+        relu_e4m3: 0x387f,
+        e5m2: 0x3c7f,
+        relu_e5m2: 0x3c7f,
+    },
+];
+
 /// TF32 keeps the f32 exponent and truncates the mantissa to 10 bits, so each
 /// value here is already representable and every rounding mode agrees. The
 /// four relu forms sit at indices 3, 5, 7 and 9 of the kernel's output.
@@ -560,6 +631,27 @@ fn main() {
             println!(
                 "  {name:<12} ({:>10}, {:>10}) = 0x{got:04x}  want 0x{want:04x}  {mark}",
                 case.lo, case.hi
+            );
+        }
+    }
+
+    for case in &BF16X2_CASES {
+        let mut out = DeviceBuffer::<u16>::zeroed(&stream, 4).expect("alloc bf16x2 output");
+        // SAFETY: the two arguments match the kernel's slice and scalar, and
+        // `out` holds the four results one thread writes.
+        unsafe { module.compile_bf16x2_fp8_conversions(&stream, cfg, &mut out, case.packed) }
+            .expect("bf16x2 launch failed");
+        let got = out.to_host_vec(&stream).expect("bf16x2 readback failed");
+        let want = [case.e4m3, case.relu_e4m3, case.e5m2, case.relu_e5m2];
+        let names = ["e4m3x2", "relu_e4m3x2", "e5m2x2", "relu_e5m2x2"];
+        for ((got, want), name) in got.iter().zip(want).zip(names) {
+            let mark = if *got == want { "ok" } else { "MISMATCH" };
+            if *got != want {
+                failures += 1;
+            }
+            println!(
+                "  bf16x2 {name:<12} (0x{:08x})            = 0x{got:04x}  want 0x{want:04x}  {mark}",
+                case.packed
             );
         }
     }

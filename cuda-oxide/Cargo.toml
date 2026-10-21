@@ -30,6 +30,8 @@ members = [
     "crates/nvvm-transforms",
     "crates/cargo-oxide",
     "crates/oxide-artifacts",
+    "crates/oxide-tile-export",
+    "crates/oxide-tilebc",
     # FFI bindings
     "crates/libnvvm-sys",
     "crates/nvjitlink-sys",
@@ -110,6 +112,13 @@ reserved-oxide-symbols = { path = "crates/reserved-oxide-symbols" }
 # publish, then move this line.
 # scripts/check-oxide-artifacts-parity.sh keeps them equal.
 oxide-artifacts = "0.2.1"
+# Tile export descriptions shared by `#[tile_export]`, the backend, and
+# `cargo oxide tilelib`.
+oxide-tile-export = { path = "crates/oxide-tile-export" }
+# Tile IR bytecode for those descriptions: `cargo oxide tilelib` writes a
+# tile library's interface and implementation halves with it. Pure Rust, so
+# cargo-oxide stays toolkit-free.
+oxide-tilebc = { path = "crates/oxide-tilebc" }
 ptx-parse = { path = "crates/ptx-parse" }
 ptx-schedule = { path = "crates/ptx-schedule" }
 

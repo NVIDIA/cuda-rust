@@ -99,9 +99,9 @@ pub unsafe fn read_across_write(input: &u32, scratch: *mut u32, output: *mut u32
     }
 }
 
-// Preserve two reads through MIR optimization; LLVM sees the reference facts
-// on the entry parameter when it later optimizes these calls.
-#[inline(never)]
+// MIR inlining is off for this crate (see Cargo.toml), so both calls reach
+// LLVM, which sees the reference facts on the entry parameter when it inlines
+// them. `#[inline(never)]` would keep this helper a real PTX function instead.
 unsafe fn read_input(input: *const u32) -> u32 {
     unsafe { *input }
 }
@@ -128,7 +128,8 @@ pub unsafe fn volatile_helper(input: &u32, output: *mut u32) {
     unsafe { *output = read_volatile_input(input).wrapping_add(read_volatile_input(input)) };
 }
 
-#[inline(never)]
+// MIR inlining is off for this crate (see Cargo.toml), so the two calls reach
+// LLVM and the loads land in the entry once LLVM inlines them.
 fn read_volatile_input(input: &u32) -> u32 {
     // SAFETY: the reference is aligned and initialized; reading does not mutate it.
     unsafe { core::ptr::read_volatile(input) }

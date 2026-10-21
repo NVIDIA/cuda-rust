@@ -4,7 +4,7 @@ family = "register_mma"
 
 [[intrinsic]]
 id = "mma_m16n8k64_mxf4_f32"
-abi_id = "i1030"
+abi_id = "i1039"
 operation_key = "matrix.mma.m16n8k64.row.col.kind_mxf4.scale_vec_2x.f32.e2m1.e2m1.f32.ue8m0"
 family = "register_mma"
 source_record = "int_nvvm_mma_block_scale_m16n8k64_row_col_mxf4_scale_2x_f32_e2m1_e2m1_f32_ue8m0"

@@ -568,7 +568,8 @@ pub fn doctor(ctx: &Context) {
         Err(e) => {
             println!("✗ {}", e);
             eprintln!("  Required only when kernels call CUDA libdevice math.");
-            eprintln!("  Ships with the CUDA Toolkit at <CUDA>/lib64/libnvJitLink.so.");
+            eprintln!("  Ships with the CUDA Toolkit at <CUDA>/lib64/libnvJitLink.so,");
+            eprintln!("  or <CUDA>/lib/ in conda-forge and nixpkgs layouts.");
             ok = false;
         }
     }

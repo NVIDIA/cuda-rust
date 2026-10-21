@@ -273,12 +273,18 @@ pub(crate) fn try_translate_block_scaled_type(
     };
 
     Some(Ok(match decoded.stage {
-        BlockScaledStage::Full => {
-            scaled_view_type(ctx, decoded.role, decoded.scale_format, CuteScaledLayoutAttr::Full)
-        }
-        BlockScaledStage::Row => {
-            scaled_view_type(ctx, decoded.role, decoded.scale_format, CuteScaledLayoutAttr::Row)
-        }
+        BlockScaledStage::Full => scaled_view_type(
+            ctx,
+            decoded.role,
+            decoded.scale_format,
+            CuteScaledLayoutAttr::Full,
+        ),
+        BlockScaledStage::Row => scaled_view_type(
+            ctx,
+            decoded.role,
+            decoded.scale_format,
+            CuteScaledLayoutAttr::Row,
+        ),
         BlockScaledStage::KTile64 => scaled_view_type(
             ctx,
             decoded.role,

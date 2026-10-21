@@ -616,19 +616,19 @@ fn cutlass_cluster_tma_pack_compiles() {
         block,
         vec![address],
         vec![],
-        Some("v1:i1031"),
+        Some("v1:i1040"),
     );
     let relaxed_wait = append::<MbarrierTryWaitParityClusterRelaxedOp>(
         &mut ctx,
         block,
         vec![a[2], zero],
         vec![i1],
-        Some("v1:i1032"),
+        Some("v1:i1041"),
     );
     let ready = relaxed_wait.deref(&ctx).get_result(0);
     let store = append::<MirStoreOp>(&mut ctx, block, vec![a[4], ready], vec![], None);
     MirStoreOp::new(store).set_volatile(&mut ctx, true);
-    append::<FenceAcquireSharedClusterClusterOp>(&mut ctx, block, vec![], vec![], Some("v1:i1033"));
+    append::<FenceAcquireSharedClusterClusterOp>(&mut ctx, block, vec![], vec![], Some("v1:i1042"));
     append::<MirReturnOp>(&mut ctx, block, vec![], vec![], None);
 
     let profile = CutlassFullCuteMlir22::new("sm_100a").unwrap();

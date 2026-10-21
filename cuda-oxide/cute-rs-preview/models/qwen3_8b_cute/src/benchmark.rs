@@ -209,11 +209,13 @@ impl Qwen3Engine {
     ) -> Result<()> {
         unsafe {
             if rows <= 2 {
-                let launch = self.ffn_mod.prepare_decode_linear_bf16(LaunchConfig1D::new(
-                    outputs.div_ceil(8) as u32,
-                    32,
-                    0,
-                ))?;
+                let launch = self
+                    .ffn_mod
+                    .prepare_decode_linear_bf16(LaunchConfig1D::new(
+                        outputs.div_ceil(8) as u32,
+                        32,
+                        0,
+                    ))?;
                 self.ffn_mod.decode_linear_bf16(
                     &self.stream,
                     &launch,
@@ -460,9 +462,30 @@ impl Qwen3Engine {
                 HIDDEN,
                 EPSILON,
             )?;
-            self.enqueue_project_bf16(&s.normalized, &layer.q_proj, &mut s.q, rows, HIDDEN, Q_WIDTH)?;
-            self.enqueue_project_bf16(&s.normalized, &layer.k_proj, &mut s.k, rows, HIDDEN, KV_WIDTH)?;
-            self.enqueue_project_bf16(&s.normalized, &layer.v_proj, &mut s.v, rows, HIDDEN, KV_WIDTH)?;
+            self.enqueue_project_bf16(
+                &s.normalized,
+                &layer.q_proj,
+                &mut s.q,
+                rows,
+                HIDDEN,
+                Q_WIDTH,
+            )?;
+            self.enqueue_project_bf16(
+                &s.normalized,
+                &layer.k_proj,
+                &mut s.k,
+                rows,
+                HIDDEN,
+                KV_WIDTH,
+            )?;
+            self.enqueue_project_bf16(
+                &s.normalized,
+                &layer.v_proj,
+                &mut s.v,
+                rows,
+                HIDDEN,
+                KV_WIDTH,
+            )?;
             crate::norm_specialized::enqueue(
                 &self.norms,
                 stream,
@@ -895,7 +918,8 @@ pub fn run_benchmark(
     let mut nv_step_in = Batch::<HIDDEN>::from_host(&stream, 1, &step_host)?;
     let t_dec1 = Instant::now();
     for (cos, sin) in &decode_cos_sin {
-        nv_step_in = engine.forward_nvfp4(&nv_step_in, &nvfp4_stack, &mut nvfp4_caches, cos, sin)?;
+        nv_step_in =
+            engine.forward_nvfp4(&nv_step_in, &nvfp4_stack, &mut nvfp4_caches, cos, sin)?;
     }
     stream.synchronize()?;
     let nvfp4_decode_total_ms = t_dec1.elapsed().as_secs_f64() * 1000.0;

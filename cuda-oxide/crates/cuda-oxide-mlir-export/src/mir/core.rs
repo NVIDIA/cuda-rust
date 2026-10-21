@@ -16,7 +16,8 @@ use crate::{
 };
 use dialect_mir::{
     attributes::{
-        MirCastKindAttr, MirFP16Attr, MirPointerKindAuthorityAttr, ReferenceParamValidityAttr,
+        InlineIntentAttr, MirCastKindAttr, MirFP16Attr, MirPointerKindAuthorityAttr,
+        ReferenceParamValidityAttr,
     },
     ops::{
         MirAddOp, MirBitAndOp, MirBitOrOp, MirBitXorOp, MirCastOp, MirCondBranchOp, MirConstantOp,
@@ -43,6 +44,9 @@ use pliron::{
 pub fn register_mir_core_pack(registry: &mut TranslationRegistry) -> Result<(), TranslationError> {
     registry.register_type::<MirFP16Type>(FixedType(MlirType::Float(MlirFloatType::F16)))?;
     registry.register_attribute::<MirFP16Attr>(MirFp16AttributeTranslation)?;
+    // A `mir.func`'s `#[inline]` request. The function translation folds the
+    // keyword into the LLVM `passthrough` list, as `mir-lower` does natively.
+    registry.register_attribute::<InlineIntentAttr>(InlineIntentTranslation)?;
     registry.register_attribute::<MirCastKindAttr>(DropAttribute)?;
     // Rust-boundary provenance metadata consumed by the dialect-mir verifier;
     // like the cast kind, it has no MLIR counterpart and is dropped at export.
@@ -106,6 +110,29 @@ impl AttributeTranslation for MirFp16AttributeTranslation {
     }
 }
 
+/// Carry a `mir.func`'s `#[inline]` request as the LLVM attribute keyword that
+/// `mir-lower` emits for it on the native path.
+struct InlineIntentTranslation;
+
+impl AttributeTranslation for InlineIntentTranslation {
+    fn translate(
+        &self,
+        _ctx: &Context,
+        source: &AttrObj,
+        _registry: &TranslationRegistry,
+    ) -> Result<Option<MlirAttribute>, String> {
+        let intent = source
+            .downcast_ref::<InlineIntentAttr>()
+            .ok_or_else(|| "expected mir.inline_intent".to_owned())?;
+        let keyword = match intent {
+            InlineIntentAttr::Hint => "inlinehint",
+            InlineIntentAttr::Always => "alwaysinline",
+            InlineIntentAttr::Never => "noinline",
+        };
+        Ok(Some(MlirAttribute::String(keyword.into())))
+    }
+}
+
 /// Forward translated structure to a standard MLIR operation spelling.
 struct RenameOperation(#[doc = "Target MLIR operation spelling."] &'static str);
 
@@ -137,6 +164,7 @@ impl OperationTranslation for FunctionTranslation {
         move_property(&mut target, "mir_func_type", "function_type")?;
         let grid_constants = crate::grid_constant::take_parameters(ctx, source, &mut target)?;
         lower_alwaysinline_contract(&mut target)?;
+        lower_inline_intent_contract(&mut target)?;
         let mut is_kernel = false;
         if let Some(marker) = target.attributes.remove("gpu_kernel") {
             match marker {
@@ -236,6 +264,46 @@ fn lower_alwaysinline_contract(target: &mut MlirOperation) -> Result<(), String>
             "alwaysinline must be the string `true`, got {other:?}"
         )),
     }
+}
+
+/// Lower the typed `#[inline]` request recorded on `mir.func` as `inline_intent`.
+///
+/// `InlineIntentTranslation` has already turned the request into the keyword
+/// `mir-lower` uses on the native path (`inlinehint`, `alwaysinline`,
+/// `noinline`). Put it in the LLVM `passthrough` list so CUTLASS hands the
+/// same request to LLVM, sharing the list with the older `alwaysinline`
+/// marker when both are present.
+fn lower_inline_intent_contract(target: &mut MlirOperation) -> Result<(), String> {
+    let Some(keyword) = target
+        .attributes
+        .remove(dialect_mir::ops::function::INLINE_INTENT_ATTR_KEY)
+    else {
+        return Ok(());
+    };
+    let MlirAttribute::String(keyword) = keyword else {
+        return Err(format!(
+            "inline_intent must translate to an LLVM attribute keyword, got {keyword:?}"
+        ));
+    };
+    let entry = MlirAttribute::String(keyword);
+    match target.attributes.get_mut("passthrough") {
+        None => {
+            target
+                .attributes
+                .insert("passthrough".into(), MlirAttribute::Array(vec![entry]));
+        }
+        Some(MlirAttribute::Array(entries)) => {
+            if !entries.contains(&entry) {
+                entries.push(entry);
+            }
+        }
+        Some(other) => {
+            return Err(format!(
+                "function passthrough attribute is not an array: {other:?}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Move cuda-oxide's three scalar block-contract attributes to the one array
@@ -1268,6 +1336,8 @@ mod tests {
         value::Value,
     };
 
+    use dialect_mir::attributes::InlineIntentAttr;
+
     /// Create a source context with the MIR dialect needed by scalar translation tests.
     fn context() -> Context {
         let mut ctx = Context::new();
@@ -1762,6 +1832,56 @@ mod tests {
         let text = translate(&mut ctx, &module);
         assert!(text.contains(r#"passthrough = ["alwaysinline"]"#), "{text}");
         assert!(!text.contains(r#"alwaysinline = "true""#), "{text}");
+    }
+
+    /// Check each typed `#[inline]` request lowers to the LLVM passthrough keyword
+    /// the native path uses, and that the request itself does not reach the text.
+    #[test]
+    fn inline_intent_uses_llvm_passthrough() {
+        for (intent, keyword) in [
+            (InlineIntentAttr::Hint, "inlinehint"),
+            (InlineIntentAttr::Always, "alwaysinline"),
+            (InlineIntentAttr::Never, "noinline"),
+        ] {
+            let mut ctx = context();
+            let module = ModuleOp::new(&mut ctx, Identifier::try_from("inline_request").unwrap());
+            let (function, region) = append_function(&mut ctx, &module, "helper", vec![], vec![]);
+            MirFuncOp::wrap(&ctx, function)
+                .unwrap()
+                .set_inline_intent(&mut ctx, intent);
+            let entry = BasicBlock::new(&mut ctx, None, vec![]);
+            entry.insert_at_back(region, &ctx);
+            operation::<MirReturnOp>(&mut ctx, entry, vec![], vec![]);
+
+            let text = translate(&mut ctx, &module);
+            assert!(
+                text.contains(&format!(r#"passthrough = ["{keyword}"]"#)),
+                "{intent:?}: {text}"
+            );
+            assert!(!text.contains("inline_intent"), "{intent:?}: {text}");
+        }
+    }
+
+    /// Check the typed request and the older string marker produce one keyword, not two.
+    #[test]
+    fn inline_intent_shares_the_passthrough_list_with_the_alwaysinline_marker() {
+        let mut ctx = context();
+        let module = ModuleOp::new(&mut ctx, Identifier::try_from("inline_both").unwrap());
+        let (function, region) = append_function(&mut ctx, &module, "helper", vec![], vec![]);
+        function.deref_mut(&ctx).attributes.set(
+            Identifier::try_from("alwaysinline").unwrap(),
+            StringAttr::new("true".into()),
+        );
+        MirFuncOp::wrap(&ctx, function)
+            .unwrap()
+            .set_inline_intent(&mut ctx, InlineIntentAttr::Always);
+        let entry = BasicBlock::new(&mut ctx, None, vec![]);
+        entry.insert_at_back(region, &ctx);
+        operation::<MirReturnOp>(&mut ctx, entry, vec![], vec![]);
+
+        let text = translate(&mut ctx, &module);
+        assert!(text.contains(r#"passthrough = ["alwaysinline"]"#), "{text}");
+        assert_eq!(text.matches("alwaysinline").count(), 1, "{text}");
     }
 
     /// Check an unstructured MIR branch graph retains successor edges and operand segment sizes.

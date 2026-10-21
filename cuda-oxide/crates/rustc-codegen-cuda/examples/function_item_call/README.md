@@ -7,3 +7,20 @@ Rust lowers `apply_once(plus_seven, x)` through a callable trait method such as
 function-item body, and MIR import must emit a direct call name that matches the
 collector/export naming policy. Otherwise the generated device IR references a
 callee symbol that was never emitted.
+
+The diverging-call regression also covers an ordinary direct `#[device]`
+function returning `!`. Its body performs an observable store before looping
+forever. A MIR `Call` with no normal successor must therefore keep the call and
+end the caller block with `unreachable`; replacing the call itself with a trap
+would erase the store.
+
+`verify-code-shape.sh` checks that contract in the pre-optimization LLVM IR,
+before the middle-end can inline the diverging helper. It covers the three
+call sites in `diverging_callable` that used to lower to a trap: two through
+`apply_never` (a function item and a closure) and the direct call to
+`write_then_diverge`. Each kept call must be followed by `unreachable`. When
+the build also wrote PTX, the kernel entry must keep the sentinel store or a
+call to the helper. The control is `panic_only`, a `-> !` function whose body
+is nothing but a panic: the collector does not emit it, so its call site must
+still lower to the device trap, in the IR and in the PTX. The divergent
+branches are not launched; the host run exercises only the returning path.

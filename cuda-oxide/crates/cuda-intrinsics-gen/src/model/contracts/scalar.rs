@@ -311,7 +311,7 @@ pub enum ExtendedMinMaxAdapter {
 /// Closed contract for converting between scalar and packed values.
 ///
 /// The source may be a scalar pair (`f32x2`, two operands) or an already-packed
-/// 16-bit or 32-bit register (`f16x2`, `e4m3x2`, `e5m2x2`, one operand), so the
+/// 16-bit or 32-bit register (`bf16x2`, `f16x2`, `e4m3x2`, `e5m2x2`, one operand), so the
 /// operand arity follows [`PackedConversionSourceFormat`] rather than being
 /// fixed at two.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -327,6 +327,7 @@ pub struct PackedConversion {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackedConversionSourceFormat {
+    Bf16x2,
     E4m3x2,
     E5m2x2,
     F16x2,
@@ -341,13 +342,14 @@ impl PackedConversionSourceFormat {
     pub fn operand_count(self) -> usize {
         match self {
             Self::F32x2 => 2,
-            Self::E4m3x2 | Self::E5m2x2 | Self::F16x2 => 1,
+            Self::Bf16x2 | Self::E4m3x2 | Self::E5m2x2 | Self::F16x2 => 1,
         }
     }
 
     /// PTX source-type token, used as the trailing `cvt` modifier.
     pub fn ptx_token(self) -> &'static str {
         match self {
+            Self::Bf16x2 => "bf16x2",
             Self::E4m3x2 => "e4m3x2",
             Self::E5m2x2 => "e5m2x2",
             Self::F16x2 => "f16x2",

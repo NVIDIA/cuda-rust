@@ -123,7 +123,7 @@ pub fn register_nvvm_cluster_pack(
     register!(FenceProxyAsyncSharedCtaOp, "v1:i0312", AsyncFence);
     register!(
         FenceAcquireSharedClusterClusterOp,
-        "v1:i1033",
+        "v1:i1042",
         SharedAcquireFence
     );
     register!(
@@ -194,12 +194,12 @@ pub fn register_nvvm_cluster_pack(
     );
     register!(
         MbarrierArriveClusterRelaxedOp,
-        "v1:i1031",
+        "v1:i1040",
         RemoteArrive { relaxed: true }
     );
     register!(
         MbarrierTryWaitParityClusterRelaxedOp,
-        "v1:i1032",
+        "v1:i1041",
         WaitParity {
             cluster: true,
             relaxed: true
@@ -1164,9 +1164,9 @@ mod tests {
     #[test]
     fn relaxed_cluster_arrival_and_wait_keep_scope_without_acquire_release() {
         let mut fixture = Fixture::new();
-        fixture.append::<MbarrierArriveClusterRelaxedOp>("v1:i1031", vec![fixture.arg(6)], vec![]);
+        fixture.append::<MbarrierArriveClusterRelaxedOp>("v1:i1040", vec![fixture.arg(6)], vec![]);
         fixture.append::<MbarrierTryWaitParityClusterRelaxedOp>(
-            "v1:i1032",
+            "v1:i1041",
             vec![fixture.arg(1), fixture.arg(3)],
             vec![fixture.types[7]],
         );
@@ -1188,7 +1188,7 @@ mod tests {
     #[test]
     fn restricted_acquire_fence_retains_shared_only_ordering() {
         let mut fixture = Fixture::new();
-        fixture.append::<FenceAcquireSharedClusterClusterOp>("v1:i1033", vec![], vec![]);
+        fixture.append::<FenceAcquireSharedClusterClusterOp>("v1:i1042", vec![], vec![]);
         let text = fixture.render().unwrap();
         assert!(text.contains("\"nvvm.fence.sync_restrict\""), "{text}");
         assert!(text.contains("order = #nvvm.mem_order<acquire>"), "{text}");

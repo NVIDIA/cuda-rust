@@ -84,9 +84,9 @@ if warp_id == 0 {
 
 | Workload | Location | Highlights |
 | :------- | :------- | :--------- |
-| **Elementwise / SwiGLU / RMSNorm** | `cuda-oxide/cuteir/examples/{elementwise,swiglu,rmsnorm}_cute` | 1D tiling, register transforms, warp reductions, and ragged tails. |
-| **FFN & RoPE KV-Cache Attention** | `cuda-oxide/cuteir/examples/{ffn,rope_cache}_cute` | BF16 tensor-core projections, typed weight roles, and 128-wide GQA. |
-| **MXFP4 GEMV & Block-Scaled GEMM** | `cuda-oxide/cuteir/examples/{nvfp4_gemv,blockscale_gemm}_cute` | Packed FP4 + `UE8M0` scales, 3-stage TMA pipelines, and `*_ctm` counterparts. |
-| **SM100a 2-CTA GEMM & Attention** | `cuda-oxide/cuteir/examples/{fp16_gemm_256x352,sm100_fmha_prefill,sm100_mla_decode_fp16}_cute` | Two-CTA cluster TMA, TMEM, A-collector reuse, and FlashAttention / MLA decode. |
-| **Qwen3-8B (BF16 & NVFP4)** | `cuda-oxide/cuteir/models/qwen3_8b_cute` | 36-layer `Qwen/Qwen3-8B` (`H=4096, I=12288, GQA 32:8`) in BF16 and NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`) on RTX 5090 (`visual.md`). |
-| **End-to-End Qwen3-TTS Model** | `cuda-oxide/cuteir/models/qwen_decoder_cute` | Complete Talker + Predictor speech synthesis on SM120a (see `visual.md` inside that folder for a 14-SVG visual tour). |
+| **Elementwise / SwiGLU / RMSNorm** | `cuda-oxide/cute-rs-preview/examples/{elementwise,swiglu,rmsnorm}_cute` | 1D tiling, register transforms, warp reductions, and ragged tails. |
+| **FFN & RoPE KV-Cache Attention** | `cuda-oxide/cute-rs-preview/examples/{ffn,rope_cache}_cute` | BF16 tensor-core projections, typed weight roles, and 128-wide GQA. |
+| **MXFP4 GEMV & Block-Scaled GEMM** | `cuda-oxide/cute-rs-preview/examples/{nvfp4_gemv,blockscale_gemm}_cute` | Packed FP4 + `UE8M0` scales, 3-stage TMA pipelines, and `*_ctm` counterparts. |
+| **SM100a 2-CTA GEMM & Attention** | `cuda-oxide/cute-rs-preview/examples/{fp16_gemm_256x352,sm100_fmha_prefill,sm100_mla_decode_fp16}_cute` | Two-CTA cluster TMA, TMEM, A-collector reuse, and FlashAttention / MLA decode. |
+| **Qwen3-8B (BF16 & NVFP4)** | `cuda-oxide/cute-rs-preview/models/qwen3_8b_cute` | 36-layer `Qwen/Qwen3-8B` (`H=4096, I=12288, GQA 32:8`) in BF16 and NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`) on RTX 5090 (`visual.md`). |
+| **End-to-End Qwen3-TTS Model** | `cuda-oxide/cute-rs-preview/models/qwen_decoder_cute` | Complete Talker + Predictor speech synthesis on SM120a (see `visual.md` inside that folder for a 14-SVG visual tour). |

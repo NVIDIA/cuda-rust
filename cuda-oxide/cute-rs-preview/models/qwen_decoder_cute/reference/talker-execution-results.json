@@ -1,0 +1,1029 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-16",
+  "base_code_commit": "1f87f3cf8789fcb89fc882d54e2f348224669a20",
+  "status": "Validated working-tree measurements before commit; includes the preceding ordered projection prefetch. See Git history for integration.",
+  "gpu": "RTX 5090 / SM120a",
+  "gpu_uuid": "GPU-04a6d226-f1d6-0fc8-a95a-3ede21981e72",
+  "device_backend": "cutlass-mlir; CUTLASS 4.7.0",
+  "timing_boundary": "Host token IDs to complete host waveform; excludes tokenization, loading, warm predictor graph preparation, hashing/comparison and WAV writing. Per-request Talker plan creation is included; local request-state teardown after waveform availability is excluded, as for the prior cache.",
+  "request_sha256": "5dd939e87772594a239664f9d8d38a3428ee0f8ebf5a5b9848509c9b9ef5419b",
+  "execution_order": [
+    "baseline-a",
+    "final-a",
+    "final-b",
+    "baseline-b",
+    "reference-final"
+  ],
+  "percentile_estimator": "nearest observed rank; ceil(N*p)-1, zero based",
+  "clocks_locked": false,
+  "gpu_work_serialized": true,
+  "post_build_source_changes": "Documentation-only clarification that Drop attempts completion but cannot report CUDA cleanup failures, plus rustfmt-only predictor validation formatting; no executable behavior changed.",
+  "baseline": {
+    "warmups_per_batch": 3,
+    "batches": 2,
+    "measured_runs": 40,
+    "latency_seconds_p50": 0.693598059,
+    "latency_seconds_p95": 0.694611299,
+    "latency_seconds_min": 0.692405664,
+    "latency_seconds_max": 0.69534823,
+    "latencies_seconds": [
+      0.692405664,
+      0.692729873,
+      0.693736399,
+      0.694904401,
+      0.692860569,
+      0.692873607,
+      0.693215862,
+      0.69292673,
+      0.693089923,
+      0.693155037,
+      0.692425486,
+      0.694533278,
+      0.693615882,
+      0.692850472,
+      0.6936026,
+      0.693965756,
+      0.69311251,
+      0.692613152,
+      0.692646259,
+      0.692894364,
+      0.692831515,
+      0.693911557,
+      0.693847622,
+      0.693357866,
+      0.693449449,
+      0.693669054,
+      0.693609648,
+      0.694057649,
+      0.693598059,
+      0.693655033,
+      0.694611299,
+      0.693910526,
+      0.693499047,
+      0.69322656,
+      0.693806971,
+      0.69534823,
+      0.693888364,
+      0.693770309,
+      0.693865933,
+      0.693928639
+    ],
+    "audio_seconds": 3.92,
+    "frames": 49,
+    "rtf_p50": 0.17693828035714287,
+    "binary_sha256": "7706900614afef7adf053b01dc530aaf30f7cd0a1baffe4be513bd6b641ad5ee",
+    "talker_execution": "synchronous",
+    "predictor_execution": "CUDA Graph predictor",
+    "all_codes_and_waveforms_match_previous": true,
+    "saved_wavs_match_previous": true,
+    "waveform_f32le_sha256": "9e341d4bb62821bdefdddf6ab73b5f871b71c90b440495ba445615abeafee87e",
+    "phase_seconds_p50": {
+      "prompt_seconds": 0.000648235,
+      "talker_seconds": 0.335059834,
+      "predictor_seconds": 0.26138962799999993,
+      "codec_seconds": 0.093160273
+    },
+    "batches_summary": [
+      {
+        "binary_sha256": "7706900614afef7adf053b01dc530aaf30f7cd0a1baffe4be513bd6b641ad5ee",
+        "gpu_uuid": "GPU-04a6d226-f1d6-0fc8-a95a-3ede21981e72",
+        "warmups": 3,
+        "repetitions": 20,
+        "percentile_estimator": "nearest rank (observed sample)",
+        "latency_seconds_p50": 0.69292673,
+        "latency_seconds_p95": 0.694533278,
+        "latency_min": 0.692405664,
+        "latency_max": 0.694904401,
+        "rtf_p50": 0.1767670229591837,
+        "rtf_p95": 0.17717685663265306,
+        "predictor_execution": "CUDA Graph predictor",
+        "talker_execution": "synchronous",
+        "audio_seconds": 3.92,
+        "frames": 49,
+        "all_codes_and_waveforms_match_previous": true,
+        "wav_bytes_match_previous": true,
+        "telemetry": {
+          "temperature.gpu": {
+            "min": 41.0,
+            "median": 47.0,
+            "max": 50.0
+          },
+          "utilization.gpu [%]": {
+            "min": 0.0,
+            "median": 78.0,
+            "max": 84.0
+          },
+          "clocks.current.sm [MHz]": {
+            "min": 2415.0,
+            "median": 2880.0,
+            "max": 2887.0
+          },
+          "clocks.current.memory [MHz]": {
+            "min": 13801.0,
+            "median": 13801.0,
+            "max": 14001.0
+          },
+          "power.draw [W]": {
+            "min": 70.19,
+            "median": 239.45,
+            "max": 245.57
+          },
+          "memory.used [MiB]": {
+            "min": 2.0,
+            "median": 4440.0,
+            "max": 4490.0
+          }
+        }
+      },
+      {
+        "binary_sha256": "7706900614afef7adf053b01dc530aaf30f7cd0a1baffe4be513bd6b641ad5ee",
+        "gpu_uuid": "GPU-04a6d226-f1d6-0fc8-a95a-3ede21981e72",
+        "warmups": 3,
+        "repetitions": 20,
+        "percentile_estimator": "nearest rank (observed sample)",
+        "latency_seconds_p50": 0.693770309,
+        "latency_seconds_p95": 0.694611299,
+        "latency_min": 0.692831515,
+        "latency_max": 0.69534823,
+        "rtf_p50": 0.17698222168367347,
+        "rtf_p95": 0.1771967599489796,
+        "predictor_execution": "CUDA Graph predictor",
+        "talker_execution": "synchronous",
+        "audio_seconds": 3.92,
+        "frames": 49,
+        "all_codes_and_waveforms_match_previous": true,
+        "wav_bytes_match_previous": true,
+        "telemetry": {
+          "temperature.gpu": {
+            "min": 48.0,
+            "median": 54.0,
+            "max": 58.0
+          },
+          "utilization.gpu [%]": {
+            "min": 0.0,
+            "median": 78.0,
+            "max": 82.0
+          },
+          "clocks.current.sm [MHz]": {
+            "min": 2415.0,
+            "median": 2865.0,
+            "max": 2880.0
+          },
+          "clocks.current.memory [MHz]": {
+            "min": 13801.0,
+            "median": 13801.0,
+            "max": 14001.0
+          },
+          "power.draw [W]": {
+            "min": 77.85,
+            "median": 246.53,
+            "max": 252.09
+          },
+          "memory.used [MiB]": {
+            "min": 2.0,
+            "median": 4440.0,
+            "max": 4508.0
+          }
+        }
+      }
+    ],
+    "artifacts": {
+      "a": {
+        "report_sha256": "ffc09b4cf78ef7daa971e94c32253a14f51b54782761b5b603a283c453c45d82",
+        "environment_sha256": "1c450c11c35dc36a22600a4c106eb8148f91f18c20d15abfbd7b1ef289974c29",
+        "telemetry_sha256": "467a0c207fa9ea6a21f96a55cf6e8a2ef6860261647b34fcc92e1cd74c314b28"
+      },
+      "b": {
+        "report_sha256": "3896b4564a2048e4c01da95522ac2e0ef63f22e64d0e7037798fe714c815a1de",
+        "environment_sha256": "60c686215b197159e325f7d75f29646c4a024c024bbce2b05546451a4c8323f3",
+        "telemetry_sha256": "1109514316ac86ebfb61039a867964364d966f6f2c57189094e95a7533296c5e"
+      }
+    }
+  },
+  "final": {
+    "warmups_per_batch": 3,
+    "batches": 2,
+    "measured_runs": 40,
+    "latency_seconds_p50": 0.568071426,
+    "latency_seconds_p95": 0.576663487,
+    "latency_seconds_min": 0.566677398,
+    "latency_seconds_max": 0.585306575,
+    "latencies_seconds": [
+      0.567221903,
+      0.566677398,
+      0.566854768,
+      0.567173675,
+      0.567556845,
+      0.567239229,
+      0.567241861,
+      0.56730746,
+      0.56812642,
+      0.567678135,
+      0.567962153,
+      0.568805085,
+      0.567912964,
+      0.567474083,
+      0.567972799,
+      0.567879637,
+      0.567532121,
+      0.573307089,
+      0.568541674,
+      0.56817967,
+      0.568068747,
+      0.5690422,
+      0.568593596,
+      0.571920783,
+      0.569281466,
+      0.568071426,
+      0.572247778,
+      0.570106399,
+      0.585306575,
+      0.571105994,
+      0.569689541,
+      0.5738547,
+      0.571924458,
+      0.576663487,
+      0.580954792,
+      0.569180087,
+      0.567870467,
+      0.568098686,
+      0.568028039,
+      0.567559487
+    ],
+    "audio_seconds": 3.92,
+    "frames": 49,
+    "rtf_p50": 0.14491618010204083,
+    "binary_sha256": "73534da1bb6a70cd5561d9edbfd4116b0b56b7dfa4baf9d4e06398e2d21d0be9",
+    "talker_execution": "persistent eager Talker",
+    "predictor_execution": "CUDA Graph predictor",
+    "all_codes_and_waveforms_match_previous": true,
+    "saved_wavs_match_previous": true,
+    "waveform_f32le_sha256": "9e341d4bb62821bdefdddf6ab73b5f871b71c90b440495ba445615abeafee87e",
+    "phase_seconds_p50": {
+      "prompt_seconds": 0.000652621,
+      "talker_seconds": 0.209066765,
+      "predictor_seconds": 0.261586861,
+      "codec_seconds": 0.093650229
+    },
+    "batches_summary": [
+      {
+        "binary_sha256": "73534da1bb6a70cd5561d9edbfd4116b0b56b7dfa4baf9d4e06398e2d21d0be9",
+        "gpu_uuid": "GPU-04a6d226-f1d6-0fc8-a95a-3ede21981e72",
+        "warmups": 3,
+        "repetitions": 20,
+        "percentile_estimator": "nearest rank (observed sample)",
+        "latency_seconds_p50": 0.567556845,
+        "latency_seconds_p95": 0.568805085,
+        "latency_min": 0.566677398,
+        "latency_max": 0.573307089,
+        "rtf_p50": 0.14478490943877553,
+        "rtf_p95": 0.14510333801020409,
+        "predictor_execution": "CUDA Graph predictor",
+        "talker_execution": "persistent eager Talker",
+        "audio_seconds": 3.92,
+        "frames": 49,
+        "all_codes_and_waveforms_match_previous": true,
+        "wav_bytes_match_previous": true,
+        "telemetry": {
+          "temperature.gpu": {
+            "min": 44.0,
+            "median": 50.0,
+            "max": 55.0
+          },
+          "utilization.gpu [%]": {
+            "min": 0.0,
+            "median": 94.0,
+            "max": 99.0
+          },
+          "clocks.current.sm [MHz]": {
+            "min": 1687.0,
+            "median": 2872.0,
+            "max": 2880.0
+          },
+          "clocks.current.memory [MHz]": {
+            "min": 13801.0,
+            "median": 13801.0,
+            "max": 14001.0
+          },
+          "power.draw [W]": {
+            "min": 72.66,
+            "median": 270.75,
+            "max": 275.51
+          },
+          "memory.used [MiB]": {
+            "min": 2.0,
+            "median": 4440.0,
+            "max": 4526.0
+          }
+        }
+      },
+      {
+        "binary_sha256": "73534da1bb6a70cd5561d9edbfd4116b0b56b7dfa4baf9d4e06398e2d21d0be9",
+        "gpu_uuid": "GPU-04a6d226-f1d6-0fc8-a95a-3ede21981e72",
+        "warmups": 3,
+        "repetitions": 20,
+        "percentile_estimator": "nearest rank (observed sample)",
+        "latency_seconds_p50": 0.569281466,
+        "latency_seconds_p95": 0.580954792,
+        "latency_min": 0.567559487,
+        "latency_max": 0.585306575,
+        "rtf_p50": 0.1452248637755102,
+        "rtf_p95": 0.1482027530612245,
+        "predictor_execution": "CUDA Graph predictor",
+        "talker_execution": "persistent eager Talker",
+        "audio_seconds": 3.92,
+        "frames": 49,
+        "all_codes_and_waveforms_match_previous": true,
+        "wav_bytes_match_previous": true,
+        "telemetry": {
+          "temperature.gpu": {
+            "min": 46.0,
+            "median": 52.0,
+            "max": 56.0
+          },
+          "utilization.gpu [%]": {
+            "min": 0.0,
+            "median": 95.0,
+            "max": 99.0
+          },
+          "clocks.current.sm [MHz]": {
+            "min": 2415.0,
+            "median": 2865.0,
+            "max": 2880.0
+          },
+          "clocks.current.memory [MHz]": {
+            "min": 13801.0,
+            "median": 13801.0,
+            "max": 14001.0
+          },
+          "power.draw [W]": {
+            "min": 76.14,
+            "median": 271.38,
+            "max": 275.35
+          },
+          "memory.used [MiB]": {
+            "min": 2.0,
+            "median": 4440.0,
+            "max": 4514.0
+          }
+        }
+      }
+    ],
+    "artifacts": {
+      "a": {
+        "report_sha256": "1d7f93b2b394060156c88af58fabcdf043214c45bdc29a9aa48588d9ebf3d35e",
+        "environment_sha256": "fc76c8589d3bc0d157799fd1f9058495e6a53791ae87246e16c267d8a69b7cad",
+        "telemetry_sha256": "43a2161ba0a97570497a35f5d4aa90a6a96b5575990e7b98c92c948e75edf634"
+      },
+      "b": {
+        "report_sha256": "493108bbe8ba36bb64bebf505619671b08b27cb4fec4e2f3be6efc206ed2222e",
+        "environment_sha256": "1bef8ac78fa4639c5af3ead705a43ca613d8795b766463856e055ab8ddec4cdf",
+        "telemetry_sha256": "c65796aa740ccd3b577c4a317b2c445f992a734cab91b44543f9a43c23601bf5"
+      }
+    }
+  },
+  "reference": {
+    "mode": "hybrid",
+    "sdpa_backend": "math",
+    "warmups": [
+      {
+        "seconds": 4.482797323958948,
+        "audio_seconds": 3.76,
+        "first_playable_audio_seconds": 4.482797323958948,
+        "delivery_mode": "complete_waveform",
+        "incremental_streaming": false,
+        "samples": 90240,
+        "frames": 47,
+        "peak_allocated_bytes": 4455338496,
+        "peak_reserved_bytes": 4519362560,
+        "codec_sha256": "b18d28be3eebe81ed74f80d5e973f6b73983a028c6144f64c47f64d08027f792",
+        "waveform_sha256": "45aca4bba204e3a47c47b89ae4ba10042ba94aef5867ef837bea4e704018c36c",
+        "stopped_before_cap": true
+      },
+      {
+        "seconds": 0.5503127449192107,
+        "audio_seconds": 3.76,
+        "first_playable_audio_seconds": 0.5503127449192107,
+        "delivery_mode": "complete_waveform",
+        "incremental_streaming": false,
+        "samples": 90240,
+        "frames": 47,
+        "peak_allocated_bytes": 4455345664,
+        "peak_reserved_bytes": 4521459712,
+        "codec_sha256": "b18d28be3eebe81ed74f80d5e973f6b73983a028c6144f64c47f64d08027f792",
+        "waveform_sha256": "45aca4bba204e3a47c47b89ae4ba10042ba94aef5867ef837bea4e704018c36c",
+        "stopped_before_cap": true
+      },
+      {
+        "seconds": 0.5497966089751571,
+        "audio_seconds": 3.76,
+        "first_playable_audio_seconds": 0.5497966089751571,
+        "delivery_mode": "complete_waveform",
+        "incremental_streaming": false,
+        "samples": 90240,
+        "frames": 47,
+        "peak_allocated_bytes": 4455345664,
+        "peak_reserved_bytes": 4521459712,
+        "codec_sha256": "b18d28be3eebe81ed74f80d5e973f6b73983a028c6144f64c47f64d08027f792",
+        "waveform_sha256": "45aca4bba204e3a47c47b89ae4ba10042ba94aef5867ef837bea4e704018c36c",
+        "stopped_before_cap": true
+      }
+    ],
+    "summary": {
+      "percentile_estimator": "nearest observed rank: ceil(N * p) - 1, zero-based",
+      "latency_seconds_p50": 0.5491085879039019,
+      "latency_seconds_p95": 0.549645819934085,
+      "first_playable_audio_seconds_p50": 0.5491085879039019,
+      "first_playable_audio_seconds_p95": 0.549645819934085,
+      "real_time_factor_p50": 0.1460395180595484,
+      "real_time_factor_p95": 0.14618239891863963,
+      "codec_frames_per_second_p50": 85.5925954250106,
+      "real_time_factor_definition": "synthesis_seconds / actual_audio_seconds; lower is better"
+    },
+    "model_revision": "0c0e3051f131929182e2c023b9537f8b1c68adfe",
+    "official_source_revision": "022e286b98fbec7e1e916cb940cdf532cd9f488e",
+    "optimized_source_revision": "c64873e6a792d4dabc7ae592933fefd740ff4d5f",
+    "benchmark_script_sha256": "f445270357ca84ee43ba9f4009ed20001051d51344ef97fa4477c910b35fc89d",
+    "measured_runs": 20,
+    "audio_seconds": 3.76,
+    "frames": 47,
+    "latencies_seconds": [
+      0.5502474009990692,
+      0.5494716470129788,
+      0.5492773749865592,
+      0.5494814109988511,
+      0.549645819934085,
+      0.5489793519955128,
+      0.5494517011102289,
+      0.5491085879039019,
+      0.5490018459968269,
+      0.5490998618770391,
+      0.5493064860347658,
+      0.5492177160922438,
+      0.5488895408343524,
+      0.5488860819023103,
+      0.5485190199688077,
+      0.5486758390907198,
+      0.5488896060269326,
+      0.5486676539294422,
+      0.5491129199508578,
+      0.5492917059455067
+    ],
+    "codec_sha256": "b18d28be3eebe81ed74f80d5e973f6b73983a028c6144f64c47f64d08027f792",
+    "waveform_sha256": "45aca4bba204e3a47c47b89ae4ba10042ba94aef5867ef837bea4e704018c36c",
+    "report_sha256": "c4a33dd43c371d9fd161d6e035b11fd7244d2539a24f28833160c30c4bc55426",
+    "comparison_note": "Same request and timing boundary; different codes and waveform duration, not identical work."
+  },
+  "improvement": {
+    "latency_reduction_percent": 18.097892773947333,
+    "latency_speedup_factor": 1.2209698063567098,
+    "latency_ratio_to_reference": 1.034533858172724,
+    "rtf_ratio_to_reference": 0.9923079864105719
+  },
+  "profiles": {
+    "baseline": {
+      "scope": "Final request of captured 3 warmups + 2 measurements; first prompt embedding kernel through last codec kernel. Includes per-request Talker plan preparation within that span. Excludes loading, predictor graph preparation, the final waveform D2H copy, and the host tail outside this kernel span. Node-level graph tracing; diagnostic timings include profiling overhead and are not full synthesis latency.",
+      "selection": {
+        "prompt_kernel": "embedding_bf16",
+        "grid_x": 304,
+        "occurrences": 5,
+        "selected_index": 4,
+        "first_kernel_index": 422884
+      },
+      "requested_predictor_mode": "graph",
+      "requested_talker_mode": "sync",
+      "predictor_execution": "CUDA Graph predictor",
+      "talker_execution": "synchronous",
+      "span_ns": 720592948,
+      "exclusive_ns": {
+        "linear": 353399149,
+        "normalization": 27912121,
+        "other_kernels": 97552857,
+        "copies_or_memsets": 30722879,
+        "no_recorded_gpu_activity": 211005942
+      },
+      "kernel_count": 105319,
+      "graph_node_kernel_count": 78008,
+      "api": [
+        {
+          "name": "cuStreamSynchronize",
+          "count": 26547,
+          "total_ns": 544330369
+        },
+        {
+          "name": "cuLaunchKernel",
+          "count": 27310,
+          "total_ns": 48091447
+        },
+        {
+          "name": "cuMemcpyHtoDAsync_v2",
+          "count": 6118,
+          "total_ns": 35550252
+        },
+        {
+          "name": "cuGraphLaunch",
+          "count": 49,
+          "total_ns": 12638457
+        },
+        {
+          "name": "cuCtxSynchronize",
+          "count": 41831,
+          "total_ns": 11258961
+        },
+        {
+          "name": "cuMemcpyDtoHAsync_v2",
+          "count": 1548,
+          "total_ns": 9741957
+        },
+        {
+          "name": "cuMemAlloc_v2",
+          "count": 6118,
+          "total_ns": 8920639
+        },
+        {
+          "name": "cuMemFree_v2",
+          "count": 6053,
+          "total_ns": 7727035
+        }
+      ],
+      "copies": [
+        {
+          "direction": "Host-to-Device",
+          "count": 6118,
+          "bytes": 704438256,
+          "total_ns": 29856869
+        },
+        {
+          "direction": "Device-to-Host",
+          "count": 1548,
+          "bytes": 14099776,
+          "total_ns": 866010
+        }
+      ],
+      "full_capture_device_allocations": {
+        "exact_for_traced_device_allocations": true,
+        "peak_bytes": 4244911618,
+        "peak_timestamp_ns": 4090445628,
+        "final_live_bytes": 0,
+        "allocation_count": 31447,
+        "free_count": 31447,
+        "total_allocated_bytes": 7611599790,
+        "per_device": {
+          "0": {
+            "live_bytes": 0,
+            "peak_bytes": 4244911618
+          }
+        },
+        "anomalies": [],
+        "scope": "Requested live bytes in traced device allocations; excludes driver/module overhead and pool reservations.",
+        "available": true
+      },
+      "outputs_match_previous": true,
+      "summary_sha256": "b87e0a5f0a3d70a596bfad33c11a62264b2a54fbec6eae5932478cb1f370b434",
+      "capture_sha256": "2ad0cc0bd0817ec59729e0332fa51095fee155859ef43f89482570cc5d7e1339"
+    },
+    "final": {
+      "scope": "Final request of captured 3 warmups + 2 measurements; first prompt embedding kernel through last codec kernel. Includes per-request Talker plan preparation within that span. Excludes loading, predictor graph preparation, the final waveform D2H copy, and the host tail outside this kernel span. Node-level graph tracing; diagnostic timings include profiling overhead and are not full synthesis latency.",
+      "selection": {
+        "prompt_kernel": "embedding_bf16",
+        "grid_x": 304,
+        "occurrences": 5,
+        "selected_index": 4,
+        "first_kernel_index": 428568
+      },
+      "requested_predictor_mode": "graph",
+      "requested_talker_mode": "eager",
+      "predictor_execution": "CUDA Graph predictor",
+      "talker_execution": "persistent eager Talker",
+      "span_ns": 583205106,
+      "exclusive_ns": {
+        "linear": 352487797,
+        "normalization": 27948694,
+        "other_kernels": 100756131,
+        "copies_or_memsets": 28257273,
+        "no_recorded_gpu_activity": 73755211
+      },
+      "kernel_count": 106740,
+      "graph_node_kernel_count": 78008,
+      "api": [
+        {
+          "name": "cuStreamSynchronize",
+          "count": 1776,
+          "total_ns": 459060486
+        },
+        {
+          "name": "cuLaunchKernel",
+          "count": 28731,
+          "total_ns": 48116141
+        },
+        {
+          "name": "cuMemcpyHtoDAsync_v2",
+          "count": 702,
+          "total_ns": 27309510
+        },
+        {
+          "name": "cuGraphLaunch",
+          "count": 49,
+          "total_ns": 12730387
+        },
+        {
+          "name": "cuMemAlloc_v2",
+          "count": 604,
+          "total_ns": 3531617
+        },
+        {
+          "name": "cuMemFree_v2",
+          "count": 514,
+          "total_ns": 2849990
+        },
+        {
+          "name": "cuMemcpyDtoHAsync_v2",
+          "count": 225,
+          "total_ns": 1664964
+        },
+        {
+          "name": "cuModuleLoadData",
+          "count": 6,
+          "total_ns": 714773
+        },
+        {
+          "name": "cuCtxSynchronize",
+          "count": 1752,
+          "total_ns": 536087
+        },
+        {
+          "name": "cuStreamCreate",
+          "count": 1,
+          "total_ns": 5598
+        }
+      ],
+      "copies": [
+        {
+          "direction": "Host-to-Device",
+          "count": 702,
+          "bytes": 679476800,
+          "total_ns": 28070074
+        },
+        {
+          "direction": "Device-to-Host",
+          "count": 225,
+          "bytes": 2641028,
+          "total_ns": 187199
+        }
+      ],
+      "full_capture_device_allocations": {
+        "exact_for_traced_device_allocations": true,
+        "peak_bytes": 4244983766,
+        "peak_timestamp_ns": 3988706782,
+        "final_live_bytes": 0,
+        "allocation_count": 3864,
+        "free_count": 3864,
+        "total_allocated_bytes": 7486680638,
+        "per_device": {
+          "0": {
+            "live_bytes": 0,
+            "peak_bytes": 4244983766
+          }
+        },
+        "anomalies": [],
+        "scope": "Requested live bytes in traced device allocations; excludes driver/module overhead and pool reservations.",
+        "available": true
+      },
+      "outputs_match_previous": true,
+      "summary_sha256": "657ad7467144d495c8df5b9ef7677c08b7142a4d6c1990c6810ea88a1dd31d6f",
+      "capture_sha256": "5cbebbf9549a935fdd634a3dee1d80ed9252b04abf89357bcc86a7a3e0154650"
+    }
+  },
+  "validation": {
+    "host_tests": {
+      "passed": 91,
+      "failed": 0,
+      "ignored": 3,
+      "log_sha256": "37eaf883f337c2497cca807500e784e5c7c07b491782e2dd6ad7fae3eb871535"
+    },
+    "strict_clippy": {
+      "passed": true,
+      "log_sha256": "abd3d1c8285f1914711ab8327e367644139d490cb6d6f03f21190d6627310601"
+    },
+    "formatting": "Scoped rustfmt checks pass for all 13 changed Rust files. Full-model cargo fmt --check still reports pre-existing formatting in unchanged attention_kernel.rs and decode_linear_grouped.rs.",
+    "talker_fixture": {
+      "passed": true,
+      "log_sha256": "8e1a61a9cf53e4eaf3853e22479baf16adfc0197977bfcff42ab84904a6a9229",
+      "scope": "Exact original/new hidden, logits and full cache backing at 63/64/65 and 127/128/129 prefixes; retained outputs; delayed foreign producer; input/context/capacity rejection; sticky guard failure; error/unwind completion."
+    },
+    "readiness_negative_control": {
+      "expected_failure_observed": true,
+      "mutation": "Remove only the per-step context readiness fence; delayed producer observes stale BF16 input.",
+      "failure": "delayed foreign-stream producer hidden[0]: BF16 bits 7fff != 3e64",
+      "log_sha256": "a834410db1961a9185a61f37a6cd33a162910ae1ec5dddea97f8187e736cf562",
+      "restored_fixture_passed": true
+    },
+    "sanitizers": {
+      "all_passed": true,
+      "runs": 6,
+      "cases": [
+        "talker-decode",
+        "predictor-graph"
+      ],
+      "tools": [
+        "memcheck",
+        "racecheck",
+        "synccheck"
+      ],
+      "report_sha256": "46ff2379e7d1bddda6d59ba04e79d8ec2d38216a40f55e4cd5e790fcb945ec3e",
+      "api_reporting_scope": "Talker has API error reporting enabled. Predictor uses --report-api-errors no for intentional capture-invalidating probes: all CUDA API error reporting is disabled for that fixture. Device memory/race/synchronization reporting remains enabled; exit status, zero summaries and completion markers are required.",
+      "sanitized_binary_sha256": "85c04e58466298b5aab84f246d3914935c3e9a0b0a95e973aaa42b7469ac0971",
+      "runs_summary": [
+        {
+          "case": "talker-decode",
+          "tool": "memcheck",
+          "elapsed_seconds": 25.288658620091155,
+          "passed": true,
+          "log_sha256": "9889eff80f800f3e7ee5162dc0582a9030fe7b3e72666f0479dc48185ba0a046",
+          "summaries": {
+            "error_summaries": [
+              0
+            ],
+            "racecheck_summaries": [],
+            "fixture_completion_markers": [
+              "PASS Talker persistent eager exact hidden/logits/cache parity"
+            ]
+          }
+        },
+        {
+          "case": "talker-decode",
+          "tool": "racecheck",
+          "elapsed_seconds": 487.0157880759798,
+          "passed": true,
+          "log_sha256": "99330b828f194c36792e34cc70cc98a2aa9fdbd9c5e0e5efcfddacd3b8ebcd05",
+          "summaries": {
+            "error_summaries": [],
+            "racecheck_summaries": [
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            "fixture_completion_markers": [
+              "PASS Talker persistent eager exact hidden/logits/cache parity"
+            ]
+          }
+        },
+        {
+          "case": "talker-decode",
+          "tool": "synccheck",
+          "elapsed_seconds": 4.416446681832895,
+          "passed": true,
+          "log_sha256": "3531c4cdb648c28e040149f0ba0eccdf6f4fa1a36048ee8455ce4e2773b5bb09",
+          "summaries": {
+            "error_summaries": [
+              0
+            ],
+            "racecheck_summaries": [],
+            "fixture_completion_markers": [
+              "PASS Talker persistent eager exact hidden/logits/cache parity"
+            ]
+          }
+        },
+        {
+          "case": "predictor-graph",
+          "tool": "memcheck",
+          "elapsed_seconds": 15.334162624087185,
+          "passed": true,
+          "log_sha256": "9dace0a25ecf337203281666f80c561b9e65d06d1ac4725459e7e008efa74916",
+          "summaries": {
+            "error_summaries": [
+              0
+            ],
+            "racecheck_summaries": [],
+            "fixture_completion_markers": [
+              "PASS predictor graph/eager/original exact codes and embedding sums"
+            ]
+          }
+        },
+        {
+          "case": "predictor-graph",
+          "tool": "racecheck",
+          "elapsed_seconds": 180.14628225495107,
+          "passed": true,
+          "log_sha256": "0a1ce402e32cfb64ff0a16cba205c2073bd0e9ee02b983219c8bdf3c345a24ba",
+          "summaries": {
+            "error_summaries": [],
+            "racecheck_summaries": [
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            "fixture_completion_markers": [
+              "PASS predictor graph/eager/original exact codes and embedding sums"
+            ]
+          }
+        },
+        {
+          "case": "predictor-graph",
+          "tool": "synccheck",
+          "elapsed_seconds": 3.876433902885765,
+          "passed": true,
+          "log_sha256": "876334c4a4241ab49dcc637108d84576eadc4aeaaf9416edc8cd4398aab1ab9a",
+          "summaries": {
+            "error_summaries": [
+              0
+            ],
+            "racecheck_summaries": [],
+            "fixture_completion_markers": [
+              "PASS predictor graph/eager/original exact codes and embedding sums"
+            ]
+          }
+        }
+      ]
+    },
+    "speech_preservation": {
+      "binary_sha256": "85c04e58466298b5aab84f246d3914935c3e9a0b0a95e973aaa42b7469ac0971",
+      "quality_cases": [
+        {
+          "case": "robot",
+          "fields_exact": [
+            "codec_frames",
+            "code_zero_sequence",
+            "stop_reason",
+            "samples",
+            "waveform_f32le_sha256"
+          ],
+          "wav_bytes_exact": true,
+          "talker_execution": "persistent eager Talker",
+          "predictor_execution": "CUDA Graph predictor",
+          "stop_reason": "eos"
+        },
+        {
+          "case": "vivian-greedy",
+          "fields_exact": [
+            "codec_frames",
+            "code_zero_sequence",
+            "stop_reason",
+            "samples",
+            "waveform_f32le_sha256"
+          ],
+          "wav_bytes_exact": true,
+          "talker_execution": "persistent eager Talker",
+          "predictor_execution": "CUDA Graph predictor",
+          "stop_reason": "max_new_tokens"
+        },
+        {
+          "case": "ryan-0",
+          "fields_exact": [
+            "codec_frames",
+            "code_zero_sequence",
+            "stop_reason",
+            "samples",
+            "waveform_f32le_sha256"
+          ],
+          "wav_bytes_exact": true,
+          "talker_execution": "persistent eager Talker",
+          "predictor_execution": "synchronous",
+          "stop_reason": "eos"
+        },
+        {
+          "case": "vivian-0",
+          "fields_exact": [
+            "codec_frames",
+            "code_zero_sequence",
+            "stop_reason",
+            "samples",
+            "waveform_f32le_sha256"
+          ],
+          "wav_bytes_exact": true,
+          "talker_execution": "persistent eager Talker",
+          "predictor_execution": "synchronous",
+          "stop_reason": "eos"
+        },
+        {
+          "case": "vivian-1",
+          "fields_exact": [
+            "codec_frames",
+            "code_zero_sequence",
+            "stop_reason",
+            "samples",
+            "waveform_f32le_sha256"
+          ],
+          "wav_bytes_exact": true,
+          "talker_execution": "persistent eager Talker",
+          "predictor_execution": "synchronous",
+          "stop_reason": "eos"
+        }
+      ],
+      "known_failure": "Vivian greedy repetition unchanged; no broad quality acceptance claim"
+    },
+    "workspace_vs_isolated_device_code": {
+      "all_kernel_sass_identical": true,
+      "kernel_count": 30
+    },
+    "sync_control": {
+      "binary_sha256": "73534da1bb6a70cd5561d9edbfd4116b0b56b7dfa4baf9d4e06398e2d21d0be9",
+      "gpu_uuid": "GPU-04a6d226-f1d6-0fc8-a95a-3ede21981e72",
+      "warmups": 3,
+      "repetitions": 5,
+      "percentile_estimator": "nearest rank (observed sample)",
+      "latency_seconds_p50": 0.694061608,
+      "latency_seconds_p95": 0.694774554,
+      "latency_min": 0.693203761,
+      "latency_max": 0.694774554,
+      "rtf_p50": 0.17705653265306123,
+      "rtf_p95": 0.17723840663265306,
+      "predictor_execution": "CUDA Graph predictor",
+      "talker_execution": "synchronous",
+      "audio_seconds": 3.92,
+      "frames": 49,
+      "all_codes_and_waveforms_match_previous": true,
+      "wav_bytes_match_previous": true,
+      "telemetry": {
+        "temperature.gpu": {
+          "min": 38.0,
+          "median": 43.5,
+          "max": 47.0
+        },
+        "utilization.gpu [%]": {
+          "min": 0.0,
+          "median": 78.0,
+          "max": 81.0
+        },
+        "clocks.current.sm [MHz]": {
+          "min": 180.0,
+          "median": 2872.0,
+          "max": 2887.0
+        },
+        "clocks.current.memory [MHz]": {
+          "min": 405.0,
+          "median": 13801.0,
+          "max": 13801.0
+        },
+        "power.draw [W]": {
+          "min": 13.4,
+          "median": 180.60500000000002,
+          "max": 242.87
+        },
+        "memory.used [MiB]": {
+          "min": 2.0,
+          "median": 4440.0,
+          "max": 4458.0
+        }
+      }
+    },
+    "checkpoint_scope": "Prior checkpoint fixtures exercise the original runner; new persistent path is checked directly against it at all listed live-prefix boundaries and with full speech outputs."
+  },
+  "source_sha256": {
+    "cute-rs-preview/examples/rope_cache_cute/src/operator.rs": "04284787b523ccd6ecf62230bea8eb488e7dc71445b4bdeea0482aa029bdc3dc",
+    "cute-rs-preview/models/qwen_decoder_cute/src/decoder_execution.rs": "33fb6b3567544d91cb76604b2219b1c7c51e31bca7d93f697849bebe8a3e9b70",
+    "cute-rs-preview/models/qwen_decoder_cute/src/talker_decode.rs": "13081a8b23e850108b2e2aa964f67cef52ad11703d61f806dc39bfe817238593",
+    "cute-rs-preview/models/qwen_decoder_cute/src/talker_decode_validation.rs": "df99b78dbfbd93cff572b48e523eef56dda25ccf3c6b3728cee984d409c1b1ac",
+    "cute-rs-preview/models/qwen_decoder_cute/src/main.rs": "30cdf9c82582c390166280020b669449fb06a55f39ad586eb240e74b44dffe56",
+    "cute-rs-preview/models/qwen_decoder_cute/src/model.rs": "cc04a07d79adf5042867df4b3d8a6a39b5190b0fdc22b252c8dc1e81b818b5a4",
+    "cute-rs-preview/models/qwen_decoder_cute/src/predictor_graph.rs": "bcdc8ad8ff5afd7246fe8790085f8f5626694e9d2826bc5c1cf90e2394fe82b4",
+    "cute-rs-preview/models/qwen_decoder_cute/src/predictor_graph_kernel.rs": "390ad61e66d3794e61e1ae2de88528bb7ebc33c6cc851ab89313cce8017f18f9",
+    "cute-rs-preview/models/qwen_decoder_cute/src/predictor_graph_validation.rs": "7d40e120e28c65819a6834b6a77637a9c16c37416cd592c7c262273f1392a67b",
+    "cute-rs-preview/models/qwen_decoder_cute/src/tts.rs": "29d2b84329ecfc6b1cc31e0da013570c45053c376fbadc41fb1e473c3ca5565e"
+  },
+  "raw_artifacts": "/tmp/qwen-talker-experiment",
+  "open_gates": [
+    "Known Vivian greedy repetition/cap failure remains unchanged.",
+    "Broad model quality and performance acceptance remain open; one request does not establish general parity."
+  ],
+  "cleanup_verification": {
+    "date": "2026-10-16",
+    "scope": "Documentation/API comment clarification, ignore generated Lean build cache, rustfmt-only changes in attention_kernel.rs and decode_linear_grouped.rs; no runtime behavior changes.",
+    "host_tests": {
+      "passed": 91,
+      "failed": 0,
+      "ignored": 3,
+      "log_sha256": "750319a1978f4f0522f8c7d815f489442562ff9c04e17f87bbe0d8aa41e4c114"
+    },
+    "strict_clippy": "Passed all-target check with -D warnings.",
+    "clippy_log_sha256": "405d729609330e3aaf2b04e640cec6b2f8147e8f4cef29731e1d528950e8b30a",
+    "formatting": "Full model cargo fmt --check passes after the two formatting corrections.",
+    "note": "Earlier measured-build hashes and validation records are retained unchanged.",
+    "source_sha256": {
+      "cute-rs-preview/examples/ffn_cute/src/kernel.rs": "b8ceb267c067f2119167a0268714d30fd356f392a2037bc5e734eeb64bac1e64",
+      "cute-rs-preview/examples/rope_cache_cute/src/attention_kernel.rs": "100082fa931397a9fb670f03bb5a0c05596db4032fda1750cc62b7c90c6102d4",
+      "cute-rs-preview/examples/rope_cache_cute/src/operator.rs": "04284787b523ccd6ecf62230bea8eb488e7dc71445b4bdeea0482aa029bdc3dc",
+      "cute-rs-preview/models/qwen_decoder_cute/src/decode_linear.rs": "225a606685f8cd219a9a4fffb9347c6b342e4a1d17feac1816f0522433d11f73",
+      "cute-rs-preview/models/qwen_decoder_cute/src/decode_linear_bench.rs": "f66269f3c88ee4437dbff7919dd182fd00d168472b1f3ecc4946a4740adf18ce",
+      "cute-rs-preview/models/qwen_decoder_cute/src/decode_linear_grouped.rs": "f17545b91b422845d1b51527c7a5f07fac48b8b554f576a4ea0c4d412dd8469e",
+      "cute-rs-preview/models/qwen_decoder_cute/src/decoder_execution.rs": "33fb6b3567544d91cb76604b2219b1c7c51e31bca7d93f697849bebe8a3e9b70",
+      "cute-rs-preview/models/qwen_decoder_cute/src/main.rs": "30cdf9c82582c390166280020b669449fb06a55f39ad586eb240e74b44dffe56",
+      "cute-rs-preview/models/qwen_decoder_cute/src/model.rs": "cc04a07d79adf5042867df4b3d8a6a39b5190b0fdc22b252c8dc1e81b818b5a4",
+      "cute-rs-preview/models/qwen_decoder_cute/src/predictor_graph.rs": "bcdc8ad8ff5afd7246fe8790085f8f5626694e9d2826bc5c1cf90e2394fe82b4",
+      "cute-rs-preview/models/qwen_decoder_cute/src/predictor_graph_kernel.rs": "390ad61e66d3794e61e1ae2de88528bb7ebc33c6cc851ab89313cce8017f18f9",
+      "cute-rs-preview/models/qwen_decoder_cute/src/predictor_graph_validation.rs": "7d40e120e28c65819a6834b6a77637a9c16c37416cd592c7c262273f1392a67b",
+      "cute-rs-preview/models/qwen_decoder_cute/src/talker_decode.rs": "802410f8411af678505cec4b5c43c5f5f347055f927e2ce2d3002d5bfddfa380",
+      "cute-rs-preview/models/qwen_decoder_cute/src/talker_decode_validation.rs": "df99b78dbfbd93cff572b48e523eef56dda25ccf3c6b3728cee984d409c1b1ac",
+      "cute-rs-preview/models/qwen_decoder_cute/src/tts.rs": "29d2b84329ecfc6b1cc31e0da013570c45053c376fbadc41fb1e473c3ca5565e"
+    },
+    "private_api_rustdoc": {
+      "result": "Passed cargo doc --document-private-items --no-deps with RUSTDOCFLAGS=-D warnings.",
+      "log_sha256": "0e28322e19baaa5e6991430637b030161e8a5527ea6d6e7b9efd54403f50b106"
+    }
+  }
+}

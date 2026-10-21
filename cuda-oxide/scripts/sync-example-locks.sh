@@ -6,7 +6,7 @@
 # versions.
 #
 # Why this matters: examples under crates/rustc-codegen-cuda/examples/ and
-# cuteir/examples/, plus models under cuteir/models/, have their own cargo
+# cute-rs-preview/examples/, plus models under cute-rs-preview/models/, have their own cargo
 # workspaces and committed Cargo.lock.
 # CI builds them all into one shared CARGO_TARGET_DIR, and cargo keys its build cache
 # on the resolved versions of a unit's whole dependency subtree. When two
@@ -44,7 +44,7 @@
 #       pins). With no arguments, aligns every drifted lock. Use this for a
 #       newly added example, or for git-dependency workspaces after --bump.
 #       Use a short example or model name from any root, or a root-qualified path
-#       such as cuteir/examples/elementwise_cute to select one explicitly.
+#       such as cute-rs-preview/examples/elementwise_cute to select one explicitly.
 #
 # Adding a new example? Copy an existing example's Cargo.lock (e.g.
 # vecadd's) into the new workspace before the first build; cargo keeps the
@@ -53,7 +53,7 @@
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-EXAMPLES_ROOTS=("crates/rustc-codegen-cuda/examples" "cuteir/examples" "cuteir/models")
+EXAMPLES_ROOTS=("crates/rustc-codegen-cuda/examples" "cute-rs-preview/examples" "cute-rs-preview/models")
 
 usage() {
     # The doc block above: everything after the shebang + SPDX lines, up to

@@ -7,7 +7,7 @@ publish = false
 [workspace]
 
 [dependencies]
-ctm-rs = { path = "../../../../../cuteir/ctm-rs" }
+ctm-rs = { path = "../../../../../cute-rs-preview/ctm-rs" }
 cuda-device = { path = "../../../../cuda-device" }
 cuda-host = { path = "../../../../cuda-host" }
 cuda-core = { path = "../../../../../../cuda-core" }

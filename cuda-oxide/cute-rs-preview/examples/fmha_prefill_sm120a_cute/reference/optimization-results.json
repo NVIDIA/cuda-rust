@@ -1,0 +1,4651 @@
+{
+  "status": "passed",
+  "performance_parity_established": false,
+  "date": "2026-10-12",
+  "physical_gpu": 1,
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "target": "sm_120a",
+  "metric": "Nsight Systems CUPTI kernel-active duration",
+  "unit": "us",
+  "aggregation": "median of three round medians; alternating implementations; 100 warmups and 31 measured launches per round; two correctness launches excluded",
+  "shape": {
+    "batch": 1,
+    "seq_q": 1024,
+    "seq_k": 1024,
+    "heads": 8,
+    "head_dim": 64
+  },
+  "compiler_versions": {
+    "rust_cutlass": "4.7.0",
+    "python_cutlass_dsl": "4.7.0"
+  },
+  "build": {
+    "binary_sha256": "8607eedd7ea559aad4688550526ad0e6969be1e2bddb1c8917a86e443211ea0c",
+    "cubin_sha256": "a8a48524aef99e9c20a1b40ba94b5a937bc8b05f96970be1f078aaad1c6ebc10",
+    "backend_sha256": "b6593860f4aab81fd8ecdd4b80c8c4a17808076fa1f3cc42f01bf0ca8447fd0a",
+    "compiler_library_sha256": "57df017e3585a10443c74c8b4cd99bda854242fb2f4c9534cf56d58c2c741628",
+    "cutlass_version": "4.7.0",
+    "target": "sm_120a",
+    "profile": "cutlass-full-cute-mlir22",
+    "generated_at_utc": "2026-10-12T06:17:07.963496+00:00",
+    "git_head": "53cc7555577b9bf30f67e026a21ca0700dd678c5",
+    "build_script": "#!/usr/bin/env bash\nset -eu\ncd /home/nihalp/prod/cuda-rust/cuda-oxide\nexport CUDA_OXIDE_BACKEND=/tmp/primitives-api-evidence/tools/backend/x86_64-unknown-linux-gnu/debug/librustc_codegen_cuda.so\nexport CUDA_OXIDE_CUTLASS_COMPILER=/home/nihalp/.cargo/cuda-oxide/toolchains/cutlass/4.7.0/x86_64-cu13/lib/libCutlassCompiler.so\nexport CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir\nexport CUDA_OXIDE_MLIR_PROFILE=cutlass-full-cute-mlir22\nexport CUDA_OXIDE_DUMP_MIR=1 CUDA_OXIDE_VERBOSE=1\nexport CUDA_OXIDE_PTX_DIR=/tmp/fmha-prefill-sm120a-build\nexport CUDA_OXIDE_MLIR_OUTPUT=/tmp/fmha-prefill-sm120a-build/fmha.mlir\nmkdir -p /tmp/fmha-prefill-sm120a-build\n/tmp/primitives-api-evidence/tools/cli/x86_64-unknown-linux-gnu/debug/cargo-oxide build --arch sm_120a --cargo-target-dir /tmp/fmha-prefill-build/target --device-codegen-crate fmha_prefill_sm120a_cute -- --manifest-path cute-rs-preview/examples/fmha_prefill_sm120a_cute/Cargo.toml --release --offline > /tmp/fmha-prefill-sm120a-build/build.log 2>&1 || { tail -65 /tmp/fmha-prefill-sm120a-build/build.log; exit 1; }\ntail -8 /tmp/fmha-prefill-sm120a-build/build.log\n",
+    "source_files": [
+      {
+        "path": "cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/src/kernel.rs",
+        "sha256": "62cb655fb6acb20dd1462aed6343515618a6ff5657930183f7af33a9cc52ea49"
+      },
+      {
+        "path": "cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/src/runner.rs",
+        "sha256": "a79c197e925bc9f0eb2d63d3031a03bcc2a238e9a898946161f65287df1a297f"
+      },
+      {
+        "path": "cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/src/fixture.rs",
+        "sha256": "245294d8a7749c7f961822c189a7c42e0b0a4c600e69c002c209a2502a179e02"
+      },
+      {
+        "path": "cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/src/main.rs",
+        "sha256": "b83bcf2c1d86d00c63c9fb4fc105df707924d55056b0ec0de62593b3279ecefc"
+      },
+      {
+        "path": "cuda-oxide/crates/cuda-oxide-mlir-export/src/nvvm_attention.rs",
+        "sha256": "57881693a7477890c29976374bb26a41ead7db2d74504d223b2ec473db27fe5d"
+      },
+      {
+        "path": "cuda-oxide/crates/cuda-oxide-mlir-export/src/mir_memory.rs",
+        "sha256": "46b30874559e1bffa04e155f5ac4b85fd0e727f36c080b88cdc2b9ddab3b465e"
+      },
+      {
+        "path": "cuda-oxide/crates/cuda-oxide-mlir-export/src/cute_attention.rs",
+        "sha256": "51154940d6603053ff759a59ea15817afd9ae28e9ba2ce980a12787e2ac86465"
+      },
+      {
+        "path": "cuda-oxide/crates/mir-importer/src/translator/cute/mod.rs",
+        "sha256": "490c3e164c6db8fc73197022888a18dc017fea40e00098220f71d058894d4c15"
+      },
+      {
+        "path": "cuda-oxide/cute-rs-preview/dialect-cute/src/attributes.rs",
+        "sha256": "b8056286b11ab75e6d82126384a9790bee9442a5b0d70509a8d9d6ac99713e15"
+      },
+      {
+        "path": "cuda-oxide/cute-rs-preview/dialect-cute/src/ops.rs",
+        "sha256": "871885beba17a5c4216d9236fab1124474b6589e92527a93d786fed283b38c0b"
+      },
+      {
+        "path": "cuda-oxide/cute-rs-preview/cute-rs/src/mma.rs",
+        "sha256": "16db11c4a3a84a4e5adaf102d9da035aefc64811c15b170a65029638367eb63a"
+      },
+      {
+        "path": "cuda-oxide/cute-rs-preview/cute-rs/src/lib.rs",
+        "sha256": "7cefa426379537d8825b2d975180bc4039dbc269964d3ad38cdd142561089812"
+      },
+      {
+        "path": "cuda-oxide/rust-toolchain.toml",
+        "sha256": "40b2e82ebc8031485b670b8634d923d97bb2ad2d36a6634329cab7718e789b4c"
+      },
+      {
+        "path": "cuda-oxide/crates/cuda-oxide-codegen/src/cutlass_backend.rs",
+        "sha256": "913898b7ce04078d5180af24686f50736d547ef7091c73a5ef1318c4c9f47a71"
+      }
+    ]
+  },
+  "reference": {
+    "commit": "dcf215af68a2d08d305076c152a06f201728cd53",
+    "kernel_source": {
+      "path": "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/flash_attention_v2.py",
+      "sha256": "263df1fd783729286cd6fa5ec994ec86e7614837bd1ff204eb6687192a8bae2d"
+    },
+    "kernel_modified": false
+  },
+  "changes": [
+    "Const-generic causal dispatch on both shape modes; peeled first/diagonal tile and unmasked steady-state loop.",
+    "Full checked K/V tile views remove redundant dynamic bounds; Q remains bounds-aware.",
+    "Explicit FTZ exp2 matches reference fastmath exp2. Non-FTZ intrinsic lowering remains unchanged.",
+    "Native Rust f32::max exporter mapping with IEEE edge-case GPU verification.",
+    "Typed K-major B-pair matrix load supplies MMA operand order without the old 48 register moves per QK tile.",
+    "Tree maximum reduction, packed nearest-even FP16 conversion, and 32-bit shared-tile offset arithmetic.",
+    "Separate static-shape mode on BOTH implementations for Sq=Sk=1024,H8; runtime mode remains default. Wrong static shapes and mixed comparison modes are rejected."
+  ],
+  "limitations": [
+    "Remaining runtime gaps are 6.7% causal and 4.9% noncausal; static gaps are 6.0% and 1.4%.",
+    "Static mode is intentionally restricted to the measured 1024-token, 8-head shape; no generalized static-shape dispatch claim.",
+    "Warm reused-input kernel-active timing; excludes compile time, CPU launch overhead, transfers, correctness, and sanitizer overhead; not cold-cache or graph throughput.",
+    "NVIDIA profiler instruction counts identify excess work, but do not establish per-PC stall causality.",
+    "Raw trace/log paths under /tmp are local evidence; summary samples, hashes, and validation results are retained in this file."
+  ],
+  "workloads": [
+    {
+      "shape_mode": "runtime",
+      "mask": "causal",
+      "report": {
+        "path": "/tmp/prefill-optimization/final-runtime/causal/run-qfkqemr3/report.json",
+        "sha256": "28fe7656785d0bf529b0b871a31945cd541dfe94081eb49d0fb62b14b0cb6fa6"
+      },
+      "started_utc": "2026-10-12T06:17:09.920930+00:00",
+      "parameters": {
+        "seq_q": 1024,
+        "seq_k": 1024,
+        "heads": 8,
+        "causal": true,
+        "shape_mode": "runtime",
+        "input_scale": 1,
+        "zero_query": false,
+        "device": 0,
+        "warmup": 100,
+        "samples": 31,
+        "rounds": 3,
+        "timeout": 600
+      },
+      "summary": {
+        "rust": {
+          "round_medians_us": [
+            16.768,
+            16.768,
+            16.768
+          ],
+          "samples_us": [
+            16.8,
+            16.768,
+            16.768,
+            16.768,
+            16.767,
+            16.768,
+            16.8,
+            16.8,
+            16.768,
+            16.736,
+            16.8,
+            16.767,
+            16.768,
+            16.768,
+            16.8,
+            16.768,
+            16.768,
+            16.736,
+            16.768,
+            16.768,
+            16.768,
+            16.736,
+            16.8,
+            16.8,
+            16.768,
+            16.768,
+            16.8,
+            16.768,
+            16.8,
+            16.768,
+            16.8,
+            16.768,
+            16.8,
+            16.8,
+            16.768,
+            16.768,
+            16.768,
+            16.8,
+            16.8,
+            16.768,
+            16.736,
+            16.8,
+            16.768,
+            16.768,
+            16.768,
+            16.768,
+            16.8,
+            16.8,
+            16.768,
+            16.8,
+            16.8,
+            16.8,
+            16.768,
+            16.8,
+            16.8,
+            16.8,
+            16.768,
+            16.768,
+            16.768,
+            16.768,
+            16.736,
+            16.767,
+            16.768,
+            16.736,
+            16.8,
+            16.736,
+            16.767,
+            16.768,
+            16.768,
+            16.768,
+            16.8,
+            16.768,
+            16.768,
+            16.735,
+            16.768,
+            16.736,
+            16.8,
+            16.768,
+            16.768,
+            16.768,
+            16.767,
+            16.768,
+            16.8,
+            16.768,
+            16.768,
+            16.768,
+            16.736,
+            16.767,
+            16.768,
+            16.768,
+            16.768,
+            16.768,
+            16.768
+          ],
+          "median_of_round_medians_us": 16.768
+        },
+        "cutlass": {
+          "round_medians_us": [
+            15.712,
+            15.712,
+            15.744
+          ],
+          "samples_us": [
+            15.776,
+            15.744,
+            15.712,
+            15.744,
+            15.712,
+            15.744,
+            15.68,
+            15.712,
+            15.712,
+            15.744,
+            15.712,
+            15.68,
+            15.744,
+            15.744,
+            15.712,
+            15.68,
+            15.712,
+            15.744,
+            15.744,
+            15.712,
+            15.744,
+            15.712,
+            15.744,
+            15.744,
+            15.712,
+            15.68,
+            15.712,
+            15.776,
+            15.68,
+            15.712,
+            15.744,
+            15.712,
+            15.712,
+            15.744,
+            15.744,
+            15.776,
+            15.68,
+            15.744,
+            15.744,
+            15.68,
+            15.712,
+            15.776,
+            15.744,
+            15.776,
+            15.744,
+            15.712,
+            15.711,
+            15.712,
+            15.744,
+            15.68,
+            15.712,
+            15.679,
+            15.744,
+            15.712,
+            15.712,
+            15.712,
+            15.711,
+            15.712,
+            15.776,
+            15.712,
+            15.68,
+            15.712,
+            15.744,
+            15.776,
+            15.712,
+            15.68,
+            15.68,
+            15.711,
+            15.68,
+            15.776,
+            15.776,
+            15.744,
+            15.744,
+            15.744,
+            15.744,
+            15.744,
+            15.776,
+            15.68,
+            15.712,
+            15.744,
+            15.712,
+            15.744,
+            15.744,
+            15.711,
+            15.712,
+            15.712,
+            15.744,
+            15.744,
+            15.744,
+            15.744,
+            15.712,
+            15.744,
+            15.776
+          ],
+          "median_of_round_medians_us": 15.712
+        }
+      },
+      "rust_slower_percent": 6.720977596741351,
+      "nsys_version": "NVIDIA Nsight Systems version 2026.3.2.476-263238834031v0",
+      "runs": [
+        {
+          "round": 1,
+          "label": "rust",
+          "kernel_name": "fmha_prefill_TID_dee726da1349085a0af582adf224d032",
+          "raw_trace": "/tmp/prefill-optimization/final-runtime/causal/run-qfkqemr3/round-01-rust.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-runtime/causal/run-qfkqemr3/round-01-rust.sqlite",
+          "median_us": 16.768,
+          "registers_per_thread": 138,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 7.693035735747977e-05,
+            "max_tolerance_ratio": 0.16110046892975602,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "k": "e0d5338ce588c10a",
+            "q": "d4e8334d2df479c9",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "dab6354df10c5234"
+        },
+        {
+          "round": 1,
+          "label": "cutlass",
+          "kernel_name": "kernel_cutlass_kernel_flash_attention_v2FlashAttentionForwardAmpere_object_at__tensorptrf16gmemalign16odiv8i64div8i64div8i64div81_tensorptrf16gmemalign16odiv8i64div8i64div8i64div81_tensor_0",
+          "raw_trace": "/tmp/prefill-optimization/final-runtime/causal/run-qfkqemr3/round-01-cutlass.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-runtime/causal/run-qfkqemr3/round-01-cutlass.sqlite",
+          "median_us": 15.712,
+          "registers_per_thread": null,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 7.693035735745202e-05,
+            "max_tolerance_ratio": 0.16110046892981755,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "q": "d4e8334d2df479c9",
+            "k": "e0d5338ce588c10a",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "dab6354df10c5234"
+        },
+        {
+          "round": 2,
+          "label": "cutlass",
+          "kernel_name": "kernel_cutlass_kernel_flash_attention_v2FlashAttentionForwardAmpere_object_at__tensorptrf16gmemalign16odiv8i64div8i64div8i64div81_tensorptrf16gmemalign16odiv8i64div8i64div8i64div81_tensor_0",
+          "raw_trace": "/tmp/prefill-optimization/final-runtime/causal/run-qfkqemr3/round-02-cutlass.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-runtime/causal/run-qfkqemr3/round-02-cutlass.sqlite",
+          "median_us": 15.712,
+          "registers_per_thread": null,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 7.693035735745202e-05,
+            "max_tolerance_ratio": 0.16110046892981755,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "q": "d4e8334d2df479c9",
+            "k": "e0d5338ce588c10a",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "dab6354df10c5234"
+        },
+        {
+          "round": 2,
+          "label": "rust",
+          "kernel_name": "fmha_prefill_TID_dee726da1349085a0af582adf224d032",
+          "raw_trace": "/tmp/prefill-optimization/final-runtime/causal/run-qfkqemr3/round-02-rust.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-runtime/causal/run-qfkqemr3/round-02-rust.sqlite",
+          "median_us": 16.768,
+          "registers_per_thread": 138,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 7.693035735747977e-05,
+            "max_tolerance_ratio": 0.16110046892975602,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "k": "e0d5338ce588c10a",
+            "q": "d4e8334d2df479c9",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "dab6354df10c5234"
+        },
+        {
+          "round": 3,
+          "label": "rust",
+          "kernel_name": "fmha_prefill_TID_dee726da1349085a0af582adf224d032",
+          "raw_trace": "/tmp/prefill-optimization/final-runtime/causal/run-qfkqemr3/round-03-rust.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-runtime/causal/run-qfkqemr3/round-03-rust.sqlite",
+          "median_us": 16.768,
+          "registers_per_thread": 138,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 7.693035735747977e-05,
+            "max_tolerance_ratio": 0.16110046892975602,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "k": "e0d5338ce588c10a",
+            "q": "d4e8334d2df479c9",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "dab6354df10c5234"
+        },
+        {
+          "round": 3,
+          "label": "cutlass",
+          "kernel_name": "kernel_cutlass_kernel_flash_attention_v2FlashAttentionForwardAmpere_object_at__tensorptrf16gmemalign16odiv8i64div8i64div8i64div81_tensorptrf16gmemalign16odiv8i64div8i64div8i64div81_tensor_0",
+          "raw_trace": "/tmp/prefill-optimization/final-runtime/causal/run-qfkqemr3/round-03-cutlass.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-runtime/causal/run-qfkqemr3/round-03-cutlass.sqlite",
+          "median_us": 15.744,
+          "registers_per_thread": null,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 7.693035735745202e-05,
+            "max_tolerance_ratio": 0.16110046892981755,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "q": "d4e8334d2df479c9",
+            "k": "e0d5338ce588c10a",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "dab6354df10c5234"
+        }
+      ],
+      "cross_checks": [
+        {
+          "round": 1,
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "round": 2,
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "round": 3,
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        }
+      ]
+    },
+    {
+      "shape_mode": "runtime",
+      "mask": "noncausal",
+      "report": {
+        "path": "/tmp/prefill-optimization/final-runtime/noncausal/run-vbjjgjkb/report.json",
+        "sha256": "8bb488128aa64598aeec50e453fd7519e7d37e3e2618564f4a2134c9bfe7dd4f"
+      },
+      "started_utc": "2026-10-12T06:17:39.118459+00:00",
+      "parameters": {
+        "seq_q": 1024,
+        "seq_k": 1024,
+        "heads": 8,
+        "causal": false,
+        "shape_mode": "runtime",
+        "input_scale": 1,
+        "zero_query": false,
+        "device": 0,
+        "warmup": 100,
+        "samples": 31,
+        "rounds": 3,
+        "timeout": 600
+      },
+      "summary": {
+        "rust": {
+          "round_medians_us": [
+            16.543,
+            16.512,
+            16.512
+          ],
+          "samples_us": [
+            16.544,
+            16.512,
+            16.48,
+            16.512,
+            16.543,
+            16.512,
+            16.512,
+            16.512,
+            16.544,
+            16.544,
+            16.544,
+            16.543,
+            16.544,
+            16.544,
+            16.512,
+            16.512,
+            16.48,
+            16.544,
+            16.544,
+            16.512,
+            16.48,
+            16.576,
+            16.544,
+            16.544,
+            16.512,
+            16.576,
+            16.543,
+            16.512,
+            16.512,
+            16.544,
+            16.576,
+            16.64,
+            16.672,
+            16.64,
+            16.576,
+            16.608,
+            16.576,
+            16.576,
+            16.576,
+            16.544,
+            16.448,
+            16.512,
+            16.512,
+            16.512,
+            16.511,
+            16.512,
+            16.544,
+            16.48,
+            16.544,
+            16.512,
+            16.512,
+            16.48,
+            16.575,
+            16.512,
+            16.544,
+            16.512,
+            16.576,
+            16.544,
+            16.512,
+            16.48,
+            16.512,
+            16.512,
+            16.511,
+            16.48,
+            16.48,
+            16.512,
+            16.512,
+            16.512,
+            16.512,
+            16.543,
+            16.48,
+            16.544,
+            16.512,
+            16.544,
+            16.48,
+            16.512,
+            16.48,
+            16.479,
+            16.48,
+            16.576,
+            16.544,
+            16.512,
+            16.512,
+            16.576,
+            16.543,
+            16.512,
+            16.512,
+            16.576,
+            16.48,
+            16.544,
+            16.448,
+            16.512,
+            16.543
+          ],
+          "median_of_round_medians_us": 16.512
+        },
+        "cutlass": {
+          "round_medians_us": [
+            15.776,
+            15.744,
+            15.744
+          ],
+          "samples_us": [
+            15.807,
+            15.808,
+            15.808,
+            15.808,
+            15.808,
+            15.775,
+            15.776,
+            15.712,
+            15.776,
+            15.776,
+            15.776,
+            15.744,
+            15.776,
+            15.776,
+            15.776,
+            15.776,
+            15.743,
+            15.776,
+            15.808,
+            15.744,
+            15.744,
+            15.743,
+            15.776,
+            15.808,
+            15.744,
+            15.776,
+            15.744,
+            15.776,
+            15.712,
+            15.744,
+            15.776,
+            15.711,
+            15.744,
+            15.776,
+            15.744,
+            15.712,
+            15.711,
+            15.776,
+            15.744,
+            15.712,
+            15.744,
+            15.776,
+            15.776,
+            15.744,
+            15.744,
+            15.776,
+            15.744,
+            15.711,
+            15.744,
+            15.744,
+            15.744,
+            15.744,
+            15.744,
+            15.744,
+            15.712,
+            15.744,
+            15.744,
+            15.776,
+            15.712,
+            15.744,
+            15.712,
+            15.744,
+            15.744,
+            15.744,
+            15.776,
+            15.776,
+            15.744,
+            15.712,
+            15.744,
+            15.712,
+            15.712,
+            15.744,
+            15.744,
+            15.743,
+            15.712,
+            15.712,
+            15.744,
+            15.712,
+            15.744,
+            15.712,
+            15.776,
+            15.712,
+            15.712,
+            15.744,
+            15.743,
+            15.744,
+            15.744,
+            15.744,
+            15.712,
+            15.744,
+            15.744,
+            15.744,
+            15.776
+          ],
+          "median_of_round_medians_us": 15.744
+        }
+      },
+      "rust_slower_percent": 4.878048780487809,
+      "nsys_version": "NVIDIA Nsight Systems version 2026.3.2.476-263238834031v0",
+      "runs": [
+        {
+          "round": 1,
+          "label": "rust",
+          "kernel_name": "fmha_prefill_TID_4e18005ffb21c986d6a0434f765e4370",
+          "raw_trace": "/tmp/prefill-optimization/final-runtime/noncausal/run-vbjjgjkb/round-01-rust.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-runtime/noncausal/run-vbjjgjkb/round-01-rust.sqlite",
+          "median_us": 16.543,
+          "registers_per_thread": 162,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 8.958882915671013e-06,
+            "max_tolerance_ratio": 0.03866158839230508,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "k": "e0d5338ce588c10a",
+            "q": "d4e8334d2df479c9",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "865025c29ce54d28"
+        },
+        {
+          "round": 1,
+          "label": "cutlass",
+          "kernel_name": "kernel_cutlass_kernel_flash_attention_v2FlashAttentionForwardAmpere_object_at__tensorptrf16gmemalign16odiv8i64div8i64div8i64div81_tensorptrf16gmemalign16odiv8i64div8i64div8i64div81_tensor_0",
+          "raw_trace": "/tmp/prefill-optimization/final-runtime/noncausal/run-vbjjgjkb/round-01-cutlass.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-runtime/noncausal/run-vbjjgjkb/round-01-cutlass.sqlite",
+          "median_us": 15.776,
+          "registers_per_thread": null,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 8.958882915660604e-06,
+            "max_tolerance_ratio": 0.038661588392260166,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "q": "d4e8334d2df479c9",
+            "k": "e0d5338ce588c10a",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "865025c29ce54d28"
+        },
+        {
+          "round": 2,
+          "label": "cutlass",
+          "kernel_name": "kernel_cutlass_kernel_flash_attention_v2FlashAttentionForwardAmpere_object_at__tensorptrf16gmemalign16odiv8i64div8i64div8i64div81_tensorptrf16gmemalign16odiv8i64div8i64div8i64div81_tensor_0",
+          "raw_trace": "/tmp/prefill-optimization/final-runtime/noncausal/run-vbjjgjkb/round-02-cutlass.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-runtime/noncausal/run-vbjjgjkb/round-02-cutlass.sqlite",
+          "median_us": 15.744,
+          "registers_per_thread": null,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 8.958882915660604e-06,
+            "max_tolerance_ratio": 0.038661588392260166,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "q": "d4e8334d2df479c9",
+            "k": "e0d5338ce588c10a",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "865025c29ce54d28"
+        },
+        {
+          "round": 2,
+          "label": "rust",
+          "kernel_name": "fmha_prefill_TID_4e18005ffb21c986d6a0434f765e4370",
+          "raw_trace": "/tmp/prefill-optimization/final-runtime/noncausal/run-vbjjgjkb/round-02-rust.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-runtime/noncausal/run-vbjjgjkb/round-02-rust.sqlite",
+          "median_us": 16.512,
+          "registers_per_thread": 162,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 8.958882915671013e-06,
+            "max_tolerance_ratio": 0.03866158839230508,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "k": "e0d5338ce588c10a",
+            "q": "d4e8334d2df479c9",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "865025c29ce54d28"
+        },
+        {
+          "round": 3,
+          "label": "rust",
+          "kernel_name": "fmha_prefill_TID_4e18005ffb21c986d6a0434f765e4370",
+          "raw_trace": "/tmp/prefill-optimization/final-runtime/noncausal/run-vbjjgjkb/round-03-rust.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-runtime/noncausal/run-vbjjgjkb/round-03-rust.sqlite",
+          "median_us": 16.512,
+          "registers_per_thread": 162,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 8.958882915671013e-06,
+            "max_tolerance_ratio": 0.03866158839230508,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "k": "e0d5338ce588c10a",
+            "q": "d4e8334d2df479c9",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "865025c29ce54d28"
+        },
+        {
+          "round": 3,
+          "label": "cutlass",
+          "kernel_name": "kernel_cutlass_kernel_flash_attention_v2FlashAttentionForwardAmpere_object_at__tensorptrf16gmemalign16odiv8i64div8i64div8i64div81_tensorptrf16gmemalign16odiv8i64div8i64div8i64div81_tensor_0",
+          "raw_trace": "/tmp/prefill-optimization/final-runtime/noncausal/run-vbjjgjkb/round-03-cutlass.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-runtime/noncausal/run-vbjjgjkb/round-03-cutlass.sqlite",
+          "median_us": 15.744,
+          "registers_per_thread": null,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 8.958882915660604e-06,
+            "max_tolerance_ratio": 0.038661588392260166,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "q": "d4e8334d2df479c9",
+            "k": "e0d5338ce588c10a",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "865025c29ce54d28"
+        }
+      ],
+      "cross_checks": [
+        {
+          "round": 1,
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "round": 2,
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "round": 3,
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        }
+      ]
+    },
+    {
+      "shape_mode": "static",
+      "mask": "causal",
+      "report": {
+        "path": "/tmp/prefill-optimization/final-static/causal/run-nab5geg9/report.json",
+        "sha256": "1d6dbacc36c6636a0d0d059f045c0cd3b82829e2fe73a9ab9572ebd68c1ad80d"
+      },
+      "started_utc": "2026-10-12T06:18:08.805519+00:00",
+      "parameters": {
+        "seq_q": 1024,
+        "seq_k": 1024,
+        "heads": 8,
+        "causal": true,
+        "shape_mode": "static",
+        "input_scale": 1,
+        "zero_query": false,
+        "device": 0,
+        "warmup": 100,
+        "samples": 31,
+        "rounds": 3,
+        "timeout": 600
+      },
+      "summary": {
+        "rust": {
+          "round_medians_us": [
+            16.416,
+            16.447,
+            16.448
+          ],
+          "samples_us": [
+            16.416,
+            16.448,
+            16.48,
+            16.416,
+            16.448,
+            16.448,
+            16.448,
+            16.416,
+            16.416,
+            16.416,
+            16.448,
+            16.416,
+            16.448,
+            16.416,
+            16.512,
+            16.416,
+            16.416,
+            16.416,
+            16.415,
+            16.48,
+            16.416,
+            16.416,
+            16.448,
+            16.416,
+            16.416,
+            16.416,
+            16.479,
+            16.416,
+            16.448,
+            16.416,
+            16.416,
+            16.447,
+            16.448,
+            16.48,
+            16.416,
+            16.416,
+            16.448,
+            16.48,
+            16.416,
+            16.416,
+            16.416,
+            16.48,
+            16.416,
+            16.416,
+            16.448,
+            16.48,
+            16.448,
+            16.416,
+            16.416,
+            16.448,
+            16.448,
+            16.416,
+            16.384,
+            16.416,
+            16.447,
+            16.448,
+            16.448,
+            16.48,
+            16.448,
+            16.416,
+            16.416,
+            16.448,
+            16.416,
+            16.448,
+            16.448,
+            16.448,
+            16.448,
+            16.415,
+            16.448,
+            16.448,
+            16.416,
+            16.384,
+            16.448,
+            16.448,
+            16.416,
+            16.447,
+            16.448,
+            16.48,
+            16.448,
+            16.416,
+            16.448,
+            16.448,
+            16.448,
+            16.447,
+            16.48,
+            16.416,
+            16.48,
+            16.416,
+            16.48,
+            16.48,
+            16.416,
+            16.415,
+            16.448
+          ],
+          "median_of_round_medians_us": 16.447
+        },
+        "cutlass": {
+          "round_medians_us": [
+            15.52,
+            15.52,
+            15.52
+          ],
+          "samples_us": [
+            15.456,
+            15.519,
+            15.52,
+            15.552,
+            15.488,
+            15.52,
+            15.52,
+            15.552,
+            15.488,
+            15.52,
+            15.52,
+            15.552,
+            15.487,
+            15.52,
+            15.52,
+            15.552,
+            15.52,
+            15.52,
+            15.52,
+            15.552,
+            15.456,
+            15.52,
+            15.52,
+            15.552,
+            15.488,
+            15.52,
+            15.488,
+            15.52,
+            15.488,
+            15.519,
+            15.52,
+            15.52,
+            15.52,
+            15.52,
+            15.552,
+            15.552,
+            15.52,
+            15.488,
+            15.552,
+            15.488,
+            15.52,
+            15.519,
+            15.52,
+            15.488,
+            15.52,
+            15.52,
+            15.52,
+            15.487,
+            15.584,
+            15.52,
+            15.52,
+            15.488,
+            15.52,
+            15.52,
+            15.52,
+            15.456,
+            15.52,
+            15.52,
+            15.519,
+            15.488,
+            15.552,
+            15.488,
+            15.488,
+            15.52,
+            15.519,
+            15.552,
+            15.456,
+            15.52,
+            15.552,
+            15.552,
+            15.488,
+            15.52,
+            15.552,
+            15.552,
+            15.488,
+            15.552,
+            15.52,
+            15.552,
+            15.488,
+            15.552,
+            15.488,
+            15.551,
+            15.424,
+            15.552,
+            15.456,
+            15.552,
+            15.488,
+            15.487,
+            15.552,
+            15.52,
+            15.488,
+            15.52,
+            15.488
+          ],
+          "median_of_round_medians_us": 15.52
+        }
+      },
+      "rust_slower_percent": 5.972938144329887,
+      "nsys_version": "NVIDIA Nsight Systems version 2026.3.2.476-263238834031v0",
+      "runs": [
+        {
+          "round": 1,
+          "label": "rust",
+          "kernel_name": "fmha_prefill_TID_b4afed6137c9e184a61ef298372090de",
+          "raw_trace": "/tmp/prefill-optimization/final-static/causal/run-nab5geg9/round-01-rust.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-static/causal/run-nab5geg9/round-01-rust.sqlite",
+          "median_us": 16.416,
+          "registers_per_thread": 138,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 7.693035735747977e-05,
+            "max_tolerance_ratio": 0.16110046892975602,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "k": "e0d5338ce588c10a",
+            "q": "d4e8334d2df479c9",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "dab6354df10c5234"
+        },
+        {
+          "round": 1,
+          "label": "cutlass",
+          "kernel_name": "kernel_cutlass_kernel_flash_attention_v2FlashAttentionForwardAmpere_object_at__tensorptrf16gmemalign16o11024864524288512641_tensorptrf16gmemalign16o11024864524288512641_tensorptrf16gmemal_0",
+          "raw_trace": "/tmp/prefill-optimization/final-static/causal/run-nab5geg9/round-01-cutlass.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-static/causal/run-nab5geg9/round-01-cutlass.sqlite",
+          "median_us": 15.52,
+          "registers_per_thread": null,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 7.693035735745202e-05,
+            "max_tolerance_ratio": 0.16110046892981755,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "q": "d4e8334d2df479c9",
+            "k": "e0d5338ce588c10a",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "dab6354df10c5234"
+        },
+        {
+          "round": 2,
+          "label": "cutlass",
+          "kernel_name": "kernel_cutlass_kernel_flash_attention_v2FlashAttentionForwardAmpere_object_at__tensorptrf16gmemalign16o11024864524288512641_tensorptrf16gmemalign16o11024864524288512641_tensorptrf16gmemal_0",
+          "raw_trace": "/tmp/prefill-optimization/final-static/causal/run-nab5geg9/round-02-cutlass.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-static/causal/run-nab5geg9/round-02-cutlass.sqlite",
+          "median_us": 15.52,
+          "registers_per_thread": null,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 7.693035735745202e-05,
+            "max_tolerance_ratio": 0.16110046892981755,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "q": "d4e8334d2df479c9",
+            "k": "e0d5338ce588c10a",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "dab6354df10c5234"
+        },
+        {
+          "round": 2,
+          "label": "rust",
+          "kernel_name": "fmha_prefill_TID_b4afed6137c9e184a61ef298372090de",
+          "raw_trace": "/tmp/prefill-optimization/final-static/causal/run-nab5geg9/round-02-rust.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-static/causal/run-nab5geg9/round-02-rust.sqlite",
+          "median_us": 16.447,
+          "registers_per_thread": 138,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 7.693035735747977e-05,
+            "max_tolerance_ratio": 0.16110046892975602,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "k": "e0d5338ce588c10a",
+            "q": "d4e8334d2df479c9",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "dab6354df10c5234"
+        },
+        {
+          "round": 3,
+          "label": "rust",
+          "kernel_name": "fmha_prefill_TID_b4afed6137c9e184a61ef298372090de",
+          "raw_trace": "/tmp/prefill-optimization/final-static/causal/run-nab5geg9/round-03-rust.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-static/causal/run-nab5geg9/round-03-rust.sqlite",
+          "median_us": 16.448,
+          "registers_per_thread": 138,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 7.693035735747977e-05,
+            "max_tolerance_ratio": 0.16110046892975602,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "k": "e0d5338ce588c10a",
+            "q": "d4e8334d2df479c9",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "dab6354df10c5234"
+        },
+        {
+          "round": 3,
+          "label": "cutlass",
+          "kernel_name": "kernel_cutlass_kernel_flash_attention_v2FlashAttentionForwardAmpere_object_at__tensorptrf16gmemalign16o11024864524288512641_tensorptrf16gmemalign16o11024864524288512641_tensorptrf16gmemal_0",
+          "raw_trace": "/tmp/prefill-optimization/final-static/causal/run-nab5geg9/round-03-cutlass.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-static/causal/run-nab5geg9/round-03-cutlass.sqlite",
+          "median_us": 15.52,
+          "registers_per_thread": null,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 7.693035735745202e-05,
+            "max_tolerance_ratio": 0.16110046892981755,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "q": "d4e8334d2df479c9",
+            "k": "e0d5338ce588c10a",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "dab6354df10c5234"
+        }
+      ],
+      "cross_checks": [
+        {
+          "round": 1,
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "round": 2,
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "round": 3,
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        }
+      ]
+    },
+    {
+      "shape_mode": "static",
+      "mask": "noncausal",
+      "report": {
+        "path": "/tmp/prefill-optimization/final-static/noncausal/run-hfzu2w6y/report.json",
+        "sha256": "6625e34c94cdc1f677e9165a0d5245e124b3a78c2bbe5a8db9212fe7d2a2506a"
+      },
+      "started_utc": "2026-10-12T06:18:37.713753+00:00",
+      "parameters": {
+        "seq_q": 1024,
+        "seq_k": 1024,
+        "heads": 8,
+        "causal": false,
+        "shape_mode": "static",
+        "input_scale": 1,
+        "zero_query": false,
+        "device": 0,
+        "warmup": 100,
+        "samples": 31,
+        "rounds": 3,
+        "timeout": 600
+      },
+      "summary": {
+        "rust": {
+          "round_medians_us": [
+            15.744,
+            15.712,
+            15.744
+          ],
+          "samples_us": [
+            15.776,
+            15.808,
+            15.776,
+            15.808,
+            15.776,
+            15.808,
+            15.775,
+            15.776,
+            15.808,
+            15.776,
+            15.776,
+            15.744,
+            15.712,
+            15.744,
+            15.712,
+            15.744,
+            15.712,
+            15.744,
+            15.712,
+            15.712,
+            15.712,
+            15.744,
+            15.744,
+            15.744,
+            15.712,
+            15.744,
+            15.712,
+            15.712,
+            15.712,
+            15.744,
+            15.712,
+            15.712,
+            15.712,
+            15.712,
+            15.744,
+            15.744,
+            15.744,
+            15.712,
+            15.712,
+            15.712,
+            15.743,
+            15.712,
+            15.712,
+            15.744,
+            15.744,
+            15.744,
+            15.712,
+            15.712,
+            15.711,
+            15.712,
+            15.744,
+            15.712,
+            15.744,
+            15.744,
+            15.712,
+            15.712,
+            15.743,
+            15.712,
+            15.744,
+            15.68,
+            15.744,
+            15.712,
+            15.808,
+            15.808,
+            15.808,
+            15.808,
+            15.808,
+            15.776,
+            15.776,
+            15.808,
+            15.776,
+            15.776,
+            15.712,
+            15.744,
+            15.744,
+            15.744,
+            15.712,
+            15.744,
+            15.712,
+            15.712,
+            15.712,
+            15.712,
+            15.711,
+            15.744,
+            15.712,
+            15.744,
+            15.712,
+            15.712,
+            15.712,
+            15.712,
+            15.711,
+            15.744,
+            15.712
+          ],
+          "median_of_round_medians_us": 15.744
+        },
+        "cutlass": {
+          "round_medians_us": [
+            15.52,
+            15.52,
+            15.52
+          ],
+          "samples_us": [
+            15.552,
+            15.552,
+            15.552,
+            15.584,
+            15.552,
+            15.552,
+            15.519,
+            15.52,
+            15.52,
+            15.552,
+            15.52,
+            15.52,
+            15.519,
+            15.52,
+            15.52,
+            15.52,
+            15.52,
+            15.552,
+            15.52,
+            15.488,
+            15.52,
+            15.52,
+            15.52,
+            15.52,
+            15.519,
+            15.52,
+            15.52,
+            15.52,
+            15.52,
+            15.52,
+            15.52,
+            15.552,
+            15.52,
+            15.52,
+            15.52,
+            15.552,
+            15.52,
+            15.52,
+            15.52,
+            15.552,
+            15.519,
+            15.52,
+            15.52,
+            15.488,
+            15.52,
+            15.52,
+            15.519,
+            15.52,
+            15.52,
+            15.52,
+            15.52,
+            15.52,
+            15.519,
+            15.52,
+            15.488,
+            15.552,
+            15.552,
+            15.552,
+            15.519,
+            15.52,
+            15.52,
+            15.552,
+            15.552,
+            15.52,
+            15.551,
+            15.52,
+            15.488,
+            15.52,
+            15.52,
+            15.52,
+            15.551,
+            15.52,
+            15.552,
+            15.552,
+            15.52,
+            15.52,
+            15.52,
+            15.52,
+            15.52,
+            15.52,
+            15.552,
+            15.52,
+            15.52,
+            15.52,
+            15.488,
+            15.52,
+            15.552,
+            15.52,
+            15.488,
+            15.552,
+            15.52,
+            15.552,
+            15.552
+          ],
+          "median_of_round_medians_us": 15.52
+        }
+      },
+      "rust_slower_percent": 1.4432989690721598,
+      "nsys_version": "NVIDIA Nsight Systems version 2026.3.2.476-263238834031v0",
+      "runs": [
+        {
+          "round": 1,
+          "label": "rust",
+          "kernel_name": "fmha_prefill_TID_89b6d3c167850566b451c3012e30d811",
+          "raw_trace": "/tmp/prefill-optimization/final-static/noncausal/run-hfzu2w6y/round-01-rust.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-static/noncausal/run-hfzu2w6y/round-01-rust.sqlite",
+          "median_us": 15.744,
+          "registers_per_thread": 152,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 8.958882915671013e-06,
+            "max_tolerance_ratio": 0.03866158839230508,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "k": "e0d5338ce588c10a",
+            "q": "d4e8334d2df479c9",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "865025c29ce54d28"
+        },
+        {
+          "round": 1,
+          "label": "cutlass",
+          "kernel_name": "kernel_cutlass_kernel_flash_attention_v2FlashAttentionForwardAmpere_object_at__tensorptrf16gmemalign16o11024864524288512641_tensorptrf16gmemalign16o11024864524288512641_tensorptrf16gmemal_0",
+          "raw_trace": "/tmp/prefill-optimization/final-static/noncausal/run-hfzu2w6y/round-01-cutlass.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-static/noncausal/run-hfzu2w6y/round-01-cutlass.sqlite",
+          "median_us": 15.52,
+          "registers_per_thread": null,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 8.958882915660604e-06,
+            "max_tolerance_ratio": 0.038661588392260166,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "q": "d4e8334d2df479c9",
+            "k": "e0d5338ce588c10a",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "865025c29ce54d28"
+        },
+        {
+          "round": 2,
+          "label": "cutlass",
+          "kernel_name": "kernel_cutlass_kernel_flash_attention_v2FlashAttentionForwardAmpere_object_at__tensorptrf16gmemalign16o11024864524288512641_tensorptrf16gmemalign16o11024864524288512641_tensorptrf16gmemal_0",
+          "raw_trace": "/tmp/prefill-optimization/final-static/noncausal/run-hfzu2w6y/round-02-cutlass.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-static/noncausal/run-hfzu2w6y/round-02-cutlass.sqlite",
+          "median_us": 15.52,
+          "registers_per_thread": null,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 8.958882915660604e-06,
+            "max_tolerance_ratio": 0.038661588392260166,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "q": "d4e8334d2df479c9",
+            "k": "e0d5338ce588c10a",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "865025c29ce54d28"
+        },
+        {
+          "round": 2,
+          "label": "rust",
+          "kernel_name": "fmha_prefill_TID_89b6d3c167850566b451c3012e30d811",
+          "raw_trace": "/tmp/prefill-optimization/final-static/noncausal/run-hfzu2w6y/round-02-rust.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-static/noncausal/run-hfzu2w6y/round-02-rust.sqlite",
+          "median_us": 15.712,
+          "registers_per_thread": 152,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 8.958882915671013e-06,
+            "max_tolerance_ratio": 0.03866158839230508,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "k": "e0d5338ce588c10a",
+            "q": "d4e8334d2df479c9",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "865025c29ce54d28"
+        },
+        {
+          "round": 3,
+          "label": "rust",
+          "kernel_name": "fmha_prefill_TID_89b6d3c167850566b451c3012e30d811",
+          "raw_trace": "/tmp/prefill-optimization/final-static/noncausal/run-hfzu2w6y/round-03-rust.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-static/noncausal/run-hfzu2w6y/round-03-rust.sqlite",
+          "median_us": 15.744,
+          "registers_per_thread": 152,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 8.958882915671013e-06,
+            "max_tolerance_ratio": 0.03866158839230508,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "k": "e0d5338ce588c10a",
+            "q": "d4e8334d2df479c9",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "865025c29ce54d28"
+        },
+        {
+          "round": 3,
+          "label": "cutlass",
+          "kernel_name": "kernel_cutlass_kernel_flash_attention_v2FlashAttentionForwardAmpere_object_at__tensorptrf16gmemalign16o11024864524288512641_tensorptrf16gmemalign16o11024864524288512641_tensorptrf16gmemal_0",
+          "raw_trace": "/tmp/prefill-optimization/final-static/noncausal/run-hfzu2w6y/round-03-cutlass.nsys-rep",
+          "sqlite": "/tmp/prefill-optimization/final-static/noncausal/run-hfzu2w6y/round-03-cutlass.sqlite",
+          "median_us": 15.52,
+          "registers_per_thread": null,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 8.958882915660604e-06,
+            "max_tolerance_ratio": 0.038661588392260166,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "replay_bitwise_equal": true,
+          "input_hashes": {
+            "q": "d4e8334d2df479c9",
+            "k": "e0d5338ce588c10a",
+            "v": "dd8283e601dfa572"
+          },
+          "output_hash": "865025c29ce54d28"
+        }
+      ],
+      "cross_checks": [
+        {
+          "round": 1,
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "round": 2,
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "round": 3,
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        }
+      ]
+    }
+  ],
+  "validation": {
+    "runtime": {
+      "report": {
+        "path": "/tmp/prefill-final-validation/runtime/report.json",
+        "sha256": "33a27dcc865df6a943663ecb23e9488a37529408b3ec57fa955375c85c113e05"
+      },
+      "binary": "/tmp/prefill-final/prefill-final",
+      "binary_sha256": "8607eedd7ea559aad4688550526ad0e6969be1e2bddb1c8917a86e443211ea0c",
+      "status": "passed",
+      "checks": [
+        {
+          "name": "causal-one-tile",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "64",
+            "--seq-k",
+            "64",
+            "--heads",
+            "2",
+            "--causal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/causal-one-tile-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/causal-one-tile-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 8192,
+            "max_abs_error": 6.820045169064759e-05,
+            "max_tolerance_ratio": 0.14243973918063702,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            64,
+            64,
+            2,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "causal-one-tile",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "64",
+            "--seq-k",
+            "64",
+            "--heads",
+            "2",
+            "--causal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/causal-one-tile-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/causal-one-tile-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 8192,
+            "max_abs_error": 6.820045169067535e-05,
+            "max_tolerance_ratio": 0.14243973918063702,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            64,
+            64,
+            2,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "causal-one-tile",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 8192,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "name": "noncausal-one-tile",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "64",
+            "--seq-k",
+            "64",
+            "--heads",
+            "2",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/noncausal-one-tile-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/noncausal-one-tile-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 8192,
+            "max_abs_error": 1.9377900841451023e-05,
+            "max_tolerance_ratio": 0.07195290790260143,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            64,
+            64,
+            2,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "noncausal-one-tile",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "64",
+            "--seq-k",
+            "64",
+            "--heads",
+            "2",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/noncausal-one-tile-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/noncausal-one-tile-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 8192,
+            "max_abs_error": 1.9377900841457962e-05,
+            "max_tolerance_ratio": 0.0719529079026272,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            64,
+            64,
+            2,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "noncausal-one-tile",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 8192,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "name": "causal-two-tiles",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "128",
+            "--seq-k",
+            "128",
+            "--heads",
+            "8",
+            "--causal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/causal-two-tiles-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/causal-two-tiles-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 65536,
+            "max_abs_error": 7.693035735747977e-05,
+            "max_tolerance_ratio": 0.16110046892975602,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            128,
+            128,
+            8,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "causal-two-tiles",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "128",
+            "--seq-k",
+            "128",
+            "--heads",
+            "8",
+            "--causal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/causal-two-tiles-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/causal-two-tiles-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 65536,
+            "max_abs_error": 7.693035735745202e-05,
+            "max_tolerance_ratio": 0.16110046892981755,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            128,
+            128,
+            8,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "causal-two-tiles",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 65536,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "name": "noncausal-two-tiles",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "128",
+            "--seq-k",
+            "128",
+            "--heads",
+            "8",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/noncausal-two-tiles-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/noncausal-two-tiles-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 65536,
+            "max_abs_error": 1.8528275205625944e-05,
+            "max_tolerance_ratio": 0.06878631191118165,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            128,
+            128,
+            8,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "noncausal-two-tiles",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "128",
+            "--seq-k",
+            "128",
+            "--heads",
+            "8",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/noncausal-two-tiles-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/noncausal-two-tiles-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 65536,
+            "max_abs_error": 1.852827520563982e-05,
+            "max_tolerance_ratio": 0.06878631191123318,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            128,
+            128,
+            8,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "noncausal-two-tiles",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 65536,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "name": "causal-three-tiles",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "192",
+            "--seq-k",
+            "192",
+            "--heads",
+            "3",
+            "--causal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/causal-three-tiles-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/causal-three-tiles-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 36864,
+            "max_abs_error": 7.777335976866251e-05,
+            "max_tolerance_ratio": 0.16662490668585,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            192,
+            192,
+            3,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "causal-three-tiles",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "192",
+            "--seq-k",
+            "192",
+            "--heads",
+            "3",
+            "--causal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/causal-three-tiles-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/causal-three-tiles-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 36864,
+            "max_abs_error": 7.777335976869026e-05,
+            "max_tolerance_ratio": 0.16662490668590943,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            192,
+            192,
+            3,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "causal-three-tiles",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 36864,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "name": "noncausal-single-query",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "1",
+            "--seq-k",
+            "192",
+            "--heads",
+            "3",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/noncausal-single-query-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/noncausal-single-query-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 192,
+            "max_abs_error": 1.611151289880597e-05,
+            "max_tolerance_ratio": 0.058241819812881714,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            1,
+            192,
+            3,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "noncausal-single-query",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "1",
+            "--seq-k",
+            "192",
+            "--heads",
+            "3",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/noncausal-single-query-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/noncausal-single-query-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 192,
+            "max_abs_error": 1.611151289879903e-05,
+            "max_tolerance_ratio": 0.05824181981285664,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            1,
+            192,
+            3,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "noncausal-single-query",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 192,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "name": "more-kv-tiles",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "64",
+            "--seq-k",
+            "128",
+            "--heads",
+            "3",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/more-kv-tiles-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/more-kv-tiles-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 12288,
+            "max_abs_error": 1.875873740246614e-05,
+            "max_tolerance_ratio": 0.06909831525411379,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            64,
+            128,
+            3,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "more-kv-tiles",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "64",
+            "--seq-k",
+            "128",
+            "--heads",
+            "3",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/more-kv-tiles-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/more-kv-tiles-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 12288,
+            "max_abs_error": 1.8758737402452264e-05,
+            "max_tolerance_ratio": 0.06909831525395918,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            64,
+            128,
+            3,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "more-kv-tiles",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 12288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "name": "more-query-tiles",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "128",
+            "--seq-k",
+            "64",
+            "--heads",
+            "3",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/more-query-tiles-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/more-query-tiles-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 24576,
+            "max_abs_error": 2.095427444060577e-05,
+            "max_tolerance_ratio": 0.07821963195465856,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            128,
+            64,
+            3,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "more-query-tiles",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "128",
+            "--seq-k",
+            "64",
+            "--heads",
+            "3",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/more-query-tiles-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/more-query-tiles-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 24576,
+            "max_abs_error": 2.095427444059189e-05,
+            "max_tolerance_ratio": 0.07821963195460675,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            128,
+            64,
+            3,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "more-query-tiles",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 24576,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "name": "causal-prefill",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "1024",
+            "--seq-k",
+            "1024",
+            "--heads",
+            "8",
+            "--causal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/causal-prefill-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/causal-prefill-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 7.693035735747977e-05,
+            "max_tolerance_ratio": 0.16110046892975602,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            1024,
+            1024,
+            8,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "causal-prefill",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "1024",
+            "--seq-k",
+            "1024",
+            "--heads",
+            "8",
+            "--causal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/causal-prefill-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/causal-prefill-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 7.693035735745202e-05,
+            "max_tolerance_ratio": 0.16110046892981755,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            1024,
+            1024,
+            8,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "causal-prefill",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "name": "noncausal-fmha",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "1024",
+            "--seq-k",
+            "1024",
+            "--heads",
+            "8",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/noncausal-fmha-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/noncausal-fmha-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 8.958882915671013e-06,
+            "max_tolerance_ratio": 0.03866158839230508,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            1024,
+            1024,
+            8,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "noncausal-fmha",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "1024",
+            "--seq-k",
+            "1024",
+            "--heads",
+            "8",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/noncausal-fmha-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/noncausal-fmha-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 8.958882915660604e-06,
+            "max_tolerance_ratio": 0.038661588392260166,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            1024,
+            1024,
+            8,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "noncausal-fmha",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "name": "causal-large-logits",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "128",
+            "--seq-k",
+            "128",
+            "--heads",
+            "2",
+            "--causal",
+            "--input-scale",
+            "16",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/causal-large-logits-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/causal-large-logits-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 16384,
+            "max_abs_error": 8.472114625876492e-05,
+            "max_tolerance_ratio": 0.16739363878014327,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            128,
+            128,
+            2,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "causal-large-logits",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "128",
+            "--seq-k",
+            "128",
+            "--heads",
+            "2",
+            "--causal",
+            "--input-scale",
+            "16",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/causal-large-logits-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/causal-large-logits-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 16384,
+            "max_abs_error": 8.47211462589037e-05,
+            "max_tolerance_ratio": 0.16739363878014327,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            128,
+            128,
+            2,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "causal-large-logits",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 16384,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "name": "noncausal-large-logits",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "128",
+            "--seq-k",
+            "128",
+            "--heads",
+            "2",
+            "--noncausal",
+            "--input-scale",
+            "16",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/noncausal-large-logits-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/noncausal-large-logits-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 16384,
+            "max_abs_error": 8.230883767326724e-05,
+            "max_tolerance_ratio": 0.17035328641434014,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            128,
+            128,
+            2,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "noncausal-large-logits",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "128",
+            "--seq-k",
+            "128",
+            "--heads",
+            "2",
+            "--noncausal",
+            "--input-scale",
+            "16",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/noncausal-large-logits-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/noncausal-large-logits-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 16384,
+            "max_abs_error": 8.230883767315622e-05,
+            "max_tolerance_ratio": 0.17035328641440106,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            128,
+            128,
+            2,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "noncausal-large-logits",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 16384,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "name": "moderate-logits",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "64",
+            "--seq-k",
+            "128",
+            "--heads",
+            "2",
+            "--noncausal",
+            "--input-scale",
+            "4",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/moderate-logits-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/moderate-logits-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 8192,
+            "max_abs_error": 1.912016781764614e-05,
+            "max_tolerance_ratio": 0.07224031754757869,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            64,
+            128,
+            2,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "moderate-logits",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "64",
+            "--seq-k",
+            "128",
+            "--heads",
+            "2",
+            "--noncausal",
+            "--input-scale",
+            "4",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/moderate-logits-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/moderate-logits-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 8192,
+            "max_abs_error": 1.912016781764614e-05,
+            "max_tolerance_ratio": 0.07224031754757869,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            64,
+            128,
+            2,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "moderate-logits",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 8192,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "name": "causal-uniform-softmax",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "128",
+            "--seq-k",
+            "128",
+            "--heads",
+            "3",
+            "--causal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--zero-query",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/causal-uniform-softmax-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/causal-uniform-softmax-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 24576,
+            "max_abs_error": 5.231584821427382e-05,
+            "max_tolerance_ratio": 0.11455278592372761,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            128,
+            128,
+            3,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "causal-uniform-softmax",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "128",
+            "--seq-k",
+            "128",
+            "--heads",
+            "3",
+            "--causal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--zero-query",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/causal-uniform-softmax-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/causal-uniform-softmax-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 24576,
+            "max_abs_error": 5.231584821427382e-05,
+            "max_tolerance_ratio": 0.11455278592372761,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            128,
+            128,
+            3,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "causal-uniform-softmax",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 24576,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "name": "noncausal-uniform-softmax",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "128",
+            "--seq-k",
+            "128",
+            "--heads",
+            "3",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--zero-query",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/noncausal-uniform-softmax-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/noncausal-uniform-softmax-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 24576,
+            "max_abs_error": 0.0,
+            "max_tolerance_ratio": 0.0,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            128,
+            128,
+            3,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "noncausal-uniform-softmax",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "128",
+            "--seq-k",
+            "128",
+            "--heads",
+            "3",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "runtime",
+            "--zero-query",
+            "--json",
+            "/tmp/prefill-final-validation/runtime/noncausal-uniform-softmax-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/runtime/noncausal-uniform-softmax-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 24576,
+            "max_abs_error": 0.0,
+            "max_tolerance_ratio": 0.0,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            128,
+            128,
+            3,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "runtime"
+        },
+        {
+          "name": "noncausal-uniform-softmax",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 24576,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        }
+      ],
+      "shape_mode": "runtime"
+    },
+    "static": {
+      "report": {
+        "path": "/tmp/prefill-final-validation/static/report.json",
+        "sha256": "3133e182006cb571ca1008f4c85a5bbef307315e2d817ee19ca1d49d99079ef6"
+      },
+      "binary": "/tmp/prefill-final/prefill-final",
+      "binary_sha256": "8607eedd7ea559aad4688550526ad0e6969be1e2bddb1c8917a86e443211ea0c",
+      "status": "passed",
+      "checks": [
+        {
+          "name": "static-causal",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "1024",
+            "--seq-k",
+            "1024",
+            "--heads",
+            "8",
+            "--causal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "static",
+            "--json",
+            "/tmp/prefill-final-validation/static/static-causal-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/static/static-causal-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 7.693035735747977e-05,
+            "max_tolerance_ratio": 0.16110046892975602,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            1024,
+            1024,
+            8,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "static"
+        },
+        {
+          "name": "static-causal",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "1024",
+            "--seq-k",
+            "1024",
+            "--heads",
+            "8",
+            "--causal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "static",
+            "--json",
+            "/tmp/prefill-final-validation/static/static-causal-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/static/static-causal-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 7.693035735745202e-05,
+            "max_tolerance_ratio": 0.16110046892981755,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            1024,
+            1024,
+            8,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "static"
+        },
+        {
+          "name": "static-causal",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "name": "static-noncausal",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "1024",
+            "--seq-k",
+            "1024",
+            "--heads",
+            "8",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "static",
+            "--json",
+            "/tmp/prefill-final-validation/static/static-noncausal-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/static/static-noncausal-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 8.958882915671013e-06,
+            "max_tolerance_ratio": 0.03866158839230508,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            1024,
+            1024,
+            8,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "static"
+        },
+        {
+          "name": "static-noncausal",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "1024",
+            "--seq-k",
+            "1024",
+            "--heads",
+            "8",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "static",
+            "--json",
+            "/tmp/prefill-final-validation/static/static-noncausal-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/static/static-noncausal-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 8.958882915660604e-06,
+            "max_tolerance_ratio": 0.038661588392260166,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            1024,
+            1024,
+            8,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "static"
+        },
+        {
+          "name": "static-noncausal",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "name": "static-causal-large-logits",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "1024",
+            "--seq-k",
+            "1024",
+            "--heads",
+            "8",
+            "--causal",
+            "--input-scale",
+            "16",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "static",
+            "--json",
+            "/tmp/prefill-final-validation/static/static-causal-large-logits-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/static/static-causal-large-logits-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 9.325228987713818e-05,
+            "max_tolerance_ratio": 0.1896688620440528,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            1024,
+            1024,
+            8,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "static"
+        },
+        {
+          "name": "static-causal-large-logits",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "1024",
+            "--seq-k",
+            "1024",
+            "--heads",
+            "8",
+            "--causal",
+            "--input-scale",
+            "16",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "static",
+            "--json",
+            "/tmp/prefill-final-validation/static/static-causal-large-logits-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/static/static-causal-large-logits-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 9.32522898769994e-05,
+            "max_tolerance_ratio": 0.1896688620445942,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            1024,
+            1024,
+            8,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "static"
+        },
+        {
+          "name": "static-causal-large-logits",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        },
+        {
+          "name": "static-noncausal-uniform",
+          "implementation": "rust",
+          "command": [
+            "/tmp/prefill-final/prefill-final",
+            "--seq-q",
+            "1024",
+            "--seq-k",
+            "1024",
+            "--heads",
+            "8",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "static",
+            "--zero-query",
+            "--json",
+            "/tmp/prefill-final-validation/static/static-noncausal-uniform-rust.json",
+            "--output",
+            "/tmp/prefill-final-validation/static/static-noncausal-uniform-rust.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "atol": 0.0002,
+            "elements": 524288,
+            "max_abs_error": 7.62939453125e-06,
+            "max_tolerance_ratio": 0.032976744799567345,
+            "oracle": "cpu-fp64-stable-softmax",
+            "rtol": 0.002
+          },
+          "shape": [
+            1,
+            1024,
+            1024,
+            8,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "static"
+        },
+        {
+          "name": "static-noncausal-uniform",
+          "implementation": "cutlass",
+          "command": [
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "1024",
+            "--seq-k",
+            "1024",
+            "--heads",
+            "8",
+            "--noncausal",
+            "--input-scale",
+            "1",
+            "--warmup",
+            "0",
+            "--iters",
+            "0",
+            "--shape-mode",
+            "static",
+            "--zero-query",
+            "--json",
+            "/tmp/prefill-final-validation/static/static-noncausal-uniform-cutlass.json",
+            "--output",
+            "/tmp/prefill-final-validation/static/static-noncausal-uniform-cutlass.f16"
+          ],
+          "status": "passed",
+          "exit_code": 0,
+          "validation": {
+            "elements": 524288,
+            "max_abs_error": 7.62939453125e-06,
+            "max_tolerance_ratio": 0.032976744799567345,
+            "atol": 0.0002,
+            "rtol": 0.002,
+            "oracle": "cpu-fp64-stable-softmax"
+          },
+          "shape": [
+            1,
+            1024,
+            1024,
+            8,
+            64
+          ],
+          "replay_bitwise_equal": true,
+          "shape_specialization": "static"
+        },
+        {
+          "name": "static-noncausal-uniform",
+          "implementation": "cross-check",
+          "status": "passed",
+          "elements": 524288,
+          "max_abs_error": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "atol": 0.0002,
+          "rtol": 0.002,
+          "oracle": "cpu-fp64-stable-softmax"
+        }
+      ],
+      "shape_mode": "static"
+    }
+  },
+  "sanitizers": [
+    {
+      "name": "runtime-memcheck-causal",
+      "command": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "memcheck",
+        "--error-exitcode",
+        "99",
+        "/tmp/fmha-prefill-build/target/release/fmha_prefill_sm120a_cute",
+        "--shape-mode",
+        "runtime",
+        "--seq-q",
+        "128",
+        "--seq-k",
+        "128",
+        "--heads",
+        "3",
+        "--causal",
+        "--warmup",
+        "0",
+        "--iters",
+        "0"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/prefill-final-sanitizers/runtime-memcheck-causal.log",
+      "summary": [
+        "========= ERROR SUMMARY: 0 errors"
+      ],
+      "log_sha256": "fce424ff3129e3953ebfadcadd40a727e2253076a188d45af33d912df690c0f6"
+    },
+    {
+      "name": "runtime-memcheck-noncausal",
+      "command": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "memcheck",
+        "--error-exitcode",
+        "99",
+        "/tmp/fmha-prefill-build/target/release/fmha_prefill_sm120a_cute",
+        "--shape-mode",
+        "runtime",
+        "--seq-q",
+        "128",
+        "--seq-k",
+        "128",
+        "--heads",
+        "3",
+        "--noncausal",
+        "--warmup",
+        "0",
+        "--iters",
+        "0"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/prefill-final-sanitizers/runtime-memcheck-noncausal.log",
+      "summary": [
+        "========= ERROR SUMMARY: 0 errors"
+      ],
+      "log_sha256": "c541968cb36b71b759ba760aab3521a26607ea4b44f5425f9dfece2feeaa1a92"
+    },
+    {
+      "name": "runtime-racecheck-causal",
+      "command": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "racecheck",
+        "--error-exitcode",
+        "99",
+        "/tmp/fmha-prefill-build/target/release/fmha_prefill_sm120a_cute",
+        "--shape-mode",
+        "runtime",
+        "--seq-q",
+        "128",
+        "--seq-k",
+        "128",
+        "--heads",
+        "3",
+        "--causal",
+        "--warmup",
+        "0",
+        "--iters",
+        "0"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/prefill-final-sanitizers/runtime-racecheck-causal.log",
+      "summary": [
+        "========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)"
+      ],
+      "log_sha256": "205b5cbfae79d0e15de24fdb59138d1c04535d89c74dbe94dd8fdae37954f1ad"
+    },
+    {
+      "name": "runtime-racecheck-noncausal",
+      "command": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "racecheck",
+        "--error-exitcode",
+        "99",
+        "/tmp/fmha-prefill-build/target/release/fmha_prefill_sm120a_cute",
+        "--shape-mode",
+        "runtime",
+        "--seq-q",
+        "128",
+        "--seq-k",
+        "128",
+        "--heads",
+        "3",
+        "--noncausal",
+        "--warmup",
+        "0",
+        "--iters",
+        "0"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/prefill-final-sanitizers/runtime-racecheck-noncausal.log",
+      "summary": [
+        "========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)"
+      ],
+      "log_sha256": "6c707abef9c44a19f43da5b05f2f525aa05caf99f5601fd492c04905ef581066"
+    },
+    {
+      "name": "runtime-synccheck-causal",
+      "command": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "synccheck",
+        "--error-exitcode",
+        "99",
+        "/tmp/fmha-prefill-build/target/release/fmha_prefill_sm120a_cute",
+        "--shape-mode",
+        "runtime",
+        "--seq-q",
+        "128",
+        "--seq-k",
+        "128",
+        "--heads",
+        "3",
+        "--causal",
+        "--warmup",
+        "0",
+        "--iters",
+        "0"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/prefill-final-sanitizers/runtime-synccheck-causal.log",
+      "summary": [
+        "========= ERROR SUMMARY: 0 errors"
+      ],
+      "log_sha256": "fce424ff3129e3953ebfadcadd40a727e2253076a188d45af33d912df690c0f6"
+    },
+    {
+      "name": "runtime-synccheck-noncausal",
+      "command": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "synccheck",
+        "--error-exitcode",
+        "99",
+        "/tmp/fmha-prefill-build/target/release/fmha_prefill_sm120a_cute",
+        "--shape-mode",
+        "runtime",
+        "--seq-q",
+        "128",
+        "--seq-k",
+        "128",
+        "--heads",
+        "3",
+        "--noncausal",
+        "--warmup",
+        "0",
+        "--iters",
+        "0"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/prefill-final-sanitizers/runtime-synccheck-noncausal.log",
+      "summary": [
+        "========= ERROR SUMMARY: 0 errors"
+      ],
+      "log_sha256": "c541968cb36b71b759ba760aab3521a26607ea4b44f5425f9dfece2feeaa1a92"
+    },
+    {
+      "name": "runtime-initcheck-causal",
+      "command": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "initcheck",
+        "--error-exitcode",
+        "99",
+        "--initcheck-address-space",
+        "all",
+        "/tmp/fmha-prefill-build/target/release/fmha_prefill_sm120a_cute",
+        "--shape-mode",
+        "runtime",
+        "--seq-q",
+        "128",
+        "--seq-k",
+        "128",
+        "--heads",
+        "3",
+        "--causal",
+        "--warmup",
+        "0",
+        "--iters",
+        "0"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/prefill-final-sanitizers/runtime-initcheck-causal.log",
+      "summary": [
+        "========= ERROR SUMMARY: 0 errors"
+      ],
+      "log_sha256": "fce424ff3129e3953ebfadcadd40a727e2253076a188d45af33d912df690c0f6"
+    },
+    {
+      "name": "runtime-initcheck-noncausal",
+      "command": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "initcheck",
+        "--error-exitcode",
+        "99",
+        "--initcheck-address-space",
+        "all",
+        "/tmp/fmha-prefill-build/target/release/fmha_prefill_sm120a_cute",
+        "--shape-mode",
+        "runtime",
+        "--seq-q",
+        "128",
+        "--seq-k",
+        "128",
+        "--heads",
+        "3",
+        "--noncausal",
+        "--warmup",
+        "0",
+        "--iters",
+        "0"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/prefill-final-sanitizers/runtime-initcheck-noncausal.log",
+      "summary": [
+        "========= ERROR SUMMARY: 0 errors"
+      ],
+      "log_sha256": "c541968cb36b71b759ba760aab3521a26607ea4b44f5425f9dfece2feeaa1a92"
+    },
+    {
+      "name": "static-memcheck-causal",
+      "command": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "memcheck",
+        "--error-exitcode",
+        "99",
+        "/tmp/fmha-prefill-build/target/release/fmha_prefill_sm120a_cute",
+        "--shape-mode",
+        "static",
+        "--seq-q",
+        "1024",
+        "--seq-k",
+        "1024",
+        "--heads",
+        "8",
+        "--causal",
+        "--warmup",
+        "0",
+        "--iters",
+        "0"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/prefill-final-sanitizers/static-memcheck-causal.log",
+      "summary": [
+        "========= ERROR SUMMARY: 0 errors"
+      ],
+      "log_sha256": "fbbc4d11316edbb3949944cb19f2b10ed09e3c47903ce920e753ae1924eabb42"
+    },
+    {
+      "name": "static-memcheck-noncausal",
+      "command": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "memcheck",
+        "--error-exitcode",
+        "99",
+        "/tmp/fmha-prefill-build/target/release/fmha_prefill_sm120a_cute",
+        "--shape-mode",
+        "static",
+        "--seq-q",
+        "1024",
+        "--seq-k",
+        "1024",
+        "--heads",
+        "8",
+        "--noncausal",
+        "--warmup",
+        "0",
+        "--iters",
+        "0"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/prefill-final-sanitizers/static-memcheck-noncausal.log",
+      "summary": [
+        "========= ERROR SUMMARY: 0 errors"
+      ],
+      "log_sha256": "2e7008ef95fc0982ea8016282c7749cd4392917ac77e4e8da786d005d598171b"
+    },
+    {
+      "name": "static-racecheck-causal",
+      "command": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "racecheck",
+        "--error-exitcode",
+        "99",
+        "/tmp/fmha-prefill-build/target/release/fmha_prefill_sm120a_cute",
+        "--shape-mode",
+        "static",
+        "--seq-q",
+        "1024",
+        "--seq-k",
+        "1024",
+        "--heads",
+        "8",
+        "--causal",
+        "--warmup",
+        "0",
+        "--iters",
+        "0"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/prefill-final-sanitizers/static-racecheck-causal.log",
+      "summary": [
+        "========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)"
+      ],
+      "log_sha256": "b53b0e636792f9e6b402404271da1f132269b9e3c5c360053a5c18d12be6bc51"
+    },
+    {
+      "name": "static-racecheck-noncausal",
+      "command": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "racecheck",
+        "--error-exitcode",
+        "99",
+        "/tmp/fmha-prefill-build/target/release/fmha_prefill_sm120a_cute",
+        "--shape-mode",
+        "static",
+        "--seq-q",
+        "1024",
+        "--seq-k",
+        "1024",
+        "--heads",
+        "8",
+        "--noncausal",
+        "--warmup",
+        "0",
+        "--iters",
+        "0"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/prefill-final-sanitizers/static-racecheck-noncausal.log",
+      "summary": [
+        "========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)"
+      ],
+      "log_sha256": "c676c7ba942aedc63c742707a7844c037b876931df4c66f88ae1f9e242064a7b"
+    },
+    {
+      "name": "static-synccheck-causal",
+      "command": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "synccheck",
+        "--error-exitcode",
+        "99",
+        "/tmp/fmha-prefill-build/target/release/fmha_prefill_sm120a_cute",
+        "--shape-mode",
+        "static",
+        "--seq-q",
+        "1024",
+        "--seq-k",
+        "1024",
+        "--heads",
+        "8",
+        "--causal",
+        "--warmup",
+        "0",
+        "--iters",
+        "0"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/prefill-final-sanitizers/static-synccheck-causal.log",
+      "summary": [
+        "========= ERROR SUMMARY: 0 errors"
+      ],
+      "log_sha256": "fbbc4d11316edbb3949944cb19f2b10ed09e3c47903ce920e753ae1924eabb42"
+    },
+    {
+      "name": "static-synccheck-noncausal",
+      "command": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "synccheck",
+        "--error-exitcode",
+        "99",
+        "/tmp/fmha-prefill-build/target/release/fmha_prefill_sm120a_cute",
+        "--shape-mode",
+        "static",
+        "--seq-q",
+        "1024",
+        "--seq-k",
+        "1024",
+        "--heads",
+        "8",
+        "--noncausal",
+        "--warmup",
+        "0",
+        "--iters",
+        "0"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/prefill-final-sanitizers/static-synccheck-noncausal.log",
+      "summary": [
+        "========= ERROR SUMMARY: 0 errors"
+      ],
+      "log_sha256": "2e7008ef95fc0982ea8016282c7749cd4392917ac77e4e8da786d005d598171b"
+    },
+    {
+      "name": "static-initcheck-causal",
+      "command": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "initcheck",
+        "--error-exitcode",
+        "99",
+        "--initcheck-address-space",
+        "all",
+        "/tmp/fmha-prefill-build/target/release/fmha_prefill_sm120a_cute",
+        "--shape-mode",
+        "static",
+        "--seq-q",
+        "1024",
+        "--seq-k",
+        "1024",
+        "--heads",
+        "8",
+        "--causal",
+        "--warmup",
+        "0",
+        "--iters",
+        "0"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/prefill-final-sanitizers/static-initcheck-causal.log",
+      "summary": [
+        "========= ERROR SUMMARY: 0 errors"
+      ],
+      "log_sha256": "fbbc4d11316edbb3949944cb19f2b10ed09e3c47903ce920e753ae1924eabb42"
+    },
+    {
+      "name": "static-initcheck-noncausal",
+      "command": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "initcheck",
+        "--error-exitcode",
+        "99",
+        "--initcheck-address-space",
+        "all",
+        "/tmp/fmha-prefill-build/target/release/fmha_prefill_sm120a_cute",
+        "--shape-mode",
+        "static",
+        "--seq-q",
+        "1024",
+        "--seq-k",
+        "1024",
+        "--heads",
+        "8",
+        "--noncausal",
+        "--warmup",
+        "0",
+        "--iters",
+        "0"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/prefill-final-sanitizers/static-initcheck-noncausal.log",
+      "summary": [
+        "========= ERROR SUMMARY: 0 errors"
+      ],
+      "log_sha256": "2e7008ef95fc0982ea8016282c7749cd4392917ac77e4e8da786d005d598171b"
+    }
+  ],
+  "experiments": [
+    {
+      "stage": "static-only",
+      "note": "Causal flag only; dimensions still runtime.",
+      "measurements": [
+        {
+          "mask": "causal",
+          "rounds": 3,
+          "report": {
+            "path": "/tmp/prefill-optimization/static-only/causal/run-h5joj288/report.json",
+            "sha256": "587ebf69f8909e74cfa25c178f8bd33ea7a695a5567dab55af9f940321ef3830"
+          },
+          "rust_us": 17.152,
+          "cutlass_us": 15.712
+        },
+        {
+          "mask": "noncausal",
+          "rounds": 3,
+          "report": {
+            "path": "/tmp/prefill-optimization/static-only/noncausal/run-as8r9w95/report.json",
+            "sha256": "a78cb1e147a28ed02166507abadbb095158d4d6ccbf232004e8f38e9883f22d8"
+          },
+          "rust_us": 18.848,
+          "cutlass_us": 15.775
+        }
+      ]
+    },
+    {
+      "stage": "peeled",
+      "note": "First tile split from unmasked steady loop.",
+      "measurements": [
+        {
+          "mask": "causal",
+          "rounds": 3,
+          "report": {
+            "path": "/tmp/prefill-optimization/peeled/causal/run-bx0ojkdu/report.json",
+            "sha256": "bdcacd36f672de14d8e3179d34658b68bef2a47724ca0102d8156b502765a141"
+          },
+          "rust_us": 16.736,
+          "cutlass_us": 15.743
+        },
+        {
+          "mask": "noncausal",
+          "rounds": 3,
+          "report": {
+            "path": "/tmp/prefill-optimization/peeled/noncausal/run-g6zxijuh/report.json",
+            "sha256": "63f2bc7be1d63f8844d2e2d75482200a28650898cceeb3be8bb0f2bebccb531a"
+          },
+          "rust_us": 18.24,
+          "cutlass_us": 15.744
+        }
+      ]
+    },
+    {
+      "stage": "packed",
+      "note": "Probability packing change emitted an identical cubin to peeled; no speedup claim.",
+      "measurements": [
+        {
+          "mask": "causal",
+          "rounds": 3,
+          "report": {
+            "path": "/tmp/prefill-optimization/packed/causal/run-fc0k662m/report.json",
+            "sha256": "35148a87ac232091f62cc4e269060d59850fc3a1cc7846d7f9fec7d1a0f99046"
+          },
+          "rust_us": 16.736,
+          "cutlass_us": 15.744
+        },
+        {
+          "mask": "noncausal",
+          "rounds": 3,
+          "report": {
+            "path": "/tmp/prefill-optimization/packed/noncausal/run-qsewwrxg/report.json",
+            "sha256": "1e55148ee4c99fa39f5aa0257556b74d23ce6cbd0c0c83849046c8a50ee0e839"
+          },
+          "rust_us": 18.176,
+          "cutlass_us": 15.776
+        }
+      ]
+    },
+    {
+      "stage": "native-max",
+      "note": "Native maximum mapping, before later memory/codegen changes.",
+      "measurements": [
+        {
+          "mask": "causal",
+          "rounds": 3,
+          "report": {
+            "path": "/tmp/prefill-optimization/native-max/causal/run-ca_8rbh8/report.json",
+            "sha256": "2cdb6a00f7c1cb19d4dc6138500f59ab0ea72dea769f2b3cde2f61890754050d"
+          },
+          "rust_us": 17.12,
+          "cutlass_us": 15.776
+        },
+        {
+          "mask": "noncausal",
+          "rounds": 3,
+          "report": {
+            "path": "/tmp/prefill-optimization/native-max/noncausal/run-g37djt6j/report.json",
+            "sha256": "e6d77a637086781f8e60642172f557671596d4f20202c53ec5141216e68ab48e"
+          },
+          "rust_us": 17.952,
+          "cutlass_us": 15.776
+        }
+      ]
+    },
+    {
+      "stage": "full-tiles",
+      "note": "Checked K/V views; one-round probe.",
+      "measurements": [
+        {
+          "mask": "causal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/full-tiles/causal/run-syuv3l1z/report.json",
+            "sha256": "9255a4fdc4334c84b6aace484a8c5039ed13188faf40ba444ab61bf9fad1984e"
+          },
+          "rust_us": 17.151,
+          "cutlass_us": 15.648
+        },
+        {
+          "mask": "noncausal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/full-tiles/noncausal/run-7mf0wba3/report.json",
+            "sha256": "ce51c8908eccb8f05f1530caf0e18d9fca2e8c60aed168d9d933364474a55137"
+          },
+          "rust_us": 16.672,
+          "cutlass_us": 15.68
+        }
+      ]
+    },
+    {
+      "stage": "u32-grid",
+      "note": "32-bit grid divmod; timings essentially unchanged.",
+      "measurements": [
+        {
+          "mask": "causal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/u32-grid/causal/run-vv18xx15/report.json",
+            "sha256": "5a7ddc3270fc1799cae8ca41b694e79acebb7e50c3f5a1aad927fda8dcd79b6a"
+          },
+          "rust_us": 17.152,
+          "cutlass_us": 15.648
+        },
+        {
+          "mask": "noncausal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/u32-grid/noncausal/run-g1b6rvi5/report.json",
+            "sha256": "5a344f0045727d3f55a72753843253bdfcbef3697be09b9faf7212a1ddfde3f9"
+          },
+          "rust_us": 16.672,
+          "cutlass_us": 15.68
+        }
+      ]
+    },
+    {
+      "stage": "tree-max",
+      "note": "Maximum tree without FTZ; causal regressed in this intermediate combination.",
+      "measurements": [
+        {
+          "mask": "causal",
+          "rounds": 3,
+          "report": {
+            "path": "/tmp/prefill-optimization/tree-max/causal/run-303geqp4/report.json",
+            "sha256": "695415133b2778ba61d97d408b80ce359d365d8382085029cf31c00ed9764ca3"
+          },
+          "rust_us": 17.887,
+          "cutlass_us": 15.744
+        },
+        {
+          "mask": "noncausal",
+          "rounds": 3,
+          "report": {
+            "path": "/tmp/prefill-optimization/tree-max/noncausal/run-m4oa05g7/report.json",
+            "sha256": "6acd909b2185f70d2b7900c381d6b9f8aac39b6cddf981a0493e0a93791e5b9a"
+          },
+          "rust_us": 16.608,
+          "cutlass_us": 15.744
+        }
+      ]
+    },
+    {
+      "stage": "tree-ftz",
+      "note": "Matched FTZ exponential with maximum tree.",
+      "measurements": [
+        {
+          "mask": "causal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/tree-ftz/causal/run-srwjfp6w/report.json",
+            "sha256": "068909b953d448c9d2bf2b0cb8f598c13554df9254c19f81efc814ec5430d1f8"
+          },
+          "rust_us": 17.6,
+          "cutlass_us": 15.743
+        },
+        {
+          "mask": "noncausal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/tree-ftz/noncausal/run-dqqtm2f3/report.json",
+            "sha256": "f20a1c11b8e30cb0fcadbf82627604e443da468b8ebe8cffd1e248deaa409a31"
+          },
+          "rust_us": 16.511,
+          "cutlass_us": 15.744
+        }
+      ]
+    },
+    {
+      "stage": "serial-ftz",
+      "note": "Isolated serial maximum variant.",
+      "measurements": [
+        {
+          "mask": "causal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/serial-ftz/causal/run-ihn_5l3w/report.json",
+            "sha256": "52fee4000b34dbf6c8608d87679a12fe89c293bc6d05b23b6dc841dcf3d3bd74"
+          },
+          "rust_us": 17.056,
+          "cutlass_us": 15.712
+        },
+        {
+          "mask": "noncausal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/serial-ftz/noncausal/run-jxlt2fbo/report.json",
+            "sha256": "ceadf206ad7941ce971b976c3a4fba41063ddbf9aaf01425fa59a71170561f90"
+          },
+          "rust_us": 16.576,
+          "cutlass_us": 15.744
+        }
+      ]
+    },
+    {
+      "stage": "local-mask",
+      "note": "32-bit local diagonal mask under validated equal causal lengths.",
+      "measurements": [
+        {
+          "mask": "causal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/local-mask/causal/run-zdtcrtce/report.json",
+            "sha256": "cde11249085caac5b0cee852f1f062764971f15472467d51456111e9b53ac865"
+          },
+          "rust_us": 16.896,
+          "cutlass_us": 15.744
+        },
+        {
+          "mask": "noncausal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/local-mask/noncausal/run-3hcdlinq/report.json",
+            "sha256": "30459acde7aec95c4ad35b84f3d9a9a55fb6b0ccedd2291da9b1a1b0e7424622"
+          },
+          "rust_us": 16.576,
+          "cutlass_us": 15.776
+        }
+      ]
+    },
+    {
+      "stage": "k-major",
+      "note": "Direct B register order; serial maximum.",
+      "measurements": [
+        {
+          "mask": "causal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/k-major/causal/run-zb68946r/report.json",
+            "sha256": "83d4696404a5991fbcbd0ed21536caf7516c0befcb5e0dca50ffe04c3a2be4c6"
+          },
+          "rust_us": 17.12,
+          "cutlass_us": 15.744
+        },
+        {
+          "mask": "noncausal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/k-major/noncausal/run-7jf38hpu/report.json",
+            "sha256": "23eb733b486272372d615cd3e5229eb8823a82d4d3b4d6e2092fa032c42cb1d1"
+          },
+          "rust_us": 16.352,
+          "cutlass_us": 15.744
+        }
+      ]
+    },
+    {
+      "stage": "k-major-tree",
+      "note": "Direct B register order plus maximum tree.",
+      "measurements": [
+        {
+          "mask": "causal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/k-major-tree/causal/run-g82j3t_f/report.json",
+            "sha256": "fc1dbdc81c828859a743e45afa89cbc5e0403ebcc624f0faec08d18d55e80ce5"
+          },
+          "rust_us": 16.96,
+          "cutlass_us": 15.744
+        },
+        {
+          "mask": "noncausal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/k-major-tree/noncausal/run-5penm59c/report.json",
+            "sha256": "cc2bc732e9cd3d184cbfd12a762eee13c0c24bd9f48e666024df5198d23538ba"
+          },
+          "rust_us": 16.416,
+          "cutlass_us": 15.808
+        }
+      ]
+    },
+    {
+      "stage": "epilogue",
+      "note": "Packed conversion and 32-bit shared offset arithmetic.",
+      "measurements": [
+        {
+          "mask": "causal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/epilogue/causal/run-_b3uv53o/report.json",
+            "sha256": "2f44881d4f7e721f74dd0b637cc2fc4c396c4110d431563adb80fef91fd01215"
+          },
+          "rust_us": 16.832,
+          "cutlass_us": 15.808
+        },
+        {
+          "mask": "noncausal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/epilogue/noncausal/run-k38yn3jy/report.json",
+            "sha256": "3f3026f5704b6af3461329a70b914ddde00f645ccd3a9e49009c62629a8418dd"
+          },
+          "rust_us": 16.512,
+          "cutlass_us": 15.808
+        }
+      ]
+    },
+    {
+      "stage": "bounded-tid",
+      "note": "Discarded: modulo128 removed ZFILL and reduced instructions but worsened noncausal timing.",
+      "measurements": [
+        {
+          "mask": "causal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/bounded-tid/causal/run-6_pthu_3/report.json",
+            "sha256": "6c0cc4bbb5341be9e74379cd125bc14d7c5ead1d1049c7c51c198a83238e2e32"
+          },
+          "rust_us": 16.736,
+          "cutlass_us": 15.648
+        },
+        {
+          "mask": "noncausal",
+          "rounds": 1,
+          "report": {
+            "path": "/tmp/prefill-optimization/bounded-tid/noncausal/run-63jyg7os/report.json",
+            "sha256": "231516211bb8e6465898112ca647e071c0a4c4a1f8c790901bd1cd045af50605"
+          },
+          "rust_us": 16.896,
+          "cutlass_us": 15.68
+        }
+      ]
+    }
+  ],
+  "f32_max_gpu_validation": {
+    "status": "passed",
+    "pairs": 324,
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "physical_gpu": 1,
+    "command": "CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1 /tmp/prefill-max-probe-build/target/release/prefill_max_probe",
+    "coverage": "18 IEEE754 bit patterns, all ordered pairs, quiet/signaling NaNs, +/-zero, +/-subnormals, normal boundaries, infinity, finite; numeric results bit-exact except signed-zero choice; NaN payload unspecified",
+    "files": [
+      {
+        "path": "/tmp/prefill-max-probe/src/main.rs",
+        "sha256": "0df3a180c3c448c133a37259466b523fedbdaa6ce5af89e447426e5675af4e3c"
+      },
+      {
+        "path": "/tmp/prefill-max-probe/gpu-validation.log",
+        "sha256": "648d4b0ec0c57eccdd2c303877032a2a617ee4dbcc8f528298e5b8fb11c11eee"
+      },
+      {
+        "path": "/tmp/prefill-max-probe-build/target/release/prefill_max_probe",
+        "sha256": "88805f83ac3af72cad347c6e6874ae4fe30dbca982a6b5fe370b2e51dc70e570"
+      },
+      {
+        "path": "/tmp/prefill-max-probe-build/prefill_max_probe.cubin",
+        "sha256": "9857296a6e27480b654967836a6257fbd2ed553fb14caa5569864daaa3d8dbd4"
+      }
+    ]
+  },
+  "diagnostic_artifacts": [
+    {
+      "path": "/tmp/prefill-reference-reduction-audit/audit.json",
+      "sha256": "da406380f465a172efc42d2e69752c736971fca6e12dadd4c54bbd4eba513d62"
+    },
+    {
+      "path": "/tmp/prefill-reference-reduction-audit/epilogue-counts.json",
+      "sha256": "f2810e73085cf5ff24c97aa7fe0b58115cf3e0fcd0f0223d3f293128362da3a4"
+    },
+    {
+      "path": "/tmp/prefill-reference-static-audit/audit.json",
+      "sha256": "fe00542157fd27e1fd233775c6c5ff6279077d563f0a4dc5bffb308de0bc506e"
+    },
+    {
+      "path": "/tmp/prefill-copy-lowering-probe/findings.json",
+      "sha256": "7ac5c51204518a1a33d41ff6b91791b58adde1ff154a953273a41fc968105a99"
+    }
+  ],
+  "cpu_checks": [
+    {
+      "suite": "prefill host",
+      "passed": 8,
+      "log": {
+        "path": "/tmp/prefill-static-shape-green.log",
+        "sha256": "e62d7caa7bc5c6b1ba629c443044a9bf1e3a8e6a121ee3ea194ea4dcfce495ac"
+      }
+    },
+    {
+      "suite": "prefill Python including CPU Torch oracle",
+      "passed": 29,
+      "skipped": 0,
+      "log": {
+        "path": "/tmp/prefill-final-python-tests.log",
+        "sha256": "45c7bb89bd02dd98487f78055b13b6fd7dc9abb091999f7d87c9b094b89becc2"
+      }
+    }
+  ]
+}

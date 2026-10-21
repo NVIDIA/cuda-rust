@@ -1,0 +1,470 @@
+{
+  "date": "2026-10-12",
+  "binary_sha256": "59129818212f33f8e485e932da1d4d17d32b8566a6d2b8677eef908fddbcde79",
+  "base_commit": "53cc7555577b9bf30f67e026a21ca0700dd678c5",
+  "aggregation": "median of all timing windows from both timing orders; no samples discarded",
+  "profiles": {
+    "short-small": {
+      "configuration": {
+        "batch": 1,
+        "kv_length": 1024,
+        "splits": 1,
+        "heads": 128,
+        "query_length": 1,
+        "latent": 512,
+        "rope": 64,
+        "page_size": 128,
+        "softmax_scale": 0.0416,
+        "output_scale": 1.0
+      },
+      "clusters": 1,
+      "timing": {
+        "method": "cuda-events-repeated-complete-invocation",
+        "graphs": false,
+        "warmup": 10,
+        "iterations": 100,
+        "rounds": 5,
+        "includes_split_reduction": false
+      },
+      "rust": {
+        "median_us": 16.774719953536987,
+        "min_us": 16.728320121765137,
+        "max_us": 16.79327964782715,
+        "windows": 10
+      },
+      "cutedsl": {
+        "median_us": 18.022239804267883,
+        "min_us": 17.991679906845093,
+        "max_us": 18.316800594329834,
+        "windows": 10
+      },
+      "rust_latency_reduction_percent": 6.92211325717389
+    },
+    "short-large": {
+      "configuration": {
+        "batch": 16,
+        "kv_length": 8192,
+        "splits": 8,
+        "heads": 128,
+        "query_length": 1,
+        "latent": 512,
+        "rope": 64,
+        "page_size": 128,
+        "softmax_scale": 0.0416,
+        "output_scale": 1.0
+      },
+      "clusters": 74,
+      "timing": {
+        "method": "cuda-events-repeated-complete-invocation",
+        "graphs": false,
+        "warmup": 10,
+        "iterations": 100,
+        "rounds": 5,
+        "includes_split_reduction": true
+      },
+      "rust": {
+        "median_us": 48.51423978805542,
+        "min_us": 48.477439880371094,
+        "max_us": 48.63423824310303,
+        "windows": 10
+      },
+      "cutedsl": {
+        "median_us": 49.21295881271362,
+        "min_us": 49.137282371520996,
+        "max_us": 49.275522232055664,
+        "windows": 10
+      },
+      "rust_latency_reduction_percent": 1.4197866609022003
+    },
+    "sustained-small": {
+      "configuration": {
+        "batch": 1,
+        "kv_length": 1024,
+        "splits": 1,
+        "heads": 128,
+        "query_length": 1,
+        "latent": 512,
+        "rope": 64,
+        "page_size": 128,
+        "softmax_scale": 0.0416,
+        "output_scale": 1.0
+      },
+      "clusters": 1,
+      "timing": {
+        "method": "cuda-events-repeated-complete-invocation",
+        "graphs": false,
+        "warmup": 2000,
+        "iterations": 301,
+        "rounds": 7,
+        "includes_split_reduction": false
+      },
+      "rust": {
+        "median_us": 16.74508969253084,
+        "min_us": 16.72239240221803,
+        "max_us": 16.761302947998047,
+        "windows": 14
+      },
+      "cutedsl": {
+        "median_us": 17.925687802590403,
+        "min_us": 17.909688410964915,
+        "max_us": 17.94732211040104,
+        "windows": 14
+      },
+      "rust_latency_reduction_percent": 6.5860686801036294
+    },
+    "sustained-large": {
+      "configuration": {
+        "batch": 16,
+        "kv_length": 8192,
+        "splits": 8,
+        "heads": 128,
+        "query_length": 1,
+        "latent": 512,
+        "rope": 64,
+        "page_size": 128,
+        "softmax_scale": 0.0416,
+        "output_scale": 1.0
+      },
+      "clusters": 74,
+      "timing": {
+        "method": "cuda-events-repeated-complete-invocation",
+        "graphs": false,
+        "warmup": 2000,
+        "iterations": 301,
+        "rounds": 7,
+        "includes_split_reduction": true
+      },
+      "rust": {
+        "median_us": 65.6326902269129,
+        "min_us": 63.66107471757553,
+        "max_us": 69.8151762699368,
+        "windows": 14
+      },
+      "cutedsl": {
+        "median_us": 66.04693656743959,
+        "min_us": 62.8891434780387,
+        "max_us": 69.9517893236737,
+        "windows": 14
+      },
+      "rust_latency_reduction_percent": 0.6271999309214071
+    }
+  },
+  "source_sha256": {
+    "cuda-oxide/cute-rs-preview/examples/sm100_mla_decode_fp16_cute/src/kernel.rs": "11896e025b2d0932fe847d9e3110b20dcb3c8c7d5bc1c220e3200f3c9f2cca85",
+    "cuda-oxide/cute-rs-preview/examples/sm100_mla_decode_fp16_cute/src/main.rs": "db2e185308a78aaca7ef4bffbbb9784ac8067a82e5acfff0ef35cd8e8604af17",
+    "cuda-oxide/cute-rs-preview/cute-rs/src/sm100_attention.rs": "bac9bc9f15e30cc406b1a3679bf23555f601b5b700da12b43fa7ac9fbcee8114",
+    "cuda-oxide/cute-rs-preview/cute-rs/src/sm100_attention/pipeline.rs": "c425d1567ad42902fa7bd8893f4d8b3caf030639910f2e84d0a9844f4f5b63d7",
+    "cuda-oxide/cute-rs-preview/cute-rs/src/tile.rs": "cd824ab0b07c2e9452c19012605aeca0d182eb160e4a46dad21b0dbb6108c22e",
+    "cuda-oxide/crates/cuda-oxide-mlir-export/src/cute_sm100_attention.rs": "2242149d77dae5fd259bc92e1fc4c4304654a0ac85fc3df3ec13f019f3f84745"
+  },
+  "validation": {
+    "cases": 9,
+    "cross_implementation_output_max_abs": 0,
+    "cross_implementation_lse_max_abs": 0,
+    "memcheck_errors": 0,
+    "synccheck_errors": 0,
+    "racecheck_errors": 0,
+    "racecheck_warnings": 0,
+    "host_unit_tests": 5,
+    "python_tests": 12,
+    "prefill_regression_cases": 3
+  },
+  "sanitizers": {
+    "binary_sha256": "59129818212f33f8e485e932da1d4d17d32b8566a6d2b8677eef908fddbcde79",
+    "cases": [
+      {
+        "input_directory": "inputs-tail",
+        "clusters": 1,
+        "sha256": {
+          "c_latent.f16": "5c901025597970152243ed92f12b56ea012a501deccd52f652604567c37fdbc9",
+          "c_rope.f16": "c9cda0b391adf6100c314b83990932cc2cebc252401f874a0f01729a34af18a3",
+          "config.json": "41bd87c0189ea574b45ae29fe6faa62ef8f2f29a8b529737062f0450a9983c2d",
+          "page_table.i32": "e1545bc9a28a4a63412720e3edfc9955bcefee1e24e178bc896a509cc9969c3c",
+          "q_latent.f16": "cb20d982a1fc56a73e03cfcc8de6c9fcb385df9c5087e800ee7ac355aab5f580",
+          "q_rope.f16": "31e5cc205fa79dee585e2d3d7fd038bf8c19e13f7e90dc795be7cb6501a50b90"
+        }
+      },
+      {
+        "input_directory": "inputs-empty",
+        "clusters": 2,
+        "sha256": {
+          "c_latent.f16": "ee0aa40711afd6c4eee579ac511b6eaf87bbc1c9bd22aae16e44d395c25901e4",
+          "c_rope.f16": "f3f4dca5ee08bc23c5a206b64b0c342bdcb1b1e69a808e9c84245023730e41a2",
+          "config.json": "4d6e036961a150e799dddd415530881483c65c1538f15a45591db7af9b16d9e6",
+          "page_table.i32": "01acecb507abfe1a354aa8064f4af5d3f1acd019e37db3c11c97523b71c76e9d",
+          "q_latent.f16": "b0d076fef08597af4c6a6d9e93ad862a2bbec2e620fa74a2ab72a74c00ac4ca3",
+          "q_rope.f16": "b4f7ca2febe8674bae4e8772c65d48aa19279261faf7ad997dbd0cd35c09d579"
+        }
+      }
+    ]
+  },
+  "instrumented_profiles": {
+    "note": "Diagnostic replay measurements; do not substitute these for CUDA-event invocation timings. Nsight Systems confirms the sustained shift occurs in GPU kernel-active time. Its cause was not isolated.",
+    "measurements": [
+      {
+        "variant": "rust-baseline",
+        "kernels": {
+          "0": {
+            "kernel": "sm100_mla_decode_fp16_cute_rs",
+            "SM Frequency": {
+              "value": "1.75",
+              "unit": "Ghz"
+            },
+            "Duration": {
+              "value": "74.78",
+              "unit": "us"
+            },
+            "Executed Instructions": {
+              "value": "11117162",
+              "unit": "inst"
+            },
+            "Registers Per Thread": {
+              "value": "168",
+              "unit": "register/thread"
+            }
+          }
+        }
+      },
+      {
+        "variant": "rust-page-release",
+        "kernels": {
+          "0": {
+            "kernel": "sm100_mla_decode_fp16_cute_rs",
+            "SM Frequency": {
+              "value": "1.72",
+              "unit": "Ghz"
+            },
+            "Duration": {
+              "value": "51.01",
+              "unit": "us"
+            },
+            "Executed Instructions": {
+              "value": "6340449",
+              "unit": "inst"
+            },
+            "Registers Per Thread": {
+              "value": "168",
+              "unit": "register/thread"
+            }
+          },
+          "1": {
+            "kernel": "sm100_mla_decode_fp16_reduce_cute_rs",
+            "SM Frequency": {
+              "value": "1.78",
+              "unit": "Ghz"
+            },
+            "Duration": {
+              "value": "6.34",
+              "unit": "us"
+            },
+            "Executed Instructions": {
+              "value": "1439744",
+              "unit": "inst"
+            },
+            "Registers Per Thread": {
+              "value": "36",
+              "unit": "register/thread"
+            }
+          }
+        }
+      },
+      {
+        "variant": "cutedsl-pair",
+        "kernels": {
+          "0": {
+            "kernel": "kernel_cutlass_reduction_kernel_cuteblackwellkernelattentionmlamla_decode_fp16BlackwellMultiHeadLatentAttentionForwardFP16_object_at__tensorptrf16gmemalign16odiv8i64div81i64div8i64div8_te_1",
+            "SM Frequency": {
+              "value": "1.77",
+              "unit": "Ghz"
+            },
+            "Duration": {
+              "value": "7.42",
+              "unit": "us"
+            },
+            "Executed Instructions": {
+              "value": "2168832",
+              "unit": "inst"
+            },
+            "Registers Per Thread": {
+              "value": "40",
+              "unit": "register/thread"
+            }
+          },
+          "1": {
+            "kernel": "kernel_cutlass_split_kv_kernel_cuteblackwellkernelattentionmlamla_decode_fp16BlackwellMultiHeadLatentAttentionForwardFP16_object_at__TiledMMA_ThrLayoutVMNK21111000_PermutationMNK____MMAAt_0",
+            "SM Frequency": {
+              "value": "1.72",
+              "unit": "Ghz"
+            },
+            "Duration": {
+              "value": "43.04",
+              "unit": "us"
+            },
+            "Executed Instructions": {
+              "value": "6297733",
+              "unit": "inst"
+            },
+            "Registers Per Thread": {
+              "value": "168",
+              "unit": "register/thread"
+            }
+          }
+        }
+      },
+      {
+        "variant": "final-profile",
+        "kernels": {
+          "0": {
+            "kernel": "sm100_mla_decode_fp16_cute_rs",
+            "SM Frequency": {
+              "value": "1.71",
+              "unit": "Ghz"
+            },
+            "Duration": {
+              "value": "45.44",
+              "unit": "us"
+            },
+            "Executed Instructions": {
+              "value": "6451839",
+              "unit": "inst"
+            },
+            "Registers Per Thread": {
+              "value": "168",
+              "unit": "register/thread"
+            }
+          },
+          "1": {
+            "kernel": "sm100_mla_decode_fp16_reduce_cute_rs",
+            "SM Frequency": {
+              "value": "1.78",
+              "unit": "Ghz"
+            },
+            "Duration": {
+              "value": "6.21",
+              "unit": "us"
+            },
+            "Executed Instructions": {
+              "value": "1439744",
+              "unit": "inst"
+            },
+            "Registers Per Thread": {
+              "value": "36",
+              "unit": "register/thread"
+            }
+          }
+        }
+      }
+    ],
+    "selected_opcodes": {
+      "rust-baseline": {
+        "CCTL.IVALL": {
+          "static_sites": 140,
+          "executed_instructions": 1046742
+        },
+        "UTMALDG.3D.MULTICAST.2CTA": {
+          "static_sites": 43,
+          "executed_instructions": 37120
+        },
+        "LDTM.x32": {
+          "static_sites": 18,
+          "executed_instructions": 81744
+        },
+        "LDTM.x4": {
+          "static_sites": 1,
+          "executed_instructions": 8192
+        },
+        "STG.E.128": {
+          "static_sites": 96,
+          "executed_instructions": 65536
+        },
+        "STG.E": {
+          "static_sites": 2,
+          "executed_instructions": 1024
+        }
+      },
+      "rust-page-release": {
+        "CCTL.IVALL": {
+          "static_sites": 2,
+          "executed_instructions": 3552
+        },
+        "UTMALDG.3D.2CTA": {
+          "static_sites": 43,
+          "executed_instructions": 37120
+        },
+        "LDTM.x32": {
+          "static_sites": 18,
+          "executed_instructions": 81744
+        },
+        "LDTM.x4": {
+          "static_sites": 1,
+          "executed_instructions": 8192
+        },
+        "STG.E.128": {
+          "static_sites": 96,
+          "executed_instructions": 65536
+        },
+        "STG.E": {
+          "static_sites": 2,
+          "executed_instructions": 1024
+        }
+      },
+      "final-profile": {
+        "CCTL.IVALL": {
+          "static_sites": 2,
+          "executed_instructions": 3552
+        },
+        "UTMALDG.3D.2CTA": {
+          "static_sites": 43,
+          "executed_instructions": 37120
+        },
+        "LDTM.x32": {
+          "static_sites": 20,
+          "executed_instructions": 81744
+        },
+        "LDTM.x4": {
+          "static_sites": 1,
+          "executed_instructions": 8192
+        },
+        "STG.E.NA.ENL2.256": {
+          "static_sites": 48,
+          "executed_instructions": 32768
+        },
+        "STG.E": {
+          "static_sites": 2,
+          "executed_instructions": 1024
+        }
+      },
+      "cutedsl-baseline": {
+        "CCTL.IVALL": {
+          "static_sites": 1,
+          "executed_instructions": 1776
+        },
+        "UTMALDG.4D.2CTA": {
+          "static_sites": 9,
+          "executed_instructions": 2304
+        },
+        "UTMALDG.3D.2CTA": {
+          "static_sites": 50,
+          "executed_instructions": 51200
+        },
+        "LDTM.x32": {
+          "static_sites": 20,
+          "executed_instructions": 81744
+        },
+        "LDTM.x4": {
+          "static_sites": 1,
+          "executed_instructions": 8192
+        },
+        "STG.E.NA.ENL2.256": {
+          "static_sites": 32,
+          "executed_instructions": 32768
+        },
+        "STG.E": {
+          "static_sites": 2,
+          "executed_instructions": 2048
+        }
+      }
+    }
+  },
+  "prefill_binary_sha256": "4f9ffbb5a7e3194a37425516cc28c12a5c0bfe0a3324019f5350e0e2e06ce6b2"
+}

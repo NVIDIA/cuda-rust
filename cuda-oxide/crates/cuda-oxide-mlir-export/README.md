@@ -26,7 +26,7 @@ manifest records the Pliron version, published printer version, and local adapte
 revision. The workspace pins crates.io `pliron-mlir-interop = "=0.1.0"` with
 Pliron `=0.20.0`. Attribute and argument-location compatibility stays in the
 adapter; no upstream source is vendored. See the
-[dependency and adapter contract](../../cuteir/docs/reference/pliron-mlir-interop.md)
+[dependency and adapter contract](../../cute-rs-preview/docs/reference/pliron-mlir-interop.md)
 for details.
 
 The profile targets the official CUTLASS 4.7 compiler library. cuda-oxide installs the exact NVIDIA release archive, verifies both the archive and
@@ -57,7 +57,7 @@ text for inspection; select `CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir` to compile 
 The SM100 primitive pack additionally maps two-CTA FP16 TCGen05 MMA with A
 collector selectors, tensor-memory allocation/load/commit/wait operations,
 cluster synchronization, elected-lane results and multicast TMA. The
-[`fp16_gemm_256x352_cute`](../../cuteir/examples/fp16_gemm_256x352_cute)
+[`fp16_gemm_256x352_cute`](../../cute-rs-preview/examples/fp16_gemm_256x352_cute)
 example exercises these together. It also preserves fixed cluster dimensions
 in `nvvm.cluster_dim` and the scalar order of compiler-created register arrays.
 Unsupported primitive selectors and intrinsic identities fail at export.
@@ -75,7 +75,7 @@ Real Rust fixtures also exercise checked arithmetic, padded tuple carriers,
 Direct/Single enum storage, static shared globals and Rust pointer-address
 semantics. Explicit NVVM shared offsets preserve AS3/AS7; Rust address casts
 convert named pointers to generic addresses first. See the
-[coverage and validation contract](../../cuteir/ctm-rs/docs/primitives-coverage.md).
+[coverage and validation contract](../../cute-rs-preview/ctm-rs/docs/primitives-coverage.md).
 
 See [`hoist_enum_scratch`](src/mir/checked.rs) for why enum scratch allocations
 move to the function entry while their loads and stores stay in place.

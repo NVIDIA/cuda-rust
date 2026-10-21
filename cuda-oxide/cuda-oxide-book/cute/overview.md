@@ -2,11 +2,11 @@
 
 **`cute-rs`** is the primary way to write high-performance tensor, GEMM, attention, and model kernels in **cuda-oxide**. It brings CUTLASS CuTe's layout algebra, partitions, TMA transfers, pipelines, and tensor-core MMA operations directly into Rust's type system—without a Python interpreter or runtime JIT tracer.
 
-```{figure} images/cuteir-stack-and-flow.svg
+```{figure} images/cute-rs-preview-stack-and-flow.svg
 :align: center
 :width: 100%
 
-The `cuteir` stack: kernels author tensor computation in `cute-rs` over `ctm-rs` instruction primitives, import into one Pliron module (`dialect-cute` + `dialect-mir` + `dialect-nvvm`), pass whole-module verification, and compile through CUTLASS 4.7 MLIR into an embedded cubin.
+The `cute-rs-preview` stack: kernels author tensor computation in `cute-rs` over `ctm-rs` instruction primitives, import into one Pliron module (`dialect-cute` + `dialect-mir` + `dialect-nvvm`), pass whole-module verification, and compile through CUTLASS 4.7 MLIR into an embedded cubin.
 ```
 
 ---

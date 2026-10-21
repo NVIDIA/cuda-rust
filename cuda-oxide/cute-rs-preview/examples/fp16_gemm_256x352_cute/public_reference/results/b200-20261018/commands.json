@@ -1,0 +1,172 @@
+[
+  {
+    "name": "cute-comparison-1",
+    "profiled": false,
+    "cwd": "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute",
+    "argv": [
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/.venv/bin/python",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/compare.py",
+      "--rust-bin",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/target/release/fp16_gemm_256x352_cute",
+      "--mnk",
+      "8192,8096,8192",
+      "--warmup",
+      "2000",
+      "--iters",
+      "301",
+      "--json",
+      "/tmp/fp16-readme-20261018/cute-comparison-1.json"
+    ]
+  },
+  {
+    "name": "ctm-comparison-1",
+    "profiled": false,
+    "cwd": "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute",
+    "argv": [
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/.venv/bin/python",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/compare.py",
+      "--rust-bin",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_ctm/target/release/fp16_gemm_256x352_ctm",
+      "--mnk",
+      "8192,8096,8192",
+      "--warmup",
+      "2000",
+      "--iters",
+      "301",
+      "--json",
+      "/tmp/fp16-readme-20261018/ctm-comparison-1.json"
+    ]
+  },
+  {
+    "name": "cute-comparison-2",
+    "profiled": false,
+    "cwd": "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute",
+    "argv": [
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/.venv/bin/python",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/compare.py",
+      "--rust-bin",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/target/release/fp16_gemm_256x352_cute",
+      "--mnk",
+      "8192,8096,8192",
+      "--warmup",
+      "2000",
+      "--iters",
+      "301",
+      "--json",
+      "/tmp/fp16-readme-20261018/cute-comparison-2.json"
+    ]
+  },
+  {
+    "name": "ctm-comparison-2",
+    "profiled": false,
+    "cwd": "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute",
+    "argv": [
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/.venv/bin/python",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/compare.py",
+      "--rust-bin",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_ctm/target/release/fp16_gemm_256x352_ctm",
+      "--mnk",
+      "8192,8096,8192",
+      "--warmup",
+      "2000",
+      "--iters",
+      "301",
+      "--json",
+      "/tmp/fp16-readme-20261018/ctm-comparison-2.json"
+    ]
+  },
+  {
+    "name": "cute-comparison-3",
+    "profiled": false,
+    "cwd": "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute",
+    "argv": [
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/.venv/bin/python",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/compare.py",
+      "--rust-bin",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/target/release/fp16_gemm_256x352_cute",
+      "--mnk",
+      "8192,8096,8192",
+      "--warmup",
+      "2000",
+      "--iters",
+      "301",
+      "--json",
+      "/tmp/fp16-readme-20261018/cute-comparison-3.json"
+    ]
+  },
+  {
+    "name": "ctm-comparison-3",
+    "profiled": false,
+    "cwd": "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute",
+    "argv": [
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/.venv/bin/python",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/compare.py",
+      "--rust-bin",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_ctm/target/release/fp16_gemm_256x352_ctm",
+      "--mnk",
+      "8192,8096,8192",
+      "--warmup",
+      "2000",
+      "--iters",
+      "301",
+      "--json",
+      "/tmp/fp16-readme-20261018/ctm-comparison-3.json"
+    ]
+  },
+  {
+    "name": "cute-nsight",
+    "profiled": true,
+    "cwd": "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute",
+    "argv": [
+      "nsys",
+      "profile",
+      "--trace=cuda-sw",
+      "--sample=none",
+      "--cpuctxsw=none",
+      "--cuda-event-trace=true",
+      "--discard-environment=true",
+      "--export=sqlite",
+      "--output=/tmp/fp16-readme-20261018/cute-nsight",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/.venv/bin/python",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/compare.py",
+      "--rust-bin",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/target/release/fp16_gemm_256x352_cute",
+      "--mnk",
+      "8192,8096,8192",
+      "--warmup",
+      "2000",
+      "--iters",
+      "301",
+      "--json",
+      "/tmp/fp16-readme-20261018/cute-nsight.json"
+    ]
+  },
+  {
+    "name": "ctm-nsight",
+    "profiled": true,
+    "cwd": "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute",
+    "argv": [
+      "nsys",
+      "profile",
+      "--trace=cuda-sw",
+      "--sample=none",
+      "--cpuctxsw=none",
+      "--cuda-event-trace=true",
+      "--discard-environment=true",
+      "--export=sqlite",
+      "--output=/tmp/fp16-readme-20261018/ctm-nsight",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/.venv/bin/python",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/compare.py",
+      "--rust-bin",
+      "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_ctm/target/release/fp16_gemm_256x352_ctm",
+      "--mnk",
+      "8192,8096,8192",
+      "--warmup",
+      "2000",
+      "--iters",
+      "301",
+      "--json",
+      "/tmp/fp16-readme-20261018/ctm-nsight.json"
+    ]
+  }
+]

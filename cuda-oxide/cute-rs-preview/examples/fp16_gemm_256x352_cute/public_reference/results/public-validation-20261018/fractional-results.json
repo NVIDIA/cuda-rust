@@ -1,0 +1,344 @@
+{
+  "head": "904638f6549b8fffa49443c9a05dd2454c63bccf",
+  "created_utc": "2026-10-18T06:52:54.736520+00:00",
+  "binary": "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/target/release/fp16_gemm_256x352_cute",
+  "binary_sha256": "e93007fc4408b8f56fd786416a8cef96296c399f725ffdb5e3b6ef92853e85e4",
+  "torch": "2.13.0+cu130",
+  "gpu": "NVIDIA B200",
+  "oracle": "CPU torch.bmm FP32, optional FP32 row bias, then one FP16 conversion",
+  "atol": 0.1,
+  "rtol": 1e-05,
+  "exact_mismatch_policy": "Reported diagnostically; only tolerance violations fail.",
+  "cases": [
+    {
+      "name": "fractional_small",
+      "kind": "fractional",
+      "mnk": [
+        256,
+        352,
+        64
+      ],
+      "has_bias": false,
+      "seed": 1535,
+      "clusters": 1,
+      "output_tiles": 1,
+      "inputs_all_finite": true,
+      "input_sha256": {
+        "a": "b460051dcad8f89f236b5236c31ff21c2e5c998196d4f74d2afbe8bbea3db827",
+        "b": "bece13af36d5cb904de972926b4083c22d9bce7848cd0599cd2d0060d5da0fa4"
+      },
+      "public_vs_fp32_oracle": {
+        "elements": 90112,
+        "actual_all_finite": true,
+        "expected_all_finite": true,
+        "max_absolute_error": 0.0078125,
+        "exact_mismatch_count": 60,
+        "outside_tolerance_count": 0,
+        "pass": true,
+        "first_failures": []
+      },
+      "public_shipped_oracle": {
+        "pass": true
+      },
+      "rust_command": [
+        "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/target/release/fp16_gemm_256x352_cute",
+        "--rust-only",
+        "--mnk",
+        "256,352,64",
+        "--input-dir",
+        "/tmp/pr1535-validation/fractional-cases/fractional_small",
+        "--output",
+        "/tmp/pr1535-validation/fractional-cases/fractional_small/rust.f16",
+        "--skip-cpu-check",
+        "--timing-mode",
+        "direct",
+        "--warmup",
+        "0",
+        "--iters",
+        "1",
+        "--clusters",
+        "1"
+      ],
+      "rust_process": {
+        "returncode": 0,
+        "stdout": "{\n  \"has_bias\": false,\n  \"implementation\": \"cute-rs\",\n  \"metric_unit\": \"us\",\n  \"metric_value\": 24.000000208616257,\n  \"mnk\": [\n    256,\n    352,\n    64\n  ],\n  \"provenance\": {\n    \"clusters\": 1,\n    \"compute_capability\": [\n      10,\n      0\n    ],\n    \"gpu\": \"NVIDIA B200\",\n    \"graph_launches\": 1,\n    \"iters\": 1,\n    \"registers_per_thread\": 50,\n    \"resident_cluster_capacity\": 74,\n    \"shared_memory_bytes\": 211072,\n    \"single_launch\": true,\n    \"threads\": 192,\n    \"timing_mode\": \"direct\",\n    \"tool\": \"cuda-events-single-kernel\",\n    \"warmup\": 0\n  },\n  \"tflops\": 0.480597329155816,\n  \"verification\": \"external-oracle-required\"\n}\n",
+        "stderr": ""
+      },
+      "rust_vs_fp32_oracle": {
+        "elements": 90112,
+        "actual_all_finite": true,
+        "expected_all_finite": true,
+        "max_absolute_error": 0.0078125,
+        "exact_mismatch_count": 60,
+        "outside_tolerance_count": 0,
+        "pass": true,
+        "first_failures": []
+      },
+      "public_vs_rust": {
+        "elements": 90112,
+        "actual_all_finite": true,
+        "expected_all_finite": true,
+        "max_absolute_error": 0.0,
+        "exact_mismatch_count": 0,
+        "outside_tolerance_count": 0,
+        "pass": true,
+        "first_failures": []
+      },
+      "rust_shipped_oracle": {
+        "pass": true
+      },
+      "pass": true
+    },
+    {
+      "name": "fractional_biased_tail_persistent",
+      "kind": "fractional",
+      "mnk": [
+        512,
+        712,
+        392
+      ],
+      "has_bias": true,
+      "seed": 1536,
+      "clusters": 1,
+      "output_tiles": 6,
+      "inputs_all_finite": true,
+      "input_sha256": {
+        "a": "3af88fc2040d29e46ff71b97a3d6705b9a8d48fd01c7c7c92abec6513724e4b5",
+        "b": "82c3cb0bd329a660f73d8bc82c8dc4579c380db3a59e5a2098a5926fa98b17ef",
+        "bias": "fa51140636a0c7f74a3e90fda2dc567131e8ec1e68922569619232d82e124c67"
+      },
+      "public_vs_fp32_oracle": {
+        "elements": 364544,
+        "actual_all_finite": true,
+        "expected_all_finite": true,
+        "max_absolute_error": 0.015625,
+        "exact_mismatch_count": 889,
+        "outside_tolerance_count": 0,
+        "pass": true,
+        "first_failures": []
+      },
+      "public_shipped_oracle": {
+        "pass": true
+      },
+      "rust_command": [
+        "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/target/release/fp16_gemm_256x352_cute",
+        "--rust-only",
+        "--mnk",
+        "512,712,392",
+        "--input-dir",
+        "/tmp/pr1535-validation/fractional-cases/fractional_biased_tail_persistent",
+        "--output",
+        "/tmp/pr1535-validation/fractional-cases/fractional_biased_tail_persistent/rust.f16",
+        "--skip-cpu-check",
+        "--timing-mode",
+        "direct",
+        "--warmup",
+        "0",
+        "--iters",
+        "1",
+        "--clusters",
+        "1",
+        "--has-bias"
+      ],
+      "rust_process": {
+        "returncode": 0,
+        "stdout": "{\n  \"has_bias\": true,\n  \"implementation\": \"cute-rs\",\n  \"metric_unit\": \"us\",\n  \"metric_value\": 57.760000228881836,\n  \"mnk\": [\n    512,\n    712,\n    392\n  ],\n  \"provenance\": {\n    \"clusters\": 1,\n    \"compute_capability\": [\n      10,\n      0\n    ],\n    \"gpu\": \"NVIDIA B200\",\n    \"graph_launches\": 1,\n    \"iters\": 1,\n    \"registers_per_thread\": 50,\n    \"resident_cluster_capacity\": 74,\n    \"shared_memory_bytes\": 211072,\n    \"single_launch\": true,\n    \"threads\": 192,\n    \"timing_mode\": \"direct\",\n    \"tool\": \"cuda-events-single-kernel\",\n    \"warmup\": 0\n  },\n  \"tflops\": 4.94810413551712,\n  \"verification\": \"external-oracle-required\"\n}\n",
+        "stderr": ""
+      },
+      "rust_vs_fp32_oracle": {
+        "elements": 364544,
+        "actual_all_finite": true,
+        "expected_all_finite": true,
+        "max_absolute_error": 0.015625,
+        "exact_mismatch_count": 889,
+        "outside_tolerance_count": 0,
+        "pass": true,
+        "first_failures": []
+      },
+      "public_vs_rust": {
+        "elements": 364544,
+        "actual_all_finite": true,
+        "expected_all_finite": true,
+        "max_absolute_error": 0.0,
+        "exact_mismatch_count": 0,
+        "outside_tolerance_count": 0,
+        "pass": true,
+        "first_failures": []
+      },
+      "rust_shipped_oracle": {
+        "pass": true
+      },
+      "pass": true
+    },
+    {
+      "name": "cancellation_biased_tail_persistent",
+      "kind": "cancellation",
+      "mnk": [
+        512,
+        712,
+        392
+      ],
+      "has_bias": true,
+      "seed": 1537,
+      "clusters": 1,
+      "output_tiles": 6,
+      "inputs_all_finite": true,
+      "input_sha256": {
+        "a": "acebe3fa8a38404e935e361a8f2f80c224830f2cbce2362b2c63de8626cefcb5",
+        "b": "32ac908ef2ac9802ab7ae0ff8e0918843a5f936c9905344df63aefa6f4065861",
+        "bias": "56dddf5fc1c624e50fd38006c48e06e0347236077fc7e27f10d922f40e6eb343"
+      },
+      "public_vs_fp32_oracle": {
+        "elements": 364544,
+        "actual_all_finite": true,
+        "expected_all_finite": true,
+        "max_absolute_error": 6.103515625e-05,
+        "exact_mismatch_count": 18053,
+        "outside_tolerance_count": 0,
+        "pass": true,
+        "first_failures": []
+      },
+      "public_shipped_oracle": {
+        "pass": true
+      },
+      "rust_command": [
+        "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/target/release/fp16_gemm_256x352_cute",
+        "--rust-only",
+        "--mnk",
+        "512,712,392",
+        "--input-dir",
+        "/tmp/pr1535-validation/fractional-cases/cancellation_biased_tail_persistent",
+        "--output",
+        "/tmp/pr1535-validation/fractional-cases/cancellation_biased_tail_persistent/rust.f16",
+        "--skip-cpu-check",
+        "--timing-mode",
+        "direct",
+        "--warmup",
+        "0",
+        "--iters",
+        "1",
+        "--clusters",
+        "1",
+        "--has-bias"
+      ],
+      "rust_process": {
+        "returncode": 0,
+        "stdout": "{\n  \"has_bias\": true,\n  \"implementation\": \"cute-rs\",\n  \"metric_unit\": \"us\",\n  \"metric_value\": 58.78400057554245,\n  \"mnk\": [\n    512,\n    712,\n    392\n  ],\n  \"provenance\": {\n    \"clusters\": 1,\n    \"compute_capability\": [\n      10,\n      0\n    ],\n    \"gpu\": \"NVIDIA B200\",\n    \"graph_launches\": 1,\n    \"iters\": 1,\n    \"registers_per_thread\": 50,\n    \"resident_cluster_capacity\": 74,\n    \"shared_memory_bytes\": 211072,\n    \"single_launch\": true,\n    \"threads\": 192,\n    \"timing_mode\": \"direct\",\n    \"tool\": \"cuda-events-single-kernel\",\n    \"warmup\": 0\n  },\n  \"tflops\": 4.8619095876729155,\n  \"verification\": \"external-oracle-required\"\n}\n",
+        "stderr": ""
+      },
+      "rust_vs_fp32_oracle": {
+        "elements": 364544,
+        "actual_all_finite": true,
+        "expected_all_finite": true,
+        "max_absolute_error": 6.103515625e-05,
+        "exact_mismatch_count": 18053,
+        "outside_tolerance_count": 0,
+        "pass": true,
+        "first_failures": []
+      },
+      "public_vs_rust": {
+        "elements": 364544,
+        "actual_all_finite": true,
+        "expected_all_finite": true,
+        "max_absolute_error": 0.0,
+        "exact_mismatch_count": 0,
+        "outside_tolerance_count": 0,
+        "pass": true,
+        "first_failures": []
+      },
+      "rust_shipped_oracle": {
+        "pass": true
+      },
+      "pass": true
+    },
+    {
+      "name": "bias_before_rounding",
+      "kind": "bias_before_rounding",
+      "mnk": [
+        256,
+        352,
+        64
+      ],
+      "has_bias": true,
+      "seed": 1538,
+      "clusters": 1,
+      "output_tiles": 1,
+      "inputs_all_finite": true,
+      "input_sha256": {
+        "a": "66a2af19fdd9d8fc195fde0bc6e63d2e23b406ac9bd4979c32eb930e476052e6",
+        "b": "4a738f9d565a12b5fe51e0639e49fd3d328651783f4bc72487a9c6b35cbd0456",
+        "bias": "b52f1a391580ca061d258dac1af97a7a9c494c68059238948fc2f98f3d4e5028"
+      },
+      "rounding_probe": {
+        "fp32_dot": 2049,
+        "fp32_bias": 1,
+        "required_output": 2050,
+        "early_rounding_output": 2048,
+        "sensitive_elements": 90112
+      },
+      "public_vs_fp32_oracle": {
+        "elements": 90112,
+        "actual_all_finite": true,
+        "expected_all_finite": true,
+        "max_absolute_error": 0.0,
+        "exact_mismatch_count": 0,
+        "outside_tolerance_count": 0,
+        "pass": true,
+        "first_failures": []
+      },
+      "public_shipped_oracle": {
+        "pass": true
+      },
+      "rust_command": [
+        "/localhome/local-nihalp/cuda-rust/cuda-oxide/cute-rs-preview/examples/fp16_gemm_256x352_cute/target/release/fp16_gemm_256x352_cute",
+        "--rust-only",
+        "--mnk",
+        "256,352,64",
+        "--input-dir",
+        "/tmp/pr1535-validation/fractional-cases/bias_before_rounding",
+        "--output",
+        "/tmp/pr1535-validation/fractional-cases/bias_before_rounding/rust.f16",
+        "--skip-cpu-check",
+        "--timing-mode",
+        "direct",
+        "--warmup",
+        "0",
+        "--iters",
+        "1",
+        "--clusters",
+        "1",
+        "--has-bias"
+      ],
+      "rust_process": {
+        "returncode": 0,
+        "stdout": "{\n  \"has_bias\": true,\n  \"implementation\": \"cute-rs\",\n  \"metric_unit\": \"us\",\n  \"metric_value\": 22.207999601960182,\n  \"mnk\": [\n    256,\n    352,\n    64\n  ],\n  \"provenance\": {\n    \"clusters\": 1,\n    \"compute_capability\": [\n      10,\n      0\n    ],\n    \"gpu\": \"NVIDIA B200\",\n    \"graph_launches\": 1,\n    \"iters\": 1,\n    \"registers_per_thread\": 50,\n    \"resident_cluster_capacity\": 74,\n    \"shared_memory_bytes\": 211072,\n    \"single_launch\": true,\n    \"threads\": 192,\n    \"timing_mode\": \"direct\",\n    \"tool\": \"cuda-events-single-kernel\",\n    \"warmup\": 0\n  },\n  \"tflops\": 0.5193775309227727,\n  \"verification\": \"external-oracle-required\"\n}\n",
+        "stderr": ""
+      },
+      "rust_vs_fp32_oracle": {
+        "elements": 90112,
+        "actual_all_finite": true,
+        "expected_all_finite": true,
+        "max_absolute_error": 0.0,
+        "exact_mismatch_count": 0,
+        "outside_tolerance_count": 0,
+        "pass": true,
+        "first_failures": []
+      },
+      "public_vs_rust": {
+        "elements": 90112,
+        "actual_all_finite": true,
+        "expected_all_finite": true,
+        "max_absolute_error": 0.0,
+        "exact_mismatch_count": 0,
+        "outside_tolerance_count": 0,
+        "pass": true,
+        "first_failures": []
+      },
+      "rust_shipped_oracle": {
+        "pass": true
+      },
+      "pass": true
+    }
+  ],
+  "pass": true
+}

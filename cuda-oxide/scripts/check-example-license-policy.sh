@@ -38,8 +38,8 @@ cd "$(dirname "$0")/.."
 
 EXAMPLE_ROOTS=(
     crates/rustc-codegen-cuda/examples
-    cuteir/examples
-    cuteir/models
+    cute-rs-preview/examples
+    cute-rs-preview/models
 )
 
 # Examples whose dependencies deliberately cannot satisfy deny.toml.

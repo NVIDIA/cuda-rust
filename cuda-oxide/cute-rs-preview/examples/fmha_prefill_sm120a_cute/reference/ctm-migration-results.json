@@ -1,0 +1,258 @@
+{
+  "status": "passed",
+  "date": "2026-10-14",
+  "change": "Route SM120a attention GPU primitives through CTM-RS, preserving CuTe layouts and copies.",
+  "base_revision": "238a2ef910fc312fa5352645234a16ef333c9930",
+  "target": "sm_120a",
+  "device_backend": "cutlass-mlir",
+  "nvvm_dialect_unchanged": true,
+  "environment": {
+    "gpu": "0, NVIDIA GeForce RTX 5090, GPU-04a6d226-f1d6-0fc8-a95a-3ede21981e72, 00000000:02:00.0, 615.71.09, 12.0",
+    "cuda_toolkit": "13.4.92",
+    "cutlass": "4.7.0",
+    "nsight_systems": "2026.3.2.476",
+    "compute_sanitizer": "2026.3.0.0",
+    "rustc": "1.101.0-nightly (6f5da406b 2026-10-10)",
+    "cutlass_compiler_sha256": "57df017e3585a10443c74c8b4cd99bda854242fb2f4c9534cf56d58c2c741628"
+  },
+  "source_sha256": {
+    "cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/src/kernel.rs": "f0d56299428a846d778d9057eba11acb1f8aed64e242462dfe67d1143dba1db6",
+    "cuda-oxide/cute-rs-preview/cute-rs/src/mma.rs": "a180d77d76b2598f4f784300c9f776aa55c67db06e8ca64b337d168b44ef2674",
+    "cuda-oxide/cute-rs-preview/ctm-rs/src/lib.rs": "c48611a7c50b36b6f2b10f07d6d01ae69951692ec35d3dd8da1f71f37e3b41e9",
+    "cuda-oxide/cute-rs-preview/ctm-rs/src/memory.rs": "3ede95ab877c0d99d38ce509d32d31dc9690a8203907c5a96ebb240ebb340b00",
+    "cuda-oxide/cute-rs-preview/ctm-rs/src/async_copy.rs": "f7599dd7e5105c0ab9f4f6c4fb9d6a95c668287b15f9729a7b9f2e8b375b06de",
+    "cuda-oxide/cute-rs-preview/ctm-rs/src/float.rs": "1f4ec19f491d69d86e6dc24b226524ab3553a4d2577673f79f9ad93921c469a1",
+    "cuda-oxide/cute-rs-preview/ctm-rs/src/convert.rs": "69cb75675119cea2acc5e277eff55dab792012e9ada03b36720c1d57d1192e30",
+    "cuda-oxide/cute-rs-preview/ctm-rs/src/warp.rs": "40e066cba7cc253f065f5857c3de6b74009ed04439660f13e0cc6dcfb1ece3d1",
+    "cuda-oxide/cute-rs-preview/ctm-rs/src/mma.rs": "b37b6fbdc37a43dddcfd3a1180370f88c7e6820d8f4776d34d06460a27b0f95a"
+  },
+  "build_command": "CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir cargo oxide build fmha_prefill_sm120a_cute --arch sm_120a",
+  "build_working_directory": "cuda-oxide",
+  "cubins": {
+    "archived": {
+      "record": "epilogue-results.json",
+      "sha256": "3ad0811fc76a3671a002ad351d6b2ec484ad0429dc48b79007ed9141e5113f81"
+    },
+    "before_sha256": "4f7c2f591edb7216d451b7775ba5fb37f03373331cb9656d5b1532e5db08d20c",
+    "after_sha256": "3dc4ba4a1b4ee5d235ca99c8efcbad2e4c01dcceec6358d17268d1cf938197ac"
+  },
+  "codegen": {
+    "all_kernel_instruction_bytes_equal_to_before_and_archive": true,
+    "all_kernel_resources_equal": true,
+    "comparison": "Complete kernel instruction encodings, including padding, checked against actual ELF code sections; symbol hashes and non-code metadata may differ.",
+    "kernels": [
+      {
+        "symbol": "fmha_prefill_TID_33beb4c1a569d292f6a1d474c4c30ff6",
+        "instructions": 888,
+        "instruction_sha256": "6629648ac76f9875866f9d3961b366263802c76380b1b75f274582c01227723e",
+        "resources": "REG:120 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:972 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      },
+      {
+        "symbol": "fmha_prefill_TID_3982e4cfaa04d93295cffa97b4941569",
+        "instructions": 1136,
+        "instruction_sha256": "5ae1603c6e09b55b29973d6becbc78593266f7ce9ec4a2028c0d197f80d91c2b",
+        "resources": "REG:128 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:972 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      },
+      {
+        "symbol": "fmha_prefill_TID_ab065f1ad81b2a331a0ce50d6ab568f2",
+        "instructions": 1056,
+        "instruction_sha256": "8e8cb15828544e9b735c283c02bb9455a0c105344d5c173694e9a2c4da9f0872",
+        "resources": "REG:136 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:972 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      },
+      {
+        "symbol": "fmha_prefill_TID_6c09702c4d47a1647a97f344eaaf5855",
+        "instructions": 984,
+        "instruction_sha256": "5c8bf499ce0e19c73c9d69b41c827407b340b82a0af921ec32249e0cf15760a3",
+        "resources": "REG:125 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:972 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    ]
+  },
+  "correctness": {
+    "oracle": "Every output checked against independent CPU FP64 stable softmax; poisoned output buffers and repeat-launch checks.",
+    "suites": [
+      {
+        "suite": "prefill-validation-runtime",
+        "case_count": 15,
+        "all_outputs_bitwise_identical": true
+      },
+      {
+        "suite": "prefill-validation-static",
+        "case_count": 4,
+        "all_outputs_bitwise_identical": true
+      }
+    ],
+    "decode_runtime_static_cross_checks": 0,
+    "cutedsl_benchmark_input_hash_and_output_parity": "passed in every benchmark case"
+  },
+  "sanitizers": {
+    "runs": 16,
+    "all_passed": true,
+    "tools": [
+      "memcheck",
+      "racecheck",
+      "synccheck",
+      "initcheck (global and shared)"
+    ],
+    "cases": [
+      "runtime causal/noncausal: Sq=Sk=128,H=3",
+      "static causal/noncausal: Sq=Sk=1024,H=8"
+    ]
+  },
+  "timing": {
+    "protocol": "Nsight Systems, 100 warmups, 31 samples per implementation per round, 3 alternating rounds; median of round medians",
+    "shape": {
+      "batch": 1,
+      "seq_q": 1024,
+      "seq_k": 1024,
+      "heads": 8,
+      "head_dim": 64
+    },
+    "cases": [
+      {
+        "case": "prefill-runtime-causal",
+        "before_report": "/tmp/ctm-sm120a-validation/before/benchmark-prefill-runtime-causal/run-iih15ir_/report.json",
+        "after_report": "/tmp/ctm-sm120a-validation/after/benchmark-prefill-runtime-causal/run-dxva2mq0/report.json",
+        "round_medians_us": {
+          "before_rust": [
+            16.064,
+            16.064,
+            16.063
+          ],
+          "after_rust": [
+            16.064,
+            16.063,
+            16.064
+          ],
+          "before_reference": [
+            15.871,
+            15.84,
+            15.84
+          ],
+          "after_reference": [
+            15.936,
+            15.935,
+            15.904
+          ]
+        },
+        "rust_before_active_us": 16.064,
+        "rust_after_active_us": 16.064,
+        "rust_active_delta_percent": 0.0,
+        "reference_before_active_us": 15.84,
+        "reference_after_active_us": 15.935
+      },
+      {
+        "case": "prefill-runtime-noncausal",
+        "before_report": "/tmp/ctm-sm120a-validation/before/benchmark-prefill-runtime-noncausal/run-vaw1acvr/report.json",
+        "after_report": "/tmp/ctm-sm120a-validation/after/benchmark-prefill-runtime-noncausal/run-bc_fxe_b/report.json",
+        "round_medians_us": {
+          "before_rust": [
+            16.32,
+            16.32,
+            16.32
+          ],
+          "after_rust": [
+            16.32,
+            16.32,
+            16.32
+          ],
+          "before_reference": [
+            15.872,
+            15.872,
+            15.872
+          ],
+          "after_reference": [
+            15.904,
+            15.936,
+            15.936
+          ]
+        },
+        "rust_before_active_us": 16.32,
+        "rust_after_active_us": 16.32,
+        "rust_active_delta_percent": 0.0,
+        "reference_before_active_us": 15.872,
+        "reference_after_active_us": 15.936
+      },
+      {
+        "case": "prefill-static-causal",
+        "before_report": "/tmp/ctm-sm120a-validation/before/benchmark-prefill-static-causal/run-ussrwr19/report.json",
+        "after_report": "/tmp/ctm-sm120a-validation/after/benchmark-prefill-static-causal/run-aib0670m/report.json",
+        "round_medians_us": {
+          "before_rust": [
+            15.68,
+            15.68,
+            15.68
+          ],
+          "after_rust": [
+            15.712,
+            15.744,
+            15.744
+          ],
+          "before_reference": [
+            15.616,
+            15.648,
+            15.616
+          ],
+          "after_reference": [
+            15.711,
+            15.712,
+            15.712
+          ]
+        },
+        "rust_before_active_us": 15.68,
+        "rust_after_active_us": 15.744,
+        "rust_active_delta_percent": 0.40816326530612734,
+        "reference_before_active_us": 15.616,
+        "reference_after_active_us": 15.712
+      },
+      {
+        "case": "prefill-static-noncausal",
+        "before_report": "/tmp/ctm-sm120a-validation/before/benchmark-prefill-static-noncausal/run-89klqn7u/report.json",
+        "after_report": "/tmp/ctm-sm120a-validation/after/benchmark-prefill-static-noncausal/run-xppeul6e/report.json",
+        "round_medians_us": {
+          "before_rust": [
+            15.776,
+            15.776,
+            15.807
+          ],
+          "after_rust": [
+            15.84,
+            15.84,
+            15.84
+          ],
+          "before_reference": [
+            15.648,
+            15.648,
+            15.648
+          ],
+          "after_reference": [
+            15.712,
+            15.712,
+            15.712
+          ]
+        },
+        "rust_before_active_us": 15.776,
+        "rust_after_active_us": 15.84,
+        "rust_active_delta_percent": 0.40567951318457585,
+        "reference_before_active_us": 15.648,
+        "reference_after_active_us": 15.712
+      }
+    ],
+    "interpretation": "Kernel-active before/after differences are observed run variation, with identical generated code. Decode active sum and sequence span are separate metrics.",
+    "archived_comparison": "Archived timings used physical GPU 1; this matched before/after pair used physical GPU 0. Compare the paired measurements to assess the migration, not absolute timing across boards."
+  },
+  "host_checks": {
+    "ctm_rs_tests_including_doctests": 20,
+    "cute_rs_tests_including_doctests": 63,
+    "example_tests": 14,
+    "python_tests_run": 29,
+    "python_result": "OK (skipped=1)",
+    "clippy_warnings_denied": "passed",
+    "rustdoc_warnings_denied": "passed",
+    "primitives_api_compile": "passed; nine exact instruction identities, selectors, operands and result adaptation checked"
+  },
+  "raw_evidence": "/tmp/ctm-sm120a-validation",
+  "instruction_comparison": "/tmp/ctm-sm120a-validation/after/fmha_prefill_sm120a_cute.comparison.json",
+  "numerical_output_hashes": "/tmp/ctm-sm120a-validation/output-correctness-comparison.json",
+  "sanitizer_commands_logs": "/tmp/ctm-sm120a-validation/after/correctness-sanitizers-summary.json",
+  "primitive_compile_manifest": "/tmp/ctm-sm120a-validation/primitives/manifest.json"
+}

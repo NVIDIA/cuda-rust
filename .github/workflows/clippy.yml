@@ -68,8 +68,8 @@ jobs:
           set -e
           example_roots=(
             cuda-oxide/crates/rustc-codegen-cuda/examples
-            cuda-oxide/cuteir/examples
-            cuda-oxide/cuteir/models
+            cuda-oxide/cute-rs-preview/examples
+            cuda-oxide/cute-rs-preview/models
           )
           for example_root in "${example_roots[@]}"; do
             for ex in "$example_root"/*/; do

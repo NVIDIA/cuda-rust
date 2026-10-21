@@ -51,8 +51,8 @@ jobs:
           shopt -s globstar nullglob
           manifests=(
             cuda-oxide/crates/rustc-codegen-cuda/examples/**/Cargo.toml
-            cuda-oxide/cuteir/examples/**/Cargo.toml
-            cuda-oxide/cuteir/models/**/Cargo.toml
+            cuda-oxide/cute-rs-preview/examples/**/Cargo.toml
+            cuda-oxide/cute-rs-preview/models/**/Cargo.toml
           )
           ((${#manifests[@]} > 0))
           for manifest in "${manifests[@]}"; do

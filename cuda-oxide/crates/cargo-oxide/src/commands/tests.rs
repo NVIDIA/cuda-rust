@@ -547,9 +547,9 @@ fn workspace_clean_covers_example_and_model_roots_in_flat_and_nested_layouts() {
         let codegen_crate = component.join("crates/rustc-codegen-cuda");
         let examples_dir = codegen_crate.join("examples");
         let example_dir = examples_dir.join("demo");
-        let cute_root = component.join("cuteir/examples");
+        let cute_root = component.join("cute-rs-preview/examples");
         let cute_dir = cute_root.join("tiled");
-        let models_root = component.join("cuteir/models");
+        let models_root = component.join("cute-rs-preview/models");
         let model_dir = models_root.join("decoder");
         for dir in [
             &root,
@@ -4367,8 +4367,8 @@ fn workspace_example_roots_follow_the_selected_backend_in_each_layout() {
         };
         let codegen = component.join("crates/rustc-codegen-cuda");
         let standard = codegen.join("examples");
-        let cute = component.join("cuteir/examples");
-        let models = component.join("cuteir/models");
+        let cute = component.join("cute-rs-preview/examples");
+        let models = component.join("cute-rs-preview/models");
         std::fs::create_dir_all(&standard).unwrap();
         std::fs::create_dir_all(&cute).unwrap();
         write_list_example(&standard, "native", None, None);
@@ -4376,7 +4376,7 @@ fn workspace_example_roots_follow_the_selected_backend_in_each_layout() {
         write_list_example(&models, "qwen_decoder_cute", None, None);
         if nested {
             // A leftover root tree must never shadow the selected component.
-            for path in ["cuteir/examples", "cuteir/models"] {
+            for path in ["cute-rs-preview/examples", "cute-rs-preview/models"] {
                 write_list_example(&root.join(path), "stale", None, None);
             }
         }
@@ -4413,7 +4413,7 @@ fn workspace_example_roots_follow_the_selected_backend_in_each_layout() {
 #[test]
 fn standalone_example_roots_do_not_discover_neighboring_cute_trees() {
     let root = unique_temp_dir("cargo_oxide_standalone_cute_root");
-    for path in ["cuteir/examples", "cuteir/models"] {
+    for path in ["cute-rs-preview/examples", "cute-rs-preview/models"] {
         std::fs::create_dir_all(root.join(path)).unwrap();
     }
     let mut ctx = test_context(OxideConfig::default());

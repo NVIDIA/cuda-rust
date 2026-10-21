@@ -150,8 +150,8 @@ VENDORED_WORKSPACE_ROOTS=(
 #                      `-- example or model root with a tracked Cargo.lock
 EXAMPLE_ROOTS=(
     cuda-oxide/crates/rustc-codegen-cuda/examples
-    cuda-oxide/cuteir/examples
-    cuda-oxide/cuteir/models
+    cuda-oxide/cute-rs-preview/examples
+    cuda-oxide/cute-rs-preview/models
 )
 EXAMPLE_ROOT_PATTERNS=()
 EXAMPLE_LOCK_GLOBS=()

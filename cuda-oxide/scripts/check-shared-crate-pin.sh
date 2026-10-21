@@ -64,12 +64,12 @@ done < <(git -C "${GIT_ROOT}" ls-files \
     'cuda-oxide/crates/rustc-codegen-cuda/examples/*/Cargo.toml' \
     'cuda-oxide/crates/rustc-codegen-cuda/examples/*/*/Cargo.toml' \
     'cuda-oxide/crates/rustc-codegen-cuda/examples/*/*/*/Cargo.toml' \
-    'cuda-oxide/cuteir/examples/*/Cargo.toml' \
-    'cuda-oxide/cuteir/examples/*/*/Cargo.toml' \
-    'cuda-oxide/cuteir/examples/*/*/*/Cargo.toml' \
-    'cuda-oxide/cuteir/models/*/Cargo.toml' \
-    'cuda-oxide/cuteir/models/*/*/Cargo.toml' \
-    'cuda-oxide/cuteir/models/*/*/*/Cargo.toml')
+    'cuda-oxide/cute-rs-preview/examples/*/Cargo.toml' \
+    'cuda-oxide/cute-rs-preview/examples/*/*/Cargo.toml' \
+    'cuda-oxide/cute-rs-preview/examples/*/*/*/Cargo.toml' \
+    'cuda-oxide/cute-rs-preview/models/*/Cargo.toml' \
+    'cuda-oxide/cute-rs-preview/models/*/*/Cargo.toml' \
+    'cuda-oxide/cute-rs-preview/models/*/*/*/Cargo.toml')
 
 # 3. The scaffold names every host crate from GIT_REPO.
 scaffold_lines="$(grep -E '^(cuda-bindings|cuda-core|cuda-async)[[:space:]]*=' "${SCAFFOLD}" || true)"

@@ -1,0 +1,5351 @@
+{
+  "created_utc": "2026-10-12T07:12:12.096680+00:00",
+  "scope": "Final noncausal residual analysis after retained i32 matrix-address narrowing and causal-only maximum guard; matched unchanged CUTLASS4.7 reference. Profiles are diagnostic, final timing comes from separate three-round Nsight Systems runs.",
+  "method": {
+    "instruction_count": "Dynamic warp Instructions Executed summed across PCs; verified against raw smsp__inst_executed.sum.",
+    "samples": "Stall counts normalized by all samples in each individual profile and by executions. No conversion of sample differences into time.",
+    "hmma": "128 static HMMA instructions grouped into first/steady QK/PV sets of32.",
+    "memory": "SourceCounters memory metrics grouped by opcode, retaining reported ideal and excessive values. These do not establish physical latency per instruction."
+  },
+  "conclusions": [
+    "The final static noncausal kernel executes slightly fewer total instructions than the reference (-0.19%); its measured1.65% timing gap cannot be attributed to instruction-count excess alone.",
+    "Runtime noncausal has3.53% more dynamic instructions. The largest positive opcode deltas are IADD.64, LOP3.LUT, IMAD.WIDE.U32 and64-bit predicates. There are offsetting reductions, so positive deltas must not be summed as the net excess.",
+    "HMMA short-scoreboard observations remain low:6 samples static and0 runtime, versus208/165 reference. Final causal instruction encodings equal the previously profiled narrowed causal kernels, which had0 observed HMMA short-scoreboard samples; none of these observations proves zero actual stalls.",
+    "The clearest remaining memory-pipeline difference is the emitted copy form: Rust LDGSTS.E.BYPASS.128.ZFILL versus reference LDGSTS.E.BYPASS.LTC128B.128. Both execute67584 copies with identical global theoretical sectors1081344, but reported shared copy wavefronts are540672 versus270336. Both equal their own reported ideal; excessive shared wavefronts are0. This is a copy-form/scheduling candidate, not evidence of bank conflicts or a measured2x copy latency.",
+    "MIO and barrier sample shares are higher in Rust while HMMA short-scoreboard shares remain low. This supports investigating copy/load issue grouping and barrier arrival timing. Barrier, wait and async-commit instruction counts match; no unnecessary barrier removal is justified by these data.",
+    "Epilogue memory-operation counts match:8192 scalar shared stores,2048 LDS.128 and2048 STG.E.128. Rust nevertheless executes101888/120832 epilogue instructions (static/runtime) versus65536/82944, mainly extra LOP3/LEA/shift/index work. Epilogue sampled shares are only1.52%/1.86% versus1.30%/1.50%, so it is a specific cleanup candidate rather than an established dominant bottleneck."
+  ],
+  "remaining_candidates": [
+    {
+      "candidate": "Proven full-atom copy specialization and copy/load scheduling",
+      "source": "CopyTranslation plus TilePipeline staging/commit/wait ordering.",
+      "constraint": "Any specialization must prove a complete valid source atom and preserve the generic partial-atom zero-fill contract. Do not drop ZFILL or barriers from sample evidence alone.",
+      "status": "Unproven performance opportunity; requires isolated benchmark and correctness/sanitizer validation."
+    },
+    {
+      "candidate": "Runtime integer/address and loop-predicate lowering",
+      "source": "Runtime geometry, pointer indexing and staging address calculations.",
+      "constraint": "Narrow only with a complete arithmetic/range proof; current matrix-load proof does not automatically cover global copy addresses.",
+      "status": "Direct excess-instruction evidence; fraction of remaining time unknown."
+    },
+    {
+      "candidate": "Epilogue coordinate/swizzle/address reuse",
+      "source": "WarpTile::store and final shared-to-global output indexing.",
+      "constraint": "Preserve lane mapping, alignment, output guards and disjoint-store contract.",
+      "status": "Extra index instructions observed, but small sample share; no demonstrated timing gain."
+    }
+  ],
+  "caveats": [
+    "Single sampled launch per profile; stall distributions are stochastic.",
+    "Zero observed samples is not a guarantee of zero actual stalls.",
+    "A sampled consumer may be waiting on an earlier instruction; per-PC attribution is not necessarily the originating cause.",
+    "SourceCounters ideal-wavefront differences between instruction forms must not be interpreted as proportional hardware latency.",
+    "Normalized category deltas are not additive portions of the measured gap.",
+    "The analysis identifies specific residual differences; it does not explain all remaining measured time."
+  ],
+  "comparisons": {
+    "static": {
+      "instructions": {
+        "rust_final": 2948096,
+        "reference": 2953728,
+        "delta": -5632,
+        "rust_excess_pct": -0.19067429363841537
+      },
+      "opcode_differences": [
+        {
+          "opcode": "LOP3.LUT",
+          "rust": 50688,
+          "reference": 19968,
+          "delta": 30720
+        },
+        {
+          "opcode": "IADD.64",
+          "rust": 117760,
+          "reference": 92160,
+          "delta": 25600
+        },
+        {
+          "opcode": "UISETP.NE.U64.AND",
+          "rust": 15360,
+          "reference": 0,
+          "delta": 15360
+        },
+        {
+          "opcode": "LEA",
+          "rust": 11776,
+          "reference": 4096,
+          "delta": 7680
+        },
+        {
+          "opcode": "UIADD3.64",
+          "rust": 7680,
+          "reference": 0,
+          "delta": 7680
+        },
+        {
+          "opcode": "BRA.U",
+          "rust": 15360,
+          "reference": 7680,
+          "delta": 7680
+        },
+        {
+          "opcode": "ISETP.NE.U32.AND",
+          "rust": 7680,
+          "reference": 512,
+          "delta": 7168
+        },
+        {
+          "opcode": "SHF.R.U32.HI",
+          "rust": 7680,
+          "reference": 3072,
+          "delta": 4608
+        },
+        {
+          "opcode": "IMAD.SHL.U32",
+          "rust": 8704,
+          "reference": 5632,
+          "delta": 3072
+        },
+        {
+          "opcode": "SHF.R.U64",
+          "rust": 2048,
+          "reference": 0,
+          "delta": 2048
+        },
+        {
+          "opcode": "IMAD.WIDE.U32",
+          "rust": 2560,
+          "reference": 512,
+          "delta": 2048
+        },
+        {
+          "opcode": "ISETP.GT.U64.AND",
+          "rust": 2048,
+          "reference": 0,
+          "delta": 2048
+        },
+        {
+          "opcode": "LEA.HI.X",
+          "rust": 1536,
+          "reference": 0,
+          "delta": 1536
+        },
+        {
+          "opcode": "LDC.64",
+          "rust": 1024,
+          "reference": 0,
+          "delta": 1024
+        },
+        {
+          "opcode": "IMNMX.U64",
+          "rust": 512,
+          "reference": 0,
+          "delta": 512
+        },
+        {
+          "opcode": "USHF.L.U32",
+          "rust": 512,
+          "reference": 0,
+          "delta": 512
+        },
+        {
+          "opcode": "UMOV.64",
+          "rust": 512,
+          "reference": 0,
+          "delta": 512
+        },
+        {
+          "opcode": "S2UR",
+          "rust": 1536,
+          "reference": 1024,
+          "delta": 512
+        },
+        {
+          "opcode": "SHF.L.U64.HI",
+          "rust": 1024,
+          "reference": 512,
+          "delta": 512
+        },
+        {
+          "opcode": "ULOP3.LUT",
+          "rust": 512,
+          "reference": 0,
+          "delta": 512
+        },
+        {
+          "opcode": "R2P",
+          "rust": 0,
+          "reference": 512,
+          "delta": -512
+        },
+        {
+          "opcode": "UMOV",
+          "rust": 1536,
+          "reference": 2048,
+          "delta": -512
+        },
+        {
+          "opcode": "IADD3",
+          "rust": 0,
+          "reference": 512,
+          "delta": -512
+        },
+        {
+          "opcode": "LEA.HI",
+          "rust": 0,
+          "reference": 1024,
+          "delta": -1024
+        },
+        {
+          "opcode": "LDCU",
+          "rust": 0,
+          "reference": 1024,
+          "delta": -1024
+        },
+        {
+          "opcode": "LDCU.64",
+          "rust": 2048,
+          "reference": 3584,
+          "delta": -1536
+        },
+        {
+          "opcode": "IMAD",
+          "rust": 1536,
+          "reference": 3584,
+          "delta": -2048
+        },
+        {
+          "opcode": "STS.128",
+          "rust": 0,
+          "reference": 2048,
+          "delta": -2048
+        },
+        {
+          "opcode": "S2R",
+          "rust": 1024,
+          "reference": 3072,
+          "delta": -2048
+        },
+        {
+          "opcode": "SEL",
+          "rust": 0,
+          "reference": 3072,
+          "delta": -3072
+        },
+        {
+          "opcode": "ISETP.GT.U32.AND",
+          "rust": 0,
+          "reference": 4096,
+          "delta": -4096
+        },
+        {
+          "opcode": "LDS",
+          "rust": 49152,
+          "reference": 54272,
+          "delta": -5120
+        },
+        {
+          "opcode": "UIADD3",
+          "rust": 47616,
+          "reference": 55296,
+          "delta": -7680
+        },
+        {
+          "opcode": "BRA.U.ANY",
+          "rust": 0,
+          "reference": 7680,
+          "delta": -7680
+        },
+        {
+          "opcode": "BRA",
+          "rust": 0,
+          "reference": 7680,
+          "delta": -7680
+        },
+        {
+          "opcode": "UISETP.NE.U32.AND",
+          "rust": 0,
+          "reference": 15360,
+          "delta": -15360
+        },
+        {
+          "opcode": "MOV",
+          "rust": 27136,
+          "reference": 58880,
+          "delta": -31744
+        },
+        {
+          "opcode": "IADD",
+          "rust": 27136,
+          "reference": 60416,
+          "delta": -33280
+        }
+      ],
+      "epilogue_opcode_differences": [
+        {
+          "opcode": "LOP3.LUT",
+          "rust": 14336,
+          "reference": 2560,
+          "delta": 11776
+        },
+        {
+          "opcode": "LEA",
+          "rust": 11264,
+          "reference": 1024,
+          "delta": 10240
+        },
+        {
+          "opcode": "SHF.R.U32.HI",
+          "rust": 6656,
+          "reference": 512,
+          "delta": 6144
+        },
+        {
+          "opcode": "IADD",
+          "rust": 9728,
+          "reference": 4608,
+          "delta": 5120
+        },
+        {
+          "opcode": "ISETP.GT.U64.AND",
+          "rust": 2048,
+          "reference": 0,
+          "delta": 2048
+        },
+        {
+          "opcode": "IADD.64",
+          "rust": 2048,
+          "reference": 512,
+          "delta": 1536
+        },
+        {
+          "opcode": "IMAD.SHL.U32",
+          "rust": 3072,
+          "reference": 2048,
+          "delta": 1024
+        },
+        {
+          "opcode": "LEA.HI.X",
+          "rust": 1024,
+          "reference": 0,
+          "delta": 1024
+        },
+        {
+          "opcode": "S2UR",
+          "rust": 1024,
+          "reference": 512,
+          "delta": 512
+        },
+        {
+          "opcode": "UMOV",
+          "rust": 1024,
+          "reference": 512,
+          "delta": 512
+        },
+        {
+          "opcode": "USHF.L.U32",
+          "rust": 512,
+          "reference": 0,
+          "delta": 512
+        },
+        {
+          "opcode": "IMAD.WIDE.U32",
+          "rust": 512,
+          "reference": 0,
+          "delta": 512
+        },
+        {
+          "opcode": "ULOP3.LUT",
+          "rust": 512,
+          "reference": 0,
+          "delta": 512
+        },
+        {
+          "opcode": "R2P",
+          "rust": 0,
+          "reference": 512,
+          "delta": -512
+        },
+        {
+          "opcode": "LEA.HI",
+          "rust": 0,
+          "reference": 512,
+          "delta": -512
+        },
+        {
+          "opcode": "S2R",
+          "rust": 0,
+          "reference": 1024,
+          "delta": -1024
+        },
+        {
+          "opcode": "SEL",
+          "rust": 0,
+          "reference": 1024,
+          "delta": -1024
+        },
+        {
+          "opcode": "ISETP.GT.U32.AND",
+          "rust": 0,
+          "reference": 2048,
+          "delta": -2048
+        }
+      ]
+    },
+    "runtime": {
+      "instructions": {
+        "rust_final": 3317760,
+        "reference": 3204608,
+        "delta": 113152,
+        "rust_excess_pct": 3.5309154817063426
+      },
+      "opcode_differences": [
+        {
+          "opcode": "IADD.64",
+          "rust": 161280,
+          "reference": 32256,
+          "delta": 129024
+        },
+        {
+          "opcode": "LOP3.LUT",
+          "rust": 64512,
+          "reference": 13312,
+          "delta": 51200
+        },
+        {
+          "opcode": "IMAD.WIDE.U32",
+          "rust": 59392,
+          "reference": 28672,
+          "delta": 30720
+        },
+        {
+          "opcode": "ISETP.NE.U64.AND",
+          "rust": 16384,
+          "reference": 0,
+          "delta": 16384
+        },
+        {
+          "opcode": "IMAD.SHL.U32",
+          "rust": 18432,
+          "reference": 7680,
+          "delta": 10752
+        },
+        {
+          "opcode": "SHF.L.U64.HI",
+          "rust": 11264,
+          "reference": 4096,
+          "delta": 7168
+        },
+        {
+          "opcode": "ISETP.GE.U64.AND",
+          "rust": 4096,
+          "reference": 0,
+          "delta": 4096
+        },
+        {
+          "opcode": "SHF.R.U32.HI",
+          "rust": 7680,
+          "reference": 3584,
+          "delta": 4096
+        },
+        {
+          "opcode": "LDCU.64",
+          "rust": 6144,
+          "reference": 3584,
+          "delta": 2560
+        },
+        {
+          "opcode": "SHF.R.U64",
+          "rust": 2560,
+          "reference": 0,
+          "delta": 2560
+        },
+        {
+          "opcode": "ISETP.NE.U32.AND",
+          "rust": 10240,
+          "reference": 8192,
+          "delta": 2048
+        },
+        {
+          "opcode": "SEL.64",
+          "rust": 2048,
+          "reference": 0,
+          "delta": 2048
+        },
+        {
+          "opcode": "ISETP.LE.U64.AND",
+          "rust": 1536,
+          "reference": 0,
+          "delta": 1536
+        },
+        {
+          "opcode": "LDC",
+          "rust": 8192,
+          "reference": 7168,
+          "delta": 1024
+        },
+        {
+          "opcode": "ISETP.GE.U32.AND",
+          "rust": 1024,
+          "reference": 0,
+          "delta": 1024
+        },
+        {
+          "opcode": "UMOV",
+          "rust": 2560,
+          "reference": 1536,
+          "delta": 1024
+        },
+        {
+          "opcode": "IMAD.HI.U32",
+          "rust": 1024,
+          "reference": 0,
+          "delta": 1024
+        },
+        {
+          "opcode": "USHF.R.U32.HI",
+          "rust": 1024,
+          "reference": 0,
+          "delta": 1024
+        },
+        {
+          "opcode": "BSYNC.RECONVERGENT",
+          "rust": 1536,
+          "reference": 1024,
+          "delta": 512
+        },
+        {
+          "opcode": "UI2F.U32.RP",
+          "rust": 512,
+          "reference": 0,
+          "delta": 512
+        },
+        {
+          "opcode": "IMNMX.U64",
+          "rust": 512,
+          "reference": 0,
+          "delta": 512
+        },
+        {
+          "opcode": "MUFU.RCP",
+          "rust": 1536,
+          "reference": 1024,
+          "delta": 512
+        },
+        {
+          "opcode": "F2I.FTZ.U32.TRUNC.NTZ",
+          "rust": 512,
+          "reference": 0,
+          "delta": 512
+        },
+        {
+          "opcode": "NOP",
+          "rust": 1536,
+          "reference": 1024,
+          "delta": 512
+        },
+        {
+          "opcode": "ULEA.HI",
+          "rust": 512,
+          "reference": 0,
+          "delta": 512
+        },
+        {
+          "opcode": "ISETP.LT.U64.AND",
+          "rust": 512,
+          "reference": 0,
+          "delta": 512
+        },
+        {
+          "opcode": "USHF.R.U64",
+          "rust": 512,
+          "reference": 0,
+          "delta": 512
+        },
+        {
+          "opcode": "BSSY.RECONVERGENT",
+          "rust": 1536,
+          "reference": 1024,
+          "delta": 512
+        },
+        {
+          "opcode": "ULOP3.LUT",
+          "rust": 512,
+          "reference": 0,
+          "delta": 512
+        },
+        {
+          "opcode": "USHF.L.U64.HI",
+          "rust": 0,
+          "reference": 512,
+          "delta": -512
+        },
+        {
+          "opcode": "USHF.L.U32",
+          "rust": 0,
+          "reference": 512,
+          "delta": -512
+        },
+        {
+          "opcode": "LEA.HI.SX32",
+          "rust": 0,
+          "reference": 512,
+          "delta": -512
+        },
+        {
+          "opcode": "EXIT",
+          "rust": 1024,
+          "reference": 1536,
+          "delta": -512
+        },
+        {
+          "opcode": "R2P",
+          "rust": 0,
+          "reference": 512,
+          "delta": -512
+        },
+        {
+          "opcode": "ISETP.GE.OR",
+          "rust": 0,
+          "reference": 512,
+          "delta": -512
+        },
+        {
+          "opcode": "S2UR",
+          "rust": 1024,
+          "reference": 2048,
+          "delta": -1024
+        },
+        {
+          "opcode": "SEL",
+          "rust": 2048,
+          "reference": 3072,
+          "delta": -1024
+        },
+        {
+          "opcode": "LEA.HI",
+          "rust": 0,
+          "reference": 1536,
+          "delta": -1536
+        },
+        {
+          "opcode": "LDCU",
+          "rust": 512,
+          "reference": 4096,
+          "delta": -3584
+        },
+        {
+          "opcode": "UIADD3",
+          "rust": 41472,
+          "reference": 47616,
+          "delta": -6144
+        },
+        {
+          "opcode": "LDC.64",
+          "rust": 0,
+          "reference": 6144,
+          "delta": -6144
+        },
+        {
+          "opcode": "STS.128",
+          "rust": 0,
+          "reference": 6144,
+          "delta": -6144
+        },
+        {
+          "opcode": "IADD",
+          "rust": 59392,
+          "reference": 65536,
+          "delta": -6144
+        },
+        {
+          "opcode": "BRA",
+          "rust": 17920,
+          "reference": 25088,
+          "delta": -7168
+        },
+        {
+          "opcode": "ISETP.GT.AND",
+          "rust": 0,
+          "reference": 8192,
+          "delta": -8192
+        },
+        {
+          "opcode": "IMAD",
+          "rust": 34304,
+          "reference": 44544,
+          "delta": -10240
+        },
+        {
+          "opcode": "LEA",
+          "rust": 75776,
+          "reference": 86528,
+          "delta": -10752
+        },
+        {
+          "opcode": "SHF.R.S32.HI",
+          "rust": 0,
+          "reference": 12800,
+          "delta": -12800
+        },
+        {
+          "opcode": "LDS",
+          "rust": 49152,
+          "reference": 64512,
+          "delta": -15360
+        },
+        {
+          "opcode": "MOV",
+          "rust": 47104,
+          "reference": 62464,
+          "delta": -15360
+        },
+        {
+          "opcode": "LEA.HI.X",
+          "rust": 65536,
+          "reference": 83456,
+          "delta": -17920
+        },
+        {
+          "opcode": "ISETP.GE.AND",
+          "rust": 0,
+          "reference": 29184,
+          "delta": -29184
+        }
+      ],
+      "epilogue_opcode_differences": [
+        {
+          "opcode": "LOP3.LUT",
+          "rust": 14336,
+          "reference": 1024,
+          "delta": 13312
+        },
+        {
+          "opcode": "LEA",
+          "rust": 12288,
+          "reference": 1536,
+          "delta": 10752
+        },
+        {
+          "opcode": "SHF.R.U32.HI",
+          "rust": 7168,
+          "reference": 1024,
+          "delta": 6144
+        },
+        {
+          "opcode": "IADD",
+          "rust": 11264,
+          "reference": 7168,
+          "delta": 4096
+        },
+        {
+          "opcode": "ISETP.GE.U64.AND",
+          "rust": 2048,
+          "reference": 0,
+          "delta": 2048
+        },
+        {
+          "opcode": "IMAD.WIDE.U32",
+          "rust": 4608,
+          "reference": 2560,
+          "delta": 2048
+        },
+        {
+          "opcode": "IMAD",
+          "rust": 4608,
+          "reference": 3072,
+          "delta": 1536
+        },
+        {
+          "opcode": "LDCU.64",
+          "rust": 2048,
+          "reference": 512,
+          "delta": 1536
+        },
+        {
+          "opcode": "LEA.HI.X",
+          "rust": 2048,
+          "reference": 1024,
+          "delta": 1024
+        },
+        {
+          "opcode": "IADD.64",
+          "rust": 1536,
+          "reference": 512,
+          "delta": 1024
+        },
+        {
+          "opcode": "IMAD.SHL.U32",
+          "rust": 3072,
+          "reference": 2048,
+          "delta": 1024
+        },
+        {
+          "opcode": "BSYNC.RECONVERGENT",
+          "rust": 1536,
+          "reference": 1024,
+          "delta": 512
+        },
+        {
+          "opcode": "BRA",
+          "rust": 1536,
+          "reference": 1024,
+          "delta": 512
+        },
+        {
+          "opcode": "UMOV",
+          "rust": 1024,
+          "reference": 512,
+          "delta": 512
+        },
+        {
+          "opcode": "NOP",
+          "rust": 1536,
+          "reference": 1024,
+          "delta": 512
+        },
+        {
+          "opcode": "BSSY.RECONVERGENT",
+          "rust": 1536,
+          "reference": 1024,
+          "delta": 512
+        },
+        {
+          "opcode": "EXIT",
+          "rust": 1024,
+          "reference": 1536,
+          "delta": -512
+        },
+        {
+          "opcode": "R2P",
+          "rust": 0,
+          "reference": 512,
+          "delta": -512
+        },
+        {
+          "opcode": "LEA.HI",
+          "rust": 0,
+          "reference": 512,
+          "delta": -512
+        },
+        {
+          "opcode": "ISETP.GE.OR",
+          "rust": 0,
+          "reference": 512,
+          "delta": -512
+        },
+        {
+          "opcode": "LDCU",
+          "rust": 512,
+          "reference": 1024,
+          "delta": -512
+        },
+        {
+          "opcode": "SHF.L.U64.HI",
+          "rust": 0,
+          "reference": 512,
+          "delta": -512
+        },
+        {
+          "opcode": "SEL",
+          "rust": 0,
+          "reference": 1024,
+          "delta": -1024
+        },
+        {
+          "opcode": "LDC.64",
+          "rust": 0,
+          "reference": 1536,
+          "delta": -1536
+        },
+        {
+          "opcode": "MOV",
+          "rust": 2048,
+          "reference": 3584,
+          "delta": -1536
+        },
+        {
+          "opcode": "ISETP.GE.AND",
+          "rust": 0,
+          "reference": 2048,
+          "delta": -2048
+        }
+      ]
+    }
+  },
+  "profiles": {
+    "static": {
+      "rust_final": {
+        "kernel": "fmha_prefill_TID_89b6d3c167850566b451c3012e30d811",
+        "provenance": {
+          "source": {
+            "path": "/tmp/prefill-profiled-final-profile/rust-static-noncausal-source.csv",
+            "sha256": "f4948b9e20099cd52a7b789bf1dfbb5b0f3d464fc4166a79b5215a849f4bf61d",
+            "size_bytes": 319185
+          },
+          "raw": {
+            "path": "/tmp/prefill-profiled-final-profile/rust-static-noncausal-raw.csv",
+            "sha256": "1e88e52e7b284045f83018d146c5485db833cc1f03ecd3056ddf347ed3acb410",
+            "size_bytes": 47750
+          },
+          "command": {
+            "path": "/tmp/prefill-profiled-final-profile/rust-static-noncausal-command.json",
+            "sha256": "2cb0b49ba1c8e4d76150dfc08434b99ec33be35844d7ccb931e8db9ff90e8a69",
+            "size_bytes": 1182
+          },
+          "report": {
+            "path": "/tmp/prefill-profiled-final-profile/rust-static-noncausal.ncu-repz",
+            "sha256": "9e7265ce79b710231c4b6d5630e109ffce808881e7cf5b9cef0110744105e623",
+            "size_bytes": 73541
+          }
+        },
+        "totals": {
+          "instructions": 2948096,
+          "samples": 22442,
+          "share_of_all_samples_pct": 100.0,
+          "stalls": {
+            "barrier": {
+              "observed_samples": 584,
+              "share_of_all_samples_pct": 2.6022636128687284,
+              "samples_per_1000_executions": 0.19809395623480375
+            },
+            "branch_resolving": {
+              "observed_samples": 28,
+              "share_of_all_samples_pct": 0.12476606363069245,
+              "samples_per_1000_executions": 0.009497655435915249
+            },
+            "dispatch": {
+              "observed_samples": 84,
+              "share_of_all_samples_pct": 0.37429819089207733,
+              "samples_per_1000_executions": 0.028492966307745744
+            },
+            "drain": {
+              "observed_samples": 31,
+              "share_of_all_samples_pct": 0.13813385616255236,
+              "samples_per_1000_executions": 0.010515261375477597
+            },
+            "lg": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "long_sb": {
+              "observed_samples": 878,
+              "share_of_all_samples_pct": 3.912307280990999,
+              "samples_per_1000_executions": 0.2978193383119139
+            },
+            "math": {
+              "observed_samples": 10029,
+              "share_of_all_samples_pct": 44.68853043400767,
+              "samples_per_1000_executions": 3.4018566559569297
+            },
+            "membar": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "mio": {
+              "observed_samples": 944,
+              "share_of_all_samples_pct": 4.206398716691917,
+              "samples_per_1000_executions": 0.3202066689822855
+            },
+            "misc": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "no_inst": {
+              "observed_samples": 295,
+              "share_of_all_samples_pct": 1.314499598966224,
+              "samples_per_1000_executions": 0.10006458405696422
+            },
+            "not_selected": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "selected": {
+              "observed_samples": 2834,
+              "share_of_all_samples_pct": 12.628108011763658,
+              "samples_per_1000_executions": 0.9612984109065648
+            },
+            "short_sb": {
+              "observed_samples": 611,
+              "share_of_all_samples_pct": 2.7225737456554673,
+              "samples_per_1000_executions": 0.2072524096908649
+            },
+            "sleep": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "tex": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "wait": {
+              "observed_samples": 6124,
+              "share_of_all_samples_pct": 27.28812048837002,
+              "samples_per_1000_executions": 2.0772729246266066
+            }
+          }
+        },
+        "hmma": {
+          "instructions": 524288,
+          "samples": 14164,
+          "share_of_all_samples_pct": 63.11380447375457,
+          "stalls": {
+            "barrier": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "branch_resolving": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "dispatch": {
+              "observed_samples": 7,
+              "share_of_all_samples_pct": 0.031191515907673113,
+              "samples_per_1000_executions": 0.0133514404296875
+            },
+            "drain": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "lg": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "long_sb": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "math": {
+              "observed_samples": 10012,
+              "share_of_all_samples_pct": 44.61277960966046,
+              "samples_per_1000_executions": 19.09637451171875
+            },
+            "membar": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "mio": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "misc": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "no_inst": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "not_selected": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "selected": {
+              "observed_samples": 491,
+              "share_of_all_samples_pct": 2.1878620443810712,
+              "samples_per_1000_executions": 0.9365081787109375
+            },
+            "short_sb": {
+              "observed_samples": 6,
+              "share_of_all_samples_pct": 0.02673558506371981,
+              "samples_per_1000_executions": 0.011444091796875
+            },
+            "sleep": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "tex": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "wait": {
+              "observed_samples": 3648,
+              "share_of_all_samples_pct": 16.255235718741645,
+              "samples_per_1000_executions": 6.9580078125
+            }
+          }
+        },
+        "hmma_phases": {
+          "first_qk": {
+            "instructions": 16384,
+            "samples": 425,
+            "share_of_all_samples_pct": 1.8937706086801533,
+            "stalls": {
+              "barrier": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "branch_resolving": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "dispatch": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "drain": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "lg": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "long_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "math": {
+                "observed_samples": 313,
+                "share_of_all_samples_pct": 1.3947063541573834,
+                "samples_per_1000_executions": 19.10400390625
+              },
+              "membar": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "mio": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "misc": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "no_inst": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "not_selected": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "selected": {
+                "observed_samples": 14,
+                "share_of_all_samples_pct": 0.06238303181534623,
+                "samples_per_1000_executions": 0.8544921875
+              },
+              "short_sb": {
+                "observed_samples": 6,
+                "share_of_all_samples_pct": 0.02673558506371981,
+                "samples_per_1000_executions": 0.3662109375
+              },
+              "sleep": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "tex": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "wait": {
+                "observed_samples": 92,
+                "share_of_all_samples_pct": 0.4099456376437038,
+                "samples_per_1000_executions": 5.615234375
+              }
+            }
+          },
+          "first_pv": {
+            "instructions": 16384,
+            "samples": 410,
+            "share_of_all_samples_pct": 1.8269316460208538,
+            "stalls": {
+              "barrier": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "branch_resolving": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "dispatch": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "drain": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "lg": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "long_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "math": {
+                "observed_samples": 298,
+                "share_of_all_samples_pct": 1.3278673914980839,
+                "samples_per_1000_executions": 18.1884765625
+              },
+              "membar": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "mio": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "misc": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "no_inst": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "not_selected": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "selected": {
+                "observed_samples": 20,
+                "share_of_all_samples_pct": 0.08911861687906604,
+                "samples_per_1000_executions": 1.220703125
+              },
+              "short_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "sleep": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "tex": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "wait": {
+                "observed_samples": 92,
+                "share_of_all_samples_pct": 0.4099456376437038,
+                "samples_per_1000_executions": 5.615234375
+              }
+            }
+          },
+          "steady_qk": {
+            "instructions": 245760,
+            "samples": 6736,
+            "share_of_all_samples_pct": 30.015150164869443,
+            "stalls": {
+              "barrier": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "branch_resolving": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "dispatch": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "drain": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "lg": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "long_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "math": {
+                "observed_samples": 4712,
+                "share_of_all_samples_pct": 20.99634613670796,
+                "samples_per_1000_executions": 19.173177083333332
+              },
+              "membar": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "mio": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "misc": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "no_inst": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "not_selected": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "selected": {
+                "observed_samples": 216,
+                "share_of_all_samples_pct": 0.9624810622939132,
+                "samples_per_1000_executions": 0.87890625
+              },
+              "short_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "sleep": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "tex": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "wait": {
+                "observed_samples": 1808,
+                "share_of_all_samples_pct": 8.05632296586757,
+                "samples_per_1000_executions": 7.356770833333333
+              }
+            }
+          },
+          "steady_pv": {
+            "instructions": 245760,
+            "samples": 6593,
+            "share_of_all_samples_pct": 29.37795205418412,
+            "stalls": {
+              "barrier": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "branch_resolving": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "dispatch": {
+                "observed_samples": 7,
+                "share_of_all_samples_pct": 0.031191515907673113,
+                "samples_per_1000_executions": 0.028483072916666668
+              },
+              "drain": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "lg": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "long_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "math": {
+                "observed_samples": 4689,
+                "share_of_all_samples_pct": 20.893859727297034,
+                "samples_per_1000_executions": 19.07958984375
+              },
+              "membar": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "mio": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "misc": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "no_inst": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "not_selected": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "selected": {
+                "observed_samples": 241,
+                "share_of_all_samples_pct": 1.0738793333927457,
+                "samples_per_1000_executions": 0.9806315104166666
+              },
+              "short_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "sleep": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "tex": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "wait": {
+                "observed_samples": 1656,
+                "share_of_all_samples_pct": 7.379021477586668,
+                "samples_per_1000_executions": 6.73828125
+              }
+            }
+          }
+        },
+        "opcode_counts": {
+          "BAR.SYNC.DEFER_BLOCKING": 16896,
+          "BRA": 0,
+          "BRA.U": 15360,
+          "DEPBAR.LE": 16384,
+          "EXIT": 1024,
+          "F2FP.F16.F32.PACK_AB": 139264,
+          "FADD": 264192,
+          "FFMA": 292864,
+          "FMNMX": 293888,
+          "FMUL": 278528,
+          "FSETP.NE.AND": 1024,
+          "HMMA.16816.F32": 524288,
+          "IADD": 27136,
+          "IADD.64": 117760,
+          "IMAD": 1536,
+          "IMAD.SHL.U32": 8704,
+          "IMAD.WIDE.U32": 2560,
+          "IMNMX.U64": 512,
+          "ISETP.GT.U64.AND": 2048,
+          "ISETP.NE.U32.AND": 7680,
+          "LDC": 512,
+          "LDC.64": 1024,
+          "LDCU.64": 2048,
+          "LDGDEPBAR": 16384,
+          "LDGSTS.E.BYPASS.128.ZFILL": 67584,
+          "LDS": 49152,
+          "LDS.128": 2048,
+          "LDSM.16.M88.4": 163840,
+          "LDSM.16.MT88.4": 131072,
+          "LEA": 11776,
+          "LEA.HI.X": 1536,
+          "LOP3.LUT": 50688,
+          "MOV": 27136,
+          "MUFU.EX2": 277504,
+          "MUFU.RCP": 1024,
+          "NOP": 0,
+          "S2R": 1024,
+          "S2UR": 1536,
+          "SHF.L.U64.HI": 1024,
+          "SHF.R.U32.HI": 7680,
+          "SHF.R.U64": 2048,
+          "SHFL.BFLY": 34816,
+          "STG.E.128": 2048,
+          "STS": 8192,
+          "UIADD3": 47616,
+          "UIADD3.64": 7680,
+          "UISETP.NE.U64.AND": 15360,
+          "ULEA": 1024,
+          "ULOP3.LUT": 512,
+          "UMOV": 1536,
+          "UMOV.64": 512,
+          "USHF.L.U32": 512
+        },
+        "memory_by_opcode": {
+          "LDGSTS.E.BYPASS.128.ZFILL": {
+            "Instructions Executed": 67584,
+            "L1 Wavefronts Shared": 540672,
+            "L1 Wavefronts Shared Ideal": 540672,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 1081344,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "LDSM.16.M88.4": {
+            "Instructions Executed": 163840,
+            "L1 Wavefronts Shared": 655360,
+            "L1 Wavefronts Shared Ideal": 655360,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 0,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "LDSM.16.MT88.4": {
+            "Instructions Executed": 131072,
+            "L1 Wavefronts Shared": 524288,
+            "L1 Wavefronts Shared Ideal": 524288,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 0,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "STS": {
+            "Instructions Executed": 8192,
+            "L1 Wavefronts Shared": 8192,
+            "L1 Wavefronts Shared Ideal": 8192,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 0,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "LDS.128": {
+            "Instructions Executed": 2048,
+            "L1 Wavefronts Shared": 8192,
+            "L1 Wavefronts Shared Ideal": 8192,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 0,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "STG.E.128": {
+            "Instructions Executed": 2048,
+            "L1 Wavefronts Shared": 0,
+            "L1 Wavefronts Shared Ideal": 0,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 32768,
+            "L2 Theoretical Sectors Global Excessive": 0
+          }
+        },
+        "epilogue": {
+          "start_pc": "0x3080",
+          "method": "Starts after the loop backedge following the last static HMMA; excludes repeated loop-tail instructions.",
+          "instructions": 101888,
+          "samples": 342,
+          "share_of_all_samples_pct": 1.5239283486320292,
+          "stalls": {
+            "barrier": {
+              "observed_samples": 1,
+              "share_of_all_samples_pct": 0.004455930843953302,
+              "samples_per_1000_executions": 0.009814698492462312
+            },
+            "branch_resolving": {
+              "observed_samples": 4,
+              "share_of_all_samples_pct": 0.017823723375813207,
+              "samples_per_1000_executions": 0.03925879396984925
+            },
+            "dispatch": {
+              "observed_samples": 3,
+              "share_of_all_samples_pct": 0.013367792531859905,
+              "samples_per_1000_executions": 0.029444095477386936
+            },
+            "drain": {
+              "observed_samples": 31,
+              "share_of_all_samples_pct": 0.13813385616255236,
+              "samples_per_1000_executions": 0.30425565326633164
+            },
+            "lg": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "long_sb": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "math": {
+              "observed_samples": 1,
+              "share_of_all_samples_pct": 0.004455930843953302,
+              "samples_per_1000_executions": 0.009814698492462312
+            },
+            "membar": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "mio": {
+              "observed_samples": 8,
+              "share_of_all_samples_pct": 0.03564744675162641,
+              "samples_per_1000_executions": 0.0785175879396985
+            },
+            "misc": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "no_inst": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "not_selected": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "selected": {
+              "observed_samples": 104,
+              "share_of_all_samples_pct": 0.4634168077711434,
+              "samples_per_1000_executions": 1.0207286432160805
+            },
+            "short_sb": {
+              "observed_samples": 101,
+              "share_of_all_samples_pct": 0.4500490152392835,
+              "samples_per_1000_executions": 0.9912845477386935
+            },
+            "sleep": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "tex": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "wait": {
+              "observed_samples": 89,
+              "share_of_all_samples_pct": 0.39657784511184385,
+              "samples_per_1000_executions": 0.8735081658291457
+            }
+          },
+          "opcode_counts": {
+            "BAR.SYNC.DEFER_BLOCKING": 512,
+            "BRA": 0,
+            "EXIT": 1024,
+            "F2FP.F16.F32.PACK_AB": 8192,
+            "FADD": 2048,
+            "FMUL": 16384,
+            "FSETP.NE.AND": 1024,
+            "IADD": 9728,
+            "IADD.64": 2048,
+            "IMAD": 512,
+            "IMAD.SHL.U32": 3072,
+            "IMAD.WIDE.U32": 512,
+            "ISETP.GT.U64.AND": 2048,
+            "LDCU.64": 512,
+            "LDS.128": 2048,
+            "LEA": 11264,
+            "LEA.HI.X": 1024,
+            "LOP3.LUT": 14336,
+            "MOV": 2048,
+            "MUFU.RCP": 1024,
+            "NOP": 0,
+            "S2UR": 1024,
+            "SHF.R.U32.HI": 6656,
+            "SHFL.BFLY": 2048,
+            "STG.E.128": 2048,
+            "STS": 8192,
+            "ULEA": 512,
+            "ULOP3.LUT": 512,
+            "UMOV": 1024,
+            "USHF.L.U32": 512
+          }
+        },
+        "top_pcs": {
+          "stall_mio": [
+            {
+              "offset": "0x1c10",
+              "instruction": "LDSM.16.M88.4 R56, [R118+UR6]",
+              "observed_samples": 132,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.5881828714018359
+            },
+            {
+              "offset": "0x2200",
+              "instruction": "LDGDEPBAR",
+              "observed_samples": 126,
+              "executions": 7168,
+              "share_of_all_samples_pct": 0.561447286338116
+            },
+            {
+              "offset": "0x1cd0",
+              "instruction": "LDGDEPBAR",
+              "observed_samples": 66,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.29409143570091795
+            },
+            {
+              "offset": "0x1c70",
+              "instruction": "LDSM.16.M88.4 R68, [R19+UR6+0x2000]",
+              "observed_samples": 58,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.2584439889492915
+            },
+            {
+              "offset": "0x1cb0",
+              "instruction": "LDSM.16.M88.4 R104, [R8+UR6+0x2000]",
+              "observed_samples": 58,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.2584439889492915
+            }
+          ],
+          "stall_barrier": [
+            {
+              "offset": "0x20d0",
+              "instruction": "BRA.U !UP0, 0x10005714010",
+              "observed_samples": 321,
+              "executions": 7680,
+              "share_of_all_samples_pct": 1.43035380090901
+            },
+            {
+              "offset": "0x1ba0",
+              "instruction": "@!PT  LDS RZ, [RZ]",
+              "observed_samples": 186,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.8288031369753142
+            },
+            {
+              "offset": "0x680",
+              "instruction": "@!PT  LDS RZ, [RZ]",
+              "observed_samples": 63,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.280723643169058
+            },
+            {
+              "offset": "0xf80",
+              "instruction": "@!PT  LDS RZ, [RZ]",
+              "observed_samples": 13,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.05792710097139293
+            },
+            {
+              "offset": "0x3b90",
+              "instruction": "@!P0  LDS.128 R12, [R12]",
+              "observed_samples": 1,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.004455930843953302
+            }
+          ],
+          "stall_long_sb": [
+            {
+              "offset": "0x670",
+              "instruction": "BAR.SYNC.DEFER_BLOCKING 0x1, 0x80",
+              "observed_samples": 551,
+              "executions": 512,
+              "share_of_all_samples_pct": 2.4552178950182695
+            },
+            {
+              "offset": "0x2210",
+              "instruction": "FMNMX R52, R78, R79, !PT",
+              "observed_samples": 236,
+              "executions": 7680,
+              "share_of_all_samples_pct": 1.0515996791729791
+            },
+            {
+              "offset": "0x6f0",
+              "instruction": "IADD R4, R76, 0x20",
+              "observed_samples": 22,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.09803047856697264
+            },
+            {
+              "offset": "0x4b0",
+              "instruction": "IMAD.WIDE.U32 R2, R121, 0x80, R146",
+              "observed_samples": 19,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.08466268603511273
+            },
+            {
+              "offset": "0x540",
+              "instruction": "LOP3.LUT R7, R136, 0x8, RZ, 0xc0, !PT",
+              "observed_samples": 14,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.06238303181534623
+            }
+          ],
+          "stall_short_sb": [
+            {
+              "offset": "0x2320",
+              "instruction": "FMNMX R53, R84, R53, !PT",
+              "observed_samples": 167,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.7441404509402014
+            },
+            {
+              "offset": "0x2360",
+              "instruction": "FMNMX R55, R53, R52, !PT",
+              "observed_samples": 121,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.5391676321183495
+            },
+            {
+              "offset": "0x2340",
+              "instruction": "FMNMX R54, R65, R54, !PT",
+              "observed_samples": 45,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.20051688797789857
+            },
+            {
+              "offset": "0x2820",
+              "instruction": "FMUL R22, R93, R22",
+              "observed_samples": 39,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.17378130291417876
+            },
+            {
+              "offset": "0x2670",
+              "instruction": "F2FP.F16.F32.PACK_AB R66, R90, R87",
+              "observed_samples": 36,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.16041351038231888
+            }
+          ]
+        },
+        "resources": {
+          "launch__registers_per_thread": "152",
+          "launch__registers_per_thread_allocated": "152.000000",
+          "derived__local_spilling_requests": "0",
+          "derived__shared_spilling_requests": "0"
+        },
+        "command": {
+          "command": [
+            "/usr/local/cuda/bin/ncu",
+            "--section",
+            "SpeedOfLight",
+            "--section",
+            "SchedulerStats",
+            "--section",
+            "WarpStateStats",
+            "--section",
+            "InstructionStats",
+            "--section",
+            "LaunchStats",
+            "--section",
+            "SourceCounters",
+            "--section",
+            "MemoryWorkloadAnalysis",
+            "--cache-control",
+            "none",
+            "--clock-control",
+            "none",
+            "--warp-sampling-interval",
+            "0",
+            "--target-processes",
+            "all",
+            "--kernel-name",
+            "regex:.*fmha_prefill.*",
+            "--launch-skip",
+            "102",
+            "--launch-count",
+            "1",
+            "--export",
+            "/tmp/prefill-profiled-final-profile/rust-static-noncausal",
+            "/tmp/prefill-profiled-final/prefill",
+            "--seq-q",
+            "1024",
+            "--seq-k",
+            "1024",
+            "--heads",
+            "8",
+            "--noncausal",
+            "--shape-mode",
+            "static",
+            "--warmup",
+            "100",
+            "--iters",
+            "31"
+          ],
+          "environment": {
+            "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+            "CUDA_VISIBLE_DEVICES": "1",
+            "CUTE_DSL_ARCH": "sm_120a",
+            "PYTHONPATH": "/tmp/fmha-cutlass47/nvidia_cutlass_dsl/dsl_packages:/tmp/fmha-cutlass47:/home/nihalp/dev/cutlass-dsl-venv/lib/python3.12/site-packages"
+          }
+        }
+      },
+      "reference": {
+        "kernel": "kernel_cutlass_kernel_flash_attention_v2FlashAttentionForwardAmpere_object_at__tensorptrf16gmemalign16o11024864524288512641_tensorptrf16gmemalign16o11024864524288512641_tensorptrf16gmemal_0",
+        "provenance": {
+          "source": {
+            "path": "/tmp/prefill-final-profile/cutlass-static-noncausal-source.csv",
+            "sha256": "6ba4c35d23b37103b1e1270c4f789851f25cf12cdd1994ed269f157ed00a1f09",
+            "size_bytes": 296827
+          },
+          "raw": {
+            "path": "/tmp/prefill-final-profile/cutlass-static-noncausal-raw.csv",
+            "sha256": "75001c0d91760b551197e8757ccf430fcc78efda8101d763f31bf7f47610164c",
+            "size_bytes": 47876
+          },
+          "command": {
+            "path": "/tmp/prefill-final-profile/cutlass-static-noncausal-command.json",
+            "sha256": "4b80e19319090edaae205723bb43f367c224f2f1c52afe4bd43e5243c2948ac0",
+            "size_bytes": 1295
+          },
+          "report": {
+            "path": "/tmp/prefill-final-profile/cutlass-static-noncausal.ncu-repz",
+            "sha256": "899f1928dbcdef1d18f51fa1b3b725ac11a1fd601508fdafa714771c04400cf8",
+            "size_bytes": 51389
+          }
+        },
+        "totals": {
+          "instructions": 2953728,
+          "samples": 21957,
+          "share_of_all_samples_pct": 100.0,
+          "stalls": {
+            "barrier": {
+              "observed_samples": 287,
+              "share_of_all_samples_pct": 1.3071002413808808,
+              "samples_per_1000_executions": 0.09716534494713122
+            },
+            "branch_resolving": {
+              "observed_samples": 67,
+              "share_of_all_samples_pct": 0.30514186819693034,
+              "samples_per_1000_executions": 0.022683198994626452
+            },
+            "dispatch": {
+              "observed_samples": 48,
+              "share_of_all_samples_pct": 0.218609099603771,
+              "samples_per_1000_executions": 0.01625065002600104
+            },
+            "drain": {
+              "observed_samples": 24,
+              "share_of_all_samples_pct": 0.1093045498018855,
+              "samples_per_1000_executions": 0.00812532501300052
+            },
+            "lg": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "long_sb": {
+              "observed_samples": 808,
+              "share_of_all_samples_pct": 3.679919843330145,
+              "samples_per_1000_executions": 0.2735526087710175
+            },
+            "math": {
+              "observed_samples": 9693,
+              "share_of_all_samples_pct": 44.145375051236506,
+              "samples_per_1000_executions": 3.281615639625585
+            },
+            "membar": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "mio": {
+              "observed_samples": 309,
+              "share_of_all_samples_pct": 1.4072960786992759,
+              "samples_per_1000_executions": 0.10461355954238169
+            },
+            "misc": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "no_inst": {
+              "observed_samples": 399,
+              "share_of_all_samples_pct": 1.8171881404563466,
+              "samples_per_1000_executions": 0.13508352834113366
+            },
+            "not_selected": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "selected": {
+              "observed_samples": 2850,
+              "share_of_all_samples_pct": 12.979915288973903,
+              "samples_per_1000_executions": 0.9648823452938118
+            },
+            "short_sb": {
+              "observed_samples": 793,
+              "share_of_all_samples_pct": 3.611604499703967,
+              "samples_per_1000_executions": 0.2684742806378922
+            },
+            "sleep": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "tex": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "wait": {
+              "observed_samples": 6679,
+              "share_of_all_samples_pct": 30.418545338616386,
+              "samples_per_1000_executions": 2.2612102400762697
+            }
+          }
+        },
+        "hmma": {
+          "instructions": 524288,
+          "samples": 13545,
+          "share_of_all_samples_pct": 61.68875529443913,
+          "stalls": {
+            "barrier": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "branch_resolving": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "dispatch": {
+              "observed_samples": 4,
+              "share_of_all_samples_pct": 0.01821742496698092,
+              "samples_per_1000_executions": 0.00762939453125
+            },
+            "drain": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "lg": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "long_sb": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "math": {
+              "observed_samples": 9685,
+              "share_of_all_samples_pct": 44.108940201302545,
+              "samples_per_1000_executions": 18.472671508789062
+            },
+            "membar": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "mio": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "misc": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "no_inst": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "not_selected": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "selected": {
+              "observed_samples": 508,
+              "share_of_all_samples_pct": 2.3136129708065765,
+              "samples_per_1000_executions": 0.96893310546875
+            },
+            "short_sb": {
+              "observed_samples": 208,
+              "share_of_all_samples_pct": 0.9473060982830077,
+              "samples_per_1000_executions": 0.396728515625
+            },
+            "sleep": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "tex": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "wait": {
+              "observed_samples": 3140,
+              "share_of_all_samples_pct": 14.30067859908002,
+              "samples_per_1000_executions": 5.98907470703125
+            }
+          }
+        },
+        "hmma_phases": {
+          "first_qk": {
+            "instructions": 16384,
+            "samples": 479,
+            "share_of_all_samples_pct": 2.181536639795965,
+            "stalls": {
+              "barrier": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "branch_resolving": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "dispatch": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "drain": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "lg": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "long_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "math": {
+                "observed_samples": 318,
+                "share_of_all_samples_pct": 1.448285284874983,
+                "samples_per_1000_executions": 19.4091796875
+              },
+              "membar": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "mio": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "misc": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "no_inst": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "not_selected": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "selected": {
+                "observed_samples": 18,
+                "share_of_all_samples_pct": 0.08197841235141413,
+                "samples_per_1000_executions": 1.0986328125
+              },
+              "short_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "sleep": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "tex": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "wait": {
+                "observed_samples": 143,
+                "share_of_all_samples_pct": 0.6512729425695678,
+                "samples_per_1000_executions": 8.72802734375
+              }
+            }
+          },
+          "first_pv": {
+            "instructions": 16384,
+            "samples": 416,
+            "share_of_all_samples_pct": 1.8946121965660154,
+            "stalls": {
+              "barrier": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "branch_resolving": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "dispatch": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "drain": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "lg": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "long_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "math": {
+                "observed_samples": 313,
+                "share_of_all_samples_pct": 1.4255135036662567,
+                "samples_per_1000_executions": 19.10400390625
+              },
+              "membar": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "mio": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "misc": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "no_inst": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "not_selected": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "selected": {
+                "observed_samples": 13,
+                "share_of_all_samples_pct": 0.05920663114268798,
+                "samples_per_1000_executions": 0.79345703125
+              },
+              "short_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "sleep": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "tex": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "wait": {
+                "observed_samples": 90,
+                "share_of_all_samples_pct": 0.40989206175707066,
+                "samples_per_1000_executions": 5.4931640625
+              }
+            }
+          },
+          "steady_qk": {
+            "instructions": 245760,
+            "samples": 6650,
+            "share_of_all_samples_pct": 30.286469007605774,
+            "stalls": {
+              "barrier": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "branch_resolving": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "dispatch": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "drain": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "lg": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "long_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "math": {
+                "observed_samples": 4563,
+                "share_of_all_samples_pct": 20.78152753108348,
+                "samples_per_1000_executions": 18.56689453125
+              },
+              "membar": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "mio": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "misc": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "no_inst": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "not_selected": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "selected": {
+                "observed_samples": 235,
+                "share_of_all_samples_pct": 1.0702737168101288,
+                "samples_per_1000_executions": 0.9562174479166666
+              },
+              "short_sb": {
+                "observed_samples": 208,
+                "share_of_all_samples_pct": 0.9473060982830077,
+                "samples_per_1000_executions": 0.8463541666666666
+              },
+              "sleep": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "tex": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "wait": {
+                "observed_samples": 1644,
+                "share_of_all_samples_pct": 7.487361661429157,
+                "samples_per_1000_executions": 6.689453125
+              }
+            }
+          },
+          "steady_pv": {
+            "instructions": 245760,
+            "samples": 6000,
+            "share_of_all_samples_pct": 27.326137450471375,
+            "stalls": {
+              "barrier": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "branch_resolving": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "dispatch": {
+                "observed_samples": 4,
+                "share_of_all_samples_pct": 0.01821742496698092,
+                "samples_per_1000_executions": 0.016276041666666668
+              },
+              "drain": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "lg": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "long_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "math": {
+                "observed_samples": 4491,
+                "share_of_all_samples_pct": 20.453613881677825,
+                "samples_per_1000_executions": 18.27392578125
+              },
+              "membar": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "mio": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "misc": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "no_inst": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "not_selected": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "selected": {
+                "observed_samples": 242,
+                "share_of_all_samples_pct": 1.1021542105023454,
+                "samples_per_1000_executions": 0.9847005208333334
+              },
+              "short_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "sleep": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "tex": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "wait": {
+                "observed_samples": 1263,
+                "share_of_all_samples_pct": 5.752151933324225,
+                "samples_per_1000_executions": 5.13916015625
+              }
+            }
+          }
+        },
+        "opcode_counts": {
+          "BAR.SYNC.DEFER_BLOCKING": 16896,
+          "BRA": 7680,
+          "BRA.U": 7680,
+          "BRA.U.ANY": 7680,
+          "DEPBAR.LE": 16384,
+          "EXIT": 1024,
+          "F2FP.F16.F32.PACK_AB": 139264,
+          "FADD": 264192,
+          "FFMA": 292864,
+          "FMNMX": 48128,
+          "FMNMX.NAN": 245760,
+          "FMUL": 278528,
+          "FSETP.NE.AND": 1024,
+          "HMMA.16816.F32": 524288,
+          "IADD": 60416,
+          "IADD.64": 92160,
+          "IADD3": 512,
+          "IMAD": 3584,
+          "IMAD.SHL.U32": 5632,
+          "IMAD.WIDE.U32": 512,
+          "ISETP.GT.U32.AND": 4096,
+          "ISETP.NE.U32.AND": 512,
+          "LDC": 512,
+          "LDCU": 1024,
+          "LDCU.64": 3584,
+          "LDGDEPBAR": 16384,
+          "LDGSTS.E.BYPASS.LTC128B.128": 67584,
+          "LDS": 54272,
+          "LDS.128": 2048,
+          "LDSM.16.M88.4": 163840,
+          "LDSM.16.MT88.4": 131072,
+          "LEA": 4096,
+          "LEA.HI": 1024,
+          "LOP3.LUT": 19968,
+          "MOV": 58880,
+          "MUFU.EX2": 277504,
+          "MUFU.RCP": 1024,
+          "NOP": 0,
+          "R2P": 512,
+          "S2R": 3072,
+          "S2UR": 1024,
+          "SEL": 3072,
+          "SHF.L.U64.HI": 512,
+          "SHF.R.U32.HI": 3072,
+          "SHFL.BFLY": 34816,
+          "STG.E.128": 2048,
+          "STS": 8192,
+          "STS.128": 2048,
+          "UIADD3": 55296,
+          "UISETP.NE.U32.AND": 15360,
+          "ULEA": 1024,
+          "UMOV": 2048
+        },
+        "memory_by_opcode": {
+          "LDGSTS.E.BYPASS.LTC128B.128": {
+            "Instructions Executed": 67584,
+            "L1 Wavefronts Shared": 270336,
+            "L1 Wavefronts Shared Ideal": 270336,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 1081344,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "LDSM.16.M88.4": {
+            "Instructions Executed": 163840,
+            "L1 Wavefronts Shared": 655360,
+            "L1 Wavefronts Shared Ideal": 655360,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 0,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "LDSM.16.MT88.4": {
+            "Instructions Executed": 131072,
+            "L1 Wavefronts Shared": 524288,
+            "L1 Wavefronts Shared Ideal": 524288,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 0,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "STS": {
+            "Instructions Executed": 8192,
+            "L1 Wavefronts Shared": 8192,
+            "L1 Wavefronts Shared Ideal": 8192,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 0,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "LDS.128": {
+            "Instructions Executed": 2048,
+            "L1 Wavefronts Shared": 8192,
+            "L1 Wavefronts Shared Ideal": 8192,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 0,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "STG.E.128": {
+            "Instructions Executed": 2048,
+            "L1 Wavefronts Shared": 0,
+            "L1 Wavefronts Shared Ideal": 0,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 32768,
+            "L2 Theoretical Sectors Global Excessive": 0
+          }
+        },
+        "epilogue": {
+          "start_pc": "0x30f0",
+          "method": "Starts after the loop backedge following the last static HMMA; excludes repeated loop-tail instructions.",
+          "instructions": 65536,
+          "samples": 285,
+          "share_of_all_samples_pct": 1.2979915288973904,
+          "stalls": {
+            "barrier": {
+              "observed_samples": 17,
+              "share_of_all_samples_pct": 0.0774240561096689,
+              "samples_per_1000_executions": 0.2593994140625
+            },
+            "branch_resolving": {
+              "observed_samples": 3,
+              "share_of_all_samples_pct": 0.013663068725235688,
+              "samples_per_1000_executions": 0.0457763671875
+            },
+            "dispatch": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "drain": {
+              "observed_samples": 24,
+              "share_of_all_samples_pct": 0.1093045498018855,
+              "samples_per_1000_executions": 0.3662109375
+            },
+            "lg": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "long_sb": {
+              "observed_samples": 10,
+              "share_of_all_samples_pct": 0.04554356241745229,
+              "samples_per_1000_executions": 0.152587890625
+            },
+            "math": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "membar": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "mio": {
+              "observed_samples": 3,
+              "share_of_all_samples_pct": 0.013663068725235688,
+              "samples_per_1000_executions": 0.0457763671875
+            },
+            "misc": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "no_inst": {
+              "observed_samples": 5,
+              "share_of_all_samples_pct": 0.022771781208726145,
+              "samples_per_1000_executions": 0.0762939453125
+            },
+            "not_selected": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "selected": {
+              "observed_samples": 72,
+              "share_of_all_samples_pct": 0.32791364940565654,
+              "samples_per_1000_executions": 1.0986328125
+            },
+            "short_sb": {
+              "observed_samples": 87,
+              "share_of_all_samples_pct": 0.39622899303183495,
+              "samples_per_1000_executions": 1.3275146484375
+            },
+            "sleep": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "tex": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "wait": {
+              "observed_samples": 64,
+              "share_of_all_samples_pct": 0.2914787994716947,
+              "samples_per_1000_executions": 0.9765625
+            }
+          },
+          "opcode_counts": {
+            "BAR.SYNC.DEFER_BLOCKING": 512,
+            "BRA": 0,
+            "EXIT": 1024,
+            "F2FP.F16.F32.PACK_AB": 8192,
+            "FADD": 2048,
+            "FMUL": 16384,
+            "FSETP.NE.AND": 1024,
+            "IADD": 4608,
+            "IADD.64": 512,
+            "IMAD": 512,
+            "IMAD.SHL.U32": 2048,
+            "ISETP.GT.U32.AND": 2048,
+            "LDCU.64": 512,
+            "LDS.128": 2048,
+            "LEA": 1024,
+            "LEA.HI": 512,
+            "LOP3.LUT": 2560,
+            "MOV": 2048,
+            "MUFU.RCP": 1024,
+            "NOP": 0,
+            "R2P": 512,
+            "S2R": 1024,
+            "S2UR": 512,
+            "SEL": 1024,
+            "SHF.R.U32.HI": 512,
+            "SHFL.BFLY": 2048,
+            "STG.E.128": 2048,
+            "STS": 8192,
+            "ULEA": 512,
+            "UMOV": 512
+          }
+        },
+        "top_pcs": {
+          "stall_mio": [
+            {
+              "offset": "0x2970",
+              "instruction": "MUFU.EX2 R11, R24",
+              "observed_samples": 47,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.2140547433620258
+            },
+            {
+              "offset": "0x1bd0",
+              "instruction": "LDGSTS.E.BYPASS.LTC128B.128 [R121+0x3000], desc[UR6][R74.64]",
+              "observed_samples": 25,
+              "executions": 7168,
+              "share_of_all_samples_pct": 0.11385890604363073
+            },
+            {
+              "offset": "0x1bf0",
+              "instruction": "LDGDEPBAR",
+              "observed_samples": 20,
+              "executions": 7168,
+              "share_of_all_samples_pct": 0.09108712483490458
+            },
+            {
+              "offset": "0x1db0",
+              "instruction": "LDSM.16.M88.4 R88, [R108+UR5+0x3800]",
+              "observed_samples": 16,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.07286969986792367
+            },
+            {
+              "offset": "0x28c0",
+              "instruction": "MUFU.EX2 R101, R101",
+              "observed_samples": 16,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.07286969986792367
+            }
+          ],
+          "stall_barrier": [
+            {
+              "offset": "0x1ce0",
+              "instruction": "@!PT  LDS RZ, [RZ]",
+              "observed_samples": 193,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.8789907546568293
+            },
+            {
+              "offset": "0x770",
+              "instruction": "@!PT  LDS RZ, [RZ]",
+              "observed_samples": 51,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.23227216832900668
+            },
+            {
+              "offset": "0xdf0",
+              "instruction": "SHFL.BFLY PT, R5, R32, 0x1, 0x1f",
+              "observed_samples": 26,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.11841326228537596
+            },
+            {
+              "offset": "0x3850",
+              "instruction": "LDS.128 R12, [R2+0x800]",
+              "observed_samples": 17,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.0774240561096689
+            },
+            {
+              "offset": "0x0",
+              "instruction": "LDC R1, c[0x0][0x37c]",
+              "observed_samples": 0,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.0
+            }
+          ],
+          "stall_long_sb": [
+            {
+              "offset": "0x650",
+              "instruction": "BAR.SYNC.DEFER_BLOCKING 0x1, 0x80",
+              "observed_samples": 523,
+              "executions": 512,
+              "share_of_all_samples_pct": 2.3819283144327548
+            },
+            {
+              "offset": "0x23c0",
+              "instruction": "FMNMX R74, R0, R3, !PT",
+              "observed_samples": 144,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.6558272988113131
+            },
+            {
+              "offset": "0x1d50",
+              "instruction": "MOV R70, R117",
+              "observed_samples": 122,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.555631461492918
+            },
+            {
+              "offset": "0x38c0",
+              "instruction": "LDS.128 R4, [R2+0x1800]",
+              "observed_samples": 10,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.04554356241745229
+            },
+            {
+              "offset": "0x2320",
+              "instruction": "MOV R76, R116",
+              "observed_samples": 9,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.04098920617570707
+            }
+          ],
+          "stall_short_sb": [
+            {
+              "offset": "0x1de0",
+              "instruction": "HMMA.16816.F32 R4, R76, R80, RZ",
+              "observed_samples": 202,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.9199799608325363
+            },
+            {
+              "offset": "0x2400",
+              "instruction": "FMNMX R3, R74, R3, !PT",
+              "observed_samples": 171,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.7787949173384342
+            },
+            {
+              "offset": "0x2410",
+              "instruction": "FMNMX R77, R75, R68, !PT",
+              "observed_samples": 76,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.3461310743726374
+            },
+            {
+              "offset": "0x23d0",
+              "instruction": "FMNMX R75, R71, R2, !PT",
+              "observed_samples": 56,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.25504394953773285
+            },
+            {
+              "offset": "0x28d0",
+              "instruction": "F2FP.F16.F32.PACK_AB R80, R102, R103",
+              "observed_samples": 52,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.23682652457075193
+            }
+          ]
+        },
+        "resources": {
+          "launch__registers_per_thread": "128",
+          "launch__registers_per_thread_allocated": "128.000000",
+          "derived__local_spilling_requests": "0",
+          "derived__shared_spilling_requests": "0"
+        },
+        "command": {
+          "command": [
+            "/usr/local/cuda/bin/ncu",
+            "--section",
+            "SpeedOfLight",
+            "--section",
+            "SchedulerStats",
+            "--section",
+            "WarpStateStats",
+            "--section",
+            "InstructionStats",
+            "--section",
+            "LaunchStats",
+            "--section",
+            "SourceCounters",
+            "--section",
+            "MemoryWorkloadAnalysis",
+            "--cache-control",
+            "none",
+            "--clock-control",
+            "none",
+            "--warp-sampling-interval",
+            "0",
+            "--target-processes",
+            "all",
+            "--kernel-name",
+            "regex:.*FlashAttentionForwardAmpere.*",
+            "--launch-skip",
+            "102",
+            "--launch-count",
+            "1",
+            "--export",
+            "/tmp/prefill-final-profile/cutlass-static-noncausal",
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "1024",
+            "--seq-k",
+            "1024",
+            "--heads",
+            "8",
+            "--noncausal",
+            "--shape-mode",
+            "static",
+            "--warmup",
+            "100",
+            "--iters",
+            "31"
+          ],
+          "environment": {
+            "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+            "CUDA_VISIBLE_DEVICES": "1",
+            "CUTE_DSL_ARCH": "sm_120a",
+            "PYTHONPATH": "/tmp/fmha-cutlass47/nvidia_cutlass_dsl/dsl_packages:/tmp/fmha-cutlass47:/home/nihalp/dev/cutlass-dsl-venv/lib/python3.12/site-packages"
+          }
+        }
+      }
+    },
+    "runtime": {
+      "rust_final": {
+        "kernel": "fmha_prefill_TID_4e18005ffb21c986d6a0434f765e4370",
+        "provenance": {
+          "source": {
+            "path": "/tmp/prefill-profiled-final-profile/rust-runtime-noncausal-source.csv",
+            "sha256": "c838c0ed3e17c810dcb5a9984dfd0c4a8208c9b2d700b090eba7afbfff62c52b",
+            "size_bytes": 394783
+          },
+          "raw": {
+            "path": "/tmp/prefill-profiled-final-profile/rust-runtime-noncausal-raw.csv",
+            "sha256": "8fc727b20075afc14cff242f56f8c3325c2296b7899c60a26d085317adce6c63",
+            "size_bytes": 47757
+          },
+          "command": {
+            "path": "/tmp/prefill-profiled-final-profile/rust-runtime-noncausal-command.json",
+            "sha256": "1de16c933b928898fdc09e92ca06fb2c2f33b217a6e0b0512c1e1ec95ffe68ee",
+            "size_bytes": 1184
+          },
+          "report": {
+            "path": "/tmp/prefill-profiled-final-profile/rust-runtime-noncausal.ncu-repz",
+            "sha256": "2200d01278091645f431ea879b0ce30616c97d73cd863e7d3aadf1d07408b698",
+            "size_bytes": 75778
+          }
+        },
+        "totals": {
+          "instructions": 3317760,
+          "samples": 23240,
+          "share_of_all_samples_pct": 100.0,
+          "stalls": {
+            "barrier": {
+              "observed_samples": 504,
+              "share_of_all_samples_pct": 2.1686746987951806,
+              "samples_per_1000_executions": 0.1519097222222222
+            },
+            "branch_resolving": {
+              "observed_samples": 42,
+              "share_of_all_samples_pct": 0.18072289156626506,
+              "samples_per_1000_executions": 0.01265914351851852
+            },
+            "dispatch": {
+              "observed_samples": 128,
+              "share_of_all_samples_pct": 0.5507745266781411,
+              "samples_per_1000_executions": 0.038580246913580245
+            },
+            "drain": {
+              "observed_samples": 26,
+              "share_of_all_samples_pct": 0.11187607573149742,
+              "samples_per_1000_executions": 0.007836612654320988
+            },
+            "lg": {
+              "observed_samples": 10,
+              "share_of_all_samples_pct": 0.043029259896729774,
+              "samples_per_1000_executions": 0.0030140817901234567
+            },
+            "long_sb": {
+              "observed_samples": 820,
+              "share_of_all_samples_pct": 3.5283993115318415,
+              "samples_per_1000_executions": 0.24715470679012347
+            },
+            "math": {
+              "observed_samples": 9949,
+              "share_of_all_samples_pct": 42.80981067125646,
+              "samples_per_1000_executions": 2.998709972993827
+            },
+            "membar": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "mio": {
+              "observed_samples": 897,
+              "share_of_all_samples_pct": 3.859724612736661,
+              "samples_per_1000_executions": 0.27036313657407407
+            },
+            "misc": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "no_inst": {
+              "observed_samples": 292,
+              "share_of_all_samples_pct": 1.2564543889845095,
+              "samples_per_1000_executions": 0.08801118827160494
+            },
+            "not_selected": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "selected": {
+              "observed_samples": 3197,
+              "share_of_all_samples_pct": 13.75645438898451,
+              "samples_per_1000_executions": 0.9636019483024691
+            },
+            "short_sb": {
+              "observed_samples": 698,
+              "share_of_all_samples_pct": 3.0034423407917386,
+              "samples_per_1000_executions": 0.2103829089506173
+            },
+            "sleep": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "tex": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "wait": {
+              "observed_samples": 6677,
+              "share_of_all_samples_pct": 28.73063683304647,
+              "samples_per_1000_executions": 2.012502411265432
+            }
+          }
+        },
+        "hmma": {
+          "instructions": 524288,
+          "samples": 13993,
+          "share_of_all_samples_pct": 60.21084337349398,
+          "stalls": {
+            "barrier": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "branch_resolving": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "dispatch": {
+              "observed_samples": 6,
+              "share_of_all_samples_pct": 0.025817555938037865,
+              "samples_per_1000_executions": 0.011444091796875
+            },
+            "drain": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "lg": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "long_sb": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "math": {
+              "observed_samples": 9902,
+              "share_of_all_samples_pct": 42.607573149741825,
+              "samples_per_1000_executions": 18.886566162109375
+            },
+            "membar": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "mio": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "misc": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "no_inst": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "not_selected": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "selected": {
+              "observed_samples": 482,
+              "share_of_all_samples_pct": 2.0740103270223753,
+              "samples_per_1000_executions": 0.919342041015625
+            },
+            "short_sb": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "sleep": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "tex": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "wait": {
+              "observed_samples": 3603,
+              "share_of_all_samples_pct": 15.503442340791738,
+              "samples_per_1000_executions": 6.8721771240234375
+            }
+          }
+        },
+        "hmma_phases": {
+          "first_qk": {
+            "instructions": 16384,
+            "samples": 425,
+            "share_of_all_samples_pct": 1.8287435456110155,
+            "stalls": {
+              "barrier": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "branch_resolving": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "dispatch": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "drain": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "lg": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "long_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "math": {
+                "observed_samples": 310,
+                "share_of_all_samples_pct": 1.333907056798623,
+                "samples_per_1000_executions": 18.9208984375
+              },
+              "membar": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "mio": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "misc": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "no_inst": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "not_selected": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "selected": {
+                "observed_samples": 10,
+                "share_of_all_samples_pct": 0.043029259896729774,
+                "samples_per_1000_executions": 0.6103515625
+              },
+              "short_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "sleep": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "tex": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "wait": {
+                "observed_samples": 105,
+                "share_of_all_samples_pct": 0.45180722891566266,
+                "samples_per_1000_executions": 6.40869140625
+              }
+            }
+          },
+          "first_pv": {
+            "instructions": 16384,
+            "samples": 371,
+            "share_of_all_samples_pct": 1.5963855421686748,
+            "stalls": {
+              "barrier": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "branch_resolving": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "dispatch": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "drain": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "lg": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "long_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "math": {
+                "observed_samples": 298,
+                "share_of_all_samples_pct": 1.2822719449225473,
+                "samples_per_1000_executions": 18.1884765625
+              },
+              "membar": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "mio": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "misc": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "no_inst": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "not_selected": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "selected": {
+                "observed_samples": 15,
+                "share_of_all_samples_pct": 0.06454388984509467,
+                "samples_per_1000_executions": 0.91552734375
+              },
+              "short_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "sleep": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "tex": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "wait": {
+                "observed_samples": 58,
+                "share_of_all_samples_pct": 0.2495697074010327,
+                "samples_per_1000_executions": 3.5400390625
+              }
+            }
+          },
+          "steady_qk": {
+            "instructions": 245760,
+            "samples": 6595,
+            "share_of_all_samples_pct": 28.377796901893287,
+            "stalls": {
+              "barrier": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "branch_resolving": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "dispatch": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "drain": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "lg": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "long_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "math": {
+                "observed_samples": 4604,
+                "share_of_all_samples_pct": 19.810671256454388,
+                "samples_per_1000_executions": 18.733723958333332
+              },
+              "membar": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "mio": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "misc": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "no_inst": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "not_selected": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "selected": {
+                "observed_samples": 209,
+                "share_of_all_samples_pct": 0.8993115318416524,
+                "samples_per_1000_executions": 0.8504231770833334
+              },
+              "short_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "sleep": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "tex": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "wait": {
+                "observed_samples": 1782,
+                "share_of_all_samples_pct": 7.667814113597246,
+                "samples_per_1000_executions": 7.2509765625
+              }
+            }
+          },
+          "steady_pv": {
+            "instructions": 245760,
+            "samples": 6602,
+            "share_of_all_samples_pct": 28.407917383820998,
+            "stalls": {
+              "barrier": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "branch_resolving": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "dispatch": {
+                "observed_samples": 6,
+                "share_of_all_samples_pct": 0.025817555938037865,
+                "samples_per_1000_executions": 0.0244140625
+              },
+              "drain": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "lg": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "long_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "math": {
+                "observed_samples": 4690,
+                "share_of_all_samples_pct": 20.180722891566266,
+                "samples_per_1000_executions": 19.083658854166668
+              },
+              "membar": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "mio": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "misc": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "no_inst": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "not_selected": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "selected": {
+                "observed_samples": 248,
+                "share_of_all_samples_pct": 1.0671256454388984,
+                "samples_per_1000_executions": 1.0091145833333333
+              },
+              "short_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "sleep": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "tex": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "wait": {
+                "observed_samples": 1658,
+                "share_of_all_samples_pct": 7.134251290877797,
+                "samples_per_1000_executions": 6.746419270833333
+              }
+            }
+          }
+        },
+        "opcode_counts": {
+          "BAR.SYNC.DEFER_BLOCKING": 16896,
+          "BRA": 17920,
+          "BSSY.RECONVERGENT": 1536,
+          "BSYNC.RECONVERGENT": 1536,
+          "DEPBAR.LE": 16384,
+          "EXIT": 1024,
+          "F2FP.F16.F32.PACK_AB": 139264,
+          "F2I.FTZ.U32.TRUNC.NTZ": 512,
+          "FADD": 264192,
+          "FFMA": 292864,
+          "FMNMX": 293888,
+          "FMUL": 278528,
+          "FSETP.NE.AND": 1024,
+          "HMMA.16816.F32": 524288,
+          "IADD": 59392,
+          "IADD.64": 161280,
+          "IMAD": 34304,
+          "IMAD.HI.U32": 1024,
+          "IMAD.SHL.U32": 18432,
+          "IMAD.WIDE.U32": 59392,
+          "IMNMX.U64": 512,
+          "ISETP.GE.U32.AND": 1024,
+          "ISETP.GE.U64.AND": 4096,
+          "ISETP.LE.U64.AND": 1536,
+          "ISETP.LT.U64.AND": 512,
+          "ISETP.NE.U32.AND": 10240,
+          "ISETP.NE.U64.AND": 16384,
+          "LDC": 8192,
+          "LDCU": 512,
+          "LDCU.64": 6144,
+          "LDGDEPBAR": 16384,
+          "LDGSTS.E.BYPASS.128.ZFILL": 67584,
+          "LDS": 49152,
+          "LDS.128": 2048,
+          "LDSM.16.M88.4": 163840,
+          "LDSM.16.MT88.4": 131072,
+          "LEA": 75776,
+          "LEA.HI.X": 65536,
+          "LOP3.LUT": 64512,
+          "MOV": 47104,
+          "MUFU.EX2": 277504,
+          "MUFU.RCP": 1536,
+          "NOP": 1536,
+          "S2R": 1536,
+          "S2UR": 1024,
+          "SEL": 2048,
+          "SEL.64": 2048,
+          "SHF.L.U64.HI": 11264,
+          "SHF.R.U32.HI": 7680,
+          "SHF.R.U64": 2560,
+          "SHFL.BFLY": 34816,
+          "STG.E.128": 2048,
+          "STS": 8192,
+          "UI2F.U32.RP": 512,
+          "UIADD3": 41472,
+          "ULEA": 1024,
+          "ULEA.HI": 512,
+          "ULOP3.LUT": 512,
+          "UMOV": 2560,
+          "USHF.R.U32.HI": 1024,
+          "USHF.R.U64": 512
+        },
+        "memory_by_opcode": {
+          "LDGSTS.E.BYPASS.128.ZFILL": {
+            "Instructions Executed": 67584,
+            "L1 Wavefronts Shared": 540672,
+            "L1 Wavefronts Shared Ideal": 540672,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 1081344,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "LDSM.16.M88.4": {
+            "Instructions Executed": 163840,
+            "L1 Wavefronts Shared": 655360,
+            "L1 Wavefronts Shared Ideal": 655360,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 0,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "LDSM.16.MT88.4": {
+            "Instructions Executed": 131072,
+            "L1 Wavefronts Shared": 524288,
+            "L1 Wavefronts Shared Ideal": 524288,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 0,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "STS": {
+            "Instructions Executed": 8192,
+            "L1 Wavefronts Shared": 8192,
+            "L1 Wavefronts Shared Ideal": 8192,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 0,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "LDS.128": {
+            "Instructions Executed": 2048,
+            "L1 Wavefronts Shared": 8192,
+            "L1 Wavefronts Shared Ideal": 8192,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 0,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "STG.E.128": {
+            "Instructions Executed": 2048,
+            "L1 Wavefronts Shared": 0,
+            "L1 Wavefronts Shared Ideal": 0,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 32768,
+            "L2 Theoretical Sectors Global Excessive": 0
+          }
+        },
+        "epilogue": {
+          "start_pc": "0x3d10",
+          "method": "Starts after the loop backedge following the last static HMMA; excludes repeated loop-tail instructions.",
+          "instructions": 120832,
+          "samples": 433,
+          "share_of_all_samples_pct": 1.8631669535283992,
+          "stalls": {
+            "barrier": {
+              "observed_samples": 14,
+              "share_of_all_samples_pct": 0.060240963855421686,
+              "samples_per_1000_executions": 0.11586334745762712
+            },
+            "branch_resolving": {
+              "observed_samples": 18,
+              "share_of_all_samples_pct": 0.0774526678141136,
+              "samples_per_1000_executions": 0.14896716101694915
+            },
+            "dispatch": {
+              "observed_samples": 13,
+              "share_of_all_samples_pct": 0.05593803786574871,
+              "samples_per_1000_executions": 0.1075873940677966
+            },
+            "drain": {
+              "observed_samples": 26,
+              "share_of_all_samples_pct": 0.11187607573149742,
+              "samples_per_1000_executions": 0.2151747881355932
+            },
+            "lg": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "long_sb": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "math": {
+              "observed_samples": 4,
+              "share_of_all_samples_pct": 0.01721170395869191,
+              "samples_per_1000_executions": 0.033103813559322036
+            },
+            "membar": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "mio": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "misc": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "no_inst": {
+              "observed_samples": 3,
+              "share_of_all_samples_pct": 0.012908777969018933,
+              "samples_per_1000_executions": 0.024827860169491525
+            },
+            "not_selected": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "selected": {
+              "observed_samples": 119,
+              "share_of_all_samples_pct": 0.5120481927710844,
+              "samples_per_1000_executions": 0.9848384533898306
+            },
+            "short_sb": {
+              "observed_samples": 86,
+              "share_of_all_samples_pct": 0.37005163511187605,
+              "samples_per_1000_executions": 0.7117319915254238
+            },
+            "sleep": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "tex": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "wait": {
+              "observed_samples": 150,
+              "share_of_all_samples_pct": 0.6454388984509466,
+              "samples_per_1000_executions": 1.2413930084745763
+            }
+          },
+          "opcode_counts": {
+            "BAR.SYNC.DEFER_BLOCKING": 512,
+            "BRA": 1536,
+            "BSSY.RECONVERGENT": 1536,
+            "BSYNC.RECONVERGENT": 1536,
+            "EXIT": 1024,
+            "F2FP.F16.F32.PACK_AB": 8192,
+            "FADD": 2048,
+            "FMUL": 16384,
+            "FSETP.NE.AND": 1024,
+            "IADD": 11264,
+            "IADD.64": 1536,
+            "IMAD": 4608,
+            "IMAD.SHL.U32": 3072,
+            "IMAD.WIDE.U32": 4608,
+            "ISETP.GE.U64.AND": 2048,
+            "LDCU": 512,
+            "LDCU.64": 2048,
+            "LDS.128": 2048,
+            "LEA": 12288,
+            "LEA.HI.X": 2048,
+            "LOP3.LUT": 14336,
+            "MOV": 2048,
+            "MUFU.RCP": 1024,
+            "NOP": 1536,
+            "S2R": 512,
+            "S2UR": 512,
+            "SHF.R.U32.HI": 7168,
+            "SHFL.BFLY": 2048,
+            "STG.E.128": 2048,
+            "STS": 8192,
+            "ULEA": 512,
+            "UMOV": 1024
+          }
+        },
+        "top_pcs": {
+          "stall_mio": [
+            {
+              "offset": "0x2e80",
+              "instruction": "LDGSTS.E.BYPASS.128.ZFILL [R118+0x3800], desc[UR8][R68.64], P0",
+              "observed_samples": 89,
+              "executions": 7168,
+              "share_of_all_samples_pct": 0.382960413080895
+            },
+            {
+              "offset": "0x2840",
+              "instruction": "LDGDEPBAR",
+              "observed_samples": 87,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.3743545611015491
+            },
+            {
+              "offset": "0x2820",
+              "instruction": "LDSM.16.M88.4 R92, [R7+UR4+0x2000]",
+              "observed_samples": 86,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.37005163511187605
+            },
+            {
+              "offset": "0x2810",
+              "instruction": "LDSM.16.M88.4 R104, [R5+UR4+0x2000]",
+              "observed_samples": 61,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.26247848537005164
+            },
+            {
+              "offset": "0x27c0",
+              "instruction": "LDSM.16.M88.4 R88, [R112+UR4+0x2000]",
+              "observed_samples": 60,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.25817555938037867
+            }
+          ],
+          "stall_barrier": [
+            {
+              "offset": "0x2c20",
+              "instruction": "@!P1  BRA 0x10005714ca0",
+              "observed_samples": 281,
+              "executions": 7680,
+              "share_of_all_samples_pct": 1.2091222030981068
+            },
+            {
+              "offset": "0x2710",
+              "instruction": "@!PT  LDS RZ, [RZ]",
+              "observed_samples": 106,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.45611015490533563
+            },
+            {
+              "offset": "0xda0",
+              "instruction": "@!PT  LDS RZ, [RZ]",
+              "observed_samples": 84,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.3614457831325301
+            },
+            {
+              "offset": "0x1490",
+              "instruction": "@!P1  BRA 0x10005713460",
+              "observed_samples": 19,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.08175559380378658
+            },
+            {
+              "offset": "0x4710",
+              "instruction": "@P1   BRA 0x10005716610",
+              "observed_samples": 14,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.060240963855421686
+            }
+          ],
+          "stall_long_sb": [
+            {
+              "offset": "0xd80",
+              "instruction": "BAR.SYNC.DEFER_BLOCKING 0x1, 0x80",
+              "observed_samples": 562,
+              "executions": 512,
+              "share_of_all_samples_pct": 2.4182444061962136
+            },
+            {
+              "offset": "0x2ea0",
+              "instruction": "FMNMX R69, R78, R79, !PT",
+              "observed_samples": 216,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.9294320137693631
+            },
+            {
+              "offset": "0xbc0",
+              "instruction": "SHF.R.U32.HI R7, RZ, 0x1, R16",
+              "observed_samples": 12,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.05163511187607573
+            },
+            {
+              "offset": "0xe50",
+              "instruction": "IADD R5, R17, 0x20",
+              "observed_samples": 12,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.05163511187607573
+            },
+            {
+              "offset": "0x16c0",
+              "instruction": "FMNMX R38, R42, R43, !PT",
+              "observed_samples": 7,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.030120481927710843
+            }
+          ],
+          "stall_short_sb": [
+            {
+              "offset": "0x2fc0",
+              "instruction": "FMNMX R68, R91, R68, !PT",
+              "observed_samples": 161,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.6927710843373494
+            },
+            {
+              "offset": "0x3000",
+              "instruction": "FMNMX R84, R68, R69, !PT",
+              "observed_samples": 111,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.4776247848537005
+            },
+            {
+              "offset": "0x2cd0",
+              "instruction": "IMAD.WIDE.U32 R68, R157, 0x1000, RZ",
+              "observed_samples": 82,
+              "executions": 7168,
+              "share_of_all_samples_pct": 0.3528399311531842
+            },
+            {
+              "offset": "0x2fe0",
+              "instruction": "FMNMX R71, R80, R71, !PT",
+              "observed_samples": 52,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.22375215146299485
+            },
+            {
+              "offset": "0x34a0",
+              "instruction": "FMUL R22, R91, R22",
+              "observed_samples": 41,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.1764199655765921
+            }
+          ]
+        },
+        "resources": {
+          "launch__registers_per_thread": "162",
+          "launch__registers_per_thread_allocated": "168.000000",
+          "derived__local_spilling_requests": "0",
+          "derived__shared_spilling_requests": "0"
+        },
+        "command": {
+          "command": [
+            "/usr/local/cuda/bin/ncu",
+            "--section",
+            "SpeedOfLight",
+            "--section",
+            "SchedulerStats",
+            "--section",
+            "WarpStateStats",
+            "--section",
+            "InstructionStats",
+            "--section",
+            "LaunchStats",
+            "--section",
+            "SourceCounters",
+            "--section",
+            "MemoryWorkloadAnalysis",
+            "--cache-control",
+            "none",
+            "--clock-control",
+            "none",
+            "--warp-sampling-interval",
+            "0",
+            "--target-processes",
+            "all",
+            "--kernel-name",
+            "regex:.*fmha_prefill.*",
+            "--launch-skip",
+            "102",
+            "--launch-count",
+            "1",
+            "--export",
+            "/tmp/prefill-profiled-final-profile/rust-runtime-noncausal",
+            "/tmp/prefill-profiled-final/prefill",
+            "--seq-q",
+            "1024",
+            "--seq-k",
+            "1024",
+            "--heads",
+            "8",
+            "--noncausal",
+            "--shape-mode",
+            "runtime",
+            "--warmup",
+            "100",
+            "--iters",
+            "31"
+          ],
+          "environment": {
+            "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+            "CUDA_VISIBLE_DEVICES": "1",
+            "CUTE_DSL_ARCH": "sm_120a",
+            "PYTHONPATH": "/tmp/fmha-cutlass47/nvidia_cutlass_dsl/dsl_packages:/tmp/fmha-cutlass47:/home/nihalp/dev/cutlass-dsl-venv/lib/python3.12/site-packages"
+          }
+        }
+      },
+      "reference": {
+        "kernel": "kernel_cutlass_kernel_flash_attention_v2FlashAttentionForwardAmpere_object_at__tensorptrf16gmemalign16odiv8i64div8i64div8i64div81_tensorptrf16gmemalign16odiv8i64div8i64div8i64div81_tensor_0",
+        "provenance": {
+          "source": {
+            "path": "/tmp/prefill-final-profile/cutlass-runtime-noncausal-source.csv",
+            "sha256": "aaf391faecb3fbc1f600525e4f3749ae8511b302e349304aef4c731f8bd7a119",
+            "size_bytes": 401540
+          },
+          "raw": {
+            "path": "/tmp/prefill-final-profile/cutlass-runtime-noncausal-raw.csv",
+            "sha256": "a9207642de9a9c61acfd88bf058feb24e569e3abf6f61c522576080f6e30c599",
+            "size_bytes": 47881
+          },
+          "command": {
+            "path": "/tmp/prefill-final-profile/cutlass-runtime-noncausal-command.json",
+            "sha256": "6a6e99c73f298bae1478417212dea0636635f0ddd62952617e463d9c40f73819",
+            "size_bytes": 1297
+          },
+          "report": {
+            "path": "/tmp/prefill-final-profile/cutlass-runtime-noncausal.ncu-repz",
+            "sha256": "f5c6df14365df225f9436a63b5122af07417d799a51066c4eb0aa68ca06b7f73",
+            "size_bytes": 57025
+          }
+        },
+        "totals": {
+          "instructions": 3204608,
+          "samples": 22268,
+          "share_of_all_samples_pct": 100.0,
+          "stalls": {
+            "barrier": {
+              "observed_samples": 255,
+              "share_of_all_samples_pct": 1.145141009520388,
+              "samples_per_1000_executions": 0.07957291500239655
+            },
+            "branch_resolving": {
+              "observed_samples": 68,
+              "share_of_all_samples_pct": 0.30537093587210346,
+              "samples_per_1000_executions": 0.02121944400063908
+            },
+            "dispatch": {
+              "observed_samples": 150,
+              "share_of_all_samples_pct": 0.6736123585414047,
+              "samples_per_1000_executions": 0.04680759706023326
+            },
+            "drain": {
+              "observed_samples": 19,
+              "share_of_all_samples_pct": 0.08532423208191127,
+              "samples_per_1000_executions": 0.0059289622942962136
+            },
+            "lg": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "long_sb": {
+              "observed_samples": 532,
+              "share_of_all_samples_pct": 2.3890784982935154,
+              "samples_per_1000_executions": 0.16601094424029397
+            },
+            "math": {
+              "observed_samples": 9816,
+              "share_of_all_samples_pct": 44.081192742949526,
+              "samples_per_1000_executions": 3.0630891516216647
+            },
+            "membar": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "mio": {
+              "observed_samples": 390,
+              "share_of_all_samples_pct": 1.7513921322076522,
+              "samples_per_1000_executions": 0.12169975235660649
+            },
+            "misc": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "no_inst": {
+              "observed_samples": 397,
+              "share_of_all_samples_pct": 1.7828273756062512,
+              "samples_per_1000_executions": 0.12388410688608403
+            },
+            "not_selected": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "selected": {
+              "observed_samples": 3172,
+              "share_of_all_samples_pct": 14.244656008622238,
+              "samples_per_1000_executions": 0.9898246525003994
+            },
+            "short_sb": {
+              "observed_samples": 742,
+              "share_of_all_samples_pct": 3.332135800251482,
+              "samples_per_1000_executions": 0.23154158012462053
+            },
+            "sleep": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "tex": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "wait": {
+              "observed_samples": 6727,
+              "share_of_all_samples_pct": 30.20926890605353,
+              "samples_per_1000_executions": 2.099164702827928
+            }
+          }
+        },
+        "hmma": {
+          "instructions": 524288,
+          "samples": 13868,
+          "share_of_all_samples_pct": 62.27770792168133,
+          "stalls": {
+            "barrier": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "branch_resolving": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "dispatch": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "drain": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "lg": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "long_sb": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "math": {
+              "observed_samples": 9807,
+              "share_of_all_samples_pct": 44.04077600143704,
+              "samples_per_1000_executions": 18.705368041992188
+            },
+            "membar": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "mio": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "misc": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "no_inst": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "not_selected": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "selected": {
+              "observed_samples": 495,
+              "share_of_all_samples_pct": 2.2229207831866353,
+              "samples_per_1000_executions": 0.9441375732421875
+            },
+            "short_sb": {
+              "observed_samples": 165,
+              "share_of_all_samples_pct": 0.7409735943955452,
+              "samples_per_1000_executions": 0.3147125244140625
+            },
+            "sleep": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "tex": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "wait": {
+              "observed_samples": 3401,
+              "share_of_all_samples_pct": 15.273037542662117,
+              "samples_per_1000_executions": 6.4868927001953125
+            }
+          }
+        },
+        "hmma_phases": {
+          "first_qk": {
+            "instructions": 16384,
+            "samples": 468,
+            "share_of_all_samples_pct": 2.101670558649183,
+            "stalls": {
+              "barrier": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "branch_resolving": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "dispatch": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "drain": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "lg": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "long_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "math": {
+                "observed_samples": 289,
+                "share_of_all_samples_pct": 1.2978264774564396,
+                "samples_per_1000_executions": 17.63916015625
+              },
+              "membar": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "mio": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "misc": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "no_inst": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "not_selected": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "selected": {
+                "observed_samples": 21,
+                "share_of_all_samples_pct": 0.09430573019579666,
+                "samples_per_1000_executions": 1.28173828125
+              },
+              "short_sb": {
+                "observed_samples": 1,
+                "share_of_all_samples_pct": 0.004490749056942698,
+                "samples_per_1000_executions": 0.06103515625
+              },
+              "sleep": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "tex": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "wait": {
+                "observed_samples": 157,
+                "share_of_all_samples_pct": 0.7050476019400036,
+                "samples_per_1000_executions": 9.58251953125
+              }
+            }
+          },
+          "first_pv": {
+            "instructions": 16384,
+            "samples": 419,
+            "share_of_all_samples_pct": 1.8816238548589905,
+            "stalls": {
+              "barrier": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "branch_resolving": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "dispatch": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "drain": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "lg": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "long_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "math": {
+                "observed_samples": 313,
+                "share_of_all_samples_pct": 1.4056044548230644,
+                "samples_per_1000_executions": 19.10400390625
+              },
+              "membar": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "mio": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "misc": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "no_inst": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "not_selected": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "selected": {
+                "observed_samples": 12,
+                "share_of_all_samples_pct": 0.05388898868331238,
+                "samples_per_1000_executions": 0.732421875
+              },
+              "short_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "sleep": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "tex": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "wait": {
+                "observed_samples": 94,
+                "share_of_all_samples_pct": 0.42213041135261364,
+                "samples_per_1000_executions": 5.7373046875
+              }
+            }
+          },
+          "steady_qk": {
+            "instructions": 245760,
+            "samples": 6689,
+            "share_of_all_samples_pct": 30.03862044188971,
+            "stalls": {
+              "barrier": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "branch_resolving": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "dispatch": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "drain": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "lg": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "long_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "math": {
+                "observed_samples": 4502,
+                "share_of_all_samples_pct": 20.217352254356026,
+                "samples_per_1000_executions": 18.318684895833332
+              },
+              "membar": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "mio": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "misc": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "no_inst": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "not_selected": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "selected": {
+                "observed_samples": 233,
+                "share_of_all_samples_pct": 1.0463445302676486,
+                "samples_per_1000_executions": 0.9480794270833334
+              },
+              "short_sb": {
+                "observed_samples": 164,
+                "share_of_all_samples_pct": 0.7364828453386025,
+                "samples_per_1000_executions": 0.6673177083333334
+              },
+              "sleep": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "tex": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "wait": {
+                "observed_samples": 1790,
+                "share_of_all_samples_pct": 8.03844081192743,
+                "samples_per_1000_executions": 7.283528645833333
+              }
+            }
+          },
+          "steady_pv": {
+            "instructions": 245760,
+            "samples": 6292,
+            "share_of_all_samples_pct": 28.255793066283456,
+            "stalls": {
+              "barrier": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "branch_resolving": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "dispatch": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "drain": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "lg": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "long_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "math": {
+                "observed_samples": 4703,
+                "share_of_all_samples_pct": 21.11999281480151,
+                "samples_per_1000_executions": 19.136555989583332
+              },
+              "membar": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "mio": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "misc": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "no_inst": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "not_selected": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "selected": {
+                "observed_samples": 229,
+                "share_of_all_samples_pct": 1.0283815340398779,
+                "samples_per_1000_executions": 0.9318033854166666
+              },
+              "short_sb": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "sleep": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "tex": {
+                "observed_samples": 0,
+                "share_of_all_samples_pct": 0.0,
+                "samples_per_1000_executions": 0.0
+              },
+              "wait": {
+                "observed_samples": 1360,
+                "share_of_all_samples_pct": 6.107418717442069,
+                "samples_per_1000_executions": 5.533854166666667
+              }
+            }
+          }
+        },
+        "opcode_counts": {
+          "BAR.SYNC.DEFER_BLOCKING": 16896,
+          "BRA": 25088,
+          "BSSY.RECONVERGENT": 1024,
+          "BSYNC.RECONVERGENT": 1024,
+          "DEPBAR.LE": 16384,
+          "EXIT": 1536,
+          "F2FP.F16.F32.PACK_AB": 139264,
+          "FADD": 264192,
+          "FFMA": 292864,
+          "FMNMX": 48128,
+          "FMNMX.NAN": 245760,
+          "FMUL": 278528,
+          "FSETP.NE.AND": 1024,
+          "HMMA.16816.F32": 524288,
+          "IADD": 65536,
+          "IADD.64": 32256,
+          "IMAD": 44544,
+          "IMAD.SHL.U32": 7680,
+          "IMAD.WIDE.U32": 28672,
+          "ISETP.GE.AND": 29184,
+          "ISETP.GE.OR": 512,
+          "ISETP.GT.AND": 8192,
+          "ISETP.NE.U32.AND": 8192,
+          "LDC": 7168,
+          "LDC.64": 6144,
+          "LDCU": 4096,
+          "LDCU.64": 3584,
+          "LDGDEPBAR": 16384,
+          "LDGSTS.E.BYPASS.LTC128B.128": 67584,
+          "LDS": 64512,
+          "LDS.128": 2048,
+          "LDSM.16.M88.4": 163840,
+          "LDSM.16.MT88.4": 131072,
+          "LEA": 86528,
+          "LEA.HI": 1536,
+          "LEA.HI.SX32": 512,
+          "LEA.HI.X": 83456,
+          "LOP3.LUT": 13312,
+          "MOV": 62464,
+          "MUFU.EX2": 277504,
+          "MUFU.RCP": 1024,
+          "NOP": 1024,
+          "R2P": 512,
+          "S2R": 1536,
+          "S2UR": 2048,
+          "SEL": 3072,
+          "SHF.L.U64.HI": 4096,
+          "SHF.R.S32.HI": 12800,
+          "SHF.R.U32.HI": 3584,
+          "SHFL.BFLY": 34816,
+          "STG.E.128": 2048,
+          "STS": 8192,
+          "STS.128": 6144,
+          "UIADD3": 47616,
+          "ULEA": 1024,
+          "UMOV": 1536,
+          "USHF.L.U32": 512,
+          "USHF.L.U64.HI": 512
+        },
+        "memory_by_opcode": {
+          "LDGSTS.E.BYPASS.LTC128B.128": {
+            "Instructions Executed": 67584,
+            "L1 Wavefronts Shared": 270336,
+            "L1 Wavefronts Shared Ideal": 270336,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 1081344,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "LDSM.16.M88.4": {
+            "Instructions Executed": 163840,
+            "L1 Wavefronts Shared": 655360,
+            "L1 Wavefronts Shared Ideal": 655360,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 0,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "LDSM.16.MT88.4": {
+            "Instructions Executed": 131072,
+            "L1 Wavefronts Shared": 524288,
+            "L1 Wavefronts Shared Ideal": 524288,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 0,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "STS": {
+            "Instructions Executed": 8192,
+            "L1 Wavefronts Shared": 8192,
+            "L1 Wavefronts Shared Ideal": 8192,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 0,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "LDS.128": {
+            "Instructions Executed": 2048,
+            "L1 Wavefronts Shared": 8192,
+            "L1 Wavefronts Shared Ideal": 8192,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 0,
+            "L2 Theoretical Sectors Global Excessive": 0
+          },
+          "STG.E.128": {
+            "Instructions Executed": 2048,
+            "L1 Wavefronts Shared": 0,
+            "L1 Wavefronts Shared Ideal": 0,
+            "L1 Wavefronts Shared Excessive": 0,
+            "L2 Theoretical Sectors Global": 32768,
+            "L2 Theoretical Sectors Global Excessive": 0
+          }
+        },
+        "epilogue": {
+          "start_pc": "0x43a0",
+          "method": "Starts after the loop backedge following the last static HMMA; excludes repeated loop-tail instructions.",
+          "instructions": 82944,
+          "samples": 335,
+          "share_of_all_samples_pct": 1.5044009340758038,
+          "stalls": {
+            "barrier": {
+              "observed_samples": 27,
+              "share_of_all_samples_pct": 0.12125022453745285,
+              "samples_per_1000_executions": 0.3255208333333333
+            },
+            "branch_resolving": {
+              "observed_samples": 9,
+              "share_of_all_samples_pct": 0.04041674151248428,
+              "samples_per_1000_executions": 0.10850694444444445
+            },
+            "dispatch": {
+              "observed_samples": 5,
+              "share_of_all_samples_pct": 0.02245374528471349,
+              "samples_per_1000_executions": 0.06028163580246913
+            },
+            "drain": {
+              "observed_samples": 19,
+              "share_of_all_samples_pct": 0.08532423208191127,
+              "samples_per_1000_executions": 0.2290702160493827
+            },
+            "lg": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "long_sb": {
+              "observed_samples": 8,
+              "share_of_all_samples_pct": 0.03592599245554159,
+              "samples_per_1000_executions": 0.09645061728395062
+            },
+            "math": {
+              "observed_samples": 1,
+              "share_of_all_samples_pct": 0.004490749056942698,
+              "samples_per_1000_executions": 0.012056327160493827
+            },
+            "membar": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "mio": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "misc": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "no_inst": {
+              "observed_samples": 5,
+              "share_of_all_samples_pct": 0.02245374528471349,
+              "samples_per_1000_executions": 0.06028163580246913
+            },
+            "not_selected": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "selected": {
+              "observed_samples": 98,
+              "share_of_all_samples_pct": 0.4400934075803844,
+              "samples_per_1000_executions": 1.181520061728395
+            },
+            "short_sb": {
+              "observed_samples": 63,
+              "share_of_all_samples_pct": 0.28291719058738996,
+              "samples_per_1000_executions": 0.7595486111111112
+            },
+            "sleep": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "tex": {
+              "observed_samples": 0,
+              "share_of_all_samples_pct": 0.0,
+              "samples_per_1000_executions": 0.0
+            },
+            "wait": {
+              "observed_samples": 100,
+              "share_of_all_samples_pct": 0.4490749056942698,
+              "samples_per_1000_executions": 1.2056327160493827
+            }
+          },
+          "opcode_counts": {
+            "BAR.SYNC.DEFER_BLOCKING": 512,
+            "BRA": 1024,
+            "BSSY.RECONVERGENT": 1024,
+            "BSYNC.RECONVERGENT": 1024,
+            "EXIT": 1536,
+            "F2FP.F16.F32.PACK_AB": 8192,
+            "FADD": 2048,
+            "FMUL": 16384,
+            "FSETP.NE.AND": 1024,
+            "IADD": 7168,
+            "IADD.64": 512,
+            "IMAD": 3072,
+            "IMAD.SHL.U32": 2048,
+            "IMAD.WIDE.U32": 2560,
+            "ISETP.GE.AND": 2048,
+            "ISETP.GE.OR": 512,
+            "LDC.64": 1536,
+            "LDCU": 1024,
+            "LDCU.64": 512,
+            "LDS.128": 2048,
+            "LEA": 1536,
+            "LEA.HI": 512,
+            "LEA.HI.X": 1024,
+            "LOP3.LUT": 1024,
+            "MOV": 3584,
+            "MUFU.RCP": 1024,
+            "NOP": 1024,
+            "R2P": 512,
+            "S2R": 512,
+            "S2UR": 512,
+            "SEL": 1024,
+            "SHF.L.U64.HI": 512,
+            "SHF.R.U32.HI": 1024,
+            "SHFL.BFLY": 2048,
+            "STG.E.128": 2048,
+            "STS": 8192,
+            "ULEA": 512,
+            "UMOV": 512
+          }
+        },
+        "top_pcs": {
+          "stall_mio": [
+            {
+              "offset": "0x3c00",
+              "instruction": "MUFU.EX2 R137, R137",
+              "observed_samples": 44,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.19759295850547873
+            },
+            {
+              "offset": "0x3030",
+              "instruction": "LDGSTS.E.BYPASS.LTC128B.128 [R127+0x5000], desc[UR12][R74.64], !P0",
+              "observed_samples": 28,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.12574097359439554
+            },
+            {
+              "offset": "0x3080",
+              "instruction": "LDSM.16.M88.4 R76, [R114]",
+              "observed_samples": 20,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.08981498113885396
+            },
+            {
+              "offset": "0x2e80",
+              "instruction": "LDGSTS.E.BYPASS.LTC128B.128 [R127+0x3800], desc[UR12][R68.64], !P0",
+              "observed_samples": 19,
+              "executions": 7168,
+              "share_of_all_samples_pct": 0.08532423208191127
+            },
+            {
+              "offset": "0x30b0",
+              "instruction": "LDGDEPBAR",
+              "observed_samples": 15,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.06736123585414047
+            }
+          ],
+          "stall_barrier": [
+            {
+              "offset": "0x2f90",
+              "instruction": "@!PT  LDS RZ, [RZ]",
+              "observed_samples": 176,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.7903718340219149
+            },
+            {
+              "offset": "0x1660",
+              "instruction": "@!P3  BRA 0x10005714500",
+              "observed_samples": 28,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.12574097359439554
+            },
+            {
+              "offset": "0x4c00",
+              "instruction": "@!P4  LDS.128 R4, [R127]",
+              "observed_samples": 27,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.12125022453745285
+            },
+            {
+              "offset": "0xe50",
+              "instruction": "@!P4  LDC R3, c[0x0][0x3c4]",
+              "observed_samples": 24,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.10777797736662476
+            },
+            {
+              "offset": "0x0",
+              "instruction": "LDC R1, c[0x0][0x37c]",
+              "observed_samples": 0,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.0
+            }
+          ],
+          "stall_long_sb": [
+            {
+              "offset": "0xdf0",
+              "instruction": "BAR.SYNC.DEFER_BLOCKING 0x1, 0x80",
+              "observed_samples": 447,
+              "executions": 512,
+              "share_of_all_samples_pct": 2.007364828453386
+            },
+            {
+              "offset": "0x3610",
+              "instruction": "SHFL.BFLY PT, R3, R0, 0x2, 0x1f",
+              "observed_samples": 50,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.2245374528471349
+            },
+            {
+              "offset": "0x1850",
+              "instruction": "MOV R6, 0xff800000",
+              "observed_samples": 16,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.07185198491108317
+            },
+            {
+              "offset": "0x8f0",
+              "instruction": "@!P0  LEA R20, P1, R18, R123, 0x1",
+              "observed_samples": 8,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.03592599245554159
+            },
+            {
+              "offset": "0x4c60",
+              "instruction": "LDS.128 R4, [R127+0x800]",
+              "observed_samples": 8,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.03592599245554159
+            }
+          ],
+          "stall_short_sb": [
+            {
+              "offset": "0x36d0",
+              "instruction": "FMNMX R77, R75, R68, !PT",
+              "observed_samples": 238,
+              "executions": 7680,
+              "share_of_all_samples_pct": 1.0687982755523622
+            },
+            {
+              "offset": "0x30f0",
+              "instruction": "HMMA.16816.F32 R4, R76, R80, RZ",
+              "observed_samples": 164,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.7364828453386025
+            },
+            {
+              "offset": "0x470",
+              "instruction": "IMAD.WIDE.U32 R22, R4, UR10, R132",
+              "observed_samples": 46,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.2065744566193641
+            },
+            {
+              "offset": "0x36e0",
+              "instruction": "FMNMX R3, R74, R3, !PT",
+              "observed_samples": 43,
+              "executions": 7680,
+              "share_of_all_samples_pct": 0.193102209448536
+            },
+            {
+              "offset": "0xc0",
+              "instruction": "SHF.L.U64.HI R17, R6, 0x6, R7",
+              "observed_samples": 38,
+              "executions": 512,
+              "share_of_all_samples_pct": 0.17064846416382254
+            }
+          ]
+        },
+        "resources": {
+          "launch__registers_per_thread": "151",
+          "launch__registers_per_thread_allocated": "152.000000",
+          "derived__local_spilling_requests": "0",
+          "derived__shared_spilling_requests": "0"
+        },
+        "command": {
+          "command": [
+            "/usr/local/cuda/bin/ncu",
+            "--section",
+            "SpeedOfLight",
+            "--section",
+            "SchedulerStats",
+            "--section",
+            "WarpStateStats",
+            "--section",
+            "InstructionStats",
+            "--section",
+            "LaunchStats",
+            "--section",
+            "SourceCounters",
+            "--section",
+            "MemoryWorkloadAnalysis",
+            "--cache-control",
+            "none",
+            "--clock-control",
+            "none",
+            "--warp-sampling-interval",
+            "0",
+            "--target-processes",
+            "all",
+            "--kernel-name",
+            "regex:.*FlashAttentionForwardAmpere.*",
+            "--launch-skip",
+            "102",
+            "--launch-count",
+            "1",
+            "--export",
+            "/tmp/prefill-final-profile/cutlass-runtime-noncausal",
+            "/tmp/cutlass-ctm-venv/bin/python",
+            "/home/nihalp/prod/cuda-rust/cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/launch.py",
+            "--seq-q",
+            "1024",
+            "--seq-k",
+            "1024",
+            "--heads",
+            "8",
+            "--noncausal",
+            "--shape-mode",
+            "runtime",
+            "--warmup",
+            "100",
+            "--iters",
+            "31"
+          ],
+          "environment": {
+            "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+            "CUDA_VISIBLE_DEVICES": "1",
+            "CUTE_DSL_ARCH": "sm_120a",
+            "PYTHONPATH": "/tmp/fmha-cutlass47/nvidia_cutlass_dsl/dsl_packages:/tmp/fmha-cutlass47:/home/nihalp/dev/cutlass-dsl-venv/lib/python3.12/site-packages"
+          }
+        }
+      }
+    }
+  },
+  "final_measurements": [
+    {
+      "provenance": {
+        "path": "/tmp/prefill-optimization/profiled-final-runtime/causal/run-cqiz6kc0/report.json",
+        "sha256": "6796ff6a97934a514a49daedaec03bdf284c21c6791b62638c196a6759410671",
+        "size_bytes": 149260
+      },
+      "parameters": {
+        "seq_q": 1024,
+        "seq_k": 1024,
+        "heads": 8,
+        "causal": true,
+        "shape_mode": "runtime",
+        "input_scale": 1,
+        "zero_query": false,
+        "device": 0,
+        "warmup": 100,
+        "samples": 31,
+        "rounds": 3,
+        "timeout": 600
+      },
+      "metric": "Nsight Systems kernel-active duration",
+      "aggregation": "median of each round's kernel samples, then median of round medians",
+      "rust_us": 16.096,
+      "reference_us": 15.743,
+      "rust_gap_pct": 2.242266404116111,
+      "binary": {
+        "path": "/tmp/prefill-profiled-final/prefill",
+        "sha256": "0b62c422fba70789d4f31331fe3f2cb736a174698300a328e9d9579480d2a1b0",
+        "size_bytes": 1613600
+      }
+    },
+    {
+      "provenance": {
+        "path": "/tmp/prefill-optimization/profiled-final-runtime/noncausal/run-li4s01vv/report.json",
+        "sha256": "151879808b891947f7773a948290bb3205e76926bcebef216ffd071212bd2190",
+        "size_bytes": 150293
+      },
+      "parameters": {
+        "seq_q": 1024,
+        "seq_k": 1024,
+        "heads": 8,
+        "causal": false,
+        "shape_mode": "runtime",
+        "input_scale": 1,
+        "zero_query": false,
+        "device": 0,
+        "warmup": 100,
+        "samples": 31,
+        "rounds": 3,
+        "timeout": 600
+      },
+      "metric": "Nsight Systems kernel-active duration",
+      "aggregation": "median of each round's kernel samples, then median of round medians",
+      "rust_us": 16.32,
+      "reference_us": 15.744,
+      "rust_gap_pct": 3.658536585365857,
+      "binary": {
+        "path": "/tmp/prefill-profiled-final/prefill",
+        "sha256": "0b62c422fba70789d4f31331fe3f2cb736a174698300a328e9d9579480d2a1b0",
+        "size_bytes": 1613600
+      }
+    },
+    {
+      "provenance": {
+        "path": "/tmp/prefill-optimization/profiled-final-static/causal/run-j29e14ck/report.json",
+        "sha256": "65c41bc59263ea653bd8598d4354b87ae511f48619aff42d8dceeeb236212219",
+        "size_bytes": 149208
+      },
+      "parameters": {
+        "seq_q": 1024,
+        "seq_k": 1024,
+        "heads": 8,
+        "causal": true,
+        "shape_mode": "static",
+        "input_scale": 1,
+        "zero_query": false,
+        "device": 0,
+        "warmup": 100,
+        "samples": 31,
+        "rounds": 3,
+        "timeout": 600
+      },
+      "metric": "Nsight Systems kernel-active duration",
+      "aggregation": "median of each round's kernel samples, then median of round medians",
+      "rust_us": 15.776,
+      "reference_us": 15.52,
+      "rust_gap_pct": 1.6494845360824684,
+      "binary": {
+        "path": "/tmp/prefill-profiled-final/prefill",
+        "sha256": "0b62c422fba70789d4f31331fe3f2cb736a174698300a328e9d9579480d2a1b0",
+        "size_bytes": 1613600
+      }
+    },
+    {
+      "provenance": {
+        "path": "/tmp/prefill-optimization/profiled-final-static/noncausal/run-2ln6whjy/report.json",
+        "sha256": "cfa053f7a4d38b25bd92d5bf8955d5fddc1543714957a50597944f692ca1ed3f",
+        "size_bytes": 150227
+      },
+      "parameters": {
+        "seq_q": 1024,
+        "seq_k": 1024,
+        "heads": 8,
+        "causal": false,
+        "shape_mode": "static",
+        "input_scale": 1,
+        "zero_query": false,
+        "device": 0,
+        "warmup": 100,
+        "samples": 31,
+        "rounds": 3,
+        "timeout": 600
+      },
+      "metric": "Nsight Systems kernel-active duration",
+      "aggregation": "median of each round's kernel samples, then median of round medians",
+      "rust_us": 15.808,
+      "reference_us": 15.552,
+      "rust_gap_pct": 1.6460905349794164,
+      "binary": {
+        "path": "/tmp/prefill-profiled-final/prefill",
+        "sha256": "0b62c422fba70789d4f31331fe3f2cb736a174698300a328e9d9579480d2a1b0",
+        "size_bytes": 1613600
+      }
+    }
+  ],
+  "causal_code_equivalence": {
+    "provenance": {
+      "path": "/tmp/prefill-profiled-final/sass-equivalence.json",
+      "sha256": "95a60240bb72e51daedce9c176287dadebe11317c5a5c67c1bdbb3cba2a77e41",
+      "size_bytes": 2457
+    },
+    "results": [
+      {
+        "symbol": "fmha_prefill_TID_dee726da1349085a0af582adf224d032",
+        "same_sass": true,
+        "narrow_instructions": 1320,
+        "final_instructions": 1320,
+        "narrow_sass_sha256": "d430e41fefb1190fa311660800d2dca71fe663ddd19a92fbd0cf1ab21b144250",
+        "final_sass_sha256": "d430e41fefb1190fa311660800d2dca71fe663ddd19a92fbd0cf1ab21b144250",
+        "same_instruction_encodings": true,
+        "encoding_words": 2640,
+        "narrow_encoding_sha256": "608fda07b13d35ef462c4d92529460cb1bec7647899dbb5631610c4ec5b031ad",
+        "final_encoding_sha256": "608fda07b13d35ef462c4d92529460cb1bec7647899dbb5631610c4ec5b031ad"
+      },
+      {
+        "symbol": "fmha_prefill_TID_4e18005ffb21c986d6a0434f765e4370",
+        "same_sass": false,
+        "narrow_instructions": 1232,
+        "final_instructions": 1224,
+        "narrow_sass_sha256": "e51915c1bdeacc36f0fc8c0b8424c396263c4635edc1a235a1baa6c941011487",
+        "final_sass_sha256": "85650790fb4c0d7f8acd50882d0945278cc6daece755bdfb1f4e96f820508b5d",
+        "same_instruction_encodings": false,
+        "encoding_words": 2448,
+        "narrow_encoding_sha256": "4a38f7a676b72e047b2f2c1bb3f16b1fd09f26e9aca611e52ed7e7111931669f",
+        "final_encoding_sha256": "54d67ac78fe62e5c12be189abf8bde30f2e5acbcc6f550ea55755cefd48e29b9"
+      },
+      {
+        "symbol": "fmha_prefill_TID_b4afed6137c9e184a61ef298372090de",
+        "same_sass": true,
+        "narrow_instructions": 1104,
+        "final_instructions": 1104,
+        "narrow_sass_sha256": "a4b45729e5eb0168f78d3a319c8071c29c505fd59c1c3a9d4b87df4731c0ce71",
+        "final_sass_sha256": "a4b45729e5eb0168f78d3a319c8071c29c505fd59c1c3a9d4b87df4731c0ce71",
+        "same_instruction_encodings": true,
+        "encoding_words": 2208,
+        "narrow_encoding_sha256": "0f901e0148d9222b0255f91818a4b26a3437fef21810da4362b7ed22d1e226a1",
+        "final_encoding_sha256": "0f901e0148d9222b0255f91818a4b26a3437fef21810da4362b7ed22d1e226a1"
+      },
+      {
+        "symbol": "fmha_prefill_TID_89b6d3c167850566b451c3012e30d811",
+        "same_sass": false,
+        "narrow_instructions": 992,
+        "final_instructions": 984,
+        "narrow_sass_sha256": "6596581937d8ab4b9961a5bcf98561889148b9f3a5c9f1f0cdf7a52cbc0fd64f",
+        "final_sass_sha256": "285f7a5f908f2b49531224c50ce0fc62ceea430b1ccb76a438d33ee5341ff1a2",
+        "same_instruction_encodings": false,
+        "encoding_words": 1968,
+        "narrow_encoding_sha256": "cc89d69f21733f66574b4bd30ede98b827ef5934a4f7a302870bc78ace9b84ba",
+        "final_encoding_sha256": "baca26ccfbd3e811c15fb1d72f04ff97980b1a4864b5cb13c4a8a24f9dd1aaa9"
+      }
+    ],
+    "prior_narrow_profile_analysis": {
+      "path": "/tmp/prefill-narrow-matrix-profile/analysis.json",
+      "sha256": "f29d040bdd55a4cf77239efc930ef3c04d12d9ea99f0abcd4b609f5d1ec3be58",
+      "size_bytes": 367704
+    }
+  },
+  "build_manifest": {
+    "provenance": {
+      "path": "/tmp/prefill-profiled-final/build-manifest.json",
+      "sha256": "bf8da2399a09401197c10e0f893743472d7f067c9c379913b6409a544fd3cc04",
+      "size_bytes": 4073
+    },
+    "contents": {
+      "binary_sha256": "0b62c422fba70789d4f31331fe3f2cb736a174698300a328e9d9579480d2a1b0",
+      "cubin_sha256": "b2846b1627b9a1448e36482985008b22bc3ee55e1b65ac5f9b9c077333689c1e",
+      "backend_sha256": "daf3a06537289d764da908e10ffe26f7f309a77caf514492658a9f3a6a0910cd",
+      "compiler_library_sha256": "57df017e3585a10443c74c8b4cd99bda854242fb2f4c9534cf56d58c2c741628",
+      "cutlass_version": "4.7.0",
+      "target": "sm_120a",
+      "profile": "cutlass-full-cute-mlir22",
+      "generated_at_utc": "2026-10-12T07:01:02.482301+00:00",
+      "git_head": "53cc7555577b9bf30f67e026a21ca0700dd678c5",
+      "build_script": "#!/usr/bin/env bash\nset -eu\ncd /home/nihalp/prod/cuda-rust/cuda-oxide\nexport CUDA_OXIDE_BACKEND=/tmp/primitives-api-evidence/tools/backend/x86_64-unknown-linux-gnu/debug/librustc_codegen_cuda.so\nexport CUDA_OXIDE_CUTLASS_COMPILER=/home/nihalp/.cargo/cuda-oxide/toolchains/cutlass/4.7.0/x86_64-cu13/lib/libCutlassCompiler.so\nexport CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir\nexport CUDA_OXIDE_MLIR_PROFILE=cutlass-full-cute-mlir22\nexport CUDA_OXIDE_DUMP_MIR=1 CUDA_OXIDE_VERBOSE=1\nexport CUDA_OXIDE_PTX_DIR=/tmp/fmha-prefill-sm120a-build\nexport CUDA_OXIDE_MLIR_OUTPUT=/tmp/fmha-prefill-sm120a-build/fmha.mlir\nmkdir -p /tmp/fmha-prefill-sm120a-build\n/tmp/primitives-api-evidence/tools/cli/x86_64-unknown-linux-gnu/debug/cargo-oxide build --arch sm_120a --cargo-target-dir /tmp/fmha-prefill-build/target --device-codegen-crate fmha_prefill_sm120a_cute -- --manifest-path cute-rs-preview/examples/fmha_prefill_sm120a_cute/Cargo.toml --release --offline > /tmp/fmha-prefill-sm120a-build/build.log 2>&1 || { tail -65 /tmp/fmha-prefill-sm120a-build/build.log; exit 1; }\ntail -8 /tmp/fmha-prefill-sm120a-build/build.log\n",
+      "source_files": [
+        {
+          "path": "cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/src/kernel.rs",
+          "sha256": "c45e0f910cd30d26297a0baf17c34b13edd689788ce2e01a65f7ad200bb86cbe"
+        },
+        {
+          "path": "cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/src/runner.rs",
+          "sha256": "a79c197e925bc9f0eb2d63d3031a03bcc2a238e9a898946161f65287df1a297f"
+        },
+        {
+          "path": "cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/src/fixture.rs",
+          "sha256": "245294d8a7749c7f961822c189a7c42e0b0a4c600e69c002c209a2502a179e02"
+        },
+        {
+          "path": "cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/src/main.rs",
+          "sha256": "b83bcf2c1d86d00c63c9fb4fc105df707924d55056b0ec0de62593b3279ecefc"
+        },
+        {
+          "path": "cuda-oxide/crates/cuda-oxide-mlir-export/src/nvvm_attention.rs",
+          "sha256": "57881693a7477890c29976374bb26a41ead7db2d74504d223b2ec473db27fe5d"
+        },
+        {
+          "path": "cuda-oxide/crates/cuda-oxide-mlir-export/src/mir_memory.rs",
+          "sha256": "46b30874559e1bffa04e155f5ac4b85fd0e727f36c080b88cdc2b9ddab3b465e"
+        },
+        {
+          "path": "cuda-oxide/crates/cuda-oxide-mlir-export/src/cute_attention.rs",
+          "sha256": "832b09604db9a71d3310e602bea8d307f8c7bb1f14b5ad0351da687a6f5eed33"
+        },
+        {
+          "path": "cuda-oxide/crates/mir-importer/src/translator/cute/mod.rs",
+          "sha256": "490c3e164c6db8fc73197022888a18dc017fea40e00098220f71d058894d4c15"
+        },
+        {
+          "path": "cuda-oxide/cute-rs-preview/dialect-cute/src/attributes.rs",
+          "sha256": "b8056286b11ab75e6d82126384a9790bee9442a5b0d70509a8d9d6ac99713e15"
+        },
+        {
+          "path": "cuda-oxide/cute-rs-preview/dialect-cute/src/ops.rs",
+          "sha256": "f04c5e295d46d1b20dffbf5348a5a45d8201b12300494d38ed3bf4acc3dcae62"
+        },
+        {
+          "path": "cuda-oxide/cute-rs-preview/cute-rs/src/mma.rs",
+          "sha256": "16db11c4a3a84a4e5adaf102d9da035aefc64811c15b170a65029638367eb63a"
+        },
+        {
+          "path": "cuda-oxide/cute-rs-preview/cute-rs/src/lib.rs",
+          "sha256": "7cefa426379537d8825b2d975180bc4039dbc269964d3ad38cdd142561089812"
+        },
+        {
+          "path": "cuda-oxide/rust-toolchain.toml",
+          "sha256": "40b2e82ebc8031485b670b8634d923d97bb2ad2d36a6634329cab7718e789b4c"
+        },
+        {
+          "path": "cuda-oxide/crates/cuda-oxide-codegen/src/cutlass_backend.rs",
+          "sha256": "913898b7ce04078d5180af24686f50736d547ef7091c73a5ef1318c4c9f47a71"
+        }
+      ]
+    }
+  },
+  "durable_record": {
+    "source_analysis": {
+      "path": "/tmp/prefill-profiled-final-profile/residual-analysis.json",
+      "sha256": "b6220a23aa94afad684bdde5b90740a3a65e978c774fe61423ebcca4c84389d5",
+      "size_bytes": 175819
+    },
+    "note": "Original analysis fields preserved. Exact profiler commands and build manifests are embedded so their contents survive loss of temporary paths. Temporary paths remain as historical provenance."
+  },
+  "embedded_build_provenance": {
+    "profiled_final": {
+      "provenance": {
+        "path": "/tmp/prefill-profiled-final/build-manifest.json",
+        "sha256": "bf8da2399a09401197c10e0f893743472d7f067c9c379913b6409a544fd3cc04",
+        "size_bytes": 4073
+      },
+      "contents": {
+        "binary_sha256": "0b62c422fba70789d4f31331fe3f2cb736a174698300a328e9d9579480d2a1b0",
+        "cubin_sha256": "b2846b1627b9a1448e36482985008b22bc3ee55e1b65ac5f9b9c077333689c1e",
+        "backend_sha256": "daf3a06537289d764da908e10ffe26f7f309a77caf514492658a9f3a6a0910cd",
+        "compiler_library_sha256": "57df017e3585a10443c74c8b4cd99bda854242fb2f4c9534cf56d58c2c741628",
+        "cutlass_version": "4.7.0",
+        "target": "sm_120a",
+        "profile": "cutlass-full-cute-mlir22",
+        "generated_at_utc": "2026-10-12T07:01:02.482301+00:00",
+        "git_head": "53cc7555577b9bf30f67e026a21ca0700dd678c5",
+        "build_script": "#!/usr/bin/env bash\nset -eu\ncd /home/nihalp/prod/cuda-rust/cuda-oxide\nexport CUDA_OXIDE_BACKEND=/tmp/primitives-api-evidence/tools/backend/x86_64-unknown-linux-gnu/debug/librustc_codegen_cuda.so\nexport CUDA_OXIDE_CUTLASS_COMPILER=/home/nihalp/.cargo/cuda-oxide/toolchains/cutlass/4.7.0/x86_64-cu13/lib/libCutlassCompiler.so\nexport CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir\nexport CUDA_OXIDE_MLIR_PROFILE=cutlass-full-cute-mlir22\nexport CUDA_OXIDE_DUMP_MIR=1 CUDA_OXIDE_VERBOSE=1\nexport CUDA_OXIDE_PTX_DIR=/tmp/fmha-prefill-sm120a-build\nexport CUDA_OXIDE_MLIR_OUTPUT=/tmp/fmha-prefill-sm120a-build/fmha.mlir\nmkdir -p /tmp/fmha-prefill-sm120a-build\n/tmp/primitives-api-evidence/tools/cli/x86_64-unknown-linux-gnu/debug/cargo-oxide build --arch sm_120a --cargo-target-dir /tmp/fmha-prefill-build/target --device-codegen-crate fmha_prefill_sm120a_cute -- --manifest-path cute-rs-preview/examples/fmha_prefill_sm120a_cute/Cargo.toml --release --offline > /tmp/fmha-prefill-sm120a-build/build.log 2>&1 || { tail -65 /tmp/fmha-prefill-sm120a-build/build.log; exit 1; }\ntail -8 /tmp/fmha-prefill-sm120a-build/build.log\n",
+        "source_files": [
+          {
+            "path": "cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/src/kernel.rs",
+            "sha256": "c45e0f910cd30d26297a0baf17c34b13edd689788ce2e01a65f7ad200bb86cbe"
+          },
+          {
+            "path": "cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/src/runner.rs",
+            "sha256": "a79c197e925bc9f0eb2d63d3031a03bcc2a238e9a898946161f65287df1a297f"
+          },
+          {
+            "path": "cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/src/fixture.rs",
+            "sha256": "245294d8a7749c7f961822c189a7c42e0b0a4c600e69c002c209a2502a179e02"
+          },
+          {
+            "path": "cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/src/main.rs",
+            "sha256": "b83bcf2c1d86d00c63c9fb4fc105df707924d55056b0ec0de62593b3279ecefc"
+          },
+          {
+            "path": "cuda-oxide/crates/cuda-oxide-mlir-export/src/nvvm_attention.rs",
+            "sha256": "57881693a7477890c29976374bb26a41ead7db2d74504d223b2ec473db27fe5d"
+          },
+          {
+            "path": "cuda-oxide/crates/cuda-oxide-mlir-export/src/mir_memory.rs",
+            "sha256": "46b30874559e1bffa04e155f5ac4b85fd0e727f36c080b88cdc2b9ddab3b465e"
+          },
+          {
+            "path": "cuda-oxide/crates/cuda-oxide-mlir-export/src/cute_attention.rs",
+            "sha256": "832b09604db9a71d3310e602bea8d307f8c7bb1f14b5ad0351da687a6f5eed33"
+          },
+          {
+            "path": "cuda-oxide/crates/mir-importer/src/translator/cute/mod.rs",
+            "sha256": "490c3e164c6db8fc73197022888a18dc017fea40e00098220f71d058894d4c15"
+          },
+          {
+            "path": "cuda-oxide/cute-rs-preview/dialect-cute/src/attributes.rs",
+            "sha256": "b8056286b11ab75e6d82126384a9790bee9442a5b0d70509a8d9d6ac99713e15"
+          },
+          {
+            "path": "cuda-oxide/cute-rs-preview/dialect-cute/src/ops.rs",
+            "sha256": "f04c5e295d46d1b20dffbf5348a5a45d8201b12300494d38ed3bf4acc3dcae62"
+          },
+          {
+            "path": "cuda-oxide/cute-rs-preview/cute-rs/src/mma.rs",
+            "sha256": "16db11c4a3a84a4e5adaf102d9da035aefc64811c15b170a65029638367eb63a"
+          },
+          {
+            "path": "cuda-oxide/cute-rs-preview/cute-rs/src/lib.rs",
+            "sha256": "7cefa426379537d8825b2d975180bc4039dbc269964d3ad38cdd142561089812"
+          },
+          {
+            "path": "cuda-oxide/rust-toolchain.toml",
+            "sha256": "40b2e82ebc8031485b670b8634d923d97bb2ad2d36a6634329cab7718e789b4c"
+          },
+          {
+            "path": "cuda-oxide/crates/cuda-oxide-codegen/src/cutlass_backend.rs",
+            "sha256": "913898b7ce04078d5180af24686f50736d547ef7091c73a5ef1318c4c9f47a71"
+          }
+        ]
+      },
+      "binary": {
+        "path": "/tmp/prefill-profiled-final/prefill",
+        "sha256": "0b62c422fba70789d4f31331fe3f2cb736a174698300a328e9d9579480d2a1b0",
+        "size_bytes": 1613600
+      },
+      "cubin": {
+        "path": "/tmp/prefill-profiled-final/prefill.cubin",
+        "sha256": "b2846b1627b9a1448e36482985008b22bc3ee55e1b65ac5f9b9c077333689c1e",
+        "size_bytes": 122864
+      }
+    }
+  }
+}

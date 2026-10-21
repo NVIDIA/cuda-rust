@@ -1,0 +1,15 @@
+{
+  "affected_suite_passed": 241,
+  "affected_suite_failed": 0,
+  "affected_suite_ignored": 1,
+  "source_sha256": {
+    "cute-rs-preview/cute-rs/src/tile.rs": "cd824ab0b07c2e9452c19012605aeca0d182eb160e4a46dad21b0dbb6108c22e",
+    "cute-rs-preview/dialect-cute/src/copy_ops.rs": "dd28eed6c0ebc892014b7736c07ecf5d76b99f15508f15b27b5ccdabc16c932f",
+    "crates/mir-importer/src/translator/cute/emit.rs": "9f50edf9b851298cd788126c480980288937f86e7a5cde99990aa533791b671c",
+    "crates/mir-importer/src/translator/cute/mod.rs": "0fb85a6fa31d3a84b55d0e8d600336b7a66236a04bfa6c3e4b42a14541c6610c",
+    "crates/cuda-oxide-mlir-export/src/cute.rs": "4e60cf47ac7962c680ce1001dd7ba279b323d1a8951f9bc0bfb269e6e294eb57",
+    "crates/cuda-oxide-codegen/src/prep.rs": "fc62078c546ca15b994cf7b8847de4fa116c49524e033da0232f8b5f8fbabbac",
+    "cute-rs-preview/cute-rs/examples/global_store_compile.rs": "8bb5c41211979303876b3d939ce322a0eca86b1cabdd84b148a6b21e13fc331e"
+  },
+  "fixture_cubin_sha256": "c947d09534b48cfb2f4a661d2a5f896b93b8bd8a4fffa0a3dac8409f71d03b78"
+}

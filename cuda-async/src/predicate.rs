@@ -384,23 +384,6 @@ impl Predicate {
     }
 }
 
-/// One source frame of a compiler-generated check, innermost frame first.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CheckFrame {
-    pub file: String,
-    /// One-based source line.
-    pub line: u32,
-    /// Zero-based source column.
-    pub column: u32,
-    pub function: Option<String>,
-}
-
-/// The original access and its inline callers, retained when a check moves.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CheckOrigin {
-    pub frames: Vec<CheckFrame>,
-}
-
 /// A predicate hoisted out of the device kernel to the host launcher, with a
 /// diagnostic `cause` rendered if it fails. Carried on the compiled kernel
 /// (`Validator`) and evaluated once per launch by the host's `validate_launch`.
@@ -410,31 +393,6 @@ pub struct CheckOrigin {
 pub struct LaunchCheck {
     pub predicate: Predicate,
     pub cause: String,
-    /// All distinct source origins sharing this predicate. Deduplication keeps
-    /// one host comparison without discarding the other accesses it protects.
-    pub origins: Vec<CheckOrigin>,
-}
-
-impl std::fmt::Display for LaunchCheck {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.cause)?;
-        for origin in &self.origins {
-            for (index, frame) in origin.frames.iter().enumerate() {
-                let relation = if index == 0 { "at" } else { "inlined at" };
-                write!(
-                    f,
-                    "\n  {relation} {}:{}:{}",
-                    frame.file,
-                    frame.line,
-                    frame.column + 1
-                )?;
-                if let Some(function) = &frame.function {
-                    write!(f, " ({function})")?;
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]

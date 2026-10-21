@@ -9,6 +9,7 @@
 //! the old CUDATileFunctionCompiler.
 
 use super::_module::CUDATileModules;
+use super::launch_checks::LaunchChecks;
 use crate::ast::{SourceLocation, SpanBase};
 use crate::bounds::Bounds;
 use crate::error::{JITError, SpannedJITError};
@@ -72,7 +73,7 @@ pub struct CUDATileFunctionCompiler<'m> {
     /// (`Resolution::Launch`). Interior-mutable because compile passes take
     /// `&self`; merged into the `Validator` in [`Self::get_validator`] and run
     /// once per launch by the host `validate_launch`.
-    pub(crate) launch_checks: RefCell<Vec<cuda_async::predicate::LaunchCheck>>,
+    launch_checks: RefCell<LaunchChecks>,
     pub(crate) gpu_name: String,
     pub(crate) target_capabilities: Option<cutile_ir::capabilities::TargetCapabilities>,
     pub(crate) optimization_hints: OptimizationHints,
@@ -325,64 +326,20 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         let obligation = Obligation::new(predicate, cause);
         match resolve(&obligation, &self.assumptions) {
             Resolution::Jit => true,
-            Resolution::Launch(mut check) => {
-                // Canonical predicates make duplicate detection exact. Two
-                // obligations reducing to the same host compare (e.g. a shared
-                // `Dim`'s divisibility, once per binding) cost one check.
-                let mut checks = self.launch_checks.borrow_mut();
-                let origin = self.check_origin(span);
-                if let Some(existing) = checks.iter_mut().find(|c| c.predicate == check.predicate) {
-                    if !origin.frames.is_empty() && !existing.origins.contains(&origin) {
-                        existing.origins.push(origin);
-                    }
-                } else {
-                    if !origin.frames.is_empty() {
-                        check.origins.push(origin);
-                    }
-                    checks.push(check);
-                }
+            Resolution::Launch(check) => {
+                self.launch_checks
+                    .borrow_mut()
+                    .insert(check, &self.ir_location(span));
                 true
             }
             Resolution::Device => false,
         }
     }
 
-    /// Flatten the same source/inline chain emitted into Tile IR into host
-    /// data. Host checks must not depend on the Tile IR crate or debug mode.
-    fn check_origin(&self, span: &proc_macro2::Span) -> cuda_async::predicate::CheckOrigin {
-        use cuda_async::predicate::{CheckFrame, CheckOrigin};
-        use cutile_ir::ir::{DebugScope, Location};
-        fn collect(location: &Location, frames: &mut Vec<CheckFrame>) {
-            match location {
-                Location::CallSite { callee, caller } => {
-                    collect(callee, frames);
-                    collect(caller, frames);
-                }
-                Location::FileLineCol {
-                    filename,
-                    line,
-                    column,
-                } => frames.push(CheckFrame {
-                    file: filename.clone(),
-                    line: *line,
-                    column: *column,
-                    function: None,
-                }),
-                Location::DebugInfo(info) => frames.push(CheckFrame {
-                    file: info.filename.clone(),
-                    line: info.line,
-                    column: info.column,
-                    function: match &info.scope {
-                        DebugScope::Subprogram(scope) => Some(scope.name.clone()),
-                        _ => None,
-                    },
-                }),
-                Location::Unknown => {}
-            }
-        }
-        let mut frames = Vec::new();
-        collect(&self.ir_location(span), &mut frames);
-        CheckOrigin { frames }
+    /// Export checks with their source origins rendered in the existing host
+    /// diagnostic field. Structured origins remain internal to the compiler.
+    pub(crate) fn launch_checks(&self) -> Vec<cuda_async::predicate::LaunchCheck> {
+        self.launch_checks.borrow().to_host_checks()
     }
 
     /// The kernel-visible extent of `partition`'s axis `axis`, taken from the
@@ -711,7 +668,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             assumptions,
             param_index,
             param_is_mutable,
-            launch_checks: RefCell::new(Vec::new()),
+            launch_checks: RefCell::new(LaunchChecks::default()),
             gpu_name,
             target_capabilities: None,
             optimization_hints,
@@ -1307,7 +1264,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         let mut validator = self.validator.clone();
         // Surface the launch checks hoisted during compilation so the host runs
         // them at launch.
-        validator.launch_checks = self.launch_checks.borrow().clone();
+        validator.launch_checks = self.launch_checks();
         validator
     }
 

@@ -173,11 +173,37 @@ fn array_bindings_use_entry_function_and_method_definitions() {
                     };
                     let number = i32::from_le_bytes(bytes);
                     match number {
-                    -17 | 23 => assert_helper(&op.location, "array_function", line(HELPERS, "pub fn array_function<const VALUES: [i32; 2]>(x: i32) -> i32 {"), line(HELPERS, "let a = array_function::<{ [-17, 23] }>(x);")),
-                    31 | 37 => assert_helper(&op.location, "array_method", line(HELPERS, "fn array_method(self, _shape: Shape<VALUES>) -> i32 {"), line(HELPERS, "a.array_method(shape![31, 37])")),
-                    41 | 43 => assert_eq!(frames(&op.location)[0].1, line(SOURCE, "fn arrays<const VALUES: [i32; 2]>(out: &mut Tensor<i32, { [32] }>, x: i32) {")),
-                    _ => return,
-                }
+                        -17 | 23 => assert_helper(
+                            &op.location,
+                            "array_function",
+                            line(
+                                HELPERS,
+                                "pub fn array_function<const VALUES: [i32; 2]>(x: i32) -> i32 {",
+                            ),
+                            line(HELPERS, "let a = array_function::<{ [-17, 23] }>(x);"),
+                        ),
+                        31 | 37 => assert_helper(
+                            &op.location,
+                            "array_method",
+                            line(
+                                HELPERS,
+                                "fn array_method(self, _shape: Shape<VALUES>) -> i32 {",
+                            ),
+                            line(HELPERS, "a.array_method(shape![31, 37])"),
+                        ),
+                        41 | 43 => {
+                            let chain = frames(&op.location);
+                            assert!(chain[0].0.ends_with("generated_source_locations.rs"));
+                            assert_eq!(
+                                chain[0].1,
+                                line(
+                                    SOURCE,
+                                    "fn arrays<const VALUES: [i32; 2]>(out: &mut Tensor<i32, { [32] }>, x: i32) {",
+                                )
+                            );
+                        }
+                        _ => return,
+                    }
                     seen.insert(number);
                 },
             );
@@ -215,7 +241,18 @@ fn generated_reduction_regions_keep_the_call_location() {
                     reductions += 1;
                     let origin = &op.location;
                     let chain = frames(origin);
+                    assert_eq!(chain.len(), 3, "{chain:?}");
+                    assert!(chain[0].0.ends_with("fixtures/generated_debug_helpers.rs"));
                     assert_eq!(chain[0].2, Some("reductions"));
+                    assert!(chain[1].0.ends_with("generated_source_locations.rs"));
+                    assert_eq!(chain[1].2, Some("reduction_source"));
+                    assert_eq!(
+                        chain[1].1,
+                        line(
+                            SOURCE,
+                            "let value = reductions(x.partition(shape![32]).load([0]));"
+                        )
+                    );
                     let lines = [
                         "let sum: Tile<f32, { [] }> = reduce_sum(x, 0);",
                         "let product: Tile<f32, { [] }> = reduce_prod(x, 0);",
@@ -323,7 +360,14 @@ fn host_check_errors_keep_all_deduplicated_inline_origins() {
                 1,
                 "one comparison for repeated accesses"
             );
-            assert_eq!(artifacts.launch_checks()[0].origins.len(), 2);
+            assert_eq!(
+                artifacts.launch_checks()[0]
+                    .cause
+                    .matches("\n  at ")
+                    .count(),
+                2,
+                "both distinct access chains belong to the same host diagnostic"
+            );
             let message = cutile::tile_kernel::validate_launch_checks(
                 artifacts.launch_checks(),
                 &[vec![32], vec![0]],

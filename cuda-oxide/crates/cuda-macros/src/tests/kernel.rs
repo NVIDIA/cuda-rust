@@ -222,6 +222,21 @@ fn kernel_launch_context_uses_the_contract_domain_and_coordinate_width_in_either
 }
 
 #[test]
+fn block_index_uses_the_scoped_witness_path() {
+    let mut input: ItemFn = parse_quote! {
+        fn output() {
+            let index = thread::block_index();
+        }
+    };
+    inject_thread_index_scope(&mut input);
+    let expanded = quote!(#input).to_string().replace(' ', "");
+    assert!(expanded.contains("make_kernel_scope::<"));
+    assert!(expanded.contains(&format!(
+        "thread::__internal::block_index(&{KERNEL_SCOPE_LOCAL})"
+    )));
+}
+
+#[test]
 fn thread_index_rewrite_preserves_the_user_call_span_with_multiple_attributes() {
     let mut input: ItemFn = syn::parse_str(
         r#"

@@ -13,9 +13,9 @@
 //! Safety is enforced through the type system and bounds checking:
 //!
 //! 1. **ThreadIndex**: Can only be constructed by `index_1d`,
-//!    `index_2d::<S>`, or `index_2d_runtime(&slice)`, which derive
-//!    the index from hardware built-in variables (`threadIdx`,
-//!    `blockIdx`, `blockDim`) -- read-only special registers assigned
+//!    `index_2d::<S>`, `index_2d_runtime(&slice)`, `warp_index`, or
+//!    `block_index`, which derive the index from hardware built-in variables
+//!    (`threadIdx`, `blockIdx`, `blockDim`, `gridDim`) -- read-only special registers assigned
 //!    by the runtime at kernel launch. Flat spaces combine these into
 //!    a scalar index per thread, with the 2D const stride encoded in
 //!    the index space so mixing const strides is rejected at compile
@@ -40,8 +40,8 @@
 //! `DisjointSlice` from raw memory is also unsafe.
 
 use crate::thread::{
-    FlatIndexSpace, Index1D, Index2D, IndexFormula, LaunchContext, Runtime2DIndex, ThreadIndex,
-    WarpIndex,
+    BlockIndex, FlatIndexSpace, Index1D, Index2D, IndexFormula, LaunchContext, Runtime2DIndex,
+    ThreadIndex, WarpIndex,
 };
 use crate::view::{LinearTiles, RowMajorTiles, RuntimeRowMajorTiles};
 use core::marker::PhantomData;
@@ -133,6 +133,11 @@ impl SpaceLayout for WarpIndex {
     type Data = ();
 }
 
+impl space_layout_sealed::Sealed for BlockIndex {}
+impl SpaceLayout for BlockIndex {
+    type Data = ();
+}
+
 impl<const ROWS: usize, const COLS: usize> space_layout_sealed::Sealed
     for RuntimeRowMajorTiles<ROWS, COLS>
 {
@@ -149,7 +154,8 @@ impl<const ROWS: usize, const COLS: usize> SpaceLayout for RuntimeRowMajorTiles<
 /// The type system enforces these invariants:
 /// 1. Default access via `get_mut(ThreadIndex)` is bounds-checked and sound.
 /// 2. `ThreadIndex` can only be created by trusted index functions
-///    (`index_1d`, `index_2d::<S>`, `index_2d_runtime(&slice)`), which
+///    (`index_1d`, `index_2d::<S>`, `index_2d_runtime(&slice)`, `warp_index`,
+///    `block_index`), which
 ///    derive the index from hardware built-in variables -- read-only
 ///    special registers assigned by the runtime at launch.
 /// 3. Each thread's `ThreadIndex` is unique within its index space when the
@@ -282,6 +288,10 @@ impl<'a, T, const ROW_STRIDE: usize> __LaunchContractDisjointSlice<T, 2>
 }
 
 impl<'a, T> __LaunchContractDisjointSlice<T, 1> for DisjointSlice<'a, T, crate::thread::WarpIndex> {}
+
+impl<'a, T> __LaunchContractDisjointSlice<T, 1> for DisjointSlice<'a, T, BlockIndex> {}
+impl<'a, T> __LaunchContractDisjointSlice<T, 2> for DisjointSlice<'a, T, BlockIndex> {}
+impl<'a, T> __LaunchContractDisjointSlice<T, 3> for DisjointSlice<'a, T, BlockIndex> {}
 
 impl<'a, T> __LaunchContractDisjointSlice<T, 1>
     for DisjointSlice<'a, T, crate::thread::Runtime2DIndex>
@@ -478,9 +488,10 @@ impl<'a, T, IndexSpace: FlatIndexSpace + SpaceLayout> DisjointSlice<'a, T, Index
     /// 1. **Bounds checked**: Returns `None` for out-of-bounds indices.
     ///
     /// 2. **Unique access**: `ThreadIndex` can only be constructed by
-    ///    `index_1d()`, `index_2d::<S>()`, or `index_2d_runtime()`, which
+    ///    `index_1d()`, `index_2d::<S>()`, `index_2d_runtime()`, `warp_index()`
+    ///    or `block_index()`, which
     ///    derive the index from hardware built-in variables (`threadIdx`,
-    ///    `blockIdx`, `blockDim`) -- read-only special registers assigned
+    ///    `blockIdx`, `blockDim`, `gridDim`) -- read-only special registers assigned
     ///    by the runtime at kernel launch. 2D stride is carried in the
     ///    index space, so a slice can only be indexed by a matching witness.
     ///

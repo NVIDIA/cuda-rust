@@ -7,8 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Const-generic array bindings retain their function or method signature as
+  their source origin, and generated reduction bodies retain the reduction
+  call's location and inline chain.
+- Failed host launch checks report their original accesses and inline callers,
+  retaining distinct origins when equivalent predicates share one comparison.
+
 ### Changed
 
+- `cuda_async::predicate::LaunchCheck` now carries `origins`. Code constructing
+  this struct directly must initialize that field (use an empty vector when
+  source information is unavailable).
 - cuTile Rust now lives in the [NVIDIA/cuda-rust](https://github.com/NVIDIA/cuda-rust)
   repository under `cutile-rs/`, next to cuda-oxide (SIMT) and the shared host
   crates (`cuda-bindings`, `cuda-core`, `cuda-core-derive`, `cuda-async`) at the

@@ -1192,12 +1192,10 @@ fn evaluate_launch_check(
     match check.predicate.eval(&resolve_atom) {
         Some(true) => Ok(()),
         Some(false) => Err(Error::KernelLaunch(KernelLaunchError(format!(
-            "launch check failed: {}",
-            check.cause
+            "launch check failed: {check}"
         )))),
         None => Err(Error::KernelLaunch(KernelLaunchError(format!(
-            "launch check has unresolved operands (extent unavailable at launch): {}",
-            check.cause
+            "launch check has unresolved operands (extent unavailable at launch): {check}"
         )))),
     }
 }
@@ -2025,6 +2023,7 @@ mod launch_check_tests {
 
     fn nonzero(param: usize, axis: usize) -> LaunchCheck {
         LaunchCheck {
+            origins: Vec::new(),
             predicate: Predicate::nonzero(Term::atom(Atom::Dim { param, axis })),
             cause: "extent > 0".to_string(),
         }
@@ -2032,6 +2031,7 @@ mod launch_check_tests {
 
     fn view_nonzero(param: usize, axis: usize) -> LaunchCheck {
         LaunchCheck {
+            origins: Vec::new(),
             predicate: Predicate::nonzero(Term::atom(Atom::ViewExtent { param, axis })),
             cause: "view extent > 0".to_string(),
         }

@@ -187,6 +187,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         a_axis: usize,
         b_tensor: &str,
         b_axis: usize,
+        span: &proc_macro2::Span,
     ) -> bool {
         use cuda_async::predicate::{Atom, Predicate, Term};
         // Resolve both tensor names to param indices; if either is not a
@@ -212,6 +213,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         self.lower_obligation(
             predicate,
             format!("dim({a_tensor}, {a_axis}) == dim({b_tensor}, {b_axis})"),
+            span,
         )
     }
 
@@ -238,6 +240,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         b_tensor: &str,
         b_axis: usize,
         tile: i32,
+        span: &proc_macro2::Span,
     ) -> bool {
         use crate::passes::obligation::{resolve, Obligation, Resolution};
         use cuda_async::predicate::{Atom, Predicate, Term};
@@ -296,6 +299,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             format!(
                 "ceil(dim({a_tensor}, {a_axis})/{tile}) <= ceil(dim({b_tensor}, {b_axis})/{tile})"
             ),
+            span,
         )
     }
 
@@ -315,23 +319,70 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         &self,
         predicate: cuda_async::predicate::Predicate,
         cause: impl Into<String>,
+        span: &proc_macro2::Span,
     ) -> bool {
         use crate::passes::obligation::{resolve, Obligation, Resolution};
         let obligation = Obligation::new(predicate, cause);
         match resolve(&obligation, &self.assumptions) {
             Resolution::Jit => true,
-            Resolution::Launch(check) => {
+            Resolution::Launch(mut check) => {
                 // Canonical predicates make duplicate detection exact. Two
                 // obligations reducing to the same host compare (e.g. a shared
                 // `Dim`'s divisibility, once per binding) cost one check.
                 let mut checks = self.launch_checks.borrow_mut();
-                if !checks.iter().any(|c| c.predicate == check.predicate) {
+                let origin = self.check_origin(span);
+                if let Some(existing) = checks.iter_mut().find(|c| c.predicate == check.predicate) {
+                    if !origin.frames.is_empty() && !existing.origins.contains(&origin) {
+                        existing.origins.push(origin);
+                    }
+                } else {
+                    if !origin.frames.is_empty() {
+                        check.origins.push(origin);
+                    }
                     checks.push(check);
                 }
                 true
             }
             Resolution::Device => false,
         }
+    }
+
+    /// Flatten the same source/inline chain emitted into Tile IR into host
+    /// data. Host checks must not depend on the Tile IR crate or debug mode.
+    fn check_origin(&self, span: &proc_macro2::Span) -> cuda_async::predicate::CheckOrigin {
+        use cuda_async::predicate::{CheckFrame, CheckOrigin};
+        use cutile_ir::ir::{DebugScope, Location};
+        fn collect(location: &Location, frames: &mut Vec<CheckFrame>) {
+            match location {
+                Location::CallSite { callee, caller } => {
+                    collect(callee, frames);
+                    collect(caller, frames);
+                }
+                Location::FileLineCol {
+                    filename,
+                    line,
+                    column,
+                } => frames.push(CheckFrame {
+                    file: filename.clone(),
+                    line: *line,
+                    column: *column,
+                    function: None,
+                }),
+                Location::DebugInfo(info) => frames.push(CheckFrame {
+                    file: info.filename.clone(),
+                    line: info.line,
+                    column: info.column,
+                    function: match &info.scope {
+                        DebugScope::Subprogram(scope) => Some(scope.name.clone()),
+                        _ => None,
+                    },
+                }),
+                Location::Unknown => {}
+            }
+        }
+        let mut frames = Vec::new();
+        collect(&self.ir_location(span), &mut frames);
+        CheckOrigin { frames }
     }
 
     /// The kernel-visible extent of `partition`'s axis `axis`, taken from the
@@ -1177,6 +1228,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
 
         // Add arrays as variables.
         for (key, value) in generic_vars.ordered_inst_array() {
+            // Binding materialization has no expression in the source. Use
+            // the user signature, not the generated ABI wrapper's span.
+            let _source = self.push_opaque_call_site(&self._function.sig.span());
             let arr_expr = syn::parse2::<syn::Expr>(format!("{value:?}").parse().unwrap()).unwrap();
             let arr_ty =
                 syn::parse2::<syn::Type>(format!("[i32;{}]", value.len()).parse().unwrap())

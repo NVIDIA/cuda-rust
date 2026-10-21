@@ -185,6 +185,7 @@ pub(crate) fn resolve(obligation: &Obligation, assumptions: &Assumptions) -> Res
         Resolution::Launch(LaunchCheck {
             predicate: obligation.predicate.clone(),
             cause: obligation.cause.clone(),
+            origins: Vec::new(),
         })
     } else {
         Resolution::Device

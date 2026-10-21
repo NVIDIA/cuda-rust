@@ -20,9 +20,9 @@ pub use crate::error::Error;
 
 // Tensor types and traits
 pub use crate::tensor::{
-    IntoPartition, KernelInput, KernelInputStored, KernelOutput, KernelOutputStored,
-    MappedLaunchPartition, Partition, PartitionMut, Reshape, SpecializationBits, Tensor,
-    TensorView, ToHostVec, TryPartition, Unpartition, OWNED,
+    Atomic, IntoPartition, KernelAtomic, KernelInput, KernelInputStored, KernelOutput,
+    KernelOutputStored, MappedLaunchPartition, Partition, PartitionMut, Reshape,
+    SpecializationBits, Tensor, TensorView, ToHostVec, TryPartition, Unpartition, OWNED,
 };
 
 // Tile kernel traits

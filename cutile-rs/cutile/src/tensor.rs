@@ -1446,6 +1446,11 @@ impl<T: DType> Tensor<T> {
         self.strides == contiguous_strides(&self.shape)
     }
 
+    /// Identity of the backing allocation, used for launch alias checks.
+    pub fn storage_id(&self) -> StorageId {
+        StorageId(Arc::as_ptr(&self.storage) as *const () as usize)
+    }
+
     /// Create an `Arc<Tensor<T>>` that shares this tensor's device memory.
     ///
     /// # Safety
@@ -2082,6 +2087,8 @@ pub unsafe trait KernelOutputStored<T: DType>: Send {
     fn strides_hint(&self) -> Vec<i32>;
     fn spec(&self) -> &SpecializationBits;
     fn shape_as_i32(&self) -> Vec<i32>;
+    /// Identity of the backing allocation.
+    fn storage_id(&self) -> StorageId;
 }
 
 /// How a `&mut Tensor` kernel param is stored during execution and recovered.
@@ -2160,6 +2167,9 @@ unsafe impl<T: DType> KernelOutputStored<T> for Partition<Tensor<T>> {
     fn shape_as_i32(&self) -> Vec<i32> {
         self.object.shape.clone()
     }
+    fn storage_id(&self) -> StorageId {
+        self.object.storage_id()
+    }
 }
 
 // SAFETY: the typed tensor/partition supplies the metadata and ABI arguments.
@@ -2221,6 +2231,9 @@ unsafe impl<T: DType> KernelOutputStored<T> for Partition<&mut Tensor<T>> {
     fn shape_as_i32(&self) -> Vec<i32> {
         self.object.shape.clone()
     }
+    fn storage_id(&self) -> StorageId {
+        self.object.storage_id()
+    }
 }
 
 // SAFETY: storage, metadata and arguments delegate to the trusted partition;
@@ -2263,6 +2276,9 @@ unsafe impl<T: DType> KernelOutputStored<T> for MappedLaunchPartition<Partition<
     fn shape_as_i32(&self) -> Vec<i32> {
         self.partition.shape_as_i32()
     }
+    fn storage_id(&self) -> StorageId {
+        KernelOutputStored::storage_id(&self.partition)
+    }
 }
 
 // SAFETY: delegates retention and ABI facts to the trusted borrowed partition;
@@ -2304,6 +2320,9 @@ unsafe impl<T: DType> KernelOutputStored<T> for MappedLaunchPartition<Partition<
 
     fn shape_as_i32(&self) -> Vec<i32> {
         self.partition.shape_as_i32()
+    }
+    fn storage_id(&self) -> StorageId {
+        KernelOutputStored::storage_id(&self.partition)
     }
 }
 
@@ -2388,6 +2407,8 @@ pub unsafe trait KernelInputStored: Send {
     fn strides(&self) -> &[i32];
     fn spec(&self) -> &SpecializationBits;
     fn dtype_str(&self) -> &'static str;
+    /// Identity of the backing allocation.
+    fn storage_id(&self) -> StorageId;
 }
 
 /// Converts a user-provided kernel input into a stored form for execution,
@@ -2439,6 +2460,9 @@ unsafe impl<T: DType> KernelInputStored for Arc<Tensor<T>> {
     fn dtype_str(&self) -> &'static str {
         T::DTYPE.as_str()
     }
+    fn storage_id(&self) -> StorageId {
+        Tensor::storage_id(self)
+    }
 }
 
 // SAFETY: arguments describe the borrowed typed tensor, and Storage::retain
@@ -2469,6 +2493,9 @@ unsafe impl<T: DType + Sync> KernelInputStored for &Tensor<T> {
     }
     fn dtype_str(&self) -> &'static str {
         T::DTYPE.as_str()
+    }
+    fn storage_id(&self) -> StorageId {
+        Tensor::storage_id(self)
     }
 }
 
@@ -2541,6 +2568,9 @@ unsafe impl<'a, T: DType + Sync> KernelInputStored for &'a TensorView<'a, T> {
     fn dtype_str(&self) -> &'static str {
         T::DTYPE.as_str()
     }
+    fn storage_id(&self) -> StorageId {
+        self.base.storage_id()
+    }
 }
 
 impl<'a, T: DType + Sync> KernelInput<T> for &'a TensorView<'a, T> {
@@ -2557,6 +2587,165 @@ impl<'a, T: DType + Sync> KernelInput<T> for &'a TensorView<'a, T> {
 impl<'a, T: DType + Sync> IntoDeviceOp<&'a TensorView<'a, T>> for &'a TensorView<'a, T> {
     type Op = Value<&'a TensorView<'a, T>>;
     fn into_op(self) -> Value<&'a TensorView<'a, T>> {
+        value(self)
+    }
+}
+
+// ── Atomic binding ──────────────────────────────────────────────────────────
+
+/// Opaque identity of a backing allocation used for launch alias checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StorageId(usize);
+
+impl StorageId {
+    /// Synthetic identity for launch-validation tests.
+    #[cfg(test)]
+    pub(crate) fn fake(n: usize) -> Self {
+        StorageId(n)
+    }
+}
+
+/// Exclusive host binding for an aggregation parameter.
+///
+/// ```rust,ignore
+/// // `out` must already hold the identity (0.0) for `atomic_add`.
+/// let mut out = api::zeros::<f32>(&[256, 256]).sync_on(&stream)?;
+/// split_k(out.atomic(), lhs, rhs).grid((2, 2, 4)).sync_on(&stream)?;
+/// ```
+///
+/// The backing must be initialized by the caller; floating-point atomics are
+/// not reproducible.
+#[derive(Debug)]
+pub struct Atomic<B>(B);
+
+impl<T: DType> Atomic<Tensor<T>> {
+    /// Bind an owned tensor atomically.
+    pub fn owned(tensor: Tensor<T>) -> Self {
+        Atomic(tensor)
+    }
+}
+
+impl<T: DType> Tensor<T> {
+    /// Binds this tensor as an atomic destination.
+    pub fn atomic(&mut self) -> Atomic<&mut Tensor<T>> {
+        Atomic(self)
+    }
+}
+
+/// Host binding accepted by aggregation kernel parameters. It is sealed to the
+/// two [`Atomic`] forms so their write-access tracking cannot be bypassed.
+pub trait KernelAtomic<T: DType>: KernelInput<T> + atomic_sealed::Sealed {}
+
+/// Seals [`KernelAtomic`] to exclusive [`Atomic`] backings.
+mod atomic_sealed {
+    pub trait Sealed {}
+    impl<T: super::DType> Sealed for super::Atomic<super::Tensor<T>> {}
+    impl<T: super::DType> Sealed for super::Atomic<&mut super::Tensor<T>> {}
+}
+
+fn atomic_binding_retain<T: DType>(
+    tensor: &Tensor<T>,
+    ctx: &ExecutionContext,
+) -> Result<(), DeviceError> {
+    // Write access: the kernel mutates this storage, atomically.
+    tensor.storage.retain(ctx, true)
+}
+
+fn atomic_binding_args<T: DType>(tensor: &Tensor<T>, launcher: &mut AsyncKernelLaunchBuilder) {
+    unsafe {
+        launcher.push_device_ptr(tensor.cu_deviceptr());
+    }
+    for dim in tensor.shape.iter() {
+        launcher.push_arg(*dim);
+    }
+    for stride in tensor.strides.iter() {
+        launcher.push_arg(*stride);
+    }
+}
+
+impl<T: DType> Atomic<Tensor<T>> {
+    fn backing(&self) -> &Tensor<T> {
+        &self.0
+    }
+}
+
+impl<T: DType> Atomic<&mut Tensor<T>> {
+    fn backing(&self) -> &Tensor<T> {
+        self.0
+    }
+}
+
+macro_rules! atomic_input_stored {
+    ($backing:ty) => {
+        // SAFETY: the pushed arguments describe the Atomic's backing tensor
+        // (pointer, shape, strides), and atomic_binding_retain registers its
+        // owner with write access independently of this Rust borrow, matching
+        // the obligations of the other KernelInputStored tensor impls above.
+        unsafe impl<T: DType> KernelInputStored for Atomic<$backing> {
+            fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
+                atomic_binding_retain(self.backing(), ctx)
+            }
+            fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunchBuilder) {
+                atomic_binding_args(self.backing(), launcher)
+            }
+            fn shape(&self) -> &[i32] {
+                Tensor::shape(self.backing())
+            }
+            fn strides(&self) -> &[i32] {
+                Tensor::strides(self.backing())
+            }
+            fn spec(&self) -> &SpecializationBits {
+                Tensor::spec(self.backing())
+            }
+            fn dtype_str(&self) -> &'static str {
+                T::DTYPE.as_str()
+            }
+            fn storage_id(&self) -> StorageId {
+                self.backing().storage_id()
+            }
+        }
+    };
+}
+
+atomic_input_stored!(Tensor<T>);
+atomic_input_stored!(&mut Tensor<T>);
+
+impl<T: DType> KernelInput<T> for Atomic<Tensor<T>> {
+    type Stored = Atomic<Tensor<T>>;
+    type Returned = Tensor<T>;
+    fn prepare(self) -> Self::Stored {
+        self
+    }
+    fn recover(stored: Self::Stored) -> Tensor<T> {
+        stored.0
+    }
+}
+
+impl<T: DType> KernelAtomic<T> for Atomic<Tensor<T>> {}
+
+impl<'a, T: DType> KernelInput<T> for Atomic<&'a mut Tensor<T>> {
+    type Stored = Atomic<&'a mut Tensor<T>>;
+    type Returned = &'a mut Tensor<T>;
+    fn prepare(self) -> Self::Stored {
+        self
+    }
+    fn recover(stored: Self::Stored) -> &'a mut Tensor<T> {
+        stored.0
+    }
+}
+
+impl<T: DType> KernelAtomic<T> for Atomic<&mut Tensor<T>> {}
+
+impl<T: DType> IntoDeviceOp<Atomic<Tensor<T>>> for Atomic<Tensor<T>> {
+    type Op = Value<Atomic<Tensor<T>>>;
+    fn into_op(self) -> Value<Atomic<Tensor<T>>> {
+        value(self)
+    }
+}
+
+impl<'a, T: DType> IntoDeviceOp<Atomic<&'a mut Tensor<T>>> for Atomic<&'a mut Tensor<T>> {
+    type Op = Value<Atomic<&'a mut Tensor<T>>>;
+    fn into_op(self) -> Value<Atomic<&'a mut Tensor<T>>> {
         value(self)
     }
 }
@@ -2593,6 +2782,34 @@ mod tests {
         assert_eq!(addressable_bytes::<f32>(&[4], &[10]), 31 * 4);
         // Empty shape addresses nothing.
         assert_eq!(addressable_bytes::<f32>(&[0], &[1]), 0);
+    }
+
+    /// Views over one allocation share a `StorageId`; distinct allocations do
+    /// not. The identity is what launch-time alias validation compares, and
+    /// the type stays opaque: equality is its whole public surface.
+    #[test]
+    fn storage_identity_follows_the_allocation() {
+        let owner: Arc<dyn DeviceAllocation> = Arc::new(FakeAlloc { len_bytes: 124 });
+        // SAFETY: metadata-only test; the pointer is never dereferenced and
+        // nothing else aliases the fake allocation.
+        let a = unsafe { Tensor::<f32>::from_foreign(owner.clone(), vec![4], vec![10]) };
+        // SAFETY: as above; `b` shares `a`'s allocation by construction.
+        let b = unsafe { Tensor::<f32>::from_foreign(owner, vec![2], vec![1]) };
+        let other: Arc<dyn DeviceAllocation> = Arc::new(FakeAlloc { len_bytes: 124 });
+        // SAFETY: as above.
+        let c = unsafe { Tensor::<f32>::from_foreign(other, vec![4], vec![10]) };
+        assert_ne!(a.storage_id(), c.storage_id(), "distinct allocations");
+        // `from_foreign` wraps each call in its own storage, so equality is
+        // asserted on the alias path real kernels use.
+        let id = c.storage_id();
+        // SAFETY: metadata-only; the alias is dropped before `c`.
+        let alias = unsafe { c.into_shared_alias() };
+        assert_eq!(
+            alias.storage_id(),
+            id,
+            "an alias shares its source's identity"
+        );
+        drop((a, b, alias));
     }
 
     #[test]

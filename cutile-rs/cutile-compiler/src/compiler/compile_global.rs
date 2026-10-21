@@ -13,7 +13,7 @@
 use super::_function::CUDATileFunctionCompiler;
 use super::_type;
 use super::_value::{CompilerContext, TileRustValue};
-use super::shared_utils::{AtomicMode, ElementTypePrefix};
+use super::shared_utils::AtomicMode;
 use super::tile_rust_type::TileRustType;
 use crate::error::{JITError, SpannedJITError};
 use crate::generics::GenericVars;
@@ -380,12 +380,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             )
         })?;
 
-        let elem_prefix = ElementTypePrefix::new(&info.element_name)?;
-        let mode = if elem_prefix == ElementTypePrefix::Float {
-            AtomicMode::new("AddF", elem_prefix)?
-        } else {
-            AtomicMode::new("Add", elem_prefix)?
-        } as i64;
+        // The same element-selected addition the aggregation types use.
+        let mode = AtomicMode::resolve("Sum", &info.element_name)
+            .map_err(|e| self.jit_error(&method_call.span(), &e))? as i64;
 
         let ffi_token = super::compile_foreign::ffi_token(ctx);
         let (op_id, results) =

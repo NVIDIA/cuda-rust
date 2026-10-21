@@ -58,6 +58,7 @@ run_step \
     cargo test -p cutile --test ui
 
 for test_target in \
+    aggregation_tensor \
     basics_and_inlining \
     binary_math_ops \
     bitwise_and_bitcast_ops \
@@ -94,6 +95,7 @@ for test_target in \
     token_threading \
     two_cga_trait_impl \
     type_inference_sanity \
+    ui_aggregation \
     unary_math_ops \
     use_classifier
 do

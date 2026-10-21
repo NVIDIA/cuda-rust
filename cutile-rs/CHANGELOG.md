@@ -46,6 +46,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Add a reusable fused QKV projection, Q/K RMSNorm, FP8 conversion and paged
   KV-scatter kernel, with a correctness example and opt-in CUDA graph benchmark
   sweep. The initial schedule is not B200-tuned (#1746).
+- Aggregation capabilities for overlapping atomic updates to tensor-shaped
+  storage, one kernel parameter type per operation: `AddTensor`, `AndTensor`,
+  `OrTensor`, `XorTensor`, `MaxTensor` and `MinTensor`, each passed by shared
+  reference — like Rust's own atomics — and each handing out a matching
+  partition (`AddPartition` … `MinPartition`) with one bounds-checked
+  operation (`atomic_add` … `atomic_min`) and its `unsafe` unchecked form,
+  returning the completion `Token`. Element sets are sealed traits
+  (`atomic::AtomicAdd`, `AtomicBitwise`, `AtomicOrd`); comparisons follow the
+  element's signedness, additions pick `AddF`/`Add` by float versus integer.
+  `partition` requires the tile to divide the destination exactly (static
+  shapes decided at compile time, dynamic extents checked before launch).
+  Host binding is through `tensor.atomic()` / `Atomic::owned(tensor)` with
+  exclusive authority; launch-time alias validation accepts same-operation
+  bindings of one allocation, and rejects different operations or any
+  ordinary access to it
 
 ### Changed
 

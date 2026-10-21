@@ -1679,16 +1679,12 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         .build(module);
         append_op(module, block_id, op_id);
         let _old = super::shared_utils::update_token(view_arg, results[0], ctx);
-        let Some(var_arg_ident) = get_ident_from_expr(view_arg) else {
-            return self.jit_error_result(&view_arg.span(), "Unexpected expression");
-        };
-        let Some(result) = ctx.vars.get(var_arg_ident.to_string().as_str()) else {
-            return self.jit_error_result(
-                &view_arg.span(),
-                &format!("Unexpected state: Expected {var_arg_ident} in ctx"),
-            );
-        };
-        Ok(Some(result.clone()))
+        let token_type = self
+            .compile_type(&syn::parse_quote!(Token), generic_args, &HashMap::new())?
+            .ok_or_else(|| self.jit_error(&call_expr.span(), "unable to resolve Token"))?;
+        Ok(Some(TileRustValue::new_primitive(
+            results[0], token_type, None,
+        )))
     }
 
     /// Reads `memory_ordering`, `memory_scope` ZST args from a view op call.
@@ -2105,16 +2101,12 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         let (op_id, results) = op_builder.build(module);
         append_op(module, block_id, op_id);
         let _old = super::shared_utils::update_token(view_arg, results[0], ctx);
-        let Some(var_arg_ident) = get_ident_from_expr(view_arg) else {
-            return self.jit_error_result(&view_arg.span(), "Unexpected expression");
-        };
-        let Some(result) = ctx.vars.get(var_arg_ident.to_string().as_str()) else {
-            return self.jit_error_result(
-                &view_arg.span(),
-                &format!("Unexpected state: Expected {var_arg_ident} in ctx"),
-            );
-        };
-        Ok(Some(result.clone()))
+        let token_type = self
+            .compile_type(&syn::parse_quote!(Token), generic_args, &HashMap::new())?
+            .ok_or_else(|| self.jit_error(&call_expr.span(), "unable to resolve Token"))?;
+        Ok(Some(TileRustValue::new_primitive(
+            results[0], token_type, None,
+        )))
     }
 
     fn compile_print_tko(

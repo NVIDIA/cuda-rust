@@ -1171,7 +1171,13 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         }
 
         for (key, value) in generic_vars.ordered_inst_bool() {
-            let tr_val = self.compile_bool_constant(module, block_id, generic_vars, value)?;
+            let tr_val = self.compile_bool_constant(
+                module,
+                block_id,
+                generic_vars,
+                value,
+                &fn_item.sig.span(),
+            )?;
             ctx.vars.insert(key.to_string(), tr_val);
         }
 
@@ -1307,7 +1313,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         let tr_ty = self
             .compile_type(&rust_ty, generic_vars, &HashMap::new())?
             .ok_or(self.jit_error(&rust_ty.span(), "failed to compile constant"))?;
-        self.compile_constant_from_exact_bounds(module, block_id, bounds, tr_ty)
+        let span = tr_ty.rust_ty.span();
+        self.compile_constant_from_exact_bounds(module, block_id, bounds, tr_ty, &span)
     }
 
     pub(crate) fn compile_bool_constant(
@@ -1316,16 +1323,18 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         block_id: cutile_ir::ir::BlockId,
         generic_vars: &GenericVars,
         x: bool,
+        span: &proc_macro2::Span,
     ) -> Result<TileRustValue, JITError> {
         let rust_ty: syn::Type = syn::parse_quote!(bool);
         let tr_ty = self
             .compile_type(&rust_ty, generic_vars, &HashMap::new())?
-            .ok_or(self.jit_error(&rust_ty.span(), "failed to compile bool constant"))?;
+            .ok_or(self.jit_error(span, "failed to compile bool constant"))?;
         self.compile_constant_from_exact_bounds(
             module,
             block_id,
             Bounds::exact(if x { 1 } else { 0 }),
             tr_ty,
+            span,
         )
     }
 
@@ -1335,10 +1344,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         block_id: cutile_ir::ir::BlockId,
         bounds: Bounds<i64>,
         tr_ty: TileRustType,
+        span: &proc_macro2::Span,
     ) -> Result<TileRustValue, JITError> {
         if !bounds.is_exact() {
             return self.jit_error_result(
-                &tr_ty.rust_ty.span(),
+                span,
                 &format!(
                     "expected a compile-time constant, but got a value with bounds [{}, {}]",
                     bounds.start, bounds.end
@@ -1347,14 +1357,13 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         }
         let const_value = bounds.start;
         let TypeInstance::ElementType(type_inst) = &tr_ty.type_instance else {
-            return self.jit_error_result(&tr_ty.rust_ty.span(), "expected a scalar element type");
+            return self.jit_error_result(span, "expected a scalar element type");
         };
         let Some(const_ty_str) = get_cuda_tile_element_type_from_rust_primitive_str(
             &type_inst.rust_element_instance_ty,
             self.modules.primitives(),
         ) else {
-            return self
-                .jit_error_result(&tr_ty.rust_ty.span(), "failed to compile constant value");
+            return self.jit_error_result(span, "failed to compile constant value");
         };
 
         // Build tile-ir Constant op directly (replaces operation_parse).
@@ -1388,18 +1397,17 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             ScalarType::F4E2M1FN => vec![(const_value as u8) & 0x0F],
             _ => (const_value as i32).to_le_bytes().to_vec(),
         };
-        let (op_id, results) =
-            OpBuilder::new(Opcode::Constant, self.ir_location(&tr_ty.rust_ty.span()))
-                .result(result_ty.clone())
-                .attr(
-                    "value",
-                    Attribute::DenseElements(DenseElements {
-                        element_type: result_ty,
-                        shape: vec![],
-                        data,
-                    }),
-                )
-                .build(module);
+        let (op_id, results) = OpBuilder::new(Opcode::Constant, self.ir_location(span))
+            .result(result_ty.clone())
+            .attr(
+                "value",
+                Attribute::DenseElements(DenseElements {
+                    element_type: result_ty,
+                    shape: vec![],
+                    data,
+                }),
+            )
+            .build(module);
         append_op(module, block_id, op_id);
         let mut tr_val = TileRustValue::new_value_kind_like(results[0], tr_ty);
         tr_val.mutability = Mutability::Immutable;

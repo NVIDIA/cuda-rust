@@ -3854,7 +3854,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                 &lit_string,
                                 &cuda_tile_ty,
                                 self.ir_location(&lit_expr.span()),
-                            );
+                            )
+                            .map_err(|e| self.jit_error(&lit_expr.span(), &e))?;
 
                             let rust_ty = return_type.rust_ty;
                             let ct_type =
@@ -3998,7 +3999,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         &lit_string,
                         &cuda_tile_ty,
                         self.ir_location(&lit_expr.span()),
-                    );
+                    )
+                    .map_err(|e| self.jit_error(&lit_expr.span(), &e))?;
 
                     let rust_ty = return_type.rust_ty;
                     let ct_type = self.compile_type(&rust_ty, generic_vars, &HashMap::new())?;
@@ -4228,11 +4230,11 @@ fn build_constant_op(
     lit_string: &str,
     cuda_tile_ty: &str,
     location: Location,
-) -> (cutile_ir::ir::Value, cutile_ir::ir::Type) {
+) -> Result<(cutile_ir::ir::Value, cutile_ir::ir::Type), String> {
     use cutile_ir::ir::DenseElements;
 
     let result_ty = cuda_tile_element_type_to_tile_ir(cuda_tile_ty);
-    let data = encode_literal_bytes(lit_string, cuda_tile_ty);
+    let data = encode_literal_bytes(lit_string, cuda_tile_ty)?;
 
     let (op_id, results) = OpBuilder::new(Opcode::Constant, location)
         .result(result_ty.clone())
@@ -4246,14 +4248,17 @@ fn build_constant_op(
         )
         .build(module);
     cutile_ir::builder::append_op(module, block_id, op_id);
-    (results[0], result_ty)
+    Ok((results[0], result_ty))
 }
 
 /// Encode a literal value string into bytes for a DenseElements attribute.
-pub fn encode_literal_bytes(lit_string: &str, cuda_tile_ty: &str) -> Vec<u8> {
+///
+/// Errors when the literal does not fit the element, rather than silently
+/// substituting a wrong value.
+pub fn encode_literal_bytes(lit_string: &str, cuda_tile_ty: &str) -> Result<Vec<u8>, String> {
     use cutile_ir::ir::ScalarType;
     let scalar = super::_type::scalar_from_name(cuda_tile_ty).unwrap_or(ScalarType::I32);
-    match scalar {
+    Ok(match scalar {
         ScalarType::I1 => vec![if lit_string != "0" { 0xFF } else { 0x00 }],
         ScalarType::I4 => {
             let v: i8 = lit_string.parse().unwrap_or(0);
@@ -4267,22 +4272,47 @@ pub fn encode_literal_bytes(lit_string: &str, cuda_tile_ty: &str) -> Vec<u8> {
             let v: i16 = lit_string.parse().unwrap_or(0);
             v.to_le_bytes().to_vec()
         }
+        // The Tile IR scalar is signedness-erased, so each width must accept
+        // the whole signed *and* unsigned literal range: `u32::MAX` and `-1`
+        // are different spellings of the same bytes. Parsing through the
+        // signed type silently zeroed any literal above its maximum, which
+        // turned `constant(0x8000_0010u32, ..)` into zero on the device; a
+        // literal that does not fit, or does not parse, is an error naming
+        // it, never a substitute value.
         ScalarType::I32 => {
-            let v: i32 = lit_string.parse().unwrap_or(0);
-            v.to_le_bytes().to_vec()
+            let v = parse_int_literal(lit_string)?;
+            if !(i128::from(i32::MIN)..=i128::from(u32::MAX)).contains(&v) {
+                return Err(format!(
+                    "integer constant `{lit_string}` does not fit a 32-bit element"
+                ));
+            }
+            (v as u32).to_le_bytes().to_vec()
         }
         ScalarType::I64 => {
-            let v: i64 = lit_string.parse().unwrap_or(0);
-            v.to_le_bytes().to_vec()
+            let v = parse_int_literal(lit_string)?;
+            if !(i128::from(i64::MIN)..=i128::from(u64::MAX)).contains(&v) {
+                return Err(format!(
+                    "integer constant `{lit_string}` does not fit a 64-bit element"
+                ));
+            }
+            (v as u64).to_le_bytes().to_vec()
         }
-        ScalarType::F16 => {
-            let v = parse_float_or_hex(lit_string);
-            half::f16::from_f64(v).to_le_bytes().to_vec()
-        }
-        ScalarType::BF16 => {
-            let v = parse_float_or_hex(lit_string);
-            half::bf16::from_f64(v).to_le_bytes().to_vec()
-        }
+        // A 16-bit hex spelling is ambiguous between `f16` and `bf16` bit
+        // patterns, so each arm decodes hex by its own target type instead of
+        // `parse_float_or_hex`'s length heuristic, which read `bf16::ONE`
+        // (`0x3f80`) through the `f16` layout as 1.875.
+        ScalarType::F16 => match parse_hex_bits(lit_string) {
+            Some(bits) => half::f16::from_bits(bits as u16).to_le_bytes().to_vec(),
+            None => half::f16::from_f64(parse_float_or_hex(lit_string))
+                .to_le_bytes()
+                .to_vec(),
+        },
+        ScalarType::BF16 => match parse_hex_bits(lit_string) {
+            Some(bits) => half::bf16::from_bits(bits as u16).to_le_bytes().to_vec(),
+            None => half::bf16::from_f64(parse_float_or_hex(lit_string))
+                .to_le_bytes()
+                .to_vec(),
+        },
         ScalarType::F32 => {
             let v = parse_float_or_hex(lit_string);
             (v as f32).to_le_bytes().to_vec()
@@ -4302,10 +4332,28 @@ pub fn encode_literal_bytes(lit_string: &str, cuda_tile_ty: &str) -> Vec<u8> {
             let v: u8 = lit_string.parse().unwrap_or(0);
             vec![v & 0x0F]
         }
-    }
+    })
 }
 
 /// Parse a float literal string, handling both decimal ("3.14") and hex ("0x40490fdb") forms.
+/// Parses an integer constant string: decimal, or the `0x…` hex spelling the
+/// named-constant path (`T::ZERO`, `T::ONE`) produces.
+/// The raw bits of a `0x…` constant spelling, or `None` for decimal text.
+fn parse_hex_bits(s: &str) -> Option<u64> {
+    u64::from_str_radix(s.strip_prefix("0x")?, 16).ok()
+}
+
+fn parse_int_literal(s: &str) -> Result<i128, String> {
+    let parsed = if let Some(hex) = s.strip_prefix("0x") {
+        i128::from_str_radix(hex, 16).ok()
+    } else if let Some(hex) = s.strip_prefix("-0x") {
+        i128::from_str_radix(hex, 16).ok().map(|v| -v)
+    } else {
+        s.parse().ok()
+    };
+    parsed.ok_or_else(|| format!("`{s}` is not an integer constant"))
+}
+
 fn parse_float_or_hex(s: &str) -> f64 {
     if s.starts_with("0x") || s.starts_with("-0x") {
         let negative = s.starts_with('-');
@@ -4323,5 +4371,81 @@ fn parse_float_or_hex(s: &str) -> f64 {
         }
     } else {
         s.parse::<f64>().unwrap_or(0.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_literal_bytes;
+
+    /// Each width accepts the union of its signed and unsigned ranges and
+    /// encodes the exact little-endian bytes; the Tile IR scalar is
+    /// signedness-erased, so `u32::MAX` and `-1` are different spellings of
+    /// the same bytes.
+    #[test]
+    fn boundary_integers_encode_their_exact_bytes() {
+        for (lit, expect) in [
+            ("2147483647", vec![0xFF, 0xFF, 0xFF, 0x7F]),
+            ("-2147483648", vec![0x00, 0x00, 0x00, 0x80]),
+            ("4294967295", vec![0xFF, 0xFF, 0xFF, 0xFF]),
+            ("-1", vec![0xFF, 0xFF, 0xFF, 0xFF]),
+            ("2147483664", vec![0x10, 0x00, 0x00, 0x80]), // 0x8000_0010
+            ("0x1", vec![0x01, 0x00, 0x00, 0x00]),        // named-constant spelling
+        ] {
+            assert_eq!(
+                encode_literal_bytes(lit, "i32").as_deref(),
+                Ok(expect.as_slice()),
+                "{lit} (32-bit)"
+            );
+            assert_eq!(
+                encode_literal_bytes(lit, "u32"),
+                Ok(expect.clone()),
+                "{lit} (u32)"
+            );
+        }
+        for (lit, expect) in [
+            ("9223372036854775807", 0x7FFF_FFFF_FFFF_FFFFu64),
+            ("-9223372036854775808", 0x8000_0000_0000_0000),
+            ("18446744073709551615", 0xFFFF_FFFF_FFFF_FFFF),
+            ("9223372036854775824", 0x8000_0000_0000_0010), // high bit set
+        ] {
+            assert_eq!(
+                encode_literal_bytes(lit, "i64"),
+                Ok(expect.to_le_bytes().to_vec()),
+                "{lit} (64-bit)"
+            );
+        }
+    }
+
+    /// A 16-bit hex constant decodes through its own target's bit layout.
+    /// `f16` and `bf16` hex spellings are the same width, and the named
+    /// constants (`bf16::ONE` is `0x3f80`) arrive as hex, so a length
+    /// heuristic read bf16 bits through the f16 layout: 1.0 became 1.875 on
+    /// the device.
+    #[test]
+    fn sixteen_bit_hex_constants_decode_by_target_type() {
+        // bf16 1.0 and f16 1.0 have different bit patterns.
+        assert_eq!(encode_literal_bytes("0x3f80", "bf16"), Ok(vec![0x80, 0x3F]));
+        assert_eq!(encode_literal_bytes("0x3c00", "f16"), Ok(vec![0x00, 0x3C]));
+        // Decimal spellings are unaffected.
+        assert_eq!(encode_literal_bytes("1.0", "bf16"), Ok(vec![0x80, 0x3F]));
+        assert_eq!(encode_literal_bytes("1.0", "f16"), Ok(vec![0x00, 0x3C]));
+    }
+
+    /// Out-of-range and unparsable literals are errors naming the literal,
+    /// never a silently substituted value.
+    #[test]
+    fn out_of_range_or_unparsable_literals_are_rejected() {
+        for (lit, ty) in [
+            ("4294967296", "i32"),
+            ("-2147483649", "i32"),
+            ("18446744073709551616", "i64"),
+            ("-9223372036854775809", "i64"),
+            ("not-a-number", "i32"),
+        ] {
+            let err = encode_literal_bytes(lit, ty)
+                .expect_err(&format!("{lit} must not encode for {ty}"));
+            assert!(err.contains(lit), "the error must name the literal: {err}");
+        }
     }
 }

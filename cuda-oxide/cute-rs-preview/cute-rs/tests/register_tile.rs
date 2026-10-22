@@ -87,6 +87,40 @@ fn fold_preserves_order_with_an_explicit_accumulator_type() {
 }
 
 #[test]
+fn arithmetic_operators_apply_per_lane_in_order() {
+    let lhs = RegisterTile::from_array([8.0_f32, -6.0, 1.5, 0.0]);
+    let rhs = RegisterTile::from_array([2.0_f32, 3.0, -0.5, 4.0]);
+    assert_eq!((lhs + rhs).into_array(), [10.0, -3.0, 1.0, 4.0]);
+    assert_eq!((lhs - rhs).into_array(), [6.0, -9.0, 2.0, -4.0]);
+    assert_eq!((lhs * rhs).into_array(), [16.0, -18.0, -0.75, 0.0]);
+    assert_eq!((lhs / rhs).into_array(), [4.0, -2.0, -3.0, 0.0]);
+    let negated = (-lhs).into_array();
+    assert_eq!(negated, [-8.0, 6.0, -1.5, 0.0]);
+    assert!(negated[3].is_sign_negative());
+}
+
+#[test]
+fn integer_arithmetic_keeps_the_element_type_and_truncates_quotients() {
+    let lhs = RegisterTile::from_array([7_i32, -4, 9]);
+    let rhs = RegisterTile::from_array([2_i32, 3, -3]);
+    let difference: RegisterTile<i32, 3> = lhs - rhs;
+    assert_eq!(difference.into_array(), [5, -7, 12]);
+    assert_eq!((lhs * rhs).into_array(), [14, -12, -27]);
+    assert_eq!((lhs / rhs).into_array(), [3, -1, -3]);
+    assert_eq!((-rhs).into_array(), [-2, -3, 3]);
+}
+
+#[test]
+fn empty_tiles_support_every_operator() {
+    let empty = RegisterTile::<f32, 0>::from_array([]);
+    assert_eq!((empty + empty).into_array(), []);
+    assert_eq!((empty - empty).into_array(), []);
+    assert_eq!((empty * empty).into_array(), []);
+    assert_eq!((empty / empty).into_array(), []);
+    assert_eq!((-empty).into_array(), []);
+}
+
+#[test]
 fn warp_reduction_sum_exposes_an_unsafe_collective_boundary() {
     let _: unsafe fn(f32) -> f32 = cute_rs::arch::warp_reduction_sum_f32;
 }

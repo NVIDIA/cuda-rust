@@ -119,7 +119,7 @@ What a CuTeDSL user relies on beyond the per-architecture atoms, and what the pr
 | IKET profiling | In-kernel event markers collected into timelines. | None. Use Nsight on the embedded cubin. | no |
 | CUDA graphs, PDL, cooperative launch | Graph capture, programmatic dependent launch, cooperative launch, launch events. | Graphs, the PDL launch attribute and cooperative launch from the Rust host. No device-side PDL helpers in kernels. | partial |
 | Typed shared memory | SmemAllocator bump allocator, cute.struct, auto-deduced smem size. | Typed static and dynamic shared arrays and layout-typed tiles; carve dynamic shared memory by hand. | partial |
-| TensorSSA register vectors | Immutable register vectors with arithmetic, where, conversions and reductions. | RegisterTile with map, zip_map, fold and gather; conversions as closures. | partial |
+| TensorSSA register vectors | Immutable register vectors with arithmetic, where, conversions and reductions. | RegisterTile with elementwise `+`, `-`, `*`, `/` and unary `-`, map, zip_map, fold and gather; conversions as closures. | partial |
 | block_copy | One call issues TMA (multicast hidden) or shared-to-TMEM copies. | A typed two-CTA TMA copy. No shared-to-TMEM copy. | partial |
 | Grouped GEMM, MoE, ptr-array | Grouped and MoE persistent schedulers, device-only problem shapes. | None. One launch per group. | no |
 | Mixed-input GEMM | Narrow int4 and int8 weights with bf16 or fp8 activations, dequant in the mainloop. | None. Operands share one type. | no |

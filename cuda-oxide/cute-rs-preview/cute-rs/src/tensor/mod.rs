@@ -26,7 +26,7 @@
 pub mod partition;
 
 use core::marker::PhantomData;
-use core::ops::Add;
+use core::ops::{Add, Div, Mul, Neg, Sub};
 
 use cuda_device::DisjointSlice;
 
@@ -265,6 +265,7 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
     }
 }
 
+/// Elementwise sum of two equally sized register tiles (CuTeDSL `TensorSSA + TensorSSA`).
 impl<T: Copy + Add<Output = T>, const N: usize> Add for RegisterTile<T, N> {
     type Output = Self;
 
@@ -273,6 +274,69 @@ impl<T: Copy + Add<Output = T>, const N: usize> Add for RegisterTile<T, N> {
         let mut i = 0;
         while i < N {
             self.0[i] = self.0[i] + rhs.0[i];
+            i += 1;
+        }
+        self
+    }
+}
+
+/// Elementwise difference of two equally sized register tiles (CuTeDSL `TensorSSA - TensorSSA`).
+impl<T: Copy + Sub<Output = T>, const N: usize> Sub for RegisterTile<T, N> {
+    type Output = Self;
+
+    #[inline(always)]
+    fn sub(mut self, rhs: Self) -> Self::Output {
+        let mut i = 0;
+        while i < N {
+            self.0[i] = self.0[i] - rhs.0[i];
+            i += 1;
+        }
+        self
+    }
+}
+
+/// Elementwise product of two equally sized register tiles (CuTeDSL `TensorSSA * TensorSSA`).
+impl<T: Copy + Mul<Output = T>, const N: usize> Mul for RegisterTile<T, N> {
+    type Output = Self;
+
+    #[inline(always)]
+    fn mul(mut self, rhs: Self) -> Self::Output {
+        let mut i = 0;
+        while i < N {
+            self.0[i] = self.0[i] * rhs.0[i];
+            i += 1;
+        }
+        self
+    }
+}
+
+/// Elementwise quotient of two equally sized register tiles (CuTeDSL `TensorSSA / TensorSSA`).
+///
+/// Each lane divides with the element type's own `/`: integer lanes truncate
+/// and panic on a zero divisor like the scalar operator does.
+impl<T: Copy + Div<Output = T>, const N: usize> Div for RegisterTile<T, N> {
+    type Output = Self;
+
+    #[inline(always)]
+    fn div(mut self, rhs: Self) -> Self::Output {
+        let mut i = 0;
+        while i < N {
+            self.0[i] = self.0[i] / rhs.0[i];
+            i += 1;
+        }
+        self
+    }
+}
+
+/// Elementwise negation of a register tile (CuTeDSL `-TensorSSA`).
+impl<T: Copy + Neg<Output = T>, const N: usize> Neg for RegisterTile<T, N> {
+    type Output = Self;
+
+    #[inline(always)]
+    fn neg(mut self) -> Self::Output {
+        let mut i = 0;
+        while i < N {
+            self.0[i] = -self.0[i];
             i += 1;
         }
         self

@@ -108,7 +108,7 @@ pub use tensor::partition;
 pub use block_scaled::{
     BlockScaledTensor, BlockScaledThreadRow, BlockScaledTile64, DenseBlockScaleKMajor, KMajor,
     LoadedBlockScaledTile64, LoadedNvfp4Tile64, Mkl, MmaScalePair, MmaScaleQuad,
-    Mxfp4BlockScaledTensor, Nkl, Nvfp4BlockScaledTensor, Nvfp4ThreadRow, Nvfp4Tile64, ScalePack4,
+    Mxf4BlockScaledTensor, Nkl, Nvfp4BlockScaledTensor, Nvfp4ThreadRow, Nvfp4Tile64, ScalePack4,
     SharedScaleAtom, Sm1xxBlockScaleKMajor, Sm120ScaleAtom,
 };
 pub use copy::cooperative::{GmemMatrix, SmemTile, copy_g2s};
@@ -128,14 +128,15 @@ pub use epilogue::{
 pub use markers::{C, ColMajor, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
 pub use mma::block_scaled::{
     Mxf4AccumulatorTile2x8, Mxf4BTileK64, Mxf4ScalePairs, Mxf4ScalePairs128, Mxf4ScaleStage,
-    Mxf4ScaleTile128, Mxfp4TiledMma,
+    Mxf4ScaleTile128, Mxf4TiledMma,
 };
 pub use mma::{
     FragmentA, FragmentB, FragmentBPair, FragmentC, load_matrix_a, load_matrix_b,
     load_matrix_b_pair, load_matrix_b_pair_k_major,
 };
 pub use numeric::{
-    Bf16, E2M1, E4M3, E4M3x2, E4M3x4, Mxf4E2M1, PackedE2M1x2, UE8M0, UE8M0x2, UE8M0x4, e4m3_to_f32,
+    BFloat16, E4M3x2, E4M3x4, Float4E2M1FN, Float4E2M1FNx2, Float8E4M3FN, Float8E8M0FNU, Mxf4E2M1,
+    UE8M0x2, UE8M0x4, e4m3_to_f32,
 };
 pub use pipeline::{Consumer, PipelineState, Producer, TmaLoadPipeline, TmaStorePipeline};
 pub use scheduler::{StaticPersistentTileScheduler, WorkTile};

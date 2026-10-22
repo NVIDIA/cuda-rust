@@ -22,7 +22,7 @@ use crate::ffn::{
     AttentionOutput, FfnError, FfnShape, FfnWeights, Key, ProjectionRole, ProjectionWeights, Query,
     RowMajorShape, Value,
 };
-use crate::numeric::Bf16;
+use crate::numeric::BFloat16;
 
 /// A rejected decoder shape, vocabulary index or projection width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -256,22 +256,22 @@ impl NormRole for FinalNorm {}
 /// The immutable borrow lasts through the checked view's final use:
 /// ```compile_fail,E0502
 /// use cuda_core::DeviceBuffer;
-/// use cute_rs::{Bf16, decoder::{InputNorm, NormWeights}};
-/// fn mutate(_: &mut DeviceBuffer<Bf16>) {}
-/// fn alias(buffer: &mut DeviceBuffer<Bf16>) {
+/// use cute_rs::{BFloat16, decoder::{InputNorm, NormWeights}};
+/// fn mutate(_: &mut DeviceBuffer<BFloat16>) {}
+/// fn alias(buffer: &mut DeviceBuffer<BFloat16>) {
 ///     let weights = NormWeights::<InputNorm, 1024>::new(buffer).unwrap();
 ///     mutate(buffer);
 ///     let _ = weights.buffer();
 /// }
 /// ```
 pub struct NormWeights<'a, Role: NormRole, const WIDTH: usize> {
-    buffer: &'a DeviceBuffer<Bf16>,
+    buffer: &'a DeviceBuffer<BFloat16>,
     role: PhantomData<Role>,
 }
 
 impl<'a, Role: NormRole, const WIDTH: usize> NormWeights<'a, Role, WIDTH> {
     /// Check a positive logical width and BF16 allocation extent, allowing guards.
-    pub fn new(buffer: &'a DeviceBuffer<Bf16>) -> Result<Self, FfnError> {
+    pub fn new(buffer: &'a DeviceBuffer<BFloat16>) -> Result<Self, FfnError> {
         RowMajorShape::dense(1, WIDTH)?.validate_len(buffer.len())?;
         Ok(Self {
             buffer,
@@ -280,7 +280,7 @@ impl<'a, Role: NormRole, const WIDTH: usize> NormWeights<'a, Role, WIDTH> {
     }
     /// Borrow the existing allocation for a checked kernel launch.
     #[must_use]
-    pub const fn buffer(&self) -> &'a DeviceBuffer<Bf16> {
+    pub const fn buffer(&self) -> &'a DeviceBuffer<BFloat16> {
         self.buffer
     }
     /// Logical number of normalization weights, excluding trailing padding.
@@ -292,13 +292,13 @@ impl<'a, Role: NormRole, const WIDTH: usize> NormWeights<'a, Role, WIDTH> {
 
 /// Borrowed BF16 bias for a projection with a specific role and output width.
 pub struct BiasWeights<'a, Role: ProjectionRole, const WIDTH: usize> {
-    buffer: &'a DeviceBuffer<Bf16>,
+    buffer: &'a DeviceBuffer<BFloat16>,
     role: PhantomData<Role>,
 }
 
 impl<'a, Role: ProjectionRole, const WIDTH: usize> BiasWeights<'a, Role, WIDTH> {
     /// Check a positive logical width and BF16 allocation extent, allowing guards.
-    pub fn new(buffer: &'a DeviceBuffer<Bf16>) -> Result<Self, FfnError> {
+    pub fn new(buffer: &'a DeviceBuffer<BFloat16>) -> Result<Self, FfnError> {
         RowMajorShape::dense(1, WIDTH)?.validate_len(buffer.len())?;
         Ok(Self {
             buffer,
@@ -307,7 +307,7 @@ impl<'a, Role: ProjectionRole, const WIDTH: usize> BiasWeights<'a, Role, WIDTH> 
     }
     /// Borrow the existing allocation for a checked kernel launch.
     #[must_use]
-    pub const fn buffer(&self) -> &'a DeviceBuffer<Bf16> {
+    pub const fn buffer(&self) -> &'a DeviceBuffer<BFloat16> {
         self.buffer
     }
     /// Logical number of bias elements, excluding trailing padding.
@@ -490,20 +490,23 @@ impl<const VOCAB: usize, const WIDTH: usize> EmbeddingShape<VOCAB, WIDTH> {
 
 /// Borrowed BF16 embedding table with checked vocabulary and embedding width.
 pub struct EmbeddingWeights<'a, const VOCAB: usize, const WIDTH: usize> {
-    buffer: &'a DeviceBuffer<Bf16>,
+    buffer: &'a DeviceBuffer<BFloat16>,
     shape: EmbeddingShape<VOCAB, WIDTH>,
 }
 
 impl<'a, const VOCAB: usize, const WIDTH: usize> EmbeddingWeights<'a, VOCAB, WIDTH> {
     /// Borrow a `[vocabulary, width]` table, permitting trailing allocation guards.
-    pub fn new(buffer: &'a DeviceBuffer<Bf16>, row_stride: usize) -> Result<Self, DecoderError> {
+    pub fn new(
+        buffer: &'a DeviceBuffer<BFloat16>,
+        row_stride: usize,
+    ) -> Result<Self, DecoderError> {
         let shape = EmbeddingShape::new(row_stride)?;
         shape.table().validate_len(buffer.len())?;
         Ok(Self { buffer, shape })
     }
     /// Existing table allocation.
     #[must_use]
-    pub const fn buffer(&self) -> &'a DeviceBuffer<Bf16> {
+    pub const fn buffer(&self) -> &'a DeviceBuffer<BFloat16> {
         self.buffer
     }
     /// Checked table geometry.

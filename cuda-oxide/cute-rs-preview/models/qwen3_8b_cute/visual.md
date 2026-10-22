@@ -2,7 +2,7 @@
 
 > A causal language decoder takes a matrix of token rows in (`[P, 4096]` during prefill, `[1, 4096]` on each decode step), passes those rows through **36 identical blocks**, and uses the last output row to pick the next token. Every block keeps its own key/value cache so earlier rows are never recomputed.
 
-In `qwen3_8b_cute`, the normalization, rotary position embedding, and grouped-query attention spine stays in BF16/FP32 while all **252 linear projection matrices** (`7 per block × 36 blocks`) can run either in **BF16 (`12.94 GiB`)** or in **Blackwell NVFP4 (`E2M1` + `E4M3` scale, `3.64 GiB`)**.
+In `qwen3_8b_cute`, the normalization, rotary position embedding, and grouped-query attention spine stays in BF16/FP32 while all **252 linear projection matrices** (`7 per block × 36 blocks`) can run either in **BF16 (`12.94 GiB`)** or in **Blackwell NVFP4 (`Float4E2M1FN` + `Float8E4M3FN` scale, `3.64 GiB`)**.
 
 Model: `Qwen/Qwen3-8B`. Example prompt throughout: `P = 32` prompt rows of width `4096`, followed by `B = 1` autoregressive decode steps.
 
@@ -60,7 +60,7 @@ Each token row (`[1, 4096]`) is widened 3× by two parallel projections: **Gate*
 
 ![Inside one projection: BF16 vs. NVFP4](svg/07-projection-bf16-vs-nvfp4.svg)
 
-Every block runs 7 linear projections (`Wq`, `Wk`, `Wv`, `Wo`, `W_gate`, `W_up`, `W_down`). In **NVFP4**, every 16 numbers along `K` are stored as sixteen 4-bit `E2M1` values (`8 bytes`) plus one 8-bit `E4M3` fractional scale (`1 byte`) — **9 bytes instead of 32 bytes in BF16 (3.56× smaller)**. One 32-lane warp reads 32 contiguous `K = 64` tiles (`1 KB` coalesced), converts `E2M1 × E4M3` in hardware via `cute.scaled_view_load` (`nvgpu.cvt_fpext`), and sums across the warp with `warp_reduction_sum_f32`.
+Every block runs 7 linear projections (`Wq`, `Wk`, `Wv`, `Wo`, `W_gate`, `W_up`, `W_down`). In **NVFP4**, every 16 numbers along `K` are stored as sixteen 4-bit `Float4E2M1FN` values (`8 bytes`) plus one 8-bit `Float8E4M3FN` fractional scale (`1 byte`) — **9 bytes instead of 32 bytes in BF16 (3.56× smaller)**. One 32-lane warp reads 32 contiguous `K = 64` tiles (`1 KB` coalesced), converts `E2M1 × E4M3` in hardware via `cute.scaled_view_load` (`nvgpu.cvt_fpext`), and sums across the warp with `warp_reduction_sum_f32`.
 
 ![RTX 5090 benchmark comparison](svg/03-rtx5090-benchmark-comparison.svg)
 

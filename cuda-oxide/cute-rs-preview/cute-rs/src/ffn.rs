@@ -18,13 +18,13 @@
 //!
 //! ```
 //! use cuda_core::DeviceBuffer;
-//! use cute_rs::Bf16;
+//! use cute_rs::BFloat16;
 //! use cute_rs::ffn::{Down, FfnError, FfnWeights, Gate, ProjectionWeights, Up};
 //!
 //! fn checked<'a>(
-//!     gate: &'a DeviceBuffer<Bf16>,
-//!     up: &'a DeviceBuffer<Bf16>,
-//!     down: &'a DeviceBuffer<Bf16>,
+//!     gate: &'a DeviceBuffer<BFloat16>,
+//!     up: &'a DeviceBuffer<BFloat16>,
+//!     down: &'a DeviceBuffer<BFloat16>,
 //! ) -> Result<FfnWeights<'a, 1024, 3072>, FfnError> {
 //!     Ok(FfnWeights::new(
 //!         ProjectionWeights::<Gate, 1024, 3072>::new(gate, 1024)?,
@@ -37,7 +37,7 @@
 use core::{fmt, marker::PhantomData, mem::size_of};
 use cuda_core::DeviceBuffer;
 
-use crate::numeric::Bf16;
+use crate::numeric::BFloat16;
 
 /// A rejected BF16 matrix shape or allocation extent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,7 +158,7 @@ impl RowMajorShape {
 
 /// Reject BF16 buffers whose complete byte extent cannot be represented by a Rust slice.
 fn check_byte_extent(len: usize) -> Result<(), FfnError> {
-    match len.checked_mul(size_of::<Bf16>()) {
+    match len.checked_mul(size_of::<BFloat16>()) {
         Some(bytes) if bytes <= isize::MAX as usize => Ok(()),
         _ => Err(FfnError::ExtentOverflow),
     }
@@ -294,10 +294,10 @@ impl ProjectionRole for Logits {}
 ///
 /// ```compile_fail,E0502
 /// use cuda_core::DeviceBuffer;
-/// use cute_rs::Bf16;
+/// use cute_rs::BFloat16;
 /// use cute_rs::ffn::{Gate, ProjectionWeights};
-/// fn exclusive_use(_: &mut DeviceBuffer<Bf16>) {}
-/// fn alias(weights: &mut DeviceBuffer<Bf16>) {
+/// fn exclusive_use(_: &mut DeviceBuffer<BFloat16>) {}
+/// fn alias(weights: &mut DeviceBuffer<BFloat16>) {
 ///     let gate = ProjectionWeights::<Gate, 8, 16>::new(weights, 8).unwrap();
 ///     exclusive_use(weights);
 ///     let _ = gate.buffer();
@@ -305,7 +305,7 @@ impl ProjectionRole for Logits {}
 /// ```
 pub struct ProjectionWeights<'a, Role: ProjectionRole, const INPUT: usize, const OUTPUT: usize> {
     /// The existing, immutably borrowed allocation.
-    buffer: &'a DeviceBuffer<Bf16>,
+    buffer: &'a DeviceBuffer<BFloat16>,
     /// Checked checkpoint orientation and row pitch.
     shape: RowMajorShape,
     /// Distinguishes equally shaped weights with different semantic roles.
@@ -319,7 +319,7 @@ impl<'a, Role: ProjectionRole, const INPUT: usize, const OUTPUT: usize>
     ///
     /// Both projection dimensions must be positive. The caller explicitly labels
     /// the role; this validates dimensions and capacity, not semantic contents.
-    pub fn new(buffer: &'a DeviceBuffer<Bf16>, row_stride: usize) -> Result<Self, FfnError> {
+    pub fn new(buffer: &'a DeviceBuffer<BFloat16>, row_stride: usize) -> Result<Self, FfnError> {
         if OUTPUT == 0 {
             return Err(FfnError::ZeroWidth);
         }
@@ -334,7 +334,7 @@ impl<'a, Role: ProjectionRole, const INPUT: usize, const OUTPUT: usize>
 
     /// Borrow the existing allocation for a checked kernel launch.
     #[must_use]
-    pub const fn buffer(&self) -> &'a DeviceBuffer<Bf16> {
+    pub const fn buffer(&self) -> &'a DeviceBuffer<BFloat16> {
         self.buffer
     }
 

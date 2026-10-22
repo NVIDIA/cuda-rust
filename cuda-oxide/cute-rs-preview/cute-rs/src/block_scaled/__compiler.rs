@@ -7,7 +7,7 @@
 
 use super::*;
 use crate::copy::vector::{assume_div, load_tile};
-use crate::numeric::{E2M1, E4M3, E4M3x2, PackedE2M1x2, UE8M0, UE8M0x2};
+use crate::numeric::{E4M3x2, Float4E2M1FN, Float4E2M1FNx2, Float8E4M3FN, Float8E8M0FNU, UE8M0x2};
 use crate::tensor::Tensor;
 use core::marker::PhantomData;
 
@@ -18,7 +18,7 @@ pub(super) const fn block_scaled_make<'a, Mode: Copy>(
     scales: &'a [u8],
     rows: usize,
     k: usize,
-) -> BlockScaledTensor<'a, E2M1, UE8M0, 16, KMajor<Mode>> {
+) -> BlockScaledTensor<'a, Float4E2M1FN, Float8E8M0FNU, 16, KMajor<Mode>> {
     let scale_layout = Sm1xxBlockScaleKMajor {
         rest_m: rows.div_ceil(CANONICAL_SCALE_M),
         rest_k: k.div_ceil(16 * CANONICAL_SCALE_K_GROUPS),
@@ -39,7 +39,7 @@ pub(super) const fn block_scaled_make<'a, Mode: Copy>(
 #[inline(never)]
 /// Compiler boundary selecting a batch row and computing its value/scale byte bases.
 pub(super) fn block_scaled_thread_row<'a, Mode: Copy>(
-    tensor: BlockScaledTensor<'a, E2M1, UE8M0, 16, KMajor<Mode>>,
+    tensor: BlockScaledTensor<'a, Float4E2M1FN, Float8E8M0FNU, 16, KMajor<Mode>>,
     batch: usize,
     row: usize,
 ) -> BlockScaledThreadRow<'a, Mode> {
@@ -139,7 +139,7 @@ pub(super) const fn nvfp4_make<'a, Mode: Copy>(
     scales: &'a [u8],
     rows: usize,
     k: usize,
-) -> BlockScaledTensor<'a, E2M1, E4M3, 16, KMajor<Mode>> {
+) -> BlockScaledTensor<'a, Float4E2M1FN, Float8E4M3FN, 16, KMajor<Mode>> {
     let scale_layout = Sm1xxBlockScaleKMajor {
         rest_m: rows.div_ceil(CANONICAL_SCALE_M),
         rest_k: k.div_ceil(16 * CANONICAL_SCALE_K_GROUPS),
@@ -160,7 +160,7 @@ pub(super) const fn nvfp4_make<'a, Mode: Copy>(
 #[inline(never)]
 /// Compiler boundary selecting an NVFP4 batch row and computing its value/scale byte bases.
 pub(super) const fn nvfp4_thread_row<'a, Mode: Copy>(
-    tensor: BlockScaledTensor<'a, E2M1, E4M3, 16, KMajor<Mode>>,
+    tensor: BlockScaledTensor<'a, Float4E2M1FN, Float8E4M3FN, 16, KMajor<Mode>>,
     batch: usize,
     row: usize,
 ) -> Nvfp4ThreadRow<'a, Mode> {
@@ -224,8 +224,8 @@ pub(super) fn nvfp4_dot_k64(
     let mut scale_group = |a_bytes: &[u8], b_bytes: &[u8], scale_a: f32, scale_b: f32| {
         let mut i = 0usize;
         while i < 8 {
-            let (a0, a1) = PackedE2M1x2::from_bits(a_bytes[i]).to_f32x2();
-            let (b0, b1) = PackedE2M1x2::from_bits(b_bytes[i]).to_f32x2();
+            let (a0, a1) = Float4E2M1FNx2::from_bits(a_bytes[i]).to_f32x2();
+            let (b0, b1) = Float4E2M1FNx2::from_bits(b_bytes[i]).to_f32x2();
             acc += ((a0 * scale_a) * b0) * scale_b;
             acc += ((a1 * scale_a) * b1) * scale_b;
             i += 1;

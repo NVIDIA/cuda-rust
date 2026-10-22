@@ -13,7 +13,7 @@ use crate::{
 };
 use cuda_core::{CudaStream, DeviceBuffer};
 use cute_rs::{
-    Bf16,
+    BFloat16,
     decoder::{AttentionWeights, DecoderWeights, FinalNorm, NormWeights},
     ffn::{FfnWeights, ProjectionWeights},
 };
@@ -21,27 +21,27 @@ use cute_rs::{
 /// GPU allocations live outside their immutable, role-checked views.
 pub(crate) struct DeviceLayer {
     /// Owned hidden-width input RMSNorm vector.
-    input_norm: DeviceBuffer<Bf16>,
+    input_norm: DeviceBuffer<BFloat16>,
     /// Owned dense `[query_width, hidden]` projection.
-    query: DeviceBuffer<Bf16>,
+    query: DeviceBuffer<BFloat16>,
     /// Owned dense `[kv_width, hidden]` projection.
-    key: DeviceBuffer<Bf16>,
+    key: DeviceBuffer<BFloat16>,
     /// Owned dense `[kv_width, hidden]` value projection.
-    value: DeviceBuffer<Bf16>,
+    value: DeviceBuffer<BFloat16>,
     /// Owned dense `[hidden, query_width]` attention output projection.
-    output: DeviceBuffer<Bf16>,
+    output: DeviceBuffer<BFloat16>,
     /// Owned 128-value per-head query RMSNorm vector.
-    q_norm: DeviceBuffer<Bf16>,
+    q_norm: DeviceBuffer<BFloat16>,
     /// Owned 128-value per-head key RMSNorm vector.
-    k_norm: DeviceBuffer<Bf16>,
+    k_norm: DeviceBuffer<BFloat16>,
     /// Owned hidden-width post-attention RMSNorm vector.
-    post_norm: DeviceBuffer<Bf16>,
+    post_norm: DeviceBuffer<BFloat16>,
     /// Owned dense `[intermediate, hidden]` FFN gate projection.
-    gate: DeviceBuffer<Bf16>,
+    gate: DeviceBuffer<BFloat16>,
     /// Owned dense `[intermediate, hidden]` FFN expansion projection.
-    up: DeviceBuffer<Bf16>,
+    up: DeviceBuffer<BFloat16>,
     /// Owned dense `[hidden, intermediate]` FFN contraction projection.
-    down: DeviceBuffer<Bf16>,
+    down: DeviceBuffer<BFloat16>,
 }
 
 impl DeviceLayer {
@@ -89,7 +89,7 @@ impl DeviceLayer {
 }
 
 /// Generate a dense `[output, input]` BF16 matrix sensitive to both coordinates and seed.
-fn matrix(input: usize, output: usize, seed: u64) -> Vec<Bf16> {
+fn matrix(input: usize, output: usize, seed: u64) -> Vec<BFloat16> {
     (0..output)
         .flat_map(|row| {
             (0..input).map(move |column| {
@@ -108,7 +108,7 @@ fn matrix(input: usize, output: usize, seed: u64) -> Vec<Bf16> {
 }
 
 /// Generate nonunit per-coordinate BF16 normalization weights to expose rounding changes.
-fn norm_fixture(width: usize, seed: usize) -> Vec<Bf16> {
+fn norm_fixture(width: usize, seed: usize) -> Vec<BFloat16> {
     (0..width)
         .map(|i| round(0.875 + ((i * 5 + seed) % 17) as f64 / 64.0))
         .collect()
@@ -137,7 +137,7 @@ pub(crate) fn fixture(h: usize, i: usize, q: usize, k: usize) -> LayerWeights {
 }
 
 /// Generate dense `[rows, width]` BF16 inputs varying with row and channel.
-fn input_fixture(rows: usize, width: usize) -> Vec<Bf16> {
+fn input_fixture(rows: usize, width: usize) -> Vec<BFloat16> {
     (0..rows)
         .flat_map(|row| {
             (0..width).map(move |column| {
@@ -175,8 +175,8 @@ impl Checks {
     fn close(
         &mut self,
         label: &str,
-        actual: &[Bf16],
-        expected: &[Bf16],
+        actual: &[BFloat16],
+        expected: &[BFloat16],
         atol: f64,
         rtol: f64,
     ) -> Result<()> {
@@ -201,7 +201,7 @@ impl Checks {
     }
 
     /// Require matching lengths and BF16 bits, then count the compared values.
-    fn exact(&mut self, label: &str, actual: &[Bf16], expected: &[Bf16]) -> Result<()> {
+    fn exact(&mut self, label: &str, actual: &[BFloat16], expected: &[BFloat16]) -> Result<()> {
         if actual.len() != expected.len()
             || actual
                 .iter()
@@ -217,7 +217,7 @@ impl Checks {
     /// Require the suffix starting at `start` to contain only the allocation guard bits.
     ///
     /// The caller supplies an in-bounds suffix; mismatches return a labeled error.
-    fn guards(&mut self, label: &str, values: &[Bf16], start: usize) -> Result<()> {
+    fn guards(&mut self, label: &str, values: &[BFloat16], start: usize) -> Result<()> {
         if values[start..]
             .iter()
             .any(|x| x.to_bits() != operator::GUARD)
@@ -230,7 +230,7 @@ impl Checks {
 }
 
 /// Borrow a named recorded stage or return a missing-stage error.
-fn stage<'a>(trace: &'a Trace, name: &str) -> Result<&'a [Bf16]> {
+fn stage<'a>(trace: &'a Trace, name: &str) -> Result<&'a [BFloat16]> {
     trace
         .stages
         .iter()
@@ -275,7 +275,7 @@ fn layer_case<
     let output =
         runner.layer::<H, I, Q, K, QW, KW>(&batch, &weights, &mut cache, &tables, &mut trace)?;
     let mut checks = Checks::default();
-    let mut compare = |name: &str, expected: Vec<Bf16>| -> Result<()> {
+    let mut compare = |name: &str, expected: Vec<BFloat16>| -> Result<()> {
         checks.close(name, stage(&trace, name)?, &expected, 2e-5, 0.008)
     };
     compare(

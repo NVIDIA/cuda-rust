@@ -13,7 +13,7 @@ use cute_rs::arch::NamedBarrier;
 use cute_rs::markers::{C, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
 use cute_rs::static_layout::StaticLayout;
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
-use cute_rs::{Bf16, GmemMatrix, RegisterTile, SmemTile, copy_g2s};
+use cute_rs::{BFloat16, GmemMatrix, RegisterTile, SmemTile, copy_g2s};
 
 /// Shared bytes for two 64-by-128 BF16 tiles and FP32 reduction state.
 pub const PARTIAL_SHARED_BYTES: u32 = 35_104;
@@ -78,7 +78,7 @@ impl Bf16KvTile {
     /// complete `column..column + N` interval must lie within 128 columns.
     #[inline(always)]
     unsafe fn row<const N: usize>(&self, row: usize, column: usize) -> RegisterTile<f32, N> {
-        unsafe { self.0.load::<N>(row, column) }.map(|bits| Bf16::from_bits(bits).to_f32())
+        unsafe { self.0.load::<N>(row, column) }.map(|bits| BFloat16::from_bits(bits).to_f32())
     }
 }
 
@@ -91,7 +91,7 @@ impl Bf16KvTile {
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 unsafe fn stage(
-    source: &[Bf16],
+    source: &[BFloat16],
     head: usize,
     kv_heads: usize,
     visible: usize,
@@ -99,7 +99,7 @@ unsafe fn stage(
     destination: &Bf16KvTile,
     tid: u32,
 ) {
-    // Bf16 is repr(transparent) over u16. This cast changes only the copy
+    // BFloat16 is repr(transparent) over u16. This cast changes only the copy
     // carrier; loads later restore the BF16 type before numerical conversion.
     let source = GmemMatrix {
         base: unsafe { source.as_ptr().add(head * 128) }.cast::<u16>(),
@@ -147,9 +147,9 @@ pub mod kernels {
     #[kernel]
     #[allow(clippy::too_many_arguments)]
     pub fn partial(
-        q: &[Bf16],
-        k: &[Bf16],
-        v: &[Bf16],
+        q: &[BFloat16],
+        k: &[BFloat16],
+        v: &[BFloat16],
         mut partials: DisjointSlice<f32>,
         query_tokens: u32,
         key_tokens: u32,
@@ -245,7 +245,7 @@ pub mod kernels {
                     .subview_unchecked(query_base + column, 32);
                 let dot = keys.0.row_view::<32>(row, column)
                     .zip_fold(query, 0.0_f32, |dot, key, query| {
-                        dot + query.to_f32() * Bf16::from_bits(key).to_f32()
+                        dot + query.to_f32() * BFloat16::from_bits(key).to_f32()
                     });
                 let dot = cute_rs::arch::quad_sum_f32(dot);
                 if tid.is_multiple_of(4) {
@@ -342,7 +342,7 @@ pub mod kernels {
     #[kernel]
     pub fn merge(
         partials: &[f32],
-        mut out: DisjointSlice<Bf16>,
+        mut out: DisjointSlice<BFloat16>,
         query_tokens: u32,
         query_heads: u32,
         splits: u32,
@@ -396,7 +396,7 @@ pub mod kernels {
             };
             StridedTensorMut::from_disjoint_slice(&mut out)
                 .subview_unchecked(work * 128 + numerator_column, 4)
-                .store(numerator.map(|value| Bf16::from_f32(value * reciprocal)));
+                .store(numerator.map(|value| BFloat16::from_f32(value * reciprocal)));
         }
     }
 }

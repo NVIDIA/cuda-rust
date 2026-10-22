@@ -6,7 +6,7 @@
 
 use ctm_rs::memory::DisjointSlice;
 use ctm_rs::{cuda_module, kernel, thread};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 
 /// Dense BF16 primitives; the host validates extents and keeps output disjoint.
@@ -22,9 +22,9 @@ pub mod kernels {
     /// values. Output has `rows * width` elements and may not alias the table.
     #[kernel]
     pub fn embedding_bf16(
-        table: &[Bf16],
+        table: &[BFloat16],
         ids: &[u32],
-        mut output: DisjointSlice<Bf16>,
+        mut output: DisjointSlice<BFloat16>,
         rows: usize,
         width: usize,
     ) {
@@ -48,7 +48,12 @@ pub mod kernels {
     /// Both inputs and the separate output provide at least `length` BF16 values;
     /// addition widens operands to FP32 before narrowing the result.
     #[kernel]
-    pub fn add_bf16(left: &[Bf16], right: &[Bf16], mut output: DisjointSlice<Bf16>, length: usize) {
+    pub fn add_bf16(
+        left: &[BFloat16],
+        right: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
+        length: usize,
+    ) {
         let index = thread::index_1d().get();
         if index < length {
             // Scalar tiles retain the existing launch assignment. The same
@@ -60,7 +65,7 @@ pub mod kernels {
                 let mut output =
                     StridedTensorMut::from_disjoint_slice(&mut output).subview_unchecked(index, 1);
                 left.zip_map_to(right, &mut output, |a, b| {
-                    Bf16::from_f32(a.to_f32() + b.to_f32())
+                    BFloat16::from_f32(a.to_f32() + b.to_f32())
                 });
             }
         }
@@ -70,7 +75,7 @@ pub mod kernels {
     /// Input and separate output provide `length` values; each active thread
     /// evaluates one dense coordinate through the cute-rs numerical operation.
     #[kernel]
-    pub fn silu_bf16(input: &[Bf16], mut output: DisjointSlice<Bf16>, length: usize) {
+    pub fn silu_bf16(input: &[BFloat16], mut output: DisjointSlice<BFloat16>, length: usize) {
         let index = thread::index_1d().get();
         if index < length {
             // SAFETY: checked equal extents and disjoint global-thread tiles.
@@ -88,9 +93,9 @@ pub mod kernels {
     /// `total_length - left_length`; output is a separate `total_length` range.
     #[kernel]
     pub fn concat_bf16(
-        left: &[Bf16],
-        right: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        left: &[BFloat16],
+        right: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         left_length: usize,
         total_length: usize,
     ) {
@@ -115,8 +120,8 @@ pub mod kernels {
     /// values. FP32 sums start at zero, so an empty row range produces zeros.
     #[kernel]
     pub fn sum_rows_bf16(
-        input: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         rows: usize,
         width: usize,
     ) {
@@ -136,7 +141,7 @@ pub mod kernels {
             let mut output = StridedTensorMut::from_disjoint_slice(&mut output);
             // SAFETY: each thread owns one checked output column.
             unsafe {
-                output.store_at(column, Bf16::from_f32(sum));
+                output.store_at(column, BFloat16::from_f32(sum));
             }
         }
     }

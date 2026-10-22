@@ -15,7 +15,7 @@ use crate::model::{Batch, EPSILON};
 use crate::operator::{GUARD_LEN, Result};
 use crate::{attention_kernel, predictor_graph_kernel, rotary::RotarySpec};
 use cuda_core::{CudaStream, DeviceBuffer, DriverError, sys};
-use cute_rs::{Bf16, decoder::DecoderShape};
+use cute_rs::{BFloat16, decoder::DecoderShape};
 use std::sync::Arc;
 
 // Device guard/index helpers encode this fixed model schedule. Fail compilation
@@ -143,9 +143,9 @@ struct LayerCache {
 /// Immutable BF16 rotary coefficients for the exact positions of one predictor step.
 struct Tables {
     /// Dense `[step_rows, 64]` half-head cosine coefficients rounded to BF16 on the host.
-    cos: DeviceBuffer<Bf16>,
+    cos: DeviceBuffer<BFloat16>,
     /// Matching `[step_rows, 64]` half-head sine coefficients for the same token positions.
-    sin: DeviceBuffer<Bf16>,
+    sin: DeviceBuffer<BFloat16>,
 }
 
 /// Layer scratch plus the predictor-only selected row and vocabulary logits.
@@ -225,7 +225,7 @@ fn validate_weights(stream: &CudaStream, weights: &PredictorWeights<'_>) -> Resu
     if weights.layers.len() != PREDICTOR_LAYERS {
         return Err("predictor requires five layers".into());
     }
-    let context = |buffer: &DeviceBuffer<Bf16>| -> Result<()> {
+    let context = |buffer: &DeviceBuffer<BFloat16>| -> Result<()> {
         if Arc::ptr_eq(buffer.context(), stream.context()) {
             Ok(())
         } else {
@@ -326,9 +326,9 @@ impl PredictorPlan {
             decode,
             caches,
             tables,
-            first_input: Batch::from_host(&stream, 2, &[Bf16::from_bits(0); 4096])?,
+            first_input: Batch::from_host(&stream, 2, &[BFloat16::from_bits(0); 4096])?,
             feedback: Batch::allocate(&stream, 1)?,
-            codec_rows: Batch::from_host(&stream, 16, &[Bf16::from_bits(0); 32768])?,
+            codec_rows: Batch::from_host(&stream, 16, &[BFloat16::from_bits(0); 32768])?,
             embedding_sum: Batch::allocate(&stream, 1)?,
             codes: DeviceBuffer::from_host(&stream, &[0u32; REMAINING_CODES])?,
             status: DeviceBuffer::from_host(&stream, &[0u32])?,

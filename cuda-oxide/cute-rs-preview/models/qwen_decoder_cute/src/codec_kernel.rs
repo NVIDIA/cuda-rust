@@ -5,7 +5,7 @@
 //! Waveform kernels use time-major [time, channel] storage throughout.
 use ctm_rs::memory::DisjointSlice;
 use ctm_rs::{cuda_module, kernel, launch_contract, thread};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 
 /// Device convolution, normalization and activation operations for time-major batches.
 #[cuda_module]
@@ -21,7 +21,7 @@ pub mod kernels {
     #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     fn input_value(
-        input: &[Bf16],
+        input: &[BFloat16],
         row: usize,
         k: usize,
         rows: usize,
@@ -61,7 +61,7 @@ pub mod kernels {
     #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     fn weight_value(
-        weight: &[Bf16],
+        weight: &[BFloat16],
         column: usize,
         k: usize,
         in_group: usize,
@@ -101,10 +101,10 @@ pub mod kernels {
     #[kernel]
     #[allow(clippy::too_many_arguments)]
     pub fn conv_bf16(
-        input: &[Bf16],
-        weight: &[Bf16],
-        bias: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        bias: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         rows: usize,
         inputs: usize,
         outputs: usize,
@@ -145,13 +145,13 @@ pub mod kernels {
                 });
                 if has_bias {
                     // cuDNN stores its BF16 convolution before the separate bias add.
-                    sum = Bf16::from_f32(sum).to_f32() + bias[channel].to_f32();
+                    sum = BFloat16::from_f32(sum).to_f32() + bias[channel].to_f32();
                 }
                 let mut output = StridedTensorMut::from_disjoint_slice(&mut output)
                     .local_partition::<32>(index % 32);
                 // SAFETY: global threads select distinct partition coordinates.
                 unsafe {
-                    output.store_at(index / 32, Bf16::from_f32(sum));
+                    output.store_at(index / 32, BFloat16::from_f32(sum));
                 }
             }
             return;
@@ -181,7 +181,7 @@ pub mod kernels {
                 // The convolution supplies logical im2col coordinates. The
                 // CuTe atom partitions and packs those values for each lane.
                 let a = mma.partition_a().load_with(|r, reduction| {
-                    Bf16::from_bits(input_value(
+                    BFloat16::from_bits(input_value(
                         input,
                         m + r,
                         k + reduction,
@@ -197,7 +197,7 @@ pub mod kernels {
                     ))
                 });
                 let b = mma.partition_b().load_with(|c, reduction| {
-                    Bf16::from_bits(weight_value(
+                    BFloat16::from_bits(weight_value(
                         weight,
                         n + c,
                         k + reduction,
@@ -222,7 +222,7 @@ pub mod kernels {
                     let channel = group * out_group + n + c;
                     let value = if has_bias {
                         // Preserve the observable convolution output before bias.
-                        Bf16::from_f32(value).to_f32() + bias[channel].to_f32()
+                        BFloat16::from_f32(value).to_f32() + bias[channel].to_f32()
                     } else {
                         value
                     };
@@ -234,7 +234,7 @@ pub mod kernels {
                     // SAFETY: the CuTe C partition is bijective within each
                     // tile; groups and phases map to distinct output positions.
                     unsafe {
-                        output.store_at(row * outputs + channel, Bf16::from_f32(value));
+                        output.store_at(row * outputs + channel, BFloat16::from_f32(value));
                     }
                 }
             });
@@ -248,10 +248,10 @@ pub mod kernels {
     #[launch_contract(domain=1, block=(128,1,1), min_compute_capability=(8,0))]
     #[kernel]
     pub fn layer_norm_bf16(
-        input: &[Bf16],
-        weight: &[Bf16],
-        bias: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        bias: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         rows: usize,
         width: usize,
         epsilon: f32,
@@ -291,7 +291,7 @@ pub mod kernels {
                         (value.to_f32() - mean) * inverse * weight.get_unchecked(item).to_f32()
                             + bias.get_unchecked(item).to_f32();
                     item += 1;
-                    Bf16::from_f32(value)
+                    BFloat16::from_f32(value)
                 });
             }
         }
@@ -299,7 +299,7 @@ pub mod kernels {
     /// Round an FP32 intermediate to BF16 and widen it exactly back to FP32.
     #[inline(always)]
     fn rounded(value: f32) -> f32 {
-        Bf16::from_f32(value).to_f32()
+        BFloat16::from_f32(value).to_f32()
     }
 
     /// Erf-form GELU. The five-coefficient erf approximation has about 1.5e-7
@@ -348,10 +348,10 @@ pub mod kernels {
     #[kernel]
     #[allow(clippy::too_many_arguments)]
     pub fn unary_bf16(
-        input: &[Bf16],
-        alpha: &[Bf16],
-        beta: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        alpha: &[BFloat16],
+        beta: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         length: usize,
         width: usize,
         operation: u32,
@@ -399,7 +399,7 @@ pub mod kernels {
             };
             // SAFETY: global threads select distinct partition coordinates.
             unsafe {
-                output.store_at(item, Bf16::from_f32(result));
+                output.store_at(item, BFloat16::from_f32(result));
             }
         }
     }
@@ -410,10 +410,10 @@ pub mod kernels {
     /// matching extents and distinct output storage; each thread writes one value.
     #[kernel]
     pub fn scaled_add_bf16(
-        input: &[Bf16],
-        residual: &[Bf16],
-        scale: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        residual: &[BFloat16],
+        scale: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         length: usize,
         width: usize,
     ) {
@@ -437,7 +437,7 @@ pub mod kernels {
             let result = product + unsafe { residual.get_unchecked(item) }.to_f32();
             // SAFETY: global threads select distinct partition coordinates.
             unsafe {
-                output.store_at(item, Bf16::from_f32(result));
+                output.store_at(item, BFloat16::from_f32(result));
             }
         }
     }

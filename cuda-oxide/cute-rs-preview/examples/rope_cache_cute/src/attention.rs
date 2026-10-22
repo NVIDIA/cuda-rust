@@ -6,7 +6,7 @@
 use crate::attention_kernel::{PARTIAL_SHARED_BYTES, STATE_SIZE, kernels};
 use crate::operator::{GUARD_LEN, Result};
 use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig1D};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 use cute_rs::attention::{AttentionShape, AttentionWindow};
 use std::sync::Arc;
 
@@ -74,14 +74,14 @@ fn geometry<const Q: usize, const K: usize>(window: AttentionWindow) -> Result<O
 /// Owned BF16 output; query-head count is retained and head width is always 128.
 pub struct AttentionOutput<const Q: usize> {
     /// Dense `[tokens, Q, 128]` completed BF16 results, followed by validation guards.
-    buffer: DeviceBuffer<Bf16>,
+    buffer: DeviceBuffer<BFloat16>,
     /// Number of query token rows, excluding allocation guards.
     tokens: usize,
 }
 
 impl<const Q: usize> AttentionOutput<Q> {
     /// Read-only allocation including trailing validation guards.
-    pub fn buffer(&self) -> &DeviceBuffer<Bf16> {
+    pub fn buffer(&self) -> &DeviceBuffer<BFloat16> {
         &self.buffer
     }
 
@@ -121,10 +121,10 @@ impl AttentionRunner {
     #[allow(clippy::too_many_arguments)]
     pub fn run<const Q: usize, const K: usize>(
         &self,
-        query: &DeviceBuffer<Bf16>,
+        query: &DeviceBuffer<BFloat16>,
         query_tokens: usize,
-        key: &DeviceBuffer<Bf16>,
-        value: &DeviceBuffer<Bf16>,
+        key: &DeviceBuffer<BFloat16>,
+        value: &DeviceBuffer<BFloat16>,
         key_tokens: usize,
         query_start: Option<usize>,
     ) -> Result<AttentionOutput<Q>> {

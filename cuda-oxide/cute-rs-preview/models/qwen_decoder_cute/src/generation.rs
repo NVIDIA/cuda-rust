@@ -14,7 +14,7 @@ use crate::model::{Batch, DecoderCache, Runner};
 use crate::operator::Result;
 use crate::rotary::RotarySpec;
 use crate::sampling::{Sampler, SamplingConfig};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 use cute_rs::decoder::{
     BiasWeights, DecoderWeights, EmbeddingWeights, FinalNorm, NormWeights, TokenIds,
 };
@@ -113,7 +113,7 @@ fn predictor_positions(step: usize) -> Result<Vec<[u32; 3]>> {
 
 /// Deterministic validation policy. Nonfinite logits are errors, and the lowest
 /// vocabulary index wins a tie. This does not reproduce stochastic sampling.
-pub fn greedy_token<const VOCAB: usize>(logits: &[Bf16]) -> Result<u32> {
+pub fn greedy_token<const VOCAB: usize>(logits: &[BFloat16]) -> Result<u32> {
     if VOCAB == 0 || VOCAB > u32::MAX as usize || logits.len() != VOCAB {
         return Err("greedy logits must match a nonempty u32-indexed vocabulary".into());
     }
@@ -273,11 +273,11 @@ pub fn predictor_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cute_rs::Bf16;
+    use cute_rs::BFloat16;
 
     /// Round a scalar to BF16 for host token-selection fixtures.
-    fn bf16(value: f32) -> Bf16 {
-        Bf16::from_f32(value)
+    fn bf16(value: f32) -> BFloat16 {
+        BFloat16::from_f32(value)
     }
 
     /// Verify two initial rows plus fourteen appends fill exactly sixteen predictor positions.

@@ -8,7 +8,7 @@
 //! Load callbacks can describe ordinary matrices or virtual im2col views.
 //! CTM supplies only the final instruction and packed physical loads.
 use crate::markers::{C, Layout};
-use crate::numeric::Bf16;
+use crate::numeric::BFloat16;
 use crate::static_layout::StaticLayout;
 use core::marker::PhantomData;
 
@@ -96,20 +96,20 @@ pub struct PackedDecode<'a> {
     // Raw carriers admit null as a bit pattern, so Option<Self> has an ordinary
     // discriminant supported by the device enum ABI. Only the checked borrowed
     // constructor creates this private payload; the phantom retains both loans.
-    input: *const Bf16,
-    weight: *const Bf16,
+    input: *const BFloat16,
+    weight: *const BFloat16,
     rows: usize,
     input_stride: usize,
     weight_stride: usize,
-    borrow: PhantomData<&'a [Bf16]>,
+    borrow: PhantomData<&'a [BFloat16]>,
 }
 impl<'a> PackedDecode<'a> {
     /// Validate the storage needed by packed decode operand loads.
     #[must_use]
     #[inline(always)]
     pub fn new(
-        input: &'a [Bf16],
-        weight: &'a [Bf16],
+        input: &'a [BFloat16],
+        weight: &'a [BFloat16],
         rows: usize,
         width: usize,
         outputs: usize,
@@ -147,8 +147,8 @@ impl<'a> PackedDecode<'a> {
     #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     pub fn with_validated(
-        input: &'a [Bf16],
-        weight: &'a [Bf16],
+        input: &'a [BFloat16],
+        weight: &'a [BFloat16],
         rows: usize,
         width: usize,
         outputs: usize,
@@ -182,8 +182,8 @@ impl<'a> PackedDecode<'a> {
 
     #[inline(always)]
     fn supported(
-        input: &[Bf16],
-        weight: &[Bf16],
+        input: &[BFloat16],
+        weight: &[BFloat16],
         rows: usize,
         width: usize,
         outputs: usize,
@@ -215,7 +215,7 @@ impl APartition {
     /// Load this lane's eight BF16 elements, preserving low/high pair order.
     /// The callback receives local `(M,K)` coordinates in register order.
     #[inline(always)]
-    pub fn load_with(self, mut read: impl FnMut(usize, usize) -> Bf16) -> FragmentA {
+    pub fn load_with(self, mut read: impl FnMut(usize, usize) -> BFloat16) -> FragmentA {
         let mut pair = |i| {
             let (r, c) = coordinate::<ALayout, 16>(self.lane, i);
             let low = read(r, c).to_bits();
@@ -267,7 +267,7 @@ impl APartition {
 impl BPartition {
     /// Load this lane's four BF16 elements from local stored `(N,K)` coordinates.
     #[inline(always)]
-    pub fn load_with(self, mut read: impl FnMut(usize, usize) -> Bf16) -> FragmentB {
+    pub fn load_with(self, mut read: impl FnMut(usize, usize) -> BFloat16) -> FragmentB {
         let mut pair = |i| {
             let (r, c) = coordinate::<BLayout, 16>(self.lane, i);
             let low = read(r, c).to_bits();
@@ -353,14 +353,14 @@ mod tests {
     fn operand_storage_preserves_bf16_bits_and_register_order() {
         let a = Bf16Mma16x8x16::get_slice(0)
             .partition_a()
-            .load_with(|r, k| Bf16::from_bits(0x8000 + (r * 16 + k) as u16));
+            .load_with(|r, k| BFloat16::from_bits(0x8000 + (r * 16 + k) as u16));
         assert_eq!(
             a.0.registers(),
             [0x8001_8000, 0x8081_8080, 0x8009_8008, 0x8089_8088]
         );
         let b = Bf16Mma16x8x16::get_slice(31)
             .partition_b()
-            .load_with(|n, k| Bf16::from_bits(0x8000 + (n * 16 + k) as u16));
+            .load_with(|n, k| BFloat16::from_bits(0x8000 + (n * 16 + k) as u16));
         assert_eq!(b.0.registers(), [0x8077_8076, 0x807f_807e]);
     }
 

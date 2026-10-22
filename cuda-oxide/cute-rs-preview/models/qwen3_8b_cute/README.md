@@ -1,12 +1,12 @@
 # `qwen3_8b_cute` — `Qwen/Qwen3-8B` in `cute-rs` (BF16 & NVFP4 on RTX 5090)
 
-End-to-end 36-layer **`Qwen/Qwen3-8B`** transformer decoder (`H = 4096`, `I = 12288`, `Q = 32`, `KV = 8`, `D = 128`, `RoPE θ = 1e6`, per-head `QK-Norm`) written in Rust with [`cute-rs`](../../cute-rs), supporting both **BF16 Tensor-Core MMA** and **true NVFP4 (`E2M1` + `E4M3` scale, `SF_VEC = 16`)** execution on Blackwell (`sm_120a`).
+End-to-end 36-layer **`Qwen/Qwen3-8B`** transformer decoder (`H = 4096`, `I = 12288`, `Q = 32`, `KV = 8`, `D = 128`, `RoPE θ = 1e6`, per-head `QK-Norm`) written in Rust with [`cute-rs`](../../cute-rs), supporting both **BF16 Tensor-Core MMA** and **true NVFP4 (`Float4E2M1FN` + `Float8E4M3FN` scale, `SF_VEC = 16`)** execution on Blackwell (`sm_120a`).
 
 <p align="center">
   <img src="svg/00-qwen3-8b-overview.svg" alt="Qwen/Qwen3-8B dual-precision architecture map" width="100%"/>
 </p>
 
-👉 **[Read the Visual Architecture Guide (`visual.md`)](visual.md)** for a diagram-by-diagram walkthrough of the 36-layer GQA decoder and NVFP4 (`E2M1` + `E4M3`) block scaling.
+👉 **[Read the Visual Architecture Guide (`visual.md`)](visual.md)** for a diagram-by-diagram walkthrough of the 36-layer GQA decoder and NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`) block scaling.
 
 ---
 
@@ -18,7 +18,7 @@ End-to-end 36-layer **`Qwen/Qwen3-8B`** transformer decoder (`H = 4096`, `I = 12
 
 | Implementation & Precision Mode | 36-Layer Weight Footprint | Compression | Prefill (`32` tok) | Decode (`B = 1`) |
 | --- | ---: | ---: | ---: | ---: |
-| **`cute-rs` NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`)** | **`3,726.59 MiB` (`3.64 GiB`)** | **`3.56×`** | **`50.57 ms` (`632.8 tok/s`)** | **`8.77 ms/tok` (`114.0 tok/s`)** |
+| **`cute-rs` NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`)** | **`3,726.59 MiB` (`3.64 GiB`)** | **`3.56×`** | **`50.57 ms` (`632.8 tok/s`)** | **`8.77 ms/tok` (`114.0 tok/s`)** |
 | **CuTeDSL (`cutlass.cute`) NVFP4 Reference** | `3,726.59 MiB` (`3.64 GiB`) | `3.56×` | `53.08 ms` (`602.9 tok/s`) | `13.20 ms/tok` (`75.8 tok/s`) |
 | **`cute-rs` BF16 (`m16n8k16` Tensor Core)** | `13,248.59 MiB` (`12.94 GiB`) | `1.00×` | `95.89 ms` (`333.7 tok/s`) | `14.32 ms/tok` (`69.8 tok/s`) |
 
@@ -70,7 +70,7 @@ python3 cute-rs-preview/models/qwen3_8b_cute/reference/benchmark_cutedsl.py --la
 | File | Responsibility |
 | --- | --- |
 | [`src/config.rs`](src/config.rs) | `Qwen/Qwen3-8B` dimensions (`HIDDEN = 4096`, `INTERMEDIATE = 12288`, `LAYERS = 36`, `Q_HEADS = 32`, `KV_HEADS = 8`, `HEAD_DIM = 128`) and memory footprint helpers. |
-| [`src/nvfp4.rs`](src/nvfp4.rs) | True NVFP4 (`E2M1` + `E4M3` scale, `SF_VEC = 16`) quantizer, canonical `(32, 4)` Blackwell scale-atom layout, and hardware-lowered `cute.scaled_view_load` (`nvgpu.cvt_fpext`) GPU projection kernels. |
+| [`src/nvfp4.rs`](src/nvfp4.rs) | True NVFP4 (`Float4E2M1FN` + `Float8E4M3FN` scale, `SF_VEC = 16`) quantizer, canonical `(32, 4)` Blackwell scale-atom layout, and hardware-lowered `cute.scaled_view_load` (`nvgpu.cvt_fpext`) GPU projection kernels. |
 | [`src/checkpoint.rs`](src/checkpoint.rs) | Multi-shard `model.safetensors.index.json` loader for `Qwen/Qwen3-8B` plus fast GPU synthetic weight generator. |
 | [`src/benchmark.rs`](src/benchmark.rs) | `Qwen3Engine` executing both BF16 and NVFP4 stacks with KV caching, prefill/decode timing, and cosine-similarity verification. |
 | [`reference/benchmark_cutedsl.py`](reference/benchmark_cutedsl.py) | CuTeDSL (`cutlass.cute`) Python reference implementation and RTX 5090 benchmark harness. |

@@ -5,7 +5,7 @@
 
 //! Typed scale, accumulator, and lazy B fragments for SM120 MMA.
 
-use super::{__compiler, Mxfp4TiledMma};
+use super::{__compiler, Mxf4TiledMma};
 use crate::block_scaled::{Mkl, MmaScalePair, Nkl, ScalePack4};
 use crate::copy::tiled::SharedTensor;
 use crate::mma::{FragmentA, FragmentB, FragmentC};
@@ -176,7 +176,7 @@ pub struct Mxf4AccumulatorTile2x8 {
 /// One warp's eight B fragments for one K=64 step.
 ///
 /// This is a view, so creating it does not load all eight fragments. During
-/// [`Mxf4AccumulatorTile2x8::accumulate_k64`], it loads two at a time:
+/// [`Mxf4AccumulatorTile2x8::gemm`], it loads two at a time:
 ///
 /// ```text
 /// load b0,b1 -> compute -> load b2,b3 -> compute -> ...
@@ -207,7 +207,7 @@ impl<SharedLayout> Mxf4BTileK64<'_, SharedLayout> {
     #[inline(always)]
     pub(super) unsafe fn load<const PAIR: usize>(
         &self,
-        mma: &Mxfp4TiledMma<SharedLayout>,
+        mma: &Mxf4TiledMma<SharedLayout>,
     ) -> (FragmentB, FragmentB) {
         const { assert!(PAIR < 4) };
         let source = unsafe {
@@ -241,6 +241,9 @@ impl Mxf4AccumulatorTile2x8 {
     /// selects the eight matching B fragments and loads them two at a time.
     /// `scales` must cover the same A, B, and K=64 positions.
     ///
+    /// [`Mxf4TiledMma::gemm`] is the one-cell form of this operation; this
+    /// method runs sixteen of those cells for the warp's 2 x 8 tile.
+    ///
     /// # Safety
     ///
     /// All 32 lanes must call this together. `mma` must contain each calling
@@ -249,9 +252,9 @@ impl Mxf4AccumulatorTile2x8 {
     /// stage. The B view's `warp_n` and `k_half` must each be 0 or 1, and that
     /// stage must not be overwritten during this call.
     #[inline(always)]
-    pub unsafe fn accumulate_k64<SharedLayout>(
+    pub unsafe fn gemm<SharedLayout>(
         &mut self,
-        mma: &Mxfp4TiledMma<SharedLayout>,
+        mma: &Mxf4TiledMma<SharedLayout>,
         a: (FragmentA, FragmentA),
         b: Mxf4BTileK64<'_, SharedLayout>,
         scales: Mxf4ScalePairs128,

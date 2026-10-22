@@ -7,7 +7,7 @@ use crate::kernel::kernels;
 use cuda_core::simt::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
 use cute_rs::{
-    Bf16,
+    BFloat16,
     ffn::{FfnShape, FfnWeights},
 };
 use std::sync::Arc;
@@ -24,24 +24,24 @@ pub struct Workspace<const H: usize, const I: usize> {
     /// Batch row count that a runner must match when reusing this workspace.
     rows: usize,
     /// Dense `[rows, I]` gate projection, rounded to BF16, plus trailing guards.
-    pub gate: DeviceBuffer<Bf16>,
+    pub gate: DeviceBuffer<BFloat16>,
     /// Dense `[rows, I]` up projection, rounded to BF16, plus trailing guards.
-    pub up: DeviceBuffer<Bf16>,
+    pub up: DeviceBuffer<BFloat16>,
     /// Dense `[rows, I]` BF16 SiLU values before multiplication, plus guards.
-    pub silu: DeviceBuffer<Bf16>,
+    pub silu: DeviceBuffer<BFloat16>,
     /// Dense `[rows, I]` BF16 SiLU/up products used by the down projection, plus guards.
-    pub product: DeviceBuffer<Bf16>,
+    pub product: DeviceBuffer<BFloat16>,
     /// Dense `[rows, H]` BF16 down-projection result, plus trailing guards.
-    pub output: DeviceBuffer<Bf16>,
+    pub output: DeviceBuffer<BFloat16>,
 }
 impl<const H: usize, const I: usize> Workspace<H, I> {
     /// Allocate separate sentinel-filled buffers for this batch and the const widths.
     pub fn new(stream: &CudaStream, shape: FfnShape<H, I>) -> Result<Self> {
-        let alloc = |len: usize| -> Result<DeviceBuffer<Bf16>> {
+        let alloc = |len: usize| -> Result<DeviceBuffer<BFloat16>> {
             let total = len.checked_add(GUARD_LEN).ok_or("guard extent overflow")?;
             Ok(DeviceBuffer::from_host(
                 stream,
-                &vec![Bf16::from_bits(GUARD); total],
+                &vec![BFloat16::from_bits(GUARD); total],
             )?)
         };
         Ok(Self {
@@ -110,7 +110,7 @@ impl Runner {
     pub fn run<const H: usize, const I: usize>(
         &self,
         shape: FfnShape<H, I>,
-        input: &DeviceBuffer<Bf16>,
+        input: &DeviceBuffer<BFloat16>,
         weights: &FfnWeights<'_, H, I>,
         workspace: &mut Workspace<H, I>,
     ) -> Result<()> {
@@ -221,10 +221,10 @@ impl Runner {
     }
     /// Exercise the exact SiLU rounding discriminator through the real kernel.
     pub fn check_rounding(&self) -> Result<()> {
-        let gate = DeviceBuffer::from_host(&self.stream, &[Bf16::from_bits(0x3f80)])?;
-        let up = DeviceBuffer::from_host(&self.stream, &[Bf16::from_bits(0x4001)])?;
-        let mut silu = DeviceBuffer::from_host(&self.stream, &[Bf16::from_bits(GUARD)])?;
-        let mut product = DeviceBuffer::from_host(&self.stream, &[Bf16::from_bits(GUARD)])?;
+        let gate = DeviceBuffer::from_host(&self.stream, &[BFloat16::from_bits(0x3f80)])?;
+        let up = DeviceBuffer::from_host(&self.stream, &[BFloat16::from_bits(0x4001)])?;
+        let mut silu = DeviceBuffer::from_host(&self.stream, &[BFloat16::from_bits(GUARD)])?;
+        let mut product = DeviceBuffer::from_host(&self.stream, &[BFloat16::from_bits(GUARD)])?;
         unsafe {
             self.module.activate_bf16(
                 &self.stream,
@@ -236,7 +236,7 @@ impl Runner {
                 1,
             )?;
         }
-        let mut actual = [Bf16::from_bits(0)];
+        let mut actual = [BFloat16::from_bits(0)];
         silu.copy_to_host(&self.stream, &mut actual)?;
         assert_eq!(actual[0].to_bits(), 0x3f3b);
         product.copy_to_host(&self.stream, &mut actual)?;

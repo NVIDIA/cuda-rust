@@ -36,14 +36,14 @@ pub(super) const fn b_pair_atom_128(warp_n: usize, pair_n: usize) -> usize {
 /// 32 lane handles -> 32 lanes load together -> one warp-wide MMA
 /// ```
 #[derive(Clone, Copy)]
-pub struct Mxfp4TiledMma<SharedLayout> {
+pub struct Mxf4TiledMma<SharedLayout> {
     /// Calling thread’s lane index in the 32-thread warp.
     pub(super) lane: u32,
     /// Retains the shared-memory coordinate map for fragment loads.
     pub(super) layout: PhantomData<SharedLayout>,
 }
 
-impl<SharedLayout> Mxfp4TiledMma<SharedLayout> {
+impl<SharedLayout> Mxf4TiledMma<SharedLayout> {
     /// Create the handle for one lane of the warp.
     ///
     /// The later load methods require `lane` to be the calling thread's real
@@ -64,7 +64,7 @@ impl<SharedLayout> Mxfp4TiledMma<SharedLayout> {
     /// ```
     ///
     /// The view loads two fragments at a time when it is passed to
-    /// [`Mxf4AccumulatorTile2x8::accumulate_k64`](super::Mxf4AccumulatorTile2x8::accumulate_k64). `warp_n` must be 0 or 1;
+    /// [`Mxf4AccumulatorTile2x8::gemm`](super::Mxf4AccumulatorTile2x8::gemm). `warp_n` must be 0 or 1;
     /// `k_half` must be 0 or 1 before that unsafe operation is called.
     #[must_use]
     #[inline(always)]

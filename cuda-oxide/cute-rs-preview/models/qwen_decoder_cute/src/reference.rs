@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! Independent FP64 decoder oracle with explicit BF16 storage boundaries.
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 
 /// Owned host weights for a D128 decoder-layer oracle.
 ///
@@ -12,27 +12,27 @@ use cute_rs::Bf16;
 #[derive(Clone)]
 pub struct LayerWeights {
     /// H input RMSNorm weights.
-    pub input_norm: Vec<Bf16>,
+    pub input_norm: Vec<BFloat16>,
     /// Query projection matrix `[QW, H]`.
-    pub query: Vec<Bf16>,
+    pub query: Vec<BFloat16>,
     /// Key projection matrix `[KW, H]`.
-    pub key: Vec<Bf16>,
+    pub key: Vec<BFloat16>,
     /// Value projection matrix `[KW, H]`.
-    pub value: Vec<Bf16>,
+    pub value: Vec<BFloat16>,
     /// Attention output projection matrix `[H, QW]`.
-    pub output: Vec<Bf16>,
+    pub output: Vec<BFloat16>,
     /// 128 RMSNorm weights shared across query heads.
-    pub q_norm: Vec<Bf16>,
+    pub q_norm: Vec<BFloat16>,
     /// 128 RMSNorm weights shared across key heads.
-    pub k_norm: Vec<Bf16>,
+    pub k_norm: Vec<BFloat16>,
     /// H post-attention RMSNorm weights.
-    pub post_norm: Vec<Bf16>,
+    pub post_norm: Vec<BFloat16>,
     /// FFN gate matrix `[I, H]`.
-    pub gate: Vec<Bf16>,
+    pub gate: Vec<BFloat16>,
     /// FFN expansion matrix `[I, H]`.
-    pub up: Vec<Bf16>,
+    pub up: Vec<BFloat16>,
     /// FFN contraction matrix `[H, I]`.
-    pub down: Vec<Bf16>,
+    pub down: Vec<BFloat16>,
 }
 
 /// Dense BF16 snapshots at every observable layer storage boundary.
@@ -40,60 +40,60 @@ pub struct LayerWeights {
 /// All buffers are row-major; widths follow the associated layer weights.
 pub struct LayerTrace {
     /// Input RMSNorm output `[rows, H]`.
-    pub normalized: Vec<Bf16>,
+    pub normalized: Vec<BFloat16>,
     /// Query projection output `[rows, QW]`.
-    pub q: Vec<Bf16>,
+    pub q: Vec<BFloat16>,
     /// Key projection output `[rows, KW]`.
-    pub k: Vec<Bf16>,
+    pub k: Vec<BFloat16>,
     /// Unrotated value projection output `[rows, KW]`.
-    pub v: Vec<Bf16>,
+    pub v: Vec<BFloat16>,
     /// Per-head query RMSNorm output `[rows, QW]`.
-    pub q_normed: Vec<Bf16>,
+    pub q_normed: Vec<BFloat16>,
     /// Per-head key RMSNorm output `[rows, KW]`.
-    pub k_normed: Vec<Bf16>,
+    pub k_normed: Vec<BFloat16>,
     /// Rotary query output `[rows, QW]`.
-    pub rotated_q: Vec<Bf16>,
+    pub rotated_q: Vec<BFloat16>,
     /// Rotary key output `[rows, KW]`, also the logical K cache.
-    pub rotated_k: Vec<Bf16>,
+    pub rotated_k: Vec<BFloat16>,
     /// Causal grouped-query attention output `[rows, QW]`.
-    pub attention: Vec<Bf16>,
+    pub attention: Vec<BFloat16>,
     /// Attention output projected to `[rows, H]`.
-    pub projected: Vec<Bf16>,
+    pub projected: Vec<BFloat16>,
     /// First residual addition `[rows, H]`.
-    pub residual: Vec<Bf16>,
+    pub residual: Vec<BFloat16>,
     /// Post-attention RMSNorm output `[rows, H]`.
-    pub post_normed: Vec<Bf16>,
+    pub post_normed: Vec<BFloat16>,
     /// FFN gate projection `[rows, I]`.
-    pub gate: Vec<Bf16>,
+    pub gate: Vec<BFloat16>,
     /// FFN up projection `[rows, I]`.
-    pub up: Vec<Bf16>,
+    pub up: Vec<BFloat16>,
     /// BF16 SiLU of the gate `[rows, I]`.
-    pub silu: Vec<Bf16>,
+    pub silu: Vec<BFloat16>,
     /// Rounded SiLU-times-up product `[rows, I]`.
-    pub product: Vec<Bf16>,
+    pub product: Vec<BFloat16>,
     /// FFN down projection `[rows, H]`.
-    pub down: Vec<Bf16>,
+    pub down: Vec<BFloat16>,
     /// Final residual addition `[rows, H]`.
-    pub output: Vec<Bf16>,
+    pub output: Vec<BFloat16>,
 }
 
 /// Convert FP64 to FP32, then round to BF16 using round-to-nearest, ties-to-even.
 ///
 /// NaNs are quieted while retaining their upper payload bits.
-pub fn round(value: f64) -> Bf16 {
+pub fn round(value: f64) -> BFloat16 {
     let value = value as f32;
     let bits = value.to_bits();
     let retained = (bits >> 16) as u16;
     if value.is_nan() {
-        return Bf16::from_bits(retained | 0x0040);
+        return BFloat16::from_bits(retained | 0x0040);
     }
     let discarded = bits & 0xffff;
     let increment = discarded > 0x8000 || (discarded == 0x8000 && retained & 1 != 0);
-    Bf16::from_bits(retained.wrapping_add(u16::from(increment)))
+    BFloat16::from_bits(retained.wrapping_add(u16::from(increment)))
 }
 
 /// Widen BF16 storage exactly through FP32 to FP64, preserving signed zero.
-pub fn widen(value: Bf16) -> f64 {
+pub fn widen(value: BFloat16) -> f64 {
     f64::from(f32::from_bits(u32::from(value.to_bits()) << 16))
 }
 
@@ -107,7 +107,13 @@ fn extent(rows: usize, width: usize) -> usize {
 ///
 /// Panics for mismatched extents, zero width, extent overflow or a nonfinite
 /// or negative epsilon. The normalized value and weighted output each round.
-pub fn norm(input: &[Bf16], weight: &[Bf16], rows: usize, width: usize, epsilon: f32) -> Vec<Bf16> {
+pub fn norm(
+    input: &[BFloat16],
+    weight: &[BFloat16],
+    rows: usize,
+    width: usize,
+    epsilon: f32,
+) -> Vec<BFloat16> {
     assert!(width > 0, "normalization width must be positive");
     assert!(
         epsilon.is_finite() && epsilon >= 0.0,
@@ -137,13 +143,13 @@ pub fn norm(input: &[Bf16], weight: &[Bf16], rows: usize, width: usize, epsilon:
 /// Input is `[rows, input_width]`; output is `[rows, output_width]`. Panics
 /// for zero widths, extent overflow, or mismatched input/weight/bias storage.
 pub fn linear(
-    input: &[Bf16],
-    weight: &[Bf16],
+    input: &[BFloat16],
+    weight: &[BFloat16],
     rows: usize,
     input_width: usize,
     output_width: usize,
-    bias: Option<&[Bf16]>,
-) -> Vec<Bf16> {
+    bias: Option<&[BFloat16]>,
+) -> Vec<BFloat16> {
     assert!(
         input_width > 0 && output_width > 0,
         "linear widths must be positive"
@@ -179,7 +185,7 @@ pub fn linear(
 /// Add equal-length BF16 arrays in FP64 and round each sum once.
 ///
 /// Panics when the storage lengths differ.
-pub fn add(left: &[Bf16], right: &[Bf16]) -> Vec<Bf16> {
+pub fn add(left: &[BFloat16], right: &[BFloat16]) -> Vec<BFloat16> {
     assert_eq!(left.len(), right.len(), "residual storage length mismatch");
     left.iter()
         .zip(right)
@@ -188,7 +194,7 @@ pub fn add(left: &[Bf16], right: &[Bf16]) -> Vec<Bf16> {
 }
 
 /// Evaluate sign-stable FP64 SiLU independently and round each output to BF16.
-pub fn silu(input: &[Bf16]) -> Vec<Bf16> {
+pub fn silu(input: &[BFloat16]) -> Vec<BFloat16> {
     input
         .iter()
         .map(|&x| {
@@ -207,7 +213,7 @@ pub fn silu(input: &[Bf16]) -> Vec<Bf16> {
 /// Gather width-sized rows in ID order, preserving duplicates and exact bits.
 ///
 /// Panics for zero width, partial table rows, out-of-range IDs or extent overflow.
-pub fn embedding(table: &[Bf16], ids: &[u32], width: usize) -> Vec<Bf16> {
+pub fn embedding(table: &[BFloat16], ids: &[u32], width: usize) -> Vec<BFloat16> {
     assert!(width > 0, "embedding width must be positive");
     assert!(
         table.len().is_multiple_of(width),
@@ -233,14 +239,14 @@ pub fn embedding(table: &[Bf16], ids: &[u32], width: usize) -> Vec<Bf16> {
 /// partial rows or inconsistent weight/table extents.
 #[allow(clippy::too_many_arguments)]
 pub fn layer(
-    input: &[Bf16],
+    input: &[BFloat16],
     weights: &LayerWeights,
     hidden: usize,
     intermediate: usize,
     query_heads: usize,
     kv_heads: usize,
-    cos: &[Bf16],
-    sin: &[Bf16],
+    cos: &[BFloat16],
+    sin: &[BFloat16],
 ) -> LayerTrace {
     /// Coordinates per query/key/value head in the language decoder.
     const DIM: usize = 128;
@@ -338,7 +344,7 @@ mod tests {
     use super::*;
 
     /// Extract exact BF16 bit patterns for oracle regression assertions.
-    fn bits(values: &[Bf16]) -> Vec<u16> {
+    fn bits(values: &[BFloat16]) -> Vec<u16> {
         values.iter().map(|x| x.to_bits()).collect()
     }
 
@@ -355,7 +361,7 @@ mod tests {
             )),
             [0x3f9a, 0xbf4d]
         );
-        let weights = [Bf16::from_bits(0x3f71), round(1.0)];
+        let weights = [BFloat16::from_bits(0x3f71), round(1.0)];
         let actual = norm(&[1.0, 2.0].map(round), &weights, 1, 2, 0.0);
         assert_eq!(actual[0].to_bits(), 0x3f19);
         // Multiplying the weight before narrowing the normalized value gives 0x3f18.
@@ -374,12 +380,12 @@ mod tests {
             [6.5, -1.0, 12.5, 5.0]
         );
         let actual = linear(
-            &[Bf16::from_bits(0x3f70)],
-            &[Bf16::from_bits(0x3f78)],
+            &[BFloat16::from_bits(0x3f70)],
+            &[BFloat16::from_bits(0x3f78)],
             1,
             1,
             1,
-            Some(&[Bf16::from_bits(0xbb80)]),
+            Some(&[BFloat16::from_bits(0xbb80)]),
         );
         assert_eq!(actual[0].to_bits(), 0x3f68);
         // Narrowing the matrix product before adding bias instead gives 0x3f67.
@@ -400,7 +406,7 @@ mod tests {
     /// Verify gather order and exact preservation of signed zero and NaN payloads.
     #[test]
     fn embedding_preserves_order_duplicates_and_storage_bits() {
-        let table = [0x8000, 0x7fc1, 0x3f80, 0xbf80, 0x4000, 0x4040].map(Bf16::from_bits);
+        let table = [0x8000, 0x7fc1, 0x3f80, 0xbf80, 0x4000, 0x4040].map(BFloat16::from_bits);
         assert_eq!(
             bits(&embedding(&table, &[2, 0, 2], 2)),
             [0x4000, 0x4040, 0x8000, 0x7fc1, 0x4000, 0x4040]

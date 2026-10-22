@@ -6,7 +6,7 @@
 
 use core::ptr;
 
-use cute_rs::{Mxf4E2M1, Mxfp4TiledMma, Nkl, SharedTensor};
+use cute_rs::{Mxf4E2M1, Mxf4TiledMma, Nkl, SharedTensor};
 
 /// Reject a B-role shared tile passed to the A-fragment loader.
 
@@ -14,6 +14,6 @@ fn main() {
     let shared_b = unsafe {
         SharedTensor::<Mxf4E2M1, f16, (), Nkl>::from_raw_parts(ptr::null_mut(), 0)
     };
-    let mma = Mxfp4TiledMma::<()>::get_slice(0);
+    let mma = Mxf4TiledMma::<()>::get_slice(0);
     let _ = unsafe { mma.load_a(&shared_b, (0, 0)) };
 }

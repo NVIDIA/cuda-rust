@@ -4,7 +4,7 @@
  */
 //! Independent FP64 grouped-query attention oracle over BF16 storage.
 use crate::reference::{round, widen};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 
 /// Computes scaled dot-product attention in token/head/coordinate order.
 ///
@@ -16,16 +16,16 @@ use cute_rs::Bf16;
 /// the cache. Future keys and values are excluded before evaluating arithmetic.
 #[allow(clippy::too_many_arguments)]
 pub fn attention(
-    query: &[Bf16],
-    key: &[Bf16],
-    value: &[Bf16],
+    query: &[BFloat16],
+    key: &[BFloat16],
+    value: &[BFloat16],
     query_heads: usize,
     kv_heads: usize,
     dim: usize,
     query_tokens: usize,
     key_tokens: usize,
     query_start: Option<usize>,
-) -> Vec<Bf16> {
+) -> Vec<BFloat16> {
     assert!(query_heads > 0, "query heads must be positive");
     assert!(kv_heads > 0, "KV heads must be positive");
     assert!(dim > 0, "head dimension must be positive");
@@ -100,7 +100,7 @@ mod tests {
     use super::*;
 
     /// Widen oracle output for direct comparison with analytic FP64 fixture values.
-    fn values(output: Vec<Bf16>) -> Vec<f64> {
+    fn values(output: Vec<BFloat16>) -> Vec<f64> {
         output.into_iter().map(widen).collect()
     }
 

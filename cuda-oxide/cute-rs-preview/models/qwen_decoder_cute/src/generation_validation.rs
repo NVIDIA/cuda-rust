@@ -12,24 +12,24 @@ use crate::{
 };
 use cuda_core::DeviceBuffer;
 use cute_rs::{
-    Bf16,
+    BFloat16,
     decoder::{BiasWeights, EmbeddingWeights, NormWeights, TokenIds},
     ffn::ProjectionWeights,
 };
 
 /// Construct positive-zero BF16 storage for sparse fixture matrices.
-fn zeros(len: usize) -> Vec<Bf16> {
-    vec![Bf16::from_bits(0); len]
+fn zeros(len: usize) -> Vec<BFloat16> {
+    vec![BFloat16::from_bits(0); len]
 }
 /// Construct unit BF16 values for identity RMSNorm weights and expectations.
-fn ones(len: usize) -> Vec<Bf16> {
+fn ones(len: usize) -> Vec<BFloat16> {
     vec![reference::round(1.0); len]
 }
 /// Generate a codebook value depending on stage, selected ID and channel.
 ///
 /// Alternating first/second channels steer the next predictor choice, exposing
 /// wrong table selection or stale feedback.
-fn codec_value(stage: usize, id: usize, column: usize) -> Bf16 {
+fn codec_value(stage: usize, id: usize, column: usize) -> BFloat16 {
     let base = (stage + 1 + id % 17) as f64 / 16.0;
     reference::round(match column {
         0 => base + if stage.is_multiple_of(2) { 2.0 } else { 0.0 },
@@ -56,7 +56,7 @@ fn identity_layer(hidden: usize, intermediate: usize) -> LayerWeights {
     }
 }
 /// Assert equal lengths and BF16 bits, reporting the named failing coordinate.
-fn exact(actual: &[Bf16], expected: &[Bf16], label: &str) {
+fn exact(actual: &[BFloat16], expected: &[BFloat16], label: &str) {
     assert_eq!(actual.len(), expected.len(), "{label}");
     for (i, (a, e)) in actual.iter().zip(expected).enumerate() {
         assert_eq!(a.to_bits(), e.to_bits(), "{label}[{i}]");

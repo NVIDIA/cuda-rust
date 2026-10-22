@@ -14,7 +14,7 @@ use crate::{
 };
 use cuda_core::{CudaStream, DeviceBuffer};
 use cute_rs::{
-    Bf16,
+    BFloat16,
     decoder::{
         BiasWeights, EmbeddingWeights, FinalNorm, InputNorm, NormRole, NormWeights,
         PostAttentionNorm, TokenIds,
@@ -215,7 +215,7 @@ fn specs() -> Vec<Spec> {
 /// The two encoder-only quantizer input projections are intentionally not loaded.
 struct Weights {
     /// Owned checkpoint tensors, narrowed from finite FP32 to finite BF16.
-    tensors: BTreeMap<String, DeviceBuffer<Bf16>>,
+    tensors: BTreeMap<String, DeviceBuffer<BFloat16>>,
     /// Sixteen normalized `[2048, 256]` embedding tables in codec group order.
     codebooks: Vec<Batch<256>>,
 }
@@ -244,7 +244,7 @@ impl Weights {
             if host.iter().any(|value| !value.is_finite()) {
                 return Err(format!("codec tensor {} contains nonfinite data", spec.name).into());
             }
-            let narrow: Vec<_> = host.into_iter().map(Bf16::from_f32).collect();
+            let narrow: Vec<_> = host.into_iter().map(BFloat16::from_f32).collect();
             if narrow.iter().any(|value| !value.to_f32().is_finite()) {
                 return Err(format!("codec tensor {} overflows BF16 storage", spec.name).into());
             }
@@ -271,7 +271,7 @@ impl Weights {
         Ok(result)
     }
     /// Borrow a decoder tensor by its suffix, returning an error if it was not loaded.
-    fn tensor(&self, name: &str) -> Result<&DeviceBuffer<Bf16>> {
+    fn tensor(&self, name: &str) -> Result<&DeviceBuffer<BFloat16>> {
         self.tensors
             .get(&format!("decoder.{name}"))
             .ok_or_else(|| format!("missing codec weight {name}").into())
@@ -332,7 +332,7 @@ pub struct Stage {
     /// Channels per time step.
     pub width: usize,
     /// Dense time-major `[rows, width]` BF16 storage.
-    pub values: Vec<Bf16>,
+    pub values: Vec<BFloat16>,
 }
 /// Optional ordered host snapshots; disabled traces perform no readback.
 #[derive(Default)]
@@ -432,10 +432,10 @@ impl Runner {
         let input = Batch::<2>::from_host(
             &self.stream,
             2,
-            &[1.0, 0.00390625, 1.0, 0.00390625].map(Bf16::from_f32),
+            &[1.0, 0.00390625, 1.0, 0.00390625].map(BFloat16::from_f32),
         )?;
-        let weight = DeviceBuffer::from_host(&self.stream, &[Bf16::from_f32(1.0); 2])?;
-        let bias = DeviceBuffer::from_host(&self.stream, &[Bf16::from_f32(0.0009765625)])?;
+        let weight = DeviceBuffer::from_host(&self.stream, &[BFloat16::from_f32(1.0); 2])?;
+        let bias = DeviceBuffer::from_host(&self.stream, &[BFloat16::from_f32(0.0009765625)])?;
         let weight = ProjectionWeights::<InputProjection, 2, 1>::new(&weight, 2)?;
         let bias = BiasWeights::<InputProjection, 1>::new(&bias)?;
         let separate = self
@@ -746,7 +746,7 @@ impl Runner {
                     .read(&self.stream)?
                     .into_iter()
                     .skip(chunk.crop)
-                    .map(Bf16::to_f32),
+                    .map(BFloat16::to_f32),
             );
         }
         Ok(output)

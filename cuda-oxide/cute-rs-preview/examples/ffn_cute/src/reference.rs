@@ -3,20 +3,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! Independent FP64 matrix arithmetic and BF16 rounding for synthetic fixtures.
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 
 /// Integer RNE oracle independent of the device conversion helper.
-pub fn round(value: f32) -> Bf16 {
+pub fn round(value: f32) -> BFloat16 {
     let bits = value.to_bits();
     let high = (bits >> 16) as u16;
     if value.is_nan() {
-        return Bf16::from_bits(high | 0x40);
+        return BFloat16::from_bits(high | 0x40);
     }
     let low = bits & 0xffff;
-    Bf16::from_bits(high.wrapping_add(u16::from(low > 0x8000 || (low == 0x8000 && high & 1 != 0))))
+    BFloat16::from_bits(
+        high.wrapping_add(u16::from(low > 0x8000 || (low == 0x8000 && high & 1 != 0))),
+    )
 }
 /// Widen stored bits independently from the device implementation.
-pub fn widen(value: Bf16) -> f64 {
+pub fn widen(value: BFloat16) -> f64 {
     f64::from(f32::from_bits(u32::from(value.to_bits()) << 16))
 }
 /// Compute X times transposed stored weights using sequential FP64 dot products.
@@ -27,14 +29,14 @@ pub fn widen(value: Bf16) -> f64 {
 /// product narrows through FP32 before integer round-to-nearest-even BF16.
 #[allow(clippy::too_many_arguments)]
 pub fn linear(
-    input: &[Bf16],
-    weight: &[Bf16],
+    input: &[BFloat16],
+    weight: &[BFloat16],
     rows: usize,
     input_width: usize,
     output_width: usize,
     input_stride: usize,
     weight_stride: usize,
-) -> Vec<Bf16> {
+) -> Vec<BFloat16> {
     let mut result = Vec::with_capacity(rows * output_width);
     for row in 0..rows {
         for out in 0..output_width {
@@ -49,7 +51,7 @@ pub fn linear(
     result
 }
 /// Compute SiLU in FP64; preserve its BF16 output before the BF16 product.
-pub fn activate(gate: &[Bf16], up: &[Bf16]) -> (Vec<Bf16>, Vec<Bf16>) {
+pub fn activate(gate: &[BFloat16], up: &[BFloat16]) -> (Vec<BFloat16>, Vec<BFloat16>) {
     assert_eq!(gate.len(), up.len());
     let silu: Vec<_> = gate
         .iter()
@@ -101,11 +103,11 @@ mod tests {
     /// Distinguish the BF16 SiLU intermediate from rounding the full product only once.
     #[test]
     fn activation_keeps_the_silu_rounding_boundary() {
-        let (silu, product) = activate(&[round(1.0)], &[Bf16::from_bits(0x4001)]);
+        let (silu, product) = activate(&[round(1.0)], &[BFloat16::from_bits(0x4001)]);
         assert_eq!(silu[0].to_bits(), 0x3f3b);
         assert_eq!(product[0].to_bits(), 0x3fbc);
         let fused =
-            round((1.0_f64 / (1.0 + (-1.0_f64).exp()) * widen(Bf16::from_bits(0x4001))) as f32);
+            round((1.0_f64 / (1.0 + (-1.0_f64).exp()) * widen(BFloat16::from_bits(0x4001))) as f32);
         assert_ne!(product[0].to_bits(), fused.to_bits());
     }
 }

@@ -20,7 +20,7 @@ use crate::{
     sampling::{Sampler, SamplingConfig},
 };
 use cuda_core::CudaContext;
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 use cute_rs::decoder::TokenIds;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -265,7 +265,11 @@ fn prompt_plan(request: &Request, config: &Value) -> Result<PromptPlan> {
 /// Only codes `0..2048` and EOS 2150 remain eligible. EOS is suppressed for
 /// the first two selections; previous codes receive the sign-aware 1.05 penalty
 /// in FP32 before the request's greedy or stochastic policy is applied.
-fn next_code_with(logits: &[Bf16], previous: &[u32], sampler: &mut Sampler<3072>) -> Result<u32> {
+fn next_code_with(
+    logits: &[BFloat16],
+    previous: &[u32],
+    sampler: &mut Sampler<3072>,
+) -> Result<u32> {
     if logits.len() != 3072 {
         return Err("Talker logits require 3072 values".into());
     }
@@ -292,7 +296,7 @@ fn next_code_with(logits: &[Bf16], previous: &[u32], sampler: &mut Sampler<3072>
 
 /// Use greedy selection for CPU fixtures of tag masking, EOS gating, and repetition penalty.
 #[cfg(test)]
-fn next_code(logits: &[Bf16], previous: &[u32]) -> Result<u32> {
+fn next_code(logits: &[BFloat16], previous: &[u32]) -> Result<u32> {
     next_code_with(
         logits,
         previous,
@@ -1056,11 +1060,11 @@ mod tests {
     /// Check codec-tag masking, two-step EOS suppression, and the repetition penalty.
     #[test]
     fn generation_policy_suppresses_tags_and_eos_then_applies_repetition_penalty() {
-        let mut logits = vec![Bf16::from_f32(-10.0); 3072];
-        logits[3061] = Bf16::from_f32(100.0);
-        logits[2150] = Bf16::from_f32(99.0);
-        logits[7] = Bf16::from_f32(1.0);
-        logits[8] = Bf16::from_f32(0.98);
+        let mut logits = vec![BFloat16::from_f32(-10.0); 3072];
+        logits[3061] = BFloat16::from_f32(100.0);
+        logits[2150] = BFloat16::from_f32(99.0);
+        logits[7] = BFloat16::from_f32(1.0);
+        logits[8] = BFloat16::from_f32(0.98);
         assert_eq!(next_code(&logits, &[]).unwrap(), 7);
         assert_eq!(next_code(&logits, &[7]).unwrap(), 8);
         assert_eq!(next_code(&logits, &[7, 8]).unwrap(), 2150);

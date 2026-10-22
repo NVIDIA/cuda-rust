@@ -179,7 +179,7 @@ mod canonical_path_tests {
         for path in [
             "cute_rs::numeric::silu_bf16",
             "cute_rs::numeric::{impl#3}::to_f32",
-            "cute-rs::numeric::Bf16::from_f32",
+            "cute-rs::numeric::BFloat16::from_f32",
             "cute_rs::arch::exp2_f32",
             "cute_rs::tensor::partition::{impl#3}::get",
             "cute_rs::static_layout::{impl#1}::crd2idx",
@@ -306,7 +306,7 @@ mod canonical_path_tests {
             "cute_rs"
         ));
         assert!(is_source_abstraction_path(
-            "cute-rs::numeric::PackedE2M1x2::to_f32x2",
+            "cute-rs::numeric::Float4E2M1FNx2::to_f32x2",
             "cute-rs"
         ));
         assert!(is_source_abstraction_path(
@@ -318,7 +318,7 @@ mod canonical_path_tests {
             "cute_rs"
         ));
         assert!(is_source_abstraction_path(
-            "cute_rs::mma::block_scaled::tiled::Mxfp4TiledMma<...>::gemm",
+            "cute_rs::mma::block_scaled::tiled::Mxf4TiledMma<...>::gemm",
             "cute_rs"
         ));
         assert!(is_source_abstraction_path(
@@ -486,7 +486,7 @@ mod canonical_path_tests {
     fn shared_mma_method_path_keeps_module_and_method_exact() {
         assert_eq!(
             smem_mma_method_name_from_path(
-                "cute_rs::mma::block_scaled::tiled::Mxfp4TiledMma<...>>::load_a_128",
+                "cute_rs::mma::block_scaled::tiled::Mxf4TiledMma<...>>::load_a_128",
                 "mma::block_scaled::tiled"
             ),
             Some("load_a_128")
@@ -500,7 +500,7 @@ mod canonical_path_tests {
         );
         assert_eq!(
             smem_mma_method_name_from_path(
-                "cute_rs::other::Mxfp4TiledMma<...>>::load_a_128",
+                "cute_rs::other::Mxf4TiledMma<...>>::load_a_128",
                 "mma::block_scaled::tiled"
             ),
             None
@@ -512,6 +512,33 @@ mod canonical_path_tests {
             ),
             None,
             "a free function is not an inherent method"
+        );
+    }
+
+    /// Check that the accumulator-tile `gemm` is keyed by the fragments module,
+    /// so the one-cell `Mxf4TiledMma::gemm` in the tiled module is not taken for it.
+    #[test]
+    fn accumulator_gemm_is_keyed_by_the_fragments_module() {
+        assert_eq!(
+            smem_mma_method_name_from_path(
+                "cute_rs::mma::block_scaled::fragments::{impl#4}::gemm",
+                "mma::block_scaled::fragments"
+            ),
+            Some("gemm")
+        );
+        assert_eq!(
+            smem_mma_method_name_from_path(
+                "cute_rs::mma::block_scaled::fragments::Mxf4AccumulatorTile2x8::gemm",
+                "mma::block_scaled::fragments"
+            ),
+            Some("gemm")
+        );
+        assert_eq!(
+            smem_mma_method_name_from_path(
+                "cute_rs::mma::block_scaled::tiled::Mxf4TiledMma<...>>::gemm",
+                "mma::block_scaled::fragments"
+            ),
+            None
         );
     }
 

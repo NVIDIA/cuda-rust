@@ -8,7 +8,7 @@ use crate::{
     codec_model::{Runner, SAMPLES_PER_FRAME, Stage, Trace},
     operator::Result,
 };
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 use std::path::Path;
 
 /// Error and signal metrics computed over finite aligned waveform/stage values.
@@ -66,11 +66,11 @@ fn metrics(actual: &[f32], expected: &[f32]) -> Result<Metrics> {
 /// Transpose a batch-one `[channel, time]` BF16 fixture to `[time, channel]`.
 ///
 /// Preserves storage bits and rejects incompatible or overflowing extents.
-fn time_major(values: &[Bf16], rows: usize, channels: usize) -> Result<Vec<Bf16>> {
+fn time_major(values: &[BFloat16], rows: usize, channels: usize) -> Result<Vec<BFloat16>> {
     if rows.checked_mul(channels) != Some(values.len()) {
         return Err("codec NCT tensor extent mismatch".into());
     }
-    let mut output = vec![Bf16::from_bits(0); values.len()];
+    let mut output = vec![BFloat16::from_bits(0); values.len()];
     for t in 0..rows {
         for c in 0..channels {
             output[t * channels + c] = values[c * rows + t];
@@ -178,7 +178,7 @@ pub fn run(model_dir: &Path, reference_dir: &Path) -> Result<()> {
                 width: 1,
                 // decode widens completed BF16 samples exactly; this conversion
                 // restores their storage representation for the shared reader.
-                values: waveform.into_iter().map(Bf16::from_f32).collect(),
+                values: waveform.into_iter().map(BFloat16::from_f32).collect(),
             });
         } else {
             let output = runner.decode_chunk(&input, &mut trace)?;
@@ -191,7 +191,7 @@ pub fn run(model_dir: &Path, reference_dir: &Path) -> Result<()> {
             if !reference.contains(&name) {
                 continue;
             }
-            let actual: Vec<_> = stage.values.into_iter().map(Bf16::to_f32).collect();
+            let actual: Vec<_> = stage.values.into_iter().map(BFloat16::to_f32).collect();
             let expected = if stage.name == "waveform" {
                 reference.f32(&name, &[stage.rows])?
             } else {
@@ -207,7 +207,7 @@ pub fn run(model_dir: &Path, reference_dir: &Path) -> Result<()> {
                 } else {
                     time_major(&values, stage.rows, stage.width)?
                 };
-                values.into_iter().map(Bf16::to_f32).collect()
+                values.into_iter().map(BFloat16::to_f32).collect()
             };
             let stats = metrics(&actual, &expected)?;
             println!(
@@ -276,11 +276,11 @@ mod tests {
     /// Verify physical channel-first transposition and reject mismatched/overflowing extents.
     #[test]
     fn reference_channel_first_layout_is_transposed_not_reinterpreted() {
-        let source = [1., 2., 3., 10., 20., 30.].map(Bf16::from_f32);
+        let source = [1., 2., 3., 10., 20., 30.].map(BFloat16::from_f32);
         let got: Vec<_> = time_major(&source, 3, 2)
             .unwrap()
             .into_iter()
-            .map(Bf16::to_f32)
+            .map(BFloat16::to_f32)
             .collect();
         assert_eq!(got, [1., 10., 2., 20., 3., 30.]);
         assert!(time_major(&source, 4, 2).is_err());

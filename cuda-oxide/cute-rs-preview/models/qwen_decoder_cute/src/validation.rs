@@ -10,13 +10,13 @@ use crate::{
 };
 use cuda_core::{CudaContext, DeviceBuffer};
 use cute_rs::{
-    Bf16,
+    BFloat16,
     decoder::{BiasWeights, EmbeddingWeights, TokenIds},
     ffn::{InputProjection, ProjectionWeights},
 };
 
 /// Extract BF16 storage bits for exact comparisons, including signed zero.
-fn bits(values: &[Bf16]) -> Vec<u16> {
+fn bits(values: &[BFloat16]) -> Vec<u16> {
     values.iter().map(|v| v.to_bits()).collect()
 }
 
@@ -33,7 +33,7 @@ pub fn run() -> Result<()> {
     // A fresh host thread has no current CUDA context. Safe construction must
     // bind the supplied stream's context before allocating its input storage.
     let thread_stream = stream.clone();
-    let from_worker = std::thread::spawn(move || -> std::result::Result<Vec<Bf16>, String> {
+    let from_worker = std::thread::spawn(move || -> std::result::Result<Vec<BFloat16>, String> {
         let batch = Batch::<3>::from_host(&thread_stream, 1, &[1., -2., 3.].map(reference::round))
             .map_err(|e| e.to_string())?;
         batch.read(&thread_stream).map_err(|e| e.to_string())
@@ -46,7 +46,7 @@ pub fn run() -> Result<()> {
         bits(&[1., -2., 3.].map(reference::round))
     );
     let mut failures = Vec::new();
-    let mut check = |label, actual: Vec<Bf16>, expected: Vec<Bf16>| {
+    let mut check = |label, actual: Vec<BFloat16>, expected: Vec<BFloat16>| {
         if bits(&actual) != bits(&expected) {
             failures.push(label);
         }
@@ -86,17 +86,17 @@ pub fn run() -> Result<()> {
     check(
         "sum_rows",
         runner.sum_rows(&rows)?.read(&stream)?,
-        vec![Bf16::from_bits(0x3f81)],
+        vec![BFloat16::from_bits(0x3f81)],
     );
-    let x = Batch::<1>::from_host(&stream, 1, &[Bf16::from_bits(0x3f81)])?;
-    let w = DeviceBuffer::from_host(&stream, &[Bf16::from_bits(0x3f81)])?;
-    let b = DeviceBuffer::from_host(&stream, &[Bf16::from_bits(0x3b80)])?;
+    let x = Batch::<1>::from_host(&stream, 1, &[BFloat16::from_bits(0x3f81)])?;
+    let w = DeviceBuffer::from_host(&stream, &[BFloat16::from_bits(0x3f81)])?;
+    let b = DeviceBuffer::from_host(&stream, &[BFloat16::from_bits(0x3b80)])?;
     let weight = ProjectionWeights::<InputProjection, 1, 1>::new(&w, 1)?;
     let bias = BiasWeights::<InputProjection, 1>::new(&b)?;
     check(
         "biased_linear",
         runner.project(&x, &weight, Some(&bias))?.read(&stream)?,
-        vec![Bf16::from_bits(0x3f83)],
+        vec![BFloat16::from_bits(0x3f83)],
     );
     assert!(
         failures.is_empty(),

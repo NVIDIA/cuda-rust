@@ -23,7 +23,9 @@ use ctm_rs::memory::DisjointSlice;
 use ctm_rs::{cuda_module, kernel, thread};
 use cuda_core::simt::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
-use cute_rs::{BlockScaledTensor, E2M1, KMajor, Mkl, Nkl, Sm1xxBlockScaleKMajor, UE8M0};
+use cute_rs::{
+    BlockScaledTensor, Float4E2M1FN, Float8E8M0FNU, KMajor, Mkl, Nkl, Sm1xxBlockScaleKMajor,
+};
 
 /// Rows computed per CTA, with one output row per thread.
 const CTA_M: usize = 128;
@@ -39,10 +41,10 @@ const DEFAULT_K: usize = 256;
 const DEFAULT_L: usize = 1;
 
 /// Packed E2M1 matrix with UE8M0 scales and K-major matrix coordinates.
-type MatrixA<'a> = BlockScaledTensor<'a, E2M1, UE8M0, SF_VEC, KMajor<Mkl>>;
+type MatrixA<'a> = BlockScaledTensor<'a, Float4E2M1FN, Float8E8M0FNU, SF_VEC, KMajor<Mkl>>;
 
 /// Packed E2M1 vector with UE8M0 scales and K-major vector coordinates.
-type VectorB<'a> = BlockScaledTensor<'a, E2M1, UE8M0, SF_VEC, KMajor<Nkl>>;
+type VectorB<'a> = BlockScaledTensor<'a, Float4E2M1FN, Float8E8M0FNU, SF_VEC, KMajor<Nkl>>;
 
 /// Device entry point for one-thread-per-row block-scaled GEMV.
 #[cuda_module]

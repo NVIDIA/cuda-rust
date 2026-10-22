@@ -6,7 +6,7 @@
 //! Per-thread GEMV rows, K64 tiles, and loaded register values.
 
 use super::{__compiler, Mkl, Nkl};
-use crate::numeric::PackedE2M1x2;
+use crate::numeric::Float4E2M1FNx2;
 use core::marker::PhantomData;
 
 /// One thread's view of a row whose K values are adjacent.
@@ -106,14 +106,14 @@ impl<Mode: Copy> LoadedBlockScaledTile64<Mode> {
     /// Return packed FP4 pair `PAIR` in increasing K order.
     #[must_use]
     #[inline(always)]
-    pub fn value_pair<const PAIR: usize>(self) -> PackedE2M1x2 {
+    pub fn value_pair<const PAIR: usize>(self) -> Float4E2M1FNx2 {
         const { assert!(PAIR < 32) };
         let bits = if PAIR < 16 {
             self.values_lo[PAIR]
         } else {
             self.values_hi[PAIR - 16]
         };
-        PackedE2M1x2::from_bits(bits)
+        Float4E2M1FNx2::from_bits(bits)
     }
 
     /// Return the `f32` scale for one of the four 16-value groups.
@@ -149,7 +149,7 @@ impl LoadedBlockScaledTile64<Mkl> {
     }
 }
 
-/// One thread's view of an NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`) row.
+/// One thread's view of an NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) row.
 ///
 /// It stores slice references plus the row's starting value and scale offsets.
 #[derive(Clone, Copy, Debug)]
@@ -167,7 +167,7 @@ pub struct Nvfp4ThreadRow<'a, Mode> {
 }
 
 impl<'a, Mode: Copy> Nvfp4ThreadRow<'a, Mode> {
-    /// Select 64 neighboring K values and their four `E4M3` scales.
+    /// Select 64 neighboring K values and their four `Float8E4M3FN` scales.
     #[must_use]
     #[inline(always)]
     pub const fn k_tile(self, tile: usize) -> Nvfp4Tile64<'a, Mode> {
@@ -175,7 +175,7 @@ impl<'a, Mode: Copy> Nvfp4ThreadRow<'a, Mode> {
     }
 }
 
-/// A view of 64 packed `E2M1` values and four `E4M3` scales (`SF_VEC = 16`).
+/// A view of 64 packed `Float4E2M1FN` values and four `Float8E4M3FN` scales (`SF_VEC = 16`).
 #[derive(Clone, Copy, Debug)]
 pub struct Nvfp4Tile64<'a, Mode> {
     /// Borrowed packed value bytes for the complete tensor.
@@ -191,7 +191,7 @@ pub struct Nvfp4Tile64<'a, Mode> {
 }
 
 impl<'a, Mode: Copy> Nvfp4Tile64<'a, Mode> {
-    /// Load the 64 packed `E2M1` values and decode the four `E4M3` scales to `f32`.
+    /// Load the 64 packed `Float4E2M1FN` values and decode the four `Float8E4M3FN` scales to `f32`.
     ///
     /// # Safety
     ///
@@ -204,7 +204,7 @@ impl<'a, Mode: Copy> Nvfp4Tile64<'a, Mode> {
     }
 }
 
-/// 64 packed `E2M1` values and four decoded `E4M3` (`f32`) scales for one K=64 tile.
+/// 64 packed `Float4E2M1FN` values and four decoded `Float8E4M3FN` (`f32`) scales for one K=64 tile.
 #[derive(Clone, Copy, Debug)]
 pub struct LoadedNvfp4Tile64<Mode> {
     /// First 16 packed bytes, covering K values 0..31.
@@ -224,7 +224,7 @@ pub struct LoadedNvfp4Tile64<Mode> {
 }
 
 impl LoadedNvfp4Tile64<Mkl> {
-    /// Add the dot product of two K=64 NVFP4 tiles (`E2M1` + `E4M3`, `SF_VEC = 16`) to `acc`.
+    /// Add the dot product of two K=64 NVFP4 tiles (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) to `acc`.
     #[must_use]
     #[inline(always)]
     pub fn dot_accumulate(self, rhs: LoadedNvfp4Tile64<Nkl>, acc: f32) -> f32 {

@@ -21,19 +21,19 @@ mod reference;
 mod rotary;
 
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 use operator::{AttentionInputs, GUARD, KvCache, Result, Runner};
 use rotary::{HostTables, RotarySpec};
 
 /// Deliberately asymmetric finite inputs distinguish heads, coordinates and roles.
-fn fixture(len: usize, seed: usize) -> Vec<Bf16> {
+fn fixture(len: usize, seed: usize) -> Vec<BFloat16> {
     (0..len)
         .map(|i| reference::round(((i * 17 + (i / 7) * 3 + seed * 11) % 67) as f64 / 16.0 - 2.0))
         .collect()
 }
 
 /// Compare complete BF16 encodings, reporting the first unequal element and label.
-fn assert_bits(label: &str, actual: &[Bf16], expected: &[Bf16]) {
+fn assert_bits(label: &str, actual: &[BFloat16], expected: &[BFloat16]) {
     assert_eq!(actual.len(), expected.len(), "{label} length");
     for (i, (a, b)) in actual.iter().zip(expected).enumerate() {
         assert_eq!(a.to_bits(), b.to_bits(), "{label} at {i}");
@@ -41,7 +41,7 @@ fn assert_bits(label: &str, actual: &[Bf16], expected: &[Bf16]) {
 }
 
 /// Require every unwritten element to retain the BF16 sentinel bit pattern.
-fn assert_guard(label: &str, values: &[Bf16]) {
+fn assert_guard(label: &str, values: &[BFloat16]) {
     assert!(
         values.iter().all(|v| v.to_bits() == GUARD),
         "{label} overwritten"
@@ -51,10 +51,10 @@ fn assert_guard(label: &str, values: &[Bf16]) {
 /// Copy a result to the host, validate trailing guards, and return logical elements.
 fn query_output(
     stream: &CudaStream,
-    output: &DeviceBuffer<Bf16>,
+    output: &DeviceBuffer<BFloat16>,
     logical: usize,
-) -> Result<Vec<Bf16>> {
-    let mut values = vec![Bf16::from_bits(0); output.len()];
+) -> Result<Vec<BFloat16>> {
+    let mut values = vec![BFloat16::from_bits(0); output.len()];
     output.copy_to_host(stream, &mut values)?;
     assert_guard("query guard", &values[logical..]);
     values.truncate(logical);
@@ -194,11 +194,11 @@ fn validate<const Q: usize, const K: usize, const D: usize>(
 
 /// Require the exact rotary result that distinguishes product rounding from one final cast.
 fn check_product_rounding(runner: &Runner, stream: &CudaStream) -> Result<()> {
-    let q = DeviceBuffer::from_host(stream, &[0x3f81, 0x3f02].map(Bf16::from_bits))?;
+    let q = DeviceBuffer::from_host(stream, &[0x3f81, 0x3f02].map(BFloat16::from_bits))?;
     let table = HostTables::<2>::from_coefficients(
         1,
-        vec![Bf16::from_bits(0x3f35)],
-        vec![Bf16::from_bits(0x3f35)],
+        vec![BFloat16::from_bits(0x3f35)],
+        vec![BFloat16::from_bits(0x3f35)],
     )?;
     let mut cache = KvCache::<1, 2>::new(stream, 1)?;
     let result = runner.append(
@@ -209,7 +209,7 @@ fn check_product_rounding(runner: &Runner, stream: &CudaStream) -> Result<()> {
     assert_bits(
         "separate product rounding",
         &query_output(stream, result.buffer(), 2)?,
-        &[0x3eb4, 0x3f89].map(Bf16::from_bits),
+        &[0x3eb4, 0x3f89].map(BFloat16::from_bits),
     );
     println!("PASS exact product-rounding discriminator (cast-once would produce 0x3eb5)");
     Ok(())
@@ -220,7 +220,7 @@ fn check_pending_input(runner: &Runner, stream: &CudaStream) -> Result<()> {
     use std::sync::mpsc;
     use std::time::Duration;
     let producer = stream.context().new_stream()?;
-    let mut input = DeviceBuffer::from_host(stream, &[Bf16::from_bits(0x3f80); 2])?;
+    let mut input = DeviceBuffer::from_host(stream, &[BFloat16::from_bits(0x3f80); 2])?;
     let mut cache = KvCache::<1, 2>::new(stream, 1)?;
     let table = RotarySpec::<2>::standard(1e6, 8)?.tables(&[[0; 3]])?;
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -246,7 +246,7 @@ fn check_pending_input(runner: &Runner, stream: &CudaStream) -> Result<()> {
     release.join().expect("producer release thread panicked");
     let output = result?;
     completion?;
-    let zero = [Bf16::from_bits(0); 2];
+    let zero = [BFloat16::from_bits(0); 2];
     assert_bits(
         "pending query",
         &query_output(stream, output.buffer(), 2)?,

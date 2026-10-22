@@ -7,14 +7,14 @@ use crate::operator::{AttentionInputs, KvCache, Result, Runner};
 use crate::rotary::RotarySpec;
 use crate::{attention_reference, reference};
 use cuda_core::{CudaStream, DeviceBuffer};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 
 /// Check exact constant-valued attention with zero queries across the 64-key split boundary.
 fn uniform(runner: &Runner, stream: &CudaStream) -> Result<usize> {
     let tokens = 65;
-    let q = DeviceBuffer::from_host(stream, &vec![Bf16::from_bits(0); tokens * 2 * 128])?;
-    let k = DeviceBuffer::from_host(stream, &vec![Bf16::from_bits(0); tokens * 128])?;
-    let v = DeviceBuffer::from_host(stream, &vec![Bf16::from_f32(3.0); tokens * 128])?;
+    let q = DeviceBuffer::from_host(stream, &vec![BFloat16::from_bits(0); tokens * 2 * 128])?;
+    let k = DeviceBuffer::from_host(stream, &vec![BFloat16::from_bits(0); tokens * 128])?;
+    let v = DeviceBuffer::from_host(stream, &vec![BFloat16::from_f32(3.0); tokens * 128])?;
     let mut cache = KvCache::<1, 128>::new(stream, tokens + 3)?;
     let tables = RotarySpec::<128>::standard(1e6, 128)?.tables(&vec![[0; 3]; tokens])?;
     let query = runner.append(
@@ -28,14 +28,14 @@ fn uniform(runner: &Runner, stream: &CudaStream) -> Result<usize> {
     crate::assert_bits(
         "uniform GQA",
         &actual,
-        &vec![Bf16::from_f32(3.0); actual.len()],
+        &vec![BFloat16::from_f32(3.0); actual.len()],
     );
     println!("PASS uniform BF16 GQA across a 64-key split boundary");
     Ok(actual.len())
 }
 
 /// BF16 output comparison with one-ULP-scale relative tolerance near normal values.
-fn compare(label: &str, actual: &[Bf16], expected: &[Bf16]) -> f64 {
+fn compare(label: &str, actual: &[BFloat16], expected: &[BFloat16]) -> f64 {
     assert_eq!(actual.len(), expected.len(), "{label} length");
     let mut maximum = 0.0_f64;
     for (i, (&a, &b)) in actual.iter().zip(expected).enumerate() {
@@ -176,10 +176,10 @@ fn sequence<const Q: usize, const K: usize>(
 
 /// Entire future splits and a partial future tile contain poisoned K/V values.
 fn poisoned_future(runner: &Runner, stream: &CudaStream) -> Result<usize> {
-    let zero = vec![Bf16::from_bits(0); 128];
+    let zero = vec![BFloat16::from_bits(0); 128];
     let key = DeviceBuffer::from_host(stream, &zero)?;
-    let value = DeviceBuffer::from_host(stream, &vec![Bf16::from_f32(2.0); 128])?;
-    let query_buffer = DeviceBuffer::from_host(stream, &vec![Bf16::from_bits(0); 256])?;
+    let value = DeviceBuffer::from_host(stream, &vec![BFloat16::from_f32(2.0); 128])?;
+    let query_buffer = DeviceBuffer::from_host(stream, &vec![BFloat16::from_bits(0); 256])?;
     let spec = RotarySpec::<128>::standard(1e6, 256)?;
     let mut cache = KvCache::<1, 128>::new(stream, 145)?;
     let query = runner.append(
@@ -188,8 +188,8 @@ fn poisoned_future(runner: &Runner, stream: &CudaStream) -> Result<usize> {
         &spec.tables(&[[0; 3]])?,
     )?;
     let future = 128;
-    let poison = DeviceBuffer::from_host(stream, &vec![Bf16::from_bits(0x7fc1); future * 128])?;
-    let queries = DeviceBuffer::from_host(stream, &vec![Bf16::from_bits(0); future * 256])?;
+    let poison = DeviceBuffer::from_host(stream, &vec![BFloat16::from_bits(0x7fc1); future * 128])?;
+    let queries = DeviceBuffer::from_host(stream, &vec![BFloat16::from_bits(0); future * 256])?;
     runner.append(
         &mut cache,
         AttentionInputs::<2, 1, 128>::new(&queries, &poison, &poison, future)?,
@@ -200,7 +200,7 @@ fn poisoned_future(runner: &Runner, stream: &CudaStream) -> Result<usize> {
     crate::assert_bits(
         "masked future poison",
         &actual,
-        &vec![Bf16::from_f32(2.0); 256],
+        &vec![BFloat16::from_f32(2.0); 256],
     );
     println!("PASS masked future K/V poison and neutral split states");
     Ok(actual.len())

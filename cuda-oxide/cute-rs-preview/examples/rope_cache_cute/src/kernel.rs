@@ -6,7 +6,7 @@
 use ctm_rs::memory::DisjointSlice;
 use ctm_rs::{cuda_module, kernel, thread};
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
-use cute_rs::{Bf16, RegisterTile};
+use cute_rs::{BFloat16, RegisterTile};
 
 /// Independent-thread rotary and append operations over checked dense BF16 storage.
 #[cuda_module]
@@ -23,10 +23,10 @@ pub mod kernels {
     #[kernel]
     #[allow(clippy::too_many_arguments)]
     pub fn rotate_bf16(
-        input: &[Bf16],
-        cos: &[Bf16],
-        sin: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        cos: &[BFloat16],
+        sin: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         tokens: usize,
         heads: usize,
         dim: usize,
@@ -43,20 +43,20 @@ pub mod kernels {
             let values = unsafe {
                 StridedTensor::from_raw_parts(input.as_ptr().add(left), 2, half)
                     .load::<2>()
-                    .map(Bf16::to_f32)
+                    .map(BFloat16::to_f32)
             };
             let c = StridedTensor::from_slice(cos).get(table).to_f32();
             let s = StridedTensor::from_slice(sin).get(table).to_f32();
             // Eager BF16 RoPE rounds each multiplication before addition.
             // Keeping these explicit conversions also prevents FMA contraction
             // across the observable intermediate rounding boundaries.
-            let cosine = values.map(|value| Bf16::from_f32(value * c));
+            let cosine = values.map(|value| BFloat16::from_f32(value * c));
             let sine = values
                 .gather([1, 0])
                 .zip_map(RegisterTile::from_array([true, false]), |value, negate| {
-                    Bf16::from_f32((if negate { -value } else { value }) * s)
+                    BFloat16::from_f32((if negate { -value } else { value }) * s)
                 });
-            let rotated = cosine.zip_map(sine, |a, b| Bf16::from_f32(a.to_f32() + b.to_f32()));
+            let rotated = cosine.zip_map(sine, |a, b| BFloat16::from_f32(a.to_f32() + b.to_f32()));
             // SAFETY: checked dense extents, even head width and one thread
             // per pair give two disjoint, in-bounds coordinates per thread.
             unsafe {
@@ -75,10 +75,10 @@ pub mod kernels {
     /// remain live through completion. No arithmetic conversion or collective occurs.
     #[kernel]
     pub fn append_bf16(
-        key: &[Bf16],
-        value: &[Bf16],
-        mut cache_key: DisjointSlice<Bf16>,
-        mut cache_value: DisjointSlice<Bf16>,
+        key: &[BFloat16],
+        value: &[BFloat16],
+        mut cache_key: DisjointSlice<BFloat16>,
+        mut cache_value: DisjointSlice<BFloat16>,
         start: usize,
         count: usize,
     ) {

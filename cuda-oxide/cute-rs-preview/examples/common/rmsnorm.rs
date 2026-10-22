@@ -7,7 +7,7 @@
 
 use ctm_rs::memory::DisjointSlice;
 use ctm_rs::{cuda_module, kernel, thread};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 
 /// Four complete warps own four independent rows in every block.
@@ -77,9 +77,9 @@ pub mod kernels {
     /// requirements match `rmsnorm_f32`; scalar partitions permit column tails.
     #[kernel]
     pub fn rmsnorm_bf16(
-        input: &[Bf16],
-        weight: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         rows: usize,
         cols: usize,
         epsilon: f32,
@@ -110,8 +110,8 @@ pub mod kernels {
             // partitions own disjoint columns, with separate input storage.
             unsafe {
                 values.zip_map_to(scales, &mut destination, |value, scale| {
-                    let normalized = Bf16::from_f32(value.to_f32() * inverse_rms);
-                    Bf16::from_f32(normalized.to_f32() * scale.to_f32())
+                    let normalized = BFloat16::from_f32(value.to_f32() * inverse_rms);
+                    BFloat16::from_f32(normalized.to_f32() * scale.to_f32())
                 });
             }
         }
@@ -128,9 +128,9 @@ pub mod kernels {
     /// output storage must remain live through completion.
     #[inline(always)]
     fn rmsnorm_bf16_fixed<const ITEMS: usize>(
-        input: &[Bf16],
-        weight: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         rows: usize,
         divisor: usize,
         epsilon: f32,
@@ -151,12 +151,12 @@ pub mod kernels {
                     .subview_unchecked(base, ITEMS * 32)
                     .local_partition::<32>(lane)
                     .load_unchecked::<ITEMS>()
-                    .map(Bf16::to_f32);
+                    .map(BFloat16::to_f32);
                 let scales = StridedTensor::from_slice(weight)
                     .subview_unchecked(0, ITEMS * 32)
                     .local_partition::<32>(lane)
                     .load_unchecked::<ITEMS>()
-                    .map(Bf16::to_f32);
+                    .map(BFloat16::to_f32);
                 (values, scales)
             };
             let squares = values.fold(0.0_f32, |sum, value| sum + value * value);
@@ -168,8 +168,8 @@ pub mod kernels {
             // epsilon addition and change subnormal rounding boundaries.
             let inverse_rms = cute_rs::arch::rsqrt_f32(total / divisor as f32 + epsilon);
             let normalized = values.zip_map(scales, |value, scale| {
-                let normalized = Bf16::from_f32(value * inverse_rms);
-                Bf16::from_f32(normalized.to_f32() * scale)
+                let normalized = BFloat16::from_f32(value * inverse_rms);
+                BFloat16::from_f32(normalized.to_f32() * scale)
             });
             // SAFETY: the checked row extent and cyclic partition assign each
             // output one writer. The view consumes its parent writable borrow.
@@ -190,9 +190,9 @@ pub mod kernels {
     /// `rmsnorm_bf16`.
     #[kernel]
     pub fn rmsnorm_bf16_128(
-        input: &[Bf16],
-        weight: &[Bf16],
-        output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        output: DisjointSlice<BFloat16>,
         rows: usize,
         cols: usize,
         epsilon: f32,
@@ -208,9 +208,9 @@ pub mod kernels {
     /// `rmsnorm_bf16`.
     #[kernel]
     pub fn rmsnorm_bf16_1024(
-        input: &[Bf16],
-        weight: &[Bf16],
-        output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        output: DisjointSlice<BFloat16>,
         rows: usize,
         cols: usize,
         epsilon: f32,
@@ -226,9 +226,9 @@ pub mod kernels {
     /// `rmsnorm_bf16`.
     #[kernel]
     pub fn rmsnorm_bf16_2048(
-        input: &[Bf16],
-        weight: &[Bf16],
-        output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        output: DisjointSlice<BFloat16>,
         rows: usize,
         cols: usize,
         epsilon: f32,
@@ -243,7 +243,7 @@ pub mod kernels {
     /// bit too. Each unique linear thread index owns one tile, without collectives.
     /// The host establishes source readiness and allocation lifetimes.
     #[kernel]
-    pub fn copy_bf16(input: &[Bf16], mut output: DisjointSlice<Bf16>) {
+    pub fn copy_bf16(input: &[BFloat16], mut output: DisjointSlice<BFloat16>) {
         let tid = thread::index_1d().get();
         let input_tile = cute_rs::Tensor::from_slice(input)
             .zipped_divide::<8>()

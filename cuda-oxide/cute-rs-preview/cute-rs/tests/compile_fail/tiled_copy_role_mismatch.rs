@@ -7,7 +7,7 @@
 use core::ptr;
 
 use cute_rs::{
-    CopyG2S, Mkl, Mxf4E2M1, Mxfp4BlockScaledTensor, Nkl, SharedTensor, TiledCopy,
+    CopyG2S, Mkl, Mxf4E2M1, Mxf4BlockScaledTensor, Nkl, SharedTensor, TiledCopy,
 };
 
 /// Reject an M-role source paired with an N-role shared destination.
@@ -15,7 +15,7 @@ use cute_rs::{
 fn main() {
     let values = [f16::from_bits(0); 32];
     let scales = [127u8; 2];
-    let matrix = Mxfp4BlockScaledTensor::<Mkl>::from_slices(&values, &scales, 1, 64);
+    let matrix = Mxf4BlockScaledTensor::<Mkl>::from_slices(&values, &scales, 1, 64);
     let source = matrix.values_for_copy();
     let mut shared_b = unsafe {
         SharedTensor::<Mxf4E2M1, f16, (), Nkl>::from_raw_parts(ptr::null_mut(), 0)

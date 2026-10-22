@@ -67,7 +67,7 @@ fn partition_layout_and_storage_identity_are_compile_time_contracts() {
 fn encoded_storage_retains_its_element_contract_and_bits() {
     use cute_rs::partition::Strided1D;
     let bytes = [0x12_u8, 0x34, 0x56, 0x78];
-    let encoded = StridedTensor::<cute_rs::E2M1, Strided1D, u8>::from_storage(&bytes);
+    let encoded = StridedTensor::<cute_rs::Float4E2M1FN, Strided1D, u8>::from_storage(&bytes);
     assert_eq!(
         encoded.local_partition::<2>(1).load::<2>().into_array(),
         [0x34, 0x78]

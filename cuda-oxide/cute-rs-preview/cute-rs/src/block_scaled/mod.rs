@@ -74,7 +74,7 @@ pub use layouts::{
     KMajor, SharedScaleAtom, Sm1xxBlockScaleKMajor, Sm120ScaleAtom,
 };
 pub use scales::{MmaScalePair, MmaScaleQuad, ScalePack4};
-pub use tensor::{BlockScaledTensor, Mxfp4BlockScaledTensor, Nvfp4BlockScaledTensor};
+pub use tensor::{BlockScaledTensor, Mxf4BlockScaledTensor, Nvfp4BlockScaledTensor};
 
 /// Stable calls recognized by the CuTe importer.
 mod __compiler;

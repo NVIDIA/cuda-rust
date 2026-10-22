@@ -28,7 +28,7 @@
 
 use core::{fmt, mem::size_of, ops::Range};
 
-use crate::numeric::Bf16;
+use crate::numeric::BFloat16;
 
 /// A rejected attention dimension, token window, BF16 extent or cache append.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,7 +72,7 @@ impl core::error::Error for AttentionError {}
 
 /// Validate the complete byte extent of one BF16 allocation or slice.
 fn check_extent(elements: usize) -> Result<usize, AttentionError> {
-    match elements.checked_mul(size_of::<Bf16>()) {
+    match elements.checked_mul(size_of::<BFloat16>()) {
         Some(bytes) if bytes <= isize::MAX as usize => Ok(elements),
         _ => Err(AttentionError::ExtentOverflow),
     }

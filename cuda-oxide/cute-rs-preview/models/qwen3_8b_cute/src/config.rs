@@ -68,7 +68,7 @@ pub const ROPE_THETA: f32 = 1_000_000.0;
 /// Maximum rotary position index (`40960`).
 pub const MAX_POSITION: u32 = 40_960;
 
-/// Number of logical K elements sharing one `E4M3` block scale in NVFP4 (`16`).
+/// Number of logical K elements sharing one `Float8E4M3FN` block scale in NVFP4 (`16`).
 pub const NVFP4_VEC_SIZE: usize = 16;
 
 /// Total parameter count for one `Qwen3-8B` decoder layer (`q, k, v, o, gate, up, down` + norms).
@@ -87,8 +87,8 @@ pub const fn layer_parameter_count() -> usize {
 
 /// Approximate weight footprint in bytes for `layers` decoder layers plus embeddings and LM head.
 ///
-/// In BF16, every parameter uses 2 bytes. In NVFP4 (`E2M1` + `E4M3` scale per 16 values),
-/// linear weights use `0.5` bytes per weight plus `1/16` byte (`0.0625` bytes) of `E4M3` scale,
+/// In BF16, every parameter uses 2 bytes. In NVFP4 (`Float4E2M1FN` + `Float8E4M3FN` scale per 16 values),
+/// linear weights use `0.5` bytes per weight plus `1/16` byte (`0.0625` bytes) of `Float8E4M3FN` scale,
 /// while embeddings and RMSNorm weights remain in BF16.
 ///
 /// ```

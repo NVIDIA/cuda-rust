@@ -55,15 +55,15 @@ The important types are visible at the point where the views are made:
 
 ```rust
 type MatrixA<'a> =
-    BlockScaledTensor<'a, E2M1, UE8M0, 16, KMajor<Mkl>>;
+    BlockScaledTensor<'a, Float4E2M1FN, Float8E8M0FNU, 16, KMajor<Mkl>>;
 type VectorB<'a> =
-    BlockScaledTensor<'a, E2M1, UE8M0, 16, KMajor<Nkl>>;
+    BlockScaledTensor<'a, Float4E2M1FN, Float8E8M0FNU, 16, KMajor<Nkl>>;
 ```
 
 They record:
 
-- the packed value format (`E2M1`);
-- the scale format (`UE8M0`);
+- the packed value format (`Float4E2M1FN`);
+- the scale format (`Float8E8M0FNU`);
 - the 16-value scale group;
 - the K-contiguous layout;
 - whether a view plays the matrix or vector role.

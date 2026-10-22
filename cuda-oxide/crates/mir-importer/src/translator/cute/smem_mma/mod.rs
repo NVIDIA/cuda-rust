@@ -29,8 +29,8 @@ const SM120_SCALE_ATOM: &str = "cute_rs::block_scaled::layouts::Sm120ScaleAtom";
 const MKL: &str = "cute_rs::block_scaled::Mkl";
 /// Exact defining path of `cute_rs::block_scaled::Nkl`; public reexports do not change it.
 const NKL: &str = "cute_rs::block_scaled::Nkl";
-/// Exact defining path of `cute_rs::mma::block_scaled::tiled::Mxfp4TiledMma`; public reexports do not change it.
-const TILED_MMA: &str = "cute_rs::mma::block_scaled::tiled::Mxfp4TiledMma";
+/// Exact defining path of `cute_rs::mma::block_scaled::tiled::Mxf4TiledMma`; public reexports do not change it.
+const TILED_MMA: &str = "cute_rs::mma::block_scaled::tiled::Mxf4TiledMma";
 /// Exact defining path of `cute_rs::mma::block_scaled::fragments::Mxf4AccumulatorTile2x8`; public reexports do not change it.
 const ACCUMULATOR: &str = "cute_rs::mma::block_scaled::fragments::Mxf4AccumulatorTile2x8";
 /// Exact defining path of `cute_rs::mma::block_scaled::fragments::Mxf4ScaleTile128`; public reexports do not change it.

@@ -14,7 +14,7 @@ use crate::{
 use cuda_core::simt::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig1D, PreparedLaunch};
 use cute_rs::{
-    Bf16,
+    BFloat16,
     decoder::{BiasWeights, DecoderWeights},
     ffn::{ProjectionRole, ProjectionWeights},
 };
@@ -89,7 +89,7 @@ impl Drop for Completion {
 /// indices into a universal buffer collection.
 pub(crate) struct Guarded<const W: usize> {
     /// BF16 logical rows followed by `GUARD_LEN` sentinel elements checked on device.
-    pub(crate) buffer: DeviceBuffer<Bf16>,
+    pub(crate) buffer: DeviceBuffer<BFloat16>,
 }
 impl<const W: usize> Guarded<W> {
     /// Allocate `rows * W` initialized BF16 elements plus the operator guard tail.
@@ -363,7 +363,7 @@ impl Modules {
     /// Reject extents a prepared projection launch could not cover.
     #[allow(clippy::too_many_arguments)]
     fn check_projection_extents(
-        input: &DeviceBuffer<Bf16>,
+        input: &DeviceBuffer<BFloat16>,
         rows: usize,
         weight_len: usize,
         weight_stride: usize,
@@ -397,7 +397,7 @@ impl Modules {
     pub(crate) unsafe fn project<Role: ProjectionRole, const IN: usize, const OUT: usize>(
         &self,
         stream: &CudaStream,
-        input: &DeviceBuffer<Bf16>,
+        input: &DeviceBuffer<BFloat16>,
         rows: usize,
         weight: &ProjectionWeights<'_, Role, IN, OUT>,
         output: &mut Batch<OUT>,
@@ -503,7 +503,7 @@ impl Modules {
     pub(crate) unsafe fn project_biased<Role: ProjectionRole, const IN: usize, const OUT: usize>(
         &self,
         stream: &CudaStream,
-        input: &DeviceBuffer<Bf16>,
+        input: &DeviceBuffer<BFloat16>,
         rows: usize,
         weight: &ProjectionWeights<'_, Role, IN, OUT>,
         bias: &BiasWeights<'_, Role, OUT>,
@@ -574,11 +574,11 @@ impl Modules {
         stream: &CudaStream,
         s: &mut LayerScratch<H, I>,
         weight: &DecoderWeights<'_, H, I, 2048, 1024, 128>,
-        cache_key: &mut DeviceBuffer<Bf16>,
-        cache_value: &mut DeviceBuffer<Bf16>,
+        cache_key: &mut DeviceBuffer<BFloat16>,
+        cache_value: &mut DeviceBuffer<BFloat16>,
         cache_capacity: usize,
-        cos: &DeviceBuffer<Bf16>,
-        sin: &DeviceBuffer<Bf16>,
+        cos: &DeviceBuffer<BFloat16>,
+        sin: &DeviceBuffer<BFloat16>,
         start: usize,
         key_tokens: usize,
         status: &mut DeviceBuffer<u32>,

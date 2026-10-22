@@ -16,8 +16,8 @@ use core::marker::PhantomData;
 
 /// Compiler boundary assigning a lane to its typed shared-layout MMA view.
 #[inline(never)]
-pub const fn tiled_mma_slice<SharedLayout>(lane: u32) -> Mxfp4TiledMma<SharedLayout> {
-    Mxfp4TiledMma {
+pub const fn tiled_mma_slice<SharedLayout>(lane: u32) -> Mxf4TiledMma<SharedLayout> {
+    Mxf4TiledMma {
         lane,
         layout: PhantomData,
     }
@@ -102,7 +102,7 @@ pub const unsafe fn fragment_slice_k(scales: Mxf4ScaleTile128, half: usize) -> M
 /// Shared scale atoms must be initialized and live; lane and warp coordinates must match the consuming MMA.
 #[inline(never)]
 pub unsafe fn mma_load_scales<SharedLayout>(
-    mma: &Mxfp4TiledMma<SharedLayout>,
+    mma: &Mxf4TiledMma<SharedLayout>,
     a: &SharedScaleAtom<Mkl>,
     b: &SharedScaleAtom<Nkl>,
     warp_m: usize,
@@ -136,10 +136,10 @@ pub unsafe fn mma_load_scales<SharedLayout>(
 /// Compiler boundary loading the warp’s two A fragments for one K64 half.
 ///
 /// # Safety
-/// Shared storage, lane participation and coordinates must satisfy Mxfp4TiledMma::load_a.
+/// Shared storage, lane participation and coordinates must satisfy Mxf4TiledMma::load_a.
 #[inline(never)]
 pub unsafe fn mma_load_a<SharedLayout>(
-    mma: &Mxfp4TiledMma<SharedLayout>,
+    mma: &Mxf4TiledMma<SharedLayout>,
     source: &SharedTensor<Mxf4E2M1, f16, SharedLayout, Mkl>,
     warp_m: usize,
     k_half: usize,
@@ -155,7 +155,7 @@ pub unsafe fn mma_load_a<SharedLayout>(
 /// Compiler boundary borrowing a lazy B view without loading its eight fragments.
 #[inline(never)]
 pub const fn mma_partition_b<'a, SharedLayout>(
-    _mma: &Mxfp4TiledMma<SharedLayout>,
+    _mma: &Mxf4TiledMma<SharedLayout>,
     source: &'a SharedTensor<Mxf4E2M1, f16, SharedLayout, Nkl>,
     warp_n: usize,
     k_half: usize,
@@ -176,7 +176,7 @@ pub const fn mma_partition_b<'a, SharedLayout>(
 #[inline(never)]
 pub unsafe fn tiled_gemm<SharedLayout>(
     accumulators: &mut Mxf4AccumulatorTile2x8,
-    mma: &Mxfp4TiledMma<SharedLayout>,
+    mma: &Mxf4TiledMma<SharedLayout>,
     a: (FragmentA, FragmentA),
     b: Mxf4BTileK64<'_, SharedLayout>,
     scales: Mxf4ScalePairs128,

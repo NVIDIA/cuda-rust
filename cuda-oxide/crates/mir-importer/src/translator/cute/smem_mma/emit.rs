@@ -388,7 +388,7 @@ fn decode_mma_operand(
         })?
         .ok_or_else(|| {
             pliron::input_error_noloc!(TranslationErr::unsupported(format!(
-                "{what} must be Mxfp4TiledMma"
+                "{what} must be Mxf4TiledMma"
             )))
         })
 }
@@ -591,7 +591,7 @@ pub(crate) fn emit_mma_slice(
         })?
         .ok_or_else(|| {
             pliron::input_error_noloc!(TranslationErr::unsupported(
-                "tiled_mma_slice must return Mxfp4TiledMma".to_string()
+                "tiled_mma_slice must return Mxf4TiledMma".to_string()
             ))
         })?;
     let (lane, after) =

@@ -4,9 +4,9 @@
  */
 #![feature(f16)]
 use cute_rs::{
-    Bf16,
+    BFloat16,
     partition::{Strided1D, StridedTensor},
 };
 fn main() {
-    let _invalid: Option<StridedTensor<'_, Bf16, Strided1D, f16>> = None;
+    let _invalid: Option<StridedTensor<'_, BFloat16, Strided1D, f16>> = None;
 }

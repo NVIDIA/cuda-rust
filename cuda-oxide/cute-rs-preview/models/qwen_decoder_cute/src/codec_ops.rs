@@ -6,7 +6,7 @@
 
 use crate::{codec_kernel, model::Batch, operator::Result};
 use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig1D, simt::LaunchConfig};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 use std::sync::Arc;
 
 /// Checkpoint convolution orientation. These are different physical layouts.
@@ -108,9 +108,9 @@ impl Geometry {
 /// are immutable after construction; input/output/kernel widths are Rust types.
 pub struct ConvWeights<'a, const IN: usize, const OUT: usize, const K: usize> {
     /// Borrowed physical weights whose length matches the validated geometry.
-    weight: &'a DeviceBuffer<Bf16>,
+    weight: &'a DeviceBuffer<BFloat16>,
     /// Optional OUT-element bias, added after rounding the convolution to BF16.
-    bias: Option<&'a DeviceBuffer<Bf16>>,
+    bias: Option<&'a DeviceBuffer<BFloat16>>,
     /// Immutable checked grouping, dimensions and orientation.
     geometry: Geometry,
 }
@@ -119,8 +119,8 @@ impl<'a, const IN: usize, const OUT: usize, const K: usize> ConvWeights<'a, IN, 
     ///
     /// The runner checks CUDA context compatibility when the view is used.
     pub fn new(
-        weight: &'a DeviceBuffer<Bf16>,
-        bias: Option<&'a DeviceBuffer<Bf16>>,
+        weight: &'a DeviceBuffer<BFloat16>,
+        bias: Option<&'a DeviceBuffer<BFloat16>>,
         layout: CheckpointLayout,
         groups: usize,
     ) -> Result<Self> {
@@ -154,7 +154,7 @@ impl Runner {
         })
     }
     /// Reject buffers from other contexts, then synchronize prior context work.
-    fn ready(&self, buffers: &[&DeviceBuffer<Bf16>]) -> Result<()> {
+    fn ready(&self, buffers: &[&DeviceBuffer<BFloat16>]) -> Result<()> {
         if buffers
             .iter()
             .any(|b| !Arc::ptr_eq(b.context(), self.stream.context()))
@@ -208,8 +208,8 @@ impl Runner {
     pub fn layer_norm<const C: usize>(
         &self,
         input: &Batch<C>,
-        weight: &DeviceBuffer<Bf16>,
-        bias: &DeviceBuffer<Bf16>,
+        weight: &DeviceBuffer<BFloat16>,
+        bias: &DeviceBuffer<BFloat16>,
         epsilon: f32,
     ) -> Result<Batch<C>> {
         if weight.len() != C || bias.len() != C || !epsilon.is_finite() || epsilon <= 0.0 {
@@ -250,7 +250,7 @@ impl Runner {
     pub fn normalize_rows<const C: usize>(
         &self,
         input: &Batch<C>,
-        denominator: &DeviceBuffer<Bf16>,
+        denominator: &DeviceBuffer<BFloat16>,
         epsilon: f32,
     ) -> Result<Batch<C>> {
         self.normalize_rows_buffer(input.buffer(), input.rows(), denominator, epsilon)
@@ -261,9 +261,9 @@ impl Runner {
     /// BF16 before comparison with each count. Returns extent/context/CUDA errors.
     pub fn normalize_rows_buffer<const C: usize>(
         &self,
-        input: &DeviceBuffer<Bf16>,
+        input: &DeviceBuffer<BFloat16>,
         rows: usize,
-        denominator: &DeviceBuffer<Bf16>,
+        denominator: &DeviceBuffer<BFloat16>,
         epsilon: f32,
     ) -> Result<Batch<C>> {
         let shape = cute_rs::ffn::RowMajorShape::dense(rows, C)?;
@@ -292,8 +292,8 @@ impl Runner {
     pub fn snake<const C: usize>(
         &self,
         input: &Batch<C>,
-        log_alpha: &DeviceBuffer<Bf16>,
-        log_beta: &DeviceBuffer<Bf16>,
+        log_alpha: &DeviceBuffer<BFloat16>,
+        log_beta: &DeviceBuffer<BFloat16>,
     ) -> Result<Batch<C>> {
         if log_alpha.len() != C || log_beta.len() != C {
             return Err("SnakeBeta channel parameter extent mismatch".into());
@@ -322,8 +322,8 @@ impl Runner {
     fn unary<const C: usize>(
         &self,
         input: &Batch<C>,
-        alpha: &DeviceBuffer<Bf16>,
-        beta: &DeviceBuffer<Bf16>,
+        alpha: &DeviceBuffer<BFloat16>,
+        beta: &DeviceBuffer<BFloat16>,
         operation: u32,
         lower: f32,
         upper: f32,
@@ -345,10 +345,10 @@ impl Runner {
     #[allow(clippy::too_many_arguments)]
     fn unary_buffer<const C: usize>(
         &self,
-        input: &DeviceBuffer<Bf16>,
+        input: &DeviceBuffer<BFloat16>,
         rows: usize,
-        alpha: &DeviceBuffer<Bf16>,
-        beta: &DeviceBuffer<Bf16>,
+        alpha: &DeviceBuffer<BFloat16>,
+        beta: &DeviceBuffer<BFloat16>,
         operation: u32,
         lower: f32,
         upper: f32,
@@ -387,7 +387,7 @@ impl Runner {
         &self,
         input: &Batch<C>,
         residual: &Batch<C>,
-        scale: &DeviceBuffer<Bf16>,
+        scale: &DeviceBuffer<BFloat16>,
     ) -> Result<Batch<C>> {
         if input.rows() != residual.rows() || scale.len() != C {
             return Err("scaled residual extent mismatch".into());
@@ -504,13 +504,13 @@ pub fn validate(stream: Arc<CudaStream>) -> Result<()> {
         layout: CheckpointLayout,
     ) -> Result<()> {
         let input: Vec<_> = (0..rows * IN)
-            .map(|i| Bf16::from_f32(((i * 7 % 17) as f32 - 8.0) / 8.0))
+            .map(|i| BFloat16::from_f32(((i * 7 % 17) as f32 - 8.0) / 8.0))
             .collect();
         let weight: Vec<_> = (0..IN * (OUT / groups) * K)
-            .map(|i| Bf16::from_f32(((i * 3 % 13) as f32 - 6.0) / 16.0))
+            .map(|i| BFloat16::from_f32(((i * 3 % 13) as f32 - 6.0) / 16.0))
             .collect();
         let bias: Vec<_> = (0..OUT)
-            .map(|i| Bf16::from_f32((i as f32 - 3.0) / 32.0))
+            .map(|i| BFloat16::from_f32((i as f32 - 3.0) / 32.0))
             .collect();
         let x = Batch::<IN>::from_host(&runner.stream, rows, &input)?;
         let w = DeviceBuffer::from_host(&runner.stream, &weight)?;
@@ -581,9 +581,13 @@ pub fn validate(stream: Arc<CudaStream>) -> Result<()> {
 
 /// Distinguish dot-before-bias BF16 rounding from a fused FP32 bias addition.
 fn validate_conv_bias(runner: &Runner) -> Result<()> {
-    let input = Batch::<2>::from_host(&runner.stream, 1, &[1.0, 1.0 / 256.0].map(Bf16::from_f32))?;
-    let weight = DeviceBuffer::from_host(&runner.stream, &[Bf16::from_f32(1.0); 2])?;
-    let bias = DeviceBuffer::from_host(&runner.stream, &[Bf16::from_f32(1.0 / 1024.0)])?;
+    let input = Batch::<2>::from_host(
+        &runner.stream,
+        1,
+        &[1.0, 1.0 / 256.0].map(BFloat16::from_f32),
+    )?;
+    let weight = DeviceBuffer::from_host(&runner.stream, &[BFloat16::from_f32(1.0); 2])?;
+    let bias = DeviceBuffer::from_host(&runner.stream, &[BFloat16::from_f32(1.0 / 1024.0)])?;
     for layout in [CheckpointLayout::Conv, CheckpointLayout::Transpose] {
         let w = ConvWeights::<2, 1, 1>::new(&weight, Some(&bias), layout, 1)?;
         let output = match layout {
@@ -605,17 +609,17 @@ fn validate_elements(runner: &Runner) -> Result<()> {
     /// Channel count deliberately leaving a partial warp partition.
     const C: usize = 35;
     let values: Vec<_> = (0..C * 19)
-        .map(|i| Bf16::from_f32(((i * 17 % 127) as f32 - 63.0) / 8.0))
+        .map(|i| BFloat16::from_f32(((i * 17 % 127) as f32 - 63.0) / 8.0))
         .collect();
     let alpha: Vec<_> = (0..C)
-        .map(|i| Bf16::from_f32((i as f32 - 17.0) / 16.0))
+        .map(|i| BFloat16::from_f32((i as f32 - 17.0) / 16.0))
         .collect();
     let beta: Vec<_> = (0..C)
-        .map(|i| Bf16::from_f32((i as f32 - 17.0) / 32.0))
+        .map(|i| BFloat16::from_f32((i as f32 - 17.0) / 32.0))
         .collect();
     let input = Batch::<C>::from_host(&runner.stream, 19, &values)?;
     let denominators: Vec<_> = (0..19)
-        .map(|i| Bf16::from_f32(if i == 1 { 0.0 } else { (i + 1) as f32 / 4.0 }))
+        .map(|i| BFloat16::from_f32(if i == 1 { 0.0 } else { (i + 1) as f32 / 4.0 }))
         .collect();
     let denom = DeviceBuffer::from_host(&runner.stream, &denominators)?;
     let a = DeviceBuffer::from_host(&runner.stream, &alpha)?;
@@ -689,7 +693,7 @@ fn validate_epsilon(runner: &Runner) -> Result<()> {
     use cute_rs::decoder::{FinalNorm, NormWeights};
     let values = [1e-4, -2e-4, 3e-4].map(crate::reference::round);
     let input = Batch::<3>::from_host(&runner.stream, 1, &values)?;
-    let weights = DeviceBuffer::from_host(&runner.stream, &[Bf16::from_f32(1.0); 3])?;
+    let weights = DeviceBuffer::from_host(&runner.stream, &[BFloat16::from_f32(1.0); 3])?;
     let weights = NormWeights::<FinalNorm, 3>::new(&weights)?;
     let model = crate::model::Runner::new(runner.stream.clone())?;
     let square_mean = values

@@ -53,12 +53,12 @@ const K_MAJOR: &str = "cute_rs::block_scaled::layouts::KMajor";
 const MKL: &str = "cute_rs::block_scaled::Mkl";
 /// Exact defining path of `cute_rs::block_scaled::Nkl`; public reexports do not change it.
 const NKL: &str = "cute_rs::block_scaled::Nkl";
-/// Exact defining path of `cute_rs::numeric::E2M1`; public reexports do not change it.
-const E2M1: &str = "cute_rs::numeric::E2M1";
-/// Exact defining path of `cute_rs::numeric::UE8M0`; public reexports do not change it.
-const UE8M0: &str = "cute_rs::numeric::UE8M0";
-/// Exact defining path of `cute_rs::numeric::E4M3`; public reexports do not change it.
-const E4M3: &str = "cute_rs::numeric::E4M3";
+/// Exact defining path of `cute_rs::numeric::Float4E2M1FN`; public reexports do not change it.
+const FLOAT4_E2M1FN: &str = "cute_rs::numeric::Float4E2M1FN";
+/// Exact defining path of `cute_rs::numeric::Float8E8M0FNU`; public reexports do not change it.
+const FLOAT8_E8M0FNU: &str = "cute_rs::numeric::Float8E8M0FNU";
+/// Exact defining path of `cute_rs::numeric::Float8E4M3FN`; public reexports do not change it.
+const FLOAT8_E4M3FN: &str = "cute_rs::numeric::Float8E4M3FN";
 
 /// Which stage of the block-scaled view chain one Rust ADT represents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,12 +143,12 @@ pub(crate) fn decode_block_scaled(ty: &Ty) -> Result<Option<BlockScaledRust>, St
                 &["Lifetime", "Type", "Type", "Const", "Type"],
                 BLOCK_SCALED_TENSOR,
             )?;
-            exact_marker(&type_arg(&args, 1, BLOCK_SCALED_TENSOR)?, E2M1)?;
+            exact_marker(&type_arg(&args, 1, BLOCK_SCALED_TENSOR)?, FLOAT4_E2M1FN)?;
             let scale_ty = type_arg(&args, 2, BLOCK_SCALED_TENSOR)?;
-            let scale_format = if exact_marker(&scale_ty, UE8M0).is_ok() {
+            let scale_format = if exact_marker(&scale_ty, FLOAT8_E8M0FNU).is_ok() {
                 CuteTensorFormatAttr::UE8M0
             } else {
-                exact_marker(&scale_ty, E4M3)?;
+                exact_marker(&scale_ty, FLOAT8_E4M3FN)?;
                 CuteTensorFormatAttr::E4M3
             };
             let values_per_scale = unsigned_const(

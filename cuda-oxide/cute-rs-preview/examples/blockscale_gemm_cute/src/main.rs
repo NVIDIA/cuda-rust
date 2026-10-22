@@ -29,7 +29,7 @@
 //!   warp 8, lane 0: fill the three-slot ring until EMPTY blocks
 //!                     each stage is 17,408 bytes from four TMA loads
 //!   warps 0..7: wait FULL, then consume two packed K64 steps
-//!                accumulators.accumulate_k64(...)
+//!                accumulators.gemm(...)
 //!   typed epilogue: FragmentC -> f16x2 -> stmatrix -> shared
 //!   warp 0, lane 0: two 128x64 TMA stores -> global C
 //! }
@@ -63,7 +63,7 @@ use ctm_rs::{cuda_module, kernel, launch_bounds, launch_contract, thread, warp};
 use cuda_core::{CudaContext, LaunchConfig1D};
 use cute_rs::tma::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
 use cute_rs::{
-    C, ComposedLayout, Consumer, Layout, Mkl, Mxf4AccumulatorTile2x8, Mxf4E2M1, Mxfp4TiledMma, Nkl,
+    C, ComposedLayout, Consumer, Layout, Mkl, Mxf4AccumulatorTile2x8, Mxf4E2M1, Mxf4TiledMma, Nkl,
     PipelineState, Producer, RowMajor, SharedScaleAtom, SharedTensor, Sm1xxBlockScaleKMajor,
     Sm120Epilogue128x128, Sm120EpilogueHalfLayout, Sm120ScaleAtom, SmemTile,
     StaticPersistentTileScheduler, Swizzle, TensorMap, TmaLoadPipeline, TmaStorePipeline,
@@ -213,7 +213,7 @@ mod kernels {
             // every compute warp two M atoms and four separated N16 pairs.
             let wm = warp_id % 4;
             let wn = warp_id / 4;
-            let tiled_mma = Mxfp4TiledMma::<SmemP>::get_slice(lane);
+            let tiled_mma = Mxf4TiledMma::<SmemP>::get_slice(lane);
             let warp_epilogue = unsafe { epilogue.get_slice(warp_id, lane as u32) };
             let epilogue_pipeline = EpiloguePipeline::new();
             let mut scheduler = TileScheduler::new_1d();
@@ -264,12 +264,7 @@ mod kernels {
                             let scales = scale_tile.pairs_at_unchecked(kk);
                             let a_fragments = tiled_mma.load_a_128(&s_a, wm, kk);
                             let b_fragments = tiled_mma.get_b_tile_k64(&s_b, wn, kk);
-                            accumulators.accumulate_k64(
-                                &tiled_mma,
-                                a_fragments,
-                                b_fragments,
-                                scales,
-                            );
+                            accumulators.gemm(&tiled_mma, a_fragments, b_fragments, scales);
                             kk += 1;
                         }
                     }

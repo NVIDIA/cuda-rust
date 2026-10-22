@@ -248,7 +248,7 @@ enum CuteImplOwner {
     TmaLoadPipeline,
     PipelineState,
     SharedTensor,
-    Mxfp4TiledMma,
+    Mxf4TiledMma,
     Mxf4AccumulatorTile2x8,
     Mxf4ScaleTile128,
     Sm120Epilogue128x128,
@@ -285,7 +285,7 @@ fn is_cute_recognition_stub_identity(
         | CuteImplOwner::PipelineState
         | CuteImplOwner::TmaStorePipeline => "pipeline",
         CuteImplOwner::SharedTensor => "copy::tiled",
-        CuteImplOwner::Mxfp4TiledMma => "mma::block_scaled::tiled",
+        CuteImplOwner::Mxf4TiledMma => "mma::block_scaled::tiled",
         CuteImplOwner::Mxf4AccumulatorTile2x8 | CuteImplOwner::Mxf4ScaleTile128 => {
             "mma::block_scaled::fragments"
         }
@@ -341,11 +341,11 @@ fn is_cute_recognition_stub_identity(
         ),
         CuteImplOwner::PipelineState => matches!(method, "new" | "slot" | "advance"),
         CuteImplOwner::SharedTensor => method == "from_raw_parts",
-        CuteImplOwner::Mxfp4TiledMma => matches!(
+        CuteImplOwner::Mxf4TiledMma => matches!(
             method,
             "get_slice" | "load_scale_atom_128" | "load_a_128" | "get_b_tile_k64"
         ),
-        CuteImplOwner::Mxf4AccumulatorTile2x8 => matches!(method, "zero" | "accumulate_k64"),
+        CuteImplOwner::Mxf4AccumulatorTile2x8 => matches!(method, "zero" | "gemm"),
         CuteImplOwner::Mxf4ScaleTile128 => method == "pairs_at_unchecked",
         CuteImplOwner::Sm120Epilogue128x128 => matches!(
             method,
@@ -2628,7 +2628,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                     "TmaLoadPipeline" => Some(CuteImplOwner::TmaLoadPipeline),
                     "PipelineState" => Some(CuteImplOwner::PipelineState),
                     "SharedTensor" => Some(CuteImplOwner::SharedTensor),
-                    "Mxfp4TiledMma" => Some(CuteImplOwner::Mxfp4TiledMma),
+                    "Mxf4TiledMma" => Some(CuteImplOwner::Mxf4TiledMma),
                     "Mxf4AccumulatorTile2x8" => Some(CuteImplOwner::Mxf4AccumulatorTile2x8),
                     "Mxf4ScaleTile128" => Some(CuteImplOwner::Mxf4ScaleTile128),
                     "Sm120Epilogue128x128" => Some(CuteImplOwner::Sm120Epilogue128x128),
@@ -3387,7 +3387,7 @@ mod tests {
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
             "::mma::block_scaled::tiled::{impl#7}::load_a_128",
-            Some(CuteImplOwner::Mxfp4TiledMma),
+            Some(CuteImplOwner::Mxf4TiledMma),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
@@ -3487,7 +3487,7 @@ mod tests {
         assert!(!is_cute_recognition_stub_identity(
             "cute_rs",
             "::mma::block_scaled::tiled::{impl#7}::load_b_pair",
-            Some(CuteImplOwner::Mxfp4TiledMma),
+            Some(CuteImplOwner::Mxf4TiledMma),
         ));
         assert!(!is_cute_recognition_stub_identity(
             "cute_rs",
@@ -3516,7 +3516,7 @@ mod tests {
             ),
             (
                 "mma::block_scaled::tiled",
-                CuteImplOwner::Mxfp4TiledMma,
+                CuteImplOwner::Mxf4TiledMma,
                 "load_a_128",
             ),
             (

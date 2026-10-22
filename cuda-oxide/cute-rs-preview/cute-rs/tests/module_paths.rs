@@ -28,8 +28,8 @@ fn compatibility_aliases_preserve_type_identity() {
         cute_rs::mma::bf16::Bf16Mma16x8x16
     );
     same_type!(
-        cute_rs::block_scaled_mma::Mxfp4TiledMma<()>,
-        cute_rs::mma::block_scaled::Mxfp4TiledMma<()>
+        cute_rs::block_scaled_mma::Mxf4TiledMma<()>,
+        cute_rs::mma::block_scaled::Mxf4TiledMma<()>
     );
     same_type!(cute_rs::sm100_attention::SharedLayout<64, 64>, cute_rs::attention::sm100::SharedLayout<64, 64>);
     same_type!(
@@ -51,8 +51,8 @@ fn root_exports_preserve_type_identity() {
     same_type!(cute_rs::FragmentA, cute_rs::mma::FragmentA);
     same_type!(cute_rs::RegisterTile<f32, 4>, cute_rs::tensor::RegisterTile<f32, 4>);
     same_type!(
-        cute_rs::Mxfp4TiledMma<()>,
-        cute_rs::mma::block_scaled::Mxfp4TiledMma<()>
+        cute_rs::Mxf4TiledMma<()>,
+        cute_rs::mma::block_scaled::Mxf4TiledMma<()>
     );
     same_type!(
         cute_rs::Sm120Epilogue128x128,

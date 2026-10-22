@@ -4,18 +4,18 @@
  */
 
 //! BF16 storage and explicit conversion contracts.
-use cute_rs::{Bf16, RegisterTile, Tensor};
+use cute_rs::{BFloat16, RegisterTile, Tensor};
 
 #[test]
 fn storage_preserves_every_pattern_and_tensor_coordinates() {
-    assert_eq!(core::mem::size_of::<Bf16>(), 2);
-    assert_eq!(core::mem::align_of::<Bf16>(), 2);
+    assert_eq!(core::mem::size_of::<BFloat16>(), 2);
+    assert_eq!(core::mem::align_of::<BFloat16>(), 2);
     for bits in 0..=u16::MAX {
-        let value = Bf16::from_bits(bits);
+        let value = BFloat16::from_bits(bits);
         assert_eq!(value.to_bits(), bits);
         assert_eq!(value.to_f32().to_bits(), (bits as u32) << 16);
     }
-    let data = [Bf16::from_bits(0); 9];
+    let data = [BFloat16::from_bits(0); 9];
     let tail = Tensor::from_slice(&data).zipped_divide::<8>().slice(1);
     assert_eq!(tail.base(), 8);
     assert!(!tail.is_full());
@@ -35,16 +35,22 @@ fn conversion_rounds_ties_even_and_preserves_special_values() {
         (0x0000_8000, 0),
         (0x0001_8000, 2),
     ] {
-        assert_eq!(Bf16::from_f32(f32::from_bits(input)).to_bits(), expected);
+        assert_eq!(
+            BFloat16::from_f32(f32::from_bits(input)).to_bits(),
+            expected
+        );
     }
     for bits in [0x7f80_0001, 0xff80_0001] {
-        assert!(Bf16::from_f32(f32::from_bits(bits)).to_f32().is_nan());
+        assert!(BFloat16::from_f32(f32::from_bits(bits)).to_f32().is_nan());
     }
 }
 
 #[test]
 fn register_arithmetic_requires_explicit_widening_and_narrowing() {
-    let tile = RegisterTile::from_array([Bf16::from_f32(1.0), Bf16::from_f32(2.0)]);
-    let output = tile.map(Bf16::to_f32).map(|v| v * 0.5).map(Bf16::from_f32);
-    assert_eq!(output.into_array().map(Bf16::to_f32), [0.5, 1.0]);
+    let tile = RegisterTile::from_array([BFloat16::from_f32(1.0), BFloat16::from_f32(2.0)]);
+    let output = tile
+        .map(BFloat16::to_f32)
+        .map(|v| v * 0.5)
+        .map(BFloat16::from_f32);
+    assert_eq!(output.into_array().map(BFloat16::to_f32), [0.5, 1.0]);
 }

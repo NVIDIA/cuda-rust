@@ -7,7 +7,7 @@ use crate::attention_kernel::STATE_SIZE;
 use crate::operator::{GUARD, GUARD_LEN};
 use ctm_rs::memory::DisjointSlice;
 use ctm_rs::{cuda_module, kernel, thread};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 
 /// Shared decoder guard/copy steps and fixed fifteen-step predictor helpers.
@@ -33,8 +33,8 @@ pub mod kernels {
     /// Copy an explicitly checked dense subrange without changing BF16 bits.
     #[kernel]
     pub fn copy_range(
-        input: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         input_start: usize,
         output_start: usize,
         count: usize,
@@ -60,7 +60,7 @@ pub mod kernels {
     /// earlier failures. The plan orders this step before embedding reads.
     #[kernel]
     pub fn greedy(
-        logits: &[Bf16],
+        logits: &[BFloat16],
         mut codes: DisjointSlice<u32>,
         mut status: DisjointSlice<u32>,
         step: usize,
@@ -94,10 +94,10 @@ pub mod kernels {
     /// Distinct output allocations receive identical BF16 bits.
     #[kernel]
     pub fn embedding(
-        table: &[Bf16],
+        table: &[BFloat16],
         codes: &[u32],
-        mut feedback: DisjointSlice<Bf16>,
-        mut rows: DisjointSlice<Bf16>,
+        mut feedback: DisjointSlice<BFloat16>,
+        mut rows: DisjointSlice<BFloat16>,
         step: usize,
         table_stride: usize,
     ) {
@@ -130,11 +130,11 @@ pub mod kernels {
     #[allow(clippy::too_many_arguments)]
     pub fn attention_guards(
         partials: &[f32],
-        query: &[Bf16],
-        key: &[Bf16],
-        output: &[Bf16],
-        cache_key: &[Bf16],
-        cache_value: &[Bf16],
+        query: &[BFloat16],
+        key: &[BFloat16],
+        output: &[BFloat16],
+        cache_key: &[BFloat16],
+        cache_value: &[BFloat16],
         mut status: DisjointSlice<u32>,
         rows: usize,
         splits: usize,

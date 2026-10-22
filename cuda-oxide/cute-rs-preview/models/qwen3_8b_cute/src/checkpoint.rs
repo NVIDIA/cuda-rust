@@ -19,7 +19,7 @@ use ctm_rs::memory::DisjointSlice;
 use ctm_rs::{cuda_module, kernel, thread};
 use cuda_core::simt::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 use cute_rs::decoder::{
     AttentionWeights, DecoderWeights, FinalNorm, InputNorm, KeyNorm, NormWeights,
     PostAttentionNorm, QueryNorm,
@@ -39,7 +39,7 @@ pub mod init_kernels {
 
     /// Populate a BF16 weight buffer with bounded, deterministic pseudo-orthogonal values.
     #[kernel]
-    pub fn fill_bf16(mut out: DisjointSlice<Bf16>, length: usize, seed: u32, scale: f32) {
+    pub fn fill_bf16(mut out: DisjointSlice<BFloat16>, length: usize, seed: u32, scale: f32) {
         let tid = thread::index_1d().get();
         if tid >= length {
             return;
@@ -52,13 +52,13 @@ pub mod init_kernels {
         let mut tensor =
             cute_rs::tensor::partition::StridedTensorMut::from_disjoint_slice(&mut out);
         unsafe {
-            tensor.store_at(tid, Bf16::from_f32(signed * scale));
+            tensor.store_at(tid, BFloat16::from_f32(signed * scale));
         }
     }
 
     /// Populate an RMSNorm weight buffer with values near `1.0`.
     #[kernel]
-    pub fn fill_norm_bf16(mut out: DisjointSlice<Bf16>, length: usize) {
+    pub fn fill_norm_bf16(mut out: DisjointSlice<BFloat16>, length: usize) {
         let tid = thread::index_1d().get();
         if tid >= length {
             return;
@@ -66,7 +66,7 @@ pub mod init_kernels {
         let mut tensor =
             cute_rs::tensor::partition::StridedTensorMut::from_disjoint_slice(&mut out);
         unsafe {
-            tensor.store_at(tid, Bf16::from_f32(1.0));
+            tensor.store_at(tid, BFloat16::from_f32(1.0));
         }
     }
 }
@@ -74,27 +74,27 @@ pub mod init_kernels {
 /// Owned device buffers for one `Qwen3-8B` decoder layer in BF16.
 pub struct OwnedBf16Layer {
     /// Pre-attention RMSNorm scale (`[4096]`).
-    pub input_norm: DeviceBuffer<Bf16>,
+    pub input_norm: DeviceBuffer<BFloat16>,
     /// Post-attention RMSNorm scale (`[4096]`).
-    pub post_attention_norm: DeviceBuffer<Bf16>,
+    pub post_attention_norm: DeviceBuffer<BFloat16>,
     /// Query projection (`[4096, 4096]`).
-    pub q_proj: DeviceBuffer<Bf16>,
+    pub q_proj: DeviceBuffer<BFloat16>,
     /// Key projection (`[1024, 4096]`).
-    pub k_proj: DeviceBuffer<Bf16>,
+    pub k_proj: DeviceBuffer<BFloat16>,
     /// Value projection (`[1024, 4096]`).
-    pub v_proj: DeviceBuffer<Bf16>,
+    pub v_proj: DeviceBuffer<BFloat16>,
     /// Output projection (`[4096, 4096]`).
-    pub o_proj: DeviceBuffer<Bf16>,
+    pub o_proj: DeviceBuffer<BFloat16>,
     /// Per-head query RMSNorm scale (`[128]`).
-    pub q_norm: DeviceBuffer<Bf16>,
+    pub q_norm: DeviceBuffer<BFloat16>,
     /// Per-head key RMSNorm scale (`[128]`).
-    pub k_norm: DeviceBuffer<Bf16>,
+    pub k_norm: DeviceBuffer<BFloat16>,
     /// SwiGLU gate projection (`[12288, 4096]`).
-    pub gate_proj: DeviceBuffer<Bf16>,
+    pub gate_proj: DeviceBuffer<BFloat16>,
     /// SwiGLU up projection (`[12288, 4096]`).
-    pub up_proj: DeviceBuffer<Bf16>,
+    pub up_proj: DeviceBuffer<BFloat16>,
     /// SwiGLU down projection (`[4096, 12288]`).
-    pub down_proj: DeviceBuffer<Bf16>,
+    pub down_proj: DeviceBuffer<BFloat16>,
 }
 
 impl OwnedBf16Layer {
@@ -124,16 +124,16 @@ impl OwnedBf16Layer {
     }
 }
 
-/// Owned device buffers for one `Qwen3-8B` decoder layer with NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`) linear projections.
+/// Owned device buffers for one `Qwen3-8B` decoder layer with NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) linear projections.
 pub struct OwnedNvfp4Layer {
     /// Pre-attention RMSNorm scale (`[4096]`, kept in BF16).
-    pub input_norm: DeviceBuffer<Bf16>,
+    pub input_norm: DeviceBuffer<BFloat16>,
     /// Post-attention RMSNorm scale (`[4096]`, kept in BF16).
-    pub post_attention_norm: DeviceBuffer<Bf16>,
+    pub post_attention_norm: DeviceBuffer<BFloat16>,
     /// Per-head query RMSNorm scale (`[128]`, kept in BF16).
-    pub q_norm: DeviceBuffer<Bf16>,
+    pub q_norm: DeviceBuffer<BFloat16>,
     /// Per-head key RMSNorm scale (`[128]`, kept in BF16).
-    pub k_norm: DeviceBuffer<Bf16>,
+    pub k_norm: DeviceBuffer<BFloat16>,
     /// NVFP4 query projection (`[4096, 4096]`).
     pub q_proj: Nvfp4Projection<Query, HIDDEN, Q_WIDTH>,
     /// NVFP4 key projection (`[1024, 4096]`).
@@ -224,7 +224,7 @@ pub struct Qwen3Bf16Stack {
     /// Ordered decoder layers (`36` in the full `Qwen/Qwen3-8B` checkpoint).
     pub layers: Vec<OwnedBf16Layer>,
     /// Final RMSNorm scale (`[4096]`).
-    pub final_norm: DeviceBuffer<Bf16>,
+    pub final_norm: DeviceBuffer<BFloat16>,
 }
 
 impl Qwen3Bf16Stack {
@@ -252,11 +252,11 @@ pub struct Qwen3Nvfp4Stack {
     /// Ordered NVFP4 decoder layers.
     pub layers: Vec<OwnedNvfp4Layer>,
     /// Final RMSNorm scale (`[4096]`, kept in BF16).
-    pub final_norm: DeviceBuffer<Bf16>,
+    pub final_norm: DeviceBuffer<BFloat16>,
 }
 
 impl Qwen3Nvfp4Stack {
-    /// Quantize a complete [`Qwen3Bf16Stack`] on the GPU into NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`).
+    /// Quantize a complete [`Qwen3Bf16Stack`] on the GPU into NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`).
     pub fn from_bf16_gpu(
         stream: &CudaStream,
         runner: &crate::nvfp4::Nvfp4Runner,
@@ -273,7 +273,7 @@ impl Qwen3Nvfp4Stack {
         })
     }
 
-    /// Quantize a complete [`Qwen3Bf16Stack`] into NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`).
+    /// Quantize a complete [`Qwen3Bf16Stack`] into NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`).
     pub fn from_bf16(stream: &CudaStream, bf16: &Qwen3Bf16Stack) -> Result<Self> {
         let mut layers = Vec::with_capacity(bf16.layers.len());
         for layer in &bf16.layers {
@@ -307,8 +307,8 @@ pub fn synthesize_qwen3_bf16(stream: &CudaStream, num_layers: usize) -> Result<Q
         return Err("synthesize_qwen3_bf16 requires at least one layer".into());
     }
     let init = init_kernels::load(stream.context())?;
-    let alloc_filled = |len: usize, seed: u32, scale: f32| -> Result<DeviceBuffer<Bf16>> {
-        let mut buf = DeviceBuffer::<Bf16>::zeroed(stream, len)?;
+    let alloc_filled = |len: usize, seed: u32, scale: f32| -> Result<DeviceBuffer<BFloat16>> {
+        let mut buf = DeviceBuffer::<BFloat16>::zeroed(stream, len)?;
         let cfg = LaunchConfig {
             grid_dim: (len.div_ceil(256) as u32, 1, 1),
             block_dim: (256, 1, 1),
@@ -319,8 +319,8 @@ pub fn synthesize_qwen3_bf16(stream: &CudaStream, num_layers: usize) -> Result<Q
         }
         Ok(buf)
     };
-    let alloc_norm = |len: usize| -> Result<DeviceBuffer<Bf16>> {
-        let mut buf = DeviceBuffer::<Bf16>::zeroed(stream, len)?;
+    let alloc_norm = |len: usize| -> Result<DeviceBuffer<BFloat16>> {
+        let mut buf = DeviceBuffer::<BFloat16>::zeroed(stream, len)?;
         let cfg = LaunchConfig {
             grid_dim: (len.div_ceil(128) as u32, 1, 1),
             block_dim: (128, 1, 1),
@@ -368,7 +368,7 @@ fn read_bf16_from_safetensors(
     data_start: u64,
     name: &str,
     shape: &[usize],
-) -> Result<Vec<Bf16>> {
+) -> Result<Vec<BFloat16>> {
     use safetensors::tensor::Dtype;
     use std::io::{Read, Seek, SeekFrom};
 
@@ -391,7 +391,7 @@ fn read_bf16_from_safetensors(
         let n = (count - values.len()).min(chunk.len() / 2);
         file.read_exact(&mut chunk[..n * 2])?;
         for pair in chunk[..n * 2].as_chunks::<2>().0 {
-            values.push(Bf16::from_bits(u16::from_le_bytes(*pair)));
+            values.push(BFloat16::from_bits(u16::from_le_bytes(*pair)));
         }
     }
     Ok(values)
@@ -430,7 +430,7 @@ pub fn load_qwen3_bf16_checkpoint(
         BTreeMap::new()
     };
 
-    let mut read_tensor = |name: &str, shape: &[usize]| -> Result<DeviceBuffer<Bf16>> {
+    let mut read_tensor = |name: &str, shape: &[usize]| -> Result<DeviceBuffer<BFloat16>> {
         let (file, meta, data_start) = if let Some(shard) = weight_map.get(name) {
             if !shards.contains_key(shard) {
                 shards.insert(shard.clone(), open_safetensors(&path.join(shard))?);

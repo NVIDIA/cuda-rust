@@ -13,7 +13,7 @@ use crate::{
 };
 use cuda_core::{CudaStream, DeviceBuffer};
 use cute_rs::{
-    Bf16,
+    BFloat16,
     decoder::{AttentionWeights, BiasWeights, DecoderWeights, EmbeddingWeights, NormWeights},
     ffn::{FfnWeights, ProjectionWeights},
 };
@@ -160,9 +160,9 @@ impl<R: Read + Seek> SafeTensorFile<R> {
     }
 
     /// Exact little-endian BF16 storage load; never converts another dtype.
-    pub fn bf16(&mut self, name: &str, shape: &[usize]) -> Result<Vec<Bf16>> {
+    pub fn bf16(&mut self, name: &str, shape: &[usize]) -> Result<Vec<BFloat16>> {
         self.read_values(name, shape, Dtype::BF16, |bytes| {
-            Bf16::from_bits(u16::from_le_bytes(bytes))
+            BFloat16::from_bits(u16::from_le_bytes(bytes))
         })
     }
 
@@ -271,7 +271,7 @@ fn validate_qwen<R: Read + Seek>(file: &SafeTensorFile<R>) -> Result<Vec<TensorS
 /// these buffers; they cannot outlive the weights or exchange projection roles.
 pub struct QwenWeights {
     /// Sole owners of uploaded BF16 buffers, indexed by their checkpoint tensor names.
-    tensors: BTreeMap<String, DeviceBuffer<Bf16>>,
+    tensors: BTreeMap<String, DeviceBuffer<BFloat16>>,
 }
 
 impl QwenWeights {
@@ -296,7 +296,7 @@ impl QwenWeights {
     }
 
     /// Borrow a loaded allocation by its exact key; missing keys are errors.
-    fn tensor(&self, name: &str) -> Result<&DeviceBuffer<Bf16>> {
+    fn tensor(&self, name: &str) -> Result<&DeviceBuffer<BFloat16>> {
         self.tensors
             .get(name)
             .ok_or_else(|| format!("missing loaded tensor {name}").into())

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! Independent checks of BF16 operand coverage, register order and layout evaluation.
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 
 #[test]
 fn static_atom_layouts_match_cute_algebra_for_every_lane_and_value() {
@@ -29,8 +29,8 @@ fn static_atom_layouts_match_cute_algebra_for_every_lane_and_value() {
 fn packed_output_partition_visits_only_live_decode_rows() {
     use cute_rs::bf16_mma::PackedDecode;
     #[repr(align(4))]
-    struct Aligned([Bf16; 256]);
-    let data = Aligned([Bf16::from_bits(0); 256]);
+    struct Aligned([BFloat16; 256]);
+    let data = Aligned([BFloat16::from_bits(0); 256]);
     for rows in [1, 2] {
         let source = PackedDecode::new(&data.0, &data.0, rows, 16, 8, 16, 16).unwrap();
         let mut seen = vec![0; rows * 8];
@@ -51,8 +51,8 @@ use cute_rs::markers::{ComposedLayout, RowMajor, Swizzle};
 fn packed_decode_proof_rejects_incomplete_or_misaligned_operands() {
     use cute_rs::bf16_mma::PackedDecode;
     #[repr(align(4))]
-    struct Aligned([Bf16; 1024]);
-    let data = Aligned([Bf16::from_bits(0); 1024]);
+    struct Aligned([BFloat16; 1024]);
+    let data = Aligned([BFloat16::from_bits(0); 1024]);
     assert!(PackedDecode::new(&data.0, &data.0, 1, 16, 8, 16, 16).is_some());
     assert!(PackedDecode::new(&data.0, &data.0, 2, 32, 16, 34, 34).is_some());
     for (rows, width, outputs, is, ws) in [
@@ -74,8 +74,8 @@ fn packed_decode_proof_rejects_incomplete_or_misaligned_operands() {
 fn validated_decode_callback_runs_once_only_for_proven_storage() {
     use cute_rs::bf16_mma::PackedDecode;
     #[repr(align(4))]
-    struct Aligned([Bf16; 128]);
-    let data = Aligned([Bf16::from_bits(0); 128]);
+    struct Aligned([BFloat16; 128]);
+    let data = Aligned([BFloat16::from_bits(0); 128]);
     let mut calls = 0;
     assert!(PackedDecode::with_validated(
         &data.0,
@@ -119,12 +119,12 @@ fn operand_partition_matches_ptx_coordinates_and_covers_every_element() {
         mma.partition_a().load_with(|r, k| {
             a_coords.push((r, k));
             a_seen[r * 16 + k] += 1;
-            Bf16::from_bits(0)
+            BFloat16::from_bits(0)
         });
         mma.partition_b().load_with(|n, k| {
             b_coords.push((n, k));
             b_seen[n * 16 + k] += 1;
-            Bf16::from_bits(0)
+            BFloat16::from_bits(0)
         });
         let row = lane / 4;
         let col = lane % 4 * 2;

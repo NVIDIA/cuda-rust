@@ -73,9 +73,8 @@ pub(super) fn classify_smem_mma_method_call(
             )
         })
         .or_else(|| {
-            smem_mma_method_name_from_path(path, "mma::block_scaled::fragments").filter(|method| {
-                matches!(*method, "zero" | "pairs_at_unchecked" | "accumulate_k64")
-            })
+            smem_mma_method_name_from_path(path, "mma::block_scaled::fragments")
+                .filter(|method| matches!(*method, "zero" | "pairs_at_unchecked" | "gemm"))
         })?;
     match method {
         "get_slice"
@@ -137,7 +136,7 @@ pub(super) fn classify_smem_mma_method_call(
         {
             Some(CuteFn::MmaPartitionB)
         }
-        "accumulate_k64"
+        "gemm"
             if args.len() == 5
                 && operand_ty(0)
                     .is_some_and(|ty| smem_mma::is_accumulator(&ty).unwrap_or(false)) =>

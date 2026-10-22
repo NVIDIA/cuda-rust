@@ -40,7 +40,7 @@ fn inputs(stream: &CudaStream, seed: usize) -> Result<(Batch<2048>, Batch<2048>)
     let values = |offset: usize| {
         (0..2048)
             .map(|index| {
-                Bf16::from_f32(((index * (17 + seed) + offset) % 113) as f32 / 64.0 - 0.875)
+                BFloat16::from_f32(((index * (17 + seed) + offset) % 113) as f32 / 64.0 - 0.875)
             })
             .collect::<Vec<_>>()
     };
@@ -59,17 +59,17 @@ fn selector(stream: &Arc<CudaStream>) -> Result<()> {
     let mut codes = DeviceBuffer::from_host(stream, &[u32::MAX; REMAINING_CODES])?;
     let mut status = DeviceBuffer::from_host(stream, &[0u32])?;
     let mut fixtures = Vec::new();
-    let mut tied = vec![Bf16::from_f32(-65536.0); 2048];
-    tied[33] = Bf16::from_f32(65536.0);
+    let mut tied = vec![BFloat16::from_f32(-65536.0); 2048];
+    tied[33] = BFloat16::from_f32(65536.0);
     tied[1] = tied[33];
     fixtures.push(tied);
-    fixtures.push(vec![Bf16::from_bits(0x8000); 2048]);
-    let mut extreme = vec![Bf16::from_bits(0xff7f); 2048];
-    extreme[2047] = Bf16::from_bits(0x7f7f);
+    fixtures.push(vec![BFloat16::from_bits(0x8000); 2048]);
+    let mut extreme = vec![BFloat16::from_bits(0xff7f); 2048];
+    extreme[2047] = BFloat16::from_bits(0x7f7f);
     fixtures.push(extreme);
     for bits in [0x7fc1, 0x7f80, 0xff80] {
-        let mut invalid = vec![Bf16::from_f32(1.0); 2048];
-        invalid[2047] = Bf16::from_bits(bits);
+        let mut invalid = vec![BFloat16::from_f32(1.0); 2048];
+        invalid[2047] = BFloat16::from_bits(bits);
         fixtures.push(invalid);
     }
     for (index, fixture) in fixtures.iter().enumerate() {
@@ -118,14 +118,14 @@ fn selector(stream: &Arc<CudaStream>) -> Result<()> {
 fn pitched_embedding(stream: &Arc<CudaStream>) -> Result<()> {
     let module = predictor_graph_kernel::kernels::load(stream.context())?;
     let stride = 2050;
-    let mut table = vec![Bf16::from_bits(0); 2047 * stride + 2048];
+    let mut table = vec![BFloat16::from_bits(0); 2047 * stride + 2048];
     for column in 0..2048 {
-        table[2047 * stride + column] = Bf16::from_bits(0x3f00 + (column % 127) as u16);
+        table[2047 * stride + column] = BFloat16::from_bits(0x3f00 + (column % 127) as u16);
     }
     let expected = &table[2047 * stride..];
     let table = DeviceBuffer::from_host(stream, &table)?;
     let codes = DeviceBuffer::from_host(stream, &[2047u32; REMAINING_CODES])?;
-    let guard = Bf16::from_bits(0x7fc1);
+    let guard = BFloat16::from_bits(0x7fc1);
     let mut feedback = DeviceBuffer::from_host(stream, &vec![guard; 2048 + 8])?;
     let mut rows = DeviceBuffer::from_host(stream, &vec![guard; 4096 + 8])?;
     let completion = Completion::new(stream);
@@ -148,7 +148,7 @@ fn pitched_embedding(stream: &Arc<CudaStream>) -> Result<()> {
     completed?;
     let feedback = feedback.to_host_vec(stream)?;
     let rows = rows.to_host_vec(stream)?;
-    let exact = |actual: &[Bf16], expected: &[Bf16]| {
+    let exact = |actual: &[BFloat16], expected: &[BFloat16]| {
         actual
             .iter()
             .zip(expected)
@@ -287,7 +287,7 @@ pub(crate) fn validate(stream: Arc<CudaStream>, weights: Arc<QwenWeights>) -> Re
     let wrong = Batch::from_host(
         &other_context.default_stream(),
         1,
-        &[Bf16::from_bits(0); 2048],
+        &[BFloat16::from_bits(0); 2048],
     )?;
     if graph.run(&wrong, &zero).is_ok() || graph.poisoned {
         return Err("predictor accepted a foreign context or poisoned on rejection".into());
@@ -305,8 +305,8 @@ pub(crate) fn validate(stream: Arc<CudaStream>, weights: Arc<QwenWeights>) -> Re
     // graph consumes invalid logits and fails; implicit stream ordering cannot
     // rescue it because both streams are nonblocking.
     let foreign = stream.context().new_stream()?;
-    let mut delayed = Batch::from_host(&stream, 1, &[Bf16::from_bits(0x7fc1); 2048])?;
-    let mut delayed_zero = Batch::from_host(&stream, 1, &[Bf16::from_bits(0x7fc1); 2048])?;
+    let mut delayed = Batch::from_host(&stream, 1, &[BFloat16::from_bits(0x7fc1); 2048])?;
+    let mut delayed_zero = Batch::from_host(&stream, 1, &[BFloat16::from_bits(0x7fc1); 2048])?;
     let expected = graph.run(&last, &zero)?;
     let output = Batch::allocate(&stream, 1)?;
     let (release, wait_release) = std::sync::mpsc::channel();

@@ -7,7 +7,7 @@
 
 use cuda_core::simt::LaunchConfig;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 
 /// Shared FP32/BF16 row kernels and bit-preserving BF16 copy kernel.
 #[path = "../../common/rmsnorm.rs"]
@@ -143,9 +143,9 @@ fn run_f32(
 fn run_bf16(
     module: &kernels::LoadedModule,
     stream: &CudaStream,
-    input: &[Bf16],
-    weight: &[Bf16],
-    output: &mut [Bf16],
+    input: &[BFloat16],
+    weight: &[BFloat16],
+    output: &mut [BFloat16],
     rows: usize,
     cols: usize,
     epsilon: f32,
@@ -199,15 +199,15 @@ fn validate_copy(
 ) -> Result<usize, Box<dyn std::error::Error>> {
     let mut checked = 0;
     for length in [0, 1, 7, 8, 9, 1031] {
-        let input: Vec<Bf16> = (0..length)
+        let input: Vec<BFloat16> = (0..length)
             .map(|i| {
                 let bits = [
                     0x0000, 0x8000, 0x7f80, 0xff80, 0x7f81, 0xffc5, 0x0001, 0xffff, 0x3f80,
                 ][i % 9];
-                Bf16::from_bits(bits)
+                BFloat16::from_bits(bits)
             })
             .collect();
-        let mut output = vec![Bf16::from_bits(0x5555); length];
+        let mut output = vec![BFloat16::from_bits(0x5555); length];
         if length != 0 {
             let input_device = DeviceBuffer::from_host(stream, &input)?;
             let mut output_device = DeviceBuffer::from_host(stream, &output)?;
@@ -260,9 +260,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         run_bf16(
             &module,
             &stream,
-            &[Bf16::from_bits(0)],
+            &[BFloat16::from_bits(0)],
             &[],
-            &mut [Bf16::from_bits(0)],
+            &mut [BFloat16::from_bits(0)],
             1,
             1,
             EPSILON
@@ -296,15 +296,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         max_error_f32 = max_error_f32.max((actual - expected).abs());
                     }
                 }
-                let input: Vec<Bf16> = input
+                let input: Vec<BFloat16> = input
                     .into_iter()
-                    .map(|v| Bf16::from_bits(reference_bf16(v)))
+                    .map(|v| BFloat16::from_bits(reference_bf16(v)))
                     .collect();
-                let weight: Vec<Bf16> = weight
+                let weight: Vec<BFloat16> = weight
                     .into_iter()
-                    .map(|v| Bf16::from_bits(reference_bf16(v)))
+                    .map(|v| BFloat16::from_bits(reference_bf16(v)))
                     .collect();
-                let mut output = vec![Bf16::from_bits(0x7fc0); input.len()];
+                let mut output = vec![BFloat16::from_bits(0x7fc0); input.len()];
                 run_bf16(
                     &module,
                     &stream,
@@ -341,12 +341,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // An exact separate fixture rejects a kernel that casts only once, even
     // though a loose BF16 tolerance alone could accept that semantic error.
-    let mut fixture = [Bf16::from_bits(0); 2];
+    let mut fixture = [BFloat16::from_bits(0); 2];
     run_bf16(
         &module,
         &stream,
-        &[Bf16::from_bits(0x3f80), Bf16::from_bits(0x4000)],
-        &[Bf16::from_bits(0x3f02); 2],
+        &[BFloat16::from_bits(0x3f80), BFloat16::from_bits(0x4000)],
+        &[BFloat16::from_bits(0x3f02); 2],
         &mut fixture,
         1,
         2,

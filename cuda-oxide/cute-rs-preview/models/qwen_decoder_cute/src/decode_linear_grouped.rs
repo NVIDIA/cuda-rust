@@ -14,7 +14,7 @@ use crate::{
 };
 use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig1D, PreparedLaunch};
 use cute_rs::{
-    Bf16,
+    BFloat16,
     decoder::AttentionWeights,
     ffn::{FfnWeights, ProjectionRole, ProjectionWeights, RowMajorShape},
 };
@@ -278,10 +278,10 @@ fn matrix(
     cols: usize,
     stride: usize,
     seed: &mut u32,
-) -> Result<DeviceBuffer<Bf16>> {
+) -> Result<DeviceBuffer<BFloat16>> {
     RowMajorShape::new(rows, cols, stride)?;
     let length = rows.checked_mul(stride).ok_or("fixture extent overflow")?;
-    let mut values = vec![Bf16::from_bits(0x7fc1); length];
+    let mut values = vec![BFloat16::from_bits(0x7fc1); length];
     for row in 0..rows {
         for col in 0..cols {
             values[row * stride + col] = super::varied_bf16(seed);
@@ -291,7 +291,7 @@ fn matrix(
 }
 
 /// Require equal-length bit-identical BF16 outputs and return the compared value count.
-fn same_values(actual: &[Bf16], expected: &[Bf16]) -> Result<usize> {
+fn same_values(actual: &[BFloat16], expected: &[BFloat16]) -> Result<usize> {
     if actual.len() != expected.len()
         || actual
             .iter()
@@ -322,7 +322,7 @@ fn fixture<const H: usize, const QW: usize, const KW: usize, const I: usize>(
     let key = matrix(&runner.stream, KW, H, stride, &mut seed)?;
     let value = matrix(&runner.stream, KW, H, stride, &mut seed)?;
     let output = matrix(&runner.stream, H, QW, QW, &mut seed)?;
-    let norm = DeviceBuffer::from_host(&runner.stream, &[Bf16::from_f32(1.0); 128])?;
+    let norm = DeviceBuffer::from_host(&runner.stream, &[BFloat16::from_f32(1.0); 128])?;
     let attention = AttentionWeights::<H, QW, KW, 128>::new(
         ProjectionWeights::new(&query, stride)?,
         ProjectionWeights::new(&key, stride)?,
@@ -376,7 +376,7 @@ fn fixture<const H: usize, const QW: usize, const KW: usize, const I: usize>(
             let invalid = Batch::<H>::from_host(
                 &runner.stream,
                 invalid_rows,
-                &vec![Bf16::from_bits(0); invalid_rows * H],
+                &vec![BFloat16::from_bits(0); invalid_rows * H],
             )?;
             if runner.project_qkv(&invalid, &attention).is_ok()
                 || runner.project_gate_up(&invalid, &ffn).is_ok()
@@ -420,11 +420,11 @@ fn foreign_producer(runner: &Runner) -> Result<usize> {
     let stream = runner.stream.context().new_stream()?;
     let foreign = runner.stream.context().new_stream()?;
     let grouped = Runner::new(Arc::clone(&stream))?;
-    let mut input = Batch::<16>::from_host(&stream, 2, &[Bf16::from_bits(0); 32])?;
-    let source = DeviceBuffer::from_host(&stream, &[Bf16::from_f32(0.25); 32])?;
-    let gate = DeviceBuffer::from_host(&stream, &[Bf16::from_f32(1.0); 8 * 16])?;
-    let up = DeviceBuffer::from_host(&stream, &[Bf16::from_f32(2.0); 8 * 16])?;
-    let down = DeviceBuffer::from_host(&stream, &[Bf16::from_bits(0); 16 * 8])?;
+    let mut input = Batch::<16>::from_host(&stream, 2, &[BFloat16::from_bits(0); 32])?;
+    let source = DeviceBuffer::from_host(&stream, &[BFloat16::from_f32(0.25); 32])?;
+    let gate = DeviceBuffer::from_host(&stream, &[BFloat16::from_f32(1.0); 8 * 16])?;
+    let up = DeviceBuffer::from_host(&stream, &[BFloat16::from_f32(2.0); 8 * 16])?;
+    let down = DeviceBuffer::from_host(&stream, &[BFloat16::from_bits(0); 16 * 8])?;
     let weights = FfnWeights::<16, 8>::new(
         ProjectionWeights::new(&gate, 16)?,
         ProjectionWeights::new(&up, 16)?,
@@ -452,8 +452,9 @@ fn foreign_producer(runner: &Runner) -> Result<usize> {
             let _ = finished.send(());
             projected
                 .and_then(|(gate, up)| {
-                    let checked = same_values(&gate.read(&stream)?, &[Bf16::from_f32(4.0); 16])?;
-                    Ok(checked + same_values(&up.read(&stream)?, &[Bf16::from_f32(8.0); 16])?)
+                    let checked =
+                        same_values(&gate.read(&stream)?, &[BFloat16::from_f32(4.0); 16])?;
+                    Ok(checked + same_values(&up.read(&stream)?, &[BFloat16::from_f32(8.0); 16])?)
                 })
                 .map_err(|error| error.to_string())
         });

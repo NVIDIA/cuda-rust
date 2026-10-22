@@ -7,7 +7,7 @@ use crate::{kernel::kernels, rotary::HostTables};
 use cuda_core::simt::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
 use cute_rs::{
-    Bf16,
+    BFloat16,
     attention::{AttentionShape, CacheShape},
 };
 use std::sync::Arc;
@@ -28,9 +28,9 @@ pub struct DeviceTables<const D: usize> {
     /// Number of coefficient rows; each row has `D / 2` elements.
     tokens: usize,
     /// Completed, private `[tokens, D / 2]` BF16 cosine allocation.
-    cos: DeviceBuffer<Bf16>,
+    cos: DeviceBuffer<BFloat16>,
     /// Completed, private `[tokens, D / 2]` BF16 sine allocation.
-    sin: DeviceBuffer<Bf16>,
+    sin: DeviceBuffer<BFloat16>,
 }
 
 impl<const D: usize> DeviceTables<D> {
@@ -59,7 +59,7 @@ fn guarded_len(logical_len: usize) -> Result<usize> {
         .checked_add(GUARD_LEN)
         .ok_or("guard extent overflow")?;
     let bytes = elements
-        .checked_mul(size_of::<Bf16>())
+        .checked_mul(size_of::<BFloat16>())
         .ok_or("guard byte extent overflow")?;
     if bytes > isize::MAX as usize {
         return Err("guarded BF16 allocation exceeds the slice address range".into());
@@ -84,12 +84,12 @@ fn launch_grid(work_items: usize) -> Result<Option<LaunchConfig>> {
 }
 
 /// Allocate sentinel-filled storage only after checking the full guarded extent.
-pub(crate) fn allocate(stream: &CudaStream, logical_len: usize) -> Result<DeviceBuffer<Bf16>> {
+pub(crate) fn allocate(stream: &CudaStream, logical_len: usize) -> Result<DeviceBuffer<BFloat16>> {
     let elements = guarded_len(logical_len)?;
     stream.context().bind_to_thread()?;
     Ok(DeviceBuffer::from_host(
         stream,
-        &vec![Bf16::from_bits(GUARD); elements],
+        &vec![BFloat16::from_bits(GUARD); elements],
     )?)
 }
 
@@ -99,11 +99,11 @@ pub(crate) fn allocate(stream: &CudaStream, logical_len: usize) -> Result<Device
 /// tokens. Context and pending producer work are checked by the runner.
 pub struct AttentionInputs<'a, const Q: usize, const K: usize, const D: usize> {
     /// Unrotated `[tokens, Q, D]` queries; pending writes are ordered by the runner.
-    query: &'a DeviceBuffer<Bf16>,
+    query: &'a DeviceBuffer<BFloat16>,
     /// Unrotated `[tokens, K, D]` keys to rotate before appending.
-    key: &'a DeviceBuffer<Bf16>,
+    key: &'a DeviceBuffer<BFloat16>,
     /// `[tokens, K, D]` values copied unchanged into the cache.
-    value: &'a DeviceBuffer<Bf16>,
+    value: &'a DeviceBuffer<BFloat16>,
     /// Checked grouping and element-count arithmetic for the const head dimensions.
     shape: AttentionShape<Q, K, D>,
     /// Number of new token rows across all three inputs.
@@ -116,9 +116,9 @@ impl<'a, const Q: usize, const K: usize, const D: usize> AttentionInputs<'a, Q, 
     /// Reject invalid head grouping, extent overflow, and any nonexact buffer length.
     /// Context identity and input readiness are established later by the runner.
     pub fn new(
-        query: &'a DeviceBuffer<Bf16>,
-        key: &'a DeviceBuffer<Bf16>,
-        value: &'a DeviceBuffer<Bf16>,
+        query: &'a DeviceBuffer<BFloat16>,
+        key: &'a DeviceBuffer<BFloat16>,
+        value: &'a DeviceBuffer<BFloat16>,
         tokens: usize,
     ) -> Result<Self> {
         let shape = AttentionShape::new()?;
@@ -146,9 +146,9 @@ impl<'a, const Q: usize, const K: usize, const D: usize> AttentionInputs<'a, Q, 
 /// discards the logical prefix; it does not expose or clear old allocation data.
 pub struct KvCache<const K: usize, const D: usize> {
     /// Rotated keys in `[capacity, K, D]` order, followed by guard elements.
-    key: DeviceBuffer<Bf16>,
+    key: DeviceBuffer<BFloat16>,
     /// Unrotated values with the same dense layout and trailing guards.
-    value: DeviceBuffer<Bf16>,
+    value: DeviceBuffer<BFloat16>,
     /// Checked fixed token capacity and per-token width in BF16 elements.
     shape: CacheShape<K, D>,
     /// Completed token prefix; only successful synchronized appends advance it.
@@ -166,9 +166,9 @@ pub struct KvCache<const K: usize, const D: usize> {
 )]
 pub(crate) struct OwnedKvCache<const K: usize, const D: usize> {
     /// Initialized rotated keys in `[capacity, K, D]` order plus guard suffix.
-    pub(crate) key: DeviceBuffer<Bf16>,
+    pub(crate) key: DeviceBuffer<BFloat16>,
     /// Initialized unrotated values with the same shape and guard suffix.
-    pub(crate) value: DeviceBuffer<Bf16>,
+    pub(crate) value: DeviceBuffer<BFloat16>,
     /// Checked dimensions retained independently of each buffer's element count.
     shape: CacheShape<K, D>,
     /// Last completed prefix, never advanced merely by enqueueing an append.
@@ -279,15 +279,15 @@ impl<const K: usize, const D: usize> KvCache<K, D> {
 
     /// Return all capacity and sentinel elements for this example's validation.
     /// Only the first `len()` tokens represent the current cache prefix.
-    pub fn snapshot(&self, stream: &CudaStream) -> Result<(Vec<Bf16>, Vec<Bf16>)> {
+    pub fn snapshot(&self, stream: &CudaStream) -> Result<(Vec<BFloat16>, Vec<BFloat16>)> {
         if !Arc::ptr_eq(self.key.context(), stream.context())
             || !Arc::ptr_eq(self.value.context(), stream.context())
         {
             return Err("snapshot stream must share the cache context".into());
         }
         stream.context().synchronize()?;
-        let mut key = vec![Bf16::from_bits(0); self.key.len()];
-        let mut value = vec![Bf16::from_bits(0); self.value.len()];
+        let mut key = vec![BFloat16::from_bits(0); self.key.len()];
+        let mut value = vec![BFloat16::from_bits(0); self.value.len()];
         self.key.copy_to_host(stream, &mut key)?;
         self.value.copy_to_host(stream, &mut value)?;
         Ok((key, value))
@@ -302,14 +302,14 @@ impl<const K: usize, const D: usize> KvCache<K, D> {
 /// Owned rotated query storage, retaining its query-head and head-width types.
 pub struct RotatedQuery<const Q: usize, const D: usize> {
     /// Completed dense `[tokens, Q, D]` rotated queries, plus trailing guards.
-    buffer: DeviceBuffer<Bf16>,
+    buffer: DeviceBuffer<BFloat16>,
     /// Number of valid query token rows, excluding guards.
     tokens: usize,
 }
 
 impl<const Q: usize, const D: usize> RotatedQuery<Q, D> {
     /// Read-only buffer including the trailing validation sentinel elements.
-    pub fn buffer(&self) -> &DeviceBuffer<Bf16> {
+    pub fn buffer(&self) -> &DeviceBuffer<BFloat16> {
         &self.buffer
     }
 
@@ -500,12 +500,12 @@ fn prepared_tables_reuse_completed_coefficients_across_streams_exactly() -> Resu
     let runner = Runner::new(stream.clone())?;
     let host = HostTables::<2>::from_coefficients(
         1,
-        vec![Bf16::from_bits(0x3f35)],
-        vec![Bf16::from_bits(0x3f35)],
+        vec![BFloat16::from_bits(0x3f35)],
+        vec![BFloat16::from_bits(0x3f35)],
     )?;
     let tables = DeviceTables::new(&upload, &host)?;
     drop(host);
-    let input = DeviceBuffer::from_host(&stream, &[0x3f81, 0x3f02].map(Bf16::from_bits))?;
+    let input = DeviceBuffer::from_host(&stream, &[0x3f81, 0x3f02].map(BFloat16::from_bits))?;
     let mut cache = KvCache::<1, 2>::new(&stream, 2)?;
     for prefix in 1..=2 {
         let query = runner.append_prepared(
@@ -520,7 +520,7 @@ fn prepared_tables_reuse_completed_coefficients_across_streams_exactly() -> Resu
         assert_eq!(cache.len(), prefix);
     }
     let (key, value) = cache.snapshot(&stream)?;
-    let bits = |values: &[Bf16]| {
+    let bits = |values: &[BFloat16]| {
         values
             .iter()
             .map(|value| value.to_bits())
@@ -542,7 +542,7 @@ fn prepared_table_rejection_preserves_the_completed_cache_prefix() -> Result<()>
     let context = cuda_core::CudaContext::new(0)?;
     let stream = context.default_stream();
     let runner = Runner::new(stream.clone())?;
-    let input = DeviceBuffer::from_host(&stream, &[Bf16::from_f32(1.0); 2])?;
+    let input = DeviceBuffer::from_host(&stream, &[BFloat16::from_f32(1.0); 2])?;
     let mut cache = KvCache::<1, 2>::new(&stream, 2)?;
     let rotary = crate::rotary::RotarySpec::<2>::standard(1e6, 8)?;
     let host = rotary.tables(&[[0; 3]])?;
@@ -589,7 +589,7 @@ mod tests {
     fn guards_cover_empty_and_nonempty_buffers_without_exceeding_slice_extent() {
         assert_eq!(guarded_len(0).unwrap(), 8);
         assert_eq!(guarded_len(17).unwrap(), 25);
-        let largest = isize::MAX as usize / size_of::<cute_rs::Bf16>();
+        let largest = isize::MAX as usize / size_of::<cute_rs::BFloat16>();
         assert_eq!(guarded_len(largest - GUARD_LEN).unwrap(), largest);
         assert!(guarded_len(largest - GUARD_LEN + 1).is_err());
         assert!(guarded_len(usize::MAX).is_err());

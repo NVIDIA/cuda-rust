@@ -99,7 +99,7 @@ fn tensor_view_accepts_transparent_scalar_storage() {
     let mut element = u16_ty;
     // Nested transparent wrappers are equally valid; no defining type name
     // should be required to copy their unchanged physical representation.
-    for name in ["Bf16", "TypedBf16"] {
+    for name in ["BFloat16", "TypedBFloat16"] {
         element = MirStructType::get_with_full_layout_and_abi(
             &mut ctx,
             name.into(),

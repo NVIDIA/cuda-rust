@@ -277,7 +277,7 @@ use crate::{
 };
 use cuda_core::CudaContext;
 use cute_rs::{
-    Bf16,
+    BFloat16,
     decoder::BiasWeights,
     ffn::{ProjectionRole, ProjectionWeights},
 };
@@ -298,7 +298,7 @@ fn project_values<Role: ProjectionRole, const IN: usize, const OUT: usize>(
         .input_bf16
         .iter()
         .copied()
-        .map(Bf16::from_bits)
+        .map(BFloat16::from_bits)
         .collect();
     let input = Batch::<IN>::from_host(runner.stream(), request.rows, &values)?;
     let output = runner.project(&input, weights, bias)?;

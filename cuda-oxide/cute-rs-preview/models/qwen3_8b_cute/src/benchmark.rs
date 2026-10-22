@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! End-to-end `Qwen3-8B` BF16 and NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`) engine and benchmark suite.
+//! End-to-end `Qwen3-8B` BF16 and NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) engine and benchmark suite.
 //!
 //! Measures prefill (`tokens/sec`), autoregressive decode (`tokens/sec`), weight memory
 //! savings, and numerical cosine similarity between BF16 and NVFP4 on RTX 5090 (`sm_120a`).
@@ -22,7 +22,7 @@ use crate::nvfp4::Nvfp4Runner;
 use crate::operator::Result;
 use crate::rotary::RotarySpec;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer, LaunchConfig1D};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -55,7 +55,7 @@ pub struct ModeMetrics {
 pub struct BenchmarkReport {
     /// Metrics for the BF16 Tensor-Core baseline.
     pub bf16: ModeMetrics,
-    /// Metrics for the NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`) block-scaled path.
+    /// Metrics for the NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) block-scaled path.
     pub nvfp4: ModeMetrics,
     /// Cosine similarity between the final normalized hidden states of BF16 and NVFP4.
     pub cosine_similarity: f64,
@@ -66,9 +66,9 @@ pub struct BenchmarkReport {
 /// Pre-allocated device KV-cache for one NVFP4 `Qwen3-8B` layer (`[capacity, KV_HEADS, HEAD_DIM]`).
 pub struct Nvfp4KvCache {
     /// Rotated key cache `[capacity, KV_HEADS, HEAD_DIM]`.
-    pub key: DeviceBuffer<Bf16>,
+    pub key: DeviceBuffer<BFloat16>,
     /// Unrotated value cache `[capacity, KV_HEADS, HEAD_DIM]`.
-    pub value: DeviceBuffer<Bf16>,
+    pub value: DeviceBuffer<BFloat16>,
     /// Current valid token prefix length.
     pub len: usize,
     /// Maximum token capacity.
@@ -79,7 +79,7 @@ impl Nvfp4KvCache {
     /// Allocate a zero-initialized KV cache for `capacity` tokens on `stream`.
     pub fn new(stream: &CudaStream, capacity: usize) -> Result<Self> {
         let elems = capacity * KV_WIDTH + 8;
-        let zero = vec![Bf16::from_bits(0); elems];
+        let zero = vec![BFloat16::from_bits(0); elems];
         Ok(Self {
             key: DeviceBuffer::from_host(stream, &zero)?,
             value: DeviceBuffer::from_host(stream, &zero)?,
@@ -93,45 +93,45 @@ impl Nvfp4KvCache {
 struct Nvfp4Scratch {
     /// Hidden states entering the first layer `[rows, HIDDEN]`; a run takes both hidden
     /// buffers out of their options and alternates them as layer input and output.
-    hidden_a: Option<DeviceBuffer<Bf16>>,
+    hidden_a: Option<DeviceBuffer<BFloat16>>,
     /// The other hidden-state buffer `[rows, HIDDEN]` of that alternation.
-    hidden_b: Option<DeviceBuffer<Bf16>>,
+    hidden_b: Option<DeviceBuffer<BFloat16>>,
     /// Input RMSNorm output `[rows, HIDDEN]`, the operand of the Q/K/V projections.
-    normalized: DeviceBuffer<Bf16>,
+    normalized: DeviceBuffer<BFloat16>,
     /// Query projection `[rows, Q_WIDTH]`.
-    q: DeviceBuffer<Bf16>,
+    q: DeviceBuffer<BFloat16>,
     /// Key projection `[rows, KV_WIDTH]`.
-    k: DeviceBuffer<Bf16>,
+    k: DeviceBuffer<BFloat16>,
     /// Value projection `[rows, KV_WIDTH]`.
-    v: DeviceBuffer<Bf16>,
+    v: DeviceBuffer<BFloat16>,
     /// Per-head QK-normed queries `[rows, Q_WIDTH]`.
-    qn: DeviceBuffer<Bf16>,
+    qn: DeviceBuffer<BFloat16>,
     /// Per-head QK-normed keys `[rows, KV_WIDTH]`.
-    kn: DeviceBuffer<Bf16>,
+    kn: DeviceBuffer<BFloat16>,
     /// Rotated queries `[rows, Q_WIDTH]`.
-    rot_q: DeviceBuffer<Bf16>,
+    rot_q: DeviceBuffer<BFloat16>,
     /// Rotated keys `[rows, KV_WIDTH]`, appended to the layer's KV cache.
-    rot_k: DeviceBuffer<Bf16>,
+    rot_k: DeviceBuffer<BFloat16>,
     /// Split attention partial states `[rows, Q_HEADS, splits, STATE_SIZE]` in `f32`.
     partials: DeviceBuffer<f32>,
     /// Merged attention output `[rows, Q_WIDTH]`.
-    attended: DeviceBuffer<Bf16>,
+    attended: DeviceBuffer<BFloat16>,
     /// Output projection `[rows, HIDDEN]`.
-    projected: DeviceBuffer<Bf16>,
+    projected: DeviceBuffer<BFloat16>,
     /// Layer input plus the attention output `[rows, HIDDEN]`.
-    residual: DeviceBuffer<Bf16>,
+    residual: DeviceBuffer<BFloat16>,
     /// Post-attention RMSNorm output `[rows, HIDDEN]`, the operand of the gate and up projections.
-    post: DeviceBuffer<Bf16>,
+    post: DeviceBuffer<BFloat16>,
     /// Gate projection `[rows, INTERMEDIATE]`.
-    gate: DeviceBuffer<Bf16>,
+    gate: DeviceBuffer<BFloat16>,
     /// Up projection `[rows, INTERMEDIATE]`.
-    up: DeviceBuffer<Bf16>,
+    up: DeviceBuffer<BFloat16>,
     /// `SiLU(gate)` `[rows, INTERMEDIATE]`.
-    silu: DeviceBuffer<Bf16>,
+    silu: DeviceBuffer<BFloat16>,
     /// `SiLU(gate) * up` `[rows, INTERMEDIATE]`, the operand of the down projection.
-    product: DeviceBuffer<Bf16>,
+    product: DeviceBuffer<BFloat16>,
     /// Down projection `[rows, HIDDEN]`, added to `residual` to form the layer output.
-    down: DeviceBuffer<Bf16>,
+    down: DeviceBuffer<BFloat16>,
 }
 
 impl Nvfp4Scratch {
@@ -140,7 +140,8 @@ impl Nvfp4Scratch {
     fn new(stream: &CudaStream, max_rows: usize, max_seq: usize) -> Result<Self> {
         let splits = max_seq.div_ceil(64);
         let partial_elems = max_rows * Q_HEADS * splits * crate::attention_kernel::STATE_SIZE + 8;
-        let z_bf16 = |n: usize| DeviceBuffer::from_host(stream, &vec![Bf16::from_bits(0); n + 8]);
+        let z_bf16 =
+            |n: usize| DeviceBuffer::from_host(stream, &vec![BFloat16::from_bits(0); n + 8]);
         Ok(Self {
             hidden_a: Some(z_bf16(max_rows * HIDDEN)?),
             hidden_b: Some(z_bf16(max_rows * HIDDEN)?),
@@ -166,11 +167,11 @@ impl Nvfp4Scratch {
     }
 }
 
-/// Combined `Qwen3-8B` execution engine supporting both BF16 and NVFP4 (`E2M1` + `E4M3`) stacks.
+/// Combined `Qwen3-8B` execution engine supporting both BF16 and NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`) stacks.
 pub struct Qwen3Engine {
     /// Shared execution stream.
     stream: Arc<CudaStream>,
-    /// NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`) linear projection runner.
+    /// NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) linear projection runner.
     nvfp4_runner: Nvfp4Runner,
     /// Loaded RMSNorm module for stream-ordered execution.
     norms: norm_kernel::kernels::LoadedModule,
@@ -223,9 +224,9 @@ impl Qwen3Engine {
     /// Enqueue one BF16 projection asynchronously on `self.stream`.
     fn enqueue_project_bf16(
         &self,
-        input: &DeviceBuffer<Bf16>,
-        weight: &DeviceBuffer<Bf16>,
-        output: &mut DeviceBuffer<Bf16>,
+        input: &DeviceBuffer<BFloat16>,
+        weight: &DeviceBuffer<BFloat16>,
+        output: &mut DeviceBuffer<BFloat16>,
         rows: usize,
         width: usize,
         outputs: usize,
@@ -279,13 +280,13 @@ impl Qwen3Engine {
     #[allow(clippy::too_many_arguments)]
     fn enqueue_layer_nvfp4(
         &self,
-        hidden_in: &DeviceBuffer<Bf16>,
-        hidden_out: &mut DeviceBuffer<Bf16>,
+        hidden_in: &DeviceBuffer<BFloat16>,
+        hidden_out: &mut DeviceBuffer<BFloat16>,
         rows: usize,
         layer: &OwnedNvfp4Layer,
         cache: &mut Nvfp4KvCache,
-        cos: &DeviceBuffer<Bf16>,
-        sin: &DeviceBuffer<Bf16>,
+        cos: &DeviceBuffer<BFloat16>,
+        sin: &DeviceBuffer<BFloat16>,
         s: &mut Nvfp4Scratch,
     ) -> Result<()> {
         let start = cache.len;
@@ -459,13 +460,13 @@ impl Qwen3Engine {
     #[allow(clippy::too_many_arguments)]
     fn enqueue_layer_bf16(
         &self,
-        hidden_in: &DeviceBuffer<Bf16>,
-        hidden_out: &mut DeviceBuffer<Bf16>,
+        hidden_in: &DeviceBuffer<BFloat16>,
+        hidden_out: &mut DeviceBuffer<BFloat16>,
         rows: usize,
         layer: &crate::checkpoint::OwnedBf16Layer,
         cache: &mut Nvfp4KvCache,
-        cos: &DeviceBuffer<Bf16>,
-        sin: &DeviceBuffer<Bf16>,
+        cos: &DeviceBuffer<BFloat16>,
+        sin: &DeviceBuffer<BFloat16>,
         s: &mut Nvfp4Scratch,
     ) -> Result<()> {
         let start = cache.len;
@@ -670,8 +671,8 @@ impl Qwen3Engine {
         input: &Batch<HIDDEN>,
         stack: &Qwen3Bf16Stack,
         caches: &mut [Nvfp4KvCache],
-        cos: &DeviceBuffer<Bf16>,
-        sin: &DeviceBuffer<Bf16>,
+        cos: &DeviceBuffer<BFloat16>,
+        sin: &DeviceBuffer<BFloat16>,
     ) -> Result<Batch<HIDDEN>> {
         if caches.len() != stack.layers.len() {
             return Err("BF16 layer count does not match KV cache count".into());
@@ -739,7 +740,7 @@ impl Qwen3Engine {
         Ok(out)
     }
 
-    /// Execute the `Qwen3-8B` NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`) stack over `input`.
+    /// Execute the `Qwen3-8B` NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) stack over `input`.
     ///
     /// Enqueues all 36 layers asynchronously onto `self.stream` over pre-allocated
     /// device scratch buffers without per-layer allocation or host synchronization.
@@ -748,8 +749,8 @@ impl Qwen3Engine {
         input: &Batch<HIDDEN>,
         stack: &Qwen3Nvfp4Stack,
         caches: &mut [Nvfp4KvCache],
-        cos: &DeviceBuffer<Bf16>,
-        sin: &DeviceBuffer<Bf16>,
+        cos: &DeviceBuffer<BFloat16>,
+        sin: &DeviceBuffer<BFloat16>,
     ) -> Result<Batch<HIDDEN>> {
         if caches.len() != stack.layers.len() {
             return Err("NVFP4 layer count does not match KV cache count".into());
@@ -820,7 +821,7 @@ impl Qwen3Engine {
 
 /// Compute cosine similarity between two equal-length BF16 slices in `f64`.
 #[must_use]
-pub fn cosine_similarity_bf16(a: &[Bf16], b: &[Bf16]) -> f64 {
+pub fn cosine_similarity_bf16(a: &[BFloat16], b: &[BFloat16]) -> f64 {
     let mut dot = 0.0f64;
     let mut norm_a = 0.0f64;
     let mut norm_b = 0.0f64;
@@ -835,7 +836,7 @@ pub fn cosine_similarity_bf16(a: &[Bf16], b: &[Bf16]) -> f64 {
     if denom == 0.0 { 0.0 } else { dot / denom }
 }
 
-/// Run the end-to-end `Qwen3-8B` BF16 vs. NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`) benchmark on GPU 0.
+/// Run the end-to-end `Qwen3-8B` BF16 vs. NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) benchmark on GPU 0.
 pub fn run_benchmark(
     num_layers: usize,
     prompt_len: usize,
@@ -861,8 +862,8 @@ pub fn run_benchmark(
         .map(|_| Nvfp4KvCache::new(&stream, capacity))
         .collect::<Result<_>>()?;
 
-    let prompt_host: Vec<Bf16> = (0..prompt_len * HIDDEN)
-        .map(|i| Bf16::from_f32(((i % 97) as f32 - 48.0) * 0.03125))
+    let prompt_host: Vec<BFloat16> = (0..prompt_len * HIDDEN)
+        .map(|i| BFloat16::from_f32(((i % 97) as f32 - 48.0) * 0.03125))
         .collect();
     let prompt_batch = Batch::<HIDDEN>::from_host(&stream, prompt_len, &prompt_host)?;
     let prompt_positions: Vec<u32> = (0..prompt_len as u32).collect();
@@ -917,7 +918,7 @@ pub fn run_benchmark(
     stream.synchronize()?;
     let bf16_prefill_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
-    let step_host: Vec<Bf16> = prompt_host[..HIDDEN].to_vec();
+    let step_host: Vec<BFloat16> = prompt_host[..HIDDEN].to_vec();
     let mut step_in = Batch::<HIDDEN>::from_host(&stream, 1, &step_host)?;
     let t_dec0 = Instant::now();
     for (cos, sin) in &decode_cos_sin {

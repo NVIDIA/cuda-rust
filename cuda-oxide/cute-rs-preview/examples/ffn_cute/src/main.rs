@@ -12,14 +12,14 @@ mod reference;
 
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
 use cute_rs::{
-    Bf16,
+    BFloat16,
     ffn::{Down, FfnShape, FfnWeights, Gate, ProjectionWeights, RowMajorShape, Up},
 };
 use operator::{GUARD, Result, Runner, Workspace};
 
 /// Asymmetric bounded dyadic values keep the projection reference well-conditioned.
-fn matrix(shape: RowMajorShape, seed: usize) -> Vec<Bf16> {
-    let mut data = vec![Bf16::from_bits(GUARD); shape.required_len()];
+fn matrix(shape: RowMajorShape, seed: usize) -> Vec<BFloat16> {
+    let mut data = vec![BFloat16::from_bits(GUARD); shape.required_len()];
     for row in 0..shape.rows() {
         for col in 0..shape.cols() {
             let code = ((row * 37 + col * 13 + (row ^ col) * 3 + seed * 11) % 17) as i32 - 8;
@@ -33,10 +33,10 @@ fn matrix(shape: RowMajorShape, seed: usize) -> Vec<Bf16> {
 /// Copy every allocated element and check that no logical write touched the guard.
 fn read_output(
     stream: &CudaStream,
-    data: &DeviceBuffer<Bf16>,
+    data: &DeviceBuffer<BFloat16>,
     logical: usize,
-) -> Result<Vec<Bf16>> {
-    let mut actual = vec![Bf16::from_bits(0); data.len()];
+) -> Result<Vec<BFloat16>> {
+    let mut actual = vec![BFloat16::from_bits(0); data.len()];
     data.copy_to_host(stream, &mut actual)?;
     assert!(
         actual[logical..].iter().all(|v| v.to_bits() == GUARD),
@@ -47,7 +47,7 @@ fn read_output(
 }
 
 /// Compare independent reference values, allowing one BF16 output quantum plus cancellation error.
-fn verify(label: &str, actual: &[Bf16], expected: &[Bf16], atol: f64, rtol: f64) -> f64 {
+fn verify(label: &str, actual: &[BFloat16], expected: &[BFloat16], atol: f64, rtol: f64) -> f64 {
     assert_eq!(actual.len(), expected.len());
     let mut maximum = 0.0_f64;
     for (i, (&a, &e)) in actual.iter().zip(expected).enumerate() {
@@ -159,7 +159,7 @@ fn check_pending_input(runner: &Runner, stream: &CudaStream) -> Result<()> {
     use std::time::Duration;
 
     let producer = stream.context().new_stream()?;
-    let one = [Bf16::from_bits(0x3f80)];
+    let one = [BFloat16::from_bits(0x3f80)];
     let mut input = DeviceBuffer::from_host(stream, &one)?;
     let weight = DeviceBuffer::from_host(stream, &one)?;
     let weights = FfnWeights::<1, 1>::new(

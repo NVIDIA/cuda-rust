@@ -16,7 +16,7 @@
 //! code owns seed/domain separation; greedy selection consumes no random draws.
 
 use crate::operator::Result;
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 
 /// Reportable identifier for the exact integer generator and uniform conversion policy.
 pub const RNG_VERSION: &str = "splitmix64-v1/top53-uniform";
@@ -122,7 +122,7 @@ impl<const VOCAB: usize> Sampler<VOCAB> {
     }
 
     /// Raw GPU logits cannot contain masks or nonfinite values.
-    pub fn select_bf16(&mut self, scores: &[Bf16]) -> Result<u32> {
+    pub fn select_bf16(&mut self, scores: &[BFloat16]) -> Result<u32> {
         let scores: Vec<_> = scores.iter().map(|value| value.to_f32()).collect();
         if scores.iter().any(|value| !value.is_finite()) {
             return Err("raw BF16 logits must all be finite".into());
@@ -288,10 +288,10 @@ mod tests {
         assert_eq!(
             sampler
                 .select_bf16(&[
-                    Bf16::from_bits(0x3f80),
-                    Bf16::from_bits(0x4040),
-                    Bf16::from_bits(0x4040),
-                    Bf16::from_bits(0)
+                    BFloat16::from_bits(0x3f80),
+                    BFloat16::from_bits(0x4040),
+                    BFloat16::from_bits(0x4040),
+                    BFloat16::from_bits(0)
                 ])
                 .unwrap(),
             1
@@ -301,7 +301,11 @@ mod tests {
         }
         assert!(sampler.select(&[f32::NEG_INFINITY; 4]).is_err());
         assert!(sampler.select(&[1., 2.]).is_err());
-        assert!(sampler.select_bf16(&[Bf16::from_bits(0xff80); 4]).is_err());
+        assert!(
+            sampler
+                .select_bf16(&[BFloat16::from_bits(0xff80); 4])
+                .is_err()
+        );
     }
 
     /// Compare a warped distribution and fixed uniform draws against an exported reference.
@@ -415,7 +419,7 @@ mod tests {
         let config = SamplingConfig::<4>::sample(0.9, 3, 0.8).unwrap();
         let mut bf16 = Sampler::new(config, 13);
         let mut fp32 = Sampler::new(config, 13);
-        let values = [0x3f80, 0x4000, 0x4040, 0x4080].map(Bf16::from_bits);
+        let values = [0x3f80, 0x4000, 0x4040, 0x4080].map(BFloat16::from_bits);
         for _ in 0..32 {
             assert_eq!(
                 bf16.select_bf16(&values).unwrap(),

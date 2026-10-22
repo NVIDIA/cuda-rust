@@ -114,7 +114,7 @@ impl ArgMax {
 #[must_use]
 #[inline(always)]
 pub unsafe fn argmax_bf16<L: crate::tensor::partition::IndexLayout>(
-    input: crate::tensor::partition::StridedTensor<'_, crate::numeric::Bf16, L>,
+    input: crate::tensor::partition::StridedTensor<'_, crate::numeric::BFloat16, L>,
     lane: u32,
 ) -> ArgMax {
     let values = input.local_partition::<32>(lane as usize);

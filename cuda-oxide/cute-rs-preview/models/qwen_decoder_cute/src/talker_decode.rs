@@ -15,7 +15,7 @@ use crate::model::{Batch, DecoderCache, EPSILON, ExecutionCache};
 use crate::operator::Result;
 use crate::rotary::RotarySpec;
 use cuda_core::{CudaStream, DeviceBuffer};
-use cute_rs::{Bf16, decoder::DecoderShape};
+use cute_rs::{BFloat16, decoder::DecoderShape};
 use std::sync::Arc;
 
 /// Require exact Talker layer geometry, initialized weight extents and one context.
@@ -23,7 +23,7 @@ fn validate_weights(stream: &CudaStream, weights: &TalkerWeights<'_>) -> Result<
     if weights.layers.len() != TALKER_LAYERS {
         return Err("Talker execution requires 28 layers".into());
     }
-    let context = |buffer: &DeviceBuffer<Bf16>| -> Result<()> {
+    let context = |buffer: &DeviceBuffer<BFloat16>| -> Result<()> {
         if Arc::ptr_eq(buffer.context(), stream.context()) {
             Ok(())
         } else {
@@ -80,9 +80,9 @@ pub(crate) struct TalkerDecodePlan {
     /// Exact three-axis interleaved rotary policy of the synchronous Talker.
     rotary: RotarySpec<128>,
     /// Persistent 64-value cosine row, uploaded before layer submission.
-    cos: DeviceBuffer<Bf16>,
+    cos: DeviceBuffer<BFloat16>,
     /// Matching sine row; its host source stays live through completion.
-    sin: DeviceBuffer<Bf16>,
+    sin: DeviceBuffer<BFloat16>,
     /// Sticky per-step device guard status, checked after all layers finish.
     status: DeviceBuffer<u32>,
 }
@@ -116,8 +116,8 @@ impl TalkerDecodePlan {
             modules,
             weights,
             rotary: RotarySpec::interleaved(1_000_000.0, 32768, [24, 20, 20])?,
-            cos: DeviceBuffer::from_host(&stream, &[Bf16::from_bits(0); 64])?,
-            sin: DeviceBuffer::from_host(&stream, &[Bf16::from_bits(0); 64])?,
+            cos: DeviceBuffer::from_host(&stream, &[BFloat16::from_bits(0); 64])?,
+            sin: DeviceBuffer::from_host(&stream, &[BFloat16::from_bits(0); 64])?,
             status: DeviceBuffer::from_host(&stream, &[0u32])?,
             stream,
         })

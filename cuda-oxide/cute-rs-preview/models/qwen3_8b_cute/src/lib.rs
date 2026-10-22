@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! `Qwen/Qwen3-8B` transformer decoder in `cute-rs` with BF16 and NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`) execution.
+//! `Qwen/Qwen3-8B` transformer decoder in `cute-rs` with BF16 and NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) execution.
 //!
 //! ```text
 //! Token IDs / Prompt Hidden [rows, 4096]
@@ -26,7 +26,7 @@
 /// Architectural constants and memory-footprint helpers for `Qwen/Qwen3-8B`.
 pub mod config;
 
-/// True NVFP4 (`E2M1` + `E4M3` scale, `SF_VEC = 16`) quantization and GPU projection kernels.
+/// True NVFP4 (`Float4E2M1FN` + `Float8E4M3FN` scale, `SF_VEC = 16`) quantization and GPU projection kernels.
 pub mod nvfp4;
 
 /// Multi-shard safetensors checkpoint loader and fast GPU synthetic weight generator.

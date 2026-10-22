@@ -4,16 +4,16 @@
 //! Compile-fail probe: reject swapped A and B scale roles in block-scaled MMA.
 #![feature(f16)]
 
-use cute_rs::{FragmentC, FragmentA, FragmentB, Mkl, Mxfp4BlockScaledTensor, Mxfp4TiledMma, Nkl};
+use cute_rs::{FragmentC, FragmentA, FragmentB, Mkl, Mxf4BlockScaledTensor, Mxf4TiledMma, Nkl};
 
 /// Reject swapped A and B scale roles in block-scaled MMA.
 
 fn main() {
     let values = [f16::from_bits(0); 32];
     let scales = [127u8; 2];
-    let matrix = Mxfp4BlockScaledTensor::<Mkl>::from_slices(&values, &scales, 1, 64);
-    let vector = Mxfp4BlockScaledTensor::<Nkl>::from_slices(&values, &scales, 1, 64);
-    let mma = Mxfp4TiledMma::<()>::get_slice(0);
+    let matrix = Mxf4BlockScaledTensor::<Mkl>::from_slices(&values, &scales, 1, 64);
+    let vector = Mxf4BlockScaledTensor::<Nkl>::from_slices(&values, &scales, 1, 64);
+    let mma = Mxf4TiledMma::<()>::get_slice(0);
 
     let _ = unsafe {
         mma.gemm(

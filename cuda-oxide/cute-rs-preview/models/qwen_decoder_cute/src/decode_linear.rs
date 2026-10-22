@@ -12,7 +12,7 @@ use crate::{
 };
 use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig1D, PreparedLaunch};
 use cute_rs::{
-    Bf16,
+    BFloat16,
     decoder::BiasWeights,
     ffn::{ProjectionRole, ProjectionWeights, RowMajorShape},
 };
@@ -117,7 +117,7 @@ impl Runner {
     /// allocation, and CUDA errors propagate. Successful output is dense BF16.
     pub fn project_buffer<Role: ProjectionRole, const IN: usize, const OUT: usize>(
         &self,
-        input: &DeviceBuffer<Bf16>,
+        input: &DeviceBuffer<BFloat16>,
         rows: usize,
         input_stride: usize,
         weight: &ProjectionWeights<'_, Role, IN, OUT>,
@@ -209,7 +209,7 @@ impl Runner {
     fn launch_fma_chains<Role: ProjectionRole, const IN: usize, const OUT: usize>(
         &self,
         chains: usize,
-        input: &DeviceBuffer<Bf16>,
+        input: &DeviceBuffer<BFloat16>,
         weight: &ProjectionWeights<'_, Role, IN, OUT>,
         bias: Option<&BiasWeights<'_, Role, OUT>>,
         output: &mut Batch<OUT>,
@@ -300,7 +300,7 @@ impl Runner {
     fn launch_split_k<Role: ProjectionRole, const IN: usize, const OUT: usize>(
         &self,
         slice_width: usize,
-        input: &DeviceBuffer<Bf16>,
+        input: &DeviceBuffer<BFloat16>,
         rows: usize,
         input_stride: usize,
         weight: &ProjectionWeights<'_, Role, IN, OUT>,
@@ -372,14 +372,14 @@ impl Runner {
 ///
 /// Rejects nonfinite values or absolute error above `2e-5 + 0.008 * abs(expected)`;
 /// returns the maximum absolute error. This tolerance does not prove bit identity.
-fn compare(actual: &[Bf16], expected: &[f64], label: &str) -> Result<f64> {
+fn compare(actual: &[BFloat16], expected: &[f64], label: &str) -> Result<f64> {
     if actual.len() != expected.len() || actual.is_empty() {
         return Err(format!("{label}: comparison requires equal nonempty lengths").into());
     }
     let mut maximum = 0.0f64;
     for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
         let actual = f64::from(actual.to_f32());
-        let expected = f64::from(Bf16::from_f32(*expected as f32).to_f32());
+        let expected = f64::from(BFloat16::from_f32(*expected as f32).to_f32());
         let difference = (actual - expected).abs();
         // The existing per-operation synthetic gate; no new tolerance for
         // changing the reduction order. FP64 oracle does not use warp grouping.
@@ -398,7 +398,7 @@ fn compare(actual: &[Bf16], expected: &[f64], label: &str) -> Result<f64> {
 }
 
 /// Require nonempty equal extents and exact BF16 bits against `what`.
-fn exact_bits(actual: &[Bf16], expected: &[Bf16], label: &str, what: &str) -> Result<()> {
+fn exact_bits(actual: &[BFloat16], expected: &[BFloat16], label: &str, what: &str) -> Result<()> {
     if actual.len() != expected.len() || actual.is_empty() {
         return Err(format!("{label}: exact comparison requires equal nonempty lengths").into());
     }
@@ -429,11 +429,11 @@ enum Pattern {
 /// Advance a deterministic wrapping generator and produce a finite signed BF16 test value.
 ///
 /// Exponent fields span 116 through 127; this is fixture data, not model sampling.
-fn varied_bf16(seed: &mut u32) -> Bf16 {
+fn varied_bf16(seed: &mut u32) -> BFloat16 {
     *seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
     let sign = (*seed >> 16) as u16 & 0x8000;
     let exponent = 116 + ((*seed >> 7) % 12) as u16;
-    Bf16::from_bits(sign | (exponent << 7) | (*seed as u16 & 127))
+    BFloat16::from_bits(sign | (exponent << 7) | (*seed as u16 & 127))
 }
 
 /// Run a strided projection with NaN-poisoned padding against exact and host references.
@@ -454,7 +454,7 @@ fn fixture<const IN: usize, const OUT: usize>(
     pattern: Pattern,
 ) -> Result<usize> {
     use cute_rs::ffn::Query;
-    let poison = Bf16::from_bits(0x7fc1);
+    let poison = BFloat16::from_bits(0x7fc1);
     let mut input = vec![poison; rows * input_stride + 7];
     let mut weight = vec![poison; OUT * weight_stride + 7];
     let mut bias = vec![poison; OUT + 7];
@@ -463,22 +463,22 @@ fn fixture<const IN: usize, const OUT: usize>(
         for k in 0..IN {
             input[row * input_stride + k] = match pattern {
                 Pattern::Cancellation => {
-                    Bf16::from_f32([16.0, 0.03125, -16.0, -0.015625][k % 4] * (row + 1) as f32)
+                    BFloat16::from_f32([16.0, 0.03125, -16.0, -0.015625][k % 4] * (row + 1) as f32)
                 }
                 Pattern::Regular => {
-                    Bf16::from_f32(((k * 7 + row * 11) % 41) as f32 / 64.0 - 0.3125)
+                    BFloat16::from_f32(((k * 7 + row * 11) % 41) as f32 / 64.0 - 0.3125)
                 }
                 Pattern::Varied => varied_bf16(&mut seed),
             };
         }
     }
     for column in 0..OUT {
-        bias[column] = Bf16::from_f32((column % 7) as f32 / 128.0 - 0.0234375);
+        bias[column] = BFloat16::from_f32((column % 7) as f32 / 128.0 - 0.0234375);
         for k in 0..IN {
             weight[column * weight_stride + k] = match pattern {
-                Pattern::Cancellation => Bf16::from_f32((column % 5 + 1) as f32 / 8.0),
+                Pattern::Cancellation => BFloat16::from_f32((column % 5 + 1) as f32 / 8.0),
                 Pattern::Regular => {
-                    Bf16::from_f32(((k * 13 + column * 17) % 37) as f32 / 128.0 - 0.140625)
+                    BFloat16::from_f32(((k * 13 + column * 17) % 37) as f32 / 128.0 - 0.140625)
                 }
                 Pattern::Varied => varied_bf16(&mut seed),
             };
@@ -598,7 +598,7 @@ fn fixture<const IN: usize, const OUT: usize>(
         let mut maximum = 0.0f64;
         for (actual, expected) in actual.iter().zip(&expected) {
             let actual = f64::from(actual.to_f32());
-            let expected = f64::from(Bf16::from_f32(*expected as f32).to_f32());
+            let expected = f64::from(BFloat16::from_f32(*expected as f32).to_f32());
             if !actual.is_finite() || !expected.is_finite() {
                 return Err("decode MMA bit-preservation fixture produced nonfinite values".into());
             }
@@ -653,15 +653,15 @@ fn split_k_single_slice_identity(runner: &Runner) -> Result<usize> {
         let weight_dev = DeviceBuffer::from_host(&runner.stream, &weight)?;
         let mut plain = DeviceBuffer::from_host(
             &runner.stream,
-            &vec![Bf16::from_bits(0x7fc1); rows * outputs],
+            &vec![BFloat16::from_bits(0x7fc1); rows * outputs],
         )?;
         let mut single = DeviceBuffer::from_host(
             &runner.stream,
-            &vec![Bf16::from_bits(0x7fc1); rows * outputs],
+            &vec![BFloat16::from_bits(0x7fc1); rows * outputs],
         )?;
         let mut sliced = DeviceBuffer::from_host(
             &runner.stream,
-            &vec![Bf16::from_bits(0x7fc1); rows * outputs],
+            &vec![BFloat16::from_bits(0x7fc1); rows * outputs],
         )?;
         let blocks = outputs.div_ceil(8) as u32;
         let config = LaunchConfig1D::new(blocks, 32, 0);
@@ -774,21 +774,21 @@ pub fn validate(stream: Arc<CudaStream>) -> Result<()> {
     let input = DeviceBuffer::from_host(
         &runner.stream,
         &[
-            Bf16::from_f32(1.0),
-            Bf16::from_f32(1.0 / 256.0),
-            Bf16::from_f32(-1.0),
-            Bf16::from_f32(-1.0 / 256.0),
+            BFloat16::from_f32(1.0),
+            BFloat16::from_f32(1.0 / 256.0),
+            BFloat16::from_f32(-1.0),
+            BFloat16::from_f32(-1.0 / 256.0),
         ],
     )?;
-    let weight = DeviceBuffer::from_host(&runner.stream, &[Bf16::from_f32(1.0); 2])?;
-    let bias = DeviceBuffer::from_host(&runner.stream, &[Bf16::from_f32(1.0 / 1024.0)])?;
+    let weight = DeviceBuffer::from_host(&runner.stream, &[BFloat16::from_f32(1.0); 2])?;
+    let bias = DeviceBuffer::from_host(&runner.stream, &[BFloat16::from_f32(1.0 / 1024.0)])?;
     let weights = ProjectionWeights::<Query, 2, 1>::new(&weight, 2)?;
     let biases = BiasWeights::<Query, 1>::new(&bias)?;
     let output = runner
         .project_buffer(&input, 2, 2, &weights, Some(&biases))?
         .read(&runner.stream)?;
-    if output[0].to_bits() != Bf16::from_f32(1.0078125).to_bits()
-        || output[1].to_bits() != Bf16::from_f32(-1.0).to_bits()
+    if output[0].to_bits() != BFloat16::from_f32(1.0078125).to_bits()
+        || output[1].to_bits() != BFloat16::from_f32(-1.0).to_bits()
     {
         return Err("decode linear lost FP32 bias-before-BF16 rounding".into());
     }
@@ -805,19 +805,20 @@ pub fn validate(stream: Arc<CudaStream>) -> Result<()> {
     // Put the same halfway dots in a full 2x16 -> 8 packed tile. Padding the
     // remaining K terms with zero keeps the expected results exact; rounding
     // the positive dot before bias would incorrectly produce 1.0 in row zero.
-    let mut packed_input = [Bf16::from_bits(0); 2 * 16];
-    packed_input[0] = Bf16::from_f32(1.0);
-    packed_input[1] = Bf16::from_f32(1.0 / 256.0);
-    packed_input[16] = Bf16::from_f32(-1.0);
-    packed_input[17] = Bf16::from_f32(-1.0 / 256.0);
-    let mut packed_weight = [Bf16::from_bits(0); 8 * 16];
+    let mut packed_input = [BFloat16::from_bits(0); 2 * 16];
+    packed_input[0] = BFloat16::from_f32(1.0);
+    packed_input[1] = BFloat16::from_f32(1.0 / 256.0);
+    packed_input[16] = BFloat16::from_f32(-1.0);
+    packed_input[17] = BFloat16::from_f32(-1.0 / 256.0);
+    let mut packed_weight = [BFloat16::from_bits(0); 8 * 16];
     for column in 0..8 {
-        packed_weight[column * 16] = Bf16::from_f32(1.0);
-        packed_weight[column * 16 + 1] = Bf16::from_f32(1.0);
+        packed_weight[column * 16] = BFloat16::from_f32(1.0);
+        packed_weight[column * 16 + 1] = BFloat16::from_f32(1.0);
     }
     let packed_input = DeviceBuffer::from_host(&runner.stream, &packed_input)?;
     let packed_weight = DeviceBuffer::from_host(&runner.stream, &packed_weight)?;
-    let packed_bias = DeviceBuffer::from_host(&runner.stream, &[Bf16::from_f32(1.0 / 1024.0); 8])?;
+    let packed_bias =
+        DeviceBuffer::from_host(&runner.stream, &[BFloat16::from_f32(1.0 / 1024.0); 8])?;
     let packed_weights = ProjectionWeights::<Query, 16, 8>::new(&packed_weight, 16)?;
     let packed_biases = BiasWeights::<Query, 8>::new(&packed_bias)?;
     let packed_output = runner
@@ -827,7 +828,7 @@ pub fn validate(stream: Arc<CudaStream>) -> Result<()> {
         return Err("decode packed bias fixture returned an unexpected output extent".into());
     }
     for (index, actual) in packed_output.iter().enumerate() {
-        let expected = Bf16::from_f32(if index < 8 { 1.0078125 } else { -1.0 });
+        let expected = BFloat16::from_f32(if index < 8 { 1.0078125 } else { -1.0 });
         if actual.to_bits() != expected.to_bits() {
             return Err(format!(
                 "decode packed linear output {index} lost FP32 bias-before-BF16 rounding"
@@ -863,17 +864,17 @@ mod tests {
     /// Ensure nonfinite and inaccurate results fail, and bit identity is stricter than tolerance.
     #[test]
     fn fp64_oracle_rejects_nonfinite_and_wrong_results() {
-        assert!(compare(&[Bf16::from_f32(1.0)], &[1.0], "test").is_ok());
-        assert!(compare(&[Bf16::from_f32(1.0)], &[0.0], "test").is_err());
-        assert!(compare(&[Bf16::from_bits(0x7fc1)], &[0.0], "test").is_err());
+        assert!(compare(&[BFloat16::from_f32(1.0)], &[1.0], "test").is_ok());
+        assert!(compare(&[BFloat16::from_f32(1.0)], &[0.0], "test").is_err());
+        assert!(compare(&[BFloat16::from_bits(0x7fc1)], &[0.0], "test").is_err());
         for expected in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert!(compare(&[Bf16::from_f32(0.0)], &[expected], "test").is_err());
+            assert!(compare(&[BFloat16::from_f32(0.0)], &[expected], "test").is_err());
         }
         assert!(compare(&[], &[], "test").is_err());
         // A one-ULP BF16 change fits the numerical oracle's bound but must
         // still fail the arithmetic-preservation gate.
-        let one = [Bf16::from_f32(1.0)];
-        let next = [Bf16::from_f32(1.0078125)];
+        let one = [BFloat16::from_f32(1.0)];
+        let next = [BFloat16::from_f32(1.0078125)];
         assert!(compare(&next, &[1.0], "test").is_ok());
         assert!(exact_bits(&next, &one, "test", "fixture").is_err());
         assert!(exact_bits(&one, &one, "test", "fixture").is_ok());

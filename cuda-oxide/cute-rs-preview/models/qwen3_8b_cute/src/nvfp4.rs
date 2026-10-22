@@ -3,20 +3,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! True NVFP4 (`E2M1` + `E4M3` scale, `SF_VEC = 16`) quantization and GPU projection kernels.
+//! True NVFP4 (`Float4E2M1FN` + `Float8E4M3FN` scale, `SF_VEC = 16`) quantization and GPU projection kernels.
 //!
 //! Each 16-element K block is represented by:
-//! - Eight packed bytes (`16` 4-bit [`E2M1`] nibbles in `[-6.0, 6.0]`), and
-//! - One 8-bit [`E4M3`] (`Float8E4M3FN`) block scale stored in Blackwell's canonical
+//! - Eight packed bytes (`16` 4-bit [`Float4E2M1FN`] nibbles in `[-6.0, 6.0]`), and
+//! - One 8-bit [`Float8E4M3FN`] block scale stored in Blackwell's canonical
 //!   `(32, 4)` 512-byte scale-atom layout ([`cute_rs::Sm1xxBlockScaleKMajor`]).
 //!
 //! # Example
 //!
 //! ```
-//! use cute_rs::Bf16;
+//! use cute_rs::BFloat16;
 //! use qwen3_8b_cute::nvfp4::{dequantize_nvfp4_row, quantize_matrix_nvfp4};
 //!
-//! let row: Vec<Bf16> = (0..64).map(|i| Bf16::from_f32((i as f32 - 32.0) * 0.125)).collect();
+//! let row: Vec<BFloat16> = (0..64).map(|i| BFloat16::from_f32((i as f32 - 32.0) * 0.125)).collect();
 //! let (values, scales) = quantize_matrix_nvfp4(&row, 1, 64).unwrap();
 //! let reconstructed = dequantize_nvfp4_row(&values, &scales, 0, 64);
 //! assert_eq!(reconstructed.len(), 64);
@@ -33,7 +33,9 @@ use cute_rs::block_scaled::{
 };
 use cute_rs::ffn::{ProjectionRole, ProjectionWeights};
 use cute_rs::tensor::partition::StridedTensorMut;
-use cute_rs::{Bf16, BlockScaledTensor, E2M1, E4M3, KMajor, Mkl, Nkl, e4m3_to_f32};
+use cute_rs::{
+    BFloat16, BlockScaledTensor, Float4E2M1FN, Float8E4M3FN, KMajor, Mkl, Nkl, e4m3_to_f32,
+};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -60,7 +62,7 @@ pub fn f32_to_e4m3(value: f32) -> u8 {
     best_code
 }
 
-/// Encode one signed `f32` value into its nearest 4-bit `E2M1` nibble (`bits 3..0`).
+/// Encode one signed `f32` value into its nearest 4-bit `Float4E2M1FN` nibble (`bits 3..0`).
 #[must_use]
 #[inline(always)]
 pub fn f32_to_e2m1(value: f32) -> u8 {
@@ -97,8 +99,12 @@ pub const fn canonical_scale_offset(rest_k: usize, row: usize, group: usize) -> 
         + (group & 3)
 }
 
-/// Quantize a dense `[rows, k]` BF16 matrix into packed `E2M1` bytes and canonical `E4M3` scales.
-pub fn quantize_matrix_nvfp4(matrix: &[Bf16], rows: usize, k: usize) -> Result<(Vec<u8>, Vec<u8>)> {
+/// Quantize a dense `[rows, k]` BF16 matrix into packed `Float4E2M1FN` bytes and canonical `Float8E4M3FN` scales.
+pub fn quantize_matrix_nvfp4(
+    matrix: &[BFloat16],
+    rows: usize,
+    k: usize,
+) -> Result<(Vec<u8>, Vec<u8>)> {
     if rows == 0 || k == 0 || !k.is_multiple_of(64) {
         return Err("NVFP4 quantization requires positive rows and K divisible by 64".into());
     }
@@ -143,7 +149,7 @@ pub fn quantize_matrix_nvfp4(matrix: &[Bf16], rows: usize, k: usize) -> Result<(
     Ok((values, scales))
 }
 
-/// Reconstruct one logical row of `k` `f32` values from NVFP4 `values` and canonical `E4M3` `scales`.
+/// Reconstruct one logical row of `k` `f32` values from NVFP4 `values` and canonical `Float8E4M3FN` `scales`.
 #[must_use]
 pub fn dequantize_nvfp4_row(values: &[u8], scales: &[u8], row: usize, k: usize) -> Vec<f32> {
     let packed_k = k / 2;
@@ -154,7 +160,7 @@ pub fn dequantize_nvfp4_row(values: &[u8], scales: &[u8], row: usize, k: usize) 
         let scale = e4m3_to_f32(scales[canonical_scale_offset(rest_k, row, g)]);
         for pair in 0..8 {
             let byte = values[row * packed_k + g * 8 + pair];
-            let (lo, hi) = cute_rs::PackedE2M1x2::from_bits(byte).to_f32x2();
+            let (lo, hi) = cute_rs::Float4E2M1FNx2::from_bits(byte).to_f32x2();
             out.push(lo * scale);
             out.push(hi * scale);
         }
@@ -206,10 +212,10 @@ pub mod kernels {
         (((exp as u8) & 0x0f) << 3) | ((mant as u8) & 0x07)
     }
 
-    /// Quantize `[rows, k]` BF16 values into packed `E2M1` bytes and canonical `E4M3` scales.
+    /// Quantize `[rows, k]` BF16 values into packed `Float4E2M1FN` bytes and canonical `Float8E4M3FN` scales.
     #[kernel]
     pub fn quantize_activations_nvfp4(
-        input: &[Bf16],
+        input: &[BFloat16],
         mut out_values: DisjointSlice<u8>,
         mut out_scales: DisjointSlice<u8>,
         rows: usize,
@@ -276,7 +282,7 @@ pub mod kernels {
     /// Project NVFP4-quantized `[rows, k]` activations against `[outputs, k]` NVFP4 weights.
     ///
     /// One 32-lane warp cooperates across the `K=64` tiles of one `(row, out_col)` output
-    /// Hardware-lowered NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`) linear projection.
+    /// Hardware-lowered NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) linear projection.
     ///
     /// Maps `128` threads per CTA to `128` contiguous output columns (`out_col`), matching
     /// the `128`-row canonical `(32, 4)` Blackwell scale atom (`Sm1xxBlockScaleKMajor`),
@@ -288,7 +294,7 @@ pub mod kernels {
         weight_scales: &[u8],
         input_values: &[u8],
         input_scales: &[u8],
-        mut output: DisjointSlice<Bf16>,
+        mut output: DisjointSlice<BFloat16>,
         rows: usize,
         k: usize,
         outputs: usize,
@@ -296,13 +302,13 @@ pub mod kernels {
         let out_col = (thread::blockIdx_x() as usize) * 128 + (thread::threadIdx_x() as usize);
         let row = thread::blockIdx_y() as usize;
 
-        let weights = BlockScaledTensor::<E2M1, E4M3, 16, KMajor<Mkl>>::from_slices(
+        let weights = BlockScaledTensor::<Float4E2M1FN, Float8E4M3FN, 16, KMajor<Mkl>>::from_slices(
             weight_values,
             weight_scales,
             outputs,
             k,
         );
-        let inputs = BlockScaledTensor::<E2M1, E4M3, 16, KMajor<Nkl>>::from_slices(
+        let inputs = BlockScaledTensor::<Float4E2M1FN, Float8E4M3FN, 16, KMajor<Nkl>>::from_slices(
             input_values,
             input_scales,
             rows,
@@ -324,12 +330,12 @@ pub mod kernels {
         unsafe {
             out_tensor.store_at(
                 row * outputs + out_col,
-                Bf16::from_f32(acc * (1.0 / 1024.0)),
+                BFloat16::from_f32(acc * (1.0 / 1024.0)),
             );
         }
     }
 
-    /// Warp-cooperative NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`) decode projection for `rows <= 2`.
+    /// Warp-cooperative NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) decode projection for `rows <= 2`.
     ///
     /// One 32-lane warp cooperates across `K=64` tiles for each `(row, out_col)` output element
     /// using hardware `cute.scaled_view_load` (`nvgpu.cvt_fpext`) and [`cute_rs::arch::warp_reduction_sum_f32`],
@@ -341,7 +347,7 @@ pub mod kernels {
         weight_scales: &[u8],
         input_values: &[u8],
         input_scales: &[u8],
-        mut output: DisjointSlice<Bf16>,
+        mut output: DisjointSlice<BFloat16>,
         rows: usize,
         k: usize,
         outputs: usize,
@@ -356,13 +362,13 @@ pub mod kernels {
         let row = warp_id / outputs;
         let out_col = warp_id % outputs;
 
-        let weights = BlockScaledTensor::<E2M1, E4M3, 16, KMajor<Mkl>>::from_slices(
+        let weights = BlockScaledTensor::<Float4E2M1FN, Float8E4M3FN, 16, KMajor<Mkl>>::from_slices(
             weight_values,
             weight_scales,
             outputs,
             k,
         );
-        let inputs = BlockScaledTensor::<E2M1, E4M3, 16, KMajor<Nkl>>::from_slices(
+        let inputs = BlockScaledTensor::<Float4E2M1FN, Float8E4M3FN, 16, KMajor<Nkl>>::from_slices(
             input_values,
             input_scales,
             rows,
@@ -384,7 +390,7 @@ pub mod kernels {
         if lane == 0 {
             let mut out_tensor = StridedTensorMut::from_disjoint_slice(&mut output);
             unsafe {
-                out_tensor.store_at(row * outputs + out_col, Bf16::from_f32(sum));
+                out_tensor.store_at(row * outputs + out_col, BFloat16::from_f32(sum));
             }
         }
     }
@@ -392,9 +398,9 @@ pub mod kernels {
 
 /// Owned device buffers for an NVFP4-quantized `[OUT, IN]` linear projection matrix.
 pub struct Nvfp4Projection<Role: ProjectionRole, const IN: usize, const OUT: usize> {
-    /// Packed `E2M1` weight values (`OUT * (IN / 2)` bytes).
+    /// Packed `Float4E2M1FN` weight values (`OUT * (IN / 2)` bytes).
     values: DeviceBuffer<u8>,
-    /// Canonical `(32, 4)` `E4M3` block scales (`1` byte per 16 K elements).
+    /// Canonical `(32, 4)` `Float8E4M3FN` block scales (`1` byte per 16 K elements).
     scales: DeviceBuffer<u8>,
     /// Retains the semantic projection role (`Query`, `Key`, `Value`, `Gate`, `Up`, `Down`, etc.).
     role: PhantomData<Role>,
@@ -436,7 +442,7 @@ impl<Role: ProjectionRole, const IN: usize, const OUT: usize> Nvfp4Projection<Ro
         })
     }
 
-    /// Total device bytes occupied by the packed `E2M1` values and `E4M3` scales.
+    /// Total device bytes occupied by the packed `Float4E2M1FN` values and `Float8E4M3FN` scales.
     #[must_use]
     pub fn byte_len(&self) -> usize {
         self.values.len() + self.scales.len()
@@ -448,7 +454,7 @@ const MAX_SCRATCH_ROWS: usize = 256;
 /// Maximum input K dimension (`INTERMEDIATE = 12288`) for pre-allocated activation quantization scratch.
 const MAX_SCRATCH_K: usize = 12_288;
 
-/// GPU runner for NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`) linear projections with pooled buffers.
+/// GPU runner for NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) linear projections with pooled buffers.
 pub struct Nvfp4Runner {
     /// Stream used for quantization and projection launches.
     stream: Arc<CudaStream>,
@@ -456,9 +462,9 @@ pub struct Nvfp4Runner {
     module: kernels::LoadedModule,
     /// Reusable BF16 output buffer pool.
     pool: crate::model::BufferPool,
-    /// Pre-allocated device buffer for quantized activation `E2M1` bytes.
+    /// Pre-allocated device buffer for quantized activation `Float4E2M1FN` bytes.
     act_values: std::sync::Mutex<DeviceBuffer<u8>>,
-    /// Pre-allocated device buffer for quantized activation `E4M3` scales.
+    /// Pre-allocated device buffer for quantized activation `Float8E4M3FN` scales.
     act_scales: std::sync::Mutex<DeviceBuffer<u8>>,
 }
 
@@ -546,7 +552,7 @@ impl Nvfp4Runner {
     /// Quantize `rows` of `IN`-wide BF16 activations into the runner's internal scratch.
     fn quantize_into_scratch(
         &self,
-        input_buffer: &DeviceBuffer<Bf16>,
+        input_buffer: &DeviceBuffer<BFloat16>,
         rows: usize,
         in_width: usize,
         act_values: &mut DeviceBuffer<u8>,
@@ -582,7 +588,7 @@ impl Nvfp4Runner {
         act_scales: &DeviceBuffer<u8>,
         rows: usize,
         weight: &Nvfp4Projection<Role, IN, OUT>,
-        output: &mut DeviceBuffer<Bf16>,
+        output: &mut DeviceBuffer<BFloat16>,
     ) -> Result<()> {
         if rows <= 64 {
             let total_outputs = rows * OUT;
@@ -629,7 +635,7 @@ impl Nvfp4Runner {
         Ok(())
     }
 
-    /// Quantize `input` once and project Q, K, and V in NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`).
+    /// Quantize `input` once and project Q, K, and V in NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`).
     pub fn project_qkv<
         QRole: ProjectionRole,
         KRole: ProjectionRole,
@@ -657,7 +663,7 @@ impl Nvfp4Runner {
         Ok((q, k, v))
     }
 
-    /// Quantize `input` once and project SwiGLU `gate` and `up` in NVFP4 (`E2M1` + `E4M3`).
+    /// Quantize `input` once and project SwiGLU `gate` and `up` in NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`).
     pub fn project_gate_up<
         GRole: ProjectionRole,
         URole: ProjectionRole,
@@ -689,7 +695,7 @@ impl Nvfp4Runner {
     /// Quantize `rows` of `IN`-wide BF16 activations from `input_buffer` and project through `weight`.
     pub fn project_buffer<Role: ProjectionRole, const IN: usize, const OUT: usize>(
         &self,
-        input_buffer: &DeviceBuffer<Bf16>,
+        input_buffer: &DeviceBuffer<BFloat16>,
         rows: usize,
         weight: &Nvfp4Projection<Role, IN, OUT>,
     ) -> Result<Batch<OUT>> {
@@ -717,14 +723,14 @@ impl Nvfp4Runner {
         const KV_OUT: usize,
     >(
         &self,
-        input_buffer: &DeviceBuffer<Bf16>,
+        input_buffer: &DeviceBuffer<BFloat16>,
         rows: usize,
         q_weight: &Nvfp4Projection<QRole, IN, Q_OUT>,
         k_weight: &Nvfp4Projection<KRole, IN, KV_OUT>,
         v_weight: &Nvfp4Projection<VRole, IN, KV_OUT>,
-        q_out: &mut DeviceBuffer<Bf16>,
-        k_out: &mut DeviceBuffer<Bf16>,
-        v_out: &mut DeviceBuffer<Bf16>,
+        q_out: &mut DeviceBuffer<BFloat16>,
+        k_out: &mut DeviceBuffer<BFloat16>,
+        v_out: &mut DeviceBuffer<BFloat16>,
     ) -> Result<()> {
         let mut act_values = self.act_values.lock().map_err(|_| "poisoned scratch")?;
         let mut act_scales = self.act_scales.lock().map_err(|_| "poisoned scratch")?;
@@ -744,12 +750,12 @@ impl Nvfp4Runner {
         const OUT: usize,
     >(
         &self,
-        input_buffer: &DeviceBuffer<Bf16>,
+        input_buffer: &DeviceBuffer<BFloat16>,
         rows: usize,
         gate_weight: &Nvfp4Projection<GRole, IN, OUT>,
         up_weight: &Nvfp4Projection<URole, IN, OUT>,
-        gate_out: &mut DeviceBuffer<Bf16>,
-        up_out: &mut DeviceBuffer<Bf16>,
+        gate_out: &mut DeviceBuffer<BFloat16>,
+        up_out: &mut DeviceBuffer<BFloat16>,
     ) -> Result<()> {
         let mut act_values = self.act_values.lock().map_err(|_| "poisoned scratch")?;
         let mut act_scales = self.act_scales.lock().map_err(|_| "poisoned scratch")?;
@@ -762,10 +768,10 @@ impl Nvfp4Runner {
     /// Asynchronously quantize `input_buffer` and project through `weight` on `self.stream` without allocation or sync.
     pub fn enqueue_project<Role: ProjectionRole, const IN: usize, const OUT: usize>(
         &self,
-        input_buffer: &DeviceBuffer<Bf16>,
+        input_buffer: &DeviceBuffer<BFloat16>,
         rows: usize,
         weight: &Nvfp4Projection<Role, IN, OUT>,
-        output: &mut DeviceBuffer<Bf16>,
+        output: &mut DeviceBuffer<BFloat16>,
     ) -> Result<()> {
         let mut act_values = self.act_values.lock().map_err(|_| "poisoned scratch")?;
         let mut act_scales = self.act_scales.lock().map_err(|_| "poisoned scratch")?;
@@ -775,7 +781,7 @@ impl Nvfp4Runner {
     }
 }
 
-/// CPU unit tests for NVFP4 (`E2M1` + `E4M3` scale, `SF_VEC = 16`) encoding and block scaling.
+/// CPU unit tests for NVFP4 (`Float4E2M1FN` + `Float8E4M3FN` scale, `SF_VEC = 16`) encoding and block scaling.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -799,13 +805,13 @@ mod tests {
         let mut row = Vec::with_capacity(64);
         for i in 0..64 {
             let val = ((i as f32) - 32.0) * 0.25;
-            row.push(Bf16::from_f32(val));
+            row.push(BFloat16::from_f32(val));
         }
         let (values, scales) = quantize_matrix_nvfp4(&row, 1, 64).unwrap();
         assert_eq!(values.len(), 32);
         assert_eq!(scales.len(), CANONICAL_SCALE_ATOM_BYTES);
         let recon = dequantize_nvfp4_row(&values, &scales, 0, 64);
-        let recon_bf16: Vec<Bf16> = recon.iter().copied().map(Bf16::from_f32).collect();
+        let recon_bf16: Vec<BFloat16> = recon.iter().copied().map(BFloat16::from_f32).collect();
         let cos = crate::benchmark::cosine_similarity_bf16(&row, &recon_bf16);
         assert!(cos > 0.99, "expected high cosine similarity, got {cos}");
     }

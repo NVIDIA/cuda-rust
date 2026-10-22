@@ -7,7 +7,7 @@
 
 use core::marker::PhantomData;
 
-/// The two [`UE8M0`](crate::numeric::UE8M0) scales used by one K=64 MXFP4 MMA.
+/// The two [`Float8E8M0FNU`](crate::numeric::Float8E8M0FNU) scales used by one K=64 MXFP4 MMA.
 ///
 /// Each scale covers 32 K values:
 ///
@@ -99,7 +99,7 @@ impl<Mode> ScalePack4<Mode> {
     }
 }
 
-/// Four [`E4M3`](crate::numeric::E4M3) scales used by one K=64 NVFP4 MMA (`SF_VEC = 16`).
+/// Four [`Float8E4M3FN`](crate::numeric::Float8E4M3FN) scales used by one K=64 NVFP4 MMA (`SF_VEC = 16`).
 ///
 /// Each scale covers 16 consecutive K values:
 ///

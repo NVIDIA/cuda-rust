@@ -11,14 +11,14 @@ use crate::generation::{self, TALKER_LAYERS, TalkerStep};
 use crate::model::{Batch, DecoderCache, Runner};
 use crate::operator::Result;
 use cuda_core::{CudaContext, CudaStream};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 use std::sync::Arc;
 
 /// Complete K/V backing arrays per layer, including unused capacity and guards.
-type Snapshots = Vec<(Vec<Bf16>, Vec<Bf16>)>;
+type Snapshots = Vec<(Vec<BFloat16>, Vec<BFloat16>)>;
 
 /// Reject different extents or BF16 payloads, including differing NaN guard bits.
-fn same_bits(actual: &[Bf16], expected: &[Bf16], label: &str) -> Result<()> {
+fn same_bits(actual: &[BFloat16], expected: &[BFloat16], label: &str) -> Result<()> {
     if actual.len() != expected.len() {
         return Err(format!("{label}: extent {} != {}", actual.len(), expected.len()).into());
     }
@@ -103,7 +103,7 @@ fn input(stream: &CudaStream, rows: usize, seed: usize) -> Result<Batch<2048>> {
         .map(|index| {
             let row = index / 2048;
             let column = index % 2048;
-            Bf16::from_f32(
+            BFloat16::from_f32(
                 ((column * (17 + seed) + row * 29 + seed * 13) % 113) as f32 / 64.0 - 0.875,
             )
         })
@@ -199,7 +199,7 @@ fn foreign_producer(
     let positions = positions(plan.len(), 1);
     let expected =
         generation::talker_step(runner, &weights.talker()?, original, &source, &positions)?;
-    let mut delayed = Batch::from_host(stream, 1, &[Bf16::from_bits(0x7fc1); 2048])?;
+    let mut delayed = Batch::from_host(stream, 1, &[BFloat16::from_bits(0x7fc1); 2048])?;
     let output = TalkerStep {
         last_hidden: Batch::allocate(stream, 1)?,
         logits: Batch::allocate(stream, 1)?,

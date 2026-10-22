@@ -20,13 +20,13 @@
 //!
 //! ```text
 //! logical value       storage bits
-//! E2M1                u8   holds 2 FP4 values
-//! UE8M0               u8   holds 1 scale
+//! Float4E2M1FN        u8   holds 2 FP4 values
+//! Float8E8M0FNU       u8   holds 1 scale
 //! Mxf4E2M1            f16  holds 4 FP4 values
 //! UE8M0x4             u32  holds 4 scales
 //! ```
 //!
-//! [`PackedE2M1x2`] and [`UE8M0x2`] represent values already loaded into a
+//! [`Float4E2M1FNx2`] and [`UE8M0x2`] represent values already loaded into a
 //! register. Their conversion methods describe the numeric result without
 //! naming a backend instruction. CuTe-aware compilers retain the enclosing
 //! high-level operation and choose the implementation for their backend.
@@ -40,9 +40,9 @@ use crate::tensor::TensorElement;
 /// are supplied. Every bit pattern is valid, including signed zero and NaNs.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug)]
-pub struct Bf16(#[doc = "The unchanged IEEE-style BF16 storage bits."] u16);
+pub struct BFloat16(#[doc = "The unchanged IEEE-style BF16 storage bits."] u16);
 
-impl Bf16 {
+impl BFloat16 {
     /// Preserve an existing BF16 bit pattern without conversion.
     #[must_use]
     #[inline(always)]
@@ -74,7 +74,7 @@ impl Bf16 {
     }
 }
 
-impl TensorElement<Bf16> for Bf16 {}
+impl TensorElement<BFloat16> for BFloat16 {}
 
 /// Evaluate SiLU using stable FP32 sigmoid branches, then round once to BF16.
 ///
@@ -83,7 +83,7 @@ impl TensorElement<Bf16> for Bf16 {}
 /// composing it with a later product (for example, a gated activation).
 #[must_use]
 #[inline(always)]
-pub fn silu_bf16(value: Bf16) -> Bf16 {
+pub fn silu_bf16(value: BFloat16) -> BFloat16 {
     let value = value.to_f32();
     let sigmoid = if value >= 0.0 {
         let e = ctm_rs::float::ex2_approx_f32(-value * core::f32::consts::LOG2_E);
@@ -92,12 +92,12 @@ pub fn silu_bf16(value: Bf16) -> Bf16 {
         let e = ctm_rs::float::ex2_approx_f32(value * core::f32::consts::LOG2_E);
         e * ctm_rs::float::rcp_approx_ftz_f32(1.0 + e)
     };
-    Bf16::from_f32(value * sigmoid)
+    BFloat16::from_f32(value * sigmoid)
 }
 
 // SAFETY: repr(transparent) over u16, no padding, references or invalid patterns.
 #[cfg(feature = "host")]
-unsafe impl cuda_core::DeviceCopy for Bf16 {}
+unsafe impl cuda_core::DeviceCopy for BFloat16 {}
 
 /// One logical `Float4E2M1FN` value, also called E2M1 or FP4.
 ///
@@ -107,7 +107,7 @@ unsafe impl cuda_core::DeviceCopy for Bf16 {}
 ///
 /// Each value uses four bits, so one `u8` storage byte holds two values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct E2M1;
+pub struct Float4E2M1FN;
 
 /// One unsigned `Float8E8M0FNU` scale, also called UE8M0.
 ///
@@ -117,7 +117,7 @@ pub struct E2M1;
 ///
 /// It has no sign or fraction bits. The all-ones byte represents NaN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UE8M0;
+pub struct Float8E8M0FNU;
 
 /// One `Float8E4M3FN` scale, also called E4M3 (used by NVFP4 block scaling).
 ///
@@ -125,12 +125,12 @@ pub struct UE8M0;
 /// 8 bits: [sign][4-bit exponent][3-bit mantissa]
 /// ```
 ///
-/// Unlike [`UE8M0`], E4M3 carries three fraction bits so each 16-element NVFP4
+/// Unlike [`Float8E8M0FNU`], E4M3 carries three fraction bits so each 16-element NVFP4
 /// block scale can represent fractional steps such as `1.5` (`max_val / 6.0`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct E4M3;
+pub struct Float8E4M3FN;
 
-/// Four neighboring [`UE8M0`] scale bytes carried in one `u32`.
+/// Four neighboring [`Float8E8M0FNU`] scale bytes carried in one `u32`.
 ///
 /// ```text
 /// u32: [scale 3][scale 2][scale 1][scale 0]
@@ -142,7 +142,7 @@ pub struct E4M3;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UE8M0x4;
 
-/// Four neighboring [`E4M3`] scale bytes carried in one `u32` (covering K=64 at SF=16).
+/// Four neighboring [`Float8E4M3FN`] scale bytes carried in one `u32` (covering K=64 at SF=16).
 ///
 /// ```text
 /// u32: [scale 3][scale 2][scale 1][scale 0]
@@ -154,7 +154,7 @@ pub struct UE8M0x4;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct E4M3x4;
 
-/// Four neighboring [`E2M1`] values packed for an MXFP4 MMA instruction.
+/// Four neighboring [`Float4E2M1FN`] values packed for an MXFP4 MMA instruction.
 ///
 /// The four nibbles use the bits of one `f16` storage value. It is only a
 /// 16-bit box; its bits do **not** represent an FP16 number.
@@ -165,14 +165,14 @@ pub struct E4M3x4;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Mxf4E2M1;
 
-impl TensorElement<u8> for E2M1 {}
-impl TensorElement<u8> for UE8M0 {}
-impl TensorElement<u8> for E4M3 {}
+impl TensorElement<u8> for Float4E2M1FN {}
+impl TensorElement<u8> for Float8E8M0FNU {}
+impl TensorElement<u8> for Float8E4M3FN {}
 impl TensorElement<f16> for Mxf4E2M1 {}
 impl TensorElement<u32> for UE8M0x4 {}
 impl TensorElement<u32> for E4M3x4 {}
 
-/// Two [`E2M1`] values packed into one byte.
+/// Two [`Float4E2M1FN`] values packed into one byte.
 ///
 /// ```text
 /// bits 7..4 = value 1
@@ -182,9 +182,9 @@ impl TensorElement<u32> for E4M3x4 {}
 /// Every bit pattern is valid, including positive and negative zero.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PackedE2M1x2(#[doc = "Low and high FP4 nibbles preserved in one byte."] u8);
+pub struct Float4E2M1FNx2(#[doc = "Low and high FP4 nibbles preserved in one byte."] u8);
 
-impl PackedE2M1x2 {
+impl Float4E2M1FNx2 {
     /// Treat `bits` as two packed E2M1 values without changing them.
     #[must_use]
     #[inline(always)]
@@ -213,7 +213,7 @@ impl PackedE2M1x2 {
     }
 }
 
-/// Two [`UE8M0`] scales packed into one 16-bit register.
+/// Two [`Float8E8M0FNU`] scales packed into one 16-bit register.
 ///
 /// ```text
 /// bits 15..8 = scale 1
@@ -264,7 +264,7 @@ impl UE8M0x2 {
     }
 }
 
-/// Two [`E4M3`] (`Float8E4M3FN`) scales packed into one 16-bit register.
+/// Two [`Float8E4M3FN`] scales packed into one 16-bit register.
 ///
 /// ```text
 /// bits 15..8 = scale 1 (K group 1)
@@ -374,7 +374,7 @@ mod tests {
     #[test]
     fn e2m1_pair_preserves_all_bits() {
         for bits in 0u8..=u8::MAX {
-            assert_eq!(PackedE2M1x2::from_bits(bits).to_bits(), bits);
+            assert_eq!(Float4E2M1FNx2::from_bits(bits).to_bits(), bits);
         }
     }
 

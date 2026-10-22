@@ -12,7 +12,7 @@ use super::{
 use crate::copy::cooperative::GmemMatrix;
 use crate::copy::tiled::GlobalCopyTensor;
 use crate::markers::LeadingDim;
-use crate::numeric::{E2M1, E4M3, E4M3x4, Mxf4E2M1, UE8M0, UE8M0x4};
+use crate::numeric::{E4M3x4, Float4E2M1FN, Float8E4M3FN, Float8E8M0FNU, Mxf4E2M1, UE8M0x4};
 use crate::tensor::{Tensor, TensorElement};
 use core::marker::PhantomData;
 
@@ -27,14 +27,14 @@ use core::marker::PhantomData;
 /// The `f16` is only a 16-bit storage box for four FP4 nibbles; it is not an
 /// FP16 numeric value. Scales are stored densely, one byte per 32 K values.
 #[derive(Clone, Copy, Debug)]
-pub struct Mxfp4BlockScaledTensor<'a, Mode: Copy> {
+pub struct Mxf4BlockScaledTensor<'a, Mode: Copy> {
     /// Packed value storage viewed as four FP4 values per f16 carrier.
     values: Tensor<'a, Mxf4E2M1, KMajor<Mode>, f16>,
     /// One UE8M0 scale per logical K32 group, stored densely by row.
-    pub(super) scales: Tensor<'a, UE8M0, DenseBlockScaleKMajor<Mode, 32>, u8>,
+    pub(super) scales: Tensor<'a, Float8E8M0FNU, DenseBlockScaleKMajor<Mode, 32>, u8>,
 }
 
-impl<'a, Mode: Copy> Mxfp4BlockScaledTensor<'a, Mode> {
+impl<'a, Mode: Copy> Mxf4BlockScaledTensor<'a, Mode> {
     /// View packed FP4 values and dense scale bytes as one block-scaled tensor.
     ///
     /// This does not allocate, copy, or validate memory. Later copy and load
@@ -138,7 +138,7 @@ pub struct BlockScaledTensor<
     pub(super) scales: Tensor<'a, Scale, Sm1xxBlockScaleKMajor<SF_VEC>, u8>,
 }
 
-impl<'a, Mode: Copy> BlockScaledTensor<'a, E2M1, UE8M0, 16, KMajor<Mode>> {
+impl<'a, Mode: Copy> BlockScaledTensor<'a, Float4E2M1FN, Float8E8M0FNU, 16, KMajor<Mode>> {
     /// View packed values and Blackwell-formatted scales as one tensor.
     ///
     /// This does not validate, allocate, convert, or copy memory. The later
@@ -169,8 +169,8 @@ impl<'a, Mode: Copy> BlockScaledTensor<'a, E2M1, UE8M0, 16, KMajor<Mode>> {
     }
 }
 
-impl<'a, Mode: Copy> BlockScaledTensor<'a, E2M1, E4M3, 16, KMajor<Mode>> {
-    /// View packed `E2M1` values and canonical `E4M3` (`SF_VEC = 16`) scales as one NVFP4 tensor.
+impl<'a, Mode: Copy> BlockScaledTensor<'a, Float4E2M1FN, Float8E4M3FN, 16, KMajor<Mode>> {
+    /// View packed `Float4E2M1FN` values and canonical `Float8E4M3FN` (`SF_VEC = 16`) scales as one NVFP4 tensor.
     #[must_use]
     #[inline(always)]
     pub const fn from_slices(values: &'a [u8], scales: &'a [u8], rows: usize, k: usize) -> Self {
@@ -192,7 +192,7 @@ impl<'a, Mode: Copy> BlockScaledTensor<'a, E2M1, E4M3, 16, KMajor<Mode>> {
     }
 }
 
-/// Packed NVFP4 (`E2M1`) values and their dense `E4M3` scales (`SF_VEC = 16`, `L = 1`).
+/// Packed NVFP4 (`Float4E2M1FN`) values and their dense `Float8E4M3FN` scales (`SF_VEC = 16`, `L = 1`).
 ///
 /// ```text
 /// logical K values: [fp4 fp4 fp4 fp4] ... 16 values ...
@@ -204,7 +204,7 @@ pub struct Nvfp4BlockScaledTensor<'a, Mode: Copy> {
     /// Packed value storage viewed as four FP4 values per f16 carrier.
     values: Tensor<'a, Mxf4E2M1, KMajor<Mode>, f16>,
     /// One E4M3 scale per logical K16 group, stored densely by row.
-    pub(super) scales: Tensor<'a, E4M3, DenseBlockScaleKMajor<Mode, 16>, u8>,
+    pub(super) scales: Tensor<'a, Float8E4M3FN, DenseBlockScaleKMajor<Mode, 16>, u8>,
 }
 
 impl<'a, Mode: Copy> Nvfp4BlockScaledTensor<'a, Mode> {
@@ -258,7 +258,7 @@ impl<'a, Mode: Copy> Nvfp4BlockScaledTensor<'a, Mode> {
         })
     }
 
-    /// Load the four neighboring `E4M3` scale bytes used by one K=64 NVFP4 MMA.
+    /// Load the four neighboring `Float8E4M3FN` scale bytes used by one K=64 NVFP4 MMA.
     #[must_use]
     #[inline(always)]
     pub fn load_scale_quad(&self, row: usize, k64_step: usize) -> MmaScaleQuad<Mode> {

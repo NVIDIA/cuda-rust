@@ -6,7 +6,7 @@
 use crate::{model::Batch, operator::Result, rotary::HostTables};
 use ctm_rs::{cuda_module, kernel, launch_contract, memory::DisjointSlice, thread};
 use cuda_core::{CudaStream, simt::LaunchConfig};
-use cute_rs::{Bf16, attention::AttentionShape};
+use cute_rs::{BFloat16, attention::AttentionShape};
 use std::sync::Arc;
 
 /// Return the first included key for a causal window ending at `query`.
@@ -35,10 +35,10 @@ pub mod kernels {
     #[launch_contract(domain=1, block=(128,1,1), min_compute_capability=(8,0))]
     #[kernel]
     pub fn window_attention_bf16(
-        q: &[Bf16],
-        k: &[Bf16],
-        v: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        q: &[BFloat16],
+        k: &[BFloat16],
+        v: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         rows: usize,
         heads: usize,
         window: usize,
@@ -58,7 +58,7 @@ pub mod kernels {
         let query = unsafe { StridedTensor::from_slice(q).subview_unchecked(base, 64) }
             .local_partition::<32>(lane)
             .load::<2>()
-            .map(Bf16::to_f32);
+            .map(BFloat16::to_f32);
         let start = (row + 1).saturating_sub(window);
         let mut key = start;
         let mut maximum = f32::NEG_INFINITY;
@@ -70,7 +70,7 @@ pub mod kernels {
             let keys = unsafe { StridedTensor::from_slice(k).subview_unchecked(at, 64) }
                 .local_partition::<32>(lane)
                 .load::<2>()
-                .map(Bf16::to_f32);
+                .map(BFloat16::to_f32);
             let q = query.as_array();
             let k = keys.as_array();
             // Keep the original two-product expression: introducing a zero-
@@ -86,7 +86,7 @@ pub mod kernels {
             let values = unsafe { StridedTensor::from_slice(v).subview_unchecked(at, 64) }
                 .local_partition::<32>(lane)
                 .load::<2>()
-                .map(Bf16::to_f32);
+                .map(BFloat16::to_f32);
             sums = sums.zip_map(values, |sum, value| sum * old + weight * value);
             denominator = denominator * old + weight;
             maximum = next;
@@ -99,7 +99,7 @@ pub mod kernels {
             let mut output = StridedTensorMut::from_disjoint_slice(&mut output)
                 .subview_unchecked(base, 64)
                 .local_partition::<32>(lane);
-            output.store(sums.map(|sum| Bf16::from_f32(sum * reciprocal)));
+            output.store(sums.map(|sum| BFloat16::from_f32(sum * reciprocal)));
         }
     }
 }
@@ -238,13 +238,13 @@ pub fn validate(stream: Arc<CudaStream>) -> Result<()> {
     let tables = crate::rotary::RotarySpec::<64>::standard(10_000.0, 1000)?.tables(&positions)?;
     let mut checked = 0;
     for uniform in [true, false] {
-        let values = |salt: usize| -> Vec<Bf16> {
+        let values = |salt: usize| -> Vec<BFloat16> {
             (0..ROWS * WIDTH)
                 .map(|i| crate::reference::round(((i * 19 + salt * 31) % 127) as f64 / 64.0 - 1.0))
                 .collect()
         };
         let q = if uniform {
-            vec![Bf16::from_bits(0); ROWS * WIDTH]
+            vec![BFloat16::from_bits(0); ROWS * WIDTH]
         } else {
             values(1)
         };

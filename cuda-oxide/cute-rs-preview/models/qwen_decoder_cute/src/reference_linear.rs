@@ -23,7 +23,7 @@
 //! across every predictor and Talker decode shape. The tensor-core chain is
 //! what the ordinary decode kernel already computes, so shapes outside the
 //! table keep that kernel.
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 
 /// How the reference reduces one decode projection shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,14 +68,14 @@ pub(crate) fn fma_chain_blocks(chains: usize, outputs: usize) -> usize {
 /// element pitch `weight_stride`. Rust evaluates `w * x + acc` as an exact
 /// product followed by one FP32 addition, exactly like the device entry.
 pub(crate) fn emulate_fma_chains(
-    input: &[Bf16],
-    weight: &[Bf16],
+    input: &[BFloat16],
+    weight: &[BFloat16],
     weight_stride: usize,
     width: usize,
     outputs: usize,
     chains: usize,
-    bias: Option<&[Bf16]>,
-) -> Vec<Bf16> {
+    bias: Option<&[BFloat16]>,
+) -> Vec<BFloat16> {
     (0..outputs)
         .map(|n| {
             let row = &weight[n * weight_stride..n * weight_stride + width];
@@ -94,7 +94,7 @@ pub(crate) fn emulate_fma_chains(
                 Some(bias) => acc[0] + bias[n].to_f32(),
                 None => acc[0],
             };
-            Bf16::from_f32(total)
+            BFloat16::from_f32(total)
         })
         .collect()
 }
@@ -154,20 +154,20 @@ mod tests {
     #[test]
     fn emulation_follows_interleaved_chains_and_butterfly() {
         let width = 64;
-        let one = Bf16::from_f32(1.0);
+        let one = BFloat16::from_f32(1.0);
         let input = vec![one; width];
-        let large = Bf16::from_f32(33_554_432.0);
-        let mut weight = vec![Bf16::from_f32(0.0); 2 * width];
+        let large = BFloat16::from_f32(33_554_432.0);
+        let mut weight = vec![BFloat16::from_f32(0.0); 2 * width];
         weight[0] = large;
-        weight[16] = Bf16::from_f32(-33_554_432.0);
+        weight[16] = BFloat16::from_f32(-33_554_432.0);
         weight[1] = one;
         weight[width] = large;
         weight[width + 32] = one;
-        weight[width + 48] = Bf16::from_f32(-33_554_432.0);
+        weight[width + 48] = BFloat16::from_f32(-33_554_432.0);
         let out = emulate_fma_chains(&input, &weight, width, width, 2, 16, None);
         assert_eq!(out[0].to_f32(), 1.0);
         assert_eq!(out[1].to_f32(), 0.0);
-        let bias = [Bf16::from_f32(0.5); 2];
+        let bias = [BFloat16::from_f32(0.5); 2];
         let out = emulate_fma_chains(&input, &weight, width, width, 2, 16, Some(&bias));
         assert_eq!(out[0].to_f32(), 1.5);
     }

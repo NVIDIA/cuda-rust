@@ -3,25 +3,25 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! Independent BF16 storage arithmetic and coordinate-wise rotation oracle.
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 
 /// Narrow FP64 through FP32, then round to BF16 with an independent integer even-tie oracle.
 ///
 /// Signed zero is retained and NaNs are quieted while preserving retained payload bits.
-pub fn round(value: f64) -> Bf16 {
+pub fn round(value: f64) -> BFloat16 {
     let value = value as f32;
     let bits = value.to_bits();
     let retained = (bits >> 16) as u16;
     if value.is_nan() {
-        return Bf16::from_bits(retained | 0x0040);
+        return BFloat16::from_bits(retained | 0x0040);
     }
     let discarded = bits & 0xffff;
     let increment = discarded > 0x8000 || (discarded == 0x8000 && retained & 1 != 0);
-    Bf16::from_bits(retained.wrapping_add(u16::from(increment)))
+    BFloat16::from_bits(retained.wrapping_add(u16::from(increment)))
 }
 
 /// Expand BF16 storage bits exactly to FP64 through an FP32 bit reconstruction.
-pub fn widen(value: Bf16) -> f64 {
+pub fn widen(value: BFloat16) -> f64 {
     f64::from(f32::from_bits(u32::from(value.to_bits()) << 16))
 }
 
@@ -30,7 +30,13 @@ pub fn widen(value: Bf16) -> f64 {
 /// The fixture must provide positive even `dim`, positive `heads`, and complete
 /// matching buffers. Coordinate `i` pairs with `i + dim / 2`; each BF16 product
 /// rounds before the final BF16 sum. Table values are shared by heads of a token.
-pub fn rotate(input: &[Bf16], cos: &[Bf16], sin: &[Bf16], heads: usize, dim: usize) -> Vec<Bf16> {
+pub fn rotate(
+    input: &[BFloat16],
+    cos: &[BFloat16],
+    sin: &[BFloat16],
+    heads: usize,
+    dim: usize,
+) -> Vec<BFloat16> {
     let half = dim / 2;
     input
         .iter()
@@ -87,8 +93,8 @@ mod tests {
     /// Require the exact two-product rounding result that a single final cast misses.
     #[test]
     fn each_product_rounds_before_the_sum() {
-        let x = [0x3f81, 0x3f02].map(Bf16::from_bits);
-        let c = [Bf16::from_bits(0x3f35)];
+        let x = [0x3f81, 0x3f02].map(BFloat16::from_bits);
+        let c = [BFloat16::from_bits(0x3f35)];
         let y = rotate(&x, &c, &c, 1, 2);
         // Cast-once would produce 0x3eb5 for the first coordinate.
         assert_eq!(y[0].to_bits(), 0x3eb4);

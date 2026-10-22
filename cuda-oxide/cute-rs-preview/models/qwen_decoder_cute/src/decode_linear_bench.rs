@@ -10,7 +10,7 @@ use crate::{
     reference_linear_kernel::kernels as reference,
 };
 use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig1D, sys};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 use std::sync::Arc;
 
 /// Measure original, decode-specialized and reference-order projections for one- and two-row shapes.
@@ -50,11 +50,12 @@ pub fn run(stream: Arc<CudaStream>) -> Result<()> {
         let fma32 =
             reference_module.prepare_fma32_linear_bf16(warp(fma_chain_blocks(32, outputs)))?;
         let split_k = reference_module.prepare_split_k_linear_bf16(warp(outputs.div_ceil(8)))?;
-        let input = DeviceBuffer::from_host(&stream, &vec![Bf16::from_f32(0.25); rows * width])?;
+        let input =
+            DeviceBuffer::from_host(&stream, &vec![BFloat16::from_f32(0.25); rows * width])?;
         let weight =
-            DeviceBuffer::from_host(&stream, &vec![Bf16::from_f32(0.125); outputs * width])?;
+            DeviceBuffer::from_host(&stream, &vec![BFloat16::from_f32(0.125); outputs * width])?;
         let mut output =
-            DeviceBuffer::from_host(&stream, &vec![Bf16::from_f32(0.0); rows * outputs])?;
+            DeviceBuffer::from_host(&stream, &vec![BFloat16::from_f32(0.0); rows * outputs])?;
         let config = LaunchConfig1D::new(outputs.div_ceil(8) as u32, 32, 0);
         let prepared = module.prepare_decode_linear_bf16(config)?;
         let original = cuda_core::simt::LaunchConfig {
@@ -167,7 +168,7 @@ pub fn run(stream: Arc<CudaStream>) -> Result<()> {
             let mut samples = measured?;
             completed?;
             let actual = output.to_host_vec(&stream)?;
-            let expected = Bf16::from_f32(width as f32 / 32.0).to_bits();
+            let expected = BFloat16::from_f32(width as f32 / 32.0).to_bits();
             if actual.iter().any(|value| value.to_bits() != expected) {
                 return Err(
                     "projection microbenchmark output differs from exact constant-input result"

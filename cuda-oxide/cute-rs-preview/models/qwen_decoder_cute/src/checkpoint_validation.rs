@@ -11,7 +11,7 @@ use crate::{
     rotary::{HostTables, RotarySpec},
 };
 use cuda_core::CudaContext;
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -292,13 +292,13 @@ impl Reference {
     /// Read an exact-shape BF16 fixture from little-endian 16-bit storage.
     ///
     /// Preserves every storage bit; descriptor, path, I/O and checksum failures propagate.
-    pub fn bf16(&self, name: &str, shape: &[usize]) -> Result<Vec<Bf16>> {
+    pub fn bf16(&self, name: &str, shape: &[usize]) -> Result<Vec<BFloat16>> {
         Ok(self
             .bytes(name, shape, "BF16", 2)?
             .as_chunks::<2>()
             .0
             .iter()
-            .map(|b| Bf16::from_bits(u16::from_le_bytes(*b)))
+            .map(|b| BFloat16::from_bits(u16::from_le_bytes(*b)))
             .collect())
     }
 
@@ -373,7 +373,7 @@ fn positions(step: &Value, talker: bool) -> Result<Vec<[u32; 3]>> {
 /// The sign-sensitive penalty is applied in FP32 to previously emitted IDs.
 /// Rejects invalid policy fields, empty/oversized vocabularies, nonfinite logits
 /// or a policy that suppresses every candidate.
-fn policy_token(logits: &[Bf16], previous: &[u32], generation: &Value) -> Result<u32> {
+fn policy_token(logits: &[BFloat16], previous: &[u32], generation: &Value) -> Result<u32> {
     if logits.is_empty() || logits.len() > u32::MAX as usize {
         return Err("invalid logits vocabulary".into());
     }
@@ -437,7 +437,7 @@ impl Report {
     /// Returns errors for unequal/empty lengths or nonfinite values. Exceeding
     /// the configured relative-L2 limit records a failure while allowing later
     /// comparisons to run. Identical zero tensors have relative L2 zero and cosine one.
-    fn compare(&mut self, name: &str, actual: &[Bf16], expected: &[Bf16]) -> Result<()> {
+    fn compare(&mut self, name: &str, actual: &[BFloat16], expected: &[BFloat16]) -> Result<()> {
         if actual.len() != expected.len() || actual.is_empty() {
             return Err(format!("{name}: comparison lengths differ or are empty").into());
         }
@@ -497,7 +497,7 @@ impl Report {
         &mut self,
         reference: &Reference,
         name: &str,
-        actual: &[Bf16],
+        actual: &[BFloat16],
         shape: &[usize],
     ) -> Result<()> {
         self.compare(name, actual, &reference.bf16(name, shape)?)
@@ -515,7 +515,7 @@ impl Report {
 }
 
 /// Return the first-index maximum, rejecting empty/nonfinite logits or index overflow.
-fn raw_argmax(values: &[Bf16]) -> Result<u32> {
+fn raw_argmax(values: &[BFloat16]) -> Result<u32> {
     if values.is_empty() {
         return Err("empty logits".into());
     }
@@ -534,7 +534,7 @@ fn raw_argmax(values: &[Bf16]) -> Result<u32> {
 /// Describe the five highest finite logits, index-stable ties and the top-two margin.
 ///
 /// Returns errors for empty/nonfinite input; a single token has no margin.
-fn top_logits(values: &[Bf16]) -> Result<Value> {
+fn top_logits(values: &[BFloat16]) -> Result<Value> {
     raw_argmax(values)?;
     let mut order = (0..values.len()).collect::<Vec<_>>();
     order.sort_by(|&a, &b| {
@@ -901,12 +901,12 @@ mod tests {
     /// Check first-index ordering for tied logits and reject empty/nonfinite diagnostics.
     #[test]
     fn logits_diagnostic_retains_ties_and_rejects_nonfinite() {
-        let result = top_logits(&[1., 3., 3., 2.].map(Bf16::from_f32)).unwrap();
+        let result = top_logits(&[1., 3., 3., 2.].map(BFloat16::from_f32)).unwrap();
         assert_eq!(result["top"][0]["token"], 1);
         assert_eq!(result["top"][1]["token"], 2);
         assert_eq!(result["top_two_margin"], 0.);
         assert!(top_logits(&[]).is_err());
-        assert!(top_logits(&[Bf16::from_f32(f32::NAN)]).is_err());
+        assert!(top_logits(&[BFloat16::from_f32(f32::NAN)]).is_err());
     }
 
     /// Create four tiny temporary artifact files and a matching self-declared manifest.
@@ -1066,12 +1066,12 @@ mod tests {
     #[test]
     fn greedy_policy_enforces_suppression_min_length_and_sign_sensitive_penalty() {
         let config = json!({"suppress_tokens":[3],"eos_token_id":2,"min_new_tokens":2,"repetition_penalty":2.0});
-        let logits = [5.0, 4.0, 8.0, 100.0].map(Bf16::from_f32);
+        let logits = [5.0, 4.0, 8.0, 100.0].map(BFloat16::from_f32);
         assert_eq!(policy_token(&logits, &[], &config).unwrap(), 0);
         assert_eq!(policy_token(&logits, &[0], &config).unwrap(), 1);
         assert_eq!(policy_token(&logits, &[0, 1], &config).unwrap(), 2);
-        let negative = [-1.0, -1.5, -9.0, -100.0].map(Bf16::from_f32);
+        let negative = [-1.0, -1.5, -9.0, -100.0].map(BFloat16::from_f32);
         assert_eq!(policy_token(&negative, &[0], &config).unwrap(), 1);
-        assert!(policy_token(&[Bf16::from_f32(f32::NAN)], &[], &config).is_err());
+        assert!(policy_token(&[BFloat16::from_f32(f32::NAN)], &[], &config).is_err());
     }
 }

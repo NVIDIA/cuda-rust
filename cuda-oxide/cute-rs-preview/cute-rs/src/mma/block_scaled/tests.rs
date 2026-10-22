@@ -5,7 +5,7 @@
 
 #![doc = "Checks SM120 accumulator, B-fragment and scale-provider mappings."]
 use super::tiled::{a_atom_128, b_pair_atom_128};
-use super::{Mxf4AccumulatorTile2x8, Mxf4BTileK64, Mxfp4TiledMma};
+use super::{Mxf4AccumulatorTile2x8, Mxf4BTileK64, Mxf4TiledMma};
 use crate::block_scaled::{Mkl, Nkl, SharedScaleAtom, Sm120ScaleAtom};
 use crate::mma::FragmentC;
 
@@ -73,7 +73,7 @@ fn canonical_scale_atom_loads_exact_two_a_and_eight_b_packs() {
 
     // Lane 0 provides A rows 0/64 and B rows
     // 0,8,32,40,64,72,96,104 for warp (0,0).
-    let lane0 = Mxfp4TiledMma::<()>::get_slice(0);
+    let lane0 = Mxf4TiledMma::<()>::get_slice(0);
     // The arrays are valid and lane/warp positions are in range.
     let first = unsafe { lane0.load_scale_atom_128(&a, &b, 0, 0) };
     assert_eq!(
@@ -104,7 +104,7 @@ fn canonical_scale_atom_loads_exact_two_a_and_eight_b_packs() {
     );
 
     // Lane 31 checks the last rows and words for warp position (3,1).
-    let lane31 = Mxfp4TiledMma::<()>::get_slice(31);
+    let lane31 = Mxf4TiledMma::<()>::get_slice(31);
     // The arrays are valid and lane/warp positions are in range.
     let last = unsafe { lane31.load_scale_atom_128(&a, &b, 3, 1) };
     assert_eq!([last.a0.bits(), last.a1.bits()], [0xa500_007d, 0xa500_007f]);

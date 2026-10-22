@@ -5,7 +5,7 @@
 
 #![doc = "Checks packed-value carriers and dense versus Blackwell scale layouts."]
 use super::*;
-use crate::numeric::{E2M1, UE8M0};
+use crate::numeric::{Float4E2M1FN, Float8E8M0FNU};
 
 /// Canonical scale coordinates must match known Blackwell offsets, including block boundaries.
 #[test]
@@ -28,10 +28,12 @@ fn matrix_and_vector_modes_remain_distinct_types() {
     let values = [0u8; 128];
     let scales = [0u8; CANONICAL_SCALE_ATOM_BYTES];
 
-    let matrix =
-        BlockScaledTensor::<E2M1, UE8M0, 16, KMajor<Mkl>>::from_slices(&values, &scales, 4, 64);
-    let vector =
-        BlockScaledTensor::<E2M1, UE8M0, 16, KMajor<Nkl>>::from_slices(&values, &scales, 1, 64);
+    let matrix = BlockScaledTensor::<Float4E2M1FN, Float8E8M0FNU, 16, KMajor<Mkl>>::from_slices(
+        &values, &scales, 4, 64,
+    );
+    let vector = BlockScaledTensor::<Float4E2M1FN, Float8E8M0FNU, 16, KMajor<Nkl>>::from_slices(
+        &values, &scales, 1, 64,
+    );
 
     assert_eq!(matrix.k_tile_count(), 1);
     assert_eq!(vector.k_tile_count(), 1);
@@ -44,7 +46,7 @@ fn matrix_and_vector_modes_remain_distinct_types() {
 fn mxf4_tensor_keeps_logical_k_and_materializes_packed_carriers() {
     let values = [f16::from_bits(0); 128];
     let scales = [127u8; 16];
-    let matrix = Mxfp4BlockScaledTensor::<Mkl>::from_slices(&values, &scales, 4, 64);
+    let matrix = Mxf4BlockScaledTensor::<Mkl>::from_slices(&values, &scales, 4, 64);
 
     let copy = matrix.values_for_copy();
     assert_eq!(copy.carrier().rows, 4);
@@ -67,7 +69,7 @@ fn staged_scale_pack_preserves_little_endian_k_order() {
     struct AlignedScales(#[doc = "Scale bytes arranged in increasing K-group order."] [u8; 32]);
     let values = [f16::from_bits(0); 256];
     let scales = AlignedScales([127; 32]);
-    let matrix = Mxfp4BlockScaledTensor::<Mkl>::from_slices(&values, &scales.0, 4, 256);
+    let matrix = Mxf4BlockScaledTensor::<Mkl>::from_slices(&values, &scales.0, 4, 256);
     // Safe because the wrapper gives the bytes u32 alignment and each row
     // has 8 groups, which can be split into groups of 4.
     let copy = unsafe { matrix.scale_words_for_copy() };

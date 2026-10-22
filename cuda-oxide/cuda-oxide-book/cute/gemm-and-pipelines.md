@@ -6,13 +6,13 @@ The Blackwell kernels in this preview combine multi-stage TMA pipelines, swizzle
 
 ## 1. Block-Scaled MXFP4 GEMM in `cute-rs` (SM120a)
 
-In `blockscale_gemm_cute`, one producer warp (warp 8) fills a 3-stage TMA ring buffer in shared memory while eight compute warps (warps `0..7`) load swizzled FP4 fragments and `UE8M0` scales into `Mxfp4TiledMma`:
+In `blockscale_gemm_cute`, one producer warp (warp 8) fills a 3-stage TMA ring buffer in shared memory while eight compute warps (warps `0..7`) load swizzled FP4 fragments and `Float8E8M0FNU` scales into `Mxf4TiledMma`:
 
 ```{figure} images/blockscale-gemm-pipeline.svg
 :align: center
 :width: 100%
 
-Data flow of `blockscale_gemm_cute` on SM120a: 4 typed TMA descriptors feed a 3-stage `TmaLoadPipeline`, consumed by 8 compute warps running `Mxfp4TiledMma` and an `Sm120Epilogue128x128` TMA store epilogue.
+Data flow of `blockscale_gemm_cute` on SM120a: 4 typed TMA descriptors feed a 3-stage `TmaLoadPipeline`, consumed by 8 compute warps running `Mxf4TiledMma` and an `Sm120Epilogue128x128` TMA store epilogue.
 ```
 
 ```rust
@@ -35,7 +35,7 @@ while kk < 2 {
     let scales  = unsafe { scale_tile.pairs_at_unchecked(kk) };
     let a_frags = unsafe { tiled_mma.load_a_128(&s_a, wm, kk) };
     let b_frags = unsafe { tiled_mma.get_b_tile_k64(&s_b, wn, kk) };
-    accumulators.accumulate_k64(&tiled_mma, a_frags, b_frags, scales);
+    accumulators.gemm(&tiled_mma, a_frags, b_frags, scales);
     kk += 1;
 }
 pipeline.consumer_release(&consumer);
@@ -91,7 +91,7 @@ if warp_id == 0 {
 | :------- | :------- | :--------- |
 | **Elementwise / SwiGLU / RMSNorm** | `cuda-oxide/cute-rs-preview/examples/{elementwise,swiglu,rmsnorm}_cute` | 1D tiling, register transforms, warp reductions, and ragged tails. |
 | **FFN & RoPE KV-Cache Attention** | `cuda-oxide/cute-rs-preview/examples/{ffn,rope_cache}_cute` | BF16 tensor-core projections, typed weight roles, and 128-wide GQA. |
-| **MXFP4 GEMV & Block-Scaled GEMM** | `cuda-oxide/cute-rs-preview/examples/{nvfp4_gemv,blockscale_gemm}_cute` | Packed FP4 + `UE8M0` scales, 3-stage TMA pipelines, and `*_ctm` counterparts. |
+| **MXFP4 GEMV & Block-Scaled GEMM** | `cuda-oxide/cute-rs-preview/examples/{nvfp4_gemv,blockscale_gemm}_cute` | Packed FP4 + `Float8E8M0FNU` scales, 3-stage TMA pipelines, and `*_ctm` counterparts. |
 | **SM100a 2-CTA GEMM & Attention** | `cuda-oxide/cute-rs-preview/examples/{fp16_gemm_256x352,sm100_fmha_prefill,sm100_mla_decode_fp16}_cute` | Two-CTA cluster TMA, TMEM, A-collector reuse, and FlashAttention / MLA decode. |
-| **Qwen3-8B (BF16 & NVFP4)** | `cuda-oxide/cute-rs-preview/models/qwen3_8b_cute` | 36-layer `Qwen/Qwen3-8B` (`H=4096, I=12288, GQA 32:8`) in BF16 and NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`) on RTX 5090 (`visual.md`). |
+| **Qwen3-8B (BF16 & NVFP4)** | `cuda-oxide/cute-rs-preview/models/qwen3_8b_cute` | 36-layer `Qwen/Qwen3-8B` (`H=4096, I=12288, GQA 32:8`) in BF16 and NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) on RTX 5090 (`visual.md`). |
 | **End-to-End Qwen3-TTS Model** | `cuda-oxide/cute-rs-preview/models/qwen_decoder_cute` | Complete Talker + Predictor speech synthesis on SM120a (see `visual.md` inside that folder for a visual tour). |

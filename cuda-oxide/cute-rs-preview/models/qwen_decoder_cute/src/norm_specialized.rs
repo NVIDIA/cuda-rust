@@ -8,7 +8,7 @@ use crate::{
     operator::Result,
 };
 use cuda_core::{CudaStream, DeviceBuffer, simt::LaunchConfig, sys};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 use std::sync::Arc;
 
 /// Enqueue normalization after checking its allocation and launch geometry.
@@ -26,9 +26,9 @@ use std::sync::Arc;
 pub(crate) unsafe fn enqueue(
     module: &kernels::LoadedModule,
     stream: &CudaStream,
-    input: &DeviceBuffer<Bf16>,
-    weight: &DeviceBuffer<Bf16>,
-    output: &mut DeviceBuffer<Bf16>,
+    input: &DeviceBuffer<BFloat16>,
+    weight: &DeviceBuffer<BFloat16>,
+    output: &mut DeviceBuffer<BFloat16>,
     rows: usize,
     cols: usize,
     epsilon: f32,
@@ -89,7 +89,7 @@ fn checked_geometry(
 }
 
 /// Return a labeled error for unequal lengths or any BF16 storage-bit difference.
-fn exact_bits(actual: &[Bf16], expected: &[Bf16], label: &str) -> Result<()> {
+fn exact_bits(actual: &[BFloat16], expected: &[BFloat16], label: &str) -> Result<()> {
     if actual.len() != expected.len() {
         return Err(format!("{label}: normalization output extent mismatch").into());
     }
@@ -137,7 +137,7 @@ fn fixture(
 ) -> Result<usize> {
     /// Number of BF16 canaries appended to each fixture allocation.
     const GUARD: usize = 32;
-    let poison = Bf16::from_bits(0x7fc1);
+    let poison = BFloat16::from_bits(0x7fc1);
     let len = rows * cols;
     let mut input = vec![poison; len + GUARD];
     let mut weight = vec![poison; cols + GUARD];
@@ -153,22 +153,22 @@ fn fixture(
         };
         *value = match pattern {
             Pattern::Regular => {
-                Bf16::from_f32(((index * 17 + index / cols * 11) % 131) as f32 / 32.0 - 2.0)
+                BFloat16::from_f32(((index * 17 + index / cols * 11) % 131) as f32 / 32.0 - 2.0)
             }
-            Pattern::Zero => Bf16::from_bits(sign),
+            Pattern::Zero => BFloat16::from_bits(sign),
             // For widths divisible by four, sum(x*x)/cols is exactly half
             // the smallest FP32 subnormal. With epsilon=MIN_SUBNORMAL, the
             // original division rounds to zero before adding epsilon. Fusing
             // the scale+epsilon incorrectly rounds to two subnormal units.
             Pattern::UnderflowTie => {
-                Bf16::from_bits(if index % cols < cols / 4 { 53 << 7 } else { 0 })
+                BFloat16::from_bits(if index % cols < cols / 4 { 53 << 7 } else { 0 })
             }
-            _ => Bf16::from_bits(sign | exponent << 7 | seed as u16 & 127),
+            _ => BFloat16::from_bits(sign | exponent << 7 | seed as u16 & 127),
         };
     }
     for (index, value) in weight[..cols].iter_mut().enumerate() {
         // Nontrivial weights expose the intermediate BF16 rounding boundary.
-        *value = Bf16::from_f32(((index * 19) % 79) as f32 / 32.0 - 1.125);
+        *value = BFloat16::from_f32(((index * 19) % 79) as f32 / 32.0 - 1.125);
     }
     let input_dev = DeviceBuffer::from_host(stream, &input)?;
     let weight_dev = DeviceBuffer::from_host(stream, &weight)?;
@@ -269,8 +269,8 @@ pub fn validate(stream: Arc<CudaStream>) -> Result<()> {
         }
     }
     if exact_bits(
-        &[Bf16::from_bits(0x3f80)],
-        &[Bf16::from_bits(0x3f81)],
+        &[BFloat16::from_bits(0x3f80)],
+        &[BFloat16::from_bits(0x3f81)],
         "mutation",
     )
     .is_ok()
@@ -316,12 +316,13 @@ pub fn benchmark(stream: Arc<CudaStream>) -> Result<()> {
     );
     for cols in [128, 1024, 2048] {
         for rows in [1usize, 2, 8, 16, 32, 64] {
-            let input = DeviceBuffer::from_host(&stream, &vec![Bf16::from_f32(0.25); rows * cols])?;
-            let weight = DeviceBuffer::from_host(&stream, &vec![Bf16::from_f32(1.125); cols])?;
+            let input =
+                DeviceBuffer::from_host(&stream, &vec![BFloat16::from_f32(0.25); rows * cols])?;
+            let weight = DeviceBuffer::from_host(&stream, &vec![BFloat16::from_f32(1.125); cols])?;
             let mut original =
-                DeviceBuffer::from_host(&stream, &vec![Bf16::from_bits(0x7fc1); rows * cols])?;
+                DeviceBuffer::from_host(&stream, &vec![BFloat16::from_bits(0x7fc1); rows * cols])?;
             let mut specialized =
-                DeviceBuffer::from_host(&stream, &vec![Bf16::from_bits(0x7fc1); rows * cols])?;
+                DeviceBuffer::from_host(&stream, &vec![BFloat16::from_bits(0x7fc1); rows * cols])?;
             let config = LaunchConfig {
                 grid_dim: (rows.div_ceil(ROWS_PER_BLOCK) as u32, 1, 1),
                 block_dim: (128, 1, 1),

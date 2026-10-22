@@ -13,7 +13,7 @@
 //! the single BF16 rounding. `reference_linear` chooses the entry per shape.
 use ctm_rs::memory::DisjointSlice;
 use ctm_rs::{cuda_module, kernel, launch_contract, thread};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 
 /// Device entries reproducing the reference reduction order for decode shapes.
 ///
@@ -51,8 +51,8 @@ pub mod kernels {
     #[allow(clippy::too_many_arguments)]
     pub fn fma_chains_supported(
         chains: usize,
-        input: &[Bf16],
-        weight: &[Bf16],
+        input: &[BFloat16],
+        weight: &[BFloat16],
         output_len: usize,
         bias_len: Option<usize>,
         width: usize,
@@ -78,8 +78,8 @@ pub mod kernels {
     /// even strides covering `width`, 4-byte aligned operands and dense extents.
     #[allow(clippy::too_many_arguments)]
     pub fn split_k_supported(
-        input: &[Bf16],
-        weight: &[Bf16],
+        input: &[BFloat16],
+        weight: &[BFloat16],
         output_len: usize,
         rows: usize,
         width: usize,
@@ -113,8 +113,8 @@ pub mod kernels {
     #[inline(always)]
     fn accumulate(
         acc: [f32; VECTOR],
-        x: RegisterTile<Bf16, VECTOR>,
-        w: RegisterTile<Bf16, VECTOR>,
+        x: RegisterTile<BFloat16, VECTOR>,
+        w: RegisterTile<BFloat16, VECTOR>,
     ) -> [f32; VECTOR] {
         let x = x.into_array();
         let w = w.into_array();
@@ -135,7 +135,7 @@ pub mod kernels {
     /// `offset` is a multiple of [`VECTOR`], `offset + VECTOR <= input.len()`,
     /// and the slice is 8-byte aligned.
     #[inline(always)]
-    unsafe fn load_input(input: &[Bf16], offset: usize) -> RegisterTile<Bf16, VECTOR> {
+    unsafe fn load_input(input: &[BFloat16], offset: usize) -> RegisterTile<BFloat16, VECTOR> {
         unsafe {
             Tensor::from_slice(input)
                 .zipped_divide::<VECTOR>()
@@ -151,9 +151,9 @@ pub mod kernels {
     /// offset is a multiple of [`VECTOR`] and the slice is 8-byte aligned.
     #[inline(always)]
     unsafe fn load_weights<const ALIGNED: bool>(
-        weight: &[Bf16],
+        weight: &[BFloat16],
         offset: usize,
-    ) -> RegisterTile<Bf16, VECTOR> {
+    ) -> RegisterTile<BFloat16, VECTOR> {
         if ALIGNED {
             unsafe {
                 Tensor::from_slice(weight)
@@ -183,10 +183,10 @@ pub mod kernels {
     /// for these columns, and every owner outlives the launch.
     #[inline(always)]
     unsafe fn fma_chains_impl<const CHAINS: usize, const HAS_BIAS: bool, const ALIGNED: bool>(
-        input: &[Bf16],
-        weight: &[Bf16],
-        bias: &[Bf16],
-        output: &mut DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        bias: &[BFloat16],
+        output: &mut DisjointSlice<BFloat16>,
         width: usize,
         outputs: usize,
         weight_stride: usize,
@@ -252,7 +252,8 @@ pub mod kernels {
             };
             // SAFETY: exactly one lane writes each valid output column.
             unsafe {
-                StridedTensorMut::from_disjoint_slice(output).store_at(n, Bf16::from_f32(value));
+                StridedTensorMut::from_disjoint_slice(output)
+                    .store_at(n, BFloat16::from_f32(value));
             }
         }
     }
@@ -323,8 +324,8 @@ pub mod kernels {
     #[inline(always)]
     unsafe fn packed_split_k_impl<const HAS_BIAS: bool>(
         source: &PackedDecode<'_>,
-        bias: &[Bf16],
-        output: &mut DisjointSlice<Bf16>,
+        bias: &[BFloat16],
+        output: &mut DisjointSlice<BFloat16>,
         width: usize,
         outputs: usize,
         slice_width: usize,
@@ -391,7 +392,7 @@ pub mod kernels {
                 // SAFETY: C's bijective layout and the checked grid give each
                 // lane disjoint initialized output coordinates.
                 unsafe {
-                    output.store_at(row * outputs + n + col, Bf16::from_f32(value));
+                    output.store_at(row * outputs + n + col, BFloat16::from_f32(value));
                 }
             });
     }
@@ -402,10 +403,10 @@ pub mod kernels {
     /// As for `fma_chains_impl`, without the alignment choice.
     #[inline(always)]
     unsafe fn fma_chains<const CHAINS: usize, const HAS_BIAS: bool>(
-        input: &[Bf16],
-        weight: &[Bf16],
-        bias: &[Bf16],
-        output: &mut DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        bias: &[BFloat16],
+        output: &mut DisjointSlice<BFloat16>,
         width: usize,
         outputs: usize,
         weight_stride: usize,
@@ -443,9 +444,9 @@ pub mod kernels {
     #[launch_contract(domain=1, block=(32,1,1), min_compute_capability=(8,0))]
     #[kernel]
     pub fn fma16_linear_bf16(
-        input: &[Bf16],
-        weight: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         width: usize,
         outputs: usize,
         weight_stride: usize,
@@ -482,10 +483,10 @@ pub mod kernels {
     #[launch_contract(domain=1, block=(32,1,1), min_compute_capability=(8,0))]
     #[kernel]
     pub fn fma16_linear_bias_bf16(
-        input: &[Bf16],
-        weight: &[Bf16],
-        bias: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        bias: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         width: usize,
         outputs: usize,
         weight_stride: usize,
@@ -521,9 +522,9 @@ pub mod kernels {
     #[launch_contract(domain=1, block=(32,1,1), min_compute_capability=(8,0))]
     #[kernel]
     pub fn fma32_linear_bf16(
-        input: &[Bf16],
-        weight: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         width: usize,
         outputs: usize,
         weight_stride: usize,
@@ -559,10 +560,10 @@ pub mod kernels {
     #[launch_contract(domain=1, block=(32,1,1), min_compute_capability=(8,0))]
     #[kernel]
     pub fn fma32_linear_bias_bf16(
-        input: &[Bf16],
-        weight: &[Bf16],
-        bias: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        bias: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         width: usize,
         outputs: usize,
         weight_stride: usize,
@@ -602,9 +603,9 @@ pub mod kernels {
     #[kernel]
     #[allow(clippy::too_many_arguments)]
     pub fn split_k_linear_bf16(
-        input: &[Bf16],
-        weight: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         rows: usize,
         width: usize,
         outputs: usize,
@@ -657,10 +658,10 @@ pub mod kernels {
     #[kernel]
     #[allow(clippy::too_many_arguments)]
     pub fn split_k_linear_bias_bf16(
-        input: &[Bf16],
-        weight: &[Bf16],
-        bias: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        bias: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         rows: usize,
         width: usize,
         outputs: usize,

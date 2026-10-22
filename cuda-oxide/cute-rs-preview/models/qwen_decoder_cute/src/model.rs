@@ -18,7 +18,7 @@ use crate::{element_kernel, ffn_kernel, norm_kernel, operator, rotary::HostTable
 use cuda_core::simt::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
 use cute_rs::{
-    Bf16,
+    BFloat16,
     decoder::{
         BiasWeights, DecoderShape, DecoderWeights, EmbeddingWeights, FinalNorm, NormRole,
         NormWeights, TokenIds,
@@ -32,7 +32,7 @@ use std::{marker::PhantomData, sync::Arc};
 mod initialized_pool;
 use initialized_pool::Lease;
 /// Pool of exclusively leased BF16 device buffers, private to a runner and its helpers.
-pub(crate) type BufferPool = initialized_pool::Pool<DeviceBuffer<Bf16>>;
+pub(crate) type BufferPool = initialized_pool::Pool<DeviceBuffer<BFloat16>>;
 
 /// Create a pool retaining at most 64 MiB total, 4 MiB per allocation, and 16 per exact size.
 ///
@@ -57,7 +57,7 @@ pub const EPSILON: f32 = 1e-6;
 /// backing buffer be mutably borrowed while an operator reads it.
 pub struct Batch<const W: usize> {
     /// Exclusive dense storage; a weak pool lease allows this batch to outlive its runner.
-    buffer: Lease<DeviceBuffer<Bf16>>,
+    buffer: Lease<DeviceBuffer<BFloat16>>,
     /// Number of contiguous rows, each containing exactly `W` BF16 elements.
     rows: usize,
 }
@@ -67,7 +67,7 @@ impl<const W: usize> Batch<W> {
     ///
     /// Rejects invalid/overflowing shapes or mismatched lengths and returns CUDA
     /// errors. The upload completes before the borrowed host slice can be released.
-    pub fn from_host(stream: &CudaStream, rows: usize, values: &[Bf16]) -> Result<Self> {
+    pub fn from_host(stream: &CudaStream, rows: usize, values: &[BFloat16]) -> Result<Self> {
         let shape = RowMajorShape::dense(rows, W)?;
         if values.len() != shape.required_len() {
             return Err("input must contain exactly rows * typed width values".into());
@@ -88,7 +88,7 @@ impl<const W: usize> Batch<W> {
         Ok(Self {
             buffer: Lease::owned(DeviceBuffer::from_host(
                 stream,
-                &vec![Bf16::from_bits(operator::GUARD); shape.required_len()],
+                &vec![BFloat16::from_bits(operator::GUARD); shape.required_len()],
             )?),
             rows,
         })
@@ -105,14 +105,14 @@ impl<const W: usize> Batch<W> {
         let shape = RowMajorShape::dense(rows, W)?;
         let len = shape.required_len();
         let bytes = len
-            .checked_mul(std::mem::size_of::<Bf16>())
+            .checked_mul(std::mem::size_of::<BFloat16>())
             .ok_or("batch byte extent overflow")?;
         stream.context().bind_to_thread()?;
         // Pool ownership is private to a Runner and its decode projection
         // helper, which always use the same context. Kernels fully overwrite
         // logical output elements; fresh storage retains sentinel initialization.
         let buffer = pool.acquire(len, bytes, || {
-            DeviceBuffer::from_host(stream, &vec![Bf16::from_bits(operator::GUARD); len])
+            DeviceBuffer::from_host(stream, &vec![BFloat16::from_bits(operator::GUARD); len])
         })?;
         if !Arc::ptr_eq(buffer.context(), stream.context()) {
             return Err("pooled batch context mismatch".into());
@@ -126,17 +126,17 @@ impl<const W: usize> Batch<W> {
     /// Borrow dense storage without transferring ownership.
     ///
     /// This borrow alone does not establish completion of external asynchronous users.
-    pub fn buffer(&self) -> &DeviceBuffer<Bf16> {
+    pub fn buffer(&self) -> &DeviceBuffer<BFloat16> {
         &self.buffer
     }
     /// Borrow storage exclusively for checked writes; callers still establish device readiness.
-    pub(crate) fn buffer_mut(&mut self) -> &mut DeviceBuffer<Bf16> {
+    pub(crate) fn buffer_mut(&mut self) -> &mut DeviceBuffer<BFloat16> {
         &mut self.buffer
     }
     /// Fence all work in the matching context and copy dense BF16 values to the host.
     ///
     /// Rejects a foreign-context stream and propagates synchronization/copy errors.
-    pub fn read(&self, stream: &CudaStream) -> Result<Vec<Bf16>> {
+    pub fn read(&self, stream: &CudaStream) -> Result<Vec<BFloat16>> {
         if !Arc::ptr_eq(self.buffer.context(), stream.context()) {
             return Err("read stream context mismatch".into());
         }
@@ -286,7 +286,7 @@ impl<const H: usize, const I: usize, const K: usize> DecoderCache<H, I, K> {
     /// vectors are not truncated to it. A poisoned cache may contain partially
     /// advanced layers. Readback errors propagate, and snapshots do not repair
     /// or publish a consistent sequence.
-    pub fn snapshots(&self, stream: &CudaStream) -> Result<Vec<(Vec<Bf16>, Vec<Bf16>)>> {
+    pub fn snapshots(&self, stream: &CudaStream) -> Result<Vec<(Vec<BFloat16>, Vec<BFloat16>)>> {
         self.layers
             .iter()
             .map(|layer| layer.snapshot(stream))
@@ -406,7 +406,7 @@ pub struct Trace {
     /// Enable blocking stage readbacks; disabled by default.
     pub enabled: bool,
     /// Stage names and flattened logical BF16 values, in execution order.
-    pub stages: Vec<(&'static str, Vec<Bf16>)>,
+    pub stages: Vec<(&'static str, Vec<BFloat16>)>,
 }
 impl Trace {
     /// When enabled, read a buffer and retain at most `length` elements under its stage name.
@@ -416,7 +416,7 @@ impl Trace {
         &mut self,
         stream: &CudaStream,
         name: &'static str,
-        buffer: &DeviceBuffer<Bf16>,
+        buffer: &DeviceBuffer<BFloat16>,
         length: usize,
     ) -> Result<()> {
         if self.enabled {
@@ -494,7 +494,7 @@ impl Runner {
         Batch::allocate_from(&self.pool, &self.stream, rows)
     }
     /// Require identical context handles and fence all producers before using borrowed buffers.
-    fn ready(&self, buffers: &[&DeviceBuffer<Bf16>]) -> Result<()> {
+    fn ready(&self, buffers: &[&DeviceBuffer<BFloat16>]) -> Result<()> {
         if buffers
             .iter()
             .any(|buffer| !Arc::ptr_eq(buffer.context(), self.stream.context()))
@@ -648,7 +648,7 @@ impl Runner {
     /// completion are checked before returning independently owned output rows.
     fn project_buffer<Role: ProjectionRole, const IN: usize, const OUT: usize>(
         &self,
-        input: &DeviceBuffer<Bf16>,
+        input: &DeviceBuffer<BFloat16>,
         rows: usize,
         weight: &ProjectionWeights<'_, Role, IN, OUT>,
         bias: Option<&BiasWeights<'_, Role, OUT>>,
@@ -737,7 +737,7 @@ impl Runner {
     fn norm_rows<const W: usize>(
         &self,
         input: &Batch<W>,
-        weight: &DeviceBuffer<Bf16>,
+        weight: &DeviceBuffer<BFloat16>,
         norm_width: usize,
     ) -> Result<Batch<W>> {
         self.norm_rows_epsilon(input, weight, norm_width, EPSILON)
@@ -750,7 +750,7 @@ impl Runner {
     fn norm_rows_epsilon<const W: usize>(
         &self,
         input: &Batch<W>,
-        weight: &DeviceBuffer<Bf16>,
+        weight: &DeviceBuffer<BFloat16>,
         norm_width: usize,
         epsilon: f32,
     ) -> Result<Batch<W>> {
@@ -1115,15 +1115,15 @@ mod tests {
         let other = context.new_stream().unwrap();
         let pool = buffer_pool();
         let rows = 65536;
-        let original_values = vec![Bf16::from_f32(1.0); rows * 4];
-        let replaced_values = vec![Bf16::from_f32(3.0); rows * 4];
+        let original_values = vec![BFloat16::from_f32(1.0); rows * 4];
+        let replaced_values = vec![BFloat16::from_f32(3.0); rows * 4];
         let mut original = Batch::<4>::allocate_from(&pool, &stream, rows).unwrap();
         original
             .buffer_mut()
             .copy_from_host(&stream, &original_values)
             .unwrap();
         let address = original.buffer().cu_deviceptr();
-        let mut copied = DeviceBuffer::<Bf16>::zeroed(&other, rows * 4).unwrap();
+        let mut copied = DeviceBuffer::<BFloat16>::zeroed(&other, rows * 4).unwrap();
         other.synchronize().unwrap();
         let (release, wait_release) = std::sync::mpsc::channel();
         let (started, wait_started) = std::sync::mpsc::channel();

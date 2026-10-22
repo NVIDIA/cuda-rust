@@ -5,7 +5,7 @@
 //! BF16 linear and activation kernels used by the checked host composition.
 use ctm_rs::memory::DisjointSlice;
 use ctm_rs::{cuda_module, kernel, launch_contract, thread};
-use cute_rs::Bf16;
+use cute_rs::BFloat16;
 
 /// Device entries for BF16 projections and activation, shared by FFN and decoder examples.
 ///
@@ -25,17 +25,17 @@ pub mod kernels {
     /// helper does not independently validate the allocation or row stride.
     #[inline(always)]
     fn element(
-        data: &[Bf16],
+        data: &[BFloat16],
         row: usize,
         col: usize,
         rows: usize,
         cols: usize,
         stride: usize,
-    ) -> Bf16 {
+    ) -> BFloat16 {
         if row < rows && col < cols {
             data[row * stride + col]
         } else {
-            Bf16::from_bits(0)
+            BFloat16::from_bits(0)
         }
     }
 
@@ -54,8 +54,8 @@ pub mod kernels {
     #[inline(always)]
     unsafe fn packed_decode_impl<const HAS_BIAS: bool>(
         source: &PackedDecode<'_>,
-        bias: &[Bf16],
-        output: &mut DisjointSlice<Bf16>,
+        bias: &[BFloat16],
+        output: &mut DisjointSlice<BFloat16>,
         width: usize,
         outputs: usize,
     ) {
@@ -106,7 +106,7 @@ pub mod kernels {
                 // SAFETY: C's bijective layout and the checked grid give each lane
                 // disjoint initialized output coordinates, with one BF16 rounding.
                 unsafe {
-                    output.store_at(row * outputs + n + col, Bf16::from_f32(value));
+                    output.store_at(row * outputs + n + col, BFloat16::from_f32(value));
                 }
             });
     }
@@ -129,10 +129,10 @@ pub mod kernels {
         const WARPS_PER_BLOCK: usize,
         const PREFETCH: bool,
     >(
-        input: &[Bf16],
-        weight: &[Bf16],
-        bias: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        bias: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         rows: usize,
         width: usize,
         outputs: usize,
@@ -196,7 +196,7 @@ pub mod kernels {
                     // SAFETY: C's bijective layout and the host-checked tile grid
                     // give disjoint output writes within the validated extent.
                     unsafe {
-                        output.store_at((m + r) * outputs + n + c, Bf16::from_f32(value));
+                        output.store_at((m + r) * outputs + n + c, BFloat16::from_f32(value));
                     }
                 }
             });
@@ -213,9 +213,9 @@ pub mod kernels {
     #[kernel]
     #[allow(clippy::too_many_arguments)]
     pub fn linear_bf16(
-        input: &[Bf16],
-        weight: &[Bf16],
-        output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        output: DisjointSlice<BFloat16>,
         rows: usize,
         width: usize,
         outputs: usize,
@@ -244,10 +244,10 @@ pub mod kernels {
     #[kernel]
     #[allow(clippy::too_many_arguments)]
     pub fn linear_bias_bf16(
-        input: &[Bf16],
-        weight: &[Bf16],
-        bias: &[Bf16],
-        output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        bias: &[BFloat16],
+        output: DisjointSlice<BFloat16>,
         rows: usize,
         width: usize,
         outputs: usize,
@@ -279,9 +279,9 @@ pub mod kernels {
     #[kernel]
     #[allow(clippy::too_many_arguments)]
     pub fn decode_linear_bf16(
-        input: &[Bf16],
-        weight: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         rows: usize,
         width: usize,
         outputs: usize,
@@ -332,10 +332,10 @@ pub mod kernels {
     #[kernel]
     #[allow(clippy::too_many_arguments)]
     pub fn decode_linear_bias_bf16(
-        input: &[Bf16],
-        weight: &[Bf16],
-        bias: &[Bf16],
-        mut output: DisjointSlice<Bf16>,
+        input: &[BFloat16],
+        weight: &[BFloat16],
+        bias: &[BFloat16],
+        mut output: DisjointSlice<BFloat16>,
         rows: usize,
         width: usize,
         outputs: usize,
@@ -387,10 +387,10 @@ pub mod kernels {
     /// and keeps all allocations live until completion.
     #[kernel]
     pub fn activate_bf16(
-        gate: &[Bf16],
-        up: &[Bf16],
-        mut silu_output: DisjointSlice<Bf16>,
-        mut product: DisjointSlice<Bf16>,
+        gate: &[BFloat16],
+        up: &[BFloat16],
+        mut silu_output: DisjointSlice<BFloat16>,
+        mut product: DisjointSlice<BFloat16>,
         length: usize,
     ) {
         let tid = thread::index_1d().get();
@@ -412,7 +412,7 @@ pub mod kernels {
             // aligned multiples of 8, and each thread owns one disjoint tile.
             let values = unsafe { gates.load() }.map(silu);
             let multiplied = values.zip_map(unsafe { ups.load() }, |s, u| {
-                Bf16::from_f32(s.to_f32() * u.to_f32())
+                BFloat16::from_f32(s.to_f32() * u.to_f32())
             });
             unsafe {
                 silus.store(values);
@@ -422,7 +422,7 @@ pub mod kernels {
             let mut index = base;
             while index < length {
                 let s = silu(gate[index]);
-                let value = Bf16::from_f32(s.to_f32() * up[index].to_f32());
+                let value = BFloat16::from_f32(s.to_f32() * up[index].to_f32());
                 unsafe {
                     silus.store_linear(index, s);
                     products.store_linear(index, value);

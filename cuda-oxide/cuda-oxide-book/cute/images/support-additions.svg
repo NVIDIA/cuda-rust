@@ -77,7 +77,7 @@
 <text x="40" y="406" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">TensorSSA register vectors</text>
 <circle cx="392" cy="402" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
 <circle cx="472" cy="402" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 472 395 A 7 7 0 0 1 472 409 Z" style="fill: var(--code)"/>
-<text x="540" y="406" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">RegisterTile with map, zip_map, fold and gather</text>
+<text x="540" y="406" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">RegisterTile with +, -, *, / and unary -, map, zip_map, fold and gather</text>
 <text x="40" y="430" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">block_copy</text>
 <circle cx="392" cy="426" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
 <circle cx="472" cy="426" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 472 419 A 7 7 0 0 1 472 433 Z" style="fill: var(--code)"/>

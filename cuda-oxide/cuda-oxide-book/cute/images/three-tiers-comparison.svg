@@ -12,8 +12,8 @@
 <line class="hair" x1="56" y1="148" x2="324" y2="148" stroke-width="0.8"/>
 <rect class="k-box" x="56" y="162" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="190" y="177">Tensor / TensorMut / slice</text>
 <rect class="k-box" x="56" y="200" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="190" y="215">ComposedLayout&lt;Swizzle, RowMajor&gt;</text>
-<rect class="k-box" x="56" y="238" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="190" y="253">TmaDesc / TmaLoadPipeline</text>
-<rect class="k-box" x="56" y="276" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="190" y="291">Mxfp4TiledMma / Sm100TiledMma</text>
+<rect class="k-box" x="56" y="238" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="190" y="253">TensorMap / PipelineTmaAsync</text>
+<rect class="k-box" x="56" y="276" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="190" y="291">Mxf4TiledMma / Sm100TiledMma</text>
 <text class="th tx-teal l" x="56" y="330">Lowers to: dialect-cute</text>
 <text class="ts tx-teal l" x="56" y="352">Best for: GEMM, GEMV, FlashAttention,</text>
 <text class="ts tx-teal l" x="56" y="370">MLA, RMSNorm, SwiGLU, full models</text>

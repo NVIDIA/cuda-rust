@@ -14,7 +14,7 @@
 </style>
 <rect x="0" y="0" width="1240" height="836" style="fill: var(--bg)"/>
 <text x="40" y="34" text-anchor="start" style="font: 600 17px var(--sans); fill: var(--fg)">cute-rs preview against CuTeDSL 4.7</text>
-<text x="40" y="56" text-anchor="start" style="font: 400 12.5px var(--sans); fill: var(--muted)">Rust CuTe kernels compiled ahead of time through the pinned CUTLASS 4.7 compiler for two Blackwell targets. Status at 2d62c436a (2026-10-21).</text>
+<text x="40" y="56" text-anchor="start" style="font: 400 12.5px var(--sans); fill: var(--muted)">Rust CuTe kernels compiled ahead of time through the pinned CUTLASS 4.7 compiler for two Blackwell targets. Status at 5eaa6cbda (2026-10-22).</text>
 <text x="40" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">TARGETS</text>
 <rect x="40.0" y="106" width="158.9" height="58" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
 <text x="50.0" y="124" text-anchor="start" style="font: 600 10.5px var(--sans); fill: var(--fg)">Ampere  sm_80/86/87</text>
@@ -81,7 +81,7 @@
 <circle cx="372" cy="268" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
 <circle cx="452" cy="268" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 261 A 7 7 0 0 1 452 275 Z" style="fill: var(--code)"/>
 <circle cx="532" cy="268" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 532 261 A 7 7 0 0 1 532 275 Z" style="fill: var(--code)"/>
-<text x="600" y="272" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">1D tiles and fixed 2D block-scaled views; no make_tiled_copy, local_tile</text>
+<text x="600" y="272" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">1D tiles (zipped_divide, slice, 1D local_tile) and fixed 2D block-scaled views; no make_tiled_copy</text>
 <text x="40" y="296" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">TMA copies</text>
 <circle cx="372" cy="292" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
 <circle cx="452" cy="292" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 285 A 7 7 0 0 1 452 299 Z" style="fill: var(--code)"/>

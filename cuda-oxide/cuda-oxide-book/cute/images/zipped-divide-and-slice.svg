@@ -51,6 +51,6 @@
 <rect class="k-amber" x="742" y="312" width="262" height="112" rx="8" stroke-width="0.9"/>
 <text class="th tx-amber l" x="760" y="336">Ragged tail (else)</text>
 <rect class="k-box" x="760" y="352" width="226" height="32" rx="5" stroke-width="0.7"/>
-<text class="tm tx-box l" x="772" y="368">t_c.store_linear(k, ...)</text>
+<text class="tm tx-box l" x="772" y="368">t_c.store_at(k, ...)</text>
 <text class="ts tx-amber l" x="760" y="404">Plain scalar loop from t_a.base()</text>
 </svg>

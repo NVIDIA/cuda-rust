@@ -28,11 +28,11 @@
 <text class="th tx-teal l" x="726" y="132">TMEM → Shared C → TMA</text>
 <rect class="k-box" x="726" y="150" width="258" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="855" y="166">Sm100TmemEpilogue::&lt;CSmem&gt;</text>
 <rect class="k-box" x="726" y="190" width="258" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="855" y="206">11 × (128×32) slices + bias</text>
-<rect class="k-box" x="726" y="230" width="258" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="855" y="246">Sm100TmaStorePipeline&lt;2&gt;</text>
+<rect class="k-box" x="726" y="230" width="258" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="855" y="246">sm100::PipelineTmaStore&lt;2&gt;</text>
 <text class="ts tx-teal" x="855" y="286">FP32 → FP16 rounded &amp; TMA stored</text>
 <rect class="k-purple" x="36" y="338" width="968" height="94" rx="8" stroke-width="0.9"/>
 <text class="th tx-purple l" x="56" y="362">ctm-rs Instruction Primitives in the Same Kernel (dialect-nvvm)</text>
-<rect class="k-box" x="56" y="380" width="296" height="34" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="204" y="397">cluster::block_rank() / warp::id()</text>
+<rect class="k-box" x="56" y="380" width="296" height="34" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="204" y="397">cluster_ctarank() / warp_id()</text>
 <rect class="k-box" x="372" y="380" width="296" height="34" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="520" y="397">barrier::barrier_cta_sync + fences</text>
 <rect class="k-box" x="688" y="380" width="296" height="34" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="836" y="397">TmemGuard::&lt;..., 512, CtaGroup2&gt;</text>
 </svg>

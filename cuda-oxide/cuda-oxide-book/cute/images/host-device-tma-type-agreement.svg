@@ -22,10 +22,10 @@
 <rect class="k-amber" x="36" y="198" width="452" height="196" rx="8" stroke-width="0.9"/>
 <text class="th tx-amber l" x="56" y="222">Host (CPU) — Descriptor Encoding &amp; Launch</text>
 <rect class="k-box" x="56" y="240" width="412" height="30" rx="5" stroke-width="0.7"/>
-<text class="tm tx-box l" x="70" y="255">make_tma_desc_2d::&lt;f16, ASmem&gt;(ptr, m, k, ...)</text>
+<text class="tm tx-box l" x="70" y="255">create_tensor_map_tiled::&lt;f16, ASmem&gt;(ptr, m, k, ...)</text>
 <text class="ts tx-amber l" x="56" y="290">• Reads tile shape (128×64) and 128B swizzle from ASmem</text>
 <text class="ts tx-amber l" x="56" y="312">• Validates base alignment &amp; calls cuTensorMapEncodeTiled</text>
-<text class="ts tx-amber l" x="56" y="334">• Produces TmaDesc&lt;f16, ASmem&gt; (128B, 64B-aligned)</text>
+<text class="ts tx-amber l" x="56" y="334">• Produces TensorMap&lt;f16, ASmem&gt; (128B, 64B-aligned)</text>
 <text class="ts tx-amber l" x="56" y="366">Passed by value in launch params (no extra device alloc)</text>
 
 <!-- Arrow from Host to Device #[grid_constant] -->
@@ -36,7 +36,7 @@
 <rect class="k-teal" x="552" y="198" width="452" height="196" rx="8" stroke-width="0.9"/>
 <text class="th tx-teal l" x="572" y="222">Device (GPU) — Kernel &amp; Compile-Time Lowering</text>
 <rect class="k-box" x="572" y="240" width="412" height="30" rx="5" stroke-width="0.7"/>
-<text class="tm tx-box l" x="586" y="255">#[grid_constant] a: &amp;TmaDesc&lt;f16, ASmem&gt;</text>
+<text class="tm tx-box l" x="586" y="255">#[grid_constant] a: &amp;TensorMap&lt;f16, ASmem&gt;</text>
 <rect class="k-box" x="572" y="278" width="412" height="30" rx="5" stroke-width="0.7"/>
 <text class="tm tx-box l" x="586" y="293">Sm100SharedTile&lt;ASmem, OperandA&gt;</text>
 <text class="ts tx-teal l" x="572" y="328">• Type system enforces matching ASmem on copy &amp; MMA</text>

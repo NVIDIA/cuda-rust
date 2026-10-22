@@ -14,22 +14,22 @@
 <rect class="k-box" x="54" y="186" width="182" height="28" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="145" y="200">B: E2M1 [N, K]</text>
 <rect class="k-box" x="54" y="222" width="182" height="28" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="145" y="236">SFA: UE8M0 scales</text>
 <rect class="k-box" x="54" y="258" width="182" height="28" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="145" y="272">SFB: UE8M0 scales</text>
-<text class="ts tx-amber" x="145" y="298">TmaDesc&lt;u8, ByteSmem&gt;</text>
+<text class="ts tx-amber" x="145" y="298">TensorMap&lt;u8, ByteSmem&gt;</text>
 <line class="arr" x1="254" y1="200" x2="282" y2="200" marker-end="url(#arrow-gemm)"/>
 <rect class="k-purple" x="286" y="88" width="234" height="226" rx="8" stroke-width="0.9"/>
 <text class="sec l" x="304" y="110">WARP 8 (PRODUCER)</text>
 <text class="th tx-purple l" x="304" y="132">3-Stage Shared Ring</text>
-<rect class="k-box" x="304" y="150" width="198" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="403" y="166">TmaLoadPipeline&lt;3&gt;</text>
+<rect class="k-box" x="304" y="150" width="198" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="403" y="166">PipelineTmaAsync&lt;3&gt;</text>
 <rect class="k-box" x="304" y="190" width="198" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="403" y="206">SharedA (Mkl, B64)</text>
 <rect class="k-box" x="304" y="230" width="198" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="403" y="246">SharedB (Nkl, B64)</text>
 <rect class="k-box" x="304" y="270" width="198" height="28" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="403" y="284">Sm120ScaleAtom</text>
 <line class="arr" x1="520" y1="200" x2="548" y2="200" marker-end="url(#arrow-gemm)"/>
 <rect class="k-teal" x="552" y="88" width="234" height="226" rx="8" stroke-width="0.9"/>
 <text class="sec l" x="570" y="110">WARPS 0..7 (COMPUTE)</text>
-<text class="th tx-teal l" x="570" y="132">Mxfp4TiledMma</text>
+<text class="th tx-teal l" x="570" y="132">Mxf4TiledMma</text>
 <rect class="k-box" x="570" y="150" width="198" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="669" y="166">load_a_128 / get_b_tile</text>
 <rect class="k-box" x="570" y="190" width="198" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="669" y="206">load_scale_atom_128</text>
-<rect class="k-box" x="570" y="230" width="198" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="669" y="246">accumulate_k64(...)</text>
+<rect class="k-box" x="570" y="230" width="198" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="669" y="246">gemm(...)</text>
 <text class="ts tx-teal" x="669" y="286">FP32 Mxf4AccumulatorTile2x8</text>
 <line class="arr" x1="786" y1="200" x2="814" y2="200" marker-end="url(#arrow-gemm)"/>
 <rect class="k-box" x="818" y="88" width="186" height="226" rx="8" stroke-width="0.9"/>
@@ -41,6 +41,6 @@
 <text class="ts tx-box" x="911" y="298">Global C [M, N] FP16</text>
 <rect class="k-box" x="36" y="342" width="968" height="88" rx="8" stroke-width="0.8"/>
 <text class="th tx-box l" x="56" y="366">Persistent CTA Work Loop — StaticPersistentTileScheduler</text>
-<text class="ts tx-box l" x="56" y="388">Each resident CTA steps across 128×128 output tiles; PipelineState slot and phase parity persist across tiles without resetting barriers.</text>
-<text class="tm tx-box l" x="56" y="410">while scheduler.has_work() { let (m, n, _) = scheduler.current_tile().coordinates(); ... scheduler.advance(); }</text>
+<text class="ts tx-box l" x="56" y="388">Each resident CTA steps across 128×128 output tiles; PipelineState index and phase parity persist across tiles without resetting barriers.</text>
+<text class="tm tx-box l" x="56" y="410">while scheduler.has_work() { let (m, n, _) = scheduler.get_current_work().tile_idx(); ... scheduler.advance_to_next_work(); }</text>
 </svg>

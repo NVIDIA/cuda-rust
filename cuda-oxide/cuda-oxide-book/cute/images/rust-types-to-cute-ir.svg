@@ -19,7 +19,7 @@
 <rect class="k-amber" x="536" y="82" width="468" height="184" rx="8" stroke-width="0.9"/>
 <text class="th tx-amber l" x="556" y="106">Runtime kernel values (SSA operands)</text>
 <rect class="k-box" x="556" y="124" width="428" height="30" rx="5" stroke-width="0.7"/>
-<text class="tm tx-box l" x="572" y="139">#[grid_constant] a: &amp;TmaDesc&lt;f16, ASmem&gt;</text>
+<text class="tm tx-box l" x="572" y="139">#[grid_constant] a: &amp;TensorMap&lt;f16, ASmem&gt;</text>
 <rect class="k-box" x="556" y="162" width="428" height="30" rx="5" stroke-width="0.7"/>
 <text class="tm tx-box l" x="572" y="177">smem_ptr, tmem_addr, barrier_ptr</text>
 <rect class="k-box" x="556" y="200" width="428" height="30" rx="5" stroke-width="0.7"/>

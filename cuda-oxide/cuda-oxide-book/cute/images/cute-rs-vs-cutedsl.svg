@@ -31,7 +31,7 @@
 <text class="tm tx-amber" x="400" y="328">a_smem: cute.ComposedLayout, ...</text>
 <rect class="k-teal" x="620" y="246" width="384" height="96" rx="8" stroke-width="0.8"/>
 <text class="th tx-teal" x="812" y="268">Passes explicit hardware ABI only</text>
-<text class="tm tx-teal" x="812" y="290">#[grid_constant] a: &amp;TmaDesc&lt;f16, ASmem&gt;</text>
+<text class="tm tx-teal" x="812" y="290">#[grid_constant] a: &amp;TensorMap&lt;f16, ASmem&gt;</text>
 <text class="ts tx-teal" x="812" y="309">128B descriptor by value; CopyAtom, TiledMma</text>
 <text class="ts tx-teal" x="812" y="328">&amp; layouts live in type ASmem / local types</text>
 <line class="hair" x1="36" y1="358" x2="1004" y2="358" stroke-width="0.8"/>

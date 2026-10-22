@@ -6,7 +6,7 @@
 <!-- Mode A: BF16 -->
 <rect class="dash" x="36" y="54" width="608" height="132" rx="8" stroke-width="0.5"/>
 <text class="th tx-teal" x="52" y="76" text-anchor="start" dominant-baseline="central">Mode A · BF16 (16 bits per number = 32 bytes per 16 numbers)</text>
-<rect class="k-teal" x="52" y="96" width="310" height="44" rx="6"/><text class="ts tx-teal" x="207" y="118" text-anchor="middle" dominant-baseline="central">16 × Bf16 weights (32 bytes)</text>
+<rect class="k-teal" x="52" y="96" width="310" height="44" rx="6"/><text class="ts tx-teal" x="207" y="118" text-anchor="middle" dominant-baseline="central">16 × BFloat16 weights (32 bytes)</text>
 <line class="arr" x1="362" y1="118" x2="404" y2="118" marker-end="url(#arrow-07)"/>
 <rect class="k-box" x="408" y="94" width="216" height="48" rx="6" stroke-width="0.5"/>
 <text class="th tx-box" x="516" y="109" text-anchor="middle" dominant-baseline="central">m16n8k16 Tensor Core</text>
@@ -24,6 +24,6 @@
 <text class="ts tx-purple" x="504" y="276" text-anchor="middle" dominant-baseline="central">nvgpu.cvt_fpext (hardware)</text>
 <rect class="k-box" x="52" y="306" width="572" height="58" rx="6" stroke-width="0.5"/>
 <text class="th tx-box" x="338" y="325" text-anchor="middle" dominant-baseline="central">32-lane warp along K: 32 × (K=64 tile) = 1 KB coalesced read</text>
-<text class="ts tx-box" x="338" y="345" text-anchor="middle" dominant-baseline="central">each lane accumulates FP32 → warp_reduction_sum_f32 → 1 Bf16 output</text>
+<text class="ts tx-box" x="338" y="345" text-anchor="middle" dominant-baseline="central">each lane accumulates FP32 → warp_reduction_sum_f32 → 1 BFloat16 output</text>
 <text class="ts" x="52" y="392" text-anchor="start" dominant-baseline="central">Reads 3.64 GiB (3.56× less) → 114.0 tok/s decode (8.77 ms/tok) · 632.8 tok/s prefill</text>
 </svg>

@@ -7,7 +7,7 @@ use cute_rs::BFloat16;
 
 #[test]
 fn static_atom_layouts_match_cute_algebra_for_every_lane_and_value() {
-    use cute_rs::bf16_mma::{ALayout, BLayout, CLayout};
+    use cute_rs::mma::bf16::{ALayout, BLayout, CLayout};
     use cute_rs::static_layout::StaticLayout;
     fn check<L: StaticLayout>(description: &str) {
         let oracle: cute_rs::layout::Layout = description.parse().unwrap();
@@ -27,7 +27,7 @@ fn static_atom_layouts_match_cute_algebra_for_every_lane_and_value() {
 
 #[test]
 fn packed_output_partition_visits_only_live_decode_rows() {
-    use cute_rs::bf16_mma::PackedDecode;
+    use cute_rs::mma::bf16::PackedDecode;
     #[repr(align(4))]
     struct Aligned([BFloat16; 256]);
     let data = Aligned([BFloat16::from_bits(0); 256]);
@@ -44,12 +44,12 @@ fn packed_output_partition_visits_only_live_decode_rows() {
         assert_eq!(seen, vec![1; rows * 8]);
     }
 }
-use cute_rs::bf16_mma::{Bf16Mma16x8x16, FragmentC};
 use cute_rs::markers::{ComposedLayout, RowMajor, Swizzle};
+use cute_rs::mma::bf16::{Bf16Mma16x8x16, FragmentC};
 
 #[test]
 fn packed_decode_proof_rejects_incomplete_or_misaligned_operands() {
-    use cute_rs::bf16_mma::PackedDecode;
+    use cute_rs::mma::bf16::PackedDecode;
     #[repr(align(4))]
     struct Aligned([BFloat16; 1024]);
     let data = Aligned([BFloat16::from_bits(0); 1024]);
@@ -72,7 +72,7 @@ fn packed_decode_proof_rejects_incomplete_or_misaligned_operands() {
 
 #[test]
 fn validated_decode_callback_runs_once_only_for_proven_storage() {
-    use cute_rs::bf16_mma::PackedDecode;
+    use cute_rs::mma::bf16::PackedDecode;
     #[repr(align(4))]
     struct Aligned([BFloat16; 128]);
     let data = Aligned([BFloat16::from_bits(0); 128]);

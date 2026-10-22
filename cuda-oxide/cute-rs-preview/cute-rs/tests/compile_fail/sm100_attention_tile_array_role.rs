@@ -3,7 +3,7 @@
 //! Compile-fail probe: preserve B-role typing when a tile is borrowed from a shared tile array.
 #![feature(f16)]
 use cute_rs::OperandB;
-use cute_rs::sm100_attention::{MmaSs, SharedLayout, SharedTileArray};
+use cute_rs::attention::sm100::{MmaSs, SharedLayout, SharedTileArray};
 /// Supported per-CTA 64-by-64 tile layout for group-two MMA.
 type L = SharedLayout<64, 64>;
 /// Preserve B-role typing when a tile is borrowed from a shared tile array.

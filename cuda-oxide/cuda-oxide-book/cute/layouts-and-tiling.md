@@ -67,7 +67,7 @@ A single `ComposedLayout<Swizzle, Offset, Layout>` type alias binds host `create
 ```
 
 ```rust
-use cute_rs::tma::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
+use cute_rs::copy::tma::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
 use cute_rs::{ComposedLayout, RowMajor, Swizzle, TensorMap};
 
 // Shared layout type: 128x64 tile with a 128-byte swizzle

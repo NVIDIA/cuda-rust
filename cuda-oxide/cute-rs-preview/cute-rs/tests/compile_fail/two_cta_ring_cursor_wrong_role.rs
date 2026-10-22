@@ -4,7 +4,7 @@
  */
 
 //! Compile-fail probe: reject consumer cursors on producer operations and producer cursors on consumer operations.
-use cute_rs::sm100_attention::pipeline::{
+use cute_rs::attention::sm100::pipeline::{
     AsyncCompletion, Consumer, Producer, RingCursor, TwoCtaRing,
 };
 

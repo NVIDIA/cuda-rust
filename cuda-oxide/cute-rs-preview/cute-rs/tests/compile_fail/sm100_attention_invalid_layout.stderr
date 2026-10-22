@@ -6,7 +6,7 @@ error[E0080]: evaluation panicked: assertion failed: contiguous >= 32 && contigu
   |     const VALID: () = {
 ...
   |         assert!(contiguous >= 32 && contiguous.is_multiple_of(32));
-  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `cute_rs::sm100_attention::SharedLayout::<128, 16>::VALID` failed here
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `cute_rs::attention::sm100::SharedLayout::<128, 16>::VALID` failed here
 
 note: erroneous constant encountered
  --> src/attention/sm100/shared.rs

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //! Compile-fail probe: reject a K16 shared/shared attention configuration.
-use cute_rs::sm100_attention::{MmaSs, SharedLayout};
+use cute_rs::attention::sm100::{MmaSs, SharedLayout};
 /// K-major shared layout too narrow for this attention MMA path.
 type UnsupportedK16 = SharedLayout<128, 16>;
 /// Reject a K16 shared/shared attention configuration.

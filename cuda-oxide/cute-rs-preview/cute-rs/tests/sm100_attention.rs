@@ -4,7 +4,7 @@
  */
 
 #![doc = "Checks attention shared layouts, typed MMA shapes and complete tile-array contracts."]
-use cute_rs::sm100_attention::{MmaSs, MmaTs, SharedLayout, SharedTileArray, SmemLayout};
+use cute_rs::attention::sm100::{MmaSs, MmaTs, SharedLayout, SharedTileArray, SmemLayout};
 use cute_rs::{OperandA, OperandB};
 
 /// Keep explicit SM100 instructions behind CTM in both kernels and their CuTe helpers.

@@ -22,28 +22,15 @@ attention metadata, decoder metadata and FFN metadata. Device SM100 attention
 is available without that feature. Compile-time checking of a view does not
 establish convergence, allocation readiness or safe asynchronous reuse.
 
-## Import compatibility
+## Import paths
 
-Prefer the grouped paths for new code. Existing root item exports remain
-available, and the following compatibility names refer to the same modules or
-items; they do not wrap or duplicate implementations.
-
-| Existing path | Grouped path |
-| --- | --- |
-| `bf16_mma` | `mma::bf16` |
-| `block_scaled_mma` | `mma::block_scaled` |
-| `sm100_attention` | `attention::sm100` |
-| `attention::{AttentionError, AttentionShape, AttentionWindow, CacheShape}` | `attention::metadata::{AttentionError, AttentionShape, AttentionWindow, CacheShape}` |
-| `epilogue` items | `epilogue::sm120` items |
-| `partition` | `tensor::partition` |
-| `cooperative` | `copy::cooperative` |
-| `tiled_copy` | `copy::tiled` |
-| `tile` | `copy::vector` |
-| `tma` | `copy::tma` |
-
-For example, `cute_rs::tma::TensorMap` and `cute_rs::copy::tma::TensorMap` are
-identical types. Common fragments such as `mma::FragmentC` and core views such as
-`tensor::Tensor` keep their original defining paths.
+Every module has one path, its defining path. Root item exports such as
+`cute_rs::TensorMap` name the same items as their defining modules, here
+`cute_rs::copy::tma::TensorMap`; they do not wrap or duplicate
+implementations. Two parent modules re-export grouped items the same way:
+`attention::{AttentionError, AttentionShape, AttentionWindow, CacheShape}` are
+the `attention::metadata` items (behind the `host` feature), and the `epilogue`
+items are the `epilogue::sm120` items.
 
 ## Checks
 

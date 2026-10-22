@@ -6,7 +6,7 @@
 #![doc = "Checks two-CTA barrier-ring addressing, persistent cursors and policy rejection."]
 use core::mem::MaybeUninit;
 use cuda_device::barrier::Barrier;
-use cute_rs::sm100_attention::pipeline::{
+use cute_rs::attention::sm100::pipeline::{
     AsyncCompletion, Consumer, Producer, RingCursor, TwoCtaRing,
 };
 

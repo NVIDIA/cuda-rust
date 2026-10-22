@@ -3,11 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Compatibility and grouped imports must name the same public types.
+//! Root and parent-module re-exports must name the same public types as their defining paths.
 
 macro_rules! same_type {
-    ($legacy:ty, $grouped:ty) => {
-        let _: fn($legacy) -> $grouped = core::convert::identity;
+    ($import:ty, $defining:ty) => {
+        let _: fn($import) -> $defining = core::convert::identity;
     };
 }
 
@@ -22,28 +22,11 @@ fn hidden_epilogue_hooks_keep_their_import_path() {
 }
 
 #[test]
-fn compatibility_aliases_preserve_type_identity() {
-    same_type!(
-        cute_rs::bf16_mma::Bf16Mma16x8x16,
-        cute_rs::mma::bf16::Bf16Mma16x8x16
-    );
-    same_type!(
-        cute_rs::block_scaled_mma::Mxf4TiledMma<()>,
-        cute_rs::mma::block_scaled::Mxf4TiledMma<()>
-    );
-    same_type!(cute_rs::sm100_attention::SharedLayout<64, 64>, cute_rs::attention::sm100::SharedLayout<64, 64>);
+fn parent_module_re_exports_preserve_type_identity() {
     same_type!(
         cute_rs::epilogue::Sm120Epilogue128x128,
         cute_rs::epilogue::sm120::Sm120Epilogue128x128
     );
-    same_type!(
-        cute_rs::partition::Strided1D,
-        cute_rs::tensor::partition::Strided1D
-    );
-    same_type!(cute_rs::cooperative::SmemTile<f32, ()>, cute_rs::copy::cooperative::SmemTile<f32, ()>);
-    same_type!(cute_rs::tiled_copy::SharedTensor<f32, f32, ()>, cute_rs::copy::tiled::SharedTensor<f32, f32, ()>);
-    same_type!(cute_rs::tile::GlobalStoreTile<f32, 4>, cute_rs::copy::vector::GlobalStoreTile<f32, 4>);
-    same_type!(cute_rs::tma::TensorMap<f32, ()>, cute_rs::copy::tma::TensorMap<f32, ()>);
 }
 
 #[test]

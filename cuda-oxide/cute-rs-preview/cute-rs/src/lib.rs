@@ -29,9 +29,10 @@
 //! - [`attention`] groups host metadata and device-available SM100 operations.
 //! - [`epilogue`] contains SM120 output staging.
 //!
-//! Existing root exports and module aliases remain available. For example,
-//! `cute_rs::tma::TensorMap` and `cute_rs::copy::tma::TensorMap` are the same type.
-//! Architecture ownership and pipeline modules retain their existing roles.
+//! Every module has one path, its defining path. A root item export such as
+//! [`TensorMap`] names the same item as its defining module, here
+//! [`copy::tma::TensorMap`]. Architecture ownership and pipeline modules
+//! retain their existing roles.
 //!
 //! The typed wrappers are inlined, so they add no device-side storage or call
 //! overhead. Functions such as [`load_tile`] and [`copy_g2s`] are compiler
@@ -87,23 +88,6 @@ pub mod scheduler;
 pub mod sm100;
 pub mod static_layout;
 pub mod tensor;
-
-/// Compatibility alias for SM100 attention operations in [`attention::sm100`].
-pub use attention::sm100 as sm100_attention;
-/// Compatibility alias for cooperative transfers in [`copy::cooperative`].
-pub use copy::cooperative;
-/// Compatibility alias for tiled transfers in [`copy::tiled`].
-pub use copy::tiled as tiled_copy;
-/// Compatibility alias for Tensor Memory Accelerator transfers in [`copy::tma`].
-pub use copy::tma;
-/// Compatibility alias for vector transfers in [`copy::vector`].
-pub use copy::vector as tile;
-/// Compatibility alias for BF16 matrix multiply in [`mma::bf16`].
-pub use mma::bf16 as bf16_mma;
-/// Compatibility alias for block-scaled matrix multiply in [`mma::block_scaled`].
-pub use mma::block_scaled as block_scaled_mma;
-/// Compatibility alias for thread partitions in [`tensor::partition`].
-pub use tensor::partition;
 
 pub use block_scaled::{
     BlockScaledTensor, BlockScaledThreadRow, BlockScaledTile64, DenseBlockScaleKMajor, KMajor,

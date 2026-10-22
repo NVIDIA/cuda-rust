@@ -11,7 +11,7 @@
 mod kernel;
 
 use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig1D, sys};
-use cute_rs::sm100_attention::{SmemLayout, create_tensor_map_tiled};
+use cute_rs::attention::sm100::{SmemLayout, create_tensor_map_tiled};
 use serde_json::json;
 use std::{error::Error, path::PathBuf};
 

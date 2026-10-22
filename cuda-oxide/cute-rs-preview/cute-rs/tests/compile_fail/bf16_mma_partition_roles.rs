@@ -4,7 +4,7 @@
  */
 use cute_rs::{
     BFloat16,
-    bf16_mma::{Bf16Mma16x8x16, FragmentC},
+    mma::bf16::{Bf16Mma16x8x16, FragmentC},
 };
 fn main() {
     let mma = Bf16Mma16x8x16::get_slice(0);

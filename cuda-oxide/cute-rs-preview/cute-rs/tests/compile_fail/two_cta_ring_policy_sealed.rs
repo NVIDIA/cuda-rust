@@ -5,7 +5,7 @@
 
 //! Compile-fail probe: prevent external code from defining a wait policy that omits required ordering.
 use cuda_device::barrier::Barrier;
-use cute_rs::sm100_attention::pipeline::WaitPolicy;
+use cute_rs::attention::sm100::pipeline::WaitPolicy;
 
 /// Invalid external wait policy with no ordering guarantees.
 

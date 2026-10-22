@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Compile-fail probe: reject a TMA load whose destination has a different operand-major layout.
 #![feature(f16)]
-use cute_rs::sm100_attention::{SharedLayout, SharedTile, TmaCopy};
+use cute_rs::attention::sm100::{SharedLayout, SharedTile, TmaCopy};
 use cute_rs::{OperandB, TensorMap};
 /// K-major 128-by-128 descriptor layout.
 type Qk = SharedLayout<128, 128>;

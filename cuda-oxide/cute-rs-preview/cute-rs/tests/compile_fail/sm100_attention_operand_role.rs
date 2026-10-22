@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Compile-fail probe: reject a B-role tile in the shared/shared MMA A position.
 #![feature(f16)]
-use cute_rs::sm100_attention::{MmaSs, SharedLayout, SharedTile};
+use cute_rs::attention::sm100::{MmaSs, SharedLayout, SharedTile};
 use cute_rs::OperandB;
 /// Supported 128-by-128 layout shared by both role-checked operands.
 type L = SharedLayout<128, 128>;

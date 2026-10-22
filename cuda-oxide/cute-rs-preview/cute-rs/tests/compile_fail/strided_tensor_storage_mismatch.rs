@@ -5,7 +5,7 @@
 #![feature(f16)]
 use cute_rs::{
     BFloat16,
-    partition::{Strided1D, StridedTensor},
+    tensor::partition::{Strided1D, StridedTensor},
 };
 fn main() {
     let _invalid: Option<StridedTensor<'_, BFloat16, Strided1D, f16>> = None;

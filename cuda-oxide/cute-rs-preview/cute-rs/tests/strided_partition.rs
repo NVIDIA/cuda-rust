@@ -4,11 +4,11 @@
  */
 //! Partition coverage, ordered reductions and disjoint stores on ordinary memory.
 
-use cute_rs::partition::{StridedTensor, StridedTensorMut};
+use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 
 #[test]
 fn nested_partitions_retain_their_types_and_compose_coordinates() {
-    use cute_rs::partition::{Cyclic, Strided1D, Subrange};
+    use cute_rs::tensor::partition::{Cyclic, Strided1D, Subrange};
     fn typed(_: &StridedTensor<'_, f32, Cyclic<Subrange<Cyclic<Strided1D, 4>>, 3>>) {}
     let storage: Vec<f32> = (0..100).map(|i| i as f32).collect();
     let selected = StridedTensor::from_slice(&storage)
@@ -65,7 +65,7 @@ fn partition_layout_and_storage_identity_are_compile_time_contracts() {
 
 #[test]
 fn encoded_storage_retains_its_element_contract_and_bits() {
-    use cute_rs::partition::Strided1D;
+    use cute_rs::tensor::partition::Strided1D;
     let bytes = [0x12_u8, 0x34, 0x56, 0x78];
     let encoded = StridedTensor::<cute_rs::Float4E2M1FN, Strided1D, u8>::from_storage(&bytes);
     assert_eq!(

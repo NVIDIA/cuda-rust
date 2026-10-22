@@ -314,7 +314,7 @@ impl<const STAGES: u32, Role: CursorRole> Default for RingCursor<STAGES, Role> {
 ///
 /// ```no_run
 /// # #![feature(f16)]
-/// # use cute_rs::{OperandB, TensorMap, sm100_attention::{SharedLayout, SharedTile, TmaCopy, pipeline::*}};
+/// # use cute_rs::{OperandB, TensorMap, attention::sm100::{SharedLayout, SharedTile, TmaCopy, pipeline::*}};
 /// type L = SharedLayout<64, 64>;
 /// # type Ring = TwoCtaRing<2, AsyncCompletion, AsyncCopyReuse>;
 /// # unsafe fn produce(ring: Ring, p: &mut RingCursor<2, Producer>, desc: &TensorMap<f16, L>, b: &mut SharedTile<L, OperandB>, rank: u32) {
@@ -336,7 +336,7 @@ impl<const STAGES: u32, Role: CursorRole> Default for RingCursor<STAGES, Role> {
 /// requires initialized TMEM. The next producer acquire waits for this release:
 ///
 /// ```no_run
-/// # use cute_rs::{OperandA, OperandB, sm100_attention::{MmaSs, SharedLayout, SharedTile, pipeline::*}};
+/// # use cute_rs::{OperandA, OperandB, attention::sm100::{MmaSs, SharedLayout, SharedTile, pipeline::*}};
 /// # type L = SharedLayout<64, 64>;
 /// # type Ring = TwoCtaRing<2, AsyncCompletion, AsyncCopyReuse>;
 /// # unsafe fn consume(ring: Ring, c: &mut RingCursor<2, Consumer>, mma: &MmaSs<L, L, 128, 128, 64, 2>, dst: u32, a: &SharedTile<L, OperandA>, b: &SharedTile<L, OperandB>, accumulate: bool) {

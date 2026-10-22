@@ -4,7 +4,7 @@
  */
 //! Ordered streaming reductions over independently laid-out tensor views.
 
-use cute_rs::partition::StridedTensor;
+use cute_rs::tensor::partition::StridedTensor;
 use cute_rs::{ComposedLayout, RowMajor, SmemTile, Swizzle};
 
 #[test]

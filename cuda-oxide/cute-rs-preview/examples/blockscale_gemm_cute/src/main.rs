@@ -61,7 +61,7 @@ use ctm_rs::mbarrier::Barrier;
 use ctm_rs::memory::DynamicSharedArray;
 use ctm_rs::{cuda_module, kernel, launch_bounds, launch_contract, thread, warp};
 use cuda_core::{CudaContext, LaunchConfig1D};
-use cute_rs::tma::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
+use cute_rs::copy::tma::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
 use cute_rs::{
     C, ComposedLayout, Consumer, Layout, Mkl, Mxf4AccumulatorTile2x8, Mxf4E2M1, Mxf4TiledMma, Nkl,
     PipelineState, PipelineTmaAsync, PipelineTmaStore, Producer, RowMajor, SharedScaleAtom,

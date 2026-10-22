@@ -3,7 +3,7 @@
 //! Compile-fail probe: reject empty and byte-overflowing shared tile arrays at compile time.
 #![feature(f16)]
 use cute_rs::OperandB;
-use cute_rs::sm100_attention::{SharedLayout, SharedTileArray};
+use cute_rs::attention::sm100::{SharedLayout, SharedTileArray};
 /// Small 8-by-32 shared layout whose stage-array extent is checked.
 type L = SharedLayout<8, 32>;
 /// Force const evaluation of an invalid zero-tile array.

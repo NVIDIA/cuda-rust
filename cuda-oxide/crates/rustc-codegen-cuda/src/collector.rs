@@ -3491,9 +3491,10 @@ mod tests {
                 "{path}"
             );
         }
-        // The compatibility re-exports in cute_rs::lib (`tile`, `tma`,
-        // `cooperative`, `tiled_copy`, `block_scaled_mma`) are import paths,
-        // never defining paths, so they must not be recognized.
+        // Import paths are never defining paths, so none of these may be
+        // recognized: the root module aliases cute_rs once had (`tile`, `tma`,
+        // `cooperative`, `tiled_copy`, `block_scaled_mma`, retired) and the
+        // `epilogue` parent re-export.
         for path in [
             "::tile::load_tile",
             "::tma::copy_tma_2d",

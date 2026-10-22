@@ -160,8 +160,8 @@ pub(crate) enum SubstKind {
 /// `path` is the crate-relative form rustc prints for a definition
 /// (`::copy::tma::copy_tma_2d`); the registry stores the same path with the
 /// `cute_rs` crate prefix. Re-export paths never match, so a caller that
-/// resolved an item through `cute_rs::tma::copy_tma_2d` must pass the
-/// defining path, not the import path.
+/// resolved an item through the root export `cute_rs::copy_tma_2d` must pass
+/// the defining path, not the import path.
 pub fn is_cute_compiler_hook_path(path: &str) -> bool {
     CUTE_FNS
         .iter()
@@ -695,8 +695,9 @@ mod tests {
         ] {
             assert!(is_cute_compiler_hook_path(path), "{path}");
         }
-        // Compatibility re-exports (`cute_rs::tile`, `cute_rs::tma`,
-        // `cute_rs::block_scaled_mma`) and crate-qualified forms never match.
+        // Paths that are not definition paths never match: the root module
+        // aliases cute_rs once had (`tile`, `tma`, `block_scaled_mma`, retired),
+        // the `epilogue` parent re-export and crate-qualified forms.
         for path in [
             "::tile::assume",
             "::tma::copy_tma_2d",

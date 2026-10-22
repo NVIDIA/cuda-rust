@@ -11,7 +11,7 @@ mod kernel;
 mod python;
 
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer, LaunchConfig1D, sys};
-use cute_rs::tma::create_tensor_map_tiled;
+use cute_rs::copy::tma::create_tensor_map_tiled;
 use serde_json::json;
 use std::{
     error::Error,

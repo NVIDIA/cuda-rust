@@ -4,7 +4,7 @@
  */
 
 //! Compile-fail probe: reject a zero-stage cursor during const evaluation.
-use cute_rs::sm100_attention::pipeline::{Producer, RingCursor};
+use cute_rs::attention::sm100::pipeline::{Producer, RingCursor};
 
 /// Reject a zero-stage cursor during const evaluation.
 

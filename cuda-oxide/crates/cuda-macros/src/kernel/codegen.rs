@@ -139,8 +139,8 @@ pub(crate) fn generic_kernel_no_instantiation_tokens(
                 /// is bound to the generic parameter `F` at the call site
                 /// without moving the closure — the caller still needs the
                 /// closure value to push as the kernel argument right
-                /// after. Then forces rustc to emit a CGU entry for the
-                /// concrete `#kernel_name::<...>` instantiation. Returns
+                /// after. Retains the concrete `#kernel_name::<...>`
+                /// function-item type for device collection. Returns
                 /// the PTX export name produced by the kernel's
                 /// `GenericCudaKernel::ptx_name()` impl, which is the
                 /// single source of truth for the on-wire name on the
@@ -431,13 +431,11 @@ fn generate_generic_cuda_kernel_impl(
 
         /// Retains this concrete kernel specialization and returns its PTX entry name.
         ///
-        /// The reify cast is what makes rustc collect the monomorphized kernel
-        /// item for the device backend; `black_box` keeps the otherwise unused
-        /// cast from being optimized away without touching any pointer.
+        /// The type-hash helper retains the concrete kernel function-item type
+        /// for device collection without emitting its body on the host.
         #(#cfg_attrs)*
         #[inline(never)]
         #vis fn #ptx_name_fn #generics () -> &'static str #where_clause {
-            ::core::hint::black_box(#kernel_name #kernel_turbofish as *const ());
             <#marker_type as ::cuda_host::GenericCudaKernel>::ptx_name()
         }
     }

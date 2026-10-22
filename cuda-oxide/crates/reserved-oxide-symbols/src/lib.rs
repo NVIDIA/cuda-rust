@@ -72,6 +72,12 @@ pub const MATERIALIZER_PROVENANCE_ENV: &str = "CUDA_OXIDE_INTERNAL_MATERIALIZER_
 /// code remains keyed by the content-derived provenance digest.
 pub const MATERIALIZER_HANDSHAKE_ENV: &str = "CUDA_OXIDE_INTERNAL_MATERIALIZER_HANDSHAKE";
 
+/// Ordered, content-bound external LTO-IR files supplied by cargo-oxide.
+pub const EXTERNAL_LTOIR_ENV: &str = "CUDA_OXIDE_INTERNAL_EXTERNAL_LTOIR_V1";
+
+/// Definition name in `cuda_device::library`; consumers resolve its actual DefId.
+pub const LIBRARY_CALL_V1: &str = "cuda_oxide_library_v1_246e25db_call";
+
 /// Optional comma-separated filter selecting crates that may own device code.
 pub const DEVICE_CODEGEN_CRATE_ENV: &str = "CUDA_OXIDE_DEVICE_CODEGEN_CRATE";
 
@@ -142,6 +148,11 @@ pub const LEGACY_DEVICE_PREFIX: &str = "cuda_oxide_device_246e25db_";
 /// strips this prefix when emitting the LLVM `declare` so that the LTOIR
 /// linker resolves against the original (unprefixed) external symbol.
 pub const DEVICE_EXTERN_PREFIX: &str = "cuda_oxide_device_extern_246e25db_";
+
+/// Doc-alias marker retained after `#[convergent]` macro expansion.
+/// Unlike doc comments, aliases survive dependency metadata even for private
+/// externs reached through a downstream generic instantiation.
+pub const DEVICE_EXTERN_CONVERGENT_MARKER: &str = "cuda_oxide_device_extern_convergent_246e25db";
 
 /// Prefix added to closure-monomorphization helper functions generated
 /// by `#[kernel]` for kernels that take a closure parameter.

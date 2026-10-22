@@ -350,6 +350,40 @@ pub fn emit_function_call(
         last_op = arg_last_op;
     }
 
+    emit_function_call_values(
+        ctx,
+        body,
+        callee_name,
+        arg_values,
+        destination,
+        return_type,
+        external_callee_type,
+        target,
+        block_ptr,
+        last_op,
+        value_map,
+        block_map,
+        loc,
+    )
+}
+
+/// Emit already translated arguments at an explicit foreign ABI boundary.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_function_call_values(
+    ctx: &mut Context,
+    body: &mir::Body,
+    callee_name: &str,
+    mut arg_values: Vec<Value>,
+    destination: &mir::Place,
+    return_type: TypeHandle,
+    external_callee_type: Option<TypeHandle>,
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    mut last_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
     // A Rust foreign declaration uses generic pointers at its ABI surface,
     // while an argument may retain a concrete GPU address space internally
     // (for example, `*mut T` in shared memory). Adapt that representation at

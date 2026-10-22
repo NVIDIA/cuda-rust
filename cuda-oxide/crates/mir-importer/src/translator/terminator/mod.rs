@@ -968,6 +968,27 @@ fn translate_call(
     let (pattern_name, call_name, substs_args, type_substs) = extract_func_info(func, &loc)?;
     let loc = call_debug_location(pattern_name.as_deref(), loc);
 
+    if let mir::Operand::Constant(constant) = func
+        && let rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::FnDef(def, substs)) =
+            constant.const_.ty().kind()
+        && let Ok(instance) = rustc_public::mir::mono::Instance::resolve(def, &substs)
+        && let Some(plan) = crate::library::get_call(instance.mangled_name().as_str())
+    {
+        return crate::library::translate_call(
+            ctx,
+            body,
+            &plan,
+            args,
+            destination,
+            &target_usize,
+            block_ptr,
+            prev_op,
+            value_map,
+            block_map,
+            loc,
+        );
+    }
+
     // Is the trait-method Self type SharedArray? Shared with
     // `values::classify_call` so intrinsic dispatch and destination-slot
     // classification can't drift.
@@ -1150,6 +1171,7 @@ fn translate_call(
                 loc,
                 0,         // byte_offset = 0 for get() and get_raw()
                 alignment, // User-specified or default alignment
+                name.contains("::get_fixed"),
             );
         } else if name.contains("::offset") {
             // DynamicSharedArray::offset(byte_offset) - get pointer at byte offset
@@ -1477,6 +1499,7 @@ const KERNEL_METADATA_MARKERS: &[&str] = &[
     "cuda_device::thread::__unchecked_indexing_config",
     "cuda_device::cluster::__cluster_config",
     "cuda_device::shared::__dynamic_shared_alignment",
+    "cuda_device::shared::__dynamic_shared_inferred",
 ];
 
 /// Keep the macro-injected launch-context constructor out of user line tables.
@@ -3177,7 +3200,8 @@ fn try_dispatch_intrinsic(
                 loc,
             )))
         }
-        "cuda_device::shared::__dynamic_shared_alignment" => {
+        "cuda_device::shared::__dynamic_shared_alignment"
+        | "cuda_device::shared::__dynamic_shared_inferred" => {
             // Zero-cost marker injected by #[launch_contract]. body.rs records
             // the const alignment on the kernel; no runtime call survives.
             let actual_prev_op = match prev_op {

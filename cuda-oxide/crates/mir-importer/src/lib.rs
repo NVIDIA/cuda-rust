@@ -94,6 +94,7 @@ extern crate rustc_span;
 pub const DEVICE_RUNTIME_CHECKS_VALUE: bool = false;
 
 pub mod error;
+mod kernel_resources;
 pub mod pipeline;
 // Crate-internal: every caller reaches the translator through `pipeline`, and
 // the handful of predicates outsiders need are re-exported below. Keeping the
@@ -112,3 +113,7 @@ pub use pipeline::{
 pub use translator::facts::KnownDefs;
 pub use translator::terminator::drop_glue::{drop_glue_is_noop, drop_instance_is_noop};
 pub use translator::terminator::is_panic_entry_path;
+
+mod library;
+pub use library::LibraryCallPlan;
+pub use pipeline::run_pipeline_with_libraries;

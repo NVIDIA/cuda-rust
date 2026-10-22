@@ -370,7 +370,7 @@ pub(crate) fn try_translate_cute_call(
         CuteFn::TmaLoadPipelineFromRawPartsRejected => input_err!(
             loc.clone(),
             TranslationErr::unsupported(
-                "TmaLoadPipeline::from_raw_parts is not supported by the v0 semantic pipeline; use one contiguous [full][empty] ring with from_raw_base"
+                "PipelineTmaAsync::from_raw_parts is not supported by the v0 semantic pipeline; use one contiguous [full][empty] ring with from_raw_base"
                     .to_owned()
             )
         ),

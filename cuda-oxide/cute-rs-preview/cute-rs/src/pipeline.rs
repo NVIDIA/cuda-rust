@@ -26,8 +26,8 @@
 //! Stages form a ring: `0 -> 1 -> ... -> 0`. A one-bit phase distinguishes
 //! the new use of a slot from its previous use. New buffers are empty, so the
 //! producer starts at phase 1 and the consumer at phase 0. The phase flips
-//! only when the stage index wraps to slot 0. This matches CUTLASS
-//! `PipelineTmaAsync`.
+//! only when the stage index wraps to slot 0, as in the CUTLASS pipeline of
+//! the same name.
 
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of};
@@ -113,6 +113,8 @@ impl<Role, const STAGES: usize> PipelineState<Role, STAGES> {
 
 /// A CTA-local TMA load pipeline with one full and one empty barrier per stage.
 ///
+/// This is CuTeDSL's `pipeline.PipelineTmaAsync`.
+///
 /// - `STAGES` is the number of shared tile buffers.
 /// - `CONSUMER_WARPS` is the number of warps that read each tile. Lane 0 of
 ///   each warp releases the stage through [`Self::consumer_release`].
@@ -121,7 +123,7 @@ impl<Role, const STAGES: usize> PipelineState<Role, STAGES> {
 /// This value stores only two pointers. The caller owns the barriers and tile
 /// buffers in shared memory.
 #[derive(Clone, Copy)]
-pub struct TmaLoadPipeline<const STAGES: usize, const CONSUMER_WARPS: u32, const TX_BYTES: u32> {
+pub struct PipelineTmaAsync<const STAGES: usize, const CONSUMER_WARPS: u32, const TX_BYTES: u32> {
     /// First of STAGES full barriers, completed by TMA transaction bytes.
     full: *mut Barrier,
     /// First of STAGES empty barriers, released by consumer warps.
@@ -191,7 +193,7 @@ impl<const STAGES: usize> TmaStorePipeline<STAGES> {
 }
 
 impl<const STAGES: usize, const CONSUMER_WARPS: u32, const TX_BYTES: u32>
-    TmaLoadPipeline<STAGES, CONSUMER_WARPS, TX_BYTES>
+    PipelineTmaAsync<STAGES, CONSUMER_WARPS, TX_BYTES>
 {
     /// Required alignment of each shared-memory barrier array.
     pub const STORAGE_ALIGN: usize = align_of::<Barrier>();
@@ -202,8 +204,8 @@ impl<const STAGES: usize, const CONSUMER_WARPS: u32, const TX_BYTES: u32>
     /// barrier expects one arrival from lane 0 of every consumer warp.
     ///
     /// ```compile_fail
-    /// use cute_rs::TmaLoadPipeline;
-    /// const _: usize = TmaLoadPipeline::<0, 1, 16>::STORAGE_BYTES;
+    /// use cute_rs::PipelineTmaAsync;
+    /// const _: usize = PipelineTmaAsync::<0, 1, 16>::STORAGE_BYTES;
     /// ```
     pub const STORAGE_BYTES: usize = {
         assert!(STAGES > 0);
@@ -425,7 +427,7 @@ pub mod __compiler {
     /// Compiler boundary splitting adjacent full and empty barrier arrays.
     ///
     /// # Safety
-    /// The base must satisfy the public TmaLoadPipeline storage and lifetime contract.
+    /// The base must satisfy the public PipelineTmaAsync storage and lifetime contract.
     #[inline(never)]
     pub unsafe fn tma_load_pipeline_from_raw_base<
         const STAGES: usize,
@@ -433,9 +435,9 @@ pub mod __compiler {
         const TX_BYTES: u32,
     >(
         base: *mut Barrier,
-    ) -> TmaLoadPipeline<STAGES, CONSUMER_WARPS, TX_BYTES> {
-        let _ = TmaLoadPipeline::<STAGES, CONSUMER_WARPS, TX_BYTES>::STORAGE_BYTES;
-        TmaLoadPipeline {
+    ) -> PipelineTmaAsync<STAGES, CONSUMER_WARPS, TX_BYTES> {
+        let _ = PipelineTmaAsync::<STAGES, CONSUMER_WARPS, TX_BYTES>::STORAGE_BYTES;
+        PipelineTmaAsync {
             full: base,
             empty: unsafe { base.add(STAGES) },
         }
@@ -451,10 +453,10 @@ pub mod __compiler {
         const CONSUMER_WARPS: u32,
         const TX_BYTES: u32,
     >(
-        pipeline: TmaLoadPipeline<STAGES, CONSUMER_WARPS, TX_BYTES>,
+        pipeline: PipelineTmaAsync<STAGES, CONSUMER_WARPS, TX_BYTES>,
         init_thread: u32,
     ) {
-        let _ = TmaLoadPipeline::<STAGES, CONSUMER_WARPS, TX_BYTES>::STORAGE_BYTES;
+        let _ = PipelineTmaAsync::<STAGES, CONSUMER_WARPS, TX_BYTES>::STORAGE_BYTES;
         let _ = (pipeline.full, pipeline.empty, init_thread);
         unreachable!("cute-rs TMA-load init executed outside recognized device compilation")
     }
@@ -469,10 +471,10 @@ pub mod __compiler {
         const CONSUMER_WARPS: u32,
         const TX_BYTES: u32,
     >(
-        pipeline: TmaLoadPipeline<STAGES, CONSUMER_WARPS, TX_BYTES>,
+        pipeline: PipelineTmaAsync<STAGES, CONSUMER_WARPS, TX_BYTES>,
         state: &PipelineState<Producer, STAGES>,
     ) {
-        let _ = TmaLoadPipeline::<STAGES, CONSUMER_WARPS, TX_BYTES>::STORAGE_BYTES;
+        let _ = PipelineTmaAsync::<STAGES, CONSUMER_WARPS, TX_BYTES>::STORAGE_BYTES;
         let _ = (pipeline, state);
         unreachable!("cute-rs producer acquire executed outside recognized device compilation")
     }
@@ -487,10 +489,10 @@ pub mod __compiler {
         const CONSUMER_WARPS: u32,
         const TX_BYTES: u32,
     >(
-        pipeline: TmaLoadPipeline<STAGES, CONSUMER_WARPS, TX_BYTES>,
+        pipeline: PipelineTmaAsync<STAGES, CONSUMER_WARPS, TX_BYTES>,
         state: &PipelineState<Producer, STAGES>,
     ) -> *mut Barrier {
-        let _ = TmaLoadPipeline::<STAGES, CONSUMER_WARPS, TX_BYTES>::STORAGE_BYTES;
+        let _ = PipelineTmaAsync::<STAGES, CONSUMER_WARPS, TX_BYTES>::STORAGE_BYTES;
         let _ = (pipeline, state);
         unreachable!("cute-rs producer expect-tx executed outside recognized device compilation")
     }
@@ -505,10 +507,10 @@ pub mod __compiler {
         const CONSUMER_WARPS: u32,
         const TX_BYTES: u32,
     >(
-        pipeline: TmaLoadPipeline<STAGES, CONSUMER_WARPS, TX_BYTES>,
+        pipeline: PipelineTmaAsync<STAGES, CONSUMER_WARPS, TX_BYTES>,
         state: &PipelineState<Consumer, STAGES>,
     ) {
-        let _ = TmaLoadPipeline::<STAGES, CONSUMER_WARPS, TX_BYTES>::STORAGE_BYTES;
+        let _ = PipelineTmaAsync::<STAGES, CONSUMER_WARPS, TX_BYTES>::STORAGE_BYTES;
         let _ = (pipeline, state);
         unreachable!("cute-rs consumer wait executed outside recognized device compilation")
     }
@@ -523,10 +525,10 @@ pub mod __compiler {
         const CONSUMER_WARPS: u32,
         const TX_BYTES: u32,
     >(
-        pipeline: TmaLoadPipeline<STAGES, CONSUMER_WARPS, TX_BYTES>,
+        pipeline: PipelineTmaAsync<STAGES, CONSUMER_WARPS, TX_BYTES>,
         state: &PipelineState<Consumer, STAGES>,
     ) {
-        let _ = TmaLoadPipeline::<STAGES, CONSUMER_WARPS, TX_BYTES>::STORAGE_BYTES;
+        let _ = PipelineTmaAsync::<STAGES, CONSUMER_WARPS, TX_BYTES>::STORAGE_BYTES;
         let _ = (pipeline, state);
         unreachable!("cute-rs consumer release executed outside recognized device compilation")
     }
@@ -541,10 +543,10 @@ pub mod __compiler {
         const CONSUMER_WARPS: u32,
         const TX_BYTES: u32,
     >(
-        pipeline: TmaLoadPipeline<STAGES, CONSUMER_WARPS, TX_BYTES>,
+        pipeline: PipelineTmaAsync<STAGES, CONSUMER_WARPS, TX_BYTES>,
         state: PipelineState<Producer, STAGES>,
     ) {
-        let _ = TmaLoadPipeline::<STAGES, CONSUMER_WARPS, TX_BYTES>::STORAGE_BYTES;
+        let _ = PipelineTmaAsync::<STAGES, CONSUMER_WARPS, TX_BYTES>::STORAGE_BYTES;
         let _ = (pipeline, state);
         unreachable!("cute-rs producer tail executed outside recognized device compilation")
     }
@@ -586,7 +588,7 @@ mod tests {
     #[test]
     fn static_contract_sizes_two_aligned_barrier_rings() {
         /// Three-stage fixture with eight consumer warps and 32 KiB of TMA bytes per stage.
-        type Pipeline = TmaLoadPipeline<3, 8, 32_768>;
+        type Pipeline = PipelineTmaAsync<3, 8, 32_768>;
         /// Required storage for both three-stage barrier arrays.
         const BYTES: usize = Pipeline::STORAGE_BYTES;
         assert_eq!(Pipeline::STORAGE_ALIGN, 8);

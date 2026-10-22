@@ -245,7 +245,7 @@ enum CuteImplOwner {
     LoadedBlockScaledTile64,
     StaticPersistentTileScheduler,
     WorkTile,
-    TmaLoadPipeline,
+    PipelineTmaAsync,
     PipelineState,
     SharedTensor,
     Mxf4TiledMma,
@@ -281,7 +281,7 @@ fn is_cute_recognition_stub_identity(
         | CuteImplOwner::BlockScaledTile64
         | CuteImplOwner::LoadedBlockScaledTile64 => "block_scaled::gemv",
         CuteImplOwner::StaticPersistentTileScheduler | CuteImplOwner::WorkTile => "scheduler",
-        CuteImplOwner::TmaLoadPipeline
+        CuteImplOwner::PipelineTmaAsync
         | CuteImplOwner::PipelineState
         | CuteImplOwner::TmaStorePipeline => "pipeline",
         CuteImplOwner::SharedTensor => "copy::tiled",
@@ -328,7 +328,7 @@ fn is_cute_recognition_stub_identity(
             matches!(method, "new_1d" | "has_work" | "current_tile" | "advance")
         }
         CuteImplOwner::WorkTile => method == "coordinates",
-        CuteImplOwner::TmaLoadPipeline => matches!(
+        CuteImplOwner::PipelineTmaAsync => matches!(
             method,
             "from_raw_base"
                 | "from_raw_parts"
@@ -2625,7 +2625,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                         Some(CuteImplOwner::StaticPersistentTileScheduler)
                     }
                     "WorkTile" => Some(CuteImplOwner::WorkTile),
-                    "TmaLoadPipeline" => Some(CuteImplOwner::TmaLoadPipeline),
+                    "PipelineTmaAsync" => Some(CuteImplOwner::PipelineTmaAsync),
                     "PipelineState" => Some(CuteImplOwner::PipelineState),
                     "SharedTensor" => Some(CuteImplOwner::SharedTensor),
                     "Mxf4TiledMma" => Some(CuteImplOwner::Mxf4TiledMma),
@@ -3354,7 +3354,7 @@ mod tests {
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
             "::pipeline::{impl#9}::producer_expect_tx",
-            Some(CuteImplOwner::TmaLoadPipeline),
+            Some(CuteImplOwner::PipelineTmaAsync),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
@@ -3365,7 +3365,7 @@ mod tests {
             is_cute_recognition_stub_identity(
                 "cute_rs",
                 "::pipeline::{impl#9}::from_raw_parts",
-                Some(CuteImplOwner::TmaLoadPipeline),
+                Some(CuteImplOwner::PipelineTmaAsync),
             ),
             "the rejected split-ring constructor must not be body-translated"
         );

@@ -80,6 +80,6 @@ Compile-time Rust types supply the static IR attributes (shape, stride, swizzle,
 | **Swizzled SMEM layout** | `cute.make_composed_layout(Swizzle(3, 3, 3), 0, layout)` | `ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>` |
 | **TMA descriptor** | `(tma_atom, tma_tensor)` pair passed into `@cute.kernel` | `#[grid_constant] a: &TensorMap<f16, ASmem>` (128B by value) |
 | **Shared tensor view** | `storage.sA.get_tensor(a_smem_layout)` | `SharedTensor<Mxf4E2M1, f16, SmemP, Mkl>` or `Sm100SharedTile<ASmem, OperandA>` |
-| **TMA pipeline** | `pipeline.PipelineTmaAsync.create(...)` or `pipeline.PipelineTmaUmma.create(...)` | `TmaLoadPipeline<STAGES>` or `PipelineTmaUmma<5, 77_824>` |
+| **TMA pipeline** | `pipeline.PipelineTmaAsync.create(...)` or `pipeline.PipelineTmaUmma.create(...)` | `PipelineTmaAsync<STAGES, CONSUMER_WARPS, TX_BYTES>` or `PipelineTmaUmma<5, 77_824>` |
 | **Tiled MMA** | `cute.make_tiled_mma(mma_op, atom_layout, ...)` | `Mxf4TiledMma::<SmemP>::get_slice(lane)` or `Sm100TiledMma<ASmem, B0Smem, B1Smem, 192, 160>` |
 | **Architecture primitives** | `cute.arch.thread_idx()`, `cute.arch.warp_idx()`, `cute.arch.elect_one()`, `cute.arch.cluster_arrive()`, ... | `cute_rs::arch::thread_idx()`, `warp_idx()`, `elect_one_sync()`, `cluster_arrive()`, ...: forwarders over the PTX-named `ctm_rs` layer, the mask spelled out |

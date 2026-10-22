@@ -12,7 +12,7 @@ In `blockscale_gemm_cute`, one producer warp (warp 8) fills a 3-stage TMA ring b
 :align: center
 :width: 100%
 
-Data flow of `blockscale_gemm_cute` on SM120a: 4 typed TMA descriptors feed a 3-stage `TmaLoadPipeline`, consumed by 8 compute warps running `Mxf4TiledMma` and an `Sm120Epilogue128x128` TMA store epilogue.
+Data flow of `blockscale_gemm_cute` on SM120a: 4 typed TMA descriptors feed a 3-stage `PipelineTmaAsync`, consumed by 8 compute warps running `Mxf4TiledMma` and an `Sm120Epilogue128x128` TMA store epilogue.
 ```
 
 ```rust

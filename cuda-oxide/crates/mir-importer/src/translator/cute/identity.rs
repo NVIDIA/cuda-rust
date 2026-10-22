@@ -326,7 +326,7 @@ mod canonical_path_tests {
             "cute_rs"
         ));
         assert!(is_source_abstraction_path(
-            "cute_rs::pipeline::TmaLoadPipeline<...>::consumer_wait",
+            "cute_rs::pipeline::PipelineTmaAsync<...>::consumer_wait",
             "cute_rs"
         ));
         assert!(is_source_abstraction_path(
@@ -466,7 +466,7 @@ mod canonical_path_tests {
     fn pipeline_method_path_ignores_only_the_impl_owner_spelling() {
         assert_eq!(
             pipeline_method_name_from_path(
-                "cute_rs::pipeline::TmaLoadPipeline<...>>::producer_expect_tx"
+                "cute_rs::pipeline::PipelineTmaAsync<...>>::producer_expect_tx"
             ),
             Some("producer_expect_tx")
         );

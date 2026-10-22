@@ -45,7 +45,7 @@ use pliron::value::Value;
 use rustc_public::mir;
 
 use super::super::pipeline::{
-    TmaLoadPipelineRust, decode_pipeline_state, decode_pipeline_state_receiver,
+    PipelineTmaAsyncRust, decode_pipeline_state, decode_pipeline_state_receiver,
     decode_tma_load_pipeline,
 };
 
@@ -170,7 +170,7 @@ fn pipeline_facts_from_type(
     ty: &mir::Operand,
     body: &mir::Body,
     what: &str,
-) -> TranslationResult<TmaLoadPipelineRust> {
+) -> TranslationResult<PipelineTmaAsyncRust> {
     let ty = ty.ty(body.locals()).map_err(|error| {
         pliron::input_error_noloc!(TranslationErr::unsupported(format!(
             "cannot read {what} pipeline type: {error:?}"
@@ -184,7 +184,7 @@ fn pipeline_facts_from_type(
         })?
         .ok_or_else(|| {
             pliron::input_error_noloc!(TranslationErr::unsupported(format!(
-                "{what} needs a by-value TmaLoadPipeline receiver"
+                "{what} needs a by-value PipelineTmaAsync receiver"
             )))
         })
 }
@@ -477,7 +477,7 @@ pub(crate) fn emit_make(
         })?
         .ok_or_else(|| {
             pliron::input_error_noloc!(TranslationErr::unsupported(
-                "TMA load-pipeline construction must return TmaLoadPipeline".to_owned()
+                "TMA load-pipeline construction must return PipelineTmaAsync".to_owned()
             ))
         })?;
     let (base, after) =

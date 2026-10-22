@@ -64,10 +64,10 @@ use cuda_core::{CudaContext, LaunchConfig1D};
 use cute_rs::tma::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
 use cute_rs::{
     C, ComposedLayout, Consumer, Layout, Mkl, Mxf4AccumulatorTile2x8, Mxf4E2M1, Mxf4TiledMma, Nkl,
-    PipelineState, Producer, RowMajor, SharedScaleAtom, SharedTensor, Sm1xxBlockScaleKMajor,
-    Sm120Epilogue128x128, Sm120EpilogueHalfLayout, Sm120ScaleAtom, SmemTile,
-    StaticPersistentTileScheduler, Swizzle, TensorMap, TmaLoadPipeline, TmaStorePipeline,
-    copy_tma_2d, copy_tma_s2g_2d,
+    PipelineState, PipelineTmaAsync, Producer, RowMajor, SharedScaleAtom, SharedTensor,
+    Sm1xxBlockScaleKMajor, Sm120Epilogue128x128, Sm120EpilogueHalfLayout, Sm120ScaleAtom, SmemTile,
+    StaticPersistentTileScheduler, Swizzle, TensorMap, TmaStorePipeline, copy_tma_2d,
+    copy_tma_s2g_2d,
 };
 
 /// Output row count for the fixed benchmark problem.
@@ -119,7 +119,7 @@ const TMA_TX_BYTES: u32 = (2 * DATA_STAGE_BYTES + 2 * SCALE_STAGE_BYTES) as u32;
 /// Number of shared slots overlapped by the load pipeline.
 const PIPELINE_STAGES: usize = 3;
 /// Three-stage load pipeline with eight consumer warps and an exact transaction-byte count.
-type MainloopPipeline = TmaLoadPipeline<PIPELINE_STAGES, 8, TMA_TX_BYTES>;
+type MainloopPipeline = PipelineTmaAsync<PIPELINE_STAGES, 8, TMA_TX_BYTES>;
 /// TMA store queue allowing one outstanding committed output group.
 type EpiloguePipeline = TmaStorePipeline<1>;
 

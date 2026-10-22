@@ -9,7 +9,7 @@
 //! pair, so loop state still travels as two `u32` values:
 //!
 //! ```text
-//! TmaLoadPipeline<S, W, B>  -> !cute.tma_load_pipeline<S,W,B>
+//! PipelineTmaAsync<S, W, B>  -> !cute.tma_load_pipeline<S,W,B>
 //! PipelineState<Role, S>    -> { slot: u32, phase: u32 }
 //! ```
 
@@ -25,8 +25,8 @@ use rustc_public::ty::{GenericArgs, RigidTy, Ty, TyKind};
 
 use super::tensor::{canonical_adt_path, const_arg, exact_schema, type_arg, unsigned_const};
 
-/// Exact defining path of `cute_rs::pipeline::TmaLoadPipeline`; public reexports do not change it.
-const TMA_LOAD_PIPELINE: &str = "cute_rs::pipeline::TmaLoadPipeline";
+/// Exact defining path of `cute_rs::pipeline::PipelineTmaAsync`; public reexports do not change it.
+const TMA_LOAD_PIPELINE: &str = "cute_rs::pipeline::PipelineTmaAsync";
 /// Exact defining path of `cute_rs::pipeline::PipelineState`; public reexports do not change it.
 const PIPELINE_STATE: &str = "cute_rs::pipeline::PipelineState";
 /// Exact defining path of `cute_rs::pipeline::Producer`; public reexports do not change it.
@@ -34,9 +34,9 @@ const PRODUCER: &str = "cute_rs::pipeline::Producer";
 /// Exact defining path of `cute_rs::pipeline::Consumer`; public reexports do not change it.
 const CONSUMER: &str = "cute_rs::pipeline::Consumer";
 
-/// Static facts carried by `TmaLoadPipeline<S, W, B>`.
+/// Static facts carried by `PipelineTmaAsync<S, W, B>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TmaLoadPipelineRust {
+pub(crate) struct PipelineTmaAsyncRust {
     /// Number of reusable slots in the pipeline ring.
     pub stages: u64,
     /// Consumer-warp count used to determine release arrivals.
@@ -57,7 +57,7 @@ fn exact_adt(ty: &Ty, expected: &str) -> Result<Option<GenericArgs>, String> {
 }
 
 /// Decode the compiler-only load-pipeline handle.
-pub(crate) fn decode_tma_load_pipeline(ty: &Ty) -> Result<Option<TmaLoadPipelineRust>, String> {
+pub(crate) fn decode_tma_load_pipeline(ty: &Ty) -> Result<Option<PipelineTmaAsyncRust>, String> {
     let Some(args) = exact_adt(ty, TMA_LOAD_PIPELINE)? else {
         return Ok(None);
     };
@@ -79,7 +79,7 @@ pub(crate) fn decode_tma_load_pipeline(ty: &Ty) -> Result<Option<TmaLoadPipeline
     let transaction_bytes = u32::try_from(transaction_bytes)
         .map_err(|_| "pipeline transaction byte count does not fit in u32".to_owned())?;
     validate_pipeline_facts(stages, consumer_warps, transaction_bytes)?;
-    Ok(Some(TmaLoadPipelineRust {
+    Ok(Some(PipelineTmaAsyncRust {
         stages,
         consumer_warps,
         transaction_bytes,
@@ -164,7 +164,7 @@ pub(crate) fn decode_pipeline_state_receiver(
 }
 
 /// Construct the IR pipeline type with every validated static barrier parameter.
-fn pipeline_type(ctx: &mut Context, facts: TmaLoadPipelineRust) -> TypeHandle {
+fn pipeline_type(ctx: &mut Context, facts: PipelineTmaAsyncRust) -> TypeHandle {
     CuteTmaLoadPipelineType::get(
         ctx,
         facts.stages,
@@ -198,7 +198,7 @@ mod tests {
     fn load_pipeline_type_keeps_all_static_facts() {
         let mut ctx = Context::new();
         dialect_cute::register(&mut ctx);
-        let facts = TmaLoadPipelineRust {
+        let facts = PipelineTmaAsyncRust {
             stages: 3,
             consumer_warps: 8,
             transaction_bytes: 17_408,

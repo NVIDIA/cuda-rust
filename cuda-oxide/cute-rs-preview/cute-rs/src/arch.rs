@@ -138,7 +138,7 @@ impl<const ID: u32, const THREADS: u32> NamedBarrier<ID, THREADS> {
             assert!(ID < 16 && THREADS > 0 && THREADS <= 1024 && THREADS.is_multiple_of(32));
         }
         // SAFETY: the caller supplies the fixed complete-warp participant set.
-        unsafe { ctm_rs::mbarrier::barrier_cta_sync(ID, THREADS) };
+        unsafe { ctm_rs::barrier::barrier_cta_sync(ID, THREADS) };
     }
 }
 
@@ -264,7 +264,7 @@ pub unsafe fn sync_warp(mask: u32) {
 /// Synchronize `number_of_threads` CTA threads at the named barrier `barrier_id`.
 ///
 /// This is `cute.arch.barrier(barrier_id, number_of_threads)` over
-/// [`ctm_rs::mbarrier::barrier_cta_sync`] (`barrier.cta.sync`). [`NamedBarrier`]
+/// [`ctm_rs::barrier::barrier_cta_sync`] (`barrier.cta.sync`). [`NamedBarrier`]
 /// fixes both values at compile time; the aligned form stays in ctm-rs as
 /// `barrier_cta_sync_aligned`.
 ///
@@ -273,13 +273,13 @@ pub unsafe fn sync_warp(mask: u32) {
 #[inline(always)]
 pub unsafe fn barrier(barrier_id: u32, number_of_threads: u32) {
     // SAFETY: forwarded under the caller contract above.
-    unsafe { ctm_rs::mbarrier::barrier_cta_sync(barrier_id, number_of_threads) }
+    unsafe { ctm_rs::barrier::barrier_cta_sync(barrier_id, number_of_threads) }
 }
 
 /// Arrive at the named barrier `barrier_id` without waiting.
 ///
 /// This is `cute.arch.barrier_arrive(barrier_id, number_of_threads)` over
-/// [`ctm_rs::mbarrier::barrier_cta_arrive`] (`barrier.cta.arrive`, the form
+/// [`ctm_rs::barrier::barrier_cta_arrive`] (`barrier.cta.arrive`, the form
 /// that admits a subset of the CTA's warps); the aligned form stays in ctm-rs
 /// as `barrier_cta_arrive_aligned`.
 ///
@@ -288,7 +288,7 @@ pub unsafe fn barrier(barrier_id: u32, number_of_threads: u32) {
 #[inline(always)]
 pub unsafe fn barrier_arrive(barrier_id: u32, number_of_threads: u32) {
     // SAFETY: forwarded under the caller contract above.
-    unsafe { ctm_rs::mbarrier::barrier_cta_arrive(barrier_id, number_of_threads) }
+    unsafe { ctm_rs::barrier::barrier_cta_arrive(barrier_id, number_of_threads) }
 }
 
 // Mbarrier transactions.
@@ -296,16 +296,16 @@ pub unsafe fn barrier_arrive(barrier_id: u32, number_of_threads: u32) {
 /// Publish preceding mbarrier initialization at cluster scope.
 ///
 /// This is `cute.arch.mbarrier_init_fence()` over
-/// [`ctm_rs::mbarrier::fence_mbarrier_init`]
+/// [`ctm_rs::fence::fence_mbarrier_init`]
 /// (`fence.mbarrier_init.release.cluster`).
 ///
 /// # Safety
 /// The caller must satisfy the barrier, scope, and memory-ordering contract of
-/// [`ctm_rs::mbarrier::fence_mbarrier_init`].
+/// [`ctm_rs::fence::fence_mbarrier_init`].
 #[inline(always)]
 pub unsafe fn mbarrier_init_fence() {
     // SAFETY: forwarded under the caller contract above.
-    unsafe { ctm_rs::mbarrier::fence_mbarrier_init() }
+    unsafe { ctm_rs::fence::fence_mbarrier_init() }
 }
 
 /// Arrive once on a TMA barrier and add the expected transaction bytes.

@@ -33,6 +33,6 @@
 <rect class="k-purple" x="36" y="338" width="968" height="94" rx="8" stroke-width="0.9"/>
 <text class="th tx-purple l" x="56" y="362">ctm-rs Instruction Primitives in the Same Kernel (dialect-nvvm)</text>
 <rect class="k-box" x="56" y="380" width="296" height="34" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="204" y="397">cluster::block_rank() / warp::id()</text>
-<rect class="k-box" x="372" y="380" width="296" height="34" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="520" y="397">mbarrier::barrier_cta_sync + fences</text>
+<rect class="k-box" x="372" y="380" width="296" height="34" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="520" y="397">barrier::barrier_cta_sync + fences</text>
 <rect class="k-box" x="688" y="380" width="296" height="34" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="836" y="397">TmemGuard::&lt;..., 512, CtaGroup2&gt;</text>
 </svg>

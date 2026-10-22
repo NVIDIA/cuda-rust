@@ -18,8 +18,8 @@ use ctm_rs::mbarrier::{Barrier, GeneralBarrier, ManagedBarrier, Ready};
 use ctm_rs::memory::{DynamicSharedArray, SharedAddress, U32x4};
 use ctm_rs::tcgen05::tmem::{self, TmemGuard, TmemReady, TmemUninit};
 use ctm_rs::{
-    async_copy, cluster, cluster_launch, convert, cuda_module, float, groups::CtaGroup2, kernel,
-    launch_bounds, launch_contract, mbarrier, tcgen05, thread, warp,
+    async_copy, barrier, cluster, cluster_launch, convert, cuda_module, fence, float,
+    groups::CtaGroup2, kernel, launch_bounds, launch_contract, mbarrier, tcgen05, thread, warp,
 };
 use cute_rs::arch::make_warp_uniform;
 use cute_rs::attention::sm100::pipeline::{
@@ -396,7 +396,7 @@ unsafe fn softmax_tile<const LAST: bool>(
         .add(MAX_EXCHANGE + (state.probability_ticket % 2) as usize * 512)
         .cast::<f32>();
     *exchange.add(tid as usize) = new_maximum;
-    mbarrier::barrier_cta_sync(2, 128);
+    barrier::barrier_cta_sync(2, 128);
     new_maximum = maxf(new_maximum, *exchange.add(((tid + 64) % 128) as usize));
     let alpha = float::ex2_approx_ftz_f32((state.maximum - new_maximum) * scale);
     let mut metadata = TmemFragment::<4> {
@@ -545,7 +545,7 @@ pub mod kernels {
                 output.init(1, 256);
                 pages.init(32, 32);
             }
-            mbarrier::fence_mbarrier_init();
+            fence::fence_mbarrier_init();
             cluster::barrier_cluster_arrive_relaxed();
             cluster::barrier_cluster_wait();
             let token = smem.add(TOKEN).cast::<u32>();
@@ -554,7 +554,7 @@ pub mod kernels {
                 tcgen05::relinquish_alloc_permit_cg2();
             }
             if wid < 9 {
-                mbarrier::barrier_cta_sync(1, 288);
+                barrier::barrier_cta_sync(1, 288);
             }
             let mut work = make_warp_uniform(thread::blockIdx_x() / 2);
             let stride = make_warp_uniform(thread::gridDim_x() / 2);
@@ -815,10 +815,10 @@ pub mod kernels {
                             if tile + 1 == count {
                                 let exchange = smem.add(SUM_EXCHANGE).cast::<f32>();
                                 *exchange.add(ct as usize) = metadata.values[0];
-                                mbarrier::barrier_cta_sync(3, 128);
+                                barrier::barrier_cta_sync(3, 128);
                                 let denominator =
                                     metadata.values[0] + *exchange.add(((ct + 64) % 128) as usize);
-                                mbarrier::barrier_cta_sync(3, 128);
+                                barrier::barrier_cta_sync(3, 128);
                                 output.wait(o_ticket);
                                 let normalization = float::rcp_approx_ftz_f32(denominator);
                                 let mut part = 0;
@@ -999,7 +999,7 @@ pub mod kernels {
                     i += 1;
                 }
             }
-            mbarrier::barrier_cta_sync(4, 128);
+            barrier::barrier_cta_sync(4, 128);
             // Share each split weight across four independent output accumulators.
             // Each accumulator retains the reference's increasing-split sum order.
             let mut values = [0.0f32; 4];

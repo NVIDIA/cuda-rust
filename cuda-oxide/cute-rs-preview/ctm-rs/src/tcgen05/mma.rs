@@ -51,6 +51,9 @@ dispatch!(collector_a::Use, 3);
 
 /// Issue one MMA. The collector selector does not infer a sequence or pipeline.
 ///
+/// cute-rs exposes the `enable_d` flag (PTX `enable-input-d`) as `accumulate`,
+/// CuTeDSL's `Field.ACCUMULATE`.
+///
 /// # Safety
 /// The elected issuing thread must satisfy group-2 participation and collector
 /// sequencing rules. Shared operands must be published and remain live until

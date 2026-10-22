@@ -4,7 +4,7 @@
  */
 //! Compile-pass probe for SM100 raw instruction operands and canonical carriers.
 #![allow(dead_code)]
-use ctm_rs::{async_copy, f32x2, float, mbarrier, memory, tcgen05, thread, warp};
+use ctm_rs::{async_copy, f32x2, fence, float, mbarrier, memory, tcgen05, thread, warp};
 
 /// Canonical carrier identity is retained across both public crates.
 fn canonical_simd<const N: usize>(value: memory::CuSimd<u32, N>) -> cuda_device::CuSimd<u32, N> {
@@ -25,9 +25,9 @@ unsafe fn sm100_step(bar: *mut mbarrier::Barrier, shared: *mut u32, global: *con
         let _ = mbarrier::mbarrier_arrive_expect_tx_cluster(bar, 1, 4);
         let _ = mbarrier::mbarrier_try_wait_parity(bar, 0);
         let _ = mbarrier::mbarrier_try_wait_parity_cluster_relaxed(bar, 1);
-        mbarrier::fence_proxy_async_acquire_sync_restrict();
-        mbarrier::fence_proxy_async_release_sync_restrict();
-        mbarrier::fence_sync_restrict_acquire();
+        fence::fence_proxy_async_acquire_sync_restrict();
+        fence::fence_proxy_async_release_sync_restrict();
+        fence::fence_sync_restrict_acquire();
         async_copy::cp_async_ca_4_raw(shared, global);
         async_copy::cp_async_mbarrier_arrive_noinc_raw(bar);
         tcgen05::commit_address(memory::SharedAddress::from_raw(bar));

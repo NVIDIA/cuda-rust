@@ -7,7 +7,7 @@
 //! One CTA owns 64 queries; four warps each own 16 rows of a 64-column tile.
 use core::marker::PhantomData;
 use ctm_rs::{
-    async_copy, convert, cuda_module, float, kernel, launch_bounds, launch_contract, mbarrier,
+    async_copy, barrier, convert, cuda_module, float, kernel, launch_bounds, launch_contract,
     memory::{DisjointSlice, DynamicSharedArray},
     thread, warp,
 };
@@ -323,7 +323,7 @@ impl TilePipeline {
         // remain live across all steps; waits and CTA barriers order reuse.
         unsafe {
             async_copy::cp_async_wait_group::<0>();
-            mbarrier::barrier_cta_sync(1, 128);
+            barrier::barrier_cta_sync(1, 128);
             stage_full(&self.values, key_block, &self.v, tid);
             async_copy::cp_async_commit_group();
             let mut scores = WarpTile::zero();
@@ -338,7 +338,7 @@ impl TilePipeline {
             });
             scores.gemm(a, b);
             async_copy::cp_async_wait_group::<0>();
-            mbarrier::barrier_cta_sync(1, 128);
+            barrier::barrier_cta_sync(1, 128);
             if key_block > 0 {
                 stage_full(&self.keys, key_block - 1, &self.k, tid);
                 async_copy::cp_async_commit_group();
@@ -443,7 +443,7 @@ pub mod kernels {
                 pipeline.step::<CAUSAL, false>(remaining, &mut output, &mut state);
             }
             output.store(&state, &pipeline.q, warp_id, lane as usize);
-            mbarrier::barrier_cta_sync(1, 128);
+            barrier::barrier_cta_sync(1, 128);
             static_for!(GROUP in [0, 1, 2, 3] {
                 let row = tid as usize / 8 + GROUP * 16;
                 let col = tid as usize % 8 * 8;

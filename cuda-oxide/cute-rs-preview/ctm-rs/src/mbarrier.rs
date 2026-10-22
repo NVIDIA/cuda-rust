@@ -2,72 +2,16 @@
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
-//! Canonical barrier states with explicit instruction-only lifecycle methods.
+//! The `mbarrier.*` instruction family: canonical barrier states with explicit
+//! instruction-only lifecycle methods, plus the raw init, arrive, expect-tx
+//! and parity-test forms on CTA-shared barrier objects.
+//!
+//! Named CTA barriers (`bar.*`, `barrier.cta.*`) live in [`crate::barrier`];
+//! memory fences (`fence.*`) in [`crate::fence`].
 use crate::memory::SharedAddress;
 pub use cuda_device::barrier::{
     Barrier, BarrierToken, GeneralBarrier, Invalidated, ManagedBarrier, Ready, TmaBarrier, Uninit,
 };
-
-/// Signal arrival at a numbered CTA barrier without waiting.
-///
-/// # Safety
-/// Participating threads must use a compatible barrier ID and expected count.
-#[inline(always)]
-pub unsafe fn barrier_cta_arrive(barrier_id: u32, thread_count: u32) {
-    unsafe { cuda_device::barrier::barrier_cta_arrive(barrier_id, thread_count) }
-}
-
-/// Signal arrival at a numbered CTA barrier in aligned mode without waiting.
-///
-/// # Safety
-/// Participating threads must use a compatible barrier ID and expected count.
-/// Every non-exited thread in the warp must execute with identical control flow.
-#[inline(always)]
-pub unsafe fn barrier_cta_arrive_aligned(barrier_id: u32, thread_count: u32) {
-    unsafe { cuda_device::barrier::barrier_cta_arrive_aligned(barrier_id, thread_count) }
-}
-
-/// Synchronize the requested number of threads at a numbered CTA barrier.
-///
-/// # Safety
-/// Participating threads must use a compatible barrier ID and expected count.
-#[inline(always)]
-pub unsafe fn barrier_cta_sync(barrier_id: u32, thread_count: u32) {
-    unsafe { cuda_device::barrier::barrier_cta_sync(barrier_id, thread_count) }
-}
-
-/// Synchronize at a numbered CTA barrier in aligned mode.
-///
-/// # Safety
-/// Participating threads must use a compatible barrier ID and expected count.
-/// Every non-exited thread in the warp must execute with identical control flow.
-#[inline(always)]
-pub unsafe fn barrier_cta_sync_aligned(barrier_id: u32, thread_count: u32) {
-    unsafe { cuda_device::barrier::barrier_cta_sync_aligned(barrier_id, thread_count) }
-}
-
-/// Publish preceding mbarrier initialization at cluster scope.
-///
-/// PTX `fence.mbarrier_init.release.cluster` is the only form of this fence,
-/// so the name carries no ordering or scope suffix.
-///
-/// # Safety
-/// The caller must satisfy the barrier, scope, and memory-ordering contract of
-/// [`cuda_device::barrier::fence_mbarrier_init_release_cluster`].
-#[inline(always)]
-pub unsafe fn fence_mbarrier_init() {
-    unsafe { cuda_device::barrier::fence_mbarrier_init_release_cluster() }
-}
-
-/// Make preceding CTA-shared generic-proxy writes visible to the async proxy.
-///
-/// # Safety
-/// The caller must satisfy the barrier, scope, and memory-ordering contract of
-/// [`cuda_device::barrier::fence_proxy_async_shared_cta`].
-#[inline(always)]
-pub unsafe fn fence_proxy_async_shared_cta() {
-    unsafe { cuda_device::barrier::fence_proxy_async_shared_cta() }
-}
 
 /// Borrow typed shared addresses from initialized barrier handles.
 pub trait BarrierAddressExt {
@@ -213,42 +157,4 @@ pub unsafe fn mbarrier_try_wait_parity(bar: *const Barrier, parity: u32) -> bool
 #[inline(always)]
 pub unsafe fn mbarrier_try_wait_parity_cluster_relaxed(bar: *const Barrier, parity: u32) -> bool {
     unsafe { cuda_device::barrier::mbarrier_try_wait_parity_cluster_relaxed(bar, parity) }
-}
-
-/// Acquire cluster-shared async-proxy writes through the generic proxy (sm_90+).
-///
-/// PTX `fence.proxy.async::generic.acquire.sync_restrict::shared::cluster.cluster`.
-///
-/// # Safety
-/// Pair this fence with the compatible cluster-scoped release and barrier
-/// protocol. It neither waits for asynchronous operations nor orders global memory.
-#[inline(always)]
-pub unsafe fn fence_proxy_async_acquire_sync_restrict() {
-    unsafe { cuda_device::barrier::fence_proxy_async_generic_acquire_shared_cluster_cluster() }
-}
-
-/// Release CTA-shared generic writes to the async proxy at cluster scope (sm_90+).
-///
-/// PTX `fence.proxy.async::generic.release.sync_restrict::shared::cta.cluster`.
-///
-/// # Safety
-/// Pair this fence with the compatible cluster-scoped acquire and barrier
-/// protocol, and keep the shared storage live through its asynchronous uses.
-#[inline(always)]
-pub unsafe fn fence_proxy_async_release_sync_restrict() {
-    unsafe { cuda_device::barrier::fence_proxy_async_generic_release_shared_cta_cluster() }
-}
-
-/// Acquire cluster-shared memory at cluster scope (sm_90+), excluding global memory.
-///
-/// PTX `fence.acquire.sync_restrict::shared::cluster.cluster`; CuTeDSL's
-/// `fence_sync_restrict(order)` covers acquire and release, and only the
-/// acquire form has an intrinsic here.
-///
-/// # Safety
-/// Pair this with a compatible cluster-scoped synchronization protocol. This
-/// does not substitute for a proxy fence or asynchronous completion wait.
-#[inline(always)]
-pub unsafe fn fence_sync_restrict_acquire() {
-    unsafe { cuda_device::barrier::fence_acquire_shared_cluster_cluster() }
 }

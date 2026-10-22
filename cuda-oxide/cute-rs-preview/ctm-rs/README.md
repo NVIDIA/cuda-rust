@@ -69,7 +69,7 @@ expansions name it.
 | `memory`, `mma` | storage formats and typed MMA operands |
 | `tcgen05` | descriptors, MMA issue, TMEM ownership and completion |
 | `async_copy`, `tma` | shared-memory copies and tensor-map operations |
-| `mbarrier`, `cluster`, `groups` | barrier readiness, cluster operations, CTA-group types |
+| `mbarrier`, `barrier`, `fence`, `cluster`, `groups` | mbarrier readiness, named CTA barriers, memory fences, cluster operations, CTA-group types |
 | `warp`, `thread` | collectives, coordinates, register limits |
 | `convert`, `float`, `f32x2`, `debug` | conversion, arithmetic and debugging |
 | `host::tma` | host tensor-map encoding behind the `host` feature |

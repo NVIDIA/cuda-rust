@@ -36,10 +36,12 @@ pub mod host;
 pub use cuda_device::{cluster_launch, cuda_module, kernel, launch_bounds, launch_contract};
 
 pub mod async_copy;
+pub mod barrier;
 pub mod cluster;
 pub mod convert;
 pub mod debug;
 pub mod f32x2;
+pub mod fence;
 pub mod float;
 pub mod groups;
 pub mod mbarrier;

@@ -25,8 +25,8 @@
 
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of};
-use ctm_rs::mbarrier::{self as barrier, Barrier};
-use ctm_rs::{cluster, groups::CtaGroup2, memory::SharedAddress, tcgen05};
+use ctm_rs::mbarrier::{self, Barrier};
+use ctm_rs::{cluster, fence, groups::CtaGroup2, memory::SharedAddress, tcgen05};
 
 /// Restricts edge policies and cursor roles to the implementations in this module.
 mod sealed {
@@ -80,7 +80,7 @@ impl sealed::Wait for LocalMemory {}
 impl WaitPolicy for LocalMemory {
     #[inline(always)]
     unsafe fn wait(bar: *const Barrier, phase: u32) {
-        while !unsafe { barrier::mbarrier_try_wait_parity(bar, phase) } {}
+        while !unsafe { mbarrier::mbarrier_try_wait_parity(bar, phase) } {}
     }
 }
 
@@ -98,7 +98,7 @@ impl sealed::Wait for LocalShared {
 impl WaitPolicy for LocalShared {
     #[inline(always)]
     unsafe fn wait(bar: *const Barrier, phase: u32) {
-        while !unsafe { barrier::mbarrier_try_wait_parity(bar, phase) } {}
+        while !unsafe { mbarrier::mbarrier_try_wait_parity(bar, phase) } {}
     }
 }
 
@@ -115,7 +115,7 @@ impl TmaPolicy for AsyncCompletion {}
 impl WaitPolicy for AsyncCompletion {
     #[inline(always)]
     unsafe fn wait(bar: *const Barrier, phase: u32) {
-        while !unsafe { barrier::mbarrier_try_wait_parity_cluster_relaxed(bar, phase) } {}
+        while !unsafe { mbarrier::mbarrier_try_wait_parity_cluster_relaxed(bar, phase) } {}
     }
 }
 
@@ -136,7 +136,7 @@ impl MmaPolicy for AsyncCopyReuse {}
 impl WaitPolicy for AsyncCopyReuse {
     #[inline(always)]
     unsafe fn wait(bar: *const Barrier, phase: u32) {
-        while !unsafe { barrier::mbarrier_try_wait_parity_cluster_relaxed(bar, phase) } {}
+        while !unsafe { mbarrier::mbarrier_try_wait_parity_cluster_relaxed(bar, phase) } {}
     }
 }
 
@@ -152,7 +152,7 @@ impl MmaPolicy for TensorMemory {}
 impl WaitPolicy for TensorMemory {
     #[inline(always)]
     unsafe fn wait(bar: *const Barrier, phase: u32) {
-        while !unsafe { barrier::mbarrier_try_wait_parity_cluster_relaxed(bar, phase) } {}
+        while !unsafe { mbarrier::mbarrier_try_wait_parity_cluster_relaxed(bar, phase) } {}
     }
 }
 impl SignalPolicy for TensorMemory {
@@ -173,15 +173,15 @@ impl sealed::Signal for SharedToAsync {}
 impl WaitPolicy for SharedToAsync {
     #[inline(always)]
     unsafe fn wait(bar: *const Barrier, phase: u32) {
-        while !unsafe { barrier::mbarrier_try_wait_parity_cluster_relaxed(bar, phase) } {}
-        unsafe { barrier::fence_proxy_async_acquire_sync_restrict() };
+        while !unsafe { mbarrier::mbarrier_try_wait_parity_cluster_relaxed(bar, phase) } {}
+        unsafe { fence::fence_proxy_async_acquire_sync_restrict() };
     }
 }
 impl SignalPolicy for SharedToAsync {
     #[inline(always)]
     unsafe fn arrive(bar: *mut Barrier) {
         unsafe {
-            barrier::fence_proxy_async_release_sync_restrict();
+            fence::fence_proxy_async_release_sync_restrict();
             arrive_remote(bar);
         }
     }
@@ -198,8 +198,8 @@ impl MmaPolicy for SharedReuse {}
 impl WaitPolicy for SharedReuse {
     #[inline(always)]
     unsafe fn wait(bar: *const Barrier, phase: u32) {
-        while !unsafe { barrier::mbarrier_try_wait_parity_cluster_relaxed(bar, phase) } {}
-        unsafe { barrier::fence_sync_restrict_acquire() };
+        while !unsafe { mbarrier::mbarrier_try_wait_parity_cluster_relaxed(bar, phase) } {}
+        unsafe { fence::fence_sync_restrict_acquire() };
     }
 }
 
@@ -414,8 +414,8 @@ impl<const STAGES: u32, Full: WaitPolicy, Empty: WaitPolicy> TwoCtaRing<STAGES, 
         let mut stage = 0;
         while stage < STAGES {
             unsafe {
-                barrier::mbarrier_init(self.full.add(stage as usize), producers);
-                barrier::mbarrier_init(self.empty.add(stage as usize), consumers);
+                mbarrier::mbarrier_init(self.full.add(stage as usize), producers);
+                mbarrier::mbarrier_init(self.empty.add(stage as usize), consumers);
             }
             stage += 1;
         }
@@ -466,7 +466,7 @@ impl<const STAGES: u32, Full: WaitPolicy, Empty: WaitPolicy> TwoCtaRing<STAGES, 
     where
         Full: TmaPolicy,
     {
-        unsafe { barrier::mbarrier_arrive_expect_tx_cluster(self.full_at(ticket), 1, bytes) };
+        unsafe { mbarrier::mbarrier_arrive_expect_tx_cluster(self.full_at(ticket), 1, bytes) };
     }
     /// Signal full in both CTAs after prior group-two MMA completes.
     /// # Safety
@@ -560,7 +560,7 @@ impl<const STAGES: u32, Full: WaitPolicy, Empty: WaitPolicy> TwoCtaRing<STAGES, 
         Full: TmaPolicy,
     {
         unsafe {
-            barrier::mbarrier_arrive_expect_tx_cluster(self.full_at_cursor(cursor), 1, bytes)
+            mbarrier::mbarrier_arrive_expect_tx_cluster(self.full_at_cursor(cursor), 1, bytes)
         };
     }
     /// Signal MMA production at the producer cursor's full barrier.

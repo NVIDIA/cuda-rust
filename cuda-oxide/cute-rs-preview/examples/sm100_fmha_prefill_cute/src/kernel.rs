@@ -18,8 +18,8 @@ use ctm_rs::mbarrier::{Barrier, GeneralBarrier, ManagedBarrier, Ready, TmaBarrie
 use ctm_rs::memory::{DynamicSharedArray, U32x4};
 use ctm_rs::tcgen05::tmem::{self, TmemGuard, TmemReady, TmemUninit};
 use ctm_rs::{
-    convert, cuda_module, float, kernel, launch_bounds, launch_contract, mbarrier, tcgen05, thread,
-    warp,
+    barrier, convert, cuda_module, fence, float, kernel, launch_bounds, launch_contract, mbarrier,
+    tcgen05, thread, warp,
 };
 use cute_rs::attention::sm100::{MmaSs, MmaTs, SharedLayout, SharedTile, TmaCopy, TmemFragment};
 use cute_rs::{OperandA, OperandB, TensorMap};
@@ -427,14 +427,14 @@ pub mod kernels {
             if tid == 0 {
                 pipes.init();
             }
-            mbarrier::fence_mbarrier_init();
-            mbarrier::barrier_cta_sync(0, 512);
+            fence::fence_mbarrier_init();
+            barrier::barrier_cta_sync(0, 512);
             if warp_id == 8 {
                 TmemGuard::<TmemUninit, 512>::from_raw_slot(token).alloc_collective();
             }
             let mut tmem = 0;
             if warp_id <= 12 {
-                mbarrier::barrier_cta_sync(2, 416);
+                barrier::barrier_cta_sync(2, 416);
                 tmem = TmemGuard::<TmemReady, 512>::adopt_ready(token).raw_address();
             }
 
@@ -943,7 +943,7 @@ pub mod kernels {
                             }
                             col += 16;
                         }
-                        mbarrier::fence_proxy_async_shared_cta();
+                        fence::fence_proxy_async_shared_cta();
                         pipes.output.release_threads(ocount);
                         pipes.epi.commit_threads(epicount);
                         ocount += 1;
@@ -953,7 +953,7 @@ pub mod kernels {
                     stat_count += 1;
                     tile += stride;
                 }
-                mbarrier::barrier_cta_sync(7, 128);
+                barrier::barrier_cta_sync(7, 128);
                 if warp_id == 8 {
                     tcgen05::relinquish_alloc_permit();
                     TmemGuard::<TmemReady, 512>::adopt_ready(token).dealloc_collective();

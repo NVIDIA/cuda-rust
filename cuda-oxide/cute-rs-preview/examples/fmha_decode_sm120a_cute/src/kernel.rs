@@ -10,7 +10,7 @@
 //! Scores, probabilities, split numerators and reduction states remain FP32.
 use core::marker::PhantomData;
 use ctm_rs::{
-    async_copy, cuda_module, float, kernel, launch_bounds, launch_contract, mbarrier,
+    async_copy, barrier, cuda_module, float, kernel, launch_bounds, launch_contract,
     memory::{DisjointSlice, DynamicSharedArray},
     thread, warp,
 };
@@ -166,7 +166,7 @@ pub mod kernels {
             stage(&global_v, split, &sv, tid as u32);
             async_copy::cp_async_commit_group();
             async_copy::cp_async_wait_group::<0>();
-            mbarrier::barrier_cta_sync(1, 128);
+            barrier::barrier_cta_sync(1, 128);
 
             // 32 independent keys at a time, with four lanes per 64-D dot.
             static_for!(PASS in [0, 1] {
@@ -185,7 +185,7 @@ pub mod kernels {
                     } else { f32::NEG_INFINITY };
                 }
             });
-            mbarrier::barrier_cta_sync(1, 128);
+            barrier::barrier_cta_sync(1, 128);
             let score = if tid < 64 {
                 *scores.add(tid)
             } else {
@@ -195,7 +195,7 @@ pub mod kernels {
             if lane == 0 {
                 *maxima.add(warp_id) = local_maximum;
             }
-            mbarrier::barrier_cta_sync(1, 128);
+            barrier::barrier_cta_sync(1, 128);
             let maximum = max(
                 max(*maxima, *maxima.add(1)),
                 max(*maxima.add(2), *maxima.add(3)),
@@ -209,7 +209,7 @@ pub mod kernels {
             if lane == 0 {
                 *sums.add(warp_id) = local_sum;
             }
-            mbarrier::barrier_cta_sync(1, 128);
+            barrier::barrier_cta_sync(1, 128);
 
             // Each warp integrates 16 keys into two output dimensions per lane.
             let mut numerator = [0.0f32; 2];
@@ -223,7 +223,7 @@ pub mod kernels {
             static_for!(D in [0, 1] {
                 *warp_outputs.add(warp_id * 64 + lane * 2 + D) = numerator[D];
             });
-            mbarrier::barrier_cta_sync(1, 128);
+            barrier::barrier_cta_sync(1, 128);
             if warp_id == 0 {
                 let dst = partials
                     .as_mut_ptr()

@@ -6,14 +6,15 @@
 use crate::physical;
 use ctm_rs::mbarrier::BarrierAddressExt;
 use ctm_rs::memory::DynamicSharedArray;
-use ctm_rs::{cuda_module, kernel, launch_bounds, launch_contract};
 use ctm_rs::{
+    barrier, fence,
     mbarrier::{self, Barrier, GeneralBarrier, ManagedBarrier, Ready, TmaBarrier, Uninit},
     memory::{F16Tile128, Mxf4ScaleTile, Mxf4Tile128, PhysicalFormat, SharedAddress, SharedRegion},
     mma::{self, Accumulator16x8, AccumulatorTile16x8, ScalePairA, ScalePairB},
     thread,
     tma::{self, Coordinates2D, TensorMap},
 };
+use ctm_rs::{cuda_module, kernel, launch_bounds, launch_contract};
 /// Output row count for the fixed benchmark problem.
 pub const M: usize = 2048;
 /// Output column count for the fixed benchmark problem.
@@ -170,8 +171,8 @@ pub mod kernels {
                     s += 1;
                 }
             }
-            mbarrier::fence_mbarrier_init();
-            mbarrier::barrier_cta_sync(0, THREADS as u32);
+            fence::fence_mbarrier_init();
+            barrier::barrier_cta_sync(0, THREADS as u32);
             let mut tile = thread::blockIdx_x() as usize;
             let stride = thread::gridDim_x() as usize;
             let mut slot = 0usize;
@@ -238,7 +239,7 @@ pub mod kernels {
                     if tid == 0 {
                         tma::cp_async_bulk_wait_group_read::<0>();
                     }
-                    mbarrier::barrier_cta_sync(2, 256);
+                    barrier::barrier_cta_sync(2, 256);
                     let output = base.add(OUTPUT).cast::<f16>();
                     mma::static_for!(BAND in [0, 1] {
                         mma::static_for!(COL in [0, 1, 2, 3, 4, 5, 6, 7] {
@@ -247,8 +248,8 @@ pub mod kernels {
                             );
                         });
                     });
-                    mbarrier::fence_proxy_async_shared_cta();
-                    mbarrier::barrier_cta_sync(2, 256);
+                    fence::fence_proxy_async_shared_cta();
+                    barrier::barrier_cta_sync(2, 256);
                     if tid == 0 {
                         let left = region::<F16Tile128>(base.add(OUTPUT));
                         let right = region::<F16Tile128>(base.add(OUTPUT + 16384));

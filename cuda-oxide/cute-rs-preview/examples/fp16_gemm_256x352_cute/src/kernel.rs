@@ -10,7 +10,7 @@
 
 use ctm_rs::memory::DynamicSharedArray;
 use ctm_rs::{
-    cluster,
+    barrier, cluster, fence,
     groups::CtaGroup2,
     mbarrier::{self, Barrier, GeneralBarrier, ManagedBarrier, Ready, Uninit},
     memory::SharedAddress,
@@ -145,7 +145,7 @@ pub mod kernels {
                 accumulator.init();
                 pipeline.init();
             }
-            mbarrier::fence_mbarrier_init();
+            fence::fence_mbarrier_init();
             cluster::barrier_cluster_arrive_relaxed();
 
             // Each cluster visits output tiles in M-first order.
@@ -221,7 +221,7 @@ pub mod kernels {
                     pipeline.producer_acquire(stage as u32, phase);
                 }
             } else if warp_id == 4 {
-                mbarrier::barrier_cta_sync(2, 160);
+                barrier::barrier_cta_sync(2, 160);
                 let tmem = *tmem_token;
                 let mut stage = 0usize;
                 let mut phase = 0u32;
@@ -272,7 +272,7 @@ pub mod kernels {
                         .alloc_collective();
                     tcgen05::relinquish_alloc_permit_cg2();
                 }
-                mbarrier::barrier_cta_sync(2, 160);
+                barrier::barrier_cta_sync(2, 160);
                 let tmem = *tmem_token;
                 let mut phase = 0u32;
                 let mut epi_stage = 0usize;
@@ -295,8 +295,8 @@ pub mod kernels {
                             tid,
                             row_bias,
                         );
-                        mbarrier::fence_proxy_async_shared_cta();
-                        mbarrier::barrier_cta_sync(1, 128);
+                        fence::fence_proxy_async_shared_cta();
+                        barrier::barrier_cta_sync(1, 128);
                         if tid == 0 {
                             Sm100TmemEpilogue::<CSmem>::store_async(
                                 c,
@@ -307,7 +307,7 @@ pub mod kernels {
                             stores.producer_commit();
                             stores.producer_acquire();
                         }
-                        mbarrier::barrier_cta_sync(1, 128);
+                        barrier::barrier_cta_sync(1, 128);
                         subtile += 1;
                     }
                     accumulator.consumer_release();
@@ -319,7 +319,7 @@ pub mod kernels {
                     if tid == 0 {
                         stores.producer_tail();
                     }
-                    mbarrier::barrier_cta_sync(3, 32);
+                    barrier::barrier_cta_sync(3, 32);
                     let peer = cluster::mapa(SharedAddress::from_raw(dealloc), rank ^ 1);
                     cluster::arrive_remote(peer);
                     wait_deallocation(dealloc);

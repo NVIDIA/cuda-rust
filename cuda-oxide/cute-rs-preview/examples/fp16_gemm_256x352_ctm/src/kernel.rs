@@ -9,7 +9,9 @@ use ctm_rs::mbarrier::BarrierAddressExt;
 use ctm_rs::memory::DynamicSharedArray;
 use ctm_rs::tcgen05::tmem::{TmemGuard, TmemReady, TmemUninit, TmemView};
 use ctm_rs::{
+    barrier,
     cluster::{self, CtaMask},
+    fence,
     groups::CtaGroup2,
     mbarrier::{self, Barrier, GeneralBarrier, ManagedBarrier, Ready, TmaBarrier, Uninit},
     memory::{F16Tile128, F16TileB80, F16TileB96, F16TileC, PhysicalFormat, SharedRegion},
@@ -252,7 +254,7 @@ pub mod kernels {
                     stage += 1;
                 }
             }
-            mbarrier::fence_mbarrier_init();
+            fence::fence_mbarrier_init();
             cluster::barrier_cluster_arrive_relaxed();
             let mtiles = m / 256;
             let total_tiles = mtiles * n.div_ceil(352);
@@ -338,7 +340,7 @@ pub mod kernels {
                     );
                 }
             } else if warp_id == 4 {
-                mbarrier::barrier_cta_sync(2, 160);
+                barrier::barrier_cta_sync(2, 160);
                 let acc = Accumulator::adopt_ready(token);
                 let mut stage = 0usize;
                 let mut phase = 0u32;
@@ -401,7 +403,7 @@ pub mod kernels {
                     owner.alloc_collective();
                     tcgen05::relinquish_alloc_permit_cg2();
                 }
-                mbarrier::barrier_cta_sync(2, 160);
+                barrier::barrier_cta_sync(2, 160);
                 let acc = Accumulator::adopt_ready(token);
                 let mut phase = 0u32;
                 let mut epi_stage = 0usize;
@@ -421,8 +423,8 @@ pub mod kernels {
                         let output = smem.add(C_OFFSET + epi_stage * C_STAGE_BYTES).cast::<f16>();
                         let dst = region::<CSmem>(output.cast::<u8>());
                         epilogue(&acc, output, tid, subtile, row_bias);
-                        mbarrier::fence_proxy_async_shared_cta();
-                        mbarrier::barrier_cta_sync(1, 128);
+                        fence::fence_proxy_async_shared_cta();
+                        barrier::barrier_cta_sync(1, 128);
                         if tid == 0 {
                             tma::cp_async_bulk_tensor_global_shared_cta(
                                 &dst,
@@ -432,7 +434,7 @@ pub mod kernels {
                             tma::cp_async_bulk_commit_group();
                             tma::cp_async_bulk_wait_group_read::<1>();
                         }
-                        mbarrier::barrier_cta_sync(1, 128);
+                        barrier::barrier_cta_sync(1, 128);
                         subtile += 1;
                     }
                     tcgen05::fence_before_thread_sync();
@@ -446,7 +448,7 @@ pub mod kernels {
                     if tid == 0 {
                         tma::cp_async_bulk_wait_group_read::<0>();
                     }
-                    mbarrier::barrier_cta_sync(3, 32);
+                    barrier::barrier_cta_sync(3, 32);
                     let dealloc = ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(dealloc_ptr);
                     cluster::arrive_remote(cluster::mapa(dealloc.shared_address(), rank ^ 1));
                     wait(&dealloc, 0);

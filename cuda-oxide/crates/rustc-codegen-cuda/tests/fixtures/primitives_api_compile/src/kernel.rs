@@ -12,9 +12,9 @@ fn generic_shared_identity(pointer: *mut u8) -> *mut u8 {
 #[cuda_module]
 mod probes {
     use ctm_rs::{
-        async_copy,
+        async_copy, barrier,
         cluster::{self, CtaMask},
-        convert, float,
+        convert, fence, float,
         groups::CtaGroup2,
         kernel, launch_bounds, launch_contract,
         mbarrier::{self, Barrier, BarrierAddressExt, ManagedBarrier, Ready, TmaBarrier, Uninit},
@@ -122,14 +122,14 @@ mod probes {
             let shared = DynamicSharedArray::<u8, 1024>::get_raw();
             out.add(3)
                 .write(super::generic_shared_identity(shared) as u64);
-            mbarrier::fence_mbarrier_init();
-            mbarrier::fence_proxy_async_shared_cta();
+            fence::fence_mbarrier_init();
+            fence::fence_proxy_async_shared_cta();
             tcgen05::fence_before_thread_sync();
             tcgen05::fence_after_thread_sync();
-            mbarrier::barrier_cta_sync(3, 128);
-            mbarrier::barrier_cta_sync_aligned(3, 128);
-            mbarrier::barrier_cta_arrive(3, 128);
-            mbarrier::barrier_cta_arrive_aligned(3, 128);
+            barrier::barrier_cta_sync(3, 128);
+            barrier::barrier_cta_sync_aligned(3, 128);
+            barrier::barrier_cta_arrive(3, 128);
+            barrier::barrier_cta_arrive_aligned(3, 128);
             cluster::barrier_cluster_arrive();
             cluster::barrier_cluster_wait();
             cluster::barrier_cluster_arrive_aligned();

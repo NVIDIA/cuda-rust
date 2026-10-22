@@ -162,15 +162,11 @@ jobs:
           # bindgen still needs cuda.h.
           - package: cuda-host
     steps:
-      # A local action is loaded from the workspace, so checkout comes first.
-      # The CUDA image has no git; without it checkout stores a tarball.
-      - name: Install git
-        run: |
-          apt-get update -qq
-          apt-get install -y -qq --no-install-recommends ca-certificates git
+      # $/ installs git before checkout. The CUDA image has no git; without
+      # it checkout stores a tarball.
+      - uses: $/.github/actions/setup-cuda-container
       - name: Clone repository
         uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-cuda-container
 
       - name: Install LLVM 21 (llc/opt for the NVPTX backend)
         if: matrix.package == 'cuda-oxide-codegen'

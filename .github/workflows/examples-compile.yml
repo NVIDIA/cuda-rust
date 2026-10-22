@@ -54,17 +54,12 @@ jobs:
     # focused 10-minute materialization gate, plus toolkit/LLVM setup.
     timeout-minutes: 75
     steps:
-      # A local action is loaded from the workspace, so checkout comes first.
-      # The CUDA image has no git; without it checkout stores a tarball.
-      # sync-example-locks.sh --check is a python3 stdlib script. ubuntu-latest
-      # had python3; this image does not.
-      - name: Install git and Python
-        run: |
-          apt-get update -qq
-          apt-get install -y -qq --no-install-recommends ca-certificates git python3
+      # $/ installs git before checkout. The CUDA image has no git; without
+      # it checkout stores a tarball. The same step installs python3 for
+      # sync-example-locks.sh.
+      - uses: $/.github/actions/setup-cuda-container
       - name: Clone repository
         uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-cuda-container
 
       # Every example workspace must pin the same dependency versions. The
       # shared CARGO_TARGET_DIR below keys build caches on the resolved

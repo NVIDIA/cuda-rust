@@ -5,7 +5,7 @@
 
 //! CUDA driver error types and result conversion utilities.
 
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::mem::MaybeUninit;
 use std::{
     error,
@@ -146,9 +146,46 @@ impl DriverError {
     }
 }
 
+/// Converts a Rust string into a NUL-terminated C string for a driver call.
+///
+/// A single NUL in the final byte is a terminator and is dropped. PTX read
+/// back from NVRTC ends in one. Any other NUL byte would truncate the string
+/// at the driver and maps to `CUDA_ERROR_INVALID_VALUE`. The driver returns
+/// that code for a bad argument.
+pub(crate) fn c_string(s: &str) -> Result<CString, DriverError> {
+    let s = s.strip_suffix('\0').unwrap_or(s);
+    CString::new(s).map_err(|_| DriverError(cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::DriverError;
+    use super::{c_string, DriverError};
+
+    #[test]
+    fn c_string_drops_a_final_nul_and_rejects_any_other() {
+        let cases: [(&str, Option<&[u8]>); 9] = [
+            ("", Some(b"")),
+            ("kernel", Some(b"kernel")),
+            ("/tmp/m.ptx", Some(b"/tmp/m.ptx")),
+            ("\0", Some(b"")),
+            ("trailing\0", Some(b"trailing")),
+            ("a\0b", None),
+            ("\0a", None),
+            ("a\0\0", None),
+            ("a\0b\0", None),
+        ];
+        for (input, expected) in cases {
+            match (c_string(input), expected) {
+                (Ok(c), Some(bytes)) => assert_eq!(c.as_bytes(), bytes, "input {input:?}"),
+                (Err(e), None) => assert_eq!(
+                    e.0,
+                    cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE,
+                    "input {input:?}"
+                ),
+                (got, want) => panic!("input {input:?}: got {got:?}, expected {want:?}"),
+            }
+        }
+    }
 
     #[test]
     fn identifies_unsupported_ptx_version() {

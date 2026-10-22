@@ -406,6 +406,71 @@ pub(crate) fn emit_make(
     )
 }
 
+/// Read the tile width from a divided or selected tensor-view destination.
+///
+/// `what` names the Rust call in diagnostics (`zipped_divide` or `local_tile`).
+fn destination_tile_size(
+    body: &mir::Body,
+    destination: &mir::Place,
+    what: &str,
+) -> TranslationResult<u64> {
+    let destination_ty = destination.ty(body.locals()).map_err(|error| {
+        pliron::input_error_noloc!(TranslationErr::unsupported(format!(
+            "cannot read {what} destination type: {error:?}"
+        )))
+    })?;
+    let result = decode_tensor_view(&destination_ty)
+        .map_err(|error| {
+            pliron::input_error_noloc!(TranslationErr::unsupported(format!(
+                "invalid {what} destination: {error}"
+            )))
+        })?
+        .ok_or_else(|| {
+            pliron::input_error_noloc!(TranslationErr::unsupported(format!(
+                "{what} destination is not a v0 tensor view"
+            )))
+        })?;
+    result.layout.tile_size().ok_or_else(|| {
+        pliron::input_error_noloc!(TranslationErr::unsupported(format!(
+            "{what} result does not carry a tile width"
+        )))
+    })
+}
+
+/// Insert one `cute.tensor_zipped_divide` after `anchor`; return the op and its view.
+fn insert_zipped_divide(
+    ctx: &mut Context,
+    tensor: Value,
+    tile_size: u64,
+    block: Ptr<BasicBlock>,
+    anchor: Option<Ptr<Operation>>,
+    loc: &Location,
+) -> (Ptr<Operation>, Value) {
+    let divide = CuteTensorZippedDivideOp::new(ctx, tensor, tile_size);
+    let op = divide.get_operation();
+    op.deref_mut(ctx).set_loc(loc.clone());
+    insert(ctx, op, block, anchor);
+    let result = op.deref(ctx).get_result(0);
+    (op, result)
+}
+
+/// Insert one `cute.tensor_slice` after `anchor`; return the op and its view.
+fn insert_slice(
+    ctx: &mut Context,
+    tensor: Value,
+    tile_index: Value,
+    block: Ptr<BasicBlock>,
+    anchor: Option<Ptr<Operation>>,
+    loc: &Location,
+) -> (Ptr<Operation>, Value) {
+    let slice = CuteTensorSliceOp::new(ctx, tensor, tile_index);
+    let op = slice.get_operation();
+    op.deref_mut(ctx).set_loc(loc.clone());
+    insert(ctx, op, block, anchor);
+    let result = op.deref(ctx).get_result(0);
+    (op, result)
+}
+
 /// Split a contiguous tensor into tile-local and tile-index coordinates.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_zipped_divide(
@@ -426,34 +491,10 @@ pub(crate) fn emit_zipped_divide(
             TranslationErr::unsupported("tensor zipped_divide expects one view".to_string())
         );
     }
-    let destination_ty = destination.ty(body.locals()).map_err(|error| {
-        pliron::input_error_noloc!(TranslationErr::unsupported(format!(
-            "cannot read zipped_divide destination type: {error:?}"
-        )))
-    })?;
-    let result = decode_tensor_view(&destination_ty)
-        .map_err(|error| {
-            pliron::input_error_noloc!(TranslationErr::unsupported(format!(
-                "invalid zipped_divide destination: {error}"
-            )))
-        })?
-        .ok_or_else(|| {
-            pliron::input_error_noloc!(TranslationErr::unsupported(
-                "zipped_divide destination is not a v0 tensor view".to_string()
-            ))
-        })?;
-    let tile_size = result.layout.tile_size().ok_or_else(|| {
-        pliron::input_error_noloc!(TranslationErr::unsupported(
-            "zipped_divide result does not carry a tile width".to_string()
-        ))
-    })?;
+    let tile_size = destination_tile_size(body, destination, "zipped_divide")?;
     let (tensor, after) =
         translate_operand(ctx, body, &args[0], value_map, block, prev, loc.clone())?;
-    let divide = CuteTensorZippedDivideOp::new(ctx, tensor, tile_size);
-    let op = divide.get_operation();
-    op.deref_mut(ctx).set_loc(loc.clone());
-    insert(ctx, op, block, after.or(prev));
-    let result = op.deref(ctx).get_result(0);
+    let (op, result) = insert_zipped_divide(ctx, tensor, tile_size, block, after.or(prev), &loc);
     finish_value(
         ctx,
         op,
@@ -492,11 +533,7 @@ pub(crate) fn emit_slice(
         translate_operand(ctx, body, &args[0], value_map, block, prev, loc.clone())?;
     let (tile_index, after) =
         translate_operand(ctx, body, &args[1], value_map, block, after, loc.clone())?;
-    let slice = CuteTensorSliceOp::new(ctx, tensor, tile_index);
-    let op = slice.get_operation();
-    op.deref_mut(ctx).set_loc(loc.clone());
-    insert(ctx, op, block, after.or(prev));
-    let result = op.deref(ctx).get_result(0);
+    let (op, result) = insert_slice(ctx, tensor, tile_index, block, after.or(prev), &loc);
     finish_value(
         ctx,
         op,
@@ -508,6 +545,71 @@ pub(crate) fn emit_slice(
         block_map,
         loc,
         "tensor_slice",
+    )
+}
+
+/// Split a contiguous tensor into tiles and select one in a single call.
+///
+/// This is CuTe's `local_tile` for a one-dimensional tiler and a single tile
+/// coordinate. It inserts the same `cute.tensor_zipped_divide` followed by
+/// `cute.tensor_slice` that the two-step `zipped_divide` then `slice` chain
+/// produces, through the same builders, so the dialect verifier and the
+/// CUTLASS compiler see one program for both forms. The tile width comes
+/// from the `Tile1D` destination type; the tile index is the second operand.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_local_tile(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block: Ptr<BasicBlock>,
+    prev: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    if args.len() != 2 {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "tensor local_tile expects a view and tile index".to_string()
+            )
+        );
+    }
+    let tile_size = destination_tile_size(body, destination, "local_tile")?;
+    let (tensor, after) =
+        translate_operand(ctx, body, &args[0], value_map, block, prev, loc.clone())?;
+    let (divide, divided) =
+        insert_zipped_divide(ctx, tensor, tile_size, block, after.or(prev), &loc);
+    let (tile_index, after) = translate_operand(
+        ctx,
+        body,
+        &args[1],
+        value_map,
+        block,
+        Some(divide),
+        loc.clone(),
+    )?;
+    let (op, result) = insert_slice(
+        ctx,
+        divided,
+        tile_index,
+        block,
+        after.or(Some(divide)),
+        &loc,
+    );
+    finish_value(
+        ctx,
+        op,
+        result,
+        destination,
+        target,
+        block,
+        value_map,
+        block_map,
+        loc,
+        "tensor_local_tile",
     )
 }
 

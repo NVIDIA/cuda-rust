@@ -192,6 +192,7 @@ mod canonical_path_tests {
         for path in [
             "cute_rs::copy::vector::load_tile",
             "cute_rs::tensor::make_tensor_read",
+            "cute_rs::tensor::{impl#6}::local_tile",
             "cute_rs::tensor::{impl#7}::load",
             "cute_rs::pipeline::{impl#4}::advance",
             "cute_rs::sm100::tcgen05_alloc",

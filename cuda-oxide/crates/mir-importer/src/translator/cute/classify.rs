@@ -531,6 +531,22 @@ pub(super) fn classify_tensor_method_call(
             }
             _ => None,
         },
+        // CuTe's `local_tile` for a one-dimensional tiler: one call whose
+        // emitter produces the same zipped_divide and slice pair as the chain.
+        "local_tile" => match (receiver_view, destination_view) {
+            (Some(source), Some(result))
+                if source.layout == CuteTensorLayoutAttr::Contiguous1D
+                    && matches!(result.layout, CuteTensorLayoutAttr::Tile1D(_))
+                    && source.access == result.access =>
+            {
+                Some(if source.access == CuteTensorAccessAttr::ReadOnly {
+                    CuteFn::LocalTileRead
+                } else {
+                    CuteFn::LocalTileWrite
+                })
+            }
+            _ => None,
+        },
         "is_full"
             if receiver_view.is_some_and(|view| {
                 view.access == CuteTensorAccessAttr::ReadOnly

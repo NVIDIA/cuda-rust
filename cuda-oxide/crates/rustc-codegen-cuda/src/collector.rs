@@ -321,10 +321,13 @@ fn is_cute_recognition_stub_identity(
     match impl_owner {
         CuteImplOwner::Tensor => matches!(
             method,
-            "from_slice" | "zipped_divide" | "slice" | "is_full" | "base" | "load"
+            "from_slice" | "zipped_divide" | "local_tile" | "slice" | "is_full" | "base" | "load"
         ),
         CuteImplOwner::TensorMut => {
-            matches!(method, "from_disjoint_slice" | "zipped_divide" | "slice")
+            matches!(
+                method,
+                "from_disjoint_slice" | "zipped_divide" | "local_tile" | "slice"
+            )
         }
         CuteImplOwner::TensorMutTile1D => matches!(method, "store" | "store_at"),
         CuteImplOwner::BlockScaledTensor => matches!(method, "from_slices" | "thread_row"),
@@ -3346,10 +3349,27 @@ mod tests {
             "::tensor::{impl#10}::store_at",
             Some(CuteImplOwner::TensorMut),
         ));
-        assert!(!is_cute_recognition_stub_identity(
+        assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::tensor::{impl#10}::store",
-            Some(CuteImplOwner::TensorMut),
+            "::tensor::{impl#11}::store",
+            Some(CuteImplOwner::TensorMutTile1D),
+        ));
+        // The Contiguous1D impl's view constructor and view changes, including
+        // the fused `local_tile`, stay stubs the importer intercepts.
+        for method in ["from_disjoint_slice", "zipped_divide", "local_tile"] {
+            assert!(
+                is_cute_recognition_stub_identity(
+                    "cute_rs",
+                    &format!("::tensor::{{impl#10}}::{method}"),
+                    Some(CuteImplOwner::TensorMut),
+                ),
+                "{method}"
+            );
+        }
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::tensor::{impl#6}::local_tile",
+            Some(CuteImplOwner::Tensor),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",

@@ -189,6 +189,18 @@ pub(crate) fn try_translate_cute_call(
             block_map,
             loc.clone(),
         ),
+        CuteFn::LocalTileRead | CuteFn::LocalTileWrite => tensor::emit::emit_local_tile(
+            ctx,
+            body,
+            args,
+            destination,
+            target,
+            block_ptr,
+            prev_op,
+            value_map,
+            block_map,
+            loc.clone(),
+        ),
         CuteFn::TensorTileIsFull | CuteFn::TensorTileBase => tensor::emit::emit_query(
             ctx,
             body,

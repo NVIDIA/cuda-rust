@@ -365,6 +365,20 @@ impl<'a, T: Copy + TensorElement<T>> Tensor<'a, T, Contiguous1D, T> {
     pub const fn zipped_divide<const TILE: usize>(self) -> Tensor<'a, T, Zipped1D<TILE>, T> {
         zipped_divide_read::<T, TILE>(self)
     }
+
+    /// Select tile number `tile` of the row split into `TILE`-element tiles.
+    ///
+    /// Equivalent to `zipped_divide::<TILE>().slice(tile)`: CuTe's
+    /// `local_tile` for a one-dimensional tiler and a single tile
+    /// coordinate. This only changes the view. It does not read memory.
+    #[must_use]
+    #[inline(always)]
+    pub const fn local_tile<const TILE: usize>(
+        self,
+        tile: usize,
+    ) -> Tensor<'a, T, Tile1D<TILE>, T> {
+        self.zipped_divide::<TILE>().slice(tile)
+    }
 }
 
 impl<'a, T: Copy + TensorElement<T>, const TILE: usize> Tensor<'a, T, Zipped1D<TILE>, T> {
@@ -515,6 +529,17 @@ impl<'a, T: Copy + TensorElement<T>> TensorMut<'a, T, Contiguous1D, T> {
     #[inline(always)]
     pub fn zipped_divide<const TILE: usize>(self) -> TensorMut<'a, T, Zipped1D<TILE>, T> {
         zipped_divide_write::<T, TILE>(self)
+    }
+
+    /// Select writable tile number `tile` of the row split into `TILE`-element tiles.
+    ///
+    /// Equivalent to `zipped_divide::<TILE>().slice(tile)`: CuTe's
+    /// `local_tile` for a one-dimensional tiler and a single tile
+    /// coordinate. This only changes the view. It does not write memory.
+    #[must_use]
+    #[inline(always)]
+    pub fn local_tile<const TILE: usize>(self, tile: usize) -> TensorMut<'a, T, Tile1D<TILE>, T> {
+        self.zipped_divide::<TILE>().slice(tile)
     }
 }
 
@@ -771,6 +796,41 @@ mod tests {
         let tail = tiled.slice(2);
         assert_eq!(tail.layout().base(), 8);
         assert!(!tail.layout().is_full());
+    }
+
+    /// The fused tile selection must agree with the two-step chain on a full and a ragged tile.
+    #[test]
+    fn local_tile_equals_zipped_divide_then_slice() {
+        let storage = [0.0f32; 10];
+        let tensor: Tensor<'_, f32, Contiguous1D> = Tensor::from_slice(&storage);
+        let tiled = tensor.zipped_divide::<4>();
+
+        // Tile 1 is full; tile 2 is the two-element tail.
+        for tile in [1, 2] {
+            let direct = tensor.local_tile::<4>(tile);
+            let chained = tiled.slice(tile);
+            assert_eq!(direct.storage().as_ptr(), chained.storage().as_ptr());
+            assert_eq!(direct.base(), chained.base());
+            assert_eq!(direct.is_full(), chained.is_full());
+        }
+        assert!(tensor.local_tile::<4>(1).is_full());
+        assert!(!tensor.local_tile::<4>(2).is_full());
+
+        let mut output = [0.0f32; 10];
+        for tile in [1, 2] {
+            // Each writable view is built, queried and dropped before the
+            // next one, so no two views over `output` are alive together.
+            let direct = unsafe { make_tensor_write(output.as_mut_ptr(), output.len()) }
+                .local_tile::<4>(tile)
+                .layout();
+            let chained = unsafe { make_tensor_write(output.as_mut_ptr(), output.len()) }
+                .zipped_divide::<4>()
+                .slice(tile)
+                .layout();
+            assert_eq!(direct.base(), chained.base());
+            assert_eq!(direct.is_full(), chained.is_full());
+            assert_eq!(direct.is_full(), tile == 1);
+        }
     }
 
     /// Register-tile addition must preserve element order and produce per-element sums.

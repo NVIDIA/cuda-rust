@@ -29,6 +29,10 @@ pub(crate) enum CuteFn {
     SliceRead,
     /// Select one writable tensor tile.
     SliceWrite,
+    /// Split a read-only tensor into tiles and select one: CuTe's `local_tile`.
+    LocalTileRead,
+    /// Split a writable tensor into tiles and select one: CuTe's `local_tile`.
+    LocalTileWrite,
     /// Test whether every element of the selected tile is in bounds.
     TensorTileIsFull,
     /// Return the selected tile's absolute starting element index.

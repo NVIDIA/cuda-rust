@@ -75,6 +75,24 @@ jobs:
               - '*'
               - '**'
 
+  # Audit the Tile workspace with its own policy and lockfile. This only
+  # resolves dependencies, so it needs neither a CUDA container nor a GPU.
+  cargo-deny:
+    needs: changes
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.tile == 'true' ||
+      needs.changes.outputs.any_changed != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
+        with:
+          tool: cargo-deny
+      - name: Check dependency policy
+        run: cargo deny --manifest-path Cargo.toml --workspace --locked --config deny.toml check
+
   # Exercise the oldest Tile IR assembler, including its lack of
   # --list-versions. The separate 13.0 lane only checks shared host crates.
   tile-ir-cuda13-2:

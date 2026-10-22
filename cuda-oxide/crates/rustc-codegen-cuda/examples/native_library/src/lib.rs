@@ -3,8 +3,18 @@
 
 #![no_std]
 
-fn registration() -> &'static str {
-    cuda_device::library::registration!("FIXTURE_REGISTRATION")
+trait Recipe<const ITEMS: usize> {
+    const REGISTRATION: &'static str;
+}
+
+struct LoadAddRecipe;
+
+impl<const ITEMS: usize> Recipe<ITEMS> for LoadAddRecipe {
+    const REGISTRATION: &'static str = cuda_device::library::registration!("FIXTURE_REGISTRATION");
+}
+
+fn registration<R: Recipe<ITEMS>, const ITEMS: usize>() -> &'static str {
+    R::REGISTRATION
 }
 
 /// Load a complete block tile through a native provider in a dependency crate.
@@ -22,7 +32,7 @@ pub unsafe fn load_add<const ITEMS: usize>(input: *const i32, output: *mut i32) 
     // supplies the full input tile and required geometry. This recipe uses no scratch.
     unsafe {
         cuda_device::library::call_v1::<i32, _, _, 128, ITEMS>(
-            registration,
+            registration::<LoadAddRecipe, ITEMS>,
             (input.add(origin), values.as_mut_ptr(), 7_i32),
         );
         for (item, value) in values.iter().enumerate() {

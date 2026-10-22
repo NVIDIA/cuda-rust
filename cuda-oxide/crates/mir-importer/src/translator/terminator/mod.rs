@@ -1174,6 +1174,7 @@ fn translate_call_inner(
             def.def_id().name().as_str().rsplit("::").next(),
             Some(
                 reserved_oxide_symbols::LIBRARY_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_CALLBACK_CALL_V1
                     | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_CALL_V1
                     | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_RESOURCE_CALL_V1
                     | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_STORAGE_CALL_V1
@@ -3689,10 +3690,12 @@ mod library {
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_storage_release(_: StorageReservation<i32,4>) {}
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_storage_call<R: Copy>(_: R, _: &[i32], _: &mut StorageDescriptor<128,16,false,true>, _: (*const i32,usize), _: (*mut i32,)) {}
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_call<R: Copy>(_: R, _: (*const i32,*mut i32)) {}
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_call_with_callback<R: Copy,F:Copy>(_: R, _: (*const i32,*mut i32), _: F, _: &i32) {}
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_call<R: Copy>(_: R, _: (*const i32,usize), _: (*mut i32,)) {}
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_resource_call<R: Copy>(_: R, _: &[i32], _: (*const i32,usize), _: (*mut i32,)) {}
 }
 fn registration() -> &'static str { "{}" }
+unsafe extern "C" fn thunk(_: *const i32, a: i32, b: i32) -> i32 { a + b }
 pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
     library::cuda_oxide_library_v1_246e25db_call(registration,(input,output));
     library::cuda_oxide_library_v1_246e25db_checked_block_call(registration,(input,7),(output,));
@@ -3702,6 +3705,7 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
     let reservation = library::cuda_oxide_library_v1_246e25db_storage_reserve(&mut storage);
     library::cuda_oxide_library_v1_246e25db_checked_block_storage_call(registration,slice,&mut storage,(input,7),(output,));
     library::cuda_oxide_library_v1_246e25db_storage_release(reservation);
+    library::cuda_oxide_library_v1_246e25db_call_with_callback(registration,(input,output),thunk,&7);
 }
 "#).unwrap();
         let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
@@ -3758,7 +3762,7 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                             Some((bb, Instance::resolve(def, &args).unwrap().mangled_name()))
                         })
                         .collect();
-                    assert_eq!(source.len(), 8);
+                    assert_eq!(source.len(), 9);
                     let spec = NativeSpec {
                         scalar: LibraryScalar::Signed(32),
                         items: 4,
@@ -3807,6 +3811,10 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                             storage: LibraryStorageArg::Explicit(policy),
                         }),
                         LibraryRoleAttr::StorageRelease,
+                        LibraryRoleAttr::Native(LibraryNativeMetadata::Callback {
+                            spec,
+                            block_threads: 64,
+                        }),
                     ];
                     for (caller, debug) in [
                         ("original_entry", DebugKind::Off),
@@ -3920,7 +3928,8 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                     (1, 1),
                                     (1, 1),
                                     (4, 0),
-                                    (1, 0)
+                                    (1, 0),
+                                    (2, 0)
                                 ])
                                 .map(|(((bb, _), role), (operands, results))| (
                                     *bb, role, operands, results
@@ -3929,7 +3938,13 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                         );
                         assert_eq!(
                             boundaries,
-                            [source[0].0, source[1].0, source[2].0, source[6].0]
+                            [
+                                source[0].0,
+                                source[1].0,
+                                source[2].0,
+                                source[6].0,
+                                source[8].0
+                            ]
                         );
                         let plans = source
                             .iter()
@@ -3965,7 +3980,8 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                         );
                                         if matches!(roles[index], LibraryRoleAttr::Native(_)) {
                                             plan.symbol = format!("native_{index}");
-                                            plan.checked_block = index != 0;
+                                            plan.checked_block = index != 0 && index != 8;
+                                            plan.callback = index == 8;
                                             plan.resource_witness = index == 2 || index == 6;
                                             plan.storage_witness = index == 6;
                                             plan.scratch_bytes = if index == 2 { 0 } else { 32 };
@@ -4012,9 +4028,9 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                 }
                             }
                         }
-                        assert_eq!(native_arguments, vec![3, 4, 4, 4]);
+                        assert_eq!(native_arguments, vec![3, 4, 4, 4, 4]);
                         assert_eq!(
-                            scratch_views, 5,
+                            scratch_views, 6,
                             "zero-byte native scratch still retains a fixed view"
                         );
                     }

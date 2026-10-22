@@ -289,45 +289,53 @@ fn native_valid(ctx: &Context, native: LibraryNativeMetadata, args: &[TypeHandle
     if !valid_scalar(spec.scalar) || spec.items == 0 {
         return false;
     }
-    let (uniform_index, payload_index) = match native {
-        N::Raw { block_threads, .. } => {
-            return block_threads > 0
-                && args.len() == 1
-                && tuple_fields(ctx, args[0]).is_some_and(|fields| {
-                    fields.into_iter().all(|ty| {
-                        scalar_type(ctx, ty).is_some() || pointer_scalar(ctx, ty).is_some()
-                    })
-                });
-        }
-        N::CheckedBlock { .. } => {
-            if args.len() != 2 {
-                return false;
+    let (uniform_index, payload_index) =
+        match native {
+            N::Raw { block_threads, .. } | N::Callback { block_threads, .. } => {
+                let callback = matches!(native, N::Callback { .. });
+                let expected_args = if callback { 2 } else { 1 };
+                return block_threads > 0
+                    && args.len() == expected_args
+                    && (!callback
+                        || (spec.scalar == LibraryScalar::Signed(32)
+                            && args[1].deref(ctx).downcast_ref::<MirPtrType>().is_some_and(
+                                |ptr| ptr.kind == MirPointerKind::SharedRef && !ptr.is_mutable,
+                            )))
+                    && tuple_fields(ctx, args[0]).is_some_and(|fields| {
+                        fields.into_iter().all(|ty| {
+                            scalar_type(ctx, ty).is_some() || pointer_scalar(ctx, ty).is_some()
+                        })
+                    });
             }
-            (0, 1)
-        }
-        N::CheckedBlockResource {
-            access, witness, ..
-        } => {
-            if args.len() != 3 || !witness_valid(ctx, witness, access, args[0], spec.scalar) {
-                return false;
+            N::CheckedBlock { .. } => {
+                if args.len() != 2 {
+                    return false;
+                }
+                (0, 1)
             }
-            (1, 2)
-        }
-        N::CheckedBlockStorage {
-            access,
-            witness,
-            storage,
-            ..
-        } => {
-            if args.len() != 4
-                || !witness_valid(ctx, witness, access, args[0], spec.scalar)
-                || !storage_arg_valid(ctx, storage, args[1])
-            {
-                return false;
+            N::CheckedBlockResource {
+                access, witness, ..
+            } => {
+                if args.len() != 3 || !witness_valid(ctx, witness, access, args[0], spec.scalar) {
+                    return false;
+                }
+                (1, 2)
             }
-            (2, 3)
-        }
-    };
+            N::CheckedBlockStorage {
+                access,
+                witness,
+                storage,
+                ..
+            } => {
+                if args.len() != 4
+                    || !witness_valid(ctx, witness, access, args[0], spec.scalar)
+                    || !storage_arg_valid(ctx, storage, args[1])
+                {
+                    return false;
+                }
+                (2, 3)
+            }
+        };
     let Some(uniform) = tuple_fields(ctx, args[uniform_index]) else {
         return false;
     };

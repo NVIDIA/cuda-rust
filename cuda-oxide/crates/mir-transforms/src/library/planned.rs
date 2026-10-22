@@ -52,7 +52,7 @@ pub(super) fn validate(ctx: &Context, op: Ptr<Operation>, plan: &LibraryCallPlan
     }
     if let LibraryRoleAttr::Native(native) = role {
         use LibraryNativeMetadata::*;
-        if matches!(native, Raw { .. }) {
+        if matches!(native, Raw { .. } | Callback { .. }) {
             let signature = library
                 .get_attr_library_signature(ctx)
                 .unwrap()
@@ -77,7 +77,7 @@ pub(super) fn validate(ctx: &Context, op: Ptr<Operation>, plan: &LibraryCallPlan
             }
         }
         let (checked, resource, storage) = match native {
-            Raw { .. } => (false, false, false),
+            Raw { .. } | Callback { .. } => (false, false, false),
             CheckedBlock { .. } => (true, false, false),
             CheckedBlockResource { .. } => (true, true, false),
             CheckedBlockStorage { .. } => (true, true, true),
@@ -87,6 +87,7 @@ pub(super) fn validate(ctx: &Context, op: Ptr<Operation>, plan: &LibraryCallPlan
             plan.resource_witness,
             plan.storage_witness,
         ) != (checked, resource, storage)
+            || plan.callback != matches!(native, Callback { .. })
             || plan.symbol.is_empty()
         {
             return verify_err!(
@@ -158,6 +159,11 @@ fn scratch_pointer(ctx: &mut Context, pointee: TypeHandle, shared: bool) -> Type
     } else {
         MirPtrType::get_generic_with_kind(ctx, pointee, true, MirPointerKind::RawMut).into()
     }
+}
+
+#[allow(clippy::disallowed_methods)]
+fn environment_pointer(ctx: &mut Context, pointee: TypeHandle) -> TypeHandle {
+    MirPtrType::get_generic_with_kind(ctx, pointee, false, MirPointerKind::RawConst).into()
 }
 
 fn shared_view(
@@ -243,7 +249,7 @@ fn native_call(
         .arg_types();
     let operands = anchor.deref(ctx).operands().collect::<Vec<_>>();
     let indices: &[usize] = match native {
-        Raw { .. } => &[0],
+        Raw { .. } | Callback { .. } => &[0],
         CheckedBlock { .. } => &[0, 1],
         CheckedBlockResource { .. } => &[1, 2],
         CheckedBlockStorage { .. } => &[2, 3],
@@ -283,6 +289,29 @@ fn native_call(
     );
     arguments.insert(2, scratch);
     declared.insert(2, scratch_pointer(ctx, byte, false));
+    if matches!(native, Callback { .. }) {
+        let environment = operands[1];
+        let pointee = environment
+            .get_type(ctx)
+            .deref(ctx)
+            .downcast_ref::<MirPtrType>()
+            .unwrap()
+            .pointee;
+        let typed_raw = environment_pointer(ctx, pointee);
+        let environment = pointer_cast(
+            ctx,
+            anchor,
+            environment,
+            typed_raw,
+            MirPointerKindAuthorityAttr::RawAddress,
+        );
+        let opaque = environment_pointer(ctx, byte);
+        // Pointee erasure belongs to this explicit unsafe callback ABI.
+        let cast = emit::<MirCastOp>(ctx, anchor, vec![opaque], vec![environment]);
+        MirCastOp::new(cast).set_attr_cast_kind(ctx, MirCastKindAttr::PtrToPtr);
+        arguments.push(cast.deref(ctx).get_result(0));
+        declared.push(opaque);
+    }
     for (argument, &expected) in arguments.iter_mut().zip(&declared) {
         let actual = argument.get_type(ctx);
         let address_only = {
@@ -417,6 +446,10 @@ mod tests {
                 spec,
                 block_threads: 64,
             },
+            Callback {
+                spec,
+                block_threads: 64,
+            },
             CheckedBlock { spec },
             CheckedBlockResource {
                 spec,
@@ -451,8 +484,17 @@ mod tests {
             let empty = MirTupleType::get(ctx, vec![]).into();
             let borrowed =
                 MirSliceType::get_with_kind(ctx, scalar, MirPointerKind::SharedRef).into();
+            let environment = MirTupleType::get(ctx, vec![scalar]).into();
+            let environment = MirPtrType::get_generic_with_kind(
+                ctx,
+                environment,
+                false,
+                MirPointerKind::SharedRef,
+            )
+            .into();
             let types = match native {
                 Raw { .. } => vec![raw],
+                Callback { .. } => vec![raw, environment],
                 CheckedBlock { .. } => vec![uniform, payload],
                 CheckedBlockResource { .. } => {
                     vec![borrowed, uniform, payload]
@@ -511,7 +553,8 @@ mod tests {
             op.insert_at_back(block, ctx);
             let mut plan = LibraryCallPlan::internal(LibraryOperation::Native, "marker".into());
             plan.symbol = "native_body".into();
-            plan.checked_block = !matches!(native, Raw { .. });
+            plan.checked_block = !matches!(native, Raw { .. } | Callback { .. });
+            plan.callback = matches!(native, Callback { .. });
             plan.resource_witness = matches!(
                 native,
                 CheckedBlockResource { .. } | CheckedBlockStorage { .. }
@@ -524,6 +567,9 @@ mod tests {
             };
             plan.scratch_alignment = 4;
             plan.barrier_before = true;
+            let mut wrong_kind = plan.clone();
+            wrong_kind.callback = !plan.callback;
+            assert!(validate(ctx, op, &wrong_kind).is_err());
             super::super::lower_planned_library_operations(
                 module,
                 ctx,
@@ -551,7 +597,7 @@ mod tests {
             call.get_operation().deref(ctx).verify(ctx).unwrap();
             let call_op = call.get_operation();
             let expected = match native {
-                Raw { .. } => {
+                Raw { .. } | Callback { .. } => {
                     vec![(operands[0], 0), (operands[0], 1), (operands[0], 2)]
                 }
                 CheckedBlock { .. } => vec![
@@ -579,6 +625,29 @@ mod tests {
                     origin(ctx, call_op.deref(ctx).get_operand(index)),
                     expected,
                     "{native:?}"
+                );
+            }
+            if matches!(native, Callback { .. }) {
+                assert_eq!(call_op.deref(ctx).get_num_operands(), 5);
+                let environment = call_op.deref(ctx).get_operand(4);
+                let ty = environment.get_type(ctx);
+                let ty = ty.deref(ctx);
+                let pointer = ty.downcast_ref::<MirPtrType>().unwrap();
+                assert_eq!(
+                    (pointer.pointee, pointer.kind, pointer.address_space),
+                    (byte, MirPointerKind::RawConst, 0)
+                );
+                assert!(!pointer.is_mutable);
+                let erase = environment.defining_op().unwrap();
+                erase.deref(ctx).verify(ctx).unwrap();
+                let raw = erase.deref(ctx).get_operand(0).defining_op().unwrap();
+                raw.deref(ctx).verify(ctx).unwrap();
+                assert_eq!(raw.deref(ctx).get_operand(0), operands[1]);
+                assert_eq!(
+                    *MirCastOp::new(raw)
+                        .get_attr_pointer_kind_authority(ctx)
+                        .unwrap(),
+                    MirPointerKindAuthorityAttr::RawAddress
                 );
             }
             let scratch = call_op.deref(ctx).get_operand(2);

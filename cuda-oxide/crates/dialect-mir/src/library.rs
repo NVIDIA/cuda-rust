@@ -77,6 +77,10 @@ pub enum LibraryNativeMetadata {
         spec: NativeSpec,
         block_threads: u32,
     },
+    Callback {
+        spec: NativeSpec,
+        block_threads: u32,
+    },
     CheckedBlock {
         spec: NativeSpec,
     },
@@ -96,11 +100,64 @@ impl LibraryNativeMetadata {
     pub fn spec(self) -> NativeSpec {
         match self {
             Self::Raw { spec, .. }
+            | Self::Callback { spec, .. }
             | Self::CheckedBlock { spec }
             | Self::CheckedBlockResource { spec, .. }
             | Self::CheckedBlockStorage { spec, .. } => spec,
         }
     }
+}
+
+/// Genuine definition class, before source calls are expanded or erased.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LibraryCallbackDefinition {
+    Rust,
+    Cuda,
+    Foreign,
+    Intrinsic,
+}
+
+/// Concrete dispatch identity; the two named shims have separately rooted receivers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LibraryCallbackDispatch {
+    Direct,
+    Indirect,
+    FunctionItemShim,
+    ClosureOnceShim,
+}
+
+/// Original monomorphically reachable terminators relevant to callback admission.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LibraryCallbackCall {
+    Direct {
+        definition: LibraryCallbackDefinition,
+        diagnostic: String,
+    },
+    Indirect,
+    InlineAssembly,
+}
+
+/// Source distinctions consumed by callback admission, independent of Rust types.
+/// Local nominal types include unused declarations; calls include only original
+/// monomorphically reachable terminators. This is not a block or value graph.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LibraryCallbackFunction {
+    pub diagnostic: String,
+    pub export: Option<String>,
+    pub definition: LibraryCallbackDefinition,
+    pub dispatch: LibraryCallbackDispatch,
+    pub has_body: bool,
+    pub cuda_local_types: Vec<String>,
+    pub calls: Vec<LibraryCallbackCall>,
+    pub callees: Vec<String>,
+}
+
+/// Original selected callback roots and complete collector identities, including
+/// callees that have no imported symbol. Missing records cannot imply admission.
+#[derive(Clone, Debug, Default)]
+pub struct LibraryCallbackSources {
+    pub roots: std::collections::BTreeMap<LibraryCallSite, String>,
+    pub functions: std::collections::BTreeMap<String, LibraryCallbackFunction>,
 }
 
 /// Genuine source-native semantics; this role does not prove participation.
@@ -309,6 +366,8 @@ pub struct LibraryCallPlan {
     pub checked_block: bool,
     /// An additional typed memory witness, consumed only by compiler checks.
     pub resource_witness: bool,
+    /// Append the borrowed callback environment after injected scratch.
+    pub callback: bool,
     /// Size of the assigned shared scratch view in bytes.
     pub scratch_bytes: u32,
     /// Required alignment of the shared scratch base.
@@ -328,6 +387,7 @@ impl LibraryCallPlan {
             barrier_after: false,
             checked_block: false,
             resource_witness: false,
+            callback: false,
             scratch_bytes: 0,
             scratch_alignment: 1,
         }

@@ -34,12 +34,14 @@ use std::{
 };
 
 mod admission;
+mod callback;
 mod context_plans;
 mod contexts;
 mod planned;
 mod stateful;
 mod storage;
 pub use admission::{admit_library_roots, capture_library_roles};
+pub use callback::admit_library_callbacks;
 pub use context_plans::{LibraryAssembly, assemble_library_plans};
 pub use contexts::{materialize_library_contexts, resolve_library_call_target};
 pub use stateful::analyze_libraries;

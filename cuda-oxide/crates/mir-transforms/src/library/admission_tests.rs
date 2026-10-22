@@ -122,10 +122,13 @@ fn native(ctx: &mut Context, block: Ptr<BasicBlock>, caller: &str, kind: Native)
     let pointer =
         MirPtrType::get_generic_with_kind(ctx, scalar, true, MirPointerKind::RawMut).into();
     let tuple = MirTupleType::get(ctx, vec![pointer]).into();
-    let args = if matches!(kind, Native::Raw { .. }) {
-        vec![tuple]
-    } else {
-        vec![tuple, tuple]
+    let args = match kind {
+        Native::Raw { .. } => vec![tuple],
+        Native::Callback { .. } => vec![
+            tuple,
+            MirPtrType::get_generic_with_kind(ctx, scalar, false, MirPointerKind::SharedRef).into(),
+        ],
+        _ => vec![tuple, tuple],
     };
     let values = args
         .iter()
@@ -228,6 +231,170 @@ fn raw_contract_keeps_its_explicit_shape_and_authenticates_surviving_effects() {
         }),
     );
     assert!(admit_library_roots(module, ctx, &roots, &symbols, &roles).is_err());
+}
+
+#[test]
+fn callbacks_preserve_erased_source_obligations_and_actual_thunk_identity() {
+    use super::callback::admit_library_callbacks;
+    use dialect_mir::library::{
+        LibraryCallbackCall, LibraryCallbackDefinition as D, LibraryCallbackDispatch as Dispatch,
+        LibraryCallbackFunction, LibraryCallbackSources,
+    };
+    let ctx = &mut Context::new();
+    let module = module(ctx);
+    let (_, root) = function(ctx, module, "root", "root", vec![]);
+    let callback = native(
+        ctx,
+        root,
+        "root",
+        Native::Callback {
+            spec: SPEC,
+            block_threads: 64,
+        },
+    );
+    ret(ctx, root, vec![]);
+    let (thunk, body) = function(ctx, module, "physical_thunk", "source::thunk", vec![]);
+    ret(ctx, body, vec![]);
+    let identity = "mangled_source::thunk".to_string();
+    let symbols = BTreeMap::from([
+        ("root".into(), "root".into()),
+        ("source::thunk".into(), "physical_thunk".into()),
+    ]);
+    let mut sources = LibraryCallbackSources {
+        roots: BTreeMap::from([(site("root", 7), identity.clone())]),
+        functions: BTreeMap::from([(
+            identity.clone(),
+            LibraryCallbackFunction {
+                diagnostic: "source::thunk".into(),
+                export: Some("source::thunk".into()),
+                definition: D::Rust,
+                dispatch: Dispatch::Direct,
+                has_body: true,
+                cuda_local_types: vec![],
+                calls: vec![],
+                callees: vec![],
+            },
+        )]),
+    };
+    assert!(
+        admit_library_callbacks(module, ctx, &LibraryCallbackSources::default(), &symbols).is_err()
+    );
+    assert_eq!(
+        admit_library_callbacks(module, ctx, &sources, &symbols).unwrap(),
+        BTreeMap::from([(identity.clone(), "physical_thunk".into())])
+    );
+    // Preparation may remove the original call, but not its source obligations.
+    Operation::erase(callback, ctx);
+    sources
+        .functions
+        .get_mut(&identity)
+        .unwrap()
+        .cuda_local_types
+        .push("cuda_device::TempStorage".into());
+    assert!(
+        admit_library_callbacks(module, ctx, &sources, &symbols)
+            .unwrap_err()
+            .contains("cannot contain CUDA resource type")
+    );
+    sources
+        .functions
+        .get_mut(&identity)
+        .unwrap()
+        .cuda_local_types
+        .clear();
+    // An expanded scalar intrinsic may leave no ordinary call in prepared MIR.
+    sources
+        .functions
+        .get_mut(&identity)
+        .unwrap()
+        .calls
+        .push(LibraryCallbackCall::Direct {
+            definition: D::Intrinsic,
+            diagnostic: "core::intrinsics::opaque".into(),
+        });
+    assert!(
+        admit_library_callbacks(module, ctx, &sources, &symbols)
+            .unwrap_err()
+            .contains("unqualified compiler intrinsic")
+    );
+    sources.functions.get_mut(&identity).unwrap().calls.clear();
+    assert!(admit_library_callbacks(module, ctx, &sources, &symbols).is_ok());
+    let f = MirFuncOp::wrap(ctx, thunk).unwrap();
+    let mut source = f.library_function_source(ctx).unwrap();
+    source.mangled = "different_instance".into();
+    f.set_library_function_source(ctx, source);
+    assert!(
+        admit_library_callbacks(module, ctx, &sources, &symbols)
+            .unwrap_err()
+            .contains("does not match its actual definition")
+    );
+}
+
+#[test]
+fn callbacks_follow_receiver_edges_and_reject_missing_or_unavailable_bodies() {
+    use super::callback::admit_library_callbacks;
+    use dialect_mir::library::{
+        LibraryCallbackDefinition as D, LibraryCallbackDispatch as Dispatch,
+        LibraryCallbackFunction, LibraryCallbackSources,
+    };
+    let ctx = &mut Context::new();
+    let module = module(ctx);
+    let (_, body) = function(ctx, module, "physical_thunk", "thunk", vec![]);
+    ret(ctx, body, vec![]);
+    let class = || LibraryCallbackFunction {
+        diagnostic: "helper".into(),
+        export: None,
+        definition: D::Rust,
+        dispatch: Dispatch::Direct,
+        has_body: true,
+        cuda_local_types: vec![],
+        calls: vec![],
+        callees: vec![],
+    };
+    let mut thunk = class();
+    thunk.export = Some("thunk".into());
+    // Actual receiver and shim are parallel collector edges from the caller.
+    thunk.callees = vec!["shim".into(), "receiver".into()];
+    let mut shim = class();
+    shim.dispatch = Dispatch::FunctionItemShim;
+    shim.has_body = false;
+    let mut sources = LibraryCallbackSources {
+        roots: BTreeMap::from([(site("root", 7), "mangled_thunk".into())]),
+        functions: BTreeMap::from([
+            ("mangled_thunk".into(), thunk),
+            ("shim".into(), shim),
+            ("receiver".into(), class()),
+        ]),
+    };
+    let symbols = BTreeMap::from([("thunk".into(), "physical_thunk".into())]);
+    assert!(admit_library_callbacks(module, ctx, &sources, &symbols).is_ok());
+    sources.functions.get_mut("shim").unwrap().dispatch = Dispatch::ClosureOnceShim;
+    assert!(admit_library_callbacks(module, ctx, &sources, &symbols).is_ok());
+    sources.functions.get_mut("receiver").unwrap().definition = D::Cuda;
+    assert!(
+        admit_library_callbacks(module, ctx, &sources, &symbols)
+            .unwrap_err()
+            .contains("CUDA resource or collective operation")
+    );
+    sources.functions.remove("receiver");
+    assert!(
+        admit_library_callbacks(module, ctx, &sources, &symbols)
+            .unwrap_err()
+            .contains("classification is missing")
+    );
+    sources.functions.insert("receiver".into(), class());
+    sources.functions.get_mut("shim").unwrap().dispatch = Dispatch::Direct;
+    assert!(
+        admit_library_callbacks(module, ctx, &sources, &symbols)
+            .unwrap_err()
+            .contains("body is unavailable")
+    );
+    sources.functions.get_mut("shim").unwrap().dispatch = Dispatch::Indirect;
+    assert!(
+        admit_library_callbacks(module, ctx, &sources, &symbols)
+            .unwrap_err()
+            .contains("indirect call")
+    );
 }
 #[test]
 #[allow(clippy::disallowed_methods)]

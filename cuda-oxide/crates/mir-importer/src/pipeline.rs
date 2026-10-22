@@ -523,6 +523,7 @@ pub fn run_pipeline(
         BTreeMap::new(),
         BTreeMap::new(),
         BTreeMap::new(),
+        Default::default(),
     )?
     .finish()
 }
@@ -544,6 +545,7 @@ pub struct ImportedModule {
     symbols: BTreeMap<String, String>,
     marker_exports: BTreeMap<String, String>,
     source_targets: BTreeMap<crate::LibraryCallSite, BTreeSet<String>>,
+    callback_sources: crate::LibraryCallbackSources,
     outputs: ImportOutputs,
     completion: Option<ImportCompletion>,
 }
@@ -577,9 +579,11 @@ pub struct PreparedImport<'a> {
     symbols: BTreeMap<String, String>,
     marker_exports: BTreeMap<String, String>,
     source_targets: BTreeMap<crate::LibraryCallSite, BTreeSet<String>>,
+    callback_sources: crate::LibraryCallbackSources,
     original_roles: BTreeMap<crate::LibraryCallSite, dialect_mir::library::LibraryRoleAttr>,
     library_rooted_functions: BTreeMap<String, BTreeSet<String>>,
     library_validation: Option<mir_transforms::library::Validation>,
+    callback_symbols: BTreeMap<String, String>,
     libraries_bound: bool,
     library_calls: BTreeMap<crate::LibraryCallSite, crate::LibraryCallPlan>,
     library_externs: Vec<DeviceExternDecl>,
@@ -631,6 +635,8 @@ impl ImportedModule {
             symbols: std::mem::take(&mut self.symbols),
             marker_exports: std::mem::take(&mut self.marker_exports),
             source_targets: std::mem::take(&mut self.source_targets),
+            callback_sources: std::mem::take(&mut self.callback_sources),
+            callback_symbols: BTreeMap::new(),
             original_roles,
             library_rooted_functions: BTreeMap::new(),
             library_validation: None,
@@ -675,6 +681,26 @@ impl PreparedImport<'_> {
         }
         let shapes = self.admit_library_geometry(rooted_functions)?;
         let (ctx, module, analyses) = self.stage.ir();
+        let callback_symbols = mir_transforms::library::admit_library_callbacks(
+            module,
+            ctx,
+            &self.callback_sources,
+            &self.symbols,
+        )
+        .map_err(PipelineError::Translation)?;
+        let retained = callback_symbols.values().cloned().collect::<Vec<_>>();
+        let module_op = Operation::get_op::<pliron::builtin::ops::ModuleOp>(module, ctx)
+            .expect("imported module");
+        llvm_export::export::retain_functions(ctx, &module_op, &retained);
+        self.callback_symbols = callback_symbols
+            .into_iter()
+            .map(|(identity, symbol)| {
+                (
+                    identity,
+                    llvm_export::export::exported_function_name(&symbol),
+                )
+            })
+            .collect();
         let validation = mir_transforms::library::analyze_libraries(
             module,
             ctx,
@@ -689,6 +715,11 @@ impl PreparedImport<'_> {
         self.library_rooted_functions = rooted_functions.clone();
         self.library_validation = Some(validation);
         Ok(shapes)
+    }
+
+    /// Actual emitted thunk names available only after callback admission.
+    pub fn callback_symbols(&self) -> &BTreeMap<String, String> {
+        &self.callback_symbols
     }
 
     /// Join provider layouts with the proof, then bind the final shared plan.
@@ -969,6 +1000,7 @@ pub fn import_pipeline_with_libraries(
         crate::LibraryCallSite,
         dialect_mir::library::LibraryCallTargetAttr,
     >,
+    callback_sources: crate::LibraryCallbackSources,
 ) -> Result<ImportedModule, PipelineError> {
     crate::library::set_semantics(library_semantics);
     crate::library::set_selected_call_targets(selected_call_targets);
@@ -1159,6 +1191,7 @@ pub fn import_pipeline_with_libraries(
         symbols,
         marker_exports,
         source_targets,
+        callback_sources,
         outputs,
         completion: Some(ImportCompletion {
             kernel_names,
@@ -2189,6 +2222,7 @@ fn adversarial_export_name() -> u64 {
             BTreeMap::new(),
             BTreeMap::new(),
             BTreeMap::new(),
+            Default::default(),
         )
         .unwrap();
         verify_operation(&first.ctx, first.module_op_ptr, "paused import").unwrap();

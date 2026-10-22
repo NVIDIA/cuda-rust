@@ -1339,6 +1339,7 @@ pub fn generate_device_code<'tcx>(
             authenticated.semantics.clone(),
             authenticated.call_targets.clone(),
             authenticated.selected_call_targets.clone(),
+            authenticated.callbacks.clone(),
         )
     });
 
@@ -1353,8 +1354,9 @@ pub fn generate_device_code<'tcx>(
     let shapes = prepared
         .validate_libraries(&authenticated.rooted_functions)
         .map_err(|error| DeviceCodegenError::PtxGeneration(error.to_string()))?;
-    let libraries = crate::library::finalize_provider(tcx, collection, &shapes)
-        .map_err(DeviceCodegenError::PtxGeneration)?;
+    let libraries =
+        crate::library::finalize_provider(tcx, collection, &shapes, prepared.callback_symbols())
+            .map_err(DeviceCodegenError::PtxGeneration)?;
     prepared
         .finish_library_planning(
             &libraries.native_plans,

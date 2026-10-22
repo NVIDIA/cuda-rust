@@ -153,6 +153,57 @@ fn analyze(
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)]
+fn scalar_callbacks_remain_raw_and_cannot_join_checked_roots() {
+    for checked_root in [false, true] {
+        let ctx = &mut Context::new();
+        let (module, _, block) = function(ctx);
+        let scalar: TypeHandle = IntegerType::get(ctx, 32, Signedness::Signed).into();
+        let pointer =
+            MirPtrType::get_generic_with_kind(ctx, scalar, true, MirPointerKind::RawMut).into();
+        let tuple = MirTupleType::get(ctx, vec![pointer, pointer]).into();
+        let environment =
+            MirPtrType::get_generic_with_kind(ctx, scalar, false, MirPointerKind::SharedRef).into();
+        let operands = vec![value(ctx, block, tuple), value(ctx, block, environment)];
+        let signature = FunctionType::get(ctx, vec![tuple, environment], vec![]);
+        let role = Role::Native(Native::Callback {
+            spec: NativeSpec {
+                scalar: LibraryScalar::Signed(32),
+                items: 1,
+            },
+            block_threads: 64,
+        });
+        MirLibraryOp::build_call(
+            ctx,
+            role,
+            site(1),
+            "callback_marker".into(),
+            signature,
+            operands,
+        )
+        .insert_at_back(block, ctx);
+        let mut roles = BTreeMap::from([(site(1), role)]);
+        if checked_root {
+            let control = source_value(ctx, block, SourceKind::BlockQuery, false);
+            roles.insert(site(2), native(ctx, block, control, 2));
+        }
+        emit::<MirReturnOp>(ctx, block, vec![], vec![]);
+        module.deref(ctx).verify(ctx).unwrap();
+        let result = analyze(ctx, module, &mut AnalysisManager::default(), &roles);
+        if checked_root {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("raw and checked library calls")
+            );
+        } else {
+            assert!(result.unwrap().shapes.is_empty());
+        }
+    }
+}
+
+#[test]
 fn query_result_before_destination_store_has_the_same_ssa_and_full_slot_proof() {
     for kind in [SourceKind::BlockQuery, SourceKind::LaneQuery] {
         let ctx = &mut Context::new();

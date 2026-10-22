@@ -136,6 +136,7 @@ fn runtime_indices(role: LibraryRoleAttr) -> &'static [usize] {
     use LibraryNativeMetadata as Native;
     match role {
         LibraryRoleAttr::Native(Native::Raw { .. }) => &[1],
+        LibraryRoleAttr::Native(Native::Callback { .. }) => &[1, 3],
         LibraryRoleAttr::Native(Native::CheckedBlock { .. }) => &[1, 2],
         LibraryRoleAttr::Native(Native::CheckedBlockResource { .. }) => &[1, 2, 3],
         LibraryRoleAttr::Native(Native::CheckedBlockStorage { .. }) => &[1, 2, 3, 4],

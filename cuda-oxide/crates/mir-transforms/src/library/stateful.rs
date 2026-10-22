@@ -823,7 +823,7 @@ fn checked(role: Role) -> bool {
 }
 fn controls_index(native: Native) -> Option<usize> {
     match native {
-        Native::Raw { .. } => None,
+        Native::Raw { .. } | Native::Callback { .. } => None,
         Native::CheckedBlock { .. } => Some(0),
         Native::CheckedBlockResource { .. } => Some(1),
         Native::CheckedBlockStorage { .. } => Some(2),

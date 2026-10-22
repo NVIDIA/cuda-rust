@@ -102,3 +102,98 @@ pub mod gather_row_f16_module {
 }
 
 pub use gather_row_f16_module::gather_row_f16;
+
+#[allow(clippy::too_many_arguments)]
+#[cutile::module]
+pub mod add_2d_module {
+    use cutile::core::*;
+
+    /// Adds two rank-2 tensors tile by tile.
+    #[cutile::entry(print_ir=false,
+                       optimization_hints = (
+                         sm_120 = (occupancy=1, max_divisibility=16,),
+                       ))]
+    fn add_2d<E: ElementType, const BLOCK_SIZE: i32>(
+        out: &mut Tensor<E, { [1, BLOCK_SIZE] }>,
+        lhs: &Tensor<E, { [-1, -1] }>,
+        rhs: &Tensor<E, { [-1, -1] }>,
+    ) {
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let row = pid.0;
+        let col = pid.1;
+        let lhs_part: Partition<E, { [1, BLOCK_SIZE] }> =
+            lhs.partition(const_shape![1, BLOCK_SIZE]);
+        let rhs_part: Partition<E, { [1, BLOCK_SIZE] }> =
+            rhs.partition(const_shape![1, BLOCK_SIZE]);
+        let lhs_tile: Tile<E, { [1, BLOCK_SIZE] }> = lhs_part.load([row, col]);
+        let rhs_tile: Tile<E, { [1, BLOCK_SIZE] }> = rhs_part.load([row, col]);
+        out.store(lhs_tile + rhs_tile);
+    }
+}
+
+pub use add_2d_module::add_2d;
+
+#[allow(clippy::too_many_arguments)]
+#[cutile::module]
+pub mod silu_mul_2d_module {
+    use cutile::core::*;
+
+    /// Fuses SiLU(gate) * up for SwiGLU-style MLPs.
+    #[cutile::entry(print_ir=false,
+                       optimization_hints = (
+                         sm_120 = (occupancy=1, max_divisibility=16,),
+                       ))]
+    fn silu_mul_2d<E: FloatElement, const BLOCK_SIZE: i32>(
+        out: &mut Tensor<E, { [1, BLOCK_SIZE] }>,
+        gate: &Tensor<E, { [-1, -1] }>,
+        up: &Tensor<E, { [-1, -1] }>,
+    ) {
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let row = pid.0;
+        let col = pid.1;
+        let gate_part: Partition<E, { [1, BLOCK_SIZE] }> =
+            gate.partition(const_shape![1, BLOCK_SIZE]);
+        let up_part: Partition<E, { [1, BLOCK_SIZE] }> = up.partition(const_shape![1, BLOCK_SIZE]);
+        let gate_e: Tile<E, { [1, BLOCK_SIZE] }> = gate_part.load([row, col]);
+        let up_e: Tile<E, { [1, BLOCK_SIZE] }> = up_part.load([row, col]);
+        let gate_f32: Tile<f32, { [1, BLOCK_SIZE] }> = convert_tile(gate_e);
+        let up_f32: Tile<f32, { [1, BLOCK_SIZE] }> = convert_tile(up_e);
+        let one: Tile<f32, { [1, BLOCK_SIZE] }> = constant(1.0f32, const_shape![1, BLOCK_SIZE]);
+        let zero: Tile<f32, { [1, BLOCK_SIZE] }> = constant(0.0f32, const_shape![1, BLOCK_SIZE]);
+        let neg_gate: Tile<f32, { [1, BLOCK_SIZE] }> = zero - gate_f32;
+        let exp_neg_gate: Tile<f32, { [1, BLOCK_SIZE] }> = exp(neg_gate);
+        let denom: Tile<f32, { [1, BLOCK_SIZE] }> = one + exp_neg_gate;
+        let sigmoid: Tile<f32, { [1, BLOCK_SIZE] }> = true_div(one, denom);
+        let y: Tile<f32, { [1, BLOCK_SIZE] }> = sigmoid * gate_f32 * up_f32;
+        let y_e: Tile<E, { [1, BLOCK_SIZE] }> = convert_tile(y);
+        out.store(y_e);
+    }
+}
+
+pub use silu_mul_2d_module::silu_mul_2d;
+
+#[allow(clippy::too_many_arguments)]
+#[cutile::module]
+pub mod gather_row_module {
+    use cutile::core::*;
+
+    /// Copies one row from a rank-2 tensor.
+    #[cutile::entry(print_ir=false,
+                       optimization_hints = (
+                         sm_120 = (occupancy=1, max_divisibility=16,),
+                       ))]
+    fn gather_row<E: ElementType, const BLOCK_SIZE: i32>(
+        src: &Tensor<E, { [-1, -1] }>,
+        out: &mut Tensor<E, { [BLOCK_SIZE] }>,
+        row_idx: i32,
+    ) {
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let block = pid.0;
+        let src_part: Partition<E, { [1, BLOCK_SIZE] }> =
+            src.partition(const_shape![1, BLOCK_SIZE]);
+        let tile: Tile<E, { [1, BLOCK_SIZE] }> = src_part.load([row_idx, block]);
+        out.store(tile.reshape(const_shape![BLOCK_SIZE]));
+    }
+}
+
+pub use gather_row_module::gather_row;

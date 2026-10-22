@@ -385,6 +385,43 @@ pub fn block_idx_in_cluster() -> u32 {
     ctm_rs::cluster::cluster_ctarank()
 }
 
+/// Return this CTA's index within its cluster as `(x, y, z)`.
+///
+/// This is `cute.arch.block_in_cluster_idx()`; it reads `%cluster_ctaid.x`,
+/// `%cluster_ctaid.y` and `%cluster_ctaid.z` through [`ctm_rs::cluster`].
+/// [`block_idx_in_cluster`] is the linear rank of the same CTA
+/// (`%cluster_ctarank`). The cluster's own `(x, y, z)` within the grid,
+/// `cute.arch.cluster_idx()` over `%clusterid`, is not forwarded because
+/// cuda-device exposes no per-axis reader for it.
+#[must_use]
+#[inline(always)]
+pub fn block_in_cluster_idx() -> (u32, u32, u32) {
+    (
+        ctm_rs::cluster::cluster_ctaidX(),
+        ctm_rs::cluster::cluster_ctaidY(),
+        ctm_rs::cluster::cluster_ctaidZ(),
+    )
+}
+
+/// Return the number of CTAs in each cluster dimension as `(x, y, z)`.
+///
+/// This is `cute.arch.block_in_cluster_dim()`; it reads `%cluster_nctaid.x`,
+/// `%cluster_nctaid.y` and `%cluster_nctaid.z` through [`ctm_rs::cluster`].
+/// The compiler's own `cluster_dim` vocabulary, the `#[cluster_launch]`
+/// attribute and the intrinsic family behind it, means this value, CTAs per
+/// cluster, while CuTeDSL's `cute.arch.cluster_dim()` means the number of
+/// clusters in the grid (`%nclusterid`), which is not forwarded because
+/// cuda-device exposes no per-axis reader for it.
+#[must_use]
+#[inline(always)]
+pub fn block_in_cluster_dim() -> (u32, u32, u32) {
+    (
+        ctm_rs::cluster::cluster_nctaidX(),
+        ctm_rs::cluster::cluster_nctaidY(),
+        ctm_rs::cluster::cluster_nctaidZ(),
+    )
+}
+
 /// Map local shared storage to the same offset in cluster peer `rank`.
 ///
 /// This is `cute.arch.map_dsmem_ptr(ptr, rank)` over

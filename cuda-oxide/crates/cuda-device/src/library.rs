@@ -138,9 +138,10 @@ pub use cuda_oxide_library_v1_246e25db_checked_block_resource_call as checked_bl
 
 /// Invoke a scratch-free Warp operation with a typed memory witness.
 ///
-/// WIDTH is currently 32. The root's full exact block shape must contain only
+/// WIDTH is a power of two in 1..=32. The root's full exact block shape must contain only
 /// complete physical warps. Controls and participation agree within WIDTH;
-/// sibling warps may differ. A block barrier completes conflicting accesses.
+/// sibling groups may differ. A containing canonical WarpTile or block barrier
+/// completes conflicting accesses within that scope.
 ///
 /// # Safety
 ///
@@ -188,6 +189,30 @@ pub fn cuda_oxide_library_v1_246e25db_warp_group_index<const WIDTH: usize>() -> 
 }
 
 pub use cuda_oxide_library_v1_246e25db_warp_group_index as warp_group_index_v1;
+
+/// Synchronize the canonical aligned tile containing the executing lane.
+///
+/// This genuine marker has the same device fallback as WarpTile::sync. It
+/// requires no provider or native resource plan.
+///
+/// # Safety
+/// WIDTH must be a power of two in 1..=32. Every lane in the canonical tile
+/// must execute this synchronization in converged control flow. Checked roots
+/// enforce this participation and credit only completion within that tile.
+/// Outside checked roots, even the safe `WarpTile::sync` interface relies on
+/// the caller to satisfy this collective participation requirement.
+#[inline(never)]
+pub unsafe fn cuda_oxide_library_v1_246e25db_checked_warp_sync<const WIDTH: u32>() {
+    assert!(WIDTH > 0 && WIDTH <= 32 && WIDTH.is_power_of_two());
+    let mask = if WIDTH == 32 {
+        u32::MAX
+    } else {
+        ((1u32 << WIDTH) - 1) << ((crate::warp::lane_id() / WIDTH) * WIDTH)
+    };
+    crate::warp::sync_mask(mask);
+}
+
+pub use cuda_oxide_library_v1_246e25db_checked_warp_sync as checked_warp_sync_v1;
 
 /// Internal full-block scratch policy. Its private token has no address identity.
 /// Allocation and synchronization are finalized per rooted static use site.

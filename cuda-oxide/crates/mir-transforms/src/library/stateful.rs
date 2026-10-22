@@ -236,7 +236,6 @@ enum Domain {
 }
 impl Domain {
     const BLOCK: Self = Self::Block;
-    const WARP: Self = Self::Warp(32);
     const LANE: Self = Self::Warp(1);
     const HEIGHT: usize = 7;
     fn covers(self, other: Self) -> bool {
@@ -312,7 +311,6 @@ impl Epochs {
 }
 #[derive(Clone)]
 struct State {
-    ceiling: Domain,
     values: FxHashMap<Value, Fact>,
     slots: Vec<Fact>,
     borrowed: BTreeSet<usize>,
@@ -324,10 +322,7 @@ impl State {
         self.values.get(&value).cloned().unwrap_or(Fact::Unset)
     }
     fn merge(&mut self, other: &Self) -> bool {
-        let ceiling = self.ceiling.meet(other.ceiling);
-        let mut changed = ceiling != self.ceiling;
-        self.ceiling = ceiling;
-        changed |= merge_pending(&mut self.pending, &other.pending);
+        let mut changed = merge_pending(&mut self.pending, &other.pending);
         changed |= self.epochs.merge(&other.epochs);
         let n = self.borrowed.len();
         self.borrowed.extend(&other.borrowed);
@@ -468,21 +463,6 @@ fn reachable(edges: &[Vec<usize>], start: usize, stop: Option<usize>) -> BTreeSe
         }
     }
     result
-}
-// Preserve the prefix's conservative participation rule only before this
-// branch's reconvergence point, not across a surrounding uniform backedge.
-fn has_pre_join_cycle(edges: &[Vec<usize>], block: usize, join: Option<usize>) -> bool {
-    let targets: BTreeSet<_> = edges[block].iter().copied().collect();
-    targets.len() > 1
-        && targets.into_iter().any(|target| {
-            let region = reachable(edges, target, join);
-            region.contains(&block)
-                || region.iter().any(|&member| {
-                    edges[member].iter().any(|&next| {
-                        region.contains(&next) && reachable(edges, next, join).contains(&member)
-                    })
-                })
-        })
 }
 fn joins(edges: &[Vec<usize>]) -> Vec<Option<usize>> {
     let exit = edges.len();
@@ -656,7 +636,6 @@ struct FunctionGraph {
     edges: Vec<Vec<usize>>,
     successor_ordinals: Vec<Vec<usize>>,
     joins: Vec<Option<usize>>,
-    cyclic_branches: BTreeSet<usize>,
     slots: HashMap<Ptr<Operation>, usize>,
     escaped_slots: BTreeSet<usize>,
     value_count: usize,
@@ -776,13 +755,6 @@ impl Analysis for PreparedGraph {
                 })
                 .collect();
             let joins = joins(&edges);
-            let cyclic_branches = (0..blocks.len())
-                .filter(|&block| {
-                    Operation::get_op::<MirCondBranchOp>(operations[block].last().unwrap().op, ctx)
-                        .is_some()
-                        && has_pre_join_cycle(&edges, block, joins[block])
-                })
-                .collect();
             functions.insert(
                 name,
                 FunctionGraph {
@@ -792,7 +764,6 @@ impl Analysis for PreparedGraph {
                     edges,
                     successor_ordinals,
                     joins,
-                    cyclic_branches,
                     slots,
                     escaped_slots,
                     value_count,
@@ -905,12 +876,12 @@ impl Analyzer<'_> {
         entry_control: Control,
         pending: Pending,
         epochs: Epochs,
-    ) -> Result<(Fact, Pending, Epochs, Domain), String> {
+    ) -> Result<(Fact, Pending, Epochs), String> {
         if self.stack.iter().any(|f| f == function) {
             return if validate {
                 Err(self.error(function, 0, "recursive helper participation is unsupported"))
             } else {
-                Ok((Fact::Varying, pending, epochs, Domain::BLOCK))
+                Ok((Fact::Varying, pending, epochs))
             };
         }
         let Some(graph) = self
@@ -925,7 +896,7 @@ impl Analyzer<'_> {
                     "call without MIR cannot prove collective participation",
                 ))
             } else {
-                Ok((Fact::Varying, pending, epochs, Domain::BLOCK))
+                Ok((Fact::Varying, pending, epochs))
             };
         };
         if MirFuncOp::wrap(self.ctx, graph.op)
@@ -944,9 +915,6 @@ impl Analyzer<'_> {
                 .insert(self.path.clone(), function.to_owned());
         }
         let mut entry = State {
-            // Entry control reconverges at the caller. Only a cycle lowers
-            // the persistent exit ceiling.
-            ceiling: Domain::BLOCK,
             values: FxHashMap::default(),
             slots: vec![Fact::Unset; graph.slots.len()],
             borrowed: graph.escaped_slots.clone(),
@@ -982,7 +950,7 @@ impl Analyzer<'_> {
                     continue;
                 };
                 self.block(function, graph, block, &mut state, controls[block], false)?;
-                let control = controls[block].narrow(state.ceiling);
+                let control = controls[block];
                 let term = graph.operations[block].last().unwrap().op;
                 let successors = if Operation::get_op::<MirCondBranchOp>(term, self.ctx).is_some() {
                     let targets: Vec<_> = graph.edges[block]
@@ -995,15 +963,6 @@ impl Analyzer<'_> {
                         &targets,
                         control,
                     );
-                    if graph.cyclic_branches.contains(&block) {
-                        state.ceiling = state.ceiling.meet(
-                            state
-                                .fact(term.deref(self.ctx).get_operand(0))
-                                .precision()
-                                .unwrap_or(Domain::LANE)
-                                .meet(control.domain),
-                        );
-                    }
                     for &(target, restriction) in &branches {
                         for member in reachable(&graph.edges, target, graph.joins[block]) {
                             let restricted = controls[member].narrow(restriction.domain);
@@ -1030,7 +989,7 @@ impl Analyzer<'_> {
                             .enumerate()
                         {
                             let value = term.deref(self.ctx).get_operand(index);
-                            let mut selection = controls[block].domain.meet(state.ceiling);
+                            let mut selection = controls[block].domain;
                             // Reconvergence does not erase a value selection. A
                             // conditional branch may pass different values to
                             // the same destination block argument on its edges.
@@ -1087,7 +1046,6 @@ impl Analyzer<'_> {
             ));
         }
         let mut returned = Fact::Unset;
-        let mut returned_ceiling = Domain::BLOCK;
         let mut returned_pending = Pending::new();
         let mut returned_epochs = Epochs::default();
         for block in live {
@@ -1115,21 +1073,13 @@ impl Analyzer<'_> {
                 } else {
                     state.fact(term.deref(self.ctx).get_operand(0))
                 };
-                returned_ceiling = returned_ceiling.meet(state.ceiling);
-                returned = returned.merge(&return_fact(
-                    value.taint(controls[block].domain.meet(state.ceiling)),
-                ));
+                returned = returned.merge(&return_fact(value.taint(controls[block].domain)));
                 merge_pending(&mut returned_pending, &state.pending);
                 returned_epochs.merge(&state.epochs);
             }
         }
         self.stack.pop();
-        Ok((
-            return_fact(returned),
-            returned_pending,
-            returned_epochs,
-            returned_ceiling,
-        ))
+        Ok((return_fact(returned), returned_pending, returned_epochs))
     }
     #[allow(clippy::too_many_arguments)]
     fn library(
@@ -1148,14 +1098,32 @@ impl Analyzer<'_> {
             ));
         }
         let call = (*library.get_attr_site(self.ctx).unwrap()).clone();
+        if let Role::SyncWarp { width } = role {
+            let scope = Domain::Warp(width);
+            if validate && !control.admits(scope) {
+                return Err(self.error(
+                    function,
+                    call.block,
+                    "WarpTile barrier is reached through control narrower than its width",
+                ));
+            }
+            for ((_, producer, _), completion) in &mut state.pending {
+                if scope.covers(*producer) {
+                    *completion = (*completion).max(scope);
+                }
+            }
+            // Tile completion does not release full-block scratch epochs or
+            // erase the producer scope needed by a later containing access.
+            return Ok(None);
+        }
         let marker = String::from((*library.get_attr_library_callee(self.ctx).unwrap()).clone());
         let mut site = self.path.clone();
         site.push(call.block);
         let operands: Vec<_> = op.deref(self.ctx).operands().collect();
         let facts: Vec<_> = operands.iter().map(|v| state.fact(*v)).collect();
         let resolved: Vec<_> = facts.iter().cloned().map(|f| call_fact(f, state)).collect();
-        let scope = if matches!(role, Role::Native(Native::CheckedWarp { .. })) {
-            Domain::WARP
+        let scope = if let Role::Native(Native::CheckedWarp { width, .. }) = role {
+            Domain::Warp(width)
         } else {
             Domain::BLOCK
         };
@@ -1164,7 +1132,9 @@ impl Analyzer<'_> {
         let mut result = None;
         let mut storage_use = false;
         match role {
-            Role::NativeOperandBoundary | Role::WarpGroupIndex { .. } => return Ok(None),
+            Role::NativeOperandBoundary | Role::WarpGroupIndex { .. } | Role::SyncWarp { .. } => {
+                return Ok(None);
+            }
             Role::StorageNew(new) => {
                 policy = new;
                 result = Some(Fact::Descriptor(site.clone(), policy));
@@ -1365,7 +1335,7 @@ impl Analyzer<'_> {
                     return Err(self.error(
                         function,
                         call.block,
-                        "conflicting collective resource access requires a full-block barrier",
+                        "conflicting collective resource access requires a barrier covering both accesses",
                     ));
                 }
                 state
@@ -1404,7 +1374,6 @@ impl Analyzer<'_> {
         let mut aborted = false;
         let mut facts = Vec::new();
         for prepared in &graph.operations[block] {
-            let control = control.narrow(state.ceiling);
             let op = prepared.op;
             let operands = &prepared.operands;
             let kind = prepared.kind;
@@ -1518,8 +1487,7 @@ impl Analyzer<'_> {
                             state.epochs.clone(),
                         );
                         self.path.pop();
-                        let (result, pending, epochs, ceiling) = analyzed?;
-                        state.ceiling = state.ceiling.meet(ceiling);
+                        let (result, pending, epochs) = analyzed?;
                         state.pending = pending;
                         state.epochs = epochs;
                         invalidate_borrows(state);

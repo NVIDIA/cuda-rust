@@ -255,7 +255,12 @@ fn warp_admission_requires_complete_physical_blocks_but_queries_need_no_contract
         ([64, 1, 1], 32, true),
         ([4, 4, 6], 32, true),
         ([48, 1, 1], 32, false),
-        ([64, 1, 1], 16, false),
+        ([64, 1, 1], 1, true),
+        ([64, 1, 1], 2, true),
+        ([64, 1, 1], 4, true),
+        ([64, 1, 1], 8, true),
+        ([64, 1, 1], 16, true),
+        ([64, 1, 1], 3, false),
     ] {
         shape(ctx, root, dimensions);
         roles.insert(

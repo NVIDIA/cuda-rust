@@ -172,6 +172,36 @@ pub(super) fn lower_warp_query(ctx: &mut Context, anchor: Ptr<Operation>, width:
     arithmetic!(MirDivOp, vec![rank, divisor])
 }
 
+/// Emit the canonical aligned tile mask after participation and completion proof.
+pub(super) fn lower_warp_sync(ctx: &mut Context, anchor: Ptr<Operation>, width: u32) {
+    use dialect_mir::ops::{MirBitAndOp, MirShlOp};
+    use dialect_nvvm::ops::{BarWarpSyncOp, ReadPtxSregLaneIdOp};
+    let ty = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
+    let mask = if width == 32 {
+        integer(ctx, anchor, 32, u32::MAX.into())
+    } else {
+        let lane = emit::<ReadPtxSregLaneIdOp>(ctx, anchor, vec![ty], vec![]);
+        lane.deref_mut(ctx).attributes.set(
+            "cuda_oxide_intrinsic_marker".try_into().unwrap(),
+            StringAttr::new("v1:i0016".into()),
+        );
+        let lane = lane.deref(ctx).get_result(0);
+        let alignment = integer(ctx, anchor, 32, (32 - width).into());
+        let base = emit::<MirBitAndOp>(ctx, anchor, vec![ty], vec![lane, alignment])
+            .deref(ctx)
+            .get_result(0);
+        let bits = integer(ctx, anchor, 32, ((1u32 << width) - 1).into());
+        emit::<MirShlOp>(ctx, anchor, vec![ty], vec![bits, base])
+            .deref(ctx)
+            .get_result(0)
+    };
+    let barrier = emit::<BarWarpSyncOp>(ctx, anchor, vec![], vec![mask]);
+    barrier.deref_mut(ctx).attributes.set(
+        "cuda_oxide_intrinsic_marker".try_into().unwrap(),
+        StringAttr::new("v1:i0049".into()),
+    );
+}
+
 fn pointer_cast(
     ctx: &mut Context,
     anchor: Ptr<Operation>,
@@ -467,6 +497,78 @@ mod tests {
                 return (
                     op.deref(ctx).get_operand(0),
                     extract.get_attr_index(ctx).unwrap().0 as usize,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tile_sync_lowers_without_a_plan_to_the_exact_aligned_lane_mask() {
+        use dialect_mir::ops::{MirBitAndOp, MirShlOp};
+        use dialect_nvvm::ops::{BarWarpSyncOp, ReadPtxSregLaneIdOp};
+        use pliron::location::Location;
+
+        fn mask(ctx: &Context, value: Value, lane: u32) -> u32 {
+            let op = value.defining_op().unwrap();
+            if let Some(constant) = Operation::get_op::<MirConstantOp>(op, ctx) {
+                constant.get_attr_value(ctx).unwrap().value().to_u64() as u32
+            } else if Operation::get_op::<ReadPtxSregLaneIdOp>(op, ctx).is_some() {
+                lane
+            } else {
+                let lhs = mask(ctx, op.deref(ctx).get_operand(0), lane);
+                let rhs = mask(ctx, op.deref(ctx).get_operand(1), lane);
+                if Operation::get_op::<MirBitAndOp>(op, ctx).is_some() {
+                    lhs & rhs
+                } else {
+                    assert!(Operation::get_op::<MirShlOp>(op, ctx).is_some());
+                    lhs << rhs
+                }
+            }
+        }
+        for width in [1, 2, 4, 8, 16, 32] {
+            let ctx = &mut Context::new();
+            let (module, block) = root(ctx);
+            let site = LibraryCallSite {
+                caller: "sync_root".into(),
+                block: 0,
+            };
+            let sync = MirLibraryOp::build(
+                ctx,
+                LibraryRoleAttr::SyncWarp { width },
+                site,
+                "sync".into(),
+            );
+            let loc = Location::Named {
+                name: "source_sync".into(),
+                child_loc: Box::new(Location::Unknown),
+            };
+            sync.deref_mut(ctx).set_loc(loc.clone());
+            sync.insert_at_back(block, ctx);
+            super::super::lower_library_operations(module, ctx, &mut AnalysisManager::default())
+                .unwrap();
+            module.deref(ctx).verify(ctx).unwrap();
+            let operations: Vec<_> = block.deref(ctx).iter(ctx).collect();
+            assert!(
+                !operations
+                    .iter()
+                    .any(|&op| Operation::get_op::<MirLibraryOp>(op, ctx).is_some())
+            );
+            assert!(operations.iter().all(|&op| op.deref(ctx).loc() == &loc));
+            let barriers: Vec<_> = operations
+                .iter()
+                .copied()
+                .filter(|&op| Operation::get_op::<BarWarpSyncOp>(op, ctx).is_some())
+                .collect();
+            assert_eq!(barriers.len(), 1);
+            let operand = barriers[0].deref(ctx).get_operand(0);
+            for lane in 0..32 {
+                let expected = (0..32)
+                    .filter(|&member| member / width == lane / width)
+                    .fold(0, |bits, member| bits | (1u32 << member));
+                assert_eq!(
+                    mask(ctx, operand, lane),
+                    expected,
+                    "width {width}, lane {lane}"
                 );
             }
         }

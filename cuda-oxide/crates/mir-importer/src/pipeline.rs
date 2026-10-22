@@ -908,6 +908,7 @@ impl PreparedImport<'_> {
                 !matches!(
                     role,
                     dialect_mir::library::LibraryRoleAttr::WarpGroupIndex { .. }
+                        | dialect_mir::library::LibraryRoleAttr::SyncWarp { .. }
                 )
             })
         {
@@ -1349,7 +1350,7 @@ mod tests {
     }
 
     #[test]
-    fn genuine_warp_query_retains_identity_and_finishes_without_native_plans() {
+    fn genuine_warp_query_and_sync_finish_without_native_plans() {
         use dialect_mir::library::LibraryRoleAttr;
         use dialect_mir::ops::{MirCallOp, MirFuncOp, MirLibraryOp};
         use pliron::common_traits::Verify;
@@ -1369,6 +1370,7 @@ mod tests {
         fs::write(&dependency, r#"
 pub mod library {
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_warp_group_index<const WIDTH:usize>() -> u32 { WIDTH as u32 }
+    #[inline(never)] pub unsafe fn cuda_oxide_library_v1_246e25db_checked_warp_sync<const WIDTH:u32>() {}
 }
 "#).unwrap();
         let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
@@ -1396,6 +1398,10 @@ extern crate cuda_device;
 pub fn query() -> u32 { cuda_device::library::cuda_oxide_library_v1_246e25db_warp_group_index::<8>() }
 pub fn invalid_width() -> u32 { cuda_device::library::cuda_oxide_library_v1_246e25db_warp_group_index::<3>() }
 pub fn lookalike() -> u32 { cuda_oxide_library_v1_246e25db_warp_group_index::<8>() }
+#[inline(never)] pub unsafe fn cuda_oxide_library_v1_246e25db_checked_warp_sync<const WIDTH:u32>() {}
+pub fn sync() { unsafe { cuda_device::library::cuda_oxide_library_v1_246e25db_checked_warp_sync::<8>() } }
+pub fn invalid_sync() { unsafe { cuda_device::library::cuda_oxide_library_v1_246e25db_checked_warp_sync::<3>() } }
+pub fn sync_lookalike() { unsafe { cuda_oxide_library_v1_246e25db_checked_warp_sync::<8>() } }
 "#).unwrap();
         let sysroot = std::process::Command::new(&rustc)
             .args(["--print", "sysroot"])
@@ -1469,120 +1475,159 @@ pub fn lookalike() -> u32 { cuda_oxide_library_v1_246e25db_warp_group_index::<8>
                             Default::default(),
                         )
                     };
-                    let invalid = import(collected("invalid_width"), &config)
-                        .err()
-                        .expect("invalid genuine width rejected");
-                    assert!(
-                        invalid.to_string().contains("warp group index width"),
-                        "{invalid}"
-                    );
-                    let fake = import(collected("lookalike"), &config).unwrap();
-                    let mut fake_calls = 0;
-                    for block in fake
-                        .module_op_ptr
-                        .deref(&fake.ctx)
-                        .get_region(0)
-                        .deref(&fake.ctx)
-                        .iter(&fake.ctx)
-                    {
-                        for op in block.deref(&fake.ctx).iter(&fake.ctx) {
-                            if Operation::get_op::<MirFuncOp>(op, &fake.ctx).is_none() {
-                                continue;
-                            }
-                            for block in op
-                                .deref(&fake.ctx)
-                                .get_region(0)
-                                .deref(&fake.ctx)
-                                .iter(&fake.ctx)
-                            {
-                                for op in block.deref(&fake.ctx).iter(&fake.ctx) {
-                                    assert!(
-                                        Operation::get_op::<MirLibraryOp>(op, &fake.ctx).is_none()
-                                    );
-                                    fake_calls += usize::from(
-                                        Operation::get_op::<MirCallOp>(op, &fake.ctx).is_some(),
-                                    );
+                    for (name, diagnostic) in [
+                        ("invalid_width", "warp group index width"),
+                        ("invalid_sync", "warp synchronization width"),
+                    ] {
+                        let invalid = import(collected(name), &config)
+                            .err()
+                            .expect("invalid genuine width rejected");
+                        assert!(invalid.to_string().contains(diagnostic), "{invalid}");
+                    }
+                    for name in ["lookalike", "sync_lookalike"] {
+                        let fake = import(collected(name), &config).unwrap();
+                        let mut fake_calls = 0;
+                        for block in fake
+                            .module_op_ptr
+                            .deref(&fake.ctx)
+                            .get_region(0)
+                            .deref(&fake.ctx)
+                            .iter(&fake.ctx)
+                        {
+                            for op in block.deref(&fake.ctx).iter(&fake.ctx) {
+                                if Operation::get_op::<MirFuncOp>(op, &fake.ctx).is_none() {
+                                    continue;
+                                }
+                                for block in op
+                                    .deref(&fake.ctx)
+                                    .get_region(0)
+                                    .deref(&fake.ctx)
+                                    .iter(&fake.ctx)
+                                {
+                                    for op in block.deref(&fake.ctx).iter(&fake.ctx) {
+                                        assert!(
+                                            Operation::get_op::<MirLibraryOp>(op, &fake.ctx)
+                                                .is_none()
+                                        );
+                                        fake_calls += usize::from(
+                                            Operation::get_op::<MirCallOp>(op, &fake.ctx).is_some(),
+                                        );
+                                    }
                                 }
                             }
                         }
+                        assert_eq!(fake_calls, 1, "same spelling gains no query/sync authority");
                     }
-                    assert_eq!(fake_calls, 1, "same spelling gains no query authority");
-                    for debug in [DebugKind::Off, DebugKind::Full] {
-                        for bind_empty in [false, true] {
-                            let function = collected("query");
-                            let body = function.instance.body().unwrap();
-                            let site = body
-                                .blocks
-                                .iter()
-                                .position(|b| {
-                                    matches!(b.terminator.kind, mir::TerminatorKind::Call { .. })
-                                })
-                                .unwrap();
-                            let mut config = config.clone();
-                            config.debug_kind = debug;
-                            let mut imported = import(function, &config).unwrap();
-                            let mut prepared = imported.prepare().unwrap();
-                            assert_eq!(prepared.original_roles.len(), 1);
-                            assert_eq!(
-                                prepared.original_roles.get(&crate::LibraryCallSite {
-                                    caller: "query".into(),
-                                    block: site
-                                }),
-                                Some(&LibraryRoleAttr::WarpGroupIndex { width: 8 })
-                            );
-                            let (ctx, module, _) = prepared.stage.ir();
-                            let mut queries = 0;
-                            for block in module.deref(ctx).get_region(0).deref(ctx).iter(ctx) {
-                                for op in block.deref(ctx).iter(ctx) {
-                                    if Operation::get_op::<MirFuncOp>(op, ctx).is_none() {
-                                        continue;
-                                    }
-                                    for block in op.deref(ctx).get_region(0).deref(ctx).iter(ctx) {
-                                        for op in block.deref(ctx).iter(ctx) {
-                                            if let Some(query) =
-                                                Operation::get_op::<MirLibraryOp>(op, ctx)
-                                            {
-                                                query.verify(ctx).unwrap();
-                                                queries += 1;
-                                                assert_eq!(op.deref(ctx).get_num_operands(), 0);
-                                                assert_eq!(op.deref(ctx).get_num_results(), 1);
-                                                assert!(
-                                                    query.get_attr_library_signature(ctx).is_none()
-                                                );
+                    for (name, role, results) in [
+                        ("query", LibraryRoleAttr::WarpGroupIndex { width: 8 }, 1),
+                        ("sync", LibraryRoleAttr::SyncWarp { width: 8 }, 0),
+                    ] {
+                        for debug in [DebugKind::Off, DebugKind::Full] {
+                            for bind_empty in [false, true] {
+                                let function = collected(name);
+                                let body = function.instance.body().unwrap();
+                                let site = body
+                                    .blocks
+                                    .iter()
+                                    .position(|b| {
+                                        matches!(
+                                            b.terminator.kind,
+                                            mir::TerminatorKind::Call { .. }
+                                        )
+                                    })
+                                    .unwrap();
+                                let mut config = config.clone();
+                                config.debug_kind = debug;
+                                let mut imported = import(function, &config).unwrap();
+                                let mut prepared = imported.prepare().unwrap();
+                                assert_eq!(prepared.original_roles.len(), 1);
+                                assert_eq!(
+                                    prepared.original_roles.get(&crate::LibraryCallSite {
+                                        caller: name.into(),
+                                        block: site
+                                    }),
+                                    Some(&role)
+                                );
+                                let (ctx, module, _) = prepared.stage.ir();
+                                let mut queries = 0;
+                                for block in module.deref(ctx).get_region(0).deref(ctx).iter(ctx) {
+                                    for op in block.deref(ctx).iter(ctx) {
+                                        if Operation::get_op::<MirFuncOp>(op, ctx).is_none() {
+                                            continue;
+                                        }
+                                        for block in
+                                            op.deref(ctx).get_region(0).deref(ctx).iter(ctx)
+                                        {
+                                            for op in block.deref(ctx).iter(ctx) {
+                                                if let Some(query) =
+                                                    Operation::get_op::<MirLibraryOp>(op, ctx)
+                                                {
+                                                    query.verify(ctx).unwrap();
+                                                    queries += 1;
+                                                    assert_eq!(op.deref(ctx).get_num_operands(), 0);
+                                                    assert_eq!(
+                                                        op.deref(ctx).get_num_results(),
+                                                        results
+                                                    );
+                                                    assert!(
+                                                        query
+                                                            .get_attr_library_signature(ctx)
+                                                            .is_none()
+                                                    );
+                                                }
                                             }
                                         }
                                     }
                                 }
-                            }
-                            assert_eq!(queries, 1, "query survives actual Normal/Full preparation");
-                            if bind_empty {
-                                let roots = BTreeMap::from([(
-                                    "query".into(),
-                                    BTreeSet::from(["query".into()]),
-                                )]);
-                                assert!(prepared.validate_libraries(&roots).unwrap().is_empty());
-                                prepared
-                                    .finish_library_planning(
-                                        &BTreeMap::new(),
-                                        Vec::new(),
-                                        BTreeMap::new(),
-                                    )
-                                    .unwrap();
-                            }
-                            let result = prepared.finish().unwrap();
-                            let llvm = fs::read_to_string(result.ll_path).unwrap();
-                            for register in ["tid.x", "tid.y", "tid.z", "ntid.x", "ntid.y"] {
-                                assert!(
-                                    llvm.contains(&format!(
-                                        "call i32 @llvm.nvvm.read.ptx.sreg.{register}()"
-                                    )),
-                                    "{llvm}"
+                                assert_eq!(
+                                    queries, 1,
+                                    "query/sync survives actual Normal/Full preparation"
                                 );
+                                if bind_empty {
+                                    let roots = BTreeMap::from([(
+                                        name.into(),
+                                        BTreeSet::from([name.into()]),
+                                    )]);
+                                    assert!(
+                                        prepared.validate_libraries(&roots).unwrap().is_empty()
+                                    );
+                                    prepared
+                                        .finish_library_planning(
+                                            &BTreeMap::new(),
+                                            Vec::new(),
+                                            BTreeMap::new(),
+                                        )
+                                        .unwrap();
+                                }
+                                let result = prepared.finish().unwrap();
+                                let llvm = fs::read_to_string(result.ll_path).unwrap();
+                                if results == 1 {
+                                    for register in ["tid.x", "tid.y", "tid.z", "ntid.x", "ntid.y"]
+                                    {
+                                        assert!(
+                                            llvm.contains(&format!(
+                                                "call i32 @llvm.nvvm.read.ptx.sreg.{register}()"
+                                            )),
+                                            "{llvm}"
+                                        );
+                                    }
+                                    assert!(llvm.contains("udiv i32"), "{llvm}");
+                                    assert!(!llvm.contains(
+                                        "call i32 @cuda_oxide_library_v1_246e25db_warp_group_index"
+                                    ));
+                                } else {
+                                    assert_eq!(
+                                        llvm.matches("call void @llvm.nvvm.bar.warp.sync").count(),
+                                        1,
+                                        "{llvm}"
+                                    );
+                                    assert!(
+                                        llvm.contains("call i32 @llvm.nvvm.read.ptx.sreg.laneid()"),
+                                        "{llvm}"
+                                    );
+                                    assert!(!llvm.contains("checked_warp_sync"), "{llvm}");
+                                }
                             }
-                            assert!(llvm.contains("udiv i32"), "{llvm}");
-                            assert!(!llvm.contains(
-                                "call i32 @cuda_oxide_library_v1_246e25db_warp_group_index"
-                            ));
                         }
                     }
                     std::ops::ControlFlow::<(), _>::Continue(())

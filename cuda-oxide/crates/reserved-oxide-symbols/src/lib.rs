@@ -99,10 +99,12 @@ pub const LIBRARY_STORAGE_RESERVE_V1: &str = "cuda_oxide_library_v1_246e25db_sto
 /// Internal full-block storage marker.
 pub const LIBRARY_STORAGE_RELEASE_V1: &str = "cuda_oxide_library_v1_246e25db_storage_release";
 
-/// Resource-checked physical Warp operation.
+/// Resource-checked physical/logical Warp operation.
 pub const LIBRARY_CHECKED_WARP_CALL_V1: &str = "cuda_oxide_library_v1_246e25db_checked_warp_call";
 /// Pure canonical group index, independent of native provider collection.
 pub const LIBRARY_WARP_GROUP_INDEX_V1: &str = "cuda_oxide_library_v1_246e25db_warp_group_index";
+/// Canonical aligned WarpTile synchronization, independent of native plans.
+pub const LIBRARY_CHECKED_WARP_SYNC_V1: &str = "cuda_oxide_library_v1_246e25db_checked_warp_sync";
 
 /// Final emitted identity for a helper specialized to one checked kernel root.
 /// Embedded Rust symbols may contain device prefixes and must not be stripped.

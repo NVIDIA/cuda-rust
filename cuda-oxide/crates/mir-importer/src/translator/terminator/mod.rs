@@ -1164,13 +1164,22 @@ fn translate_call_inner(
                 loc,
             );
         }
-        if let Some(width) = super::facts::library_warp_query_width(instance) {
-            let width = width.map_err(|message| {
+        let independent_role = super::facts::library_warp_query_width(instance)
+            .map(|width| {
+                width.map(|width| dialect_mir::library::LibraryRoleAttr::WarpGroupIndex { width })
+            })
+            .or_else(|| {
+                super::facts::library_warp_sync_width(instance).map(|width| {
+                    width.map(|width| dialect_mir::library::LibraryRoleAttr::SyncWarp { width })
+                })
+            });
+        if let Some(role) = independent_role {
+            let role = role.map_err(|message| {
                 pliron::input_error!(loc.clone(), TranslationErr::invalid_op(message))
             })?;
             let metadata = crate::LibraryCallMetadata {
                 marker: instance.mangled_name(),
-                role: dialect_mir::library::LibraryRoleAttr::WarpGroupIndex { width },
+                role,
             };
             return crate::library::translate_call(
                 ctx,
@@ -4006,7 +4015,8 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                                 LibraryOperation::StorageRelease
                                             }
                                             LibraryRoleAttr::NativeOperandBoundary
-                                            | LibraryRoleAttr::WarpGroupIndex { .. } => {
+                                            | LibraryRoleAttr::WarpGroupIndex { .. }
+                                            | LibraryRoleAttr::SyncWarp { .. } => {
                                                 unreachable!()
                                             }
                                         };

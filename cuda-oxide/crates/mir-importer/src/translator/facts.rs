@@ -338,6 +338,53 @@ pub(crate) fn library_warp_query_width(
     })
 }
 
+/// Authenticate the canonical tile marker without deciding participation or
+/// completion. Its const parameter is u32, unlike the usize query parameter.
+pub(crate) fn library_warp_sync_width(
+    public: rustc_public::mir::mono::Instance,
+) -> Option<Result<u32, &'static str>> {
+    use rustc_public::ty::{Abi, RigidTy, TyKind as PublicTyKind};
+    rustc_middle::ty::tls::with(|tcx| {
+        let instance = rustc_public::rustc_internal::internal(tcx, public);
+        if Some(instance.def_id())
+            != library_device_type(
+                tcx,
+                "library",
+                reserved_oxide_symbols::LIBRARY_CHECKED_WARP_SYNC_V1,
+            )
+        {
+            return None;
+        }
+        let Some(signature) = public.ty().kind().fn_sig() else {
+            return Some(Err(
+                "warp synchronization requires a resolved function signature",
+            ));
+        };
+        let signature = signature.skip_binder();
+        if signature.abi != Abi::Rust
+            || signature.c_variadic
+            || !signature.inputs().is_empty()
+            || !matches!(signature.output().kind(), PublicTyKind::RigidTy(RigidTy::Tuple(fields)) if fields.is_empty())
+        {
+            return Some(Err(
+                "warp synchronization requires a nullary Rust unit signature",
+            ));
+        }
+        Some(
+            instance
+                .args
+                .first()
+                .and_then(|arg| arg.as_const())
+                .and_then(|width| width.try_to_value())
+                .filter(|value| value.ty == tcx.types.u32)
+                .and_then(|value| value.try_to_leaf())
+                .map(|width| width.to_u32())
+                .filter(|width| *width > 0 && *width <= 32 && width.is_power_of_two())
+                .ok_or("warp synchronization width must be a u32 in 1, 2, 4, 8, 16, 32"),
+        )
+    })
+}
+
 fn library_collective_carrier<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<(Ty<'tcx>, u64)> {
     let TyKind::Adt(def, args) = ty.kind() else {
         return None;

@@ -168,14 +168,14 @@ pub fn admit_library_roots(
         let shape = [x, y, z];
         for role in &roles {
             if let LibraryRoleAttr::Native(LibraryNativeMetadata::CheckedWarp { width, .. }) = role
-                && (*width != 32
+                && (!matches!(*width, 1 | 2 | 4 | 8 | 16 | 32)
                     || x.checked_mul(y)
                         .and_then(|xy| xy.checked_mul(z))
                         .is_none_or(|threads| threads % 32 != 0))
             {
                 return pliron::verify_err!(
                     function.deref(ctx).loc(),
-                    "checked Warp calls require width 32 and an exact block containing complete physical warps"
+                    "checked Warp calls require a power-of-two width in 1..=32 and an exact block containing complete physical warps"
                 );
             }
         }

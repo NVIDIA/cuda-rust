@@ -43,14 +43,17 @@ impl MirLibraryOp {
         Self { op }
     }
 
-    /// Retain the position before evaluating a native marker's operands.
+    /// Retain a native operand boundary or canonical tile synchronization.
     pub fn build(
         ctx: &mut Context,
         role: LibraryRoleAttr,
         site: LibraryCallSite,
         callee: String,
     ) -> Ptr<Operation> {
-        assert_eq!(role, LibraryRoleAttr::NativeOperandBoundary);
+        assert!(matches!(
+            role,
+            LibraryRoleAttr::NativeOperandBoundary | LibraryRoleAttr::SyncWarp { .. }
+        ));
         let op = Operation::new(ctx, Self::get_concrete_op_info(), vec![], vec![], vec![], 0);
         let library = Self::new(op);
         library.set_attr_role(ctx, role);
@@ -127,14 +130,25 @@ impl Verify for MirLibraryOp {
         if op.num_regions() != 0 || op.get_num_successors() != 0 {
             return verify_err!(op.loc(), "mir.library has no regions or successors");
         }
-        if *role == LibraryRoleAttr::NativeOperandBoundary {
+        if let LibraryRoleAttr::SyncWarp { width } = *role
+            && (width == 0 || width > 32 || !width.is_power_of_two())
+        {
+            return verify_err!(
+                op.loc(),
+                "warp synchronization requires width 1/2/4/8/16/32"
+            );
+        }
+        if matches!(
+            *role,
+            LibraryRoleAttr::NativeOperandBoundary | LibraryRoleAttr::SyncWarp { .. }
+        ) {
             if op.get_num_operands() != 0
                 || op.get_num_results() != 0
                 || self.get_attr_library_signature(ctx).is_some()
             {
                 return verify_err!(
                     op.loc(),
-                    "native operand boundary has no operands, results or signature"
+                    "native operand boundary or warp synchronization has no operands, results or signature"
                 );
             }
             return Ok(());
@@ -328,9 +342,6 @@ fn native_valid(ctx: &Context, native: LibraryNativeMetadata, args: &[TypeHandle
     if !valid_scalar(spec.scalar) || spec.items == 0 {
         return false;
     }
-    if matches!(native, N::CheckedWarp { width, .. } if width != 32) {
-        return false;
-    }
     let (uniform_index, payload_index) =
         match native {
             N::Raw { block_threads, .. } | N::Callback { block_threads, .. } => {
@@ -427,7 +438,17 @@ fn verify_call(ctx: &Context, call: &MirLibraryOp, role: LibraryRoleAttr) -> Res
         );
     }
     let valid = match role {
-        LibraryRoleAttr::Native(native) => results.is_empty() && native_valid(ctx, native, &args),
+        LibraryRoleAttr::Native(native) => {
+            if let LibraryNativeMetadata::CheckedWarp { width, .. } = native
+                && (width == 0 || width > 32 || !width.is_power_of_two())
+            {
+                return verify_err!(
+                    op.loc(),
+                    "checked Warp calls require a power-of-two width in 1..=32"
+                );
+            }
+            results.is_empty() && native_valid(ctx, native, &args)
+        }
         LibraryRoleAttr::StorageNew(policy) => {
             policy_valid(policy)
                 && args.is_empty()

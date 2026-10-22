@@ -1039,10 +1039,10 @@ fn scoped_native(
         items: 1,
     };
     let kind = LibraryWitness::CollectiveCarrier(1);
-    let role = Role::Native(if scope == Domain::WARP {
+    let role = Role::Native(if let Domain::Warp(width) = scope {
         Native::CheckedWarp {
             spec,
-            width: 32,
+            width,
             access: LibraryAccess::Read,
             witness: kind,
         }
@@ -1081,7 +1081,7 @@ fn genuine_queries_keep_their_exact_scope_through_slots_and_arithmetic() {
         let result = emit::<MirAddOp>(ctx, block, vec![result.get_type(ctx)], vec![result, offset])
             .deref(ctx)
             .get_result(0);
-        let role = scoped_native(ctx, block, witness, result, Domain::WARP, 11);
+        let role = scoped_native(ctx, block, witness, result, Domain::Warp(32), 11);
         emit::<MirReturnOp>(ctx, block, vec![], vec![]);
         let roles = BTreeMap::from([(site(10), Role::WarpGroupIndex { width }), (site(11), role)]);
         let verdicts = slot_and_promoted_verdicts(ctx, module, &roles);
@@ -1105,19 +1105,86 @@ fn genuine_queries_keep_their_exact_scope_through_slots_and_arithmetic() {
 }
 
 #[test]
-fn helper_cycles_retain_their_scope_ceiling_after_return() {
+fn terminal_tile_completion_still_requires_its_participating_control() {
     use pliron::builtin::{
         attributes::OperandSegmentSizesAttr, op_interfaces::ATTR_KEY_OPERAND_SEGMENT_SIZES,
     };
-    for (width, consumer, accepted) in [
-        (32, Domain::WARP, true),
-        (32, Domain::BLOCK, false),
-        (16, Domain::WARP, false),
-        (1, Domain::WARP, false),
+    for width in [8, 16] {
+        let ctx = &mut Context::new();
+        let (module, entry, witness) = resource_function(ctx);
+        let region = entry.deref(ctx).get_parent_region().unwrap();
+        let yes = BasicBlock::new(ctx, None, vec![]);
+        let no = BasicBlock::new(ctx, None, vec![]);
+        yes.insert_at_back(region, ctx);
+        no.insert_at_back(region, ctx);
+        let control = source_value(ctx, entry, SourceKind::BlockQuery, false);
+        let native = scoped_native(ctx, entry, witness, control, Domain::Warp(8), 1);
+        let query = MirLibraryOp::build_query(ctx, site(2), "query".into(), 8);
+        query.insert_at_back(entry, ctx);
+        let result = query.deref(ctx).get_result(0);
+        let zero = test_constant(ctx, entry, 32, 0);
+        let bit = IntegerType::get(ctx, 1, Signedness::Signless).into();
+        let condition = emit::<MirNeOp>(ctx, entry, vec![bit], vec![result, zero])
+            .deref(ctx)
+            .get_result(0);
+        let address = test_slot(ctx, entry, condition);
+        let condition = emit::<MirLoadOp>(ctx, entry, vec![bit], vec![address])
+            .deref(ctx)
+            .get_result(0);
+        let branch = Operation::new(
+            ctx,
+            MirCondBranchOp::get_concrete_op_info(),
+            vec![],
+            vec![condition],
+            vec![yes, no],
+            0,
+        );
+        branch.deref_mut(ctx).attributes.set(
+            ATTR_KEY_OPERAND_SEGMENT_SIZES.clone(),
+            OperandSegmentSizesAttr(vec![1, 0, 0]),
+        );
+        branch.insert_at_back(entry, ctx);
+        let sync = Role::SyncWarp { width };
+        MirLibraryOp::build(ctx, sync, site(3), "sync".into()).insert_at_back(yes, ctx);
+        emit::<MirReturnOp>(ctx, yes, vec![], vec![]);
+        emit::<MirReturnOp>(ctx, no, vec![], vec![]);
+        let roles = BTreeMap::from([
+            (site(1), native),
+            (site(2), Role::WarpGroupIndex { width: 8 }),
+            (site(3), sync),
+        ]);
+        let verdicts = slot_and_promoted_verdicts(ctx, module, &roles);
+        assert_eq!(
+            verdicts.iter().map(Result::is_ok).collect::<Vec<_>>(),
+            vec![width == 8; 2]
+        );
+        if width == 16 {
+            assert!(verdicts.iter().all(|v| {
+                v.as_ref()
+                    .unwrap_err()
+                    .contains("WarpTile barrier is reached through control narrower than its width")
+            }));
+        }
+    }
+}
+
+#[test]
+fn helper_cycles_reconverge_without_widening_returned_values() {
+    use pliron::builtin::{
+        attributes::OperandSegmentSizesAttr, op_interfaces::ATTR_KEY_OPERAND_SEGMENT_SIZES,
+    };
+    for (width, consumer, carry_result, accepted) in [
+        (32, Domain::Warp(32), false, true),
+        (32, Domain::BLOCK, false, true),
+        (16, Domain::Warp(32), false, true),
+        (1, Domain::Warp(32), false, true),
+        (16, Domain::Warp(32), true, false),
+        (1, Domain::BLOCK, true, false),
     ] {
         let ctx = &mut Context::new();
         let (module, root, witness) = resource_function(ctx);
-        let helper = test_helper(ctx, module, vec![], vec![]);
+        let scalar = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
+        let helper = test_helper(ctx, module, vec![], vec![scalar]);
         let region = helper.deref(ctx).get_parent_region().unwrap();
         let header = BasicBlock::new(ctx, None, vec![]);
         header.insert_at_back(region, ctx);
@@ -1172,11 +1239,15 @@ fn helper_cycles_retain_their_scope_ceiling_after_return() {
             0,
         )
         .insert_at_back(body, ctx);
-        emit::<MirReturnOp>(ctx, exit, vec![], vec![]);
-        test_call(ctx, root, vec![], vec![]);
-        // The caller has no branch of its own, and its following native is in
-        // this same prepared block. The helper's exit ceiling must persist.
-        let control = source_value(ctx, root, SourceKind::BlockQuery, false);
+        emit::<MirReturnOp>(ctx, exit, vec![], vec![result]);
+        let call = test_call(ctx, root, vec![], vec![scalar]);
+        // Structural participation reconverges, but the query returned by the
+        // helper keeps its original precision when used as a later control.
+        let control = if carry_result {
+            call.deref(ctx).get_result(0)
+        } else {
+            source_value(ctx, root, SourceKind::BlockQuery, false)
+        };
         let role = scoped_native(ctx, root, witness, control, consumer, 1);
         emit::<MirReturnOp>(ctx, root, vec![], vec![]);
         let roles = BTreeMap::from([
@@ -1190,11 +1261,11 @@ fn helper_cycles_retain_their_scope_ceiling_after_return() {
             "width {width}, {consumer:?}: {verdicts:?}"
         );
         if !accepted {
-            assert!(verdicts.iter().all(|v| {
-                v.as_ref()
-                    .unwrap_err()
-                    .contains("operation is reached through lane-varying control flow")
-            }));
+            assert!(
+                verdicts
+                    .iter()
+                    .all(|v| { v.as_ref().unwrap_err().contains("not proved") })
+            );
         }
     }
 }
@@ -1203,42 +1274,72 @@ fn helper_cycles_retain_their_scope_ceiling_after_return() {
 #[allow(clippy::disallowed_methods)]
 fn resource_access_requires_completion_and_retains_original_witness_origin() {
     use dialect_mir::library::LibraryWitness;
-    for (scopes, accesses, completed, accepted) in [
+    for (scopes, accesses, completion, accepted) in [
         (
             [Domain::BLOCK, Domain::BLOCK],
             [LibraryAccess::Read, LibraryAccess::Write],
-            false,
+            None,
             false,
         ),
         (
             [Domain::BLOCK, Domain::BLOCK],
             [LibraryAccess::Read, LibraryAccess::Write],
-            true,
+            Some(Domain::BLOCK),
             true,
         ),
         (
-            [Domain::WARP, Domain::WARP],
+            [Domain::Warp(32), Domain::Warp(32)],
             [LibraryAccess::Read, LibraryAccess::Read],
-            false,
+            None,
             true,
         ),
         (
-            [Domain::WARP, Domain::BLOCK],
+            [Domain::Warp(32), Domain::BLOCK],
             [LibraryAccess::Write, LibraryAccess::Read],
-            false,
+            None,
             false,
         ),
         (
-            [Domain::BLOCK, Domain::WARP],
+            [Domain::BLOCK, Domain::Warp(32)],
             [LibraryAccess::Read, LibraryAccess::Write],
-            false,
+            None,
             false,
         ),
         (
-            [Domain::WARP, Domain::BLOCK],
+            [Domain::Warp(32), Domain::BLOCK],
             [LibraryAccess::Write, LibraryAccess::Read],
+            Some(Domain::BLOCK),
             true,
+        ),
+        (
+            [Domain::Warp(8), Domain::Warp(8)],
+            [LibraryAccess::Write, LibraryAccess::Read],
+            Some(Domain::Warp(8)),
             true,
+        ),
+        (
+            [Domain::Warp(8), Domain::Warp(16)],
+            [LibraryAccess::Write, LibraryAccess::Read],
+            Some(Domain::Warp(8)),
+            false,
+        ),
+        (
+            [Domain::Warp(8), Domain::Warp(16)],
+            [LibraryAccess::Write, LibraryAccess::Read],
+            Some(Domain::Warp(16)),
+            true,
+        ),
+        (
+            [Domain::Warp(16), Domain::Warp(8)],
+            [LibraryAccess::Write, LibraryAccess::Read],
+            Some(Domain::Warp(8)),
+            false,
+        ),
+        (
+            [Domain::Warp(32), Domain::BLOCK],
+            [LibraryAccess::Write, LibraryAccess::Read],
+            Some(Domain::Warp(32)),
+            false,
         ),
     ] {
         let ctx = &mut Context::new();
@@ -1266,26 +1367,35 @@ fn resource_access_requires_completion_and_retains_original_witness_origin() {
         let mut roles = BTreeMap::new();
         for (position, (scope, access)) in scopes.into_iter().zip(accesses).enumerate() {
             let index = position + 1;
-            if index == 2 && completed {
-                MirLibrarySourceOp::build(
-                    ctx,
-                    LibrarySourceEffectAttr {
-                        site: site(3),
-                        kind: SourceKind::BlockSync,
-                    },
-                    None,
-                )
-                .insert_at_back(block, ctx);
+            if index == 2
+                && let Some(scope) = completion
+            {
+                if let Domain::Warp(width) = scope {
+                    let role = Role::SyncWarp { width };
+                    MirLibraryOp::build(ctx, role, site(3), "sync".into())
+                        .insert_at_back(block, ctx);
+                    roles.insert(site(3), role);
+                } else {
+                    MirLibrarySourceOp::build(
+                        ctx,
+                        LibrarySourceEffectAttr {
+                            site: site(3),
+                            kind: SourceKind::BlockSync,
+                        },
+                        None,
+                    )
+                    .insert_at_back(block, ctx);
+                }
             }
             let spec = NativeSpec {
                 scalar: LibraryScalar::Signed(32),
                 items: 1,
             };
             let witness_kind = LibraryWitness::CollectiveCarrier(1);
-            let role = Role::Native(if scope == Domain::WARP {
+            let role = Role::Native(if let Domain::Warp(width) = scope {
                 Native::CheckedWarp {
                     spec,
-                    width: 32,
+                    width,
                     access,
                     witness: witness_kind,
                 }
@@ -1318,14 +1428,14 @@ fn resource_access_requires_completion_and_retains_original_witness_origin() {
             assert!(verdicts.iter().all(|v| {
                 v.as_ref()
                     .unwrap_err()
-                    .contains("requires a full-block barrier")
+                    .contains("requires a barrier covering both accesses")
             }));
         }
     }
 }
 
 #[test]
-fn varying_cycles_stop_at_reconvergence() {
+fn cycles_use_structural_control_after_reconvergence() {
     use pliron::builtin::{
         attributes::OperandSegmentSizesAttr, op_interfaces::ATTR_KEY_OPERAND_SEGMENT_SIZES,
     };
@@ -1344,14 +1454,14 @@ fn varying_cycles_stop_at_reconvergence() {
         vec![],
     ];
     let cases = [
-        ("varying backedge", &direct, 1, SourceKind::LaneQuery, false),
+        ("varying backedge", &direct, 1, SourceKind::LaneQuery, true),
         ("uniform backedge", &direct, 1, SourceKind::BlockQuery, true),
         (
             "varying entry to inner cycle",
             &nested,
             1,
             SourceKind::LaneQuery,
-            false,
+            true,
         ),
         (
             "uniform entry to inner cycle",
@@ -1452,29 +1562,41 @@ fn varying_cycles_stop_at_reconvergence() {
 #[allow(clippy::disallowed_methods)]
 fn planned_storage_reuses_the_same_proof_for_completion_and_global_resource_conflicts() {
     use dialect_mir::{library::LibraryWitness, types::MirDisjointSliceType};
-    for (policy, completed, bytes, expected) in [
-        (None, false, 16, None),
+    for (policy, completion, bytes, expected) in [
+        (None, None, 16, None),
         (
             None,
-            false,
+            None,
             0,
             Some("conflicting collective resource access"),
         ),
         (
             Some(Policy::default()),
-            false,
+            None,
             16,
             Some("explicit storage reuse"),
         ),
-        (Some(Policy::default()), true, 16, None),
+        (Some(Policy::default()), Some(Domain::BLOCK), 16, None),
         (
             Some(Policy {
                 auto_sync: true,
                 ..Default::default()
             }),
-            false,
+            None,
             16,
             None,
+        ),
+        (
+            Some(Policy::default()),
+            Some(Domain::Warp(32)),
+            16,
+            Some("explicit storage reuse"),
+        ),
+        (
+            None,
+            Some(Domain::Warp(32)),
+            0,
+            Some("conflicting collective resource access"),
         ),
     ] {
         let ctx = &mut Context::new();
@@ -1568,16 +1690,25 @@ fn planned_storage_reuses_the_same_proof_for_completion_and_global_resource_conf
             vec![],
         );
         for (index, access) in [(1, LibraryAccess::Read), (2, LibraryAccess::Write)] {
-            if index == 2 && completed {
-                MirLibrarySourceOp::build(
-                    ctx,
-                    LibrarySourceEffectAttr {
-                        site: site(3),
-                        kind: SourceKind::BlockSync,
-                    },
-                    None,
-                )
-                .insert_at_back(block, ctx);
+            if index == 2
+                && let Some(scope) = completion
+            {
+                if let Domain::Warp(width) = scope {
+                    let role = Role::SyncWarp { width };
+                    MirLibraryOp::build(ctx, role, site(3), "sync".into())
+                        .insert_at_back(block, ctx);
+                    roles.insert(site(3), role);
+                } else {
+                    MirLibrarySourceOp::build(
+                        ctx,
+                        LibrarySourceEffectAttr {
+                            site: site(3),
+                            kind: SourceKind::BlockSync,
+                        },
+                        None,
+                    )
+                    .insert_at_back(block, ctx);
+                }
             }
             let role = Role::Native(Native::CheckedBlockStorage {
                 spec: NativeSpec {

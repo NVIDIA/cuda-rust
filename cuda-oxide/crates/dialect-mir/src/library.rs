@@ -181,6 +181,8 @@ pub enum LibraryRoleAttr {
     Native(LibraryNativeMetadata),
     /// Genuine pure x-fastest group index, retained until after admission.
     WarpGroupIndex { width: u32 },
+    /// Genuine canonical aligned tile synchronization, independent of native plans.
+    SyncWarp { width: u32 },
     /// Create a descriptor with a new source identity.
     StorageNew(LibraryStoragePolicy),
     /// Consume a descriptor and change its policy, preserving its identity.

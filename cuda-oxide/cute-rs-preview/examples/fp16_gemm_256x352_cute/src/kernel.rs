@@ -166,7 +166,7 @@ pub mod kernels {
                     while kt < ktiles {
                         pipeline.producer_acquire(stage as u32, phase);
                         if rank == 0 && warp::is_elected_sync(u32::MAX) {
-                            pipeline.producer_expect(stage as u32);
+                            pipeline.producer_expect_tx(stage as u32);
                         }
                         // Native CuTe cluster TMA performs its own warp election.
                         // Every producer lane must participate in each copy.

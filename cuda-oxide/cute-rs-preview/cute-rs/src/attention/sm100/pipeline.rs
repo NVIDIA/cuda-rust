@@ -203,12 +203,9 @@ impl WaitPolicy for SharedReuse {
     }
 }
 
-/// Producer position: initially waits for empty phase one.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Producer;
-/// Consumer position: initially waits for full phase zero.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Consumer;
+/// Cursor roles shared with [`crate::pipeline::PipelineState`]: a producer
+/// cursor starts at empty phase one, a consumer cursor at full phase zero.
+pub use crate::pipeline::{Consumer, Producer};
 impl sealed::Cursor for Producer {}
 impl sealed::Cursor for Consumer {}
 
@@ -321,7 +318,7 @@ impl<const STAGES: u32, Role: CursorRole> Default for RingCursor<STAGES, Role> {
 /// unsafe {
 ///     ring.acquire_cursor(*p);
 ///     if rank == 0 && ctm_rs::warp::is_elected_sync(u32::MAX) {
-///         ring.expect_cursor(*p, 16384);
+///         ring.producer_expect_tx_cursor(*p, 16384);
 ///     }
 ///     let done = ring.full_at_cursor(*p);
 ///     TmaCopy::<L, 2>::load(desc, b, (rank * 64) as i32, 0, done, rank);
@@ -465,7 +462,7 @@ impl<const STAGES: u32, Full: WaitPolicy, Empty: WaitPolicy> TwoCtaRing<STAGES, 
     /// One elected rank-zero thread calls after acquire. TMA must complete
     /// exactly bytes across the CTA pair on this full barrier.
     #[inline(always)]
-    pub unsafe fn expect(self, ticket: u32, bytes: u32)
+    pub unsafe fn producer_expect_tx(self, ticket: u32, bytes: u32)
     where
         Full: TmaPolicy,
     {
@@ -556,9 +553,9 @@ impl<const STAGES: u32, Full: WaitPolicy, Empty: WaitPolicy> TwoCtaRing<STAGES, 
     }
     /// Expect TMA bytes and arrive at the producer cursor's full barrier.
     /// # Safety
-    /// The requirements of [`Self::expect`] apply to the current cursor position.
+    /// The requirements of [`Self::producer_expect_tx`] apply to the current cursor position.
     #[inline(always)]
-    pub unsafe fn expect_cursor(self, cursor: RingCursor<STAGES, Producer>, bytes: u32)
+    pub unsafe fn producer_expect_tx_cursor(self, cursor: RingCursor<STAGES, Producer>, bytes: u32)
     where
         Full: TmaPolicy,
     {

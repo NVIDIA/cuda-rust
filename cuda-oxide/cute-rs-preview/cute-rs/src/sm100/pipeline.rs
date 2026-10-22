@@ -57,7 +57,7 @@ impl<const STAGES: u32, const TX_BYTES: u32> PipelineTmaUmma<STAGES, TX_BYTES> {
     ///
     /// Exactly one elected lane of rank zero calls this after acquire.
     #[inline(always)]
-    pub unsafe fn producer_expect(&self, stage: u32) {
+    pub unsafe fn producer_expect_tx(&self, stage: u32) {
         unsafe { __compiler::sm100_pipeline_expect::<STAGES, TX_BYTES>(self.full, stage) }
     }
     /// Return the stage's local completion barrier for typed TMA copies.

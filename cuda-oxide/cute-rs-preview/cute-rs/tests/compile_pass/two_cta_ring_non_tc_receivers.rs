@@ -20,11 +20,11 @@ unsafe fn non_tc_receivers(
     let page_consumer = RingCursor::<4, Consumer>::new();
     unsafe {
         copies.acquire(0);
-        copies.expect(0, 16);
+        copies.producer_expect_tx(0, 16);
         copies.wait(0);
         copies.mma_empty(0);
         copies.acquire_cursor(producer);
-        copies.expect_cursor(producer, 16);
+        copies.producer_expect_tx_cursor(producer, 16);
         copies.wait_cursor(consumer);
         copies.mma_empty_cursor(consumer);
         pages.acquire(0);

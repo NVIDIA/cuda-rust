@@ -1,23 +1,23 @@
 error[E0277]: the trait bound `TensorMemory: TmaPolicy` is not satisfied
   --> tests/compile_fail/two_cta_ring_wrong_signal.rs:20:16
    |
-20 |         tensor.expect(0, 16);
-   |                ^^^^^^ the trait `TmaPolicy` is not implemented for `TensorMemory`
+20 |         tensor.producer_expect_tx(0, 16);
+   |                ^^^^^^^^^^^^^^^^^^ the trait `TmaPolicy` is not implemented for `TensorMemory`
    |
 help: the trait `TmaPolicy` is implemented for `AsyncCompletion`
   --> src/attention/sm100/pipeline.rs
    |
    | impl TmaPolicy for AsyncCompletion {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required by a bound in `TwoCtaRing::<STAGES, Full, Empty>::expect`
+note: required by a bound in `TwoCtaRing::<STAGES, Full, Empty>::producer_expect_tx`
   --> src/attention/sm100/pipeline.rs
    |
    | impl<const STAGES: u32, Full: WaitPolicy, Empty: WaitPolicy> TwoCtaRing<STAGES, Full, Empty> {
 ...
-   |     pub unsafe fn expect(self, ticket: u32, bytes: u32)
+   |     pub unsafe fn producer_expect_tx(self, ticket: u32, bytes: u32)
    |     where
    |         Full: TmaPolicy,
-   |               ^^^^^^^^^ required by this bound in `TwoCtaRing::<STAGES, Full, Empty>::expect`
+   |               ^^^^^^^^^ required by this bound in `TwoCtaRing::<STAGES, Full, Empty>::producer_expect_tx`
 
 error[E0277]: the trait bound `SharedToAsync: MmaPolicy` is not satisfied
   --> tests/compile_fail/two_cta_ring_wrong_signal.rs:21:16

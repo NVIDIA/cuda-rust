@@ -168,7 +168,7 @@ impl<const STAGES: u32> Ring<STAGES, TmaBarrier> {
     /// Have one elected lane arrive and expect one FP16 tile’s TMA byte count.
     /// All lanes of the producer warp must participate in the election.
     #[inline(always)]
-    unsafe fn expect(self, count: u32) {
+    unsafe fn producer_expect_tx(self, count: u32) {
         if warp::is_elected_sync(u32::MAX) {
             unsafe {
                 mbarrier::arrive_expect_tx(
@@ -452,7 +452,7 @@ pub mod kernels {
                     let vdesc = &*vmaps.add((b * kv_heads + kh) as usize);
                     let steps = trip_count(row, keys, causal);
                     pipes.q.acquire(qcount);
-                    pipes.q.expect(qcount);
+                    pipes.q.producer_expect_tx(qcount);
                     let mut qt = SharedTile::<QLayout, OperandA>::from_raw(
                         smem.add(Q_OFFSET + (qcount % 2) as usize * TILE_BYTES)
                             .cast(),
@@ -467,7 +467,7 @@ pub mod kernels {
                     );
                     qcount += 1;
                     pipes.kv.acquire(kvcount);
-                    pipes.kv.expect(kvcount);
+                    pipes.kv.producer_expect_tx(kvcount);
                     let mut kt = SharedTile::<KLayout, OperandB>::from_raw(
                         smem.add(KV_OFFSET + (kvcount % 3) as usize * TILE_BYTES)
                             .cast(),
@@ -482,7 +482,7 @@ pub mod kernels {
                     );
                     kvcount += 1;
                     pipes.q.acquire(qcount);
-                    pipes.q.expect(qcount);
+                    pipes.q.producer_expect_tx(qcount);
                     let mut qt = SharedTile::<QLayout, OperandA>::from_raw(
                         smem.add(Q_OFFSET + (qcount % 2) as usize * TILE_BYTES)
                             .cast(),
@@ -499,7 +499,7 @@ pub mod kernels {
                     let mut i = 1;
                     while i < steps {
                         pipes.kv.acquire(kvcount);
-                        pipes.kv.expect(kvcount);
+                        pipes.kv.producer_expect_tx(kvcount);
                         let mut kt = SharedTile::<KLayout, OperandB>::from_raw(
                             smem.add(KV_OFFSET + (kvcount % 3) as usize * TILE_BYTES)
                                 .cast(),
@@ -514,7 +514,7 @@ pub mod kernels {
                         );
                         kvcount += 1;
                         pipes.kv.acquire(kvcount);
-                        pipes.kv.expect(kvcount);
+                        pipes.kv.producer_expect_tx(kvcount);
                         let mut vt = SharedTile::<VLayout, OperandB>::from_raw(
                             smem.add(KV_OFFSET + (kvcount % 3) as usize * TILE_BYTES)
                                 .cast(),
@@ -531,7 +531,7 @@ pub mod kernels {
                         i += 1;
                     }
                     pipes.kv.acquire(kvcount);
-                    pipes.kv.expect(kvcount);
+                    pipes.kv.producer_expect_tx(kvcount);
                     let mut vt = SharedTile::<VLayout, OperandB>::from_raw(
                         smem.add(KV_OFFSET + (kvcount % 3) as usize * TILE_BYTES)
                             .cast(),

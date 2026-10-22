@@ -11,7 +11,7 @@
 mod kernel;
 
 use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig1D, sys};
-use cute_rs::sm100_attention::{SmemLayout, make_tma_desc};
+use cute_rs::sm100_attention::{SmemLayout, create_tensor_map_tiled};
 use serde_json::json;
 use std::{error::Error, path::PathBuf};
 
@@ -210,7 +210,7 @@ fn descriptors<L: SmemLayout>(base: u64, batch: u32, sequence: u32, heads: u32) 
         for h in 0..heads {
             let offset =
                 (u64::from(b) * u64::from(sequence) * u64::from(heads) + u64::from(h)) * 128 * 2;
-            let desc = make_tma_desc::<L>(
+            let desc = create_tensor_map_tiled::<L>(
                 (base + offset) as *mut core::ffi::c_void,
                 u64::from(sequence),
                 128,

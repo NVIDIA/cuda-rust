@@ -248,7 +248,7 @@ unsafe fn load_qk(
     if first {
         query.acquire(q_ticket);
         if rank == 0 && warp::is_elected_sync(u32::MAX) {
-            query.expect(q_ticket, 147456);
+            query.producer_expect_tx(q_ticket, 147456);
         }
     }
     if first {
@@ -274,7 +274,7 @@ unsafe fn load_qk(
     while chunk < 9 {
         kv.acquire_cursor(*kv_state);
         if rank == 0 && warp::is_elected_sync(u32::MAX) {
-            kv.expect_cursor(*kv_state, 16384);
+            kv.producer_expect_tx_cursor(*kv_state, 16384);
         }
         let mut destination = SharedTile::<KLayout, OperandB>::from_raw(
             smem.add(KV + kv_state.index() as usize * 8192).cast(),
@@ -320,7 +320,7 @@ unsafe fn load_v(
         while npart < 2 {
             kv.acquire_cursor(*kv_state);
             if rank == 0 && warp::is_elected_sync(u32::MAX) {
-                kv.expect_cursor(*kv_state, 16384);
+                kv.producer_expect_tx_cursor(*kv_state, 16384);
             }
             let mut destination = SharedTile::<VLayout, OperandB>::from_raw(
                 smem.add(KV + kv_state.index() as usize * 8192).cast(),

@@ -22,7 +22,7 @@ unsafe fn valid_completion_mechanisms(
         tensor.thread_empty(0);
         shared.thread_full(0);
         shared.mma_empty(0);
-        copies.expect(0, 16);
+        copies.producer_expect_tx(0, 16);
         copies.mma_full(0);
         copies.mma_empty(0);
     }

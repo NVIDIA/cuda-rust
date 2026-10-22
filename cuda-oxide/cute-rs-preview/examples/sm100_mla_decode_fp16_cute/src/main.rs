@@ -12,7 +12,7 @@ mod comparison;
 mod kernel;
 
 use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig1D, sys};
-use cute_rs::sm100_attention::make_tma_desc;
+use cute_rs::sm100_attention::create_tensor_map_tiled;
 use serde::Deserialize;
 use serde_json::json;
 use std::{
@@ -252,25 +252,37 @@ fn main() -> Result<()> {
         1
     };
     let workspace = DeviceBuffer::from_host(&stream, &vec![f32::NAN; workspace_values])?;
-    let q_desc = make_tma_desc::<kernel::QLayout>(
+    let q_desc = create_tensor_map_tiled::<kernel::QLayout>(
         dq.cu_deviceptr() as *mut _,
         cfg.batch as u64 * 128,
         512,
         512,
     )?;
-    let qr_desc = make_tma_desc::<kernel::QLayout>(
+    let qr_desc = create_tensor_map_tiled::<kernel::QLayout>(
         dqr.cu_deviceptr() as *mut _,
         cfg.batch as u64 * 128,
         64,
         64,
     )?;
     let physical_rows = (batch * pages * 128) as u64;
-    let k_desc =
-        make_tma_desc::<kernel::KLayout>(dk.cu_deviceptr() as *mut _, physical_rows, 512, 512)?;
-    let kr_desc =
-        make_tma_desc::<kernel::KLayout>(dkr.cu_deviceptr() as *mut _, physical_rows, 64, 64)?;
-    let v_desc =
-        make_tma_desc::<kernel::VLayout>(dk.cu_deviceptr() as *mut _, physical_rows, 512, 512)?;
+    let k_desc = create_tensor_map_tiled::<kernel::KLayout>(
+        dk.cu_deviceptr() as *mut _,
+        physical_rows,
+        512,
+        512,
+    )?;
+    let kr_desc = create_tensor_map_tiled::<kernel::KLayout>(
+        dkr.cu_deviceptr() as *mut _,
+        physical_rows,
+        64,
+        64,
+    )?;
+    let v_desc = create_tensor_map_tiled::<kernel::VLayout>(
+        dk.cu_deviceptr() as *mut _,
+        physical_rows,
+        512,
+        512,
+    )?;
     let module = unsafe { kernel::kernels::load(&context) }?;
     let work = cfg.batch * cfg.splits;
     let probe = module.prepare_sm100_mla_decode_fp16_cute_rs(LaunchConfig1D::new(

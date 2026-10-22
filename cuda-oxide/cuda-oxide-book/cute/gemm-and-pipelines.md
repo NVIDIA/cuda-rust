@@ -62,7 +62,7 @@ In `fp16_gemm_256x352_cute`, `cute-rs` (teal) owns the 5-stage cluster TMA pipel
 // expected bytes, then all 32 lanes issue the cluster TMA copies via cute-rs
 pipeline.producer_acquire(stage as u32, phase);
 if rank == 0 && warp::is_elected_sync(u32::MAX) {
-    pipeline.producer_expect(stage as u32);
+    pipeline.producer_expect_tx(stage as u32);
 }
 let barrier = pipeline.producer_get_barrier(stage as u32);
 Sm100ClusterTmaCopy::copy(a, &mut a_tile, row, kt * 64, barrier, rank);

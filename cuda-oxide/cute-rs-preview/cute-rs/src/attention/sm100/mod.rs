@@ -27,4 +27,4 @@ pub mod __compiler;
 #[cfg(feature = "host")]
 mod host;
 #[cfg(feature = "host")]
-pub use host::make_tma_desc;
+pub use host::create_tensor_map_tiled;

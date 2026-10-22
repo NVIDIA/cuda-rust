@@ -9,15 +9,23 @@ use alloc::{format, string::String};
 use core::{ffi::c_void, marker::PhantomData, mem::MaybeUninit};
 use cuda_core::sys as driver;
 
-/// Encode a physical row-major matrix into the selected shared operand layout.
+/// Encode a physical row-major FP16 matrix into the selected shared operand layout.
 ///
-/// Large contiguous dimensions are split into swizzle-sized chunks. For an
-/// MN-major operand the logical rows/columns are transposed relative to global
-/// physical rows/columns. Global coordinates always use the physical ordering.
+/// This is the attention form of [`crate::copy::tma::create_tensor_map_tiled`].
+/// The generic encoder describes one two-dimensional box. This one encodes a
+/// rank-three tensor map whose innermost dimension is the swizzle span, so a
+/// single copy fills a whole SM100 operand tile from chunks of `span` columns.
+/// It also checks the SM100 tile constraints (a span of 32 or 64 elements,
+/// a row count that is a multiple of 8 and at most 256, a column count that
+/// is a multiple of the span), transposes the logical rows and columns of an
+/// MN-major operand relative to the physical ones (global coordinates always
+/// use the physical ordering), and fixes the element type to `f16` with
+/// 128-byte L2 promotion.
+///
 /// The descriptor does not retain the allocation or track its lifetime; callers
 /// keep the allocation live until every asynchronous use completes.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn make_tma_desc<L: SmemLayout>(
+pub fn create_tensor_map_tiled<L: SmemLayout>(
     base: *mut c_void,
     rows: u64,
     cols: u64,

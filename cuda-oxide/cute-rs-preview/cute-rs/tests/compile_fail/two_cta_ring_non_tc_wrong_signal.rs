@@ -17,8 +17,8 @@ unsafe fn wrong_non_tc_signals(
 ) {
     unsafe {
         copies.thread_empty(0);
-        reuse.expect(0, 16);
-        pages.expect(0, 16);
+        reuse.producer_expect_tx(0, 16);
+        pages.producer_expect_tx(0, 16);
         pages.mma_full(0);
         pages.mma_empty_cursor(RingCursor::<4, Consumer>::new());
         pages.thread_full(0);

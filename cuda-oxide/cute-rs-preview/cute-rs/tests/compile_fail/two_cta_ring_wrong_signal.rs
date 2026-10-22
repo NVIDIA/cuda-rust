@@ -17,7 +17,7 @@ unsafe fn wrong_completion_mechanisms(
     local: TwoCtaRing<2, LocalMemory>,
 ) {
     unsafe {
-        tensor.expect(0, 16);
+        tensor.producer_expect_tx(0, 16);
         shared.mma_full(0);
         shared.thread_empty(0);
         copies.thread_full(0);

@@ -22,7 +22,7 @@ unsafe fn valid_cursors(
     let tensor_consumer = RingCursor::<2, Consumer>::new();
     unsafe {
         copies.acquire_cursor(producer);
-        copies.expect_cursor(producer, 16);
+        copies.producer_expect_tx_cursor(producer, 16);
         copies.mma_full_cursor(producer);
         copies.wait_cursor(consumer);
         copies.mma_empty_cursor(consumer);

@@ -280,11 +280,11 @@ error's `Display` names the library candidates the loader tried.
   Zlib, or similar).
 - No GPL, AGPL, SSPL, or other copyleft-licensed dependencies.
 - If adding a new dependency, update `cuda-oxide/dependency-licenses.csv`
-  accordingly. `cuda-oxide/scripts/check-dependency-licenses.sh` reports
-  anything the workspace
-  declares but that file does not record; CI runs it as the
-  `cargo-deny / license-manifest` job. It checks presence, not versions, so a
-  routine version bump needs no CSV edit.
+  or `cutile-rs/dependency-licenses.csv` for the owning component.
+  `cuda-oxide/scripts/check-dependency-licenses.sh` reports workspace members
+  and direct dependencies missing from either inventory; CI runs it as the
+  `cargo-deny / license-manifest` job and the Tile dependency job. It checks
+  presence, not versions, so a routine version bump needs no CSV edit.
 - The same applies to an example that pulls third-party code. Each example
   under `cuda-oxide/crates/rustc-codegen-cuda/examples/` is its own workspace, so
   `cargo deny check` does not resolve it; the script reads the example lock

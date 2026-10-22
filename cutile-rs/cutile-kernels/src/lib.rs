@@ -20,17 +20,29 @@ pub mod kv_cache;
 pub mod norms;
 pub mod pointwise;
 pub mod positional;
+pub mod sampling;
 
-pub use argmax::{argmax_blocks_f16, argmax_reduce_blocks_to_u32, lm_head_argmax_blocks_f16};
-pub use attention::{
-    flash_attn_causal_seq_dynpos_f16, flash_attn_causal_seq_f16, fmha_causal,
-    fmha_decode_gqa_split, fmha_prefill_causal, fmha_prefill_gqa, splitk_reduce_merge,
+pub use argmax::{
+    argmax_blocks, argmax_blocks_f16, argmax_reduce_blocks_to_u32, lm_head_argmax_blocks,
+    lm_head_argmax_blocks_f16,
 };
-pub use embeddings::embedding_batch_f16;
-pub use kv_cache::{kv_cache_update_seq_dynpos_f16, kv_cache_update_seq_f16};
-pub use norms::{add_rms_norm_f16, qk_norm_f16, rms_norm_f16};
-pub use pointwise::{add_2d_f16, gather_row_f16, silu_mul_2d_f16};
-pub use positional::{qk_rope_dynpos_f16, rope_seq_dynpos_f16, rope_seq_f16};
+pub use attention::{
+    flash_attn_causal_seq, flash_attn_causal_seq_dynpos, flash_attn_causal_seq_dynpos_f16,
+    flash_attn_causal_seq_f16, fmha_causal, fmha_decode_gqa_split, fmha_prefill_causal,
+    fmha_prefill_gqa, splitk_reduce_merge,
+};
+pub use embeddings::{embedding_batch, embedding_batch_f16};
+pub use kv_cache::{
+    kv_cache_update_seq, kv_cache_update_seq_dynpos, kv_cache_update_seq_dynpos_f16,
+    kv_cache_update_seq_f16,
+};
+pub use norms::{add_rms_norm, add_rms_norm_f16, qk_norm, qk_norm_f16, rms_norm, rms_norm_f16};
+pub use pointwise::{add_2d, add_2d_f16, gather_row, gather_row_f16, silu_mul_2d, silu_mul_2d_f16};
+pub use positional::{
+    qk_rope_dynpos, qk_rope_dynpos_f16, rope_seq, rope_seq_dynpos, rope_seq_dynpos_f16,
+    rope_seq_f16,
+};
+pub use sampling::sample;
 
 // Kinds that fire during a normal transformer inference path (decode CUDA graph
 // + step-graph prefill) and therefore may need warmup to pre-pay JIT cost.

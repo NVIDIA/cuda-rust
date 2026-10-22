@@ -2716,12 +2716,28 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         }
         generic_arg_inf.apply_provided_generics_fn_call(call, self.generic_vars);
 
+        // An unresolved callee generic must not be compiled against the caller's
+        // vars: a caller var of the same name (e.g. a kernel `const D` and
+        // `load_view_tko`'s array const `D`) would silently rebind it.
+        let callee_generics = get_supported_generic_params(&fn_item.sig.generics)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<HashSet<_>>();
+
         let mut expected_arg_types = Vec::new();
         for param_type in param_types {
+            // Fall back to the raw param type only when no callee generic is left
+            // unresolved in it; otherwise skip the hint and let inference resolve.
             let expected = substitute_resolved_generics(&param_type, &generic_arg_inf)
                 .as_ref()
                 .and_then(|ty| self.compile_expected_param_type(ty))
-                .or_else(|| self.compile_expected_param_type(&param_type));
+                .or_else(|| {
+                    if type_mentions_any_name(&param_type, &callee_generics) {
+                        None
+                    } else {
+                        self.compile_expected_param_type(&param_type)
+                    }
+                });
             expected_arg_types.push(expected);
         }
         Ok(expected_arg_types)

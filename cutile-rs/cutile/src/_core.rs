@@ -359,6 +359,17 @@ pub mod core {
         const ZERO: Self;
     }
 
+    /// Floating-point element types. Bounds kernels that compute in `f32` and
+    /// convert their IO element in and out, since `convert_tile` bridges only
+    /// float-to-float.
+    pub trait FloatElement: ElementType {}
+    impl FloatElement for half::f16 {}
+    impl FloatElement for half::bf16 {}
+    impl FloatElement for f32 {}
+    impl FloatElement for f64 {}
+    impl FloatElement for f8e4m3fn {}
+    impl FloatElement for f8e5m2 {}
+
     /// Rust byte marker for packed Tile IR sub-byte values.
     ///
     /// `u8` is the low-level interop path for raw bytes. `f4e2m1fnx2` is the

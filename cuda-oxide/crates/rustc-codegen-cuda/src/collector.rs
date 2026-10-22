@@ -3426,7 +3426,10 @@ mod tests {
             "::sm100::__compiler::sm100_tiled_mma",
             "::attention::sm100::__compiler::tma_load",
         ] {
-            assert!(is_cute_recognition_stub_identity("cute_rs", path, None), "{path}");
+            assert!(
+                is_cute_recognition_stub_identity("cute_rs", path, None),
+                "{path}"
+            );
         }
         // The compatibility re-exports in cute_rs::lib (`tile`, `tma`,
         // `cooperative`, `tiled_copy`, `block_scaled_mma`) are import paths,
@@ -3439,7 +3442,10 @@ mod tests {
             "::block_scaled_mma::__compiler::tiled_gemm",
             "::epilogue::__compiler::epilogue_half",
         ] {
-            assert!(!is_cute_recognition_stub_identity("cute_rs", path, None), "{path}");
+            assert!(
+                !is_cute_recognition_stub_identity("cute_rs", path, None),
+                "{path}"
+            );
         }
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",

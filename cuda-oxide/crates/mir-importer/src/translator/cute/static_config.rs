@@ -8,10 +8,14 @@
 //! The decoder follows ADT identities and generic-argument kinds:
 //!
 //! ```text
-//! L<T2<C<32>, C<8>>, T2<C<8>, C<1>>>
-//! │ └────── shape ──────┘  └───── stride ─────┘
+//! L<(C<32>, C<8>), (C<8>, C<1>)>
+//! │ └─── shape ──┘  └─ stride ──┘
 //! └─ exact DefId: cute_rs::markers::L
 //! ```
+//!
+//! Shape and stride modes are Rust tuples of `C<N>` leaves (the `T2<A, B>`
+//! pair marker still decodes to the same two-mode tuple). A tuple type has
+//! no defining path of its own, so the identity check holds at the leaves.
 //!
 //! It never searches a debug-printed type name. A near-miss from another
 //! crate, a swapped `Type`/`Const`, or an unevaluated constant is a loud
@@ -205,10 +209,28 @@ fn const_arg(args: &GenericArgs, index: usize, owner: &str) -> Result<TyConst, S
     }
 }
 
-/// Recursively decode integer-leaf and pair markers into a layout tuple.
+/// Recursively decode integer leaves and tuple modes into a layout tuple.
+///
+/// A mode is the leaf marker `C<N>`, a Rust tuple `(A, B, ...)` of further
+/// modes, or the `T2<A, B>` pair marker, so `(C<2>, (C<3>, C<4>))` and
+/// `T2<C<2>, T2<C<3>, C<4>>>` both decode to `(2,(3,4))`. A tuple type has
+/// no defining path, so the near-miss guard applies at the leaves: every leaf
+/// must be the exact `cute_rs::markers::C` ADT.
 fn decode_tuple(ty: &Ty) -> Result<IntTuple, String> {
+    if let TyKind::RigidTy(RigidTy::Tuple(items)) = ty.kind() {
+        if items.is_empty() {
+            return Err("layout tuple must have at least one mode".to_string());
+        }
+        return items
+            .iter()
+            .map(decode_tuple)
+            .collect::<Result<Vec<_>, _>>()
+            .map(IntTuple::Tuple);
+    }
     let TyKind::RigidTy(RigidTy::Adt(def, args)) = ty.kind() else {
-        return Err(format!("layout tuple marker must be an ADT, found {ty:?}"));
+        return Err(format!(
+            "layout tuple mode must be a tuple or `{C}`, found {ty:?}"
+        ));
     };
     match canonical_adt_path(&def).as_str() {
         C => {
@@ -225,7 +247,9 @@ fn decode_tuple(ty: &Ty) -> Result<IntTuple, String> {
                 decode_tuple(&type_arg(&args, 1, T2)?)?,
             ]))
         }
-        found => Err(format!("expected `{C}` or `{T2}`, found `{found}`")),
+        found => Err(format!(
+            "expected a tuple, `{C}` or `{T2}`, found `{found}`"
+        )),
     }
 }
 
@@ -547,6 +571,144 @@ pub(crate) fn decode_copy_tma_s2g_callee(func: &mir::Operand) -> Result<TmaCopyC
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
+    /// Compile `source` in-process as a crate named `cute_rs`, so a `markers`
+    /// module inside it sits at the defining paths the decoder pins, then
+    /// decode the first parameter type of every function item and return the
+    /// results by short function name.
+    ///
+    /// `Ty` values exist only inside a compiler session, so the decoded
+    /// layouts are plain data compared outside it. The rustup shim resolves
+    /// the pinned toolchain this test binary was built with, so the in-process
+    /// driver and the sysroot agree.
+    fn decode_fixture_parameters(
+        source: &str,
+        tag: &str,
+    ) -> BTreeMap<String, Result<Layout, String>> {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_static_config_{tag}_{}_{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let fixture = root.join("fixture.rs");
+        std::fs::write(&fixture, source).unwrap();
+
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let sysroot_output = std::process::Command::new(rustc)
+            .args(["--print", "sysroot"])
+            .output()
+            .expect("query rustc sysroot");
+        assert!(sysroot_output.status.success(), "rustc --print sysroot");
+        let sysroot = String::from_utf8(sysroot_output.stdout)
+            .expect("sysroot path is UTF-8")
+            .trim()
+            .to_string();
+
+        let args = vec![
+            "rustc".to_string(),
+            "--edition=2024".to_string(),
+            "--crate-type=rlib".to_string(),
+            "--crate-name=cute_rs".to_string(),
+            "--emit=metadata".to_string(),
+            format!("--out-dir={}", root.display()),
+            format!("--sysroot={sysroot}"),
+            fixture.display().to_string(),
+        ];
+
+        // rustc needs more stack than the default test-thread allowance.
+        let decoded = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                rustc_public::run!(&args, || {
+                    let mut decoded = BTreeMap::new();
+                    for item in rustc_public::all_local_items() {
+                        if item.kind() != rustc_public::ItemKind::Fn {
+                            continue;
+                        }
+                        let Some(body) = item.body() else {
+                            continue;
+                        };
+                        let Some(parameter) = body.locals().get(1) else {
+                            continue;
+                        };
+                        let name = item.name();
+                        let short = name.rsplit("::").next().unwrap_or(&name).to_string();
+                        decoded.insert(short, decode_layout(&parameter.ty));
+                    }
+                    std::ops::ControlFlow::<(), _>::Continue(decoded)
+                })
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+            .expect("in-process fixture compilation succeeds");
+
+        std::fs::remove_dir_all(&root).ok();
+        decoded
+    }
+
+    /// Rust tuples carry nested shapes and strides: a tuple of `C<N>` leaves
+    /// or of further tuples must decode to the same layout as the equivalent
+    /// `T2` nesting, an empty tuple is rejected, and a leaf that is not the
+    /// exact `cute_rs::markers::C` ADT fails the identity check.
+    #[test]
+    fn tuple_shapes_decode_like_the_pair_marker() {
+        let decoded = decode_fixture_parameters(
+            r#"
+pub mod markers {
+    use core::marker::PhantomData;
+    pub struct C<const VALUE: i64>;
+    pub struct T2<A, B> { _modes: PhantomData<(A, B)> }
+    pub struct L<Shape, Stride> { _layout: PhantomData<(Shape, Stride)> }
+}
+pub mod other {
+    pub struct C<const VALUE: i64>;
+}
+use markers::{C, L, T2};
+pub fn tuple_pitched(_: L<(C<2>, C<3>), (C<17>, C<4>)>) {}
+pub fn pair_pitched(_: L<T2<C<2>, C<3>>, T2<C<17>, C<4>>>) {}
+pub fn tuple_nested(_: L<(C<4>, ((C<2>, C<2>), C<2>)), (C<2>, ((C<1>, C<128>), C<8>))>) {}
+pub fn pair_nested(
+    _: L<T2<C<4>, T2<T2<C<2>, C<2>>, C<2>>>, T2<C<2>, T2<T2<C<1>, C<128>>, C<8>>>>,
+) {}
+pub fn mixed_nested(_: L<(T2<C<2>, C<2>>, C<2>), (T2<C<1>, C<128>>, C<8>)>) {}
+pub fn tuple_triple(_: L<(C<2>, C<3>, C<4>), (C<12>, C<4>, C<1>)>) {}
+pub fn empty_mode(_: L<(), ()>) {}
+pub fn primitive_leaf(_: L<(u32, C<1>), (C<1>, C<1>)>) {}
+pub fn foreign_leaf(_: L<(other::C<2>, C<3>), (C<3>, C<1>)>) {}
+"#,
+            "tuple_shapes",
+        );
+        let expect = |name: &str, layout: &str| {
+            assert_eq!(
+                decoded[name],
+                Ok(layout.parse::<Layout>().unwrap()),
+                "{name}"
+            );
+        };
+        expect("tuple_pitched", "(2,3):(17,4)");
+        assert_eq!(decoded["pair_pitched"], decoded["tuple_pitched"]);
+        expect("tuple_nested", "(4,((2,2),2)):(2,((1,128),8))");
+        assert_eq!(decoded["pair_nested"], decoded["tuple_nested"]);
+        assert_eq!(
+            decoded["mixed_nested"],
+            Ok("((2,2),2):((1,128),8)".parse().unwrap())
+        );
+        expect("tuple_triple", "(2,3,4):(12,4,1)");
+        let error = |name: &str| decoded[name].as_ref().expect_err(name).clone();
+        assert!(error("empty_mode").contains("at least one mode"));
+        assert!(error("primitive_leaf").contains("must be a tuple or `cute_rs::markers::C`"));
+        assert_eq!(
+            error("foreign_leaf"),
+            "expected a tuple, `cute_rs::markers::C` or `cute_rs::markers::T2`, \
+             found `cute_rs::other::C`"
+        );
+    }
 
     /// Check that TMA copy alignment preserves the selected swizzle phase.
     #[test]

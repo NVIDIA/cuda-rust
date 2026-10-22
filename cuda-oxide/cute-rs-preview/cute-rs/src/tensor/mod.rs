@@ -34,7 +34,7 @@ use crate::copy::vector::{assume, load_tile, store_tile};
 
 /// Says which Rust storage type may hold one or more logical elements.
 ///
-/// For example, `E2M1: TensorElement<u8>` means an `u8` may carry two packed
+/// For example, `Float4E2M1FN: TensorElement<u8>` means an `u8` may carry two packed
 /// FP4 values. A missing implementation rejects an invalid pair at compile
 /// time, such as E2M1 data stored in `f32`.
 pub trait TensorElement<Storage: Copy> {}
@@ -293,7 +293,7 @@ impl<T: Copy + Add<Output = T>, const N: usize> Add for RegisterTile<T, N> {
 ///
 /// For ordinary values, `Storage` defaults to `Element`, so
 /// `Tensor<f32, Layout>` is enough. Packed data names both types; for example,
-/// `Tensor<E2M1, Layout, u8>` means two logical FP4 values share each byte.
+/// `Tensor<Float4E2M1FN, Layout, u8>` means two logical FP4 values share each byte.
 /// [`TensorElement`] checks that the pair is allowed.
 ///
 /// Copying this value copies only the view. The underlying storage is still

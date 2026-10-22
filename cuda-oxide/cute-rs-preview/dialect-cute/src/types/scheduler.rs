@@ -26,7 +26,7 @@ use crate::attributes::CuteTileGridAttr;
 ///                    │
 ///                    ▼
 ///        !cute.work_tile<grid<16,16,1>>
-///                    │ tile_idx
+///                    │ work_tile_coordinates
 ///                    ▼
 ///              linear, m, n, batch
 /// ```

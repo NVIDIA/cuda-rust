@@ -53,7 +53,12 @@ mod kernels {
     /// one lane. A reduction that silently dropped lanes could not produce
     /// those.
     ///
-    /// Lane 0 writes `[sum, min, max, and, or, xor]`.
+    /// Min and max run again over `l << 27`, which sets bit 31 on lanes 16..32.
+    /// Unsigned, the answers are `0` and `0xF800_0000`; a signed reduction
+    /// would read those lanes as negative and answer `0x8000_0000` and
+    /// `0x7800_0000`.
+    ///
+    /// Lane 0 writes `[sum, min, max, and, or, xor, min_high, max_high]`.
     #[kernel]
     pub fn reduce_u32_all_ops(mut out: DisjointSlice<u32>) {
         let warp = this_thread_block().tiled_partition::<32>();
@@ -61,6 +66,7 @@ mod kernels {
 
         let v_one = 1u32 << lane;
         let v_inv = !v_one;
+        let v_high = lane << 27;
 
         let r_sum = warp_reduce::<u32, Sum, _>(&warp, lane);
         let r_min = warp_reduce::<u32, Min, _>(&warp, lane);
@@ -68,9 +74,11 @@ mod kernels {
         let r_and = warp_reduce::<u32, BitAnd, _>(&warp, v_inv);
         let r_or = warp_reduce::<u32, BitOr, _>(&warp, v_one);
         let r_xor = warp_reduce::<u32, BitXor, _>(&warp, v_one);
+        let r_min_high = warp_reduce::<u32, Min, _>(&warp, v_high);
+        let r_max_high = warp_reduce::<u32, Max, _>(&warp, v_high);
 
         if lane == 0 {
-            // SAFETY: the host allocates six elements for this kernel.
+            // SAFETY: the host allocates eight elements for this kernel.
             unsafe {
                 *out.get_unchecked_mut(0) = r_sum;
                 *out.get_unchecked_mut(1) = r_min;
@@ -78,6 +86,8 @@ mod kernels {
                 *out.get_unchecked_mut(3) = r_and;
                 *out.get_unchecked_mut(4) = r_or;
                 *out.get_unchecked_mut(5) = r_xor;
+                *out.get_unchecked_mut(6) = r_min_high;
+                *out.get_unchecked_mut(7) = r_max_high;
             }
         }
     }
@@ -188,14 +198,21 @@ fn main() {
 
     // ===== Test 1: every u32 op =====
     println!("\n--- Test 1: warp_reduce over u32, all six ops ---");
-    let mut u32_dev = DeviceBuffer::<u32>::zeroed(&stream, 6).unwrap();
+    let mut u32_dev = DeviceBuffer::<u32>::zeroed(&stream, 8).unwrap();
     // SAFETY: launch shape/resources match the kernel; the buffer covers its writes.
     unsafe { module.reduce_u32_all_ops((stream).as_ref(), cfg, &mut u32_dev) }
         .expect("Kernel launch failed");
     let got = u32_dev.to_host_vec(&stream).unwrap();
-    let want: [u32; 6] = [496, 0, 31, 0, u32::MAX, u32::MAX];
-    println!("[sum, min, max, and, or, xor] = {:?}", got);
-    println!("expected                      = {:?}", want);
+    let want: [u32; 8] = [496, 0, 31, 0, u32::MAX, u32::MAX, 0, 0xF800_0000];
+    println!(
+        "[sum, min, max, and, or, xor, min_high, max_high] = {:?}",
+        got
+    );
+    println!(
+        "expected                                          = {:?}",
+        want
+    );
+    println!("(a signed min/max would read 2147483648 / 2013265920 for the last two)");
     if got == want {
         println!("✓ every u32 reduction correct");
     } else {

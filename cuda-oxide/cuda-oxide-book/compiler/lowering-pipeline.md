@@ -612,7 +612,10 @@ to the backend so the generated module is guaranteed to load on the local GPU.
 The full precedence is `--arch` > `CUDA_OXIDE_TARGET` > host CC (for `run`
 only) > backend feature-based default. `cargo oxide build` and
 `cargo oxide pipeline` deliberately skip the host-CC step so they remain
-usable for cross-compilation.
+usable for cross-compilation. Without an explicit target, a feature-based
+choice below the device-code floor -- `sm_80`, or the detected GPU if that is
+older -- is raised to it, so the module never targets less than
+`cuda-device`'s `cuda_oxide_sm_at_least` cfg assumed.
 
 If the lowered module calls CUDA libdevice, cuda-oxide switches from `llc` to
 the NVVM path automatically. It resolves the target with the same precedence

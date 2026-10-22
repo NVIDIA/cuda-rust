@@ -128,6 +128,7 @@ pub mod conversion_interface;
 pub mod convert;
 pub mod helpers;
 pub mod lowering;
+pub use lowering::propagate_kernel_dynamic_shared_alignments;
 mod packed_shared_local_storage;
 pub mod scalarize_block_args;
 pub mod type_conversion_interface;

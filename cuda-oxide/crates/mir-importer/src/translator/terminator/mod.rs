@@ -1150,6 +1150,7 @@ fn translate_call(
                 loc,
                 0,         // byte_offset = 0 for get() and get_raw()
                 alignment, // User-specified or default alignment
+                name.contains("::get_fixed"),
             );
         } else if name.contains("::offset") {
             // DynamicSharedArray::offset(byte_offset) - get pointer at byte offset
@@ -1477,6 +1478,7 @@ const KERNEL_METADATA_MARKERS: &[&str] = &[
     "cuda_device::thread::__unchecked_indexing_config",
     "cuda_device::cluster::__cluster_config",
     "cuda_device::shared::__dynamic_shared_alignment",
+    "cuda_device::shared::__dynamic_shared_inferred",
 ];
 
 /// Keep the macro-injected launch-context constructor out of user line tables.
@@ -3177,7 +3179,8 @@ fn try_dispatch_intrinsic(
                 loc,
             )))
         }
-        "cuda_device::shared::__dynamic_shared_alignment" => {
+        "cuda_device::shared::__dynamic_shared_alignment"
+        | "cuda_device::shared::__dynamic_shared_inferred" => {
             // Zero-cost marker injected by #[launch_contract]. body.rs records
             // the const alignment on the kernel; no runtime call survives.
             let actual_prev_op = match prev_op {

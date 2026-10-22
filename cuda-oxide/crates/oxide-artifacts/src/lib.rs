@@ -15,12 +15,20 @@ pub const ARTIFACT_SECTION_NAME: &str = ".oxart";
 #[cfg(feature = "object-write")]
 const ARTIFACT_ANCHOR_SECTION_NAME: &str = ".oxlink";
 pub const ARTIFACT_MAGIC: [u8; 8] = *b"OXIDEART";
-pub const ARTIFACT_VERSION: u16 = 2;
+pub const ARTIFACT_VERSION: u16 = 3;
+const COMPILE_OPTIONS_ARTIFACT_VERSION: u16 = 2;
 const LEGACY_ARTIFACT_VERSION: u16 = 1;
 
 const HEADER_BYTES: usize = 32;
 const PAYLOAD_RECORD_BYTES: usize = 24;
-const ENTRY_RECORD_BYTES: usize = 24;
+const LEGACY_ENTRY_RECORD_BYTES: usize = 24;
+const ENTRY_RECORD_BYTES: usize = 48;
+
+const ENTRY_METADATA_PRESENT: u16 = 1;
+const ENTRY_LAUNCH_FACTS_PRESENT: u16 = 1 << 1;
+const ENTRY_EXACT_BLOCK_PRESENT: u16 = 1 << 2;
+const KNOWN_ENTRY_FLAGS: u16 =
+    ENTRY_METADATA_PRESENT | ENTRY_LAUNCH_FACTS_PRESENT | ENTRY_EXACT_BLOCK_PRESENT;
 
 const OPTION_NO_FMA_CONTRACTION: u64 = 1 << 0;
 const OPTION_DEBUG_LINE_TABLES: u64 = 1 << 1;
@@ -223,11 +231,28 @@ impl<'a> ArtifactPayloadSpec<'a> {
     }
 }
 
+/// Finalized launch requirements for one concrete kernel entry.
+///
+/// These facts describe the allocation selected by the compiler. They do not
+/// include static shared memory or driver-reserved memory. An absent record
+/// means that the producer did not provide finalized requirements; it is
+/// distinct from a record requiring zero dynamic bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KernelLaunchFacts {
+    /// Required `(x, y, z)` block dimensions, when the kernel needs an exact shape.
+    pub exact_block: Option<(u32, u32, u32)>,
+    /// Finalized dynamic shared-memory allocation in bytes per block.
+    pub dynamic_shared_bytes: u32,
+    /// Alignment required by the generated dynamic shared-memory declaration.
+    pub dynamic_shared_alignment: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArtifactEntrySpec<'a> {
     pub symbol: &'a str,
     pub kind: ArtifactEntryKind,
     pub metadata: Option<u64>,
+    pub launch_facts: Option<KernelLaunchFacts>,
 }
 
 impl<'a> ArtifactEntrySpec<'a> {
@@ -236,11 +261,17 @@ impl<'a> ArtifactEntrySpec<'a> {
             symbol,
             kind,
             metadata: None,
+            launch_facts: None,
         }
     }
 
     pub const fn with_metadata(mut self, metadata: u64) -> Self {
         self.metadata = Some(metadata);
+        self
+    }
+
+    pub const fn with_launch_facts(mut self, facts: KernelLaunchFacts) -> Self {
+        self.launch_facts = Some(facts);
         self
     }
 }
@@ -293,6 +324,7 @@ pub struct ArtifactEntry<'a> {
     pub symbol: &'a str,
     pub kind: ArtifactEntryKind,
     pub metadata: Option<u64>,
+    pub launch_facts: Option<KernelLaunchFacts>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -329,6 +361,7 @@ pub struct OwnedArtifactEntry {
     pub symbol: String,
     pub kind: ArtifactEntryKind,
     pub metadata: Option<u64>,
+    pub launch_facts: Option<KernelLaunchFacts>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -375,6 +408,7 @@ impl<'a> From<ArtifactBundle<'a>> for OwnedArtifactBundle {
                     symbol: entry.symbol.to_string(),
                     kind: entry.kind,
                     metadata: entry.metadata,
+                    launch_facts: entry.launch_facts,
                 })
                 .collect(),
         }
@@ -445,6 +479,15 @@ impl std::error::Error for ArtifactError {}
 pub fn build_artifact_blob(spec: &ArtifactBundleSpec<'_>) -> Result<Vec<u8>, ArtifactError> {
     validate_spec(spec)?;
 
+    let has_launch_facts = spec
+        .entries
+        .iter()
+        .any(|entry| entry.launch_facts.is_some());
+    let entry_record_bytes = if has_launch_facts {
+        ENTRY_RECORD_BYTES
+    } else {
+        LEGACY_ENTRY_RECORD_BYTES
+    };
     let mut out = vec![0; HEADER_BYTES];
     push_bytes(&mut out, spec.name.as_bytes());
     push_bytes(&mut out, spec.target.as_bytes());
@@ -452,7 +495,7 @@ pub fn build_artifact_blob(spec: &ArtifactBundleSpec<'_>) -> Result<Vec<u8>, Art
     let payload_record_start = out.len();
     out.resize(out.len() + spec.payloads.len() * PAYLOAD_RECORD_BYTES, 0);
     let entry_record_start = out.len();
-    out.resize(out.len() + spec.entries.len() * ENTRY_RECORD_BYTES, 0);
+    out.resize(out.len() + spec.entries.len() * entry_record_bytes, 0);
 
     for (index, payload) in spec.payloads.iter().enumerate() {
         let name_offset = checked_u32(out.len(), "payload name offset")?;
@@ -484,9 +527,21 @@ pub fn build_artifact_blob(spec: &ArtifactBundleSpec<'_>) -> Result<Vec<u8>, Art
         push_bytes(&mut out, entry.symbol.as_bytes());
         align_vec(&mut out, 8);
 
-        let record = entry_record_start + index * ENTRY_RECORD_BYTES;
+        let record = entry_record_start + index * entry_record_bytes;
         write_u16(&mut out, record, entry.kind.to_u16());
-        write_u16(&mut out, record + 2, u16::from(entry.metadata.is_some()));
+        let mut flags = u16::from(entry.metadata.is_some());
+        if let Some(facts) = entry.launch_facts {
+            flags |= ENTRY_LAUNCH_FACTS_PRESENT;
+            if let Some((x, y, z)) = facts.exact_block {
+                flags |= ENTRY_EXACT_BLOCK_PRESENT;
+                write_u32(&mut out, record + 24, x);
+                write_u32(&mut out, record + 28, y);
+                write_u32(&mut out, record + 32, z);
+            }
+            write_u32(&mut out, record + 36, facts.dynamic_shared_bytes);
+            write_u32(&mut out, record + 40, facts.dynamic_shared_alignment);
+        }
+        write_u16(&mut out, record + 2, flags);
         write_u64(&mut out, record + 4, entry.metadata.unwrap_or(0));
         write_u32(&mut out, record + 12, symbol_offset);
         write_u16(
@@ -498,13 +553,15 @@ pub fn build_artifact_blob(spec: &ArtifactBundleSpec<'_>) -> Result<Vec<u8>, Art
 
     let total_len = checked_u32(out.len(), "total length")?;
     out[0..8].copy_from_slice(&ARTIFACT_MAGIC);
-    // Keep default-policy bundles on v1 for backward compatibility. A bundle
-    // that carries required compile policy uses v2 so an older reader rejects
-    // it instead of silently ignoring the semantic flag.
-    let version = if spec.compile_options == ArtifactCompileOptions::new() {
+    // Preserve the legacy bytes when no launch facts are supplied. Required
+    // launch facts use v3 so older readers reject them instead of silently
+    // ignoring the kernel's resource requirements.
+    let version = if has_launch_facts {
+        ARTIFACT_VERSION
+    } else if spec.compile_options == ArtifactCompileOptions::new() {
         LEGACY_ARTIFACT_VERSION
     } else {
-        ARTIFACT_VERSION
+        COMPILE_OPTIONS_ARTIFACT_VERSION
     };
     write_u16(&mut out, 8, version);
     write_u16(&mut out, 10, HEADER_BYTES as u16);
@@ -550,7 +607,10 @@ pub fn parse_artifact_blob(bytes: &[u8]) -> Result<ArtifactBundle<'_>, ArtifactE
         return Err(ArtifactError::BadMagic);
     }
     let version = read_u16(bytes, 8)?;
-    if !matches!(version, LEGACY_ARTIFACT_VERSION | ARTIFACT_VERSION) {
+    if !matches!(
+        version,
+        LEGACY_ARTIFACT_VERSION | COMPILE_OPTIONS_ARTIFACT_VERSION | ARTIFACT_VERSION
+    ) {
         return Err(ArtifactError::UnsupportedVersion(version));
     }
     let header_len = read_u16(bytes, 10)? as usize;
@@ -591,8 +651,13 @@ pub fn parse_artifact_blob(bytes: &[u8]) -> Result<ArtifactBundle<'_>, ArtifactE
         .ok_or(ArtifactError::TooLarge("payload records"))?;
     require_len(bytes, cursor, "payload records")?;
     let entry_records = cursor;
+    let entry_record_bytes = if version == ARTIFACT_VERSION {
+        ENTRY_RECORD_BYTES
+    } else {
+        LEGACY_ENTRY_RECORD_BYTES
+    };
     cursor = cursor
-        .checked_add(entry_count * ENTRY_RECORD_BYTES)
+        .checked_add(entry_count * entry_record_bytes)
         .ok_or(ArtifactError::TooLarge("entry records"))?;
     require_len(bytes, cursor, "entry records")?;
 
@@ -617,12 +682,12 @@ pub fn parse_artifact_blob(bytes: &[u8]) -> Result<ArtifactBundle<'_>, ArtifactE
 
     let mut entries = Vec::with_capacity(entry_count);
     for index in 0..entry_count {
-        let record = entry_records + index * ENTRY_RECORD_BYTES;
+        let record = entry_records + index * entry_record_bytes;
         let kind_raw = read_u16(bytes, record)?;
         let kind = ArtifactEntryKind::from_u16(kind_raw)
             .ok_or(ArtifactError::UnsupportedEntryKind(kind_raw))?;
         let flags = read_u16(bytes, record + 2)?;
-        let metadata = if flags & 1 != 0 {
+        let metadata = if flags & ENTRY_METADATA_PRESENT != 0 {
             Some(read_u64(bytes, record + 4)?)
         } else {
             None
@@ -630,10 +695,40 @@ pub fn parse_artifact_blob(bytes: &[u8]) -> Result<ArtifactBundle<'_>, ArtifactE
         let symbol_offset = read_u32(bytes, record + 12)? as usize;
         let symbol_len = read_u16(bytes, record + 16)? as usize;
         let symbol = read_str(bytes, symbol_offset, symbol_len, "entry symbol")?;
+        let launch_facts = if version == ARTIFACT_VERSION {
+            if flags & !KNOWN_ENTRY_FLAGS != 0
+                || flags & ENTRY_EXACT_BLOCK_PRESENT != 0 && flags & ENTRY_LAUNCH_FACTS_PRESENT == 0
+            {
+                return Err(ArtifactError::Malformed(format!(
+                    "invalid launch-facts flags {flags:#x} for entry '{symbol}'"
+                )));
+            }
+            if flags & ENTRY_LAUNCH_FACTS_PRESENT != 0 {
+                Some(KernelLaunchFacts {
+                    exact_block: if flags & ENTRY_EXACT_BLOCK_PRESENT != 0 {
+                        Some((
+                            read_u32(bytes, record + 24)?,
+                            read_u32(bytes, record + 28)?,
+                            read_u32(bytes, record + 32)?,
+                        ))
+                    } else {
+                        None
+                    },
+                    dynamic_shared_bytes: read_u32(bytes, record + 36)?,
+                    dynamic_shared_alignment: read_u32(bytes, record + 40)?,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        validate_launch_facts(symbol, kind, launch_facts)?;
         entries.push(ArtifactEntry {
             symbol,
             kind,
             metadata,
+            launch_facts,
         });
     }
 
@@ -880,8 +975,37 @@ fn validate_spec(spec: &ArtifactBundleSpec<'_>) -> Result<(), ArtifactError> {
         if entry.symbol.is_empty() {
             return Err(ArtifactError::EmptyEntrySymbol);
         }
+        validate_launch_facts(entry.symbol, entry.kind, entry.launch_facts)?;
     }
     Ok(())
+}
+
+fn validate_launch_facts(
+    symbol: &str,
+    kind: ArtifactEntryKind,
+    facts: Option<KernelLaunchFacts>,
+) -> Result<(), ArtifactError> {
+    let Some(facts) = facts else {
+        return Ok(());
+    };
+    let reason = if kind != ArtifactEntryKind::Kernel {
+        Some("launch facts require a kernel entry")
+    } else if facts
+        .exact_block
+        .is_some_and(|(x, y, z)| x == 0 || y == 0 || z == 0)
+    {
+        Some("exact block dimensions must be nonzero")
+    } else if !facts.dynamic_shared_alignment.is_power_of_two() {
+        Some("dynamic shared-memory alignment must be a nonzero power of two")
+    } else {
+        None
+    };
+    match reason {
+        Some(reason) => Err(ArtifactError::Malformed(format!(
+            "invalid launch facts for entry '{symbol}': {reason}"
+        ))),
+        None => Ok(()),
+    }
 }
 
 fn checked_u16(value: usize, field: &'static str) -> Result<u16, ArtifactError> {
@@ -1006,6 +1130,160 @@ mod tests {
     }
 
     #[test]
+    fn concrete_kernel_launch_facts_survive_borrowed_and_owned_bundles() {
+        let first = KernelLaunchFacts {
+            exact_block: Some((32, 1, 1)),
+            dynamic_shared_bytes: 128,
+            dynamic_shared_alignment: 16,
+        };
+        let second = KernelLaunchFacts {
+            exact_block: Some((8, 4, 1)),
+            dynamic_shared_bytes: 512,
+            dynamic_shared_alignment: 64,
+        };
+        let empty = KernelLaunchFacts {
+            exact_block: None,
+            dynamic_shared_bytes: 0,
+            dynamic_shared_alignment: 1,
+        };
+        let blob = build_artifact_blob(
+            &ArtifactBundleSpec::new("demo", "sm_90")
+                .with_compile_options(ArtifactCompileOptions::new().with_fma_contraction(false))
+                .with_payload(ArtifactPayloadSpec::new(
+                    ArtifactPayloadKind::Cubin,
+                    "demo.cubin",
+                    b"cubin",
+                ))
+                .with_entry(
+                    ArtifactEntrySpec::new("apply_items_1", ArtifactEntryKind::Kernel)
+                        .with_metadata(7)
+                        .with_launch_facts(first),
+                )
+                .with_entry(
+                    ArtifactEntrySpec::new("apply_items_4", ArtifactEntryKind::Kernel)
+                        .with_launch_facts(second),
+                )
+                .with_entry(
+                    ArtifactEntrySpec::new("no_scratch", ArtifactEntryKind::Kernel)
+                        .with_launch_facts(empty),
+                )
+                .with_entry(ArtifactEntrySpec::new(
+                    "helper",
+                    ArtifactEntryKind::DeviceFunction,
+                )),
+        )
+        .unwrap();
+        assert_eq!(read_u16(&blob, 8).unwrap(), ARTIFACT_VERSION);
+        let borrowed = parse_artifact_blob(&blob).unwrap();
+        assert!(!borrowed.compile_options.fma_contraction_enabled());
+        assert_eq!(borrowed.entry("apply_items_1").unwrap().metadata, Some(7));
+        assert_eq!(
+            borrowed.entry("apply_items_1").unwrap().launch_facts,
+            Some(first)
+        );
+        assert_eq!(
+            borrowed.entry("apply_items_4").unwrap().launch_facts,
+            Some(second)
+        );
+        assert_eq!(
+            borrowed.entry("no_scratch").unwrap().launch_facts,
+            Some(empty)
+        );
+        assert_eq!(borrowed.entry("helper").unwrap().launch_facts, None);
+        let owned = OwnedArtifactBundle::from(borrowed.clone());
+        for entry in borrowed.entries {
+            assert_eq!(
+                owned.entry(entry.symbol).unwrap().launch_facts,
+                entry.launch_facts
+            );
+        }
+    }
+
+    #[test]
+    fn launch_facts_reject_invalid_shape_alignment_and_entry_kind() {
+        let valid = KernelLaunchFacts {
+            exact_block: Some((32, 1, 1)),
+            dynamic_shared_bytes: 128,
+            dynamic_shared_alignment: 16,
+        };
+        let spec = |kind, facts| {
+            ArtifactBundleSpec::new("demo", "sm_90")
+                .with_payload(ArtifactPayloadSpec::new(
+                    ArtifactPayloadKind::Ptx,
+                    "demo.ptx",
+                    b"ptx",
+                ))
+                .with_entry(ArtifactEntrySpec::new("hello", kind).with_launch_facts(facts))
+        };
+        for (kind, facts) in [
+            (ArtifactEntryKind::DeviceFunction, valid),
+            (
+                ArtifactEntryKind::Kernel,
+                KernelLaunchFacts {
+                    exact_block: Some((32, 0, 1)),
+                    ..valid
+                },
+            ),
+            (
+                ArtifactEntryKind::Kernel,
+                KernelLaunchFacts {
+                    dynamic_shared_alignment: 0,
+                    ..valid
+                },
+            ),
+            (
+                ArtifactEntryKind::Kernel,
+                KernelLaunchFacts {
+                    dynamic_shared_alignment: 3,
+                    ..valid
+                },
+            ),
+        ] {
+            assert!(matches!(
+                build_artifact_blob(&spec(kind, facts)),
+                Err(ArtifactError::Malformed(_))
+            ));
+        }
+
+        let blob = build_artifact_blob(&spec(ArtifactEntryKind::Kernel, valid)).unwrap();
+        let record = sample_payload_record_start() + PAYLOAD_RECORD_BYTES;
+        for (offset, value) in [(28, 0), (40, 3)] {
+            let mut corrupt = blob.clone();
+            write_u32(&mut corrupt, record + offset, value);
+            assert!(matches!(
+                parse_artifact_blob(&corrupt),
+                Err(ArtifactError::Malformed(_))
+            ));
+        }
+        let mut wrong_kind = blob.clone();
+        write_u16(
+            &mut wrong_kind,
+            record,
+            ArtifactEntryKind::DeviceFunction.to_u16(),
+        );
+        assert!(matches!(
+            parse_artifact_blob(&wrong_kind),
+            Err(ArtifactError::Malformed(_))
+        ));
+        for flags in [ENTRY_EXACT_BLOCK_PRESENT, KNOWN_ENTRY_FLAGS | (1 << 3)] {
+            let mut corrupt = blob.clone();
+            write_u16(&mut corrupt, record + 2, flags);
+            assert!(matches!(
+                parse_artifact_blob(&corrupt),
+                Err(ArtifactError::Malformed(_))
+            ));
+        }
+
+        let mut truncated = blob[..record + ENTRY_RECORD_BYTES - 1].to_vec();
+        let len = truncated.len() as u32;
+        write_u32(&mut truncated, 12, len);
+        assert_eq!(
+            parse_artifact_blob(&truncated),
+            Err(ArtifactError::Truncated("entry records"))
+        );
+    }
+
+    #[test]
     fn artifact_blob_round_trips_non_ptx_payload_kinds() {
         let blob = build_artifact_blob(
             &ArtifactBundleSpec::new("demo", "sm_90")
@@ -1027,7 +1305,10 @@ mod tests {
                 )),
         )
         .unwrap();
-        assert_eq!(read_u16(&blob, 8).unwrap(), ARTIFACT_VERSION);
+        assert_eq!(
+            read_u16(&blob, 8).unwrap(),
+            COMPILE_OPTIONS_ARTIFACT_VERSION
+        );
         let bundles = parse_artifact_section(&blob).unwrap();
 
         assert_eq!(bundles.len(), 1);
@@ -1065,7 +1346,7 @@ mod tests {
     #[test]
     fn version_2_rejects_unknown_compile_option_bits() {
         let mut blob = sample_blob();
-        write_u16(&mut blob, 8, ARTIFACT_VERSION);
+        write_u16(&mut blob, 8, COMPILE_OPTIONS_ARTIFACT_VERSION);
         write_u64(&mut blob, 24, 1 << 63);
 
         assert!(matches!(
@@ -1110,7 +1391,10 @@ mod tests {
             )
             .unwrap();
 
-            assert_eq!(read_u16(&blob, 8).unwrap(), ARTIFACT_VERSION);
+            assert_eq!(
+                read_u16(&blob, 8).unwrap(),
+                COMPILE_OPTIONS_ARTIFACT_VERSION
+            );
             assert_eq!(
                 parse_artifact_blob(&blob).unwrap().compile_options,
                 expected
@@ -1121,7 +1405,7 @@ mod tests {
     #[test]
     fn version_2_rejects_conflicting_debug_bits() {
         let mut blob = sample_blob();
-        write_u16(&mut blob, 8, ARTIFACT_VERSION);
+        write_u16(&mut blob, 8, COMPILE_OPTIONS_ARTIFACT_VERSION);
         write_u64(&mut blob, 24, OPTION_DEBUG_MASK);
 
         assert!(matches!(

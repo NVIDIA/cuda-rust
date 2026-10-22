@@ -953,10 +953,11 @@ fn write_device_artifact_object(
         } else {
             oxide_artifacts::ArtifactEntryKind::DeviceFunction
         };
-        spec = spec.with_entry(oxide_artifacts::ArtifactEntrySpec::new(
-            &function.export_name,
-            kind,
-        ));
+        let mut entry = oxide_artifacts::ArtifactEntrySpec::new(&function.export_name, kind);
+        if let Some(facts) = result.kernel_launch_facts.get(&function.export_name) {
+            entry = entry.with_launch_facts(*facts);
+        }
+        spec = spec.with_entry(entry);
     }
 
     let blob = oxide_artifacts::build_artifact_blob(&spec)?;

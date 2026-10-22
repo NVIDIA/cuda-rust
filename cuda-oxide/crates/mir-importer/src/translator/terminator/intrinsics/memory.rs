@@ -1010,6 +1010,7 @@ pub fn emit_dynamic_shared_get(
     loc: Location,
     byte_offset: u64,
     alignment: u64,
+    fixed_extent: bool,
 ) -> TranslationResult<Ptr<Operation>> {
     use dialect_mir::ops::MirExternSharedOp;
     // Get the destination type to determine the pointer element type
@@ -1041,6 +1042,32 @@ pub fn emit_dynamic_shared_get(
         }
     };
 
+    let layout = if fixed_extent {
+        Some(
+            pointee_ty
+                .layout()
+                .map_err(|error| {
+                    pliron::input_error!(
+                        loc.clone(),
+                        TranslationErr::unsupported(format!(
+                            "cannot determine fixed shared layout: {error:?}"
+                        ))
+                    )
+                })?
+                .shape(),
+        )
+    } else {
+        None
+    };
+    let alignment = layout
+        .as_ref()
+        .map_or(alignment, |layout| alignment.max(layout.abi_align));
+    if fixed_extent && !alignment.is_power_of_two() {
+        return input_err!(
+            loc.clone(),
+            TranslationErr::invalid_op("fixed shared alignment must be a nonzero power of two")
+        );
+    }
     let elem_ty = crate::translator::types::translate_type(ctx, &pointee_ty)?;
 
     // Create a shared memory pointer type (addrspace 3)
@@ -1067,6 +1094,27 @@ pub fn emit_dynamic_shared_get(
         0,
     );
     op.deref_mut(ctx).set_loc(loc.clone());
+    if let Some(layout) = layout {
+        use pliron::builtin::attributes::IntegerAttr;
+        use pliron::utils::apint::APInt;
+        let ty = pliron::builtin::types::IntegerType::get(
+            ctx,
+            64,
+            pliron::builtin::types::Signedness::Unsigned,
+        );
+        op.deref_mut(ctx).attributes.set(
+            crate::kernel_resources::FIXED_SHARED_BYTES
+                .try_into()
+                .unwrap(),
+            IntegerAttr::new(
+                ty,
+                APInt::from_u64(
+                    layout.size.bytes() as u64,
+                    std::num::NonZeroUsize::new(64).unwrap(),
+                ),
+            ),
+        );
+    }
 
     let extern_shared = MirExternSharedOp::new(op);
 

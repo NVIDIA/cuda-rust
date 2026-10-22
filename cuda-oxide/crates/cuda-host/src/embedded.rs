@@ -12,6 +12,7 @@ pub use cuda_core::embedded::{
     embedded_modules_from_current_exe,
 };
 use cuda_core::{CudaContext, CudaModule, DriverError};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -44,6 +45,10 @@ pub enum EmbeddedModuleError {
     /// PTX source could not be parsed or edited safely while merging bundles.
     #[error("embedded CUDA module '{name}' contains invalid PTX: {reason}")]
     InvalidPtx { name: String, reason: String },
+
+    /// Bundles disagree about the requirements of the same concrete entry.
+    #[error("conflicting compiled launch facts for kernel '{symbol}'")]
+    ConflictingLaunchFacts { symbol: String },
 
     /// NVVM IR or LTOIR payload compilation failed.
     #[error("failed to build embedded CUDA module: {0}")]
@@ -137,7 +142,12 @@ pub fn load_all_ptx_bundles_merged(
     let bundles = artifact_bundles_from_current_exe()?;
     let merged = merge_ptx_bundles(&bundles)?;
 
-    let module = ctx.load_module_from_image(merged.as_bytes())?;
+    let facts = merged_launch_facts(
+        bundles
+            .iter()
+            .filter(|bundle| bundle.payload(ArtifactPayloadKind::Ptx).is_some()),
+    )?;
+    let module = ctx.load_module_from_image_with_launch_facts(merged.as_bytes(), facts)?;
     // Retain the merged module's `.entry` names (a few dozen bytes per
     // kernel). If a later `_TID_` generic-kernel lookup misses while a
     // same-base entry exists under a different hash, the launch paths can
@@ -145,6 +155,32 @@ pub fn load_all_ptx_bundles_merged(
     // opaque "named symbol not found". See `crate::entry_registry`.
     crate::entry_registry::register_merged_module_entries(&module, &merged);
     Ok(module)
+}
+
+fn merged_launch_facts<'a>(
+    bundles: impl IntoIterator<Item = &'a OwnedArtifactBundle>,
+) -> Result<BTreeMap<String, oxide_artifacts::KernelLaunchFacts>, EmbeddedModuleError> {
+    // Keep None in the comparison: absent facts must not silently replace a
+    // known zero-size plan, or inherit another bundle's contract.
+    let mut entries = BTreeMap::new();
+    for bundle in bundles {
+        for entry in &bundle.entries {
+            if entry.kind != oxide_artifacts::ArtifactEntryKind::Kernel {
+                continue;
+            }
+            if let Some(previous) = entries.insert(entry.symbol.clone(), entry.launch_facts)
+                && previous != entry.launch_facts
+            {
+                return Err(EmbeddedModuleError::ConflictingLaunchFacts {
+                    symbol: entry.symbol.clone(),
+                });
+            }
+        }
+    }
+    Ok(entries
+        .into_iter()
+        .filter_map(|(symbol, facts)| facts.map(|facts| (symbol, facts)))
+        .collect())
 }
 
 /// Merge the PTX payloads of `bundles`, in iteration order, into one PTX
@@ -297,12 +333,13 @@ fn load_bundle(
     ctx: &Arc<CudaContext>,
     bundle: &OwnedArtifactBundle,
 ) -> Result<Arc<CudaModule>, EmbeddedModuleError> {
+    let facts = merged_launch_facts([bundle])?;
     if let Some(cubin) = bundle.payload(ArtifactPayloadKind::Cubin) {
-        return Ok(ctx.load_module_from_image(cubin)?);
+        return Ok(ctx.load_module_from_image_with_launch_facts(cubin, facts)?);
     }
 
     if let Some(ptx) = bundle.payload(ArtifactPayloadKind::Ptx) {
-        return Ok(ctx.load_module_from_image(ptx)?);
+        return Ok(ctx.load_module_from_image_with_launch_facts(ptx, facts)?);
     }
 
     if let Some(nvvm_ir) = bundle.payload(ArtifactPayloadKind::NvvmIr) {
@@ -322,7 +359,7 @@ fn load_bundle(
                 bundle.compile_options,
             )?,
         };
-        return Ok(ctx.load_module_from_image(&image)?);
+        return Ok(ctx.load_module_from_image_with_launch_facts(&image, facts)?);
     }
 
     if let Some(ltoir) = bundle.payload(ArtifactPayloadKind::Ltoir) {
@@ -342,7 +379,7 @@ fn load_bundle(
                 bundle.compile_options,
             )?,
         };
-        return Ok(ctx.load_module_from_image(&image)?);
+        return Ok(ctx.load_module_from_image_with_launch_facts(&image, facts)?);
     }
 
     Err(EmbeddedModuleError::UnsupportedPayload {
@@ -387,6 +424,59 @@ mod tests {
             payloads: Vec::new(),
             entries: Vec::new(),
         }
+    }
+
+    #[test]
+    fn merged_kernel_facts_preserve_identity_and_reject_conflicts() {
+        use oxide_artifacts::{
+            ArtifactBundleSpec, ArtifactEntryKind, ArtifactEntrySpec, ArtifactPayloadSpec,
+            KernelLaunchFacts,
+        };
+        let facts = KernelLaunchFacts {
+            exact_block: Some((32, 1, 1)),
+            dynamic_shared_bytes: 0,
+            dynamic_shared_alignment: 16,
+        };
+        let bundle = |symbol: &str, facts| {
+            let mut entry = ArtifactEntrySpec::new(symbol, ArtifactEntryKind::Kernel);
+            entry.launch_facts = facts;
+            let spec = ArtifactBundleSpec::new("test", "sm_120")
+                .with_payload(ArtifactPayloadSpec::new(
+                    ArtifactPayloadKind::Ptx,
+                    "test.ptx",
+                    b"ptx",
+                ))
+                .with_entry(entry);
+            let bytes = oxide_artifacts::build_artifact_blob(&spec).unwrap();
+            OwnedArtifactBundle::from(oxide_artifacts::parse_artifact_blob(&bytes).unwrap())
+        };
+        let first = bundle("apply_items_1", Some(facts));
+        let second = bundle(
+            "apply_items_4",
+            Some(KernelLaunchFacts {
+                dynamic_shared_bytes: 512,
+                ..facts
+            }),
+        );
+        let merged = merged_launch_facts([&first, &second]).unwrap();
+        assert_eq!(merged["apply_items_1"].dynamic_shared_bytes, 0);
+        assert_eq!(merged["apply_items_4"].dynamic_shared_bytes, 512);
+        for conflict in [
+            bundle("apply_items_1", None),
+            bundle(
+                "apply_items_1",
+                Some(KernelLaunchFacts {
+                    dynamic_shared_bytes: 128,
+                    ..facts
+                }),
+            ),
+        ] {
+            assert!(matches!(
+                merged_launch_facts([&first, &conflict]),
+                Err(EmbeddedModuleError::ConflictingLaunchFacts { .. })
+            ));
+        }
+        assert_eq!(merged_launch_facts([&first, &first]).unwrap().len(), 1);
     }
 
     #[test]

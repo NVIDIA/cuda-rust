@@ -44,7 +44,7 @@
 //! - [`copy_g2s`] lets every thread in a block help move one larger tile from
 //!   global memory to shared memory.
 //!
-//! [`assume_div`] tells the compiler that an index has the alignment needed by
+//! [`assume`] tells the compiler that an index has the alignment needed by
 //! a later operation.
 //!
 //! # Small glossary
@@ -115,8 +115,7 @@ pub use copy::cooperative::{GmemMatrix, SmemTile, copy_g2s};
 pub use copy::tiled::{GlobalCopyTensor, SharedTensor, TiledCopy};
 pub use copy::tma::{TensorMap, copy_tma_2d, copy_tma_s2g_2d, size_in_bytes};
 pub use copy::vector::{
-    GlobalStoreElement, GlobalStoreTile, assume_div, load_tile, store_global_no_allocate,
-    store_tile,
+    GlobalStoreElement, GlobalStoreTile, assume, load_tile, store_global_no_allocate, store_tile,
 };
 pub use cute_layout as layout;
 pub use epilogue::{

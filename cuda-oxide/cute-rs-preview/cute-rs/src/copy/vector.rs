@@ -69,9 +69,12 @@ pub unsafe fn store_tile<T: Copy, const N: usize>(dst: *mut T, idx: usize, vals:
 
 /// Return `x` while promising the compiler that it is divisible by `D`.
 ///
+/// This is CuTeDSL's `cute.assume(x, divby=D)` with the divisor as a const
+/// generic.
+///
 /// ```text
 /// x = 3 * 4 = 12
-/// assume_div::<4>(x) ──► 12, with the promise 12 % 4 == 0
+/// assume::<4>(x) ──► 12, with the promise 12 % 4 == 0
 /// ```
 ///
 /// Pass the returned value directly to the operation that needs the promise.
@@ -88,9 +91,9 @@ pub unsafe fn store_tile<T: Copy, const N: usize>(dst: *mut T, idx: usize, vals:
 /// may make a later memory instruction misaligned, which is undefined
 /// behavior.
 #[inline(never)]
-pub unsafe fn assume_div<const D: usize>(x: usize) -> usize {
+pub unsafe fn assume<const D: usize>(x: usize) -> usize {
     let _ = x;
-    unreachable!("cute-rs `assume_div` executed outside device compilation")
+    unreachable!("cute-rs `assume` executed outside device compilation")
 }
 
 // Short final tiles are handled by ordinary checked Rust code:

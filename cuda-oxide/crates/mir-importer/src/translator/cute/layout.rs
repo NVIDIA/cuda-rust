@@ -121,12 +121,12 @@ pub(crate) fn tile_elem_and_count(
     Ok((elem, n))
 }
 
-/// Extract `D` from `assume_div::<D>`, checking the promise is meaningful.
+/// Extract `D` from `assume::<D>`, checking the promise is meaningful.
 pub(crate) fn assume_divisor(func: &mir::Operand, loc: &Location) -> TranslationResult<u64> {
     let mir::Operand::Constant(const_op) = func else {
         return input_err!(
             loc.clone(),
-            TranslationErr::unsupported("assume_div callee is not constant".to_string())
+            TranslationErr::unsupported("assume callee is not constant".to_string())
         );
     };
     let rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::FnDef(_, substs)) =
@@ -134,22 +134,22 @@ pub(crate) fn assume_divisor(func: &mir::Operand, loc: &Location) -> Translation
     else {
         return input_err!(
             loc.clone(),
-            TranslationErr::unsupported("assume_div callee is not a FnDef".to_string())
+            TranslationErr::unsupported("assume callee is not a FnDef".to_string())
         );
     };
     let Some(rustc_public::ty::GenericArgKind::Const(divisor)) = substs.0.first() else {
         return input_err!(
             loc.clone(),
             TranslationErr::unsupported(
-                "assume_div is missing divisor const generic at substs[0]".to_string()
+                "assume is missing divisor const generic at substs[0]".to_string()
             )
         );
     };
-    let divisor = const_u64(divisor, "assume_div divisor", loc)?;
+    let divisor = const_u64(divisor, "assume divisor", loc)?;
     if divisor == 0 {
         return input_err!(
             loc.clone(),
-            TranslationErr::unsupported("assume_div divisor must be greater than zero".to_string())
+            TranslationErr::unsupported("assume divisor must be greater than zero".to_string())
         );
     }
     Ok(divisor)

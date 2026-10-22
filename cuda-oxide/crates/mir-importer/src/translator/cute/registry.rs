@@ -603,7 +603,7 @@ pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
         schema: &[SubstKind::Type, SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::copy::vector::assume_div",
+        canonical: "cute_rs::copy::vector::assume",
         func: CuteFn::AssumeDiv,
         schema: &[SubstKind::Const],
     },
@@ -682,7 +682,7 @@ mod tests {
     fn hook_paths_match_definitions_not_re_exports() {
         for path in [
             "::tensor::make_tensor_read",
-            "::copy::vector::assume_div",
+            "::copy::vector::assume",
             "::copy::tma::copy_tma_2d",
             "::copy::cooperative::copy_g2s",
             "::mma::block_scaled::__compiler::tiled_gemm",
@@ -694,7 +694,7 @@ mod tests {
         // Compatibility re-exports (`cute_rs::tile`, `cute_rs::tma`,
         // `cute_rs::block_scaled_mma`) and crate-qualified forms never match.
         for path in [
-            "::tile::assume_div",
+            "::tile::assume",
             "::tma::copy_tma_2d",
             "::block_scaled_mma::__compiler::tiled_gemm",
             "::epilogue::__compiler::epilogue_half",

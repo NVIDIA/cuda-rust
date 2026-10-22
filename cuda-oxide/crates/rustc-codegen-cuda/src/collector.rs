@@ -3458,7 +3458,7 @@ mod tests {
         // importer registry at their defining paths.
         for path in [
             "::copy::vector::load_tile",
-            "::copy::vector::assume_div",
+            "::copy::vector::assume",
             "::copy::cooperative::copy_g2s",
             "::copy::tma::copy_tma_2d",
             "::copy::tma::copy_tma_s2g_2d",

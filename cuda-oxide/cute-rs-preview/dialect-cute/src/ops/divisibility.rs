@@ -28,7 +28,7 @@ use crate::attributes::CuteDivisibilityAttr;
 /// ```text
 /// Rust                       cute IR                       lowering
 /// ─────                      ───────                       ────────
-/// y = assume_div::<16>(x) -> y = cute.assume_div x {16} -> y uses x
+/// y = assume::<16>(x)     -> y = cute.assume_div x {16} -> y uses x
 ///                                  │
 ///                                  └─ direct SSA consumers read the fact
 /// ```

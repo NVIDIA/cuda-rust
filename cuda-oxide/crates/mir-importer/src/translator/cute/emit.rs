@@ -6,7 +6,7 @@
 //! dialect-cute op emission.
 //!
 //! One function per recognized `cute-rs` API entry point. Per-thread tile
-//! calls become one zero-result `cute.copy`; `assume_div` becomes one SSA
+//! calls become one zero-result `cute.copy`; `assume` becomes one SSA
 //! fact. Cooperative boundaries become typed semantic operations for the
 //! selected backend continuation. Nothing here rebuilds a layout from scalar
 //! arithmetic.
@@ -978,7 +978,7 @@ pub(crate) fn emit_load_tile(
     )
 }
 
-/// `cute_rs::copy::vector::assume_div::<D>(x: usize) -> usize`
+/// `cute_rs::copy::vector::assume::<D>(x: usize) -> usize`
 ///
 /// The result equals the input at runtime, but the SSA edge carries `D`:
 ///
@@ -1003,7 +1003,7 @@ pub(crate) fn emit_assume_div(
     if args.len() != 1 {
         return input_err!(
             loc,
-            TranslationErr::unsupported("assume_div expects exactly 1 argument".to_string())
+            TranslationErr::unsupported("assume expects exactly 1 argument".to_string())
         );
     }
     let divisor = assume_divisor(func, &loc)?;
@@ -1025,7 +1025,7 @@ pub(crate) fn emit_assume_div(
         return input_err!(
             loc,
             TranslationErr::unsupported(
-                "assume_div destination with projections not supported".to_string()
+                "assume destination with projections not supported".to_string()
             )
         );
     }
@@ -1035,7 +1035,7 @@ pub(crate) fn emit_assume_div(
     let Some(target_idx) = target else {
         return input_err!(
             loc,
-            TranslationErr::unsupported("assume_div call without target not supported".to_string())
+            TranslationErr::unsupported("assume call without target not supported".to_string())
         );
     };
     Ok(emit_goto(ctx, *target_idx, goto_prev, block_map, loc))

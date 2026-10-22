@@ -30,7 +30,7 @@ use core::ops::Add;
 
 use cuda_device::DisjointSlice;
 
-use crate::copy::vector::{assume_div, load_tile, store_tile};
+use crate::copy::vector::{assume, load_tile, store_tile};
 
 /// Says which Rust storage type may hold one or more logical elements.
 ///
@@ -698,7 +698,7 @@ pub const fn tensor_tile_base<'a, T: Copy + TensorElement<T>, const TILE: usize>
 pub unsafe fn tensor_load_tile<'a, T: Copy + TensorElement<T>, const TILE: usize>(
     tensor: Tensor<'a, T, Tile1D<TILE>, T>,
 ) -> RegisterTile<T, TILE> {
-    let base = unsafe { assume_div::<TILE>(tensor.layout.base) };
+    let base = unsafe { assume::<TILE>(tensor.layout.base) };
     RegisterTile(unsafe { load_tile::<T, TILE>(tensor.storage, base) })
 }
 
@@ -713,7 +713,7 @@ pub unsafe fn tensor_store_tile<'a, T: Copy + TensorElement<T>, const TILE: usiz
     tensor: TensorMut<'a, T, Tile1D<TILE>, T>,
     values: RegisterTile<T, TILE>,
 ) {
-    let base = unsafe { assume_div::<TILE>(tensor.layout.base) };
+    let base = unsafe { assume::<TILE>(tensor.layout.base) };
     unsafe { store_tile::<T, TILE>(tensor.storage, base, values.as_array()) };
 }
 

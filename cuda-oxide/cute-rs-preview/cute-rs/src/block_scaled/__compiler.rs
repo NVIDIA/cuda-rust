@@ -6,7 +6,7 @@
 //! Exact compiler boundaries for block-scaled GEMV.
 
 use super::*;
-use crate::copy::vector::{assume_div, load_tile};
+use crate::copy::vector::{assume, load_tile};
 use crate::numeric::{E4M3x2, Float4E2M1FN, Float4E2M1FNx2, Float8E4M3FN, Float8E8M0FNU, UE8M0x2};
 use crate::tensor::Tensor;
 use core::marker::PhantomData;
@@ -82,8 +82,8 @@ pub(super) unsafe fn block_scaled_load_k64<'a, Mode: Copy>(
     // State each alignment fact immediately before its load. The device
     // compiler reads that direct link; putting the value in a struct would
     // hide it.
-    let value_base = unsafe { assume_div::<16>(tile.value_base) };
-    let scale_base = unsafe { assume_div::<4>(tile.scale_base) };
+    let value_base = unsafe { assume::<16>(tile.value_base) };
+    let scale_base = unsafe { assume::<4>(tile.scale_base) };
     let values_lo = unsafe { load_tile::<u8, 16>(tile.values, value_base) };
     let values_hi = unsafe { load_tile::<u8, 16>(tile.values, value_base + 16) };
     let scale_bytes = unsafe { load_tile::<u8, 4>(tile.scales, scale_base) };
@@ -196,8 +196,8 @@ pub(super) const fn nvfp4_k_tile<'a, Mode: Copy>(
 pub(super) unsafe fn nvfp4_load_k64<Mode: Copy>(
     tile: Nvfp4Tile64<'_, Mode>,
 ) -> LoadedNvfp4Tile64<Mode> {
-    let value_base = unsafe { assume_div::<16>(tile.value_base) };
-    let scale_base = unsafe { assume_div::<4>(tile.scale_base) };
+    let value_base = unsafe { assume::<16>(tile.value_base) };
+    let scale_base = unsafe { assume::<4>(tile.scale_base) };
     let values_lo = unsafe { load_tile::<u8, 16>(tile.values, value_base) };
     let values_hi = unsafe { load_tile::<u8, 16>(tile.values, value_base + 16) };
     let scale_bytes = unsafe { load_tile::<u8, 4>(tile.scales, scale_base) };

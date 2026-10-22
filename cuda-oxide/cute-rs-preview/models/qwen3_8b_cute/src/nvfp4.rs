@@ -332,7 +332,7 @@ pub mod kernels {
     /// Warp-cooperative NVFP4 (`E2M1` + `E4M3`, `SF_VEC = 16`) decode projection for `rows <= 2`.
     ///
     /// One 32-lane warp cooperates across `K=64` tiles for each `(row, out_col)` output element
-    /// using hardware `cute.scaled_view_load` (`nvgpu.cvt_fpext`) and [`cute_rs::arch::warp_sum_f32`],
+    /// using hardware `cute.scaled_view_load` (`nvgpu.cvt_fpext`) and [`cute_rs::arch::warp_reduction_sum_f32`],
     /// launching `(rows * outputs) / 4` 128-thread CTAs to saturate all 170 SMs on RTX 5090.
     #[kernel]
     #[allow(clippy::too_many_arguments)]
@@ -380,7 +380,7 @@ pub mod kernels {
             acc = w_frag.dot_accumulate(x_frag, acc);
             tile += 32;
         }
-        let sum = unsafe { cute_rs::arch::warp_sum_f32(acc) } * (1.0 / 1024.0);
+        let sum = unsafe { cute_rs::arch::warp_reduction_sum_f32(acc) } * (1.0 / 1024.0);
         if lane == 0 {
             let mut out_tensor = StridedTensorMut::from_disjoint_slice(&mut output);
             unsafe {

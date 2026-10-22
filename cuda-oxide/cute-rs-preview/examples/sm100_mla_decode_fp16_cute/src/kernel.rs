@@ -21,7 +21,7 @@ use ctm_rs::{
     async_copy, cluster, cluster_launch, convert, cuda_module, float, groups::CtaGroup2, kernel,
     launch_bounds, launch_contract, mbarrier, tcgen05, thread, warp,
 };
-use cute_rs::arch::assume_warp_uniform;
+use cute_rs::arch::make_warp_uniform;
 use cute_rs::attention::sm100::pipeline::{
     AsyncCompletion, AsyncCopyReuse, Consumer, LocalMemory, LocalShared, Producer, RingCursor,
     SharedReuse, SharedToAsync, TensorMemory, TwoCtaRing,
@@ -519,9 +519,9 @@ pub mod kernels {
             let scale = f32::from_bits(softmax_scale_bits as u32) * LOG2_E;
             let output_scale = f32::from_bits(output_scale_bits as u32);
             let tid = thread::threadIdx_x();
-            let wid = assume_warp_uniform(tid / 32);
+            let wid = make_warp_uniform(tid / 32);
             let lane = tid % 32;
-            let rank = assume_warp_uniform(cluster::block_rank());
+            let rank = make_warp_uniform(cluster::block_rank());
             let smem = DynamicSharedArray::<u8, 1024>::get_raw();
             let bars = smem.add(BARS).cast::<Barrier>();
             let query = QueryRing::from_raw(bars, 0);
@@ -556,10 +556,10 @@ pub mod kernels {
             if wid < 9 {
                 mbarrier::barrier_cta_sync(1, 288);
             }
-            let mut work = assume_warp_uniform(thread::blockIdx_x() / 2);
-            let stride = assume_warp_uniform(thread::gridDim_x() / 2);
-            let total_tiles = assume_warp_uniform(length.div_ceil(128));
-            let per_split = assume_warp_uniform(total_tiles.div_ceil(splits));
+            let mut work = make_warp_uniform(thread::blockIdx_x() / 2);
+            let stride = make_warp_uniform(thread::gridDim_x() / 2);
+            let total_tiles = make_warp_uniform(length.div_ceil(128));
+            let per_split = make_warp_uniform(total_tiles.div_ceil(splits));
             let mut q_ticket = 0;
             let mut s_ticket = 0;
             let mut p_ticket = 0;

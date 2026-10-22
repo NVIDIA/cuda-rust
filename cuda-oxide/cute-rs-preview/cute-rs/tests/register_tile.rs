@@ -87,6 +87,6 @@ fn fold_preserves_order_with_an_explicit_accumulator_type() {
 }
 
 #[test]
-fn warp_sum_exposes_an_unsafe_collective_boundary() {
-    let _: unsafe fn(f32) -> f32 = cute_rs::arch::warp_sum_f32;
+fn warp_reduction_sum_exposes_an_unsafe_collective_boundary() {
+    let _: unsafe fn(f32) -> f32 = cute_rs::arch::warp_reduction_sum_f32;
 }

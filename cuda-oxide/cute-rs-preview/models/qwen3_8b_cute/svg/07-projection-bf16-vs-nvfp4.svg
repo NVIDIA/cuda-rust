@@ -24,6 +24,6 @@
 <text class="ts tx-purple" x="504" y="276" text-anchor="middle" dominant-baseline="central">nvgpu.cvt_fpext (hardware)</text>
 <rect class="k-box" x="52" y="306" width="572" height="58" rx="6" stroke-width="0.5"/>
 <text class="th tx-box" x="338" y="325" text-anchor="middle" dominant-baseline="central">32-lane warp along K: 32 × (K=64 tile) = 1 KB coalesced read</text>
-<text class="ts tx-box" x="338" y="345" text-anchor="middle" dominant-baseline="central">each lane accumulates FP32 → warp_sum_f32 across 32 lanes → 1 Bf16 output</text>
+<text class="ts tx-box" x="338" y="345" text-anchor="middle" dominant-baseline="central">each lane accumulates FP32 → warp_reduction_sum_f32 → 1 Bf16 output</text>
 <text class="ts" x="52" y="392" text-anchor="start" dominant-baseline="central">Reads 3.64 GiB (3.56× less) → 114.0 tok/s decode (8.77 ms/tok) · 632.8 tok/s prefill</text>
 </svg>

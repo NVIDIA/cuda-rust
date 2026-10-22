@@ -36,7 +36,7 @@ use crate::markers::LeadingDimMarker;
 /// Every thread participating in the preceding cooperative copies must call
 /// this operation convergently, with exactly `THREADS` complete-warp
 /// participants. Destination storage must remain live through the wait, and
-/// `BARRIER` must satisfy `BlockBarrier::sync`'s phase and exclusivity rules.
+/// `BARRIER` must satisfy `NamedBarrier::sync`'s phase and exclusivity rules.
 #[inline(always)]
 pub unsafe fn finish_async_copies<const BARRIER: u32, const THREADS: u32>() {
     // SAFETY: every participating thread retains its copy destinations and
@@ -44,7 +44,7 @@ pub unsafe fn finish_async_copies<const BARRIER: u32, const THREADS: u32>() {
     unsafe {
         ctm_rs::async_copy::cp_async_commit_group();
         ctm_rs::async_copy::cp_async_wait_group::<0>();
-        crate::arch::BlockBarrier::<BARRIER, THREADS>::sync();
+        crate::arch::NamedBarrier::<BARRIER, THREADS>::sync();
     }
 }
 

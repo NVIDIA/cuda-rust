@@ -14,7 +14,7 @@ boundary without adding model-specific compiler operations.
 The checked host boundary rejects zero widths, mismatched allocation lengths,
 shape overflow, invalid epsilon and grid overflow. Zero rows skip allocation and
 launch. All lanes in each participating warp reach the reusable
-`cute_rs::arch::warp_sum_f32` collective; lanes beyond a short row contribute zero.
+`cute_rs::arch::warp_reduction_sum_f32` collective; lanes beyond a short row contribute zero.
 Scalar strided row accesses also support unaligned row starts.
 
 ## Host and GPU checks

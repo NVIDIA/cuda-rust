@@ -60,7 +60,7 @@ Each token row (`[1, 4096]`) is widened 3× by two parallel projections: **Gate*
 
 ![Inside one projection: BF16 vs. NVFP4](svg/07-projection-bf16-vs-nvfp4.svg)
 
-Every block runs 7 linear projections (`Wq`, `Wk`, `Wv`, `Wo`, `W_gate`, `W_up`, `W_down`). In **NVFP4**, every 16 numbers along `K` are stored as sixteen 4-bit `E2M1` values (`8 bytes`) plus one 8-bit `E4M3` fractional scale (`1 byte`) — **9 bytes instead of 32 bytes in BF16 (3.56× smaller)**. One 32-lane warp reads 32 contiguous `K = 64` tiles (`1 KB` coalesced), converts `E2M1 × E4M3` in hardware via `cute.scaled_view_load` (`nvgpu.cvt_fpext`), and sums across the warp with `warp_sum_f32`.
+Every block runs 7 linear projections (`Wq`, `Wk`, `Wv`, `Wo`, `W_gate`, `W_up`, `W_down`). In **NVFP4**, every 16 numbers along `K` are stored as sixteen 4-bit `E2M1` values (`8 bytes`) plus one 8-bit `E4M3` fractional scale (`1 byte`) — **9 bytes instead of 32 bytes in BF16 (3.56× smaller)**. One 32-lane warp reads 32 contiguous `K = 64` tiles (`1 KB` coalesced), converts `E2M1 × E4M3` in hardware via `cute.scaled_view_load` (`nvgpu.cvt_fpext`), and sums across the warp with `warp_reduction_sum_f32`.
 
 ![RTX 5090 benchmark comparison](svg/03-rtx5090-benchmark-comparison.svg)
 

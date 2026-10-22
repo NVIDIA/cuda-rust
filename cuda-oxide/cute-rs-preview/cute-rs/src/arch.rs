@@ -4,13 +4,28 @@
  */
 
 //! Explicit warp-level compiler facts built from supported CUDA operations.
+//!
+//! This module carries the `cute.arch` names of CuTeDSL over the PTX-named
+//! ctm-rs layer, mirroring `cute.arch` over the NVVM primitives in CuTeDSL.
+//! Every forwarder is an `#[inline(always)]` call to the existing ctm-rs
+//! primitive: it adds no instruction, no storage and no implicit election or
+//! synchronization, and cute-rs never reaches past ctm-rs to the raw device
+//! operations. Argument order follows `cute.arch`,
+//! the value first and the participation mask last; Rust has no default
+//! arguments, so the mask is spelled out (`u32::MAX` for the full warp).
+//! Safety follows the primitive: a forwarder is `unsafe` when the function it
+//! calls is, under the same contract.
+
+use ctm_rs::mbarrier::{BarrierToken, ManagedBarrier, Ready, TmaBarrier};
+use ctm_rs::memory::{ClusterSharedAddress, SharedAddress};
 
 /// Return a warp-uniform value in a form that can favor uniform-register use.
 ///
-/// This matches CuTe's `arch.make_warp_uniform`: a full-warp shuffle broadcasts
-/// lane zero's value. Pass the returned value to subsequent calculations. The
-/// compiler may then keep those calculations in uniform registers; this is an
-/// optimization opportunity, not a register-allocation guarantee.
+/// This is CuTeDSL's `cute.arch.make_warp_uniform`: a full-warp shuffle
+/// broadcasts lane zero's value. Pass the returned value to subsequent
+/// calculations. The compiler may then keep those calculations in uniform
+/// registers; this is an optimization opportunity, not a register-allocation
+/// guarantee.
 ///
 /// # Safety
 /// All 32 lanes must be active and execute this call convergently with equal
@@ -18,18 +33,19 @@
 /// branch. This is an identity operation only under that uniformity promise;
 /// it does not check or repair a divergent value.
 #[inline(always)]
-pub unsafe fn assume_warp_uniform(value: u32) -> u32 {
+pub unsafe fn make_warp_uniform(value: u32) -> u32 {
     // SAFETY: the caller supplies the full-warp convergence contract above.
     unsafe { ctm_rs::warp::shuffle_sync(u32::MAX, value, 0) }
 }
 
 /// Sum one FP32 contribution from each of the 32 lanes of a warp.
 ///
-/// Every lane receives the sum. Uses the existing CUDA butterfly reduction,
-/// with FP32 additions in XOR-offset order 16, 8, 4, 2, 1. The result need not
-/// equal a sequential sum. No shared memory or block barrier is required.
-/// Inactive logical elements must contribute zero while their lanes still
-/// participate. This is a device operation, not a host reduction.
+/// This is CuTeDSL's `cute.arch.warp_reduction_sum` for FP32. Every lane
+/// receives the sum. Uses the existing CUDA butterfly reduction, with FP32
+/// additions in XOR-offset order 16, 8, 4, 2, 1. The result need not equal a
+/// sequential sum. No shared memory or block barrier is required. Inactive
+/// logical elements must contribute zero while their lanes still participate.
+/// This is a device operation, not a host reduction.
 ///
 /// # Safety
 /// All 32 lanes must be active and execute this call convergently. The block
@@ -37,7 +53,7 @@ pub unsafe fn assume_warp_uniform(value: u32) -> u32 {
 /// do not invoke this in a lane-dependent branch or after a partial-warp exit.
 #[must_use]
 #[inline(always)]
-pub unsafe fn warp_sum_f32(value: f32) -> f32 {
+pub unsafe fn warp_reduction_sum_f32(value: f32) -> f32 {
     // SAFETY: every lane participates under this function's caller contract.
     unsafe { ctm_rs::warp::reduce_sum_f32(value) }
 }
@@ -68,13 +84,15 @@ pub fn sin_f32(value: f32) -> f32 {
 
 /// Maximum across one full warp, using ordered comparisons and XOR offsets.
 ///
-/// The comparison selects the right value when `left > right` is false;
-/// it deliberately retains this behavior for NaNs and signed zero.
+/// This is CuTeDSL's `cute.arch.warp_reduction_max` for FP32. The comparison
+/// selects the right value when `left > right` is false; it deliberately
+/// retains this behavior for NaNs and signed zero, so the tree stays here
+/// instead of forwarding to a primitive with a different NaN rule.
 ///
 /// # Safety
 /// All 32 lanes must execute this operation convergently.
 #[inline(always)]
-pub unsafe fn warp_max_f32(mut value: f32) -> f32 {
+pub unsafe fn warp_reduction_max_f32(mut value: f32) -> f32 {
     let mut offset = 16;
     while offset != 0 {
         let other = ctm_rs::warp::shuffle_xor_f32(value, offset);
@@ -99,12 +117,15 @@ pub unsafe fn quad_sum_f32(mut value: f32) -> f32 {
 
 /// A named CTA barrier with a statically fixed participant count.
 ///
-/// This marker describes the synchronization operation, not an owned hardware
-/// resource. Callers must keep barrier phases and their participating threads
-/// consistent; distinct logical barriers must use distinct IDs.
-pub struct BlockBarrier<const ID: u32, const THREADS: u32>;
+/// This is CuTeDSL's `pipeline.NamedBarrier(barrier_id, num_threads)` with
+/// both values as const generics; [`NamedBarrier::sync`] is its
+/// `arrive_and_wait`. This marker describes the synchronization operation,
+/// not an owned hardware resource. Callers must keep barrier phases and their
+/// participating threads consistent; distinct logical barriers must use
+/// distinct IDs.
+pub struct NamedBarrier<const ID: u32, const THREADS: u32>;
 
-impl<const ID: u32, const THREADS: u32> BlockBarrier<ID, THREADS> {
+impl<const ID: u32, const THREADS: u32> NamedBarrier<ID, THREADS> {
     /// Wait for all participating threads and make their shared writes visible.
     ///
     /// # Safety
@@ -119,4 +140,513 @@ impl<const ID: u32, const THREADS: u32> BlockBarrier<ID, THREADS> {
         // SAFETY: the caller supplies the fixed complete-warp participant set.
         unsafe { ctm_rs::mbarrier::barrier_cta_sync(ID, THREADS) };
     }
+}
+
+// Thread, block and grid coordinates.
+
+/// Return the thread index within the CTA as `(x, y, z)`.
+///
+/// This is `cute.arch.thread_idx()`; it reads `%tid.x`, `%tid.y` and `%tid.z`
+/// through [`ctm_rs::thread`].
+#[must_use]
+#[inline(always)]
+pub fn thread_idx() -> (u32, u32, u32) {
+    (
+        ctm_rs::thread::threadIdx_x(),
+        ctm_rs::thread::threadIdx_y(),
+        ctm_rs::thread::threadIdx_z(),
+    )
+}
+
+/// Return the CTA index within the grid as `(x, y, z)`.
+///
+/// This is `cute.arch.block_idx()`; it reads `%ctaid.x`, `%ctaid.y` and
+/// `%ctaid.z` through [`ctm_rs::thread`].
+#[must_use]
+#[inline(always)]
+pub fn block_idx() -> (u32, u32, u32) {
+    (
+        ctm_rs::thread::blockIdx_x(),
+        ctm_rs::thread::blockIdx_y(),
+        ctm_rs::thread::blockIdx_z(),
+    )
+}
+
+/// Return the number of CTAs in each grid dimension as `(x, y, z)`.
+///
+/// This is `cute.arch.grid_dim()`; it reads `%nctaid.x`, `%nctaid.y` and
+/// `%nctaid.z` through [`ctm_rs::thread`].
+#[must_use]
+#[inline(always)]
+pub fn grid_dim() -> (u32, u32, u32) {
+    (
+        ctm_rs::thread::gridDim_x(),
+        ctm_rs::thread::gridDim_y(),
+        ctm_rs::thread::gridDim_z(),
+    )
+}
+
+/// Return the number of threads in each CTA dimension as `(x, y, z)`.
+///
+/// This is `cute.arch.block_dim()`; it reads `%ntid.x`, `%ntid.y` and
+/// `%ntid.z` through [`ctm_rs::thread`].
+#[must_use]
+#[inline(always)]
+pub fn block_dim() -> (u32, u32, u32) {
+    (
+        ctm_rs::thread::blockDim_x(),
+        ctm_rs::thread::blockDim_y(),
+        ctm_rs::thread::blockDim_z(),
+    )
+}
+
+/// Return the logical warp index within the CTA, marked warp-uniform.
+///
+/// This is `cute.arch.warp_idx()`: the block-linear thread index
+/// (`x + y * dim_x + z * dim_x * dim_y`) divided by 32, passed through
+/// [`make_warp_uniform`]. For a one-dimensional block this is
+/// `threadIdx.x / 32`. Hardware warps are formed from consecutive linear
+/// thread indices, so the quotient is the same in every lane of a warp.
+///
+/// # Safety
+/// All 32 lanes must be active and execute this call convergently, as
+/// [`make_warp_uniform`] requires. Do not call from an elected-lane or
+/// partially active branch.
+#[must_use]
+#[inline(always)]
+pub unsafe fn warp_idx() -> u32 {
+    let (x, y, z) = thread_idx();
+    let dim_x = ctm_rs::thread::blockDim_x();
+    let dim_y = ctm_rs::thread::blockDim_y();
+    let linear = x + y * dim_x + z * dim_x * dim_y;
+    // SAFETY: the caller supplies the full-warp convergence contract above.
+    unsafe { make_warp_uniform(linear / 32) }
+}
+
+/// Return this thread's lane index within its warp (`%laneid`).
+///
+/// This is `cute.arch.lane_idx()` over [`ctm_rs::warp::lane_id`].
+#[must_use]
+#[inline(always)]
+pub fn lane_idx() -> u32 {
+    ctm_rs::warp::lane_id()
+}
+
+// Warp election and synchronization.
+
+/// Elect one lane of the full warp and return whether this lane won.
+///
+/// This is the predicate form of `cute.arch.elect_one()`, over
+/// [`ctm_rs::warp::is_elected_sync`] with the full 32-lane mask (`elect.sync`,
+/// sm_90+). All 32 lanes must be converged at the call. Use
+/// [`ctm_rs::warp::is_elected_sync`] directly for a partial mask.
+#[must_use]
+#[inline(always)]
+pub fn elect_one_sync() -> bool {
+    ctm_rs::warp::is_elected_sync(u32::MAX)
+}
+
+/// Synchronize the warp lanes named in `mask` (`bar.warp.sync`).
+///
+/// This is `cute.arch.sync_warp(mask)` over [`ctm_rs::warp::sync_mask`]; pass
+/// `u32::MAX` for the full warp.
+///
+/// # Safety
+/// The caller's lane must be included in `mask`. Every lane named in `mask`
+/// must reach this call with the same mask. All accesses ordered by the barrier
+/// must satisfy their allocation contracts.
+#[inline(always)]
+pub unsafe fn sync_warp(mask: u32) {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::warp::sync_mask(mask) }
+}
+
+/// Synchronize `number_of_threads` CTA threads at the named barrier `barrier_id`.
+///
+/// This is `cute.arch.barrier(barrier_id, number_of_threads)` over
+/// [`ctm_rs::mbarrier::barrier_cta_sync`] (`barrier.cta.sync`). [`NamedBarrier`]
+/// fixes both values at compile time; the aligned form stays in ctm-rs as
+/// `barrier_cta_sync_aligned`.
+///
+/// # Safety
+/// Participating threads must use a compatible barrier ID and expected count.
+#[inline(always)]
+pub unsafe fn barrier(barrier_id: u32, number_of_threads: u32) {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::mbarrier::barrier_cta_sync(barrier_id, number_of_threads) }
+}
+
+/// Arrive at the named barrier `barrier_id` without waiting.
+///
+/// This is `cute.arch.barrier_arrive(barrier_id, number_of_threads)` over
+/// [`ctm_rs::mbarrier::barrier_cta_arrive`] (`barrier.cta.arrive`, the form
+/// that admits a subset of the CTA's warps); the aligned form stays in ctm-rs
+/// as `barrier_cta_arrive_aligned`.
+///
+/// # Safety
+/// Participating threads must use a compatible barrier ID and expected count.
+#[inline(always)]
+pub unsafe fn barrier_arrive(barrier_id: u32, number_of_threads: u32) {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::mbarrier::barrier_cta_arrive(barrier_id, number_of_threads) }
+}
+
+// Mbarrier transactions.
+
+/// Publish preceding mbarrier initialization at cluster scope.
+///
+/// This is `cute.arch.mbarrier_init_fence()` over
+/// [`ctm_rs::mbarrier::fence_mbarrier_init_release_cluster`]
+/// (`fence.mbarrier_init.release.cluster`).
+///
+/// # Safety
+/// The caller must satisfy the barrier, scope, and memory-ordering contract of
+/// [`ctm_rs::mbarrier::fence_mbarrier_init_release_cluster`].
+#[inline(always)]
+pub unsafe fn mbarrier_init_fence() {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::mbarrier::fence_mbarrier_init_release_cluster() }
+}
+
+/// Arrive once on a TMA barrier and add the expected transaction bytes.
+///
+/// This is `cute.arch.mbarrier_arrive_and_expect_tx(mbar, bytes)` over the typed
+/// [`ctm_rs::mbarrier::arrive_expect_tx`]; the arrival decrement is one and the
+/// hardware phase token is returned.
+///
+/// # Safety
+/// The issuing participant must be expected, and `bytes` must match the
+/// asynchronous transfers completing against this barrier phase.
+#[inline(always)]
+pub unsafe fn mbarrier_arrive_and_expect_tx<const ID: usize>(
+    bar: &ManagedBarrier<Ready, TmaBarrier, ID>,
+    bytes: u32,
+) -> BarrierToken {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::mbarrier::arrive_expect_tx(bar, bytes) }
+}
+
+// Cluster membership and barriers.
+
+/// Arrive at the cluster barrier with release ordering.
+///
+/// This is `cute.arch.cluster_arrive()` over
+/// [`ctm_rs::cluster::barrier_cluster_arrive`]; the aligned form stays in
+/// ctm-rs as `barrier_cluster_arrive_aligned`.
+///
+/// # Safety
+/// Each non-exited cluster thread must arrive exactly once before completion,
+/// then execute the matching wait.
+#[inline(always)]
+pub unsafe fn cluster_arrive() {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::cluster::barrier_cluster_arrive() }
+}
+
+/// Arrive at the cluster barrier without a release guarantee.
+///
+/// This is `cute.arch.cluster_arrive_relaxed()` over
+/// [`ctm_rs::cluster::barrier_cluster_arrive_relaxed`]; the aligned form stays
+/// in ctm-rs as `barrier_cluster_arrive_relaxed_aligned`.
+///
+/// # Safety
+/// Each non-exited cluster thread must arrive exactly once before completion,
+/// then execute the matching wait. Publish earlier memory accesses with the
+/// required cluster-scope fence first.
+#[inline(always)]
+pub unsafe fn cluster_arrive_relaxed() {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::cluster::barrier_cluster_arrive_relaxed() }
+}
+
+/// Wait at the cluster barrier with acquire ordering.
+///
+/// This is `cute.arch.cluster_wait()` over
+/// [`ctm_rs::cluster::barrier_cluster_wait`]; the aligned form stays in ctm-rs
+/// as `barrier_cluster_wait_aligned`.
+///
+/// # Safety
+/// Each non-exited cluster thread must arrive exactly once before completion,
+/// then execute this matching wait.
+#[inline(always)]
+pub unsafe fn cluster_wait() {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::cluster::barrier_cluster_wait() }
+}
+
+/// Return the linear rank of this CTA within its cluster.
+///
+/// This is `cute.arch.block_idx_in_cluster()` over
+/// [`ctm_rs::cluster::block_rank`], the value `%cluster_ctarank` holds, in
+/// `0..cluster_size`.
+#[must_use]
+#[inline(always)]
+pub fn block_idx_in_cluster() -> u32 {
+    ctm_rs::cluster::block_rank()
+}
+
+/// Map local shared storage to the same offset in cluster peer `rank`.
+///
+/// This is `cute.arch.map_dsmem_ptr(ptr, rank)` over
+/// [`ctm_rs::cluster::map_shared`].
+///
+/// # Safety
+/// `rank` must name an active CTA in this cluster with matching live storage.
+/// Remote initialization, readiness and lifetime must be coordinated explicitly.
+#[inline(always)]
+pub unsafe fn map_dsmem_ptr<T>(
+    address: SharedAddress<'_, T>,
+    rank: u32,
+) -> ClusterSharedAddress<'_, T> {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::cluster::map_shared(address, rank) }
+}
+
+// Register budget.
+
+/// Decrease the warpgroup's register limit to the immediate `N`.
+///
+/// This is `cute.arch.setmaxregister_decrease(n)` over
+/// [`ctm_rs::thread::setmaxnreg_dec`]; `N` must be a multiple of eight in
+/// `24..=256`.
+///
+/// # Safety
+/// Every thread in the warpgroup must execute the same operation and count
+/// on supported hardware. The current register limit must be at least `N`.
+/// Synchronize the warpgroup before another register-limit adjustment.
+/// Subsequent code must respect the selected limit.
+#[inline(always)]
+pub unsafe fn setmaxregister_decrease<const N: u32>()
+where
+    (): ctm_rs::thread::ValidRegisterCount<N>,
+{
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::thread::setmaxnreg_dec::<N>() }
+}
+
+/// Increase the warpgroup's register limit to the immediate `N`.
+///
+/// This is `cute.arch.setmaxregister_increase(n)` over
+/// [`ctm_rs::thread::setmaxnreg_inc`]; `N` must be a multiple of eight in
+/// `24..=256`.
+///
+/// # Safety
+/// Every thread in the warpgroup must execute the same operation and count
+/// on supported hardware. The current register limit must be at most `N`.
+/// Synchronize the warpgroup before another register-limit adjustment.
+/// Coordinate releases by other warpgroups to avoid waiting indefinitely
+/// for unavailable registers.
+#[inline(always)]
+pub unsafe fn setmaxregister_increase<const N: u32>()
+where
+    (): ctm_rs::thread::ValidRegisterCount<N>,
+{
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::thread::setmaxnreg_inc::<N>() }
+}
+
+// Bulk-copy groups.
+
+/// Commit this thread's pending bulk copies as one group; does not wait.
+///
+/// This is `cute.arch.cp_async_bulk_commit_group()` over
+/// [`ctm_rs::tma::bulk_commit_group`].
+#[inline(always)]
+pub fn cp_async_bulk_commit_group() {
+    ctm_rs::tma::bulk_commit_group()
+}
+
+/// Wait until at most `N` committed bulk groups still read their shared sources.
+///
+/// This is `cute.arch.cp_async_bulk_wait_group(N, read=True)` over
+/// [`ctm_rs::tma::bulk_wait_group_read`]; `N` is an immediate in `0..=7`. It
+/// is not proof that the groups' global writes are visible to other threads.
+#[inline(always)]
+pub fn cp_async_bulk_wait_group_read<const N: u32>()
+where
+    (): ctm_rs::tma::ValidWaitCount<N>,
+{
+    ctm_rs::tma::bulk_wait_group_read::<N>()
+}
+
+// Tensor memory completion.
+
+/// Complete this thread's previously issued SM100 TMEM loads.
+///
+/// This is `cute.arch.fence_view_async_tmem_load()` over
+/// [`ctm_rs::tcgen05::tmem::load_wait`] (`tcgen05.wait::ld`). No CTA barrier,
+/// producer wait or memory/proxy fence is inserted.
+///
+/// # Safety
+/// All 32 warp lanes must execute convergently. The loads must target live,
+/// valid TMEM allocations with correctly ordered producers. All tcgen05
+/// operations must use one CTA-group mode.
+#[inline(always)]
+pub unsafe fn fence_view_async_tmem_load() {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::tcgen05::tmem::load_wait() }
+}
+
+/// Complete this thread's previously issued SM100 TMEM stores.
+///
+/// This is `cute.arch.fence_view_async_tmem_store()` over
+/// [`ctm_rs::tcgen05::tmem::store_wait`] (`tcgen05.wait::st`). No CTA barrier,
+/// consumer synchronization or memory/proxy fence is inserted.
+///
+/// # Safety
+/// All 32 warp lanes must execute convergently. The stores must target live,
+/// valid TMEM allocations with no conflicting accesses. All tcgen05 operations
+/// must use one CTA-group mode.
+#[inline(always)]
+pub unsafe fn fence_view_async_tmem_store() {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::tcgen05::tmem::store_wait() }
+}
+
+// Warp votes.
+
+/// Ballot across the lanes in `mask`: bit `k` is set when lane `k` participates
+/// and its `predicate` is true.
+///
+/// This is `cute.arch.vote_ballot_sync(pred, mask)` over
+/// [`ctm_rs::warp::vote_sync_ballot`] (`vote.sync.ballot`).
+///
+/// # Safety
+/// Every lane named in `mask` must execute this vote with the same mask,
+/// including the caller.
+#[must_use]
+#[inline(always)]
+pub unsafe fn vote_ballot_sync(predicate: bool, mask: u32) -> u32 {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::warp::vote_sync_ballot(mask, predicate) }
+}
+
+/// Return whether `predicate` holds for at least one lane in `mask`.
+///
+/// This is `cute.arch.vote_any_sync(pred, mask)` over
+/// [`ctm_rs::warp::vote_sync_any`] (`vote.sync.any`).
+///
+/// # Safety
+/// Every lane named in `mask` must execute this vote with the same mask,
+/// including the caller.
+#[must_use]
+#[inline(always)]
+pub unsafe fn vote_any_sync(predicate: bool, mask: u32) -> bool {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::warp::vote_sync_any(mask, predicate) }
+}
+
+/// Return whether `predicate` holds for every lane in `mask`.
+///
+/// This is `cute.arch.vote_all_sync(pred, mask)` over
+/// [`ctm_rs::warp::vote_sync_all`] (`vote.sync.all`).
+///
+/// # Safety
+/// Every lane named in `mask` must execute this vote with the same mask,
+/// including the caller.
+#[must_use]
+#[inline(always)]
+pub unsafe fn vote_all_sync(predicate: bool, mask: u32) -> bool {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::warp::vote_sync_all(mask, predicate) }
+}
+
+/// Return the mask of the warp's currently active lanes (`activemask`).
+///
+/// This is `cute.arch.activemask()` over [`ctm_rs::warp::activemask`]. Bit `k`
+/// is set when lane `k` has neither exited nor diverged away at this point of
+/// execution.
+#[must_use]
+#[inline(always)]
+pub fn activemask() -> u32 {
+    ctm_rs::warp::activemask()
+}
+
+// Warp shuffles. The DSL's one generic function becomes a `u32` form and an
+// `_f32` form, the two widths the preview kernels exchange.
+
+/// Exchange a `u32` with the lane whose index is this lane's XOR `offset`.
+///
+/// This is `cute.arch.shuffle_sync_bfly(value, offset, mask)` over
+/// [`ctm_rs::warp::shfl_sync_bfly`] (`shfl.sync.bfly.b32`); the clamp is the
+/// full warp. No memory synchronization is inserted.
+///
+/// # Safety
+/// Every lane named in `mask` must execute with the same mask and `offset`,
+/// including the caller. `offset` must select a source lane within the warp.
+#[must_use]
+#[inline(always)]
+pub unsafe fn shuffle_sync_bfly(value: u32, offset: u32, mask: u32) -> u32 {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::warp::shfl_sync_bfly(mask, value, offset) }
+}
+
+/// FP32 form of [`shuffle_sync_bfly`] over [`ctm_rs::warp::shfl_sync_bfly_f32`].
+///
+/// # Safety
+/// Every lane named in `mask` must execute with the same mask and `offset`,
+/// including the caller. `offset` must select a source lane within the warp.
+#[must_use]
+#[inline(always)]
+pub unsafe fn shuffle_sync_bfly_f32(value: f32, offset: u32, mask: u32) -> f32 {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::warp::shfl_sync_bfly_f32(mask, value, offset) }
+}
+
+/// Read a `u32` from the lane `offset` below this lane; lanes below `offset`
+/// keep their own value.
+///
+/// This is `cute.arch.shuffle_sync_up(value, offset, mask)` over
+/// [`ctm_rs::warp::shfl_sync_up`] (`shfl.sync.up.b32`). No memory
+/// synchronization is inserted.
+///
+/// # Safety
+/// Every lane named in `mask` must execute with the same mask and `offset`,
+/// including the caller.
+#[must_use]
+#[inline(always)]
+pub unsafe fn shuffle_sync_up(value: u32, offset: u32, mask: u32) -> u32 {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::warp::shfl_sync_up(mask, value, offset) }
+}
+
+/// FP32 form of [`shuffle_sync_up`] over [`ctm_rs::warp::shfl_sync_up_f32`].
+///
+/// # Safety
+/// Every lane named in `mask` must execute with the same mask and `offset`,
+/// including the caller.
+#[must_use]
+#[inline(always)]
+pub unsafe fn shuffle_sync_up_f32(value: f32, offset: u32, mask: u32) -> f32 {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::warp::shfl_sync_up_f32(mask, value, offset) }
+}
+
+/// Read a `u32` from the lane `offset` above this lane; the top `offset` lanes
+/// keep their own value.
+///
+/// This is `cute.arch.shuffle_sync_down(value, offset, mask)` over
+/// [`ctm_rs::warp::shfl_sync_down`] (`shfl.sync.down.b32`). No memory
+/// synchronization is inserted.
+///
+/// # Safety
+/// Every lane named in `mask` must execute with the same mask and `offset`,
+/// including the caller.
+#[must_use]
+#[inline(always)]
+pub unsafe fn shuffle_sync_down(value: u32, offset: u32, mask: u32) -> u32 {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::warp::shfl_sync_down(mask, value, offset) }
+}
+
+/// FP32 form of [`shuffle_sync_down`] over [`ctm_rs::warp::shfl_sync_down_f32`].
+///
+/// # Safety
+/// Every lane named in `mask` must execute with the same mask and `offset`,
+/// including the caller.
+#[must_use]
+#[inline(always)]
+pub unsafe fn shuffle_sync_down_f32(value: f32, offset: u32, mask: u32) -> f32 {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::warp::shfl_sync_down_f32(mask, value, offset) }
 }

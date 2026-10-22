@@ -16,7 +16,7 @@ weight; the final result rounds again.
 ```text
 row → StridedTensor → local_partition::<32>(lane) → sum local squares
                                                              │
-                                                     warp_sum_f32
+                                                  warp_reduction_sum_f32
                                                              │
 weights → matching partition → normalize and multiply ────────┘
                                         │

@@ -140,7 +140,7 @@ pub use numeric::{
 pub use pipeline::{Consumer, PipelineState, Producer, TmaLoadPipeline, TmaStorePipeline};
 pub use scheduler::{StaticPersistentTileScheduler, WorkTile};
 pub use sm100::{
-    OperandA, OperandB, Sm100AccumulatorPipeline, Sm100ClusterTmaCopy, Sm100SharedTile,
-    Sm100TiledMma, Sm100TmaMmaPipeline, Sm100TmaStorePipeline, Sm100Tmem, Sm100TmemEpilogue,
+    OperandA, OperandB, PipelineTmaUmma, PipelineUmmaAsync, Sm100ClusterTmaCopy, Sm100SharedTile,
+    Sm100TiledMma, Sm100TmaStorePipeline, Sm100Tmem, Sm100TmemEpilogue,
 };
 pub use tensor::{Contiguous1D, RegisterTile, Tensor, TensorElement, TensorMut, Tile1D, Zipped1D};

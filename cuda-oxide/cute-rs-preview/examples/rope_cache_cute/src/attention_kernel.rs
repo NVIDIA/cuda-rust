@@ -9,7 +9,7 @@ use ctm_rs::{
     memory::{DisjointSlice, DynamicSharedArray},
     thread,
 };
-use cute_rs::arch::BlockBarrier;
+use cute_rs::arch::NamedBarrier;
 use cute_rs::markers::{C, Composed, CpAsync, L, LeadingDim, RowMajor, Swizzle, T2};
 use cute_rs::static_layout::StaticLayout;
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
@@ -256,7 +256,7 @@ pub mod kernels {
                     });
                 }
             });
-            BlockBarrier::<1, 128>::sync();
+            NamedBarrier::<1, 128>::sync();
 
             let scores = StridedTensor::from_raw_parts(score_base, 64, 1);
             let score = if tid < 64 {
@@ -264,11 +264,11 @@ pub mod kernels {
             } else {
                 f32::NEG_INFINITY
             };
-            let local_maximum = cute_rs::arch::warp_max_f32(score);
+            let local_maximum = cute_rs::arch::warp_reduction_max_f32(score);
             if lane == 0 {
                 maximum_output.store_at(warp_id, local_maximum);
             }
-            BlockBarrier::<1, 128>::sync();
+            NamedBarrier::<1, 128>::sync();
             let maxima = StridedTensor::from_raw_parts(maximum_base, 4, 1);
             let maximum = maximum(
                 maximum(maxima.get_unchecked(0), maxima.get_unchecked(1)),
@@ -284,11 +284,11 @@ pub mod kernels {
             if tid < 64 {
                 score_output.store_at(tid, probability);
             }
-            let local_sum = cute_rs::arch::warp_sum_f32(probability);
+            let local_sum = cute_rs::arch::warp_reduction_sum_f32(probability);
             if lane == 0 {
                 sum_output.store_at(warp_id, local_sum);
             }
-            BlockBarrier::<1, 128>::sync();
+            NamedBarrier::<1, 128>::sync();
             let sums = StridedTensor::from_raw_parts(sum_base, 4, 1);
 
             // A warp integrates 16 keys into four dimensions per lane.
@@ -303,7 +303,7 @@ pub mod kernels {
                 .reborrow()
                 .subview_unchecked(warp_numerator_offset, 4)
                 .store(numerator);
-            BlockBarrier::<1, 128>::sync();
+            NamedBarrier::<1, 128>::sync();
             let warp_outputs = StridedTensor::from_raw_parts(warp_base, 512, 1);
             if warp_id == 0 {
                 let mut total = RegisterTile::from_array([0.0_f32; 4]);

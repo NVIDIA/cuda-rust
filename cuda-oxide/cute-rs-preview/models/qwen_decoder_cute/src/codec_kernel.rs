@@ -269,13 +269,13 @@ pub mod kernels {
             let bias = StridedTensor::from_slice(bias).local_partition::<32>(lane);
             let sum = input.fold(0.0_f32, |sum, value| sum + value.to_f32());
             // SAFETY: complete warp participates; row predicate is warp-uniform.
-            let mean = unsafe { cute_rs::arch::warp_sum_f32(sum) } / width as f32;
+            let mean = unsafe { cute_rs::arch::warp_reduction_sum_f32(sum) } / width as f32;
             let squared = input.fold(0.0_f32, |sum, value| {
                 let d = value.to_f32() - mean;
                 sum + d * d
             });
             // SAFETY: identical convergent warp participation as the first sum.
-            let variance = unsafe { cute_rs::arch::warp_sum_f32(squared) } / width as f32;
+            let variance = unsafe { cute_rs::arch::warp_reduction_sum_f32(squared) } / width as f32;
             let inverse = cute_rs::arch::rsqrt_f32(variance + epsilon);
             let mut output = unsafe {
                 StridedTensorMut::from_disjoint_slice(&mut output)

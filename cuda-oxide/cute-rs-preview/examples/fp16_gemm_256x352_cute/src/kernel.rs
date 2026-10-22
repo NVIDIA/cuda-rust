@@ -22,8 +22,8 @@ use ctm_rs::{
 };
 use ctm_rs::{cluster_launch, cuda_module, kernel, launch_bounds, launch_contract};
 use cute_rs::{
-    Composed, OperandA, OperandB, RowMajor, Sm100AccumulatorPipeline, Sm100ClusterTmaCopy,
-    Sm100SharedTile, Sm100TiledMma, Sm100TmaMmaPipeline, Sm100TmaStorePipeline, Sm100TmemEpilogue,
+    Composed, OperandA, OperandB, PipelineTmaUmma, PipelineUmmaAsync, RowMajor,
+    Sm100ClusterTmaCopy, Sm100SharedTile, Sm100TiledMma, Sm100TmaStorePipeline, Sm100TmemEpilogue,
     Swizzle, TmaDesc,
 };
 
@@ -60,9 +60,9 @@ pub const DYNAMIC_SMEM_BYTES: usize = BARRIER_OFFSET + 128;
 const _: () = assert!(DYNAMIC_SMEM_BYTES == 211_072);
 
 /// Five-stage two-CTA TMA/MMA pipeline expecting 77,824 transaction bytes per stage.
-type MainloopPipeline = Sm100TmaMmaPipeline<5, 77_824>;
+type MainloopPipeline = PipelineTmaUmma<5, 77_824>;
 /// Accumulator handoff between the MMA producer and four epilogue warps per CTA.
-type AccumulatorPipeline = Sm100AccumulatorPipeline<4>;
+type AccumulatorPipeline = PipelineUmmaAsync<4>;
 /// Paired 256x192 and 256x160 MMA instructions sharing the A collector.
 type TiledMma = Sm100TiledMma<ASmem, B0Smem, B1Smem, 192, 160>;
 
@@ -170,7 +170,7 @@ pub mod kernels {
                         }
                         // Native CuTe cluster TMA performs its own warp election.
                         // Every producer lane must participate in each copy.
-                        let barrier = pipeline.full_barrier(stage as u32);
+                        let barrier = pipeline.producer_get_barrier(stage as u32);
                         let mut a_tile = Sm100SharedTile::<ASmem, OperandA>::from_raw(
                             smem.add(stage * A_BYTES).cast(),
                         );

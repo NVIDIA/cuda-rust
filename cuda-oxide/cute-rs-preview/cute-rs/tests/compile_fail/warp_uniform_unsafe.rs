@@ -4,5 +4,5 @@
 //! Compile-fail probe: require an unsafe assertion before treating a value as warp-uniform.
 /// Require an unsafe assertion before treating a value as warp-uniform.
 fn main() {
-    let _ = cute_rs::arch::assume_warp_uniform(0);
+    let _ = cute_rs::arch::make_warp_uniform(0);
 }

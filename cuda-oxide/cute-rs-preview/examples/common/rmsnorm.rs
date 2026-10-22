@@ -54,7 +54,7 @@ pub mod kernels {
             let squares = values.fold(0.0_f32, |sum, value| sum + value * value);
             // SAFETY: all 32 lanes of this row reach the collective. Lanes
             // with no valid column contribute zero, instead of returning.
-            let total = unsafe { cute_rs::arch::warp_sum_f32(squares) };
+            let total = unsafe { cute_rs::arch::warp_reduction_sum_f32(squares) };
             let inverse_rms = cute_rs::arch::rsqrt_f32(total / cols as f32 + epsilon);
             let mut destination = StridedTensorMut::from_disjoint_slice(&mut output)
                 .subview(base, cols)
@@ -101,7 +101,7 @@ pub mod kernels {
             });
             // SAFETY: each launched block contains four complete warps; the
             // row predicate is warp-uniform and column tails do not skip lanes.
-            let total = unsafe { cute_rs::arch::warp_sum_f32(squares) };
+            let total = unsafe { cute_rs::arch::warp_reduction_sum_f32(squares) };
             let inverse_rms = cute_rs::arch::rsqrt_f32(total / cols as f32 + epsilon);
             let mut destination = StridedTensorMut::from_disjoint_slice(&mut output)
                 .subview(base, cols)
@@ -161,8 +161,8 @@ pub mod kernels {
             };
             let squares = values.fold(0.0_f32, |sum, value| sum + value * value);
             // SAFETY: full warps own rows, and the row predicate is uniform.
-            // warp_sum_f32 retains XOR offsets 16, 8, 4, 2, 1.
-            let total = unsafe { cute_rs::arch::warp_sum_f32(squares) };
+            // warp_reduction_sum_f32 retains XOR offsets 16, 8, 4, 2, 1.
+            let total = unsafe { cute_rs::arch::warp_reduction_sum_f32(squares) };
             // Keep the divisor a runtime argument, as in the original kernel.
             // Constant power-of-two division may otherwise contract with the
             // epsilon addition and change subnormal rounding boundaries.

@@ -278,7 +278,7 @@ mod canonical_path_tests {
     #[test]
     fn source_abstraction_modules_are_exact_and_closed() {
         assert!(is_source_abstraction_path(
-            "cute_rs::arch::assume_warp_uniform",
+            "cute_rs::arch::make_warp_uniform",
             "cute_rs"
         ));
         assert_eq!(

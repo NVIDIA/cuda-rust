@@ -77,7 +77,7 @@ pub mod kernels {
             // seeded fold or materializing products would change contraction.
             let score = q[0] * k[0] + q[1] * k[1];
             // SAFETY: all 32 lanes execute this fixed XOR sum convergently.
-            let mut score = unsafe { cute_rs::arch::warp_sum_f32(score) };
+            let mut score = unsafe { cute_rs::arch::warp_reduction_sum_f32(score) };
             score *= 0.125 * core::f32::consts::LOG2_E;
             let next = if maximum > score { maximum } else { score };
             let old = cute_rs::arch::exp2_f32(maximum - next);

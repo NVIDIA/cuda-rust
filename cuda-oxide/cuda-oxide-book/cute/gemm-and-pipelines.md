@@ -64,7 +64,7 @@ pipeline.producer_acquire(stage as u32, phase);
 if rank == 0 && warp::is_elected_sync(u32::MAX) {
     pipeline.producer_expect(stage as u32);
 }
-let barrier = pipeline.full_barrier(stage as u32);
+let barrier = pipeline.producer_get_barrier(stage as u32);
 Sm100ClusterTmaCopy::copy(a, &mut a_tile, row, kt * 64, barrier, rank);
 Sm100ClusterTmaCopy::copy(b0, &mut b0_tile, col, kt * 64, barrier, rank);
 Sm100ClusterTmaCopy::copy(b1, &mut b1_tile, col + 192, kt * 64, barrier, rank);

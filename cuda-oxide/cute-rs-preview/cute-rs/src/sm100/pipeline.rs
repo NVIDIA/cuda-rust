@@ -13,13 +13,13 @@ use cuda_device::barrier::Barrier;
 /// `TX_BYTES` is the total number of bytes copied by both CTAs per stage.
 /// One lane in the leader CTA sets this expected byte count. MMA completion
 /// releases the stage in both CTAs so the next TMA copy can reuse it.
-pub struct Sm100TmaMmaPipeline<const STAGES: u32, const TX_BYTES: u32> {
+pub struct PipelineTmaUmma<const STAGES: u32, const TX_BYTES: u32> {
     /// Local array of full barriers tracking cluster-wide input-copy bytes.
     full: *mut Barrier,
     /// Local array of empty barriers released by group-two MMA completion.
     empty: *mut Barrier,
 }
-impl<const STAGES: u32, const TX_BYTES: u32> Sm100TmaMmaPipeline<STAGES, TX_BYTES> {
+impl<const STAGES: u32, const TX_BYTES: u32> PipelineTmaUmma<STAGES, TX_BYTES> {
     /// Require at least one stage and a nonzero cluster transaction byte count.
     const VALID: () = assert!(STAGES > 0 && TX_BYTES > 0);
     /// Attach separate full and empty barrier arrays.
@@ -67,7 +67,7 @@ impl<const STAGES: u32, const TX_BYTES: u32> Sm100TmaMmaPipeline<STAGES, TX_BYTE
     /// `stage < STAGES`. Copies using this barrier must belong to the acquired
     /// stage and phase covered by the leader's one cluster-wide expectation.
     #[inline(always)]
-    pub unsafe fn full_barrier(&self, stage: u32) -> *mut Barrier {
+    pub unsafe fn producer_get_barrier(&self, stage: u32) -> *mut Barrier {
         unsafe { self.full.add(stage as usize) }
     }
     /// Wait for input copies and order subsequent tensor-core operations.
@@ -91,13 +91,13 @@ impl<const STAGES: u32, const TX_BYTES: u32> Sm100TmaMmaPipeline<STAGES, TX_BYTE
 }
 
 /// One accumulator slot shared by the MMA producer and epilogue warps.
-pub struct Sm100AccumulatorPipeline<const CONSUMER_WARPS: u32> {
+pub struct PipelineUmmaAsync<const CONSUMER_WARPS: u32> {
     /// Local barrier released when all epilogue warps finish reading the accumulator.
     empty: *mut Barrier,
     /// Local barrier signaled when the leader’s MMA work completes.
     full: *mut Barrier,
 }
-impl<const CONSUMER_WARPS: u32> Sm100AccumulatorPipeline<CONSUMER_WARPS> {
+impl<const CONSUMER_WARPS: u32> PipelineUmmaAsync<CONSUMER_WARPS> {
     /// Require between one and 32 epilogue consumer warps per CTA.
     const VALID: () = assert!(CONSUMER_WARPS > 0 && CONSUMER_WARPS <= 32);
     /// Attach the shared empty and full barriers.

@@ -22,7 +22,7 @@ cuda-device   raw intrinsics
 | tcgen05 | `TmemGuard` collective alloc and dealloc, F16 two-CTA MMA through `InstructionDescriptor`, 32x32b TMEM load and store, commit, fences | `sm_100a` |
 | Register MMA | m16n8k16 F16 and BF16 with F32 accumulate; m16n8k64 MXF4 with UE8M0 scales; ldmatrix x4, stmatrix x2 | both; MXF4 on `sm_120a` |
 | Async copy | 4-byte `cp.async`, noinc barrier arrive, commit and wait groups | both |
-| Warp | shuffle, elect, vote all, sum reduce, `setmaxnreg` | both |
+| Warp | shuffle (full-warp and masked), elect, vote (all, any, ballot), lane id, active mask, sum reduce, `setmaxnreg` | both |
 | Numerics | BF16 round-to-nearest convert, packed f32x2 add, mul and fma, approximate ex2, lg2, rcp, rsqrt and sin, trap | both |
 
 Not covered: other tcgen05 kinds and TMEM shapes, atomics and reductions, wgmma,

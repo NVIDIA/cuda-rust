@@ -10,7 +10,7 @@
 <rect class="k-teal" x="36" y="88" width="298" height="226" rx="8" stroke-width="0.9"/>
 <text class="sec l" x="56" y="110">TMA WARP (WARP 5)</text>
 <text class="th tx-teal l" x="56" y="132">5-Stage Cluster TMA Load</text>
-<rect class="k-box" x="56" y="150" width="258" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="185" y="166">Sm100TmaMmaPipeline&lt;5, 77_824&gt;</text>
+<rect class="k-box" x="56" y="150" width="258" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="185" y="166">PipelineTmaUmma&lt;5, 77_824&gt;</text>
 <rect class="k-box" x="56" y="190" width="258" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="185" y="206">Sm100ClusterTmaCopy::copy</text>
 <rect class="k-box" x="56" y="230" width="258" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="185" y="246">ASmem (128×64) + B0/B1Smem</text>
 <text class="ts tx-teal" x="185" y="286">All 32 lanes participate per CTA</text>

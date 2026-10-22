@@ -67,19 +67,13 @@ fn ctx_strong_count_returns_to_baseline_after_buffer_lifecycle() {
 /// This cannot deterministically force the async-enqueue failure that
 /// triggered the original leak (no public API constructs an invalid
 /// `CudaStream`), but it pins the happy-path accounting with
-/// `cuMemGetInfo` before and after the cycles.
+/// [`CudaContext::mem_info`] before and after the cycles.
 #[test]
 fn vram_returns_to_baseline_after_buffer_cycles() {
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
-    fn free_mem() -> usize {
-        let mut free = 0usize;
-        let mut total = 0usize;
-        let rc = unsafe { cuda_bindings::cuMemGetInfo_v2(&mut free, &mut total) };
-        assert_eq!(rc, 0, "cuMemGetInfo failed: {rc}");
-        free
-    }
+    let free_mem = || ctx.mem_info().expect("mem_info failed").0;
 
     // Warm up driver allocator caches so the measured window is stable.
     for _ in 0..4 {
@@ -134,4 +128,23 @@ fn zero_length_construction_succeeds_for_both_constructors() {
         baseline,
         "empty buffers must not leak a ctx strong count"
     );
+}
+
+/// `mem_info` reports the device's memory: `total` matches the device's
+/// total memory attribute and `free` never exceeds it.
+#[test]
+fn mem_info_reports_free_within_the_device_total() {
+    let ctx = CudaContext::new(0).expect("failed to create CUDA context");
+    let (free, total) = ctx.mem_info().expect("mem_info failed");
+
+    let mut device_total = 0usize;
+    let rc = unsafe { cuda_bindings::cuDeviceTotalMem_v2(&mut device_total, ctx.cu_device()) };
+    assert_eq!(rc, 0, "cuDeviceTotalMem failed: {rc}");
+
+    assert_eq!(total, device_total, "total must be the device's memory");
+    assert!(
+        free <= total,
+        "free ({free}) must not exceed total ({total})"
+    );
+    assert!(total > 0, "a device has memory");
 }

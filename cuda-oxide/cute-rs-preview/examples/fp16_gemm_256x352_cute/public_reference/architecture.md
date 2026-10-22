@@ -55,11 +55,11 @@ asynchronous completion; kernel synchronization and caller obligations still
 apply.
 
 ```rust
-use cute_rs::{Composed, RowMajor, Sm100TiledMma, PipelineTmaUmma, Swizzle};
+use cute_rs::{ComposedLayout, RowMajor, Sm100TiledMma, PipelineTmaUmma, Swizzle};
 
-type ASmem = Composed<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>;
-type B0Smem = Composed<Swizzle<3, 3, 3>, 0, RowMajor<96, 64>>;
-type B1Smem = Composed<Swizzle<3, 3, 3>, 0, RowMajor<80, 64>>;
+type ASmem = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>;
+type B0Smem = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<96, 64>>;
+type B1Smem = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<80, 64>>;
 type TiledMma = Sm100TiledMma<ASmem, B0Smem, B1Smem, 192, 160>;
 type MainloopPipeline = PipelineTmaUmma<5, 77_824>;
 ```

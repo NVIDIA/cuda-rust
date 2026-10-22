@@ -8,13 +8,12 @@
 //! The decoder follows ADT identities and generic-argument kinds:
 //!
 //! ```text
-//! L<(C<32>, C<8>), (C<8>, C<1>)>
-//! │ └─── shape ──┘  └─ stride ──┘
-//! └─ exact DefId: cute_rs::markers::L
+//! Layout<(C<32>, C<8>), (C<8>, C<1>)>
+//! │      └─── shape ──┘  └─ stride ──┘
+//! └─ exact DefId: cute_rs::markers::Layout
 //! ```
 //!
-//! Shape and stride modes are Rust tuples of `C<N>` leaves (the `T2<A, B>`
-//! pair marker still decodes to the same two-mode tuple). A tuple type has
+//! Shape and stride modes are Rust tuples of `C<N>` leaves. A tuple type has
 //! no defining path of its own, so the identity check holds at the leaves.
 //!
 //! It never searches a debug-printed type name. A near-miss from another
@@ -34,22 +33,20 @@ use rustc_public::ty::{
 
 /// Exact defining path of `cute_rs::markers::C`; public reexports do not change it.
 const C: &str = "cute_rs::markers::C";
-/// Exact defining path of `cute_rs::markers::T2`; public reexports do not change it.
-const T2: &str = "cute_rs::markers::T2";
-/// Exact defining path of `cute_rs::markers::L`; public reexports do not change it.
-const LAYOUT: &str = "cute_rs::markers::L";
+/// Exact defining path of `cute_rs::markers::Layout`; public reexports do not change it.
+const LAYOUT: &str = "cute_rs::markers::Layout";
 /// Exact defining path of `cute_rs::markers::RowMajor`; public reexports do not change it.
 const ROW_MAJOR: &str = "cute_rs::markers::RowMajor";
 /// Exact defining path of `cute_rs::markers::ColMajor`; public reexports do not change it.
 const COL_MAJOR: &str = "cute_rs::markers::ColMajor";
-/// Exact defining path of `cute_rs::markers::CpAsync`; public reexports do not change it.
-const CP_ASYNC: &str = "cute_rs::markers::CpAsync";
+/// Exact defining path of `cute_rs::markers::CopyG2S`; public reexports do not change it.
+const COPY_G2S: &str = "cute_rs::markers::CopyG2S";
 /// Exact defining path of `cute_rs::markers::LeadingDim`; public reexports do not change it.
 const LEADING_DIM: &str = "cute_rs::markers::LeadingDim";
 /// Exact defining path of `cute_rs::markers::Swizzle`; public reexports do not change it.
 const SWIZZLE: &str = "cute_rs::markers::Swizzle";
-/// Exact defining path of `cute_rs::markers::Composed`; public reexports do not change it.
-const COMPOSED: &str = "cute_rs::markers::Composed";
+/// Exact defining path of `cute_rs::markers::ComposedLayout`; public reexports do not change it.
+const COMPOSED: &str = "cute_rs::markers::ComposedLayout";
 
 /// Validated cooperative-copy instruction width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,9 +208,8 @@ fn const_arg(args: &GenericArgs, index: usize, owner: &str) -> Result<TyConst, S
 
 /// Recursively decode integer leaves and tuple modes into a layout tuple.
 ///
-/// A mode is the leaf marker `C<N>`, a Rust tuple `(A, B, ...)` of further
-/// modes, or the `T2<A, B>` pair marker, so `(C<2>, (C<3>, C<4>))` and
-/// `T2<C<2>, T2<C<3>, C<4>>>` both decode to `(2,(3,4))`. A tuple type has
+/// A mode is the leaf marker `C<N>` or a Rust tuple `(A, B, ...)` of further
+/// modes, so `(C<2>, (C<3>, C<4>))` decodes to `(2,(3,4))`. A tuple type has
 /// no defining path, so the near-miss guard applies at the leaves: every leaf
 /// must be the exact `cute_rs::markers::C` ADT.
 fn decode_tuple(ty: &Ty) -> Result<IntTuple, String> {
@@ -240,16 +236,7 @@ fn decode_tuple(ty: &Ty) -> Result<IntTuple, String> {
                 "C value",
             )?))
         }
-        T2 => {
-            expect_schema(&args, &["Type", "Type"], T2)?;
-            Ok(IntTuple::Tuple(vec![
-                decode_tuple(&type_arg(&args, 0, T2)?)?,
-                decode_tuple(&type_arg(&args, 1, T2)?)?,
-            ]))
-        }
-        found => Err(format!(
-            "expected a tuple, `{C}` or `{T2}`, found `{found}`"
-        )),
+        found => Err(format!("expected a tuple or `{C}`, found `{found}`")),
     }
 }
 
@@ -302,12 +289,12 @@ pub(crate) fn decode_layout(ty: &Ty) -> Result<Layout, String> {
     Ok(layout)
 }
 
-/// Decode and validate a `CpAsync` copy atom's byte width.
+/// Decode and validate a `CopyG2S` copy atom's byte width.
 fn decode_atom(ty: &Ty) -> Result<CopyAtom, String> {
-    let args = adt_owned(ty, CP_ASYNC)?;
-    expect_schema(&args, &["Const"], CP_ASYNC)?;
+    let args = adt_owned(ty, COPY_G2S)?;
+    expect_schema(&args, &["Const"], COPY_G2S)?;
     let bytes = u32::try_from(unsigned_const(
-        &const_arg(&args, 0, CP_ASYNC)?,
+        &const_arg(&args, 0, COPY_G2S)?,
         "cp.async width",
     )?)
     .map_err(|_| "cp.async width does not fit in u32".to_string())?;
@@ -380,7 +367,7 @@ pub(crate) fn decode_smem_layout(ty: &Ty) -> Result<ComposedLayout, String> {
     if let TyKind::RigidTy(RigidTy::Adt(def, args)) = ty.kind()
         && canonical_adt_path(&def) == COMPOSED
     {
-        // `Composed<Inner, OFFSET, Outer>`: position 0 is the inner swizzle and
+        // `ComposedLayout<Inner, OFFSET, Outer>`: position 0 is the inner swizzle and
         // position 2 the outer layout, in the order of CuTeDSL's
         // `make_composed_layout(inner, offset, outer)`.
         expect_schema(&args, &["Type", "Const", "Type"], COMPOSED)?;
@@ -653,34 +640,29 @@ mod tests {
     }
 
     /// Rust tuples carry nested shapes and strides: a tuple of `C<N>` leaves
-    /// or of further tuples must decode to the same layout as the equivalent
-    /// `T2` nesting, an empty tuple is rejected, and a leaf that is not the
-    /// exact `cute_rs::markers::C` ADT fails the identity check.
+    /// or of further tuples decodes to the nested layout it spells, an empty
+    /// tuple is rejected, and a leaf that is not the exact
+    /// `cute_rs::markers::C` ADT fails the identity check.
     #[test]
-    fn tuple_shapes_decode_like_the_pair_marker() {
+    fn tuple_shapes_decode_to_nested_layouts() {
         let decoded = decode_fixture_parameters(
             r#"
 pub mod markers {
     use core::marker::PhantomData;
     pub struct C<const VALUE: i64>;
-    pub struct T2<A, B> { _modes: PhantomData<(A, B)> }
-    pub struct L<Shape, Stride> { _layout: PhantomData<(Shape, Stride)> }
+    pub struct Layout<Shape, Stride> { _layout: PhantomData<(Shape, Stride)> }
 }
 pub mod other {
     pub struct C<const VALUE: i64>;
 }
-use markers::{C, L, T2};
-pub fn tuple_pitched(_: L<(C<2>, C<3>), (C<17>, C<4>)>) {}
-pub fn pair_pitched(_: L<T2<C<2>, C<3>>, T2<C<17>, C<4>>>) {}
-pub fn tuple_nested(_: L<(C<4>, ((C<2>, C<2>), C<2>)), (C<2>, ((C<1>, C<128>), C<8>))>) {}
-pub fn pair_nested(
-    _: L<T2<C<4>, T2<T2<C<2>, C<2>>, C<2>>>, T2<C<2>, T2<T2<C<1>, C<128>>, C<8>>>>,
-) {}
-pub fn mixed_nested(_: L<(T2<C<2>, C<2>>, C<2>), (T2<C<1>, C<128>>, C<8>)>) {}
-pub fn tuple_triple(_: L<(C<2>, C<3>, C<4>), (C<12>, C<4>, C<1>)>) {}
-pub fn empty_mode(_: L<(), ()>) {}
-pub fn primitive_leaf(_: L<(u32, C<1>), (C<1>, C<1>)>) {}
-pub fn foreign_leaf(_: L<(other::C<2>, C<3>), (C<3>, C<1>)>) {}
+use markers::{C, Layout};
+pub fn leaf(_: Layout<C<2>, C<17>>) {}
+pub fn pitched(_: Layout<(C<2>, C<3>), (C<17>, C<4>)>) {}
+pub fn nested(_: Layout<(C<4>, ((C<2>, C<2>), C<2>)), (C<2>, ((C<1>, C<128>), C<8>))>) {}
+pub fn triple(_: Layout<(C<2>, C<3>, C<4>), (C<12>, C<4>, C<1>)>) {}
+pub fn empty_mode(_: Layout<(), ()>) {}
+pub fn primitive_leaf(_: Layout<(u32, C<1>), (C<1>, C<1>)>) {}
+pub fn foreign_leaf(_: Layout<(other::C<2>, C<3>), (C<3>, C<1>)>) {}
 "#,
             "tuple_shapes",
         );
@@ -691,22 +673,16 @@ pub fn foreign_leaf(_: L<(other::C<2>, C<3>), (C<3>, C<1>)>) {}
                 "{name}"
             );
         };
-        expect("tuple_pitched", "(2,3):(17,4)");
-        assert_eq!(decoded["pair_pitched"], decoded["tuple_pitched"]);
-        expect("tuple_nested", "(4,((2,2),2)):(2,((1,128),8))");
-        assert_eq!(decoded["pair_nested"], decoded["tuple_nested"]);
-        assert_eq!(
-            decoded["mixed_nested"],
-            Ok("((2,2),2):((1,128),8)".parse().unwrap())
-        );
-        expect("tuple_triple", "(2,3,4):(12,4,1)");
+        expect("leaf", "2:17");
+        expect("pitched", "(2,3):(17,4)");
+        expect("nested", "(4,((2,2),2)):(2,((1,128),8))");
+        expect("triple", "(2,3,4):(12,4,1)");
         let error = |name: &str| decoded[name].as_ref().expect_err(name).clone();
         assert!(error("empty_mode").contains("at least one mode"));
         assert!(error("primitive_leaf").contains("must be a tuple or `cute_rs::markers::C`"));
         assert_eq!(
             error("foreign_leaf"),
-            "expected a tuple, `cute_rs::markers::C` or `cute_rs::markers::T2`, \
-             found `cute_rs::other::C`"
+            "expected a tuple or `cute_rs::markers::C`, found `cute_rs::other::C`"
         );
     }
 

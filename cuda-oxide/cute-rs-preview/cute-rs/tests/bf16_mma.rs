@@ -13,7 +13,7 @@ fn static_atom_layouts_match_cute_algebra_for_every_lane_and_value() {
         let oracle: cute_rs::layout::Layout = description.parse().unwrap();
         for flat in 0..L::SIZE {
             assert_eq!(
-                L::offset(flat),
+                L::crd2idx(flat),
                 oracle
                     .checked_call(&cute_rs::layout::IntTuple::Leaf(flat as i64))
                     .unwrap() as usize
@@ -45,7 +45,7 @@ fn packed_output_partition_visits_only_live_decode_rows() {
     }
 }
 use cute_rs::bf16_mma::{Bf16Mma16x8x16, FragmentC};
-use cute_rs::markers::{Composed, RowMajor, Swizzle};
+use cute_rs::markers::{ComposedLayout, RowMajor, Swizzle};
 
 #[test]
 fn packed_decode_proof_rejects_incomplete_or_misaligned_operands() {
@@ -168,7 +168,7 @@ fn operand_partition_matches_ptx_coordinates_and_covers_every_element() {
 
 #[test]
 fn shared_layout_offset_matches_independent_cute_layout_oracle() {
-    type L = Composed<Swizzle<3, 3, 3>, 0, RowMajor<64, 128>>;
+    type L = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<64, 128>>;
     let layout: cute_rs::layout::Layout = "(64,128):(128,1)".parse().unwrap();
     let swizzle = cute_rs::layout::Swizzle::new(3, 3, 3);
     for r in 0..64 {
@@ -180,7 +180,7 @@ fn shared_layout_offset_matches_independent_cute_layout_oracle() {
                 ]))
                 .unwrap();
             assert_eq!(
-                cute_rs::static_layout::offset_2d::<L>(r as usize, c as usize),
+                cute_rs::static_layout::crd2idx_2d::<L>(r as usize, c as usize),
                 swizzle.apply(plain) as usize
             );
         }
@@ -190,7 +190,7 @@ fn shared_layout_offset_matches_independent_cute_layout_oracle() {
 #[test]
 fn static_composition_applies_nonzero_offset_before_negative_swizzle() {
     use cute_rs::static_layout::StaticLayout;
-    type L = Composed<Swizzle<2, 1, -3>, 7, RowMajor<3, 5>>;
+    type L = ComposedLayout<Swizzle<2, 1, -3>, 7, RowMajor<3, 5>>;
     let inner: cute_rs::layout::Layout = "(3,5):(5,1)".parse().unwrap();
     let swizzle = cute_rs::layout::Swizzle::new(2, 1, -3);
     for flat in 0..L::SIZE {
@@ -198,9 +198,9 @@ fn static_composition_applies_nonzero_offset_before_negative_swizzle() {
             .checked_call(&cute_rs::layout::IntTuple::Leaf(flat as i64))
             .unwrap();
         let expected = swizzle.apply(plain + 7) as usize;
-        assert_eq!(L::offset(flat), expected);
+        assert_eq!(L::crd2idx(flat), expected);
         assert_eq!(
-            cute_rs::static_layout::offset_2d::<L>(flat % 3, flat / 3),
+            cute_rs::static_layout::crd2idx_2d::<L>(flat % 3, flat / 3),
             expected
         );
     }

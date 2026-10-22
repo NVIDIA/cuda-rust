@@ -25,8 +25,8 @@ use core::marker::PhantomData;
 /// `(N1 / 2, 64)`, in FP16 elements, with the supported B128 swizzle:
 ///
 /// ```
-/// use cute_rs::{Composed, RowMajor, Sm100TiledMma, Swizzle};
-/// type Tile<const R: i64> = Composed<Swizzle<3, 3, 3>, 0, RowMajor<R, 64>>;
+/// use cute_rs::{ComposedLayout, RowMajor, Sm100TiledMma, Swizzle};
+/// type Tile<const R: i64> = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<R, 64>>;
 /// let mma = Sm100TiledMma::<Tile<128>, Tile<96>, Tile<80>, 192, 160>::new();
 /// ```
 pub struct Sm100TiledMma<AL, B0L, B1L, const N0: u32, const N1: u32, const K: u32 = 64>(

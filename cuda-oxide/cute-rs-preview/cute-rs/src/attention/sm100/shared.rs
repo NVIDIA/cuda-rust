@@ -27,8 +27,9 @@ pub trait SmemLayout: sealed::Layout {
     const SPAN: u32;
     /// Number of XOR bits in the shared-memory swizzle.
     const SWIZZLE_BITS: u32;
-    /// Map a logical coordinate into shared storage in elements.
-    fn offset(row: u32, col: u32) -> usize;
+    /// Map a logical coordinate into shared storage in elements (CuTeDSL
+    /// `cute.crd2idx`).
+    fn crd2idx(row: u32, col: u32) -> usize;
 }
 
 /// Logical `(MN,K)` layout. `MN_MAJOR` selects the contiguous logical mode.
@@ -41,7 +42,7 @@ pub trait SmemLayout: sealed::Layout {
 /// ```
 /// use cute_rs::attention::sm100::SharedLayout;
 /// type Tile = SharedLayout<64, 64>;
-/// assert_eq!(Tile::offset(0, 1), 1);
+/// assert_eq!(Tile::crd2idx(0, 1), 1);
 /// ```
 pub struct SharedLayout<const ROWS: u32, const COLS: u32, const MN_MAJOR: bool = false>;
 impl<const R: u32, const C: u32, const MN: bool> SharedLayout<R, C, MN> {
@@ -53,9 +54,10 @@ impl<const R: u32, const C: u32, const MN: bool> SharedLayout<R, C, MN> {
         assert!(outer > 0 && outer.is_multiple_of(8));
         assert!(contiguous == 32 || contiguous.is_multiple_of(64));
     };
-    /// Offset in FP16 elements from the start of this shared tile.
+    /// Offset in FP16 elements from the start of this shared tile (CuTeDSL
+    /// `cute.crd2idx`).
     #[inline(always)]
-    pub fn offset(row: u32, col: u32) -> usize {
+    pub fn crd2idx(row: u32, col: u32) -> usize {
         let () = Self::VALID;
         let (inner, outer, outer_extent) = if MN { (row, col, C) } else { (col, row, R) };
         let span = Self::SPAN;
@@ -77,8 +79,8 @@ impl<const R: u32, const C: u32, const MN: bool> SmemLayout for SharedLayout<R, 
     };
     const SWIZZLE_BITS: u32 = if Self::SPAN == 32 { 2 } else { 3 };
     #[inline(always)]
-    fn offset(row: u32, col: u32) -> usize {
-        Self::offset(row, col)
+    fn crd2idx(row: u32, col: u32) -> usize {
+        Self::crd2idx(row, col)
     }
 }
 

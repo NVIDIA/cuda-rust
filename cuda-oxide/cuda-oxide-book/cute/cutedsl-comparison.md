@@ -40,10 +40,10 @@ In Rust **`cute-rs`**, there is no runtime tracer—`rustc` compiles the kernel 
 
 ```rust
 // Rust cute-rs: static configuration lives in types; arguments carry only runtime TMA descriptors
-type ASmem = Composed<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>;
-type B0Smem = Composed<Swizzle<3, 3, 3>, 0, RowMajor<96, 64>>;
-type B1Smem = Composed<Swizzle<3, 3, 3>, 0, RowMajor<80, 64>>;
-type CSmem = Composed<Swizzle<2, 3, 3>, 0, RowMajor<128, 32>>;
+type ASmem = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>;
+type B0Smem = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<96, 64>>;
+type B1Smem = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<80, 64>>;
+type CSmem = ComposedLayout<Swizzle<2, 3, 3>, 0, RowMajor<128, 32>>;
 type TiledMma = Sm100TiledMma<ASmem, B0Smem, B1Smem, 192, 160>;
 type MainloopPipeline = PipelineTmaUmma<5, 77_824>;
 
@@ -76,8 +76,8 @@ Compile-time Rust types supply the static IR attributes (shape, stride, swizzle,
 
 | Concept | Python `CuTeDSL` | Rust `cute-rs` |
 | :------ | :--------------- | :------------- |
-| **Layout definition** | `cute.make_layout((128, 64), stride=(64, 1))` | `RowMajor<128, 64>` or `L<T2<C<128>, C<64>>, T2<C<64>, C<1>>>` |
-| **Swizzled SMEM layout** | `cute.make_composed_layout(Swizzle(3, 3, 3), 0, layout)` | `Composed<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>` |
+| **Layout definition** | `cute.make_layout((128, 64), stride=(64, 1))` | `RowMajor<128, 64>` or `Layout<(C<128>, C<64>), (C<64>, C<1>)>` |
+| **Swizzled SMEM layout** | `cute.make_composed_layout(Swizzle(3, 3, 3), 0, layout)` | `ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>` |
 | **TMA descriptor** | `(tma_atom, tma_tensor)` pair passed into `@cute.kernel` | `#[grid_constant] a: &TensorMap<f16, ASmem>` (128B by value) |
 | **Shared tensor view** | `storage.sA.get_tensor(a_smem_layout)` | `SharedTensor<Mxf4E2M1, f16, SmemP, Mkl>` or `Sm100SharedTile<ASmem, OperandA>` |
 | **TMA pipeline** | `pipeline.PipelineTmaAsync.create(...)` or `pipeline.PipelineTmaUmma.create(...)` | `TmaLoadPipeline<STAGES>` or `PipelineTmaUmma<5, 77_824>` |

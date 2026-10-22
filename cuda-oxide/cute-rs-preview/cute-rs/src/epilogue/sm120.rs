@@ -47,7 +47,7 @@
 use core::marker::PhantomData;
 
 use crate::copy::cooperative::SmemTile;
-use crate::markers::{Composed, RowMajor, Swizzle};
+use crate::markers::{ComposedLayout, RowMajor, Swizzle};
 use crate::mma::FragmentC;
 
 /// Layout of one 128x64 half that a B128 TMA store can read.
@@ -55,7 +55,7 @@ use crate::mma::FragmentC;
 /// `S<3,3,3>` describes the address swizzle in `f16` elements. Because one
 /// `f16` is two bytes, the same layout is TMA's byte-based `S<3,4,3>` B128
 /// mode.
-pub type Sm120EpilogueHalfLayout = Composed<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>;
+pub type Sm120EpilogueHalfLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>;
 
 /// Rows in the full output tile.
 pub const SM120_EPILOGUE_ROWS: usize = 128;

@@ -9,15 +9,16 @@
 //! layout directly in a function's type arguments.
 //!
 //! Most code can use a short form such as `RowMajor<32, 8>`. The full form
-//! stores the same shape and strides explicitly:
+//! stores the same shape and strides explicitly, with Rust tuples grouping
+//! the modes:
 //!
 //! ```text
 //! 32 rows × 8 columns, row-major
 //!
-//! L< T2<C<32>, C<8>>, T2<C<8>, C<1>> >
-//!    └── shape ─────┘   └─ strides ───┘
-//!                           row: 8
-//!                        column: 1
+//! Layout< (C<32>, C<8>), (C<8>, C<1>) >
+//!         └── shape ──┘  └─ stride ─┘
+//!                      row: 8
+//!                         column: 1
 //! ```
 
 use core::marker::PhantomData;
@@ -25,19 +26,16 @@ use core::marker::PhantomData;
 /// One integer stored in a type, usually a size or stride.
 pub struct C<const VALUE: i64>;
 
-/// Two type-level values grouped together.
-///
-/// Pairs can be nested. For example, `(A, B), C` and `A, (B, C)` describe
-/// different layouts.
-pub struct T2<A, B>(
-    #[doc = "Carries the two nested compile-time tuple entries."] PhantomData<(A, B)>,
-);
-
 /// A layout made from a `Shape` and its `Stride`.
 ///
 /// A stride is the number of elements to skip when a coordinate increases by
-/// one.
-pub struct L<Shape, Stride>(
+/// one. Nested modes are Rust tuples of [`C`] leaves, which can themselves be
+/// nested: `(A, (B, C))` and `((A, B), C)` describe different layouts.
+///
+/// This zero-sized marker is read from a function's type arguments. The
+/// runtime value with the same shape and stride is [`cute_layout::Layout`],
+/// reachable as `cute_rs::layout::Layout`.
+pub struct Layout<Shape, Stride>(
     #[doc = "Carries corresponding shape and stride descriptions."] PhantomData<(Shape, Stride)>,
 );
 
@@ -55,8 +53,9 @@ pub struct RowMajor<const ROWS: i64, const COLS: i64>;
 /// ```
 pub struct ColMajor<const ROWS: i64, const COLS: i64>;
 
-/// One `cp.async` copy of `BYTES` bytes from global to shared memory.
-pub struct CpAsync<const BYTES: u32>;
+/// One global-to-shared copy atom of `BYTES` bytes, issued as `cp.async`
+/// (CuTeDSL `cpasync.CopyG2SOp`).
+pub struct CopyG2S<const BYTES: u32>;
 
 /// The distance between rows, with a compile-time alignment promise.
 ///
@@ -119,11 +118,14 @@ pub struct Swizzle<const B: u32, const M: u32, const S: i32>;
 /// the expression that runs last; `Outer` is the affine layout that runs
 /// first. The type arguments sit in the order of CuTeDSL's
 /// `make_composed_layout(inner, offset, outer)`, so
-/// `Composed<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>` reads like that call.
+/// `ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>` reads like that
+/// call.
 ///
 /// `OFFSET` and `Outer` count elements here. The compiler converts the whole
-/// rule to bytes after it knows the element size.
-pub struct Composed<Inner, const OFFSET: i64, Outer>(
+/// rule to bytes after it knows the element size. The runtime value with the
+/// same parts is [`cute_layout::ComposedLayout`], reachable as
+/// `cute_rs::layout::ComposedLayout`.
+pub struct ComposedLayout<Inner, const OFFSET: i64, Outer>(
     #[doc = "Carries the inner swizzle and the outer layout."] PhantomData<(Inner, Outer)>,
 );
 
@@ -158,7 +160,7 @@ pub trait ReifySmem2D {
 }
 
 impl<const R: i64, const CC: i64, const SR: i64, const SC: i64> ReifySmem2D
-    for L<T2<C<R>, C<CC>>, T2<C<SR>, C<SC>>>
+    for Layout<(C<R>, C<CC>), (C<SR>, C<SC>)>
 {
     const SHAPE: (i64, i64) = (R, CC);
     const STRIDE: (i64, i64) = (SR, SC);
@@ -186,10 +188,10 @@ impl<const R: i64, const CC: i64> ReifySmem2D for ColMajor<R, CC> {
     const NUM_SHIFT: i32 = 3;
 }
 
-/// Read one composed layout. Do not nest `Composed`: this implementation
+/// Read one composed layout. Do not nest `ComposedLayout`: this implementation
 /// reports only its own inner swizzle and would hide a nested one.
 impl<const B: u32, const M: u32, const S: i32, const OFFSET: i64, Outer: ReifySmem2D> ReifySmem2D
-    for Composed<Swizzle<B, M, S>, OFFSET, Outer>
+    for ComposedLayout<Swizzle<B, M, S>, OFFSET, Outer>
 {
     const SHAPE: (i64, i64) = Outer::SHAPE;
     const STRIDE: (i64, i64) = Outer::STRIDE;
@@ -208,15 +210,15 @@ mod tests {
     #[test]
     fn markers_are_compile_time_only() {
         /// Two-dimensional 32-by-8 marker shape used to test zero-sized composition.
-        type Shape = T2<C<32>, C<8>>;
+        type Shape = (C<32>, C<8>);
         /// Row-major marker strides corresponding to the test shape.
-        type Stride = T2<C<8>, C<1>>;
+        type Stride = (C<8>, C<1>);
         /// Pairs the test’s shape and strides without runtime storage.
-        type Affine = L<Shape, Stride>;
+        type Affine = Layout<Shape, Stride>;
         /// Adds a swizzle to verify composed markers also remain zero-sized.
-        type Smem = Composed<Swizzle<3, 4, 3>, 0, Affine>;
+        type Smem = ComposedLayout<Swizzle<3, 4, 3>, 0, Affine>;
 
-        assert_eq!(core::mem::size_of::<CpAsync<16>>(), 0);
+        assert_eq!(core::mem::size_of::<CopyG2S<16>>(), 0);
         assert_eq!(core::mem::size_of::<Smem>(), 0);
         assert_eq!(core::mem::size_of::<RowMajor<32, 8>>(), 0);
         assert_eq!(

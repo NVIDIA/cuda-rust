@@ -1,10 +1,11 @@
 error[E0080]: evaluation panicked: static layout offset exceeds i64
  --> src/static_layout.rs
   |
-  | impl<A, B, SA, SB> StaticLayout for L<T2<A, B>, T2<SA, SB>>
+  | impl<A, B, SA, SB> StaticLayout for Layout<(A, B), (SA, SB)>
 ...
-  |     const MAX_OFFSET: usize = checked_offset_add(L::<A, SA>::MAX_OFFSET, L::<B, SB>::MAX_OFFSET);
-  |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `<cute_rs::L<cute_rs::T2<cute_rs::C<2>, cute_rs::C<2>>, cute_rs::T2<cute_rs::C<i64::MAX>, cute_rs::C<1>>> as cute_rs::static_layout::StaticLayout>::MAX_OFFSET` failed inside this call
+  |     const MAX_OFFSET: usize =
+  |         checked_offset_add(Layout::<A, SA>::MAX_OFFSET, Layout::<B, SB>::MAX_OFFSET);
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `<cute_rs::Layout<(cute_rs::C<2>, cute_rs::C<2>), (cute_rs::C<i64::MAX>, cute_rs::C<1>)> as cute_rs::static_layout::StaticLayout>::MAX_OFFSET` failed inside this call
   |
 note: inside `static_layout::checked_offset_add`
  --> $RUST/core/src/panic.rs

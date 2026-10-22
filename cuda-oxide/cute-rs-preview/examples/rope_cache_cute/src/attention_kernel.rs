@@ -10,7 +10,7 @@ use ctm_rs::{
     thread,
 };
 use cute_rs::arch::NamedBarrier;
-use cute_rs::markers::{C, Composed, CpAsync, L, LeadingDim, RowMajor, Swizzle, T2};
+use cute_rs::markers::{C, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
 use cute_rs::static_layout::StaticLayout;
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 use cute_rs::{Bf16, GmemMatrix, RegisterTile, SmemTile, copy_g2s};
@@ -21,17 +21,17 @@ pub const PARTIAL_SHARED_BYTES: u32 = 35_104;
 pub const STATE_SIZE: usize = 130;
 
 /// Shared-memory storage layout for one complete BF16 key or value tile.
-type KvLayout = Composed<Swizzle<3, 3, 3>, 0, RowMajor<64, 128>>;
+type KvLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<64, 128>>;
 /// Eight rows per 128-thread copy; each thread transports eight BF16 values.
-type CopyLayout = Composed<Swizzle<3, 3, 3>, 0, RowMajor<8, 128>>;
+type CopyLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<8, 128>>;
 /// Map 128 copy threads to eight rows and sixteen contiguous 8-element vectors per row.
-type CopyThreads = L<T2<C<8>, C<16>>, T2<C<16>, C<1>>>;
+type CopyThreads = Layout<(C<8>, C<16>), (C<16>, C<1>)>;
 /// Map each copy thread's eight contiguous BF16 carriers to a 16-byte transaction.
-type CopyValues = L<T2<C<1>, C<8>>, T2<C<8>, C<1>>>;
+type CopyValues = Layout<(C<1>, C<8>), (C<8>, C<1>)>;
 /// Four neighboring threads own consecutive 32-coordinate pieces of a key row.
-type DotThreads = L<T2<C<4>, C<32>>, T2<C<32>, C<128>>>;
+type DotThreads = Layout<(C<4>, C<32>), (C<32>, C<128>)>;
 /// Each lane owns four adjacent numerator coordinates; warps own separate rows.
-type NumeratorThreads = L<T2<C<32>, C<4>>, T2<C<4>, C<128>>>;
+type NumeratorThreads = Layout<(C<32>, C<4>), (C<4>, C<128>)>;
 
 /// BF16 storage carried unchanged by the existing typed integer copy primitive.
 ///
@@ -116,7 +116,7 @@ unsafe fn stage(
             layout: PhantomData,
         };
         unsafe {
-            copy_g2s::<CpAsync<16>, CopyThreads, CopyValues, RowMajor<8, 128>, CopyLayout, u16>(
+            copy_g2s::<CopyG2S<16>, CopyThreads, CopyValues, RowMajor<8, 128>, CopyLayout, u16>(
                 &source, (split * 8 + GROUP, 0), &mut part, tid,
             );
         }
@@ -161,8 +161,8 @@ pub mod kernels {
         let tid = thread::threadIdx_x() as usize;
         let lane = tid % 32;
         let warp_id = tid / 32;
-        let numerator_column = NumeratorThreads::offset(lane);
-        let warp_numerator_offset = NumeratorThreads::offset(tid);
+        let numerator_column = NumeratorThreads::crd2idx(lane);
+        let warp_numerator_offset = NumeratorThreads::crd2idx(tid);
         let splits = (key_tokens as usize).div_ceil(64);
         let work = thread::blockIdx_x() as usize;
         let split = work % splits;
@@ -238,7 +238,7 @@ pub mod kernels {
             // Four neighboring lanes sum 32 dimensions apiece. Two passes
             // cover all 64 keys, including zero-filled tail rows.
             static_for!(PASS in [0, 1] {
-                let origin = DotThreads::offset(tid);
+                let origin = DotThreads::crd2idx(tid);
                 let row = origin / 128 + PASS * 32;
                 let column = origin % 128;
                 let query = StridedTensor::from_slice(q)
@@ -349,7 +349,7 @@ pub mod kernels {
     ) {
         let work = thread::blockIdx_x() as usize;
         let lane = thread::threadIdx_x() as usize;
-        let numerator_column = NumeratorThreads::offset(lane);
+        let numerator_column = NumeratorThreads::crd2idx(lane);
         if work >= query_tokens as usize * query_heads as usize {
             return;
         }

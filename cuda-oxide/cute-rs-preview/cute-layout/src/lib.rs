@@ -140,13 +140,13 @@
 //! values described by the atom must participate together as one unit.
 //!
 //! A **copy atom** is one indivisible copy transaction used as a building block
-//! for a larger cooperative copy. `CpAsync<16>` is a compile-time description
+//! for a larger cooperative copy. `CopyG2S<16>` is a compile-time description
 //! of one thread copying 16 bytes with `cp.async`; it does not perform the copy
 //! itself. More generally, an atom can also describe a compute operation such
 //! as a matrix multiply-accumulate (MMA).
 //!
 //! ```text
-//! CpAsync<16> marker -- compiler turns it into --> one 16-byte cp.async transaction
+//! CopyG2S<16> marker -- compiler turns it into --> one 16-byte cp.async transaction
 //! many such transactions ------------------> one cooperative tile copy
 //! ```
 //!

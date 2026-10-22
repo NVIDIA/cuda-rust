@@ -62,6 +62,9 @@ fn root_exports_preserve_type_identity() {
     same_type!(cute_rs::SharedTensor<f32, f32, ()>, cute_rs::copy::tiled::SharedTensor<f32, f32, ()>);
     same_type!(cute_rs::GlobalStoreTile<f32, 4>, cute_rs::copy::vector::GlobalStoreTile<f32, 4>);
     same_type!(cute_rs::TensorMap<f32, ()>, cute_rs::copy::tma::TensorMap<f32, ()>);
+    same_type!(cute_rs::Layout<(), ()>, cute_rs::markers::Layout<(), ()>);
+    same_type!(cute_rs::ComposedLayout<(), 0, ()>, cute_rs::markers::ComposedLayout<(), 0, ()>);
+    same_type!(cute_rs::CopyG2S<16>, cute_rs::markers::CopyG2S<16>);
 }
 
 #[cfg(not(feature = "host"))]
@@ -69,7 +72,7 @@ fn root_exports_preserve_type_identity() {
 fn device_attention_is_available_without_host_metadata() {
     use cute_rs::attention::sm100::{SharedLayout, SmemLayout};
 
-    assert_eq!(SharedLayout::<64, 64>::offset(0, 1), 1);
+    assert_eq!(SharedLayout::<64, 64>::crd2idx(0, 1), 1);
     assert_eq!(SharedLayout::<64, 64>::ROWS, 64);
 }
 

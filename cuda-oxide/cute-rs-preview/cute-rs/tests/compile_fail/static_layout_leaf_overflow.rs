@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 use cute_rs::{
-    markers::{C, L},
+    markers::{C, Layout},
     static_layout::StaticLayout,
 };
-type Invalid = L<C<4>, C<{ i64::MAX }>>;
+type Invalid = Layout<C<4>, C<{ i64::MAX }>>;
 const _: usize = Invalid::SIZE;
 fn main() {}

@@ -33,9 +33,10 @@ pub trait IndexLayout: sealed::Sealed + Copy {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
-    /// Map an in-domain logical coordinate to an originating storage offset.
-    /// This computes an integer only; it does not read or write storage.
-    fn offset(&self, index: usize) -> usize;
+    /// Map an in-domain logical coordinate to an originating storage offset
+    /// (CuTeDSL `cute.crd2idx`). This computes an integer only; it does not
+    /// read or write storage.
+    fn crd2idx(&self, index: usize) -> usize;
 }
 
 /// One-dimensional shape and positive physical element stride.
@@ -51,7 +52,7 @@ impl IndexLayout for Strided1D {
         self.len
     }
     #[inline(always)]
-    fn offset(&self, index: usize) -> usize {
+    fn crd2idx(&self, index: usize) -> usize {
         index * self.stride
     }
 }
@@ -70,8 +71,8 @@ impl<Parent: IndexLayout> IndexLayout for Subrange<Parent> {
         self.len
     }
     #[inline(always)]
-    fn offset(&self, index: usize) -> usize {
-        self.parent.offset(self.start + index)
+    fn crd2idx(&self, index: usize) -> usize {
+        self.parent.crd2idx(self.start + index)
     }
 }
 
@@ -92,8 +93,8 @@ impl<Parent: IndexLayout, const PARTS: usize> IndexLayout for Cyclic<Parent, PAR
         self.len
     }
     #[inline(always)]
-    fn offset(&self, index: usize) -> usize {
-        self.parent.offset(self.part + index * PARTS)
+    fn crd2idx(&self, index: usize) -> usize {
+        self.parent.crd2idx(self.part + index * PARTS)
     }
 }
 
@@ -260,7 +261,7 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
     /// `index < self.len()` must hold.
     #[inline(always)]
     pub unsafe fn get_unchecked(&self, index: usize) -> Storage {
-        unsafe { self.base.add(self.layout.offset(index)).read() }
+        unsafe { self.base.add(self.layout.crd2idx(index)).read() }
     }
     /// Reduce logical coordinates in increasing order without reassociation.
     #[inline(always)]
@@ -456,7 +457,7 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
     #[inline(always)]
     pub unsafe fn store_at(&mut self, index: usize, value: Storage) {
         unsafe {
-            self.base.add(self.layout.offset(index)).write(value);
+            self.base.add(self.layout.crd2idx(index)).write(value);
         }
     }
     /// Read, transform and replace one initialized logical coordinate.
@@ -465,7 +466,7 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
     /// active read or write may occur. This is not an atomic operation.
     #[inline(always)]
     pub unsafe fn update_at(&mut self, index: usize, f: impl FnOnce(Storage) -> Storage) {
-        let pointer = unsafe { self.base.add(self.layout.offset(index)) };
+        let pointer = unsafe { self.base.add(self.layout.crd2idx(index)) };
         unsafe {
             pointer.write(f(pointer.read()));
         }

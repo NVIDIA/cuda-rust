@@ -11,17 +11,17 @@ use ctm_rs::{
     memory::{DisjointSlice, DynamicSharedArray},
     thread, warp,
 };
-use cute_rs::markers::{C, Composed, CpAsync, L, LeadingDim, RowMajor, Swizzle, T2};
+use cute_rs::markers::{C, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
 use cute_rs::{FragmentA, FragmentBPair, FragmentC, GmemMatrix, SmemTile, copy_g2s};
 
 /// Swizzled 64-by-64 FP16 layout shared by Q, K, V, and the output staging tile.
-type SharedLayout = Composed<Swizzle<3, 3, 3>, 0, RowMajor<64, 64>>;
+type SharedLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<64, 64>>;
 /// Swizzled 16-by-64 subview used by one cooperative copy.
-type CopyLayout = Composed<Swizzle<3, 3, 3>, 0, RowMajor<16, 64>>;
+type CopyLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<16, 64>>;
 /// Map 128 threads to 16 rows and eight 16-byte copy positions.
-type CopyThreads = L<T2<C<16>, C<8>>, T2<C<8>, C<1>>>;
+type CopyThreads = Layout<(C<16>, C<8>), (C<8>, C<1>)>;
 /// Eight adjacent FP16 values copied by each thread.
-type CopyValues = L<T2<C<1>, C<8>>, T2<C<8>, C<1>>>;
+type CopyValues = Layout<(C<1>, C<8>), (C<8>, C<1>)>;
 /// Typed view of one 64-by-64 FP16 shared tile.
 type SharedTile = SmemTile<f16, SharedLayout>;
 
@@ -234,7 +234,7 @@ unsafe fn stage(src: &GmemMatrix<f16, LeadingDim<8>>, block: usize, dst: &Shared
             base: unsafe { dst.base.add(GROUP * 1024) }, capacity: 1024, layout: PhantomData,
         };
         unsafe {
-            copy_g2s::<CpAsync<16>, CopyThreads, CopyValues, RowMajor<16, 64>, CopyLayout, f16>(
+            copy_g2s::<CopyG2S<16>, CopyThreads, CopyValues, RowMajor<16, 64>, CopyLayout, f16>(
                 src, (block * 4 + GROUP, 0), &mut part, tid,
             );
         }

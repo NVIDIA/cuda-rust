@@ -7,7 +7,7 @@
 use core::ptr;
 
 use cute_rs::{
-    CpAsync, Mkl, Mxf4E2M1, Mxfp4BlockScaledTensor, Nkl, SharedTensor, TiledCopy,
+    CopyG2S, Mkl, Mxf4E2M1, Mxfp4BlockScaledTensor, Nkl, SharedTensor, TiledCopy,
 };
 
 /// Reject an M-role source paired with an N-role shared destination.
@@ -20,7 +20,7 @@ fn main() {
     let mut shared_b = unsafe {
         SharedTensor::<Mxf4E2M1, f16, (), Nkl>::from_raw_parts(ptr::null_mut(), 0)
     };
-    let copy = TiledCopy::<CpAsync<16>, (), (), ()>::new();
+    let copy = TiledCopy::<CopyG2S<16>, (), (), ()>::new();
 
     unsafe { copy.copy(&source, (0, 0), &mut shared_b, 0) };
 }

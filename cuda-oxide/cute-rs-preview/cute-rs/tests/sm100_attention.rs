@@ -37,7 +37,7 @@ fn check_bijection<L: SmemLayout>() {
     let mut offsets = Vec::new();
     for row in 0..L::ROWS {
         for col in 0..L::COLS {
-            offsets.push(L::offset(row, col));
+            offsets.push(L::crd2idx(row, col));
         }
     }
     offsets.sort_unstable();
@@ -62,14 +62,14 @@ fn tiled_swizzles_cover_storage_without_overlap() {
 fn tma_contiguous_chunks_and_transposed_v_share_the_same_storage() {
     /// K-major 128-by-128 tile used to compare chunked TMA and transposed coordinates.
     type K = SharedLayout<128, 128>;
-    assert_eq!(K::offset(0, 0), 0);
-    assert_eq!(K::offset(0, 64), 8192);
-    assert_eq!(K::offset(1, 0), 72);
+    assert_eq!(K::crd2idx(0, 0), 0);
+    assert_eq!(K::crd2idx(0, 64), 8192);
+    assert_eq!(K::crd2idx(1, 0), 72);
     for row in 0..32 {
         for col in 0..128 {
             assert_eq!(
-                SharedLayout::<32, 128>::offset(row, col),
-                SharedLayout::<128, 32, true>::offset(col, row)
+                SharedLayout::<32, 128>::crd2idx(row, col),
+                SharedLayout::<128, 32, true>::crd2idx(col, row)
             );
         }
     }
@@ -112,13 +112,13 @@ fn check_tile_array<L: SmemLayout, Role>() {
         );
         for row in 0..L::ROWS {
             for col in 0..L::COLS {
-                let offset = tile_index as usize * tile_elements + L::offset(row, col);
+                let offset = tile_index as usize * tile_elements + L::crd2idx(row, col);
                 assert!(!seen[offset], "overlapping physical tile elements");
                 seen[offset] = true;
                 // The XOR swizzle is unchanged when translated by whole periods.
                 let mask = (1usize << L::SWIZZLE_BITS) - 1;
                 let unswizzled = offset ^ (((offset >> 6) & mask) << 3);
-                let local = L::offset(row, col);
+                let local = L::crd2idx(row, col);
                 let local_unswizzled = local ^ (((local >> 6) & mask) << 3);
                 assert_eq!(
                     unswizzled,

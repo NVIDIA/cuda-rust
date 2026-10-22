@@ -7,7 +7,7 @@
 //! The leftmost shape mode changes fastest, as in `cute_layout::Layout`.
 //! This bounded, nonnegative-stride subset is suitable for device address maps;
 //! the complete algebra and validation remain in `cute-layout`.
-use crate::markers::{C, ColMajor, Composed, L, ReifySmem2D, RowMajor, Swizzle, T2};
+use crate::markers::{C, ColMajor, ComposedLayout, Layout, ReifySmem2D, RowMajor, Swizzle};
 
 /// A static layout mapping a flat logical coordinate to an element offset.
 pub trait StaticLayout {
@@ -18,9 +18,10 @@ pub trait StaticLayout {
     /// Affine layouts have an exact maximum; swizzled layouts may conservatively
     /// include unused offsets. The bound fits both `usize` and positive `i64`.
     const MAX_OFFSET: usize;
-    /// Evaluate a coordinate in the layout's domain, without accessing memory.
-    /// Callers that use the offset for memory access must bound the coordinate.
-    fn offset(flat: usize) -> usize;
+    /// Map a flat coordinate in the layout's domain to its element offset
+    /// without accessing memory (CuTeDSL `cute.crd2idx`). Callers that use
+    /// the offset for memory access must bound the coordinate.
+    fn crd2idx(flat: usize) -> usize;
 }
 
 /// Convert a nonnegative layout parameter without truncating it on narrow hosts.
@@ -68,7 +69,7 @@ const fn swizzled_bound(maximum: usize, bits: u32, base: u32, shift: i32) -> usi
     result as usize
 }
 
-impl<const N: i64, const S: i64> StaticLayout for L<C<N>, C<S>> {
+impl<const N: i64, const S: i64> StaticLayout for Layout<C<N>, C<S>> {
     const SIZE: usize = {
         let _ = Self::MAX_OFFSET;
         parameter(N)
@@ -78,48 +79,50 @@ impl<const N: i64, const S: i64> StaticLayout for L<C<N>, C<S>> {
         checked_offset_mul(parameter(N - 1), parameter(S))
     };
     #[inline(always)]
-    fn offset(flat: usize) -> usize {
+    fn crd2idx(flat: usize) -> usize {
         let _ = Self::SIZE;
         flat * S as usize
     }
 }
-impl<A, B, SA, SB> StaticLayout for L<T2<A, B>, T2<SA, SB>>
+impl<A, B, SA, SB> StaticLayout for Layout<(A, B), (SA, SB)>
 where
-    L<A, SA>: StaticLayout,
-    L<B, SB>: StaticLayout,
+    Layout<A, SA>: StaticLayout,
+    Layout<B, SB>: StaticLayout,
 {
     const SIZE: usize = {
         let _ = Self::MAX_OFFSET;
-        match L::<A, SA>::SIZE.checked_mul(L::<B, SB>::SIZE) {
+        match Layout::<A, SA>::SIZE.checked_mul(Layout::<B, SB>::SIZE) {
             Some(n) => n,
             None => panic!("static layout extent overflow"),
         }
     };
-    const MAX_OFFSET: usize = checked_offset_add(L::<A, SA>::MAX_OFFSET, L::<B, SB>::MAX_OFFSET);
+    const MAX_OFFSET: usize =
+        checked_offset_add(Layout::<A, SA>::MAX_OFFSET, Layout::<B, SB>::MAX_OFFSET);
     #[inline(always)]
-    fn offset(flat: usize) -> usize {
+    fn crd2idx(flat: usize) -> usize {
         let _ = Self::SIZE;
-        L::<A, SA>::offset(flat % L::<A, SA>::SIZE) + L::<B, SB>::offset(flat / L::<A, SA>::SIZE)
+        Layout::<A, SA>::crd2idx(flat % Layout::<A, SA>::SIZE)
+            + Layout::<B, SB>::crd2idx(flat / Layout::<A, SA>::SIZE)
     }
 }
 impl<const R: i64, const K: i64> StaticLayout for RowMajor<R, K> {
-    const SIZE: usize = <L<T2<C<R>, C<K>>, T2<C<K>, C<1>>>>::SIZE;
-    const MAX_OFFSET: usize = <L<T2<C<R>, C<K>>, T2<C<K>, C<1>>>>::MAX_OFFSET;
+    const SIZE: usize = <Layout<(C<R>, C<K>), (C<K>, C<1>)>>::SIZE;
+    const MAX_OFFSET: usize = <Layout<(C<R>, C<K>), (C<K>, C<1>)>>::MAX_OFFSET;
     #[inline(always)]
-    fn offset(flat: usize) -> usize {
-        <L<T2<C<R>, C<K>>, T2<C<K>, C<1>>>>::offset(flat)
+    fn crd2idx(flat: usize) -> usize {
+        <Layout<(C<R>, C<K>), (C<K>, C<1>)>>::crd2idx(flat)
     }
 }
 impl<const R: i64, const K: i64> StaticLayout for ColMajor<R, K> {
-    const SIZE: usize = <L<T2<C<R>, C<K>>, T2<C<1>, C<R>>>>::SIZE;
-    const MAX_OFFSET: usize = <L<T2<C<R>, C<K>>, T2<C<1>, C<R>>>>::MAX_OFFSET;
+    const SIZE: usize = <Layout<(C<R>, C<K>), (C<1>, C<R>)>>::SIZE;
+    const MAX_OFFSET: usize = <Layout<(C<R>, C<K>), (C<1>, C<R>)>>::MAX_OFFSET;
     #[inline(always)]
-    fn offset(flat: usize) -> usize {
-        <L<T2<C<R>, C<K>>, T2<C<1>, C<R>>>>::offset(flat)
+    fn crd2idx(flat: usize) -> usize {
+        <Layout<(C<R>, C<K>), (C<1>, C<R>)>>::crd2idx(flat)
     }
 }
 impl<const B: u32, const M: u32, const S: i32, const O: i64, Outer: StaticLayout> StaticLayout
-    for Composed<Swizzle<B, M, S>, O, Outer>
+    for ComposedLayout<Swizzle<B, M, S>, O, Outer>
 {
     const SIZE: usize = {
         let _ = Self::MAX_OFFSET;
@@ -128,19 +131,23 @@ impl<const B: u32, const M: u32, const S: i32, const O: i64, Outer: StaticLayout
     const MAX_OFFSET: usize =
         swizzled_bound(checked_offset_add(Outer::MAX_OFFSET, parameter(O)), B, M, S);
     #[inline(always)]
-    fn offset(flat: usize) -> usize {
+    fn crd2idx(flat: usize) -> usize {
         let _ = Self::SIZE;
-        cute_layout::Swizzle::new(B, M, S).apply((Outer::offset(flat) + O as usize) as i64) as usize
+        cute_layout::Swizzle::new(B, M, S).apply((Outer::crd2idx(flat) + O as usize) as i64)
+            as usize
     }
 }
 
-/// Evaluate a typed two-dimensional shared-memory layout, including its swizzle.
+/// Map a `(row, column)` coordinate through a typed two-dimensional
+/// shared-memory layout, including its swizzle (CuTeDSL `cute.crd2idx` on a
+/// composed layout).
 ///
 /// Offsets and strides count elements. The static offset is added before the
-/// swizzle, matching `ComposedLayout`. This computes an offset only; callers
-/// that dereference it must establish coordinate bounds and storage lifetime.
+/// swizzle, matching `cute_layout::ComposedLayout`. This computes an offset
+/// only; callers that dereference it must establish coordinate bounds and
+/// storage lifetime.
 #[inline(always)]
-pub fn offset_2d<L: ReifySmem2D>(row: usize, column: usize) -> usize {
+pub fn crd2idx_2d<L: ReifySmem2D>(row: usize, column: usize) -> usize {
     const {
         let _ = max_offset_2d::<L>();
     }
@@ -152,7 +159,7 @@ pub fn offset_2d<L: ReifySmem2D>(row: usize, column: usize) -> usize {
 ///
 /// Rejects invalid dimensions and offsets that cannot be represented by both
 /// `usize` and the signed CuTe algebra. Swizzles can conservatively include
-/// holes in this bound. `offset_2d` instantiates this check before device code.
+/// holes in this bound. `crd2idx_2d` instantiates this check before device code.
 pub const fn max_offset_2d<L: ReifySmem2D>() -> usize {
     assert!(L::SHAPE.0 > 0 && L::SHAPE.1 > 0);
     assert!(L::STRIDE.0 >= 0 && L::STRIDE.1 >= 0 && L::OFFSET >= 0);

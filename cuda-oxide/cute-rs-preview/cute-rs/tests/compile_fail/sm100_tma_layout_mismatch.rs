@@ -3,12 +3,12 @@
 //! Compile-fail probe: reject a cluster TMA copy whose descriptor and destination shapes differ.
 #![feature(f16)]
 use cute_rs::{
-    Composed, OperandA, RowMajor, Sm100ClusterTmaCopy, Sm100SharedTile, Swizzle, TensorMap,
+    ComposedLayout, OperandA, RowMajor, Sm100ClusterTmaCopy, Sm100SharedTile, Swizzle, TensorMap,
 };
 /// B128-swizzled 128-by-64 descriptor layout.
-type A = Composed<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>;
+type A = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>;
 /// B128-swizzled 96-by-64 destination layout.
-type B = Composed<Swizzle<3, 3, 3>, 0, RowMajor<96, 64>>;
+type B = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<96, 64>>;
 /// Reject a cluster TMA copy whose descriptor and destination shapes differ.
 fn main() {
     let desc: *const TensorMap<f16, A> = core::ptr::null();

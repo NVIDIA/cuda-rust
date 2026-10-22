@@ -10,7 +10,7 @@
 <rect class="k-purple" x="36" y="82" width="468" height="184" rx="8" stroke-width="0.9"/>
 <text class="th tx-purple l" x="56" y="106">Compile-time Rust types (zero bytes at runtime)</text>
 <rect class="k-box" x="56" y="124" width="428" height="30" rx="5" stroke-width="0.7"/>
-<text class="tm tx-box l" x="72" y="139">Composed&lt;Swizzle&lt;3, 3, 3&gt;, 0, RowMajor&lt;128, 64&gt;&gt;</text>
+<text class="tm tx-box l" x="72" y="139">ComposedLayout&lt;Swizzle&lt;3, 3, 3&gt;, 0, RowMajor&lt;128, 64&gt;&gt;</text>
 <rect class="k-box" x="56" y="162" width="428" height="30" rx="5" stroke-width="0.7"/>
 <text class="tm tx-box l" x="72" y="177">Sm100SharedTile&lt;ASmem, OperandA&gt;</text>
 <rect class="k-box" x="56" y="200" width="428" height="30" rx="5" stroke-width="0.7"/>

@@ -260,7 +260,7 @@ impl ComposedLayout {
     /// the composition's declared unit. For a byte-unit layout, `delta = 3`
     /// means “three bytes after this item's first byte.”
     ///
-    /// For a one-thread [copy atom](crate#atoms) such as `CpAsync<16>`,
+    /// For a one-thread [copy atom](crate#atoms) such as `CopyG2S<16>`,
     /// validation calls this method for deltas 0 through 15 to check that the
     /// swizzle keeps those 16 bytes together and in order.
     pub fn call_with_outer_delta(&self, coord: &IntTuple, delta: i64) -> i64 {

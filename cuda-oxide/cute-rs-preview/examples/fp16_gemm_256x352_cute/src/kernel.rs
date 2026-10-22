@@ -22,7 +22,7 @@ use ctm_rs::{
 };
 use ctm_rs::{cluster_launch, cuda_module, kernel, launch_bounds, launch_contract};
 use cute_rs::{
-    Composed, OperandA, OperandB, PipelineTmaUmma, PipelineUmmaAsync, RowMajor,
+    ComposedLayout, OperandA, OperandB, PipelineTmaUmma, PipelineUmmaAsync, RowMajor,
     Sm100ClusterTmaCopy, Sm100SharedTile, Sm100TiledMma, Sm100TmaStorePipeline, Sm100TmemEpilogue,
     Swizzle, TensorMap,
 };
@@ -30,13 +30,13 @@ use cute_rs::{
 // These element layouts also encode the host TMA descriptors. FP16 shifts
 // the swizzle's low-bit position by one when lowering to byte addresses.
 /// Per-CTA 128x64 FP16 A tile with the shared swizzle used by its tensor map.
-pub type ASmem = Composed<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>;
+pub type ASmem = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>;
 /// Per-CTA 96x64 FP16 B tile feeding the 192-column MMA partition.
-pub type B0Smem = Composed<Swizzle<3, 3, 3>, 0, RowMajor<96, 64>>;
+pub type B0Smem = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<96, 64>>;
 /// Per-CTA 80x64 FP16 B tile feeding the 160-column MMA partition.
-pub type B1Smem = Composed<Swizzle<3, 3, 3>, 0, RowMajor<80, 64>>;
+pub type B1Smem = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<80, 64>>;
 /// Per-CTA 128x32 FP16 output tile with the B64 shared swizzle.
-pub type CSmem = Composed<Swizzle<2, 3, 3>, 0, RowMajor<128, 32>>;
+pub type CSmem = ComposedLayout<Swizzle<2, 3, 3>, 0, RowMajor<128, 32>>;
 
 /// Threads required in each CTA by the kernel launch contract.
 pub const THREADS: u32 = 192;

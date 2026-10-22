@@ -125,7 +125,7 @@ pub use epilogue::{
     Sm120Epilogue128x128, Sm120EpilogueHalfLayout, Sm120EpilogueWarp128x128,
     sm120_epilogue_atom_origin, sm120_epilogue_physical_offset,
 };
-pub use markers::{C, ColMajor, Composed, CpAsync, L, LeadingDim, RowMajor, Swizzle, T2};
+pub use markers::{C, ColMajor, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
 pub use mma::block_scaled::{
     Mxf4AccumulatorTile2x8, Mxf4BTileK64, Mxf4ScalePairs, Mxf4ScalePairs128, Mxf4ScaleStage,
     Mxf4ScaleTile128, Mxfp4TiledMma,

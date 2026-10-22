@@ -5,13 +5,13 @@
 
 #![doc = "Checks the zero-storage paired SM100 MMA configuration."]
 use super::*;
-use crate::{Composed, RowMajor, Swizzle};
+use crate::{ComposedLayout, RowMajor, Swizzle};
 /// Local 128-by-64 FP16 A tile with the B128 swizzle.
-type A = Composed<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>;
+type A = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>;
 /// Local 96-by-64 B tile belonging to the collective N192 partition.
-type B0 = Composed<Swizzle<3, 3, 3>, 0, RowMajor<96, 64>>;
+type B0 = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<96, 64>>;
 /// Local 80-by-64 B tile belonging to the collective N160 partition.
-type B1 = Composed<Swizzle<3, 3, 3>, 0, RowMajor<80, 64>>;
+type B1 = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<80, 64>>;
 /// The paired SM100 MMA configuration must occupy zero runtime bytes.
 #[test]
 fn typed_split_plan_has_no_runtime_storage() {

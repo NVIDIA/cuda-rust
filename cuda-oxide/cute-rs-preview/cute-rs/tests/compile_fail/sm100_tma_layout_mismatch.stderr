@@ -6,8 +6,8 @@ error[E0308]: mismatched types
    |         |
    |         arguments to this function are incorrect
    |
-   = note: expected mutable reference `&mut Sm100SharedTile<Composed<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>, _>`
-              found mutable reference `&mut Sm100SharedTile<Composed<Swizzle<3, 3, 3>, 0, RowMajor<96, 64>>, OperandA>`
+   = note: expected mutable reference `&mut Sm100SharedTile<ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>, _>`
+              found mutable reference `&mut Sm100SharedTile<ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<96, 64>>, OperandA>`
 note: associated function defined here
   --> src/sm100/tma.rs
    |

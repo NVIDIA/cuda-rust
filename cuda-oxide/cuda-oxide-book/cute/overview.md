@@ -24,7 +24,7 @@ Every CuTe kernel in `cuda-oxide` is built on two complementary device crates pl
 | :---- | :---- | :----------- |
 | **`cute-rs`** | Semantic CuTe layer | `Tensor` / `TensorMut`, `zipped_divide`, `slice`, cooperative/tiled/TMA copies, producer/consumer pipelines, reductions, and tiled MMA (`mma::bf16`, `mma::block_scaled`, `sm100`, `attention::sm100`). |
 | **`ctm-rs`** | Instruction & ABI layer | `#[cuda_module]`, `#[kernel]`, launch contracts, thread/warp/cluster coordinates, `mbarrier` state machines, `tcgen05::tmem::TmemGuard`, and packed register math over `cuda-device`. |
-| **`cute-layout`** | Shared layout algebra | `IntTuple`, `Layout`, `Composed`, `Swizzle`, and static compile-time proofs for cooperative copies, `ldmatrix`, and TMA swizzle phase alignment. |
+| **`cute-layout`** | Shared layout algebra | `IntTuple`, `Layout`, `ComposedLayout`, `Swizzle`, and static compile-time proofs for cooperative copies, `ldmatrix`, and TMA swizzle phase alignment. |
 
 ```{figure} images/three-tiers-comparison.svg
 :align: center

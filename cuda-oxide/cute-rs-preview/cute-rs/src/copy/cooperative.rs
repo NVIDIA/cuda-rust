@@ -182,7 +182,7 @@ impl<T: Copy, Layout: crate::markers::ReifySmem2D> SmemTile<T, Layout> {
     /// synchronization performed; no active write may conflict with this read.
     #[inline(always)]
     pub unsafe fn get(&self, row: usize, column: usize) -> T {
-        let offset = crate::static_layout::offset_2d::<Layout>(row, column);
+        let offset = crate::static_layout::crd2idx_2d::<Layout>(row, column);
         unsafe { self.base.add(offset).read() }
     }
 

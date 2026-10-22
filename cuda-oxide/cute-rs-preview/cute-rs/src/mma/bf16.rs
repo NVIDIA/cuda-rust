@@ -7,19 +7,18 @@
 //! Static thread/value layouts determine every operand and result coordinate.
 //! Load callbacks can describe ordinary matrices or virtual im2col views.
 //! CTM supplies only the final instruction and packed physical loads.
-use crate::markers::{C, L, T2};
+use crate::markers::{C, Layout};
 use crate::numeric::Bf16;
 use crate::static_layout::StaticLayout;
 use core::marker::PhantomData;
 
-type Threads = T2<C<4>, C<8>>;
+type Threads = (C<4>, C<8>);
 /// A's `(lane, scalar value)` map into a row-major 16-by-16 logical tile.
-pub type ALayout =
-    L<T2<Threads, T2<T2<C<2>, C<2>>, C<2>>>, T2<T2<C<2>, C<16>>, T2<T2<C<1>, C<128>>, C<8>>>>;
+pub type ALayout = Layout<(Threads, ((C<2>, C<2>), C<2>)), ((C<2>, C<16>), ((C<1>, C<128>), C<8>))>;
 /// B's `(lane, scalar value)` map into the stored 8-by-16 `(N,K)` tile.
-pub type BLayout = L<T2<Threads, T2<C<2>, C<2>>>, T2<T2<C<2>, C<16>>, T2<C<1>, C<8>>>>;
+pub type BLayout = Layout<(Threads, (C<2>, C<2>)), ((C<2>, C<16>), (C<1>, C<8>))>;
 /// C's `(lane, register)` map into a row-major 16-by-8 logical tile.
-pub type CLayout = L<T2<Threads, T2<C<2>, C<2>>>, T2<T2<C<2>, C<8>>, T2<C<1>, C<64>>>>;
+pub type CLayout = Layout<(Threads, (C<2>, C<2>)), ((C<2>, C<8>), (C<1>, C<64>))>;
 
 /// This lane's BF16 A registers, whose layout is established by its partition.
 #[derive(Clone, Copy)]
@@ -208,11 +207,8 @@ impl<'a> PackedDecode<'a> {
 }
 
 #[inline(always)]
-fn coordinate<Layout: StaticLayout, const COLS: usize>(
-    lane: usize,
-    value: usize,
-) -> (usize, usize) {
-    let offset = Layout::offset(lane + 32 * value);
+fn coordinate<L: StaticLayout, const COLS: usize>(lane: usize, value: usize) -> (usize, usize) {
+    let offset = L::crd2idx(lane + 32 * value);
     (offset / COLS, offset % COLS)
 }
 impl APartition {

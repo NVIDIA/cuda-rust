@@ -17,9 +17,9 @@ Data flow of `blockscale_gemm_cute` on SM120a: 4 typed TMA descriptors feed a 3-
 
 ```rust
 // Shared-memory layouts and operand-role views (Mkl for A, Nkl for B)
-type TileP    = L<T2<C<128>, C<32>>, T2<C<32>, C<1>>>;
-type SmemP    = Composed<Swizzle<2, 3, 3>, 0, TileP>;
-type ByteSmem = Composed<Swizzle<2, 4, 3>, 0, RowMajor<128, 64>>;
+type TileP    = Layout<(C<128>, C<32>), (C<32>, C<1>)>;
+type SmemP    = ComposedLayout<Swizzle<2, 3, 3>, 0, TileP>;
+type ByteSmem = ComposedLayout<Swizzle<2, 4, 3>, 0, RowMajor<128, 64>>;
 type SharedA  = SharedTensor<Mxf4E2M1, f16, SmemP, Mkl>;
 type SharedB  = SharedTensor<Mxf4E2M1, f16, SmemP, Nkl>;
 

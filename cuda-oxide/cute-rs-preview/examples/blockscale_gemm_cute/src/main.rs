@@ -63,10 +63,10 @@ use ctm_rs::{cuda_module, kernel, launch_bounds, launch_contract, thread, warp};
 use cuda_core::{CudaContext, LaunchConfig1D};
 use cute_rs::tma::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
 use cute_rs::{
-    C, Composed, Consumer, L, Mkl, Mxf4AccumulatorTile2x8, Mxf4E2M1, Mxfp4TiledMma, Nkl,
+    C, ComposedLayout, Consumer, Layout, Mkl, Mxf4AccumulatorTile2x8, Mxf4E2M1, Mxfp4TiledMma, Nkl,
     PipelineState, Producer, RowMajor, SharedScaleAtom, SharedTensor, Sm1xxBlockScaleKMajor,
     Sm120Epilogue128x128, Sm120EpilogueHalfLayout, Sm120ScaleAtom, SmemTile,
-    StaticPersistentTileScheduler, Swizzle, T2, TensorMap, TmaLoadPipeline, TmaStorePipeline,
+    StaticPersistentTileScheduler, Swizzle, TensorMap, TmaLoadPipeline, TmaStorePipeline,
     copy_tma_2d, copy_tma_s2g_2d,
 };
 
@@ -96,11 +96,11 @@ type TileScheduler = StaticPersistentTileScheduler<16, 16, BATCHES>;
 // TMA moves one 128-row x 64-byte packed-FP4 stage per operand. The consumer
 // overlays those exact bytes as 128x32 f16 carriers for ldmatrix.
 /// Unswizzled 128x32 FP16-carrier layout overlaying packed FP4 input bytes.
-type TileP = L<T2<C<128>, C<32>>, T2<C<32>, C<1>>>;
+type TileP = Layout<(C<128>, C<32>), (C<32>, C<1>)>;
 /// Element-domain swizzle for the FP16 carriers consumed by matrix loads.
-type SmemP = Composed<Swizzle<2, 3, 3>, 0, TileP>;
+type SmemP = ComposedLayout<Swizzle<2, 3, 3>, 0, TileP>;
 /// The same packed input stage expressed as 128x64 bytes for TMA.
-type ByteSmem = Composed<Swizzle<2, 4, 3>, 0, RowMajor<128, 64>>;
+type ByteSmem = ComposedLayout<Swizzle<2, 4, 3>, 0, RowMajor<128, 64>>;
 /// Contiguous 512-byte scale stage carried as 256 u16 values.
 type ScaleTmaSmem = RowMajor<1, 256>;
 /// Typed shared A view carrying packed MXF4 values in FP16 transport lanes.

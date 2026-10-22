@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 use cute_rs::{
-    markers::{C, Composed, L, Swizzle},
+    markers::{C, ComposedLayout, Layout, Swizzle},
     static_layout::StaticLayout,
 };
-type Invalid = Composed<Swizzle<0, 0, 0>, 1, L<C<2>, C<{ i64::MAX }>>>;
+type Invalid = ComposedLayout<Swizzle<0, 0, 0>, 1, Layout<C<2>, C<{ i64::MAX }>>>;
 const _: usize = Invalid::SIZE;
 fn main() {}

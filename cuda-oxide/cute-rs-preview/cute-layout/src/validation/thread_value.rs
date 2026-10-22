@@ -192,7 +192,7 @@ pub fn validate_tv_layout(
 /// 250 copy threads / 8 atom threads = 31 + remainder   invalid
 /// ```
 ///
-/// `CpAsync<N>` uses one thread per atom, but this helper also supports later
+/// `CopyG2S<N>` uses one thread per atom, but this helper also supports later
 /// atom kinds that group several threads.
 pub fn validate_atom_compatibility(
     copy_threads: i64,
@@ -255,7 +255,7 @@ pub fn validate_atom_compatibility(
 /// is smaller; evaluating the exact map can prove a wider interval in a
 /// special case.
 ///
-/// This function is for `CpAsync<N>`, where one thread owns each atom.
+/// This function is for `CopyG2S<N>`, where one thread owns each atom.
 /// Multi-thread atom kinds also need [`validate_atom_compatibility`] plus a
 /// compiler check specific to that atom's ownership rule.
 pub fn validate_per_thread_atom_contiguity(

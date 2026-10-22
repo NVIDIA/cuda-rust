@@ -182,7 +182,7 @@ mod canonical_path_tests {
             "cute-rs::numeric::Bf16::from_f32",
             "cute_rs::arch::exp2_f32",
             "cute_rs::tensor::partition::{impl#3}::get",
-            "cute_rs::static_layout::{impl#1}::offset",
+            "cute_rs::static_layout::{impl#1}::crd2idx",
             "cute_rs::mma::bf16::{impl#1}::get_slice",
             "cute_rs::reduction::{impl#0}::observe",
         ] {
@@ -353,7 +353,7 @@ mod canonical_path_tests {
     fn typed_partition_and_bf16_modules_have_closed_source_boundaries() {
         for (module, method) in [
             ("copy::cooperative", "SharedRow<...>::zip_fold"),
-            ("static_layout", "L<...>::offset"),
+            ("static_layout", "Layout<...>::crd2idx"),
             ("mma::bf16", "Bf16Mma16x8x16::get_slice"),
             ("reduction", "argmax_bf16"),
         ] {

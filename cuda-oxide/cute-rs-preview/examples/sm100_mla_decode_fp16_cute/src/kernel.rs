@@ -449,7 +449,7 @@ unsafe fn softmax_tile<const LAST: bool>(
         }
         let key = (wid / 2) * 64 + i as u32;
         *destination
-            .add((key / 32) as usize * 2048 + PLayout::offset(row, key % 32))
+            .add((key / 32) as usize * 2048 + PLayout::crd2idx(row, key % 32))
             .cast::<U32x4>() = U32x4(packed);
         i += 8;
     }

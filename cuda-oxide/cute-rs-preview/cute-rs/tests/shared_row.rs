@@ -5,15 +5,15 @@
 //! Ordered streaming reductions over independently laid-out tensor views.
 
 use cute_rs::partition::StridedTensor;
-use cute_rs::{Composed, RowMajor, SmemTile, Swizzle};
+use cute_rs::{ComposedLayout, RowMajor, SmemTile, Swizzle};
 
 #[test]
 fn zipped_row_reduction_preserves_coordinate_order_and_both_layouts() {
-    type Layout = Composed<Swizzle<2, 0, 2>, 0, RowMajor<4, 4>>;
+    type Layout = ComposedLayout<Swizzle<2, 0, 2>, 0, RowMajor<4, 4>>;
     let mut shared = [0.0_f32; 16];
     for row in 0..4 {
         for column in 0..4 {
-            shared[cute_rs::static_layout::offset_2d::<Layout>(row, column)] =
+            shared[cute_rs::static_layout::crd2idx_2d::<Layout>(row, column)] =
                 (row * 10 + column) as f32;
         }
     }

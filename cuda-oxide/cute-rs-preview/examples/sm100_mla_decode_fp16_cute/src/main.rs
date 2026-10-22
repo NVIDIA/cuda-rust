@@ -441,11 +441,11 @@ mod tests {
     fn probability_vectors_remain_contiguous_and_aligned_under_swizzle() {
         for row in 0..64 {
             for col in (0..32).step_by(8) {
-                let start = kernel::PLayout::offset(row, col);
+                let start = kernel::PLayout::crd2idx(row, col);
                 assert_eq!(start % 8, 0);
                 for lane in 0..8 {
                     assert_eq!(
-                        kernel::PLayout::offset(row, col + lane),
+                        kernel::PLayout::crd2idx(row, col + lane),
                         start + lane as usize
                     );
                 }

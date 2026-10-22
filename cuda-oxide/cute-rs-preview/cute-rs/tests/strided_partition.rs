@@ -172,11 +172,11 @@ fn register_gather_expresses_permuted_logical_coordinates() {
 
 #[test]
 fn shared_tile_loads_follow_its_declared_layout() {
-    type Layout = cute_rs::Composed<cute_rs::Swizzle<2, 0, 2>, 0, cute_rs::RowMajor<4, 4>>;
+    type Layout = cute_rs::ComposedLayout<cute_rs::Swizzle<2, 0, 2>, 0, cute_rs::RowMajor<4, 4>>;
     let mut storage = [0.0_f32; 16];
     for row in 0..4 {
         for col in 0..4 {
-            let offset = cute_rs::static_layout::offset_2d::<Layout>(row, col);
+            let offset = cute_rs::static_layout::crd2idx_2d::<Layout>(row, col);
             storage[offset] = (10 * row + col) as f32;
         }
     }

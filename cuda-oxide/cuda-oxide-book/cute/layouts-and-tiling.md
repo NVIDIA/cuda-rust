@@ -16,7 +16,7 @@ let layout: Layout = "(2,3):(3,1)".parse().unwrap();
 assert_eq!(layout.checked_call(&IntTuple::Leaf(1)), Some(3));
 ```
 
-In kernel signatures, you write static layouts as Rust type markers (`C<N>`, `T2<A, B>`, `L<Shape, Stride>`, `RowMajor<R, C>`, `ColMajor<R, C>`, `Swizzle<B, M, S>`, and `Composed<Swizzle, Offset, Layout>`).
+In kernel signatures, you write static layouts as Rust type markers (`C<N>`, Rust tuples such as `(A, B)` for nested modes, `Layout<Shape, Stride>`, `RowMajor<R, C>`, `ColMajor<R, C>`, `Swizzle<B, M, S>`, and `ComposedLayout<Swizzle, Offset, Layout>`).
 
 ---
 
@@ -63,15 +63,15 @@ For 2D and 3D Tensor Memory Accelerator (TMA) transfers, you define the swizzled
 :align: center
 :width: 100%
 
-A single `Composed<Swizzle, Offset, Layout>` type alias binds host `create_tensor_map_tiled` encoding to device `&TensorMap<T, Layout>` and `Sm100SharedTile`.
+A single `ComposedLayout<Swizzle, Offset, Layout>` type alias binds host `create_tensor_map_tiled` encoding to device `&TensorMap<T, Layout>` and `Sm100SharedTile`.
 ```
 
 ```rust
 use cute_rs::tma::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
-use cute_rs::{Composed, RowMajor, Swizzle, TensorMap};
+use cute_rs::{ComposedLayout, RowMajor, Swizzle, TensorMap};
 
 // Shared layout type: 128x64 tile with a 128-byte swizzle
-pub type ASmem = Composed<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>;
+pub type ASmem = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>;
 
 // 1. Host: encode the 128-byte hardware CUtensorMap from `ASmem`
 let a_desc: TensorMap<f16, ASmem> = create_tensor_map_tiled_with_options(

@@ -6,8 +6,8 @@ error[E0308]: mismatched types
    |             |
    |             arguments to this method are incorrect
    |
-   = note: expected reference `&Sm100SharedTile<Composed<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>, OperandA>`
-              found reference `&Sm100SharedTile<Composed<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>, OperandB>`
+   = note: expected reference `&Sm100SharedTile<ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>, OperandA>`
+              found reference `&Sm100SharedTile<ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>, OperandB>`
 note: method defined here
   --> src/sm100/mma.rs
    |

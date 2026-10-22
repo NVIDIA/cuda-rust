@@ -41,11 +41,11 @@ fn only_the_hardware_modes_are_encodable() {
 /// Element-unit swizzles must convert to the exact byte-unit TMA encoding.
 #[test]
 fn element_recast_reaches_the_byte_modes() {
-    use crate::markers::{Composed, ReifySmem2D, RowMajor, Swizzle};
+    use crate::markers::{ComposedLayout, ReifySmem2D, RowMajor, Swizzle};
     // For f16, element pattern S<3,3,3> becomes byte pattern S<3,4,3>,
     // which is TMA B128.
     /// FP16 element-unit layout that must recast to TMA’s B128 byte pattern.
-    type Smem = Composed<Swizzle<3, 3, 3>, 0, RowMajor<8, 64>>;
+    type Smem = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<8, 64>>;
     assert_eq!(Smem::NUM_BITS, 3);
     assert_eq!(tma_swizzle_mode_for::<Smem>(2), Some(TmaSwizzleMode::B128));
     // For f32, it becomes S<3,5,3>, which TMA cannot encode.
@@ -67,12 +67,12 @@ fn swizzle_modes_name_their_exact_row_spans() {
 /// The packed MXFP4 value tile must encode an 8192-byte footprint using B64 swizzling.
 #[test]
 fn flattened_mxfp4_ab_tile_is_8192_bytes_with_b64_swizzle() {
-    use crate::markers::{Composed, RowMajor, Swizzle};
+    use crate::markers::{ComposedLayout, RowMajor, Swizzle};
 
     // Two FP4 values share each byte: 128 K values become 64 bytes.
     // Byte pattern S<2,4,3> is TMA B64.
     /// Packed-byte value tile using the exact B64 TMA swizzle.
-    type ByteSmem = Composed<Swizzle<2, 4, 3>, 0, RowMajor<128, 64>>;
+    type ByteSmem = ComposedLayout<Swizzle<2, 4, 3>, 0, RowMajor<128, 64>>;
     assert_eq!(size_in_bytes::<u8, ByteSmem>(), 8_192);
     assert_eq!(
         tma_swizzle_mode_for::<ByteSmem>(1),
@@ -99,15 +99,15 @@ fn canonical_mxfp4_scale_tile_is_512_bytes_without_swizzle() {
 /// `size_in_bytes` follows CuTeDSL: the cosize of the affine layout times the element size.
 #[test]
 fn size_in_bytes_is_cosize_times_element_size() {
-    use crate::markers::{C, Composed, L, RowMajor, Swizzle, T2};
+    use crate::markers::{C, ComposedLayout, Layout, RowMajor, Swizzle};
 
     // A padded row stride enlarges the cosize beyond rows x columns.
     /// Eight 64-element rows with a 72-element pitch.
-    type Padded = L<T2<C<8>, C<64>>, T2<C<72>, C<1>>>;
+    type Padded = Layout<(C<8>, C<64>), (C<72>, C<1>)>;
     assert_eq!(size_in_bytes::<u16, Padded>(), (7 * 72 + 63 + 1) * 2);
     // A swizzle permutes addresses inside the span and adds no bytes.
     /// B128-swizzled 8x64 FP16 tile.
-    type Swizzled = Composed<Swizzle<3, 3, 3>, 0, RowMajor<8, 64>>;
+    type Swizzled = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<8, 64>>;
     assert_eq!(size_in_bytes::<u16, Swizzled>(), 8 * 64 * 2);
 }
 

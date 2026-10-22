@@ -9,7 +9,7 @@ impl IndexLayout for Escaping {
     fn len(&self) -> usize {
         1
     }
-    fn offset(&self, _: usize) -> usize {
+    fn crd2idx(&self, _: usize) -> usize {
         usize::MAX
     }
 }

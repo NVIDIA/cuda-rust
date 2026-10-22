@@ -937,7 +937,7 @@ pub mod kernels {
                                     scaled_half_pair(out.values[j + 4], out.values[j + 5], factor),
                                     scaled_half_pair(out.values[j + 6], out.values[j + 7], factor),
                                 ]);
-                                *dst.add(OLayout::offset(tid % 128, col + j as u32))
+                                *dst.add(OLayout::crd2idx(tid % 128, col + j as u32))
                                     .cast::<U32x4>() = words;
                                 j += 8;
                             }

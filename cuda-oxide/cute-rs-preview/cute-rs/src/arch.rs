@@ -326,6 +326,69 @@ pub unsafe fn mbarrier_arrive_and_expect_tx<const ID: usize>(
     unsafe { ctm_rs::mbarrier::arrive_expect_tx(bar, bytes) }
 }
 
+// Sync-restricted fences.
+
+/// Seals [`MemOrder`] to the orders the intrinsic catalog can emit.
+mod sealed {
+    /// Implemented by the order markers of this module only.
+    pub trait MemOrder {}
+}
+
+/// Memory order of a sync-restricted fence, fixed at compile time.
+///
+/// This is the `order` argument of CuTeDSL's `fence_sync_restrict(order)`,
+/// a `MemOrder` string enum (`"acquire"` or `"release"`) in the DSL and a
+/// marker type here, so the instruction is chosen when the kernel compiles.
+/// The trait is sealed and [`Acquire`] is its only implementor: the intrinsic
+/// catalog has no `fence.release.sync_restrict::shared::cta.cluster` entry
+/// yet, so the release order is not offered until that intrinsic exists.
+pub trait MemOrder: sealed::MemOrder {
+    /// Issue the sync-restricted fence in this order at cluster scope.
+    ///
+    /// # Safety
+    /// Pair this with a compatible cluster-scoped synchronization protocol.
+    /// This does not substitute for a proxy fence or asynchronous completion
+    /// wait.
+    unsafe fn fence_sync_restrict();
+}
+
+/// The acquire order, `MemOrder.ACQUIRE` in CuTeDSL.
+///
+/// Its fence is `fence.acquire.sync_restrict::shared::cluster.cluster`: it
+/// acquires cluster-shared memory at cluster scope and leaves global memory
+/// unordered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Acquire;
+
+impl sealed::MemOrder for Acquire {}
+
+impl MemOrder for Acquire {
+    #[inline(always)]
+    unsafe fn fence_sync_restrict() {
+        // SAFETY: forwarded under the caller contract on the trait method.
+        unsafe { ctm_rs::fence::fence_sync_restrict_acquire() }
+    }
+}
+
+/// Fence cluster-shared memory at cluster scope in `Order`, excluding global
+/// memory.
+///
+/// This is CuTeDSL's `fence_sync_restrict(order)` with the order as a type
+/// parameter: `fence_sync_restrict::<Acquire>()` is
+/// `fence.acquire.sync_restrict::shared::cluster.cluster` over
+/// [`ctm_rs::fence::fence_sync_restrict_acquire`]. The DSL defines the
+/// function in its primitives layer (`nvvm.fence_sync_restrict`) rather than
+/// in `cute.arch`; cute-rs keeps it beside the other fences here.
+///
+/// # Safety
+/// Pair this with a compatible cluster-scoped synchronization protocol. This
+/// does not substitute for a proxy fence or asynchronous completion wait.
+#[inline(always)]
+pub unsafe fn fence_sync_restrict<Order: MemOrder>() {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { Order::fence_sync_restrict() }
+}
+
 // Cluster membership and barriers.
 
 /// Arrive at the cluster barrier with release ordering.

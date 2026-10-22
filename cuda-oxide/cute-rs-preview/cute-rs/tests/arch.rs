@@ -10,3 +10,9 @@ fn warp_uniform_hint_requires_an_explicit_unsafe_u32_contract() {
     tests.compile_fail("tests/compile_fail/warp_uniform_unsafe.rs");
     tests.compile_fail("tests/compile_fail/warp_uniform_width.rs");
 }
+
+/// The sync-restricted fence is an unsafe forwarder whose order is a type parameter.
+#[test]
+fn fence_sync_restrict_takes_its_order_as_a_type() {
+    let _: unsafe fn() = cute_rs::arch::fence_sync_restrict::<cute_rs::arch::Acquire>;
+}

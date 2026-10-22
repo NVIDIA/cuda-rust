@@ -453,9 +453,8 @@ pub fn block_idx_in_cluster() -> u32 {
 /// This is `cute.arch.block_in_cluster_idx()`; it reads `%cluster_ctaid.x`,
 /// `%cluster_ctaid.y` and `%cluster_ctaid.z` through [`ctm_rs::cluster`].
 /// [`block_idx_in_cluster`] is the linear rank of the same CTA
-/// (`%cluster_ctarank`). The cluster's own `(x, y, z)` within the grid,
-/// `cute.arch.cluster_idx()` over `%clusterid`, is not forwarded because
-/// cuda-device exposes no per-axis reader for it.
+/// (`%cluster_ctarank`); [`cluster_idx`] is the cluster's own `(x, y, z)`
+/// within the grid.
 #[must_use]
 #[inline(always)]
 pub fn block_in_cluster_idx() -> (u32, u32, u32) {
@@ -472,9 +471,8 @@ pub fn block_in_cluster_idx() -> (u32, u32, u32) {
 /// `%cluster_nctaid.y` and `%cluster_nctaid.z` through [`ctm_rs::cluster`].
 /// The compiler's own `cluster_dim` vocabulary, the `#[cluster_launch]`
 /// attribute and the intrinsic family behind it, means this value, CTAs per
-/// cluster, while CuTeDSL's `cute.arch.cluster_dim()` means the number of
-/// clusters in the grid (`%nclusterid`), which is not forwarded because
-/// cuda-device exposes no per-axis reader for it.
+/// cluster; CuTeDSL's `cute.arch.cluster_dim()` is [`cluster_dim`], the
+/// number of clusters in the grid.
 #[must_use]
 #[inline(always)]
 pub fn block_in_cluster_dim() -> (u32, u32, u32) {
@@ -482,6 +480,40 @@ pub fn block_in_cluster_dim() -> (u32, u32, u32) {
         ctm_rs::cluster::cluster_nctaidX(),
         ctm_rs::cluster::cluster_nctaidY(),
         ctm_rs::cluster::cluster_nctaidZ(),
+    )
+}
+
+/// Return this CTA's cluster index within the grid as `(x, y, z)`.
+///
+/// This is `cute.arch.cluster_idx()`; it reads `%clusterid.x`, `%clusterid.y`
+/// and `%clusterid.z` through [`ctm_rs::cluster`]. The linear form of the
+/// same index stays `ctm_rs::cluster::cluster_idx()`, and
+/// [`block_in_cluster_idx`] is the CTA's index within that cluster.
+#[must_use]
+#[inline(always)]
+pub fn cluster_idx() -> (u32, u32, u32) {
+    (
+        ctm_rs::cluster::cluster_idx_x(),
+        ctm_rs::cluster::cluster_idx_y(),
+        ctm_rs::cluster::cluster_idx_z(),
+    )
+}
+
+/// Return the number of clusters in each grid dimension as `(x, y, z)`.
+///
+/// This is `cute.arch.cluster_dim()`; it reads `%nclusterid.x`,
+/// `%nclusterid.y` and `%nclusterid.z` through [`ctm_rs::cluster`]. The
+/// compiler's own `cluster_dim` vocabulary, the `#[cluster_launch]` attribute
+/// of cuda-macros and the cuda-intrinsics-gen family behind it, means CTAs
+/// per cluster, which is [`block_in_cluster_dim`] here; the DSL's
+/// `cluster_dim` means clusters in the grid.
+#[must_use]
+#[inline(always)]
+pub fn cluster_dim() -> (u32, u32, u32) {
+    (
+        ctm_rs::cluster::cluster_grid_dim_x(),
+        ctm_rs::cluster::cluster_grid_dim_y(),
+        ctm_rs::cluster::cluster_grid_dim_z(),
     )
 }
 

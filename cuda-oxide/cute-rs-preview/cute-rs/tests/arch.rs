@@ -16,3 +16,10 @@ fn warp_uniform_hint_requires_an_explicit_unsafe_u32_contract() {
 fn fence_sync_restrict_takes_its_order_as_a_type() {
     let _: unsafe fn() = cute_rs::arch::fence_sync_restrict::<cute_rs::arch::Acquire>;
 }
+
+/// The cluster coordinate triples are plain readers of the grid-level cluster registers.
+#[test]
+fn cluster_triples_are_plain_coordinate_readers() {
+    let _: fn() -> (u32, u32, u32) = cute_rs::arch::cluster_idx;
+    let _: fn() -> (u32, u32, u32) = cute_rs::arch::cluster_dim;
+}

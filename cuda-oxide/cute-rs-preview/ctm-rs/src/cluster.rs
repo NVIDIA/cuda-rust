@@ -29,7 +29,13 @@ coordinate!(
     cluster_nctaidY,
     cluster_nctaidZ,
     cluster_idx,
+    cluster_idx_x,
+    cluster_idx_y,
+    cluster_idx_z,
     num_clusters,
+    cluster_grid_dim_x,
+    cluster_grid_dim_y,
+    cluster_grid_dim_z,
     cluster_size,
 );
 

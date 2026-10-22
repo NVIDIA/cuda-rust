@@ -80,7 +80,7 @@ pub unsafe fn all(predicate: bool) -> bool {
     cuda_device::warp::all(predicate)
 }
 
-/// Synchronize warp lanes selected by an explicit participation mask.
+/// Synchronize warp lanes selected by an explicit participation mask (PTX `bar.warp.sync`).
 ///
 /// # Safety
 /// The caller's lane must be included in `mask`. Every lane named in `mask`
@@ -88,10 +88,10 @@ pub unsafe fn all(predicate: bool) -> bool {
 /// must satisfy their allocation contracts.
 ///
 /// ```compile_fail,E0133
-/// ctm_rs::warp::sync_mask(u32::MAX);
+/// ctm_rs::warp::bar_warp_sync(u32::MAX);
 /// ```
 #[inline(always)]
-pub unsafe fn sync_mask(mask: u32) {
+pub unsafe fn bar_warp_sync(mask: u32) {
     cuda_device::warp::sync_mask(mask)
 }
 

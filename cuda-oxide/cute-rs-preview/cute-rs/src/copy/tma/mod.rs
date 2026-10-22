@@ -15,7 +15,7 @@
 //! the descriptor type:
 //!
 //! ```text
-//! host:    TmaDesc<f32, SmemL>  ->  kernel: &TmaDesc<f32, SmemL>
+//! host:    TensorMap<f32, SmemL>  ->  kernel: &TensorMap<f32, SmemL>
 //!          descriptor value       #[grid_constant] parameter
 //!                     same element and layout types
 //! ```
@@ -47,23 +47,24 @@ use crate::markers::ReifySmem2D;
 /// One 128-byte TMA descriptor typed by element and shared layout.
 ///
 /// Its runtime bytes have the same layout as the CUDA driver's `CUtensorMap`.
-/// A `#[grid_constant] desc: &TmaDesc<T, SmemL>` kernel parameter takes this
+/// A `#[grid_constant] desc: &TensorMap<T, SmemL>` kernel parameter takes this
 /// value at launch. Every thread borrows the same read-only descriptor bytes.
 /// The tensor data stays in device memory and must remain live until the GPU
 /// work completes.
 #[repr(C, align(64))]
-pub struct TmaDesc<T, SmemL> {
+pub struct TensorMap<T, SmemL> {
     /// Descriptor bytes produced by the CUDA driver.
     pub bytes: [u8; 128],
     /// Zero-byte marker that keeps `T` and `SmemL` in the type.
     pub marker: PhantomData<(T, SmemL)>,
 }
 
-impl<T, SmemL> TmaDesc<T, SmemL> {
+impl<T, SmemL> TensorMap<T, SmemL> {
     /// Prefetch this descriptor into the device's tensor-map cache.
     ///
-    /// Issuer selection remains with the caller, so a kernel can prefetch its
-    /// descriptors once before starting TMA transfers.
+    /// This is CuTeDSL's `cpasync.prefetch_descriptor`. Issuer selection
+    /// remains with the caller, so a kernel can prefetch its descriptors once
+    /// before starting TMA transfers.
     ///
     /// # Safety
     ///
@@ -71,15 +72,19 @@ impl<T, SmemL> TmaDesc<T, SmemL> {
     /// CUDA tensor map in device-accessible storage, such as a grid-constant
     /// kernel argument, and remain live through the prefetch.
     #[inline(always)]
-    pub unsafe fn prefetch(&self) {
-        unsafe { ctm_rs::tma::prefetch_descriptor(core::ptr::from_ref(self).cast()) };
+    pub unsafe fn prefetch_descriptor(&self) {
+        unsafe {
+            ctm_rs::tma::prefetch_tensormap(
+                core::ptr::from_ref(self).cast::<cuda_device::TmaDescriptor>(),
+            )
+        };
     }
 }
 
 // The type parameters describe the encoded bytes; they are not stored values.
-impl<T, SmemL> Copy for TmaDesc<T, SmemL> {}
+impl<T, SmemL> Copy for TensorMap<T, SmemL> {}
 
-impl<T, SmemL> Clone for TmaDesc<T, SmemL> {
+impl<T, SmemL> Clone for TensorMap<T, SmemL> {
     fn clone(&self) -> Self {
         *self
     }
@@ -111,7 +116,7 @@ pub enum TmaSwizzleMode {
 
 /// Requested level-2 (L2) cache fetch size for a TMA descriptor.
 ///
-/// [`Self::None`] is the default used by `make_tma_desc_2d`. Select
+/// [`Self::None`] is the default used by `create_tensor_map_tiled`. Select
 /// [`Self::B128`] to request a 128-byte fetch for GEMM input tiles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TmaL2Promotion {
@@ -125,7 +130,7 @@ pub enum TmaL2Promotion {
     B256,
 }
 
-/// Host options for `make_tma_desc_2d_with_options`.
+/// Host options for `create_tensor_map_tiled_with_options`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TmaEncodeOptions {
     /// L2 fetch size requested for this descriptor.
@@ -192,18 +197,32 @@ const fn tma_swizzle_span_bytes(mode: TmaSwizzleMode) -> Option<i64> {
     }
 }
 
-/// Number of bytes in one `SmemL` tile of `T`.
+/// Bytes covered by one `SmemL` tile of `T`: the layout's cosize times the
+/// element size, as CuTeDSL's `size_in_bytes(dtype, layout)` computes it.
+///
+/// The cosize is the offset of the tile's last element plus one, taken from
+/// the affine part of the layout (its shape and strides). A swizzle only
+/// permutes addresses inside that span and the composed offset is not
+/// counted, so a padded row stride enlarges the result while a swizzle does
+/// not. For the dense row-major tiles TMA encodes, this equals rows times
+/// columns times the element size.
 ///
 /// Pass this number to the load pipeline's expected-transaction operation for
 /// [`copy_tma_2d`]. In a kernel, compute it as a constant so it creates no
 /// runtime function call:
 ///
 /// ```text
-/// const N: u32 = tile_bytes::<T, SmemL>();
+/// const N: u32 = size_in_bytes::<T, SmemL>();
 /// ```
 #[inline(always)]
-pub const fn tile_bytes<T, SmemL: ReifySmem2D>() -> u32 {
-    (SmemL::SHAPE.0 * SmemL::SHAPE.1) as u32 * size_of::<T>() as u32
+pub const fn size_in_bytes<T, SmemL: ReifySmem2D>() -> u32 {
+    let (rows, cols) = SmemL::SHAPE;
+    if rows <= 0 || cols <= 0 {
+        return 0;
+    }
+    let (row_stride, col_stride) = SmemL::STRIDE;
+    let cosize = (rows - 1) * row_stride + (cols - 1) * col_stride + 1;
+    cosize as u32 * size_of::<T>() as u32
 }
 
 /// Start one TMA copy from global memory into a shared tile.
@@ -219,7 +238,7 @@ pub const fn tile_bytes<T, SmemL: ReifySmem2D>() -> u32 {
 /// col = c * SmemL::SHAPE.1
 /// ```
 ///
-/// The caller must initialize the `mbarrier`, attach [`tile_bytes`] as its
+/// The caller must initialize the `mbarrier`, attach [`size_in_bytes`] as its
 /// expected byte count, and wait for it.
 ///
 /// # Safety
@@ -229,12 +248,12 @@ pub const fn tile_bytes<T, SmemL: ReifySmem2D>() -> u32 {
 /// the lower-level raw TMA APIs for remote or multicast cluster copies.
 ///
 /// The destination address must meet the alignment required by the layout's
-/// swizzle phase. `desc` must have been built by `make_tma_desc_2d` for the
+/// swizzle phase. `desc` must have been built by `create_tensor_map_tiled` for the
 /// same `SmemL`. The packed-MXFP4 B64 layout described above requires a
 /// 512-byte-aligned buffer base; the CuTeDSL comparison kernel uses 1024.
 #[inline(never)]
 pub unsafe fn copy_tma_2d<T, SmemL>(
-    desc: *const TmaDesc<T, SmemL>,
+    desc: *const TensorMap<T, SmemL>,
     coord: (usize, usize),
     dst_smem_tile: &mut crate::copy::cooperative::SmemTile<T, SmemL>,
     barrier: *mut cuda_device::barrier::Barrier,
@@ -270,7 +289,7 @@ pub unsafe fn copy_tma_2d<T, SmemL>(
 /// all earlier ordinary shared-memory writes visible to TMA's async proxy.
 #[inline(never)]
 pub unsafe fn copy_tma_s2g_2d<T, SmemL>(
-    desc: *const TmaDesc<T, SmemL>,
+    desc: *const TensorMap<T, SmemL>,
     coord: (usize, usize),
     src_smem_tile: crate::copy::cooperative::SmemTile<T, SmemL>,
 ) {
@@ -281,7 +300,7 @@ pub unsafe fn copy_tma_s2g_2d<T, SmemL>(
 #[cfg(feature = "host")]
 mod host;
 #[cfg(feature = "host")]
-pub use host::{TmaElement, make_tma_desc_2d, make_tma_desc_2d_with_options};
+pub use host::{TmaElement, create_tensor_map_tiled, create_tensor_map_tiled_with_options};
 
 /// Regression tests for this module’s layout, representation and rejection contracts.
 #[cfg(test)]

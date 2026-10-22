@@ -4,7 +4,7 @@
  */
 //! Host construction of the rank-three tensor maps consumed by attention tiles.
 use super::SmemLayout;
-use crate::copy::tma::TmaDesc;
+use crate::copy::tma::TensorMap;
 use alloc::{format, string::String};
 use core::{ffi::c_void, marker::PhantomData, mem::MaybeUninit};
 use cuda_core::sys as driver;
@@ -22,7 +22,7 @@ pub fn make_tma_desc<L: SmemLayout>(
     rows: u64,
     cols: u64,
     row_stride_elements: u64,
-) -> Result<TmaDesc<f16, L>, String> {
+) -> Result<TensorMap<f16, L>, String> {
     let () = L::VALID;
     let span = L::SPAN;
     let (tile_rows, tile_cols) = if L::MN_MAJOR {
@@ -86,7 +86,7 @@ pub fn make_tma_desc<L: SmemLayout>(
             "SM100 rank-three cuTensorMapEncodeTiled failed: {status:?}"
         ));
     }
-    Ok(TmaDesc {
+    Ok(TensorMap {
         bytes: unsafe { core::mem::transmute::<driver::CUtensorMap, [u8; 128]>(out.assume_init()) },
         marker: PhantomData,
     })

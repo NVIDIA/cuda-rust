@@ -49,10 +49,10 @@ type MainloopPipeline = PipelineTmaUmma<5, 77_824>;
 
 #[kernel]
 pub fn fp16_gemm_256x352(
-    #[grid_constant] a: &TmaDesc<f16, ASmem>,
-    #[grid_constant] b0: &TmaDesc<f16, B0Smem>,
-    #[grid_constant] b1: &TmaDesc<f16, B1Smem>,
-    #[grid_constant] c: &TmaDesc<f16, CSmem>,
+    #[grid_constant] a: &TensorMap<f16, ASmem>,
+    #[grid_constant] b0: &TensorMap<f16, B0Smem>,
+    #[grid_constant] b1: &TensorMap<f16, B1Smem>,
+    #[grid_constant] c: &TensorMap<f16, CSmem>,
     bias: *const f16, m: u64, n: u64, k: u64, has_bias: u64,
 ) { ... }
 ```
@@ -78,7 +78,7 @@ Compile-time Rust types supply the static IR attributes (shape, stride, swizzle,
 | :------ | :--------------- | :------------- |
 | **Layout definition** | `cute.make_layout((128, 64), stride=(64, 1))` | `RowMajor<128, 64>` or `L<T2<C<128>, C<64>>, T2<C<64>, C<1>>>` |
 | **Swizzled SMEM layout** | `cute.make_composed_layout(Swizzle(3, 3, 3), 0, layout)` | `Composed<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>` |
-| **TMA descriptor** | `(tma_atom, tma_tensor)` pair passed into `@cute.kernel` | `#[grid_constant] a: &TmaDesc<f16, ASmem>` (128B by value) |
+| **TMA descriptor** | `(tma_atom, tma_tensor)` pair passed into `@cute.kernel` | `#[grid_constant] a: &TensorMap<f16, ASmem>` (128B by value) |
 | **Shared tensor view** | `storage.sA.get_tensor(a_smem_layout)` | `SharedTensor<Mxf4E2M1, f16, SmemP, Mkl>` or `Sm100SharedTile<ASmem, OperandA>` |
 | **TMA pipeline** | `pipeline.PipelineTmaAsync.create(...)` or `pipeline.PipelineTmaUmma.create(...)` | `TmaLoadPipeline<STAGES>` or `PipelineTmaUmma<5, 77_824>` |
 | **Tiled MMA** | `cute.make_tiled_mma(mma_op, atom_layout, ...)` | `Mxfp4TiledMma::<SmemP>::new()` or `Sm100TiledMma<ASmem, B0Smem, B1Smem, 192, 160>` |

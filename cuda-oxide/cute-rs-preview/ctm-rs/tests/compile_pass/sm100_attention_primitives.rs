@@ -25,9 +25,9 @@ unsafe fn sm100_step(bar: *mut mbarrier::Barrier, shared: *mut u32, global: *con
         let _ = mbarrier::mbarrier_arrive_expect_tx_cluster(bar, 1, 4);
         let _ = mbarrier::mbarrier_try_wait_parity(bar, 0);
         let _ = mbarrier::mbarrier_try_wait_parity_cluster_relaxed(bar, 1);
-        mbarrier::fence_proxy_async_generic_acquire_shared_cluster_cluster();
-        mbarrier::fence_proxy_async_generic_release_shared_cta_cluster();
-        mbarrier::fence_acquire_shared_cluster_cluster();
+        mbarrier::fence_proxy_async_acquire_sync_restrict();
+        mbarrier::fence_proxy_async_release_sync_restrict();
+        mbarrier::fence_sync_restrict_acquire();
         async_copy::cp_async_ca_4_raw(shared, global);
         async_copy::cp_async_mbarrier_arrive_noinc_raw(bar);
         tcgen05::commit_address(memory::SharedAddress::from_raw(bar));
@@ -59,7 +59,7 @@ unsafe fn sm100_step(bar: *mut mbarrier::Barrier, shared: *mut u32, global: *con
     let _ = unsafe { warp::all(true) };
     let _ = unsafe { warp::shuffle_xor(0, 1) };
     let _ = unsafe { warp::shuffle_sync(u32::MAX, 0, 0) };
-    unsafe { warp::sync_mask(u32::MAX) };
+    unsafe { warp::bar_warp_sync(u32::MAX) };
     let mut i = 0;
     while i < 2 {
         thread::__unroll_config::<0>();

@@ -248,7 +248,7 @@ pub fn elect_one_sync() -> bool {
 
 /// Synchronize the warp lanes named in `mask` (`bar.warp.sync`).
 ///
-/// This is `cute.arch.sync_warp(mask)` over [`ctm_rs::warp::sync_mask`]; pass
+/// This is `cute.arch.sync_warp(mask)` over [`ctm_rs::warp::bar_warp_sync`]; pass
 /// `u32::MAX` for the full warp.
 ///
 /// # Safety
@@ -258,7 +258,7 @@ pub fn elect_one_sync() -> bool {
 #[inline(always)]
 pub unsafe fn sync_warp(mask: u32) {
     // SAFETY: forwarded under the caller contract above.
-    unsafe { ctm_rs::warp::sync_mask(mask) }
+    unsafe { ctm_rs::warp::bar_warp_sync(mask) }
 }
 
 /// Synchronize `number_of_threads` CTA threads at the named barrier `barrier_id`.
@@ -296,16 +296,16 @@ pub unsafe fn barrier_arrive(barrier_id: u32, number_of_threads: u32) {
 /// Publish preceding mbarrier initialization at cluster scope.
 ///
 /// This is `cute.arch.mbarrier_init_fence()` over
-/// [`ctm_rs::mbarrier::fence_mbarrier_init_release_cluster`]
+/// [`ctm_rs::mbarrier::fence_mbarrier_init`]
 /// (`fence.mbarrier_init.release.cluster`).
 ///
 /// # Safety
 /// The caller must satisfy the barrier, scope, and memory-ordering contract of
-/// [`ctm_rs::mbarrier::fence_mbarrier_init_release_cluster`].
+/// [`ctm_rs::mbarrier::fence_mbarrier_init`].
 #[inline(always)]
 pub unsafe fn mbarrier_init_fence() {
     // SAFETY: forwarded under the caller contract above.
-    unsafe { ctm_rs::mbarrier::fence_mbarrier_init_release_cluster() }
+    unsafe { ctm_rs::mbarrier::fence_mbarrier_init() }
 }
 
 /// Arrive once on a TMA barrier and add the expected transaction bytes.
@@ -377,18 +377,18 @@ pub unsafe fn cluster_wait() {
 /// Return the linear rank of this CTA within its cluster.
 ///
 /// This is `cute.arch.block_idx_in_cluster()` over
-/// [`ctm_rs::cluster::block_rank`], the value `%cluster_ctarank` holds, in
+/// [`ctm_rs::cluster::cluster_ctarank`], the value `%cluster_ctarank` holds, in
 /// `0..cluster_size`.
 #[must_use]
 #[inline(always)]
 pub fn block_idx_in_cluster() -> u32 {
-    ctm_rs::cluster::block_rank()
+    ctm_rs::cluster::cluster_ctarank()
 }
 
 /// Map local shared storage to the same offset in cluster peer `rank`.
 ///
 /// This is `cute.arch.map_dsmem_ptr(ptr, rank)` over
-/// [`ctm_rs::cluster::map_shared`].
+/// [`ctm_rs::cluster::mapa`].
 ///
 /// # Safety
 /// `rank` must name an active CTA in this cluster with matching live storage.
@@ -399,7 +399,7 @@ pub unsafe fn map_dsmem_ptr<T>(
     rank: u32,
 ) -> ClusterSharedAddress<'_, T> {
     // SAFETY: forwarded under the caller contract above.
-    unsafe { ctm_rs::cluster::map_shared(address, rank) }
+    unsafe { ctm_rs::cluster::mapa(address, rank) }
 }
 
 // Register budget.
@@ -450,23 +450,23 @@ where
 /// Commit this thread's pending bulk copies as one group; does not wait.
 ///
 /// This is `cute.arch.cp_async_bulk_commit_group()` over
-/// [`ctm_rs::tma::bulk_commit_group`].
+/// [`ctm_rs::tma::cp_async_bulk_commit_group`].
 #[inline(always)]
 pub fn cp_async_bulk_commit_group() {
-    ctm_rs::tma::bulk_commit_group()
+    ctm_rs::tma::cp_async_bulk_commit_group()
 }
 
 /// Wait until at most `N` committed bulk groups still read their shared sources.
 ///
 /// This is `cute.arch.cp_async_bulk_wait_group(N, read=True)` over
-/// [`ctm_rs::tma::bulk_wait_group_read`]; `N` is an immediate in `0..=7`. It
+/// [`ctm_rs::tma::cp_async_bulk_wait_group_read`]; `N` is an immediate in `0..=7`. It
 /// is not proof that the groups' global writes are visible to other threads.
 #[inline(always)]
 pub fn cp_async_bulk_wait_group_read<const N: u32>()
 where
     (): ctm_rs::tma::ValidWaitCount<N>,
 {
-    ctm_rs::tma::bulk_wait_group_read::<N>()
+    ctm_rs::tma::cp_async_bulk_wait_group_read::<N>()
 }
 
 // Tensor memory completion.

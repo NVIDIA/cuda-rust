@@ -9,7 +9,7 @@
 //! The current CTM consumer validates `sm_100a`; these are unavailable on SM120a.
 use crate::groups::{CtaGroup, CtaGroup1};
 use core::marker::PhantomData;
-pub use cuda_device::tcgen05::{TmemAddress, TmemDeallocated, TmemReady, TmemUninit};
+pub use cuda_device::tcgen05::{TmemAddress as TmemAddr, TmemDeallocated, TmemReady, TmemUninit};
 
 /// A typed handle to TMEM with explicit collective allocation and release.
 ///
@@ -198,8 +198,8 @@ where
 {
     /// Read the allocated TMEM address from the synchronized shared slot.
     #[inline(always)]
-    pub fn address(&self) -> TmemAddress {
-        unsafe { TmemAddress::from_raw(self.raw_address()) }
+    pub fn address(&self) -> TmemAddr {
+        unsafe { TmemAddr::from_raw(self.raw_address()) }
     }
 
     /// Read the raw TMEM address for low-level instruction interoperability.

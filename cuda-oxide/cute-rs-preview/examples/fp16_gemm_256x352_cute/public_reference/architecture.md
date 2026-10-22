@@ -68,7 +68,7 @@ All four typed TMA descriptors use `#[grid_constant]` parameters. The kernel
 takes typed references:
 
 ```rust
-#[grid_constant] a: &TmaDesc<f16, ASmem>
+#[grid_constant] a: &TensorMap<f16, ASmem>
 ```
 
 The generated host launcher accepts each descriptor **by value**, passing

@@ -22,7 +22,7 @@ use ctm_rs::{
     warp,
 };
 use cute_rs::attention::sm100::{MmaSs, MmaTs, SharedLayout, SharedTile, TmaCopy, TmemFragment};
-use cute_rs::{OperandA, OperandB, TmaDesc};
+use cute_rs::{OperandA, OperandB, TensorMap};
 
 /// K-major shared layout for a 128 × 128 FP16 query tile.
 pub type QLayout = SharedLayout<128, 128>;
@@ -395,10 +395,10 @@ pub mod kernels {
     #[kernel]
     #[allow(clippy::too_many_arguments)]
     pub fn sm100_fmha_prefill_cute_rs(
-        qmaps: *const TmaDesc<f16, QLayout>,
-        kmaps: *const TmaDesc<f16, KLayout>,
-        vmaps: *const TmaDesc<f16, VLayout>,
-        omaps: *const TmaDesc<f16, OLayout>,
+        qmaps: *const TensorMap<f16, QLayout>,
+        kmaps: *const TensorMap<f16, KLayout>,
+        vmaps: *const TensorMap<f16, VLayout>,
+        omaps: *const TensorMap<f16, OLayout>,
         batch: u64,
         query: u64,
         keys: u64,
@@ -427,7 +427,7 @@ pub mod kernels {
             if tid == 0 {
                 pipes.init();
             }
-            mbarrier::fence_mbarrier_init_release_cluster();
+            mbarrier::fence_mbarrier_init();
             mbarrier::barrier_cta_sync(0, 512);
             if warp_id == 8 {
                 TmemGuard::<TmemUninit, 512>::from_raw_slot(token).alloc_collective();
@@ -969,7 +969,7 @@ pub mod kernels {
                     let out0 = SharedTile::<OLayout, OperandA>::from_raw(smem.add(O_OFFSET).cast());
                     if warp::is_elected_sync(u32::MAX) {
                         TmaCopy::<OLayout, 1>::store(desc, &out0, row as i32, 0);
-                        ctm_rs::tma::bulk_commit_group();
+                        ctm_rs::tma::cp_async_bulk_commit_group();
                     }
                     pipes.epi.wait(count + 1);
                     let out1 = SharedTile::<OLayout, OperandA>::from_raw(
@@ -977,15 +977,15 @@ pub mod kernels {
                     );
                     if warp::is_elected_sync(u32::MAX) {
                         TmaCopy::<OLayout, 1>::store(desc, &out1, (row + 128) as i32, 0);
-                        ctm_rs::tma::bulk_commit_group();
-                        ctm_rs::tma::bulk_wait_group_read::<1>();
+                        ctm_rs::tma::cp_async_bulk_commit_group();
+                        ctm_rs::tma::cp_async_bulk_wait_group_read::<1>();
                     }
-                    warp::sync_mask(u32::MAX);
+                    warp::bar_warp_sync(u32::MAX);
                     pipes.epi.release_threads(count);
                     if warp::is_elected_sync(u32::MAX) {
-                        ctm_rs::tma::bulk_wait_group_read::<0>();
+                        ctm_rs::tma::cp_async_bulk_wait_group_read::<0>();
                     }
-                    warp::sync_mask(u32::MAX);
+                    warp::bar_warp_sync(u32::MAX);
                     pipes.epi.release_threads(count + 1);
                     count += 2;
                     tile += stride;

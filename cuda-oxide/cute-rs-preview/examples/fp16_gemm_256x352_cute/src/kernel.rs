@@ -24,7 +24,7 @@ use ctm_rs::{cluster_launch, cuda_module, kernel, launch_bounds, launch_contract
 use cute_rs::{
     Composed, OperandA, OperandB, PipelineTmaUmma, PipelineUmmaAsync, RowMajor,
     Sm100ClusterTmaCopy, Sm100SharedTile, Sm100TiledMma, Sm100TmaStorePipeline, Sm100TmemEpilogue,
-    Swizzle, TmaDesc,
+    Swizzle, TensorMap,
 };
 
 // These element layouts also encode the host TMA descriptors. FP16 shifts
@@ -99,10 +99,10 @@ pub mod kernels {
     #[kernel]
     #[allow(clippy::too_many_arguments)] // Keep each tensor map explicit in the signature.
     pub fn fp16_gemm_256x352(
-        #[grid_constant] a: &TmaDesc<f16, ASmem>,
-        #[grid_constant] b0: &TmaDesc<f16, B0Smem>,
-        #[grid_constant] b1: &TmaDesc<f16, B1Smem>,
-        #[grid_constant] c: &TmaDesc<f16, CSmem>,
+        #[grid_constant] a: &TensorMap<f16, ASmem>,
+        #[grid_constant] b0: &TensorMap<f16, B0Smem>,
+        #[grid_constant] b1: &TensorMap<f16, B1Smem>,
+        #[grid_constant] c: &TensorMap<f16, CSmem>,
         bias: *const f16,
         m: u64,
         n: u64,
@@ -117,7 +117,7 @@ pub mod kernels {
         let has_bias = has_bias != 0;
         let tid = thread::threadIdx_x();
         let warp_id = tid / 32;
-        let rank = cluster::block_rank();
+        let rank = cluster::cluster_ctarank();
         let smem = DynamicSharedArray::<u8, 1024>::get_raw();
         // Shared storage: A[5], B[5], C[2], full[5], empty[5], acc_empty,
         // acc_full, dealloc, tmem_token. Tile bases are 1024-byte aligned.
@@ -135,17 +135,17 @@ pub mod kernels {
             if warp_id == 4 {
                 // CuTe maps retain their layout types; prefetch only needs
                 // their ABI-compatible opaque descriptor bytes.
-                tma::prefetch_descriptor((a as *const TmaDesc<f16, ASmem>).cast());
-                tma::prefetch_descriptor((b0 as *const TmaDesc<f16, B0Smem>).cast());
-                tma::prefetch_descriptor((b1 as *const TmaDesc<f16, B1Smem>).cast());
-                tma::prefetch_descriptor((c as *const TmaDesc<f16, CSmem>).cast());
+                tma::prefetch_tensormap((a as *const TensorMap<f16, ASmem>).cast());
+                tma::prefetch_tensormap((b0 as *const TensorMap<f16, B0Smem>).cast());
+                tma::prefetch_tensormap((b1 as *const TensorMap<f16, B1Smem>).cast());
+                tma::prefetch_tensormap((c as *const TensorMap<f16, CSmem>).cast());
             }
             if warp_id == 0 && warp::is_elected_sync(u32::MAX) {
                 ManagedBarrier::<Uninit, GeneralBarrier>::from_static(dealloc).init_instruction(32);
                 accumulator.init();
                 pipeline.init();
             }
-            mbarrier::fence_mbarrier_init_release_cluster();
+            mbarrier::fence_mbarrier_init();
             cluster::barrier_cluster_arrive_relaxed();
 
             // Each cluster visits output tiles in M-first order.
@@ -320,7 +320,7 @@ pub mod kernels {
                         stores.producer_tail();
                     }
                     mbarrier::barrier_cta_sync(3, 32);
-                    let peer = cluster::map_shared(SharedAddress::from_raw(dealloc), rank ^ 1);
+                    let peer = cluster::mapa(SharedAddress::from_raw(dealloc), rank ^ 1);
                     cluster::arrive_remote(peer);
                     wait_deallocation(dealloc);
                     TmemGuard::<TmemReady, 512, CtaGroup2>::adopt_ready(tmem_token)

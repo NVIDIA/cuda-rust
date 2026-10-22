@@ -10,7 +10,7 @@
 mod kernel;
 mod physical;
 
-use ctm_rs::host::tma::{EncodeOptions, encode_2d};
+use ctm_rs::host::tma::{EncodeOptions, create_tensor_map_tiled};
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer, LaunchConfig1D, sys};
 use serde_json::json;
 use std::{
@@ -416,28 +416,28 @@ fn main() -> Result<()> {
     let mut c_dev = DeviceBuffer::from_host(&stream, &vec![f16::NAN.to_bits(); m * n])?;
     // These physical format types set both the descriptor's tile shape and swizzle
     // and the kernel's shared-memory layout.
-    let a_desc = encode_2d::<f16, kernel::ASmem>(
+    let a_desc = create_tensor_map_tiled::<f16, kernel::ASmem>(
         a_dev.cu_deviceptr() as *mut core::ffi::c_void,
         u64::from(args.m),
         u64::from(args.k),
         u64::from(args.k),
         EncodeOptions::default(),
     )?;
-    let b0_desc = encode_2d::<f16, kernel::B0Smem>(
+    let b0_desc = create_tensor_map_tiled::<f16, kernel::B0Smem>(
         b_dev.cu_deviceptr() as *mut core::ffi::c_void,
         u64::from(args.n),
         u64::from(args.k),
         u64::from(args.k),
         EncodeOptions::default(),
     )?;
-    let b1_desc = encode_2d::<f16, kernel::B1Smem>(
+    let b1_desc = create_tensor_map_tiled::<f16, kernel::B1Smem>(
         b_dev.cu_deviceptr() as *mut core::ffi::c_void,
         u64::from(args.n),
         u64::from(args.k),
         u64::from(args.k),
         EncodeOptions::default(),
     )?;
-    let c_desc = encode_2d::<f16, kernel::CSmem>(
+    let c_desc = create_tensor_map_tiled::<f16, kernel::CSmem>(
         c_dev.cu_deviceptr() as *mut core::ffi::c_void,
         u64::from(args.m),
         u64::from(args.n),

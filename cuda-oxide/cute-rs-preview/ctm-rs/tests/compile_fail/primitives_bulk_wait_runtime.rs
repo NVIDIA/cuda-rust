@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! Compile-fail probe: require bulk-copy wait counts as const generics rather than runtime arguments.
-use ctm_rs::tma::bulk_wait_group_read;
+use ctm_rs::tma::cp_async_bulk_wait_group_read;
 /// Require bulk-copy wait counts as const generics rather than runtime arguments.
-fn wrong(n:u32) { bulk_wait_group_read(n); }
+fn wrong(n:u32) { cp_async_bulk_wait_group_read(n); }
 /// Unused host entry point; the device or rejection probe is only type-checked.
 fn main() {}

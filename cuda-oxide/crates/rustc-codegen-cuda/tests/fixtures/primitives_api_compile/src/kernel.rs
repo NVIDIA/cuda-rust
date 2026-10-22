@@ -43,7 +43,7 @@ mod probes {
 
     #[kernel]
     pub fn primitives_grid_constant(#[grid_constant] map: &TensorMap<f16, F16Tile128>) {
-        unsafe { tma::prefetch(map) };
+        unsafe { tma::prefetch_tensormap(map) };
     }
 
     // These instruction probes are compile-only. Their straight-line issue
@@ -86,18 +86,22 @@ mod probes {
                 return;
             };
             let bar = ManagedBarrier::<Ready, TmaBarrier>::adopt_ready(&raw mut BAR);
-            let completion = cluster::map_shared(bar.shared_address(), 0);
+            let completion = cluster::mapa(bar.shared_address(), 0);
             let Ok(mask) = CtaMask::<CtaGroup2>::try_from_bits(0b11) else {
                 return;
             };
             let coords = tma::Coordinates2D::new(-32, 4096);
-            tma::load_2d_cg2(&a, a_map, coords, completion, mask);
-            tma::load_2d_cg2(&b0, b0_map, coords, completion, mask);
-            tma::load_2d_cg2(&b1, b1_map, coords, completion, mask);
-            tma::store_2d(&c, c_map, tma::Coordinates2D::new(64, 128));
-            tma::bulk_commit_group();
-            tma::bulk_wait_group_read::<0>();
-            tma::bulk_wait_group_read::<7>();
+            tma::cp_async_bulk_tensor_shared_cluster_global(&a, a_map, coords, completion, mask);
+            tma::cp_async_bulk_tensor_shared_cluster_global(&b0, b0_map, coords, completion, mask);
+            tma::cp_async_bulk_tensor_shared_cluster_global(&b1, b1_map, coords, completion, mask);
+            tma::cp_async_bulk_tensor_global_shared_cta(
+                &c,
+                c_map,
+                tma::Coordinates2D::new(64, 128),
+            );
+            tma::cp_async_bulk_commit_group();
+            tma::cp_async_bulk_wait_group_read::<0>();
+            tma::cp_async_bulk_wait_group_read::<7>();
             out.write(mbarrier::arrive(&bar).raw());
             out.add(1)
                 .write(mbarrier::arrive_expect_tx(&bar, 16384).raw());
@@ -106,7 +110,7 @@ mod probes {
                 .write(mbarrier::arrive_expect_tx_cluster(&bar, 77824).raw());
             out.add(4)
                 .write(mbarrier::try_wait_parity_cluster(&bar, 0) as u64);
-            cluster::arrive_remote(cluster::map_shared(bar.shared_address(), 1));
+            cluster::arrive_remote(cluster::mapa(bar.shared_address(), 1));
             tcgen05::commit_multicast_cg2(bar.shared_address(), mask);
         }
     }
@@ -118,7 +122,7 @@ mod probes {
             let shared = DynamicSharedArray::<u8, 1024>::get_raw();
             out.add(3)
                 .write(super::generic_shared_identity(shared) as u64);
-            mbarrier::fence_mbarrier_init_release_cluster();
+            mbarrier::fence_mbarrier_init();
             mbarrier::fence_proxy_async_shared_cta();
             tcgen05::fence_before_thread_sync();
             tcgen05::fence_after_thread_sync();
@@ -138,7 +142,7 @@ mod probes {
             out.add(2).write(
                 (warp::warp_id()
                     + thread::blockIdx_x()
-                    + cluster::block_rank()
+                    + cluster::cluster_ctarank()
                     + cluster::cluster_size()) as u64,
             );
         }

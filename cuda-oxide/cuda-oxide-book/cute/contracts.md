@@ -19,7 +19,7 @@ Where `ctm-rs` sits: typed carriers select instruction families, one of two comp
 | `cute-layout` proofs | cooperative copy coverage and per-thread contiguity, `ldmatrix` source validity, TMA encodability and swizzle phase alignment |
 | `dialect-cute` verifier | tensor provenance, one pipeline init with complete producer and consumer state, cursor provenance, scheduler grids, MMA placement, epilogue phases, no compiler-only type reaches runtime storage |
 | Target gate | `sm_100a` or `sm_120a`; `tcgen05` only on `sm_100a`; MXF4 register MMA only on `sm_120a` |
-| Launch ABI | cubin argument sizes and offsets match the exported MLIR; `#[grid_constant] &TmaDesc` is a 128-byte by-value argument aligned to 64 |
+| Launch ABI | cubin argument sizes and offsets match the exported MLIR; `#[grid_constant] &TensorMap` is a 128-byte by-value argument aligned to 64 |
 
 Any failure stops the build. The importer is closed-world: a `cute_rs::` call it does not
 recognise is an error, not a fallback.
@@ -55,9 +55,9 @@ completion multicast and TMEM fences.
 ## Grid-constant launch arguments
 
 ```text
-#[grid_constant] desc: &TmaDesc<...>
+#[grid_constant] desc: &TensorMap<...>
 
-host descriptor  ──►  128-byte launch argument  ──►  device &TmaDesc<...>
+host descriptor  ──►  128-byte launch argument  ──►  device &TensorMap<...>
                       aligned to 64 bytes            same address for every thread
 ```
 

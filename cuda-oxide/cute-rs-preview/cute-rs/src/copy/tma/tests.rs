@@ -12,9 +12,15 @@ fn descriptor_value_abi_does_not_require_copy_marker_types() {
     struct Marker;
     /// Require Copy at compile time without constructing or reading a descriptor.
     fn assert_copy<T: Copy>() {}
-    assert_copy::<super::TmaDesc<Marker, Marker>>();
-    assert_eq!(core::mem::size_of::<super::TmaDesc<Marker, Marker>>(), 128);
-    assert_eq!(core::mem::align_of::<super::TmaDesc<Marker, Marker>>(), 64);
+    assert_copy::<super::TensorMap<Marker, Marker>>();
+    assert_eq!(
+        core::mem::size_of::<super::TensorMap<Marker, Marker>>(),
+        128
+    );
+    assert_eq!(
+        core::mem::align_of::<super::TensorMap<Marker, Marker>>(),
+        64
+    );
 }
 
 use super::*;
@@ -67,7 +73,7 @@ fn flattened_mxfp4_ab_tile_is_8192_bytes_with_b64_swizzle() {
     // Byte pattern S<2,4,3> is TMA B64.
     /// Packed-byte value tile using the exact B64 TMA swizzle.
     type ByteSmem = Composed<Swizzle<2, 4, 3>, 0, RowMajor<128, 64>>;
-    assert_eq!(tile_bytes::<u8, ByteSmem>(), 8_192);
+    assert_eq!(size_in_bytes::<u8, ByteSmem>(), 8_192);
     assert_eq!(
         tma_swizzle_mode_for::<ByteSmem>(1),
         Some(TmaSwizzleMode::B64)
@@ -83,11 +89,26 @@ fn canonical_mxfp4_scale_tile_is_512_bytes_without_swizzle() {
     // Viewing those bytes as u16 creates one legal 1x256 TMA tile.
     /// One unswizzled row of 256 u16 scale carriers.
     type ScaleSmem = RowMajor<1, 256>;
-    assert_eq!(tile_bytes::<u16, ScaleSmem>(), 512);
+    assert_eq!(size_in_bytes::<u16, ScaleSmem>(), 512);
     assert_eq!(
         tma_swizzle_mode_for::<ScaleSmem>(2),
         Some(TmaSwizzleMode::None)
     );
+}
+
+/// `size_in_bytes` follows CuTeDSL: the cosize of the affine layout times the element size.
+#[test]
+fn size_in_bytes_is_cosize_times_element_size() {
+    use crate::markers::{C, Composed, L, RowMajor, Swizzle, T2};
+
+    // A padded row stride enlarges the cosize beyond rows x columns.
+    /// Eight 64-element rows with a 72-element pitch.
+    type Padded = L<T2<C<8>, C<64>>, T2<C<72>, C<1>>>;
+    assert_eq!(size_in_bytes::<u16, Padded>(), (7 * 72 + 63 + 1) * 2);
+    // A swizzle permutes addresses inside the span and adds no bytes.
+    /// B128-swizzled 8x64 FP16 tile.
+    type Swizzled = Composed<Swizzle<3, 3, 3>, 0, RowMajor<8, 64>>;
+    assert_eq!(size_in_bytes::<u16, Swizzled>(), 8 * 64 * 2);
 }
 
 /// Default descriptor options must retain no promotion while exposing the CuTeDSL L2 policy.

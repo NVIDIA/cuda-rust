@@ -7,7 +7,7 @@
 #![feature(f16)]
 mod kernel;
 mod physical;
-use ctm_rs::host::tma::{EncodeOptions, L2Promotion, encode_2d};
+use ctm_rs::host::tma::{EncodeOptions, L2Promotion, create_tensor_map_tiled};
 use ctm_rs::{
     memory::{F16Tile128, Mxf4ScaleTile, Mxf4Tile128},
     tma::TensorMap,
@@ -220,7 +220,7 @@ fn main() {
 
     // The descriptor types are the host/kernel agreement: A/B land in the
     // B64 byte layout, while each flattened scale row is one canonical atom.
-    let a_desc: TensorMap<u8, Mxf4Tile128> = encode_2d(
+    let a_desc: TensorMap<u8, Mxf4Tile128> = create_tensor_map_tiled(
         a_dev.cu_deviceptr() as *mut core::ffi::c_void,
         M as u64,
         (K / 2) as u64,
@@ -230,7 +230,7 @@ fn main() {
         },
     )
     .expect("A TMA descriptor encoding failed");
-    let b_desc: TensorMap<u8, Mxf4Tile128> = encode_2d(
+    let b_desc: TensorMap<u8, Mxf4Tile128> = create_tensor_map_tiled(
         b_dev.cu_deviceptr() as *mut core::ffi::c_void,
         N as u64,
         (K / 2) as u64,
@@ -242,7 +242,7 @@ fn main() {
     .expect("B TMA descriptor encoding failed");
     let sfa_atom_rows = (M / 128) * K_STAGES;
     let sfb_atom_rows = (N / 128) * K_STAGES;
-    let sfa_desc: TensorMap<u16, Mxf4ScaleTile> = encode_2d(
+    let sfa_desc: TensorMap<u16, Mxf4ScaleTile> = create_tensor_map_tiled(
         sfa_dev.cu_deviceptr() as *mut core::ffi::c_void,
         sfa_atom_rows as u64,
         256,
@@ -252,7 +252,7 @@ fn main() {
         },
     )
     .expect("SFA TMA descriptor encoding failed");
-    let sfb_desc: TensorMap<u16, Mxf4ScaleTile> = encode_2d(
+    let sfb_desc: TensorMap<u16, Mxf4ScaleTile> = create_tensor_map_tiled(
         sfb_dev.cu_deviceptr() as *mut core::ffi::c_void,
         sfb_atom_rows as u64,
         256,
@@ -264,7 +264,7 @@ fn main() {
     .expect("SFB TMA descriptor encoding failed");
     let poison = vec![f16::NAN; M * N];
     let out = cuda_core::DeviceBuffer::from_host(&stream, &poison).unwrap();
-    let out_desc: TensorMap<f16, F16Tile128> = encode_2d(
+    let out_desc: TensorMap<f16, F16Tile128> = create_tensor_map_tiled(
         out.cu_deviceptr() as *mut core::ffi::c_void,
         M as u64,
         N as u64,

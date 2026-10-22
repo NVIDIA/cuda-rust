@@ -30,9 +30,16 @@ coordinate!(
     cluster_nctaidZ,
     cluster_idx,
     num_clusters,
-    block_rank,
     cluster_size,
 );
+
+/// Read this CTA's linear rank in its cluster, the value PTX `%cluster_ctarank` holds.
+///
+/// Forwards [`cuda_device::cluster::block_rank`] under the CuTeDSL primitives name.
+#[inline(always)]
+pub fn cluster_ctarank() -> u32 {
+    cuda_device::cluster::block_rank()
+}
 
 /// Arrive at the cluster barrier with release ordering.
 ///
@@ -137,16 +144,13 @@ impl<G: CtaGroup> CtaMask<G> {
         self.bits
     }
 }
-/// Map local shared storage to the same offset in a cluster peer.
+/// Map local shared storage to the same offset in a cluster peer (PTX `mapa`).
 ///
 /// # Safety
 /// `rank` must name an active CTA in this cluster with matching live storage.
 /// Remote initialization, readiness and lifetime must be coordinated explicitly.
 #[inline(always)]
-pub unsafe fn map_shared<'s, T>(
-    address: SharedAddress<'s, T>,
-    rank: u32,
-) -> ClusterSharedAddress<'s, T> {
+pub unsafe fn mapa<'s, T>(address: SharedAddress<'s, T>, rank: u32) -> ClusterSharedAddress<'s, T> {
     unsafe {
         ClusterSharedAddress::from_raw(cuda_device::cluster::map_shared_rank_mut(
             address.as_raw(),

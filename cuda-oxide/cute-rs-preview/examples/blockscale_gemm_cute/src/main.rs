@@ -36,7 +36,7 @@
 //! producer/consumer slot + phase survive between output tiles
 //! ```
 //!
-//! `TmaDesc<T, Layout>` makes the host encoder and device copy name the same
+//! `TensorMap<T, Layout>` makes the host encoder and device copy name the same
 //! placement. The byte TMA view and f16 consumer overlay encode the same B64
 //! swizzle; the scale view keeps the hardware's canonical atom unchanged.
 //!
@@ -61,12 +61,12 @@ use ctm_rs::mbarrier::Barrier;
 use ctm_rs::memory::DynamicSharedArray;
 use ctm_rs::{cuda_module, kernel, launch_bounds, launch_contract, thread, warp};
 use cuda_core::{CudaContext, LaunchConfig1D};
-use cute_rs::tma::{TmaEncodeOptions, make_tma_desc_2d_with_options};
+use cute_rs::tma::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
 use cute_rs::{
     C, Composed, Consumer, L, Mkl, Mxf4AccumulatorTile2x8, Mxf4E2M1, Mxfp4TiledMma, Nkl,
     PipelineState, Producer, RowMajor, SharedScaleAtom, SharedTensor, Sm1xxBlockScaleKMajor,
     Sm120Epilogue128x128, Sm120EpilogueHalfLayout, Sm120ScaleAtom, SmemTile,
-    StaticPersistentTileScheduler, Swizzle, T2, TmaDesc, TmaLoadPipeline, TmaStorePipeline,
+    StaticPersistentTileScheduler, Swizzle, T2, TensorMap, TmaLoadPipeline, TmaStorePipeline,
     copy_tma_2d, copy_tma_s2g_2d,
 };
 
@@ -183,11 +183,11 @@ mod kernels {
     )]
     #[kernel]
     pub fn blockscale_gemm(
-        a_tma: *const TmaDesc<u8, ByteSmem>,
-        b_tma: *const TmaDesc<u8, ByteSmem>,
-        sfa_tma: *const TmaDesc<u16, ScaleTmaSmem>,
-        sfb_tma: *const TmaDesc<u16, ScaleTmaSmem>,
-        out_tma: *const TmaDesc<f16, Sm120EpilogueHalfLayout>,
+        a_tma: *const TensorMap<u8, ByteSmem>,
+        b_tma: *const TensorMap<u8, ByteSmem>,
+        sfa_tma: *const TensorMap<u16, ScaleTmaSmem>,
+        sfb_tma: *const TensorMap<u16, ScaleTmaSmem>,
+        out_tma: *const TensorMap<f16, Sm120EpilogueHalfLayout>,
     ) {
         let tid = thread::threadIdx_x();
 
@@ -548,7 +548,7 @@ fn main() {
 
     // The descriptor types are the host/kernel agreement: A/B land in the
     // B64 byte layout, while each flattened scale row is one canonical atom.
-    let a_desc: TmaDesc<u8, ByteSmem> = make_tma_desc_2d_with_options(
+    let a_desc: TensorMap<u8, ByteSmem> = create_tensor_map_tiled_with_options(
         a_dev.cu_deviceptr() as *mut core::ffi::c_void,
         M as u64,
         (K / 2) as u64,
@@ -556,7 +556,7 @@ fn main() {
         TmaEncodeOptions::L2_128B,
     )
     .expect("A TMA descriptor encoding failed");
-    let b_desc: TmaDesc<u8, ByteSmem> = make_tma_desc_2d_with_options(
+    let b_desc: TensorMap<u8, ByteSmem> = create_tensor_map_tiled_with_options(
         b_dev.cu_deviceptr() as *mut core::ffi::c_void,
         N as u64,
         (K / 2) as u64,
@@ -566,7 +566,7 @@ fn main() {
     .expect("B TMA descriptor encoding failed");
     let sfa_atom_rows = (M / BLOCK_M) * K_STAGES;
     let sfb_atom_rows = (N / BLOCK_N) * K_STAGES;
-    let sfa_desc: TmaDesc<u16, ScaleTmaSmem> = make_tma_desc_2d_with_options(
+    let sfa_desc: TensorMap<u16, ScaleTmaSmem> = create_tensor_map_tiled_with_options(
         sfa_dev.cu_deviceptr() as *mut core::ffi::c_void,
         sfa_atom_rows as u64,
         256,
@@ -574,7 +574,7 @@ fn main() {
         TmaEncodeOptions::L2_128B,
     )
     .expect("SFA TMA descriptor encoding failed");
-    let sfb_desc: TmaDesc<u16, ScaleTmaSmem> = make_tma_desc_2d_with_options(
+    let sfb_desc: TensorMap<u16, ScaleTmaSmem> = create_tensor_map_tiled_with_options(
         sfb_dev.cu_deviceptr() as *mut core::ffi::c_void,
         sfb_atom_rows as u64,
         256,
@@ -586,13 +586,13 @@ fn main() {
     let b_desc_dev = cuda_core::DeviceBuffer::from_host(&stream, &b_desc.bytes).unwrap();
     let sfa_desc_dev = cuda_core::DeviceBuffer::from_host(&stream, &sfa_desc.bytes).unwrap();
     let sfb_desc_dev = cuda_core::DeviceBuffer::from_host(&stream, &sfb_desc.bytes).unwrap();
-    let a_desc_ptr = a_desc_dev.cu_deviceptr() as *const TmaDesc<u8, ByteSmem>;
-    let b_desc_ptr = b_desc_dev.cu_deviceptr() as *const TmaDesc<u8, ByteSmem>;
-    let sfa_desc_ptr = sfa_desc_dev.cu_deviceptr() as *const TmaDesc<u16, ScaleTmaSmem>;
-    let sfb_desc_ptr = sfb_desc_dev.cu_deviceptr() as *const TmaDesc<u16, ScaleTmaSmem>;
+    let a_desc_ptr = a_desc_dev.cu_deviceptr() as *const TensorMap<u8, ByteSmem>;
+    let b_desc_ptr = b_desc_dev.cu_deviceptr() as *const TensorMap<u8, ByteSmem>;
+    let sfa_desc_ptr = sfa_desc_dev.cu_deviceptr() as *const TensorMap<u16, ScaleTmaSmem>;
+    let sfb_desc_ptr = sfb_desc_dev.cu_deviceptr() as *const TensorMap<u16, ScaleTmaSmem>;
 
     let out = cuda_core::DeviceBuffer::<f16>::zeroed(&stream, M * N).unwrap();
-    let out_desc: TmaDesc<f16, Sm120EpilogueHalfLayout> = make_tma_desc_2d_with_options(
+    let out_desc: TensorMap<f16, Sm120EpilogueHalfLayout> = create_tensor_map_tiled_with_options(
         out.cu_deviceptr() as *mut core::ffi::c_void,
         M as u64,
         N as u64,
@@ -601,7 +601,8 @@ fn main() {
     )
     .expect("C TMA descriptor encoding failed");
     let out_desc_dev = cuda_core::DeviceBuffer::from_host(&stream, &out_desc.bytes).unwrap();
-    let out_desc_ptr = out_desc_dev.cu_deviceptr() as *const TmaDesc<f16, Sm120EpilogueHalfLayout>;
+    let out_desc_ptr =
+        out_desc_dev.cu_deviceptr() as *const TensorMap<f16, Sm120EpilogueHalfLayout>;
     // Ask the driver how many copies of this CTA fit on each SM. The
     // persistent scheduler needs that number to choose its physical grid.
     let probe = module

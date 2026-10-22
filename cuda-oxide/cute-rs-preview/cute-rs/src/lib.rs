@@ -30,7 +30,7 @@
 //! - [`epilogue`] contains SM120 output staging.
 //!
 //! Existing root exports and module aliases remain available. For example,
-//! `cute_rs::tma::TmaDesc` and `cute_rs::copy::tma::TmaDesc` are the same type.
+//! `cute_rs::tma::TensorMap` and `cute_rs::copy::tma::TensorMap` are the same type.
 //! Architecture ownership and pipeline modules retain their existing roles.
 //!
 //! The typed wrappers are inlined, so they add no device-side storage or call
@@ -113,7 +113,7 @@ pub use block_scaled::{
 };
 pub use copy::cooperative::{GmemMatrix, SmemTile, copy_g2s};
 pub use copy::tiled::{GlobalCopyTensor, SharedTensor, TiledCopy};
-pub use copy::tma::{TmaDesc, copy_tma_2d, copy_tma_s2g_2d, tile_bytes};
+pub use copy::tma::{TensorMap, copy_tma_2d, copy_tma_s2g_2d, size_in_bytes};
 pub use copy::vector::{
     GlobalStoreElement, GlobalStoreTile, assume_div, load_tile, store_global_no_allocate,
     store_tile,

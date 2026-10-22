@@ -41,7 +41,7 @@ items; they do not wrap or duplicate implementations.
 | `tile` | `copy::vector` |
 | `tma` | `copy::tma` |
 
-For example, `cute_rs::tma::TmaDesc` and `cute_rs::copy::tma::TmaDesc` are
+For example, `cute_rs::tma::TensorMap` and `cute_rs::copy::tma::TensorMap` are
 identical types. Common fragments such as `mma::FragmentC` and core views such as
 `tensor::Tensor` keep their original defining paths.
 

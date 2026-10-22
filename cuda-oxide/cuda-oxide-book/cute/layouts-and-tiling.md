@@ -63,18 +63,18 @@ For 2D and 3D Tensor Memory Accelerator (TMA) transfers, you define the swizzled
 :align: center
 :width: 100%
 
-A single `Composed<Swizzle, Offset, Layout>` type alias binds host `make_tma_desc_2d` encoding to device `&TmaDesc<T, Layout>` and `Sm100SharedTile`.
+A single `Composed<Swizzle, Offset, Layout>` type alias binds host `create_tensor_map_tiled` encoding to device `&TensorMap<T, Layout>` and `Sm100SharedTile`.
 ```
 
 ```rust
-use cute_rs::tma::{TmaEncodeOptions, make_tma_desc_2d_with_options};
-use cute_rs::{Composed, RowMajor, Swizzle, TmaDesc};
+use cute_rs::tma::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
+use cute_rs::{Composed, RowMajor, Swizzle, TensorMap};
 
 // Shared layout type: 128x64 tile with a 128-byte swizzle
 pub type ASmem = Composed<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>;
 
 // 1. Host: encode the 128-byte hardware CUtensorMap from `ASmem`
-let a_desc: TmaDesc<f16, ASmem> = make_tma_desc_2d_with_options(
+let a_desc: TensorMap<f16, ASmem> = create_tensor_map_tiled_with_options(
     a_dev.as_device_ptr(),
     m,
     k,
@@ -84,9 +84,9 @@ let a_desc: TmaDesc<f16, ASmem> = make_tma_desc_2d_with_options(
 
 // 2. Device: receive the descriptor by value via #[grid_constant]
 #[kernel]
-pub fn gemm_kernel(#[grid_constant] a: &TmaDesc<f16, ASmem>) {
+pub fn gemm_kernel(#[grid_constant] a: &TensorMap<f16, ASmem>) {
     // `a` is guaranteed to carry the exact `ASmem` tile shape and swizzle
 }
 ```
 
-If a kernel attempts to pass `&TmaDesc<f16, ASmem>` into a copy or MMA expecting a different layout or element type, `rustc` rejects the program at compile time before device codegen even runs.
+If a kernel attempts to pass `&TensorMap<f16, ASmem>` into a copy or MMA expecting a different layout or element type, `rustc` rejects the program at compile time before device codegen even runs.

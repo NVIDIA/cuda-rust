@@ -8,7 +8,7 @@ use ctm_rs::{
         F16Tile128, MemoryError, Mxf4ScaleTile, Mxf4Tile128, PhysicalFormat, SharedAddress,
         SharedRegion,
     },
-    tma::{Coordinates2D, TensorMap, load_2d},
+    tma::{Coordinates2D, TensorMap, cp_async_bulk_tensor_shared_cta_global},
 };
 use cuda_device::barrier::Barrier;
 
@@ -80,13 +80,13 @@ fn ordinary_tma_load_uses_cta_local_completion_for_both_stage_types() {
         &TensorMap<u8, Mxf4Tile128>,
         Coordinates2D,
         SharedAddress<'_, Barrier>,
-    ) = load_2d::<u8, Mxf4Tile128>;
+    ) = cp_async_bulk_tensor_shared_cta_global::<u8, Mxf4Tile128>;
     let _: unsafe fn(
         &SharedRegion<'_, Mxf4ScaleTile>,
         &TensorMap<u16, Mxf4ScaleTile>,
         Coordinates2D,
         SharedAddress<'_, Barrier>,
-    ) = load_2d::<u16, Mxf4ScaleTile>;
+    ) = cp_async_bulk_tensor_shared_cta_global::<u16, Mxf4ScaleTile>;
 }
 
 /// Successful trapping constructors must retain the same validated addresses as checked constructors.

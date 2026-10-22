@@ -174,14 +174,14 @@ impl WaitPolicy for SharedToAsync {
     #[inline(always)]
     unsafe fn wait(bar: *const Barrier, phase: u32) {
         while !unsafe { barrier::mbarrier_try_wait_parity_cluster_relaxed(bar, phase) } {}
-        unsafe { barrier::fence_proxy_async_generic_acquire_shared_cluster_cluster() };
+        unsafe { barrier::fence_proxy_async_acquire_sync_restrict() };
     }
 }
 impl SignalPolicy for SharedToAsync {
     #[inline(always)]
     unsafe fn arrive(bar: *mut Barrier) {
         unsafe {
-            barrier::fence_proxy_async_generic_release_shared_cta_cluster();
+            barrier::fence_proxy_async_release_sync_restrict();
             arrive_remote(bar);
         }
     }
@@ -199,7 +199,7 @@ impl WaitPolicy for SharedReuse {
     #[inline(always)]
     unsafe fn wait(bar: *const Barrier, phase: u32) {
         while !unsafe { barrier::mbarrier_try_wait_parity_cluster_relaxed(bar, phase) } {}
-        unsafe { barrier::fence_acquire_shared_cluster_cluster() };
+        unsafe { barrier::fence_sync_restrict_acquire() };
     }
 }
 
@@ -314,10 +314,10 @@ impl<const STAGES: u32, Role: CursorRole> Default for RingCursor<STAGES, Role> {
 ///
 /// ```no_run
 /// # #![feature(f16)]
-/// # use cute_rs::{OperandB, TmaDesc, sm100_attention::{SharedLayout, SharedTile, TmaCopy, pipeline::*}};
+/// # use cute_rs::{OperandB, TensorMap, sm100_attention::{SharedLayout, SharedTile, TmaCopy, pipeline::*}};
 /// type L = SharedLayout<64, 64>;
 /// # type Ring = TwoCtaRing<2, AsyncCompletion, AsyncCopyReuse>;
-/// # unsafe fn produce(ring: Ring, p: &mut RingCursor<2, Producer>, desc: &TmaDesc<f16, L>, b: &mut SharedTile<L, OperandB>, rank: u32) {
+/// # unsafe fn produce(ring: Ring, p: &mut RingCursor<2, Producer>, desc: &TensorMap<f16, L>, b: &mut SharedTile<L, OperandB>, rank: u32) {
 /// unsafe {
 ///     ring.acquire_cursor(*p);
 ///     if rank == 0 && ctm_rs::warp::is_elected_sync(u32::MAX) {
@@ -623,7 +623,7 @@ fn after_wait<Policy: WaitPolicy>() {
 /// The two CTAs must have matching live initialized barriers and the caller must supply the policy’s publication fences.
 unsafe fn arrive_remote(bar: *mut Barrier) {
     unsafe {
-        cluster::arrive_remote_relaxed(cluster::map_shared(SharedAddress::from_raw(bar), 0));
+        cluster::arrive_remote_relaxed(cluster::mapa(SharedAddress::from_raw(bar), 0));
     }
 }
 #[inline(always)]

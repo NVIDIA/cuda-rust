@@ -29,7 +29,7 @@ use cute_rs::attention::sm100::pipeline::{
 use cute_rs::attention::sm100::{
     MmaSs, SharedLayout, SharedTile, SharedTileArray, TmaCopy, TmemFragment,
 };
-use cute_rs::{OperandA, OperandB, TmaDesc};
+use cute_rs::{OperandA, OperandB, TensorMap};
 
 /// Per-CTA 64-by-64 FP16 query tile, stored K-major for QK MMA.
 pub type QLayout = SharedLayout<64, 64>;
@@ -227,10 +227,10 @@ unsafe fn issue_pv(
 #[allow(clippy::too_many_arguments)] // Typed maps and separate pipeline lifetimes are explicit.
 unsafe fn load_qk(
     smem: *mut u8,
-    q: &TmaDesc<f16, QLayout>,
-    qr: &TmaDesc<f16, QLayout>,
-    k: &TmaDesc<f16, KLayout>,
-    kr: &TmaDesc<f16, KLayout>,
+    q: &TensorMap<f16, QLayout>,
+    qr: &TensorMap<f16, QLayout>,
+    k: &TensorMap<f16, KLayout>,
+    kr: &TensorMap<f16, KLayout>,
     query: QueryRing,
     kv: KvRing,
     pages: PageRing,
@@ -299,7 +299,7 @@ unsafe fn load_qk(
 #[inline(always)]
 unsafe fn load_v(
     smem: *mut u8,
-    v: &TmaDesc<f16, VLayout>,
+    v: &TensorMap<f16, VLayout>,
     kv: KvRing,
     pages: PageRing,
     kv_state: &mut RingCursor<15, Producer>,
@@ -496,11 +496,11 @@ pub mod kernels {
                       dynamic_shared_alignment=1024,min_compute_capability=(10,0))]
     #[allow(clippy::too_many_arguments)]
     pub fn sm100_mla_decode_fp16_cute_rs(
-        #[grid_constant] q: &TmaDesc<f16, QLayout>,
-        #[grid_constant] qr: &TmaDesc<f16, QLayout>,
-        #[grid_constant] k: &TmaDesc<f16, KLayout>,
-        #[grid_constant] kr: &TmaDesc<f16, KLayout>,
-        #[grid_constant] v: &TmaDesc<f16, VLayout>,
+        #[grid_constant] q: &TensorMap<f16, QLayout>,
+        #[grid_constant] qr: &TensorMap<f16, QLayout>,
+        #[grid_constant] k: &TensorMap<f16, KLayout>,
+        #[grid_constant] kr: &TensorMap<f16, KLayout>,
+        #[grid_constant] v: &TensorMap<f16, VLayout>,
         page_table: *const i32,
         out: *mut f16,
         lse: *mut f32,
@@ -521,7 +521,7 @@ pub mod kernels {
             let tid = thread::threadIdx_x();
             let wid = make_warp_uniform(tid / 32);
             let lane = tid % 32;
-            let rank = make_warp_uniform(cluster::block_rank());
+            let rank = make_warp_uniform(cluster::cluster_ctarank());
             let smem = DynamicSharedArray::<u8, 1024>::get_raw();
             let bars = smem.add(BARS).cast::<Barrier>();
             let query = QueryRing::from_raw(bars, 0);
@@ -532,11 +532,11 @@ pub mod kernels {
             let output = OutputRing::from_raw(bars, 44);
             let pages = PageRing::from_raw(bars, 46);
             if tid == 0 {
-                q.prefetch();
-                qr.prefetch();
-                k.prefetch();
-                kr.prefetch();
-                v.prefetch();
+                q.prefetch_descriptor();
+                qr.prefetch_descriptor();
+                k.prefetch_descriptor();
+                kr.prefetch_descriptor();
+                v.prefetch_descriptor();
                 query.init(1, 1);
                 kv.init(1, 1);
                 score.init(1, 256);
@@ -545,7 +545,7 @@ pub mod kernels {
                 output.init(1, 256);
                 pages.init(32, 32);
             }
-            mbarrier::fence_mbarrier_init_release_cluster();
+            mbarrier::fence_mbarrier_init();
             cluster::barrier_cluster_arrive_relaxed();
             cluster::barrier_cluster_wait();
             let token = smem.add(TOKEN).cast::<u32>();

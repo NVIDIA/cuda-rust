@@ -226,7 +226,7 @@ pub mod kernels {
         let (m, n, k) = (m as u32, n as u32, k as u32);
         let tid = thread::threadIdx_x();
         let warp_id = tid / 32;
-        let rank = cluster::block_rank();
+        let rank = cluster::cluster_ctarank();
         let smem = DynamicSharedArray::<u8, 1024>::get_raw();
         unsafe {
             let full = smem.add(BARRIER_OFFSET).cast::<Barrier>();
@@ -236,10 +236,10 @@ pub mod kernels {
             let dealloc_ptr = acc_full_ptr.add(1);
             let token = dealloc_ptr.add(1).cast::<u32>();
             if warp_id == 4 {
-                tma::prefetch(a);
-                tma::prefetch(b0);
-                tma::prefetch(b1);
-                tma::prefetch(c);
+                tma::prefetch_tensormap(a);
+                tma::prefetch_tensormap(b0);
+                tma::prefetch_tensormap(b1);
+                tma::prefetch_tensormap(c);
             }
             if warp_id == 0 && warp::is_elected_sync(u32::MAX) {
                 init::<GeneralBarrier>(dealloc_ptr, 32);
@@ -252,7 +252,7 @@ pub mod kernels {
                     stage += 1;
                 }
             }
-            mbarrier::fence_mbarrier_init_release_cluster();
+            mbarrier::fence_mbarrier_init();
             cluster::barrier_cluster_arrive_relaxed();
             let mtiles = m / 256;
             let total_tiles = mtiles * n.div_ceil(352);
@@ -280,28 +280,28 @@ pub mod kernels {
                             if rank == 0 {
                                 mbarrier::arrive_expect_tx_cluster(&loaded, TX_BYTES);
                             }
-                            let completion = cluster::map_shared(loaded.shared_address(), 0);
+                            let completion = cluster::mapa(loaded.shared_address(), 0);
                             let mask = checked(CtaMask::<CtaGroup2>::try_from_bits(1 << rank));
                             let a_tile = region::<ASmem>(smem.add(stage * A_BYTES));
                             let b0_tile = region::<B0Smem>(smem.add(B_OFFSET + stage * B_BYTES));
                             let b1_tile = region::<B1Smem>(
                                 smem.add(B_OFFSET + stage * B_BYTES + B0Smem::FOOTPRINT_BYTES),
                             );
-                            tma::load_2d_cg2(
+                            tma::cp_async_bulk_tensor_shared_cluster_global(
                                 &a_tile,
                                 a,
                                 Coordinates2D::new((kt * 64) as i32, row as i32),
                                 completion,
                                 mask,
                             );
-                            tma::load_2d_cg2(
+                            tma::cp_async_bulk_tensor_shared_cluster_global(
                                 &b0_tile,
                                 b0,
                                 Coordinates2D::new((kt * 64) as i32, (col + rank * 96) as i32),
                                 completion,
                                 mask,
                             );
-                            tma::load_2d_cg2(
+                            tma::cp_async_bulk_tensor_shared_cluster_global(
                                 &b1_tile,
                                 b1,
                                 Coordinates2D::new(
@@ -424,31 +424,31 @@ pub mod kernels {
                         mbarrier::fence_proxy_async_shared_cta();
                         mbarrier::barrier_cta_sync(1, 128);
                         if tid == 0 {
-                            tma::store_2d(
+                            tma::cp_async_bulk_tensor_global_shared_cta(
                                 &dst,
                                 c,
                                 Coordinates2D::new((col + subtile * 32) as i32, row as i32),
                             );
-                            tma::bulk_commit_group();
-                            tma::bulk_wait_group_read::<1>();
+                            tma::cp_async_bulk_commit_group();
+                            tma::cp_async_bulk_wait_group_read::<1>();
                         }
                         mbarrier::barrier_cta_sync(1, 128);
                         subtile += 1;
                     }
                     tcgen05::fence_before_thread_sync();
                     if warp::is_elected_sync(u32::MAX) {
-                        cluster::arrive_remote(cluster::map_shared(acc_empty.shared_address(), 0));
+                        cluster::arrive_remote(cluster::mapa(acc_empty.shared_address(), 0));
                     }
                     phase ^= 1;
                     tile += tile_stride;
                 }
                 if warp_id == 0 {
                     if tid == 0 {
-                        tma::bulk_wait_group_read::<0>();
+                        tma::cp_async_bulk_wait_group_read::<0>();
                     }
                     mbarrier::barrier_cta_sync(3, 32);
                     let dealloc = ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(dealloc_ptr);
-                    cluster::arrive_remote(cluster::map_shared(dealloc.shared_address(), rank ^ 1));
+                    cluster::arrive_remote(cluster::mapa(dealloc.shared_address(), rank ^ 1));
                     wait(&dealloc, 0);
                     acc.dealloc_collective();
                 }

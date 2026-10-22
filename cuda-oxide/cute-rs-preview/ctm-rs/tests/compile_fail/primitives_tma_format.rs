@@ -6,6 +6,6 @@
 #![feature(f16)]
 use ctm_rs::{memory::*,tma::*};
 /// Reject a shared output tile paired with a different TMA descriptor format.
-fn wrong(src:&SharedRegion<F16TileC>,map:&TensorMap<f16,F16Tile128>) { unsafe { store_2d(src,map,Coordinates2D::new(0,0)) }; }
+fn wrong(src:&SharedRegion<F16TileC>,map:&TensorMap<f16,F16Tile128>) { unsafe { cp_async_bulk_tensor_global_shared_cta(src,map,Coordinates2D::new(0,0)) }; }
 /// Unused host entry point; the device or rejection probe is only type-checked.
 fn main() {}

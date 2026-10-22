@@ -38,7 +38,9 @@ impl Coordinates2D {
 
 /// Issue one ordinary TMA load into this CTA's shared storage.
 ///
-/// No issuer election, fence, barrier arrival or completion wait is inserted.
+/// This is the CuTeDSL primitives name for the unicast `cp.async.bulk.tensor`
+/// load; the rank is fixed by [`TensorMap`]. No issuer election, fence,
+/// barrier arrival or completion wait is inserted.
 ///
 /// # Safety
 /// The caller must select the issuer explicitly and publish an initialized
@@ -46,7 +48,7 @@ impl Coordinates2D {
 /// allocation, destination and barrier live until completion. Coordinate all
 /// accesses to the destination and wait explicitly before reading its contents.
 #[inline(always)]
-pub unsafe fn load_2d<T, F: PhysicalFormat<Element = T>>(
+pub unsafe fn cp_async_bulk_tensor_shared_cta_global<T, F: PhysicalFormat<Element = T>>(
     dst: &SharedRegion<'_, F>,
     map: &TensorMap<T, F>,
     coords: Coordinates2D,
@@ -65,13 +67,17 @@ pub unsafe fn load_2d<T, F: PhysicalFormat<Element = T>>(
 
 /// Issue one group-2 multicast TMA load, using the default cache hint (zero).
 ///
+/// This is the CuTeDSL primitives name for the cluster-multicast
+/// `cp.async.bulk.tensor` load; the `CtaMask<CtaGroup2>` argument fixes the
+/// `.multicast::cluster` and `cta_group::2` qualifiers.
+///
 /// # Safety
 /// The elected issuer must satisfy group-2 TMA rules. Every mask bit must name
 /// a participating CTA with matching destination storage. The remote completion
 /// barrier must be initialized with the expected byte count. Keep the map,
 /// allocation, destinations and barriers live until completion; wait explicitly.
 #[inline(always)]
-pub unsafe fn load_2d_cg2<T, F: PhysicalFormat<Element = T>>(
+pub unsafe fn cp_async_bulk_tensor_shared_cluster_global<T, F: PhysicalFormat<Element = T>>(
     dst: &SharedRegion<'_, F>,
     map: &TensorMap<T, F>,
     coords: Coordinates2D,
@@ -91,11 +97,14 @@ pub unsafe fn load_2d_cg2<T, F: PhysicalFormat<Element = T>>(
 }
 /// Issue one shared-to-global tensor store without a fence, commit or wait.
 ///
+/// This is the CuTeDSL primitives name for the shared-to-global
+/// `cp.async.bulk.tensor` store.
+///
 /// # Safety
 /// Publish shared writes to the async proxy before issuing. Source and global
 /// storage must remain live through the appropriate explicit completion waits.
 #[inline(always)]
-pub unsafe fn store_2d<T, F: PhysicalFormat<Element = T>>(
+pub unsafe fn cp_async_bulk_tensor_global_shared_cta<T, F: PhysicalFormat<Element = T>>(
     src: &SharedRegion<'_, F>,
     map: &TensorMap<T, F>,
     coords: Coordinates2D,
@@ -109,39 +118,55 @@ pub unsafe fn store_2d<T, F: PhysicalFormat<Element = T>>(
         )
     }
 }
-/// Prefetch descriptor metadata.
+/// Prefetch TMA descriptor metadata into the tensor-map cache (PTX `prefetch.tensormap`).
+///
+/// `descriptor` is either a typed [`TensorMap`] reference or a raw
+/// `*const TmaDescriptor` encoded by another tensor abstraction. The raw form
+/// does not interpret element or shared-layout types, which permits
+/// interoperability with layout-typed descriptors such as CuTe tensor maps
+/// without adopting a CTM physical format.
 ///
 /// # Safety
-/// The descriptor must reside in valid device-accessible storage.
+/// `descriptor` must name a valid, 64-byte-aligned, 128-byte CUDA tensor map in
+/// device-accessible storage that remains live through the prefetch.
 #[inline(always)]
-pub unsafe fn prefetch<T, F: PhysicalFormat<Element = T>>(map: &TensorMap<T, F>) {
-    unsafe { prefetch_descriptor(map.as_descriptor()) }
+pub unsafe fn prefetch_tensormap<D: TmaDescriptorRef>(descriptor: D) {
+    unsafe {
+        cuda_device::tma::prefetch_tma_descriptor(sealed::Descriptor::descriptor_ptr(descriptor))
+    }
 }
-
-/// Prefetch opaque descriptor metadata encoded by another tensor abstraction.
-///
-/// Unlike a tensor transfer, prefetch does not interpret element or shared-layout
-/// types. This permits interoperability with layout-typed descriptors such as
-/// CuTe tensor maps without adopting a CTM physical format.
-///
-/// # Safety
-/// `descriptor` must point to a valid, 64-byte-aligned, 128-byte CUDA tensor map
-/// in device-accessible storage and remain live through the prefetch.
-#[inline(always)]
-pub unsafe fn prefetch_descriptor(descriptor: *const TmaDescriptor) {
-    unsafe { cuda_device::tma::prefetch_tma_descriptor(descriptor) }
+/// Sealed proof that a value names a 128-byte TMA descriptor [`prefetch_tensormap`] may read.
+pub trait TmaDescriptorRef: sealed::Descriptor {}
+impl<T, F: PhysicalFormat<Element = T>> sealed::Descriptor for &TensorMap<T, F> {
+    #[inline(always)]
+    fn descriptor_ptr(self) -> *const TmaDescriptor {
+        self.as_descriptor()
+    }
 }
+impl<T, F: PhysicalFormat<Element = T>> TmaDescriptorRef for &TensorMap<T, F> {}
+impl sealed::Descriptor for *const TmaDescriptor {
+    #[inline(always)]
+    fn descriptor_ptr(self) -> *const TmaDescriptor {
+        self
+    }
+}
+impl TmaDescriptorRef for *const TmaDescriptor {}
 /// Commit this thread’s pending bulk copies as one group; does not wait.
 #[inline(always)]
-pub fn bulk_commit_group() {
+pub fn cp_async_bulk_commit_group() {
     cuda_device::tma::cp_async_bulk_commit_group()
 }
-/// Limits bulk-copy wait counts to the instruction’s immediate range.
+/// Limits bulk-copy wait counts and prefetch operands to the forms the instructions accept.
 mod sealed {
     /// Select a literal maximum number of committed groups that may remain pending.
     pub trait Count<const N: u32> {
         /// Wait until at most N groups still read their shared source buffers.
         fn wait();
+    }
+    /// Resolve a descriptor reference to the raw descriptor bytes the instruction reads.
+    pub trait Descriptor {
+        /// Return the address of the 128-byte descriptor.
+        fn descriptor_ptr(self) -> *const cuda_device::TmaDescriptor;
     }
 }
 /// Sealed proof that a bulk-copy wait immediate is in 0..=7.
@@ -152,7 +177,7 @@ waits!(0, 1, 2, 3, 4, 5, 6, 7);
 /// Wait until at most `N` committed bulk groups still read their shared sources.
 /// This is not proof that their global writes are visible to other threads.
 #[inline(always)]
-pub fn bulk_wait_group_read<const N: u32>()
+pub fn cp_async_bulk_wait_group_read<const N: u32>()
 where
     (): ValidWaitCount<N>,
 {

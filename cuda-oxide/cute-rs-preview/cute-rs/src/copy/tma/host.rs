@@ -6,7 +6,7 @@
 //! Host-side descriptor encoding and element contracts.
 
 use super::{
-    ReifySmem2D, TmaDesc, TmaEncodeOptions, TmaL2Promotion, TmaSwizzleMode, tma_swizzle_mode_for,
+    ReifySmem2D, TensorMap, TmaEncodeOptions, TmaL2Promotion, TmaSwizzleMode, tma_swizzle_mode_for,
     tma_swizzle_span_bytes,
 };
 use core::marker::PhantomData;
@@ -51,17 +51,19 @@ impl TmaElement for u16 {
 
 /// Build a descriptor that loads or stores one `SmemL` tile.
 ///
+/// This is the CuTeDSL host name `create_tensor_map_tiled`; the element type,
+/// box and swizzle come from `T` and `SmemL` instead of explicit arguments.
 /// The global matrix is row-major. Types provide the tile size, swizzle,
 /// and element format. Arguments provide the global pointer, matrix size,
 /// and row pitch in elements. Unsupported layouts return an error; they
 /// are never rounded to a nearby TMA mode.
-pub fn make_tma_desc_2d<T: TmaElement, SmemL: ReifySmem2D>(
+pub fn create_tensor_map_tiled<T: TmaElement, SmemL: ReifySmem2D>(
     global_base: *mut core::ffi::c_void,
     rows: u64,
     cols: u64,
     ld_elements: u64,
-) -> Result<TmaDesc<T, SmemL>, alloc::string::String> {
-    make_tma_desc_2d_with_options(
+) -> Result<TensorMap<T, SmemL>, alloc::string::String> {
+    create_tensor_map_tiled_with_options(
         global_base,
         rows,
         cols,
@@ -72,19 +74,19 @@ pub fn make_tma_desc_2d<T: TmaElement, SmemL: ReifySmem2D>(
 
 /// Build a row-major descriptor with an explicit L2 cache policy.
 ///
-/// Tile shape and validation match [`make_tma_desc_2d`]. Use
+/// Tile shape and validation match [`create_tensor_map_tiled`]. Use
 /// [`TmaEncodeOptions::L2_128B`] to match the usual CUTLASS/CuTeDSL input
 /// policy. The shorter function keeps the original no-promotion default.
 // The driver stores this address in the descriptor. It does not read from
 // `global_base` while encoding it.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn make_tma_desc_2d_with_options<T: TmaElement, SmemL: ReifySmem2D>(
+pub fn create_tensor_map_tiled_with_options<T: TmaElement, SmemL: ReifySmem2D>(
     global_base: *mut core::ffi::c_void,
     rows: u64,
     cols: u64,
     ld_elements: u64,
     options: TmaEncodeOptions,
-) -> Result<TmaDesc<T, SmemL>, alloc::string::String> {
+) -> Result<TensorMap<T, SmemL>, alloc::string::String> {
     use alloc::format;
 
     if SmemL::SHAPE.0 <= 0 || SmemL::SHAPE.1 <= 0 {
@@ -180,7 +182,7 @@ pub fn make_tma_desc_2d_with_options<T: TmaElement, SmemL: ReifySmem2D>(
     let map = unsafe { tensor_map.assume_init() };
     /// Check that driver descriptor storage remains exactly 128 bytes before transmuting.
     const _: () = assert!(core::mem::size_of::<driver::CUtensorMap>() == 128);
-    Ok(TmaDesc {
+    Ok(TensorMap {
         bytes: unsafe { core::mem::transmute::<driver::CUtensorMap, [u8; 128]>(map) },
         marker: PhantomData,
     })

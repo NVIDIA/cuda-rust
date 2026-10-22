@@ -43,7 +43,7 @@ fn compatibility_aliases_preserve_type_identity() {
     same_type!(cute_rs::cooperative::SmemTile<f32, ()>, cute_rs::copy::cooperative::SmemTile<f32, ()>);
     same_type!(cute_rs::tiled_copy::SharedTensor<f32, f32, ()>, cute_rs::copy::tiled::SharedTensor<f32, f32, ()>);
     same_type!(cute_rs::tile::GlobalStoreTile<f32, 4>, cute_rs::copy::vector::GlobalStoreTile<f32, 4>);
-    same_type!(cute_rs::tma::TmaDesc<f32, ()>, cute_rs::copy::tma::TmaDesc<f32, ()>);
+    same_type!(cute_rs::tma::TensorMap<f32, ()>, cute_rs::copy::tma::TensorMap<f32, ()>);
 }
 
 #[test]
@@ -61,7 +61,7 @@ fn root_exports_preserve_type_identity() {
     same_type!(cute_rs::SmemTile<f32, ()>, cute_rs::copy::cooperative::SmemTile<f32, ()>);
     same_type!(cute_rs::SharedTensor<f32, f32, ()>, cute_rs::copy::tiled::SharedTensor<f32, f32, ()>);
     same_type!(cute_rs::GlobalStoreTile<f32, 4>, cute_rs::copy::vector::GlobalStoreTile<f32, 4>);
-    same_type!(cute_rs::TmaDesc<f32, ()>, cute_rs::copy::tma::TmaDesc<f32, ()>);
+    same_type!(cute_rs::TensorMap<f32, ()>, cute_rs::copy::tma::TensorMap<f32, ()>);
 }
 
 #[cfg(not(feature = "host"))]

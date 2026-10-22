@@ -6,7 +6,7 @@
 //! Rank-three copies matching independent attention operand layouts.
 
 use super::{__compiler, SharedTile, SmemLayout};
-use crate::copy::tma::TmaDesc;
+use crate::copy::tma::TensorMap;
 use core::marker::PhantomData;
 use ctm_rs::mbarrier::Barrier;
 
@@ -23,7 +23,7 @@ impl<L: SmemLayout, const G: u32> TmaCopy<L, G> {
     /// rank is the local CTA rank and completion routes to CTA zero.
     #[inline(always)]
     pub unsafe fn load<R>(
-        desc: &TmaDesc<f16, L>,
+        desc: &TensorMap<f16, L>,
         dst: &mut SharedTile<L, R>,
         row: i32,
         col: i32,
@@ -46,7 +46,7 @@ impl<L: SmemLayout, const G: u32> TmaCopy<L, G> {
     /// One elected lane issues after stores to shared memory are visible to
     /// the async proxy. Storage stays live through the bulk-copy wait.
     #[inline(always)]
-    pub unsafe fn store<R>(desc: &TmaDesc<f16, L>, src: &SharedTile<L, R>, row: i32, col: i32) {
+    pub unsafe fn store<R>(desc: &TensorMap<f16, L>, src: &SharedTile<L, R>, row: i32, col: i32) {
         unsafe {
             __compiler::tma_store::<L, G>(
                 desc as *const _,

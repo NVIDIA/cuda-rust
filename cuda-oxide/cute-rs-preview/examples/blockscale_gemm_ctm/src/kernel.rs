@@ -170,7 +170,7 @@ pub mod kernels {
                     s += 1;
                 }
             }
-            mbarrier::fence_mbarrier_init_release_cluster();
+            mbarrier::fence_mbarrier_init();
             mbarrier::barrier_cta_sync(0, THREADS as u32);
             let mut tile = thread::blockIdx_x() as usize;
             let stride = thread::gridDim_x() as usize;
@@ -236,7 +236,7 @@ pub mod kernels {
                     }
                     // The producer warp never joins the 256-thread output barriers.
                     if tid == 0 {
-                        tma::bulk_wait_group_read::<0>();
+                        tma::cp_async_bulk_wait_group_read::<0>();
                     }
                     mbarrier::barrier_cta_sync(2, 256);
                     let output = base.add(OUTPUT).cast::<f16>();
@@ -252,22 +252,22 @@ pub mod kernels {
                     if tid == 0 {
                         let left = region::<F16Tile128>(base.add(OUTPUT));
                         let right = region::<F16Tile128>(base.add(OUTPUT + 16384));
-                        tma::store_2d(
+                        tma::cp_async_bulk_tensor_global_shared_cta(
                             &left,
                             c_map,
                             Coordinates2D::new((tile_n * 128) as i32, (tile_m * 128) as i32),
                         );
-                        tma::store_2d(
+                        tma::cp_async_bulk_tensor_global_shared_cta(
                             &right,
                             c_map,
                             Coordinates2D::new((tile_n * 128 + 64) as i32, (tile_m * 128) as i32),
                         );
-                        tma::bulk_commit_group();
+                        tma::cp_async_bulk_commit_group();
                     }
                     tile += stride;
                 }
                 if tid == 0 {
-                    tma::bulk_wait_group_read::<0>();
+                    tma::cp_async_bulk_wait_group_read::<0>();
                 }
             } else if lane == 0 {
                 let mut phase = 1u32;
@@ -287,25 +287,25 @@ pub mod kernels {
                         let b = region::<Mxf4Tile128>(base.add(B_OFFSET + slot * DATA_BYTES));
                         let sa = region::<Mxf4ScaleTile>(base.add(SFA_OFFSET + slot * SCALE_BYTES));
                         let sb = region::<Mxf4ScaleTile>(base.add(SFB_OFFSET + slot * SCALE_BYTES));
-                        tma::load_2d(
+                        tma::cp_async_bulk_tensor_shared_cta_global(
                             &a,
                             a_map,
                             Coordinates2D::new((stage * 64) as i32, (tile_m * 128) as i32),
                             ready.shared_address(),
                         );
-                        tma::load_2d(
+                        tma::cp_async_bulk_tensor_shared_cta_global(
                             &b,
                             b_map,
                             Coordinates2D::new((stage * 64) as i32, (tile_n * 128) as i32),
                             ready.shared_address(),
                         );
-                        tma::load_2d(
+                        tma::cp_async_bulk_tensor_shared_cta_global(
                             &sa,
                             sa_map,
                             Coordinates2D::new(0, (tile_m * K_STAGES + stage) as i32),
                             ready.shared_address(),
                         );
-                        tma::load_2d(
+                        tma::cp_async_bulk_tensor_shared_cta_global(
                             &sb,
                             sb_map,
                             Coordinates2D::new(0, (tile_n * K_STAGES + stage) as i32),

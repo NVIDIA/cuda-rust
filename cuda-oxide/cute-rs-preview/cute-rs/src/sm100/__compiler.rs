@@ -5,7 +5,7 @@
 
 //! Exact compiler markers for paired two-CTA GEMM.
 
-use crate::copy::tma::TmaDesc;
+use crate::copy::tma::TensorMap;
 use core::marker::PhantomData;
 use cuda_device::barrier::Barrier;
 /// Device-only marker allocating COLUMNS of group-two tensor memory.
@@ -60,7 +60,7 @@ pub unsafe fn sm100_tmem_epilogue<L>(tmem: u32, dst: *mut f16, tid: u32, bias: f
 /// All producer-warp lanes participate with the matching descriptor, stage and cluster byte expectation.
 #[inline(never)]
 pub unsafe fn sm100_cluster_tma_load<L>(
-    desc: *const TmaDesc<f16, L>,
+    desc: *const TensorMap<f16, L>,
     dst: *mut f16,
     row: u32,
     col: u32,
@@ -77,7 +77,7 @@ pub unsafe fn sm100_cluster_tma_load<L>(
 /// The elected issuer must retain matching source and descriptor storage through read completion.
 #[inline(never)]
 pub unsafe fn sm100_tma_store<L>(
-    desc: *const TmaDesc<f16, L>,
+    desc: *const TensorMap<f16, L>,
     src: *const f16,
     row: u32,
     col: u32,

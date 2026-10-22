@@ -5,7 +5,7 @@
 
 //! Exact compiler markers for independent attention operations.
 
-use crate::copy::tma::TmaDesc;
+use crate::copy::tma::TensorMap;
 use ctm_rs::mbarrier::Barrier;
 /// Device-only shared/shared MMA marker; operand displacements count bytes from retained bases.
 ///
@@ -45,7 +45,7 @@ pub unsafe fn mma_ts<BL, const M: u32, const N: u32, const K: u32, const G: u32>
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn tma_load<L, const G: u32>(
-    desc: *const TmaDesc<f16, L>,
+    desc: *const TensorMap<f16, L>,
     dst: *mut f16,
     c0: i32,
     c1: i32,
@@ -62,7 +62,7 @@ pub unsafe fn tma_load<L, const G: u32>(
 /// The elected issuer must publish shared writes and retain storage until the copy stops reading it.
 #[inline(never)]
 pub unsafe fn tma_store<L, const G: u32>(
-    desc: *const TmaDesc<f16, L>,
+    desc: *const TensorMap<f16, L>,
     src: *mut f16,
     c0: i32,
     c1: i32,

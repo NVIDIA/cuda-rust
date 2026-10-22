@@ -159,13 +159,15 @@ fn encode_with<T: TmaElement, F: PhysicalFormat<Element = T>>(
 
 /// Encode a row-major global tensor for a reviewed physical shared format.
 ///
+/// This is the CuTeDSL host name `create_tensor_map_tiled`; the data type, box
+/// and swizzle come from `T` and `F` instead of explicit arguments.
 /// Coordinates use the inner (column) dimension first. Encoding does not
 /// retain the allocation: it must cover the specified extents and remain live
 /// until every asynchronous device operation using the returned map completes.
 // The driver encodes this device address; it does not access the tensor data.
 // Actual tensor-map accesses are unsafe device operations with lifetime contracts.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn encode_2d<T: TmaElement, F: PhysicalFormat<Element = T>>(
+pub fn create_tensor_map_tiled<T: TmaElement, F: PhysicalFormat<Element = T>>(
     global_base: *mut c_void,
     rows: u64,
     cols: u64,

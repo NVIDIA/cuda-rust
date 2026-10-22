@@ -6,7 +6,7 @@
 //! Cluster copies into typed shared tiles for paired GEMM.
 
 use super::{__compiler, Sm100SharedTile};
-use crate::copy::tma::TmaDesc;
+use crate::copy::tma::TensorMap;
 use crate::markers::ReifySmem2D;
 use core::marker::PhantomData;
 use cuda_device::barrier::Barrier;
@@ -35,7 +35,7 @@ impl<Layout: ReifySmem2D> Sm100ClusterTmaCopy<Layout> {
     /// and aligned, and `barrier` names the local full barrier for this stage.
     #[inline(always)]
     pub unsafe fn copy<Role>(
-        desc: *const TmaDesc<f16, Layout>,
+        desc: *const TensorMap<f16, Layout>,
         dst: &mut Sm100SharedTile<Layout, Role>,
         row: u32,
         column: u32,

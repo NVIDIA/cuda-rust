@@ -11,7 +11,7 @@ mod kernel;
 mod python;
 
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer, LaunchConfig1D, sys};
-use cute_rs::tma::make_tma_desc_2d;
+use cute_rs::tma::create_tensor_map_tiled;
 use serde_json::json;
 use std::{
     error::Error,
@@ -498,25 +498,25 @@ fn main() -> Result<()> {
     let mut c_dev = DeviceBuffer::from_host(&stream, &vec![f16::NAN.to_bits(); m * n])?;
     // These layout types set both the descriptor's tile shape and swizzle
     // and the kernel's shared-memory layout.
-    let a_desc = make_tma_desc_2d::<f16, kernel::ASmem>(
+    let a_desc = create_tensor_map_tiled::<f16, kernel::ASmem>(
         a_dev.cu_deviceptr() as *mut core::ffi::c_void,
         u64::from(args.m),
         u64::from(args.k),
         u64::from(args.k),
     )?;
-    let b0_desc = make_tma_desc_2d::<f16, kernel::B0Smem>(
+    let b0_desc = create_tensor_map_tiled::<f16, kernel::B0Smem>(
         b_dev.cu_deviceptr() as *mut core::ffi::c_void,
         u64::from(args.n),
         u64::from(args.k),
         u64::from(args.k),
     )?;
-    let b1_desc = make_tma_desc_2d::<f16, kernel::B1Smem>(
+    let b1_desc = create_tensor_map_tiled::<f16, kernel::B1Smem>(
         b_dev.cu_deviceptr() as *mut core::ffi::c_void,
         u64::from(args.n),
         u64::from(args.k),
         u64::from(args.k),
     )?;
-    let c_desc = make_tma_desc_2d::<f16, kernel::CSmem>(
+    let c_desc = create_tensor_map_tiled::<f16, kernel::CSmem>(
         c_dev.cu_deviceptr() as *mut core::ffi::c_void,
         u64::from(args.m),
         u64::from(args.n),

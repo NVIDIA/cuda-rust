@@ -6,7 +6,7 @@
 //! Two-CTA tensor-memory allocation and accumulator epilogues.
 
 use super::__compiler;
-use crate::copy::tma::TmaDesc;
+use crate::copy::tma::TensorMap;
 use crate::markers::ReifySmem2D;
 use core::marker::PhantomData;
 
@@ -84,7 +84,7 @@ impl<Layout: ReifySmem2D> Sm100TmemEpilogue<Layout> {
     /// newest group pending; it does not immediately release this source.
     #[inline(always)]
     pub unsafe fn store_async(
-        desc: *const TmaDesc<f16, Layout>,
+        desc: *const TensorMap<f16, Layout>,
         src: *const f16,
         row: u32,
         column: u32,

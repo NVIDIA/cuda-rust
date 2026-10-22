@@ -70,7 +70,7 @@ fn collective_and_instruction_signatures_preserve_their_contracts() {
     let _: unsafe fn(u32, u32, u32) -> u32 = warp::shuffle_sync;
     let _: unsafe fn(f32) -> f32 = warp::reduce_sum_f32;
     let _: unsafe fn(bool) -> bool = warp::all;
-    let _: unsafe fn(u32) = warp::sync_mask;
+    let _: unsafe fn(u32) = warp::bar_warp_sync;
     let _: unsafe fn() = thread::setmaxnreg_inc::<24>;
     let _: unsafe fn() = thread::setmaxnreg_inc::<256>;
     let _: unsafe fn() = thread::setmaxnreg_dec::<24>;

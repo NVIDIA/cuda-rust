@@ -915,7 +915,9 @@ pub mod ops {
         const HAS_FULL_WARP_FORM: bool = false;
 
         /// Reduce the participating warp. Called only when `HAS_FULL_WARP_FORM`
-        /// is true and the tile contains all 32 lanes.
+        /// is true and the tile contains all 32 lanes. An implementation that
+        /// sets `HAS_FULL_WARP_FORM` must override it: this default returns
+        /// `value` unreduced.
         #[inline(always)]
         fn reduce_full_warp(_mask: u32, value: T) -> T {
             value

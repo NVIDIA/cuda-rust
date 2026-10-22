@@ -36,8 +36,8 @@ use super::{AlgebraError, Result};
 /// returns `1` because this analysis cannot prove a larger factor for a
 /// backwards walk.
 pub fn max_alignment(layout: &Layout) -> Result<i64> {
-    let shapes = layout.shape.leaves();
-    let strides = layout.stride.leaves();
+    let shapes = layout.shape.flatten();
+    let strides = layout.stride.flatten();
     if shapes.iter().any(|&shape| shape <= 0) {
         return Err(AlgebraError(
             "max_alignment: every shape extent must be positive".into(),
@@ -60,7 +60,7 @@ pub fn max_alignment(layout: &Layout) -> Result<i64> {
     let vector_size = modes[0].size();
     let rest_stride_gcd = modes[1]
         .stride
-        .leaves()
+        .flatten()
         .into_iter()
         .fold(0, gcd_nonnegative);
     Ok(gcd_nonnegative(vector_size, rest_stride_gcd).max(1))

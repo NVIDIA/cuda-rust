@@ -1,10 +1,10 @@
 error[E0080]: evaluation panicked: static layout offset exceeds i64
  --> src/static_layout.rs
   |
-  | impl<const B: u32, const M: u32, const S: i32, const O: i64, Inner: StaticLayout> StaticLayout
+  | impl<const B: u32, const M: u32, const S: i32, const O: i64, Outer: StaticLayout> StaticLayout
 ...
   |     const MAX_OFFSET: usize =
-  |         swizzled_bound(checked_offset_add(Inner::MAX_OFFSET, parameter(O)), B, M, S);
+  |         swizzled_bound(checked_offset_add(Outer::MAX_OFFSET, parameter(O)), B, M, S);
   |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `<cute_rs::Composed<cute_rs::Swizzle<0, 0, 0>, 1, cute_rs::L<cute_rs::C<2>, cute_rs::C<i64::MAX>>> as cute_rs::static_layout::StaticLayout>::MAX_OFFSET` failed inside this call
   |
 note: inside `static_layout::checked_offset_add`

@@ -39,13 +39,13 @@ use crate::layout::{ComposedLayout, Layout, OffsetUnit, Swizzle};
 
 /// Build a zero-offset FP16 row-major layout with the requested hardware swizzle.
 fn row_major(rows: u32, columns: u32, swizzle_bits: u32) -> ComposedLayout {
-    let inner: Layout = format!("({rows},{columns}):({columns},1)")
+    let outer: Layout = format!("({rows},{columns}):({columns},1)")
         .parse()
         .expect("fixed rank-two layout");
     ComposedLayout::new(
         Swizzle::new(swizzle_bits, 3, 3),
         0,
-        inner,
+        outer,
         OffsetUnit::Elements,
     )
     .expect("fixed SM100 FP16 swizzle")

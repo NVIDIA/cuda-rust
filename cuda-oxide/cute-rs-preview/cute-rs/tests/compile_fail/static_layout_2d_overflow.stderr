@@ -7,8 +7,8 @@ error[E0080]: evaluation panicked: static layout physical offset overflow
 note: inside `max_offset_2d::<L<T2<C<4>, C<1>>, T2<C<i64::MAX>, C<1>>>>`
   --> src/static_layout.rs
    |
-   |     let row_max = checked_offset_mul(parameter(L::ROWS - 1), parameter(L::ROW_STRIDE));
-   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     let row_max = checked_offset_mul(parameter(L::SHAPE.0 - 1), parameter(L::STRIDE.0));
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: inside `static_layout::checked_offset_mul`
   --> $RUST/core/src/panic.rs
    |

@@ -104,21 +104,27 @@ impl<const DIVISOR: usize> LeadingDimMarker for LeadingDim<DIVISOR> {}
 /// converts them to byte positions after it knows the element type.
 pub struct Swizzle<const B: u32, const M: u32, const S: i32>;
 
-/// One address rule built by applying `Inner`, adding `OFFSET`, then applying
-/// `Outer`.
+/// One address rule built by applying `Outer`, adding `OFFSET`, then applying
+/// `Inner`: `Inner(OFFSET + Outer(coordinate))`.
 ///
 /// ```text
-/// coordinate ── Inner ──► element offset
+/// coordinate ── Outer ──► element offset
 ///                          + OFFSET
 ///                              │
 ///                              ▼
-///                            Outer ──► final address
+///                            Inner ──► final address
 /// ```
 ///
-/// `OFFSET` and `Inner` count elements here. The compiler converts the whole
+/// The names are CuTe's. `Inner` is the swizzle, the map on the outside of
+/// the expression that runs last; `Outer` is the affine layout that runs
+/// first. The type arguments sit in the order of CuTeDSL's
+/// `make_composed_layout(inner, offset, outer)`, so
+/// `Composed<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>` reads like that call.
+///
+/// `OFFSET` and `Outer` count elements here. The compiler converts the whole
 /// rule to bytes after it knows the element size.
-pub struct Composed<Outer, const OFFSET: i64, Inner>(
-    #[doc = "Carries the inner map and outer offset permutation."] PhantomData<(Outer, Inner)>,
+pub struct Composed<Inner, const OFFSET: i64, Outer>(
+    #[doc = "Carries the inner swizzle and the outer layout."] PhantomData<(Inner, Outer)>,
 );
 
 /// Makes a two-dimensional shared-memory layout readable by host code.
@@ -132,73 +138,65 @@ pub struct Composed<Outer, const OFFSET: i64, Inner>(
 ///      ├──► device compiler
 ///      └──► host TMA descriptor
 /// ```
+///
+/// The swizzle constants carry the field names of `cute_layout::Swizzle`,
+/// which are CuTeDSL's `Swizzle.num_bits`, `num_base`, and `num_shift`.
 pub trait ReifySmem2D {
-    /// Number of rows.
-    const ROWS: i64;
-    /// Number of columns.
-    const COLS: i64;
-    /// Number of elements skipped when the row increases by one.
-    const ROW_STRIDE: i64;
-    /// Number of elements skipped when the column increases by one.
-    const COL_STRIDE: i64;
+    /// Tile extents as `(rows, columns)`.
+    const SHAPE: (i64, i64);
+    /// Elements skipped when the row, then the column, increases by one.
+    const STRIDE: (i64, i64);
     /// Fixed starting offset in elements; `0` for a plain layout.
     const OFFSET: i64;
-    /// Swizzle settings in element units; `B = 0` means no swizzle.
-    const SWIZZLE_B: u32;
-    /// Number of low address bits left unchanged by the swizzle.
-    const SWIZZLE_M: u32;
-    /// Distance between the two address fields used by the swizzle.
-    const SWIZZLE_S: i32;
+    /// Swizzle `B`, the number of XOR-ed bits, in element units; `0` means no
+    /// swizzle.
+    const NUM_BITS: u32;
+    /// Swizzle `M`: the number of low address bits left unchanged.
+    const NUM_BASE: u32;
+    /// Swizzle `S`: the distance between the two address fields.
+    const NUM_SHIFT: i32;
 }
 
 impl<const R: i64, const CC: i64, const SR: i64, const SC: i64> ReifySmem2D
     for L<T2<C<R>, C<CC>>, T2<C<SR>, C<SC>>>
 {
-    const ROWS: i64 = R;
-    const COLS: i64 = CC;
-    const ROW_STRIDE: i64 = SR;
-    const COL_STRIDE: i64 = SC;
+    const SHAPE: (i64, i64) = (R, CC);
+    const STRIDE: (i64, i64) = (SR, SC);
     const OFFSET: i64 = 0;
-    const SWIZZLE_B: u32 = 0;
-    const SWIZZLE_M: u32 = 4;
-    const SWIZZLE_S: i32 = 3;
+    const NUM_BITS: u32 = 0;
+    const NUM_BASE: u32 = 4;
+    const NUM_SHIFT: i32 = 3;
 }
 
 impl<const R: i64, const CC: i64> ReifySmem2D for RowMajor<R, CC> {
-    const ROWS: i64 = R;
-    const COLS: i64 = CC;
-    const ROW_STRIDE: i64 = CC;
-    const COL_STRIDE: i64 = 1;
+    const SHAPE: (i64, i64) = (R, CC);
+    const STRIDE: (i64, i64) = (CC, 1);
     const OFFSET: i64 = 0;
-    const SWIZZLE_B: u32 = 0;
-    const SWIZZLE_M: u32 = 4;
-    const SWIZZLE_S: i32 = 3;
+    const NUM_BITS: u32 = 0;
+    const NUM_BASE: u32 = 4;
+    const NUM_SHIFT: i32 = 3;
 }
 
 impl<const R: i64, const CC: i64> ReifySmem2D for ColMajor<R, CC> {
-    const ROWS: i64 = R;
-    const COLS: i64 = CC;
-    const ROW_STRIDE: i64 = 1;
-    const COL_STRIDE: i64 = R;
+    const SHAPE: (i64, i64) = (R, CC);
+    const STRIDE: (i64, i64) = (1, R);
     const OFFSET: i64 = 0;
-    const SWIZZLE_B: u32 = 0;
-    const SWIZZLE_M: u32 = 4;
-    const SWIZZLE_S: i32 = 3;
+    const NUM_BITS: u32 = 0;
+    const NUM_BASE: u32 = 4;
+    const NUM_SHIFT: i32 = 3;
 }
 
 /// Read one composed layout. Do not nest `Composed`: this implementation
-/// returns the outer swizzle and would hide the inner one.
-impl<const B: u32, const M: u32, const S: i32, const OFFSET: i64, Inner: ReifySmem2D> ReifySmem2D
-    for Composed<Swizzle<B, M, S>, OFFSET, Inner>
+/// reports only its own inner swizzle and would hide a nested one.
+impl<const B: u32, const M: u32, const S: i32, const OFFSET: i64, Outer: ReifySmem2D> ReifySmem2D
+    for Composed<Swizzle<B, M, S>, OFFSET, Outer>
 {
-    const ROWS: i64 = Inner::ROWS;
-    const COLS: i64 = Inner::COLS;
-    const ROW_STRIDE: i64 = Inner::ROW_STRIDE;
-    const COL_STRIDE: i64 = Inner::COL_STRIDE;
+    const SHAPE: (i64, i64) = Outer::SHAPE;
+    const STRIDE: (i64, i64) = Outer::STRIDE;
     const OFFSET: i64 = OFFSET;
-    const SWIZZLE_B: u32 = B;
-    const SWIZZLE_M: u32 = M;
-    const SWIZZLE_S: i32 = S;
+    const NUM_BITS: u32 = B;
+    const NUM_BASE: u32 = M;
+    const NUM_SHIFT: i32 = S;
 }
 
 /// Regression tests for this module’s layout, representation and rejection contracts.

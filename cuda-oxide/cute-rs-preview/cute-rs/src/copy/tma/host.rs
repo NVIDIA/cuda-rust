@@ -87,18 +87,18 @@ pub fn make_tma_desc_2d_with_options<T: TmaElement, SmemL: ReifySmem2D>(
 ) -> Result<TmaDesc<T, SmemL>, alloc::string::String> {
     use alloc::format;
 
-    if SmemL::ROWS <= 0 || SmemL::COLS <= 0 {
+    if SmemL::SHAPE.0 <= 0 || SmemL::SHAPE.1 <= 0 {
         return Err(format!(
             "TMA tile extents must be positive, got {} x {}",
-            SmemL::ROWS,
-            SmemL::COLS
+            SmemL::SHAPE.0,
+            SmemL::SHAPE.1
         ));
     }
-    if SmemL::ROW_STRIDE != SmemL::COLS || SmemL::COL_STRIDE != 1 {
+    if SmemL::STRIDE.0 != SmemL::SHAPE.1 || SmemL::STRIDE.1 != 1 {
         return Err(format!(
             "TMA v0 requires a row-major shared tile, got strides ({}, {})",
-            SmemL::ROW_STRIDE,
-            SmemL::COL_STRIDE
+            SmemL::STRIDE.0,
+            SmemL::STRIDE.1
         ));
     }
     if SmemL::OFFSET != 0 {
@@ -110,13 +110,14 @@ pub fn make_tma_desc_2d_with_options<T: TmaElement, SmemL: ReifySmem2D>(
     let Some(mode) = tma_swizzle_mode_for::<SmemL>(T::BYTES) else {
         return Err(format!(
             "swizzle S<{},{},{}> (elements) is not one of TMA's encodable modes",
-            SmemL::SWIZZLE_B,
-            SmemL::SWIZZLE_M,
-            SmemL::SWIZZLE_S
+            SmemL::NUM_BITS,
+            SmemL::NUM_BASE,
+            SmemL::NUM_SHIFT
         ));
     };
     if let Some(span_bytes) = tma_swizzle_span_bytes(mode) {
-        let pitch_bytes = SmemL::COLS
+        let pitch_bytes = SmemL::SHAPE
+            .1
             .checked_mul(i64::from(T::BYTES))
             .ok_or_else(|| alloc::string::String::from("TMA shared-tile pitch overflows i64"))?;
         if pitch_bytes != span_bytes {
@@ -141,7 +142,7 @@ pub fn make_tma_desc_2d_with_options<T: TmaElement, SmemL: ReifySmem2D>(
     // which are contiguous in a row-major matrix.
     let global_dim: [u64; 2] = [cols, rows];
     let global_strides: [u64; 1] = [ld_elements * u64::from(T::BYTES)];
-    let box_dim: [u32; 2] = [SmemL::COLS as u32, SmemL::ROWS as u32];
+    let box_dim: [u32; 2] = [SmemL::SHAPE.1 as u32, SmemL::SHAPE.0 as u32];
     let element_strides: [u32; 2] = [1, 1];
     let l2_promotion = match options.l2_promotion {
         TmaL2Promotion::None => driver::CUtensorMapL2promotion_enum_CU_TENSOR_MAP_L2_PROMOTION_NONE,

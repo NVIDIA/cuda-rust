@@ -33,7 +33,7 @@ pub fn validate_tma_encodable(
             value: 0,
         });
     }
-    let modes = smem_layout.inner().modes();
+    let modes = smem_layout.outer().modes();
     if modes.len() != 2 {
         return Err(ValidationError::TvRank {
             actual: modes.len(),
@@ -47,8 +47,8 @@ pub fn validate_tma_encodable(
         .ok_or(ValidationError::ArithmeticOverflow("TMA tile columns"))?;
     positive_count("TMA tile rows", rows)?;
     positive_count("TMA tile columns", columns)?;
-    let row_leaves = modes[0].stride.leaves();
-    let col_leaves = modes[1].stride.leaves();
+    let row_leaves = modes[0].stride.flatten();
+    let col_leaves = modes[1].stride.flatten();
     if row_leaves != [columns] || col_leaves != [1] {
         return Err(ValidationError::InvalidCount {
             name: "TMA tile must be row-major (row stride = columns, column stride = 1)",
@@ -61,19 +61,19 @@ pub fn validate_tma_encodable(
             value: smem_layout.offset(),
         });
     }
-    let swizzle = smem_layout.outer();
-    if swizzle.bits == 0 {
+    let swizzle = smem_layout.inner();
+    if swizzle.num_bits == 0 {
         return Ok(());
     }
-    let m_bytes = i64::from(swizzle.base) + element_bytes.trailing_zeros() as i64;
-    if swizzle.bits > 3 || m_bytes != 4 || swizzle.shift != 3 {
+    let m_bytes = i64::from(swizzle.num_base) + element_bytes.trailing_zeros() as i64;
+    if swizzle.num_bits > 3 || m_bytes != 4 || swizzle.num_shift != 3 {
         return Err(ValidationError::InvalidCount {
             name: "swizzle is not one of TMA's encodable byte-unit S<B,4,3> modes",
-            value: i64::from(swizzle.bits),
+            value: i64::from(swizzle.num_bits),
         });
     }
     let pitch_bytes = columns * element_bytes;
-    if pitch_bytes != (16 << swizzle.bits) {
+    if pitch_bytes != (16 << swizzle.num_bits) {
         return Err(ValidationError::InvalidCount {
             name: "swizzled TMA tile pitch must equal the swizzle span",
             value: pitch_bytes,
@@ -115,15 +115,15 @@ pub fn tma_phase_alignment_bytes(
     element_bytes: i64,
 ) -> ValidationResult<i64> {
     validate_tma_encodable(smem_layout, element_bytes)?;
-    let swizzle = smem_layout.outer();
-    if swizzle.bits == 0 {
+    let swizzle = smem_layout.inner();
+    if swizzle.num_bits == 0 {
         return Ok(16);
     }
 
     // Validation above normalized the element-based swizzle to byte-unit
     // S<B,4,3>. The highest participating source bit is therefore 4+B+3-1.
     let phase_bits = 4_u32
-        .checked_add(swizzle.bits)
+        .checked_add(swizzle.num_bits)
         .and_then(|bits| bits.checked_add(3))
         .ok_or(ValidationError::ArithmeticOverflow(
             "TMA swizzle phase alignment exponent",

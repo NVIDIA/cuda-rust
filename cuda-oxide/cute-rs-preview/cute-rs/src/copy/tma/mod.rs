@@ -178,7 +178,7 @@ pub const fn tma_swizzle_mode_for<SmemL: ReifySmem2D>(
         return None;
     }
     let log2 = element_bytes.trailing_zeros();
-    tma_swizzle_mode(SmemL::SWIZZLE_B, SmemL::SWIZZLE_M + log2, SmemL::SWIZZLE_S)
+    tma_swizzle_mode(SmemL::NUM_BITS, SmemL::NUM_BASE + log2, SmemL::NUM_SHIFT)
 }
 
 /// Bytes covered by one repeat of the swizzle, or `None` without a swizzle.
@@ -203,7 +203,7 @@ const fn tma_swizzle_span_bytes(mode: TmaSwizzleMode) -> Option<i64> {
 /// ```
 #[inline(always)]
 pub const fn tile_bytes<T, SmemL: ReifySmem2D>() -> u32 {
-    (SmemL::ROWS * SmemL::COLS) as u32 * size_of::<T>() as u32
+    (SmemL::SHAPE.0 * SmemL::SHAPE.1) as u32 * size_of::<T>() as u32
 }
 
 /// Start one TMA copy from global memory into a shared tile.
@@ -215,8 +215,8 @@ pub const fn tile_bytes<T, SmemL: ReifySmem2D>() -> u32 {
 /// `coord = (r, c)` counts tiles, not elements. The element origin is:
 ///
 /// ```text
-/// row = r * SmemL::ROWS
-/// col = c * SmemL::COLS
+/// row = r * SmemL::SHAPE.0
+/// col = c * SmemL::SHAPE.1
 /// ```
 ///
 /// The caller must initialize the `mbarrier`, attach [`tile_bytes`] as its
@@ -248,7 +248,7 @@ pub unsafe fn copy_tma_2d<T, SmemL>(
 /// This is the reverse of [`copy_tma_2d`]. The descriptor and source carry
 /// the same element and layout types, so Rust rejects mismatches. `coord`
 /// counts tiles; `(r, c)` starts at element
-/// `(r * SmemL::ROWS, c * SmemL::COLS)`.
+/// `(r * SmemL::SHAPE.0, c * SmemL::SHAPE.1)`.
 ///
 /// TMA stores are tracked in copy groups rather than `mbarrier` objects. TMA
 /// observes shared memory through an asynchronous *proxy*, a hardware view of

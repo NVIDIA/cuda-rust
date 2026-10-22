@@ -162,7 +162,7 @@ impl Emit<'_, '_> {
     ) -> Result<MlirValueUse, String> {
         // Source composed layouts count FP16 elements. CuTe pointers carry
         // BYTE-address swizzles, so the base advances by log2(sizeof(f16)).
-        let swizzle = layout.0.outer();
+        let swizzle = layout.0.inner();
         let ptr = self.cute_ptr(
             ptr,
             "f16",
@@ -170,9 +170,9 @@ impl Emit<'_, '_> {
             128,
             Some(format!(
                 "S<{},{},{}>",
-                swizzle.bits,
-                swizzle.base + 1,
-                swizzle.shift
+                swizzle.num_bits,
+                swizzle.num_base + 1,
+                swizzle.num_shift
             )),
         )?;
         let (result, desc) = self.fresh(dialect("!cute_nvgpu.smem_desc")?);

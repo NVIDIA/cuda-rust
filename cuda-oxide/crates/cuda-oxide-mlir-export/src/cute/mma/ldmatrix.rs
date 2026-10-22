@@ -30,9 +30,9 @@ pub(in crate::cute) struct MatrixTranslation;
 pub(in crate::cute) fn matrix_offset_fits_i32(layout: &ComposedLayout) -> bool {
     let limit = i64::from(i32::MAX);
     if layout.unit() != OffsetUnit::Bytes
-        || layout.inner().modes().len() != 2
+        || layout.outer().modes().len() != 2
         || !layout
-            .inner()
+            .outer()
             .checked_size()
             .is_some_and(|size| size <= limit)
         || !(0..=limit).contains(&layout.offset())
@@ -41,11 +41,11 @@ pub(in crate::cute) fn matrix_offset_fits_i32(layout: &ComposedLayout) -> bool {
     }
     let mut maximum = layout.offset();
     for (&extent, &stride) in layout
-        .inner()
+        .outer()
         .shape
-        .leaves()
+        .flatten()
         .iter()
-        .zip(&layout.inner().stride.leaves())
+        .zip(&layout.outer().stride.flatten())
     {
         if !(0..=limit).contains(&stride) {
             return false;
@@ -63,7 +63,7 @@ pub(in crate::cute) fn matrix_offset_fits_i32(layout: &ComposedLayout) -> bool {
     }
     // Keeping both fields below the sign bit bounds the mask, shifted bits,
     // and final XOR even when swizzling raises the maximum physical offset.
-    let swizzle = layout.outer();
+    let swizzle = layout.inner();
     swizzle.is_valid()
         && (0..=limit).contains(&swizzle.y_mask())
         && (0..=limit).contains(&swizzle.z_mask())
@@ -87,11 +87,11 @@ pub(in crate::cute) fn matrix_address_plan(
     role: CuteMatrixRoleAttr,
 ) -> Option<MatrixAddressPlan> {
     if !matrix_offset_fits_i32(layout)
-        || layout.inner().checked_size()? > cute_layout::validation::MAX_STATIC_VALIDATION_ELEMENTS
+        || layout.outer().checked_size()? > cute_layout::validation::MAX_STATIC_VALIDATION_ELEMENTS
     {
         return None;
     }
-    let modes = layout.inner().modes();
+    let modes = layout.outer().modes();
     let rows = modes[0].checked_size()?;
     let columns = modes[1].checked_size()?;
     let window_columns = if role == CuteMatrixRoleAttr::B { 8 } else { 16 };
@@ -99,7 +99,7 @@ pub(in crate::cute) fn matrix_address_plan(
         return None;
     }
     let index = |mode: usize, coordinate| modes[mode].checked_call(&IntTuple::Leaf(coordinate));
-    let swizzle = layout.outer();
+    let swizzle = layout.inner();
     let active = swizzle.y_mask() | swizzle.z_mask();
     let low_mask = (1i64 << (i64::BITS - active.leading_zeros())) - 1;
     let high_mask = i64::from(i32::MAX) ^ low_mask;
@@ -224,16 +224,16 @@ impl OperationTranslation for MatrixTranslation {
             e.constant(0, width)?
         };
         let source = if let Some(plan) = matrix_address_plan(&layout, role) {
-            let uniform = e.linear_pair(layout.inner(), window_row, window_column)?;
+            let uniform = e.linear_pair(layout.outer(), window_row, window_column)?;
             let offset = e.constant(layout.offset(), 32)?;
             let uniform = e.binary("arith.addi", uniform, offset)?;
-            let local = e.linear_pair(layout.inner(), local_row, local_column)?;
+            let local = e.linear_pair(layout.outer(), local_row, local_column)?;
             let high_mask = e.constant(plan.high_mask, 32)?;
             let high = e.binary("arith.andi", uniform.clone(), high_mask)?;
             let low_mask = e.constant(plan.low_mask, 32)?;
             let low = e.binary("arith.andi", uniform, low_mask)?;
-            let low = e.swizzle(layout.outer(), low)?;
-            let local = e.swizzle(layout.outer(), local)?;
+            let low = e.swizzle(layout.inner(), low)?;
+            let local = e.swizzle(layout.inner(), local)?;
             let low = e.binary("arith.xori", low, local)?;
             // Keep the high window offset additive so constant matrix-row
             // displacements can remain GEP/immediate offsets after lowering.

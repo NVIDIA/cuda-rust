@@ -105,7 +105,7 @@ impl Verify for CuteLdmatrixOp {
             return verify_err!(op.loc(), "cute.ldmatrix v0 supports f16 elements only");
         }
         let _ = role;
-        let modes = smem_layout.inner().modes();
+        let modes = smem_layout.outer().modes();
         if modes.len() != 2 {
             return verify_err!(op.loc(), "cute.ldmatrix shared layout needs two modes");
         }

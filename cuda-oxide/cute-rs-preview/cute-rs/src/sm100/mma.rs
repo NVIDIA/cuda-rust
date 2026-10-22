@@ -47,9 +47,9 @@ impl<
         assert!(N0 >= 16 && N0 <= 256 && N0.is_multiple_of(16));
         assert!(N1 >= 16 && N1 <= 256 && N1.is_multiple_of(16));
         assert!(N0 + N1 <= 512 && K == 64);
-        assert!(AL::ROWS == 128 && AL::COLS == K as i64);
-        assert!(B0L::ROWS == (N0 / 2) as i64 && B0L::COLS == K as i64);
-        assert!(B1L::ROWS == (N1 / 2) as i64 && B1L::COLS == K as i64);
+        assert!(AL::SHAPE.0 == 128 && AL::SHAPE.1 == K as i64);
+        assert!(B0L::SHAPE.0 == (N0 / 2) as i64 && B0L::SHAPE.1 == K as i64);
+        assert!(B1L::SHAPE.0 == (N1 / 2) as i64 && B1L::SHAPE.1 == K as i64);
     };
 
     /// Check the tile dimensions and create the MMA configuration.

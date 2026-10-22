@@ -162,7 +162,7 @@ impl CuteSmemTensorType {
     /// Number of physical carrier elements in one shared stage.
     #[must_use]
     pub fn storage_elements(&self) -> Option<u64> {
-        u64::try_from(self.placement.0.inner().checked_size()?).ok()
+        u64::try_from(self.placement.0.outer().checked_size()?).ok()
     }
 
     /// Physical byte size of one shared stage.

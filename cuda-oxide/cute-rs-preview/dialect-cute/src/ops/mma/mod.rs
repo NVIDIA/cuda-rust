@@ -118,19 +118,19 @@ fn shared_carriers_match_view(
 
 /// Build the supported dense placement for one stage of block-scale carriers.
 fn canonical_scale_placement() -> ComposedLayout {
-    let inner: Layout = "(32,4):(4,1)"
+    let outer: Layout = "(32,4):(4,1)"
         .parse()
         .expect("fixed SM120 scale placement is valid");
-    ComposedLayout::new(Swizzle::IDENTITY, 0, inner, OffsetUnit::Elements)
+    ComposedLayout::new(Swizzle::IDENTITY, 0, outer, OffsetUnit::Elements)
         .expect("identity scale placement is valid")
 }
 
 /// Build the supported swizzled placement for one stage of packed FP4 values.
 fn canonical_data_placement() -> ComposedLayout {
-    let inner: Layout = "(128,32):(32,1)"
+    let outer: Layout = "(128,32):(32,1)"
         .parse()
         .expect("fixed SM120 data placement is valid");
-    ComposedLayout::new(Swizzle::new(2, 3, 3), 0, inner, OffsetUnit::Elements)
+    ComposedLayout::new(Swizzle::new(2, 3, 3), 0, outer, OffsetUnit::Elements)
         .expect("fixed SM120 data swizzle is valid")
 }
 

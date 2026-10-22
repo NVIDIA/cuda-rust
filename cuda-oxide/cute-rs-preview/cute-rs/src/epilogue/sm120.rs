@@ -322,13 +322,11 @@ mod tests {
     /// An epilogue half must have the shape, byte count and swizzle expected by one B128 TMA store.
     #[test]
     fn half_layout_is_exactly_one_b128_tma_tile() {
-        assert_eq!(<Sm120EpilogueHalfLayout as ReifySmem2D>::ROWS, 128);
-        assert_eq!(<Sm120EpilogueHalfLayout as ReifySmem2D>::COLS, 64);
-        assert_eq!(<Sm120EpilogueHalfLayout as ReifySmem2D>::ROW_STRIDE, 64);
-        assert_eq!(<Sm120EpilogueHalfLayout as ReifySmem2D>::COL_STRIDE, 1);
-        assert_eq!(<Sm120EpilogueHalfLayout as ReifySmem2D>::SWIZZLE_B, 3);
-        assert_eq!(<Sm120EpilogueHalfLayout as ReifySmem2D>::SWIZZLE_M, 3);
-        assert_eq!(<Sm120EpilogueHalfLayout as ReifySmem2D>::SWIZZLE_S, 3);
+        assert_eq!(<Sm120EpilogueHalfLayout as ReifySmem2D>::SHAPE, (128, 64));
+        assert_eq!(<Sm120EpilogueHalfLayout as ReifySmem2D>::STRIDE, (64, 1));
+        assert_eq!(<Sm120EpilogueHalfLayout as ReifySmem2D>::NUM_BITS, 3);
+        assert_eq!(<Sm120EpilogueHalfLayout as ReifySmem2D>::NUM_BASE, 3);
+        assert_eq!(<Sm120EpilogueHalfLayout as ReifySmem2D>::NUM_SHIFT, 3);
         assert_eq!(SM120_EPILOGUE_HALF_BYTES, 16 * 1024);
         assert_eq!(Sm120Epilogue128x128::BYTES, 32 * 1024);
     }

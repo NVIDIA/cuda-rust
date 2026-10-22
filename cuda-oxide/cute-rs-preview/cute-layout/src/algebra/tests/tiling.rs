@@ -13,7 +13,7 @@ use super::*;
 #[test]
 fn zipped_divide_is_definitional() {
     let a = l("(8,6):(6,1)");
-    let r = zipped_divide_by_shape(&a, &[4, 3]).unwrap();
+    let r = zipped_divide(&a, &[4, 3]).unwrap();
     for t0 in 0..4 {
         for t1 in 0..3 {
             for r0 in 0..2 {

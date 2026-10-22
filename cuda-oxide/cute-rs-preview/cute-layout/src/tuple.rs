@@ -46,7 +46,8 @@ impl IntTuple {
         }
     }
 
-    /// Reports whether two tuples have the same parenthesis structure.
+    /// Reports whether two tuples have the same parenthesis structure, as
+    /// CuTe's `is_congruent`.
     ///
     /// The integer values do not matter:
     ///
@@ -57,26 +58,29 @@ impl IntTuple {
     ///
     /// A [`Layout`](crate::Layout) requires congruent shape and stride tuples so every shape
     /// number has a matching stride number in the same position.
-    pub fn congruent(&self, other: &IntTuple) -> bool {
+    pub fn is_congruent(&self, other: &IntTuple) -> bool {
         match (self, other) {
             (IntTuple::Leaf(_), IntTuple::Leaf(_)) => true,
             (IntTuple::Tuple(a), IntTuple::Tuple(b)) => {
-                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.congruent(y))
+                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.is_congruent(y))
             }
             _ => false,
         }
     }
 
-    /// Returns every integer from left to right and discards parentheses.
+    /// Returns every integer from left to right and discards parentheses, as
+    /// CuTe's `flatten`.
     ///
     /// ```text
     /// input:  ((2,3),4)
     /// output: [2, 3, 4]    parentheses are gone
     /// ```
     ///
-    /// Algebra operations use this when they need the numbers but not the
-    /// nested [mode](crate#modes) structure.
-    pub fn leaves(&self) -> Vec<i64> {
+    /// A flat tuple holds nothing but integers, so it is returned as a
+    /// `Vec<i64>`. Algebra operations use this when they need the numbers but
+    /// not the nested [mode](crate#modes) structure;
+    /// [`algebra::flatten`](crate::algebra::flatten) flattens a whole layout.
+    pub fn flatten(&self) -> Vec<i64> {
         let mut out = Vec::new();
         self.collect_leaves(&mut out);
         out

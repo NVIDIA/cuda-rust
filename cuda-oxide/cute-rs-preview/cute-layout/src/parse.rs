@@ -108,7 +108,7 @@ impl FromStr for Layout {
         if !rest.trim().is_empty() {
             return Err(ParseLayoutError);
         }
-        if !shape.congruent(&stride) {
+        if !shape.is_congruent(&stride) {
             return Err(ParseLayoutError);
         }
         Ok(Layout { shape, stride })

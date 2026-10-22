@@ -359,7 +359,7 @@ impl Verify for CuteTiledMmaPlanAttr {
             .checked_mul(self.cta_k)
             .and_then(|values| values.checked_div(4));
         if expected_shared_elements.and_then(|value| i64::try_from(value).ok())
-            != self.shared_layout.0.inner().checked_size()
+            != self.shared_layout.0.outer().checked_size()
         {
             return verify_err_noloc!(
                 "cute.tiled_mma_plan shared placement must hold four packed E2M1 values per f16 carrier"
@@ -374,8 +374,8 @@ impl Verify for CuteTiledMmaPlanAttr {
                 "cute.tiled_mma_plan ownership layouts must cover every M/N atom exactly once"
             );
         }
-        if self.m_ownership.0.shape.leaves().first().copied() != Some(i64::from(self.warp_m))
-            || self.n_ownership.0.shape.leaves().last().copied() != Some(i64::from(self.warp_n))
+        if self.m_ownership.0.shape.flatten().first().copied() != Some(i64::from(self.warp_m))
+            || self.n_ownership.0.shape.flatten().last().copied() != Some(i64::from(self.warp_n))
         {
             return verify_err_noloc!(
                 "cute.tiled_mma_plan ownership layouts must expose warp-M first and warp-N last"

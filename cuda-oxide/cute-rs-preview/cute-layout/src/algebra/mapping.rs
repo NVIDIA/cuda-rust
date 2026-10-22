@@ -13,6 +13,21 @@ use crate::{IntTuple, Layout};
 
 use super::{AlgebraError, Result, flat_modes, layout_from_flat};
 
+/// Removes the parentheses that group [modes](crate#modes), as CuTe's
+/// `flatten`.
+///
+/// ```text
+/// ((2,3),4):((12,4),1)  ->  (2,3,4):(12,4,1)
+/// ```
+///
+/// Every flat coordinate reaches the same offset as before; only the nesting
+/// of the tuple coordinate changes, so the result has one mode per integer
+/// of the original shape. A layout with a single integer mode is returned
+/// without parentheses. [`IntTuple::flatten`] does the same for one tuple.
+pub fn flatten(l: &Layout) -> Layout {
+    layout_from_flat(flat_modes(l))
+}
+
 /// Rewrites a layout as fewer [modes](crate#modes) while preserving its flat
 /// coordinate-to-offset sequence.
 ///

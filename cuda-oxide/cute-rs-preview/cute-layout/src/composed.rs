@@ -23,17 +23,19 @@
 //! coordinate
 //!     │
 //!     ▼
-//! inner layout ──> plain offset ──> + static offset ──> outer swizzle
+//! outer layout ──> plain offset ──> + static offset ──> inner swizzle
 //!                                                               │
 //!                                                               ▼
 //!                                                  physical tile offset
 //!
-//! call(c) = outer(offset + inner(c))
+//! call(c) = inner(offset + outer(c))
 //! ```
 //!
-//! The names “inner” and “outer” describe evaluation order: the inner layout
-//! runs first; the outer swizzle runs last. The stored `offset` is a fixed
-//! displacement between them.
+//! The names “inner” and “outer” are CuTe's. They name each map's position
+//! in `inner(offset + outer(c))`, not the order of evaluation: the outer
+//! layout is applied first and the inner swizzle last, as CuTeDSL's
+//! `ComposedLayout` documents. The stored `offset` is a fixed displacement
+//! between them.
 //!
 //! ## Concrete example
 //!
@@ -41,11 +43,11 @@
 //! row-major offsets:
 //!
 //! ```text
-//! inner layout: (2,4):(4,1)
+//! outer layout:  (2,4):(4,1)
 //! row mode:      extent 2, stride 4
 //! column mode:   extent 4, stride 1
 //! fixed offset:  0
-//! outer swizzle: S<1,0,2>  (offset bit 2 toggles bit 0)
+//! inner swizzle: S<1,0,2>  (offset bit 2 toggles bit 0)
 //!
 //! coordinates             plain offsets       final offsets
 //! (0,0) (0,1) (0,2) (0,3)   0  1  2  3    ->   0  1  2  3
@@ -81,7 +83,7 @@ use crate::{IntTuple, Layout, Swizzle};
 
 /// What one step in every stored and returned offset represents.
 ///
-/// The inner layout's strides, the fixed composed offset, and the number fed
+/// The outer layout's strides, the fixed composed offset, and the number fed
 /// to the swizzle must all use this same unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OffsetUnit {
@@ -138,43 +140,45 @@ impl core::error::Error for ComposedLayoutError {}
 /// A complete, position-independent mapping from coordinates to swizzled
 /// tile-relative offsets.
 ///
-/// It stores all three parts of `outer(offset + inner(coordinate))`, plus the
+/// It stores all three parts of `inner(offset + outer(coordinate))`, plus the
 /// unit in which those offsets are measured. It deliberately does not store
 /// the allocation's base pointer.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ComposedLayout {
-    /// Offset-bit permutation applied after the inner map and fixed displacement.
-    outer: Swizzle,
+    /// Offset-bit permutation applied last, after the outer map and the fixed
+    /// displacement.
+    inner: Swizzle,
     /// Fixed displacement in the recorded unit, added before the swizzle.
     offset: i64,
-    /// Coordinate-to-offset map evaluated before the outer swizzle.
-    inner: Layout,
+    /// Coordinate-to-offset map applied first, before the inner swizzle.
+    outer: Layout,
     /// Whether offsets and strides count elements or bytes.
     unit: OffsetUnit,
 }
 
 impl ComposedLayout {
-    /// Build the mapping `outer(offset + inner(coordinate))`.
+    /// Build the mapping `inner(offset + outer(coordinate))`.
     ///
-    /// `offset`, every stride in `inner`, and the input expected by `outer`
-    /// must already use `unit`. Construction rejects a swizzle whose bit
-    /// fields overlap or fall outside the supported low 32-bit swizzle window.
-    /// Higher offset bits pass through unchanged. See the
-    /// module's [concrete example](crate::composed#concrete-example) for all
-    /// three steps with numbers.
+    /// The arguments follow CuTeDSL's `make_composed_layout(inner, offset,
+    /// outer)`. `offset`, every stride in `outer`, and the input expected by
+    /// `inner` must already use `unit`. Construction rejects a swizzle whose
+    /// bit fields overlap or fall outside the supported low 32-bit swizzle
+    /// window. Higher offset bits pass through unchanged. See the module's
+    /// [concrete example](crate::composed#concrete-example) for all three
+    /// steps with numbers.
     pub fn new(
-        outer: Swizzle,
+        inner: Swizzle,
         offset: i64,
-        inner: Layout,
+        outer: Layout,
         unit: OffsetUnit,
     ) -> Result<Self, ComposedLayoutError> {
-        if !outer.is_valid() {
+        if !inner.is_valid() {
             return Err(ComposedLayoutError::InvalidSwizzle);
         }
         Ok(ComposedLayout {
-            outer,
-            offset,
             inner,
+            offset,
+            outer,
             unit,
         })
     }
@@ -184,35 +188,37 @@ impl ComposedLayout {
     /// The identity swizzle changes no bits and the fixed offset is zero:
     ///
     /// ```text
-    /// inner layout (2,3):(3,1), coordinate (1,2)
-    /// inner offset 5 -> identity swizzle -> final offset 5
+    /// outer layout (2,3):(3,1), coordinate (1,2)
+    /// outer offset 5 -> identity swizzle -> final offset 5
     /// ```
-    pub fn from_layout(inner: Layout, unit: OffsetUnit) -> Self {
+    pub fn from_layout(outer: Layout, unit: OffsetUnit) -> Self {
         ComposedLayout {
-            outer: Swizzle::IDENTITY,
+            inner: Swizzle::IDENTITY,
             offset: 0,
-            inner,
+            outer,
             unit,
         }
     }
 
-    /// Return the swizzle applied last.
+    /// Return the inner swizzle, the map applied last.
     ///
-    /// “Outer” describes composition order; it does not mean an outer tile or
-    /// an absolute address.
-    pub const fn outer(&self) -> Swizzle {
-        self.outer
+    /// “Inner” is CuTe's name for the map on the outside of
+    /// `inner(offset + outer(c))`; it does not mean an inner tile or the map
+    /// that runs first.
+    pub const fn inner(&self) -> Swizzle {
+        self.inner
     }
 
-    /// Return the fixed displacement added after the inner layout and before
-    /// the swizzle, measured in [`Self::unit`].
+    /// Return the fixed displacement added after the outer layout and before
+    /// the inner swizzle, measured in [`Self::unit`].
     pub const fn offset(&self) -> i64 {
         self.offset
     }
 
-    /// Return the plain coordinate-to-offset layout evaluated first.
-    pub const fn inner(&self) -> &Layout {
-        &self.inner
+    /// Return the outer layout, the plain coordinate-to-offset map applied
+    /// first.
+    pub const fn outer(&self) -> &Layout {
+        &self.outer
     }
 
     /// Return whether this composition's offsets count elements or bytes.
@@ -220,22 +226,22 @@ impl ComposedLayout {
         self.unit
     }
 
-    /// Return the number of logical coordinates accepted by the inner layout.
+    /// Return the number of logical coordinates accepted by the outer layout.
     ///
     /// Swizzling only permutes locations, so it does not change this count.
     pub fn size(&self) -> i64 {
-        self.inner.size()
+        self.outer.size()
     }
 
     /// Map one logical coordinate to a physical tile-relative offset.
     ///
     /// The returned number uses [`Self::unit`]. This unchecked form assumes
-    /// that `coord` has the right structure and lies inside the inner layout;
+    /// that `coord` has the right structure and lies inside the outer layout;
     /// compiler input should use [`Self::checked_call`] instead. The module's
     /// [concrete example](crate::composed#concrete-example) shows the complete
-    /// inner-layout, fixed-offset, and swizzle calculation.
+    /// outer-layout, fixed-offset, and swizzle calculation.
     pub fn call(&self, coord: &IntTuple) -> i64 {
-        self.call_with_inner_delta(coord, 0)
+        self.call_with_outer_delta(coord, 0)
     }
 
     /// Map an in-range coordinate without panicking or overflowing.
@@ -245,32 +251,32 @@ impl ComposedLayout {
     /// use this for layouts decoded from the compiler's intermediate
     /// representation (IR), which must be treated as untrusted input.
     pub fn checked_call(&self, coord: &IntTuple) -> Option<i64> {
-        self.checked_call_with_inner_delta(coord, 0)
+        self.checked_call_with_outer_delta(coord, 0)
     }
 
     /// Map a position shortly after the item selected by `coord`.
     ///
-    /// `delta` is added to the inner layout's result before swizzling and uses
+    /// `delta` is added to the outer layout's result before swizzling and uses
     /// the composition's declared unit. For a byte-unit layout, `delta = 3`
     /// means “three bytes after this item's first byte.”
     ///
     /// For a one-thread [copy atom](crate#atoms) such as `CpAsync<16>`,
     /// validation calls this method for deltas 0 through 15 to check that the
     /// swizzle keeps those 16 bytes together and in order.
-    pub fn call_with_inner_delta(&self, coord: &IntTuple, delta: i64) -> i64 {
-        self.outer
-            .apply(self.offset + self.inner.call(coord) + delta)
+    pub fn call_with_outer_delta(&self, coord: &IntTuple, delta: i64) -> i64 {
+        self.inner
+            .apply(self.offset + self.outer.call(coord) + delta)
     }
 
-    /// Checked form of [`Self::call_with_inner_delta`].
+    /// Checked form of [`Self::call_with_outer_delta`].
     ///
     /// Returns `None` for an invalid coordinate or arithmetic overflow.
-    pub fn checked_call_with_inner_delta(&self, coord: &IntTuple, delta: i64) -> Option<i64> {
+    pub fn checked_call_with_outer_delta(&self, coord: &IntTuple, delta: i64) -> Option<i64> {
         let input = self
             .offset
-            .checked_add(self.inner.checked_call(coord)?)?
+            .checked_add(self.outer.checked_call(coord)?)?
             .checked_add(delta)?;
-        Some(self.outer.apply(input))
+        Some(self.inner.apply(input))
     }
 
     /// Convert an element-counting composition into an equivalent
@@ -297,7 +303,7 @@ impl ComposedLayout {
     /// coordinate (1,2): 5 elements          -> 20 bytes
     /// ```
     ///
-    /// The fixed offset and every inner stride are multiplied by
+    /// The fixed offset and every outer stride are multiplied by
     /// `element_bytes` as well. The resulting physical byte offset is exactly
     /// the old physical element offset multiplied by `element_bytes`.
     ///
@@ -315,23 +321,23 @@ impl ComposedLayout {
 
         let added_bits = element_bytes.trailing_zeros();
         let new_base = self
-            .outer
-            .base
+            .inner
+            .num_base
             .checked_add(added_bits)
             .ok_or(ComposedLayoutError::ArithmeticOverflow)?;
-        let outer = Swizzle::try_new(self.outer.bits, new_base, self.outer.shift)
+        let inner = Swizzle::try_new(self.inner.num_bits, new_base, self.inner.num_shift)
             .ok_or(ComposedLayoutError::InvalidSwizzle)?;
         let offset = self
             .offset
             .checked_mul(element_bytes)
             .ok_or(ComposedLayoutError::ArithmeticOverflow)?;
-        let stride = checked_scale_tuple(&self.inner.stride, element_bytes)
+        let stride = checked_scale_tuple(&self.outer.stride, element_bytes)
             .ok_or(ComposedLayoutError::ArithmeticOverflow)?;
 
         Ok(ComposedLayout {
-            outer,
+            inner,
             offset,
-            inner: Layout::new(self.inner.shape.clone(), stride),
+            outer: Layout::new(self.outer.shape.clone(), stride),
             unit: OffsetUnit::Bytes,
         })
     }
@@ -344,15 +350,15 @@ impl ComposedLayout {
     /// part, so the result is the greatest common divisor of:
     ///
     /// ```text
-    /// inner layout's alignment
+    /// outer layout's alignment
     /// fixed offset
     /// swizzle's chunk-alignment factor
     ///                │
     ///                ▼
-    /// gcd(inner alignment, fixed offset, swizzle alignment)
+    /// gcd(outer alignment, fixed offset, swizzle alignment)
     /// ```
     ///
-    /// Example: an inner layout aligned to 16 bytes plus an 8-byte fixed
+    /// Example: an outer layout aligned to 16 bytes plus an 8-byte fixed
     /// offset can promise only 8-byte alignment, even if the swizzle preserves
     /// 16-byte chunks.
     ///
@@ -362,13 +368,13 @@ impl ComposedLayout {
     /// static layout property; the real allocation pointer must still be
     /// suitably aligned.
     pub fn max_alignment(&self) -> Result<i64, AlgebraError> {
-        let inner_alignment = max_alignment(&self.inner)?;
+        let outer_alignment = max_alignment(&self.outer)?;
         // gcd(x, 0) = x, so a zero offset drops out on its own.
-        let with_offset = gcd(inner_alignment, unsigned_to_i64(self.offset.unsigned_abs()));
-        if self.outer.bits == 0 {
+        let with_offset = gcd(outer_alignment, unsigned_to_i64(self.offset.unsigned_abs()));
+        if self.inner.num_bits == 0 {
             return Ok(with_offset.max(1));
         }
-        Ok(gcd(with_offset, self.outer.max_alignment()).max(1))
+        Ok(gcd(with_offset, self.inner.max_alignment()).max(1))
     }
 }
 
@@ -377,7 +383,7 @@ impl fmt::Display for ComposedLayout {
         write!(
             f,
             "{} o {} o {} [{}]",
-            self.outer, self.offset, self.inner, self.unit
+            self.inner, self.offset, self.outer, self.unit
         )
     }
 }
@@ -423,7 +429,7 @@ mod tests {
         text.parse().unwrap()
     }
 
-    /// Composed calls must evaluate the inner layout, fixed displacement and outer swizzle in that order.
+    /// Composed calls must evaluate the outer layout, fixed displacement and inner swizzle in that order.
     #[test]
     fn call_uses_cutegen_composition_order() {
         let layout =
@@ -433,7 +439,7 @@ mod tests {
             let coord = IntTuple::Leaf(coord);
             assert_eq!(
                 layout.call(&coord),
-                layout.outer.apply(8 + layout.inner.call(&coord))
+                layout.inner.apply(8 + layout.outer.call(&coord))
             );
         }
         assert_eq!(layout.to_string(), "S<2,0,3> o 8 o 4:1 [bytes]");
@@ -452,9 +458,9 @@ mod tests {
         let bytes = elements.to_byte_offsets(4).unwrap();
 
         assert_eq!(bytes.unit(), OffsetUnit::Bytes);
-        assert_eq!(bytes.outer(), Swizzle::new(2, 4, 3));
+        assert_eq!(bytes.inner(), Swizzle::new(2, 4, 3));
         assert_eq!(bytes.offset(), 32);
-        assert_eq!(bytes.inner().to_string(), "(4,4):(4,16)");
+        assert_eq!(bytes.outer().to_string(), "(4,4):(4,16)");
         for coord in 0..elements.size() {
             let coord = IntTuple::Leaf(coord);
             assert_eq!(bytes.call(&coord), elements.call(&coord) * 4);
@@ -485,9 +491,9 @@ mod tests {
         // representation, bypassing Swizzle::new. ComposedLayout is therefore
         // a second input boundary and rejects overlapping bit fields.
         let invalid = Swizzle {
-            bits: 4,
-            base: 3,
-            shift: 3,
+            num_bits: 4,
+            num_base: 3,
+            num_shift: 3,
         };
         assert_eq!(
             ComposedLayout::new(invalid, 0, l("4:1"), OffsetUnit::Bytes),
@@ -503,7 +509,7 @@ mod tests {
         assert_eq!(layout.checked_call(&IntTuple::Leaf(1)), None);
     }
 
-    /// Alignment must account for inner strides, fixed displacement and swizzle-protected bits.
+    /// Alignment must account for outer strides, fixed displacement and swizzle-protected bits.
     #[test]
     fn max_alignment_combines_every_part() {
         let layout = ComposedLayout::new(
@@ -524,17 +530,17 @@ mod tests {
         .unwrap();
         assert_eq!(offset_limited.max_alignment().unwrap(), 8);
 
-        let inner_limited = ComposedLayout::new(
+        let outer_limited = ComposedLayout::new(
             Swizzle::new(3, 4, 4),
             0,
             l("(8,16):(1,4)"),
             OffsetUnit::Bytes,
         )
         .unwrap();
-        assert_eq!(inner_limited.max_alignment().unwrap(), 4);
+        assert_eq!(outer_limited.max_alignment().unwrap(), 4);
     }
 
-    /// An identity swizzle must not reduce alignment already guaranteed by the inner map.
+    /// An identity swizzle must not reduce alignment already guaranteed by the outer map.
     #[test]
     fn zero_bit_swizzle_adds_no_alignment_cap() {
         // Swizzle::IDENTITY is S<0,4,3>: its M = 4 is a placeholder, and with

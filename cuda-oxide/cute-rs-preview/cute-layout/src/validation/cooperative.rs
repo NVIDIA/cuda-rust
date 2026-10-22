@@ -93,7 +93,7 @@ fn validate_plan_layout_arithmetic(
     layout: &Layout,
     role: &str,
 ) -> Result<(), CooperativePlanError> {
-    for stride in layout.stride.leaves() {
+    for stride in layout.stride.flatten() {
         if stride.unsigned_abs() > MAX_STATIC_LAYOUT_OFFSET_MAGNITUDE {
             return Err(plan_error(format!(
                 "{role} layout stride {stride} exceeds static magnitude limit \
@@ -229,7 +229,7 @@ fn validate_physical_smem_map(
                 .ok_or_else(|| plan_error(format!("TV ({thread},{value}) overflows i64")))?;
             for byte_in_element in 0..element_bytes {
                 let offset = smem_bytes
-                    .checked_call_with_inner_delta(&IntTuple::Leaf(cell), byte_in_element)
+                    .checked_call_with_outer_delta(&IntTuple::Leaf(cell), byte_in_element)
                     .ok_or_else(|| {
                         plan_error(format!(
                             "TV ({thread},{value}) byte {byte_in_element} overflows its smem offset"
@@ -344,7 +344,7 @@ pub fn validate_cooperative_copy_plan(
     let thread_count = checked_plan_layout_size(thread_layout, "thread")?;
     let values_per_thread = checked_plan_layout_size(value_layout, "value")?;
     let tile_elements = checked_plan_layout_size(tile_layout, "tile")?;
-    let smem_elements = checked_plan_layout_size(smem_layout.inner(), "shared-memory inner")?;
+    let smem_elements = checked_plan_layout_size(smem_layout.outer(), "shared-memory layout")?;
     let assignments = thread_count
         .checked_mul(values_per_thread)
         .ok_or_else(|| plan_error("TV assignment count overflows i64"))?;
@@ -373,7 +373,7 @@ pub fn validate_cooperative_copy_plan(
         ("thread", thread_layout),
         ("value", value_layout),
         ("tile", tile_layout),
-        ("shared-memory inner", smem_layout.inner()),
+        ("shared-memory layout", smem_layout.outer()),
     ] {
         validate_plan_layout_arithmetic(layout, name)?;
     }

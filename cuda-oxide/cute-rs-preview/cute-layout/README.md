@@ -17,8 +17,8 @@ assert_eq!(layout.checked_call(&IntTuple::Leaf(1)), Some(3));
 | [`tuple`](src/tuple.rs) | Nested `IntTuple` shapes, strides and coordinates |
 | [`layout`](src/layout.rs) | `Layout` construction and coordinate evaluation |
 | [`parse`](src/parse.rs) | Text formatting, parsing and `ParseLayoutError` |
-| [`algebra::mapping`](src/algebra/mapping.rs) | Coalescing, composition, complements, inverse maps and reshaping |
-| [`algebra::tiling`](src/algebra/tiling.rs) | Logical division, blocked products and raked products |
+| [`algebra::mapping`](src/algebra/mapping.rs) | Flattening, coalescing, composition, complements, inverse maps and reshaping |
+| [`algebra::tiling`](src/algebra/tiling.rs) | Logical and zipped division, blocked products and raked products |
 | [`algebra::thread_value`](src/algebra/thread_value.rs) | Thread/value ownership maps |
 | [`algebra::alignment`](src/algebra/alignment.rs) | Static vector-access alignment |
 | [`composed`](src/composed.rs) and [`swizzle`](src/swizzle.rs) | Composed addresses, offset units and shared-memory swizzles |

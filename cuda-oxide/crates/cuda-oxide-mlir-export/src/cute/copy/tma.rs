@@ -171,7 +171,7 @@ fn tma_tile_extents(ctx: &Context, ty: TypeHandle) -> Result<(u64, u64), String>
     let view = ty_ref
         .downcast_ref::<CuteTmaViewType>()
         .ok_or_else(|| "expected a cute.tma_view operand".to_owned())?;
-    let modes = view.smem_layout.0.inner().modes();
+    let modes = view.smem_layout.0.outer().modes();
     if modes.len() != 2 {
         return Err(format!("TMA mapping needs two modes, got {}", modes.len()));
     }

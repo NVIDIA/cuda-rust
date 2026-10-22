@@ -13,12 +13,12 @@ use super::{layout::parse_composed_layout, *};
 /// Printing and parsing preserve the swizzle, offset, unit, shape, and stride together.
 #[test]
 fn composed_layout_text_round_trips_every_addressing_piece() {
-    let inner = Layout::new(
+    let outer = Layout::new(
         IntTuple::Tuple(vec![IntTuple::Leaf(8), IntTuple::Leaf(32)]),
         IntTuple::Tuple(vec![IntTuple::Leaf(32), IntTuple::Leaf(1)]),
     );
     let composed =
-        ComposedLayout::new(Swizzle::new(3, 4, 3), 8, inner, OffsetUnit::Elements).unwrap();
+        ComposedLayout::new(Swizzle::new(3, 4, 3), 8, outer, OffsetUnit::Elements).unwrap();
     let attr = CuteComposedLayoutAttr(composed);
     let printed = attr.to_string();
     let reparsed = parse_composed_layout(printed.trim_matches('"').to_string()).unwrap();
@@ -39,7 +39,7 @@ fn composed_layout_text_rejects_overlapping_swizzle_fields() {
 #[test]
 fn composed_layout_text_preserves_negative_cute_shifts() {
     let attr = parse_composed_layout("2,0,-3;0;bytes;16:4".to_string()).unwrap();
-    assert_eq!(attr.0.outer(), Swizzle::new(2, 0, -3));
+    assert_eq!(attr.0.inner(), Swizzle::new(2, 0, -3));
     assert_eq!(attr.to_string(), "\"2,0,-3;0;bytes;16:4\"");
 }
 

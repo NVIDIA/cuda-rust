@@ -118,19 +118,19 @@ impl<const R: i64, const K: i64> StaticLayout for ColMajor<R, K> {
         <L<T2<C<R>, C<K>>, T2<C<1>, C<R>>>>::offset(flat)
     }
 }
-impl<const B: u32, const M: u32, const S: i32, const O: i64, Inner: StaticLayout> StaticLayout
-    for Composed<Swizzle<B, M, S>, O, Inner>
+impl<const B: u32, const M: u32, const S: i32, const O: i64, Outer: StaticLayout> StaticLayout
+    for Composed<Swizzle<B, M, S>, O, Outer>
 {
     const SIZE: usize = {
         let _ = Self::MAX_OFFSET;
-        Inner::SIZE
+        Outer::SIZE
     };
     const MAX_OFFSET: usize =
-        swizzled_bound(checked_offset_add(Inner::MAX_OFFSET, parameter(O)), B, M, S);
+        swizzled_bound(checked_offset_add(Outer::MAX_OFFSET, parameter(O)), B, M, S);
     #[inline(always)]
     fn offset(flat: usize) -> usize {
         let _ = Self::SIZE;
-        cute_layout::Swizzle::new(B, M, S).apply((Inner::offset(flat) + O as usize) as i64) as usize
+        cute_layout::Swizzle::new(B, M, S).apply((Outer::offset(flat) + O as usize) as i64) as usize
     }
 }
 
@@ -144,8 +144,8 @@ pub fn offset_2d<L: ReifySmem2D>(row: usize, column: usize) -> usize {
     const {
         let _ = max_offset_2d::<L>();
     }
-    let plain = row * L::ROW_STRIDE as usize + column * L::COL_STRIDE as usize + L::OFFSET as usize;
-    cute_layout::Swizzle::new(L::SWIZZLE_B, L::SWIZZLE_M, L::SWIZZLE_S).apply(plain as i64) as usize
+    let plain = row * L::STRIDE.0 as usize + column * L::STRIDE.1 as usize + L::OFFSET as usize;
+    cute_layout::Swizzle::new(L::NUM_BITS, L::NUM_BASE, L::NUM_SHIFT).apply(plain as i64) as usize
 }
 
 /// Bound the physical offsets of a reified two-dimensional layout at compile time.
@@ -154,13 +154,13 @@ pub fn offset_2d<L: ReifySmem2D>(row: usize, column: usize) -> usize {
 /// `usize` and the signed CuTe algebra. Swizzles can conservatively include
 /// holes in this bound. `offset_2d` instantiates this check before device code.
 pub const fn max_offset_2d<L: ReifySmem2D>() -> usize {
-    assert!(L::ROWS > 0 && L::COLS > 0);
-    assert!(L::ROW_STRIDE >= 0 && L::COL_STRIDE >= 0 && L::OFFSET >= 0);
-    let row_max = checked_offset_mul(parameter(L::ROWS - 1), parameter(L::ROW_STRIDE));
-    let column_max = checked_offset_mul(parameter(L::COLS - 1), parameter(L::COL_STRIDE));
+    assert!(L::SHAPE.0 > 0 && L::SHAPE.1 > 0);
+    assert!(L::STRIDE.0 >= 0 && L::STRIDE.1 >= 0 && L::OFFSET >= 0);
+    let row_max = checked_offset_mul(parameter(L::SHAPE.0 - 1), parameter(L::STRIDE.0));
+    let column_max = checked_offset_mul(parameter(L::SHAPE.1 - 1), parameter(L::STRIDE.1));
     let maximum = checked_offset_add(
         checked_offset_add(row_max, column_max),
         parameter(L::OFFSET),
     );
-    swizzled_bound(maximum, L::SWIZZLE_B, L::SWIZZLE_M, L::SWIZZLE_S)
+    swizzled_bound(maximum, L::NUM_BITS, L::NUM_BASE, L::NUM_SHIFT)
 }

@@ -110,18 +110,18 @@ fn is_u32(ty: &Ty) -> bool {
 
 /// Return the fixed 32-by-4 word layout of one SM120 scale atom.
 fn scale_placement() -> ComposedLayout {
-    let inner = "(32,4):(4,1)"
+    let outer = "(32,4):(4,1)"
         .parse()
         .expect("fixed SM120 scale placement is valid");
-    ComposedLayout::from_layout(inner, OffsetUnit::Elements)
+    ComposedLayout::from_layout(outer, OffsetUnit::Elements)
 }
 
 /// Return the fixed swizzled 128-by-32 packed-data placement.
 pub(crate) fn canonical_data_placement() -> ComposedLayout {
-    let inner: Layout = "(128,32):(32,1)"
+    let outer: Layout = "(128,32):(32,1)"
         .parse()
         .expect("fixed SM120 packed-data placement is valid");
-    ComposedLayout::new(Swizzle::new(2, 3, 3), 0, inner, OffsetUnit::Elements)
+    ComposedLayout::new(Swizzle::new(2, 3, 3), 0, outer, OffsetUnit::Elements)
         .expect("fixed SM120 packed-data swizzle is valid")
 }
 
@@ -239,15 +239,15 @@ mod tests {
     /// Check that scale placement uses exactly one 128-word atom.
     #[test]
     fn fixed_scale_placement_has_one_128_word_atom() {
-        assert_eq!(scale_placement().inner().checked_size(), Some(128));
+        assert_eq!(scale_placement().outer().checked_size(), Some(128));
     }
 
     /// Check that data placement fixes the canonical swizzled 128-by-32 tile.
     #[test]
     fn canonical_data_placement_locks_the_128_by_32_swizzled_tile() {
         let placement = canonical_data_placement();
-        assert_eq!(placement.inner().checked_size(), Some(128 * 32));
-        assert_eq!(placement.outer(), Swizzle::new(2, 3, 3));
+        assert_eq!(placement.outer().checked_size(), Some(128 * 32));
+        assert_eq!(placement.inner(), Swizzle::new(2, 3, 3));
         assert_eq!(placement.offset(), 0);
         assert_eq!(placement.unit(), OffsetUnit::Elements);
     }

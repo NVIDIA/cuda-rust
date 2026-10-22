@@ -74,32 +74,33 @@
 //!
 //! In general, a swizzle alone preserves aligned chunks of `2^M` input
 //! units. If the input counts elements, that means `2^M` elements, not bytes.
-//! This is only one vectorization condition: the inner layout, composed
+//! This is only one vectorization condition: the outer layout, composed
 //! offset, and real pointer must provide compatible alignment too.
 
 use core::fmt;
 
 /// A reversible permutation of a tile-relative offset's bits.
 ///
-/// `Swizzle { bits: B, base: M, shift: S }` represents CuTe's `S<B,M,S>`.
-/// It changes only the offset supplied to [`Swizzle::apply`]; it does not own
+/// `Swizzle { num_bits: B, num_base: M, num_shift: S }` represents CuTe's
+/// `S<B,M,S>`; the field names are those of CuTeDSL's `Swizzle`. It
+/// changes only the offset supplied to [`Swizzle::apply`]; it does not own
 /// memory or move any values by itself. See the module-level bit diagram for
 /// the meaning of all three fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Swizzle {
     /// `B`: number of bits copied from the source field and XOR-ed into the
     /// target field.
-    pub bits: u32,
+    pub num_bits: u32,
     /// `M`: number of lowest offset bits that are never changed.
     ///
     /// When offsets count bytes, this preserves aligned chunks of `2^M`
     /// bytes. When offsets count elements, it preserves `2^M` elements.
-    pub base: u32,
+    pub num_base: u32,
     /// `S`: signed distance from target field to source field.
     ///
     /// A positive value moves a higher source field right. A negative value
     /// moves a lower source field left.
-    pub shift: i32,
+    pub num_shift: i32,
 }
 
 impl Swizzle {
@@ -119,12 +120,16 @@ impl Swizzle {
     /// source and target do not overlap:  |S| >= B
     /// highest used bit fits:             M + B + |S| <= 32
     /// ```
-    pub const fn new(bits: u32, base: u32, shift: i32) -> Self {
+    pub const fn new(num_bits: u32, num_base: u32, num_shift: i32) -> Self {
         assert!(
-            Self::parameters_are_valid(bits, base, shift),
+            Self::parameters_are_valid(num_bits, num_base, num_shift),
             "invalid CuTe swizzle"
         );
-        Swizzle { bits, base, shift }
+        Swizzle {
+            num_bits,
+            num_base,
+            num_shift,
+        }
     }
 
     /// Build `S<B,M,S>`, returning `None` when its fields overlap or fall
@@ -133,9 +138,13 @@ impl Swizzle {
     /// Compiler passes use this form for values decoded from Rust types or the
     /// compiler's intermediate representation (IR), because malformed input
     /// must produce a diagnostic rather than panic the compiler.
-    pub const fn try_new(bits: u32, base: u32, shift: i32) -> Option<Self> {
-        if Self::parameters_are_valid(bits, base, shift) {
-            Some(Swizzle { bits, base, shift })
+    pub const fn try_new(num_bits: u32, num_base: u32, num_shift: i32) -> Option<Self> {
+        if Self::parameters_are_valid(num_bits, num_base, num_shift) {
+            Some(Swizzle {
+                num_bits,
+                num_base,
+                num_shift,
+            })
         } else {
             None
         }
@@ -144,13 +153,14 @@ impl Swizzle {
     /// Return whether `S<B,M,S>` has disjoint fields inside the supported low
     /// 32-bit swizzle window.
     ///
-    /// `bits`, `base`, and `shift` mean `B`, `M`, and `S`, respectively.
-    pub const fn parameters_are_valid(bits: u32, base: u32, shift: i32) -> bool {
-        let distance = shift.unsigned_abs();
-        if distance < bits {
+    /// `num_bits`, `num_base`, and `num_shift` mean `B`, `M`, and `S`,
+    /// respectively.
+    pub const fn parameters_are_valid(num_bits: u32, num_base: u32, num_shift: i32) -> bool {
+        let distance = num_shift.unsigned_abs();
+        if distance < num_bits {
             return false;
         }
-        let Some(base_and_bits) = base.checked_add(bits) else {
+        let Some(base_and_bits) = num_base.checked_add(num_bits) else {
             return false;
         };
         let Some(used_bits) = base_and_bits.checked_add(distance) else {
@@ -166,7 +176,7 @@ impl Swizzle {
     /// also means a caller can create an invalid struct literal, so an input
     /// boundary must call this method before using such a value.
     pub const fn is_valid(&self) -> bool {
-        Self::parameters_are_valid(self.bits, self.base, self.shift)
+        Self::parameters_are_valid(self.num_bits, self.num_base, self.num_shift)
     }
 
     /// A swizzle that leaves every offset unchanged.
@@ -186,8 +196,8 @@ impl Swizzle {
     /// ```
     pub fn y_mask(&self) -> i64 {
         debug_assert!(self.is_valid());
-        let mask = (1i64 << self.bits) - 1;
-        mask << (self.base as i64 + self.shift.max(0) as i64)
+        let mask = (1i64 << self.num_bits) - 1;
+        mask << (self.num_base as i64 + self.num_shift.max(0) as i64)
     }
 
     /// Return a mask with 1s at every target-bit position.
@@ -197,8 +207,8 @@ impl Swizzle {
     /// `0b11`.
     pub fn z_mask(&self) -> i64 {
         debug_assert!(self.is_valid());
-        let mask = (1i64 << self.bits) - 1;
-        mask << (self.base as i64 + (-self.shift).max(0) as i64)
+        let mask = (1i64 << self.num_bits) - 1;
+        mask << (self.num_base as i64 + (-self.num_shift).max(0) as i64)
     }
 
     /// Map one plain tile-relative offset to its physical offset.
@@ -210,10 +220,10 @@ impl Swizzle {
     pub fn apply(&self, x: i64) -> i64 {
         debug_assert!(self.is_valid());
         let masked = x & self.y_mask();
-        let moved = if self.shift >= 0 {
-            masked >> self.shift
+        let moved = if self.num_shift >= 0 {
+            masked >> self.num_shift
         } else {
-            masked << (-self.shift)
+            masked << (-self.num_shift)
         };
         x ^ moved
     }
@@ -226,10 +236,10 @@ impl Swizzle {
     /// and the second application XORs the same bits back out.
     pub fn is_involution(&self) -> bool {
         let y = self.y_mask();
-        let z = if self.shift >= 0 {
-            y >> self.shift
+        let z = if self.num_shift >= 0 {
+            y >> self.num_shift
         } else {
-            y << (-self.shift)
+            y << (-self.num_shift)
         };
         y & z == 0
     }
@@ -250,7 +260,7 @@ impl Swizzle {
     /// chunk of any size.
     pub const fn max_alignment(&self) -> i64 {
         debug_assert!(self.is_valid());
-        1i64 << self.base
+        1i64 << self.num_base
     }
 
     /// Translate CuTe's positive relative shift into `cuda-device`'s absolute
@@ -271,16 +281,20 @@ impl Swizzle {
     /// field down, so a negative CuTe shift has no representation and returns
     /// `None`. Invalid swizzles also return `None`.
     pub const fn cuda_device_absolute_source_bit(&self) -> Option<u32> {
-        if !self.is_valid() || self.shift < 0 {
+        if !self.is_valid() || self.num_shift < 0 {
             return None;
         }
-        self.base.checked_add(self.shift as u32)
+        self.num_base.checked_add(self.num_shift as u32)
     }
 }
 
 impl fmt::Display for Swizzle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "S<{},{},{}>", self.bits, self.base, self.shift)
+        write!(
+            f,
+            "S<{},{},{}>",
+            self.num_bits, self.num_base, self.num_shift
+        )
     }
 }
 

@@ -69,6 +69,43 @@ fn identity_map_detection() {
     assert_eq!(overflowing_address.checked_call(&IntTuple::Leaf(2)), None);
 }
 
+/// `get` must return each top-level mode as `modes` lists it, and `rank` must count them.
+#[test]
+fn get_and_rank_follow_the_top_level_modes() {
+    use alloc::string::ToString;
+    for text in ["(8,32):(32,1)", "4:1", "((2,4),32):((128,32),1)"] {
+        let l: Layout = text.parse().unwrap();
+        let modes = l.modes();
+        assert_eq!(l.rank(), modes.len(), "{text}");
+        for (mode, expected) in modes.into_iter().enumerate() {
+            assert_eq!(l.get(mode), expected, "{text} mode {mode}");
+        }
+    }
+    let nested: Layout = "((2,4),32):((128,32),1)".parse().unwrap();
+    assert_eq!(nested.get(0).to_string(), "(2,4):(128,32)");
+    assert_eq!(nested.get(1).to_string(), "32:1");
+    assert_eq!(Layout::contiguous(4).get(0), Layout::contiguous(4));
+    assert_eq!(Layout::contiguous(4).rank(), 1);
+}
+
+/// `get` past the rank must panic rather than return a wrong mode.
+#[test]
+#[should_panic(expected = "out of range")]
+fn get_rejects_a_mode_past_the_rank() {
+    let l: Layout = "(8,32):(32,1)".parse().unwrap();
+    let _ = l.get(2);
+}
+
+/// Flattening a tuple must list its integers left to right and drop the grouping.
+#[test]
+fn flatten_and_is_congruent_follow_the_tuple_structure() {
+    let nested: IntTuple = "((2,3),4)".parse().unwrap();
+    assert_eq!(nested.flatten(), vec![2, 3, 4]);
+    assert_eq!(IntTuple::Leaf(7).flatten(), vec![7]);
+    assert!(nested.is_congruent(&"((8,5),6)".parse().unwrap()));
+    assert!(!nested.is_congruent(&"(8,(5,6))".parse().unwrap()));
+}
+
 /// Nested coordinate groups must retain their matching shape and stride structure.
 #[test]
 fn nested_shape() {

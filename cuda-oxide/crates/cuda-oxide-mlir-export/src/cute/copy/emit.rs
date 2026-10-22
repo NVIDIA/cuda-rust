@@ -173,8 +173,8 @@ impl<'a, 'ctx> Emitter<'a, 'ctx> {
         layout: &Layout,
         mut coordinate: MlirValueUse,
     ) -> Result<MlirValueUse, String> {
-        let sizes = layout.shape.leaves();
-        let strides = layout.stride.leaves();
+        let sizes = layout.shape.flatten();
+        let strides = layout.stride.flatten();
         let MlirType::Integer(width) = coordinate.ty else {
             return Err("CuTe layout coordinate must be an integer".into());
         };
@@ -210,7 +210,7 @@ impl<'a, 'ctx> Emitter<'a, 'ctx> {
         let column = self.index(&modes[1], column)?;
         self.binary("arith.addi", row, column)
     }
-    /// Apply the inner row/column layout, fixed offset, and outer swizzle in order.
+    /// Apply the outer row/column layout, the fixed offset, and the inner swizzle in order.
     pub(in crate::cute) fn composed(
         &mut self,
         layout: &ComposedLayout,
@@ -220,10 +220,10 @@ impl<'a, 'ctx> Emitter<'a, 'ctx> {
         let MlirType::Integer(width) = row.ty else {
             return Err("CuTe layout coordinate must be an integer".into());
         };
-        let plain = self.linear_pair(layout.inner(), row, column)?;
+        let plain = self.linear_pair(layout.outer(), row, column)?;
         let offset = self.constant(layout.offset(), width)?;
         let plain = self.binary("arith.addi", plain, offset)?;
-        self.swizzle(layout.outer(), plain)
+        self.swizzle(layout.inner(), plain)
     }
     /// Apply the layout's XOR bit permutation without changing the offset's integer width.
     pub(in crate::cute) fn swizzle(
@@ -234,14 +234,14 @@ impl<'a, 'ctx> Emitter<'a, 'ctx> {
         let MlirType::Integer(width) = plain.ty else {
             return Err("CuTe swizzle offset must be an integer".into());
         };
-        if swizzle.bits == 0 {
+        if swizzle.num_bits == 0 {
             return Ok(plain);
         }
         let mask = self.constant(swizzle.y_mask(), width)?;
         let bits = self.binary("arith.andi", plain.clone(), mask)?;
-        let shift = self.constant(i64::from(swizzle.shift.unsigned_abs()), width)?;
+        let shift = self.constant(i64::from(swizzle.num_shift.unsigned_abs()), width)?;
         let moved = self.binary(
-            if swizzle.shift >= 0 {
+            if swizzle.num_shift >= 0 {
                 "arith.shrui"
             } else {
                 "arith.shli"

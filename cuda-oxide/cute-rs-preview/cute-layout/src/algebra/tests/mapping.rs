@@ -16,6 +16,28 @@ fn coalesce_examples() {
     assert_eq!(coalesce(&l("1:0")).to_string(), "1:0");
 }
 
+/// Flattening must keep every flat coordinate's offset and expose one mode per
+/// integer of the original shape.
+#[test]
+fn flatten_is_definitional() {
+    let nested = [l("((2,3),4):((12,4),1)"), l("(2,(3,4)):(1,(2,6))")];
+    for a in corpus().into_iter().chain(nested) {
+        let flat = flatten(&a);
+        assert_eq!(flat.rank(), a.shape.flatten().len(), "{a}");
+        assert_eq!(flat.shape.flatten(), a.shape.flatten(), "{a}");
+        assert_eq!(flat.stride.flatten(), a.stride.flatten(), "{a}");
+        for coord in 0..a.size() {
+            let coord = IntTuple::Leaf(coord);
+            assert_eq!(flat.call(&coord), a.call(&coord), "{a} at {coord}");
+        }
+    }
+    assert_eq!(
+        flatten(&l("((2,3),4):((12,4),1)")).to_string(),
+        "(2,3,4):(12,4,1)"
+    );
+    assert_eq!(flatten(&l("(4):(1)")).to_string(), "4:1");
+}
+
 /// Checks the definition of composition at every coordinate:
 /// `result(i) == a(b(i))`.
 ///

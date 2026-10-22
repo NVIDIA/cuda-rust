@@ -197,11 +197,11 @@ impl CuteEpiloguePlanAttr {
     /// Current SM120 two-half FP16 epilogue for the 128x128 MXFP4 plan.
     #[must_use]
     pub fn sm120_mxf4_128x128(tiled_mma: CuteTiledMmaPlanAttr) -> Self {
-        let inner: Layout = "(128,64):(64,1)"
+        let outer: Layout = "(128,64):(64,1)"
             .parse()
             .expect("fixed epilogue half layout is valid");
         let half_layout =
-            ComposedLayout::new(Swizzle::new(3, 3, 3), 0, inner, OffsetUnit::Elements)
+            ComposedLayout::new(Swizzle::new(3, 3, 3), 0, outer, OffsetUnit::Elements)
                 .expect("fixed epilogue swizzle is valid");
         Self {
             tiled_mma,
@@ -214,7 +214,7 @@ impl CuteEpiloguePlanAttr {
     /// Return the element capacity of one output half, or `None` on overflow.
     #[must_use]
     pub fn half_elements(&self) -> Option<u64> {
-        u64::try_from(self.half_layout.0.inner().checked_size()?).ok()
+        u64::try_from(self.half_layout.0.outer().checked_size()?).ok()
     }
 
     /// Return the element capacity of the complete output tile, or `None` on overflow.
@@ -241,11 +241,11 @@ impl Verify for CuteEpiloguePlanAttr {
         self.tiled_mma.verify(ctx)?;
         self.base_alignment.verify(ctx)?;
 
-        let data_inner: Layout = "(128,32):(32,1)"
+        let data_outer: Layout = "(128,32):(32,1)"
             .parse()
             .expect("fixed SM120 MMA shared layout is valid");
         let data_layout =
-            ComposedLayout::new(Swizzle::new(2, 3, 3), 0, data_inner, OffsetUnit::Elements)
+            ComposedLayout::new(Swizzle::new(2, 3, 3), 0, data_outer, OffsetUnit::Elements)
                 .expect("fixed SM120 MMA shared swizzle is valid");
         let expected_mma = CuteTiledMmaPlanAttr::mxf4_128x128x128(data_layout);
         if self.tiled_mma != expected_mma {
@@ -262,7 +262,7 @@ impl Verify for CuteEpiloguePlanAttr {
                 "cute.epilogue_plan v0 needs two B128-swizzled 128x64 f16 halves aligned to 1024 bytes"
             );
         }
-        let modes = self.half_layout.0.inner().modes();
+        let modes = self.half_layout.0.outer().modes();
         if modes.len() != 2
             || modes[0].checked_size() != Some(128)
             || modes[1].checked_size() != Some(64)

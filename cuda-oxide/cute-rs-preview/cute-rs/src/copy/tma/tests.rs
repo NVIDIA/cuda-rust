@@ -40,7 +40,7 @@ fn element_recast_reaches_the_byte_modes() {
     // which is TMA B128.
     /// FP16 element-unit layout that must recast to TMA’s B128 byte pattern.
     type Smem = Composed<Swizzle<3, 3, 3>, 0, RowMajor<8, 64>>;
-    assert_eq!(Smem::SWIZZLE_B, 3);
+    assert_eq!(Smem::NUM_BITS, 3);
     assert_eq!(tma_swizzle_mode_for::<Smem>(2), Some(TmaSwizzleMode::B128));
     // For f32, it becomes S<3,5,3>, which TMA cannot encode.
     assert_eq!(tma_swizzle_mode_for::<Smem>(4), None);

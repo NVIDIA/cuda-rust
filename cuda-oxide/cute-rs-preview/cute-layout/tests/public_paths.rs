@@ -37,6 +37,15 @@ fn grouped_algebra_paths_preserve_coordinate_maps() {
     assert_eq!(divided.to_string(), "(4,2):(1,4)");
     assert_eq!(algebra::mapping::coalesce(&divided), whole);
     assert_eq!(algebra::coalesce(&divided), whole);
+    let zipped = algebra::tiling::zipped_divide(&whole, &[4]).unwrap();
+    assert_eq!(zipped, algebra::zipped_divide(&whole, &[4]).unwrap());
+    assert_eq!(zipped.to_string(), "(4,2):(1,4)");
+    let nested: Layout = "((2,4),3):((1,2),8)".parse().unwrap();
+    assert_eq!(
+        algebra::mapping::flatten(&nested),
+        algebra::flatten(&nested)
+    );
+    assert_eq!(algebra::flatten(&nested).to_string(), "(2,4,3):(1,2,8)");
 
     let thread: Layout = "(2,3):(3,1)".parse().unwrap();
     let value: Layout = "(2,2):(2,1)".parse().unwrap();

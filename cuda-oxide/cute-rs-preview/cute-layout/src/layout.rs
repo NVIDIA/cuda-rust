@@ -175,7 +175,7 @@ impl Layout {
     /// Panics when `shape` and `stride` do not have identical nesting.
     pub fn new(shape: IntTuple, stride: IntTuple) -> Self {
         assert!(
-            shape.congruent(&stride),
+            shape.is_congruent(&stride),
             "shape and stride must be congruent"
         );
         Layout { shape, stride }
@@ -338,7 +338,7 @@ impl Layout {
     /// offsets `0, 4, 8, 12, 16, 20`. Shape extents and stride arithmetic are
     /// unchecked; validate externally supplied layouts before using them.
     pub fn col_major_with(shape: IntTuple, init: i64) -> Layout {
-        let leaves = shape.leaves();
+        let leaves = shape.flatten();
         let mut strides = Vec::with_capacity(leaves.len());
         let mut running = init;
         for s in &leaves {
@@ -375,7 +375,7 @@ impl Layout {
     /// `(3,4)`. For a nested layout,
     /// `((2,4),3):((1,2),8)` becomes `[(2,4):(1,2), 3:8]`; the parentheses
     /// inside the first mode stay intact. A rank-1 layout returns a one-item
-    /// vector containing itself.
+    /// vector containing itself. [`Layout::get`] returns one mode on its own.
     pub fn modes(&self) -> Vec<Layout> {
         match (&self.shape, &self.stride) {
             (IntTuple::Tuple(ss), IntTuple::Tuple(ds)) => ss
@@ -388,6 +388,52 @@ impl Layout {
                 .collect(),
             _ => vec![self.clone()],
         }
+    }
+
+    /// Returns top-level [mode](crate#modes) `mode` as its own layout, as
+    /// CuTe's `get<I>(layout)` and CuTeDSL's `cute.get(layout, mode=[i])`.
+    ///
+    /// ```text
+    /// layout     ((2,4),3):((1,2),8)
+    /// get(0)     (2,4):(1,2)
+    /// get(1)     3:8
+    /// ```
+    ///
+    /// The result is `modes()[mode]` without building the other modes. A
+    /// rank-1 layout returns itself for `mode == 0`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `mode` is not below [`Layout::rank`].
+    pub fn get(&self, mode: usize) -> Layout {
+        match (&self.shape, &self.stride) {
+            (IntTuple::Tuple(ss), IntTuple::Tuple(ds)) => {
+                assert!(
+                    mode < ss.len(),
+                    "layout mode {mode} is out of range for rank {}",
+                    ss.len()
+                );
+                Layout {
+                    shape: ss[mode].clone(),
+                    stride: ds[mode].clone(),
+                }
+            }
+            _ => {
+                assert!(mode == 0, "layout mode {mode} is out of range for rank 1");
+                self.clone()
+            }
+        }
+    }
+
+    /// Counts the top-level [modes](crate#modes), as CuTe's `rank(layout)`.
+    ///
+    /// ```text
+    /// 4:1                    rank 1
+    /// (2,3):(3,1)            rank 2
+    /// ((2,4),3):((1,2),8)    rank 2    nesting inside a mode does not count
+    /// ```
+    pub fn rank(&self) -> usize {
+        self.shape.rank()
     }
 
     /// Joins sublayouts as adjacent top-level [modes](crate#modes) of one layout.

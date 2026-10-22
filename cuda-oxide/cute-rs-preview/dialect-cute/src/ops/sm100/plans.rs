@@ -147,7 +147,7 @@ pub struct CuteSm100ClusterCopyPlanAttr {
 impl Verify for CuteSm100ClusterCopyPlanAttr {
     fn verify(&self, ctx: &Context) -> Result<(), Error> {
         self.layout.verify(ctx)?;
-        let dimensions = self.layout.0.inner().shape.leaves();
+        let dimensions = self.layout.0.outer().shape.flatten();
         if self.cta_group != 2
             || self.leader_rank != 0
             || dimensions.len() != 2

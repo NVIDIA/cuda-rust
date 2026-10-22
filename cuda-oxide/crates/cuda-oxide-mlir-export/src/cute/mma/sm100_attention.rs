@@ -143,13 +143,18 @@ fn descriptor(
     k: u32,
     mn: bool,
 ) -> Result<MlirValueUse, String> {
-    let sw = layout.0.outer();
+    let sw = layout.0.inner();
     let ptr = e.cute_ptr(
         ptr,
         "f16",
         "smem",
         128,
-        Some(format!("S<{},{},{}>", sw.bits, sw.base + 1, sw.shift)),
+        Some(format!(
+            "S<{},{},{}>",
+            sw.num_bits,
+            sw.num_base + 1,
+            sw.num_shift
+        )),
     )?;
     let (result, value) = e.fresh(MlirType::dialect("!cute_nvgpu.smem_desc")?);
     let mut op = e.operation("cute_nvgpu.make_umma_smem_desc", vec![ptr])?;

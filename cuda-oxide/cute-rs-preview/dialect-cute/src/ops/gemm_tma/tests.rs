@@ -25,14 +25,14 @@ fn result(ctx: &Context, op: Ptr<Operation>) -> Value {
 
 /// Build the canonical packed-value transport tile used by the four-copy stage fixture.
 fn byte_layout() -> ComposedLayout {
-    let inner: Layout = "(128,64):(64,1)".parse().unwrap();
-    ComposedLayout::new(Swizzle::new(2, 4, 3), 0, inner, OffsetUnit::Elements).unwrap()
+    let outer: Layout = "(128,64):(64,1)".parse().unwrap();
+    ComposedLayout::new(Swizzle::new(2, 4, 3), 0, outer, OffsetUnit::Elements).unwrap()
 }
 
 /// Build the canonical scale transport tile used by the four-copy stage fixture.
 fn scale_layout() -> ComposedLayout {
-    let inner: Layout = "(1,256):(256,1)".parse().unwrap();
-    ComposedLayout::new(Swizzle::IDENTITY, 0, inner, OffsetUnit::Elements).unwrap()
+    let outer: Layout = "(1,256):(256,1)".parse().unwrap();
+    ComposedLayout::new(Swizzle::IDENTITY, 0, outer, OffsetUnit::Elements).unwrap()
 }
 
 /// Typed placeholder operands shared by the operation-family verifier tests.

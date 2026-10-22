@@ -13,6 +13,7 @@
 //!
 //! ```text
 //! coalesce     Can adjacent modes be written as one simpler mode?
+//! flatten      What are the modes once their grouping parentheses are removed?
 //! composition  What is the final map after passing through two maps?
 //! complement   Which offsets does a layout leave unused?
 //! inverse      Which coordinate reaches a requested offset?
@@ -76,11 +77,11 @@ pub mod thread_value;
 pub mod tiling;
 
 pub use alignment::max_alignment;
-pub use mapping::{coalesce, complement, composition, left_inverse, right_inverse, with_shape};
-pub use thread_value::make_layout_tv;
-pub use tiling::{
-    blocked_product, logical_divide, logical_product, raked_product, zipped_divide_by_shape,
+pub use mapping::{
+    coalesce, complement, composition, flatten, left_inverse, right_inverse, with_shape,
 };
+pub use thread_value::make_layout_tv;
+pub use tiling::{blocked_product, logical_divide, logical_product, raked_product, zipped_divide};
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -114,9 +115,9 @@ type Result<T> = core::result::Result<T, AlgebraError>;
 /// `((2,3),4):((12,4),1)` becomes `[(2,12), (3,4), (4,1)]`.
 fn flat_modes(l: &Layout) -> Vec<(i64, i64)> {
     l.shape
-        .leaves()
+        .flatten()
         .into_iter()
-        .zip(l.stride.leaves())
+        .zip(l.stride.flatten())
         .collect()
 }
 

@@ -79,7 +79,7 @@ impl CuteTmaViewType {
     /// Return the number of carrier elements in one tile.
     #[must_use]
     pub fn tile_elements(&self) -> Option<u64> {
-        u64::try_from(self.smem_layout.0.inner().checked_size()?).ok()
+        u64::try_from(self.smem_layout.0.outer().checked_size()?).ok()
     }
 
     /// Return the physical byte count moved by one complete tile.

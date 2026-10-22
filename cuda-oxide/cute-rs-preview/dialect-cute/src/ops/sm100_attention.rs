@@ -83,13 +83,13 @@ pub fn shared_layout(rows: u32, cols: u32, mn: bool) -> Result<CuteComposedLayou
             format!("(({span},{}),(1,{}))", span * 8, span * rows),
         )
     };
-    let inner: Layout = format!("{shape}:{stride}")
+    let outer: Layout = format!("{shape}:{stride}")
         .parse()
         .map_err(|e| format!("{e}"))?;
     ComposedLayout::new(
         Swizzle::new(if span == 32 { 2 } else { 3 }, 3, 3),
         0,
-        inner,
+        outer,
         OffsetUnit::Elements,
     )
     .map(CuteComposedLayoutAttr)
@@ -175,12 +175,15 @@ impl Verify for CuteSm100TmaAttr {
         if !matches!(self.cta_group, 1 | 2) {
             return verify_err_noloc!("SM100 TMA requires CTA group1 or2");
         }
-        let sw = self.layout.0.outer();
-        if !matches!(sw.bits, 2 | 3) || sw.base != 3 || sw.shift != 3 || self.layout.0.offset() != 0
+        let sw = self.layout.0.inner();
+        if !matches!(sw.num_bits, 2 | 3)
+            || sw.num_base != 3
+            || sw.num_shift != 3
+            || self.layout.0.offset() != 0
         {
             return verify_err_noloc!("SM100 TMA requires zero-offset tiled B64/B128 FP16 layout");
         }
-        let modes = self.layout.0.inner().modes();
+        let modes = self.layout.0.outer().modes();
         if modes.len() != 2 {
             return verify_err_noloc!("SM100 TMA layout must have two logical modes");
         }

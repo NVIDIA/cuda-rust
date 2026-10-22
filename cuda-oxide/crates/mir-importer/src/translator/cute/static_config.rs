@@ -252,7 +252,7 @@ pub(crate) fn decode_layout(ty: &Ty) -> Result<Layout, String> {
             expect_schema(&args, &["Type", "Type"], LAYOUT)?;
             let shape = decode_tuple(&type_arg(&args, 0, LAYOUT)?)?;
             let stride = decode_tuple(&type_arg(&args, 1, LAYOUT)?)?;
-            if !shape.congruent(&stride) {
+            if !shape.is_congruent(&stride) {
                 return Err("layout shape and stride have different nesting".to_string());
             }
             Layout::new(shape, stride)
@@ -356,14 +356,17 @@ pub(crate) fn decode_smem_layout(ty: &Ty) -> Result<ComposedLayout, String> {
     if let TyKind::RigidTy(RigidTy::Adt(def, args)) = ty.kind()
         && canonical_adt_path(&def) == COMPOSED
     {
+        // `Composed<Inner, OFFSET, Outer>`: position 0 is the inner swizzle and
+        // position 2 the outer layout, in the order of CuTeDSL's
+        // `make_composed_layout(inner, offset, outer)`.
         expect_schema(&args, &["Type", "Const", "Type"], COMPOSED)?;
-        let outer = decode_swizzle(&type_arg(&args, 0, COMPOSED)?)?;
+        let swizzle = decode_swizzle(&type_arg(&args, 0, COMPOSED)?)?;
         let offset = signed_const(&const_arg(&args, 1, COMPOSED)?, "composed offset")?;
-        let inner = decode_layout(&type_arg(&args, 2, COMPOSED)?)?;
+        let layout = decode_layout(&type_arg(&args, 2, COMPOSED)?)?;
         // Rust marker layouts count elements. Keeping the unit explicit here
         // lets the dialect verifier recast the entire expression—including
         // the swizzle bit fields—to bytes once `T` is known.
-        return ComposedLayout::new(outer, offset, inner, OffsetUnit::Elements)
+        return ComposedLayout::new(swizzle, offset, layout, OffsetUnit::Elements)
             .map_err(|error| error.to_string());
     }
     Ok(ComposedLayout::from_layout(
@@ -453,7 +456,7 @@ pub(crate) fn decode_load_matrix_callee(func: &mir::Operand) -> Result<MatrixLoa
     expect_schema(&args, &["Type"], "cute_rs::mma::load_matrix")?;
     let smem_layout = decode_smem_layout(&type_arg(&args, 0, "load_matrix")?)?;
 
-    let modes = smem_layout.inner().modes();
+    let modes = smem_layout.outer().modes();
     if modes.len() != 2 {
         return Err("load_matrix shared layout needs row and column modes".to_string());
     }

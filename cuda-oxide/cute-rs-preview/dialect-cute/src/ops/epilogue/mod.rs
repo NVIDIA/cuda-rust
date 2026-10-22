@@ -108,10 +108,10 @@ fn checked_tile(
 
 /// Build the supported 128-by-64 swizzled FP16 half-tile placement.
 fn current_half_layout() -> ComposedLayout {
-    let inner: Layout = "(128,64):(64,1)"
+    let outer: Layout = "(128,64):(64,1)"
         .parse()
         .expect("fixed epilogue half layout is valid");
-    ComposedLayout::new(Swizzle::new(3, 3, 3), 0, inner, OffsetUnit::Elements)
+    ComposedLayout::new(Swizzle::new(3, 3, 3), 0, outer, OffsetUnit::Elements)
         .expect("fixed epilogue half swizzle is valid")
 }
 

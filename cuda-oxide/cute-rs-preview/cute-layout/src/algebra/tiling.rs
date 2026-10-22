@@ -94,7 +94,11 @@ pub fn logical_divide(a: &Layout, b: &Layout) -> Result<Layout> {
 /// the two ranks must be equal. If a tile extent does not divide its matching
 /// input extent, the final tile is rounded up and later predication must
 /// disable its extra edge positions.
-pub fn zipped_divide_by_shape(a: &Layout, tile_shape: &[i64]) -> Result<Layout> {
+///
+/// This is CuTe's `zipped_divide` with the tiler given as a shape, so every
+/// tile mode is contiguous (stride 1). A tiler layout with its own strides
+/// is not accepted.
+pub fn zipped_divide(a: &Layout, tile_shape: &[i64]) -> Result<Layout> {
     let modes = a.modes();
     if modes.len() != tile_shape.len() {
         return Err(AlgebraError(format!(

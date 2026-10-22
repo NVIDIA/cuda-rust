@@ -790,7 +790,7 @@ mod tests {
     #[test]
     fn attention_matrix_i32_proof_checks_each_bound_before_narrowing() {
         let max = i64::from(i32::MAX);
-        for (inner, offset, expected) in [
+        for (outer, offset, expected) in [
             ("(16,16):(32,2)".to_owned(), max - 510, true),
             ("(16,16):(32,2)".to_owned(), max - 509, false),
             ("(16,16):(32,2)".to_owned(), -1, false),
@@ -809,7 +809,7 @@ mod tests {
             let layout = ComposedLayout::new(
                 Swizzle::IDENTITY,
                 offset,
-                inner.parse().unwrap(),
+                outer.parse().unwrap(),
                 OffsetUnit::Bytes,
             )
             .unwrap();
@@ -949,7 +949,7 @@ mod tests {
         ];
         for (layout_index, layout) in layouts.into_iter().enumerate() {
             let bytes = layout.to_byte_offsets(2).unwrap();
-            let modes = layout.inner().modes();
+            let modes = layout.outer().modes();
             let rows = modes[0].checked_size().unwrap() as u64;
             let columns = modes[1].checked_size().unwrap() as u64;
             for role in [
@@ -1046,18 +1046,18 @@ mod tests {
     /// Reject factoring when proof work exceeds its cap or the selected matrix window is incomplete.
     #[test]
     fn attention_matrix_factoring_caps_proof_and_requires_a_complete_window() {
-        for inner in ["(1024,2048):(4096,2)", "(8,64):(128,2)", "(16,8):(16,2)"] {
+        for outer in ["(1024,2048):(4096,2)", "(8,64):(128,2)", "(16,8):(16,2)"] {
             let layout = ComposedLayout::new(
                 Swizzle::IDENTITY,
                 0,
-                inner.parse().unwrap(),
+                outer.parse().unwrap(),
                 OffsetUnit::Bytes,
             )
             .unwrap();
             assert!(super::matrix_offset_fits_i32(&layout));
             assert!(
                 super::matrix_address_plan(&layout, CuteMatrixRoleAttr::A).is_none(),
-                "{inner}"
+                "{outer}"
             );
         }
     }

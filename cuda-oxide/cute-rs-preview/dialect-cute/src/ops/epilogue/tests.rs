@@ -23,8 +23,8 @@ fn undef(ctx: &mut Context, ty: TypeHandle) -> Value {
 
 /// Build the canonical shared placement consumed by the output-tile fixture.
 fn data_layout() -> ComposedLayout {
-    let inner: Layout = "(128,32):(32,1)".parse().unwrap();
-    ComposedLayout::new(Swizzle::new(2, 3, 3), 0, inner, OffsetUnit::Elements).unwrap()
+    let outer: Layout = "(128,32):(32,1)".parse().unwrap();
+    ComposedLayout::new(Swizzle::new(2, 3, 3), 0, outer, OffsetUnit::Elements).unwrap()
 }
 
 /// Ordinary runtime carriers and static types for a two-half epilogue test.

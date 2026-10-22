@@ -52,9 +52,12 @@ pub(in crate::cute) fn emit_epilogue(
     let dst = e.llvm_ptr(a[1].clone(), 3)?;
     let stride = e.constant(32, p.columns as i128)?;
     let row = e.binary("arith.muli", a[2].clone(), stride)?;
-    let swizzle = p.layout.0.outer();
-    let mask = e.constant(32, (((1u32 << swizzle.bits) - 1) << swizzle.base) as i128)?;
-    let shift = e.constant(32, swizzle.shift as i128)?;
+    let swizzle = p.layout.0.inner();
+    let mask = e.constant(
+        32,
+        (((1u32 << swizzle.num_bits) - 1) << swizzle.num_base) as i128,
+    )?;
+    let shift = e.constant(32, swizzle.num_shift as i128)?;
     // The verified B64 layout has element swizzle S<2,3,3>: it only
     // changes bits 3 and 4 using bits 6 and 7. Within each eight-element
     // chunk the low three bits therefore remain ordered and contiguous.

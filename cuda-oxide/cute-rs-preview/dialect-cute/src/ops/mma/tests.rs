@@ -21,8 +21,8 @@ fn undef(ctx: &mut Context, ty: TypeHandle) -> Value {
 
 /// Build the canonical swizzled packed-data shared layout for the MMA fixture.
 fn data_placement() -> ComposedLayout {
-    let inner: Layout = "(128,32):(32,1)".parse().unwrap();
-    ComposedLayout::new(Swizzle::new(2, 3, 3), 0, inner, OffsetUnit::Elements).unwrap()
+    let outer: Layout = "(128,32):(32,1)".parse().unwrap();
+    ComposedLayout::new(Swizzle::new(2, 3, 3), 0, outer, OffsetUnit::Elements).unwrap()
 }
 
 /// Storage interpretation and placement used to construct shared-view test types.

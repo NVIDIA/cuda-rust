@@ -18,37 +18,39 @@ use pliron_derive::pliron_attr;
 
 /// A complete swizzled layout, stored as one typed attribute.
 ///
-/// The quoted payload is intentionally simple and round-trippable:
+/// The quoted payload is intentionally simple and round-trippable. Its
+/// fields are CuTe's inner swizzle, offset, unit, and outer layout, in that
+/// order:
 ///
 /// ```text
 /// "3,4,3;0;elements;(8,32):(32,1)"
-///   B M S  off unit      inner layout
+///   B M S  off unit      outer layout
 /// ```
 #[pliron_attr(name = "cute.composed_layout", verifier = "succ")]
 #[derive(PartialEq, Eq, Clone, Debug, Hash)]
 pub struct CuteComposedLayoutAttr(
-    #[doc = "Structural swizzle, offset, and inner layout."] pub ComposedLayout,
+    #[doc = "Structural inner swizzle, offset, and outer layout."] pub ComposedLayout,
 );
 
 impl fmt::Display for CuteComposedLayoutAttr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let swizzle = self.0.outer();
+        let swizzle = self.0.inner();
         write!(
             f,
             "\"{},{},{};{};{};{}\"",
-            swizzle.bits,
-            swizzle.base,
-            swizzle.shift,
+            swizzle.num_bits,
+            swizzle.num_base,
+            swizzle.num_shift,
             self.0.offset(),
             self.0.unit(),
-            self.0.inner()
+            self.0.outer()
         )
     }
 }
 
 impl_printable_for_display!(CuteComposedLayoutAttr);
 
-/// Parse the structural swizzle, offset unit, and inner layout from the printed attribute syntax.
+/// Parse the structural inner swizzle, offset, unit, and outer layout from the printed attribute syntax.
 pub(super) fn parse_composed_layout(
     text: String,
 ) -> Result<CuteComposedLayoutAttr, ParseLayoutError> {
@@ -64,7 +66,7 @@ pub(super) fn parse_composed_layout(
         "bytes" => OffsetUnit::Bytes,
         _ => return Err(ParseLayoutError),
     };
-    let inner = fields.next().ok_or(ParseLayoutError)?.parse::<Layout>()?;
+    let outer = fields.next().ok_or(ParseLayoutError)?.parse::<Layout>()?;
     let swizzle_fields = swizzle.split(',').map(str::trim).collect::<Vec<_>>();
     let [bits, base, shift] = swizzle_fields.as_slice() else {
         return Err(ParseLayoutError);
@@ -72,8 +74,8 @@ pub(super) fn parse_composed_layout(
     let bits = bits.parse::<u32>().map_err(|_| ParseLayoutError)?;
     let base = base.parse::<u32>().map_err(|_| ParseLayoutError)?;
     let shift = shift.parse::<i32>().map_err(|_| ParseLayoutError)?;
-    let outer = Swizzle::try_new(bits, base, shift).ok_or(ParseLayoutError)?;
-    ComposedLayout::new(outer, offset, inner, unit)
+    let inner = Swizzle::try_new(bits, base, shift).ok_or(ParseLayoutError)?;
+    ComposedLayout::new(inner, offset, outer, unit)
         .map(CuteComposedLayoutAttr)
         .map_err(|_| ParseLayoutError)
 }

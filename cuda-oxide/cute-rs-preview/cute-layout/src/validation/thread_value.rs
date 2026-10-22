@@ -279,7 +279,7 @@ pub fn validate_per_thread_atom_contiguity(
         return Err(ValidationError::AtomNeedsByteLayout);
     }
     let memory_size = memory
-        .inner()
+        .outer()
         .checked_size()
         .ok_or(ValidationError::ArithmeticOverflow("memory layout size"))?;
     validate_tv_exact_coverage(tv, thread_count, values_per_thread, memory_size)?;
@@ -323,7 +323,7 @@ pub fn validate_per_thread_atom_contiguity(
                     .checked_call(&tv_coord(thread, value))
                     .ok_or(ValidationError::ArithmeticOverflow("TV atom address"))?;
                 let actual = memory
-                    .checked_call_with_inner_delta(&IntTuple::Leaf(cell), byte_in_element)
+                    .checked_call_with_outer_delta(&IntTuple::Leaf(cell), byte_in_element)
                     .ok_or(ValidationError::ArithmeticOverflow("memory atom address"))?;
                 let expected = first_offset.checked_add(byte_in_atom).ok_or(
                     ValidationError::ArithmeticOverflow("expected atom byte address"),

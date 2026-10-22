@@ -563,7 +563,9 @@ pub(super) fn classify_tensor_method_call(
         {
             Some(CuteFn::TensorStoreTile)
         }
-        "store_linear"
+        // The Tile1D guard keeps `TensorMut<Contiguous1D>::store_at`, ordinary
+        // Rust with the same method name, on the body-translation path.
+        "store_at"
             if receiver_view.is_some_and(|view| {
                 view.access == CuteTensorAccessAttr::ReadWrite
                     && matches!(view.layout, CuteTensorLayoutAttr::Tile1D(_))

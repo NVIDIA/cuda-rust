@@ -258,7 +258,7 @@ pub mod kernels {
         } else {
             let mut index = input_tile.base();
             while index < input.len() {
-                unsafe { output_tile.store_linear(index, input[index]) };
+                unsafe { output_tile.store_at(index, input[index]) };
                 index += 1;
             }
         }

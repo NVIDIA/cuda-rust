@@ -399,8 +399,8 @@ mod canonical_path_tests {
             Some("from_slice")
         );
         assert_eq!(
-            tensor_method_name_from_path("cute-rs::tensor::Tile1D<TILE>>::store_linear"),
-            Some("store_linear")
+            tensor_method_name_from_path("cute-rs::tensor::Tile1D<TILE>>::store_at"),
+            Some("store_at")
         );
         assert_eq!(
             tensor_method_name_from_path("cute_rs::tensor::from_slice"),

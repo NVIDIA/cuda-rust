@@ -630,9 +630,10 @@ pub fn slice_write<'a, T: Copy + TensorElement<T>, const TILE: usize>(
 }
 
 impl<'a, T: Copy + TensorElement<T>, const TILE: usize> TensorMut<'a, T, Tile1D<TILE>, T> {
-    /// Write one value using its absolute index in the original tensor.
+    /// Write one value at its absolute index in the original tensor.
     ///
-    /// Use this for a short final tile. Use [`TensorMut::store`] for a full
+    /// Use this for a short final tile; it is the same scalar store verb as
+    /// `store_at` on an undivided row. Use [`TensorMut::store`] for a full
     /// tile so all values are written by one vector store.
     ///
     /// # Safety
@@ -642,7 +643,7 @@ impl<'a, T: Copy + TensorElement<T>, const TILE: usize> TensorMut<'a, T, Tile1D<
     /// - No concurrently running thread may access the same element in a
     ///   conflicting way.
     #[inline(always)]
-    pub unsafe fn store_linear(&mut self, index: usize, value: T) {
+    pub unsafe fn store_at(&mut self, index: usize, value: T) {
         unsafe { tensor_store_element_abs::<T, TILE>(self, index, value) };
     }
 
@@ -720,7 +721,7 @@ pub unsafe fn tensor_store_tile<'a, T: Copy + TensorElement<T>, const TILE: usiz
 ///
 /// # Safety
 ///
-/// The rules are the same as [`TensorMut::store_linear`].
+/// The rules are the same as [`TensorMut::store_at`] on a selected tile.
 #[doc(hidden)]
 #[inline(never)]
 pub unsafe fn tensor_store_element_abs<'a, T: Copy + TensorElement<T>, const TILE: usize>(

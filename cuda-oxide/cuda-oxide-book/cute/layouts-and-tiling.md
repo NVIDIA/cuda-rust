@@ -47,7 +47,7 @@ if t_a.is_full() {
 } else {
     let mut k = t_a.base();
     while k < a.len() {
-        unsafe { t_c.store_linear(k, a[k] + b[k]) };
+        unsafe { t_c.store_at(k, a[k] + b[k]) };
         k += 1;
     }
 }

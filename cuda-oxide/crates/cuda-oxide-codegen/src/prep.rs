@@ -572,7 +572,8 @@ mod tests {
 
         // This harmless view makes the fixture take the tensor-only second
         // promotion path. The nested slots below reproduce the writable
-        // `store_linear(&mut self)` shape that exposed the ordering bug.
+        // `TensorMut<Tile1D>::store_at(&mut self)` shape that exposed the
+        // ordering bug.
         let data = MirUndefOp::new(&mut ctx, global_pointer).get_operation();
         data.insert_at_back(entry, &ctx);
         let data = data.deref(&ctx).get_result(0);

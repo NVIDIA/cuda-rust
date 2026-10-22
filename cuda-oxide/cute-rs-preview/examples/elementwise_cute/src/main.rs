@@ -59,7 +59,7 @@ mod kernels {
             // Ragged tail: plain Rust scalar loop, boundary thread only.
             let mut k = t_a.base();
             while k < a.len() {
-                unsafe { t_c.store_linear(k, a[k] + b[k]) };
+                unsafe { t_c.store_at(k, a[k] + b[k]) };
                 k += 1;
             }
         }
@@ -84,7 +84,7 @@ mod kernels {
         } else {
             let mut k = t_a.base();
             while k < a.len() {
-                unsafe { t_c.store_linear(k, a[k] + b[k]) };
+                unsafe { t_c.store_at(k, a[k] + b[k]) };
                 k += 1;
             }
         }

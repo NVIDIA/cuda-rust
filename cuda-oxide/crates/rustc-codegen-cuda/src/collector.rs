@@ -135,7 +135,8 @@ use rustc_middle::mir::{
 };
 use rustc_middle::mono::{CodegenUnit, MonoItem};
 use rustc_middle::ty::{
-    Instance, InstanceKind, ShimKind, Ty, TyCtxt, TyKind, TypeVisitableExt, TypingEnv,
+    GenericArgsRef, Instance, InstanceKind, ShimKind, Ty, TyCtxt, TyKind, TypeVisitableExt,
+    TypingEnv,
 };
 use rustc_span::Span;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -239,6 +240,10 @@ enum CollectDecision {
 enum CuteImplOwner {
     Tensor,
     TensorMut,
+    /// `TensorMut<'_, T, Tile1D<TILE>, T>`: the impl whose `store` and
+    /// `store_at` the importer lowers to tile operations. The Contiguous1D
+    /// impl's `store_at` is ordinary Rust whose body must be collected.
+    TensorMutTile1D,
     BlockScaledTensor,
     BlockScaledThreadRow,
     BlockScaledTile64,
@@ -275,7 +280,9 @@ fn is_cute_recognition_stub_identity(
         return false;
     };
     let module = match impl_owner {
-        CuteImplOwner::Tensor | CuteImplOwner::TensorMut => "tensor",
+        CuteImplOwner::Tensor | CuteImplOwner::TensorMut | CuteImplOwner::TensorMutTile1D => {
+            "tensor"
+        }
         CuteImplOwner::BlockScaledTensor => "block_scaled::tensor",
         CuteImplOwner::BlockScaledThreadRow
         | CuteImplOwner::BlockScaledTile64
@@ -316,10 +323,10 @@ fn is_cute_recognition_stub_identity(
             method,
             "from_slice" | "zipped_divide" | "slice" | "is_full" | "base" | "load"
         ),
-        CuteImplOwner::TensorMut => matches!(
-            method,
-            "from_disjoint_slice" | "zipped_divide" | "slice" | "store" | "store_linear"
-        ),
+        CuteImplOwner::TensorMut => {
+            matches!(method, "from_disjoint_slice" | "zipped_divide" | "slice")
+        }
+        CuteImplOwner::TensorMutTile1D => matches!(method, "store" | "store_at"),
         CuteImplOwner::BlockScaledTensor => matches!(method, "from_slices" | "thread_row"),
         CuteImplOwner::BlockScaledThreadRow => method == "k_tile",
         CuteImplOwner::BlockScaledTile64 => method == "load",
@@ -2617,32 +2624,50 @@ impl<'tcx> DeviceCollector<'tcx> {
                 .skip_normalization()
                 .kind()
             {
-                TyKind::Adt(def, _) => match self.tcx.item_name(def.did()).to_string().as_str() {
-                    "Tensor" => Some(CuteImplOwner::Tensor),
-                    "TensorMut" => Some(CuteImplOwner::TensorMut),
-                    "BlockScaledTensor" => Some(CuteImplOwner::BlockScaledTensor),
-                    "BlockScaledThreadRow" => Some(CuteImplOwner::BlockScaledThreadRow),
-                    "BlockScaledTile64" => Some(CuteImplOwner::BlockScaledTile64),
-                    "LoadedBlockScaledTile64" => Some(CuteImplOwner::LoadedBlockScaledTile64),
-                    "StaticPersistentTileScheduler" => {
-                        Some(CuteImplOwner::StaticPersistentTileScheduler)
+                TyKind::Adt(def, args) => {
+                    match self.tcx.item_name(def.did()).to_string().as_str() {
+                        "Tensor" => Some(CuteImplOwner::Tensor),
+                        "TensorMut" if self.tensor_impl_layout_is_tile_1d(args) => {
+                            Some(CuteImplOwner::TensorMutTile1D)
+                        }
+                        "TensorMut" => Some(CuteImplOwner::TensorMut),
+                        "BlockScaledTensor" => Some(CuteImplOwner::BlockScaledTensor),
+                        "BlockScaledThreadRow" => Some(CuteImplOwner::BlockScaledThreadRow),
+                        "BlockScaledTile64" => Some(CuteImplOwner::BlockScaledTile64),
+                        "LoadedBlockScaledTile64" => Some(CuteImplOwner::LoadedBlockScaledTile64),
+                        "StaticPersistentTileScheduler" => {
+                            Some(CuteImplOwner::StaticPersistentTileScheduler)
+                        }
+                        "WorkTileInfo" => Some(CuteImplOwner::WorkTileInfo),
+                        "PipelineTmaAsync" => Some(CuteImplOwner::PipelineTmaAsync),
+                        "PipelineState" => Some(CuteImplOwner::PipelineState),
+                        "SharedTensor" => Some(CuteImplOwner::SharedTensor),
+                        "Mxf4TiledMma" => Some(CuteImplOwner::Mxf4TiledMma),
+                        "Mxf4AccumulatorTile2x8" => Some(CuteImplOwner::Mxf4AccumulatorTile2x8),
+                        "Mxf4ScaleTile128" => Some(CuteImplOwner::Mxf4ScaleTile128),
+                        "Sm120Epilogue128x128" => Some(CuteImplOwner::Sm120Epilogue128x128),
+                        "Sm120EpilogueWarp128x128" => Some(CuteImplOwner::Sm120EpilogueWarp128x128),
+                        "PipelineTmaStore" => Some(CuteImplOwner::PipelineTmaStore),
+                        _ => None,
                     }
-                    "WorkTileInfo" => Some(CuteImplOwner::WorkTileInfo),
-                    "PipelineTmaAsync" => Some(CuteImplOwner::PipelineTmaAsync),
-                    "PipelineState" => Some(CuteImplOwner::PipelineState),
-                    "SharedTensor" => Some(CuteImplOwner::SharedTensor),
-                    "Mxf4TiledMma" => Some(CuteImplOwner::Mxf4TiledMma),
-                    "Mxf4AccumulatorTile2x8" => Some(CuteImplOwner::Mxf4AccumulatorTile2x8),
-                    "Mxf4ScaleTile128" => Some(CuteImplOwner::Mxf4ScaleTile128),
-                    "Sm120Epilogue128x128" => Some(CuteImplOwner::Sm120Epilogue128x128),
-                    "Sm120EpilogueWarp128x128" => Some(CuteImplOwner::Sm120EpilogueWarp128x128),
-                    "PipelineTmaStore" => Some(CuteImplOwner::PipelineTmaStore),
-                    _ => None,
-                },
+                }
                 _ => None,
             }
         });
         is_cute_recognition_stub_identity(crate_name.as_str(), &definition_path, impl_owner)
+    }
+
+    /// Whether a cute-rs tensor impl's `Layout` generic argument is `Tile1D`.
+    ///
+    /// `Tensor` and `TensorMut` are `<'a, Element, Layout, Storage>`, so the
+    /// layout is the second type argument of the impl's self type.
+    fn tensor_impl_layout_is_tile_1d(&self, args: GenericArgsRef<'tcx>) -> bool {
+        args.types()
+            .nth(1)
+            .is_some_and(|layout| match layout.kind() {
+                TyKind::Adt(def, _) => self.tcx.item_name(def.did()).as_str() == "Tile1D",
+                _ => false,
+            })
     }
 
     /// Recognize a generated intrinsic placeholder or reject a mismatched raw
@@ -3311,7 +3336,19 @@ mod tests {
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::tensor::{impl#11}::store_linear",
+            "::tensor::{impl#11}::store_at",
+            Some(CuteImplOwner::TensorMutTile1D),
+        ));
+        // `TensorMut<Contiguous1D>::store_at` shares the method name but is
+        // ordinary Rust; only the Tile1D impl's scalar store is a stub.
+        assert!(!is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::tensor::{impl#10}::store_at",
+            Some(CuteImplOwner::TensorMut),
+        ));
+        assert!(!is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::tensor::{impl#10}::store",
             Some(CuteImplOwner::TensorMut),
         ));
         assert!(is_cute_recognition_stub_identity(

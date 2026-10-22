@@ -424,8 +424,8 @@ pub mod kernels {
                 let s = silu(gate[index]);
                 let value = BFloat16::from_f32(s.to_f32() * up[index].to_f32());
                 unsafe {
-                    silus.store_linear(index, s);
-                    products.store_linear(index, value);
+                    silus.store_at(index, s);
+                    products.store_at(index, value);
                 }
                 index += 1;
             }

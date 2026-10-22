@@ -68,7 +68,7 @@ mod kernels {
         } else {
             let mut index = gate_tile.base();
             while index < gate.len() {
-                unsafe { output_tile.store_linear(index, swiglu(gate[index], up[index])) };
+                unsafe { output_tile.store_at(index, swiglu(gate[index], up[index])) };
                 index += 1;
             }
         }
@@ -101,7 +101,7 @@ mod kernels {
             let mut index = gate_tile.base();
             while index < gate.len() {
                 let result = swiglu(gate[index] as f32, up[index] as f32) as f16;
-                unsafe { output_tile.store_linear(index, result) };
+                unsafe { output_tile.store_at(index, result) };
                 index += 1;
             }
         }

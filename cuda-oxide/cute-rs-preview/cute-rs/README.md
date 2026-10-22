@@ -42,7 +42,7 @@ items; they do not wrap or duplicate implementations.
 | `tma` | `copy::tma` |
 
 For example, `cute_rs::tma::TmaDesc` and `cute_rs::copy::tma::TmaDesc` are
-identical types. Common fragments such as `mma::AccC` and core views such as
+identical types. Common fragments such as `mma::FragmentC` and core views such as
 `tensor::Tensor` keep their original defining paths.
 
 ## Checks

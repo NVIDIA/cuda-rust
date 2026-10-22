@@ -4,7 +4,7 @@
 //! Compile-fail probe: reject swapped A and B scale roles in block-scaled MMA.
 #![feature(f16)]
 
-use cute_rs::{AccC, FragA, FragB, Mkl, Mxfp4BlockScaledTensor, Mxfp4TiledMma, Nkl};
+use cute_rs::{FragmentC, FragmentA, FragmentB, Mkl, Mxfp4BlockScaledTensor, Mxfp4TiledMma, Nkl};
 
 /// Reject swapped A and B scale roles in block-scaled MMA.
 
@@ -17,11 +17,11 @@ fn main() {
 
     let _ = unsafe {
         mma.gemm(
-            FragA([0; 4]),
+            FragmentA([0; 4]),
             vector.load_scale_pair(0, 0),
-            FragB([0; 2]),
+            FragmentB([0; 2]),
             matrix.load_scale_pair(0, 0),
-            AccC::ZERO,
+            FragmentC::ZERO,
         )
     };
 }

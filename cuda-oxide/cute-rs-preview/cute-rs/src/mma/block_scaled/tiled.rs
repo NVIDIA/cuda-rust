@@ -9,7 +9,7 @@ use super::{__compiler, Mxf4BTileK64, Mxf4ScaleStage, Mxf4ScaleTile128};
 use crate::block_scaled::{Mkl, MmaScalePair, Nkl, ScalePack4, SharedScaleAtom};
 use crate::copy::tiled::SharedTensor;
 use crate::markers::ColMajor;
-use crate::mma::{AccC, FragA, FragB, load_matrix_a};
+use crate::mma::{FragmentA, FragmentB, FragmentC, load_matrix_a};
 use crate::numeric::{Mxf4E2M1, UE8M0x4};
 use core::marker::PhantomData;
 
@@ -93,7 +93,7 @@ impl<SharedLayout> Mxfp4TiledMma<SharedLayout> {
         &self,
         source: &SharedTensor<Mxf4E2M1, f16, SharedLayout, Mkl>,
         warp_tile: (usize, usize),
-    ) -> FragA {
+    ) -> FragmentA {
         unsafe { load_matrix_a::<SharedLayout>(source.carrier(), warp_tile, self.lane) }
     }
 
@@ -116,12 +116,12 @@ impl<SharedLayout> Mxfp4TiledMma<SharedLayout> {
         &self,
         source: &SharedTensor<Mxf4E2M1, f16, SharedLayout, Nkl>,
         warp_tile: (usize, usize),
-    ) -> (FragB, FragB) {
+    ) -> (FragmentB, FragmentB) {
         let loaded =
             unsafe { load_matrix_a::<SharedLayout>(source.carrier(), warp_tile, self.lane) };
         (
-            FragB([loaded.0[0], loaded.0[2]]),
-            FragB([loaded.0[1], loaded.0[3]]),
+            FragmentB([loaded.0[0], loaded.0[2]]),
+            FragmentB([loaded.0[1], loaded.0[3]]),
         )
     }
 
@@ -149,7 +149,7 @@ impl<SharedLayout> Mxfp4TiledMma<SharedLayout> {
         source: &SharedTensor<Mxf4E2M1, f16, SharedLayout, Mkl>,
         warp_m: usize,
         k_half: usize,
-    ) -> (FragA, FragA) {
+    ) -> (FragmentA, FragmentA) {
         unsafe { __compiler::mma_load_a(self, source, warp_m, k_half) }
     }
 
@@ -176,7 +176,7 @@ impl<SharedLayout> Mxfp4TiledMma<SharedLayout> {
         warp_n: usize,
         pair_n: usize,
         k_half: usize,
-    ) -> (FragB, FragB) {
+    ) -> (FragmentB, FragmentB) {
         unsafe { self.load_b_pair(source, (b_pair_atom_128(warp_n, pair_n), k_half)) }
     }
 
@@ -326,12 +326,12 @@ impl<SharedLayout> Mxfp4TiledMma<SharedLayout> {
     #[inline(always)]
     pub unsafe fn gemm(
         &self,
-        a: FragA,
+        a: FragmentA,
         scale_a: MmaScalePair<Mkl>,
-        b: FragB,
+        b: FragmentB,
         scale_b: MmaScalePair<Nkl>,
-        c: AccC,
-    ) -> AccC {
+        c: FragmentC,
+    ) -> FragmentC {
         let _ = (self, a, scale_a, b, scale_b, c);
         unreachable!("cute-rs block-scaled MMA executed outside recognized CuTe device compilation")
     }

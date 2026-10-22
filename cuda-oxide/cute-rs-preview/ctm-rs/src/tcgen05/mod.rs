@@ -9,7 +9,8 @@
 //!
 //! Start with [`descriptors::DenseSharedF16`] for supported shapes and
 //! [`tmem::TmemGuard`] for allocation ownership. Issue, commit, wait and release
-//! remain explicit. The crate README gives an issue-site example and the
+//! remain explicit; [`tmem::load_wait`] and [`tmem::store_wait`] are the two
+//! completion waits. The crate README gives an issue-site example and the
 //! supported compiler profiles.
 
 pub mod descriptors;
@@ -35,30 +36,6 @@ pub unsafe fn commit<Kind, const ID: usize>(
     barrier: &crate::mbarrier::ManagedBarrier<crate::mbarrier::Ready, Kind, ID>,
 ) {
     unsafe { cuda_device::tcgen05::tcgen05_commit(barrier.as_ptr().cast_mut().cast()) }
-}
-
-/// Wait collectively for previously issued asynchronous TMEM loads.
-///
-/// # Safety
-/// All 32 lanes of the warp must execute the same load wait convergently.
-/// The loads must target live, valid TMEM allocations with correctly ordered
-/// producers. This synchronizes the participating warp; it is not a CTA barrier
-/// and does not release storage. All tcgen05 operations must use one CTA-group mode.
-#[inline(always)]
-pub unsafe fn load_wait() {
-    cuda_device::tcgen05::tcgen05_load_wait()
-}
-
-/// Wait collectively for previously issued asynchronous TMEM stores.
-///
-/// # Safety
-/// All 32 lanes of the warp must execute the same store wait convergently.
-/// The stores must target live, valid TMEM allocations with no conflicting
-/// accesses. This synchronizes the participating warp; it is not a CTA barrier
-/// and does not release storage. All tcgen05 operations must use one CTA-group mode.
-#[inline(always)]
-pub unsafe fn store_wait() {
-    cuda_device::tcgen05::tcgen05_store_wait()
 }
 
 /// Relinquish the group-one allocation permit after allocation completes.

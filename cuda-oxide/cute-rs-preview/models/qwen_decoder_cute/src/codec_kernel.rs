@@ -12,7 +12,7 @@ use cute_rs::Bf16;
 pub mod kernels {
     use super::*;
 
-    use cute_rs::mma::bf16::{Bf16Mma16x8x16, MmaAccumulator};
+    use cute_rs::mma::bf16::{Bf16Mma16x8x16, FragmentC};
     use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 
     /// Read one virtual im2col element, zero-filling outside the input extent.
@@ -175,7 +175,7 @@ pub mod kernels {
             } else {
                 kernel
             };
-            let mut accumulator = MmaAccumulator::zero();
+            let mut accumulator = FragmentC::ZERO;
             let mut k = 0;
             while k < in_group * k_steps {
                 // The convolution supplies logical im2col coordinates. The
@@ -213,7 +213,7 @@ pub mod kernels {
                 });
                 // SAFETY: the enclosing tile predicate is warp-uniform; all
                 // 32 lanes execute identical MMA counts with typed A/B tiles.
-                accumulator = unsafe { mma.mma(accumulator, a, b) };
+                accumulator = unsafe { mma.mma_atom_call(accumulator, a, b) };
                 k += 16;
             }
             let mut output = StridedTensorMut::from_disjoint_slice(&mut output);

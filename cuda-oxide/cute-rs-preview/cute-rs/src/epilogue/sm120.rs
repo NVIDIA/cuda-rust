@@ -11,7 +11,7 @@
 //! A lane is a thread's position from 0 to 31 inside its warp.
 //!
 //! One tensor-core operation gives each thread four `f32` results in
-//! [`AccC`]. Together, one warp owns a 16x8 result block. This
+//! [`FragmentC`]. Together, one warp owns a 16x8 result block. This
 //! module calls that small block an *atom*. `stmatrix` is a warp-wide
 //! instruction that stores packed register values into shared memory.
 //!
@@ -48,7 +48,7 @@ use core::marker::PhantomData;
 
 use crate::copy::cooperative::SmemTile;
 use crate::markers::{Composed, RowMajor, Swizzle};
-use crate::mma::AccC;
+use crate::mma::FragmentC;
 
 /// Layout of one 128x64 half that a B128 TMA store can read.
 ///
@@ -301,7 +301,7 @@ impl Sm120EpilogueWarp128x128 {
     /// calling hardware warp and lane. No other warp may write the same atom
     /// at the same time.
     #[inline(always)]
-    pub unsafe fn store_atom<const M_BAND: usize, const N_SLOT: usize>(&self, acc: AccC) {
+    pub unsafe fn store_atom<const M_BAND: usize, const N_SLOT: usize>(&self, acc: FragmentC) {
         const {
             assert!(M_BAND < 2);
             assert!(N_SLOT < 8);

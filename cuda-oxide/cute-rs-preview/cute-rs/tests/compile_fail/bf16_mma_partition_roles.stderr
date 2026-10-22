@@ -1,18 +1,18 @@
 error[E0308]: arguments to this method are incorrect
   --> tests/compile_fail/bf16_mma_partition_roles.rs:13:26
    |
-13 |     let _ = unsafe { mma.mma(MmaAccumulator::zero(), b, a) };
-   |                          ^^^                         -  - expected `BFragment`, found `AFragment`
-   |                                                      |
-   |                                                      expected `AFragment`, found `BFragment`
+13 |     let _ = unsafe { mma.mma_atom_call(FragmentC::ZERO, b, a) };
+   |                          ^^^^^^^^^^^^^                  -  - expected `cute_rs::bf16_mma::FragmentB`, found `cute_rs::bf16_mma::FragmentA`
+   |                                                         |
+   |                                                         expected `cute_rs::bf16_mma::FragmentA`, found `cute_rs::bf16_mma::FragmentB`
    |
 note: method defined here
   --> src/mma/bf16.rs
    |
-   |     pub unsafe fn mma(self, c: MmaAccumulator, a: AFragment, b: BFragment) -> MmaAccumulator {
-   |                   ^^^
+   |     pub unsafe fn mma_atom_call(self, c: FragmentC, a: FragmentA, b: FragmentB) -> FragmentC {
+   |                   ^^^^^^^^^^^^^
 help: swap these arguments
    |
-13 -     let _ = unsafe { mma.mma(MmaAccumulator::zero(), b, a) };
-13 +     let _ = unsafe { mma.mma(MmaAccumulator::zero(), a, b) };
+13 -     let _ = unsafe { mma.mma_atom_call(FragmentC::ZERO, b, a) };
+13 +     let _ = unsafe { mma.mma_atom_call(FragmentC::ZERO, a, b) };
    |

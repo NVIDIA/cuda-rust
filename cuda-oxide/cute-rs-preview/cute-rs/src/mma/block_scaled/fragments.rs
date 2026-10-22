@@ -8,7 +8,7 @@
 use super::{__compiler, Mxfp4TiledMma};
 use crate::block_scaled::{Mkl, MmaScalePair, Nkl, ScalePack4};
 use crate::copy::tiled::SharedTensor;
-use crate::mma::{AccC, FragA, FragB};
+use crate::mma::{FragmentA, FragmentB, FragmentC};
 use crate::numeric::Mxf4E2M1;
 use core::marker::PhantomData;
 
@@ -140,37 +140,37 @@ pub struct Mxf4ScalePairs128 {
 #[derive(Clone, Copy)]
 pub struct Mxf4AccumulatorTile2x8 {
     /// Per-lane accumulators for row band 0 and N8 fragment 0.
-    pub(super) c00: AccC,
+    pub(super) c00: FragmentC,
     /// Per-lane accumulators for row band 0 and N8 fragment 1.
-    pub(super) c01: AccC,
+    pub(super) c01: FragmentC,
     /// Per-lane accumulators for row band 0 and N8 fragment 2.
-    pub(super) c02: AccC,
+    pub(super) c02: FragmentC,
     /// Per-lane accumulators for row band 0 and N8 fragment 3.
-    pub(super) c03: AccC,
+    pub(super) c03: FragmentC,
     /// Per-lane accumulators for row band 0 and N8 fragment 4.
-    pub(super) c04: AccC,
+    pub(super) c04: FragmentC,
     /// Per-lane accumulators for row band 0 and N8 fragment 5.
-    pub(super) c05: AccC,
+    pub(super) c05: FragmentC,
     /// Per-lane accumulators for row band 0 and N8 fragment 6.
-    pub(super) c06: AccC,
+    pub(super) c06: FragmentC,
     /// Per-lane accumulators for row band 0 and N8 fragment 7.
-    pub(super) c07: AccC,
+    pub(super) c07: FragmentC,
     /// Per-lane accumulators for row band 1 and N8 fragment 0.
-    pub(super) c10: AccC,
+    pub(super) c10: FragmentC,
     /// Per-lane accumulators for row band 1 and N8 fragment 1.
-    pub(super) c11: AccC,
+    pub(super) c11: FragmentC,
     /// Per-lane accumulators for row band 1 and N8 fragment 2.
-    pub(super) c12: AccC,
+    pub(super) c12: FragmentC,
     /// Per-lane accumulators for row band 1 and N8 fragment 3.
-    pub(super) c13: AccC,
+    pub(super) c13: FragmentC,
     /// Per-lane accumulators for row band 1 and N8 fragment 4.
-    pub(super) c14: AccC,
+    pub(super) c14: FragmentC,
     /// Per-lane accumulators for row band 1 and N8 fragment 5.
-    pub(super) c15: AccC,
+    pub(super) c15: FragmentC,
     /// Per-lane accumulators for row band 1 and N8 fragment 6.
-    pub(super) c16: AccC,
+    pub(super) c16: FragmentC,
     /// Per-lane accumulators for row band 1 and N8 fragment 7.
-    pub(super) c17: AccC,
+    pub(super) c17: FragmentC,
 }
 
 /// One warp's eight B fragments for one K=64 step.
@@ -208,7 +208,7 @@ impl<SharedLayout> Mxf4BTileK64<'_, SharedLayout> {
     pub(super) unsafe fn load<const PAIR: usize>(
         &self,
         mma: &Mxfp4TiledMma<SharedLayout>,
-    ) -> (FragB, FragB) {
+    ) -> (FragmentB, FragmentB) {
         const { assert!(PAIR < 4) };
         let source = unsafe {
             SharedTensor::<Mxf4E2M1, f16, SharedLayout, Nkl>::from_raw_parts(
@@ -252,7 +252,7 @@ impl Mxf4AccumulatorTile2x8 {
     pub unsafe fn accumulate_k64<SharedLayout>(
         &mut self,
         mma: &Mxfp4TiledMma<SharedLayout>,
-        a: (FragA, FragA),
+        a: (FragmentA, FragmentA),
         b: Mxf4BTileK64<'_, SharedLayout>,
         scales: Mxf4ScalePairs128,
     ) {

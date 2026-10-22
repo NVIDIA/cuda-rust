@@ -48,7 +48,7 @@ fn compatibility_aliases_preserve_type_identity() {
 
 #[test]
 fn root_exports_preserve_type_identity() {
-    same_type!(cute_rs::FragA, cute_rs::mma::FragA);
+    same_type!(cute_rs::FragmentA, cute_rs::mma::FragmentA);
     same_type!(cute_rs::RegisterTile<f32, 4>, cute_rs::tensor::RegisterTile<f32, 4>);
     same_type!(
         cute_rs::Mxfp4TiledMma<()>,

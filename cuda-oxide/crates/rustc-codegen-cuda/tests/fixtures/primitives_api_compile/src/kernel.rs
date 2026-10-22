@@ -26,7 +26,7 @@ mod probes {
             self,
             descriptors::*,
             mma::{self, collector_a},
-            tmem::{ColumnOffset, TmemGuard, TmemReady, TmemUninit},
+            tmem::{self, ColumnOffset, TmemGuard, TmemReady, TmemUninit},
         },
         thread,
         tma::{self, TensorMap},
@@ -232,7 +232,7 @@ mod probes {
                 return;
             };
             let raw = mma::load_32x32b_x32(&read);
-            mma::load_wait();
+            tmem::load_wait();
             let regs = raw.decode_f32();
             macro_rules! store { ($($i:literal),*) => { $(out.add($i).write(regs.get::<$i>());)* }; }
             store!(

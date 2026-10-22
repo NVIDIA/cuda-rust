@@ -13,10 +13,10 @@
 //! global A/B -> TMA -> shared tiles -> MMA -> tensor memory -> output
 //! ```
 
-/// A shared tile used as the left input of a matrix product.
-pub enum OperandA {}
-/// A shared tile used as the right input of a matrix product.
-pub enum OperandB {}
+/// Operand roles shared with the ctm-rs tcgen05 descriptors: `OperandA` marks
+/// the left input and `OperandB` the right input of a matrix product, for
+/// shared tiles here and for instruction operands in ctm-rs alike.
+pub use ctm_rs::tcgen05::descriptors::{OperandA, OperandB};
 
 mod mma;
 mod pipeline;

@@ -37,14 +37,14 @@ fn packed_output_partition_visits_only_live_decode_rows() {
         for lane in 0..32 {
             Bf16Mma16x8x16::get_slice(lane)
                 .partition_c()
-                .store_decode_with(MmaAccumulator::zero(), &source, |r, c, _| {
+                .store_decode_with(FragmentC::ZERO, &source, |r, c, _| {
                     seen[r * 8 + c] += 1;
                 });
         }
         assert_eq!(seen, vec![1; rows * 8]);
     }
 }
-use cute_rs::bf16_mma::{Bf16Mma16x8x16, MmaAccumulator};
+use cute_rs::bf16_mma::{Bf16Mma16x8x16, FragmentC};
 use cute_rs::markers::{Composed, RowMajor, Swizzle};
 
 #[test]
@@ -90,7 +90,7 @@ fn validated_decode_callback_runs_once_only_for_proven_storage() {
             let mut count = 0;
             Bf16Mma16x8x16::get_slice(0)
                 .partition_c()
-                .store_decode_with(MmaAccumulator::zero(), proof, |_, _, _| count += 1);
+                .store_decode_with(FragmentC::ZERO, proof, |_, _, _| count += 1);
             assert_eq!(count, 2);
         }
     ));
@@ -146,12 +146,11 @@ fn operand_partition_matches_ptx_coordinates_and_covers_every_element() {
             [(row, col), (row, col + 1), (row, col + 8), (row, col + 9)]
         );
         let mut c_coords = Vec::new();
-        mma.partition_c()
-            .store_with(MmaAccumulator::zero(), |r, c, v| {
-                c_coords.push((r, c));
-                c_seen[r * 8 + c] += 1;
-                assert_eq!(v.to_bits(), 0);
-            });
+        mma.partition_c().store_with(FragmentC::ZERO, |r, c, v| {
+            c_coords.push((r, c));
+            c_seen[r * 8 + c] += 1;
+            assert_eq!(v.to_bits(), 0);
+        });
         assert_eq!(
             c_coords,
             [

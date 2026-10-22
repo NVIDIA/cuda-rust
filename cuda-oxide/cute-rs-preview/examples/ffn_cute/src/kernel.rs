@@ -15,7 +15,7 @@ use cute_rs::Bf16;
 #[cuda_module]
 pub mod kernels {
     use super::*;
-    use cute_rs::mma::bf16::{Bf16Mma16x8x16, MmaAccumulator, PackedDecode};
+    use cute_rs::mma::bf16::{Bf16Mma16x8x16, FragmentC, PackedDecode};
     use cute_rs::numeric::silu_bf16 as silu;
 
     /// Read `(row, col)` from an element-strided row-major BF16 matrix.
@@ -67,7 +67,7 @@ pub mod kernels {
         let mma = Bf16Mma16x8x16::get_slice(lane);
         let a = mma.partition_a();
         let b = mma.partition_b();
-        let mut accumulator = MmaAccumulator::zero();
+        let mut accumulator = FragmentC::ZERO;
         let mut k = 0;
         while k < width {
             // SAFETY: PackedDecode validates source extents/alignment; N and K
@@ -84,12 +84,13 @@ pub mod kernels {
                             b.load_decode_packed(source, n, k + step * 16),
                         )
                     });
-                    accumulator = operands.fold(accumulator, |acc, (av, bv)| mma.mma(acc, av, bv));
+                    accumulator =
+                        operands.fold(accumulator, |acc, (av, bv)| mma.mma_atom_call(acc, av, bv));
                     k += 512;
                 } else {
                     let av = a.load_decode_packed(source, k);
                     let bv = b.load_decode_packed(source, n, k);
-                    accumulator = mma.mma(accumulator, av, bv);
+                    accumulator = mma.mma_atom_call(accumulator, av, bv);
                     k += 16;
                 }
             }
@@ -154,7 +155,7 @@ pub mod kernels {
                 mma.partition_b()
                     .load_with(|r, c| element(weight, n + r, k + c, outputs, width, weight_stride))
             };
-            let mut accumulator = MmaAccumulator::zero();
+            let mut accumulator = FragmentC::ZERO;
             let mut k = 0;
             while k < width {
                 if PREFETCH && width - k >= 64 {
@@ -169,10 +170,10 @@ pub mod kernels {
                     // SAFETY: the full warp uses the atom's typed fragments;
                     // arithmetic consumes K tiles in unchanged increasing order.
                     unsafe {
-                        accumulator = mma.mma(accumulator, a0, b0);
-                        accumulator = mma.mma(accumulator, a1, b1);
-                        accumulator = mma.mma(accumulator, a2, b2);
-                        accumulator = mma.mma(accumulator, a3, b3);
+                        accumulator = mma.mma_atom_call(accumulator, a0, b0);
+                        accumulator = mma.mma_atom_call(accumulator, a1, b1);
+                        accumulator = mma.mma_atom_call(accumulator, a2, b2);
+                        accumulator = mma.mma_atom_call(accumulator, a3, b3);
                     }
                     k += 64;
                     continue;
@@ -180,7 +181,7 @@ pub mod kernels {
                 let a = load_a(k);
                 let b = load_b(k);
                 // SAFETY: no lane skips the collective; tails are zero-padded.
-                accumulator = unsafe { mma.mma(accumulator, a, b) };
+                accumulator = unsafe { mma.mma_atom_call(accumulator, a, b) };
                 k += 16;
             }
             let mut output =

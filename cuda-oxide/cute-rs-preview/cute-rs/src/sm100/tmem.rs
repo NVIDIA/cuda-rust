@@ -27,7 +27,7 @@ impl<const COLUMNS: u32> Sm100Tmem<COLUMNS> {
     /// `token` points to a live aligned shared `u32`. Synchronize readers
     /// before loading the address written there.
     #[inline(always)]
-    pub unsafe fn allocate(token: *mut u32) {
+    pub unsafe fn alloc(token: *mut u32) {
         let () = Self::VALID;
         unsafe { __compiler::sm100_tmem_alloc::<COLUMNS>(token) }
     }
@@ -39,7 +39,7 @@ impl<const COLUMNS: u32> Sm100Tmem<COLUMNS> {
     /// All asynchronous MMA and loads must be complete and the two CTAs must
     /// rendezvous before both allocating warps call this operation.
     #[inline(always)]
-    pub unsafe fn deallocate(address: u32) {
+    pub unsafe fn dealloc(address: u32) {
         let () = Self::VALID;
         unsafe { __compiler::sm100_tmem_dealloc::<COLUMNS>(address) }
     }

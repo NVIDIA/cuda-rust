@@ -131,8 +131,8 @@ pub use mma::block_scaled::{
     Mxf4ScaleTile128, Mxfp4TiledMma,
 };
 pub use mma::{
-    AccC, FragA, FragB, FragBPair, load_matrix_a, load_matrix_b, load_matrix_b_pair,
-    load_matrix_b_pair_k_major,
+    FragmentA, FragmentB, FragmentBPair, FragmentC, load_matrix_a, load_matrix_b,
+    load_matrix_b_pair, load_matrix_b_pair_k_major,
 };
 pub use numeric::{
     Bf16, E2M1, E4M3, E4M3x2, E4M3x4, Mxf4E2M1, PackedE2M1x2, UE8M0, UE8M0x2, UE8M0x4, e4m3_to_f32,

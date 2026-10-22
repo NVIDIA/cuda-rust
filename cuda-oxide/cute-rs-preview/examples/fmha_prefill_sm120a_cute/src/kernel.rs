@@ -12,7 +12,7 @@ use ctm_rs::{
     thread, warp,
 };
 use cute_rs::markers::{C, Composed, CpAsync, L, LeadingDim, RowMajor, Swizzle, T2};
-use cute_rs::{AccC, FragA, FragBPair, GmemMatrix, SmemTile, copy_g2s};
+use cute_rs::{FragmentA, FragmentBPair, FragmentC, GmemMatrix, SmemTile, copy_g2s};
 
 /// Swizzled 64-by-64 FP16 layout shared by Q, K, V, and the output staging tile.
 type SharedLayout = Composed<Swizzle<3, 3, 3>, 0, RowMajor<64, 64>>;
@@ -35,34 +35,36 @@ macro_rules! static_for {
 }
 
 /// The eight 16x8 accumulators making one warp's 16x64 tile.
-struct WarpTile(#[doc = "Eight adjacent 16-by-8 FP32 accumulator fragments."] [AccC; 8]);
+struct WarpTile(#[doc = "Eight adjacent 16-by-8 FP32 accumulator fragments."] [FragmentC; 8]);
 
 impl WarpTile {
     /// Create an all-zero warp accumulator tile.
     #[inline(always)]
     fn zero() -> Self {
-        Self([AccC::ZERO; 8])
+        Self([FragmentC::ZERO; 8])
     }
 
-    /// Accumulate one K16 step across all eight column fragments.
+    /// Accumulate one K16 step across all eight column fragments, one atom call each.
     ///
     /// # Safety
     /// All warp lanes must participate with matching, valid operand fragments.
     #[inline(always)]
-    unsafe fn mma(&mut self, a: FragA, b: [FragBPair; 4]) {
+    unsafe fn gemm(&mut self, a: FragmentA, b: [FragmentBPair; 4]) {
         static_for!(PAIR in [0, 1, 2, 3] {
-            self.0[2 * PAIR] = unsafe { self.0[2 * PAIR].mma(a, b[PAIR].get::<0>()) };
-            self.0[2 * PAIR + 1] = unsafe { self.0[2 * PAIR + 1].mma(a, b[PAIR].get::<1>()) };
+            self.0[2 * PAIR] =
+                unsafe { self.0[2 * PAIR].mma_atom_call(a, b[PAIR].get::<0>()) };
+            self.0[2 * PAIR + 1] =
+                unsafe { self.0[2 * PAIR + 1].mma_atom_call(a, b[PAIR].get::<1>()) };
         });
     }
 
     /// Retile two adjacent C fragments into one A fragment, entirely in registers.
     #[inline(always)]
-    fn probability<const K: usize>(&self) -> FragA {
+    fn probability<const K: usize>(&self) -> FragmentA {
         const { assert!(K < 4) };
         let left = self.0[2 * K].0;
         let right = self.0[2 * K + 1].0;
-        FragA([
+        FragmentA([
             pack(left[0], left[1]),
             pack(left[2], left[3]),
             pack(right[0], right[1]),
@@ -72,8 +74,8 @@ impl WarpTile {
 
     /// Narrow the whole probability tile before loading the value fragments.
     #[inline(always)]
-    fn probabilities(&self) -> [FragA; 4] {
-        let mut fragments = [FragA([0; 4]); 4];
+    fn probabilities(&self) -> [FragmentA; 4] {
+        let mut fragments = [FragmentA([0; 4]); 4];
         static_for!(K in [0, 1, 2, 3] {
             fragments[K] = self.probability::<K>();
         });
@@ -264,8 +266,8 @@ unsafe fn stage_full(
 /// # Safety
 /// The shared tile must be ready, and every warp lane must participate with its own lane ID.
 #[inline(always)]
-unsafe fn load_k<const K: usize>(src: &SharedTile, lane: u32) -> [FragBPair; 4] {
-    let mut fragments = [FragBPair([0; 4]); 4];
+unsafe fn load_k<const K: usize>(src: &SharedTile, lane: u32) -> [FragmentBPair; 4] {
+    let mut fragments = [FragmentBPair([0; 4]); 4];
     static_for!(N in [0, 1, 2, 3] {
         fragments[N] = unsafe { cute_rs::load_matrix_b_pair_k_major(src, (N, K), lane) };
     });
@@ -277,8 +279,8 @@ unsafe fn load_k<const K: usize>(src: &SharedTile, lane: u32) -> [FragBPair; 4] 
 /// # Safety
 /// The shared tile must be ready, and every warp lane must participate with its own lane ID.
 #[inline(always)]
-unsafe fn load_v<const K: usize>(src: &SharedTile, lane: u32) -> [FragBPair; 4] {
-    let mut fragments = [FragBPair([0; 4]); 4];
+unsafe fn load_v<const K: usize>(src: &SharedTile, lane: u32) -> [FragmentBPair; 4] {
+    let mut fragments = [FragmentBPair([0; 4]); 4];
     static_for!(N in [0, 1, 2, 3] {
         fragments[N] = unsafe { cute_rs::load_matrix_b_pair(src, (K, N), lane) };
     });
@@ -330,11 +332,11 @@ impl TilePipeline {
             static_for!(K in [0, 1, 2] {
                 let next_a = cute_rs::load_matrix_a(&self.q, (warp_id, K + 1), lane);
                 let next_b = load_k::<{ K + 1 }>(&self.k, lane);
-                scores.mma(a, b);
+                scores.gemm(a, b);
                 a = next_a;
                 b = next_b;
             });
-            scores.mma(a, b);
+            scores.gemm(a, b);
             async_copy::cp_async_wait_group::<0>();
             mbarrier::barrier_cta_sync(1, 128);
             if key_block > 0 {
@@ -346,10 +348,10 @@ impl TilePipeline {
             let mut values = load_v::<0>(&self.v, lane);
             static_for!(K in [0, 1, 2] {
                 let next = load_v::<{ K + 1 }>(&self.v, lane);
-                output.mma(probabilities[K], values);
+                output.gemm(probabilities[K], values);
                 values = next;
             });
-            output.mma(probabilities[3], values);
+            output.gemm(probabilities[3], values);
         }
     }
 }

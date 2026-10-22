@@ -10,7 +10,7 @@ use super::*;
 use crate::block_scaled::{Mkl, Nkl, ScalePack4, SharedScaleAtom, Sm120ScaleAtom};
 use crate::copy::tiled::SharedTensor;
 use crate::epilogue::sm120::Sm120EpilogueWarp128x128;
-use crate::mma::{AccC, FragA};
+use crate::mma::{FragmentA, FragmentC};
 use crate::numeric::Mxf4E2M1;
 use core::marker::PhantomData;
 
@@ -26,7 +26,7 @@ pub const fn tiled_mma_slice<SharedLayout>(lane: u32) -> Mxfp4TiledMma<SharedLay
 /// Compiler boundary filling all 16 per-lane accumulator fragments with one FP32 value.
 #[inline(never)]
 pub const fn fragment_fill(fill: f32) -> Mxf4AccumulatorTile2x8 {
-    let cell = AccC([fill; 4]);
+    let cell = FragmentC([fill; 4]);
     Mxf4AccumulatorTile2x8 {
         c00: cell,
         c01: cell,
@@ -143,7 +143,7 @@ pub unsafe fn mma_load_a<SharedLayout>(
     source: &SharedTensor<Mxf4E2M1, f16, SharedLayout, Mkl>,
     warp_m: usize,
     k_half: usize,
-) -> (FragA, FragA) {
+) -> (FragmentA, FragmentA) {
     unsafe {
         (
             mma.load_a(source, (a_atom_128(warp_m, 0), k_half)),
@@ -177,7 +177,7 @@ pub const fn mma_partition_b<'a, SharedLayout>(
 pub unsafe fn tiled_gemm<SharedLayout>(
     accumulators: &mut Mxf4AccumulatorTile2x8,
     mma: &Mxfp4TiledMma<SharedLayout>,
-    a: (FragA, FragA),
+    a: (FragmentA, FragmentA),
     b: Mxf4BTileK64<'_, SharedLayout>,
     scales: Mxf4ScalePairs128,
 ) {

@@ -23,19 +23,16 @@ pub type CLayout = L<T2<Threads, T2<C<2>, C<2>>>, T2<T2<C<2>, C<8>>, T2<C<1>, C<
 
 /// This lane's BF16 A registers, whose layout is established by its partition.
 #[derive(Clone, Copy)]
-pub struct AFragment(ctm_rs::mma::Bf16A);
+pub struct FragmentA(ctm_rs::mma::Bf16A);
 /// This lane's BF16 B registers, distinct from an A operand.
 #[derive(Clone, Copy)]
-pub struct BFragment(ctm_rs::mma::Bf16B);
+pub struct FragmentB(ctm_rs::mma::Bf16B);
 /// This lane's FP32 accumulator in the atom's C layout.
 #[derive(Clone, Copy)]
-pub struct MmaAccumulator(ctm_rs::mma::Accumulator16x8);
-impl MmaAccumulator {
-    /// Initialize one warp product's accumulator to positive FP32 zero.
-    #[inline(always)]
-    pub const fn zero() -> Self {
-        Self(ctm_rs::mma::Accumulator16x8::zero())
-    }
+pub struct FragmentC(ctm_rs::mma::Accumulator16x8);
+impl FragmentC {
+    /// Positive FP32 zero in every register, for starting one warp product.
+    pub const ZERO: Self = Self(ctm_rs::mma::Accumulator16x8::zero());
 }
 
 /// One lane's handle to the BF16 16-by-8-by-16 matrix operation.
@@ -72,8 +69,8 @@ impl Bf16Mma16x8x16 {
     /// lane handles and A/B/C fragments of the same logical warp product.
     #[must_use]
     #[inline(always)]
-    pub unsafe fn mma(self, c: MmaAccumulator, a: AFragment, b: BFragment) -> MmaAccumulator {
-        MmaAccumulator(unsafe { ctm_rs::mma::mma_bf16(c.0, a.0, b.0) })
+    pub unsafe fn mma_atom_call(self, c: FragmentC, a: FragmentA, b: FragmentB) -> FragmentC {
+        FragmentC(unsafe { ctm_rs::mma::mma_bf16(c.0, a.0, b.0) })
     }
 }
 /// A lane's immutable partition of the A operand.
@@ -222,14 +219,14 @@ impl APartition {
     /// Load this lane's eight BF16 elements, preserving low/high pair order.
     /// The callback receives local `(M,K)` coordinates in register order.
     #[inline(always)]
-    pub fn load_with(self, mut read: impl FnMut(usize, usize) -> Bf16) -> AFragment {
+    pub fn load_with(self, mut read: impl FnMut(usize, usize) -> Bf16) -> FragmentA {
         let mut pair = |i| {
             let (r, c) = coordinate::<ALayout, 16>(self.lane, i);
             let low = read(r, c).to_bits();
             let (r, c) = coordinate::<ALayout, 16>(self.lane, i + 1);
             u32::from(low) | (u32::from(read(r, c).to_bits()) << 16)
         };
-        AFragment(ctm_rs::mma::Bf16A::from_registers([
+        FragmentA(ctm_rs::mma::Bf16A::from_registers([
             pair(0),
             pair(2),
             pair(4),
@@ -245,7 +242,7 @@ impl APartition {
     /// width passed to `PackedDecode::new` or `PackedDecode::with_validated`.
     /// Operand data must be ready to read.
     #[inline(always)]
-    pub unsafe fn load_decode_packed(self, source: &PackedDecode<'_>, k: usize) -> AFragment {
+    pub unsafe fn load_decode_packed(self, source: &PackedDecode<'_>, k: usize) -> FragmentA {
         let (row, low_k) = coordinate::<ALayout, 16>(self.lane, 0);
         let (_, high_k) = coordinate::<ALayout, 16>(self.lane, 4);
         let physical_row = row & (source.rows - 1);
@@ -263,7 +260,7 @@ impl APartition {
                     .cast(),
             )
         };
-        AFragment(ctm_rs::mma::Bf16A::from_registers([
+        FragmentA(ctm_rs::mma::Bf16A::from_registers([
             low & mask,
             0,
             high & mask,
@@ -274,14 +271,14 @@ impl APartition {
 impl BPartition {
     /// Load this lane's four BF16 elements from local stored `(N,K)` coordinates.
     #[inline(always)]
-    pub fn load_with(self, mut read: impl FnMut(usize, usize) -> Bf16) -> BFragment {
+    pub fn load_with(self, mut read: impl FnMut(usize, usize) -> Bf16) -> FragmentB {
         let mut pair = |i| {
             let (r, c) = coordinate::<BLayout, 16>(self.lane, i);
             let low = read(r, c).to_bits();
             let (r, c) = coordinate::<BLayout, 16>(self.lane, i + 1);
             u32::from(low) | (u32::from(read(r, c).to_bits()) << 16)
         };
-        BFragment(ctm_rs::mma::Bf16B::from_registers([pair(0), pair(2)]))
+        FragmentB(ctm_rs::mma::Bf16B::from_registers([pair(0), pair(2)]))
     }
 
     /// Load one complete eight-output decode weight tile with packed reads.
@@ -297,7 +294,7 @@ impl BPartition {
         source: &PackedDecode<'_>,
         n: usize,
         k: usize,
-    ) -> BFragment {
+    ) -> FragmentB {
         let (row, low_k) = coordinate::<BLayout, 16>(self.lane, 0);
         let (_, high_k) = coordinate::<BLayout, 16>(self.lane, 2);
         let base = source.weight;
@@ -313,14 +310,14 @@ impl BPartition {
                     .cast(),
             )
         };
-        BFragment(ctm_rs::mma::Bf16B::from_registers([low, high]))
+        FragmentB(ctm_rs::mma::Bf16B::from_registers([low, high]))
     }
 }
 impl CPartition {
     /// Visit each accumulator once in register order with its local `(M,N)`.
     /// The callback applies the explicit epilogue and output predication.
     #[inline(always)]
-    pub fn store_with(self, accumulator: MmaAccumulator, mut write: impl FnMut(usize, usize, f32)) {
+    pub fn store_with(self, accumulator: FragmentC, mut write: impl FnMut(usize, usize, f32)) {
         let values = accumulator.0.registers();
         let mut i = 0;
         while i < 4 {
@@ -334,7 +331,7 @@ impl CPartition {
     #[inline(always)]
     pub fn store_decode_with(
         self,
-        accumulator: MmaAccumulator,
+        accumulator: FragmentC,
         source: &PackedDecode<'_>,
         mut write: impl FnMut(usize, usize, f32),
     ) {
@@ -375,7 +372,7 @@ mod tests {
     #[test]
     fn result_partition_preserves_values_including_special_bits() {
         let bits = [0x8000_0000, 0x7fc1_2345, 0x0000_0001, 0xff80_0000];
-        let acc = MmaAccumulator(ctm_rs::mma::Accumulator16x8::from_registers(
+        let acc = FragmentC(ctm_rs::mma::Accumulator16x8::from_registers(
             bits.map(f32::from_bits),
         ));
         let mut result = [(0, 0, 0); 4];

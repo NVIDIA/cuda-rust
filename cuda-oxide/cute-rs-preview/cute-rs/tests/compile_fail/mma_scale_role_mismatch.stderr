@@ -3,10 +3,10 @@ error[E0308]: arguments to this method are incorrect
    |
 19 |         mma.gemm(
    |             ^^^^
-20 |             FragA([0; 4]),
+20 |             FragmentA([0; 4]),
 21 |             vector.load_scale_pair(0, 0),
    |             ---------------------------- expected `MmaScalePair<Mkl>`, found `MmaScalePair<Nkl>`
-22 |             FragB([0; 2]),
+22 |             FragmentB([0; 2]),
 23 |             matrix.load_scale_pair(0, 0),
    |             ---------------------------- expected `MmaScalePair<Nkl>`, found `MmaScalePair<Mkl>`
    |
@@ -18,10 +18,10 @@ note: method defined here
 help: swap these arguments
    |
 19 ~         mma.gemm(
-20 +             FragA([0; 4]),
+20 +             FragmentA([0; 4]),
 21 +             matrix.load_scale_pair(0, 0),
-22 +             FragB([0; 2]),
+22 +             FragmentB([0; 2]),
 23 +             vector.load_scale_pair(0, 0),
-24 +             AccC::ZERO,
+24 +             FragmentC::ZERO,
 25 +         )
    |

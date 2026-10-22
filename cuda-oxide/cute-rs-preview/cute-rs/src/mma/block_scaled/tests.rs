@@ -7,14 +7,14 @@
 use super::tiled::{a_atom_128, b_pair_atom_128};
 use super::{Mxf4AccumulatorTile2x8, Mxf4BTileK64, Mxfp4TiledMma};
 use crate::block_scaled::{Mkl, Nkl, SharedScaleAtom, Sm120ScaleAtom};
-use crate::mma::AccC;
+use crate::mma::FragmentC;
 
 /// Accumulator and lazy B views must retain the intended register and pointer carrier sizes.
 #[test]
 fn accumulator_and_lazy_b_keep_their_physical_carriers_explicit() {
     assert_eq!(
         core::mem::size_of::<Mxf4AccumulatorTile2x8>(),
-        16 * core::mem::size_of::<AccC>()
+        16 * core::mem::size_of::<FragmentC>()
     );
     assert_eq!(
         core::mem::size_of::<Mxf4BTileK64<'static, ()>>(),

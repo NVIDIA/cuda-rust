@@ -17,7 +17,7 @@ use ctm_rs::{
         self,
         descriptors::*,
         mma::{self, collector_a},
-        tmem::{ColumnOffset, TmemF32},
+        tmem::{self, ColumnOffset, TmemF32},
     },
     thread,
     tma::{self, Coordinates2D, TensorMap},
@@ -189,7 +189,7 @@ unsafe fn epilogue(acc: &Accumulator, output: *mut f16, tid: u32, subtile: u32, 
     unsafe {
         let read = checked(acc.read_32x32((tid / 32) * 32, ColumnOffset::new(subtile * 32)));
         let pending = mma::load_32x32b_x32(&read);
-        mma::load_wait();
+        tmem::load_wait();
         // By-value, constant-index extraction keeps the hardware result order.
         let values = pending.decode_f32().to_array();
         store_chunk::<0>(output, values, tid, bias);

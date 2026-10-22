@@ -23,9 +23,7 @@ use cute_rs::Bf16;
 #[cuda_module]
 pub mod kernels {
     use super::*;
-    use cute_rs::mma::bf16::{
-        APartition, BPartition, Bf16Mma16x8x16, MmaAccumulator, PackedDecode,
-    };
+    use cute_rs::mma::bf16::{APartition, BPartition, Bf16Mma16x8x16, FragmentC, PackedDecode};
     use cute_rs::tensor::partition::StridedTensorMut;
     use cute_rs::{RegisterTile, Tensor};
 
@@ -272,8 +270,8 @@ pub mod kernels {
         source: &PackedDecode<'_>,
         n: usize,
         k: usize,
-        accumulator: MmaAccumulator,
-    ) -> MmaAccumulator {
+        accumulator: FragmentC,
+    ) -> FragmentC {
         unsafe {
             let operands = RegisterTile::<_, STEPS>::from_fn(|step| {
                 (
@@ -281,7 +279,7 @@ pub mod kernels {
                     b.load_decode_packed(source, n, k + step * 16),
                 )
             });
-            operands.fold(accumulator, |acc, (av, bv)| mma.mma(acc, av, bv))
+            operands.fold(accumulator, |acc, (av, bv)| mma.mma_atom_call(acc, av, bv))
         }
     }
 
@@ -290,7 +288,7 @@ pub mod kernels {
     /// Register order is the C partition's; slice zero lands exactly on the
     /// zero totals and every later slice rounds once per register.
     #[inline(always)]
-    fn add_slice(mma: Bf16Mma16x8x16, total: [f32; 4], accumulator: MmaAccumulator) -> [f32; 4] {
+    fn add_slice(mma: Bf16Mma16x8x16, total: [f32; 4], accumulator: FragmentC) -> [f32; 4] {
         let (mut first, mut second, mut third, mut fourth) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
         let mut index = 0;
         mma.partition_c().store_with(accumulator, |_, _, value| {
@@ -350,7 +348,7 @@ pub mod kernels {
             // Each slice restarts from zero like a split-K partition. Register
             // batches never cross a slice boundary and only overlap loads; every
             // MMA still sees the preceding accumulator of its own chain.
-            let mut accumulator = MmaAccumulator::zero();
+            let mut accumulator = FragmentC::ZERO;
             let mut k = start;
             while k < end {
                 let remaining = end - k;
@@ -383,7 +381,7 @@ pub mod kernels {
         // The decode epilogue visits the valid rows in the same register order
         // the totals were gathered in; the zero accumulator only drives it.
         mma.partition_c()
-            .store_decode_with(MmaAccumulator::zero(), source, |row, col, _| {
+            .store_decode_with(FragmentC::ZERO, source, |row, col, _| {
                 let value = if HAS_BIAS {
                     total[index] + bias[n + col].to_f32()
                 } else {

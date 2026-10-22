@@ -89,23 +89,19 @@ pub struct TmemRaw32(
 ///
 /// # Safety
 /// All lanes must issue uniformly with valid addresses and completed producers.
-/// Keep the allocation live and call `load_wait` before consuming the registers.
+/// Keep the allocation live and call [`super::tmem::load_wait`] before
+/// consuming the registers.
 #[inline(always)]
 pub unsafe fn load_32x32b_x32(
     src: &impl TmemOperand<Group = CtaGroup2, Format = TmemReadF32<32, 32>>,
 ) -> TmemRaw32 {
     TmemRaw32(unsafe { cuda_device::tcgen05::tcgen05_ld_32x32b_x32_raw(src.raw_address()) })
 }
-/// Wait for this thread's outstanding TMEM loads.
-#[inline(always)]
-pub fn load_wait() {
-    cuda_device::tcgen05::tcgen05_load_wait()
-}
 impl TmemRaw32 {
     /// Interpret completed load registers in their original order.
     ///
     /// # Safety
-    /// The issuing thread must execute `load_wait` after this load and before
+    /// The issuing thread must execute [`super::tmem::load_wait`] after this load and before
     /// decoding. The wrapper does not model the hardware scoreboard.
     #[inline(always)]
     pub unsafe fn decode_f32(self) -> CuSimd<f32, 32> {

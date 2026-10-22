@@ -30,7 +30,7 @@
 //!                     each stage is 17,408 bytes from four TMA loads
 //!   warps 0..7: wait FULL, then consume two packed K64 steps
 //!                accumulators.accumulate_k64(...)
-//!   typed epilogue: AccC -> f16x2 -> stmatrix -> shared
+//!   typed epilogue: FragmentC -> f16x2 -> stmatrix -> shared
 //!   warp 0, lane 0: two 128x64 TMA stores -> global C
 //! }
 //! producer/consumer slot + phase survive between output tiles

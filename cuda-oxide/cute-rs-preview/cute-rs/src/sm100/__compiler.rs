@@ -11,7 +11,8 @@ use cuda_device::barrier::Barrier;
 /// Device-only marker allocating COLUMNS of group-two tensor memory.
 ///
 /// # Safety
-/// The allocating warps and shared address slot must satisfy Sm100Tmem::alloc.
+/// The allocating warps and shared address slot must satisfy
+/// [`Sm100Tmem::alloc`](super::Sm100Tmem::alloc).
 #[inline(never)]
 pub unsafe fn sm100_tmem_alloc<const COLUMNS: u32>(token: *mut u32) {
     let _ = token;
@@ -20,7 +21,8 @@ pub unsafe fn sm100_tmem_alloc<const COLUMNS: u32>(token: *mut u32) {
 /// Device-only marker releasing a completed group-two tensor-memory allocation.
 ///
 /// # Safety
-/// Both allocating warps must rendezvous after every asynchronous user has finished.
+/// Both allocating warps must rendezvous after every asynchronous user has
+/// finished, as [`Sm100Tmem::dealloc`](super::Sm100Tmem::dealloc) requires.
 #[inline(never)]
 pub unsafe fn sm100_tmem_dealloc<const COLUMNS: u32>(tmem: u32) {
     let _ = tmem;

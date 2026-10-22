@@ -5,12 +5,10 @@
 
 //! Output staging operations grouped by architecture.
 //!
-//! SM120 staging types and helpers remain reexported here for existing users.
+//! The SM120 staging types and helpers are also exported here. The compiler
+//! hooks have one path, `sm120::__compiler`.
 
 pub mod sm120;
-
-#[doc(hidden)]
-pub use sm120::__compiler;
 
 pub use sm120::{
     SM120_EPILOGUE_BYTES, SM120_EPILOGUE_COLS, SM120_EPILOGUE_ELEMENTS, SM120_EPILOGUE_HALF_BYTES,

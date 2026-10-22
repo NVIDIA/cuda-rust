@@ -697,7 +697,7 @@ mod tests {
         }
         // Paths that are not definition paths never match: the root module
         // aliases cute_rs once had (`tile`, `tma`, `block_scaled_mma`, retired),
-        // the `epilogue` parent re-export and crate-qualified forms.
+        // the retired `epilogue::__compiler` re-export and crate-qualified forms.
         for path in [
             "::tile::assume",
             "::tma::copy_tma_2d",

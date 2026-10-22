@@ -3494,7 +3494,7 @@ mod tests {
         // Import paths are never defining paths, so none of these may be
         // recognized: the root module aliases cute_rs once had (`tile`, `tma`,
         // `cooperative`, `tiled_copy`, `block_scaled_mma`, retired) and the
-        // `epilogue` parent re-export.
+        // retired `epilogue::__compiler` re-export.
         for path in [
             "::tile::load_tile",
             "::tma::copy_tma_2d",

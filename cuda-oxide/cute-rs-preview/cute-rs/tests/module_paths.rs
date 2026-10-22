@@ -12,16 +12,6 @@ macro_rules! same_type {
 }
 
 #[test]
-fn hidden_epilogue_hooks_keep_their_import_path() {
-    fn same_item<T>(_: T, _: T) {}
-
-    same_item(
-        cute_rs::epilogue::__compiler::epilogue_sync_reusable,
-        cute_rs::epilogue::sm120::__compiler::epilogue_sync_reusable,
-    );
-}
-
-#[test]
 fn parent_module_re_exports_preserve_type_identity() {
     same_type!(
         cute_rs::epilogue::Sm120Epilogue128x128,

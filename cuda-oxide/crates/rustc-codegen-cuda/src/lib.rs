@@ -329,6 +329,7 @@ extern crate rustc_codegen_llvm;
 mod collector;
 mod device_codegen;
 mod generated_intrinsics;
+mod library;
 mod materialize;
 
 use rustc_codegen_ssa::traits::CodegenBackend;
@@ -610,7 +611,7 @@ impl CodegenBackend for CudaCodegenBackend {
 
             // Step 2: If device code exists, compile via cuda-oxide
             let _device_result = if has_device_code {
-                let materialization_request =
+                let mut materialization_request =
                     materialize::request_from_env().unwrap_or_else(|error| {
                         tcx.dcx().fatal(format!(
                             "[rustc_codegen_cuda] Invalid cubin materialization request: {error}"
@@ -627,10 +628,36 @@ impl CodegenBackend for CudaCodegenBackend {
                     self.config.verbose,
                 );
 
+                if !collection_result.library_calls.is_empty() && materialization_request.is_none()
+                {
+                    tcx.dcx().fatal(
+                        "native library calls require `cargo oxide build --materialize-cubin`",
+                    );
+                }
+                let mut libraries =
+                    library::finalize(tcx, &collection_result).unwrap_or_else(|error| {
+                        tcx.dcx().fatal(format!("native device library: {error}"))
+                    });
+                if self.config.verbose {
+                    for (kernel, plan) in &libraries.roots {
+                        eprintln!(
+                            "[library] {kernel}: exact block {:?}, scratch {} bytes aligned {}",
+                            plan.exact_block,
+                            plan.dynamic_shared_bytes,
+                            plan.dynamic_shared_alignment
+                        );
+                    }
+                }
+                // The provider returns owned bytes. No consumer-created artifact
+                // list or path is needed, and output-path checks still apply to
+                // the file inputs received from cargo-oxide.
+                if let Some(request) = &mut materialization_request {
+                    request.add_library_inputs(std::mem::take(&mut libraries.inputs));
+                }
+
                 materialize::validate_collection(
-                    materialization_request,
+                    materialization_request.as_ref(),
                     !collection_result.device_externs.is_empty(),
-                    collection_result.requires_ptx_bundle_merge,
                 )
                 .unwrap_or_else(|error| {
                     tcx.dcx().fatal(format!(
@@ -664,6 +691,16 @@ impl CodegenBackend for CudaCodegenBackend {
                         dump_mir_dialect: self.config.dump_mir_dialect,
                         dump_llvm_dialect: self.config.dump_llvm_dialect,
                     };
+                materialize::validate_output_paths(
+                    materialization_request.as_ref(),
+                    &device_config.output_dir,
+                    &device_config.output_name,
+                )
+                .unwrap_or_else(|error| {
+                    tcx.dcx().fatal(format!(
+                        "[rustc_codegen_cuda] Cannot write device artifacts: {error}"
+                    ))
+                });
 
                 // Run the cuda-oxide pipeline, catching backend panics and
                 // re-emitting them as a cuda-oxide diagnostic. A panic
@@ -700,6 +737,7 @@ impl CodegenBackend for CudaCodegenBackend {
                             tcx,
                             device_functions,
                             &collection_result.device_externs,
+                            &libraries,
                             &device_config,
                         )
                     }));
@@ -953,10 +991,11 @@ fn write_device_artifact_object(
         } else {
             oxide_artifacts::ArtifactEntryKind::DeviceFunction
         };
-        spec = spec.with_entry(oxide_artifacts::ArtifactEntrySpec::new(
-            &function.export_name,
-            kind,
-        ));
+        let mut entry = oxide_artifacts::ArtifactEntrySpec::new(&function.export_name, kind);
+        if let Some(facts) = result.kernel_launch_facts.get(&function.export_name) {
+            entry = entry.with_launch_facts(*facts);
+        }
+        spec = spec.with_entry(entry);
     }
 
     let blob = oxide_artifacts::build_artifact_blob(&spec)?;

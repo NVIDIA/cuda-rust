@@ -417,6 +417,15 @@ mod pointer_origin {
         }
     }
 
+    /// ABI RULE: the unsafe native library marker supplies scratch as `*mut u8`.
+    /// Only this declared call boundary turns its internal shared base into RawMut.
+    pub(crate) fn abi_library_scratch() -> PointerOrigin {
+        PointerOrigin {
+            kind: MirPointerKind::RawMut,
+            mutable: true,
+        }
+    }
+
     /// ABI RULE: `cuda_device::SharedPtr<T>` stores a `*mut SharedSlot<T>`, so
     /// the shared pointer it lowers to is always `RawMut`.
     pub(crate) fn abi_shared_ptr_field() -> PointerOrigin {

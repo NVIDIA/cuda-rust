@@ -151,6 +151,19 @@ pub(crate) enum SubstKind {
     Lifetime,
 }
 
+/// Report whether `path` is the defining path of a recognized cute-rs hook.
+///
+/// `path` is the crate-relative form rustc prints for a definition
+/// (`::copy::tma::copy_tma_2d`); the registry stores the same path with the
+/// `cute_rs` crate prefix. Re-export paths never match, so a caller that
+/// resolved an item through `cute_rs::tma::copy_tma_2d` must pass the
+/// defining path, not the import path.
+pub fn is_cute_compiler_hook_path(path: &str) -> bool {
+    CUTE_FNS
+        .iter()
+        .any(|spec| spec.canonical.strip_prefix("cute_rs") == Some(path))
+}
+
 /// A recognized function's definition path and expected generic arguments.
 /// Re-export paths do not appear here.
 pub(crate) struct CuteFnSpec {
@@ -661,6 +674,34 @@ mod tests {
             let spec = spec.unwrap_or_else(|| panic!("matrix load is not recognized: {path}"));
             assert_eq!(spec.func, expected, "{path}");
             assert_eq!(spec.schema, &[SubstKind::Type], "{path}");
+        }
+    }
+
+    /// Check that the crate-relative hook query accepts defining paths only.
+    #[test]
+    fn hook_paths_match_definitions_not_re_exports() {
+        for path in [
+            "::tensor::make_tensor_read",
+            "::copy::vector::assume_div",
+            "::copy::tma::copy_tma_2d",
+            "::copy::cooperative::copy_g2s",
+            "::mma::block_scaled::__compiler::tiled_gemm",
+            "::epilogue::sm120::__compiler::epilogue_half",
+            "::sm100::__compiler::sm100_tiled_mma",
+        ] {
+            assert!(is_cute_compiler_hook_path(path), "{path}");
+        }
+        // Compatibility re-exports (`cute_rs::tile`, `cute_rs::tma`,
+        // `cute_rs::block_scaled_mma`) and crate-qualified forms never match.
+        for path in [
+            "::tile::assume_div",
+            "::tma::copy_tma_2d",
+            "::block_scaled_mma::__compiler::tiled_gemm",
+            "::epilogue::__compiler::epilogue_half",
+            "cute_rs::copy::tma::copy_tma_2d",
+            "copy::tma::copy_tma_2d",
+        ] {
+            assert!(!is_cute_compiler_hook_path(path), "{path}");
         }
     }
 

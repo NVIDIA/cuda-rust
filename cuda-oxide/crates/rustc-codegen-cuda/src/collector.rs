@@ -126,7 +126,7 @@
 //! Kernel export names are separate — they use `compute_kernel_export_name`
 //! with human-readable base names derived from the `#[kernel]` macro.
 
-use mir_importer::is_panic_entry_path;
+use mir_importer::{is_cute_compiler_hook_path, is_panic_entry_path};
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_index::{Idx, bit_set::DenseBitSet};
 use rustc_middle::mir::visit::Visitor;
@@ -235,75 +235,6 @@ enum CollectDecision {
     Forbidden { crate_name: String, fn_path: String },
 }
 
-/// CuTe entry points whose bodies are compiler-owned stubs.
-///
-/// Ordinary `cute-rs` helpers are still collected. Only these exact defining
-/// paths are replaced with `cute.*` operations at their direct call sites.
-const CUTE_RECOGNITION_STUB_PATHS: &[&str] = &[
-    "::tensor::make_tensor_read",
-    "::tensor::make_tensor_write",
-    "::tensor::zipped_divide_read",
-    "::tensor::zipped_divide_write",
-    "::tensor::slice_read",
-    "::tensor::slice_write",
-    "::tensor::tensor_tile_is_full",
-    "::tensor::tensor_tile_base",
-    "::tensor::tensor_load_tile",
-    "::tensor::tensor_store_tile",
-    "::tensor::tensor_store_element_abs",
-    "::block_scaled::__compiler::block_scaled_make",
-    "::block_scaled::__compiler::block_scaled_thread_row",
-    "::block_scaled::__compiler::block_scaled_k_tile",
-    "::block_scaled::__compiler::block_scaled_load_k64",
-    "::block_scaled::__compiler::block_scaled_dot_k64",
-    "::block_scaled::__compiler::nvfp4_make",
-    "::block_scaled::__compiler::nvfp4_thread_row",
-    "::block_scaled::__compiler::nvfp4_k_tile",
-    "::block_scaled::__compiler::nvfp4_load_k64",
-    "::block_scaled::__compiler::nvfp4_dot_k64",
-    "::scheduler::__compiler::scheduler_new_1d",
-    "::scheduler::__compiler::scheduler_has_work",
-    "::scheduler::__compiler::scheduler_current_tile",
-    "::scheduler::__compiler::work_tile_coordinates",
-    "::scheduler::__compiler::scheduler_advance",
-    "::pipeline::__compiler::tma_load_pipeline_from_raw_base",
-    "::pipeline::__compiler::tma_load_pipeline_init",
-    "::pipeline::__compiler::pipeline_state_new_producer",
-    "::pipeline::__compiler::pipeline_state_new_consumer",
-    "::pipeline::__compiler::pipeline_state_slot",
-    "::pipeline::__compiler::pipeline_state_advance",
-    "::pipeline::__compiler::pipeline_producer_acquire",
-    "::pipeline::__compiler::pipeline_producer_expect_tx",
-    "::pipeline::__compiler::pipeline_consumer_wait",
-    "::pipeline::__compiler::pipeline_consumer_release",
-    "::pipeline::__compiler::pipeline_producer_tail",
-    "::tiled_copy::__compiler::shared_tensor_overlay",
-    "::block_scaled_mma::__compiler::tiled_mma_slice",
-    "::block_scaled_mma::__compiler::fragment_fill",
-    "::block_scaled_mma::__compiler::mma_load_scales",
-    "::block_scaled_mma::__compiler::fragment_slice_k",
-    "::block_scaled_mma::__compiler::mma_load_a",
-    "::block_scaled_mma::__compiler::mma_partition_b",
-    "::block_scaled_mma::__compiler::tiled_gemm",
-    "::epilogue::__compiler::epilogue_smem_overlay",
-    "::epilogue::__compiler::epilogue_warp_slice",
-    "::block_scaled_mma::__compiler::epilogue_store_fragment",
-    "::epilogue::__compiler::epilogue_sync_reusable",
-    "::epilogue::__compiler::epilogue_sync_ready_for_tma",
-    "::epilogue::__compiler::epilogue_half",
-    "::pipeline::__compiler::tma_store_producer_acquire",
-    "::pipeline::__compiler::tma_store_producer_commit",
-    "::pipeline::__compiler::tma_store_producer_tail",
-    "::tile::load_tile",
-    "::tile::store_tile",
-    "::tile::assume_div",
-    "::cooperative::copy_g2s",
-    "::mma::load_matrix_a",
-    "::mma::load_matrix_b",
-    "::tma::copy_tma_2d",
-    "::tma::copy_tma_s2g_2d",
-];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CuteImplOwner {
     Tensor,
@@ -333,7 +264,10 @@ fn is_cute_recognition_stub_identity(
     if !matches!(crate_name, "cute_rs" | "cute-rs") {
         return false;
     }
-    if CUTE_RECOGNITION_STUB_PATHS.contains(&definition_path) {
+    // Free functions and `__compiler` hooks: the importer's registry is the
+    // one list of recognized defining paths, so the collector asks it rather
+    // than keeping a copy that drifts when cute-rs moves a module.
+    if is_cute_compiler_hook_path(definition_path) {
         return true;
     }
 
@@ -350,13 +284,14 @@ fn is_cute_recognition_stub_identity(
         CuteImplOwner::TmaLoadPipeline
         | CuteImplOwner::PipelineState
         | CuteImplOwner::TmaStorePipeline => "pipeline",
-        CuteImplOwner::SharedTensor => "tiled_copy",
-        CuteImplOwner::Mxfp4TiledMma => "block_scaled_mma::tiled",
+        CuteImplOwner::SharedTensor => "copy::tiled",
+        CuteImplOwner::Mxfp4TiledMma => "mma::block_scaled::tiled",
         CuteImplOwner::Mxf4AccumulatorTile2x8 | CuteImplOwner::Mxf4ScaleTile128 => {
-            "block_scaled_mma::fragments"
+            "mma::block_scaled::fragments"
         }
-        CuteImplOwner::Sm120Epilogue128x128 => "epilogue",
-        CuteImplOwner::Sm120EpilogueWarp128x128 => "block_scaled_mma::epilogue",
+        CuteImplOwner::Sm120Epilogue128x128 | CuteImplOwner::Sm120EpilogueWarp128x128 => {
+            "epilogue::sm120"
+        }
     };
     let Some(rest) = definition_path
         .strip_prefix("::")
@@ -3436,49 +3371,76 @@ mod tests {
         );
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::tiled_copy::__compiler::shared_tensor_overlay",
+            "::copy::tiled::__compiler::shared_tensor_overlay",
             None,
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::tiled_copy::{impl#3}::from_raw_parts",
+            "::copy::tiled::{impl#3}::from_raw_parts",
             Some(CuteImplOwner::SharedTensor),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::block_scaled_mma::__compiler::tiled_gemm",
+            "::mma::block_scaled::__compiler::tiled_gemm",
             None,
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::block_scaled_mma::tiled::{impl#7}::load_a_128",
+            "::mma::block_scaled::tiled::{impl#7}::load_a_128",
             Some(CuteImplOwner::Mxfp4TiledMma),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::block_scaled_mma::fragments::{impl#4}::zero",
+            "::mma::block_scaled::fragments::{impl#4}::zero",
             Some(CuteImplOwner::Mxf4AccumulatorTile2x8),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::block_scaled_mma::fragments::{impl#5}::pairs_at_unchecked",
+            "::mma::block_scaled::fragments::{impl#5}::pairs_at_unchecked",
             Some(CuteImplOwner::Mxf4ScaleTile128),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::epilogue::__compiler::epilogue_sync_ready_for_tma",
+            "::epilogue::sm120::__compiler::epilogue_sync_ready_for_tma",
             None,
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::epilogue::{impl#2}::tma_half",
+            "::epilogue::sm120::{impl#2}::tma_half",
             Some(CuteImplOwner::Sm120Epilogue128x128),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::block_scaled_mma::epilogue::{impl#9}::store_tile",
+            "::epilogue::sm120::{impl#9}::store_tile",
             Some(CuteImplOwner::Sm120EpilogueWarp128x128),
         ));
+        // Free functions with host-panicking bodies are recognized through the
+        // importer registry at their defining paths.
+        for path in [
+            "::copy::vector::load_tile",
+            "::copy::vector::assume_div",
+            "::copy::cooperative::copy_g2s",
+            "::copy::tma::copy_tma_2d",
+            "::copy::tma::copy_tma_s2g_2d",
+            "::mma::load_matrix_a",
+            "::sm100::__compiler::sm100_tiled_mma",
+            "::attention::sm100::__compiler::tma_load",
+        ] {
+            assert!(is_cute_recognition_stub_identity("cute_rs", path, None), "{path}");
+        }
+        // The compatibility re-exports in cute_rs::lib (`tile`, `tma`,
+        // `cooperative`, `tiled_copy`, `block_scaled_mma`) are import paths,
+        // never defining paths, so they must not be recognized.
+        for path in [
+            "::tile::load_tile",
+            "::tma::copy_tma_2d",
+            "::cooperative::copy_g2s",
+            "::tiled_copy::__compiler::shared_tensor_overlay",
+            "::block_scaled_mma::__compiler::tiled_gemm",
+            "::epilogue::__compiler::epilogue_half",
+        ] {
+            assert!(!is_cute_recognition_stub_identity("cute_rs", path, None), "{path}");
+        }
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
             "::pipeline::__compiler::tma_store_producer_commit",
@@ -3518,12 +3480,12 @@ mod tests {
         ));
         assert!(!is_cute_recognition_stub_identity(
             "cute_rs",
-            "::block_scaled_mma::tiled::{impl#7}::load_b_pair",
+            "::mma::block_scaled::tiled::{impl#7}::load_b_pair",
             Some(CuteImplOwner::Mxfp4TiledMma),
         ));
         assert!(!is_cute_recognition_stub_identity(
             "cute_rs",
-            "::epilogue::{impl#3}::store_atom",
+            "::epilogue::sm120::{impl#3}::store_atom",
             Some(CuteImplOwner::Sm120EpilogueWarp128x128),
         ));
         assert!(!is_cute_recognition_stub_identity(
@@ -3547,20 +3509,21 @@ mod tests {
                 "k_tile",
             ),
             (
-                "block_scaled_mma::tiled",
+                "mma::block_scaled::tiled",
                 CuteImplOwner::Mxfp4TiledMma,
                 "load_a_128",
             ),
             (
-                "block_scaled_mma::fragments",
+                "mma::block_scaled::fragments",
                 CuteImplOwner::Mxf4AccumulatorTile2x8,
                 "zero",
             ),
             (
-                "block_scaled_mma::epilogue",
+                "epilogue::sm120",
                 CuteImplOwner::Sm120EpilogueWarp128x128,
                 "store_tile",
             ),
+            ("copy::tiled", CuteImplOwner::SharedTensor, "from_raw_parts"),
         ] {
             assert!(is_cute_recognition_stub_identity(
                 "cute_rs",

@@ -50,3 +50,4 @@ pub(crate) mod tensor;
 
 pub(crate) use dispatch::try_translate_cute_call;
 pub(super) use identity::function_item_requires_direct_dispatch;
+pub use registry::is_cute_compiler_hook_path;

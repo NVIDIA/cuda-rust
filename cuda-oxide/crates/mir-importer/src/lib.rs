@@ -110,6 +110,7 @@ pub use pipeline::{
     build_debug_global_variable_info, build_debug_shared_array_variable_info,
     device_static_global_key, run_pipeline,
 };
+pub use translator::cute::is_cute_compiler_hook_path;
 pub use translator::facts::KnownDefs;
 pub use translator::terminator::drop_glue::{drop_glue_is_noop, drop_instance_is_noop};
 pub use translator::terminator::is_panic_entry_path;

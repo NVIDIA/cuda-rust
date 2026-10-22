@@ -281,7 +281,7 @@ pub(super) fn classify_pipeline_method_call(
             Some(CuteFn::TmaLoadPipelineInit)
         }
         "new" if args.is_empty() && destination_state.is_some() => Some(CuteFn::PipelineStateNew),
-        "slot" if args.len() == 1 && receiver_state.is_some() => Some(CuteFn::PipelineStateSlot),
+        "index" if args.len() == 1 && receiver_state.is_some() => Some(CuteFn::PipelineStateSlot),
         "advance" if args.len() == 1 && receiver_state.is_some() => {
             Some(CuteFn::PipelineStateAdvance)
         }

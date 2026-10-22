@@ -260,6 +260,9 @@ impl<const STAGES: u32, Role: CursorRole> RingCursor<STAGES, Role> {
         }
     }
     /// Current stage index, always less than STAGES.
+    ///
+    /// It is a `u32` like this ring's stage count; the TMA load pipeline's
+    /// [`crate::PipelineState::index`] is a `usize`.
     #[inline(always)]
     pub const fn index(self) -> u32 {
         self.index

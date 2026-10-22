@@ -339,7 +339,7 @@ fn is_cute_recognition_stub_identity(
                 | "consumer_release"
                 | "producer_tail"
         ),
-        CuteImplOwner::PipelineState => matches!(method, "new" | "slot" | "advance"),
+        CuteImplOwner::PipelineState => matches!(method, "new" | "index" | "advance"),
         CuteImplOwner::SharedTensor => method == "from_raw_parts",
         CuteImplOwner::Mxf4TiledMma => matches!(
             method,

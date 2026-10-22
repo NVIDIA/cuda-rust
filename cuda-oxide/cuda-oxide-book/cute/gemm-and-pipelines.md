@@ -25,7 +25,7 @@ type SharedB  = SharedTensor<Mxf4E2M1, f16, SmemP, Nkl>;
 
 // Compute warps (0..7) wait on the TMA slot, load fragments + scales, and accumulate:
 pipeline.consumer_wait(&consumer);
-let slot = consumer.slot();
+let slot = consumer.index();
 let s_a = unsafe { SharedA::from_raw_parts(smem_base.add(slot * STAGE_BYTES).cast()) };
 let s_b = unsafe { SharedB::from_raw_parts(smem_base.add(slot * STAGE_BYTES + B_OFF).cast()) };
 

@@ -90,10 +90,13 @@ impl<const STAGES: usize> Default for PipelineState<Consumer, STAGES> {
 }
 
 impl<Role, const STAGES: usize> PipelineState<Role, STAGES> {
-    /// Current shared-buffer slot.
+    /// Current stage index in `0..STAGES`, CuTeDSL's `PipelineState.index`.
+    ///
+    /// It is a `usize` so it can scale a shared-buffer offset directly; the
+    /// SM100 attention ring's `RingCursor::index` is a `u32`.
     #[must_use]
     #[inline(always)]
-    pub fn slot(&self) -> usize {
+    pub fn index(&self) -> usize {
         __compiler::pipeline_state_slot(self)
     }
 
@@ -565,8 +568,8 @@ mod tests {
     fn producer_and_consumer_use_opposite_initial_phases() {
         let producer = PipelineState::<Producer, 3>::new();
         let consumer = PipelineState::<Consumer, 3>::new();
-        assert_eq!((producer.slot(), producer.phase()), (0, 1));
-        assert_eq!((consumer.slot(), consumer.phase()), (0, 0));
+        assert_eq!((producer.index(), producer.phase()), (0, 1));
+        assert_eq!((consumer.index(), consumer.phase()), (0, 0));
     }
 
     /// Advancing must toggle parity only when the stage index wraps.
@@ -574,8 +577,8 @@ mod tests {
     fn slot_wrap_flips_phase_once_per_ring() {
         let mut state = PipelineState::<Consumer, 3>::new();
         let expected = [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1), (0, 0)];
-        for (slot, phase) in expected {
-            assert_eq!((state.slot(), state.phase()), (slot, phase));
+        for (index, phase) in expected {
+            assert_eq!((state.index(), state.phase()), (index, phase));
             state.advance();
         }
     }

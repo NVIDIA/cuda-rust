@@ -231,7 +231,7 @@ mod kernels {
                 while stage < K_STAGES {
                     unsafe { pipeline.consumer_wait(&consumer_state) };
 
-                    let consumer_slot = consumer_state.slot();
+                    let consumer_slot = consumer_state.index();
                     let a_stage_ptr = unsafe { smem_a_ptr.add(consumer_slot * DATA_STAGE_BYTES) };
                     let b_stage_ptr = unsafe { smem_b_ptr.add(consumer_slot * DATA_STAGE_BYTES) };
                     let sfa_stage_ptr =
@@ -324,7 +324,7 @@ mod kernels {
                     let b_outer = batch * (N / BLOCK_N) + n_tile;
                     let mut stage = 0usize;
                     while stage < K_STAGES {
-                        let producer_slot = producer_state.slot();
+                        let producer_slot = producer_state.index();
                         let a_stage_ptr =
                             unsafe { smem_a_ptr.add(producer_slot * DATA_STAGE_BYTES) };
                         let b_stage_ptr =

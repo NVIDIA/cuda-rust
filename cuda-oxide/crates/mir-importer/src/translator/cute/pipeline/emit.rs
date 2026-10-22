@@ -10,7 +10,7 @@
 //!
 //! ```text
 //! make -> init
-//! state_new -> slot -> acquire/expect or wait/release -> advance -> tail
+//! state_new -> index -> acquire/expect or wait/release -> advance -> tail
 //! ```
 
 use crate::error::{TranslationErr, TranslationResult};

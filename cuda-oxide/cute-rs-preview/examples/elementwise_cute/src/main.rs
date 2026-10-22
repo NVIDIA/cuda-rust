@@ -43,13 +43,11 @@ mod kernels {
     #[kernel]
     pub fn add_f32(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
         let tid = thread::index_1d().get();
-        let g_a = cute_rs::Tensor::from_slice(a).zipped_divide::<TILE_F32>();
+        let t_a = cute_rs::Tensor::from_slice(a).local_tile::<TILE_F32>(tid);
         let g_b = cute_rs::Tensor::from_slice(b).zipped_divide::<TILE_F32>();
-        let g_c = cute_rs::TensorMut::from_disjoint_slice(&mut c).zipped_divide::<TILE_F32>();
+        let mut t_c = cute_rs::TensorMut::from_disjoint_slice(&mut c).local_tile::<TILE_F32>(tid);
 
-        let t_a = g_a.slice(tid);
         let t_b = g_b.slice(tid);
-        let mut t_c = g_c.slice(tid);
 
         if t_a.is_full() {
             let a_values = unsafe { t_a.load() };

@@ -65,6 +65,7 @@ fn root_exports_preserve_type_identity() {
     same_type!(cute_rs::Layout<(), ()>, cute_rs::markers::Layout<(), ()>);
     same_type!(cute_rs::ComposedLayout<(), 0, ()>, cute_rs::markers::ComposedLayout<(), 0, ()>);
     same_type!(cute_rs::CopyG2S<16>, cute_rs::markers::CopyG2S<16>);
+    same_type!(cute_rs::ThrCopy<(), (), (), ()>, cute_rs::copy::tiled::ThrCopy<(), (), (), ()>);
 }
 
 #[cfg(not(feature = "host"))]

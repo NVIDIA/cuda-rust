@@ -7,6 +7,8 @@
 //!
 //! This module carries the `cute.arch` names of CuTeDSL over the PTX-named
 //! ctm-rs layer, mirroring `cute.arch` over the NVVM primitives in CuTeDSL.
+//! One primitives-layer name lives here as well, [`fence_sync_restrict`],
+//! because its order is a type and the DSL has no `cute.arch` form of it.
 //! Every forwarder is an `#[inline(always)]` call to the existing ctm-rs
 //! primitive: it adds no instruction, no storage and no implicit election or
 //! synchronization, and cute-rs never reaches past ctm-rs to the raw device
@@ -341,7 +343,8 @@ mod sealed {
 /// marker type here, so the instruction is chosen when the kernel compiles.
 /// The trait is sealed and [`Acquire`] is its only implementor: the intrinsic
 /// catalog has no `fence.release.sync_restrict::shared::cta.cluster` entry
-/// yet, so the release order is not offered until that intrinsic exists.
+/// yet, so the release order is not offered until that entry is added to the
+/// catalog and bound in cuda-device.
 pub trait MemOrder: sealed::MemOrder {
     /// Issue the sync-restricted fence in this order at cluster scope.
     ///

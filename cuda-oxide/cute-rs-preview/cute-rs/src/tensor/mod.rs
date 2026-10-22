@@ -310,10 +310,14 @@ impl<T: Copy + Mul<Output = T>, const N: usize> Mul for RegisterTile<T, N> {
     }
 }
 
-/// Elementwise quotient of two equally sized register tiles (CuTeDSL `TensorSSA / TensorSSA`).
+/// Elementwise quotient of two equally sized register tiles (CuTeDSL `TensorSSA / TensorSSA`
+/// for floating-point lanes).
 ///
 /// Each lane divides with the element type's own `/`: integer lanes truncate
-/// and panic on a zero divisor like the scalar operator does.
+/// toward zero and panic on a zero divisor like the scalar operator does.
+/// CuTeDSL differs on integer vectors: its `/` converts both operands to f32
+/// and divides in floating point, and its `//` floors. Parity holds for
+/// floating-point lanes only.
 impl<T: Copy + Div<Output = T>, const N: usize> Div for RegisterTile<T, N> {
     type Output = Self;
 
@@ -329,6 +333,9 @@ impl<T: Copy + Div<Output = T>, const N: usize> Div for RegisterTile<T, N> {
 }
 
 /// Elementwise negation of a register tile (CuTeDSL `-TensorSSA`).
+///
+/// Each lane is negated with the element type's own `-`, so a `+0.0` lane
+/// becomes `-0.0`; CuTeDSL computes `0 - x`, which leaves that lane `+0.0`.
 impl<T: Copy + Neg<Output = T>, const N: usize> Neg for RegisterTile<T, N> {
     type Output = Self;
 

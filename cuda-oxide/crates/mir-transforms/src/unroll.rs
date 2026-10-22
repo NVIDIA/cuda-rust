@@ -116,7 +116,7 @@ fn unroll_kind(factor: u32) -> String {
 /// A hint op's source position as `file:line:column`, the form editors and
 /// terminals turn into a link. Returns `None` when the op does not carry a
 /// single position in a file.
-fn hint_location(ctx: &Context, op: Ptr<Operation>) -> Option<String> {
+pub(crate) fn hint_location(ctx: &Context, op: Ptr<Operation>) -> Option<String> {
     match op.deref(ctx).loc() {
         Location::SrcPos {
             src: Source::File(path),
@@ -1653,7 +1653,7 @@ fn append_cmp(
 }
 
 /// All function ops in the module (each `mir.func`).
-fn collect_functions(module: Ptr<Operation>, ctx: &Context) -> Vec<Ptr<Operation>> {
+pub(crate) fn collect_functions(module: Ptr<Operation>, ctx: &Context) -> Vec<Ptr<Operation>> {
     let mut out = Vec::new();
     let module_region = module.deref(ctx).get_region(0);
     let blocks: Vec<Ptr<BasicBlock>> = module_region.deref(ctx).iter(ctx).collect();

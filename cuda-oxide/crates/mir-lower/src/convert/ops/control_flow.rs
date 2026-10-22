@@ -185,6 +185,7 @@ pub(crate) fn convert_cond_branch(
 
     let llvm_br = llvm::CondBrOp::new(ctx, cond, true_block, true_args, false_block, false_args);
     crate::convert::preserve_location(ctx, op, llvm_br.get_operation());
+    crate::convert::preserve_loop_unroll_disable(ctx, op, llvm_br.get_operation());
     rewriter.insert_operation(ctx, llvm_br.get_operation());
     rewriter.erase_operation(ctx, op);
 
@@ -305,6 +306,7 @@ pub(crate) fn convert_goto(
 
     let llvm_br = llvm::BrOp::new(ctx, dest, final_args);
     crate::convert::preserve_location(ctx, op, llvm_br.get_operation());
+    crate::convert::preserve_loop_unroll_disable(ctx, op, llvm_br.get_operation());
     rewriter.insert_operation(ctx, llvm_br.get_operation());
     rewriter.erase_operation(ctx, op);
 

@@ -58,6 +58,7 @@ jobs:
       # it checkout stores a tarball. The same step installs python3 for
       # sync-example-locks.sh.
       - uses: $/.github/actions/setup-cuda-container
+
       - name: Clone repository
         uses: actions/checkout@v4
 

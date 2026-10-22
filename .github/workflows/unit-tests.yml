@@ -165,6 +165,7 @@ jobs:
       # $/ installs git before checkout. The CUDA image has no git; without
       # it checkout stores a tarball.
       - uses: $/.github/actions/setup-cuda-container
+
       - name: Clone repository
         uses: actions/checkout@v4
 

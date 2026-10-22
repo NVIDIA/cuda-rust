@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Prove prepared Block library calls and lower their finalized native ABI.
+//! Prove prepared Block and storage calls, place storage, and lower their finalized ABI.
 
 use dialect_mir::{
     attributes::MirCastKindAttr,
     library::{LibraryCallPlan, LibraryCallSite, LibraryRoleAttr},
     ops::{MirCastOp, MirLibraryOp, MirLibrarySourceOp, MirLibraryWriteCheckOp},
 };
+use pliron::linked_list::ContainsLinkedList;
 use pliron::{
     builtin::{
         attributes::{IntegerAttr, StringAttr},
@@ -37,10 +38,12 @@ mod context_plans;
 mod contexts;
 mod planned;
 mod stateful;
+mod storage;
 pub use admission::{admit_library_roots, capture_library_roles};
-pub use context_plans::{LibraryAssembly, RootedNativePlans, assemble_library_plans};
+pub use context_plans::{LibraryAssembly, assemble_library_plans};
 pub use contexts::{materialize_library_contexts, resolve_library_call_target};
-pub use stateful::{Validation, analyze_libraries};
+pub use stateful::analyze_libraries;
+pub use storage::{RootedNativePlans, Validation, allocate_library_storage};
 #[cfg(test)]
 mod admission_tests;
 
@@ -93,22 +96,76 @@ fn lower(
         op.deref(ctx).verify(ctx)?;
     }
     let mut sites = BTreeSet::new();
+    let mut boundaries = BTreeMap::new();
+    let mut natives = BTreeMap::new();
     for &op in &retained {
         op.deref(ctx).verify(ctx)?;
-        let site = (*MirLibraryOp::new(op).get_attr_site(ctx).unwrap()).clone();
-        if !sites.insert(site.clone()) {
+        let library = MirLibraryOp::new(op);
+        let site = (*library.get_attr_site(ctx).unwrap()).clone();
+        let role = *library.get_attr_role(ctx).unwrap();
+        if role == LibraryRoleAttr::NativeOperandBoundary {
+            if boundaries.insert(site.clone(), op).is_some() {
+                return pliron::verify_err!(
+                    op.deref(ctx).loc(),
+                    "duplicate native operand boundary"
+                );
+            }
+        } else if !sites.insert(site.clone()) {
             return pliron::verify_err!(
                 op.deref(ctx).loc(),
                 "duplicate retained library source site"
             );
         }
-        let Some(plan) = plans.get(&site) else {
+        if matches!(role, LibraryRoleAttr::Native(_)) {
+            natives.insert(site.clone(), op);
+        }
+        if planned::operation(role).is_some() {
+            let Some(plan) = plans.get(&site) else {
+                return pliron::verify_err!(
+                    op.deref(ctx).loc(),
+                    "retained native/storage operation has no finalized plan"
+                );
+            };
+            planned::validate(ctx, op, plan)?;
+        }
+    }
+    for (site, &native) in &natives {
+        let Some(&boundary) = boundaries.get(site) else {
             return pliron::verify_err!(
-                op.deref(ctx).loc(),
-                "retained native operation has no finalized plan"
+                native.deref(ctx).loc(),
+                "native operation is missing its operand boundary"
             );
         };
-        planned::validate(ctx, op, plan)?;
+        let same_callee = *MirLibraryOp::new(boundary)
+            .get_attr_library_callee(ctx)
+            .unwrap()
+            == *MirLibraryOp::new(native)
+                .get_attr_library_callee(ctx)
+                .unwrap();
+        let Some(block) = native.deref(ctx).get_parent_block() else {
+            return pliron::verify_err!(native.deref(ctx).loc(), "native operation is detached");
+        };
+        if !same_callee
+            || boundary.deref(ctx).get_parent_block() != Some(block)
+            || !block
+                .deref(ctx)
+                .iter(ctx)
+                .take_while(|&op| op != native)
+                .any(|op| op == boundary)
+        {
+            return pliron::verify_err!(
+                native.deref(ctx).loc(),
+                "native operand boundary must precede its matching call in the same block"
+            );
+        }
+    }
+    for (site, &boundary) in &boundaries {
+        if !natives.contains_key(site) {
+            return pliron::verify_err!(
+                boundary.deref(ctx).loc(),
+                "native operand boundary is missing its call"
+            );
+        }
     }
     if retained.is_empty() && events.is_empty() {
         return Ok(());
@@ -118,7 +175,17 @@ fn lower(
     analyses.retain_preserved(&invalidated);
     for op in retained {
         let site = (*MirLibraryOp::new(op).get_attr_site(ctx).unwrap()).clone();
-        planned::lower(ctx, op, &plans[&site]);
+        let role = *MirLibraryOp::new(op).get_attr_role(ctx).unwrap();
+        let result = if role == LibraryRoleAttr::NativeOperandBoundary {
+            planned::lower_boundary(ctx, op, &plans[&site]);
+            None
+        } else {
+            planned::lower(ctx, op, &plans[&site])
+        };
+        if let Some(result) = result {
+            let original = op.deref(ctx).get_result(0);
+            original.replace_all_uses_with(ctx, &result);
+        }
         Operation::erase(op, ctx);
     }
     for op in events {

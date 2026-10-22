@@ -891,6 +891,8 @@ fn library_root_arguments(
             let ty = rustc_internal::internal(tcx, body.locals()[arg].ty);
             if crate::library::resource_parameter(tcx, ty) {
                 Class::ResourceCandidate
+            } else if crate::library::storage_handle_type(tcx, ty) {
+                Class::StorageCandidate
             } else if matches!(
                 ty.kind(),
                 TyKind::Bool | TyKind::Int(_) | TyKind::Uint(_) | TyKind::Float(_)

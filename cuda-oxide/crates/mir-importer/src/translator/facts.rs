@@ -325,7 +325,9 @@ pub(crate) fn library_contains_resource(ty: rustc_public::ty::Ty) -> bool {
             if !visited.insert(ty) {
                 continue;
             }
-            if library_resource_parameter(tcx, ty) {
+            if library_resource_parameter(tcx, ty)
+                || matches!(ty.kind(), TyKind::Adt(def, _) if ["StorageDescriptor", "StorageReservation"].iter().any(|name| Some(def.did()) == library_device_type(tcx, "library", name)))
+            {
                 return true;
             }
             match ty.kind() {

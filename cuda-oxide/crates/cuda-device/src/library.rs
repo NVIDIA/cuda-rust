@@ -135,3 +135,139 @@ pub unsafe fn cuda_oxide_library_v1_246e25db_checked_block_resource_call<
 }
 
 pub use cuda_oxide_library_v1_246e25db_checked_block_resource_call as checked_block_resource_call_v1;
+
+/// Internal full-block scratch policy. Its private token has no address identity.
+/// Allocation and synchronization are finalized per rooted static use site.
+/// This descriptor is neither a Rust borrow of shared memory nor completion.
+pub struct StorageDescriptor<
+    const CAPACITY: usize = 0,
+    const ALIGN: usize = 0,
+    const AUTO_SYNC: bool = false,
+    const EXCLUSIVE: bool = false,
+> {
+    _token: u8,
+}
+
+/// A compiler-planned typed shared view. No Rust reference is created.
+/// Releasing the view does not synchronize or initialize its contents.
+#[repr(transparent)]
+pub struct StorageReservation<T, const N: usize> {
+    pointer: *mut T,
+}
+
+impl<T, const N: usize> StorageReservation<T, N> {
+    /// Return the raw shared pointer. Dereferencing it requires the caller to
+    /// prove initialization, bounds, aliasing and phase synchronization.
+    #[inline(always)]
+    pub fn as_mut_ptr(&self) -> *mut T {
+        self.pointer
+    }
+}
+
+/// Create a compiler-owned descriptor origin at this rooted static call site.
+/// Zero capacity/alignment mean inferred; explicit alignment is a power of two.
+///
+/// # Safety
+/// All block lanes must execute this marker with the same policies and origin.
+/// Only a supported compiler may interpret the returned descriptor.
+#[inline(never)]
+pub unsafe fn cuda_oxide_library_v1_246e25db_storage_new<
+    const CAPACITY: usize,
+    const ALIGN: usize,
+    const AUTO_SYNC: bool,
+    const EXCLUSIVE: bool,
+>() -> StorageDescriptor<CAPACITY, ALIGN, AUTO_SYNC, EXCLUSIVE> {
+    unsafe extern "C" {
+        fn cuda_oxide_storage_requires_supported_backend();
+    }
+    unsafe { cuda_oxide_storage_requires_supported_backend() }
+    StorageDescriptor { _token: 0 }
+}
+pub use cuda_oxide_library_v1_246e25db_storage_new as storage_new_v1;
+
+/// Consume a descriptor and select its policy before any use.
+///
+/// # Safety
+/// `Old` and `New` must be genuine storage descriptors. The compiler verifies
+/// their policies and preserves the original static identity.
+#[inline(never)]
+pub unsafe fn cuda_oxide_library_v1_246e25db_storage_reconfigure<Old, New>(_old: Old) -> New {
+    unsafe extern "C" {
+        fn cuda_oxide_storage_reconfigure_requires_supported_backend() -> !;
+    }
+    unsafe { cuda_oxide_storage_reconfigure_requires_supported_backend() }
+}
+pub use cuda_oxide_library_v1_246e25db_storage_reconfigure as storage_reconfigure_v1;
+
+/// Invoke a full-block native operation with planned storage and a memory witness.
+/// `storage` is `()` (managed reuse) or a mutable borrow of a genuine descriptor.
+///
+/// # Safety
+/// The obligations of [`checked_block_resource_call_v1`] apply. Provider scratch
+/// effects must fit its declared layout. Explicit manual storage requires a
+/// full-block barrier before reuse; automatic storage adds a trailing barrier.
+#[inline(never)]
+pub unsafe fn cuda_oxide_library_v1_246e25db_checked_block_storage_call<
+    T: Copy,
+    Registration: Fn() -> &'static str + Copy,
+    Memory,
+    Storage,
+    UniformArgs: Copy,
+    PayloadArgs: Copy,
+    const ITEMS_PER_THREAD: usize,
+    const WRITE: bool,
+>(
+    _registration: Registration,
+    _memory: Memory,
+    _storage: Storage,
+    _uniform: UniformArgs,
+    _payload: PayloadArgs,
+) {
+    unsafe extern "C" {
+        fn cuda_oxide_storage_requires_supported_backend();
+    }
+    unsafe { cuda_oxide_storage_requires_supported_backend() }
+}
+pub use cuda_oxide_library_v1_246e25db_checked_block_storage_call as checked_block_storage_call_v1;
+
+/// Reserve a typed view at a static use site; all lanes receive a raw address.
+///
+/// # Safety
+/// Descriptor and participation must be block-uniform. `T` must be a supported
+/// numeric scalar, `N` positive, and alignment zero or a power of two. The caller
+/// initializes and accesses shared elements without conflicting raw accesses.
+/// Automatic trailing synchronization is incompatible with reservations.
+#[inline(never)]
+pub unsafe fn cuda_oxide_library_v1_246e25db_storage_reserve<
+    T: Copy,
+    Descriptor,
+    const N: usize,
+    const ALIGN: usize,
+>(
+    _descriptor: &mut Descriptor,
+) -> StorageReservation<T, N> {
+    unsafe extern "C" {
+        fn cuda_oxide_storage_requires_supported_backend();
+    }
+    unsafe { cuda_oxide_storage_requires_supported_backend() }
+    StorageReservation {
+        pointer: core::ptr::null_mut(),
+    }
+}
+pub use cuda_oxide_library_v1_246e25db_storage_reserve as storage_reserve_v1;
+
+/// End a reservation view without completing pending shared or output accesses.
+///
+/// # Safety
+/// No subsequent raw access may use this view. Synchronize the full block after
+/// release and before any overlapping reuse. Dropping/forgetting is not release.
+#[inline(never)]
+pub unsafe fn cuda_oxide_library_v1_246e25db_storage_release<T: Copy, const N: usize>(
+    _reservation: StorageReservation<T, N>,
+) {
+    unsafe extern "C" {
+        fn cuda_oxide_storage_requires_supported_backend();
+    }
+    unsafe { cuda_oxide_storage_requires_supported_backend() }
+}
+pub use cuda_oxide_library_v1_246e25db_storage_release as storage_release_v1;

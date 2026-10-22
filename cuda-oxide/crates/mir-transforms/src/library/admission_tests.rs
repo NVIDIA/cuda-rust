@@ -6,7 +6,7 @@
 use super::admission::*;
 use super::context_plans::*;
 use super::contexts::*;
-use super::stateful::Validation;
+use super::storage::{RootedNativePlans, Validation};
 use dialect_mir::{
     library::{
         LibraryCallPlan, LibraryCallSite, LibraryFunctionSourceAttr,
@@ -324,12 +324,17 @@ fn contexts_preserve_original_calls_statics_and_cross_block_values() {
                     resource_witness: false,
                     scratch_bytes: 16,
                     scratch_alignment: 4,
+                    ..LibraryCallPlan::internal(
+                        dialect_mir::library::LibraryOperation::Native,
+                        "genuine_marker".into(),
+                    )
                 },
             )]),
         );
     }
     let validation = Validation {
         shapes: BTreeMap::from([("a".into(), [64, 1, 1]), ("b".into(), [33, 1, 1])]),
+        ..Default::default()
     };
     let assembly = assemble_library_plans(
         module,
@@ -337,6 +342,7 @@ fn contexts_preserve_original_calls_statics_and_cross_block_values() {
         &roots,
         &targets,
         &validation,
+        &BTreeMap::new(),
         &native_plans,
         BTreeMap::new(),
     )
@@ -365,6 +371,8 @@ fn contexts_preserve_original_calls_statics_and_cross_block_values() {
             &assembly.contexts,
             &symbols,
             &invalid,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             &assembly.redirects
         )
         .is_err()
@@ -378,6 +386,8 @@ fn contexts_preserve_original_calls_statics_and_cross_block_values() {
         &assembly.contexts,
         &symbols,
         &targets,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
         &assembly.redirects,
     )
     .unwrap();
@@ -417,6 +427,8 @@ fn contexts_preserve_original_calls_statics_and_cross_block_values() {
             "foreign",
             &symbols,
             &targets,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             &assembly.redirects
         )
         .unwrap(),

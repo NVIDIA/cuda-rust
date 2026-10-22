@@ -7,10 +7,11 @@
 
 use crate::library::{
     LibraryAccess, LibraryCallSite, LibraryNativeMetadata, LibraryRoleAttr, LibraryScalar,
-    LibraryWitness,
+    LibraryStorageArg, LibraryStoragePolicy, LibraryWitness,
 };
 use crate::types::{
-    MirDisjointSliceType, MirFP16Type, MirPointerKind, MirPtrType, MirSliceType, MirTupleType,
+    MirDisjointSliceType, MirFP16Type, MirPointerKind, MirPtrType, MirSliceType, MirStructType,
+    MirTupleType,
 };
 use pliron::{
     builtin::{
@@ -40,6 +41,22 @@ pub struct MirLibraryOp;
 impl MirLibraryOp {
     pub fn new(op: Ptr<Operation>) -> Self {
         Self { op }
+    }
+
+    /// Retain the position before evaluating a native marker's operands.
+    pub fn build(
+        ctx: &mut Context,
+        role: LibraryRoleAttr,
+        site: LibraryCallSite,
+        callee: String,
+    ) -> Ptr<Operation> {
+        assert_eq!(role, LibraryRoleAttr::NativeOperandBoundary);
+        let op = Operation::new(ctx, Self::get_concrete_op_info(), vec![], vec![], vec![], 0);
+        let library = Self::new(op);
+        library.set_attr_role(ctx, role);
+        library.set_attr_site(ctx, site);
+        library.set_attr_library_callee(ctx, StringAttr::new(callee));
+        op
     }
 
     pub fn build_call(
@@ -87,6 +104,18 @@ impl Verify for MirLibraryOp {
         }
         if op.num_regions() != 0 || op.get_num_successors() != 0 {
             return verify_err!(op.loc(), "mir.library has no regions or successors");
+        }
+        if *role == LibraryRoleAttr::NativeOperandBoundary {
+            if op.get_num_operands() != 0
+                || op.get_num_results() != 0
+                || self.get_attr_library_signature(ctx).is_some()
+            {
+                return verify_err!(
+                    op.loc(),
+                    "native operand boundary has no operands, results or signature"
+                );
+            }
+            return Ok(());
         }
         verify_call(ctx, self, *role)
     }
@@ -174,6 +203,51 @@ fn retained_type_matches(ctx: &Context, actual: TypeHandle, declared: TypeHandle
     false
 }
 
+fn policy_valid(policy: LibraryStoragePolicy) -> bool {
+    policy.alignment == 0 || policy.alignment.is_power_of_two()
+}
+
+fn descriptor_type(ctx: &Context, ty: TypeHandle) -> bool {
+    ty.deref(ctx)
+        .downcast_ref::<MirStructType>()
+        .is_some_and(|ty| {
+            ty.field_types.len() == 1
+                && scalar_type(ctx, ty.field_types[0]) == Some(LibraryScalar::Unsigned(8))
+        })
+}
+
+fn descriptor_borrow(ctx: &Context, ty: TypeHandle) -> bool {
+    ty.deref(ctx)
+        .downcast_ref::<MirPtrType>()
+        .is_some_and(|ptr| {
+            ptr.kind == MirPointerKind::UniqueRef
+                && ptr.is_mutable
+                && descriptor_type(ctx, ptr.pointee)
+        })
+}
+
+fn reservation_scalar(ctx: &Context, ty: TypeHandle) -> Option<LibraryScalar> {
+    let ty = ty.deref(ctx);
+    let ty = ty.downcast_ref::<MirStructType>()?;
+    let [field] = ty.field_types.as_slice() else {
+        return None;
+    };
+    let field = field.deref(ctx);
+    let pointer = field.downcast_ref::<MirPtrType>()?;
+    (pointer.kind == MirPointerKind::RawMut && pointer.is_mutable)
+        .then(|| scalar_type(ctx, pointer.pointee))
+        .flatten()
+}
+
+fn storage_arg_valid(ctx: &Context, storage: LibraryStorageArg, ty: TypeHandle) -> bool {
+    match storage {
+        LibraryStorageArg::Implicit => {
+            tuple_fields(ctx, ty).is_some_and(|fields| fields.is_empty())
+        }
+        LibraryStorageArg::Explicit(policy) => policy_valid(policy) && descriptor_borrow(ctx, ty),
+    }
+}
+
 fn witness_valid(
     ctx: &Context,
     witness: LibraryWitness,
@@ -239,6 +313,20 @@ fn native_valid(ctx: &Context, native: LibraryNativeMetadata, args: &[TypeHandle
             }
             (1, 2)
         }
+        N::CheckedBlockStorage {
+            access,
+            witness,
+            storage,
+            ..
+        } => {
+            if args.len() != 4
+                || !witness_valid(ctx, witness, access, args[0], spec.scalar)
+                || !storage_arg_valid(ctx, storage, args[1])
+            {
+                return false;
+            }
+            (2, 3)
+        }
     };
     let Some(uniform) = tuple_fields(ctx, args[uniform_index]) else {
         return false;
@@ -259,7 +347,7 @@ fn verify_call(ctx: &Context, call: &MirLibraryOp, role: LibraryRoleAttr) -> Res
     let Some(signature) = call.get_attr_library_signature(ctx) else {
         return verify_err!(
             op.loc(),
-            "native mir.library requires its runtime signature"
+            "native/storage mir.library requires its runtime signature"
         );
     };
     let signature = signature.get_type(ctx);
@@ -285,11 +373,43 @@ fn verify_call(ctx: &Context, call: &MirLibraryOp, role: LibraryRoleAttr) -> Res
             "mir.library operands/results do not match the retained runtime signature"
         );
     }
-    let LibraryRoleAttr::Native(native) = role;
-    if !results.is_empty() || !native_valid(ctx, native, &args) {
+    let valid = match role {
+        LibraryRoleAttr::Native(native) => results.is_empty() && native_valid(ctx, native, &args),
+        LibraryRoleAttr::StorageNew(policy) => {
+            policy_valid(policy)
+                && args.is_empty()
+                && results.len() == 1
+                && descriptor_type(ctx, results[0])
+        }
+        LibraryRoleAttr::StorageReconfigure { old, new } => {
+            policy_valid(old)
+                && policy_valid(new)
+                && args.len() == 1
+                && descriptor_type(ctx, args[0])
+                && results.len() == 1
+                && descriptor_type(ctx, results[0])
+        }
+        LibraryRoleAttr::StorageReserve { policy, layout } => {
+            policy_valid(policy)
+                && layout.count > 0
+                && layout.bytes > 0
+                && layout.alignment.is_power_of_two()
+                && valid_scalar(layout.scalar)
+                && layout.scalar != LibraryScalar::Float(16)
+                && args.len() == 1
+                && descriptor_borrow(ctx, args[0])
+                && results.len() == 1
+                && reservation_scalar(ctx, results[0]) == Some(layout.scalar)
+        }
+        LibraryRoleAttr::StorageRelease => {
+            args.len() == 1 && results.is_empty() && reservation_scalar(ctx, args[0]).is_some()
+        }
+        _ => false,
+    };
+    if !valid {
         return verify_err!(
             op.loc(),
-            "mir.library runtime signature or metadata does not match its native role"
+            "mir.library runtime signature or metadata does not match its native/storage role"
         );
     }
     Ok(())

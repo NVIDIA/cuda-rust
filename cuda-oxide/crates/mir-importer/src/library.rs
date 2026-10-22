@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Retain authenticated authenticated native operations in MIR.
+//! Retain authenticated native and storage operations in MIR.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -138,6 +138,12 @@ fn runtime_indices(role: LibraryRoleAttr) -> &'static [usize] {
         LibraryRoleAttr::Native(Native::Raw { .. }) => &[1],
         LibraryRoleAttr::Native(Native::CheckedBlock { .. }) => &[1, 2],
         LibraryRoleAttr::Native(Native::CheckedBlockResource { .. }) => &[1, 2, 3],
+        LibraryRoleAttr::Native(Native::CheckedBlockStorage { .. }) => &[1, 2, 3, 4],
+        LibraryRoleAttr::StorageNew(_) => &[],
+        LibraryRoleAttr::StorageReconfigure { .. }
+        | LibraryRoleAttr::StorageReserve { .. }
+        | LibraryRoleAttr::StorageRelease => &[0],
+        LibraryRoleAttr::NativeOperandBoundary => unreachable!("boundary is importer-owned"),
     }
 }
 
@@ -180,6 +186,20 @@ pub(crate) fn translate_call(
         );
     }
     let mut previous = previous;
+    if matches!(metadata.role, LibraryRoleAttr::Native(_)) {
+        // The finalized before-reuse barrier must precede source operand loads,
+        // not merely the eventual native call. This position has no completion
+        // authority of its own; the late emitter consumes it with the call plan.
+        let boundary = MirLibraryOp::build(
+            ctx,
+            LibraryRoleAttr::NativeOperandBoundary,
+            site.clone(),
+            metadata.marker.clone(),
+        );
+        boundary.deref_mut(ctx).set_loc(loc.clone());
+        helpers::insert_op(ctx, boundary, block, previous);
+        previous = Some(boundary);
+    }
     let indices = runtime_indices(metadata.role);
     let mut operands = Vec::with_capacity(indices.len());
     let mut declared = Vec::with_capacity(indices.len());

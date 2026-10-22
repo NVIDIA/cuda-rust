@@ -4,11 +4,12 @@
  */
 
 //! Bounded per-context collective proof over prepared MIR values and local slots.
+use super::storage::{Event, Plan, Policy, Site, Trace, Validation, planned_storage};
 use dialect_mir::{
     library::{
         self, LibraryAccess, LibraryCallKind, LibraryCallSite, LibraryNativeMetadata as Native,
         LibraryRoleAttr as Role, LibraryRootArgumentClass, LibrarySourceEffectKind as SourceKind,
-        LibraryWriteKind,
+        LibraryStorageArg, LibraryWriteKind,
     },
     ops::*,
     types::MirPtrType,
@@ -35,6 +36,8 @@ enum Fact {
     Uniform(Domain),
     Kernel(String, Domain),
     Resource(String, Domain),
+    Descriptor(Site, Policy),
+    Reservation(Site),
     Local(usize, Vec<usize>),
     Referent(Box<Fact>),
     Fields(Vec<Fact>),
@@ -52,6 +55,7 @@ impl Fact {
             Self::Uniform(scope) | Self::Kernel(_, scope) | Self::Resource(_, scope) => {
                 Some(*scope)
             }
+            Self::Descriptor(..) | Self::Reservation(..) => Some(Domain::BLOCK),
             _ => None,
         }
     }
@@ -135,7 +139,7 @@ impl Fact {
     }
     fn has_resource(&self) -> bool {
         match self {
-            Self::Resource(..) => true,
+            Self::Resource(..) | Self::Descriptor(..) | Self::Reservation(..) => true,
             Self::Referent(value) => value.has_resource(),
             Self::Fields(values) | Self::Enum { fields: values, .. } => {
                 values.iter().any(Self::has_resource)
@@ -155,7 +159,7 @@ impl Fact {
     }
     fn invalidate_borrow(&mut self) {
         match self {
-            Self::Resource(..) => {}
+            Self::Resource(..) | Self::Descriptor(..) | Self::Reservation(..) => {}
             Self::Referent(value) if value.has_resource() => value.invalidate_borrow(),
             Self::Fields(values) if values.iter().any(Self::has_resource) => {
                 values.iter_mut().for_each(Self::invalidate_borrow);
@@ -168,6 +172,20 @@ impl Fact {
                 fields.iter_mut().for_each(Self::invalidate_borrow);
             }
             _ => *self = Self::Varying,
+        }
+    }
+    fn descriptor(&self) -> Option<(Site, Policy)> {
+        match self {
+            Self::Descriptor(origin, policy) => Some((origin.clone(), *policy)),
+            Self::Referent(value) => value.descriptor(),
+            _ => None,
+        }
+    }
+    fn reservation(&self) -> Option<Site> {
+        match self {
+            Self::Reservation(site) => Some(site.clone()),
+            Self::Referent(value) => value.reservation(),
+            _ => None,
         }
     }
     fn resource_origin(&self) -> Option<&str> {
@@ -192,6 +210,7 @@ impl Fact {
             Self::Kernel(origin, scope) | Self::Resource(origin, scope) => {
                 Self::Kernel(format!("{origin}.{index}"), *scope)
             }
+            Self::Reservation(_) => Self::Uniform(Domain::BLOCK),
             Self::Uniform(scope) => Self::Uniform(*scope),
             _ => Self::Varying,
         }
@@ -209,12 +228,6 @@ impl Fact {
         }
     }
 }
-/// Successful pre-provider proof for the admitted complete Block roots.
-#[derive(Default)]
-pub struct Validation {
-    pub shapes: BTreeMap<String, [u32; 3]>,
-}
-
 // This prefix has only complete Block uniformity versus lane-varying values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Domain {
@@ -262,12 +275,35 @@ fn merge_pending(into: &mut Pending, other: &Pending) -> bool {
     }
     changed
 }
+#[derive(Clone, Default)]
+struct Epochs {
+    dirty: BTreeSet<Site>,
+    live: BTreeMap<Site, Site>,
+    used: BTreeMap<Site, BTreeSet<Policy>>,
+}
+impl Epochs {
+    fn merge(&mut self, other: &Self) -> bool {
+        let before = (self.dirty.len(), self.live.len());
+        self.dirty.extend(other.dirty.iter().cloned());
+        self.live
+            .extend(other.live.iter().map(|(a, b)| (a.clone(), b.clone())));
+        let mut changed = before != (self.dirty.len(), self.live.len());
+        for (origin, policies) in &other.used {
+            let current = self.used.entry(origin.clone()).or_default();
+            let before = current.len();
+            current.extend(policies.iter().cloned());
+            changed |= before != current.len();
+        }
+        changed
+    }
+}
 #[derive(Clone)]
 struct State {
     values: FxHashMap<Value, Fact>,
     slots: Vec<Fact>,
     borrowed: BTreeSet<usize>,
     pending: Pending,
+    epochs: Epochs,
 }
 impl State {
     fn fact(&self, value: Value) -> Fact {
@@ -275,6 +311,7 @@ impl State {
     }
     fn merge(&mut self, other: &Self) -> bool {
         let mut changed = merge_pending(&mut self.pending, &other.pending);
+        changed |= self.epochs.merge(&other.epochs);
         let n = self.borrowed.len();
         self.borrowed.extend(&other.borrowed);
         changed |= n != self.borrowed.len();
@@ -320,6 +357,10 @@ fn invalidate_borrows(state: &mut State) {
     for fact in state.values.values_mut() {
         fact.invalidate_referents();
     }
+}
+fn complete(state: &mut State) {
+    state.pending.clear();
+    state.epochs.dirty.clear();
 }
 fn dereference(fact: Fact, state: &State) -> Fact {
     match fact {
@@ -763,14 +804,21 @@ fn branch_controls(
 }
 fn resource(role: Role) -> Option<LibraryAccess> {
     match role {
-        Role::Native(Native::CheckedBlockResource { access, .. }) => Some(access),
+        Role::Native(
+            Native::CheckedBlockResource { access, .. }
+            | Native::CheckedBlockStorage { access, .. },
+        ) => Some(access),
         _ => None,
     }
 }
 fn checked(role: Role) -> bool {
     matches!(
         role,
-        Role::Native(Native::CheckedBlock { .. } | Native::CheckedBlockResource { .. })
+        Role::Native(
+            Native::CheckedBlock { .. }
+                | Native::CheckedBlockResource { .. }
+                | Native::CheckedBlockStorage { .. }
+        )
     )
 }
 fn controls_index(native: Native) -> Option<usize> {
@@ -778,6 +826,7 @@ fn controls_index(native: Native) -> Option<usize> {
         Native::Raw { .. } => None,
         Native::CheckedBlock { .. } => Some(0),
         Native::CheckedBlockResource { .. } => Some(1),
+        Native::CheckedBlockStorage { .. } => Some(2),
     }
 }
 fn scalar_precision(mut facts: impl Iterator<Item = Fact>) -> Fact {
@@ -799,7 +848,11 @@ struct Analyzer<'a> {
     symbols: &'a BTreeMap<String, String>,
     root: &'a str,
     resource_root: bool,
+    storage_root: bool,
     stack: Vec<String>,
+    path: Site,
+    trace: &'a mut Trace,
+    plan: Option<&'a mut Plan>,
 }
 impl Analyzer<'_> {
     fn error(&self, function: &str, block: usize, reason: &str) -> String {
@@ -832,12 +885,13 @@ impl Analyzer<'_> {
         validate: bool,
         entry_control: Control,
         pending: Pending,
-    ) -> Result<(Fact, Pending), String> {
+        epochs: Epochs,
+    ) -> Result<(Fact, Pending, Epochs), String> {
         if self.stack.iter().any(|f| f == function) {
             return if validate {
                 Err(self.error(function, 0, "recursive helper participation is unsupported"))
             } else {
-                Ok((Fact::Varying, pending))
+                Ok((Fact::Varying, pending, epochs))
             };
         }
         let Some(graph) = self
@@ -852,7 +906,7 @@ impl Analyzer<'_> {
                     "call without MIR cannot prove collective participation",
                 ))
             } else {
-                Ok((Fact::Varying, pending))
+                Ok((Fact::Varying, pending, epochs))
             };
         };
         if MirFuncOp::wrap(self.ctx, graph.op)
@@ -865,11 +919,17 @@ impl Analyzer<'_> {
                 "checked block collectives do not support unchecked indexing; retain runtime bounds checks",
             ));
         }
+        if validate {
+            self.trace
+                .contexts
+                .insert(self.path.clone(), function.to_owned());
+        }
         let mut entry = State {
             values: FxHashMap::default(),
             slots: vec![Fact::Unset; graph.slots.len()],
             borrowed: graph.escaped_slots.clone(),
             pending,
+            epochs,
         };
         for (index, fact) in arguments.into_iter().enumerate() {
             entry
@@ -883,7 +943,12 @@ impl Analyzer<'_> {
         let limit = graph
             .blocks
             .len()
-            .saturating_mul(graph.value_count + graph.slots.len() + 4)
+            .saturating_mul(
+                graph.value_count
+                    + graph.slots.len()
+                    + self.plan.as_ref().map_or(0, |p| p.sites.len() * 4)
+                    + 4,
+            )
             .saturating_mul(6)
             .max(8);
         self.stack.push(function.to_owned());
@@ -991,6 +1056,7 @@ impl Analyzer<'_> {
         }
         let mut returned = Fact::Unset;
         let mut returned_pending = Pending::new();
+        let mut returned_epochs = Epochs::default();
         for block in live {
             let term = graph.operations[block].last().unwrap().op;
             let is_return = Operation::get_op::<MirReturnOp>(term, self.ctx).is_some();
@@ -1031,10 +1097,11 @@ impl Analyzer<'_> {
                 };
                 returned = returned.merge(&return_fact(value.taint(controls[block].domain)));
                 merge_pending(&mut returned_pending, &state.pending);
+                returned_epochs.merge(&state.epochs);
             }
         }
         self.stack.pop();
-        Ok((return_fact(returned), returned_pending))
+        Ok((return_fact(returned), returned_pending, returned_epochs))
     }
     #[allow(clippy::too_many_arguments)]
     fn library(
@@ -1044,20 +1111,178 @@ impl Analyzer<'_> {
         state: &mut State,
         control: Control,
         validate: bool,
-    ) -> Result<(), String> {
+    ) -> Result<Option<Fact>, String> {
         let library = MirLibraryOp::new(op);
         let role = *library.get_attr_role(self.ctx).unwrap();
         let call = (*library.get_attr_site(self.ctx).unwrap()).clone();
-        let Role::Native(native) = role;
+        let marker = String::from((*library.get_attr_library_callee(self.ctx).unwrap()).clone());
+        let mut site = self.path.clone();
+        site.push(call.block);
         let operands: Vec<_> = op.deref(self.ctx).operands().collect();
         let facts: Vec<_> = operands.iter().map(|v| state.fact(*v)).collect();
-        if validate {
-            if !checked(role) || (self.resource_root && resource(role).is_none()) {
-                return Err(self.error(function,call.block,if self.resource_root {
-                    "untracked and resource-checked library calls cannot be mixed in one checked root"
-                } else { "raw and checked library calls cannot be mixed in one checked root" }));
+        let resolved: Vec<_> = facts.iter().cloned().map(|f| call_fact(f, state)).collect();
+        let scope = Domain::BLOCK;
+        let mut origin = None;
+        let mut policy = Policy::default();
+        let mut result = None;
+        let mut storage_use = false;
+        match role {
+            Role::NativeOperandBoundary => return Ok(None),
+            Role::StorageNew(new) => {
+                policy = new;
+                result = Some(Fact::Descriptor(site.clone(), policy));
             }
-            if !control.admits(Domain::BLOCK) {
+            Role::StorageReconfigure { new, .. } => {
+                if let Some((id, _)) = resolved[0].descriptor() {
+                    if validate
+                        && state
+                            .epochs
+                            .used
+                            .get(&id)
+                            .is_some_and(|used| used.iter().any(|old| *old != new))
+                    {
+                        return Err(self.error(
+                            function,
+                            call.block,
+                            "storage policy cannot change after use",
+                        ));
+                    }
+                    origin = Some(id.clone());
+                    policy = new;
+                    result = Some(Fact::Descriptor(id, policy));
+                } else if validate {
+                    return Err(self.error(
+                        function,
+                        call.block,
+                        "storage reconfiguration has ambiguous descriptor origin",
+                    ));
+                } else {
+                    result = Some(Fact::Varying);
+                }
+            }
+            Role::StorageRelease => {
+                if let Some(reservation) = resolved[0].reservation() {
+                    if let Some(region) = state.epochs.live.remove(&reservation) {
+                        state.epochs.dirty.insert(region);
+                    } else if validate && self.plan.is_some() {
+                        return Err(self.error(
+                            function,
+                            call.block,
+                            "storage release has no live reservation",
+                        ));
+                    }
+                } else if validate {
+                    return Err(self.error(
+                        function,
+                        call.block,
+                        "storage release has ambiguous reservation origin",
+                    ));
+                }
+            }
+            Role::StorageReserve { .. } => {
+                storage_use = true;
+                result = Some(Fact::Reservation(site.clone()));
+            }
+            Role::Native(Native::CheckedBlockStorage { .. }) => {
+                storage_use = true;
+            }
+            Role::Native(_) => {}
+        }
+        let storage_operation = matches!(
+            role,
+            Role::StorageNew(_)
+                | Role::StorageReconfigure { .. }
+                | Role::StorageReserve { .. }
+                | Role::StorageRelease
+        ) || storage_use;
+        if storage_operation && validate && !control.admits(Domain::BLOCK) {
+            return Err(self.error(
+                function,
+                call.block,
+                "storage operation is reached through lane-varying control flow",
+            ));
+        }
+        if storage_use {
+            let (index, implicit) = match role {
+                Role::Native(Native::CheckedBlockStorage { storage, .. }) => {
+                    (1, matches!(storage, LibraryStorageArg::Implicit))
+                }
+                _ => (0, false),
+            };
+            if let Some((id, p)) = resolved[index].descriptor() {
+                origin = Some(id);
+                policy = p;
+            } else if !implicit && validate {
+                return Err(self.error(
+                    function,
+                    call.block,
+                    "storage use has no unambiguous descriptor origin",
+                ));
+            }
+            if let Some(id) = &origin {
+                state
+                    .epochs
+                    .used
+                    .entry(id.clone())
+                    .or_default()
+                    .insert(policy);
+            }
+        }
+        if validate {
+            self.trace.events.insert(
+                site.clone(),
+                Event {
+                    call: call.clone(),
+                    role,
+                    marker,
+                    origin,
+                    policy,
+                },
+            );
+        }
+        if let Some(binding) = self.plan.as_ref().and_then(|p| p.sites.get(&site)).cloned() {
+            if validate && state.epochs.live.values().any(|r| *r == binding.region) {
+                return Err(format!(
+                    "checked block collective in {}: storage use overlaps a live reservation at {site:?}",
+                    self.root
+                ));
+            }
+            if state.epochs.dirty.contains(&binding.region) {
+                if binding.implicit {
+                    self.plan
+                        .as_mut()
+                        .unwrap()
+                        .sites
+                        .get_mut(&site)
+                        .unwrap()
+                        .before = true;
+                    complete(state);
+                } else if validate {
+                    return Err(format!(
+                        "checked block collective in {}: explicit storage reuse requires a full-block barrier at {site:?}",
+                        self.root
+                    ));
+                }
+            }
+            state.epochs.dirty.insert(binding.region.clone());
+            if matches!(role, Role::StorageReserve { .. }) {
+                state.epochs.live.insert(site.clone(), binding.region);
+            }
+        }
+        let Role::Native(native) = role else {
+            return Ok(result);
+        };
+        if validate {
+            if !checked(role)
+                || ((self.resource_root || self.storage_root)
+                    && resource(role).is_none()
+                    && !storage_operation)
+            {
+                return Err(self.error(function,call.block,if self.resource_root {"untracked and resource-checked library calls cannot be mixed in one checked root"}
+                    else if self.storage_root {"untracked and planned-storage library calls cannot be mixed in one checked root"}
+                    else {"raw and checked library calls cannot be mixed in one checked root"}));
+            }
+            if !control.admits(scope) {
                 return Err(self.error(
                     function,
                     call.block,
@@ -1072,7 +1297,7 @@ impl Analyzer<'_> {
                         "uniform argument tuple has unsupported provenance",
                     ));
                 };
-                if fields.iter().any(|f| !f.uniform_at(Domain::BLOCK)) {
+                if fields.iter().any(|f| !f.uniform_at(scope)) {
                     return Err(self.error(
                         function,
                         call.block,
@@ -1086,7 +1311,10 @@ impl Analyzer<'_> {
             if let Some(origin) = witness.resource_origin() {
                 let write = access == LibraryAccess::Write;
                 let old = state.pending.get(origin).copied().unwrap_or(0);
-                if validate && (old & 2 != 0 || (write && old != 0)) {
+                if validate
+                    && (!self.storage_root || self.plan.is_some())
+                    && (old & 2 != 0 || (write && old != 0))
+                {
                     return Err(self.error(
                         function,
                         call.block,
@@ -1102,9 +1330,17 @@ impl Analyzer<'_> {
                 ));
             }
         }
+        if self
+            .plan
+            .as_ref()
+            .and_then(|p| p.sites.get(&site))
+            .is_some_and(|b| b.after)
+        {
+            complete(state);
+        }
         facts.iter().for_each(|fact| state.expose(fact));
         invalidate_borrows(state);
-        Ok(())
+        Ok(None)
     }
     #[allow(clippy::too_many_arguments)]
     fn block(
@@ -1123,7 +1359,13 @@ impl Analyzer<'_> {
             let operands = &prepared.operands;
             let kind = prepared.kind;
             if kind == TransferKind::Library {
-                self.library(function, op, state, control, validate)?;
+                if let Some(fact) = self.library(function, op, state, control, validate)? {
+                    for &result in &prepared.results {
+                        state
+                            .values
+                            .insert(result, fact.clone().taint(control.domain));
+                    }
+                }
                 continue;
             }
             facts.clear();
@@ -1140,7 +1382,7 @@ impl Analyzer<'_> {
                                 "block barrier is reached through lane-varying control flow",
                             ));
                         }
-                        state.pending.clear();
+                        complete(state);
                         Fact::Fields(vec![])
                     }
                     SourceKind::BlockQuery => Fact::Uniform(Domain::BLOCK),
@@ -1176,7 +1418,7 @@ impl Analyzer<'_> {
             }
             if kind == TransferKind::WriteCheck {
                 let write = MirLibraryWriteCheckOp::new(op);
-                if validate && self.resource_root {
+                if validate && (self.resource_root || self.storage_root) {
                     let source = write.get_attr_library_write_source(self.ctx).unwrap();
                     match source.kind {
                         LibraryWriteKind::Bulk => {
@@ -1216,15 +1458,19 @@ impl Analyzer<'_> {
                         let arguments =
                             facts.iter().cloned().map(|f| call_fact(f, state)).collect();
                         facts.iter().for_each(|f| state.expose(f));
+                        self.path.push(site.block);
                         let analyzed = self.analyze(
                             &target.export,
                             arguments,
                             validate,
                             control,
                             state.pending.clone(),
+                            state.epochs.clone(),
                         );
-                        let (result, pending) = analyzed?;
+                        self.path.pop();
+                        let (result, pending, epochs) = analyzed?;
                         state.pending = pending;
+                        state.epochs = epochs;
                         invalidate_borrows(state);
                         result
                     } else {
@@ -1299,7 +1545,9 @@ impl Analyzer<'_> {
                         Fact::Local(*slot, path)
                     }
                     Fact::Referent(f) => Fact::Referent(Box::new(f.field(index))),
-                    Fact::Resource(..) => Fact::Referent(Box::new(facts[0].clone())),
+                    Fact::Resource(..) | Fact::Descriptor(..) | Fact::Reservation(..) => {
+                        Fact::Referent(Box::new(facts[0].clone()))
+                    }
                     fact => Fact::Referent(Box::new(fact.field(index))),
                 }
             } else if kind == TransferKind::ExtractField {
@@ -1423,6 +1671,7 @@ pub fn analyze_libraries(
     symbols: &BTreeMap<String, String>,
     original_roles: &BTreeMap<LibraryCallSite, Role>,
     admitted_shapes: &BTreeMap<String, [u32; 3]>,
+    mut plans: Option<&mut BTreeMap<String, Plan>>,
 ) -> pliron::result::Result<Validation> {
     let graph = analyses.get_analysis::<PreparedGraph>(module, ctx)?;
     let mut validation = Validation::default();
@@ -1432,7 +1681,7 @@ pub fn analyze_libraries(
             .filter(|(site, _)| reached.contains(&site.caller))
             .map(|(_, role)| *role)
             .collect();
-        if !roles.iter().any(|&r| checked(r)) {
+        if !roles.iter().any(|&r| checked(r) || planned_storage(r)) {
             continue;
         }
         let Some(&shape) = admitted_shapes.get(root) else {
@@ -1442,6 +1691,7 @@ pub fn analyze_libraries(
             );
         };
         let resource_root = roles.iter().any(|&r| resource(r).is_some());
+        let storage_root = roles.iter().any(|&r| planned_storage(r));
         let Some(function) = symbols.get(root).and_then(|s| graph.functions.get(s)) else {
             return pliron::verify_err!(
                 module.deref(ctx).loc(),
@@ -1455,29 +1705,44 @@ pub fn analyze_libraries(
                     .library_root_argument(ctx, i)
                 {
                     Some(LibraryRootArgumentClass::Scalar) => Fact::Uniform(Domain::BLOCK),
-                    Some(LibraryRootArgumentClass::ResourceCandidate) if resource_root => {
+                    Some(LibraryRootArgumentClass::ResourceCandidate)
+                        if resource_root || storage_root =>
+                    {
                         Fact::Resource(format!("{root}:{}", i + 1), Domain::BLOCK)
                     }
                     Some(
                         LibraryRootArgumentClass::ResourceCandidate
                         | LibraryRootArgumentClass::Kernel,
                     ) => Fact::Kernel(format!("{root}:{}", i + 1), Domain::BLOCK),
-                    None => Fact::Varying,
+                    Some(LibraryRootArgumentClass::StorageCandidate) | None => Fact::Varying,
                 }
             })
             .collect();
+        let mut trace = Trace::default();
         let mut analyzer = Analyzer {
             ctx,
             graph: &graph,
             symbols,
             root,
             resource_root,
+            storage_root,
             stack: vec![],
+            path: vec![],
+            trace: &mut trace,
+            plan: plans.as_mut().and_then(|plans| plans.get_mut(root)),
         };
-        if let Err(error) = analyzer.analyze(root, arguments, true, Control::FULL, Pending::new()) {
+        if let Err(error) = analyzer.analyze(
+            root,
+            arguments,
+            true,
+            Control::FULL,
+            Pending::new(),
+            Epochs::default(),
+        ) {
             return pliron::verify_err!(function.op.deref(ctx).loc(), "{error}");
         }
         validation.shapes.insert(root.clone(), shape);
+        validation.traces.insert(root.clone(), trace);
     }
     Ok(validation)
 }

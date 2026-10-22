@@ -7,7 +7,7 @@
 //! This is not an allocator: fixed views alias and combine by maximum extent.
 
 use dialect_mir::{
-    library::LibraryCallSite,
+    library::{LibraryCallPlan, LibraryCallSite, LibraryOperation},
     ops::{MirCallOp, MirExternSharedOp, MirFuncOp},
 };
 use oxide_artifacts::KernelLaunchFacts;
@@ -16,6 +16,8 @@ use pliron::context::{Context, Ptr};
 use pliron::linked_list::ContainsLinkedList;
 use pliron::operation::Operation;
 use std::collections::{BTreeMap, BTreeSet};
+
+pub(crate) const PLANNED_ROOT: &str = "cuda_oxide_planned_storage_root";
 
 pub(crate) const FIXED_SHARED_BYTES: &str = "cuda_oxide_fixed_shared_bytes";
 pub(crate) const INFERRED_SHARED: &str = "cuda_oxide_inferred_shared";
@@ -93,8 +95,10 @@ struct OrdinaryCall {
     callee: String,
 }
 
-fn scan(ctx: &Context, op: Ptr<Operation>, resources: &mut FunctionResources) {
-    if let Some(shared) = Operation::get_op::<MirExternSharedOp>(op, ctx) {
+fn scan(ctx: &Context, op: Ptr<Operation>, resources: &mut FunctionResources, native_only: bool) {
+    if let Some(shared) = Operation::get_op::<MirExternSharedOp>(op, ctx)
+        && !(native_only && planned_root(ctx, op).is_some())
+    {
         match integer_attr(ctx, op, FIXED_SHARED_BYTES) {
             Some(bytes) => {
                 resources.fixed = true;
@@ -119,14 +123,14 @@ fn scan(ctx: &Context, op: Ptr<Operation>, resources: &mut FunctionResources) {
     for region in op.deref(ctx).regions() {
         for block in region.deref(ctx).iter(ctx) {
             for child in block.deref(ctx).iter(ctx) {
-                scan(ctx, child, resources);
+                scan(ctx, child, resources, native_only);
             }
         }
     }
 }
 
 /// Ordinary requirements captured before preparation can remove views or calls.
-/// Consumed by completion after native ABI binding and helper specialization.
+/// Consumed by completion so compiler-planned offsets are relocated only once.
 pub(crate) struct OrdinaryResources {
     kernels: BTreeMap<String, KernelResources>,
     alignments: BTreeMap<String, u64>,
@@ -150,7 +154,7 @@ pub(crate) fn capture_ordinary(
     module: Ptr<Operation>,
     kernels: impl IntoIterator<Item = String>,
 ) -> Result<OrdinaryResources, String> {
-    capture(ctx, module, kernels)
+    capture(ctx, module, kernels, true)
 }
 
 /// Replay saved ordinary edges under the finalized helper contexts. Names here
@@ -191,8 +195,33 @@ pub(crate) fn bind_ordinary_contexts(
     Ok(())
 }
 
-/// Validate ordinary constraints saved before preparation removed views or calls.
-pub(crate) fn validate_ordinary_compatibility(ordinary: &OrdinaryResources) -> Result<(), String> {
+/// Validate saved pre-preparation resources against the actual library plans.
+/// Only Native and Reserve emit shared views; zero-byte views still count.
+pub(crate) fn validate_ordinary_compatibility(
+    ordinary: &OrdinaryResources,
+    calls: &BTreeMap<LibraryCallSite, LibraryCallPlan>,
+) -> Result<(), String> {
+    let planned: BTreeSet<_> = calls
+        .values()
+        .filter(|plan| {
+            matches!(
+                plan.operation,
+                LibraryOperation::Native | LibraryOperation::StorageReserve
+            )
+        })
+        .filter_map(|plan| plan.planned_root.as_ref())
+        .collect();
+    for root in planned {
+        let saved = ordinary
+            .kernels
+            .get(root)
+            .ok_or("planned storage root has no captured ordinary resources")?;
+        if saved.resources.unconstrained {
+            return Err(format!(
+                "{root}: planned storage cannot include an unconstrained native dynamic shared view"
+            ));
+        }
+    }
     for (kernel, saved) in &ordinary.kernels {
         if saved.resources.inferred && saved.resources.unconstrained {
             return Err(format!(
@@ -207,6 +236,7 @@ fn capture(
     ctx: &Context,
     module: Ptr<Operation>,
     kernels: impl IntoIterator<Item = String>,
+    ordinary_only: bool,
 ) -> Result<OrdinaryResources, String> {
     let mut functions = BTreeMap::new();
     let mut entries = BTreeMap::new();
@@ -221,7 +251,7 @@ fn capture(
                 declared_alignment,
                 ..Default::default()
             };
-            scan(ctx, op, &mut local);
+            scan(ctx, op, &mut local, ordinary_only);
             let name = function.get_symbol_name(ctx).to_string();
             entries.insert(name.clone(), op);
             functions.insert(name, local);
@@ -309,6 +339,13 @@ fn aggregate_ordinary(ordinary: &mut OrdinaryResources) {
     }
 }
 
+fn planned_root(ctx: &Context, op: Ptr<Operation>) -> Option<String> {
+    let key: pliron::identifier::Identifier = PLANNED_ROOT.try_into().unwrap();
+    op.deref(ctx)
+        .attributes
+        .get::<pliron::builtin::attributes::StringAttr>(&key)
+        .map(|value| String::from((*value).clone()))
+}
 fn walk(ctx: &Context, op: Ptr<Operation>, result: &mut Vec<Ptr<Operation>>) {
     result.push(op);
     for region in op.deref(ctx).regions() {
@@ -327,9 +364,10 @@ fn merge_resources(saved: &mut FunctionResources, actual: &FunctionResources) {
     saved.alignment = saved.alignment.max(actual.alignment);
 }
 
-/// Join saved ordinary requirements with actual late native fixed views.
-/// Preparation may remove views and helper edges; their constraints survive.
-pub(crate) fn complete_native(
+/// Relocate late planned views after the saved ordinary prefix and join facts.
+/// Preparation is allowed to remove ordinary views/helper edges: their original
+/// constraints still apply. The owned snapshot is not reusable for relocation.
+pub(crate) fn complete_planned(
     ctx: &mut Context,
     module: Ptr<Operation>,
     mut ordinary: OrdinaryResources,
@@ -338,7 +376,8 @@ pub(crate) fn complete_native(
     use pliron::builtin::types::{IntegerType, Signedness};
     use pliron::utils::apint::APInt;
 
-    // Native calls emit fixed shared views, including zero-byte scratch.
+    // Raw and legacy calls also emit fixed shared views without a planned
+    // tag. They contribute to the ordinary prefix, even for zero-byte scratch.
     let late = capture_ordinary(ctx, module, ordinary.kernels.keys().cloned())?;
     for (name, actual) in late.kernels {
         merge_resources(
@@ -352,6 +391,50 @@ pub(crate) fn complete_native(
     }
     let mut operations = Vec::new();
     walk(ctx, module, &mut operations);
+    let mut relocated = Vec::new();
+    for &op in &operations {
+        let Some(root) = planned_root(ctx, op) else {
+            continue;
+        };
+        let plan = roots
+            .get(&root)
+            .ok_or("planned storage root has no finalized layout")?;
+        let saved = ordinary
+            .kernels
+            .get(&root)
+            .ok_or("planned storage root has no captured ordinary resources")?;
+        if saved.resources.unconstrained {
+            return Err(format!(
+                "{root}: planned storage cannot include an unconstrained native dynamic shared view"
+            ));
+        }
+        let alignment = u64::from(plan.dynamic_shared_alignment);
+        if !alignment.is_power_of_two() {
+            return Err("invalid planned storage alignment".into());
+        }
+        let base = saved
+            .resources
+            .bytes
+            .checked_add(alignment - 1)
+            .map(|n| n & !(alignment - 1))
+            .ok_or("native prefix and storage plan overflow")?;
+        let end = base
+            .checked_add(u64::from(plan.dynamic_shared_bytes))
+            .ok_or("native prefix and storage plan overflow")?;
+        u32::try_from(end).map_err(|_| "native prefix and storage plan exceed u32")?;
+        let shared = Operation::get_op::<MirExternSharedOp>(op, ctx)
+            .ok_or("planned storage tag is not on a shared view")?;
+        let offset = base
+            .checked_add(shared.get_byte_offset_value(ctx))
+            .ok_or("native prefix and storage plan overflow")?;
+        let bytes = integer_attr(ctx, op, FIXED_SHARED_BYTES)
+            .ok_or("planned storage view has no fixed extent")?;
+        let extent = offset
+            .checked_add(bytes)
+            .ok_or("native prefix and storage plan overflow")?;
+        narrow(&root, extent)?;
+        relocated.push((op, root, offset, extent, shared.get_alignment_value(ctx)));
+    }
     for (root, plan) in roots {
         let saved = ordinary
             .kernels
@@ -376,6 +459,13 @@ pub(crate) fn complete_native(
         }
         saved.exact_block = Some(shape);
     }
+    for (op, root, offset, extent, alignment) in relocated {
+        MirExternSharedOp::new(op).set_byte_offset_value(ctx, offset);
+        let resources = &mut ordinary.kernels.get_mut(&root).unwrap().resources;
+        resources.fixed = true;
+        resources.bytes = resources.bytes.max(extent);
+        resources.alignment = resources.alignment.max(alignment);
+    }
     // Restore alignment propagation over the original helper graph before
     // propagating across the final graph, which also contains native calls.
     let layout_ty = IntegerType::get(ctx, 64, Signedness::Unsigned);
@@ -399,7 +489,7 @@ pub(crate) fn complete_native(
         }
     }
     mir_lower::propagate_kernel_dynamic_shared_alignments(ctx, module);
-    let actual = capture(ctx, module, ordinary.kernels.keys().cloned())?;
+    let actual = capture(ctx, module, ordinary.kernels.keys().cloned(), false)?;
     for (name, actual) in actual.kernels {
         merge_resources(
             &mut ordinary.kernels.get_mut(&name).unwrap().resources,
@@ -507,6 +597,7 @@ mod tests {
         block: Ptr<BasicBlock>,
         offset: u64,
         bytes: Option<u64>,
+        planned: Option<&str>,
     ) -> Ptr<Operation> {
         let byte = IntegerType::get(ctx, 8, Signedness::Unsigned).into();
         let pointer = MirPtrType::get_shared(ctx, byte, true).into();
@@ -523,6 +614,12 @@ mod tests {
         view.set_alignment_value(ctx, 8);
         if let Some(bytes) = bytes {
             attr(ctx, op, FIXED_SHARED_BYTES, bytes);
+        }
+        if let Some(root) = planned {
+            op.deref_mut(ctx).attributes.set(
+                PLANNED_ROOT.try_into().unwrap(),
+                StringAttr::new(root.to_owned()),
+            );
         }
         op.insert_at_back(block, ctx);
         op
@@ -541,15 +638,15 @@ mod tests {
         attr(ctx, other, "dynamic_shared_alignment", 128);
         let old_call = call(ctx, body, "helper");
         call(ctx, other_body, "helper");
-        let old_view = view(ctx, helper, 5, Some(68));
+        let old_view = view(ctx, helper, 5, Some(68), None);
         let saved =
             capture_ordinary(ctx, module, ["kernel".into(), "other".into(), "raw".into()]).unwrap();
         let mut rewriter = IRRewriter::<DummyListener>::default();
         rewriter.erase_operation(ctx, old_call);
         rewriter.erase_operation(ctx, old_view);
-        view(ctx, body, 16, Some(32));
-        view(ctx, raw, 0, Some(0));
-        view(ctx, body, 4, Some(12));
+        view(ctx, body, 16, Some(32), None);
+        view(ctx, raw, 0, Some(0), None);
+        let planned = view(ctx, body, 4, Some(12), Some("kernel"));
         let roots = BTreeMap::from([(
             "kernel".into(),
             KernelLaunchFacts {
@@ -558,8 +655,12 @@ mod tests {
                 dynamic_shared_alignment: 16,
             },
         )]);
-        let facts = complete_native(ctx, module, saved, &roots).unwrap();
-        assert_eq!(facts["kernel"].dynamic_shared_bytes, 73);
+        let facts = complete_planned(ctx, module, saved, &roots).unwrap();
+        assert_eq!(
+            MirExternSharedOp::new(planned).get_byte_offset_value(ctx),
+            84
+        );
+        assert_eq!(facts["kernel"].dynamic_shared_bytes, 96);
         assert_eq!(facts["kernel"].dynamic_shared_alignment, 128);
         assert_eq!(facts["kernel"].exact_block, Some((64, 1, 1)));
         assert_eq!(facts["other"].dynamic_shared_bytes, 73);
@@ -587,7 +688,7 @@ mod tests {
                 },
             );
         }
-        let original_view = view(ctx, helper, 0, Some(13));
+        let original_view = view(ctx, helper, 0, Some(13), None);
         let mut saved = capture_ordinary(ctx, module, ["root_a".into(), "root_b".into()]).unwrap();
         let mut rewriter = IRRewriter::<DummyListener>::default();
         for op in [a_call, b_call, original_view] {
@@ -610,8 +711,8 @@ mod tests {
         .unwrap();
         let (clone_a, body_a) = function(ctx, module, "helper_a");
         let (clone_b, body_b) = function(ctx, module, "helper_b");
-        let view_a = view(ctx, body_a, 0, Some(0));
-        let view_b = view(ctx, body_b, 0, Some(0));
+        let view_a = view(ctx, body_a, 0, Some(0), Some("root_a"));
+        let view_b = view(ctx, body_b, 0, Some(0), Some("root_b"));
         let roots = ["root_a", "root_b"]
             .into_iter()
             .map(|root| {
@@ -625,11 +726,11 @@ mod tests {
                 )
             })
             .collect();
-        let facts = complete_native(ctx, module, saved, &roots).unwrap();
+        let facts = complete_planned(ctx, module, saved, &roots).unwrap();
         assert_eq!(facts["root_a"].dynamic_shared_alignment, 16);
         assert_eq!(facts["root_b"].dynamic_shared_alignment, 128);
         for name in ["root_a", "root_b"] {
-            assert_eq!(facts[name].dynamic_shared_bytes, 13);
+            assert_eq!(facts[name].dynamic_shared_bytes, 16);
         }
         assert_eq!(
             integer_attr(ctx, clone_a, "dynamic_shared_alignment"),
@@ -640,33 +741,87 @@ mod tests {
             Some(128)
         );
         for view in [view_a, view_b] {
-            assert_eq!(MirExternSharedOp::new(view).get_byte_offset_value(ctx), 0);
+            assert_eq!(MirExternSharedOp::new(view).get_byte_offset_value(ctx), 16);
         }
     }
 
     #[test]
-    fn deleted_unconstrained_helper_still_rejects_inferred_root() {
-        let ctx = &mut Context::new();
-        dialect_mir::register(ctx);
-        let module = ModuleOp::new(ctx, "unconstrained".try_into().unwrap()).get_operation();
-        let (root, body) = function(ctx, module, "kernel");
-        let (_, helper) = function(ctx, module, "helper");
-        attr(ctx, root, INFERRED_SHARED, 1);
-        let old_call = call(ctx, body, "helper");
-        let old_view = view(ctx, helper, 0, None);
-        let saved = capture_ordinary(ctx, module, ["kernel".into()]).unwrap();
-        Operation::erase(old_call, ctx);
-        Operation::erase(old_view, ctx);
-        let expected = "inferred dynamic shared memory cannot include unconstrained";
-        assert!(
-            validate_ordinary_compatibility(&saved)
-                .unwrap_err()
-                .contains(expected)
-        );
-        assert!(
-            complete_native(ctx, module, saved, &BTreeMap::new())
-                .unwrap_err()
-                .contains(expected)
-        );
+    fn deleted_unconstrained_helper_still_rejects_planned_or_inferred_roots() {
+        for planned in [false, true] {
+            let ctx = &mut Context::new();
+            dialect_mir::register(ctx);
+            let module = ModuleOp::new(ctx, "unconstrained".try_into().unwrap()).get_operation();
+            let (root, body) = function(ctx, module, "kernel");
+            let (_, helper) = function(ctx, module, "helper");
+            if !planned {
+                attr(ctx, root, INFERRED_SHARED, 1);
+            }
+            let old_call = call(ctx, body, "helper");
+            let old_view = view(ctx, helper, 0, None, None);
+            let saved = capture_ordinary(ctx, module, ["kernel".into()]).unwrap();
+            let mut rewriter = IRRewriter::<DummyListener>::default();
+            rewriter.erase_operation(ctx, old_call);
+            rewriter.erase_operation(ctx, old_view);
+            let expected = if planned {
+                "planned storage cannot include an unconstrained"
+            } else {
+                "inferred dynamic shared memory cannot include unconstrained"
+            };
+            let site = LibraryCallSite {
+                caller: "kernel".into(),
+                block: 0,
+            };
+            if planned {
+                for operation in [LibraryOperation::Native, LibraryOperation::StorageReserve] {
+                    let mut plan = LibraryCallPlan::internal(operation, "marker".into());
+                    plan.planned_root = Some("kernel".into());
+                    // Zero-byte planned views still conflict with the saved raw view.
+                    let calls = BTreeMap::from([(site.clone(), plan)]);
+                    let error = validate_ordinary_compatibility(&saved, &calls).unwrap_err();
+                    assert!(error.contains(expected), "{error}");
+                }
+                for operation in [
+                    LibraryOperation::StorageNew,
+                    LibraryOperation::StorageReconfigure,
+                    LibraryOperation::StorageRelease,
+                    LibraryOperation::Redirect,
+                ] {
+                    let mut plan = LibraryCallPlan::internal(operation, "marker".into());
+                    plan.planned_root = Some("kernel".into());
+                    validate_ordinary_compatibility(
+                        &saved,
+                        &BTreeMap::from([(site.clone(), plan)]),
+                    )
+                    .unwrap();
+                }
+                let untagged = LibraryCallPlan::internal(LibraryOperation::Native, "raw".into());
+                validate_ordinary_compatibility(&saved, &BTreeMap::from([(site, untagged)]))
+                    .unwrap();
+            } else {
+                let error = validate_ordinary_compatibility(&saved, &BTreeMap::new()).unwrap_err();
+                assert!(error.contains(expected), "{error}");
+            }
+            let mut roots = BTreeMap::new();
+            if planned {
+                view(ctx, body, 0, Some(16), Some("kernel"));
+                roots.insert(
+                    "kernel".into(),
+                    KernelLaunchFacts {
+                        exact_block: Some((32, 1, 1)),
+                        dynamic_shared_bytes: 16,
+                        dynamic_shared_alignment: 8,
+                    },
+                );
+            }
+            let error = complete_planned(ctx, module, saved, &roots).unwrap_err();
+            assert!(
+                error.contains(if planned {
+                    "planned storage cannot include an unconstrained"
+                } else {
+                    "inferred dynamic shared memory cannot include unconstrained"
+                }),
+                "{error}"
+            );
+        }
     }
 }

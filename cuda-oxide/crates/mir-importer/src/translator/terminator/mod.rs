@@ -1176,6 +1176,11 @@ fn translate_call_inner(
                 reserved_oxide_symbols::LIBRARY_CALL_V1
                     | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_CALL_V1
                     | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_RESOURCE_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_STORAGE_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_STORAGE_NEW_V1
+                    | reserved_oxide_symbols::LIBRARY_STORAGE_RECONFIGURE_V1
+                    | reserved_oxide_symbols::LIBRARY_STORAGE_RESERVE_V1
+                    | reserved_oxide_symbols::LIBRARY_STORAGE_RELEASE_V1
             )
         )
     {
@@ -3649,11 +3654,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn native_retention_preserves_original_sites_and_runtime_values() {
+    fn native_storage_retention_preserves_original_sites_and_runtime_values() {
         use crate::translator::body::translate_body;
         use dialect_mir::library::{
-            LibraryAccess, LibraryNativeMetadata, LibraryRoleAttr, LibraryScalar, LibraryWitness,
-            NativeSpec,
+            LibraryAccess, LibraryNativeMetadata, LibraryOperation, LibraryReserveLayout,
+            LibraryRoleAttr, LibraryScalar, LibraryStorageArg, LibraryStoragePolicy,
+            LibraryWitness, NativeSpec,
         };
         use dialect_mir::ops::{MirCallOp, MirExternSharedOp, MirLibraryOp};
         use llvm_export::export::DebugKind;
@@ -3675,6 +3681,13 @@ mod tests {
         // independently. No finalized provider plan is supplied to the importer.
         std::fs::write(&fixture,r#"
 mod library {
+    pub struct StorageDescriptor<const C:u32,const A:u32,const AUTO:bool,const EXCLUSIVE:bool> { token: u8 }
+    pub struct StorageReservation<T,const N:usize> { pointer: *mut T }
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_storage_new() -> StorageDescriptor<0,0,false,false> { StorageDescriptor { token: 0 } }
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_storage_reconfigure(_: StorageDescriptor<0,0,false,false>) -> StorageDescriptor<128,16,false,true> { StorageDescriptor { token: 0 } }
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_storage_reserve(_: &mut StorageDescriptor<128,16,false,true>) -> StorageReservation<i32,4> { StorageReservation { pointer: core::ptr::null_mut() } }
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_storage_release(_: StorageReservation<i32,4>) {}
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_storage_call<R: Copy>(_: R, _: &[i32], _: &mut StorageDescriptor<128,16,false,true>, _: (*const i32,usize), _: (*mut i32,)) {}
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_call<R: Copy>(_: R, _: (*const i32,*mut i32)) {}
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_call<R: Copy>(_: R, _: (*const i32,usize), _: (*mut i32,)) {}
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_resource_call<R: Copy>(_: R, _: &[i32], _: (*const i32,usize), _: (*mut i32,)) {}
@@ -3684,6 +3697,11 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
     library::cuda_oxide_library_v1_246e25db_call(registration,(input,output));
     library::cuda_oxide_library_v1_246e25db_checked_block_call(registration,(input,7),(output,));
     library::cuda_oxide_library_v1_246e25db_checked_block_resource_call(registration,slice,(input,7),(output,));
+    let old = library::cuda_oxide_library_v1_246e25db_storage_new();
+    let mut storage = library::cuda_oxide_library_v1_246e25db_storage_reconfigure(old);
+    let reservation = library::cuda_oxide_library_v1_246e25db_storage_reserve(&mut storage);
+    library::cuda_oxide_library_v1_246e25db_checked_block_storage_call(registration,slice,&mut storage,(input,7),(output,));
+    library::cuda_oxide_library_v1_246e25db_storage_release(reservation);
 }
 "#).unwrap();
         let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
@@ -3740,7 +3758,7 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                             Some((bb, Instance::resolve(def, &args).unwrap().mangled_name()))
                         })
                         .collect();
-                    assert_eq!(source.len(), 3);
+                    assert_eq!(source.len(), 8);
                     let spec = NativeSpec {
                         scalar: LibraryScalar::Signed(32),
                         items: 4,
@@ -3758,6 +3776,38 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                         },
                     ]
                     .map(LibraryRoleAttr::Native);
+                    let policy = LibraryStoragePolicy {
+                        capacity: 128,
+                        alignment: 16,
+                        auto_sync: false,
+                        exclusive: true,
+                    };
+                    let roles = [
+                        roles[0],
+                        roles[1],
+                        roles[2],
+                        LibraryRoleAttr::StorageNew(LibraryStoragePolicy::default()),
+                        LibraryRoleAttr::StorageReconfigure {
+                            old: LibraryStoragePolicy::default(),
+                            new: policy,
+                        },
+                        LibraryRoleAttr::StorageReserve {
+                            policy,
+                            layout: LibraryReserveLayout {
+                                scalar: spec.scalar,
+                                count: 4,
+                                bytes: 16,
+                                alignment: 16,
+                            },
+                        },
+                        LibraryRoleAttr::Native(LibraryNativeMetadata::CheckedBlockStorage {
+                            spec,
+                            access: LibraryAccess::Read,
+                            witness: LibraryWitness::ReadOnlySlice,
+                            storage: LibraryStorageArg::Explicit(policy),
+                        }),
+                        LibraryRoleAttr::StorageRelease,
+                    ];
                     for (caller, debug) in [
                         ("original_entry", DebugKind::Off),
                         ("alternate_entry", DebugKind::Full),
@@ -3823,6 +3873,7 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                         )
                         .unwrap();
                         let mut retained = Vec::new();
+                        let mut boundaries = Vec::new();
                         for block in function.deref(&ctx).get_region(0).deref(&ctx).iter(&ctx) {
                             for op in block.deref(&ctx).iter(&ctx) {
                                 assert!(Operation::get_op::<MirExternSharedOp>(op, &ctx).is_none());
@@ -3838,6 +3889,14 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                         marker,
                                         source.iter().find(|(bb, _)| *bb == site.block).unwrap().1
                                     );
+                                    if *library.get_attr_role(&ctx).unwrap()
+                                        == LibraryRoleAttr::NativeOperandBoundary
+                                    {
+                                        assert_eq!(op.deref(&ctx).get_num_operands(), 0);
+                                        assert_eq!(op.deref(&ctx).get_num_results(), 0);
+                                        boundaries.push(site.block);
+                                        continue;
+                                    }
                                     retained.push((
                                         site.block,
                                         *library.get_attr_role(&ctx).unwrap(),
@@ -3853,9 +3912,24 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                             source
                                 .iter()
                                 .zip(roles)
-                                .zip([1, 2, 3])
-                                .map(|(((bb, _), role), operands)| (*bb, role, operands, 0))
+                                .zip([
+                                    (1, 0),
+                                    (2, 0),
+                                    (3, 0),
+                                    (0, 1),
+                                    (1, 1),
+                                    (1, 1),
+                                    (4, 0),
+                                    (1, 0)
+                                ])
+                                .map(|(((bb, _), role), (operands, results))| (
+                                    *bb, role, operands, results
+                                ))
                                 .collect::<Vec<_>>()
+                        );
+                        assert_eq!(
+                            boundaries,
+                            [source[0].0, source[1].0, source[2].0, source[6].0]
                         );
                         let plans = source
                             .iter()
@@ -3866,13 +3940,41 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                         caller: caller.into(),
                                         block: *block,
                                     },
-                                    crate::LibraryCallPlan {
-                                        symbol: format!("native_{index}"),
-                                        marker: marker.clone(),
-                                        checked_block: index != 0,
-                                        resource_witness: index == 2,
-                                        scratch_bytes: if index == 2 { 0 } else { 32 },
-                                        scratch_alignment: 8,
+                                    {
+                                        let operation = match roles[index] {
+                                            LibraryRoleAttr::Native(_) => LibraryOperation::Native,
+                                            LibraryRoleAttr::StorageNew(_) => {
+                                                LibraryOperation::StorageNew
+                                            }
+                                            LibraryRoleAttr::StorageReconfigure { .. } => {
+                                                LibraryOperation::StorageReconfigure
+                                            }
+                                            LibraryRoleAttr::StorageReserve { .. } => {
+                                                LibraryOperation::StorageReserve
+                                            }
+                                            LibraryRoleAttr::StorageRelease => {
+                                                LibraryOperation::StorageRelease
+                                            }
+                                            LibraryRoleAttr::NativeOperandBoundary => {
+                                                unreachable!()
+                                            }
+                                        };
+                                        let mut plan = crate::LibraryCallPlan::internal(
+                                            operation,
+                                            marker.clone(),
+                                        );
+                                        if matches!(roles[index], LibraryRoleAttr::Native(_)) {
+                                            plan.symbol = format!("native_{index}");
+                                            plan.checked_block = index != 0;
+                                            plan.resource_witness = index == 2 || index == 6;
+                                            plan.storage_witness = index == 6;
+                                            plan.scratch_bytes = if index == 2 { 0 } else { 32 };
+                                            plan.scratch_alignment = 8;
+                                        } else if index == 5 {
+                                            plan.scratch_bytes = 16;
+                                            plan.scratch_alignment = 16;
+                                        }
+                                        plan
                                     },
                                 )
                             })
@@ -3910,9 +4012,9 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                 }
                             }
                         }
-                        assert_eq!(native_arguments, vec![3, 4, 4]);
+                        assert_eq!(native_arguments, vec![3, 4, 4, 4]);
                         assert_eq!(
-                            scratch_views, 3,
+                            scratch_views, 5,
                             "zero-byte native scratch still retains a fixed view"
                         );
                     }

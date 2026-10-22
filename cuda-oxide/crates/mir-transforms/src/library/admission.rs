@@ -79,6 +79,9 @@ pub fn capture_library_roles(
                 );
             }
             let role = *library.get_attr_role(ctx).unwrap();
+            if role == LibraryRoleAttr::NativeOperandBoundary {
+                continue;
+            }
             if roles.insert(site, role).is_some() {
                 return pliron::verify_err!(
                     op.deref(ctx).loc(),
@@ -96,8 +99,9 @@ fn checked(role: LibraryRoleAttr) -> bool {
         LibraryRoleAttr::Native(
             LibraryNativeMetadata::CheckedBlock { .. }
                 | LibraryNativeMetadata::CheckedBlockResource { .. }
+                | LibraryNativeMetadata::CheckedBlockStorage { .. }
         )
-    )
+    ) || super::storage::planned_storage(role)
 }
 
 fn dimension(ctx: &Context, function: Ptr<Operation>, key: &str) -> Option<u32> {

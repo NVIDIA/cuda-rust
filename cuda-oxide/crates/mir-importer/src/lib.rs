@@ -117,7 +117,8 @@ pub use translator::terminator::{is_dropped_panic_call, is_panic_entry_path};
 mod library;
 pub use dialect_mir::library::{
     LibraryAccess, LibraryCallKind, LibraryCallTargetAttr, LibraryFunctionSourceAttr,
-    LibraryNativeMetadata, LibraryRoleAttr, LibraryRootArgumentClass, LibraryScalar,
+    LibraryNativeMetadata, LibraryOperation, LibraryReserveLayout, LibraryRoleAttr,
+    LibraryRootArgumentClass, LibraryScalar, LibraryStorageArg, LibraryStoragePolicy,
     LibraryWitness, NativeSpec,
 };
 pub use library::{CallTargetRedirects, LibraryCallMetadata, LibraryCallPlan, LibraryCallSite};

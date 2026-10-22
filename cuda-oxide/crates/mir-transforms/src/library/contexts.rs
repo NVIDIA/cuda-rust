@@ -5,23 +5,19 @@
 
 //! Realize the existing finalized helper contexts without importing bodies again.
 
-use super::admission;
-use dialect_mir::ops::{MirCallOp, MirFuncOp};
-use dialect_mir::{library::LibraryCallSite, ops::MirLibraryOp};
-use pliron::{
-    builtin::attributes::StringAttr,
-    common_traits::Verify,
-    context::{Context, Ptr},
-    irbuild::{IRStatus, listener::DummyListener, rewriter::IRRewriter},
-    operation::Operation,
-    pass::{AnalysisManager, PassResult},
-    result::Result,
+use super::*;
+use dialect_mir::{
+    library::LibraryOperation,
+    ops::{MirCallOp, MirFuncOp},
 };
 use pliron::{
     builtin::op_interfaces::SymbolOpInterface,
-    irbuild::cloning::{IrMapping, clone_operation},
+    irbuild::{
+        cloning::{IrMapping, clone_operation},
+        listener::DummyListener,
+        rewriter::IRRewriter,
+    },
 };
-use std::collections::{BTreeMap, BTreeSet};
 
 struct Rewrite {
     op: Ptr<Operation>,
@@ -38,40 +34,64 @@ struct ContextRewrite {
 
 /// Resolve one original ordinary call under an existing finalized context.
 ///
-/// Used for both actual calls and saved pre-preparation resource edges.
+/// Used for both actual calls and saved pre-preparation resource edges. An exact
+/// call-site Redirect takes precedence over the context's callee redirects.
 /// Foreign calls without a collected target remain unchanged; contextual
-/// rewrites require the actual original target to be authenticated.
+/// rewrites require the actual original target to be authenticated. Mangled
+/// marker identities are resolved separately from collected export names.
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_library_call_target(
     source_site: Option<&LibraryCallSite>,
     emitted_caller: &str,
     actual_callee: &str,
     symbols: &BTreeMap<String, String>,
     source_targets: &BTreeMap<LibraryCallSite, BTreeSet<String>>,
+    marker_exports: &BTreeMap<String, String>,
+    plans: &BTreeMap<LibraryCallSite, LibraryCallPlan>,
     redirects: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> std::result::Result<String, String> {
+    let mut target = None;
     let mut authenticated = false;
-    if let Some(site) = source_site
-        && let Some(targets) = source_targets.get(site)
-    {
-        authenticated = targets.iter().any(|target| {
-            symbols
-                .get(target)
+    if let Some(site) = source_site {
+        if let Some(targets) = source_targets.get(site) {
+            authenticated = targets.iter().any(|target| {
+                symbols
+                    .get(target)
+                    .is_some_and(|symbol| symbol == actual_callee)
+            });
+            if !authenticated {
+                return Err("ordinary call does not match its authenticated source targets".into());
+            }
+        }
+        let emitted_site = LibraryCallSite {
+            caller: emitted_caller.into(),
+            block: site.block,
+        };
+        if let Some(plan) = plans.get(&emitted_site)
+            && plan.operation == LibraryOperation::Redirect
+        {
+            if !marker_exports
+                .get(&plan.marker)
+                .and_then(|original| symbols.get(original))
                 .is_some_and(|symbol| symbol == actual_callee)
-        });
-        if !authenticated {
-            return Err("ordinary call does not match its authenticated source targets".into());
+            {
+                return Err("library redirect does not match its original callee".into());
+            }
+            target = Some(&plan.symbol);
         }
     }
-    let target = redirects.get(emitted_caller).and_then(|redirects| {
-        redirects
+    if target.is_none()
+        && let Some(redirects) = redirects.get(emitted_caller)
+    {
+        target = redirects
             .iter()
             .find(|(original, _)| {
                 symbols
                     .get(*original)
                     .is_some_and(|symbol| symbol == actual_callee)
             })
-            .map(|(_, target)| target)
-    });
+            .map(|(_, target)| target);
+    }
     let Some(target) = target else {
         return Ok(actual_callee.into());
     };
@@ -87,7 +107,7 @@ pub fn resolve_library_call_target(
 /// Realize finalized context names and redirects in the same prepared module.
 ///
 /// `contexts` maps emitted raw names to original raw names. `symbols` contains
-/// both, legalized by the importer's original Legaliser. Redirects
+/// both, legalized by the importer's original Legaliser. Plans and redirects
 /// retain their existing raw-name conventions. Ordinary call-site attributes
 /// remain original; library site callers are rebound to the emitted context.
 /// Only affected functions are cloned. Module globals, static source keys,
@@ -95,6 +115,7 @@ pub fn resolve_library_call_target(
 /// All requested rewrites are checked before mutation; cache entries are then
 /// invalidated before cloning. The importer separately remaps saved alignments
 /// and reattaches debug-global owner names before resource completion.
+#[allow(clippy::too_many_arguments)]
 pub fn materialize_library_contexts(
     module: Ptr<Operation>,
     ctx: &mut Context,
@@ -102,6 +123,8 @@ pub fn materialize_library_contexts(
     contexts: &BTreeMap<String, String>,
     symbols: &BTreeMap<String, String>,
     source_targets: &BTreeMap<LibraryCallSite, BTreeSet<String>>,
+    marker_exports: &BTreeMap<String, String>,
+    plans: &BTreeMap<LibraryCallSite, LibraryCallPlan>,
     redirects: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> Result<()> {
     let functions = admission::functions(ctx, module);
@@ -123,6 +146,7 @@ pub fn materialize_library_contexts(
         .collect();
     let mut emitted_symbols = BTreeSet::new();
     let mut rewrites = Vec::new();
+    let mut seen_redirects = BTreeSet::new();
     for (emitted, source) in &targets {
         let Some(&function) = symbols.get(source).and_then(|symbol| functions.get(symbol)) else {
             return pliron::verify_err!(
@@ -192,13 +216,26 @@ pub fn materialize_library_contexts(
             let source_site = call
                 .get_attr_library_source_site(ctx)
                 .map(|site| (*site).clone());
-            if let Some(site) = &source_site
-                && site.caller != *source
-            {
-                return pliron::verify_err!(
-                    op.deref(ctx).loc(),
-                    "ordinary call site has a different source caller"
-                );
+            if let Some(site) = &source_site {
+                if site.caller != *source {
+                    return pliron::verify_err!(
+                        op.deref(ctx).loc(),
+                        "ordinary call site has a different source caller"
+                    );
+                }
+                let emitted_site = LibraryCallSite {
+                    caller: emitted.clone(),
+                    block: site.block,
+                };
+                if let Some(plan) = plans.get(&emitted_site)
+                    && plan.operation == LibraryOperation::Redirect
+                    && !seen_redirects.insert(emitted_site)
+                {
+                    return pliron::verify_err!(
+                        op.deref(ctx).loc(),
+                        "duplicate original library helper call site"
+                    );
+                }
             }
             let callee = match resolve_library_call_target(
                 source_site.as_ref(),
@@ -206,6 +243,8 @@ pub fn materialize_library_contexts(
                 &original_callee,
                 symbols,
                 source_targets,
+                marker_exports,
+                plans,
                 redirects,
             ) {
                 Ok(callee) => callee,
@@ -236,7 +275,22 @@ pub fn materialize_library_contexts(
             operations,
         });
     }
-    if contexts.is_empty() && redirects.is_empty() {
+    for (site, plan) in plans {
+        if plan.operation == LibraryOperation::Redirect && !seen_redirects.contains(site) {
+            return pliron::verify_err!(
+                module.deref(ctx).loc(),
+                "finalized library redirect has no original call site {} block {}",
+                site.caller,
+                site.block
+            );
+        }
+    }
+    if contexts.is_empty()
+        && redirects.is_empty()
+        && !plans
+            .values()
+            .any(|plan| plan.operation == LibraryOperation::Redirect)
+    {
         return Ok(());
     }
     let mut invalidated = PassResult::default();

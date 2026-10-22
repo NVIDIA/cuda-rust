@@ -83,6 +83,19 @@ pub const LIBRARY_CHECKED_BLOCK_CALL_V1: &str = "cuda_oxide_library_v1_246e25db_
 pub const LIBRARY_CHECKED_BLOCK_RESOURCE_CALL_V1: &str =
     "cuda_oxide_library_v1_246e25db_checked_block_resource_call";
 
+/// Internal full-block storage marker.
+pub const LIBRARY_CHECKED_BLOCK_STORAGE_CALL_V1: &str =
+    "cuda_oxide_library_v1_246e25db_checked_block_storage_call";
+/// Internal full-block storage marker.
+pub const LIBRARY_STORAGE_NEW_V1: &str = "cuda_oxide_library_v1_246e25db_storage_new";
+/// Internal full-block storage marker.
+pub const LIBRARY_STORAGE_RECONFIGURE_V1: &str =
+    "cuda_oxide_library_v1_246e25db_storage_reconfigure";
+/// Internal full-block storage marker.
+pub const LIBRARY_STORAGE_RESERVE_V1: &str = "cuda_oxide_library_v1_246e25db_storage_reserve";
+/// Internal full-block storage marker.
+pub const LIBRARY_STORAGE_RELEASE_V1: &str = "cuda_oxide_library_v1_246e25db_storage_release";
+
 /// Final emitted identity for a helper specialized to one checked kernel root.
 /// Embedded Rust symbols may contain device prefixes and must not be stripped.
 pub const LIBRARY_CONTEXT_PREFIX: &str = "cuda_oxide_library_context_246e25db_";

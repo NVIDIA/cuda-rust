@@ -41,6 +41,34 @@ pub enum LibraryWitness {
     CollectiveCarrier(u64),
 }
 
+/// Source descriptor policy. Zero capacity/alignment retain inferred meaning.
+#[format]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LibraryStoragePolicy {
+    pub capacity: u32,
+    pub alignment: u32,
+    pub auto_sync: bool,
+    pub exclusive: bool,
+}
+
+/// Explicit descriptor use is distinct from managed implicit scratch.
+#[format]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LibraryStorageArg {
+    Implicit,
+    Explicit(LibraryStoragePolicy),
+}
+
+/// Evaluated source array layout, including requested reservation alignment.
+#[format]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LibraryReserveLayout {
+    pub scalar: LibraryScalar,
+    pub count: u32,
+    pub bytes: u32,
+    pub alignment: u32,
+}
+
 /// Native contracts supported by the checked-Block prefix.
 #[format]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -57,13 +85,20 @@ pub enum LibraryNativeMetadata {
         access: LibraryAccess,
         witness: LibraryWitness,
     },
+    CheckedBlockStorage {
+        spec: NativeSpec,
+        access: LibraryAccess,
+        witness: LibraryWitness,
+        storage: LibraryStorageArg,
+    },
 }
 impl LibraryNativeMetadata {
     pub fn spec(self) -> NativeSpec {
         match self {
             Self::Raw { spec, .. }
             | Self::CheckedBlock { spec }
-            | Self::CheckedBlockResource { spec, .. } => spec,
+            | Self::CheckedBlockResource { spec, .. }
+            | Self::CheckedBlockStorage { spec, .. } => spec,
         }
     }
 }
@@ -72,7 +107,28 @@ impl LibraryNativeMetadata {
 #[pliron_attr(name = "mir.library_role", format, verifier = "succ")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LibraryRoleAttr {
+    /// Original position before evaluating a native marker's runtime operands.
+    ///
+    /// This has the same site/callee as its paired native operation. It carries
+    /// no participation or completion authority. Lowering consumes both and
+    /// emits any planned pre-call barrier here, before the operand producers.
+    NativeOperandBoundary,
+    /// Original native marker semantics, before tuple flattening or scratch insertion.
     Native(LibraryNativeMetadata),
+    /// Create a descriptor with a new source identity.
+    StorageNew(LibraryStoragePolicy),
+    /// Consume a descriptor and change its policy, preserving its identity.
+    StorageReconfigure {
+        old: LibraryStoragePolicy,
+        new: LibraryStoragePolicy,
+    },
+    /// Borrow a descriptor to create a typed reservation token.
+    StorageReserve {
+        policy: LibraryStoragePolicy,
+        layout: LibraryReserveLayout,
+    },
+    /// Consume a reservation token; neither synchronization nor descriptor release.
+    StorageRelease,
 }
 
 /// One source terminator in a concrete emitted Rust body.
@@ -100,6 +156,7 @@ pub struct LibraryFunctionSourceAttr {
 #[pliron_attr(name = "mir.library_root_argument", format, verifier = "succ")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LibraryRootArgumentClass {
+    StorageCandidate,
     Scalar,
     ResourceCandidate,
     Kernel,
@@ -224,9 +281,26 @@ pub fn library_impossible_successor(
         .map(|attr| attr.0)
 }
 
+/// Compiler-owned operation at one exact MIR terminator.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LibraryOperation {
+    Native,
+    StorageNew,
+    StorageReconfigure,
+    StorageReserve,
+    StorageRelease,
+    Redirect,
+}
+
 /// One monomorphized call whose Rust tuple and provider ABI already agree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LibraryCallPlan {
+    pub operation: LibraryOperation,
+    pub storage_witness: bool,
+    pub scratch_offset: u32,
+    pub planned_root: Option<String>,
+    pub barrier_before: bool,
+    pub barrier_after: bool,
     /// Exact external symbol emitted by the native provider.
     pub symbol: String,
     /// Expected marker identity at this exact MIR terminator.
@@ -239,6 +313,25 @@ pub struct LibraryCallPlan {
     pub scratch_bytes: u32,
     /// Required alignment of the shared scratch base.
     pub scratch_alignment: u32,
+}
+
+impl LibraryCallPlan {
+    pub fn internal(operation: LibraryOperation, marker: String) -> Self {
+        Self {
+            operation,
+            marker,
+            symbol: String::new(),
+            storage_witness: false,
+            scratch_offset: 0,
+            planned_root: None,
+            barrier_before: false,
+            barrier_after: false,
+            checked_block: false,
+            resource_witness: false,
+            scratch_bytes: 0,
+            scratch_alignment: 1,
+        }
+    }
 }
 
 pub(crate) fn register(ctx: &mut Context) {

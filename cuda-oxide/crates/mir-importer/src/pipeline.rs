@@ -542,6 +542,7 @@ pub struct ImportedModule {
     device_externs: Vec<DeviceExternDecl>,
     legaliser: Legaliser,
     symbols: BTreeMap<String, String>,
+    marker_exports: BTreeMap<String, String>,
     source_targets: BTreeMap<crate::LibraryCallSite, BTreeSet<String>>,
     outputs: ImportOutputs,
     completion: Option<ImportCompletion>,
@@ -574,6 +575,7 @@ pub struct PreparedImport<'a> {
     ordinary: crate::kernel_resources::OrdinaryResources,
     legaliser: &'a mut Legaliser,
     symbols: BTreeMap<String, String>,
+    marker_exports: BTreeMap<String, String>,
     source_targets: BTreeMap<crate::LibraryCallSite, BTreeSet<String>>,
     original_roles: BTreeMap<crate::LibraryCallSite, dialect_mir::library::LibraryRoleAttr>,
     library_rooted_functions: BTreeMap<String, BTreeSet<String>>,
@@ -627,6 +629,7 @@ impl ImportedModule {
             ordinary,
             legaliser: &mut self.legaliser,
             symbols: std::mem::take(&mut self.symbols),
+            marker_exports: std::mem::take(&mut self.marker_exports),
             source_targets: std::mem::take(&mut self.source_targets),
             original_roles,
             library_rooted_functions: BTreeMap::new(),
@@ -680,6 +683,7 @@ impl PreparedImport<'_> {
             &self.symbols,
             &self.original_roles,
             &shapes,
+            None,
         )
         .map_err(|error| PipelineError::Translation(error.disp(ctx).to_string()))?;
         self.library_rooted_functions = rooted_functions.clone();
@@ -687,7 +691,7 @@ impl PreparedImport<'_> {
         Ok(shapes)
     }
 
-    /// Join native provider results with the proof and bind their helper contexts.
+    /// Join provider layouts with the proof, then bind the final shared plan.
     pub fn finish_library_planning(
         &mut self,
         native_plans: &mir_transforms::library::RootedNativePlans,
@@ -697,13 +701,28 @@ impl PreparedImport<'_> {
         let validation = self.library_validation.take().ok_or_else(|| {
             PipelineError::Translation("native library planning requires its source proof".into())
         })?;
-        let (ctx, module, _) = self.stage.ir();
+        let mut plans =
+            mir_transforms::library::allocate_library_storage(&validation, native_plans)
+                .map_err(PipelineError::Translation)?;
+        let (ctx, module, analyses) = self.stage.ir();
+        mir_transforms::library::analyze_libraries(
+            module,
+            ctx,
+            analyses,
+            &self.library_rooted_functions,
+            &self.symbols,
+            &self.original_roles,
+            &validation.shapes,
+            Some(&mut plans),
+        )
+        .map_err(|error| PipelineError::Translation(error.disp(ctx).to_string()))?;
         let assembly = mir_transforms::library::assemble_library_plans(
             module,
             ctx,
             &self.library_rooted_functions,
             &self.source_targets,
             &validation,
+            &plans,
             native_plans,
             roots,
         )
@@ -722,7 +741,7 @@ impl PreparedImport<'_> {
     fn bind_libraries(
         &mut self,
         contexts: BTreeMap<String, String>,
-        calls: BTreeMap<crate::LibraryCallSite, crate::LibraryCallPlan>,
+        mut calls: BTreeMap<crate::LibraryCallSite, crate::LibraryCallPlan>,
         redirects: crate::CallTargetRedirects,
         externs: Vec<DeviceExternDecl>,
         roots: BTreeMap<String, oxide_artifacts::KernelLaunchFacts>,
@@ -737,6 +756,15 @@ impl PreparedImport<'_> {
                 .entry(name.clone())
                 .or_insert_with(|| self.legaliser.legalise(name).to_string());
         }
+        // Resource tags use the physical module names. Source sites and
+        // authenticated redirect identities keep their raw-name conventions.
+        for call in calls.values_mut() {
+            if let Some(root) = &mut call.planned_root {
+                *root = self.symbols.get(root).cloned().ok_or_else(|| {
+                    PipelineError::Translation("planned root has no imported symbol".into())
+                })?;
+            }
+        }
         let physical_contexts = contexts
             .iter()
             .map(|(emitted, source)| {
@@ -750,7 +778,11 @@ impl PreparedImport<'_> {
                 }
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
-        let materialize = !contexts.is_empty() || !redirects.is_empty();
+        let materialize = !contexts.is_empty()
+            || !redirects.is_empty()
+            || calls
+                .values()
+                .any(|plan| plan.operation == crate::LibraryOperation::Redirect);
         if materialize {
             let raw_names: BTreeMap<_, _> = self
                 .symbols
@@ -770,13 +802,15 @@ impl PreparedImport<'_> {
                         callee,
                         &self.symbols,
                         &self.source_targets,
+                        &self.marker_exports,
+                        &calls,
                         &redirects,
                     )
                 },
             )
             .map_err(PipelineError::Translation)?;
         }
-        crate::kernel_resources::validate_ordinary_compatibility(&self.ordinary)
+        crate::kernel_resources::validate_ordinary_compatibility(&self.ordinary, &calls)
             .map_err(PipelineError::Translation)?;
         let (ctx, module, analyses) = self.stage.ir();
         if materialize {
@@ -787,6 +821,8 @@ impl PreparedImport<'_> {
                 &contexts,
                 &self.symbols,
                 &self.source_targets,
+                &self.marker_exports,
+                &calls,
                 &redirects,
             )
             .map_err(|error| PipelineError::Translation(error.disp(ctx).to_string()))?;
@@ -844,8 +880,11 @@ impl PreparedImport<'_> {
         if !self.libraries_bound {
             // Direct callers have no native plan to bind. Library callers
             // validate the same saved ordinary facts during binding.
-            crate::kernel_resources::validate_ordinary_compatibility(&self.ordinary)
-                .map_err(PipelineError::Translation)?;
+            crate::kernel_resources::validate_ordinary_compatibility(
+                &self.ordinary,
+                &self.library_calls,
+            )
+            .map_err(PipelineError::Translation)?;
         }
         let Self {
             stage,
@@ -866,14 +905,14 @@ impl PreparedImport<'_> {
             &library_calls,
         )
         .map_err(|error| PipelineError::Translation(error.disp(ctx).to_string()))?;
-        let kernel_launch_facts = crate::kernel_resources::complete_native(
+        let kernel_launch_facts = crate::kernel_resources::complete_planned(
             ctx,
             module,
             ordinary,
             &completion.library_roots,
         )
         .map_err(PipelineError::Translation)?;
-        // Resource finalization changes root attributes.
+        // Resource relocation changes MIR addresses and root attributes.
         let mut invalidated = pliron::pass::PassResult::default();
         invalidated.ir_changed = pliron::irbuild::IRStatus::Changed;
         analyses.retain_preserved(&invalidated);
@@ -966,6 +1005,7 @@ pub fn import_pipeline_with_libraries(
 
     let mut legaliser = Legaliser::default();
     let mut symbols = BTreeMap::new();
+    let mut marker_exports = BTreeMap::new();
     let mut kernel_launch_bounds = BTreeMap::new();
 
     // Step 3: Translate all functions
@@ -1046,6 +1086,7 @@ pub fn import_pipeline_with_libraries(
             func.export_name.clone(),
             legaliser.legalise(&func.export_name).to_string(),
         );
+        marker_exports.insert(func.instance.mangled_name(), func.export_name.clone());
 
         if config.debug_kind.variables_enabled() {
             attach_debug_global_variables(&mut ctx, func_op_ptr, &config.debug_global_variables);
@@ -1116,6 +1157,7 @@ pub fn import_pipeline_with_libraries(
         device_externs: device_externs.to_vec(),
         legaliser,
         symbols,
+        marker_exports,
         source_targets,
         outputs,
         completion: Some(ImportCompletion {

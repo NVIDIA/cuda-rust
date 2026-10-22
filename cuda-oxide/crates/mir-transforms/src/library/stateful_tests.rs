@@ -148,6 +148,7 @@ fn analyze(
         &BTreeMap::from([("root".into(), "root".into())]),
         roles,
         &BTreeMap::from([("root".into(), [64, 1, 1])]),
+        None,
     )
 }
 
@@ -316,6 +317,7 @@ fn separate_helper_returns_keep_selection_taint_after_promotion() {
                 ]),
                 &roles,
                 &BTreeMap::from([("root".into(), [64, 1, 1])]),
+                None,
             );
             assert_eq!(
                 result.is_ok(),
@@ -497,6 +499,7 @@ fn slot_and_promoted_verdicts(
                 ]),
                 roles,
                 &BTreeMap::from([("root".into(), [64, 1, 1])]),
+                None,
             )
             .map(|_| ())
             .map_err(|error| error.to_string())
@@ -1133,4 +1136,357 @@ fn varying_cycles_stop_at_reconvergence() {
         }
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)]
+fn planned_storage_reuses_the_same_proof_for_completion_and_global_resource_conflicts() {
+    use dialect_mir::{library::LibraryWitness, types::MirDisjointSliceType};
+    for (policy, completed, bytes, expected) in [
+        (None, false, 16, None),
+        (
+            None,
+            false,
+            0,
+            Some("conflicting collective resource access"),
+        ),
+        (
+            Some(Policy::default()),
+            false,
+            16,
+            Some("explicit storage reuse"),
+        ),
+        (Some(Policy::default()), true, 16, None),
+        (
+            Some(Policy {
+                auto_sync: true,
+                ..Default::default()
+            }),
+            false,
+            16,
+            None,
+        ),
+    ] {
+        let ctx = &mut Context::new();
+        dialect_mir::register(ctx);
+        let module = ModuleOp::new(ctx, "resource".try_into().unwrap());
+        let scalar: TypeHandle = IntegerType::get(ctx, 32, Signedness::Signed).into();
+        let carrier: TypeHandle = MirDisjointSliceType::get(ctx, scalar).into();
+        let signature = FunctionType::get(ctx, vec![carrier], vec![]);
+        let function = Operation::new(
+            ctx,
+            MirFuncOp::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            1,
+        );
+        let f = MirFuncOp::new(ctx, function, TypeAttr::new(signature.into()));
+        f.set_symbol_name(ctx, "root".try_into().unwrap());
+        f.set_library_root_argument(ctx, 0, LibraryRootArgumentClass::ResourceCandidate);
+        module.append_operation(ctx, function, 0);
+        let block = BasicBlock::new(ctx, None, vec![carrier]);
+        block.insert_at_back(function.deref(ctx).get_region(0), ctx);
+        let witness_ty =
+            MirPtrType::get_generic_with_kind(ctx, carrier, true, MirPointerKind::UniqueRef).into();
+        let argument = block.deref(ctx).get_argument(0);
+        let witness = emit::<MirRefOp>(ctx, block, vec![witness_ty], vec![argument]);
+        MirRefOp::new(witness).set_mutable(ctx, true);
+        MirRefOp::new(witness).set_pointer_kind_authority(
+            ctx,
+            dialect_mir::attributes::MirPointerKindAuthorityAttr::Reborrow,
+        );
+        let witness = witness.deref(ctx).get_result(0);
+        let pointer: TypeHandle =
+            MirPtrType::get_generic_with_kind(ctx, scalar, true, MirPointerKind::RawMut).into();
+        let memory = value(ctx, block, pointer);
+        MirLibrarySourceOp::build(
+            ctx,
+            LibrarySourceEffectAttr {
+                site: site(0),
+                kind: SourceKind::BlockQuery,
+            },
+            Some(memory),
+        )
+        .insert_at_back(block, ctx);
+        let tuple: TypeHandle = MirTupleType::get(ctx, vec![pointer]).into();
+        let uniform = emit::<MirConstructTupleOp>(ctx, block, vec![tuple], vec![memory])
+            .deref(ctx)
+            .get_result(0);
+        let payload = value(ctx, block, tuple);
+        let mut roles = BTreeMap::new();
+        let (storage, storage_arg) = if let Some(policy) = policy {
+            let byte = IntegerType::get(ctx, 8, Signedness::Unsigned).into();
+            let descriptor = dialect_mir::types::MirStructType::get(
+                ctx,
+                "descriptor".into(),
+                vec!["private".into()],
+                vec![byte],
+            )
+            .into();
+            let signature = FunctionType::get(ctx, vec![], vec![descriptor]);
+            let role = Role::StorageNew(policy);
+            let new =
+                MirLibraryOp::build_call(ctx, role, site(10), "new".into(), signature, vec![]);
+            new.insert_at_back(block, ctx);
+            roles.insert(site(10), role);
+            let original = new.deref(ctx).get_result(0);
+            let address = test_slot(ctx, block, original);
+            let loaded = emit::<MirLoadOp>(ctx, block, vec![descriptor], vec![address])
+                .deref(ctx)
+                .get_result(0);
+            let borrow =
+                MirPtrType::get_generic_with_kind(ctx, descriptor, true, MirPointerKind::UniqueRef)
+                    .into();
+            let reference = emit::<MirRefOp>(ctx, block, vec![borrow], vec![loaded]);
+            MirRefOp::new(reference).set_mutable(ctx, true);
+            MirRefOp::new(reference).set_pointer_kind_authority(
+                ctx,
+                dialect_mir::attributes::MirPointerKindAuthorityAttr::Reborrow,
+            );
+            (
+                reference.deref(ctx).get_result(0),
+                LibraryStorageArg::Explicit(policy),
+            )
+        } else {
+            let empty = MirTupleType::get(ctx, vec![]).into();
+            (value(ctx, block, empty), LibraryStorageArg::Implicit)
+        };
+        let call_ty = FunctionType::get(
+            ctx,
+            vec![witness_ty, storage.get_type(ctx), tuple, tuple],
+            vec![],
+        );
+        for (index, access) in [(1, LibraryAccess::Read), (2, LibraryAccess::Write)] {
+            if index == 2 && completed {
+                MirLibrarySourceOp::build(
+                    ctx,
+                    LibrarySourceEffectAttr {
+                        site: site(3),
+                        kind: SourceKind::BlockSync,
+                    },
+                    None,
+                )
+                .insert_at_back(block, ctx);
+            }
+            let role = Role::Native(Native::CheckedBlockStorage {
+                spec: NativeSpec {
+                    scalar: LibraryScalar::Signed(32),
+                    items: 1,
+                },
+                access,
+                witness: LibraryWitness::CollectiveCarrier(1),
+                storage: storage_arg,
+            });
+            MirLibraryOp::build_call(
+                ctx,
+                role,
+                site(index),
+                "resource_marker".into(),
+                call_ty,
+                vec![witness, storage, uniform, payload],
+            )
+            .insert_at_back(block, ctx);
+            roles.insert(site(index), role);
+        }
+        emit::<MirReturnOp>(ctx, block, vec![], vec![]);
+        let module = module.get_operation();
+        module.deref(ctx).verify(ctx).unwrap();
+        let manager = &mut AnalysisManager::default();
+        for promoted in [false, true] {
+            if promoted {
+                pliron::opts::mem2reg::mem2reg(module, ctx, manager).unwrap();
+                let mut changed = pliron::pass::PassResult::default();
+                changed.ir_changed = pliron::irbuild::IRStatus::Changed;
+                manager.retain_preserved(&changed);
+                module.deref(ctx).verify(ctx).unwrap();
+            }
+            let first = analyze(ctx, module, manager, &roles).unwrap();
+            let natives = super::super::storage::RootedNativePlans::from([(
+                "root".into(),
+                [1, 2]
+                    .into_iter()
+                    .map(|index| {
+                        let mut plan = dialect_mir::library::LibraryCallPlan::internal(
+                            dialect_mir::library::LibraryOperation::Native,
+                            "resource_marker".into(),
+                        );
+                        plan.scratch_bytes = bytes;
+                        plan.scratch_alignment = 4;
+                        (site(index), plan)
+                    })
+                    .collect(),
+            )]);
+            let mut plans =
+                super::super::storage::allocate_library_storage(&first, &natives).unwrap();
+            assert!(manager.try_get_analysis::<PreparedGraph>(module).is_some());
+            let second = analyze_libraries(
+                module,
+                ctx,
+                manager,
+                &BTreeMap::from([("root".into(), BTreeSet::from(["root".into()]))]),
+                &BTreeMap::from([("root".into(), "root".into())]),
+                &roles,
+                &first.shapes,
+                Some(&mut plans),
+            );
+            if let Some(expected) = expected {
+                assert!(second.unwrap_err().to_string().contains(expected));
+            } else {
+                second.unwrap();
+                assert_eq!(plans["root"].bytes, bytes);
+                assert_eq!(plans["root"].sites[&vec![2]].before, policy.is_none());
+                assert_eq!(
+                    plans["root"].sites[&vec![1]].after,
+                    policy.is_some_and(|p| p.auto_sync)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)]
+fn reservations_require_release_and_completion_or_disjoint_exclusive_placement() {
+    use dialect_mir::{library::LibraryReserveLayout, types::MirStructType};
+    // A barrier does not release a token, and releasing a token does not complete
+    // its reads. Exclusive sites instead receive distinct aligned regions.
+    for (release, completed, exclusive, capacity, expected) in [
+        (false, false, false, 0, Some("overlaps a live reservation")),
+        (false, true, false, 0, Some("overlaps a live reservation")),
+        (true, false, false, 0, Some("explicit storage reuse")),
+        (true, true, false, 0, None),
+        (false, false, true, 0, None),
+        (false, false, true, 19, Some("including exclusive padding")),
+    ] {
+        let ctx = &mut Context::new();
+        let (module, _, block) = function(ctx);
+        let byte = IntegerType::get(ctx, 8, Signedness::Unsigned).into();
+        let scalar = IntegerType::get(ctx, 32, Signedness::Signed).into();
+        let descriptor =
+            MirStructType::get(ctx, "descriptor".into(), vec!["private".into()], vec![byte]).into();
+        let pointer =
+            MirPtrType::get_generic_with_kind(ctx, scalar, true, MirPointerKind::RawMut).into();
+        let token_type =
+            MirStructType::get(ctx, "token".into(), vec!["private".into()], vec![pointer]).into();
+        let policy = Policy {
+            exclusive,
+            capacity,
+            ..Default::default()
+        };
+        let new_role = Role::StorageNew(policy);
+        let signature = FunctionType::get(ctx, vec![], vec![descriptor]);
+        let new =
+            MirLibraryOp::build_call(ctx, new_role, site(10), "new".into(), signature, vec![]);
+        new.insert_at_back(block, ctx);
+        let initial = new.deref(ctx).get_result(0);
+        let address = test_slot(ctx, block, initial);
+        let loaded = emit::<MirLoadOp>(ctx, block, vec![descriptor], vec![address])
+            .deref(ctx)
+            .get_result(0);
+        let borrow_type =
+            MirPtrType::get_generic_with_kind(ctx, descriptor, true, MirPointerKind::UniqueRef)
+                .into();
+        let borrow = emit::<MirRefOp>(ctx, block, vec![borrow_type], vec![loaded]);
+        MirRefOp::new(borrow).set_mutable(ctx, true);
+        MirRefOp::new(borrow).set_pointer_kind_authority(
+            ctx,
+            dialect_mir::attributes::MirPointerKindAuthorityAttr::Reborrow,
+        );
+        let borrow = borrow.deref(ctx).get_result(0);
+        let mut roles = BTreeMap::from([(site(10), new_role)]);
+        for index in [1, 2] {
+            let role = Role::StorageReserve {
+                policy,
+                layout: LibraryReserveLayout {
+                    scalar: LibraryScalar::Signed(32),
+                    count: 1,
+                    bytes: 4,
+                    alignment: if index == 1 { 4 } else { 16 },
+                },
+            };
+            let signature = FunctionType::get(ctx, vec![borrow_type], vec![token_type]);
+            let reserve = MirLibraryOp::build_call(
+                ctx,
+                role,
+                site(index),
+                "reserve".into(),
+                signature,
+                vec![borrow],
+            );
+            reserve.insert_at_back(block, ctx);
+            roles.insert(site(index), role);
+            if index == 1 {
+                if release {
+                    let token = reserve.deref(ctx).get_result(0);
+                    let address = test_slot(ctx, block, token);
+                    let token = emit::<MirLoadOp>(ctx, block, vec![token_type], vec![address])
+                        .deref(ctx)
+                        .get_result(0);
+                    let signature = FunctionType::get(ctx, vec![token_type], vec![]);
+                    MirLibraryOp::build_call(
+                        ctx,
+                        Role::StorageRelease,
+                        site(3),
+                        "release".into(),
+                        signature,
+                        vec![token],
+                    )
+                    .insert_at_back(block, ctx);
+                    roles.insert(site(3), Role::StorageRelease);
+                }
+                if completed {
+                    MirLibrarySourceOp::build(
+                        ctx,
+                        LibrarySourceEffectAttr {
+                            site: site(4),
+                            kind: SourceKind::BlockSync,
+                        },
+                        None,
+                    )
+                    .insert_at_back(block, ctx);
+                }
+            }
+        }
+        emit::<MirReturnOp>(ctx, block, vec![], vec![]);
+        module.deref(ctx).verify(ctx).unwrap();
+        let manager = &mut AnalysisManager::default();
+        for promoted in [false, true] {
+            if promoted {
+                pliron::opts::mem2reg::mem2reg(module, ctx, manager).unwrap();
+                let mut changed = pliron::pass::PassResult::default();
+                changed.ir_changed = pliron::irbuild::IRStatus::Changed;
+                manager.retain_preserved(&changed);
+                module.deref(ctx).verify(ctx).unwrap();
+            }
+            let first = analyze(ctx, module, manager, &roles).unwrap();
+            assert_eq!(first.traces["root"].events[&vec![2]].origin, Some(vec![10]));
+            let plans = super::super::storage::allocate_library_storage(&first, &BTreeMap::new());
+            if capacity != 0 {
+                assert!(plans.err().unwrap().contains(expected.unwrap()));
+                continue;
+            }
+            let mut plans = plans.unwrap();
+            assert_eq!(plans["root"].bytes, if exclusive { 20 } else { 4 });
+            assert_eq!(
+                plans["root"].sites[&vec![2]].offset,
+                if exclusive { 16 } else { 0 }
+            );
+            let second = analyze_libraries(
+                module,
+                ctx,
+                manager,
+                &BTreeMap::from([("root".into(), BTreeSet::from(["root".into()]))]),
+                &BTreeMap::from([("root".into(), "root".into())]),
+                &roles,
+                &first.shapes,
+                Some(&mut plans),
+            );
+            if let Some(expected) = expected {
+                assert!(second.unwrap_err().to_string().contains(expected));
+            } else {
+                second.unwrap();
+            }
+        }
+    }
 }

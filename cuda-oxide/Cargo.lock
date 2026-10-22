@@ -1029,6 +1029,7 @@ name = "mir-transforms"
 version = "0.2.1"
 dependencies = [
  "dialect-mir",
+ "dialect-nvvm",
  "oxide-artifacts",
  "pliron",
  "reserved-oxide-symbols",

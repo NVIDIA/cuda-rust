@@ -26,15 +26,47 @@ pub(crate) enum MarkerKind {
     Raw,
     CheckedBlock,
     CheckedBlockResource,
+    CheckedBlockStorage,
+    StorageNew,
+    StorageReconfigure,
+    StorageReserve,
+    StorageRelease,
 }
 
 impl MarkerKind {
     pub(crate) fn checked(self) -> bool {
-        matches!(self, Self::CheckedBlock | Self::CheckedBlockResource)
+        matches!(
+            self,
+            Self::CheckedBlock
+                | Self::CheckedBlockResource
+                | Self::CheckedBlockStorage
+                | Self::StorageNew
+                | Self::StorageReconfigure
+                | Self::StorageReserve
+                | Self::StorageRelease
+        )
+    }
+
+    pub(crate) fn native(self) -> bool {
+        matches!(
+            self,
+            Self::Raw | Self::CheckedBlock | Self::CheckedBlockResource | Self::CheckedBlockStorage
+        )
+    }
+
+    pub(crate) fn storage(self) -> bool {
+        matches!(
+            self,
+            Self::CheckedBlockStorage
+                | Self::StorageNew
+                | Self::StorageReconfigure
+                | Self::StorageReserve
+                | Self::StorageRelease
+        )
     }
 
     pub(crate) fn resource(self) -> bool {
-        self == Self::CheckedBlockResource
+        matches!(self, Self::CheckedBlockResource | Self::CheckedBlockStorage)
     }
 }
 
@@ -89,6 +121,19 @@ pub(crate) fn marker_definitions(tcx: TyCtxt<'_>) -> HashMap<DefId, MarkerKind> 
                     reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_RESOURCE_CALL_V1 => {
                         MarkerKind::CheckedBlockResource
                     }
+                    reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_STORAGE_CALL_V1 => {
+                        MarkerKind::CheckedBlockStorage
+                    }
+                    reserved_oxide_symbols::LIBRARY_STORAGE_NEW_V1 => MarkerKind::StorageNew,
+                    reserved_oxide_symbols::LIBRARY_STORAGE_RECONFIGURE_V1 => {
+                        MarkerKind::StorageReconfigure
+                    }
+                    reserved_oxide_symbols::LIBRARY_STORAGE_RESERVE_V1 => {
+                        MarkerKind::StorageReserve
+                    }
+                    reserved_oxide_symbols::LIBRARY_STORAGE_RELEASE_V1 => {
+                        MarkerKind::StorageRelease
+                    }
                     _ => continue,
                 };
                 if let Some(def) = item.res.opt_def_id() {
@@ -100,7 +145,7 @@ pub(crate) fn marker_definitions(tcx: TyCtxt<'_>) -> HashMap<DefId, MarkerKind> 
     definitions
 }
 
-fn device_type(tcx: TyCtxt<'_>, name: &str) -> Option<DefId> {
+fn device_type(tcx: TyCtxt<'_>, module_name: &str, name: &str) -> Option<DefId> {
     for &krate in tcx.crates(()) {
         if tcx.crate_name(krate).as_str() != "cuda_device" {
             continue;
@@ -112,7 +157,7 @@ fn device_type(tcx: TyCtxt<'_>, name: &str) -> Option<DefId> {
         let module = tcx
             .module_children(root)
             .iter()
-            .find(|item| item.ident.name.as_str() == "disjoint")?
+            .find(|item| item.ident.name.as_str() == module_name)?
             .res
             .opt_def_id()?;
         return tcx
@@ -129,7 +174,7 @@ pub(crate) fn collective_carrier<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Optio
     let TyKind::Adt(def, args) = ty.kind() else {
         return None;
     };
-    if Some(def.did()) != device_type(tcx, "DisjointSlice") {
+    if Some(def.did()) != device_type(tcx, "disjoint", "DisjointSlice") {
         return None;
     }
     let mut types = args.types();
@@ -137,7 +182,7 @@ pub(crate) fn collective_carrier<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Optio
     let TyKind::Adt(space, args) = types.next()?.kind() else {
         return None;
     };
-    if Some(space.did()) != device_type(tcx, "CollectiveTiles") {
+    if Some(space.did()) != device_type(tcx, "disjoint", "CollectiveTiles") {
         return None;
     }
     Some((element, args.const_at(0).try_to_target_usize(tcx)?))
@@ -152,7 +197,11 @@ pub(crate) fn resource_parameter<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool 
 pub(crate) fn resource_write(call: &LibraryCall<'_>) -> bool {
     call.instance
         .args
-        .const_at(6)
+        .const_at(if call.kind == MarkerKind::CheckedBlockStorage {
+            7
+        } else {
+            6
+        })
         .try_to_leaf()
         .and_then(|value| value.try_to_bool().ok())
         .expect("validated resource access")
@@ -161,7 +210,11 @@ pub(crate) fn resource_write(call: &LibraryCall<'_>) -> bool {
 fn validate_resource<'tcx>(tcx: TyCtxt<'tcx>, call: &LibraryCall<'tcx>) -> Result<(), String> {
     let args = call.instance.args;
     let write = args
-        .const_at(6)
+        .const_at(if call.kind == MarkerKind::CheckedBlockStorage {
+            7
+        } else {
+            6
+        })
         .try_to_leaf()
         .and_then(|value| value.try_to_bool().ok())
         .ok_or("resource access mode is not constant")?;
@@ -188,6 +241,137 @@ fn validate_resource<'tcx>(tcx: TyCtxt<'tcx>, call: &LibraryCall<'tcx>) -> Resul
     };
     if element != args.type_at(0) {
         return Err("resource witness element type disagrees with the library element type".into());
+    }
+    Ok(())
+}
+
+fn storage_extent<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    args: rustc_middle::ty::GenericArgsRef<'tcx>,
+    index: usize,
+) -> Result<u32, String> {
+    args.const_at(index)
+        .try_to_target_usize(tcx)
+        .and_then(|n| u32::try_from(n).ok())
+        .ok_or_else(|| "storage extent must be a concrete usize fitting u32".into())
+}
+fn storage_boolean(
+    args: rustc_middle::ty::GenericArgsRef<'_>,
+    index: usize,
+) -> Result<bool, String> {
+    args.const_at(index)
+        .try_to_leaf()
+        .and_then(|n| n.try_to_bool().ok())
+        .ok_or_else(|| "storage policy must be a concrete bool".into())
+}
+fn storage_alignment(value: u32) -> Result<u32, String> {
+    if value != 0 && !value.is_power_of_two() {
+        return Err("storage alignment must be zero or a power of two".into());
+    }
+    Ok(value)
+}
+
+fn storage_policy<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Result<mir_importer::LibraryStoragePolicy, String> {
+    let TyKind::Adt(def, args) = ty.kind() else {
+        return Err("expected a genuine StorageDescriptor".into());
+    };
+    if Some(def.did()) != device_type(tcx, "library", "StorageDescriptor") {
+        return Err("expected a genuine StorageDescriptor".into());
+    }
+    Ok(mir_importer::LibraryStoragePolicy {
+        capacity: storage_extent(tcx, args, 0)?,
+        alignment: storage_alignment(storage_extent(tcx, args, 1)?)?,
+        auto_sync: storage_boolean(args, 2)?,
+        exclusive: storage_boolean(args, 3)?,
+    })
+}
+
+pub(crate) fn storage_handle_type(tcx: TyCtxt<'_>, ty: Ty<'_>) -> bool {
+    matches!(ty.kind(), TyKind::Adt(def, _) if ["StorageDescriptor","StorageReservation"].iter().any(|name|Some(def.did()) == device_type(tcx, "library", name)))
+}
+
+fn storage_borrow_policy<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Result<mir_importer::LibraryStoragePolicy, String> {
+    let TyKind::Ref(_, inner, rustc_hir::Mutability::Mut) = ty.kind() else {
+        return Err("storage must mutably borrow a genuine descriptor".into());
+    };
+    storage_policy(tcx, *inner)
+}
+
+fn storage_new_policy<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    call: &LibraryCall<'tcx>,
+) -> Result<mir_importer::LibraryStoragePolicy, String> {
+    let args = call.instance.args;
+    Ok(mir_importer::LibraryStoragePolicy {
+        capacity: storage_extent(tcx, args, 0)?,
+        alignment: storage_alignment(storage_extent(tcx, args, 1)?)?,
+        auto_sync: storage_boolean(args, 2)?,
+        exclusive: storage_boolean(args, 3)?,
+    })
+}
+
+fn storage_reserve_layout<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    call: &LibraryCall<'tcx>,
+) -> Result<(u32, u32), String> {
+    let args = call.instance.args;
+    let element = args.type_at(0);
+    scalar(element)?;
+    // f16 is not in the frozen ten-type reservation set.
+    if matches!(
+        element.kind(),
+        TyKind::Float(rustc_middle::ty::FloatTy::F16)
+    ) {
+        return Err("storage reservations require one of the ten fixed-width numeric types".into());
+    }
+    let count = storage_extent(tcx, args, 2)?;
+    if count == 0 {
+        return Err("storage reservation extent must be positive".into());
+    }
+    let array = Ty::new_array(tcx, element, u64::from(count));
+    let layout = tcx
+        .layout_of(TypingEnv::fully_monomorphized().as_query_input(array))
+        .map_err(|_| "cannot compute storage reservation layout")?;
+    let bytes =
+        u32::try_from(layout.size.bytes()).map_err(|_| "storage reservation exceeds u32")?;
+    let align = u32::try_from(layout.align.abi.bytes())
+        .map_err(|_| "storage reservation alignment exceeds u32")?;
+    Ok((
+        bytes,
+        align.max(storage_alignment(storage_extent(tcx, args, 3)?)?),
+    ))
+}
+
+fn validate_storage<'tcx>(tcx: TyCtxt<'tcx>, call: &LibraryCall<'tcx>) -> Result<(), String> {
+    let args = call.instance.args;
+    match call.kind {
+        MarkerKind::StorageNew => {
+            storage_new_policy(tcx, call)?;
+        }
+        MarkerKind::StorageReconfigure => {
+            storage_policy(tcx, args.type_at(0))?;
+            storage_policy(tcx, args.type_at(1))?;
+        }
+        MarkerKind::StorageReserve => {
+            storage_policy(tcx, args.type_at(1))?;
+            storage_reserve_layout(tcx, call)?;
+        }
+        MarkerKind::StorageRelease => {
+            scalar(args.type_at(0))?;
+        }
+        MarkerKind::CheckedBlockStorage => {
+            let ty = args.type_at(3);
+            if !matches!(ty.kind(), TyKind::Tuple(fields) if fields.is_empty()) {
+                storage_borrow_policy(tcx, ty)?;
+            }
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -539,7 +723,13 @@ fn extern_argument(argument: &Argument) -> mir_importer::DeviceExternType {
 
 fn call_arguments(call: &LibraryCall<'_>) -> Result<Vec<Argument>, String> {
     let args = call.instance.args;
-    let first = if call.kind.resource() { 3 } else { 2 };
+    let first = if call.kind == MarkerKind::CheckedBlockStorage {
+        4
+    } else if call.kind.resource() {
+        3
+    } else {
+        2
+    };
     let TyKind::Tuple(uniform) = args.type_at(first).kind() else {
         return Err("library arguments must be a tuple".into());
     };
@@ -581,8 +771,8 @@ fn authenticated_metadata<'tcx>(
     call: &LibraryCall<'tcx>,
 ) -> Result<mir_importer::LibraryCallMetadata, String> {
     use mir_importer::{
-        LibraryAccess, LibraryNativeMetadata as Native, LibraryRoleAttr, LibraryScalar,
-        LibraryWitness, NativeSpec,
+        LibraryAccess, LibraryNativeMetadata as Native, LibraryReserveLayout,
+        LibraryRoleAttr as Role, LibraryScalar, LibraryStorageArg, LibraryWitness, NativeSpec,
     };
     let args = call.instance.args;
     let positive = |index| {
@@ -595,22 +785,25 @@ fn authenticated_metadata<'tcx>(
             .filter(|value| *value != 0)
             .ok_or("library extent must fit nonzero u32")
     };
-    let scalar = match scalar(args.type_at(0))? {
-        Scalar::Signed(bits) => LibraryScalar::Signed(bits),
-        Scalar::Unsigned(bits) => LibraryScalar::Unsigned(bits),
-        Scalar::Float(bits) => LibraryScalar::Float(bits),
+    let scalar_attr = |ty| {
+        scalar(ty).map(|value| match value {
+            Scalar::Signed(bits) => LibraryScalar::Signed(bits),
+            Scalar::Unsigned(bits) => LibraryScalar::Unsigned(bits),
+            Scalar::Float(bits) => LibraryScalar::Float(bits),
+        })
     };
-    let spec = NativeSpec {
-        scalar,
-        items: positive(if call.kind.resource() { 5 } else { 4 })?,
-    };
-    let native = match call.kind {
-        MarkerKind::Raw => Native::Raw {
-            spec,
-            block_threads: positive(3)?,
-        },
-        MarkerKind::CheckedBlock => Native::CheckedBlock { spec },
-        MarkerKind::CheckedBlockResource => {
+    let role = if call.kind.native() {
+        let spec = NativeSpec {
+            scalar: scalar_attr(args.type_at(0))?,
+            items: positive(if call.kind == MarkerKind::CheckedBlockStorage {
+                6
+            } else if call.kind.resource() {
+                5
+            } else {
+                4
+            })?,
+        };
+        let access_witness = || -> Result<_, String> {
             let TyKind::Ref(_, inner, _) = args.type_at(2).kind() else {
                 return Err("resource witness must be a reference".into());
             };
@@ -621,20 +814,70 @@ fn authenticated_metadata<'tcx>(
                     .ok_or("resource witness requires DisjointSlice<T, CollectiveTiles<C>>")?;
                 LibraryWitness::CollectiveCarrier(capacity)
             };
-            Native::CheckedBlockResource {
+            let access = if resource_write(call) {
+                LibraryAccess::Write
+            } else {
+                LibraryAccess::Read
+            };
+            Ok((access, witness))
+        };
+        Role::Native(match call.kind {
+            MarkerKind::Raw => Native::Raw {
                 spec,
-                access: if resource_write(call) {
-                    LibraryAccess::Write
-                } else {
-                    LibraryAccess::Read
-                },
-                witness,
+                block_threads: positive(3)?,
+            },
+            MarkerKind::CheckedBlock => Native::CheckedBlock { spec },
+            MarkerKind::CheckedBlockResource => {
+                let (access, witness) = access_witness()?;
+                Native::CheckedBlockResource {
+                    spec,
+                    access,
+                    witness,
+                }
             }
+            MarkerKind::CheckedBlockStorage => {
+                let (access, witness) = access_witness()?;
+                let ty = args.type_at(3);
+                let storage = if matches!(ty.kind(), TyKind::Tuple(fields) if fields.is_empty()) {
+                    LibraryStorageArg::Implicit
+                } else {
+                    LibraryStorageArg::Explicit(storage_borrow_policy(tcx, ty)?)
+                };
+                Native::CheckedBlockStorage {
+                    spec,
+                    access,
+                    witness,
+                    storage,
+                }
+            }
+            _ => unreachable!("native kind checked above"),
+        })
+    } else {
+        match call.kind {
+            MarkerKind::StorageNew => Role::StorageNew(storage_new_policy(tcx, call)?),
+            MarkerKind::StorageReconfigure => Role::StorageReconfigure {
+                old: storage_policy(tcx, args.type_at(0))?,
+                new: storage_policy(tcx, args.type_at(1))?,
+            },
+            MarkerKind::StorageReserve => {
+                let (bytes, alignment) = storage_reserve_layout(tcx, call)?;
+                Role::StorageReserve {
+                    policy: storage_policy(tcx, args.type_at(1))?,
+                    layout: LibraryReserveLayout {
+                        scalar: scalar_attr(args.type_at(0))?,
+                        count: positive(2)?,
+                        bytes,
+                        alignment,
+                    },
+                }
+            }
+            MarkerKind::StorageRelease => Role::StorageRelease,
+            _ => unreachable!("all marker kinds covered"),
         }
     };
     Ok(mir_importer::LibraryCallMetadata {
         marker: tcx.symbol_name(call.instance).name.to_string(),
-        role: LibraryRoleAttr::Native(native),
+        role,
     })
 }
 
@@ -661,7 +904,10 @@ pub(crate) fn authenticate<'tcx>(
         if definitions.get(&call.instance.def_id()) != Some(&call.kind) {
             return Err("library marker is not a genuine registered definition".into());
         }
-        call_arguments(call).unwrap_or_else(|error| tcx.dcx().span_fatal(call.span, error));
+        validate_storage(tcx, call).unwrap_or_else(|error| tcx.dcx().span_fatal(call.span, error));
+        if call.kind.native() {
+            call_arguments(call).unwrap_or_else(|error| tcx.dcx().span_fatal(call.span, error));
+        }
         if call.kind.resource() {
             validate_resource(tcx, call)
                 .unwrap_or_else(|error| tcx.dcx().span_fatal(call.span, error));
@@ -805,8 +1051,10 @@ pub(crate) fn finalize_provider<'tcx>(
         if calls.is_empty() {
             continue;
         }
+        let storage_root = calls.iter().any(|call| call.kind.storage());
         for instance in &reached {
-            if tcx.crate_name(instance.def_id().krate).as_str() == "cuda_device"
+            if !storage_root
+                && tcx.crate_name(instance.def_id().krate).as_str() == "cuda_device"
                 && tcx
                     .def_path_str(instance.def_id())
                     .contains("DynamicSharedArray")
@@ -833,7 +1081,7 @@ pub(crate) fn finalize_provider<'tcx>(
                 }
             }
         }
-        for call in calls {
+        for call in calls.into_iter().filter(|call| call.kind.native()) {
             let args = call.instance.args;
             let report = |error: String| -> ! {
                 tcx.dcx()
@@ -875,9 +1123,15 @@ pub(crate) fn finalize_provider<'tcx>(
                 algorithm: registration.algorithm,
                 dtype: scalar(args.type_at(0)).unwrap_or_else(|error| report(error)),
                 block,
-                items_per_thread: positive(if call.kind.resource() { 5 } else { 4 })
-                    .map_err(str::to_owned)
-                    .unwrap_or_else(|error| report(error)),
+                items_per_thread: positive(if call.kind == MarkerKind::CheckedBlockStorage {
+                    6
+                } else if call.kind.resource() {
+                    5
+                } else {
+                    4
+                })
+                .map_err(str::to_owned)
+                .unwrap_or_else(|error| report(error)),
             };
             let batch = batches
                 .entry((registration.provider, registration.executable))
@@ -941,7 +1195,7 @@ pub(crate) fn finalize_provider<'tcx>(
                 },
             });
             for (call, root) in calls {
-                if call.kind.resource() && !spec.scratch_free {
+                if call.kind == MarkerKind::CheckedBlockResource && !spec.scratch_free {
                     tcx.dcx().span_fatal(
                         call.span,
                         "resource-checked block calls currently require a scratch-free provider",
@@ -957,6 +1211,12 @@ pub(crate) fn finalize_provider<'tcx>(
                 }
                 let _ = spec.mutates_payload;
                 let plan = mir_importer::LibraryCallPlan {
+                    operation: mir_importer::LibraryOperation::Native,
+                    storage_witness: call.kind == MarkerKind::CheckedBlockStorage,
+                    scratch_offset: 0,
+                    planned_root: None,
+                    barrier_before: false,
+                    barrier_after: false,
                     symbol: spec.symbol.clone(),
                     marker: tcx.symbol_name(call.instance).name.to_string(),
                     checked_block: call.kind.checked(),

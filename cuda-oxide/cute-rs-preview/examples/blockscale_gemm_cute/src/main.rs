@@ -461,7 +461,7 @@ fn pack_canonical_scales(dense: &[u8], rows: usize) -> Vec<u16> {
     let mut packed = vec![0u8; layout.storage_len(1)];
     for row in 0..rows {
         for group in 0..KB {
-            packed[layout.offset(0, row, group)] = dense[row * KB + group];
+            packed[layout.crd2idx(0, row, group)] = dense[row * KB + group];
         }
     }
     packed

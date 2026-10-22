@@ -265,7 +265,7 @@ fn scale_storage_len(l: usize, mn: usize, k: usize) -> usize {
 
 /// Map a batch, row, and K-group to its canonical scale-byte offset.
 fn scale_index(batch: usize, row: usize, k_group: usize, mn: usize, k: usize) -> usize {
-    Sm1xxBlockScaleKMajor::<SF_VEC>::new(mn, k).offset(batch, row, k_group)
+    Sm1xxBlockScaleKMajor::<SF_VEC>::new(mn, k).crd2idx(batch, row, k_group)
 }
 
 /// Fill valid scale coordinates and leave canonical-layout padding as raw zero bytes.

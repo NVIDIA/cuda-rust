@@ -12,13 +12,13 @@ use crate::numeric::{Float4E2M1FN, Float8E8M0FNU};
 fn canonical_scale_layout_matches_blackwell_golden_offsets() {
     let layout = Sm1xxBlockScaleKMajor::<16>::new(256, 128);
 
-    assert_eq!(layout.offset(0, 0, 0), 0);
-    assert_eq!(layout.offset(0, 31, 0), 496);
-    assert_eq!(layout.offset(0, 32, 0), 4);
-    assert_eq!(layout.offset(0, 127, 3), 511);
-    assert_eq!(layout.offset(0, 0, 4), 512);
-    assert_eq!(layout.offset(0, 128, 0), 1_024);
-    assert_eq!(layout.offset(1, 0, 0), 2_048);
+    assert_eq!(layout.crd2idx(0, 0, 0), 0);
+    assert_eq!(layout.crd2idx(0, 31, 0), 496);
+    assert_eq!(layout.crd2idx(0, 32, 0), 4);
+    assert_eq!(layout.crd2idx(0, 127, 3), 511);
+    assert_eq!(layout.crd2idx(0, 0, 4), 512);
+    assert_eq!(layout.crd2idx(0, 128, 0), 1_024);
+    assert_eq!(layout.crd2idx(1, 0, 0), 2_048);
     assert_eq!(layout.storage_len(2), 4_096);
 }
 
@@ -84,9 +84,9 @@ fn dense_and_canonical_scale_layouts_are_distinct() {
     let dense = DenseBlockScaleKMajor::<Mkl, 32>::new(128, 128);
     let canonical = Sm1xxBlockScaleKMajor::<32>::new(128, 128);
 
-    assert_eq!(dense.offset(32, 0), 128);
+    assert_eq!(dense.crd2idx(32, 0), 128);
     assert_eq!(dense.storage_len(), 512);
-    assert_eq!(canonical.offset(0, 32, 0), 4);
+    assert_eq!(canonical.crd2idx(0, 32, 0), 4);
     assert_eq!(canonical.storage_len(1), 512);
 }
 
@@ -98,9 +98,9 @@ fn shared_scale_atom_words_match_blackwell_golden_layout() {
 
     for row in 0..Sm120ScaleAtom::ROWS {
         let word = Sm120ScaleAtom::word_offset(row);
-        assert_eq!(word * 4, canonical.offset(0, row, 0));
+        assert_eq!(word * 4, canonical.crd2idx(0, row, 0));
         for group in 0..CANONICAL_SCALE_K_GROUPS {
-            assert_eq!(word * 4 + group, canonical.offset(0, row, group));
+            assert_eq!(word * 4 + group, canonical.crd2idx(0, row, group));
         }
         assert!(!seen[word]);
         seen[word] = true;

@@ -111,7 +111,7 @@ impl<'a, Mode: Copy> Mxf4BlockScaledTensor<'a, Mode> {
     #[must_use]
     #[inline(always)]
     pub fn load_scale_pair(&self, row: usize, pair: usize) -> MmaScalePair<Mode> {
-        let offset = self.scales.layout.offset(row, pair * 2);
+        let offset = self.scales.layout.crd2idx(row, pair * 2);
         MmaScalePair {
             bits: (self.scales.storage[offset] as u32)
                 | ((self.scales.storage[offset + 1] as u32) << 8),
@@ -262,7 +262,7 @@ impl<'a, Mode: Copy> Nvfp4BlockScaledTensor<'a, Mode> {
     #[must_use]
     #[inline(always)]
     pub fn load_scale_quad(&self, row: usize, k64_step: usize) -> MmaScaleQuad<Mode> {
-        let offset = self.scales.layout.offset(row, k64_step * 4);
+        let offset = self.scales.layout.crd2idx(row, k64_step * 4);
         let bits = (self.scales.storage[offset] as u32)
             | ((self.scales.storage[offset + 1] as u32) << 8)
             | ((self.scales.storage[offset + 2] as u32) << 16)

@@ -92,10 +92,11 @@ impl<Mode, const SF_VEC: usize> DenseBlockScaleKMajor<Mode, SF_VEC> {
         }
     }
 
-    /// Return the byte offset for `(row, K group)`.
+    /// Map the coordinate `(row, K group)` to its byte index (CuTeDSL
+    /// `cute.crd2idx` on this layout).
     #[must_use]
     #[inline(always)]
-    pub const fn offset(&self, row: usize, group: usize) -> usize {
+    pub const fn crd2idx(&self, row: usize, group: usize) -> usize {
         row * self.groups + group
     }
 
@@ -203,10 +204,11 @@ impl<const SF_VEC: usize> Sm1xxBlockScaleKMajor<SF_VEC> {
         }
     }
 
-    /// Return the byte offset for `(batch, row, K group)`.
+    /// Map the coordinate `(batch, row, K group)` to its byte index in the
+    /// 512-byte block order (CuTeDSL `cute.crd2idx` on this layout).
     #[must_use]
     #[inline(always)]
-    pub const fn offset(self, batch: usize, row: usize, group: usize) -> usize {
+    pub const fn crd2idx(self, batch: usize, row: usize, group: usize) -> usize {
         sm1xx_scale_offset!(self, batch, row, group)
     }
 

@@ -155,8 +155,8 @@ jobs:
           command -v tileiras
           tileiras --help | grep -q "sm_120"
 
+      - uses: $/cutile-rs/.github/actions/setup
       - uses: actions/checkout@v7
-      - uses: ./cutile-rs/.github/actions/setup
 
       # Cheapest checks first so a formatting or lint slip fails in seconds.
       - name: Format check

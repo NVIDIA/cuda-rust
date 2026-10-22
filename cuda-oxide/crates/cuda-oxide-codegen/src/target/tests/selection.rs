@@ -666,6 +666,29 @@ fn an_explicit_target_that_cannot_host_the_module_is_refused() {
     );
 }
 
+/// The floor's reject arm. A feature-selected target below the floor is
+/// raised only when the floor can host the module: WGMMA exists only on
+/// sm_90a, so a floor of 100 cannot, and that is reported instead of resolved
+/// to another architecture family.
+#[test]
+fn a_floor_that_cannot_host_the_module_is_reported() {
+    let generated = crate::generated::GeneratedModuleRequirements::default();
+    let sm_90a = "sm_90a".parse::<cuda_target_spec::CudaArch>().unwrap();
+
+    let error =
+        honour_sm_floor(sm_90a.clone(), 100, DetectedFeatures::Wgmma, &generated).unwrap_err();
+    assert!(error.contains("compute capability 100"), "{error}");
+    assert!(error.contains("run only on sm_90a"), "{error}");
+
+    // Controls: a floor the selection already meets leaves it alone, and one
+    // that can host the module raises it.
+    let kept = honour_sm_floor(sm_90a, 90, DetectedFeatures::Wgmma, &generated).unwrap();
+    assert_eq!(kept.sm(), "sm_90a");
+    let sm_75 = "sm_75".parse::<cuda_target_spec::CudaArch>().unwrap();
+    let raised = honour_sm_floor(sm_75, 80, DetectedFeatures::Ldmatrix, &generated).unwrap();
+    assert_eq!(raised.sm(), "sm_80");
+}
+
 /// `cuda-device`'s build script reads `CUDA_OXIDE_DEVICE_ARCH` as
 /// `value.parse::<DeviceArch>().ok()`. Its floor matches selection only while
 /// the backend's input boundary accepts exactly those values and rejects the

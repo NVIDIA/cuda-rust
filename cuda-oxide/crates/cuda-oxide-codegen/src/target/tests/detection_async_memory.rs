@@ -741,6 +741,14 @@ fn test_redux_f32_detection_reads_ptx_as_ptx() {
     // A backslash is literal inside a PTX string, so `"nounroll\"` closes at
     // its last quote and the instruction after it is real.
     let after_trailing_backslash = r#"%r = call float asm sideeffect ".pragma \22nounroll\5C\22;\0Aredux.sync.min.f32 $0, $1, $2;", "=f,f,r"(float %v, i32 %m)"#;
+    // A bare `$` starts an operand, so it ends the modifier before it. llc
+    // emits `redux.sync.min.f32%r1, %r2, %r3;`, which ptxas assembles at
+    // sm_100a and refuses at sm_80 with `Instruction 'redux.f32' not supported`.
+    let glued_operand = r#"%r = call float asm sideeffect "redux.sync.min.f32$0, $1, $2;", "=f,f,r"(float %v, i32 %m)"#;
+    // Modifiers may come in any order; ptxas gives both of these the same
+    // two results as the glued form.
+    let sync_after_operation = r#"%r = call float asm sideeffect "redux.min.sync.f32 $0, $1, $2;", "=f,f,r"(float %v, i32 %m)"#;
+    let type_first = r#"%r = call float asm sideeffect "redux.f32.sync.min $0, $1, $2;", "=f,f,r"(float %v, i32 %m)"#;
 
     for text in [
         spaced_type,
@@ -748,6 +756,9 @@ fn test_redux_f32_detection_reads_ptx_as_ptx() {
         fully_spaced,
         newline_between,
         after_trailing_backslash,
+        glued_operand,
+        sync_after_operation,
+        type_first,
     ] {
         assert!(
             detect_features_in_llvm_text(text).contains(DetectedFeatures::ReduxF32),
@@ -762,8 +773,19 @@ fn test_redux_f32_detection_reads_ptx_as_ptx() {
     // Nor does float work beside it in the same template: `.f32` counts only
     // as a modifier of the `redux` opcode itself.
     let integer_beside_f32 = r#"%r = call i32 asm sideeffect "{ .reg .f32 t; redux.sync.min.u32 $0, $1, $2; mov.f32 t, 0f3F800000; }", "=r,r,r"(i32 %v, i32 %m)"#;
+    // The integer forms of the glued and reordered inputs above; ptxas
+    // assembles both at sm_80.
+    let glued_integer =
+        r#"%r = call i32 asm sideeffect "redux.sync.min.u32$0, $1, $2;", "=r,r,r"(i32 %v, i32 %m)"#;
+    let reordered_integer = r#"%r = call i32 asm sideeffect "redux.min.sync.u32 $0, $1, $2;", "=r,r,r"(i32 %v, i32 %m)"#;
 
-    for text in [file_path, spaced_integer, integer_beside_f32] {
+    for text in [
+        file_path,
+        spaced_integer,
+        integer_beside_f32,
+        glued_integer,
+        reordered_integer,
+    ] {
         assert!(
             !detect_features_in_llvm_text(text).contains(DetectedFeatures::ReduxF32),
             "no float reduction is executed here: {text}"

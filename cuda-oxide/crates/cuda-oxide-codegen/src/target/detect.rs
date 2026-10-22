@@ -120,24 +120,26 @@ fn is_float_redux_callee(name: &str) -> bool {
         .is_some_and(|operation| operation.starts_with('f'))
 }
 
-/// Does this PTX contain a `redux.sync` instruction with an `.f32` modifier?
+/// Does this PTX contain a `redux` instruction with an `.f32` modifier?
 ///
-/// An opcode's modifiers are the run of `.name` tokens after it, so
-/// `redux.sync.min.f32`, `redux .sync .min .f32` and a comment between two
-/// modifiers are the same instruction.
+/// An opcode's modifiers are the run of `.name` tokens after it, in any
+/// order, so `redux.sync.min.f32`, `redux.f32.sync.min` and
+/// `redux .sync .min .f32` are the same instruction. ptxas requires `.sync`
+/// on every `redux`, so it is not checked.
 fn ptx_contains_float_redux(ptx: &str) -> bool {
     if !ptx.contains("redux") {
         return false;
     }
     let tokens = lex_ptx(ptx);
     tokens.iter().enumerate().any(|(index, token)| {
-        let mut modifiers = tokens[index + 1..].iter().map_while(|token| match token {
-            PtxToken::Modifier(modifier) => Some(*modifier),
-            _ => None,
-        });
         *token == PtxToken::Identifier("redux")
-            && modifiers.next() == Some(".sync")
-            && modifiers.any(|modifier| modifier == ".f32")
+            && tokens[index + 1..]
+                .iter()
+                .map_while(|token| match token {
+                    PtxToken::Modifier(modifier) => Some(*modifier),
+                    _ => None,
+                })
+                .any(|modifier| modifier == ".f32")
     })
 }
 
@@ -160,11 +162,20 @@ fn lex_ptx(ptx: &str) -> Vec<PtxToken<'_>> {
     }
 
     let bytes = ptx.as_bytes();
+    // In an asm template a bare `$` starts an operand and `$$` is a literal
+    // dollar, so `.f32$0` is the modifier `.f32` followed by `$0`.
     let run_end = |from: usize| {
-        bytes[from..]
-            .iter()
-            .position(|&byte| !is_identifier(byte))
-            .map_or(bytes.len(), |offset| from + offset)
+        let mut end = from;
+        while end < bytes.len() && is_identifier(bytes[end]) {
+            if bytes[end] == b'$' {
+                if bytes.get(end + 1) != Some(&b'$') {
+                    break;
+                }
+                end += 1;
+            }
+            end += 1;
+        }
+        end
     };
 
     let mut tokens = Vec::new();

@@ -40,6 +40,11 @@ fn registration() -> &'static str {
 }
 ```
 
+Generic getters may return an associated constant selected by concrete type
+and const arguments. The compiler applies those arguments before reading the
+string; the one-block constant-return restriction still applies. The raw calls
+in `native_library` exercise this with one and four items per thread.
+
 The macro requires nonempty provider, operation and algorithm names and expands
 to the same constant string. The provider executable must
 recognize its protocol arguments before its ordinary Cargo build-script behavior.

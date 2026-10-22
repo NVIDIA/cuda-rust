@@ -233,7 +233,17 @@ fn read_registration<'tcx>(tcx: TyCtxt<'tcx>, witness: Ty<'tcx>) -> Result<Regis
             if text.is_some() {
                 return Err("registration getter writes its result more than once".into());
             }
-            text = crate::collector::const_str_text(tcx, constant);
+            // The getter body still contains its generic parameters. Resolve
+            // associated constants using this concrete function-item instance.
+            let constant = rustc_middle::mir::ConstOperand {
+                const_: instance.instantiate_mir_and_normalize_erasing_regions(
+                    tcx,
+                    TypingEnv::fully_monomorphized(),
+                    rustc_middle::ty::EarlyBinder::bind(tcx, constant.const_),
+                ),
+                ..**constant
+            };
+            text = crate::collector::const_str_text(tcx, &constant);
         }
     }
     let text = text.ok_or("registration getter must return one constant UTF-8 string")?;

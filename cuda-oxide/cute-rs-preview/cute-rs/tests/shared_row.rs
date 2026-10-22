@@ -23,7 +23,7 @@ fn zipped_row_reduction_preserves_coordinate_order_and_both_layouts() {
         layout: core::marker::PhantomData,
     };
     let global = [1.0_f32, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0];
-    let global = StridedTensor::from_slice(&global).partition::<2>(0);
+    let global = StridedTensor::from_slice(&global).local_partition::<2>(0);
     let mut visited = Vec::new();
     // SAFETY: the entire logical row is initialized, in bounds and has no writer.
     let row = unsafe { tile.row_view::<4>(2, 0) };

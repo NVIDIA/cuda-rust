@@ -47,10 +47,10 @@ pub mod kernels {
             let base = row * cols;
             let values = StridedTensor::from_slice(input)
                 .subview(base, cols)
-                .partition::<32>(lane);
+                .local_partition::<32>(lane);
             let scales = StridedTensor::from_slice(weight)
                 .subview(0, cols)
-                .partition::<32>(lane);
+                .local_partition::<32>(lane);
             let squares = values.fold(0.0_f32, |sum, value| sum + value * value);
             // SAFETY: all 32 lanes of this row reach the collective. Lanes
             // with no valid column contribute zero, instead of returning.
@@ -58,7 +58,7 @@ pub mod kernels {
             let inverse_rms = cute_rs::arch::rsqrt_f32(total / cols as f32 + epsilon);
             let mut destination = StridedTensorMut::from_disjoint_slice(&mut output)
                 .subview(base, cols)
-                .partition::<32>(lane);
+                .local_partition::<32>(lane);
             // SAFETY: the checked launch partitions rows by warp and each
             // row by lane; sources and destination own distinct allocations.
             unsafe {
@@ -91,10 +91,10 @@ pub mod kernels {
             let base = row * cols;
             let values = StridedTensor::from_slice(input)
                 .subview(base, cols)
-                .partition::<32>(lane);
+                .local_partition::<32>(lane);
             let scales = StridedTensor::from_slice(weight)
                 .subview(0, cols)
-                .partition::<32>(lane);
+                .local_partition::<32>(lane);
             let squares = values.fold(0.0_f32, |sum, value| {
                 let value = value.to_f32();
                 sum + value * value
@@ -105,7 +105,7 @@ pub mod kernels {
             let inverse_rms = cute_rs::arch::rsqrt_f32(total / cols as f32 + epsilon);
             let mut destination = StridedTensorMut::from_disjoint_slice(&mut output)
                 .subview(base, cols)
-                .partition::<32>(lane);
+                .local_partition::<32>(lane);
             // SAFETY: complete warps own disjoint rows and cyclic lane
             // partitions own disjoint columns, with separate input storage.
             unsafe {
@@ -149,12 +149,12 @@ pub mod kernels {
             let (values, scales) = unsafe {
                 let values = StridedTensor::from_slice(input)
                     .subview_unchecked(base, ITEMS * 32)
-                    .partition::<32>(lane)
+                    .local_partition::<32>(lane)
                     .load_unchecked::<ITEMS>()
                     .map(Bf16::to_f32);
                 let scales = StridedTensor::from_slice(weight)
                     .subview_unchecked(0, ITEMS * 32)
-                    .partition::<32>(lane)
+                    .local_partition::<32>(lane)
                     .load_unchecked::<ITEMS>()
                     .map(Bf16::to_f32);
                 (values, scales)
@@ -176,7 +176,7 @@ pub mod kernels {
             unsafe {
                 StridedTensorMut::from_disjoint_slice(&mut output)
                     .subview_unchecked(base, ITEMS * 32)
-                    .partition::<32>(lane)
+                    .local_partition::<32>(lane)
                     .store(normalized);
             }
         }

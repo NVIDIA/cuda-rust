@@ -137,7 +137,7 @@ impl<T: Copy, Layout: crate::markers::ReifySmem2D, const N: usize> SharedRow<'_,
             let (global, shared) = unsafe {
                 (
                     other.get_unchecked(i),
-                    self.tile.load_element(self.row, self.column + i),
+                    self.tile.get(self.row, self.column + i),
                 )
             };
             accumulator = f(accumulator, shared, global);
@@ -172,13 +172,16 @@ impl<T: Copy, Layout: crate::markers::ReifySmem2D> SmemTile<T, Layout> {
 
     /// Read one logical shared-memory coordinate through its declared layout.
     ///
+    /// This is the single-coordinate read `tensor[(row, column)]` of CuTe's
+    /// `Tensor.__getitem__`.
+    ///
     /// # Safety
     /// The coordinate must lie within the layout, its mapped offset must be
     /// below `capacity`, and the element must be initialized and readable.
     /// Pending asynchronous writes must be completed and appropriate thread
     /// synchronization performed; no active write may conflict with this read.
     #[inline(always)]
-    pub unsafe fn load_element(&self, row: usize, column: usize) -> T {
+    pub unsafe fn get(&self, row: usize, column: usize) -> T {
         let offset = crate::static_layout::offset_2d::<Layout>(row, column);
         unsafe { self.base.add(offset).read() }
     }
@@ -187,17 +190,18 @@ impl<T: Copy, Layout: crate::markers::ReifySmem2D> SmemTile<T, Layout> {
     ///
     /// Consecutive logical coordinates may be physically swizzled; the layout
     /// determines each address rather than assuming contiguous physical bytes.
+    /// This is CuTe's `Tensor.load` over the `N` coordinates of one row.
     ///
     /// # Safety
-    /// Every `(row, column + i)` for `i < N` must satisfy `load_element`'s
-    /// bounds, initialization, completion and synchronization requirements.
+    /// Every `(row, column + i)` for `i < N` must satisfy `get`'s bounds,
+    /// initialization, completion and synchronization requirements.
     #[inline(always)]
-    pub unsafe fn load_row<const N: usize>(
+    pub unsafe fn load<const N: usize>(
         &self,
         row: usize,
         column: usize,
     ) -> crate::tensor::RegisterTile<T, N> {
-        crate::tensor::RegisterTile::from_fn(|i| unsafe { self.load_element(row, column + i) })
+        crate::tensor::RegisterTile::from_fn(|i| unsafe { self.get(row, column + i) })
     }
 }
 

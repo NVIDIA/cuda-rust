@@ -78,7 +78,7 @@ impl Bf16KvTile {
     /// complete `column..column + N` interval must lie within 128 columns.
     #[inline(always)]
     unsafe fn row<const N: usize>(&self, row: usize, column: usize) -> RegisterTile<f32, N> {
-        unsafe { self.0.load_row::<N>(row, column) }.map(|bits| Bf16::from_bits(bits).to_f32())
+        unsafe { self.0.load::<N>(row, column) }.map(|bits| Bf16::from_bits(bits).to_f32())
     }
 }
 

@@ -56,7 +56,7 @@ pub mod kernels {
         // SAFETY: the checked dense head row contains 64 values; the full
         // warp partitions it into two ordered coordinates per lane.
         let query = unsafe { StridedTensor::from_slice(q).subview_unchecked(base, 64) }
-            .partition::<32>(lane)
+            .local_partition::<32>(lane)
             .load::<2>()
             .map(Bf16::to_f32);
         let start = (row + 1).saturating_sub(window);
@@ -68,7 +68,7 @@ pub mod kernels {
             let at = (key * heads + head) * 64;
             // SAFETY: key is inside the checked sequence and head is valid.
             let keys = unsafe { StridedTensor::from_slice(k).subview_unchecked(at, 64) }
-                .partition::<32>(lane)
+                .local_partition::<32>(lane)
                 .load::<2>()
                 .map(Bf16::to_f32);
             let q = query.as_array();
@@ -84,7 +84,7 @@ pub mod kernels {
             let weight = cute_rs::arch::exp2_f32(score - next);
             // SAFETY: V has the same checked geometry as K.
             let values = unsafe { StridedTensor::from_slice(v).subview_unchecked(at, 64) }
-                .partition::<32>(lane)
+                .local_partition::<32>(lane)
                 .load::<2>()
                 .map(Bf16::to_f32);
             sums = sums.zip_map(values, |sum, value| sum * old + weight * value);
@@ -98,7 +98,7 @@ pub mod kernels {
         unsafe {
             let mut output = StridedTensorMut::from_disjoint_slice(&mut output)
                 .subview_unchecked(base, 64)
-                .partition::<32>(lane);
+                .local_partition::<32>(lane);
             output.store(sums.map(|sum| Bf16::from_f32(sum * reciprocal)));
         }
     }

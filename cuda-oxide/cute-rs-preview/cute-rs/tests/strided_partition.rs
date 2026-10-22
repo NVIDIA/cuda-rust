@@ -12,16 +12,16 @@ fn nested_partitions_retain_their_types_and_compose_coordinates() {
     fn typed(_: &StridedTensor<'_, f32, Cyclic<Subrange<Cyclic<Strided1D, 4>>, 3>>) {}
     let storage: Vec<f32> = (0..100).map(|i| i as f32).collect();
     let selected = StridedTensor::from_slice(&storage)
-        .partition::<4>(1)
+        .local_partition::<4>(1)
         .subview(2, 12)
-        .partition::<3>(2);
+        .local_partition::<3>(2);
     typed(&selected);
     assert_eq!(selected.load::<4>().into_array(), [17.0, 29.0, 41.0, 53.0]);
     let mut output = vec![-1.0; 100];
     let mut destination = StridedTensorMut::from_mut_slice(&mut output)
-        .partition::<4>(1)
+        .local_partition::<4>(1)
         .subview(2, 12)
-        .partition::<3>(2);
+        .local_partition::<3>(2);
     unsafe {
         selected.map_to(&mut destination, |value| value);
     }
@@ -41,11 +41,11 @@ fn nested_partitions_retain_their_types_and_compose_coordinates() {
 fn singleton_and_empty_nested_partitions_do_not_multiply_physical_stride() {
     let storage = [5.0_f32];
     let singleton = StridedTensor::from_slice(&storage)
-        .partition::<{ usize::MAX }>(0)
-        .partition::<{ usize::MAX }>(0);
+        .local_partition::<{ usize::MAX }>(0)
+        .local_partition::<{ usize::MAX }>(0);
     assert_eq!(singleton.get(0), 5.0);
     let empty = StridedTensor::from_slice(&storage)
-        .partition::<{ usize::MAX }>(usize::MAX - 1)
+        .local_partition::<{ usize::MAX }>(usize::MAX - 1)
         .subview(0, 0);
     assert_eq!(
         empty.fold(9.0, |_, _| panic!("empty layout must not access storage")),
@@ -69,7 +69,7 @@ fn encoded_storage_retains_its_element_contract_and_bits() {
     let bytes = [0x12_u8, 0x34, 0x56, 0x78];
     let encoded = StridedTensor::<cute_rs::E2M1, Strided1D, u8>::from_storage(&bytes);
     assert_eq!(
-        encoded.partition::<2>(1).load::<2>().into_array(),
+        encoded.local_partition::<2>(1).load::<2>().into_array(),
         [0x34, 0x78]
     );
 }
@@ -79,8 +79,9 @@ fn lane_partition_covers_tails_once_in_original_order() {
     let input: Vec<f32> = (0..70).map(|i| i as f32).collect();
     let mut output = vec![-1.0; input.len()];
     for lane in 0..32 {
-        let source = StridedTensor::from_slice(&input).partition::<32>(lane);
-        let mut destination = StridedTensorMut::from_mut_slice(&mut output).partition::<32>(lane);
+        let source = StridedTensor::from_slice(&input).local_partition::<32>(lane);
+        let mut destination =
+            StridedTensorMut::from_mut_slice(&mut output).local_partition::<32>(lane);
         let expected: Vec<_> = (lane..70).step_by(32).map(|i| i as f32).collect();
         let actual = source.fold(Vec::new(), |mut values, value| {
             values.push(value);
@@ -98,12 +99,12 @@ fn register_gather_and_scatter_keep_stride_and_guards() {
     let input: Vec<f32> = (0..128).map(|i| i as f32).collect();
     let mut output = [-9.0; 130];
     let gathered = StridedTensor::from_slice(&input)
-        .partition::<32>(7)
+        .local_partition::<32>(7)
         .load::<4>();
     assert_eq!(gathered.into_array(), [7.0, 39.0, 71.0, 103.0]);
     let mut destination = StridedTensorMut::from_mut_slice(&mut output)
         .subview(1, 128)
-        .partition::<32>(7);
+        .local_partition::<32>(7);
     // SAFETY: this is the sole writable view and its four coordinates are distinct.
     unsafe { destination.store(gathered) };
     for (i, value) in output.iter().enumerate() {
@@ -131,12 +132,12 @@ fn fold_does_not_reassociate_floating_point_values() {
 fn empty_and_outside_lanes_never_access_storage() {
     let input = [7.0_f32];
     for lane in 1..32 {
-        let view = StridedTensor::from_slice(&input).partition::<32>(lane);
+        let view = StridedTensor::from_slice(&input).local_partition::<32>(lane);
         assert!(view.is_empty());
         assert_eq!(view.fold(5.0, |a, b| a + b), 5.0);
     }
     let empty = StridedTensor::from_slice(&input).subview(1, 0);
-    assert!(empty.partition::<32>(31).is_empty());
+    assert!(empty.local_partition::<32>(31).is_empty());
 }
 
 #[test]
@@ -151,7 +152,7 @@ fn subview_rejects_overflowing_extent() {
 fn fixed_load_rejects_short_partition() {
     let input = [1.0_f32; 63];
     let _ = StridedTensor::from_slice(&input)
-        .partition::<32>(31)
+        .local_partition::<32>(31)
         .load::<2>();
 }
 
@@ -186,7 +187,7 @@ fn shared_tile_loads_follow_its_declared_layout() {
     };
     // SAFETY: host-backed storage has the same layout, is initialized and has no writer.
     assert_eq!(
-        unsafe { tile.load_row::<4>(2, 0) }.into_array(),
+        unsafe { tile.load::<4>(2, 0) }.into_array(),
         [20.0, 21.0, 22.0, 23.0]
     );
 }

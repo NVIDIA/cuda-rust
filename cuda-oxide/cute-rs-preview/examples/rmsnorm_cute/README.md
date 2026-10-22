@@ -14,11 +14,11 @@ weight; the final result rounds again.
 ## The row flow
 
 ```text
-row → StridedTensor → partition::<32>(lane) → sum local squares
-                                                       │
-                                               warp_sum_f32
-                                                       │
-weights → matching partition → normalize and multiply ──┘
+row → StridedTensor → local_partition::<32>(lane) → sum local squares
+                                                             │
+                                                     warp_sum_f32
+                                                             │
+weights → matching partition → normalize and multiply ────────┘
                                         │
 output ← StridedTensorMut ← store owned columns
 ```

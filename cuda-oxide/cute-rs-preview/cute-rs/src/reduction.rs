@@ -117,7 +117,7 @@ pub unsafe fn argmax_bf16<L: crate::tensor::partition::IndexLayout>(
     input: crate::tensor::partition::StridedTensor<'_, crate::numeric::Bf16, L>,
     lane: u32,
 ) -> ArgMax {
-    let values = input.partition::<32>(lane as usize);
+    let values = input.local_partition::<32>(lane as usize);
     let mut index = lane;
     let local = values.fold(ArgMax::empty(), |state, value| {
         let state = state.observe(value.to_f32(), index);

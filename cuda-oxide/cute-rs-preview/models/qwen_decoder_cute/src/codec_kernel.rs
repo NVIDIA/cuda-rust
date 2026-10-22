@@ -147,8 +147,8 @@ pub mod kernels {
                     // cuDNN stores its BF16 convolution before the separate bias add.
                     sum = Bf16::from_f32(sum).to_f32() + bias[channel].to_f32();
                 }
-                let mut output =
-                    StridedTensorMut::from_disjoint_slice(&mut output).partition::<32>(index % 32);
+                let mut output = StridedTensorMut::from_disjoint_slice(&mut output)
+                    .local_partition::<32>(index % 32);
                 // SAFETY: global threads select distinct partition coordinates.
                 unsafe {
                     output.store_at(index / 32, Bf16::from_f32(sum));
@@ -264,9 +264,9 @@ pub mod kernels {
             // parameter vectors. Lanes partition columns in increasing order.
             let input =
                 unsafe { StridedTensor::from_slice(input).subview_unchecked(row * width, width) }
-                    .partition::<32>(lane);
-            let weight = StridedTensor::from_slice(weight).partition::<32>(lane);
-            let bias = StridedTensor::from_slice(bias).partition::<32>(lane);
+                    .local_partition::<32>(lane);
+            let weight = StridedTensor::from_slice(weight).local_partition::<32>(lane);
+            let bias = StridedTensor::from_slice(bias).local_partition::<32>(lane);
             let sum = input.fold(0.0_f32, |sum, value| sum + value.to_f32());
             // SAFETY: complete warp participates; row predicate is warp-uniform.
             let mean = unsafe { cute_rs::arch::warp_sum_f32(sum) } / width as f32;
@@ -281,7 +281,7 @@ pub mod kernels {
                 StridedTensorMut::from_disjoint_slice(&mut output)
                     .subview_unchecked(row * width, width)
             }
-            .partition::<32>(lane);
+            .local_partition::<32>(lane);
             let mut item = 0;
             // SAFETY: the matching row partitions have distinct destinations;
             // affine vectors contain the same logical columns as the input.
@@ -364,11 +364,11 @@ pub mod kernels {
             // thread launch while making the thread/value partition explicit.
             let lane = index % 32;
             let item = index / 32;
-            let input = StridedTensor::from_slice(input).partition::<32>(lane);
+            let input = StridedTensor::from_slice(input).local_partition::<32>(lane);
             let alpha = StridedTensor::from_slice(alpha);
             let beta = StridedTensor::from_slice(beta);
             let mut output =
-                StridedTensorMut::from_disjoint_slice(&mut output).partition::<32>(lane);
+                StridedTensorMut::from_disjoint_slice(&mut output).local_partition::<32>(lane);
             // SAFETY: index is in the checked logical range; private host
             // dispatch validates the parameter extents for each operation.
             let value = unsafe { input.get_unchecked(item) }.to_f32();
@@ -421,11 +421,11 @@ pub mod kernels {
         if index < length {
             let lane = index % 32;
             let item = index / 32;
-            let input = StridedTensor::from_slice(input).partition::<32>(lane);
-            let residual = StridedTensor::from_slice(residual).partition::<32>(lane);
+            let input = StridedTensor::from_slice(input).local_partition::<32>(lane);
+            let residual = StridedTensor::from_slice(residual).local_partition::<32>(lane);
             let scale = StridedTensor::from_slice(scale);
             let mut output =
-                StridedTensorMut::from_disjoint_slice(&mut output).partition::<32>(lane);
+                StridedTensorMut::from_disjoint_slice(&mut output).local_partition::<32>(lane);
             // SAFETY: the host checks matching input/residual/output lengths
             // and a complete per-channel scale vector.
             let product = unsafe {

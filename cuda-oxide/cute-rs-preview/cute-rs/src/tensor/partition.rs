@@ -4,7 +4,7 @@
  */
 //! Borrowed tensor storage with composable, typed cyclic coordinate layouts.
 //!
-//! `partition::<P>` retains `Cyclic<Parent, P>` in the result type. Subranges
+//! `local_partition::<P>` retains `Cyclic<Parent, P>` in the result type. Subranges
 //! retain `Subrange<Parent>`; nested operations compose logical coordinates
 //! before the original storage layout maps them to physical offsets. No
 //! transformed pointer or erased multiplied stride defines partition semantics.
@@ -230,15 +230,22 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
             borrow: PhantomData,
         }
     }
-    /// Select a cyclic partition, preserving its count in the returned type.
+    /// Select partition `index` of a `PARTS`-way cyclic split, preserving the
+    /// count in the returned type.
+    ///
+    /// Logical coordinate `i` of the result is parent coordinate
+    /// `index + i * PARTS`. This is CuTe's `local_partition` with a `PARTS:1`
+    /// thread layout: the thread count is the const generic and the thread
+    /// index is the argument. A ragged tail leaves the later partitions
+    /// shorter instead of reading past the parent.
     #[inline(always)]
-    pub fn partition<const PARTS: usize>(
+    pub fn local_partition<const PARTS: usize>(
         self,
-        part: usize,
+        index: usize,
     ) -> StridedTensor<'a, Element, Cyclic<Layout, PARTS>, Storage> {
         StridedTensor {
             base: self.base,
-            layout: partition::<Layout, PARTS>(self.layout, part),
+            layout: partition::<Layout, PARTS>(self.layout, index),
             borrow: PhantomData,
         }
     }
@@ -424,15 +431,21 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
             borrow: PhantomData,
         }
     }
-    /// Select one typed cyclic partition, consuming the original writable view.
+    /// Select partition `index` of a `PARTS`-way cyclic split, consuming the
+    /// original writable view.
+    ///
+    /// Logical coordinate `i` of the result is parent coordinate
+    /// `index + i * PARTS`, as CuTe's `local_partition` maps it with a
+    /// `PARTS:1` thread layout. A ragged tail leaves the later partitions
+    /// shorter instead of reaching past the parent.
     #[inline(always)]
-    pub fn partition<const PARTS: usize>(
+    pub fn local_partition<const PARTS: usize>(
         self,
-        part: usize,
+        index: usize,
     ) -> StridedTensorMut<'a, Element, Cyclic<Layout, PARTS>, Storage> {
         StridedTensorMut {
             base: self.base,
-            layout: partition::<Layout, PARTS>(self.layout, part),
+            layout: partition::<Layout, PARTS>(self.layout, index),
             borrow: PhantomData,
         }
     }

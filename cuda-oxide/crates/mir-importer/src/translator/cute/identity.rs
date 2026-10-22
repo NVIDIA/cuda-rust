@@ -315,7 +315,7 @@ mod canonical_path_tests {
             "cute_rs"
         ));
         assert!(is_source_abstraction_path(
-            "cute_rs::copy::tiled::TiledCopy<...>::copy",
+            "cute_rs::copy::tiled::ThrCopy<...>::copy",
             "cute_rs"
         ));
         assert!(is_source_abstraction_path(

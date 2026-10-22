@@ -112,7 +112,7 @@ pub use block_scaled::{
     SharedScaleAtom, Sm1xxBlockScaleKMajor, Sm120ScaleAtom,
 };
 pub use copy::cooperative::{GmemMatrix, SmemTile, copy_g2s};
-pub use copy::tiled::{GlobalCopyTensor, SharedTensor, TiledCopy};
+pub use copy::tiled::{GlobalCopyTensor, SharedTensor, ThrCopy, TiledCopy};
 pub use copy::tma::{TensorMap, copy_tma_2d, copy_tma_s2g_2d, size_in_bytes};
 pub use copy::vector::{
     GlobalStoreElement, GlobalStoreTile, assume, load_tile, store_global_no_allocate, store_tile,

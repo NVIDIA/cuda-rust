@@ -10,16 +10,19 @@
 //! ```text
 //! global tile: [thread 0 part][thread 1 part][...]
 //!                            │
-//!                     TiledCopy::copy
+//!       TiledCopy::get_slice(thread_idx) ──► ThrCopy::copy
 //!                            │
 //!                            ▼
 //! shared tile: [thread 0 part][thread 1 part][...]
 //! ```
 //!
 //! [`GlobalCopyTensor`] describes the source. [`SharedTensor`] describes the
-//! destination. [`TiledCopy`] describes how the work is split across threads.
+//! destination. [`TiledCopy`] describes how the work is split across threads,
+//! and [`TiledCopy::get_slice`] selects one thread's part of that plan as a
+//! [`ThrCopy`], following CuTeDSL's `TiledCopy.get_slice` and `ThrCopy`.
 //! These wrappers add no runtime storage beyond the source and destination
-//! views. The compiler inlines them down to [`crate::copy_g2s`].
+//! views and the thread index. The compiler inlines them down to
+//! [`crate::copy_g2s`].
 
 use core::marker::PhantomData;
 
@@ -143,8 +146,9 @@ pub mod __compiler {
 /// TileLayout    shape of the complete source tile
 /// ```
 ///
-/// The value contains no runtime data. The destination layout comes from the
-/// [`SharedTensor`] passed to [`Self::copy`].
+/// The value contains no runtime data. [`Self::get_slice`] selects one
+/// thread's part of the plan; the destination layout comes from the
+/// [`SharedTensor`] passed to [`ThrCopy::copy`].
 pub struct TiledCopy<Atom, ThreadLayout, ValueLayout, TileLayout> {
     /// Records the atom and thread/value/tile maps without runtime storage.
     config: PhantomData<(Atom, ThreadLayout, ValueLayout, TileLayout)>,
@@ -162,10 +166,64 @@ impl<Atom, ThreadLayout, ValueLayout, TileLayout>
         }
     }
 
-    /// Let the whole block copy one global tile into shared memory.
+    /// Select the part of the plan one thread carries out.
     ///
-    /// `tile_coord` selects the source tile. `thread_idx` selects this thread's
-    /// assigned part of that tile.
+    /// This is CuTeDSL's `TiledCopy.get_slice(thr_idx)`. Device use must pass
+    /// the calling thread's own index in the block, as `ThreadLayout` numbers
+    /// the threads; [`ThrCopy::copy`] then issues that thread's part.
+    #[must_use]
+    #[inline(always)]
+    pub const fn get_slice(
+        &self,
+        thread_idx: u32,
+    ) -> ThrCopy<Atom, ThreadLayout, ValueLayout, TileLayout> {
+        ThrCopy {
+            thread_idx,
+            plan: PhantomData,
+        }
+    }
+}
+
+impl<Atom, ThreadLayout, ValueLayout, TileLayout> Default
+    for TiledCopy<Atom, ThreadLayout, ValueLayout, TileLayout>
+{
+    #[inline(always)]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// One thread's slice of a [`TiledCopy`] plan.
+///
+/// This is CuTeDSL's `ThrCopy`, returned by [`TiledCopy::get_slice`]. The
+/// plan has no runtime data, so the slice holds only the thread index and
+/// the plan's type parameters:
+///
+/// ```text
+/// TiledCopy<Atom, ThreadLayout, ValueLayout, TileLayout>
+///                   │ get_slice(thread_idx)
+///                   ▼
+/// ThrCopy { thread_idx }   one per thread, copies its own part
+/// ```
+pub struct ThrCopy<Atom, ThreadLayout, ValueLayout, TileLayout> {
+    /// Index of the thread this slice belongs to, as `ThreadLayout` numbers the threads.
+    thread_idx: u32,
+    /// Records the atom and thread/value/tile maps without runtime storage.
+    plan: PhantomData<(Atom, ThreadLayout, ValueLayout, TileLayout)>,
+}
+
+impl<Atom, ThreadLayout, ValueLayout, TileLayout>
+    ThrCopy<Atom, ThreadLayout, ValueLayout, TileLayout>
+{
+    /// Copy this thread's part of one global tile into shared memory.
+    ///
+    /// `tile_coord` selects the source tile. The thread index given to
+    /// [`TiledCopy::get_slice`] selects this thread's assigned part of that
+    /// tile. In CuTeDSL this is `cute.copy(tiled_copy,
+    /// thr_copy.partition_S(src), thr_copy.partition_D(dst))`; the Rust form
+    /// covers one two-dimensional global tile and one shared destination
+    /// tile, with both partitions derived from the plan's layouts inside the
+    /// compiler's cooperative-copy operation, [`crate::copy_g2s`].
     ///
     /// # Safety
     ///
@@ -186,25 +244,15 @@ impl<Atom, ThreadLayout, ValueLayout, TileLayout>
         source: &GlobalCopyTensor<Element, T, LD, Role>,
         tile_coord: (usize, usize),
         destination: &mut SharedTensor<Element, T, SharedLayout, Role>,
-        thread_idx: u32,
     ) {
         unsafe {
             copy_g2s::<Atom, ThreadLayout, ValueLayout, TileLayout, SharedLayout, T>(
                 source.carrier(),
                 tile_coord,
                 destination.carrier_mut(),
-                thread_idx,
+                self.thread_idx,
             )
         }
-    }
-}
-
-impl<Atom, ThreadLayout, ValueLayout, TileLayout> Default
-    for TiledCopy<Atom, ThreadLayout, ValueLayout, TileLayout>
-{
-    #[inline(always)]
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -213,12 +261,16 @@ impl<Atom, ThreadLayout, ValueLayout, TileLayout> Default
 mod tests {
     use super::*;
 
-    /// Copy plans must be zero-sized while typed source/destination views retain their carrier sizes.
+    /// Copy plans must be zero-sized and thread slices must hold only the thread index,
+    /// while typed source/destination views retain their carrier sizes.
     #[test]
     fn tiled_copy_is_static_and_typed_views_preserve_carrier_size() {
         /// Marker-only copy plan used to check zero runtime size.
         type Copy = TiledCopy<(), (), (), ()>;
         assert_eq!(core::mem::size_of::<Copy>(), 0);
+        /// One thread's slice of the marker-only plan.
+        type Slice = ThrCopy<(), (), (), ()>;
+        assert_eq!(core::mem::size_of::<Slice>(), core::mem::size_of::<u32>());
         /// Distinct logical element marker used to test typed copy carrier size.
         #[derive(Clone, Copy)]
         struct Element;
@@ -231,5 +283,13 @@ mod tests {
             core::mem::size_of::<SharedTensor<Element, u32, (), ()>>(),
             core::mem::size_of::<SmemTile<u32, ()>>()
         );
+    }
+
+    /// The thread slice must carry the index it was selected with.
+    #[test]
+    fn get_slice_records_the_thread_index() {
+        let plan = TiledCopy::<(), (), (), ()>::new();
+        assert_eq!(plan.get_slice(0).thread_idx, 0);
+        assert_eq!(plan.get_slice(127).thread_idx, 127);
     }
 }

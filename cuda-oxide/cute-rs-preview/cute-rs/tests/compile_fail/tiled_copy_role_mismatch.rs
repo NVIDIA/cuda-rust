@@ -22,5 +22,5 @@ fn main() {
     };
     let copy = TiledCopy::<CopyG2S<16>, (), (), ()>::new();
 
-    unsafe { copy.copy(&source, (0, 0), &mut shared_b, 0) };
+    unsafe { copy.get_slice(0).copy(&source, (0, 0), &mut shared_b) };
 }

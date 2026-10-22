@@ -40,7 +40,7 @@ use rustc_public::mir;
 /// * `ctx` - Pliron IR context
 /// * `body` - The full MIR body (needed for local declarations)
 /// * `mir_block` - The MIR block to translate
-/// * `_idx` - Block index (unused, kept for debugging)
+/// * `library_site` - Original MIR block in the concrete emitted caller
 /// * `block_ptr` - Target Pliron IR block (already created)
 /// * `value_map` - MIR local → alloca slot mapping
 /// * `block_map` - Block index → Pliron IR block mapping
@@ -58,7 +58,7 @@ pub fn translate_block(
     ctx: &mut Context,
     body: &mir::Body,
     mir_block: &mir::BasicBlock,
-    _idx: usize,
+    library_site: crate::LibraryCallSite,
     block_ptr: Ptr<BasicBlock>,
     value_map: &mut ValueMap,
     block_map: &[Ptr<BasicBlock>],
@@ -66,7 +66,6 @@ pub fn translate_block(
     legaliser: &mut Legaliser,
     entry_prev_op: Option<Ptr<Operation>>,
     statement_debug_info: Option<&StatementDebugInfoBlock>,
-    library_call: Option<&crate::LibraryCallPlan>,
 ) -> TranslationResult<()> {
     let mut prev_op: Option<Ptr<Operation>> = entry_prev_op;
 
@@ -85,7 +84,18 @@ pub fn translate_block(
     // the trap aborts the kernel, and the memory state of an aborted kernel is
     // unspecified, so the store has no defined observer either way.
     if terminator::is_dropped_panic_call(&mir_block.terminator) {
-        terminator::emit_dropped_panic_trap(ctx, &mir_block.terminator, block_ptr, prev_op);
+        let end =
+            terminator::emit_dropped_panic_trap(ctx, &mir_block.terminator, block_ptr, prev_op);
+        let marker = dialect_mir::ops::MirLibrarySourceOp::build(
+            ctx,
+            dialect_mir::library::LibrarySourceEffectAttr {
+                site: library_site.clone(),
+                kind: dialect_mir::library::LibrarySourceEffectKind::Abort,
+            },
+            None,
+        );
+        marker.insert_before(ctx, end);
+        dialect_mir::library::set_library_source_site(ctx, end, library_site);
         return Ok(());
     }
 
@@ -100,8 +110,16 @@ pub fn translate_block(
                 prev_op,
             )?;
         }
-        let op_ptr =
-            statement::translate_statement(ctx, body, stmt, value_map, block_ptr, prev_op)?;
+        let op_ptr = statement::translate_statement(
+            ctx,
+            body,
+            stmt,
+            value_map,
+            block_ptr,
+            prev_op,
+            &library_site,
+            statement_index,
+        )?;
         prev_op = op_ptr;
     }
 
@@ -126,7 +144,7 @@ pub fn translate_block(
         block_map,
         rustc_mono_successors,
         legaliser,
-        library_call,
+        library_site,
     )?;
 
     Ok(())

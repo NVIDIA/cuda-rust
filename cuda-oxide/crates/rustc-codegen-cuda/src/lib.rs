@@ -327,7 +327,6 @@ extern crate rustc_public_bridge;
 // The standard LLVM backend - we delegate host codegen to this
 extern crate rustc_codegen_llvm;
 
-mod collective_validation;
 mod collector;
 mod device_codegen;
 mod generated_intrinsics;
@@ -638,27 +637,6 @@ impl CodegenBackend for CudaCodegenBackend {
                         "native library calls require `cargo oxide build --materialize-cubin`",
                     );
                 }
-                let mut libraries =
-                    library::finalize(tcx, &collection_result).unwrap_or_else(|error| {
-                        tcx.dcx().fatal(format!("native device library: {error}"))
-                    });
-                if self.config.verbose {
-                    for (kernel, plan) in &libraries.roots {
-                        eprintln!(
-                            "[library] {kernel}: exact block {:?}, scratch {} bytes aligned {}",
-                            plan.exact_block,
-                            plan.dynamic_shared_bytes,
-                            plan.dynamic_shared_alignment
-                        );
-                    }
-                }
-                // The provider returns owned bytes. No consumer-created artifact
-                // list or path is needed, and output-path checks still apply to
-                // the file inputs received from cargo-oxide.
-                if let Some(request) = &mut materialization_request {
-                    request.add_library_inputs(std::mem::take(&mut libraries.inputs));
-                }
-
                 materialize::validate_collection(
                     materialization_request.as_ref(),
                     !collection_result.device_externs.is_empty(),
@@ -739,9 +717,7 @@ impl CodegenBackend for CudaCodegenBackend {
                     let r = catch_unwind(AssertUnwindSafe(|| {
                         device_codegen::generate_device_code(
                             tcx,
-                            device_functions,
-                            &collection_result.device_externs,
-                            &libraries,
+                            &collection_result,
                             &device_config,
                         )
                     }));
@@ -751,6 +727,11 @@ impl CodegenBackend for CudaCodegenBackend {
 
                 match panic_outcome {
                     Err(payload) => {
+                        // rustc fatal diagnostics have already been emitted. Preserve
+                        // their control flow instead of reporting a second ICE.
+                        if payload.is::<rustc_errors::FatalErrorMarker>() {
+                            std::panic::resume_unwind(payload);
+                        }
                         let msg = payload
                             .downcast_ref::<&str>()
                             .map(|s| s.to_string())
@@ -774,7 +755,22 @@ impl CodegenBackend for CudaCodegenBackend {
                              Please file at https://github.com/NVIDIA/cuda-rust/issues"
                         ));
                     }
-                    Ok(Ok(result)) => {
+                    Ok(Ok((result, mut libraries))) => {
+                        if self.config.verbose {
+                            for (kernel, facts) in &result.kernel_launch_facts {
+                                eprintln!(
+                                    "[library] {kernel}: exact block {:?}, scratch {} bytes aligned {}",
+                                    facts.exact_block,
+                                    facts.dynamic_shared_bytes,
+                                    facts.dynamic_shared_alignment
+                                );
+                            }
+                        }
+                        // Native inputs are owned provider bytes; file output and
+                        // collection checks remain before device generation.
+                        if let Some(request) = &mut materialization_request {
+                            request.add_library_inputs(std::mem::take(&mut libraries.inputs));
+                        }
                         if self.config.verbose
                             && let Some(artifact) = result.artifact.as_ref()
                         {

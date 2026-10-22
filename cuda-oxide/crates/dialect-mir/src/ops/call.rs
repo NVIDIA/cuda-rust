@@ -9,6 +9,7 @@
 
 use crate::{
     attributes::MirPointerKindAuthorityAttr,
+    library::{LibraryCallSite, LibraryCallTargetAttr, LibrarySourceEffectAttr},
     rust_intrinsics,
     types::{MirTupleType, pointer_kinds_in_type},
 };
@@ -47,6 +48,7 @@ use pliron_derive::pliron_op;
 /// | Name                     | Type                          | Description |
 /// |--------------------------|-------------------------------|-------------|
 /// | `callee`                 | StringAttr                    | Name of the called function. |
+/// | `library_source_site`    | LibraryCallSite               | Original Rust caller and terminator for contextual call remapping. |
 /// | `external_callee_type`   | TypeAttr                      | Exact Rust-level signature of a foreign item with no `mir.func`. |
 /// | `call_pointer_kind_authority` | MirPointerKindAuthorityAttr | Must be `AbiBoundary` when `external_callee_type` is present. |
 /// ```
@@ -73,6 +75,9 @@ use pliron_derive::pliron_op;
     format,
     attributes = (
         callee: StringAttr,
+        library_source_site: LibraryCallSite,
+        library_call_target: LibraryCallTargetAttr,
+        library_expanded_source: LibrarySourceEffectAttr,
         external_callee_type: TypeAttr,
         call_pointer_kind_authority: MirPointerKindAuthorityAttr
     )

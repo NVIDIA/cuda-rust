@@ -93,7 +93,7 @@
 //! The cost is one extra type conversion step, but this happens once per function
 //! and is negligible compared to actual compilation time.
 
-use crate::collector::{CollectedFunction, DeviceExternDecl};
+use crate::collector::{CollectedFunction, CollectionResult};
 use llvm_export::ops::{
     DebugInlinedScope, DebugSourcePosition, DebugSourceScope, DebugSourceScopeLocation,
     DebugSourceScopeMap,
@@ -875,6 +875,34 @@ fn is_generic_device_collector_boundary<'tcx>(tcx: TyCtxt<'tcx>, instance: Insta
             .is_some_and(|name| reserved_oxide_symbols::is_device_symbol(name.as_str()))
 }
 
+/// Capture source argument classes before the importer erases nominal types.
+fn library_root_arguments(
+    tcx: TyCtxt<'_>,
+    instance: &rustc_public::mir::mono::Instance,
+) -> Vec<mir_importer::LibraryRootArgumentClass> {
+    use mir_importer::LibraryRootArgumentClass as Class;
+    use rustc_middle::ty::TyKind;
+    use rustc_public::rustc_internal;
+    let Some(body) = instance.body() else {
+        return Vec::new();
+    };
+    (1..=body.arg_locals().len())
+        .map(|arg| {
+            let ty = rustc_internal::internal(tcx, body.locals()[arg].ty);
+            if crate::library::resource_parameter(tcx, ty) {
+                Class::ResourceCandidate
+            } else if matches!(
+                ty.kind(),
+                TyKind::Bool | TyKind::Int(_) | TyKind::Uint(_) | TyKind::Float(_)
+            ) {
+                Class::Scalar
+            } else {
+                Class::Kernel
+            }
+        })
+        .collect()
+}
+
 /// Generates PTX for device functions using the cuda-oxide pipeline.
 ///
 /// This is the main entry point for device codegen. It bridges between
@@ -884,12 +912,12 @@ fn is_generic_device_collector_boundary<'tcx>(tcx: TyCtxt<'tcx>, instance: Insta
 /// ## Parameters
 ///
 /// - `tcx`: The type context from rustc
-/// - `functions`: Collected device functions from the collector module
+/// - `collection`: Collected device functions, native calls and externs
 /// - `config`: Output and diagnostic configuration
 ///
 /// ## Returns
 ///
-/// - `Ok(DeviceCodegenResult)`: Paths to generated .ll and .ptx files
+/// - `Ok((DeviceCodegenResult, ProviderLibraries))`: Code and owned native inputs
 /// - `Err(DeviceCodegenError)`: Description of what went wrong
 ///
 /// ## Pipeline Stages
@@ -899,7 +927,7 @@ fn is_generic_device_collector_boundary<'tcx>(tcx: TyCtxt<'tcx>, instance: Insta
 ///         │
 ///         ├──▶ rustc_internal::stable() ──▶ rustc_public::Instance
 ///         │
-///         └──▶ mir_importer::run_pipeline()
+///         └──▶ import → prepare → prove → provider → bind → finish
 ///                     │
 ///                     ├──▶ `dialect-mir` (alloca form)
 ///                     │
@@ -914,12 +942,14 @@ fn is_generic_device_collector_boundary<'tcx>(tcx: TyCtxt<'tcx>, instance: Insta
 /// ```
 pub fn generate_device_code<'tcx>(
     tcx: TyCtxt<'tcx>,
-    functions: &[CollectedFunction<'tcx>],
-    device_externs: &[DeviceExternDecl],
-    libraries: &crate::library::FinalizedLibraries<'tcx>,
+    collection: &CollectionResult<'tcx>,
     config: &DeviceCodegenConfig,
-) -> Result<DeviceCodegenResult, DeviceCodegenError> {
+) -> Result<(DeviceCodegenResult, crate::library::ProviderLibraries), DeviceCodegenError> {
     use rustc_public::rustc_internal;
+    let functions = &collection.functions;
+    let device_externs = &collection.device_externs;
+    let authenticated =
+        crate::library::authenticate(tcx, collection).map_err(DeviceCodegenError::PtxGeneration)?;
 
     if functions.is_empty() {
         return Err(DeviceCodegenError::NoKernels);
@@ -962,7 +992,7 @@ pub fn generate_device_code<'tcx>(
 
     // Convert device externs to mir-importer format
     // We extract signature info from rustc here since we have access to TyCtxt
-    let mut stable_device_externs: Vec<mir_importer::DeviceExternDecl> = device_externs
+    let stable_device_externs: Vec<mir_importer::DeviceExternDecl> = device_externs
         .iter()
         .map(|decl| {
             // Get function signature from rustc
@@ -1021,8 +1051,6 @@ pub fn generate_device_code<'tcx>(
             })
         })
         .collect::<Result<_, _>>()?;
-
-    stable_device_externs.extend(libraries.declarations.clone());
 
     let output_dir = config.output_dir.clone();
     let output_name = config.output_name.clone();
@@ -1118,7 +1146,7 @@ pub fn generate_device_code<'tcx>(
         .map(|func| crate::collector::device_mono_reachability(tcx, func.instance))
         .collect();
 
-    let result = rustc_internal::run(tcx, || {
+    let imported = rustc_internal::run(tcx, || {
         let mut debug_global_variables = BTreeMap::new();
         for owned in &static_debug_identities {
             let stable_item = rustc_internal::stable(MonoItem::Static(owned.def_id));
@@ -1185,7 +1213,7 @@ pub fn generate_device_code<'tcx>(
                     // kernel supplies its block contract. Keep its Rust MIR
                     // for that consumer, but do not emit an unplanned checked
                     // marker here. Independent standalone functions remain.
-                    if libraries.deferred.contains(&func.instance) {
+                    if authenticated.deferred.contains(&func.instance) {
                         return None;
                     }
                     // Use rustc_internal::stable() to convert the Instance.
@@ -1208,7 +1236,21 @@ pub fn generate_device_code<'tcx>(
                         return None;
                     }
 
+                    let library_root_arguments = if *is_kernel {
+                        library_root_arguments(tcx, &stable_instance)
+                    } else {
+                        Vec::new()
+                    };
                     Some(mir_importer::CollectedFunction {
+                        library_source: Some(mir_importer::LibraryFunctionSourceAttr {
+                            export: export_name.clone(),
+                            mangled: tcx.symbol_name(func.instance).name.to_string(),
+                            diagnostic: tcx.def_path_str(func.instance.def_id()),
+                            checked_ancestor: authenticated
+                                .checked_ancestors
+                                .contains(&func.instance),
+                        }),
+                        library_root_arguments,
                         instance: stable_instance,
                         rustc_mir_block_count: reachability.block_count,
                         rustc_mono_successors: reachability.successors.clone(),
@@ -1220,38 +1262,6 @@ pub fn generate_device_code<'tcx>(
                     })
                 },
             )
-            .collect();
-
-        // Reuse each original MIR body and its sidecars; only emitted helper
-        // identity depends on the checked root. Static identities are unchanged.
-        let mut contextual_names: HashMap<String, Vec<String>> = HashMap::new();
-        for context in libraries.contexts.values() {
-            for (instance, name) in context {
-                let stable: rustc_public::mir::mono::Instance = rustc_internal::stable(*instance);
-                contextual_names
-                    .entry(stable.mangled_name())
-                    .or_default()
-                    .push(name.clone());
-            }
-        }
-        let stable_functions: Vec<_> = stable_functions
-            .into_iter()
-            .flat_map(|function| {
-                if !function.is_kernel
-                    && let Some(names) = contextual_names.get(&function.instance.mangled_name())
-                {
-                    names
-                        .iter()
-                        .map(|name| {
-                            let mut emitted = function.clone();
-                            emitted.export_name = name.clone();
-                            emitted
-                        })
-                        .collect()
-                } else {
-                    vec![function]
-                }
-            })
             .collect();
 
         // Check for NVVM IR mode (set by cargo oxide --emit-nvvm-ir)
@@ -1317,87 +1327,82 @@ pub fn generate_device_code<'tcx>(
             index_mut_trait: lang_items.index_mut_trait().map(rustc_internal::stable),
         };
 
-        // Run the cuda-oxide pipeline!
-        // Rust MIR → `dialect-mir` → mem2reg → unroll → LLVM dialect → LLVM IR → PTX.
-        // Device externs are emitted as `declare` statements in LLVM IR
-        let library_calls = libraries
-            .calls
-            .iter()
-            .map(|(site, caller, plan)| {
-                (
-                    mir_importer::LibraryCallSite {
-                        caller: caller.clone(),
-                        block: site.block.index(),
-                    },
-                    plan.clone(),
-                )
-            })
-            .collect();
-        mir_importer::run_pipeline_with_libraries(
+        // Import while rustc_public identities are live; preparation and proof
+        // continue on the same owned module outside this Rust context.
+        mir_importer::import_pipeline_with_libraries(
             &stable_functions,
             &stable_device_externs,
             &pipeline_config,
             known_defs,
-            library_calls,
-            &libraries.roots,
-            &libraries.redirects,
+            authenticated.semantics.clone(),
+            authenticated.call_targets.clone(),
+            authenticated.selected_call_targets.clone(),
         )
     });
 
-    // Handle the result from rustc_internal::run.
-    // We have nested Results: outer from run(), inner from run_pipeline().
-    match result {
-        Ok(pipeline_result) => match pipeline_result {
-            Ok(compilation_result) => {
-                let artifact = read_compilation_artifact(&compilation_result)?;
-                let ptx_content = match artifact.as_ref() {
-                    Some(artifact) if artifact.kind == DeviceCodegenArtifactKind::Ptx => {
-                        Some(String::from_utf8(artifact.bytes.clone()).map_err(|e| {
-                            DeviceCodegenError::PtxGeneration(format!(
-                                "generated PTX is not valid UTF-8: {e}"
-                            ))
-                        })?)
-                    }
-                    _ => None,
-                };
+    let mut imported = imported
+        .map_err(|error| DeviceCodegenError::StableMirError(format!("{error:?}")))?
+        .map_err(|error| DeviceCodegenError::PtxGeneration(error.to_string()))?;
+    // Prove the actual prepared MIR before provider I/O. Only owned admitted
+    // shapes cross back into this Rust boundary.
+    let mut prepared = imported
+        .prepare()
+        .map_err(|error| DeviceCodegenError::PtxGeneration(error.to_string()))?;
+    let shapes = prepared
+        .validate_libraries(&authenticated.rooted_functions)
+        .map_err(|error| DeviceCodegenError::PtxGeneration(error.to_string()))?;
+    let libraries = crate::library::finalize_provider(tcx, collection, &shapes)
+        .map_err(DeviceCodegenError::PtxGeneration)?;
+    prepared
+        .finish_library_planning(
+            &libraries.native_plans,
+            libraries.declarations.clone(),
+            libraries.roots.clone(),
+        )
+        .map_err(|error| DeviceCodegenError::PtxGeneration(error.to_string()))?;
+    let compilation_result = prepared
+        .finish()
+        .map_err(|error| DeviceCodegenError::PtxGeneration(error.to_string()))?;
 
-                if config.verbose {
-                    if let Some(artifact) = artifact.as_ref() {
-                        eprintln!(
-                            "[device_codegen] Embeddable artifact generated: {} ({:?}, target: {})",
-                            artifact.name, artifact.kind, compilation_result.target
-                        );
-                    } else {
-                        eprintln!(
-                            "[device_codegen] No embeddable artifact found for {} (target: {})",
-                            compilation_result.ll_path.display(),
-                            compilation_result.target
-                        );
-                    }
-                }
+    let artifact = read_compilation_artifact(&compilation_result)?;
+    let ptx_content = match artifact.as_ref() {
+        Some(artifact) if artifact.kind == DeviceCodegenArtifactKind::Ptx => {
+            Some(String::from_utf8(artifact.bytes.clone()).map_err(|e| {
+                DeviceCodegenError::PtxGeneration(format!("generated PTX is not valid UTF-8: {e}"))
+            })?)
+        }
+        _ => None,
+    };
 
-                Ok(DeviceCodegenResult {
-                    ptx_path: compilation_result.ptx_path,
-                    ll_path: compilation_result.ll_path,
-                    target: compilation_result.target,
-                    ptx_content,
-                    artifact,
-                    allow_fma_contraction: compilation_result.allow_fma_contraction,
-                    debug_kind,
-                    kernel_launch_bounds: compilation_result.kernel_launch_bounds,
-                    kernel_launch_facts: compilation_result.kernel_launch_facts,
-                })
-            }
-            Err(pipeline_err) => Err(DeviceCodegenError::PtxGeneration(format!(
-                "{}",
-                pipeline_err
-            ))),
-        },
-        Err(stable_mir_err) => Err(DeviceCodegenError::StableMirError(format!(
-            "{:?}",
-            stable_mir_err
-        ))),
+    if config.verbose {
+        if let Some(artifact) = artifact.as_ref() {
+            eprintln!(
+                "[device_codegen] Embeddable artifact generated: {} ({:?}, target: {})",
+                artifact.name, artifact.kind, compilation_result.target
+            );
+        } else {
+            eprintln!(
+                "[device_codegen] No embeddable artifact found for {} (target: {})",
+                compilation_result.ll_path.display(),
+                compilation_result.target
+            );
+        }
     }
+
+    Ok((
+        DeviceCodegenResult {
+            ptx_path: compilation_result.ptx_path,
+            ll_path: compilation_result.ll_path,
+            target: compilation_result.target,
+            ptx_content,
+            artifact,
+            allow_fma_contraction: compilation_result.allow_fma_contraction,
+            debug_kind,
+            kernel_launch_bounds: compilation_result.kernel_launch_bounds,
+            kernel_launch_facts: compilation_result.kernel_launch_facts,
+        },
+        libraries,
+    ))
 }
 
 fn device_debug_kind(rustc_debug: DebugInfo) -> llvm_export::export::DebugKind {

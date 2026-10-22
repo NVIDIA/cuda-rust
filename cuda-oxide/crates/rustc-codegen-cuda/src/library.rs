@@ -3,7 +3,7 @@
 
 //! Resolve typed library markers and finalize one batch per native provider.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -284,14 +284,10 @@ struct BatchResponse {
     specializations: Vec<Specialization>,
 }
 
+/// Owned provider results, independent of Rust body and proof state.
 #[derive(Default)]
-pub(crate) struct FinalizedLibraries<'tcx> {
-    pub calls: Vec<(CallSite<'tcx>, String, mir_importer::LibraryCallPlan)>,
-    /// Checked helpers need a concrete kernel before their calls can be lowered.
-    pub deferred: HashSet<Instance<'tcx>>,
-    /// Original Rust instances mapped to their emitted names for each checked root.
-    pub contexts: BTreeMap<String, HashMap<Instance<'tcx>, String>>,
-    pub redirects: mir_importer::CallTargetRedirects,
+pub(crate) struct ProviderLibraries {
+    pub native_plans: mir_importer::RootedNativePlans,
     pub declarations: Vec<mir_importer::DeviceExternDecl>,
     pub inputs: Vec<(String, Vec<u8>)>,
     pub roots: BTreeMap<String, KernelLaunchFacts>,
@@ -579,24 +575,212 @@ fn call_arguments(call: &LibraryCall<'_>) -> Result<Vec<Argument>, String> {
         .collect())
 }
 
-/// Finalize provider requests independently from rooted call-site proofs.
-pub(crate) fn finalize<'tcx>(
+/// Source semantics authenticated without provider or participation facts.
+fn authenticated_metadata<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    call: &LibraryCall<'tcx>,
+) -> Result<mir_importer::LibraryCallMetadata, String> {
+    use mir_importer::{
+        LibraryAccess, LibraryNativeMetadata as Native, LibraryRoleAttr, LibraryScalar,
+        LibraryWitness, NativeSpec,
+    };
+    let args = call.instance.args;
+    let positive = |index| {
+        let value = args
+            .const_at(index)
+            .try_to_target_usize(tcx)
+            .ok_or("library extent is not a concrete usize")?;
+        u32::try_from(value)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or("library extent must fit nonzero u32")
+    };
+    let scalar = match scalar(args.type_at(0))? {
+        Scalar::Signed(bits) => LibraryScalar::Signed(bits),
+        Scalar::Unsigned(bits) => LibraryScalar::Unsigned(bits),
+        Scalar::Float(bits) => LibraryScalar::Float(bits),
+    };
+    let spec = NativeSpec {
+        scalar,
+        items: positive(if call.kind.resource() { 5 } else { 4 })?,
+    };
+    let native = match call.kind {
+        MarkerKind::Raw => Native::Raw {
+            spec,
+            block_threads: positive(3)?,
+        },
+        MarkerKind::CheckedBlock => Native::CheckedBlock { spec },
+        MarkerKind::CheckedBlockResource => {
+            let TyKind::Ref(_, inner, _) = args.type_at(2).kind() else {
+                return Err("resource witness must be a reference".into());
+            };
+            let witness = if matches!(inner.kind(), TyKind::Slice(_)) {
+                LibraryWitness::ReadOnlySlice
+            } else {
+                let (_, capacity) = collective_carrier(tcx, *inner)
+                    .ok_or("resource witness requires DisjointSlice<T, CollectiveTiles<C>>")?;
+                LibraryWitness::CollectiveCarrier(capacity)
+            };
+            Native::CheckedBlockResource {
+                spec,
+                access: if resource_write(call) {
+                    LibraryAccess::Write
+                } else {
+                    LibraryAccess::Read
+                },
+                witness,
+            }
+        }
+    };
+    Ok(mir_importer::LibraryCallMetadata {
+        marker: tcx.symbol_name(call.instance).name.to_string(),
+        role: LibraryRoleAttr::Native(native),
+    })
+}
+
+/// Rust identities stay at the import boundary; prepared MIR owns the proof.
+#[derive(Default)]
+pub(crate) struct AuthenticatedLibraries<'tcx> {
+    pub semantics: BTreeMap<mir_importer::LibraryCallSite, mir_importer::LibraryCallMetadata>,
+    pub deferred: HashSet<Instance<'tcx>>,
+    pub checked_ancestors: HashSet<Instance<'tcx>>,
+    pub selected_call_targets:
+        BTreeMap<mir_importer::LibraryCallSite, mir_importer::LibraryCallTargetAttr>,
+    pub rooted_functions: BTreeMap<String, BTreeSet<String>>,
+    pub call_targets: BTreeMap<mir_importer::LibraryCallSite, BTreeSet<String>>,
+}
+
+pub(crate) fn authenticate<'tcx>(
     tcx: TyCtxt<'tcx>,
     collection: &CollectionResult<'tcx>,
-) -> Result<FinalizedLibraries<'tcx>, String> {
-    let mut result = FinalizedLibraries::default();
-    if collection.library_calls.is_empty() {
-        return Ok(result);
-    }
-    // Structural checks precede both the proof and external compilation.
+) -> Result<AuthenticatedLibraries<'tcx>, String> {
+    let mut result = AuthenticatedLibraries::default();
+    let definitions = marker_definitions(tcx);
+    let mut sites = HashSet::new();
     for call in &collection.library_calls {
+        if definitions.get(&call.instance.def_id()) != Some(&call.kind) {
+            return Err("library marker is not a genuine registered definition".into());
+        }
         call_arguments(call).unwrap_or_else(|error| tcx.dcx().span_fatal(call.span, error));
         if call.kind.resource() {
             validate_resource(tcx, call)
                 .unwrap_or_else(|error| tcx.dcx().span_fatal(call.span, error));
         }
+        if !sites.insert((call.site.caller, call.site.block)) {
+            return Err("duplicate authenticated library source site".into());
+        }
     }
-    let checked_shapes = crate::collective_validation::validate(tcx, collection)?;
+    let names: HashMap<_, _> = collection
+        .functions
+        .iter()
+        .map(|function| (function.instance, function.export_name.clone()))
+        .collect();
+    let mut rooted = HashSet::new();
+    for root in collection
+        .functions
+        .iter()
+        .filter(|function| function.is_kernel)
+    {
+        let reached = reachable_instances(collection, root.instance);
+        result.rooted_functions.insert(
+            root.export_name.clone(),
+            reached
+                .iter()
+                .filter_map(|instance| names.get(instance).cloned())
+                .collect(),
+        );
+        rooted.extend(reached);
+    }
+    result.checked_ancestors = checked_helper_ancestors(collection);
+    result.deferred = result.checked_ancestors.clone();
+    result
+        .deferred
+        .retain(|instance| !rooted.contains(instance));
+    // A standalone checked helper may still have unevaluated generic extents.
+    // Its consumer supplies the concrete root before typed roles are required.
+    for call in &collection.library_calls {
+        if !rooted.contains(&call.site.caller) {
+            continue;
+        }
+        let caller = names
+            .get(&call.site.caller)
+            .ok_or("authenticated library caller was not collected")?
+            .clone();
+        let metadata = authenticated_metadata(tcx, call)
+            .unwrap_or_else(|error| tcx.dcx().span_fatal(call.span, error));
+        result.semantics.insert(
+            mir_importer::LibraryCallSite {
+                caller,
+                block: call.site.block.index(),
+            },
+            metadata,
+        );
+    }
+    let mut selected_sites = HashSet::new();
+    for edge in &collection.call_edges {
+        if result.deferred.contains(&edge.caller) {
+            continue;
+        }
+        let first = selected_sites.insert((edge.caller, edge.block));
+        let target = names.get(&edge.callee).or_else(|| {
+            collection
+                .device_externs
+                .iter()
+                .find(|declaration| declaration.def_id == edge.callee.def_id())
+                .map(|declaration| &declaration.export_name)
+        });
+        if let (Some(caller), Some(target)) = (names.get(&edge.caller), target) {
+            let site = mir_importer::LibraryCallSite {
+                caller: caller.clone(),
+                block: edge.block.index(),
+            };
+            if first {
+                result.selected_call_targets.insert(
+                    site.clone(),
+                    mir_importer::LibraryCallTargetAttr {
+                        kind: match edge.kind {
+                            EdgeKind::Direct => mir_importer::LibraryCallKind::Direct,
+                            EdgeKind::Callable => mir_importer::LibraryCallKind::Callable,
+                            EdgeKind::Drop => mir_importer::LibraryCallKind::Drop,
+                        },
+                        export: target.clone(),
+                        marker: tcx.symbol_name(edge.callee).name.to_string(),
+                    },
+                );
+            }
+            result
+                .call_targets
+                .entry(site)
+                .or_default()
+                .insert(target.clone());
+        }
+    }
+    for helper in &result.deferred {
+        let reached = reachable_instances(collection, *helper);
+        if let Some(call) = collection
+            .library_calls
+            .iter()
+            .find(|call| call.kind == MarkerKind::Raw && reached.contains(&call.site.caller))
+        {
+            tcx.dcx().span_fatal(
+                call.span,
+                "raw and checked library calls cannot be mixed in one checked helper path",
+            );
+        }
+    }
+    Ok(result)
+}
+
+/// Resolve original-source requests only after the prepared MIR proof.
+pub(crate) fn finalize_provider<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    collection: &CollectionResult<'tcx>,
+    checked_shapes: &BTreeMap<String, [u32; 3]>,
+) -> Result<ProviderLibraries, String> {
+    let mut result = ProviderLibraries::default();
+    if collection.library_calls.is_empty() {
+        return Ok(result);
+    }
     let target = std::env::var("CUDA_OXIDE_TARGET")
         .map_err(|_| "library calls require an explicit CUDA target")?;
     let target = target
@@ -611,7 +795,6 @@ pub(crate) fn finalize<'tcx>(
     type ProviderBatch<'a, 'tcx> = Vec<(Request, Vec<RootedCall<'a, 'tcx>>)>;
     let mut batches: BTreeMap<(String, PathBuf), ProviderBatch<'_, 'tcx>> = BTreeMap::new();
     let affected = checked_helper_ancestors(collection);
-    result.deferred = affected.clone();
     for root in collection.functions.iter().filter(|f| f.is_kernel) {
         let reached = reachable_instances(collection, root.instance);
         let calls: Vec<_> = collection
@@ -635,62 +818,20 @@ pub(crate) fn finalize<'tcx>(
             }
         }
         if checked_shapes.contains_key(&root.export_name) {
-            let root_symbol = tcx.symbol_name(root.instance).name;
-            let mut context = HashMap::new();
             for function in &collection.functions {
-                if !reached.contains(&function.instance) || !affected.contains(&function.instance) {
-                    continue;
-                }
-                let name = if function.is_kernel {
-                    function.export_name.clone()
-                } else {
-                    if tcx
+                if !function.is_kernel
+                    && reached.contains(&function.instance)
+                    && affected.contains(&function.instance)
+                    && tcx
                         .codegen_fn_attrs(function.instance.def_id())
                         .contains_extern_indicator()
-                    {
-                        tcx.dcx()
-                            .struct_span_fatal(
-                                tcx.def_span(function.instance.def_id()),
-                                "fixed external symbols are not supported on checked collective helper paths",
-                            )
-                            .with_note(format!("helper is reachable from kernel {}", root.export_name))
-                            .with_help("remove the helper's #[no_mangle] or #[export_name] attribute")
-                            .emit();
-                    }
-                    format!(
-                        "{}{}_{}_{}",
-                        reserved_oxide_symbols::LIBRARY_CONTEXT_PREFIX,
-                        root_symbol.len(),
-                        root_symbol,
-                        tcx.symbol_name(function.instance).name
-                    )
-                };
-                context.insert(function.instance, name);
-                result.deferred.remove(&function.instance);
-            }
-            for function in &collection.functions {
-                let Some(caller) = context.get(&function.instance) else {
-                    continue;
-                };
-                let redirects = result.redirects.entry(caller.clone()).or_default();
-                for edge in collection
-                    .call_edges
-                    .iter()
-                    .filter(|e| e.caller == function.instance)
                 {
-                    let Some(target) = context.get(&edge.callee) else {
-                        continue;
-                    };
-                    if let Some(callee) = collection
-                        .functions
-                        .iter()
-                        .find(|f| f.instance == edge.callee)
-                    {
-                        redirects.insert(callee.export_name.clone(), target.clone());
-                    }
+                    tcx.dcx().struct_span_fatal(tcx.def_span(function.instance.def_id()),
+                        "fixed external symbols are not supported on checked collective helper paths")
+                        .with_note(format!("helper is reachable from kernel {}", root.export_name))
+                        .with_help("remove the helper's #[no_mangle] or #[export_name] attribute").emit();
                 }
             }
-            result.contexts.insert(root.export_name.clone(), context);
         }
         for call in calls {
             let args = call.instance.args;
@@ -711,7 +852,15 @@ pub(crate) fn finalize<'tcx>(
                     .ok_or("library extent must fit nonzero u32")
             };
             let block = if call.kind.checked() {
-                checked_shapes[&root.export_name]
+                checked_shapes
+                    .get(&root.export_name)
+                    .copied()
+                    .ok_or_else(|| {
+                        format!(
+                            "checked library root {} has no admitted block shape",
+                            root.export_name
+                        )
+                    })?
             } else {
                 [
                     positive(3)
@@ -740,22 +889,6 @@ pub(crate) fn finalize<'tcx>(
             }
         }
     }
-    // No later kernel context can make a mixed raw/checked path valid.
-    // Diagnose it before a dependency emits an unplanned raw descendant.
-    for helper in &result.deferred {
-        let reached = reachable_instances(collection, *helper);
-        if let Some(call) = collection
-            .library_calls
-            .iter()
-            .find(|call| call.kind == MarkerKind::Raw && reached.contains(&call.site.caller))
-        {
-            tcx.dcx().span_fatal(
-                call.span,
-                "raw and checked library calls cannot be mixed in one checked helper path",
-            );
-        }
-    }
-    let mut finalized = HashMap::new();
     let mut all_symbols = HashSet::new();
     for ((provider, executable), batch) in batches {
         let requests: Vec<_> = batch.iter().map(|(request, _)| request.clone()).collect();
@@ -831,29 +964,22 @@ pub(crate) fn finalize<'tcx>(
                     scratch_bytes,
                     scratch_alignment,
                 };
-                let caller = result
-                    .contexts
-                    .get(root)
-                    .and_then(|context| context.get(&call.site.caller))
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        collection
-                            .functions
-                            .iter()
-                            .find(|f| f.instance == call.site.caller)
-                            .expect("collected library caller")
-                            .export_name
-                            .clone()
-                    });
-                let site = (caller.clone(), call.site.block);
-                if let Some(previous) = finalized.insert(site, spec.symbol.clone()) {
-                    if previous != spec.symbol {
-                        return Err(
-                            "library call site has conflicting provider specializations".into()
-                        );
-                    }
-                } else {
-                    result.calls.push((call.site, caller, plan));
+                let caller = collection
+                    .functions
+                    .iter()
+                    .find(|function| function.instance == call.site.caller)
+                    .ok_or("collected library caller is missing")?
+                    .export_name
+                    .clone();
+                let site = mir_importer::LibraryCallSite {
+                    caller,
+                    block: call.site.block.index(),
+                };
+                let plans = result.native_plans.entry(root.to_string()).or_default();
+                if let Some(previous) = plans.insert(site, plan.clone())
+                    && previous != plan
+                {
+                    return Err("library call site has conflicting provider specializations".into());
                 }
                 let facts = KernelLaunchFacts {
                     exact_block: Some((request.block[0], request.block[1], request.block[2])),

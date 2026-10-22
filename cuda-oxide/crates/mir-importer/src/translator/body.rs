@@ -2181,6 +2181,7 @@ pub fn translate_body(
 
     // Create MirFuncOp and set the function type attribute and symbol name
     let mir_func_op = MirFuncOp::new(ctx, op_ptr, func_type_attr);
+    mir_func_op.set_library_unchecked_indexing(ctx, unchecked_indexing);
 
     let name_str = if let Some(name) = override_name {
         name.to_string()
@@ -2550,7 +2551,10 @@ pub fn translate_body(
             ctx,
             body,
             mir_block,
-            idx,
+            crate::LibraryCallSite {
+                caller: name_str.clone(),
+                block: idx,
+            },
             block_ptr,
             &mut value_map,
             &block_map,
@@ -2558,7 +2562,6 @@ pub fn translate_body(
             legaliser,
             entry_prev_op,
             block_debug_info,
-            crate::library::get_call(&name_str, idx).as_ref(),
         )?;
         blocks_processed.insert(idx);
     }

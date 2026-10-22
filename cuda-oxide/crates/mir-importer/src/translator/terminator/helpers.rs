@@ -20,7 +20,8 @@
 
 use crate::error::{TranslationErr, TranslationResult};
 use crate::translator::values::{ValueMap, establish_declared_pointer_type};
-use crate::translator::{payload_store, rvalue};
+use crate::translator::{payload_store, rvalue, statement::retain_source_write};
+use dialect_mir::library::LibraryWriteSourceAttr;
 use dialect_mir::{
     attributes::MirPointerKindAuthorityAttr,
     ops::{MirCallOp, MirConstructArrayOp, MirGotoOp},
@@ -74,10 +75,13 @@ pub(crate) enum PreparedDestinationWrite {
     /// representation coercions and ZST handling.
     Local(mir::Local),
     /// An ordinary projected place whose writable address is fixed already.
-    Address(Value),
+    Address(Value, Option<LibraryWriteSourceAttr>),
     /// An enum payload that must be rebuilt rather than written through a raw
     /// payload pointer.
-    CanonicalPayload(payload_store::PreparedCanonicalPayloadStore),
+    CanonicalPayload(
+        payload_store::PreparedCanonicalPayloadStore,
+        Option<LibraryWriteSourceAttr>,
+    ),
 }
 
 fn require_writable_destination_address(
@@ -136,7 +140,10 @@ pub(crate) fn prepare_destination_write(
             );
         };
         return Ok((
-            PreparedDestinationWrite::CanonicalPayload(prepared),
+            PreparedDestinationWrite::CanonicalPayload(
+                prepared,
+                crate::library::current_destination_write_source(),
+            ),
             prepared_prev.or(prev_op),
         ));
     }
@@ -155,7 +162,10 @@ pub(crate) fn prepare_destination_write(
         require_writable_destination_address(translated_address, &destination.projection, loc)?;
 
     Ok((
-        PreparedDestinationWrite::Address(address),
+        PreparedDestinationWrite::Address(
+            address,
+            crate::library::current_destination_write_source(),
+        ),
         address_prev.or(prev_op),
     ))
 }
@@ -172,11 +182,12 @@ pub(crate) fn finish_destination_write(
 ) -> TranslationResult<Ptr<Operation>> {
     use dialect_mir::ops::MirStoreOp;
 
+    let prev_op = crate::library::retain_source_result(ctx, value, prev_op, loc.clone());
     match destination {
         PreparedDestinationWrite::Local(local) => Ok(value_map
             .store_local(ctx, local, value, block_ptr, Some(prev_op))
             .unwrap_or(prev_op)),
-        PreparedDestinationWrite::Address(address) => {
+        PreparedDestinationWrite::Address(address, source) => {
             let store_op = Operation::new(
                 ctx,
                 MirStoreOp::get_concrete_op_info(),
@@ -187,17 +198,20 @@ pub(crate) fn finish_destination_write(
             );
             store_op.deref_mut(ctx).set_loc(loc);
             store_op.insert_after(ctx, prev_op);
+            retain_source_write(ctx, store_op, source.as_ref());
             Ok(store_op)
         }
-        PreparedDestinationWrite::CanonicalPayload(payload) => {
-            payload_store::rebuild_and_store_prepared(
+        PreparedDestinationWrite::CanonicalPayload(payload, source) => {
+            let store_op = payload_store::rebuild_and_store_prepared(
                 ctx,
                 &payload,
                 value,
                 block_ptr,
                 Some(prev_op),
                 loc,
-            )
+            )?;
+            retain_source_write(ctx, store_op, source.as_ref());
+            Ok(store_op)
         }
     }
 }
@@ -340,6 +354,42 @@ pub fn emit_function_call(
     block_map: &[Ptr<BasicBlock>],
     loc: Location,
 ) -> TranslationResult<Ptr<Operation>> {
+    emit_function_call_at_site(
+        ctx,
+        body,
+        callee_name,
+        args,
+        destination,
+        return_type,
+        external_callee_type,
+        target,
+        block_ptr,
+        prev_op,
+        value_map,
+        block_map,
+        loc,
+        None,
+    )
+}
+
+/// Emit an original source call with its collected caller/terminator identity.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_function_call_at_site(
+    ctx: &mut Context,
+    body: &mir::Body,
+    callee_name: &str,
+    args: &[mir::Operand],
+    destination: &mir::Place,
+    return_type: TypeHandle,
+    external_callee_type: Option<TypeHandle>,
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+    source_site: Option<crate::LibraryCallSite>,
+) -> TranslationResult<Ptr<Operation>> {
     let mut arg_values = Vec::new();
     let mut last_op = prev_op;
 
@@ -364,6 +414,7 @@ pub fn emit_function_call(
         value_map,
         block_map,
         loc,
+        source_site,
     )
 }
 
@@ -383,6 +434,7 @@ pub(crate) fn emit_function_call_values(
     value_map: &mut ValueMap,
     block_map: &[Ptr<BasicBlock>],
     loc: Location,
+    source_site: Option<crate::LibraryCallSite>,
 ) -> TranslationResult<Ptr<Operation>> {
     // A Rust foreign declaration uses generic pointers at its ABI surface,
     // while an argument may retain a concrete GPU address space internally
@@ -450,6 +502,9 @@ pub(crate) fn emit_function_call_values(
         pliron::identifier::Identifier::try_from("callee").unwrap(),
         callee_attr,
     );
+    if let Some(site) = source_site {
+        crate::library::attach_call_source(ctx, call_op, site);
+    }
     if let Some(signature) = external_callee_type {
         MirCallOp::new(call_op).set_external_callee_signature(ctx, signature);
     }
@@ -490,6 +545,111 @@ pub(crate) fn emit_function_call_values(
         block_map,
         loc,
     ))
+}
+
+/// Adapt raw shared pointers at an imported Rust function's generic ABI.
+/// Parameter types come from the actual `mir.func`, not the call operands.
+/// Every mismatch except otherwise-identical AS3 -> AS0 raw pointers remains
+/// visible to ordinary call verification.
+pub(crate) fn normalize_internal_shared_pointer_arguments(
+    ctx: &mut Context,
+    module: Ptr<Operation>,
+) {
+    use dialect_mir::{
+        ops::MirFuncOp,
+        types::{MirPointerKind, address_space},
+    };
+    use pliron::{
+        builtin::op_interfaces::SymbolOpInterface,
+        linked_list::{ContainsLinkedList, LinkedList},
+    };
+    use std::collections::BTreeMap;
+
+    fn collect(ctx: &Context, op: Ptr<Operation>, operations: &mut Vec<Ptr<Operation>>) {
+        operations.push(op);
+        for region in op.deref(ctx).regions() {
+            for block in region.deref(ctx).iter(ctx) {
+                for child in block.deref(ctx).iter(ctx) {
+                    collect(ctx, child, operations);
+                }
+            }
+        }
+    }
+    let mut operations = Vec::new();
+    collect(ctx, module, &mut operations);
+    let signatures: BTreeMap<_, _> = operations
+        .iter()
+        .filter_map(|&op| {
+            let function = MirFuncOp::wrap(ctx, op)?;
+            Some((
+                function.get_symbol_name(ctx).to_string(),
+                function.get_type(ctx).deref(ctx).arg_types(),
+            ))
+        })
+        .collect();
+    for op in operations {
+        let Some(call) = Operation::get_op::<MirCallOp>(op, ctx) else {
+            continue;
+        };
+        if call.get_attr_external_callee_type(ctx).is_some() {
+            continue;
+        }
+        let Some(callee) = call
+            .get_attr_callee(ctx)
+            .map(|callee| String::from((*callee).clone()))
+        else {
+            continue;
+        };
+        let Some(parameters) = signatures.get(&callee) else {
+            continue;
+        };
+        if parameters.len() != op.deref(ctx).get_num_operands() {
+            continue;
+        }
+        let block = op
+            .deref(ctx)
+            .get_parent_block()
+            .expect("imported call has a block");
+        let loc = op.deref(ctx).loc().clone();
+        let mut previous = op.deref(ctx).get_prev();
+        for (index, &expected) in parameters.iter().enumerate() {
+            let value = op.deref(ctx).get_operand(index);
+            let actual = value.get_type(ctx);
+            let matching_shared_raw = {
+                let actual = actual.deref(ctx);
+                let expected = expected.deref(ctx);
+                match (
+                    actual.downcast_ref::<MirPtrType>(),
+                    expected.downcast_ref::<MirPtrType>(),
+                ) {
+                    (Some(actual), Some(expected)) => {
+                        actual.address_space == address_space::SHARED
+                            && expected.address_space == address_space::GENERIC
+                            && actual.pointee == expected.pointee
+                            && actual.is_mutable == expected.is_mutable
+                            && actual.kind == expected.kind
+                            && matches!(
+                                actual.kind,
+                                MirPointerKind::RawMut | MirPointerKind::RawConst
+                            )
+                    }
+                    _ => false,
+                }
+            };
+            if matching_shared_raw {
+                let (value, last) = normalize_foreign_pointer_argument(
+                    ctx,
+                    value,
+                    expected,
+                    block,
+                    previous,
+                    loc.clone(),
+                );
+                Operation::replace_operand(op, ctx, index, value);
+                previous = last;
+            }
+        }
+    }
 }
 
 /// Adapt a foreign-call pointer argument only when the address space is the
@@ -884,6 +1044,204 @@ mod tests {
             bundle.deref(&ctx).get_operand(1),
             producer.deref(&ctx).get_result(1)
         );
+    }
+
+    #[test]
+    fn internal_shared_pointer_boundary_preserves_other_mismatches() {
+        use dialect_mir::{library::LibraryCallSite, types::MirPointerKind};
+        use pliron::{common_traits::Verify, linked_list::ContainsLinkedList};
+
+        for (
+            actual_space,
+            actual_kind,
+            expected_space,
+            expected_kind,
+            expected_bits,
+            expected_mutable,
+            adapts,
+            verifies,
+        ) in [
+            (
+                3,
+                MirPointerKind::RawMut,
+                0,
+                MirPointerKind::RawMut,
+                32,
+                true,
+                true,
+                true,
+            ),
+            (
+                3,
+                MirPointerKind::RawConst,
+                0,
+                MirPointerKind::RawConst,
+                32,
+                false,
+                true,
+                true,
+            ),
+            (
+                3,
+                MirPointerKind::RawMut,
+                0,
+                MirPointerKind::UniqueRef,
+                32,
+                true,
+                false,
+                false,
+            ),
+            (
+                3,
+                MirPointerKind::SharedRef,
+                0,
+                MirPointerKind::SharedRef,
+                32,
+                false,
+                false,
+                false,
+            ),
+            (
+                3,
+                MirPointerKind::RawMut,
+                0,
+                MirPointerKind::RawMut,
+                8,
+                true,
+                false,
+                false,
+            ),
+            (
+                3,
+                MirPointerKind::RawMut,
+                0,
+                MirPointerKind::RawMut,
+                32,
+                false,
+                false,
+                false,
+            ),
+            (
+                1,
+                MirPointerKind::RawMut,
+                0,
+                MirPointerKind::RawMut,
+                32,
+                true,
+                false,
+                false,
+            ),
+            (
+                0,
+                MirPointerKind::RawMut,
+                3,
+                MirPointerKind::RawMut,
+                32,
+                true,
+                false,
+                false,
+            ),
+            (
+                0,
+                MirPointerKind::RawMut,
+                0,
+                MirPointerKind::RawMut,
+                32,
+                true,
+                false,
+                true,
+            ),
+        ] {
+            let ctx = &mut Context::new();
+            dialect_mir::register(ctx);
+            let actual_element = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
+            let expected_element =
+                IntegerType::get(ctx, expected_bits, Signedness::Unsigned).into();
+            let actual_mutable = matches!(
+                actual_kind,
+                MirPointerKind::RawMut | MirPointerKind::UniqueRef
+            );
+            let actual = MirPtrType::get_with_kind(
+                ctx,
+                actual_element,
+                actual_mutable,
+                actual_space,
+                actual_kind,
+            )
+            .into();
+            let expected = MirPtrType::get_with_kind(
+                ctx,
+                expected_element,
+                expected_mutable,
+                expected_space,
+                expected_kind,
+            )
+            .into();
+            let module = ModuleOp::new(ctx, "call_boundary".try_into().unwrap());
+            let make_function = |ctx: &mut Context, name: &str, parameter: TypeHandle| {
+                let ty = FunctionType::get(ctx, vec![parameter], vec![]);
+                let op = Operation::new(
+                    ctx,
+                    MirFuncOp::get_concrete_op_info(),
+                    vec![],
+                    vec![],
+                    vec![],
+                    1,
+                );
+                let function = MirFuncOp::new(ctx, op, TypeAttr::new(ty.into()));
+                function.set_symbol_name(ctx, name.try_into().unwrap());
+                module.append_operation(ctx, op, 0);
+                let block = BasicBlock::new(ctx, None, vec![parameter]);
+                block.insert_at_back(op.deref(ctx).get_region(0), ctx);
+                block
+            };
+            make_function(ctx, "callee", expected);
+            let block = make_function(ctx, "caller", actual);
+            let argument = block.deref(ctx).get_argument(0);
+            let call = Operation::new(
+                ctx,
+                MirCallOp::get_concrete_op_info(),
+                vec![],
+                vec![argument],
+                vec![],
+                0,
+            );
+            let typed_call = MirCallOp::new(call);
+            typed_call.set_attr_callee(ctx, StringAttr::new("callee".into()));
+            let site = LibraryCallSite {
+                caller: "original::caller".into(),
+                block: 7,
+            };
+            typed_call.set_attr_library_source_site(ctx, site.clone());
+            call.insert_at_back(block, ctx);
+            let location = call.deref(ctx).loc().clone();
+
+            normalize_internal_shared_pointer_arguments(ctx, module.get_operation());
+
+            assert_eq!(call.deref(ctx).get_operand(0) != argument, adapts);
+            assert_eq!(typed_call.verify(ctx).is_ok(), verifies);
+            assert_eq!(
+                typed_call.get_attr_library_source_site(ctx).as_deref(),
+                Some(&site)
+            );
+            assert_eq!(*call.deref(ctx).loc(), location);
+            assert!(typed_call.get_attr_external_callee_type(ctx).is_none());
+            assert!(
+                typed_call
+                    .get_attr_call_pointer_kind_authority(ctx)
+                    .is_none()
+            );
+            if adapts {
+                let cast =
+                    Operation::get_op::<MirCastOp>(block.deref(ctx).iter(ctx).next().unwrap(), ctx)
+                        .unwrap();
+                assert_eq!(
+                    cast.get_attr_pointer_kind_authority(ctx).as_deref(),
+                    Some(&MirPointerKindAuthorityAttr::AbiBoundary)
+                );
+                cast.verify(ctx).unwrap();
+            }
+        }
     }
 
     #[test]

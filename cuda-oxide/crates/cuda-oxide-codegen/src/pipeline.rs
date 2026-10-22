@@ -24,7 +24,7 @@ use crate::iket::{has_iket_operations, materialize as materialize_iket, strip as
 use crate::llvm_tools::LlvmToolchain;
 use crate::lower::{add_device_extern_declarations, lower_to_llvm};
 use crate::options::{BackendOptions, IketInstrumentation};
-use crate::prep::{MirPreparation, prepare_mir_module};
+use crate::prep::{MirPreparation, MirPreparationStage, begin_mir_preparation};
 use crate::ptx::{
     PtxModule, discover_llvm_toolchain, generate_ptx_discovered, generate_ptx_with_toolchain,
 };
@@ -129,6 +129,7 @@ impl<'a> ValidatedBackendOptions<'a> {
 
 /// Complete request for the shared post-translation pipeline.
 #[doc(hidden)]
+#[derive(Clone, Copy)]
 pub struct ModulePipelineRequest<'a> {
     device_externs: &'a [DeviceExternDecl],
     output_policy: OutputPolicy,
@@ -212,6 +213,101 @@ pub fn compile_translated_module(
     module: Ptr<Operation>,
     request: &ModulePipelineRequest<'_>,
 ) -> Result<ModulePipelineOutput, PipelineError> {
+    prepare_translated_module(ctx, module, request)?.finish()
+}
+
+/// A borrowed module paused before optional post-mem2reg passes and unrolling.
+///
+/// Full variable debug retains unpromoted locals at this same boundary. The
+/// context, module, request and validated backend remain bound until consuming
+/// [`finish`](Self::finish); no output artifact has been emitted at the pause.
+/// Retained library hooks are still typed MIR operations at this boundary.
+/// Finishing lowers them first, including when Full debug skips promotion.
+#[doc(hidden)]
+#[must_use = "finish the stage to emit its artifact"]
+pub struct PreparedModuleStage<'ctx, 'inputs> {
+    ctx: &'ctx mut Context,
+    module: Ptr<Operation>,
+    request: ModulePipelineRequest<'inputs>,
+    bound_externs: Option<Vec<DeviceExternDecl>>,
+    validated: ValidatedBackendOptions<'inputs>,
+    preparation: MirPreparationStage,
+}
+
+impl PreparedModuleStage<'_, '_> {
+    /// Access the bound MIR and its preparation analysis manager.
+    ///
+    /// Callers that mutate IR must invalidate affected cached analyses through
+    /// this manager before reusing them or finishing. This accessor does not
+    /// infer which analyses a caller's changes preserve. Do not introduce IKET
+    /// operations or change the debug/optional-pass preconditions already checked
+    /// before this pause.
+    pub fn ir(
+        &mut self,
+    ) -> (
+        &mut Context,
+        Ptr<Operation>,
+        &mut pliron::pass::AnalysisManager,
+    ) {
+        (self.ctx, self.module, &mut self.preparation.analyses)
+    }
+
+    /// Bind validated native declarations once, retaining the original externs.
+    ///
+    /// The host provider owns response and ABI validation. The shared pipeline
+    /// checks these declarations against the actual module before optional MIR
+    /// preparation resumes and uses the same combined list for final export.
+    pub fn bind_device_externs(
+        mut self,
+        device_externs: Vec<DeviceExternDecl>,
+    ) -> Result<Self, PipelineError> {
+        if self.bound_externs.is_some() {
+            return Err(PipelineError::Translation(
+                "native device externs were already bound to this module".into(),
+            ));
+        }
+        let mut combined = self.request.device_externs.to_vec();
+        combined.extend(device_externs);
+        add_device_extern_declarations(self.ctx, self.module, &combined)?;
+        if !combined.is_empty() {
+            let mut invalidated = pliron::pass::PassResult::default();
+            invalidated.ir_changed = pliron::irbuild::IRStatus::Changed;
+            self.preparation.analyses.retain_preserved(&invalidated);
+        }
+        self.bound_externs = Some(combined);
+        Ok(self)
+    }
+
+    /// Consume this stage, complete preparation and emit the requested artifact.
+    pub fn finish(self) -> Result<ModulePipelineOutput, PipelineError> {
+        let Self {
+            ctx,
+            module,
+            request,
+            bound_externs,
+            validated,
+            preparation,
+        } = self;
+        preparation.finish(ctx, module)?;
+        let request = ModulePipelineRequest {
+            device_externs: bound_externs.as_deref().unwrap_or(request.device_externs),
+            ..request
+        };
+        finish_translated_module(ctx, module, &request, validated)
+    }
+}
+
+/// Prepare an imported module through promotion and result-bundle forwarding.
+///
+/// Validation, IKET stripping and target pinning retain their existing order.
+/// Full variable debug applies its current restrictions and returns a stage
+/// without promotion. Optional post-mem2reg passes run only when it is finished.
+#[doc(hidden)]
+pub fn prepare_translated_module<'ctx, 'inputs>(
+    ctx: &'ctx mut Context,
+    module: Ptr<Operation>,
+    request: &ModulePipelineRequest<'inputs>,
+) -> Result<PreparedModuleStage<'ctx, 'inputs>, PipelineError> {
     let mut validated = ValidatedBackendOptions::new(request.backend)?;
 
     if request.trace.dump_mir {
@@ -273,7 +369,7 @@ pub fn compile_translated_module(
                 .emit("\n=== Skipping mem2reg (full debug keeps locals in memory) ===");
         }
     }
-    prepare_mir_module(
+    let preparation = begin_mir_preparation(
         ctx,
         module,
         MirPreparation {
@@ -282,10 +378,27 @@ pub fn compile_translated_module(
             mir_pass_pipeline: backend.mir_pass_pipeline.as_deref(),
         },
     )?;
+    Ok(PreparedModuleStage {
+        ctx,
+        module,
+        request: *request,
+        bound_externs: None,
+        validated,
+        preparation,
+    })
+}
+
+fn finish_translated_module(
+    ctx: &mut Context,
+    module: Ptr<Operation>,
+    request: &ModulePipelineRequest<'_>,
+    validated: ValidatedBackendOptions<'_>,
+) -> Result<ModulePipelineOutput, PipelineError> {
+    let backend = validated.options();
     if request.trace.verbose {
         request.trace.emit("dialect-mir preparation successful ✓");
     }
-    if request.trace.dump_mir && promote_and_unroll {
+    if request.trace.dump_mir && !request.debug_kind.variables_enabled() {
         request
             .trace
             .emit("\n=== dialect-mir module (after preparation) ===");
@@ -836,6 +949,83 @@ fn remove_stale_files(paths: &[PathBuf]) -> Result<(), PipelineError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paused_module_emits_only_when_finished() {
+        use pliron::op::Op;
+        for debug_kind in [DebugKind::Off, DebugKind::Full] {
+            let mut ctx = Context::new();
+            dialect_mir::register(&mut ctx);
+            dialect_nvvm::register(&mut ctx);
+            let module =
+                pliron::builtin::ops::ModuleOp::new(&mut ctx, "staged".try_into().unwrap())
+                    .get_operation();
+            let output = tempfile::tempdir().unwrap();
+            let llvm_ir = output.path().join("staged.ll");
+            let ptx = output.path().join("staged.ptx");
+            std::fs::write(&ptx, "stale artifact").unwrap();
+            let stale = [ptx.clone()];
+            let backend = BackendOptions {
+                target_arch: Some("sm_120".into()),
+                ..BackendOptions::default()
+            };
+            let original = [DeviceExternDecl {
+                export_name: "original_extern".into(),
+                param_types: vec![llvm_export::export::DeviceExternType::Integer(32)],
+                return_type: llvm_export::export::DeviceExternType::Void,
+                attrs: Default::default(),
+            }];
+            // Only the referenced inputs must outlive the stage, not this
+            // temporary request assembled by an importing frontend.
+            let stage = {
+                let request = ModulePipelineRequest::for_rust_pipeline(
+                    &original,
+                    true,
+                    &backend,
+                    debug_kind,
+                    OutputFiles {
+                        llvm_ir: &llvm_ir,
+                        ptx: &ptx,
+                        stale_before_export: &stale,
+                    },
+                    PipelineTrace::default(),
+                );
+                prepare_translated_module(&mut ctx, module, &request).unwrap()
+            };
+            let mut stage = stage
+                .bind_device_externs(vec![DeviceExternDecl {
+                    export_name: "late_native".into(),
+                    param_types: vec![llvm_export::export::DeviceExternType::pointer_to(
+                        llvm_export::export::DeviceExternType::Integer(8),
+                        3,
+                    )],
+                    return_type: llvm_export::export::DeviceExternType::Void,
+                    attrs: crate::export::DeviceExternAttrs {
+                        is_convergent: true,
+                        ..Default::default()
+                    },
+                }])
+                .unwrap();
+            let (ctx, bound_module, _) = stage.ir();
+            verify_operation(ctx, bound_module, "paused module").unwrap();
+            assert!(!llvm_ir.exists(), "preparation must not export");
+            assert!(
+                ptx.exists(),
+                "preparation must not invalidate output artifacts"
+            );
+            let result = stage.finish().unwrap();
+            assert_eq!(result.artifact_kind, ModuleArtifactKind::NvvmIr);
+            assert_eq!(result.target, "sm_120");
+            let ir = std::fs::read_to_string(&llvm_ir).unwrap();
+            assert!(ir.contains("declare void @original_extern(i32)"), "{ir}");
+            assert!(
+                ir.contains("declare void @late_native(ptr addrspace(3))"),
+                "{ir}"
+            );
+            assert!(ir.contains("convergent"), "{ir}");
+            assert!(!ptx.exists());
+        }
+    }
 
     #[test]
     fn invalid_device_hints_fail_at_the_shared_input_boundary() {

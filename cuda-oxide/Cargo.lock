@@ -997,6 +997,7 @@ dependencies = [
  "linkme",
  "llvm-export",
  "mir-lower",
+ "mir-transforms",
  "once_cell",
  "oxide-artifacts",
  "pliron",
@@ -1028,6 +1029,7 @@ name = "mir-transforms"
 version = "0.2.1"
 dependencies = [
  "dialect-mir",
+ "oxide-artifacts",
  "pliron",
  "reserved-oxide-symbols",
  "rustc-hash 2.1.3",

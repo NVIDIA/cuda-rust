@@ -187,8 +187,10 @@ jobs:
       # nextest archives carry test executables, Cargo metadata, and build
       # outputs needed to run on another machine without rebuilding Rust.
       # Keep both workspaces separate, then bundle them in one downloadable tar.
-      - name: Install cargo-nextest
-        run: cargo install cargo-nextest --version 0.9.146 --locked
+      - uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
+        name: Install cargo-nextest
+        with:
+          tool: cargo-nextest
 
       - name: Archive Tile runtime test packages
         run: |

@@ -83,6 +83,28 @@ impl MirLibraryOp {
         library.set_attr_library_signature(ctx, TypeAttr::new(signature.into()));
         op
     }
+
+    pub fn build_query(
+        ctx: &mut Context,
+        site: LibraryCallSite,
+        callee: String,
+        width: u32,
+    ) -> Ptr<Operation> {
+        let result = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
+        let op = Operation::new(
+            ctx,
+            Self::get_concrete_op_info(),
+            vec![result],
+            vec![],
+            vec![],
+            0,
+        );
+        let library = Self::new(op);
+        library.set_attr_role(ctx, LibraryRoleAttr::WarpGroupIndex { width });
+        library.set_attr_site(ctx, site);
+        library.set_attr_library_callee(ctx, StringAttr::new(callee));
+        op
+    }
 }
 impl Verify for MirLibraryOp {
     fn verify(&self, ctx: &Context) -> Result<(), Error> {
@@ -113,6 +135,23 @@ impl Verify for MirLibraryOp {
                 return verify_err!(
                     op.loc(),
                     "native operand boundary has no operands, results or signature"
+                );
+            }
+            return Ok(());
+        }
+        if let LibraryRoleAttr::WarpGroupIndex { width } = *role {
+            if width == 0
+                || width > 32
+                || !width.is_power_of_two()
+                || op.get_num_operands() != 0
+                || op.get_num_results() != 1
+                || scalar_type(ctx, op.get_result(0).get_type(ctx))
+                    != Some(LibraryScalar::Unsigned(32))
+                || self.get_attr_library_signature(ctx).is_some()
+            {
+                return verify_err!(
+                    op.loc(),
+                    "warp group index requires width 1/2/4/8/16/32, no operands or signature, and one u32 result"
                 );
             }
             return Ok(());
@@ -289,6 +328,9 @@ fn native_valid(ctx: &Context, native: LibraryNativeMetadata, args: &[TypeHandle
     if !valid_scalar(spec.scalar) || spec.items == 0 {
         return false;
     }
+    if matches!(native, N::CheckedWarp { width, .. } if width != 32) {
+        return false;
+    }
     let (uniform_index, payload_index) =
         match native {
             N::Raw { block_threads, .. } | N::Callback { block_threads, .. } => {
@@ -314,6 +356,9 @@ fn native_valid(ctx: &Context, native: LibraryNativeMetadata, args: &[TypeHandle
                 (0, 1)
             }
             N::CheckedBlockResource {
+                access, witness, ..
+            }
+            | N::CheckedWarp {
                 access, witness, ..
             } => {
                 if args.len() != 3 || !witness_valid(ctx, witness, access, args[0], spec.scalar) {

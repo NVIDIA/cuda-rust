@@ -138,9 +138,11 @@ fn runtime_indices(role: LibraryRoleAttr) -> &'static [usize] {
         LibraryRoleAttr::Native(Native::Raw { .. }) => &[1],
         LibraryRoleAttr::Native(Native::Callback { .. }) => &[1, 3],
         LibraryRoleAttr::Native(Native::CheckedBlock { .. }) => &[1, 2],
-        LibraryRoleAttr::Native(Native::CheckedBlockResource { .. }) => &[1, 2, 3],
+        LibraryRoleAttr::Native(
+            Native::CheckedBlockResource { .. } | Native::CheckedWarp { .. },
+        ) => &[1, 2, 3],
         LibraryRoleAttr::Native(Native::CheckedBlockStorage { .. }) => &[1, 2, 3, 4],
-        LibraryRoleAttr::StorageNew(_) => &[],
+        LibraryRoleAttr::StorageNew(_) | LibraryRoleAttr::WarpGroupIndex { .. } => &[],
         LibraryRoleAttr::StorageReconfigure { .. }
         | LibraryRoleAttr::StorageReserve { .. }
         | LibraryRoleAttr::StorageRelease => &[0],
@@ -241,14 +243,18 @@ pub(crate) fn translate_call(
             )?;
             (Some(prepared), previous)
         };
-    let retained = MirLibraryOp::build_call(
-        ctx,
-        metadata.role,
-        site,
-        metadata.marker.clone(),
-        signature,
-        operands,
-    );
+    let retained = if let LibraryRoleAttr::WarpGroupIndex { width } = metadata.role {
+        MirLibraryOp::build_query(ctx, site, metadata.marker.clone(), width)
+    } else {
+        MirLibraryOp::build_call(
+            ctx,
+            metadata.role,
+            site,
+            metadata.marker.clone(),
+            signature,
+            operands,
+        )
+    };
     retained.deref_mut(ctx).set_loc(loc.clone());
     helpers::insert_op(ctx, retained, block, previous);
     let Some(prepared) = prepared else {

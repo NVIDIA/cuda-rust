@@ -136,6 +136,59 @@ pub unsafe fn cuda_oxide_library_v1_246e25db_checked_block_resource_call<
 
 pub use cuda_oxide_library_v1_246e25db_checked_block_resource_call as checked_block_resource_call_v1;
 
+/// Invoke a scratch-free Warp operation with a typed memory witness.
+///
+/// WIDTH is currently 32. The root's full exact block shape must contain only
+/// complete physical warps. Controls and participation agree within WIDTH;
+/// sibling warps may differ. A block barrier completes conflicting accesses.
+///
+/// # Safety
+///
+/// The pointer, witness, native recipe, payload and bounds must satisfy
+/// [`checked_block_resource_call_v1`]. The range must additionally stay inside
+/// this group's fixed, canonical lane ownership interval. The compiler checks
+/// origin and participation, not these pointer/bounds obligations. No explicit
+/// scratch or unsupported group mapping may be composed into this operation.
+#[inline(never)]
+pub unsafe fn cuda_oxide_library_v1_246e25db_checked_warp_call<
+    T: Copy,
+    Registration: Fn() -> &'static str + Copy,
+    Memory,
+    UniformArgs: Copy,
+    PayloadArgs: Copy,
+    const WIDTH: usize,
+    const ITEMS: usize,
+    const WRITE: bool,
+>(
+    _registration: Registration,
+    _memory: Memory,
+    _uniform: UniformArgs,
+    _payload: PayloadArgs,
+) {
+    unsafe extern "C" {
+        fn cuda_oxide_checked_warp_call_requires_supported_backend();
+    }
+    unsafe { cuda_oxide_checked_warp_call_requires_supported_backend() }
+}
+
+pub use cuda_oxide_library_v1_246e25db_checked_warp_call as checked_warp_call_v1;
+
+/// Canonical x-fastest group index within the block.
+///
+/// WIDTH must be a power of two in 1..=32. This pure query does not assert
+/// participation and does not require a native provider or a launch contract.
+#[inline(never)]
+pub fn cuda_oxide_library_v1_246e25db_warp_group_index<const WIDTH: usize>() -> u32 {
+    assert!(WIDTH > 0 && WIDTH <= 32 && WIDTH.is_power_of_two());
+    let rank = crate::thread::threadIdx_x()
+        + crate::thread::blockDim_x()
+            * (crate::thread::threadIdx_y()
+                + crate::thread::blockDim_y() * crate::thread::threadIdx_z());
+    rank / WIDTH as u32
+}
+
+pub use cuda_oxide_library_v1_246e25db_warp_group_index as warp_group_index_v1;
+
 /// Internal full-block scratch policy. Its private token has no address identity.
 /// Allocation and synchronization are finalized per rooted static use site.
 /// This descriptor is neither a Rust borrow of shared memory nor completion.

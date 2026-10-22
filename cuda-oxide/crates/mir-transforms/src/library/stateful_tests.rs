@@ -963,41 +963,288 @@ fn unchecked_indexing_is_rejected_in_roots_and_ordinary_helpers() {
     }
 }
 
+#[allow(clippy::disallowed_methods)]
+fn resource_function(ctx: &mut Context) -> (Ptr<Operation>, Ptr<BasicBlock>, Value) {
+    use dialect_mir::types::MirDisjointSliceType;
+    dialect_mir::register(ctx);
+    let module = ModuleOp::new(ctx, "resource".try_into().unwrap());
+    let scalar: TypeHandle = IntegerType::get(ctx, 32, Signedness::Signed).into();
+    let carrier: TypeHandle = MirDisjointSliceType::get(ctx, scalar).into();
+    let signature = FunctionType::get(ctx, vec![carrier], vec![]);
+    let function = Operation::new(
+        ctx,
+        MirFuncOp::get_concrete_op_info(),
+        vec![],
+        vec![],
+        vec![],
+        1,
+    );
+    let f = MirFuncOp::new(ctx, function, TypeAttr::new(signature.into()));
+    f.set_symbol_name(ctx, "root".try_into().unwrap());
+    f.set_library_root_argument(ctx, 0, LibraryRootArgumentClass::ResourceCandidate);
+    module.append_operation(ctx, function, 0);
+    let block = BasicBlock::new(ctx, None, vec![carrier]);
+    block.insert_at_back(function.deref(ctx).get_region(0), ctx);
+    let witness_ty =
+        MirPtrType::get_generic_with_kind(ctx, carrier, true, MirPointerKind::UniqueRef).into();
+    let argument = block.deref(ctx).get_argument(0);
+    let witness = emit::<MirRefOp>(ctx, block, vec![witness_ty], vec![argument]);
+    MirRefOp::new(witness).set_mutable(ctx, true);
+    MirRefOp::new(witness).set_pointer_kind_authority(
+        ctx,
+        dialect_mir::attributes::MirPointerKindAuthorityAttr::Reborrow,
+    );
+    let witness = witness.deref(ctx).get_result(0);
+    (module.get_operation(), block, witness)
+}
+
+#[allow(clippy::disallowed_methods)]
+fn scoped_native(
+    ctx: &mut Context,
+    block: Ptr<BasicBlock>,
+    witness: Value,
+    control: Value,
+    scope: Domain,
+    index: usize,
+) -> Role {
+    use dialect_mir::library::LibraryWitness;
+    let scalar = IntegerType::get(ctx, 32, Signedness::Signed).into();
+    let pointer =
+        MirPtrType::get_generic_with_kind(ctx, scalar, false, MirPointerKind::RawConst).into();
+    let memory = value(ctx, block, pointer);
+    MirLibrarySourceOp::build(
+        ctx,
+        LibrarySourceEffectAttr {
+            site: site(index),
+            kind: SourceKind::BlockQuery,
+        },
+        Some(memory),
+    )
+    .insert_at_back(block, ctx);
+    let uniform_ty = MirTupleType::get(ctx, vec![pointer, control.get_type(ctx)]).into();
+    let uniform = emit::<MirConstructTupleOp>(ctx, block, vec![uniform_ty], vec![memory, control])
+        .deref(ctx)
+        .get_result(0);
+    let output =
+        MirPtrType::get_generic_with_kind(ctx, scalar, true, MirPointerKind::RawMut).into();
+    let payload_ty = MirTupleType::get(ctx, vec![output]).into();
+    let payload = value(ctx, block, payload_ty);
+    let signature = FunctionType::get(
+        ctx,
+        vec![witness.get_type(ctx), uniform_ty, payload_ty],
+        vec![],
+    );
+    let spec = NativeSpec {
+        scalar: LibraryScalar::Signed(32),
+        items: 1,
+    };
+    let kind = LibraryWitness::CollectiveCarrier(1);
+    let role = Role::Native(if scope == Domain::WARP {
+        Native::CheckedWarp {
+            spec,
+            width: 32,
+            access: LibraryAccess::Read,
+            witness: kind,
+        }
+    } else {
+        Native::CheckedBlockResource {
+            spec,
+            access: LibraryAccess::Read,
+            witness: kind,
+        }
+    });
+    MirLibraryOp::build_call(
+        ctx,
+        role,
+        site(index),
+        "scoped_marker".into(),
+        signature,
+        vec![witness, uniform, payload],
+    )
+    .insert_at_back(block, ctx);
+    role
+}
+
+#[test]
+fn genuine_queries_keep_their_exact_scope_through_slots_and_arithmetic() {
+    for width in [1, 2, 4, 8, 16, 32] {
+        let ctx = &mut Context::new();
+        let (module, block, witness) = resource_function(ctx);
+        let query = MirLibraryOp::build_query(ctx, site(10), "query".into(), width);
+        query.insert_at_back(block, ctx);
+        let result = query.deref(ctx).get_result(0);
+        let address = test_slot(ctx, block, result);
+        let result = emit::<MirLoadOp>(ctx, block, vec![result.get_type(ctx)], vec![address])
+            .deref(ctx)
+            .get_result(0);
+        let offset = test_constant(ctx, block, 32, 1);
+        let result = emit::<MirAddOp>(ctx, block, vec![result.get_type(ctx)], vec![result, offset])
+            .deref(ctx)
+            .get_result(0);
+        let role = scoped_native(ctx, block, witness, result, Domain::WARP, 11);
+        emit::<MirReturnOp>(ctx, block, vec![], vec![]);
+        let roles = BTreeMap::from([(site(10), Role::WarpGroupIndex { width }), (site(11), role)]);
+        let verdicts = slot_and_promoted_verdicts(ctx, module, &roles);
+        assert_eq!(
+            verdicts.iter().map(Result::is_ok).collect::<Vec<_>>(),
+            vec![width == 32; 2],
+            "width {width}: {verdicts:?}"
+        );
+        if width == 32 {
+            let proof = analyze(ctx, module, &mut AnalysisManager::default(), &roles).unwrap();
+            assert_eq!(proof.traces["root"].events.len(), 1);
+            assert!(proof.traces["root"].events.contains_key(&vec![11]));
+        } else {
+            assert!(
+                verdicts
+                    .iter()
+                    .all(|v| v.as_ref().unwrap_err().contains("not proved Warp-uniform"))
+            );
+        }
+    }
+}
+
+#[test]
+fn helper_cycles_retain_their_scope_ceiling_after_return() {
+    use pliron::builtin::{
+        attributes::OperandSegmentSizesAttr, op_interfaces::ATTR_KEY_OPERAND_SEGMENT_SIZES,
+    };
+    for (width, consumer, accepted) in [
+        (32, Domain::WARP, true),
+        (32, Domain::BLOCK, false),
+        (16, Domain::WARP, false),
+        (1, Domain::WARP, false),
+    ] {
+        let ctx = &mut Context::new();
+        let (module, root, witness) = resource_function(ctx);
+        let helper = test_helper(ctx, module, vec![], vec![]);
+        let region = helper.deref(ctx).get_parent_region().unwrap();
+        let header = BasicBlock::new(ctx, None, vec![]);
+        header.insert_at_back(region, ctx);
+        let body = BasicBlock::new(ctx, None, vec![]);
+        let exit = BasicBlock::new(ctx, None, vec![]);
+        body.insert_at_back(region, ctx);
+        exit.insert_at_back(region, ctx);
+        let query_site = LibraryCallSite {
+            caller: "helper".into(),
+            block: 0,
+        };
+        let query = MirLibraryOp::build_query(ctx, query_site.clone(), "query".into(), width);
+        query.insert_at_back(helper, ctx);
+        let result = query.deref(ctx).get_result(0);
+        let zero = test_constant(ctx, helper, 32, 0);
+        let bit = IntegerType::get(ctx, 1, Signedness::Signless).into();
+        let condition = emit::<MirNeOp>(ctx, helper, vec![bit], vec![result, zero])
+            .deref(ctx)
+            .get_result(0);
+        let address = test_slot(ctx, helper, condition);
+        Operation::new(
+            ctx,
+            MirGotoOp::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![header],
+            0,
+        )
+        .insert_at_back(helper, ctx);
+        let condition = emit::<MirLoadOp>(ctx, header, vec![bit], vec![address])
+            .deref(ctx)
+            .get_result(0);
+        let branch = Operation::new(
+            ctx,
+            MirCondBranchOp::get_concrete_op_info(),
+            vec![],
+            vec![condition],
+            vec![body, exit],
+            0,
+        );
+        branch.deref_mut(ctx).attributes.set(
+            ATTR_KEY_OPERAND_SEGMENT_SIZES.clone(),
+            OperandSegmentSizesAttr(vec![1, 0, 0]),
+        );
+        branch.insert_at_back(header, ctx);
+        Operation::new(
+            ctx,
+            MirGotoOp::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![header],
+            0,
+        )
+        .insert_at_back(body, ctx);
+        emit::<MirReturnOp>(ctx, exit, vec![], vec![]);
+        test_call(ctx, root, vec![], vec![]);
+        // The caller has no branch of its own, and its following native is in
+        // this same prepared block. The helper's exit ceiling must persist.
+        let control = source_value(ctx, root, SourceKind::BlockQuery, false);
+        let role = scoped_native(ctx, root, witness, control, consumer, 1);
+        emit::<MirReturnOp>(ctx, root, vec![], vec![]);
+        let roles = BTreeMap::from([
+            (query_site, Role::WarpGroupIndex { width }),
+            (site(1), role),
+        ]);
+        let verdicts = slot_and_promoted_verdicts(ctx, module, &roles);
+        assert_eq!(
+            verdicts.iter().map(Result::is_ok).collect::<Vec<_>>(),
+            vec![accepted; 2],
+            "width {width}, {consumer:?}: {verdicts:?}"
+        );
+        if !accepted {
+            assert!(verdicts.iter().all(|v| {
+                v.as_ref()
+                    .unwrap_err()
+                    .contains("operation is reached through lane-varying control flow")
+            }));
+        }
+    }
+}
+
 #[test]
 #[allow(clippy::disallowed_methods)]
 fn resource_access_requires_completion_and_retains_original_witness_origin() {
-    use dialect_mir::{library::LibraryWitness, types::MirDisjointSliceType};
-    for completed in [false, true] {
+    use dialect_mir::library::LibraryWitness;
+    for (scopes, accesses, completed, accepted) in [
+        (
+            [Domain::BLOCK, Domain::BLOCK],
+            [LibraryAccess::Read, LibraryAccess::Write],
+            false,
+            false,
+        ),
+        (
+            [Domain::BLOCK, Domain::BLOCK],
+            [LibraryAccess::Read, LibraryAccess::Write],
+            true,
+            true,
+        ),
+        (
+            [Domain::WARP, Domain::WARP],
+            [LibraryAccess::Read, LibraryAccess::Read],
+            false,
+            true,
+        ),
+        (
+            [Domain::WARP, Domain::BLOCK],
+            [LibraryAccess::Write, LibraryAccess::Read],
+            false,
+            false,
+        ),
+        (
+            [Domain::BLOCK, Domain::WARP],
+            [LibraryAccess::Read, LibraryAccess::Write],
+            false,
+            false,
+        ),
+        (
+            [Domain::WARP, Domain::BLOCK],
+            [LibraryAccess::Write, LibraryAccess::Read],
+            true,
+            true,
+        ),
+    ] {
         let ctx = &mut Context::new();
-        dialect_mir::register(ctx);
-        let module = ModuleOp::new(ctx, "resource".try_into().unwrap());
+        let (module, block, witness) = resource_function(ctx);
         let scalar: TypeHandle = IntegerType::get(ctx, 32, Signedness::Signed).into();
-        let carrier: TypeHandle = MirDisjointSliceType::get(ctx, scalar).into();
-        let signature = FunctionType::get(ctx, vec![carrier], vec![]);
-        let function = Operation::new(
-            ctx,
-            MirFuncOp::get_concrete_op_info(),
-            vec![],
-            vec![],
-            vec![],
-            1,
-        );
-        let f = MirFuncOp::new(ctx, function, TypeAttr::new(signature.into()));
-        f.set_symbol_name(ctx, "root".try_into().unwrap());
-        f.set_library_root_argument(ctx, 0, LibraryRootArgumentClass::ResourceCandidate);
-        module.append_operation(ctx, function, 0);
-        let block = BasicBlock::new(ctx, None, vec![carrier]);
-        block.insert_at_back(function.deref(ctx).get_region(0), ctx);
-        let witness_ty =
-            MirPtrType::get_generic_with_kind(ctx, carrier, true, MirPointerKind::UniqueRef).into();
-        let argument = block.deref(ctx).get_argument(0);
-        let witness = emit::<MirRefOp>(ctx, block, vec![witness_ty], vec![argument]);
-        MirRefOp::new(witness).set_mutable(ctx, true);
-        MirRefOp::new(witness).set_pointer_kind_authority(
-            ctx,
-            dialect_mir::attributes::MirPointerKindAuthorityAttr::Reborrow,
-        );
-        let witness = witness.deref(ctx).get_result(0);
+        let witness_ty = witness.get_type(ctx);
         let pointer: TypeHandle =
             MirPtrType::get_generic_with_kind(ctx, scalar, true, MirPointerKind::RawMut).into();
         let memory = value(ctx, block, pointer);
@@ -1017,7 +1264,8 @@ fn resource_access_requires_completion_and_retains_original_witness_origin() {
         let payload = value(ctx, block, tuple);
         let call_ty = FunctionType::get(ctx, vec![witness_ty, tuple, tuple], vec![]);
         let mut roles = BTreeMap::new();
-        for (index, access) in [(1, LibraryAccess::Read), (2, LibraryAccess::Write)] {
+        for (position, (scope, access)) in scopes.into_iter().zip(accesses).enumerate() {
+            let index = position + 1;
             if index == 2 && completed {
                 MirLibrarySourceOp::build(
                     ctx,
@@ -1029,13 +1277,24 @@ fn resource_access_requires_completion_and_retains_original_witness_origin() {
                 )
                 .insert_at_back(block, ctx);
             }
-            let role = Role::Native(Native::CheckedBlockResource {
-                spec: NativeSpec {
-                    scalar: LibraryScalar::Signed(32),
-                    items: 1,
-                },
-                access,
-                witness: LibraryWitness::CollectiveCarrier(1),
+            let spec = NativeSpec {
+                scalar: LibraryScalar::Signed(32),
+                items: 1,
+            };
+            let witness_kind = LibraryWitness::CollectiveCarrier(1);
+            let role = Role::Native(if scope == Domain::WARP {
+                Native::CheckedWarp {
+                    spec,
+                    width: 32,
+                    access,
+                    witness: witness_kind,
+                }
+            } else {
+                Native::CheckedBlockResource {
+                    spec,
+                    access,
+                    witness: witness_kind,
+                }
             });
             MirLibraryOp::build_call(
                 ctx,
@@ -1049,13 +1308,13 @@ fn resource_access_requires_completion_and_retains_original_witness_origin() {
             roles.insert(site(index), role);
         }
         emit::<MirReturnOp>(ctx, block, vec![], vec![]);
-        let verdicts = slot_and_promoted_verdicts(ctx, module.get_operation(), &roles);
+        let verdicts = slot_and_promoted_verdicts(ctx, module, &roles);
         assert_eq!(
             verdicts.iter().map(Result::is_ok).collect::<Vec<_>>(),
-            vec![completed; 2],
+            vec![accepted; 2],
             "{verdicts:?}"
         );
-        if !completed {
+        if !accepted {
             assert!(verdicts.iter().all(|v| {
                 v.as_ref()
                     .unwrap_err()
@@ -1180,7 +1439,7 @@ fn varying_cycles_stop_at_reconvergence() {
             }
             if let Err(error) = verdict {
                 assert!(
-                    error.contains("lane-varying cycle cannot prove collective participation"),
+                    error.contains("operation is reached through lane-varying control flow"),
                     "{name}: {error}"
                 );
             }

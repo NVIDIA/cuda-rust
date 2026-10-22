@@ -69,7 +69,7 @@ pub struct LibraryReserveLayout {
     pub alignment: u32,
 }
 
-/// Native contracts supported by the checked-Block prefix.
+/// Native contracts retained for collective admission.
 #[format]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LibraryNativeMetadata {
@@ -89,6 +89,12 @@ pub enum LibraryNativeMetadata {
         access: LibraryAccess,
         witness: LibraryWitness,
     },
+    CheckedWarp {
+        spec: NativeSpec,
+        width: u32,
+        access: LibraryAccess,
+        witness: LibraryWitness,
+    },
     CheckedBlockStorage {
         spec: NativeSpec,
         access: LibraryAccess,
@@ -103,6 +109,7 @@ impl LibraryNativeMetadata {
             | Self::Callback { spec, .. }
             | Self::CheckedBlock { spec }
             | Self::CheckedBlockResource { spec, .. }
+            | Self::CheckedWarp { spec, .. }
             | Self::CheckedBlockStorage { spec, .. } => spec,
         }
     }
@@ -172,6 +179,8 @@ pub enum LibraryRoleAttr {
     NativeOperandBoundary,
     /// Original native marker semantics, before tuple flattening or scratch insertion.
     Native(LibraryNativeMetadata),
+    /// Genuine pure x-fastest group index, retained until after admission.
+    WarpGroupIndex { width: u32 },
     /// Create a descriptor with a new source identity.
     StorageNew(LibraryStoragePolicy),
     /// Consume a descriptor and change its policy, preserving its identity.

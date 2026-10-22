@@ -291,6 +291,53 @@ fn library_dynamic_shared_getter<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tc
         && matches!(signature.output().kind(), TyKind::RawPtr(ty, rustc_middle::ty::Mutability::Mut) if *ty == expected)
 }
 
+/// Authenticate the independent query by its actual dependency definition and
+/// instantiated signature. Participation and value precision belong to MIR.
+pub(crate) fn library_warp_query_width(
+    public: rustc_public::mir::mono::Instance,
+) -> Option<Result<u32, &'static str>> {
+    use rustc_public::ty::{Abi, RigidTy, TyKind as PublicTyKind, UintTy};
+    rustc_middle::ty::tls::with(|tcx| {
+        let instance = rustc_public::rustc_internal::internal(tcx, public);
+        if Some(instance.def_id())
+            != library_device_type(
+                tcx,
+                "library",
+                reserved_oxide_symbols::LIBRARY_WARP_GROUP_INDEX_V1,
+            )
+        {
+            return None;
+        }
+        let Some(signature) = public.ty().kind().fn_sig() else {
+            return Some(Err(
+                "warp group index requires a resolved function signature",
+            ));
+        };
+        let signature = signature.skip_binder();
+        if signature.abi != Abi::Rust
+            || signature.c_variadic
+            || !signature.inputs().is_empty()
+            || !matches!(
+                signature.output().kind(),
+                PublicTyKind::RigidTy(RigidTy::Uint(UintTy::U32))
+            )
+        {
+            return Some(Err(
+                "warp group index requires a nullary Rust u32 signature",
+            ));
+        }
+        Some(
+            instance
+                .args
+                .const_at(0)
+                .try_to_target_usize(tcx)
+                .and_then(|width| u32::try_from(width).ok())
+                .filter(|width| *width > 0 && *width <= 32 && width.is_power_of_two())
+                .ok_or("warp group index width must be one of 1, 2, 4, 8, 16, 32"),
+        )
+    })
+}
+
 fn library_collective_carrier<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<(Ty<'tcx>, u64)> {
     let TyKind::Adt(def, args) = ty.kind() else {
         return None;

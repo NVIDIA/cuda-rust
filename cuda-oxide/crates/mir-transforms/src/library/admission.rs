@@ -100,6 +100,7 @@ fn checked(role: LibraryRoleAttr) -> bool {
             LibraryNativeMetadata::CheckedBlock { .. }
                 | LibraryNativeMetadata::CheckedBlockResource { .. }
                 | LibraryNativeMetadata::CheckedBlockStorage { .. }
+                | LibraryNativeMetadata::CheckedWarp { .. }
         )
     ) || super::storage::planned_storage(role)
 }
@@ -165,6 +166,19 @@ pub fn admit_library_roots(
             );
         };
         let shape = [x, y, z];
+        for role in &roles {
+            if let LibraryRoleAttr::Native(LibraryNativeMetadata::CheckedWarp { width, .. }) = role
+                && (*width != 32
+                    || x.checked_mul(y)
+                        .and_then(|xy| xy.checked_mul(z))
+                        .is_none_or(|threads| threads % 32 != 0))
+            {
+                return pliron::verify_err!(
+                    function.deref(ctx).loc(),
+                    "checked Warp calls require width 32 and an exact block containing complete physical warps"
+                );
+            }
+        }
         shapes.insert(root.clone(), shape);
     }
     Ok(shapes)

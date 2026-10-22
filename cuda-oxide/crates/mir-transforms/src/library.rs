@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Prove prepared Block and storage calls, place storage, and lower their finalized ABI.
+//! Prove prepared collective calls, place storage, and lower their finalized ABI.
 
 use dialect_mir::{
     attributes::MirCastKindAttr,
@@ -178,7 +178,9 @@ fn lower(
     for op in retained {
         let site = (*MirLibraryOp::new(op).get_attr_site(ctx).unwrap()).clone();
         let role = *MirLibraryOp::new(op).get_attr_role(ctx).unwrap();
-        let result = if role == LibraryRoleAttr::NativeOperandBoundary {
+        let result = if let LibraryRoleAttr::WarpGroupIndex { width } = role {
+            Some(planned::lower_warp_query(ctx, op, width))
+        } else if role == LibraryRoleAttr::NativeOperandBoundary {
             planned::lower_boundary(ctx, op, &plans[&site]);
             None
         } else {

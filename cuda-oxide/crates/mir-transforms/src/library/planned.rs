@@ -79,7 +79,7 @@ pub(super) fn validate(ctx: &Context, op: Ptr<Operation>, plan: &LibraryCallPlan
         let (checked, resource, storage) = match native {
             Raw { .. } | Callback { .. } => (false, false, false),
             CheckedBlock { .. } => (true, false, false),
-            CheckedBlockResource { .. } => (true, true, false),
+            CheckedBlockResource { .. } | CheckedWarp { .. } => (true, true, false),
             CheckedBlockStorage { .. } => (true, true, true),
         };
         if (
@@ -132,6 +132,44 @@ fn integer(ctx: &mut Context, anchor: Ptr<Operation>, width: u32, value: u64) ->
         ),
     );
     op.deref(ctx).get_result(0)
+}
+
+/// Lower the genuine pure query only after both proofs have consumed its scope.
+pub(super) fn lower_warp_query(ctx: &mut Context, anchor: Ptr<Operation>, width: u32) -> Value {
+    use dialect_mir::ops::{MirAddOp, MirDivOp, MirMulOp};
+    use dialect_nvvm::ops::{
+        ReadPtxSregNtidXOp, ReadPtxSregNtidYOp, ReadPtxSregTidXOp, ReadPtxSregTidYOp,
+        ReadPtxSregTidZOp,
+    };
+    let ty = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
+    macro_rules! register {
+        ($op:ty, $marker:literal) => {{
+            let op = emit::<$op>(ctx, anchor, vec![ty], vec![]);
+            op.deref_mut(ctx).attributes.set(
+                "cuda_oxide_intrinsic_marker".try_into().unwrap(),
+                StringAttr::new($marker.into()),
+            );
+            op.deref(ctx).get_result(0)
+        }};
+    }
+    macro_rules! arithmetic {
+        ($op:ty, $args:expr) => {
+            emit::<$op>(ctx, anchor, vec![ty], $args)
+                .deref(ctx)
+                .get_result(0)
+        };
+    }
+    let x = register!(ReadPtxSregTidXOp, "v1:i0001");
+    let y = register!(ReadPtxSregTidYOp, "v1:i0005");
+    let z = register!(ReadPtxSregTidZOp, "v1:i0009");
+    let nx = register!(ReadPtxSregNtidXOp, "v1:i0003");
+    let ny = register!(ReadPtxSregNtidYOp, "v1:i0007");
+    let yz = arithmetic!(MirMulOp, vec![ny, z]);
+    let yz = arithmetic!(MirAddOp, vec![y, yz]);
+    let rank = arithmetic!(MirMulOp, vec![nx, yz]);
+    let rank = arithmetic!(MirAddOp, vec![x, rank]);
+    let divisor = integer(ctx, anchor, 32, width.into());
+    arithmetic!(MirDivOp, vec![rank, divisor])
 }
 
 fn pointer_cast(
@@ -251,7 +289,7 @@ fn native_call(
     let indices: &[usize] = match native {
         Raw { .. } | Callback { .. } => &[0],
         CheckedBlock { .. } => &[0, 1],
-        CheckedBlockResource { .. } => &[1, 2],
+        CheckedBlockResource { .. } | CheckedWarp { .. } => &[1, 2],
         CheckedBlockStorage { .. } => &[2, 3],
     };
     let mut arguments = Vec::new();
@@ -272,7 +310,10 @@ fn native_call(
     }
     if matches!(
         native,
-        CheckedBlock { .. } | CheckedBlockResource { .. } | CheckedBlockStorage { .. }
+        CheckedBlock { .. }
+            | CheckedBlockResource { .. }
+            | CheckedBlockStorage { .. }
+            | CheckedWarp { .. }
     ) {
         arguments[1..].rotate_left(uniform_len - 1);
         declared[1..].rotate_left(uniform_len - 1);
@@ -456,6 +497,12 @@ mod tests {
                 access,
                 witness,
             },
+            CheckedWarp {
+                spec,
+                width: 32,
+                access,
+                witness,
+            },
             CheckedBlockStorage {
                 spec,
                 access,
@@ -496,7 +543,7 @@ mod tests {
                 Raw { .. } => vec![raw],
                 Callback { .. } => vec![raw, environment],
                 CheckedBlock { .. } => vec![uniform, payload],
-                CheckedBlockResource { .. } => {
+                CheckedBlockResource { .. } | CheckedWarp { .. } => {
                     vec![borrowed, uniform, payload]
                 }
                 CheckedBlockStorage { .. } => vec![borrowed, empty, uniform, payload],
@@ -557,14 +604,15 @@ mod tests {
             plan.callback = matches!(native, Callback { .. });
             plan.resource_witness = matches!(
                 native,
-                CheckedBlockResource { .. } | CheckedBlockStorage { .. }
+                CheckedBlockResource { .. } | CheckedBlockStorage { .. } | CheckedWarp { .. }
             );
             plan.storage_witness = matches!(native, CheckedBlockStorage { .. });
-            plan.scratch_bytes = if matches!(native, CheckedBlockResource { .. }) {
-                0
-            } else {
-                32
-            };
+            plan.scratch_bytes =
+                if matches!(native, CheckedBlockResource { .. } | CheckedWarp { .. }) {
+                    0
+                } else {
+                    32
+                };
             plan.scratch_alignment = 4;
             plan.barrier_before = true;
             let mut wrong_kind = plan.clone();
@@ -606,7 +654,7 @@ mod tests {
                     (operands[1], 1),
                     (operands[0], 1),
                 ],
-                CheckedBlockResource { .. } => vec![
+                CheckedBlockResource { .. } | CheckedWarp { .. } => vec![
                     (operands[1], 0),
                     (operands[2], 0),
                     (operands[2], 1),

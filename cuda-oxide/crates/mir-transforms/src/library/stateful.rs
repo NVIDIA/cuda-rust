@@ -228,20 +228,22 @@ impl Fact {
         }
     }
 }
-// This prefix has only complete Block uniformity versus lane-varying values.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// Genuine queries supply only the six power-of-two Warp precisions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Domain {
+    Warp(u32),
     Block,
-    Lane,
 }
 impl Domain {
     const BLOCK: Self = Self::Block;
-    const LANE: Self = Self::Lane;
+    const WARP: Self = Self::Warp(32);
+    const LANE: Self = Self::Warp(1);
+    const HEIGHT: usize = 7;
     fn covers(self, other: Self) -> bool {
-        self == Self::Block || other == Self::Lane
+        self >= other
     }
     fn meet(self, other: Self) -> Self {
-        if self == other { self } else { Self::Lane }
+        self.min(other)
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,16 +263,27 @@ impl Control {
         }
     }
 }
-// Pending read=1/write=2 accesses retain every possible access at a join.
-// Only a proved complete Block barrier clears them.
-type Pending = BTreeMap<String, u8>;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Access {
+    Read,
+    Write,
+}
+// Retain each producer scope and access kind, together with the weakest
+// completion proved on every incoming path. Only Block completion clears them.
+type Pending = BTreeMap<(String, Domain, Access), Domain>;
 fn merge_pending(into: &mut Pending, other: &Pending) -> bool {
     let mut changed = false;
-    for (origin, bits) in other {
-        let old = into.entry(origin.clone()).or_default();
-        if *old | bits != *old {
-            *old |= bits;
-            changed = true;
+    for (access, completion) in other {
+        match into.entry(access.clone()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(*completion);
+                changed = true;
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let merged = entry.get().meet(*completion);
+                changed |= merged != *entry.get();
+                entry.insert(merged);
+            }
         }
     }
     changed
@@ -299,6 +312,7 @@ impl Epochs {
 }
 #[derive(Clone)]
 struct State {
+    ceiling: Domain,
     values: FxHashMap<Value, Fact>,
     slots: Vec<Fact>,
     borrowed: BTreeSet<usize>,
@@ -310,7 +324,10 @@ impl State {
         self.values.get(&value).cloned().unwrap_or(Fact::Unset)
     }
     fn merge(&mut self, other: &Self) -> bool {
-        let mut changed = merge_pending(&mut self.pending, &other.pending);
+        let ceiling = self.ceiling.meet(other.ceiling);
+        let mut changed = ceiling != self.ceiling;
+        self.ceiling = ceiling;
+        changed |= merge_pending(&mut self.pending, &other.pending);
         changed |= self.epochs.merge(&other.epochs);
         let n = self.borrowed.len();
         self.borrowed.extend(&other.borrowed);
@@ -806,7 +823,8 @@ fn resource(role: Role) -> Option<LibraryAccess> {
     match role {
         Role::Native(
             Native::CheckedBlockResource { access, .. }
-            | Native::CheckedBlockStorage { access, .. },
+            | Native::CheckedBlockStorage { access, .. }
+            | Native::CheckedWarp { access, .. },
         ) => Some(access),
         _ => None,
     }
@@ -818,6 +836,7 @@ fn checked(role: Role) -> bool {
             Native::CheckedBlock { .. }
                 | Native::CheckedBlockResource { .. }
                 | Native::CheckedBlockStorage { .. }
+                | Native::CheckedWarp { .. }
         )
     )
 }
@@ -825,7 +844,7 @@ fn controls_index(native: Native) -> Option<usize> {
     match native {
         Native::Raw { .. } | Native::Callback { .. } => None,
         Native::CheckedBlock { .. } => Some(0),
-        Native::CheckedBlockResource { .. } => Some(1),
+        Native::CheckedBlockResource { .. } | Native::CheckedWarp { .. } => Some(1),
         Native::CheckedBlockStorage { .. } => Some(2),
     }
 }
@@ -886,12 +905,12 @@ impl Analyzer<'_> {
         entry_control: Control,
         pending: Pending,
         epochs: Epochs,
-    ) -> Result<(Fact, Pending, Epochs), String> {
+    ) -> Result<(Fact, Pending, Epochs, Domain), String> {
         if self.stack.iter().any(|f| f == function) {
             return if validate {
                 Err(self.error(function, 0, "recursive helper participation is unsupported"))
             } else {
-                Ok((Fact::Varying, pending, epochs))
+                Ok((Fact::Varying, pending, epochs, Domain::BLOCK))
             };
         }
         let Some(graph) = self
@@ -906,7 +925,7 @@ impl Analyzer<'_> {
                     "call without MIR cannot prove collective participation",
                 ))
             } else {
-                Ok((Fact::Varying, pending, epochs))
+                Ok((Fact::Varying, pending, epochs, Domain::BLOCK))
             };
         };
         if MirFuncOp::wrap(self.ctx, graph.op)
@@ -925,6 +944,9 @@ impl Analyzer<'_> {
                 .insert(self.path.clone(), function.to_owned());
         }
         let mut entry = State {
+            // Entry control reconverges at the caller. Only a cycle lowers
+            // the persistent exit ceiling.
+            ceiling: Domain::BLOCK,
             values: FxHashMap::default(),
             slots: vec![Fact::Unset; graph.slots.len()],
             borrowed: graph.escaped_slots.clone(),
@@ -949,7 +971,7 @@ impl Analyzer<'_> {
                     + self.plan.as_ref().map_or(0, |p| p.sites.len() * 4)
                     + 4,
             )
-            .saturating_mul(6)
+            .saturating_mul(Domain::HEIGHT)
             .max(8);
         self.stack.push(function.to_owned());
         let mut settled = false;
@@ -960,6 +982,7 @@ impl Analyzer<'_> {
                     continue;
                 };
                 self.block(function, graph, block, &mut state, controls[block], false)?;
+                let control = controls[block].narrow(state.ceiling);
                 let term = graph.operations[block].last().unwrap().op;
                 let successors = if Operation::get_op::<MirCondBranchOp>(term, self.ctx).is_some() {
                     let targets: Vec<_> = graph.edges[block]
@@ -970,8 +993,17 @@ impl Analyzer<'_> {
                     let branches = branch_controls(
                         state.fact(term.deref(self.ctx).get_operand(0)),
                         &targets,
-                        controls[block],
+                        control,
                     );
+                    if graph.cyclic_branches.contains(&block) {
+                        state.ceiling = state.ceiling.meet(
+                            state
+                                .fact(term.deref(self.ctx).get_operand(0))
+                                .precision()
+                                .unwrap_or(Domain::LANE)
+                                .meet(control.domain),
+                        );
+                    }
                     for &(target, restriction) in &branches {
                         for member in reachable(&graph.edges, target, graph.joins[block]) {
                             let restricted = controls[member].narrow(restriction.domain);
@@ -998,7 +1030,7 @@ impl Analyzer<'_> {
                             .enumerate()
                         {
                             let value = term.deref(self.ctx).get_operand(index);
-                            let mut selection = controls[block].domain;
+                            let mut selection = controls[block].domain.meet(state.ceiling);
                             // Reconvergence does not erase a value selection. A
                             // conditional branch may pass different values to
                             // the same destination block argument on its edges.
@@ -1055,6 +1087,7 @@ impl Analyzer<'_> {
             ));
         }
         let mut returned = Fact::Unset;
+        let mut returned_ceiling = Domain::BLOCK;
         let mut returned_pending = Pending::new();
         let mut returned_epochs = Epochs::default();
         for block in live {
@@ -1076,32 +1109,27 @@ impl Analyzer<'_> {
                 controls[block],
                 validate,
             )?;
-            if validate
-                && graph.cyclic_branches.contains(&block)
-                && !state
-                    .fact(term.deref(self.ctx).get_operand(0))
-                    .uniform_at(Domain::BLOCK)
-            {
-                self.stack.pop();
-                return Err(self.error(
-                    function,
-                    self.source_block(graph, block),
-                    "lane-varying cycle cannot prove collective participation",
-                ));
-            }
             if is_return {
                 let value = if term.deref(self.ctx).get_num_operands() == 0 {
                     Fact::Fields(vec![])
                 } else {
                     state.fact(term.deref(self.ctx).get_operand(0))
                 };
-                returned = returned.merge(&return_fact(value.taint(controls[block].domain)));
+                returned_ceiling = returned_ceiling.meet(state.ceiling);
+                returned = returned.merge(&return_fact(
+                    value.taint(controls[block].domain.meet(state.ceiling)),
+                ));
                 merge_pending(&mut returned_pending, &state.pending);
                 returned_epochs.merge(&state.epochs);
             }
         }
         self.stack.pop();
-        Ok((return_fact(returned), returned_pending, returned_epochs))
+        Ok((
+            return_fact(returned),
+            returned_pending,
+            returned_epochs,
+            returned_ceiling,
+        ))
     }
     #[allow(clippy::too_many_arguments)]
     fn library(
@@ -1114,6 +1142,11 @@ impl Analyzer<'_> {
     ) -> Result<Option<Fact>, String> {
         let library = MirLibraryOp::new(op);
         let role = *library.get_attr_role(self.ctx).unwrap();
+        if let Role::WarpGroupIndex { width } = role {
+            return Ok(Some(
+                Fact::Uniform(Domain::Warp(width)).taint(control.domain),
+            ));
+        }
         let call = (*library.get_attr_site(self.ctx).unwrap()).clone();
         let marker = String::from((*library.get_attr_library_callee(self.ctx).unwrap()).clone());
         let mut site = self.path.clone();
@@ -1121,13 +1154,17 @@ impl Analyzer<'_> {
         let operands: Vec<_> = op.deref(self.ctx).operands().collect();
         let facts: Vec<_> = operands.iter().map(|v| state.fact(*v)).collect();
         let resolved: Vec<_> = facts.iter().cloned().map(|f| call_fact(f, state)).collect();
-        let scope = Domain::BLOCK;
+        let scope = if matches!(role, Role::Native(Native::CheckedWarp { .. })) {
+            Domain::WARP
+        } else {
+            Domain::BLOCK
+        };
         let mut origin = None;
         let mut policy = Policy::default();
         let mut result = None;
         let mut storage_use = false;
         match role {
-            Role::NativeOperandBoundary => return Ok(None),
+            Role::NativeOperandBoundary | Role::WarpGroupIndex { .. } => return Ok(None),
             Role::StorageNew(new) => {
                 policy = new;
                 result = Some(Fact::Descriptor(site.clone(), policy));
@@ -1301,7 +1338,11 @@ impl Analyzer<'_> {
                     return Err(self.error(
                         function,
                         call.block,
-                        "memory carrier or scalar control is not proved block-uniform",
+                        if scope == Domain::BLOCK {
+                            "memory carrier or scalar control is not proved block-uniform"
+                        } else {
+                            "memory carrier or scalar control is not proved Warp-uniform"
+                        },
                     ));
                 }
             }
@@ -1310,18 +1351,26 @@ impl Analyzer<'_> {
             let witness = call_fact(facts[0].clone(), state);
             if let Some(origin) = witness.resource_origin() {
                 let write = access == LibraryAccess::Write;
-                let old = state.pending.get(origin).copied().unwrap_or(0);
-                if validate
-                    && (!self.storage_root || self.plan.is_some())
-                    && (old & 2 != 0 || (write && old != 0))
-                {
+                let kind = if write { Access::Write } else { Access::Read };
+                let conflict =
+                    state
+                        .pending
+                        .iter()
+                        .any(|((old_origin, producer, old_kind), completion)| {
+                            old_origin == origin
+                                && (write || *old_kind == Access::Write)
+                                && *completion < (*producer).max(scope)
+                        });
+                if validate && (!self.storage_root || self.plan.is_some()) && conflict {
                     return Err(self.error(
                         function,
                         call.block,
                         "conflicting collective resource access requires a full-block barrier",
                     ));
                 }
-                *state.pending.entry(origin.to_owned()).or_default() |= if write { 2 } else { 1 };
+                state
+                    .pending
+                    .insert((origin.to_owned(), scope, kind), Domain::LANE);
             } else if validate {
                 return Err(self.error(
                     function,
@@ -1355,6 +1404,7 @@ impl Analyzer<'_> {
         let mut aborted = false;
         let mut facts = Vec::new();
         for prepared in &graph.operations[block] {
+            let control = control.narrow(state.ceiling);
             let op = prepared.op;
             let operands = &prepared.operands;
             let kind = prepared.kind;
@@ -1468,7 +1518,8 @@ impl Analyzer<'_> {
                             state.epochs.clone(),
                         );
                         self.path.pop();
-                        let (result, pending, epochs) = analyzed?;
+                        let (result, pending, epochs, ceiling) = analyzed?;
+                        state.ceiling = state.ceiling.meet(ceiling);
                         state.pending = pending;
                         state.epochs = epochs;
                         invalidate_borrows(state);

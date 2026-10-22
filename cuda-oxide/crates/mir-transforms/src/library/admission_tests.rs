@@ -234,6 +234,48 @@ fn raw_contract_keeps_its_explicit_shape_and_authenticates_surviving_effects() {
 }
 
 #[test]
+fn warp_admission_requires_complete_physical_blocks_but_queries_need_no_contract() {
+    use dialect_mir::library::{LibraryAccess, LibraryWitness};
+    let ctx = &mut Context::new();
+    let module = module(ctx);
+    let (root, block) = function(ctx, module, "root", "root", vec![]);
+    let query = MirLibraryOp::build_query(ctx, site("root", 1), "query".into(), 16);
+    query.insert_at_back(block, ctx);
+    ret(ctx, block, vec![]);
+    let symbols = BTreeMap::from([("root".into(), "root".into())]);
+    let roots = BTreeMap::from([("root".into(), BTreeSet::from(["root".into()]))]);
+    let mut roles = capture_library_roles(module, ctx, &symbols).unwrap();
+    assert!(
+        admit_library_roots(module, ctx, &roots, &symbols, &roles)
+            .unwrap()
+            .is_empty()
+    );
+    // Even a prepared-away native site retains its original geometry obligation.
+    for (dimensions, width, accepted) in [
+        ([64, 1, 1], 32, true),
+        ([4, 4, 6], 32, true),
+        ([48, 1, 1], 32, false),
+        ([64, 1, 1], 16, false),
+    ] {
+        shape(ctx, root, dimensions);
+        roles.insert(
+            site("root", 2),
+            LibraryRoleAttr::Native(Native::CheckedWarp {
+                spec: SPEC,
+                width,
+                access: LibraryAccess::Read,
+                witness: LibraryWitness::ReadOnlySlice,
+            }),
+        );
+        let result = admit_library_roots(module, ctx, &roots, &symbols, &roles);
+        assert_eq!(result.is_ok(), accepted);
+        if let Err(error) = result {
+            assert!(error.to_string().contains("complete physical warps"));
+        }
+    }
+}
+
+#[test]
 fn callbacks_preserve_erased_source_obligations_and_actual_thunk_identity() {
     use super::callback::admit_library_callbacks;
     use dialect_mir::library::{

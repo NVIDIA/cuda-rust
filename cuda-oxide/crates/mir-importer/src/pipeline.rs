@@ -903,7 +903,14 @@ impl PreparedImport<'_> {
 
     /// Lower the validated library plan and finalize resources exactly once.
     pub fn finish(self) -> Result<CompilationResult, PipelineError> {
-        if !self.libraries_bound && !self.original_roles.is_empty() {
+        if !self.libraries_bound
+            && self.original_roles.values().any(|role| {
+                !matches!(
+                    role,
+                    dialect_mir::library::LibraryRoleAttr::WarpGroupIndex { .. }
+                )
+            })
+        {
             return Err(PipelineError::Translation(
                 "native library operations require a finalized library plan".into(),
             ));
@@ -1339,6 +1346,253 @@ mod tests {
                 "explicit={explicit:?}, hint={hint:?}"
             );
         }
+    }
+
+    #[test]
+    fn genuine_warp_query_retains_identity_and_finishes_without_native_plans() {
+        use dialect_mir::library::LibraryRoleAttr;
+        use dialect_mir::ops::{MirCallOp, MirFuncOp, MirLibraryOp};
+        use pliron::common_traits::Verify;
+        use rustc_public::{CrateDef, mir};
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_warp_query_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        // A real external definition exercises the module/DefId lookup; the
+        // same-spelled local function must remain an ordinary Rust call.
+        let dependency = root.join("device.rs");
+        fs::write(&dependency, r#"
+pub mod library {
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_warp_group_index<const WIDTH:usize>() -> u32 { WIDTH as u32 }
+}
+"#).unwrap();
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let output = std::process::Command::new(&rustc)
+            .args([
+                "--edition=2024",
+                "--crate-type=rlib",
+                "--crate-name=cuda_device",
+                "--emit=metadata",
+            ])
+            .arg("--out-dir")
+            .arg(&root)
+            .arg(&dependency)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let fixture = root.join("query.rs");
+        fs::write(&fixture, r#"
+extern crate cuda_device;
+#[inline(never)] pub fn cuda_oxide_library_v1_246e25db_warp_group_index<const WIDTH:usize>() -> u32 { 77 }
+pub fn query() -> u32 { cuda_device::library::cuda_oxide_library_v1_246e25db_warp_group_index::<8>() }
+pub fn invalid_width() -> u32 { cuda_device::library::cuda_oxide_library_v1_246e25db_warp_group_index::<3>() }
+pub fn lookalike() -> u32 { cuda_oxide_library_v1_246e25db_warp_group_index::<8>() }
+"#).unwrap();
+        let sysroot = std::process::Command::new(&rustc)
+            .args(["--print", "sysroot"])
+            .output()
+            .unwrap();
+        assert!(sysroot.status.success());
+        let args = vec![
+            "rustc".to_string(),
+            "--edition=2024".into(),
+            "--crate-type=rlib".into(),
+            "--crate-name=query_fixture".into(),
+            "--emit=metadata".into(),
+            "-Zmir-opt-level=0".into(),
+            format!(
+                "--extern=cuda_device={}",
+                root.join("libcuda_device.rmeta").display()
+            ),
+            format!("--out-dir={}", root.display()),
+            format!(
+                "--sysroot={}",
+                String::from_utf8(sysroot.stdout).unwrap().trim()
+            ),
+            fixture.display().to_string(),
+        ];
+        let output_dir = root.join("output");
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                rustc_public::run!(&args, || {
+                    let collected = |name: &str| {
+                        let item = rustc_public::all_local_items()
+                            .into_iter()
+                            .find(|i| i.name() == format!("query_fixture::{name}"))
+                            .unwrap();
+                        let instance = Instance::try_from(item).unwrap();
+                        let body = instance.body().unwrap();
+                        CollectedFunction {
+                            instance,
+                            rustc_mir_block_count: body.blocks.len(),
+                            rustc_mono_successors: body
+                                .blocks
+                                .iter()
+                                .map(|b| b.terminator.successors())
+                                .collect(),
+                            is_kernel: false,
+                            export_name: name.into(),
+                            library_source: None,
+                            library_root_arguments: Vec::new(),
+                            debug_source_scopes: None,
+                            statement_debug_info: None,
+                            inline: None,
+                        }
+                    };
+                    let config = PipelineConfig {
+                        output_dir,
+                        output_name: "query".into(),
+                        verbose: false,
+                        emit_nvvm_ir: true,
+                        target_arch: Some("sm_100".into()),
+                        ..PipelineConfig::default()
+                    };
+                    let import = |function, config: &PipelineConfig| {
+                        import_pipeline_with_libraries(
+                            &[function],
+                            &[],
+                            config,
+                            Default::default(),
+                            Default::default(),
+                            Default::default(),
+                            Default::default(),
+                            Default::default(),
+                        )
+                    };
+                    let invalid = import(collected("invalid_width"), &config)
+                        .err()
+                        .expect("invalid genuine width rejected");
+                    assert!(
+                        invalid.to_string().contains("warp group index width"),
+                        "{invalid}"
+                    );
+                    let fake = import(collected("lookalike"), &config).unwrap();
+                    let mut fake_calls = 0;
+                    for block in fake
+                        .module_op_ptr
+                        .deref(&fake.ctx)
+                        .get_region(0)
+                        .deref(&fake.ctx)
+                        .iter(&fake.ctx)
+                    {
+                        for op in block.deref(&fake.ctx).iter(&fake.ctx) {
+                            if Operation::get_op::<MirFuncOp>(op, &fake.ctx).is_none() {
+                                continue;
+                            }
+                            for block in op
+                                .deref(&fake.ctx)
+                                .get_region(0)
+                                .deref(&fake.ctx)
+                                .iter(&fake.ctx)
+                            {
+                                for op in block.deref(&fake.ctx).iter(&fake.ctx) {
+                                    assert!(
+                                        Operation::get_op::<MirLibraryOp>(op, &fake.ctx).is_none()
+                                    );
+                                    fake_calls += usize::from(
+                                        Operation::get_op::<MirCallOp>(op, &fake.ctx).is_some(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    assert_eq!(fake_calls, 1, "same spelling gains no query authority");
+                    for debug in [DebugKind::Off, DebugKind::Full] {
+                        for bind_empty in [false, true] {
+                            let function = collected("query");
+                            let body = function.instance.body().unwrap();
+                            let site = body
+                                .blocks
+                                .iter()
+                                .position(|b| {
+                                    matches!(b.terminator.kind, mir::TerminatorKind::Call { .. })
+                                })
+                                .unwrap();
+                            let mut config = config.clone();
+                            config.debug_kind = debug;
+                            let mut imported = import(function, &config).unwrap();
+                            let mut prepared = imported.prepare().unwrap();
+                            assert_eq!(prepared.original_roles.len(), 1);
+                            assert_eq!(
+                                prepared.original_roles.get(&crate::LibraryCallSite {
+                                    caller: "query".into(),
+                                    block: site
+                                }),
+                                Some(&LibraryRoleAttr::WarpGroupIndex { width: 8 })
+                            );
+                            let (ctx, module, _) = prepared.stage.ir();
+                            let mut queries = 0;
+                            for block in module.deref(ctx).get_region(0).deref(ctx).iter(ctx) {
+                                for op in block.deref(ctx).iter(ctx) {
+                                    if Operation::get_op::<MirFuncOp>(op, ctx).is_none() {
+                                        continue;
+                                    }
+                                    for block in op.deref(ctx).get_region(0).deref(ctx).iter(ctx) {
+                                        for op in block.deref(ctx).iter(ctx) {
+                                            if let Some(query) =
+                                                Operation::get_op::<MirLibraryOp>(op, ctx)
+                                            {
+                                                query.verify(ctx).unwrap();
+                                                queries += 1;
+                                                assert_eq!(op.deref(ctx).get_num_operands(), 0);
+                                                assert_eq!(op.deref(ctx).get_num_results(), 1);
+                                                assert!(
+                                                    query.get_attr_library_signature(ctx).is_none()
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            assert_eq!(queries, 1, "query survives actual Normal/Full preparation");
+                            if bind_empty {
+                                let roots = BTreeMap::from([(
+                                    "query".into(),
+                                    BTreeSet::from(["query".into()]),
+                                )]);
+                                assert!(prepared.validate_libraries(&roots).unwrap().is_empty());
+                                prepared
+                                    .finish_library_planning(
+                                        &BTreeMap::new(),
+                                        Vec::new(),
+                                        BTreeMap::new(),
+                                    )
+                                    .unwrap();
+                            }
+                            let result = prepared.finish().unwrap();
+                            let llvm = fs::read_to_string(result.ll_path).unwrap();
+                            for register in ["tid.x", "tid.y", "tid.z", "ntid.x", "ntid.y"] {
+                                assert!(
+                                    llvm.contains(&format!(
+                                        "call i32 @llvm.nvvm.read.ptx.sreg.{register}()"
+                                    )),
+                                    "{llvm}"
+                                );
+                            }
+                            assert!(llvm.contains("udiv i32"), "{llvm}");
+                            assert!(!llvm.contains(
+                                "call i32 @cuda_oxide_library_v1_246e25db_warp_group_index"
+                            ));
+                        }
+                    }
+                    std::ops::ControlFlow::<(), _>::Continue(())
+                })
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+            .expect("query fixture compiles");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

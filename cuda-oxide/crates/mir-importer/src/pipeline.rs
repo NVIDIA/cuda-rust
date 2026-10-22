@@ -738,7 +738,9 @@ fn write_nvvm_compile_options_sidecar(
     })
 }
 
-fn stale_compilation_artifact_paths(
+/// Paths the pipeline may remove or replace when compiling one module.
+/// Callers can preflight these before compilation to protect external inputs.
+pub fn stale_compilation_artifact_paths(
     output_dir: &Path,
     output_name: &str,
 ) -> Vec<std::path::PathBuf> {

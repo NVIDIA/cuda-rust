@@ -90,7 +90,7 @@ set -uo pipefail
 TCGEN05_EXAMPLES=(gemm_sol gemm_sol_final tcgen05 tcgen05_matmul)
 WGMMA_EXAMPLES=(wgmma)
 BLACKWELL_MMA_EXAMPLES=(mma_mxf8f6f4)
-LTOIR_EXAMPLES=(addressof_sharedarray constant_memory cpp_consumes_rust_device device_ffi_test legacy_atomic_fadd legacy_atomic_rmw_cas legacy_nvvm_pointer_shapes manual_launch_libdevice mathdx_ffi_test primitive_stress)
+LTOIR_EXAMPLES=(addressof_sharedarray constant_memory cpp_consumes_rust_device device_ffi_test external_ltoir legacy_atomic_fadd legacy_atomic_rmw_cas legacy_nvvm_pointer_shapes manual_launch_libdevice mathdx_ffi_test primitive_stress)
 LTOIR_MODERN_EXAMPLES=(small_type_ffi_test)
 TILELIB_EXAMPLES=(tilelib_relu)
 AUTO_NVVM_EXAMPLES=(libdevice_math)
@@ -1038,6 +1038,11 @@ verdict_compile() {
                     "${ex}" "${ex_dir}/${artifact}.ptx"
                 return
                 ;;
+            external_ltoir)
+                full_debug_relocatable_ffi_verdict \
+                    "${ex}" "${ex_dir}/${artifact}.ptx"
+                return
+                ;;
             cutile_inter_kernel)
                 full_debug_ptx_verdict \
                     "${ex_dir}/simt/cutile_inter_kernel_simt.ptx" \
@@ -1179,6 +1184,9 @@ full_debug_relocatable_ffi_verdict() {
             ;;
         mathdx_ffi_test)
             expected_undefined=$'cublasdx_gemm_32x32x32_block_dim_x\ncublasdx_gemm_32x32x32_block_dim_y\ncublasdx_gemm_32x32x32_block_dim_z\ncublasdx_gemm_32x32x32_f32\ncublasdx_gemm_32x32x32_f32_alphabeta\ncublasdx_gemm_32x32x32_smem_size\ncublasdx_gemm_32x32x32_smem_size_ab\ncufftdx_fft_16_c2c_f32_forward\ncufftdx_fft_16_c2c_f32_inverse\ncufftdx_fft_16_elements_per_thread\ncufftdx_fft_16_storage_size\ncufftdx_fft_32_storage_size\ncufftdx_fft_8_c2c_f32_forward\ncufftdx_fft_8_c2c_f32_inverse\ncufftdx_fft_8_elements_per_thread\ncufftdx_fft_8_storage_size\ndebug_extern_double_array'
+            ;;
+        external_ltoir)
+            expected_undefined='external_scale_add'
             ;;
         small_type_ffi_test)
             expected_undefined=$'small_add_u16\nsmall_add_u8\nsmall_half_add\nsmall_not_bool\nsmall_scale_i16\nsmall_scale_i8\nsmall_widen_i8\nsmall_widen_u16'
@@ -1403,6 +1411,15 @@ run_cargo() {
     local ex="$1" log="$2" cat="$3"
     if [[ ${FULL_DEBUG} -eq 1 ]]; then
         run_full_debug_build "${ex}" "${log}" "${cat}"
+        return
+    fi
+    # This fixture exercises compile-time linking of external device libraries.
+    # Its script supplies those inputs and verifies the embedded executable.
+    # Compile-only and full-debug retain the ordinary artifact-only FFI routes.
+    if [[ ${COMPILE_ONLY} -eq 0 && "${ex}" == "external_ltoir" ]]; then
+        bash scripts/check-external-ltoir.sh "${LTOIR_ARCH}" >"${log}" 2>&1
+        CARGO_EC=$?
+        if [[ ${VERBOSE} -eq 1 ]]; then cat "${log}"; fi
         return
     fi
     # Rust `char` must remain plain i32 in both NVVM dialects. A runtime

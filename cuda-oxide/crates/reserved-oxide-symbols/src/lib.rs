@@ -72,6 +72,9 @@ pub const MATERIALIZER_PROVENANCE_ENV: &str = "CUDA_OXIDE_INTERNAL_MATERIALIZER_
 /// code remains keyed by the content-derived provenance digest.
 pub const MATERIALIZER_HANDSHAKE_ENV: &str = "CUDA_OXIDE_INTERNAL_MATERIALIZER_HANDSHAKE";
 
+/// Ordered, content-bound external LTO-IR files supplied by cargo-oxide.
+pub const EXTERNAL_LTOIR_ENV: &str = "CUDA_OXIDE_INTERNAL_EXTERNAL_LTOIR_V1";
+
 /// Optional comma-separated filter selecting crates that may own device code.
 pub const DEVICE_CODEGEN_CRATE_ENV: &str = "CUDA_OXIDE_DEVICE_CODEGEN_CRATE";
 

@@ -75,6 +75,10 @@ enum Commands {
     DebugPolicy,
     /// Build and run an example or project
     Run {
+        /// Link an external LTO-IR file, in argument order (repeatable).
+        /// Requires --materialize-cubin; paths are relative to the invocation directory.
+        #[arg(long)]
+        link_ltoir: Vec<PathBuf>,
         /// Example name (required in workspace, optional for standalone projects)
         example: Option<String>,
         /// Generate NVVM IR (use with libNVVM -gen-lto)
@@ -126,6 +130,10 @@ enum Commands {
     },
     /// Build and run an example or project under NVIDIA Compute Sanitizer
     Sanitize {
+        /// Link an external LTO-IR file, in argument order (repeatable).
+        /// Requires --materialize-cubin; paths are relative to the invocation directory.
+        #[arg(long)]
+        link_ltoir: Vec<PathBuf>,
         /// Example name (required in workspace, optional for standalone projects)
         example: Option<String>,
         /// Compute Sanitizer tool to run
@@ -171,6 +179,10 @@ enum Commands {
     },
     /// Build an example or project (compile only, don't run)
     Build {
+        /// Link an external LTO-IR file, in argument order (repeatable).
+        /// Requires --materialize-cubin; paths are relative to the invocation directory.
+        #[arg(long)]
+        link_ltoir: Vec<PathBuf>,
         /// Example name (required in workspace, optional for standalone projects)
         example: Option<String>,
         /// Generate NVVM IR (use with libNVVM -gen-lto)
@@ -265,6 +277,10 @@ enum Commands {
     },
     /// Run Cargo tests through the cuda-oxide backend
     Test {
+        /// Link an external LTO-IR file, in argument order (repeatable).
+        /// Requires --materialize-cubin; paths are relative to the invocation directory.
+        #[arg(long)]
+        link_ltoir: Vec<PathBuf>,
         /// Target architecture (e.g., sm_90, sm_100, sm_120)
         #[arg(long)]
         arch: Option<String>,
@@ -404,6 +420,10 @@ enum Commands {
     },
     /// Show the full compilation pipeline (MIR -> PTX/NVVM IR) with verbose output
     Pipeline {
+        /// Link an external LTO-IR file, in argument order (repeatable).
+        /// Requires --materialize-cubin; paths are relative to the invocation directory.
+        #[arg(long)]
+        link_ltoir: Vec<PathBuf>,
         /// Example name (required in workspace, optional for standalone projects)
         example: Option<String>,
         /// Generate NVVM IR (use with libNVVM -gen-lto)
@@ -434,6 +454,10 @@ enum Commands {
     },
     /// Build with debug info and launch cuda-gdb
     Debug {
+        /// Link an external LTO-IR file, in argument order (repeatable).
+        /// Requires --materialize-cubin; paths are relative to the invocation directory.
+        #[arg(long)]
+        link_ltoir: Vec<PathBuf>,
         /// Example name (required in workspace, optional for standalone projects)
         example: Option<String>,
         /// Target architecture (e.g., sm_90, sm_100, sm_120). When omitted,
@@ -604,7 +628,22 @@ fn build_passthrough_trigger(
     }
 }
 
+fn external_ltoir_inputs(command: &Commands) -> &[PathBuf] {
+    match command {
+        Commands::Run { link_ltoir, .. }
+        | Commands::Sanitize { link_ltoir, .. }
+        | Commands::Build { link_ltoir, .. }
+        | Commands::Test { link_ltoir, .. }
+        | Commands::Pipeline { link_ltoir, .. }
+        | Commands::Debug { link_ltoir, .. } => link_ltoir,
+        _ => &[],
+    }
+}
+
 fn validate_materialization_cli(cli: &Cli) -> Result<(), String> {
+    if !external_ltoir_inputs(&cli.command).is_empty() && !cli.materialize_cubin {
+        return Err("--link-ltoir requires --materialize-cubin".to_string());
+    }
     if !cli.materialize_cubin {
         return Ok(());
     }
@@ -731,6 +770,12 @@ fn main() {
             .exit();
     }
     let materialize_cubin = cli.materialize_cubin;
+    let link_ltoir = external_ltoir_inputs(&cli.command).to_vec();
+    let resolve_context = || {
+        let mut ctx = commands::resolve_context();
+        ctx.link_ltoir = link_ltoir.clone();
+        ctx
+    };
 
     match cli.command {
         Commands::MaterializerHandshake => {
@@ -740,6 +785,7 @@ fn main() {
             commands::print_debug_policy();
         }
         Commands::Run {
+            link_ltoir: _,
             example,
             emit_nvvm_ir,
             arch,
@@ -753,7 +799,7 @@ fn main() {
             device_debug,
             app_args,
         } => {
-            let ctx = commands::resolve_context();
+            let ctx = resolve_context();
             let example = resolve_example_name(example, &ctx, "run");
             validate_output_arch(
                 &ctx,
@@ -779,6 +825,7 @@ fn main() {
             );
         }
         Commands::Sanitize {
+            link_ltoir: _,
             example,
             tool,
             arch,
@@ -791,7 +838,7 @@ fn main() {
             device_debug,
             sanitizer_args,
         } => {
-            let ctx = commands::resolve_context();
+            let ctx = resolve_context();
             let example = resolve_example_name(example, &ctx, "sanitize");
             validate_output_arch(&ctx, &example, false, materialize_cubin, arch.as_deref());
             let (sanitizer_args, application_args) =
@@ -813,6 +860,7 @@ fn main() {
             );
         }
         Commands::Build {
+            link_ltoir: _,
             example,
             emit_nvvm_ir,
             arch,
@@ -829,7 +877,7 @@ fn main() {
             device_cfgs,
             cargo_args,
         } => {
-            let ctx = commands::resolve_context();
+            let ctx = resolve_context();
             let passthrough = use_build_passthrough(
                 explicit_passthrough,
                 cargo_target_dir.is_some(),
@@ -919,7 +967,7 @@ fn main() {
             keep_going,
             fail_on_finding,
         } => {
-            let ctx = commands::resolve_context();
+            let ctx = resolve_context();
             let (seed_start, seed_end) = ptx_schedule::campaign::parse_seed_range(&seeds)
                 .unwrap_or_else(|error| {
                     eprintln!("Error: {error}");
@@ -983,6 +1031,7 @@ fn main() {
             }
         }
         Commands::Test {
+            link_ltoir: _,
             arch,
             cargo_target_dir,
             device_codegen_crate,
@@ -994,7 +1043,7 @@ fn main() {
             device_debug,
             cargo_args,
         } => {
-            let ctx = commands::resolve_context();
+            let ctx = resolve_context();
             validate_output_arch(
                 &ctx,
                 "cargo test",
@@ -1033,7 +1082,7 @@ fn main() {
             lineinfo,
             device_debug,
         } => {
-            let ctx = commands::resolve_context();
+            let ctx = resolve_context();
             let example = resolve_example_name(example, &ctx, "emit-ltoir");
             commands::emit_ltoir(
                 &ctx,
@@ -1060,7 +1109,7 @@ fn main() {
             lineinfo,
             device_debug,
         } => {
-            let ctx = commands::resolve_context();
+            let ctx = resolve_context();
             let example = resolve_example_name(example, &ctx, "tilelib");
             commands::tilelib(
                 &ctx,
@@ -1077,6 +1126,7 @@ fn main() {
             );
         }
         Commands::Pipeline {
+            link_ltoir: _,
             example,
             emit_nvvm_ir,
             arch,
@@ -1085,7 +1135,7 @@ fn main() {
             lineinfo,
             device_debug,
         } => {
-            let ctx = commands::resolve_context();
+            let ctx = resolve_context();
             let example = resolve_example_name(example, &ctx, "pipeline");
             validate_output_arch(
                 &ctx,
@@ -1115,7 +1165,7 @@ fn main() {
             lineinfo,
             device_debug,
         } => {
-            let ctx = commands::resolve_context();
+            let ctx = resolve_context();
             let example = resolve_example_name(example, &ctx, "inspect");
             commands::codegen_inspect_ptx(
                 &ctx,
@@ -1129,6 +1179,7 @@ fn main() {
             );
         }
         Commands::Debug {
+            link_ltoir: _,
             example,
             arch,
             features,
@@ -1136,7 +1187,7 @@ fn main() {
             cgdb,
             tui,
         } => {
-            let ctx = commands::resolve_context();
+            let ctx = resolve_context();
             let example = resolve_example_name(example, &ctx, "debug");
             validate_output_arch(&ctx, &example, false, materialize_cubin, arch.as_deref());
             commands::codegen_debug(
@@ -1177,7 +1228,7 @@ fn main() {
             commands::doctor(&ctx);
         }
         Commands::Setup => {
-            let ctx = commands::resolve_context();
+            let ctx = resolve_context();
             commands::setup(&ctx);
         }
         Commands::Update { force } => {
@@ -1372,6 +1423,47 @@ mod tests {
             panic!("expected run command");
         };
         assert_eq!(device_features.as_deref(), Some("tensor-cores"));
+    }
+
+    #[test]
+    fn external_ltoir_requires_materialization_and_preserves_order() {
+        let unmaterialized =
+            Cli::try_parse_from(["cargo-oxide", "build", "--link-ltoir", "one"]).unwrap();
+        assert!(validate_materialization_cli(&unmaterialized).is_err());
+        let cli = Cli::try_parse_from([
+            "cargo-oxide",
+            "build",
+            "--link-ltoir",
+            "one",
+            "--materialize-cubin",
+            "--link-ltoir",
+            "two",
+        ])
+        .unwrap();
+        assert_eq!(
+            external_ltoir_inputs(&cli.command),
+            [
+                std::path::PathBuf::from("one"),
+                std::path::PathBuf::from("two")
+            ]
+        );
+        validate_materialization_cli(&cli).unwrap();
+
+        let run = Cli::try_parse_from([
+            "cargo-oxide",
+            "run",
+            "--link-ltoir",
+            "one",
+            "external_ltoir",
+            "--materialize-cubin",
+        ])
+        .unwrap();
+        validate_materialization_cli(&run).unwrap();
+        assert_eq!(external_ltoir_inputs(&run.command), [PathBuf::from("one")]);
+        let Commands::Run { example, .. } = run.command else {
+            panic!("expected run command");
+        };
+        assert_eq!(example.as_deref(), Some("external_ltoir"));
     }
 
     #[test]

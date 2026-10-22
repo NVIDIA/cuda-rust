@@ -52,6 +52,7 @@ cargo oxide update --force          # inside the workspace, run setup via update
 
 | Flag                         | Applies to                       | Description                                     |
 |------------------------------|----------------------------------|-------------------------------------------------|
+| `--link-ltoir <path>`        | run, sanitize, build, test, pipeline, debug | Add an ordered external LTO-IR file to `--materialize-cubin` (repeatable) |
 | `--materialize-cubin`        | run, sanitize, build, test, pipeline, debug | Finalize and embed target-specific native GPU code during the host build |
 | `--emit-nvvm-ir`             | run, build, pipeline             | Generate NVVM IR for libNVVM                    |
 | `--arch <sm_XX>`             | run, sanitize, build, test, pipeline, emit-ltoir, tilelib, inspect, debug | Target architecture override |
@@ -121,9 +122,32 @@ rechecks them inside the backend; use the wrapper flag instead of setting
 `CUDA_OXIDE_MATERIALIZE_CUBIN` around raw Cargo. That variable is an internal
 wrapper/backend signal, not a supported user interface: raw Cargo may reuse a
 previous artifact without running the backend, and a backend invocation without
-the wrapper's fingerprint is rejected. Generic `#[cuda_module]` kernels and
-`#[device] extern` declarations are rejected because their run-time
-multi-artifact linking is not yet represented by this single-cubin path.
+the wrapper's fingerprint is rejected. Generic `#[cuda_module]` kernels remain
+unsupported by this single-cubin path because they merge PTX bundles at run time.
+
+For non-generic kernels calling `#[device] extern` functions, pass the definitions
+as ordered, repeatable `--link-ltoir <path>` inputs alongside `--materialize-cubin`.
+Inputs must be raw CUDA LTO-IR, not object files or fatbins. Each supplied file
+is linked into every materialized device artifact in that Cargo invocation.
+Keep these inputs separate from generated artifact paths; an overlap is rejected
+before cleanup or device output emission.
+Paths are relative to the invocation directory. The wrapper fingerprints their
+canonical names and contents, and the backend verifies and owns those bytes
+before linking. Changing an input rebuilds the device artifact; a change during
+the wrapper/backend handoff is an error. The Rust module is linked first, followed
+by the supplied files in command-line order. CUDA reports unresolved symbols,
+invalid LTO-IR, and unsupported toolkit/target combinations during the build.
+Use compatible CUDA compiler and linker versions when generating the inputs.
+
+```bash
+cargo oxide run --materialize-cubin --arch sm_120 \
+  --link-ltoir build/device-libs/scale.ltoir --link-ltoir build/device-libs/add.ltoir
+```
+
+The [`external_ltoir` example](../rustc-codegen-cuda/examples/external_ltoir/README.md)
+includes C++ sources and commands to generate these files and run the ordinary
+embedded-artifact loader. Generated binaries are not source dependencies.
+
 Metadata-interop projects keep rejecting this global flag; they can instead
 request one independently finalized cubin per declared device crate with
 `artifact-kind = "cubin"`, as described below. Materialization is also a

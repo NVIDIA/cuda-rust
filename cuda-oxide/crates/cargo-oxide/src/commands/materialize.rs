@@ -9,6 +9,7 @@ use std::process::Command;
 
 use super::*;
 
+pub(super) const EXTERNAL_LTOIR_ENV: &str = reserved_oxide_symbols::EXTERNAL_LTOIR_ENV;
 pub(super) const MATERIALIZE_ENV: &str = reserved_oxide_symbols::MATERIALIZE_CUBIN_ENV;
 pub(super) const EXPECTED_PROVENANCE_ENV: &str =
     reserved_oxide_symbols::MATERIALIZER_PROVENANCE_ENV;
@@ -31,6 +32,7 @@ pub(super) struct MaterializationMode {
 pub(super) struct PreparedMaterialization {
     pub(super) provenance_sha256_hex: String,
     pub(super) tool_identity_handshake_json: String,
+    pub(super) external_ltoir_json: String,
 }
 
 impl MaterializationMode {
@@ -39,10 +41,13 @@ impl MaterializationMode {
     }
 
     pub(super) fn apply(&self, cmd: &mut Command) {
+        // Never honor an inherited internal external-input list.
+        cmd.env_remove(EXTERNAL_LTOIR_ENV);
         if let Some(prepared) = &self.prepared {
             // These override inherited/project values: they are a single
             // wrapper-generated handshake tied to this Cargo invocation.
-            cmd.env(MATERIALIZE_ENV, "1")
+            cmd.env(EXTERNAL_LTOIR_ENV, &prepared.external_ltoir_json)
+                .env(MATERIALIZE_ENV, "1")
                 .env(EXPECTED_PROVENANCE_ENV, &prepared.provenance_sha256_hex)
                 .env(
                     MATERIALIZER_HANDSHAKE_ENV,
@@ -205,6 +210,14 @@ fn prepare_materialization_result_with_env(
         .parse()
         .map_err(|error| format!("invalid materialization target {arch:?}: {error}"))?;
 
+    let external_inputs = ctx
+        .link_ltoir
+        .iter()
+        .map(|path| cuda_artifact_finalizer::LtoirFile::capture(path))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("could not capture external LTO-IR: {error}"))?;
+    let external_ltoir_json = serde_json::to_string(&external_inputs)
+        .map_err(|error| format!("could not encode external LTO-IR inputs: {error}"))?;
     let handshake = discover_materializer_handshake(ctx)?;
     let handshake_json = serde_json::to_string(&handshake)
         .map_err(|error| format!("could not encode materializer handshake: {error}"))?;
@@ -212,6 +225,7 @@ fn prepare_materialization_result_with_env(
         prepared: Some(PreparedMaterialization {
             provenance_sha256_hex: digest_hex(&handshake.provenance_sha256),
             tool_identity_handshake_json: handshake_json,
+            external_ltoir_json,
         }),
     })
 }

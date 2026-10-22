@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 // Replacing a stored tensor's token with an unordered one lets a later safe
 // Partition::load race the store. The raw view constructor must require unsafe.
 #[cutile::module]

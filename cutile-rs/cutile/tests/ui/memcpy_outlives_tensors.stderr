@@ -1,25 +1,25 @@
 error[E0597]: `dst` does not live long enough
-  --> tests/ui/memcpy_outlives_tensors.rs:11:21
+  --> tests/ui/memcpy_outlives_tensors.rs:15:21
    |
- 8 |     let op = {
+12 |     let op = {
    |         -- borrow later stored here
- 9 |         let mut dst = api::zeros::<f32>(&[4]).sync().unwrap();
+13 |         let mut dst = api::zeros::<f32>(&[4]).sync().unwrap();
    |             ------- binding `dst` declared here
-10 |         let src = api::ones::<f32>(&[4]).sync().unwrap();
-11 |         api::memcpy(&mut dst, &src)
+14 |         let src = api::ones::<f32>(&[4]).sync().unwrap();
+15 |         api::memcpy(&mut dst, &src)
    |                     ^^^^^^^^ borrowed value does not live long enough
-12 |     };
+16 |     };
    |     - `dst` dropped here while still borrowed
 
 error[E0597]: `src` does not live long enough
-  --> tests/ui/memcpy_outlives_tensors.rs:11:31
+  --> tests/ui/memcpy_outlives_tensors.rs:15:31
    |
- 8 |     let op = {
+12 |     let op = {
    |         -- borrow later stored here
- 9 |         let mut dst = api::zeros::<f32>(&[4]).sync().unwrap();
-10 |         let src = api::ones::<f32>(&[4]).sync().unwrap();
+13 |         let mut dst = api::zeros::<f32>(&[4]).sync().unwrap();
+14 |         let src = api::ones::<f32>(&[4]).sync().unwrap();
    |             --- binding `src` declared here
-11 |         api::memcpy(&mut dst, &src)
+15 |         api::memcpy(&mut dst, &src)
    |                               ^^^^ borrowed value does not live long enough
-12 |     };
+16 |     };
    |     - `src` dropped here while still borrowed

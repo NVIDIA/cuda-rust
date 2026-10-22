@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 //! Delta-debugging tool: rewrites per-op debug-attr ids in a bytecode file.
 //! Usage: patch_debug_ids <in.bc> <out.bc> <keep_n> <fill_id>
 //! Keeps the first keep_n per-op ids, replaces the rest with fill_id.

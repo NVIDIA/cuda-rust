@@ -80,20 +80,14 @@ jobs:
       # ok. (cuda-oxide/crates/fuzzer/rustlantis is another `[workspace]` root
       # and is deliberately not here: it is a vendored upstream project, not
       # first-party code, and bringing its graph under deny.toml is a policy
-      # call rather than a gap. The cutile-rs roots -- cutile-rs/Cargo.toml and
-      # the four paper benchmarks under cutile-rs/cutile-benchmarks/paper --
-      # are out for the same kind of reason: cutile-rs is a nested import of a
-      # separate product that carries its own cutile-rs/deny.toml, so Oxide's
-      # policy is not the one that judges it. To bring them in one day, add a
-      # `cargo deny --manifest-path <root> --locked check` step per root here,
-      # and drop the matching CUTILE_ROOT filter in
-      # cuda-oxide/scripts/check-dependency-licenses.sh so the inventory half
-      # covers them too.)
+      # call rather than a gap.) Tile uses its own cutile-rs/deny.toml in
+      # .github/workflows/cutile-rs.yml. The inventory guard below covers
+      # both products, including the standalone Tile paper benchmarks.
       - name: Run cargo-deny over the cuda-macros device-only fixture
         run: cargo deny --manifest-path cuda-oxide/crates/cuda-macros/tests/device-only/Cargo.toml --locked check
 
   license-manifest:
-    name: dependency-licenses.csv covers every declared crate
+    name: dependency inventories cover every declared crate
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

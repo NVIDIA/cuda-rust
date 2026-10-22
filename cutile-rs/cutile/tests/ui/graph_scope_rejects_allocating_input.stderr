@@ -1,7 +1,7 @@
 error[E0277]: the trait bound `impl cutile::prelude::DeviceOp<Output = cutile::prelude::Tensor<f32>>: cutile::prelude::GraphNode` is not satisfied
-  --> tests/ui/graph_scope_rejects_allocating_input.rs:25:18
+  --> tests/ui/graph_scope_rejects_allocating_input.rs:29:18
    |
-25 |         s.record(kernels::copy(api::zeros::<f32>(&[4]).partition([4]), &x))?;
+29 |         s.record(kernels::copy(api::zeros::<f32>(&[4]).partition([4]), &x))?;
    |           ------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `cutile::prelude::GraphNode` is not implemented for `impl cutile::prelude::DeviceOp<Output = cutile::prelude::Tensor<f32>>`
    |           |
    |           required by a bound introduced by this call

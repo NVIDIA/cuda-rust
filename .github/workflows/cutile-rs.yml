@@ -70,14 +70,16 @@ jobs:
               - 'rust-toolchain.toml'
               - '.github/workflows/cutile-rs.yml'
               - '.github/actions/setup-cutile/**'
+              - 'cuda-oxide/scripts/check-dependency-licenses.sh'
+              - 'cuda-oxide/scripts/check-spdx-headers.sh'
+              - 'cuda-oxide/dependency-licenses.csv'
               - '.github/copy-pr-bot.yaml'
             # `*` covers a root file such as AGENTS.md. `**` covers every nested path.
             any_changed:
               - '*'
               - '**'
 
-  # Audit the Tile workspace with its own policy and lockfile. This only
-  # resolves dependencies, so it needs neither a CUDA container nor a GPU.
+  # Dependency policy, inventories, and source headers need no CUDA or GPU.
   cargo-deny:
     needs: changes
     if: >-
@@ -93,6 +95,12 @@ jobs:
           tool: cargo-deny
       - name: Check dependency policy
         run: cargo deny --manifest-path Cargo.toml --workspace --locked --config deny.toml check
+      - name: Verify dependency inventories
+        working-directory: ${{ github.workspace }}
+        run: bash cuda-oxide/scripts/check-dependency-licenses.sh
+      - name: Verify source headers
+        working-directory: ${{ github.workspace }}
+        run: bash cuda-oxide/scripts/check-spdx-headers.sh
 
   # Exercise the oldest Tile IR assembler, including its lack of
   # --list-versions. The separate 13.0 lane only checks shared host crates.

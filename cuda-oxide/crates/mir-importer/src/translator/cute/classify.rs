@@ -369,16 +369,16 @@ pub(super) fn classify_scheduler_method_call(
         "has_work" if args.len() == 1 && receiver_scheduler.is_some() => {
             Some(CuteFn::SchedulerHasWork)
         }
-        "current_tile"
+        "get_current_work"
             if args.len() == 1
                 && matches!((receiver_scheduler, destination_tile), (Some(source), Some(result)) if source == result) =>
         {
             Some(CuteFn::SchedulerCurrentTile)
         }
-        "coordinates" if args.len() == 1 && receiver_tile.is_some() => {
+        "tile_idx" if args.len() == 1 && receiver_tile.is_some() => {
             Some(CuteFn::WorkTileCoordinates)
         }
-        "advance" if args.len() == 1 && receiver_scheduler.is_some() => {
+        "advance_to_next_work" if args.len() == 1 && receiver_scheduler.is_some() => {
             Some(CuteFn::SchedulerAdvance)
         }
         _ => None,

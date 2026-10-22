@@ -18,15 +18,15 @@ use crate::attributes::CuteTileGridAttr;
 /// One logical output tile selected by a static scheduler.
 ///
 /// The type remembers the static tile grid. Its defining scheduler operation
-/// carries the current linear tile number; no `WorkTile` struct reaches the
-/// runtime ABI.
+/// carries the current linear tile number; no `WorkTileInfo` struct reaches
+/// the runtime ABI.
 ///
 /// ```text
 /// current linear number + grid<16,16,1>
 ///                    │
 ///                    ▼
 ///        !cute.work_tile<grid<16,16,1>>
-///                    │ coordinates
+///                    │ tile_idx
 ///                    ▼
 ///              linear, m, n, batch
 /// ```

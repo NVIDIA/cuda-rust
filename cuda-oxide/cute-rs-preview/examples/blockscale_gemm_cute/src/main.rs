@@ -222,8 +222,8 @@ mod kernels {
             // restart at the wrong barrier and can deadlock.
             let mut consumer_state = PipelineState::<Consumer, PIPELINE_STAGES>::new();
             while scheduler.has_work() {
-                let work_tile = scheduler.current_tile();
-                let (_, m_tile, n_tile, batch) = work_tile.coordinates();
+                let work_tile = scheduler.get_current_work();
+                let (m_tile, n_tile, batch) = work_tile.tile_idx();
                 let mut accumulators = Mxf4AccumulatorTile2x8::zero();
 
                 // Only the logical K coordinate resets per output tile.
@@ -304,7 +304,7 @@ mod kernels {
                     }
                     epilogue_pipeline.producer_commit();
                 }
-                scheduler.advance();
+                scheduler.advance_to_next_work();
             }
             if tid == 0 {
                 epilogue_pipeline.producer_tail();
@@ -318,8 +318,8 @@ mod kernels {
                 // tiles; only the descriptor's logical K coordinate resets.
                 let mut producer_state = PipelineState::<Producer, PIPELINE_STAGES>::new();
                 while scheduler.has_work() {
-                    let work_tile = scheduler.current_tile();
-                    let (_, m_tile, n_tile, batch) = work_tile.coordinates();
+                    let work_tile = scheduler.get_current_work();
+                    let (m_tile, n_tile, batch) = work_tile.tile_idx();
                     let a_outer = batch * (M / BLOCK_M) + m_tile;
                     let b_outer = batch * (N / BLOCK_N) + n_tile;
                     let mut stage = 0usize;
@@ -375,7 +375,7 @@ mod kernels {
                         producer_state.advance();
                         stage += 1;
                     }
-                    scheduler.advance();
+                    scheduler.advance_to_next_work();
                 }
                 // Drain only once, after the final scheduled tile. Per-tile
                 // tails would destroy overlap between consecutive work tiles.
@@ -612,7 +612,7 @@ fn main() {
         .max_active_blocks_per_multiprocessor(THREADS as u32, DYNAMIC_SMEM_BYTES as u32)
         .expect("query active CTAs per SM");
     let sm_count = ctx.multiprocessor_count().expect("query SM count");
-    let persistent_ctas = TileScheduler::resident_grid_size(sm_count, active_ctas)
+    let persistent_ctas = TileScheduler::get_grid_shape(sm_count, active_ctas)
         .expect("persistent grid must have nonzero u32 capacity");
     drop(probe);
 

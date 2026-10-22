@@ -11,9 +11,9 @@
 //! new_1d
 //!   │ current = blockIdx.x, stride = gridDim.x
 //!   ▼
-//! current ── has_work? ── yes ──► current_tile ──► (linear, m, n, batch)
-//!   ▲                                                        │
-//!   └──────────── advance(current, stride) ◄──────────────────┘
+//! current ── has_work? ── yes ──► get_current_work ──► (linear, m, n, batch)
+//!   ▲                                                            │
+//!   └──────── advance_to_next_work(current, stride) ◄─────────────┘
 //! ```
 //!
 //! The loop carries only ordinary `u64` values. `work_tile` is a short-lived

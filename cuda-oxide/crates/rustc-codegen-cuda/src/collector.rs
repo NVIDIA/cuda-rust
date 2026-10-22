@@ -244,7 +244,7 @@ enum CuteImplOwner {
     BlockScaledTile64,
     LoadedBlockScaledTile64,
     StaticPersistentTileScheduler,
-    WorkTile,
+    WorkTileInfo,
     PipelineTmaAsync,
     PipelineState,
     SharedTensor,
@@ -280,7 +280,7 @@ fn is_cute_recognition_stub_identity(
         CuteImplOwner::BlockScaledThreadRow
         | CuteImplOwner::BlockScaledTile64
         | CuteImplOwner::LoadedBlockScaledTile64 => "block_scaled::gemv",
-        CuteImplOwner::StaticPersistentTileScheduler | CuteImplOwner::WorkTile => "scheduler",
+        CuteImplOwner::StaticPersistentTileScheduler | CuteImplOwner::WorkTileInfo => "scheduler",
         CuteImplOwner::PipelineTmaAsync
         | CuteImplOwner::PipelineState
         | CuteImplOwner::PipelineTmaStore => "pipeline",
@@ -325,9 +325,12 @@ fn is_cute_recognition_stub_identity(
         CuteImplOwner::BlockScaledTile64 => method == "load",
         CuteImplOwner::LoadedBlockScaledTile64 => method == "dot_accumulate",
         CuteImplOwner::StaticPersistentTileScheduler => {
-            matches!(method, "new_1d" | "has_work" | "current_tile" | "advance")
+            matches!(
+                method,
+                "new_1d" | "has_work" | "get_current_work" | "advance_to_next_work"
+            )
         }
-        CuteImplOwner::WorkTile => method == "coordinates",
+        CuteImplOwner::WorkTileInfo => method == "tile_idx",
         CuteImplOwner::PipelineTmaAsync => matches!(
             method,
             "from_raw_base"
@@ -2624,7 +2627,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                     "StaticPersistentTileScheduler" => {
                         Some(CuteImplOwner::StaticPersistentTileScheduler)
                     }
-                    "WorkTile" => Some(CuteImplOwner::WorkTile),
+                    "WorkTileInfo" => Some(CuteImplOwner::WorkTileInfo),
                     "PipelineTmaAsync" => Some(CuteImplOwner::PipelineTmaAsync),
                     "PipelineState" => Some(CuteImplOwner::PipelineState),
                     "SharedTensor" => Some(CuteImplOwner::SharedTensor),
@@ -3343,8 +3346,8 @@ mod tests {
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::scheduler::{impl#2}::coordinates",
-            Some(CuteImplOwner::WorkTile),
+            "::scheduler::{impl#2}::tile_idx",
+            Some(CuteImplOwner::WorkTileInfo),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
@@ -3484,7 +3487,7 @@ mod tests {
         ));
         assert!(!is_cute_recognition_stub_identity(
             "cute_rs",
-            "::scheduler::{impl#4}::current",
+            "::scheduler::{impl#4}::for_worker",
             Some(CuteImplOwner::StaticPersistentTileScheduler),
         ));
         assert!(!is_cute_recognition_stub_identity(

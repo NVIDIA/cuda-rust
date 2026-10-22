@@ -330,7 +330,7 @@ mod canonical_path_tests {
             "cute_rs"
         ));
         assert!(is_source_abstraction_path(
-            "cute_rs::scheduler::StaticPersistentTileScheduler<...>::current",
+            "cute_rs::scheduler::StaticPersistentTileScheduler<...>::get_current_work",
             "cute_rs"
         ));
         assert!(!is_source_abstraction_path(
@@ -451,8 +451,8 @@ mod canonical_path_tests {
             Some("has_work")
         );
         assert_eq!(
-            scheduler_method_name_from_path("cute_rs::scheduler::{impl#4}::coordinates"),
-            Some("coordinates")
+            scheduler_method_name_from_path("cute_rs::scheduler::{impl#4}::tile_idx"),
+            Some("tile_idx")
         );
         assert_eq!(
             scheduler_method_name_from_path("cute_rs::scheduler::__compiler::scheduler_has_work"),

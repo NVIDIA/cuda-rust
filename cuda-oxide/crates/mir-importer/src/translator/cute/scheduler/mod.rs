@@ -10,9 +10,9 @@
 //!
 //! ```text
 //! StaticPersistentTileScheduler<M,N,B>   ordinary Rust state
-//!                    │ current_tile
+//!                    │ get_current_work
 //!                    ▼
-//!          WorkTile<M,N,B>               !cute.work_tile<grid<M,N,B>>
+//!          WorkTileInfo<M,N,B>           !cute.work_tile<grid<M,N,B>>
 //! ```
 
 pub(crate) mod emit;
@@ -29,8 +29,8 @@ use super::tensor::{canonical_adt_path, const_arg, exact_schema, unsigned_const}
 
 /// Exact defining path of `cute_rs::scheduler::StaticPersistentTileScheduler`; public reexports do not change it.
 const SCHEDULER: &str = "cute_rs::scheduler::StaticPersistentTileScheduler";
-/// Exact defining path of `cute_rs::scheduler::WorkTile`; public reexports do not change it.
-const WORK_TILE: &str = "cute_rs::scheduler::WorkTile";
+/// Exact defining path of `cute_rs::scheduler::WorkTileInfo`; public reexports do not change it.
+const WORK_TILE: &str = "cute_rs::scheduler::WorkTileInfo";
 
 /// Recognize one exact source ADT rather than a type with a similar printed name.
 fn exact_adt(ty: &Ty, expected: &str) -> Result<Option<GenericArgs>, String> {

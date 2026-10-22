@@ -36,11 +36,13 @@
 
 /// Coordinates of one output tile selected by the scheduler.
 ///
+/// This is CuTeDSL's `WorkTileInfo`.
+///
 /// This value describes a location; it does not enforce exclusive access.
 /// Warps and threads inside the block must still write different elements of
 /// the selected tile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct WorkTile<const M_TILES: usize, const N_TILES: usize, const BATCHES: usize> {
+pub struct WorkTileInfo<const M_TILES: usize, const N_TILES: usize, const BATCHES: usize> {
     /// Flattened tile coordinate with M changing fastest.
     linear: usize,
     /// Tile coordinate along the output row dimension.
@@ -52,21 +54,27 @@ pub struct WorkTile<const M_TILES: usize, const N_TILES: usize, const BATCHES: u
 }
 
 impl<const M_TILES: usize, const N_TILES: usize, const BATCHES: usize>
-    WorkTile<M_TILES, N_TILES, BATCHES>
+    WorkTileInfo<M_TILES, N_TILES, BATCHES>
 {
-    /// Return `(linear, M tile, N tile, batch)` together.
+    /// Return the `(M tile, N tile, batch)` coordinates together.
     ///
-    /// Kernels normally unpack this once at the start of a tile iteration.
+    /// This is CuTeDSL's `WorkTileInfo.tile_idx`, the `(m, n, l)` coordinate
+    /// of the tile. Kernels normally unpack it once at the start of a tile
+    /// iteration. The flattened tile number is [`Self::linear_idx`].
     #[must_use]
     #[inline(always)]
-    pub fn coordinates(self) -> (usize, usize, usize, usize) {
+    pub fn tile_idx(self) -> (usize, usize, usize) {
         __compiler::work_tile_coordinates(self)
     }
 
     /// Tile number when M changes first, then N, then batch.
+    ///
+    /// This and the three accessors below read the fields on the host. In
+    /// device code the selected tile is a compiler handle, so read its
+    /// coordinates through [`Self::tile_idx`].
     #[must_use]
     #[inline(always)]
-    pub const fn linear(self) -> usize {
+    pub const fn linear_idx(self) -> usize {
         self.linear
     }
 
@@ -94,7 +102,8 @@ impl<const M_TILES: usize, const N_TILES: usize, const BATCHES: usize>
 
 /// Assign a fixed output-tile grid across persistent CUDA blocks.
 ///
-/// Every block starts at `blockIdx.x`. Each call to [`Self::advance`] adds
+/// Every block starts at `blockIdx.x`. Each call to
+/// [`Self::advance_to_next_work`] adds
 /// `gridDim.x`, so blocks visit different tile numbers without a shared
 /// counter:
 ///
@@ -169,31 +178,12 @@ impl<const M_TILES: usize, const N_TILES: usize, const BATCHES: usize>
         }
     }
 
-    /// Return the current tile coordinates, or `None` when this block is done.
-    #[must_use]
-    #[inline(always)]
-    pub fn current(&self) -> Option<WorkTile<M_TILES, N_TILES, BATCHES>> {
-        let linear = self.current_linear;
-        if linear >= Self::TOTAL_TILES {
-            return None;
-        }
-
-        // M changes first, then N, then batch. Compute each remainder with
-        // multiply/subtract so LLVM can reuse the matching division result.
-        let n_batch = linear / M_TILES;
-        let m_tile = linear - n_batch * M_TILES;
-        let batch = n_batch / N_TILES;
-        let n_tile = n_batch - batch * N_TILES;
-
-        Some(WorkTile {
-            linear,
-            m_tile,
-            n_tile,
-            batch,
-        })
-    }
-
     /// True while this block still has an output tile to process.
+    ///
+    /// CuTeDSL reads this as `is_valid_tile` on the tile that
+    /// `get_current_work` returns. Here the test is on the scheduler, so the
+    /// bounds check stays outside the coordinate arithmetic in the kernel
+    /// loop.
     #[must_use]
     #[inline(always)]
     pub fn has_work(&self) -> bool {
@@ -202,21 +192,31 @@ impl<const M_TILES: usize, const N_TILES: usize, const BATCHES: usize>
 
     /// Return the current tile after [`Self::has_work`] returned true.
     ///
-    /// This split keeps the bounds check outside the coordinate arithmetic in
-    /// the kernel loop.
+    /// This is CuTeDSL's `get_current_work`. Call it only while
+    /// [`Self::has_work`] is true; past the end of this block's schedule the
+    /// coordinates are meaningless. Host tests drive the same two calls.
     #[must_use]
     #[inline(always)]
-    pub fn current_tile(&self) -> WorkTile<M_TILES, N_TILES, BATCHES> {
+    pub fn get_current_work(&self) -> WorkTileInfo<M_TILES, N_TILES, BATCHES> {
         __compiler::scheduler_current_tile(self)
     }
 
     /// Move to this block's next output tile.
+    ///
+    /// This is CuTeDSL's `advance_to_next_work`. The step is always one grid
+    /// of blocks, so there is no `advance_count` argument.
     #[inline(always)]
-    pub fn advance(&mut self) {
+    pub fn advance_to_next_work(&mut self) {
         __compiler::scheduler_advance(self);
     }
 
     /// Choose the number of blocks for a one-dimensional persistent launch.
+    ///
+    /// This is CuTeDSL's `get_grid_shape`. CuTeDSL computes it from a
+    /// `PersistentTileSchedulerParams` object and returns an `(x, y, z)`
+    /// triple; this scheduler has no params object and its grid is one
+    /// dimensional, so the result is the X extent alone, for a launch of
+    /// `(blocks, 1, 1)`.
     ///
     /// The result is the smaller of the output tile count and the number of
     /// blocks the GPU can keep active:
@@ -233,7 +233,7 @@ impl<const M_TILES: usize, const N_TILES: usize, const BATCHES: usize>
     /// zero capacity or an X grid larger than CUDA's `u32` launch limit.
     #[must_use]
     #[inline(always)]
-    pub const fn resident_grid_size(sm_count: u32, active_ctas_per_sm: u32) -> Option<u32> {
+    pub const fn get_grid_shape(sm_count: u32, active_ctas_per_sm: u32) -> Option<u32> {
         let total = Self::TOTAL_TILES as u64;
         let resident = (sm_count as u64) * (active_ctas_per_sm as u64);
         if resident == 0 {
@@ -255,7 +255,7 @@ impl<const M_TILES: usize, const N_TILES: usize, const BATCHES: usize>
 /// ordinary testable Rust.
 #[doc(hidden)]
 pub mod __compiler {
-    use super::{StaticPersistentTileScheduler, WorkTile};
+    use super::{StaticPersistentTileScheduler, WorkTileInfo};
 
     /// Device-only boundary reading the block index and grid stride for a persistent schedule.
     #[inline(never)]
@@ -282,13 +282,13 @@ pub mod __compiler {
         const BATCHES: usize,
     >(
         scheduler: &StaticPersistentTileScheduler<M_TILES, N_TILES, BATCHES>,
-    ) -> WorkTile<M_TILES, N_TILES, BATCHES> {
+    ) -> WorkTileInfo<M_TILES, N_TILES, BATCHES> {
         let linear = scheduler.current_linear;
         let n_batch = linear / M_TILES;
         let m_tile = linear - n_batch * M_TILES;
         let batch = n_batch / N_TILES;
         let n_tile = n_batch - batch * N_TILES;
-        WorkTile {
+        WorkTileInfo {
             linear,
             m_tile,
             n_tile,
@@ -296,16 +296,16 @@ pub mod __compiler {
         }
     }
 
-    /// Expose the flattened and three logical coordinates without recomputing them.
+    /// Expose the three logical coordinates without recomputing them.
     #[inline(never)]
     pub fn work_tile_coordinates<
         const M_TILES: usize,
         const N_TILES: usize,
         const BATCHES: usize,
     >(
-        tile: WorkTile<M_TILES, N_TILES, BATCHES>,
-    ) -> (usize, usize, usize, usize) {
-        (tile.linear, tile.m_tile, tile.n_tile, tile.batch)
+        tile: WorkTileInfo<M_TILES, N_TILES, BATCHES>,
+    ) -> (usize, usize, usize) {
+        (tile.m_tile, tile.n_tile, tile.batch)
     }
 
     /// Advance by one grid stride, saturating completed schedules instead of wrapping.
@@ -340,11 +340,18 @@ mod tests {
 
         for (linear, m_tile, n_tile, batch) in expected {
             let scheduler = Scheduler::for_worker(linear, Scheduler::TOTAL_TILES).unwrap();
-            let tile = scheduler.current().unwrap();
+            assert!(scheduler.has_work());
+            let tile = scheduler.get_current_work();
             assert_eq!(
-                (tile.linear(), tile.m_tile(), tile.n_tile(), tile.batch()),
+                (
+                    tile.linear_idx(),
+                    tile.m_tile(),
+                    tile.n_tile(),
+                    tile.batch()
+                ),
                 (linear, m_tile, n_tile, batch)
             );
+            assert_eq!(tile.tile_idx(), (m_tile, n_tile, batch));
         }
     }
 
@@ -359,15 +366,16 @@ mod tests {
 
         for worker in 0..WORKERS {
             let mut scheduler = Scheduler::for_worker(worker, WORKERS).unwrap();
-            while let Some(tile) = scheduler.current() {
-                let linear = tile.linear();
+            while scheduler.has_work() {
+                let tile = scheduler.get_current_work();
+                let linear = tile.linear_idx();
                 assert!(!seen[linear], "tile {linear} was scheduled twice");
                 seen[linear] = true;
                 assert_eq!(
                     linear,
                     tile.batch() * 16 * 16 + tile.n_tile() * 16 + tile.m_tile()
                 );
-                scheduler.advance();
+                scheduler.advance_to_next_work();
             }
         }
 
@@ -383,9 +391,9 @@ mod tests {
         for worker in 0..170 {
             let mut scheduler = Scheduler::for_worker(worker, 170).unwrap();
             let mut count = 0;
-            while scheduler.current().is_some() {
+            while scheduler.has_work() {
                 count += 1;
-                scheduler.advance();
+                scheduler.advance_to_next_work();
             }
             assert_eq!(count, if worker < 86 { 2 } else { 1 });
         }
@@ -401,20 +409,20 @@ mod tests {
         assert!(Scheduler::for_worker(2, 1).is_none());
     }
 
-    /// Resident-grid sizing must cap at total work and reject arithmetic or launch-width overflow.
+    /// Grid-shape sizing must cap at total work and reject arithmetic or launch-width overflow.
     #[test]
-    fn resident_grid_is_checked_and_capped() {
+    fn grid_shape_is_checked_and_capped() {
         /// Fixed output grid used to check persistent tile ownership and state size.
         type Scheduler = StaticPersistentTileScheduler<16, 16, 1>;
-        assert_eq!(Scheduler::resident_grid_size(170, 1), Some(170));
-        assert_eq!(Scheduler::resident_grid_size(170, 2), Some(256));
-        assert_eq!(Scheduler::resident_grid_size(512, 8), Some(256));
-        assert_eq!(Scheduler::resident_grid_size(0, 1), None);
-        assert_eq!(Scheduler::resident_grid_size(170, 0), None);
+        assert_eq!(Scheduler::get_grid_shape(170, 1), Some(170));
+        assert_eq!(Scheduler::get_grid_shape(170, 2), Some(256));
+        assert_eq!(Scheduler::get_grid_shape(512, 8), Some(256));
+        assert_eq!(Scheduler::get_grid_shape(0, 1), None);
+        assert_eq!(Scheduler::get_grid_shape(170, 0), None);
 
         /// Problem whose tile count exceeds the supported physical launch width.
         type TooWide = StaticPersistentTileScheduler<{ u32::MAX as usize }, 2, 1>;
-        assert_eq!(TooWide::resident_grid_size(u32::MAX, u32::MAX), None);
+        assert_eq!(TooWide::get_grid_shape(u32::MAX, u32::MAX), None);
     }
 
     /// Advancing an exhausted scheduler must not wrap back to valid work.
@@ -423,11 +431,11 @@ mod tests {
         /// Fixed output grid used to check persistent tile ownership and state size.
         type Scheduler = StaticPersistentTileScheduler<1, 1, 1>;
         let mut scheduler = Scheduler::for_worker(0, 1).unwrap();
-        assert!(scheduler.current().is_some());
-        scheduler.advance();
-        assert!(scheduler.current().is_none());
-        scheduler.advance();
-        assert!(scheduler.current().is_none());
+        assert!(scheduler.has_work());
+        scheduler.advance_to_next_work();
+        assert!(!scheduler.has_work());
+        scheduler.advance_to_next_work();
+        assert!(!scheduler.has_work());
     }
 
     /// A persistent scheduler must store only its next linear index and grid stride.

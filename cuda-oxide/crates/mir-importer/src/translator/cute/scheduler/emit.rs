@@ -6,10 +6,10 @@
 //! Emit the five high-level persistent-scheduler operations.
 //!
 //! The Rust scheduler stays an ordinary `{ current, stride }` value. Only the
-//! selected `WorkTile` is a short-lived compiler handle:
+//! selected `WorkTileInfo` is a short-lived compiler handle:
 //!
 //! ```text
-//! new_1d -> has_work -> current_tile -> coordinates -> advance
+//! new_1d -> has_work -> get_current_work -> tile_idx -> advance_to_next_work
 //! ```
 
 use crate::error::{TranslationErr, TranslationResult};
@@ -438,6 +438,10 @@ pub(crate) fn emit_current_tile(
 }
 
 /// Project a work tile into its M, N and batch coordinates.
+///
+/// The IR operation also yields the linear tile number for the lowering;
+/// `tile_idx` returns the `(m, n, l)` triple, so only three results reach
+/// the destination tuple.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_coordinates(
     ctx: &mut Context,
@@ -469,7 +473,6 @@ pub(crate) fn emit_coordinates(
         ctx,
         result_type,
         &[
-            operation.linear(ctx),
             operation.m_tile(ctx),
             operation.n_tile(ctx),
             operation.batch(ctx),

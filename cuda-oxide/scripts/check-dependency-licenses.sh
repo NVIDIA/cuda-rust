@@ -74,11 +74,14 @@ fi
 
 # Members and directly declared third-party dependencies of one workspace.
 #
-# `--locked` so the guard reads the committed resolution rather than silently
-# updating Cargo.lock to satisfy itself: a check that can rewrite its own input
-# is not a check.
+# Only declarations are needed here. --no-deps includes optional and target-
+# specific dependencies without resolving or building them. --locked prevents
+# lockfile updates, and the manifest directory selects its pinned toolchain.
 declared_crates() {
-    cargo metadata --locked --format-version 1 --manifest-path "$1" | python3 -c '
+    (
+        cd "$(dirname "$1")"
+        cargo metadata --locked --no-deps --format-version 1 --manifest-path "$(basename "$1")"
+    ) | python3 -c '
 import json, sys
 
 metadata = json.load(sys.stdin)
@@ -125,6 +128,15 @@ FIRST_PARTY_WORKSPACE_ROOTS=(
     cuda-oxide/Cargo.toml
     cuda-oxide/crates/rustc-codegen-cuda/Cargo.toml
     cuda-oxide/crates/cuda-macros/tests/device-only/Cargo.toml
+)
+
+# Tile has its own inventory and four standalone paper benchmark workspaces.
+CUTILE_WORKSPACE_ROOTS=(
+    cutile-rs/Cargo.toml
+    cutile-rs/cutile-benchmarks/paper/app_exp1_work_distribution/bimodal_gemms_rust/Cargo.toml
+    cutile-rs/cutile-benchmarks/paper/sec5_exp1_safety_overhead/rust/elemwise/Cargo.toml
+    cutile-rs/cutile-benchmarks/paper/sec5_exp1_safety_overhead/rust/gemm/Cargo.toml
+    cutile-rs/cutile-benchmarks/paper/sec5_exp2_execution_mode_overhead/launch_overhead_rust/Cargo.toml
 )
 
 # The vendored rustlantis subtree also declares `[workspace]`. It is
@@ -174,21 +186,13 @@ if [[ -z "${all_workspace_roots}" ]]; then
     exit 1
 fi
 
-# Nested cutile-rs is a separate product (own deny.toml / notices). Oxide's
-# CSV does not inventory it yet, and .github/workflows/cargo-deny.yml leaves
-# its roots out of the policy half for the same reason. When that changes,
-# drop the CUTILE_ROOT filter below and add each cutile-rs `[workspace]` root
-# to FIRST_PARTY_WORKSPACE_ROOTS (or VENDORED_WORKSPACE_ROOTS if it should
-# stay out of the CSV).
-CUTILE_ROOT=cutile-rs
 on_disk_roots="$(
     printf '%s\n' "${all_workspace_roots}" |
         grep -v "^${EXAMPLES_ROOT}/" |
-        grep -v "^${CUTILE_ROOT}/" |
         LC_ALL=C sort
 )"
 named_roots="$(
-    printf '%s\n' "${FIRST_PARTY_WORKSPACE_ROOTS[@]}" "${VENDORED_WORKSPACE_ROOTS[@]}" |
+    printf '%s\n' "${FIRST_PARTY_WORKSPACE_ROOTS[@]}" "${CUTILE_WORKSPACE_ROOTS[@]}" "${VENDORED_WORKSPACE_ROOTS[@]}" |
         LC_ALL=C sort
 )"
 if [[ -z "${on_disk_roots}" ]]; then
@@ -199,10 +203,10 @@ fi
 unnamed="$(comm -23 <(printf '%s\n' "${on_disk_roots}") <(printf '%s\n' "${named_roots}"))"
 if [[ -n "${unnamed}" ]]; then
     echo "error: these manifests declare [workspace] but no pass below reads them," >&2
-    echo "       so nothing checks that ${CSV} records what they declare:" >&2
+    echo "       so no dependency inventory checks what they declare:" >&2
     printf '%s\n' "${unnamed}" | sed 's/^/  /' >&2
     echo >&2
-    echo "Add each to FIRST_PARTY_WORKSPACE_ROOTS in $0, or to" >&2
+    echo "Add each to FIRST_PARTY_WORKSPACE_ROOTS or CUTILE_WORKSPACE_ROOTS in $0, or to" >&2
     echo "VENDORED_WORKSPACE_ROOTS with the reason it is out of scope." >&2
     exit 1
 fi
@@ -219,9 +223,10 @@ fi
 # Every example workspace is inventoried from its committed lock file. Compare
 # the two sets before reading any package names so a new nested workspace
 # cannot disappear merely because it has not committed a lock yet.
-mapfile -d '' -t EXAMPLE_LOCKFILES < <(
-    git ls-files -z -- "${EXAMPLES_ROOT}/**/Cargo.lock"
-)
+EXAMPLE_LOCKFILES=()
+while IFS= read -r -d '' lock; do
+    EXAMPLE_LOCKFILES+=("${lock}")
+done < <(git ls-files -z -- "${EXAMPLES_ROOT}/**/Cargo.lock")
 if [[ ${#EXAMPLE_LOCKFILES[@]} -lt 20 ]]; then
     echo "error: found only ${#EXAMPLE_LOCKFILES[@]} tracked example lock files;" >&2
     echo "       the scan broke, so a clean result means nothing" >&2
@@ -258,7 +263,7 @@ fi
 
 required="$(
     for manifest in "${FIRST_PARTY_WORKSPACE_ROOTS[@]}"; do
-        declared_crates "${manifest}"
+        declared_crates "${manifest}" || exit 1
     done | LC_ALL=C sort -u
 )"
 
@@ -276,6 +281,28 @@ if [[ -n "${missing}" ]]; then
 fi
 
 echo "OK: ${CSV} records all $(printf '%s\n' "${required}" | grep -c .) declared crates."
+
+# Keep Tile's inventory separate while using the same declaration and workspace
+# discovery checks. A new nested workspace must be named above to enter a pass.
+CUTILE_CSV=cutile-rs/dependency-licenses.csv
+test -s "${CUTILE_CSV}"
+cutile_recorded="$(tail -n +2 "${CUTILE_CSV}" | cut -d, -f1 | LC_ALL=C sort -u)"
+if [[ $(printf '%s\n' "${cutile_recorded}" | grep -c .) -lt 20 ]]; then
+    echo "error: ${CUTILE_CSV} parse self-test failed: too few package names" >&2
+    exit 1
+fi
+cutile_required="$(
+    for manifest in "${CUTILE_WORKSPACE_ROOTS[@]}"; do
+        declared_crates "${manifest}" || exit 1
+    done | LC_ALL=C sort -u
+)"
+cutile_missing="$(comm -23 <(printf '%s\n' "${cutile_required}") <(printf '%s\n' "${cutile_recorded}"))"
+if [[ -n "${cutile_missing}" ]]; then
+    echo "error: ${CUTILE_CSV} is missing a row for:" >&2
+    printf '%s\n' "${cutile_missing}" | sed 's/^/  /' >&2
+    exit 1
+fi
+echo "OK: ${CUTILE_CSV} records all $(printf '%s\n' "${cutile_required}" | grep -c .) declared crates."
 
 # ---------------------------------------------------------------------------
 # Second half: the example workspaces.

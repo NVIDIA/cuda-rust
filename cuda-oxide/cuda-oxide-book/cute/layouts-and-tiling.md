@@ -22,7 +22,7 @@ In kernel signatures, you write static layouts as Rust type markers (`C<N>`, Rus
 
 ## 2. 1D Tiling and Ragged Tails (`zipped_divide` + `slice`)
 
-`zipped_divide::<TILE>()` restructures a flat 1D tensor into a 2D view indexed by `(offset_inside_tile, tile_number)`. Calling `.slice(tid)` selects the tile owned by thread `tid`:
+`zipped_divide::<TILE>()` restructures a flat 1D tensor into a 2D view indexed by `(offset_inside_tile, tile_number)`. Calling `.slice(tid)` selects the tile owned by thread `tid`. `local_tile::<TILE>(tile)` is the one-call form, equal to `zipped_divide::<TILE>().slice(tile)`: CuTe's `local_tile` for a one-dimensional tiler.
 
 ```{figure} images/zipped-divide-and-slice.svg
 :align: center

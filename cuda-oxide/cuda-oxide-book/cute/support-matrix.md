@@ -1,6 +1,6 @@
 # Support Matrix (preview)
 
-`cute-rs` is a **preview**. It compiles Rust CuTe kernels ahead of time through the pinned CUTLASS 4.7 compiler for two targets, `sm_100a` and `sm_120a`, and covers a validated subset of what CuTeDSL 4.7 offers on them. This page lists what the subset holds, what it does not, and what `cute-rs` adds. Status at commit `2d62c436a`, 2026-10-21.
+`cute-rs` is a **preview**. It compiles Rust CuTe kernels ahead of time through the pinned CUTLASS 4.7 compiler for two targets, `sm_100a` and `sm_120a`, and covers a validated subset of what CuTeDSL 4.7 offers on them. This page lists what the subset holds, what it does not, and what `cute-rs` adds. Status at commit `5eaa6cbda`, 2026-10-22.
 
 ```{figure} images/support-matrix.svg
 :align: center
@@ -70,7 +70,7 @@ The figure at the top of the page is the feature table, with the cute-rs column 
 | :--- | :--- | :--- | :--- |
 | Layout algebra, static | yes | partial | layouts are Rust types checked at compile time; no layout ops in kernels |
 | Dynamic layouts, runtime shapes | yes | partial | runtime lengths and one runtime row pitch; strides and tiles are types |
-| Tensors, partitions, tiled atoms | yes | partial | 1D tiles (zipped_divide, slice, 1D local_tile) and fixed 2D block-scaled views; no make_tiled_copy |
+| Tensors, partitions, tiled atoms | yes | partial | 1D tiles (zipped_divide, slice, the 1D local_tile) and fixed 2D block-scaled views; TiledCopy, get_slice and ThrCopy exist but no kernel can reach them yet, so block-wide copies call copy_g2s |
 | TMA copies | yes | partial | 2D tile load and store, two-CTA load; no im2col, reduce-store, multicast |
 | cp.async, bulk, DSMEM copies | yes | partial | cooperative cp.async with a coverage proof; no bulk or DSMEM data copies |
 | ldmatrix, stmatrix, atomics | yes | partial | ldmatrix x4 and x2.trans, stmatrix x2, no-allocate stores; no atomics |
@@ -128,7 +128,7 @@ What a CuTeDSL user relies on beyond the per-architecture atoms, and what the pr
 | FMHA backward | dQ, dK, dV in one SM100 kernel. | Forward only. | no |
 | Convolution | TMA im2col copy atom; the 4.7 example tree ships no convolution kernel. | Implicit im2col on the BF16 mma.sync register path in the Qwen codec kernels; no TMA im2col. | partial |
 | Sub-byte types | Int4, FP4, two FP6 formats, packed carriers, MXF8F6F4 mixes. | FP4 and scale carriers for block-scaled GEMM and GEMV. No Int4, no FP6. | partial |
-| Primitives API (4.7, experimental) | A thin NVVM wrapper beneath CuTe for Tensor Core programming through SIMT. | ctm-rs: typed tcgen05, TMEM, TMA, mbarrier, cluster, cp.async and warp primitives for the shipped kernels. No atomics, reductions, wgmma or libdevice. | partial |
+| Primitives API (4.7, experimental) | A thin NVVM wrapper beneath CuTe for Tensor Core programming through SIMT. | ctm-rs: typed tcgen05, TMEM, TMA, mbarrier, named barrier, fence, cluster, cp.async and warp primitives for the shipped kernels. No atomics, reductions, wgmma or libdevice. | partial |
 
 :::
 

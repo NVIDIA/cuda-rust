@@ -18,7 +18,7 @@ cuda-device   raw intrinsics
 | --- | --- | --- |
 | Shared memory | `SharedRegion<F>` with checked alignment and capacity, typed CTA and cluster addresses | both |
 | TMA | 2D load, two-CTA multicast load, 2D store, descriptor prefetch, bulk commit and wait; host `create_tensor_map_tiled` behind the `host` feature | both; multicast on `sm_100a` |
-| Barriers and clusters | mbarrier init, arrive, expect-tx, parity wait; cluster arrive and wait, `mapa`, remote arrive, `CtaMask` | both |
+| Barriers, fences and clusters | mbarrier init, arrive, expect-tx, parity wait; named CTA barrier sync and arrive (`bar` and `barrier.cta`, plain and aligned); `fence.mbarrier_init`, `fence.proxy.async` for `shared::cta` and its two `sync_restrict` forms, `fence.acquire.sync_restrict`; cluster arrive and wait, `mapa`, remote arrive, `CtaMask` | both |
 | tcgen05 | `TmemGuard` collective alloc and dealloc, F16 two-CTA MMA through `InstructionDescriptor`, 32x32b TMEM load and store, commit, fences | `sm_100a` |
 | Register MMA | m16n8k16 F16 and BF16 with F32 accumulate; m16n8k64 MXF4 with UE8M0 scales; ldmatrix x4, stmatrix x2 | both; MXF4 on `sm_120a` |
 | Async copy | 4-byte `cp.async`, noinc barrier arrive, commit and wait groups | both |

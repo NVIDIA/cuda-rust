@@ -21,10 +21,10 @@ use ctm_rs::{
     thread, tma, warp,
 };
 use ctm_rs::{cluster_launch, cuda_module, kernel, launch_bounds, launch_contract};
+use cute_rs::sm100::PipelineTmaStore;
 use cute_rs::{
     ComposedLayout, OperandA, OperandB, PipelineTmaUmma, PipelineUmmaAsync, RowMajor,
-    Sm100ClusterTmaCopy, Sm100SharedTile, Sm100TiledMma, Sm100TmaStorePipeline, Sm100TmemEpilogue,
-    Swizzle, TensorMap,
+    Sm100ClusterTmaCopy, Sm100SharedTile, Sm100TiledMma, Sm100TmemEpilogue, Swizzle, TensorMap,
 };
 
 // These element layouts also encode the host TMA descriptors. FP16 shifts
@@ -131,7 +131,7 @@ pub mod kernels {
             let pipeline = MainloopPipeline::from_raw(full, empty);
             let accumulator = AccumulatorPipeline::from_raw(acc_empty, acc_full);
             let mma = TiledMma::new();
-            let stores = Sm100TmaStorePipeline::<2>::new();
+            let stores = PipelineTmaStore::<2>::new();
             if warp_id == 4 {
                 // CuTe maps retain their layout types; prefetch only needs
                 // their ABI-compatible opaque descriptor bytes.

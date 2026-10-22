@@ -561,7 +561,7 @@ mod canonical_path_tests {
         );
         assert_eq!(
             pipeline_method_name_from_path(
-                "cute_rs::pipeline::TmaStorePipeline<1>::producer_commit"
+                "cute_rs::pipeline::PipelineTmaStore<1>::producer_commit"
             ),
             Some("producer_commit")
         );

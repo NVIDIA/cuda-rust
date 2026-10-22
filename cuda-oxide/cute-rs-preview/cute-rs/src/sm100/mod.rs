@@ -25,7 +25,7 @@ mod tma;
 mod tmem;
 
 pub use mma::Sm100TiledMma;
-pub use pipeline::{PipelineTmaUmma, PipelineUmmaAsync, Sm100TmaStorePipeline};
+pub use pipeline::{PipelineTmaStore, PipelineTmaUmma, PipelineUmmaAsync};
 pub use shared::Sm100SharedTile;
 pub use tma::Sm100ClusterTmaCopy;
 pub use tmem::{Sm100Tmem, Sm100TmemEpilogue};

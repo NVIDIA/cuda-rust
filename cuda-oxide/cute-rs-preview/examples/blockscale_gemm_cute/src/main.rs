@@ -64,9 +64,9 @@ use cuda_core::{CudaContext, LaunchConfig1D};
 use cute_rs::tma::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
 use cute_rs::{
     C, ComposedLayout, Consumer, Layout, Mkl, Mxf4AccumulatorTile2x8, Mxf4E2M1, Mxf4TiledMma, Nkl,
-    PipelineState, PipelineTmaAsync, Producer, RowMajor, SharedScaleAtom, SharedTensor,
-    Sm1xxBlockScaleKMajor, Sm120Epilogue128x128, Sm120EpilogueHalfLayout, Sm120ScaleAtom, SmemTile,
-    StaticPersistentTileScheduler, Swizzle, TensorMap, TmaStorePipeline, copy_tma_2d,
+    PipelineState, PipelineTmaAsync, PipelineTmaStore, Producer, RowMajor, SharedScaleAtom,
+    SharedTensor, Sm1xxBlockScaleKMajor, Sm120Epilogue128x128, Sm120EpilogueHalfLayout,
+    Sm120ScaleAtom, SmemTile, StaticPersistentTileScheduler, Swizzle, TensorMap, copy_tma_2d,
     copy_tma_s2g_2d,
 };
 
@@ -121,7 +121,7 @@ const PIPELINE_STAGES: usize = 3;
 /// Three-stage load pipeline with eight consumer warps and an exact transaction-byte count.
 type MainloopPipeline = PipelineTmaAsync<PIPELINE_STAGES, 8, TMA_TX_BYTES>;
 /// TMA store queue allowing one outstanding committed output group.
-type EpiloguePipeline = TmaStorePipeline<1>;
+type EpiloguePipeline = PipelineTmaStore<1>;
 
 // One 1024-byte-aligned dynamic allocation, partitioned without padding
 // surprises. Each operand owns a three-slot ring, followed by the six 8-byte

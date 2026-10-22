@@ -150,11 +150,14 @@ pub struct PipelineTmaAsync<const STAGES: usize, const CONSUMER_WARPS: u32, cons
 ///
 /// `STAGES` is the number of shared result buffers. After
 /// [`Self::producer_acquire`], at most `STAGES - 1` committed groups still
-/// read shared memory. This matches CUTLASS `PipelineTmaStore`.
+/// read shared memory, as in CuTeDSL's `pipeline.PipelineTmaStore`. The SM120
+/// device compiler accepts `STAGES == 1` today; other stage counts are
+/// rejected at device compile time. The SM100 form with the same name and
+/// methods, over a `u32` stage count, is [`crate::sm100::PipelineTmaStore`].
 #[derive(Clone, Copy, Debug, Default)]
-pub struct TmaStorePipeline<const STAGES: usize>;
+pub struct PipelineTmaStore<const STAGES: usize>;
 
-impl<const STAGES: usize> TmaStorePipeline<STAGES> {
+impl<const STAGES: usize> PipelineTmaStore<STAGES> {
     /// Most store groups that may still read shared memory after acquire.
     pub const MAX_PENDING: u32 = {
         assert!(STAGES > 0);
@@ -360,21 +363,21 @@ pub mod __compiler {
     /// Compiler boundary waiting until the oldest shared store buffer can be reused.
     #[inline(never)]
     pub fn tma_store_producer_acquire<const STAGES: usize>() {
-        let _ = TmaStorePipeline::<STAGES>::MAX_PENDING;
+        let _ = PipelineTmaStore::<STAGES>::MAX_PENDING;
         unreachable!("cute-rs TMA-store acquire executed outside recognized device compilation")
     }
 
     /// Compiler boundary committing the issuer’s pending TMA stores as one group.
     #[inline(never)]
     pub fn tma_store_producer_commit<const STAGES: usize>() {
-        let _ = TmaStorePipeline::<STAGES>::MAX_PENDING;
+        let _ = PipelineTmaStore::<STAGES>::MAX_PENDING;
         unreachable!("cute-rs TMA-store commit executed outside recognized device compilation")
     }
 
     /// Compiler boundary waiting until no committed group still reads shared memory.
     #[inline(never)]
     pub fn tma_store_producer_tail<const STAGES: usize>() {
-        let _ = TmaStorePipeline::<STAGES>::MAX_PENDING;
+        let _ = PipelineTmaStore::<STAGES>::MAX_PENDING;
         unreachable!("cute-rs TMA-store tail executed outside recognized device compilation")
     }
 
@@ -598,8 +601,8 @@ mod tests {
     /// Store pipelines must use no runtime storage and retain at most STAGES-1 pending groups.
     #[test]
     fn tma_store_pipeline_is_zero_storage_and_uses_stage_minus_one() {
-        assert_eq!(size_of::<TmaStorePipeline<1>>(), 0);
-        assert_eq!(TmaStorePipeline::<1>::MAX_PENDING, 0);
-        assert_eq!(TmaStorePipeline::<4>::MAX_PENDING, 3);
+        assert_eq!(size_of::<PipelineTmaStore<1>>(), 0);
+        assert_eq!(PipelineTmaStore::<1>::MAX_PENDING, 0);
+        assert_eq!(PipelineTmaStore::<4>::MAX_PENDING, 3);
     }
 }

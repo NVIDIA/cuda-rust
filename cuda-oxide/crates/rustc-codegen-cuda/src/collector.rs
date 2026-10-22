@@ -253,7 +253,7 @@ enum CuteImplOwner {
     Mxf4ScaleTile128,
     Sm120Epilogue128x128,
     Sm120EpilogueWarp128x128,
-    TmaStorePipeline,
+    PipelineTmaStore,
 }
 
 fn is_cute_recognition_stub_identity(
@@ -283,7 +283,7 @@ fn is_cute_recognition_stub_identity(
         CuteImplOwner::StaticPersistentTileScheduler | CuteImplOwner::WorkTile => "scheduler",
         CuteImplOwner::PipelineTmaAsync
         | CuteImplOwner::PipelineState
-        | CuteImplOwner::TmaStorePipeline => "pipeline",
+        | CuteImplOwner::PipelineTmaStore => "pipeline",
         CuteImplOwner::SharedTensor => "copy::tiled",
         CuteImplOwner::Mxf4TiledMma => "mma::block_scaled::tiled",
         CuteImplOwner::Mxf4AccumulatorTile2x8 | CuteImplOwner::Mxf4ScaleTile128 => {
@@ -352,7 +352,7 @@ fn is_cute_recognition_stub_identity(
             "from_raw" | "get_slice" | "sync_reusable" | "sync_ready_for_tma" | "tma_half"
         ),
         CuteImplOwner::Sm120EpilogueWarp128x128 => method == "store_tile",
-        CuteImplOwner::TmaStorePipeline => {
+        CuteImplOwner::PipelineTmaStore => {
             matches!(
                 method,
                 "producer_acquire" | "producer_commit" | "producer_tail"
@@ -2633,7 +2633,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                     "Mxf4ScaleTile128" => Some(CuteImplOwner::Mxf4ScaleTile128),
                     "Sm120Epilogue128x128" => Some(CuteImplOwner::Sm120Epilogue128x128),
                     "Sm120EpilogueWarp128x128" => Some(CuteImplOwner::Sm120EpilogueWarp128x128),
-                    "TmaStorePipeline" => Some(CuteImplOwner::TmaStorePipeline),
+                    "PipelineTmaStore" => Some(CuteImplOwner::PipelineTmaStore),
                     _ => None,
                 },
                 _ => None,
@@ -3455,7 +3455,15 @@ mod tests {
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
             "::pipeline::{impl#4}::producer_tail",
-            Some(CuteImplOwner::TmaStorePipeline),
+            Some(CuteImplOwner::PipelineTmaStore),
+        ));
+        // The SM100 store pipeline shares the item name but lives in
+        // cute_rs::sm100::pipeline; its methods are ordinary Rust over the
+        // sm100 hooks, so the owner table must not claim them.
+        assert!(!is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::sm100::pipeline::{impl#4}::producer_tail",
+            Some(CuteImplOwner::PipelineTmaStore),
         ));
 
         // Same-spelled methods on the layout ADT are ordinary Rust.

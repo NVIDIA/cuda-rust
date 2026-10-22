@@ -138,10 +138,10 @@ pub use numeric::{
     BFloat16, E4M3x2, E4M3x4, Float4E2M1FN, Float4E2M1FNx2, Float8E4M3FN, Float8E8M0FNU, Mxf4E2M1,
     UE8M0x2, UE8M0x4, e4m3_to_f32,
 };
-pub use pipeline::{Consumer, PipelineState, PipelineTmaAsync, Producer, TmaStorePipeline};
+pub use pipeline::{Consumer, PipelineState, PipelineTmaAsync, PipelineTmaStore, Producer};
 pub use scheduler::{StaticPersistentTileScheduler, WorkTile};
 pub use sm100::{
     OperandA, OperandB, PipelineTmaUmma, PipelineUmmaAsync, Sm100ClusterTmaCopy, Sm100SharedTile,
-    Sm100TiledMma, Sm100TmaStorePipeline, Sm100Tmem, Sm100TmemEpilogue,
+    Sm100TiledMma, Sm100Tmem, Sm100TmemEpilogue,
 };
 pub use tensor::{Contiguous1D, RegisterTile, Tensor, TensorElement, TensorMut, Tile1D, Zipped1D};

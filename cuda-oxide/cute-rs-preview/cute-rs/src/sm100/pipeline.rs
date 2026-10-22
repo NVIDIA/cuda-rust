@@ -161,9 +161,13 @@ impl<const CONSUMER_WARPS: u32> PipelineUmmaAsync<CONSUMER_WARPS> {
 }
 
 /// A ring of shared epilogue tiles tracked by asynchronous TMA store groups.
+///
+/// This is the SM100 form of CuTeDSL's `pipeline.PipelineTmaStore`, with a
+/// `u32` stage count and the sm100 compiler hooks. The SM120 form with the
+/// same methods over a `usize` stage count is [`crate::PipelineTmaStore`].
 #[derive(Clone, Copy, Default)]
-pub struct Sm100TmaStorePipeline<const STAGES: u32>;
-impl<const STAGES: u32> Sm100TmaStorePipeline<STAGES> {
+pub struct PipelineTmaStore<const STAGES: u32>;
+impl<const STAGES: u32> PipelineTmaStore<STAGES> {
     /// Reject an empty ring of shared output buffers.
     const VALID: () = assert!(STAGES > 0);
     /// Define a ring containing at least one shared output buffer.

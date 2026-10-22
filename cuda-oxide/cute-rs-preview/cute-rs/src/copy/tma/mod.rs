@@ -273,7 +273,7 @@ pub unsafe fn copy_tma_2d<T, SmemL>(
 /// observes shared memory through an asynchronous *proxy*, a hardware view of
 /// memory separate from ordinary thread accesses. The caller must publish
 /// earlier ordinary shared writes to that proxy, issue the stores, commit the
-/// group, and wait before reusing the source. [`crate::TmaStorePipeline`]
+/// group, and wait before reusing the source. [`crate::PipelineTmaStore`]
 /// provides the commit and wait steps.
 ///
 /// The small `SmemTile` view is passed by value. This consumes only its base

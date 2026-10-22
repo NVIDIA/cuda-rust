@@ -28,8 +28,8 @@ const EPILOGUE_TILE: &str = "cute_rs::epilogue::sm120::Sm120Epilogue128x128";
 const EPILOGUE_WARP_SLICE: &str = "cute_rs::epilogue::sm120::Sm120EpilogueWarp128x128";
 /// Exact defining path of `cute_rs::mma::block_scaled::fragments::Mxf4AccumulatorTile2x8`; public reexports do not change it.
 const ACCUMULATOR: &str = "cute_rs::mma::block_scaled::fragments::Mxf4AccumulatorTile2x8";
-/// Exact defining path of `cute_rs::pipeline::TmaStorePipeline`; public reexports do not change it.
-const TMA_STORE_PIPELINE: &str = "cute_rs::pipeline::TmaStorePipeline";
+/// Exact defining path of `cute_rs::pipeline::PipelineTmaStore`; public reexports do not change it.
+const TMA_STORE_PIPELINE: &str = "cute_rs::pipeline::PipelineTmaStore";
 
 /// Recognize one exact source ADT rather than a type with a similar printed name.
 fn exact_adt(ty: &Ty, expected: &str) -> Result<Option<GenericArgs>, String> {

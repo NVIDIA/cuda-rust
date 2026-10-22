@@ -109,7 +109,7 @@ fn is_dead_epilogue_store_pipeline_ref(ctx: &Context, operation: Ptr<Operation>)
     let Some(store_pipeline) = referent_ty_ref.downcast_ref::<MirStructType>() else {
         return false;
     };
-    if store_pipeline.name != "TmaStorePipeline"
+    if store_pipeline.name != "PipelineTmaStore"
         || !store_pipeline.field_names.is_empty()
         || !store_pipeline.field_types.is_empty()
         || !store_pipeline.mem_to_decl.is_empty()

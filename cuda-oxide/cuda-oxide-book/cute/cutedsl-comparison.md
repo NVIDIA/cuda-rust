@@ -1,6 +1,6 @@
 # From Python `CuTeDSL` to `cute-rs`
 
-If you have used NVIDIA's Python **`CuTeDSL`**, the concepts in `cute-rs`—layouts, composed swizzles, `zipped_divide`, TMA copy atoms, and tiled MMA—will feel immediately familiar. Both compile down to the **exact same CUTLASS `cute` and `cute_nvgpu` MLIR operations**.
+If you have used NVIDIA's Python **`CuTeDSL`**, the concepts in `cute-rs` will feel immediately familiar: layouts, composed swizzles, `zipped_divide`, TMA copy atoms, and tiled MMA. Both compile down to the **exact same CUTLASS `cute` and `cute_nvgpu` MLIR operations**.
 
 The key difference is **where the static configuration lives** and **when the IR is constructed**:
 
@@ -34,7 +34,7 @@ def kernel(
 ): ...
 ```
 
-In Rust **`cute-rs`**, there is no runtime tracer—`rustc` compiles the kernel ahead of time. Nothing is hidden:
+In Rust **`cute-rs`**, there is no runtime tracer: `rustc` compiles the kernel ahead of time. Nothing is hidden:
 1. **Kernel parameters carry only the hardware launch ABI** (for example, 128-byte hardware TMA descriptors passed by value via `#[grid_constant]`, device pointers, and scalar dimensions).
 2. **Layouts, swizzles, operand roles, and MMA configurations live in Rust types** (`ASmem`, `Sm100TiledMma<...>`, `MainloopPipeline`) with zero runtime byte overhead.
 

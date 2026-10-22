@@ -70,7 +70,7 @@ The figure at the top of the page is the feature table, with the cute-rs column 
 | :--- | :--- | :--- | :--- |
 | Layout algebra, static | yes | partial | layouts are Rust types checked at compile time; no layout ops in kernels |
 | Dynamic layouts, runtime shapes | yes | partial | runtime lengths and one runtime row pitch; strides and tiles are types |
-| Tensors, partitions, tiled atoms | yes | partial | 1D tiles (zipped_divide, slice, the 1D local_tile) and fixed 2D block-scaled views; TiledCopy, get_slice and ThrCopy exist but no kernel can reach them yet, so block-wide copies call copy_g2s |
+| Tensors, partitions, tiled atoms | yes | partial | 1D tiles (zipped_divide, slice, 1D local_tile) and fixed 2D block-scaled views; TiledCopy, get_slice and ThrCopy exist but no kernel can reach them yet, so block-wide copies call copy_g2s |
 | TMA copies | yes | partial | 2D tile load and store, two-CTA load; no im2col, reduce-store, multicast |
 | cp.async, bulk, DSMEM copies | yes | partial | cooperative cp.async with a coverage proof; no bulk or DSMEM data copies |
 | ldmatrix, stmatrix, atomics | yes | partial | ldmatrix x4 and x2.trans, stmatrix x2, no-allocate stores; no atomics |

@@ -57,6 +57,14 @@ let g_c = TensorMut::from_disjoint_slice(&mut c).zipped_divide::<TILE>();
 let t_a = g_a.slice(tid);
 let t_b = g_b.slice(tid);
 let mut t_c = g_c.slice(tid);
+```
+
+The f32 kernel in `src/main.rs` takes its `a` and `c` views through the one-call form,
+`local_tile::<TILE>(tid)`, which is CuTe's `local_tile` for a one-dimensional tiler and
+equals `zipped_divide::<TILE>().slice(tid)`; the f16 kernel keeps the two steps so both
+forms stay side by side.
+
+```rust
 
 let result = unsafe { t_a.load() } + unsafe { t_b.load() };
 unsafe { t_c.store(result) };

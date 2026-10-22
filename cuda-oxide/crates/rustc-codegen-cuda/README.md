@@ -229,6 +229,6 @@ cargo oxide pipeline <example_name>
 - **Closures work**. Both `move` closures (capture by value) and non-move closures (capture by reference via HMM) can be passed to kernels.
 - **Unwind paths are unreachable**. The backend ignores all MIR unwind edges, so `panic=abort` and custom sysroots are unnecessary. If a panic condition is hit at runtime, the GPU traps.
 
-### Nightly Rust
+### Pinned Rust Toolchain
 
-The backend uses `#![feature(rustc_private)]` and pins to a specific nightly via `rust-toolchain.toml`. The workspace currently uses `nightly-2026-10-11`.
+The backend uses `#![feature(rustc_private)]` (unlocked on stable via `RUSTC_BOOTSTRAP=1`) and pins to a specific toolchain release via `rust-toolchain.toml`. The workspace currently uses `1.99.1`.

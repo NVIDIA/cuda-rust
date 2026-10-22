@@ -39,6 +39,7 @@ note: required by a bound in `setmaxnreg_dec`
  --> src/lib.rs
   |
   |     pub unsafe fn setmaxnreg_dec<const N: u32>()
+  |                   -------------- required by a bound in this function
   |     where
   |         (): ValidRegisterCount<N>,
   |             ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `setmaxnreg_dec`

@@ -17,6 +17,7 @@ note: required by a bound in `cp_async_bulk_wait_group_read`
  --> src/tma.rs
   |
   | pub fn cp_async_bulk_wait_group_read<const N: u32>()
+  |        ----------------------------- required by a bound in this function
   | where
   |     (): ValidWaitCount<N>,
   |         ^^^^^^^^^^^^^^^^^ required by this bound in `cp_async_bulk_wait_group_read`

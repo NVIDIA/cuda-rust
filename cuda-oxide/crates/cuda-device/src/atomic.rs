@@ -494,7 +494,7 @@ define_float_atomic! {
     ///
     /// `swap` lowers to hardware `atom.exch.b32`; this API does not expose
     /// `compare_exchange` for floats. `fetch_add` uses LLVM `atomicrmw fadd`.
-    /// With the pinned `nightly-2026-10-11` toolchain's LLVM 23 NVPTX defaults,
+    /// With the pinned `1.99.1` toolchain's LLVM 23 NVPTX defaults,
     /// global and generic `f32` adds use a compare-and-swap loop; shared `f32`
     /// and `f64` adds still use native instructions on supported targets.
     ///

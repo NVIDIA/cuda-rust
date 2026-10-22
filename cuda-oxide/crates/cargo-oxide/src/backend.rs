@@ -1056,6 +1056,7 @@ fn backend_build_command_in(
     cmd.env("CARGO_ENCODED_RUSTFLAGS", "");
     cmd.env_remove("RUSTFLAGS");
     cmd.env_remove("CARGO_BUILD_RUSTFLAGS");
+    cmd.env("RUSTC_BOOTSTRAP", "1");
 
     if let Some(path) = rustc_lib_path {
         cmd.env("LIBRARY_PATH", build_library_path(path));

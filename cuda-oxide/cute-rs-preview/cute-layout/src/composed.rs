@@ -221,6 +221,27 @@ impl ComposedLayout {
         &self.outer
     }
 
+    /// Return the swizzle portion, the inner map applied last.
+    ///
+    /// This is CuTeDSL's `get_swizzle_portion(layout)` for a `ComposedLayout`:
+    /// the same [`Swizzle`] as [`Self::inner`], which the compiler reads. The
+    /// DSL form also accepts a plain layout and answers with the identity
+    /// swizzle `(0, 4, 3)`; a plain layout wrapped by [`Self::from_layout`]
+    /// carries that same [`Swizzle::IDENTITY`] here.
+    pub const fn get_swizzle_portion(&self) -> Swizzle {
+        self.inner
+    }
+
+    /// Return the non-swizzle portion, the outer layout applied first.
+    ///
+    /// This is CuTeDSL's `get_nonswizzle_portion(layout)` for a
+    /// `ComposedLayout`: the same [`Layout`] as [`Self::outer`], which the
+    /// compiler reads. The DSL form returns a plain layout unchanged; here
+    /// the plain layout is the outer portion of [`Self::from_layout`].
+    pub const fn get_nonswizzle_portion(&self) -> &Layout {
+        &self.outer
+    }
+
     /// Return whether this composition's offsets count elements or bytes.
     pub const fn unit(&self) -> OffsetUnit {
         self.unit
@@ -465,6 +486,23 @@ mod tests {
             let coord = IntTuple::Leaf(coord);
             assert_eq!(bytes.call(&coord), elements.call(&coord) * 4);
         }
+    }
+
+    /// The CuTeDSL portion accessors must name the inner swizzle and the outer layout.
+    #[test]
+    fn portion_accessors_split_the_swizzle_from_the_outer_layout() {
+        let swizzle = Swizzle::new(2, 2, 3);
+        let layout = ComposedLayout::new(swizzle, 8, l("(4,4):(1,4)"), OffsetUnit::Bytes).unwrap();
+
+        assert_eq!(layout.get_swizzle_portion(), swizzle);
+        assert_eq!(layout.get_swizzle_portion(), layout.inner());
+        assert_eq!(layout.get_nonswizzle_portion(), &l("(4,4):(1,4)"));
+        assert_eq!(layout.get_nonswizzle_portion(), layout.outer());
+
+        let plain = ComposedLayout::from_layout(l("4:1"), OffsetUnit::Elements);
+        assert_eq!(plain.get_swizzle_portion(), Swizzle::new(0, 4, 3));
+        assert_eq!(plain.get_swizzle_portion(), Swizzle::IDENTITY);
+        assert_eq!(plain.get_nonswizzle_portion(), &l("4:1"));
     }
 
     /// Byte conversion must reject zero, non-power-of-two and overflowing element sizes.

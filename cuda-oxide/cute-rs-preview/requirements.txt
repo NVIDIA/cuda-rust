@@ -6,7 +6,7 @@
 #   cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt
 # Tested with Python 3.12. The default PyPI torch wheel is the CUDA 13 build.
 nvidia-cutlass-dsl[cu13]==4.7.0
-torch==2.13.0
+torch==2.14.1
 cuda-python==13.3.1
 cuda-bindings==13.3.1
 numpy==2.5.2

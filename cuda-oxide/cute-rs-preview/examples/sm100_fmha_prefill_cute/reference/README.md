@@ -17,8 +17,8 @@ structured CuTe operations with explicit CTM instructions; see the
 ## Setup and matched comparison
 
 Use Python 3.12 and the shared environment pinned in
-[`cute-rs-preview/requirements.txt`](../../../requirements.txt); the tested PyTorch
-wheel is `2.13.0+cu130`. From `cuda-oxide/`:
+[`cute-rs-preview/requirements.txt`](../../../requirements.txt); the recorded B200
+results used torch `2.13.0+cu130`. From `cuda-oxide/`:
 
 ```bash
 python3 -m venv cute-rs-preview/.venv

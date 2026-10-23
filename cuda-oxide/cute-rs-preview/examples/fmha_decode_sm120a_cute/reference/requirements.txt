@@ -1,0 +1,5 @@
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+nvidia-cutlass-dsl[cu13]==4.7.0
+torch

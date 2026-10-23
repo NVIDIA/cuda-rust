@@ -670,6 +670,29 @@ pub fn translate_type(
             translate_pointer_like(ctx, &pointee, origin)
         }
         rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::Adt(adt_def, substs)) => {
+            if let Some(result) =
+                crate::translator::cute::pipeline::try_translate_tma_load_pipeline_type(
+                    ctx, rust_ty,
+                )
+            {
+                return result;
+            }
+            if let Some(result) =
+                crate::translator::cute::scheduler::try_translate_work_tile_type(ctx, rust_ty)
+            {
+                return result;
+            }
+            if let Some(result) =
+                crate::translator::cute::block_scaled::try_translate_block_scaled_type(ctx, rust_ty)
+            {
+                return result;
+            }
+            if let Some(result) =
+                crate::translator::cute::tensor::try_translate_tensor_view_type(ctx, rust_ty)
+            {
+                return result;
+            }
+
             // Get the trimmed name (just the type name without path)
             let trimmed_name = adt_def.trimmed_name();
 
@@ -764,7 +787,11 @@ pub fn translate_type(
                     64,
                     pliron::builtin::types::Signedness::Unsigned,
                 );
-                Ok(llvm_export::types::ArrayType::get(ctx, i64_ty.into(), 16).into())
+                // Keep the opaque storage in MIR until backend lowering. A
+                // typed transparent wrapper retains this as a nested field;
+                // injecting an LLVM array here bypasses MIR aggregate layout
+                // handling and breaks the explicit MLIR exporter.
+                Ok(dialect_mir::types::MirArrayType::get(ctx, i64_ty.into(), 16).into())
             } else {
                 // Generic ADT handling for user-defined structs and enums
                 let variants = adt_def.variants();
@@ -875,10 +902,8 @@ pub fn translate_type(
                             // Total struct size (bytes)
                             let size: u64 = shape.size.bytes() as u64;
                             let abi_kind = if adt_def.repr().flags.is_transparent
-                                && matches!(
-                                    &shape.value_repr,
-                                    rustc_public::abi::ValueRepr::Scalar(_)
-                                ) {
+                                && matches!(&shape.abi, rustc_public::abi::ValueAbi::Scalar(_))
+                            {
                                 StructAbiKind::TransparentScalar
                             } else {
                                 StructAbiKind::Aggregate

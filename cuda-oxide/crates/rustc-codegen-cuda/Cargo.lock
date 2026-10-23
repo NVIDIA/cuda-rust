@@ -548,6 +548,7 @@ dependencies = [
  "linkme",
  "llvm-export",
  "mir-lower",
+ "mir-transforms",
  "once_cell",
  "oxide-artifacts",
  "pliron",
@@ -578,6 +579,8 @@ name = "mir-transforms"
 version = "0.2.1"
 dependencies = [
  "dialect-mir",
+ "dialect-nvvm",
+ "oxide-artifacts",
  "pliron",
  "reserved-oxide-symbols",
  "rustc-hash",
@@ -627,8 +630,6 @@ checksum = "0b61fbf7ec37342ce171d9f5e3b82be74bda6c4e84e3b28338a03d553913e6aa"
 [[package]]
 name = "oxide-artifacts"
 version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74d9a941c0c43d2dceaf25f5c9ca4c9f9cceb28dfa5e4e3cfd14e476f003e7c9"
 dependencies = [
  "object",
 ]
@@ -815,6 +816,7 @@ dependencies = [
  "pliron",
  "pliron-derive",
  "reserved-oxide-symbols",
+ "serde",
  "serde_json",
  "thiserror",
 ]

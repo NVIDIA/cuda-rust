@@ -164,6 +164,7 @@ pub(super) fn emit_drop_glue(
     block_map: &[Ptr<BasicBlock>],
     legaliser: &mut Legaliser,
     loc: Location,
+    library_site: crate::LibraryCallSite,
 ) -> TranslationResult<Ptr<Operation>> {
     // Resolve the monomorphized drop_in_place::<T> instance.
     let drop_instance = Instance::resolve_drop_in_place(dropped_ty);
@@ -249,6 +250,7 @@ pub(super) fn emit_drop_glue(
         0,
     );
     call_op.deref_mut(ctx).set_loc(loc.clone());
+    crate::library::attach_call_source(ctx, call_op, library_site);
 
     let callee_attr = pliron::builtin::attributes::StringAttr::new(callee_name.to_string());
     call_op.deref_mut(ctx).attributes.set(

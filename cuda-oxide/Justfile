@@ -200,8 +200,8 @@ check-errors:
 # the naming-guard's reserved-prefix search, and all four cargo-deny jobs:
 # `cargo deny check` enforces deny.toml over each non-example `[workspace]`
 # root that resolves third-party crates -- the stable host workspace, the SIMT
-# workspace, crates/rustc-codegen-cuda, and the cuda-macros device-only
-# fixture, each of
+# workspace, crates/rustc-codegen-cuda, the cuda-macros device-only fixture,
+# and cutile-rs (its own deny.toml), each of
 # which resolves its own graph because each declares its own `[workspace]`;
 # the license inventory covers what those workspaces declare; deny.toml holds
 # over the example workspaces; and every first-party
@@ -237,6 +237,8 @@ check-guards:
     cargo deny --manifest-path crates/cargo-oxide/Cargo.toml --workspace --locked check
     cargo deny --manifest-path crates/rustc-codegen-cuda/Cargo.toml --locked check
     cargo deny --manifest-path crates/cuda-macros/tests/device-only/Cargo.toml --locked check
+    # Walk from cutile-rs/Cargo.toml so cutile-rs/deny.toml is found before the root policy.
+    cd .. && cargo deny --manifest-path cutile-rs/Cargo.toml --locked check
     bash scripts/check-dependency-licenses.sh
     bash scripts/check-example-license-policy.sh
     bash scripts/check-spdx-headers.sh

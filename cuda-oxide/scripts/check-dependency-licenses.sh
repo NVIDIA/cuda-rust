@@ -25,6 +25,7 @@ set -euo pipefail
 # dictionary collation, reject the pair rustc-hash/rustc_apfloat with
 # "input is not in sorted order", and abort the run via set -e.
 export LC_ALL=C
+export RUSTC_BOOTSTRAP=1
 
 cd "$(dirname "$0")/.."
 GIT_ROOT="$(git rev-parse --show-toplevel)"

@@ -466,6 +466,7 @@ fn apply_codegen_rustflags(
     append_full_debug_rustflags(&mut encoded, cmd, inherited_debug.as_deref());
 
     cmd.env("CARGO_ENCODED_RUSTFLAGS", encoded)
+        .env("RUSTC_BOOTSTRAP", "1")
         .env_remove("RUSTFLAGS");
     apply_profile_pins(cmd, profile);
 }
@@ -553,6 +554,7 @@ pub fn has_configured_arch(ctx: &Context, cli_arch: Option<&str>) -> bool {
 }
 
 pub(super) fn apply_config_env(cmd: &mut Command, ctx: &Context) {
+    cmd.env("RUSTC_BOOTSTRAP", "1");
     for (key, value) in &ctx.config.env {
         if matches!(key.as_str(), "RUSTFLAGS" | "CARGO_ENCODED_RUSTFLAGS") {
             continue;

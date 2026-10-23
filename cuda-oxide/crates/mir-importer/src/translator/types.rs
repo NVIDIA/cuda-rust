@@ -902,10 +902,8 @@ pub fn translate_type(
                             // Total struct size (bytes)
                             let size: u64 = shape.size.bytes() as u64;
                             let abi_kind = if adt_def.repr().flags.is_transparent
-                                && matches!(
-                                    &shape.value_repr,
-                                    rustc_public::abi::ValueRepr::Scalar(_)
-                                ) {
+                                && matches!(&shape.abi, rustc_public::abi::ValueAbi::Scalar(_))
+                            {
                                 StructAbiKind::TransparentScalar
                             } else {
                                 StructAbiKind::Aggregate

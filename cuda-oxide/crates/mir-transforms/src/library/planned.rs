@@ -10,8 +10,8 @@ use dialect_mir::{
     attributes::{FieldIndexAttr, MirPointerKindAuthorityAttr},
     library::{LibraryCallPlan, LibraryNativeMetadata, LibraryOperation},
     ops::{
-        MirCallOp, MirConstantOp, MirExternSharedOp, MirExtractFieldOp, MirInsertFieldOp,
-        MirUndefOp,
+        MirCallOp, MirConstantOp, MirExternSharedOp, MirExtractFieldOp, MirInsertFieldOp, MirMulOp,
+        MirPtrOffsetOp, MirUndefOp,
     },
     types::{MirPointerKind, MirPtrType, MirStructType, MirTupleType},
 };
@@ -88,6 +88,11 @@ pub(super) fn validate(ctx: &Context, op: Ptr<Operation>, plan: &LibraryCallPlan
             plan.storage_witness,
         ) != (checked, resource, storage)
             || plan.callback != matches!(native, Callback { .. })
+            || plan.warp_width
+                != match native {
+                    CheckedWarp { width, .. } => Some(width),
+                    _ => None,
+                }
             || plan.symbol.is_empty()
         {
             return verify_err!(
@@ -95,7 +100,7 @@ pub(super) fn validate(ctx: &Context, op: Ptr<Operation>, plan: &LibraryCallPlan
                 "native plan does not match the retained source contract"
             );
         }
-        if resource && !storage && plan.scratch_bytes != 0 {
+        if resource && !storage && plan.warp_width.is_none() && plan.scratch_bytes != 0 {
             return verify_err!(
                 op.deref(ctx).loc(),
                 "checked resource library calls require scratch-free artifacts"
@@ -294,7 +299,11 @@ fn flatten(ctx: &mut Context, anchor: Ptr<Operation>, value: Value) -> Vec<Value
 
 pub(super) fn lower_boundary(ctx: &mut Context, anchor: Ptr<Operation>, plan: &LibraryCallPlan) {
     if plan.barrier_before {
-        block_barrier(ctx, anchor);
+        if let Some(width) = plan.warp_width {
+            lower_warp_sync(ctx, anchor, width);
+        } else {
+            block_barrier(ctx, anchor);
+        }
     }
 }
 
@@ -350,6 +359,25 @@ fn native_call(
     }
     let byte = IntegerType::get(ctx, 8, Signedness::Unsigned).into();
     let mut scratch = shared_view(ctx, anchor, byte, plan);
+    if plan.scratch_stride != 0 {
+        let width = plan
+            .warp_width
+            .expect("validated replicated library scratch");
+        let group = lower_warp_query(ctx, anchor, width);
+        let ty = IntegerType::get(ctx, 64, Signedness::Unsigned).into();
+        let cast = emit::<MirCastOp>(ctx, anchor, vec![ty], vec![group]);
+        MirCastOp::new(cast).set_attr_cast_kind(ctx, MirCastKindAttr::IntToInt);
+        let group = cast.deref(ctx).get_result(0);
+        let stride = integer(ctx, anchor, 64, u64::from(plan.scratch_stride));
+        let offset = emit::<MirMulOp>(ctx, anchor, vec![ty], vec![group, stride])
+            .deref(ctx)
+            .get_result(0);
+        let pointer_type = scratch.get_type(ctx);
+        let pointer =
+            emit::<MirPtrOffsetOp>(ctx, anchor, vec![pointer_type], vec![scratch, offset]);
+        MirPtrOffsetOp::new(pointer).set_inbounds(ctx, false);
+        scratch = pointer.deref(ctx).get_result(0);
+    }
     let raw_shared = scratch_pointer(ctx, byte, true);
     scratch = pointer_cast(
         ctx,
@@ -418,6 +446,7 @@ fn native_call(
     call.set_attr_callee(ctx, StringAttr::new(plan.symbol.clone()));
     call.set_external_callee_signature(ctx, signature);
     if plan.barrier_after {
+        debug_assert!(plan.warp_width.is_none());
         block_barrier(ctx, anchor);
     }
 }
@@ -601,7 +630,7 @@ mod tests {
             },
             CheckedWarp {
                 spec,
-                width: 32,
+                width: 8,
                 access,
                 witness,
             },
@@ -709,6 +738,10 @@ mod tests {
                 CheckedBlockResource { .. } | CheckedBlockStorage { .. } | CheckedWarp { .. }
             );
             plan.storage_witness = matches!(native, CheckedBlockStorage { .. });
+            plan.warp_width = match native {
+                CheckedWarp { width, .. } => Some(width),
+                _ => None,
+            };
             plan.scratch_bytes =
                 if matches!(native, CheckedBlockResource { .. } | CheckedWarp { .. }) {
                     0
@@ -716,6 +749,12 @@ mod tests {
                     32
                 };
             plan.scratch_alignment = 4;
+            if matches!(native, CheckedWarp { .. }) {
+                plan.scratch_bytes = 1184;
+                plan.scratch_stride = 148;
+                plan.scratch_offset = 16;
+                plan.planned_root = Some("root".into());
+            }
             plan.barrier_before = true;
             let mut wrong_kind = plan.clone();
             wrong_kind.callback = !plan.callback;
@@ -736,7 +775,13 @@ mod tests {
             if let Some(read) = operand_read {
                 let barrier = operations
                     .iter()
-                    .position(|&op| Operation::get_op::<Barrier0Op>(op, ctx).is_some())
+                    .position(|&op| {
+                        if matches!(native, CheckedWarp { .. }) {
+                            Operation::get_op::<dialect_nvvm::ops::BarWarpSyncOp>(op, ctx).is_some()
+                        } else {
+                            Operation::get_op::<Barrier0Op>(op, ctx).is_some()
+                        }
+                    })
                     .unwrap();
                 assert!(barrier < operations.iter().position(|&op| op == read).unwrap());
             }
@@ -798,6 +843,56 @@ mod tests {
                         .get_attr_pointer_kind_authority(ctx)
                         .unwrap(),
                     MirPointerKindAuthorityAttr::RawAddress
+                );
+            }
+            if matches!(native, CheckedWarp { .. }) {
+                let offset = operations
+                    .iter()
+                    .find_map(|&op| Operation::get_op::<MirPtrOffsetOp>(op, ctx))
+                    .unwrap();
+                let product = offset
+                    .get_operation()
+                    .deref(ctx)
+                    .get_operand(1)
+                    .defining_op()
+                    .unwrap();
+                assert!(Operation::get_op::<MirMulOp>(product, ctx).is_some());
+                let ty = product.deref(ctx).get_result(0).get_type(ctx);
+                assert_eq!(
+                    ty.deref(ctx).downcast_ref::<IntegerType>().unwrap().width(),
+                    64
+                );
+                let group = product.deref(ctx).get_operand(0).defining_op().unwrap();
+                assert!(Operation::get_op::<MirCastOp>(group, ctx).is_some());
+                let view = operations
+                    .iter()
+                    .find_map(|&op| Operation::get_op::<MirExternSharedOp>(op, ctx))
+                    .unwrap();
+                assert_eq!(
+                    view.get_operation()
+                        .deref(ctx)
+                        .attributes
+                        .get::<IntegerAttr>(&FIXED_SHARED_BYTES.try_into().unwrap())
+                        .unwrap()
+                        .value()
+                        .to_u64(),
+                    1184
+                );
+                assert_eq!(view.get_byte_offset_value(ctx), 16);
+                assert_eq!(
+                    operations
+                        .iter()
+                        .filter(
+                            |&&op| Operation::get_op::<dialect_nvvm::ops::BarWarpSyncOp>(op, ctx)
+                                .is_some()
+                        )
+                        .count(),
+                    1
+                );
+                assert!(
+                    operations
+                        .iter()
+                        .all(|&op| Operation::get_op::<Barrier0Op>(op, ctx).is_none())
                 );
             }
             let scratch = call_op.deref(ctx).get_operand(2);

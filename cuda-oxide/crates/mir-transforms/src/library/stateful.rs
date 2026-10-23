@@ -4,7 +4,9 @@
  */
 
 //! Bounded per-context collective proof over prepared MIR values and local slots.
-use super::storage::{Event, Plan, Policy, Site, Trace, Validation, planned_storage};
+use super::storage::{
+    Domain, Event, Plan, Policy, Region, Site, Trace, Validation, planned_storage,
+};
 use dialect_mir::{
     library::{
         self, LibraryAccess, LibraryCallKind, LibraryCallSite, LibraryNativeMetadata as Native,
@@ -228,23 +230,6 @@ impl Fact {
         }
     }
 }
-// Genuine queries supply only the six power-of-two Warp precisions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Domain {
-    Warp(u32),
-    Block,
-}
-impl Domain {
-    const BLOCK: Self = Self::Block;
-    const LANE: Self = Self::Warp(1);
-    const HEIGHT: usize = 7;
-    fn covers(self, other: Self) -> bool {
-        self >= other
-    }
-    fn meet(self, other: Self) -> Self {
-        self.min(other)
-    }
-}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Control {
     domain: Domain,
@@ -289,8 +274,8 @@ fn merge_pending(into: &mut Pending, other: &Pending) -> bool {
 }
 #[derive(Clone, Default)]
 struct Epochs {
-    dirty: BTreeSet<Site>,
-    live: BTreeMap<Site, Site>,
+    dirty: BTreeSet<Region>,
+    live: BTreeMap<Site, Region>,
     used: BTreeMap<Site, BTreeSet<Policy>>,
 }
 impl Epochs {
@@ -370,9 +355,20 @@ fn invalidate_borrows(state: &mut State) {
         fact.invalidate_referents();
     }
 }
-fn complete(state: &mut State) {
-    state.pending.clear();
-    state.epochs.dirty.clear();
+fn complete(state: &mut State, scope: Domain) {
+    if scope == Domain::BLOCK {
+        state.pending.clear();
+    } else {
+        for ((_, producer, _), completion) in &mut state.pending {
+            if scope.covers(*producer) {
+                *completion = (*completion).max(scope);
+            }
+        }
+    }
+    state
+        .epochs
+        .dirty
+        .retain(|region| !region.completed_by(scope));
 }
 fn dereference(fact: Fact, state: &State) -> Fact {
     match fact {
@@ -1107,13 +1103,8 @@ impl Analyzer<'_> {
                     "WarpTile barrier is reached through control narrower than its width",
                 ));
             }
-            for ((_, producer, _), completion) in &mut state.pending {
-                if scope.covers(*producer) {
-                    *completion = (*completion).max(scope);
-                }
-            }
-            // Tile completion does not release full-block scratch epochs or
-            // erase the producer scope needed by a later containing access.
+            // Completion never releases a reservation or a wider storage epoch.
+            complete(state, scope);
             return Ok(None);
         }
         let marker = String::from((*library.get_attr_library_callee(self.ctx).unwrap()).clone());
@@ -1242,6 +1233,7 @@ impl Analyzer<'_> {
                     call: call.clone(),
                     role,
                     marker,
+                    scope,
                     origin,
                     policy,
                 },
@@ -1263,7 +1255,7 @@ impl Analyzer<'_> {
                         .get_mut(&site)
                         .unwrap()
                         .before = true;
-                    complete(state);
+                    complete(state, scope);
                 } else if validate {
                     return Err(format!(
                         "checked block collective in {}: explicit storage reuse requires a full-block barrier at {site:?}",
@@ -1355,7 +1347,7 @@ impl Analyzer<'_> {
             .and_then(|p| p.sites.get(&site))
             .is_some_and(|b| b.after)
         {
-            complete(state);
+            complete(state, scope);
         }
         facts.iter().for_each(|fact| state.expose(fact));
         invalidate_borrows(state);
@@ -1401,7 +1393,7 @@ impl Analyzer<'_> {
                                 "block barrier is reached through lane-varying control flow",
                             ));
                         }
-                        complete(state);
+                        complete(state, Domain::BLOCK);
                         Fact::Fields(vec![])
                     }
                     SourceKind::BlockQuery => Fact::Uniform(Domain::BLOCK),

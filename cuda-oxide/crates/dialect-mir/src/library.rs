@@ -366,6 +366,10 @@ pub struct LibraryCallPlan {
     pub operation: LibraryOperation,
     pub storage_witness: bool,
     pub scratch_offset: u32,
+    /// None means Block; Some(width) is a validated aligned Warp scope.
+    pub warp_width: Option<u32>,
+    /// Padded bytes per replica; zero for nonreplicated views.
+    pub scratch_stride: u32,
     pub planned_root: Option<String>,
     pub barrier_before: bool,
     pub barrier_after: bool,
@@ -393,6 +397,8 @@ impl LibraryCallPlan {
             symbol: String::new(),
             storage_witness: false,
             scratch_offset: 0,
+            warp_width: None,
+            scratch_stride: 0,
             planned_root: None,
             barrier_before: false,
             barrier_after: false,

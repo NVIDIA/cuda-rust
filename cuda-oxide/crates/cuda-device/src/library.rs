@@ -136,12 +136,15 @@ pub unsafe fn cuda_oxide_library_v1_246e25db_checked_block_resource_call<
 
 pub use cuda_oxide_library_v1_246e25db_checked_block_resource_call as checked_block_resource_call_v1;
 
-/// Invoke a scratch-free Warp operation with a typed memory witness.
+/// Invoke a Warp operation with a typed memory witness and implicit scratch.
 ///
 /// WIDTH is a power of two in 1..=32. The root's full exact block shape must contain only
 /// complete physical warps. Controls and participation agree within WIDTH;
 /// sibling groups may differ. A containing canonical WarpTile or block barrier
-/// completes conflicting accesses within that scope.
+/// completes conflicting accesses within that scope. The compiler allocates
+/// disjoint scratch replicas for canonical groups of each width and inserts a
+/// matching barrier before dirty scratch reuse. First use and scratch-free
+/// operations supply no completion, and no trailing barrier is implied.
 ///
 /// # Safety
 ///

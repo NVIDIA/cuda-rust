@@ -1293,7 +1293,9 @@ pub(crate) fn finalize_provider<'tcx>(
         if calls.is_empty() {
             continue;
         }
-        let storage_root = calls.iter().any(|call| call.kind.storage());
+        let storage_root = calls
+            .iter()
+            .any(|call| call.kind.storage() || call.kind == MarkerKind::CheckedWarp);
         for instance in &reached {
             if !storage_root
                 && tcx.crate_name(instance.def_id().krate).as_str() == "cuda_device"
@@ -1483,11 +1485,7 @@ pub(crate) fn finalize_provider<'tcx>(
                 },
             });
             for (call, root) in calls {
-                if matches!(
-                    call.kind,
-                    MarkerKind::CheckedBlockResource | MarkerKind::CheckedWarp
-                ) && !spec.scratch_free
-                {
+                if call.kind == MarkerKind::CheckedBlockResource && !spec.scratch_free {
                     tcx.dcx().span_fatal(
                         call.span,
                         "resource-checked block calls currently require a scratch-free provider",
@@ -1506,6 +1504,8 @@ pub(crate) fn finalize_provider<'tcx>(
                     operation: mir_importer::LibraryOperation::Native,
                     storage_witness: call.kind == MarkerKind::CheckedBlockStorage,
                     scratch_offset: 0,
+                    warp_width: request.warp_width,
+                    scratch_stride: 0,
                     planned_root: None,
                     barrier_before: false,
                     barrier_after: false,

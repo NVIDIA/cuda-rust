@@ -526,6 +526,14 @@ fn slot_and_promoted_verdicts(
     roles: &BTreeMap<LibraryCallSite, Role>,
 ) -> Vec<Result<(), String>> {
     let manager = &mut AnalysisManager::default();
+    let roots = BTreeMap::from([(
+        "root".into(),
+        BTreeSet::from(["root".into(), "helper".into()]),
+    )]);
+    let symbols = BTreeMap::from([
+        ("root".into(), "root".into()),
+        ("helper".into(), "helper".into()),
+    ]);
     [false, true]
         .into_iter()
         .map(|promoted| {
@@ -536,21 +544,48 @@ fn slot_and_promoted_verdicts(
                 manager.retain_preserved(&changed);
             }
             module.deref(ctx).verify(ctx).unwrap();
+            let first = analyze_libraries(
+                module,
+                ctx,
+                manager,
+                &roots,
+                &symbols,
+                roles,
+                &BTreeMap::from([("root".into(), [64, 1, 1])]),
+                None,
+            )
+            .map_err(|error| error.to_string())?;
+            // Warp roots now use the same layout-aware proof, even for zero-byte
+            // providers. Such a plan must not invent reuse-barrier credit.
+            let natives = BTreeMap::from([(
+                "root".into(),
+                roles
+                    .iter()
+                    .filter(|(_, role)| matches!(role, Role::Native(_)))
+                    .map(|(site, _)| {
+                        (
+                            site.clone(),
+                            dialect_mir::library::LibraryCallPlan::internal(
+                                dialect_mir::library::LibraryOperation::Native,
+                                "marker".into(),
+                            ),
+                        )
+                    })
+                    .collect(),
+            )]);
+            let mut plans = super::super::storage::allocate_library_storage(&first, &natives)?;
+            if plans.is_empty() {
+                return Ok(());
+            }
             analyze_libraries(
                 module,
                 ctx,
                 manager,
-                &BTreeMap::from([(
-                    "root".into(),
-                    BTreeSet::from(["root".into(), "helper".into()]),
-                )]),
-                &BTreeMap::from([
-                    ("root".into(), "root".into()),
-                    ("helper".into(), "helper".into()),
-                ]),
+                &roots,
+                &symbols,
                 roles,
-                &BTreeMap::from([("root".into(), [64, 1, 1])]),
-                None,
+                &first.shapes,
+                Some(&mut plans),
             )
             .map(|_| ())
             .map_err(|error| error.to_string())
@@ -1927,6 +1962,96 @@ fn reservations_require_release_and_completion_or_disjoint_exclusive_placement()
                 assert!(second.unwrap_err().to_string().contains(expected));
             } else {
                 second.unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn warp_storage_reuse_completes_only_covered_accesses_in_both_preparations() {
+    for (widths, bytes, accepted) in [
+        (vec![8, 8], 148, true),
+        (vec![8, 8], 0, false),
+        (vec![8, 16], 148, false),
+        (vec![8, 16, 8], 148, false),
+    ] {
+        let ctx = &mut Context::new();
+        let (module, block, witness) = resource_function(ctx);
+        let control = source_value(ctx, block, SourceKind::BlockQuery, true);
+        let mut roles = BTreeMap::new();
+        for (position, &width) in widths.iter().enumerate() {
+            let index = position + 1;
+            let mut role = scoped_native(ctx, block, witness, control, Domain::Warp(width), index);
+            if position + 1 == widths.len() {
+                let Role::Native(Native::CheckedWarp { access, .. }) = &mut role else {
+                    unreachable!()
+                };
+                *access = LibraryAccess::Write;
+                let op = block.deref(ctx).iter(ctx).last().unwrap();
+                MirLibraryOp::new(op).set_attr_role(ctx, role);
+            }
+            roles.insert(site(index), role);
+        }
+        emit::<MirReturnOp>(ctx, block, vec![], vec![]);
+        let manager = &mut AnalysisManager::default();
+        for promoted in [false, true] {
+            if promoted {
+                pliron::opts::mem2reg::mem2reg(module, ctx, manager).unwrap();
+                let mut changed = pliron::pass::PassResult::default();
+                changed.ir_changed = pliron::irbuild::IRStatus::Changed;
+                manager.retain_preserved(&changed);
+            }
+            module.deref(ctx).verify(ctx).unwrap();
+            let first = analyze(ctx, module, manager, &roles).unwrap();
+            let natives = BTreeMap::from([(
+                "root".into(),
+                roles
+                    .keys()
+                    .map(|site| {
+                        let mut plan = dialect_mir::library::LibraryCallPlan::internal(
+                            dialect_mir::library::LibraryOperation::Native,
+                            "scoped_marker".into(),
+                        );
+                        plan.scratch_bytes = bytes;
+                        plan.scratch_alignment = 4;
+                        (site.clone(), plan)
+                    })
+                    .collect(),
+            )]);
+            let mut plans =
+                super::super::storage::allocate_library_storage(&first, &natives).unwrap();
+            assert!(plans.contains_key("root"));
+            if bytes == 0 {
+                assert_eq!(plans["root"].bytes, 0);
+            }
+            let result = analyze_libraries(
+                module,
+                ctx,
+                manager,
+                &BTreeMap::from([("root".into(), BTreeSet::from(["root".into()]))]),
+                &BTreeMap::from([("root".into(), "root".into())]),
+                &roles,
+                &first.shapes,
+                Some(&mut plans),
+            );
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "{widths:?}, bytes={bytes}, promoted={promoted}: {result:?}"
+            );
+            if accepted {
+                assert_eq!(plans["root"].bytes, 1184);
+                assert_eq!(plans["root"].sites[&vec![1]].stride, 148);
+                assert!(!plans["root"].sites[&vec![1]].before);
+                assert!(plans["root"].sites[&vec![2]].before);
+                assert!(!plans["root"].sites[&vec![2]].after);
+            } else {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("conflicting collective resource access")
+                );
             }
         }
     }

@@ -140,9 +140,13 @@ cannot use automatic trailing synchronization.
 Ordinary `DynamicSharedArray::get_fixed` views retain their aliased base prefix.
 Planned regions follow that prefix with their required alignment. Unknown
 `get/get_raw/offset` views are rejected in a planned root. The existing artifact
-launch facts carry the total extent and exact block geometry. This boundary is
-full-block and synchronous; warp partitions and resource callbacks require
-separate binding support.
+launch facts carry the total extent and exact block geometry.
+`checked_warp_call_v1` uses separate implicit scratch pools for each logical
+width, with one aligned replica per canonical group. The compiler inserts a
+matching Warp barrier before dirty scratch reuse. The compiler grants no
+scratch-reuse completion for first use or scratch-free calls and adds no
+trailing barrier. Explicit descriptors and reservations remain full-block,
+and resource-bearing callbacks require separate binding support.
 
 ## Host request and response
 
@@ -297,12 +301,12 @@ contracts or maximum bounds are errors. The compiled artifact carries the
 resulting facts to launch preparation; `dynamic_shared = inferred` with
 `LaunchConfig3D::auto_shared` uses the compiled byte count.
 
-The raw and participation-only markers alias library scratch views at the dynamic shared base,
-using the maximum required size and alignment. The caller must complete each
-use before conflicting reuse. Mixing native dynamic shared views
-with these markers is rejected. They supply no barrier, allocation token or
-borrow-based completion. The planned full-block boundary above has explicit
-allocation and synchronization rules.
+The raw `call_v1` and participation-only `checked_block_call_v1` markers alias
+library scratch views at the dynamic shared base, using the maximum required
+size and alignment. The caller must complete each use before conflicting reuse.
+Mixing native dynamic shared views with these markers is rejected. They supply
+no barrier, allocation token or borrow-based completion. The planned Block and
+Warp boundaries use the allocation and synchronization rules above.
 
 The library wrapper must enforce pointer validity, alignment, capacity,
 initialization, nonaliasing, collective participation and resource reuse for

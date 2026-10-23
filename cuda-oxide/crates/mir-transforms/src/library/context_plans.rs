@@ -216,6 +216,7 @@ pub fn assemble_library_plans(
             }
             if let Some(binding) = plan.sites.get(site) {
                 call.scratch_offset = binding.offset;
+                call.scratch_stride = binding.stride;
                 call.scratch_bytes = binding.declared_bytes;
                 call.scratch_alignment = binding.alignment;
                 call.planned_root = Some(root.clone());
@@ -483,6 +484,7 @@ mod tests {
             call: site(caller, bb),
             role,
             marker: "native_marker".into(),
+            scope: super::super::storage::Domain::BLOCK,
             origin: None,
             policy: Policy::default(),
         };

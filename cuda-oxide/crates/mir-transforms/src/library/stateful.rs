@@ -992,6 +992,13 @@ impl Analyzer<'_> {
         let mut returned = Fact::Unset;
         let mut returned_pending = Pending::new();
         for block in live {
+            let term = graph.operations[block].last().unwrap().op;
+            let is_return = Operation::get_op::<MirReturnOp>(term, self.ctx).is_some();
+            // Non-return effects already flow through the settled incoming states.
+            // Revisit all blocks only when validating their source obligations.
+            if !validate && !is_return {
+                continue;
+            }
             let Some(mut state) = incoming[block].clone() else {
                 continue;
             };
@@ -1003,7 +1010,6 @@ impl Analyzer<'_> {
                 controls[block],
                 validate,
             )?;
-            let term = graph.operations[block].last().unwrap().op;
             if validate
                 && graph.cyclic_branches.contains(&block)
                 && !state
@@ -1017,7 +1023,7 @@ impl Analyzer<'_> {
                     "lane-varying cycle cannot prove collective participation",
                 ));
             }
-            if Operation::get_op::<MirReturnOp>(term, self.ctx).is_some() {
+            if is_return {
                 let value = if term.deref(self.ctx).get_num_operands() == 0 {
                     Fact::Fields(vec![])
                 } else {

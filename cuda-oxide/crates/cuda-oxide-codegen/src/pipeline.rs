@@ -1038,8 +1038,9 @@ fn select_pre_lowering_backend(
     // Only strict use participates in the emit-NVVM-IR decision; otherwise a
     // kernel using only rounding or sign ops would drag in the libNVVM
     // dependency it no longer needs.
-    let uses_strict_libdevice =
-        typed_mir_uses_libdevice(ctx, module) || module_uses_libdevice(ctx, module);
+    let uses_strict_libdevice = typed_mir_uses_libdevice(ctx, module)
+        || typed_mir_has_float_rem(ctx, module)
+        || module_uses_libdevice(ctx, module);
     let uses_backend_dependent_libdevice = typed_mir_calls_match(
         ctx,
         module,
@@ -1073,6 +1074,37 @@ fn typed_mir_uses_libdevice(ctx: &Context, module: Ptr<Operation>) -> bool {
         callee.starts_with("__nv_")
             || dialect_mir::rust_intrinsics::is_libdevice_backed_placeholder(callee)
     })
+}
+
+/// Whether `module` contains a float `mir.rem`.
+///
+/// Float remainder lowers to libdevice `__nv_fmod` / `__nv_fmodf` under
+/// every intrinsic backend (see `mir_lower::convert::ops::arithmetic`), so
+/// it is strict libdevice use that carries no `mir.call` to inspect.
+fn typed_mir_has_float_rem(ctx: &Context, op: Ptr<Operation>) -> bool {
+    use pliron::builtin::type_interfaces::FloatTypeInterface;
+    use pliron::r#type::{Typed, type_cast};
+
+    if Operation::get_op::<dialect_mir::ops::MirRemOp>(op, ctx).is_some() {
+        let lhs_ty = op.deref(ctx).get_operand(0).get_type(ctx);
+        if type_cast::<dyn FloatTypeInterface>(&*lhs_ty.deref(ctx)).is_some() {
+            return true;
+        }
+    }
+
+    let op_ref = op.deref(ctx);
+    for region in op_ref.regions() {
+        let region_ref = region.deref(ctx);
+        for block in region_ref.iter(ctx) {
+            let block_ref = block.deref(ctx);
+            for child_op in block_ref.iter(ctx) {
+                if typed_mir_has_float_rem(ctx, child_op) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Walk `op` and its regions and return whether any `mir.call` callee
@@ -1774,6 +1806,95 @@ mod tests {
                 mir_lower::IntrinsicBackend::LlvmNvptx
             );
         }
+    }
+
+    /// Build a typed MIR module whose kernel takes two `f32` arguments and
+    /// one `i32` argument and applies `mir.rem` to the pair `rem_float`
+    /// selects: the float pair or the integer argument with itself.
+    fn typed_mir_rem_module(ctx: &mut Context, rem_float: bool) -> Ptr<Operation> {
+        use pliron::basic_block::BasicBlock;
+        use pliron::builtin::attributes::TypeAttr;
+        use pliron::builtin::op_interfaces::SymbolOpInterface;
+        use pliron::builtin::types::{FP32Type, FunctionType, IntegerType, Signedness};
+        use pliron::op::Op;
+        use pliron::r#type::TypeHandle;
+
+        dialect_mir::register(ctx);
+        dialect_nvvm::register(ctx);
+        let module = pliron::builtin::ops::ModuleOp::new(ctx, "test".try_into().unwrap());
+        let module_op = module.get_operation();
+
+        let f32_ty: TypeHandle = FP32Type::get(ctx).into();
+        let i32_ty: TypeHandle = IntegerType::get(ctx, 32, Signedness::Signed).into();
+        let arg_tys = vec![f32_ty, f32_ty, i32_ty];
+        let function_type = FunctionType::get(ctx, arg_tys.clone(), vec![]);
+        let function_op = Operation::new(
+            ctx,
+            dialect_mir::ops::MirFuncOp::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            1,
+        );
+        let function =
+            dialect_mir::ops::MirFuncOp::new(ctx, function_op, TypeAttr::new(function_type.into()));
+        function.set_symbol_name(ctx, "kernel".try_into().unwrap());
+
+        let body = function_op.deref(ctx).get_region(0);
+        let block = BasicBlock::new(ctx, None, arg_tys);
+        block.insert_at_back(body, ctx);
+        let (lhs, rhs, result_ty) = if rem_float {
+            (
+                block.deref(ctx).get_argument(0),
+                block.deref(ctx).get_argument(1),
+                f32_ty,
+            )
+        } else {
+            (
+                block.deref(ctx).get_argument(2),
+                block.deref(ctx).get_argument(2),
+                i32_ty,
+            )
+        };
+        let rem = Operation::new(
+            ctx,
+            dialect_mir::ops::MirRemOp::get_concrete_op_info(),
+            vec![result_ty],
+            vec![lhs, rhs],
+            vec![],
+            0,
+        );
+        rem.insert_at_back(block, ctx);
+
+        let module_body = module_op.deref(ctx).get_region(0);
+        let module_block = module_body.deref(ctx).iter(ctx).next().unwrap();
+        function_op.insert_at_back(module_block, ctx);
+        module_op
+    }
+
+    /// Float `mir.rem` lowers to `__nv_fmodf` under every backend, so the
+    /// prediction must flag libdevice before lowering or the post-lowering
+    /// consistency check would abort the build. Integer `mir.rem` lowers to
+    /// `srem`/`urem` and contributes nothing.
+    #[test]
+    fn float_rem_module_is_predicted_as_strict_libdevice_use() {
+        let mut ctx = Context::new();
+        let automatic = OutputPolicy::ExternalLinkAllowed {
+            request_nvvm_ir: false,
+        };
+
+        let float_module = typed_mir_rem_module(&mut ctx, true);
+        let no_link = select_pre_lowering_backend(&ctx, float_module, automatic, false);
+        assert!(no_link.needs_libdevice);
+        assert!(no_link.emit_nvvm_ir);
+        let ir_link = select_pre_lowering_backend(&ctx, float_module, automatic, true);
+        assert!(ir_link.needs_libdevice);
+        assert!(!ir_link.emit_nvvm_ir);
+
+        let int_module = typed_mir_rem_module(&mut ctx, false);
+        let int = select_pre_lowering_backend(&ctx, int_module, automatic, false);
+        assert!(!int.needs_libdevice);
+        assert!(!int.emit_nvvm_ir);
     }
 
     /// Under an explicit NVVM IR request the sign placeholders fall back to

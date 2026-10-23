@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and release tags are namespaced `cutile-rs/vX.Y.Z`. Crate names and versions
   are unchanged.
 
+### Fixed
+
+- `StreamPoolRoundRobin::new` in cuda-async, both the host and `simt`
+  versions, returns `DeviceError::Scheduling` for a pool of zero streams
+  instead of panicking with a remainder by zero on the first scheduled
+  operation. The `simt` constructor now returns `Result`.
+
 ## [0.4.0] - 2026-09-25
 
 Debug builds support cuda-gdb and Nsight. DGX Spark is now supported.

@@ -9,14 +9,12 @@ name: naming-guard
 # here would rerun the same search; covering them means adding them to
 # SEARCH_ROOTS in the script first.
 on:
+  # Self-hosted runners reject pull_request. copy-pr-bot mirrors trusted PRs
+  # to pull-request/<n>, and this workflow triggers on that push.
   push:
-    branches: [main]
-    paths:
-      - 'cuda-oxide/crates/**'
-      - 'cuda-oxide/scripts/check-reserved-prefixes.sh'
-      - '.github/workflows/naming-guard.yml'
-  pull_request:
-    branches: [main]
+    branches:
+      - main
+      - "pull-request/[0-9]+"
     paths:
       - 'cuda-oxide/crates/**'
       - 'cuda-oxide/scripts/check-reserved-prefixes.sh'
@@ -34,7 +32,7 @@ permissions:
 jobs:
   reserved-symbols-guard:
     name: reserved-oxide-symbols literal guard
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository

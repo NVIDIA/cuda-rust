@@ -9,6 +9,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+cuda-device = { workspace = true }
 half = { workspace = true }
 # `host` is a cuda-macros default, but name it: cuda-host is precisely the
 # crate that needs the generated host surface, and it must keep it even if

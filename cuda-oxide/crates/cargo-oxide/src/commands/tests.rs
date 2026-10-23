@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::*;
+use crate::cutlass_toolchain;
 use std::ffi::OsStr;
 
 /// The concatenated sources of every module under `commands/`, standing in
@@ -67,6 +68,40 @@ fn is_sha256(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+#[test]
+fn managed_cutlass_compiler_sets_only_the_library_env() {
+    let resolved = cutlass_toolchain::ResolvedCutlass {
+        install_dir: PathBuf::from("/managed/cutlass"),
+        compiler_library: PathBuf::from("/managed/cutlass/lib/libCutlassCompiler.so"),
+        compiler_library_sha256: "fixture-digest".into(),
+    };
+    let mut cmd = Command::new("cargo");
+    apply_resolved_cutlass_compiler(&mut cmd, Some(&resolved), false);
+    assert_eq!(
+        command_env(&cmd, cutlass_toolchain::CUTLASS_COMPILER_ENV).as_deref(),
+        Some("/managed/cutlass/lib/libCutlassCompiler.so")
+    );
+}
+
+#[test]
+fn explicit_cutlass_compiler_outranks_managed_resolution() {
+    let resolved = cutlass_toolchain::ResolvedCutlass {
+        install_dir: PathBuf::from("/managed/cutlass"),
+        compiler_library: PathBuf::from("/managed/cutlass/lib/libCutlassCompiler.so"),
+        compiler_library_sha256: "fixture-digest".into(),
+    };
+    let mut cmd = Command::new("cargo");
+    cmd.env(
+        cutlass_toolchain::CUTLASS_COMPILER_ENV,
+        "/explicit/libCutlassCompiler.so",
+    );
+    apply_resolved_cutlass_compiler(&mut cmd, Some(&resolved), true);
+    assert_eq!(
+        command_env(&cmd, cutlass_toolchain::CUTLASS_COMPILER_ENV).as_deref(),
+        Some("/explicit/libCutlassCompiler.so")
+    );
 }
 
 fn strings(args: &[&str]) -> Vec<String> {
@@ -516,48 +551,69 @@ edition = "2024"
 }
 
 #[test]
-fn workspace_clean_removes_root_backend_and_example_targets() {
-    let root = unique_temp_dir("cargo_oxide_clean_workspace");
-    let codegen_crate = root.join("crates/rustc-codegen-cuda");
-    let examples_dir = codegen_crate.join("examples");
-    let example_dir = examples_dir.join("demo");
-
-    std::fs::create_dir_all(root.join("target/debug")).unwrap();
-    std::fs::create_dir_all(codegen_crate.join("target/debug")).unwrap();
-    std::fs::create_dir_all(example_dir.join("target/debug")).unwrap();
-
-    std::fs::write(
-        example_dir.join("Cargo.toml"),
-        r#"
-[package]
-name = "demo"
-version = "0.1.0"
-edition = "2024"
-"#,
-    )
-    .unwrap();
-
-    std::fs::write(example_dir.join("demo.ptx"), b"generated").unwrap();
-
-    let ctx = Context {
-        workspace_root: root.clone(),
-        codegen_crate: codegen_crate.clone(),
-        examples_dir,
-        backend_so: root.join("unused-backend.so"),
-        is_workspace: true,
-        config: OxideConfig::default(),
-    };
-
-    let summary = clean_context(&ctx).unwrap();
-
-    assert_eq!(summary.removed_directories, 3);
-    assert_eq!(summary.removed_files, 1);
-    assert!(!root.join("target").exists());
-    assert!(!codegen_crate.join("target").exists());
-    assert!(!example_dir.join("target").exists());
-    assert!(!example_dir.join("demo.ptx").exists());
-
-    std::fs::remove_dir_all(root).unwrap();
+fn workspace_clean_covers_example_and_model_roots_in_flat_and_nested_layouts() {
+    for nested in [false, true] {
+        let root = unique_temp_dir("cargo_oxide_clean_workspace");
+        let component = if nested {
+            root.join("cuda-oxide")
+        } else {
+            root.clone()
+        };
+        let codegen_crate = component.join("crates/rustc-codegen-cuda");
+        let examples_dir = codegen_crate.join("examples");
+        let example_dir = examples_dir.join("demo");
+        let cute_root = component.join("cute-rs-preview/examples");
+        let cute_dir = cute_root.join("tiled");
+        let models_root = component.join("cute-rs-preview/models");
+        let model_dir = models_root.join("decoder");
+        for dir in [
+            &root,
+            &component,
+            &codegen_crate,
+            &example_dir,
+            &cute_dir,
+            &model_dir,
+        ] {
+            std::fs::create_dir_all(dir.join("target/debug")).unwrap();
+        }
+        write_list_example(&examples_dir, "demo", None, None);
+        write_list_example(&cute_root, "tiled", None, None);
+        write_list_example(&models_root, "decoder", None, None);
+        std::fs::write(example_dir.join("demo.ptx"), b"generated").unwrap();
+        std::fs::write(cute_dir.join("tiled.cubin"), b"generated").unwrap();
+        std::fs::write(model_dir.join("decoder.cubin"), b"generated").unwrap();
+        std::fs::write(cute_dir.join("other.cubin"), b"preserve").unwrap();
+        let ctx = Context {
+            workspace_root: root.clone(),
+            codegen_crate: codegen_crate.clone(),
+            examples_dir,
+            backend_so: root.join("unused-backend.so"),
+            is_workspace: true,
+            config: OxideConfig::default(),
+        };
+        let summary = clean_context(&ctx).unwrap();
+        assert_eq!(summary.removed_directories, if nested { 6 } else { 5 });
+        assert_eq!(summary.removed_files, 3);
+        for dir in [
+            &root,
+            &component,
+            &codegen_crate,
+            &example_dir,
+            &cute_dir,
+            &model_dir,
+        ] {
+            assert!(!dir.join("target").exists());
+        }
+        assert!(!example_dir.join("demo.ptx").exists());
+        assert!(!cute_dir.join("tiled.cubin").exists());
+        assert!(!model_dir.join("decoder.cubin").exists());
+        assert_eq!(
+            std::fs::read(cute_dir.join("other.cubin")).unwrap(),
+            b"preserve"
+        );
+        assert_eq!(clean_context(&ctx).unwrap(), CleanSummary::default());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg(unix)]
@@ -3557,6 +3613,117 @@ fn passthrough_fingerprint_tracks_output_affecting_settings() {
 }
 
 #[test]
+fn passthrough_fingerprint_tracks_the_managed_cutlass_library_digest() {
+    let ctx = test_context(OxideConfig::default());
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: Some("sm_120a"),
+        features: None,
+        cargo_target_dir: None,
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+    let mut environment = BTreeMap::from([
+        (DEVICE_BACKEND_ENV.to_owned(), b"cutlass-mlir".to_vec()),
+        (
+            cutlass_toolchain::CUTLASS_COMPILER_ENV.to_owned(),
+            b"/managed/libCutlassCompiler.so".to_vec(),
+        ),
+        (
+            CUTLASS_DIGEST_FINGERPRINT_ENV.to_owned(),
+            b"digest-a".to_vec(),
+        ),
+    ]);
+    let fingerprint = |environment: &BTreeMap<String, Vec<u8>>| {
+        passthrough_codegen_fingerprint_with_env(
+            &ctx,
+            &opts,
+            None,
+            Some("sm_120a"),
+            &MaterializationMode::default(),
+            environment,
+        )
+    };
+    environment.insert(
+        "CUDA_OXIDE_MLIR_PROFILE".into(),
+        b"cutlass-full-cute-mlir22".to_vec(),
+    );
+    let full_profile = fingerprint(&environment);
+    environment.insert(
+        "CUDA_OXIDE_MLIR_PROFILE".into(),
+        b"cutlass-primitives-mlir22".to_vec(),
+    );
+    let primitives_profile = fingerprint(&environment);
+    assert_ne!(
+        full_profile, primitives_profile,
+        "changing only the profile must rebuild device code"
+    );
+    assert_eq!(primitives_profile, fingerprint(&environment));
+    let before = fingerprint(&environment);
+    environment.insert(
+        CUTLASS_DIGEST_FINGERPRINT_ENV.to_owned(),
+        b"digest-b".to_vec(),
+    );
+
+    assert_ne!(before, fingerprint(&environment));
+}
+
+#[test]
+fn passthrough_fingerprint_tracks_explicit_cutlass_library_content() {
+    let root = unique_temp_dir("cargo_oxide_explicit_cutlass_fingerprint");
+    fs::create_dir_all(&root).unwrap();
+    let compiler = root.join("libCutlassCompiler.so");
+    fs::write(&compiler, b"compiler-a").unwrap();
+
+    let ctx = test_context(OxideConfig::default());
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: Some("sm_120a"),
+        features: None,
+        cargo_target_dir: None,
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+    let base_environment = BTreeMap::from([
+        (DEVICE_BACKEND_ENV.to_owned(), b"cutlass-mlir".to_vec()),
+        (
+            cutlass_toolchain::CUTLASS_COMPILER_ENV.to_owned(),
+            compiler.as_os_str().as_encoded_bytes().to_vec(),
+        ),
+    ]);
+    let fingerprint = |environment: &mut BTreeMap<String, Vec<u8>>| {
+        augment_env_with_cutlass_compiler_identity(&ctx, environment, Some(compiler.as_path()));
+        passthrough_codegen_fingerprint_with_env(
+            &ctx,
+            &opts,
+            None,
+            Some("sm_120a"),
+            &MaterializationMode::default(),
+            environment,
+        )
+    };
+
+    let before = fingerprint(&mut base_environment.clone());
+    fs::write(&compiler, b"compiler-b").unwrap();
+    let after = fingerprint(&mut base_environment.clone());
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_ne!(before, after, "same-path compiler replacement must rebuild");
+}
+
+#[test]
 fn passthrough_fingerprint_tracks_non_unicode_presence_switch_bytes() {
     let ctx = test_context(OxideConfig::default());
     let opts = CargoPassthroughOptions {
@@ -4723,6 +4890,100 @@ fn example_discovery_is_sorted_and_uses_manifest_fallback() {
     assert_eq!(examples[0].description, "README description.");
     assert_eq!(examples[1].description, "Manifest fallback description");
 
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn example_discovery_combines_roots_and_rejects_duplicate_names() {
+    let root = unique_temp_dir("cargo_oxide_list_multi_root");
+    let standard = root.join("standard");
+    let cute = root.join("cute");
+    std::fs::create_dir_all(&standard).unwrap();
+    std::fs::create_dir_all(&cute).unwrap();
+
+    write_list_example(&standard, "zeta", None, None);
+    write_list_example(&cute, "alpha", None, None);
+    let examples = discover_examples_from_roots(&[standard.clone(), cute.clone()]).unwrap();
+    assert_eq!(
+        examples
+            .iter()
+            .map(|example| example.name.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "zeta"]
+    );
+
+    write_list_example(&cute, "zeta", None, None);
+    let error = discover_examples_from_roots(&[standard, cute]).unwrap_err();
+    assert!(error.contains("example name `zeta` exists in more than one example root"));
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn workspace_example_roots_follow_the_selected_backend_in_each_layout() {
+    for (nested, from_component) in [(false, false), (true, false), (true, true)] {
+        let root = unique_temp_dir("cargo_oxide_cute_example_root");
+        let component = if nested {
+            root.join("cuda-oxide")
+        } else {
+            root.clone()
+        };
+        let codegen = component.join("crates/rustc-codegen-cuda");
+        let standard = codegen.join("examples");
+        let cute = component.join("cute-rs-preview/examples");
+        let models = component.join("cute-rs-preview/models");
+        std::fs::create_dir_all(&standard).unwrap();
+        std::fs::create_dir_all(&cute).unwrap();
+        write_list_example(&standard, "native", None, None);
+        write_list_example(&cute, "tiled", None, None);
+        write_list_example(&models, "qwen_decoder_cute", None, None);
+        if nested {
+            // A leftover root tree must never shadow the selected component.
+            for path in ["cute-rs-preview/examples", "cute-rs-preview/models"] {
+                write_list_example(&root.join(path), "stale", None, None);
+            }
+        }
+        let mut ctx = test_context(OxideConfig::default());
+        ctx.workspace_root = if from_component {
+            component
+        } else {
+            root.clone()
+        };
+        ctx.codegen_crate = codegen;
+        ctx.examples_dir = standard.clone();
+        ctx.is_workspace = true;
+        let examples = discover_examples_from_roots(&example_roots(&ctx)).unwrap();
+        assert_eq!(
+            examples.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+            ["native", "qwen_decoder_cute", "tiled"]
+        );
+        assert_eq!(resolve_example_dir(&ctx, "tiled"), cute.join("tiled"));
+        assert_eq!(
+            resolve_example_dir(&ctx, "qwen_decoder_cute"),
+            models.join("qwen_decoder_cute")
+        );
+        // Duplicate names still fail instead of choosing one source tree.
+        write_list_example(&models, "native", None, None);
+        assert!(
+            discover_examples_from_roots(&example_roots(&ctx))
+                .unwrap_err()
+                .contains("more than one example root")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn standalone_example_roots_do_not_discover_neighboring_cute_trees() {
+    let root = unique_temp_dir("cargo_oxide_standalone_cute_root");
+    for path in ["cute-rs-preview/examples", "cute-rs-preview/models"] {
+        std::fs::create_dir_all(root.join(path)).unwrap();
+    }
+    let mut ctx = test_context(OxideConfig::default());
+    ctx.workspace_root = root.clone();
+    ctx.codegen_crate = root.clone();
+    ctx.examples_dir = root.clone();
+    assert_eq!(example_roots(&ctx).as_slice(), std::slice::from_ref(&root));
     std::fs::remove_dir_all(root).unwrap();
 }
 

@@ -41,6 +41,20 @@ pub struct Context {
     pub config: OxideConfig,
 }
 
+impl Context {
+    /// The cuda-oxide component containing the selected backend. The checkout
+    /// root may instead be the parent stable workspace in the monorepo.
+    pub(super) fn oxide_workspace_root(&self) -> &Path {
+        if !self.is_workspace {
+            return &self.workspace_root;
+        }
+        self.codegen_crate
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace backend must live under crates/rustc-codegen-cuda")
+    }
+}
+
 /// Resolve the workspace root and backend, or exit with a helpful error.
 ///
 /// Supports two modes:
@@ -489,26 +503,56 @@ fn parse_config_env(
     Ok(env)
 }
 
-/// Resolve an example name to its directory path, or exit with a list of
-/// available examples if not found.
-pub(super) fn resolve_example_dir(ctx: &Context, example: &str) -> PathBuf {
-    let example_dir = ctx.examples_dir.join(example);
-    if !example_dir.exists() {
-        eprintln!("Error: Example not found: {}", example_dir.display());
-        eprintln!();
-        eprintln!("Available examples:");
-        if let Ok(entries) = std::fs::read_dir(&ctx.examples_dir) {
-            let mut names: Vec<_> = entries
-                .flatten()
-                .filter(|e| e.path().is_dir())
-                .map(|e| e.file_name().to_string_lossy().to_string())
-                .collect();
-            names.sort();
-            for name in names {
-                eprintln!("  - {}", name);
+/// Example and model roots belonging to the selected cuda-oxide component.
+pub(super) fn example_roots(ctx: &Context) -> Vec<PathBuf> {
+    let mut roots = vec![ctx.examples_dir.clone()];
+    if ctx.is_workspace {
+        for relative in ["cute-rs-preview/examples", "cute-rs-preview/models"] {
+            let root = ctx.oxide_workspace_root().join(relative);
+            if root.is_dir() {
+                roots.push(root);
             }
         }
+    }
+    roots
+}
+
+pub(super) fn resolve_example_dir(ctx: &Context, example: &str) -> PathBuf {
+    let roots = example_roots(ctx);
+    let matches: Vec<_> = roots
+        .iter()
+        .map(|root| root.join(example))
+        .filter(|path| path.is_dir())
+        .collect();
+    if let [example_dir] = matches.as_slice() {
+        return example_dir.clone();
+    }
+    if matches.len() > 1 {
+        eprintln!("Error: Example name is ambiguous: {example}");
+        for path in matches {
+            eprintln!("  - {}", path.display());
+        }
+        eprintln!("Example names must be unique across all configured roots.");
         std::process::exit(1);
     }
-    example_dir
+
+    eprintln!("Error: Example not found: {example}");
+    eprintln!();
+    eprintln!("Available examples:");
+    let mut names: Vec<_> = roots
+        .iter()
+        .filter_map(|root| std::fs::read_dir(root).ok())
+        .flat_map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| entry.path().is_dir())
+                .map(|entry| entry.file_name().to_string_lossy().to_string())
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    for name in names {
+        eprintln!("  - {name}");
+    }
+    std::process::exit(1);
 }

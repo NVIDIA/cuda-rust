@@ -1,0 +1,17 @@
+[package]
+name = "blockscale_gemm_cute"
+version = "0.1.0"
+edition = "2024"
+authors = ["Nihal Pasham <nihalp@nvidia.com>"]
+license = "Apache-2.0"
+description = "Block-scaled MXFP4 GEMM composing typed TMA pipelines, shared-memory tiled MMA, and TMA epilogues"
+
+# Standalone example, matching the other cuda-oxide example crates.
+[workspace]
+
+[dependencies]
+ctm-rs = { path = "../../ctm-rs" }
+cute-rs = { path = "../../cute-rs", features = ["host"] }
+cuda-device = { path = "../../../crates/cuda-device" }
+cuda-host = { path = "../../../crates/cuda-host" }
+cuda-core = { path = "../../../../cuda-core", features = ["f16"] }

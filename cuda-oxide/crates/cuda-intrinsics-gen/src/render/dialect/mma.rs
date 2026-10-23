@@ -515,7 +515,7 @@ pub enum RegisterMmaOperationAttr { Multiply, AndPopc, XorPopc }
 
 #[pliron_attr(name = "nvvm.register_mma_kind", format, verifier = "succ")]
 #[derive(PartialEq, Eq, Clone, Debug, Hash)]
-pub enum RegisterMmaKindAttr { Standard, F8f6f4, Mxf8f6f4 }
+pub enum RegisterMmaKindAttr { Standard, F8f6f4, Mxf8f6f4, Mxf4 }
 
 #[pliron_attr(name = "nvvm.register_mma_accumulator", format, verifier = "succ")]
 #[derive(PartialEq, Eq, Clone, Debug, Hash)]

@@ -1,0 +1,19 @@
+[package]
+name = "qwen_decoder_cute"
+version = "0.1.0"
+edition = "2024"
+authors = ["Nihal Pasham <nihalp@nvidia.com>"]
+license = "Apache-2.0"
+description = "Typed BF16 Qwen CustomVoice inference and reference validation on SM120"
+
+[workspace]
+
+[dependencies]
+cute-rs = { path = "../../cute-rs", features = ["host"] }
+ctm-rs = { path = "../../ctm-rs" }
+cuda-device = { path = "../../../crates/cuda-device" }
+cuda-host = { path = "../../../crates/cuda-host" }
+cuda-core = { path = "../../../../cuda-core" }
+safetensors = "=0.7.0"
+serde_json = "=1.0.154"
+sha2 = "=0.10.9"

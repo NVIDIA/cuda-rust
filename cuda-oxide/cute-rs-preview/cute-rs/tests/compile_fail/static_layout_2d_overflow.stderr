@@ -1,0 +1,21 @@
+error[E0080]: evaluation panicked: static layout physical offset overflow
+  --> tests/compile_fail/static_layout_2d_overflow.rs:10:18
+   |
+10 | const _: usize = max_offset_2d::<Invalid>();
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `_` failed inside this call
+   |
+note: inside `max_offset_2d::<cute_rs::Layout<(C<4>, C<1>), (C<i64::MAX>, C<1>)>>`
+  --> src/static_layout.rs
+   |
+   |     let row_max = checked_offset_mul(parameter(L::SHAPE.0 - 1), parameter(L::STRIDE.0));
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: inside `static_layout::checked_offset_mul`
+  --> $RUST/core/src/panic.rs
+   |
+   |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
+   |
+  ::: src/static_layout.rs
+   |
+   |         None => panic!("static layout physical offset overflow"),
+   |                 ------------------------------------------------ in this macro invocation

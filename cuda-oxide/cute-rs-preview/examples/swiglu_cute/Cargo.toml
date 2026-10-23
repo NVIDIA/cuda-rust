@@ -1,0 +1,17 @@
+[package]
+name = "swiglu_cute"
+version = "0.1.0"
+edition = "2024"
+authors = ["Nihal Pasham <nihalp@nvidia.com>"]
+license = "Apache-2.0"
+description = "Fused FP32 and FP16 SwiGLU through typed CuTe register tiles"
+
+# Standalone GPU example, matching the other CuTe examples.
+[workspace]
+
+[dependencies]
+ctm-rs = { path = "../../ctm-rs" }
+cute-rs = { path = "../../cute-rs" }
+cuda-device = { path = "../../../crates/cuda-device" }
+cuda-host = { path = "../../../crates/cuda-host" }
+cuda-core = { path = "../../../../cuda-core", features = ["f16"] }

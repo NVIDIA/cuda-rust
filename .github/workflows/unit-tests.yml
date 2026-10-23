@@ -55,6 +55,18 @@ jobs:
           - package: dialect-mir
           - package: dialect-nvvm
           - package: mir-importer
+          # CuTe types, semantic IR, and MLIR export need no CUDA toolkit.
+          # Facade macro tests also compile host metadata via cuda-host.
+          - package: cute-layout
+          - package: cute-rs
+            needs_cuda: true
+          - package: ctm-rs
+            needs_cuda: true
+          - package: ctm-rs
+            test_args: --all-targets --features host
+            needs_cuda: true
+          - package: dialect-cute
+          - package: cuda-oxide-mlir-export
           # Includes a real llc -> ptxas spine-kernel validation.
           - package: cuda-oxide-codegen
             needs_cuda: true

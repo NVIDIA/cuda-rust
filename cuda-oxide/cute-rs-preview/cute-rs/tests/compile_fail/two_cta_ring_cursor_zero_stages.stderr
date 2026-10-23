@@ -1,0 +1,11 @@
+error[E0080]: evaluation panicked: assertion failed: STAGES > 0
+ --> src/attention/sm100/pipeline.rs
+  |
+  |     const VALID: () = assert!(STAGES > 0);
+  |                       ^^^^^^^^^^^^^^^^^^^ evaluation of `cute_rs::attention::sm100::pipeline::RingCursor::<0, cute_rs::Producer>::VALID` failed here
+
+note: erroneous constant encountered
+ --> src/attention/sm100/pipeline.rs
+  |
+  |         let () = Self::VALID;
+  |                  ^^^^^^^^^^^

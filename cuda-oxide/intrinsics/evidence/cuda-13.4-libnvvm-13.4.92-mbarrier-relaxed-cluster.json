@@ -1,0 +1,190 @@
+{
+  "schema": 6,
+  "backend_profile": "cuda-13.4-libnvvm-13.4.92-mbarrier-relaxed-cluster",
+  "backend_kind": "lib_nvvm",
+  "llvm_revision": "cuda-13.4-libnvvm",
+  "backend_version": "CUDA toolkit 13.4; nvcc/libNVVM release V13.4.92",
+  "backend_sha256": "eeef1ca79dc4ded9cc4ceb69a12f6d7148b5ccb5fc9f997a8ef40ff050be7092",
+  "artifact_path": "/usr/local/cuda/nvvm/lib64/libnvvm.so.4.0.0",
+  "build_id_prefix": "38855100",
+  "nvvm_ir_version": "2.0",
+  "debug_ir_version": "3.2",
+  "records": [
+    {
+      "id": "mbarrier_arrive_cluster_relaxed",
+      "llvm_symbol": null,
+      "expected_ptx": {
+        "mnemonic": "mbarrier",
+        "modifiers": [
+          "arrive",
+          "relaxed",
+          "cluster",
+          "shared::cluster",
+          "b64"
+        ],
+        "operands": [
+          {
+            "kind": "exact",
+            "value": "_"
+          },
+          {
+            "kind": "address"
+          }
+        ]
+      },
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "compute_90",
+      "ptx_feature": "PTX ISA 9.4",
+      "status": "validated",
+      "runtime_validation": "unexecuted",
+      "source": {
+        "kind": "ptx_native",
+        "instruction": "mbarrier.arrive.relaxed.cluster.shared::cluster.b64"
+      },
+      "stages": [
+        {
+          "targets": [
+            "sm_90",
+            "ptx94"
+          ],
+          "representation": "convergent exact inline-PTX probe",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "NVVM verified and compiled an annotated kernel retaining the exact instruction on 2026-10-12. PTX SHA-256 967320791ceec33c1182d5db28170645c6977475e98c6198e8ff2ae9434f5fb6."
+        },
+        {
+          "targets": [
+            "sm_90",
+            "ptx94"
+          ],
+          "representation": "nvJitLink cubin retaining the annotated probe kernel",
+          "stage": "device_link",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "nvJitLink13.4 linked libNVVM-produced PTX on2026-10-12. Cubin SHA-256 43d34256a5eb2a13965870356cdf8739e5d16a1036ee654f9ce51494728e089d.",
+          "tool_path": "/usr/local/cuda/lib64/libnvJitLink.so.13.4.92",
+          "tool_version": "V13.4.92",
+          "tool_sha256": "3afdb9677477dd584d3712a9bf2978d085729f0ed6e6432027e925d1e312e3c9"
+        }
+      ]
+    },
+    {
+      "id": "mbarrier_try_wait_parity_cluster_relaxed",
+      "llvm_symbol": "llvm.nvvm.mbarrier.try.wait.parity.relaxed.scope.cluster.space.cta",
+      "expected_ptx": {
+        "mnemonic": "mbarrier",
+        "modifiers": [
+          "try_wait",
+          "parity",
+          "relaxed",
+          "cluster",
+          "shared::cta",
+          "b64"
+        ],
+        "operands": [
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "address"
+          },
+          {
+            "kind": "register"
+          }
+        ]
+      },
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "compute_90",
+      "ptx_feature": "PTX ISA 9.4",
+      "status": "validated",
+      "runtime_validation": "unexecuted",
+      "source_record": "int_nvvm_mbarrier_try_wait_parity_relaxed_scope_cluster_space_cta",
+      "llvm_arguments": [
+        "shared_ptr",
+        "i32"
+      ],
+      "llvm_results": [
+        "i1"
+      ],
+      "stages": [
+        {
+          "targets": [
+            "sm_90",
+            "ptx94"
+          ],
+          "representation": "convergent exact inline-PTX probe",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "NVVM verified and compiled an annotated kernel retaining the exact instruction on 2026-10-12. PTX SHA-256 455a80dd009512b448d952113f7fe899b5921f3aab1dafc256e7adc0d61098b1."
+        },
+        {
+          "targets": [
+            "sm_90",
+            "ptx94"
+          ],
+          "representation": "nvJitLink cubin retaining the annotated probe kernel",
+          "stage": "device_link",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "nvJitLink13.4 linked libNVVM-produced PTX on2026-10-12. Cubin SHA-256 0776be219a56271a716559b413dcf4ca826e561812e72d9b98c3d0f1e4c1153c.",
+          "tool_path": "/usr/local/cuda/lib64/libnvJitLink.so.13.4.92",
+          "tool_version": "V13.4.92",
+          "tool_sha256": "3afdb9677477dd584d3712a9bf2978d085729f0ed6e6432027e925d1e312e3c9"
+        }
+      ]
+    },
+    {
+      "id": "fence_acquire_shared_cluster_cluster",
+      "llvm_symbol": "llvm.nvvm.fence.acquire.sync_restrict.space.cluster.scope.cluster",
+      "expected_ptx": {
+        "mnemonic": "fence",
+        "modifiers": [
+          "acquire",
+          "sync_restrict::shared::cluster",
+          "cluster"
+        ],
+        "operands": []
+      },
+      "target_triple": "nvptx64-nvidia-cuda",
+      "status": "validated",
+      "runtime_validation": "unexecuted",
+      "source_record": "int_nvvm_fence_acquire_sync_restrict_space_cluster_scope_cluster",
+      "llvm_arguments": [],
+      "llvm_results": [],
+      "gpu_target": "compute_90",
+      "ptx_feature": "PTX ISA 9.4",
+      "stages": [
+        {
+          "targets": [
+            "sm_90",
+            "ptx94"
+          ],
+          "representation": "convergent exact inline-PTX probe",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Compiled and checked the retained exact instruction on 2026-10-12. PTX SHA-256 e6cee64c4899ecdfb58ea4e3a87f6e6c917dba0b489fd7d48a1897fd54ba3b31."
+        },
+        {
+          "targets": [
+            "sm_90",
+            "ptx94"
+          ],
+          "representation": "nvJitLink cubin retaining the annotated probe kernel",
+          "stage": "device_link",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "CPU terminal validation retained the probe on 2026-10-12. Cubin SHA-256 3d6f528ee6d25eb65d606570926cf4d6eb0f595427a1423b08877d8e7113cde7.",
+          "tool_path": "/usr/local/cuda/lib64/libnvJitLink.so.13.4.92",
+          "tool_version": "V13.4.92",
+          "tool_sha256": "3afdb9677477dd584d3712a9bf2978d085729f0ed6e6432027e925d1e312e3c9"
+        }
+      ]
+    }
+  ]
+}

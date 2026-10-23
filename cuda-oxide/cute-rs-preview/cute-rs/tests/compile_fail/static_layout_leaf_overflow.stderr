@@ -1,10 +1,6 @@
 error[E0080]: evaluation panicked: static layout physical offset overflow
  --> src/static_layout.rs
   |
-  | impl<const N: i64, const S: i64> StaticLayout for Layout<C<N>, C<S>> {
-...
-  |     const MAX_OFFSET: usize = {
-  |         assert!(N > 0 && S >= 0);
   |         checked_offset_mul(parameter(N - 1), parameter(S))
   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `<cute_rs::Layout<cute_rs::C<4>, cute_rs::C<i64::MAX>> as cute_rs::static_layout::StaticLayout>::MAX_OFFSET` failed inside this call
   |

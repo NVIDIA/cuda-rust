@@ -144,6 +144,7 @@ fn run_cargo_fmt_manifest(manifest: &Path, check: bool) -> bool {
 }
 
 fn run_fmt_command(mut cmd: Command) -> bool {
+    cmd.env("RUSTC_BOOTSTRAP", "1");
     match cmd.status() {
         Ok(status) => status.success(),
         Err(e) => {

@@ -31,8 +31,9 @@ contribution guide. There is no root `Justfile`. The SIMT recipes live in
 - `cuda-bindings/`, `cuda-core/`, `cuda-core-derive/`, and `cuda-async/` — shared
   host crates in the root workspace. Both kernel stacks depend on these by path.
 - `cuda-oxide/` — the SIMT model. Its `Cargo.toml` explicitly lists workspace
-  members under `crates/`; its `rust-toolchain.toml` pins the nightly needed for
-  `rustc_private`. The book is `cuda-oxide/cuda-oxide-book/`, and
+  members under `crates/`; its `rust-toolchain.toml` pins the stable release
+  (`1.99.1`) and `rustc-dev` / `llvm-tools` components needed for `rustc_private`
+  (unlocked via `RUSTC_BOOTSTRAP=1`). The book is `cuda-oxide/cuda-oxide-book/`, and
   `cuda-oxide/intrinsics/` holds the intrinsic catalog and ABI ledger.
   `cuda-oxide/crates/rustc-codegen-cuda/` declares its own workspace and inherits
   the SIMT toolchain pin. Examples and test fixtures can also declare separate
@@ -84,15 +85,16 @@ nested workspaces.
 ## Toolchains
 
 The root `rust-toolchain.toml` and `cutile-rs/rust-toolchain.toml` carry matching
-stable pins. `cuda-oxide/rust-toolchain.toml` supplies the SIMT nightly, including
-for its nested backend workspace. Do not float a pin to work around a failure.
+stable pins. `cuda-oxide/rust-toolchain.toml` supplies the SIMT stable pin and
+compiler components (`rustc-dev`, `llvm-tools`), including for its nested backend
+workspace. Do not float a pin to work around a failure.
 `cuda-oxide/scripts/check-toolchain-parity.sh` checks the SIMT pin against its
 scaffold, development container, and documentation.
 
 rustup normally resolves the toolchain from the working directory; an explicit
 override can change that. `--manifest-path` does not change the working directory,
 so pointing a root Cargo command at the SIMT manifest does not select the SIMT
-nightly. Change directory first or select the required toolchain explicitly.
+toolchain pin. Change directory first or select the required toolchain explicitly.
 
 Nix environments live in `cuda-oxide/flake.nix` and `cutile-rs/flake.nix`.
 Run `nix develop` from the relevant component.

@@ -5741,6 +5741,8 @@ fn scaffold_names_the_canonical_repository() {
                 .contains("git = \"https://github.com/NVIDIA/cuda-rust.git\"")
         );
         assert!(!files.cargo_toml.contains("NVlabs"));
+        assert!(files.cargo_config_toml.contains("[env]"));
+        assert!(files.cargo_config_toml.contains("RUSTC_BOOTSTRAP = \"1\""));
     }
 }
 

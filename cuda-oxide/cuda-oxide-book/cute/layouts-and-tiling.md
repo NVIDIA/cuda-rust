@@ -1,12 +1,12 @@
 # Layouts, Tiling, and Partitions by Example
 
-`cute-layout` and `cute-rs` let you describe how logical coordinates map to physical memory—whether that is a 1D vector split across threads, a row-wise reduction across warps, or a 2D swizzled shared-memory tile shared by host TMA encoding and device MMA.
+cute-layout and cute-rs let you describe how logical coordinates map to physical memory: whether that is a 1D vector split across threads, a row-wise reduction across warps, or a 2D swizzled shared-memory tile shared by host TMA encoding and device MMA.
 
 ---
 
-## 1. Evaluating Layouts with `cute-layout`
+## 1. Evaluating Layouts with cute-layout
 
-`cute-layout` is a `no_std` crate shared by both `cute-rs` and the compiler. A `Layout` pairs a shape `IntTuple` with a stride `IntTuple` and maps logical coordinates to linear offsets:
+cute-layout is a `no_std` crate shared by both cute-rs and the compiler. A `Layout` pairs a shape `IntTuple` with a stride `IntTuple` and maps logical coordinates to linear offsets:
 
 ```rust
 use cute_layout::{IntTuple, Layout};
@@ -20,7 +20,7 @@ In kernel signatures, you write static layouts as Rust type markers (`C<N>`, Rus
 
 ---
 
-## 2. 1D Tiling and Ragged Tails (`zipped_divide` + `slice`)
+## 2. 1D Tiling and Ragged Tails (zipped_divide and slice)
 
 `zipped_divide::<TILE>()` restructures a flat 1D tensor into a 2D view indexed by `(offset_inside_tile, tile_number)`. Calling `.slice(tid)` selects the tile owned by thread `tid`. `local_tile::<TILE>(tile)` is the one-call form, equal to `zipped_divide::<TILE>().slice(tile)`: CuTe's `local_tile` for a one-dimensional tiler.
 
@@ -89,4 +89,4 @@ pub fn gemm_kernel(#[grid_constant] a: &TensorMap<f16, ASmem>) {
 }
 ```
 
-If a kernel attempts to pass `&TensorMap<f16, ASmem>` into a copy or MMA expecting a different layout or element type, `rustc` rejects the program at compile time before device codegen even runs.
+If a kernel attempts to pass `&TensorMap<f16, ASmem>` into a copy or MMA expecting a different layout or element type, rustc rejects the program at compile time before device codegen even runs.

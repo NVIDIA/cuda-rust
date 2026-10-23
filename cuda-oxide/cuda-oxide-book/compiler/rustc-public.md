@@ -282,7 +282,7 @@ already explicit. The `mir-importer` crate translates this into Pliron IR
 Even with `rustc_public` providing a stable API, the bridge layer
 (`rustc_public_bridge`) is compiled against `librustc_driver.so` and is tied to
 an exact compiler build. Instead of chasing daily `nightly` snapshots,
-`cuda-oxide` pins an official **stable** Rust release via
+cuda-oxide pins an official **stable** Rust release via
 `rust-toolchain.toml`:
 
 ```toml
@@ -291,22 +291,27 @@ channel = "1.99.1"
 components = ["rust-src", "rustc-dev", "rust-analyzer", "clippy", "rustfmt", "llvm-tools"]
 ```
 
+When bumping this pin, run `cuda-oxide/scripts/check-toolchain-parity.sh` to
+verify that `scaffold.rs`, `.devcontainer/devcontainer.json`, the book, and the
+READMEs agree, and run `nix flake update rust-overlay` in `cuda-oxide/` so
+`cuda-oxide/flake.lock` carries the new release manifest.
+
 ```{figure} images/ecosystem-and-bootstrap.svg
 :align: center
 :width: 100%
 
-How custom Rust compiler backends ship in production, and what lives inside an official stable `rustup` release.
+How custom Rust compiler backends ship in production, and what lives inside an official stable rustup release.
 ```
 
-### Why stable `rustc` already has `rustc_private` and `rustc_public`
+### Why stable rustc already has rustc_private and rustc_public
 
-Official stable `rustc` binaries are compiled from the same source tree as
-nightly; nothing is stripped out of the binary. In addition, `rustup` publishes
+Official stable rustc binaries are compiled from the same source tree as
+nightly; nothing is stripped out of the binary. In addition, rustup publishes
 the `rustc-dev` component (`librustc_driver.so`, `librustc_public.rlib`,
 `librustc_public_bridge.rlib`, and `librustc_middle.rlib`) for every stable
 release.
 
-When `cargo-oxide` invokes `cargo` (and inside the workspace via
+When cargo-oxide invokes Cargo (and inside the workspace via
 `cuda-oxide/.cargo/config.toml`), it sets `RUSTC_BOOTSTRAP=1` in the process
 environment. That unlocks `#![feature(rustc_private)]` and `-Z` flags
 (`-Z codegen-backend=...`, `-Z mir-enable-passes=-JumpThreading`,
@@ -318,10 +323,10 @@ stabilization cycle.
 :align: center
 :width: 100%
 
-Pinning an official stable release (`1.99.1`) in `cuda-oxide/rust-toolchain.toml` with `RUSTC_BOOTSTRAP=1` managed by `cargo-oxide`.
+Pinning an official stable release (`1.99.1`) in `cuda-oxide/rust-toolchain.toml` with `RUSTC_BOOTSTRAP=1` managed by cargo-oxide.
 ```
 
-### Upstreaming to `rustc_public` without emergency toolchain bumps
+### Upstreaming to rustc_public without emergency toolchain bumps
 
 When a feature requires a new `rustc_public` query that we upstream to
 `rust-lang/rust` (such as `ArgAttributes` getters in

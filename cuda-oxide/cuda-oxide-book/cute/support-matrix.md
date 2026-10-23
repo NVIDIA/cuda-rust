@@ -1,6 +1,6 @@
 # Support Matrix (preview)
 
-`cute-rs` is a **preview**. It compiles Rust CuTe kernels ahead of time through the pinned CUTLASS 4.7 compiler for two targets, `sm_100a` and `sm_120a`, and covers a validated subset of what CuTeDSL 4.7 offers on them. This page lists what the subset holds, what it does not, and what `cute-rs` adds. Status at commit `5eaa6cbda`, 2026-10-22.
+cute-rs is a **preview**. It compiles Rust CuTe kernels ahead of time through the pinned CUTLASS 4.7 compiler for two targets, `sm_100a` and `sm_120a`, and covers a validated subset of what CuTeDSL 4.7 offers on them. This page lists what the subset holds, what it does not, and what cute-rs adds. Status at commit `5eaa6cbda`, 2026-10-22.
 
 ```{figure} images/support-matrix.svg
 :align: center

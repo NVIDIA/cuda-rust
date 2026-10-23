@@ -150,7 +150,7 @@ cargo oxide update
 ### Requirements
 
 - **cargo-oxide** — cargo subcommand that drives the build pipeline (`cargo oxide run`, `build`, `sanitize`, `debug`, etc.)
-- **Rust nightly** with `rust-src` and `rustc-dev` and `llvm-tools` components (pinned in `rust-toolchain.toml`)
+- **Rust 1.99.1 (stable)** with `rust-src`, `rustc-dev`, and `llvm-tools` components (pinned in `rust-toolchain.toml`)
 - **CUDA Toolkit** (13.0+, including the cuRAND headers; `libcurand-dev` on Ubuntu). The shared `cuda-bindings` crate loads `libcuda` at run time and needs a CUDA 13.x driver (R580+)
 - **Clang + libclang dev headers** (`clang-21` / `libclang-common-21-dev`) — needed by `bindgen` when building the host `cuda-bindings` crate
 - **Linux** (tested on Ubuntu 24.04)

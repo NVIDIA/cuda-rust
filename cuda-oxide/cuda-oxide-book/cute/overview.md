@@ -1,43 +1,43 @@
-# Overview: `cute-rs` and `ctm-rs` (preview)
+# Overview: cute-rs and ctm-rs (preview)
 
 :::{admonition} Preview
 :class: warning
-`cute-rs` compiles for two targets, `sm_100a` and `sm_120a`, through the pinned CUTLASS 4.7 compiler, and covers a validated subset of CuTeDSL 4.7 on them. The [support matrix](support-matrix.md) lists what is supported, what is partial and what is missing. Expect API changes between releases.
+cute-rs compiles for two targets, `sm_100a` and `sm_120a`, through the pinned CUTLASS 4.7 compiler, and covers a validated subset of CuTeDSL 4.7 on them. The [support matrix](support-matrix.md) lists what is supported, what is partial and what is missing. Expect API changes between releases.
 :::
 
-**`cute-rs`** brings CUTLASS CuTe's layout algebra, partitions, TMA transfers, pipelines, and tensor-core MMA operations into Rust's type system for two Blackwell targets, without a Python interpreter or runtime JIT tracer.
+**cute-rs** brings CUTLASS CuTe's layout algebra, partitions, TMA transfers, pipelines, and tensor-core MMA operations into Rust's type system for two Blackwell targets, without a Python interpreter or runtime JIT tracer.
 
 ```{figure} images/cute-rs-preview-stack-and-flow.svg
 :align: center
 :width: 100%
 
-The `cute-rs-preview` stack: kernels author tensor computation in `cute-rs` over `ctm-rs` instruction primitives, import into one Pliron module (`dialect-cute` + `dialect-mir` + `dialect-nvvm`), pass whole-module verification, and compile through CUTLASS 4.7 MLIR into an embedded cubin.
+The cute-rs-preview stack: kernels author tensor computation in cute-rs over ctm-rs instruction primitives, import into one Pliron module (dialect-cute, dialect-mir, and dialect-nvvm), pass whole-module verification, and compile through CUTLASS 4.7 MLIR into an embedded cubin.
 ```
 
 ---
 
 ## The Two-Layer Kernel Stack
 
-Every CuTe kernel in `cuda-oxide` is built on two complementary device crates plus a shared layout algebra crate:
+Every CuTe kernel in cuda-oxide is built on two complementary device crates plus a shared layout algebra crate:
 
 | Crate | Layer | What it owns |
 | :---- | :---- | :----------- |
-| **`cute-rs`** | Semantic CuTe layer | `Tensor` / `TensorMut`, `zipped_divide`, `slice`, `local_tile`, cooperative/tiled/TMA copies, producer/consumer pipelines, reductions, and tiled MMA (`mma::bf16`, `mma::block_scaled`, `sm100`, `attention::sm100`). |
-| **`ctm-rs`** | Instruction & ABI layer | `#[cuda_module]`, `#[kernel]`, launch contracts, thread/warp/cluster coordinates, `mbarrier` state machines, `tcgen05::tmem::TmemGuard`, and packed register math over `cuda-device`. |
-| **`cute-layout`** | Shared layout algebra | `IntTuple`, `Layout`, `ComposedLayout`, `Swizzle`, and static compile-time proofs for cooperative copies, `ldmatrix`, and TMA swizzle phase alignment. |
+| **cute-rs** | Semantic CuTe layer | `Tensor` / `TensorMut`, `zipped_divide`, `slice`, `local_tile`, cooperative/tiled/TMA copies, producer/consumer pipelines, reductions, and tiled MMA (`mma::bf16`, `mma::block_scaled`, `sm100`, `attention::sm100`). |
+| **ctm-rs** | Instruction & ABI layer | `#[cuda_module]`, `#[kernel]`, launch contracts, thread/warp/cluster coordinates, `mbarrier` state machines, `tcgen05::tmem::TmemGuard`, and packed register math over cuda-device. |
+| **cute-layout** | Shared layout algebra | `IntTuple`, `Layout`, `ComposedLayout`, `Swizzle`, and static compile-time proofs for cooperative copies, `ldmatrix`, and TMA swizzle phase alignment. |
 
 ```{figure} images/three-tiers-comparison.svg
 :align: center
 :width: 100%
 
-When to use `cute-rs`, `ctm-rs`, and `cuda-device`.
+When to use cute-rs, ctm-rs, and cuda-device.
 ```
 
 ---
 
-## Your First `cute-rs` Kernel
+## Your First cute-rs Kernel
 
-In `cute-rs`, a `Tensor` pairs storage with a logical coordinate layout. Splitting a vector into 4-element (16-byte) tiles and slicing the tile owned by `tid` takes three lines:
+In cute-rs, a `Tensor` pairs storage with a logical coordinate layout. Splitting a vector into 4-element (16-byte) tiles and slicing the tile owned by `tid` takes three lines:
 
 ```rust
 use ctm_rs::memory::DisjointSlice;
@@ -90,5 +90,5 @@ CUDA_OXIDE_MLIR_OUTPUT="$PWD/module.mlir" \
 ```
 
 :::{note}
-`dialect-cute`, `dialect-mir`, and `dialect-nvvm` coexist inside a **single Pliron module** rather than acting as separate sequential passes. Before exporting MLIR, `dialect-cute`'s whole-module verifier checks tensor origins, pipeline state transitions, and TMA/MMA layout and collector contracts.
+dialect-cute, dialect-mir, and dialect-nvvm coexist inside a **single Pliron module** rather than acting as separate sequential passes. Before exporting MLIR, dialect-cute's whole-module verifier checks tensor origins, pipeline state transitions, and TMA/MMA layout and collector contracts.
 :::

@@ -26,10 +26,18 @@
 #      symptom lands later and elsewhere: a missing `rustfmt` surfaces as
 #      `cargo oxide fmt` failing, not as a bad toolchain file.
 #
-#   4. The dated commands and prose across the book and the READMEs:
-#      `rustup toolchain install nightly-...`, `cargo +nightly-... install`,
-#      and sentences naming the pin.  Readers run those commands outside a
-#      checkout, where no rust-toolchain.toml can correct a stale date.
+#   4. The explicit commands and prose across the book and the READMEs:
+#      `rustup toolchain install <pin>`, `cargo +<pin> install`, and
+#      `rustup component add ... --toolchain <pin>`.  Readers run those
+#      commands outside a checkout, where no rust-toolchain.toml can correct a
+#      stale version.
+#
+#   5. The `rust-overlay` input in `cuda-oxide/flake.lock`.  `flake.nix`
+#      resolves `./rust-toolchain.toml` through `oxalica/rust-overlay`, so when
+#      bumping to a newer release or nightly, update `rust-overlay` in
+#      `cuda-oxide/flake.lock` (`nix flake update rust-overlay` and verify with
+#      `nix eval .#devShells.x86_64-linux.default.drvPath`) so `nix develop`
+#      has the new manifest.
 #
 # This is exactly what happened: #727 added `rustfmt` to both real files and
 # left both book quotes at five components.
@@ -52,6 +60,7 @@ cd "$(dirname "$0")/.."
 ROOT_PIN=rust-toolchain.toml
 SCAFFOLD=crates/cargo-oxide/src/commands/scaffold.rs
 DEVCONTAINER=.devcontainer/devcontainer.json
+FLAKE_LOCK=flake.lock
 
 if ! command -v python3 >/dev/null 2>&1; then
     echo "error: python3 is required to verify the toolchain pin" >&2
@@ -71,17 +80,20 @@ fi
 test -s "${ROOT_PIN}"
 test -s "${SCAFFOLD}"
 test -s "${DEVCONTAINER}"
+test -s "${FLAKE_LOCK}"
 
 GIT_ROOT="$(git rev-parse --show-toplevel)"
-python3 - "${ROOT_PIN}" "${SCAFFOLD}" "${DEVCONTAINER}" "${GIT_ROOT}" <<'PY'
+python3 - "${ROOT_PIN}" "${SCAFFOLD}" "${DEVCONTAINER}" "${FLAKE_LOCK}" "${GIT_ROOT}" <<'PY'
 import glob
 import json
 import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 
-root_path, scaffold_path, devcontainer_path, git_root = sys.argv[1:5]
+root_path, scaffold_path, devcontainer_path, flake_lock_path, git_root = sys.argv[1:6]
 
 CHANNEL = re.compile(r'^\s*channel\s*=\s*"([^"]+)"', re.M)
 # Match the whole bracketed span and pull the quoted names out of it so
@@ -294,6 +306,54 @@ if not pinned_refs:
         "parse self-test failed: no toolchain command reference found in any "
         "tracked markdown; either the docs stopped spelling the pin (delete "
         "this block of the guard) or the pattern is stale (fix it)"
+    )
+
+# Verify `cuda-oxide/flake.lock` locks an `oxalica/rust-overlay` revision that
+# actually contains the manifest for `root_channel`.
+flake_lock = json.loads(read(flake_lock_path))
+rust_overlay_locked = (
+    flake_lock.get("nodes", {}).get("rust-overlay", {}).get("locked", {})
+)
+overlay_owner = rust_overlay_locked.get("owner")
+overlay_repo = rust_overlay_locked.get("repo")
+overlay_rev = rust_overlay_locked.get("rev")
+if not overlay_owner or not overlay_repo or not overlay_rev:
+    sys.exit(
+        f"parse self-test failed: expected nodes.rust-overlay.locked in "
+        f"{flake_lock_path}, found {rust_overlay_locked!r}"
+    )
+if root_channel.startswith("nightly-"):
+    _, year, month, day = root_channel.split("-")
+    manifest_rel = f"manifests/nightly/{year}/{month}-{day}.nix"
+else:
+    manifest_rel = f"manifests/stable/{root_channel}.nix"
+manifest_url = (
+    f"https://raw.githubusercontent.com/{overlay_owner}/{overlay_repo}/"
+    f"{overlay_rev}/{manifest_rel}"
+)
+try:
+    req = urllib.request.Request(manifest_url, method="HEAD")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        if resp.status != 200:
+            failures.append(
+                f"{flake_lock_path} locks {overlay_owner}/{overlay_repo} at "
+                f"{overlay_rev[:10]}, where {manifest_rel} returned HTTP "
+                f"{resp.status} (run `nix flake update rust-overlay` in cuda-oxide/)"
+            )
+except urllib.error.HTTPError as err:
+    if err.code == 404:
+        failures.append(
+            f"{flake_lock_path} locks {overlay_owner}/{overlay_repo} at "
+            f"{overlay_rev[:10]}, which does not contain {manifest_rel} for "
+            f"{root_channel!r} (HTTP 404; run `nix flake update rust-overlay` "
+            "in cuda-oxide/)"
+        )
+    else:
+        sys.exit(f"error checking {manifest_url}: HTTP {err.code}")
+except urllib.error.URLError as err:
+    print(
+        f"note: skipping online rust-overlay manifest check ({err.reason})",
+        file=sys.stderr,
     )
 
 if failures:

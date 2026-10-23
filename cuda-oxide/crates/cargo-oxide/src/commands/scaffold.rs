@@ -18,6 +18,10 @@ channel = "1.99.1"
 components = ["rust-src", "rustc-dev", "rust-analyzer", "clippy", "rustfmt", "llvm-tools"]
 "#;
 
+const CARGO_CONFIG_TOML: &str = r#"[env]
+RUSTC_BOOTSTRAP = "1"
+"#;
+
 const SCAFFOLD_GITIGNORE_EXTRA: &[&str] = &[
     "/target/",
     "**/*.bc", // bitcode leftovers not in the clean suffix list
@@ -52,6 +56,7 @@ pub(super) fn scaffold_gitignore() -> String {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ScaffoldFiles {
     pub(super) cargo_toml: String,
+    pub(super) cargo_config_toml: String,
     rust_toolchain_toml: String,
     pub(super) gitignore: String,
     pub(super) readme: String,
@@ -299,6 +304,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 pub(super) fn scaffold_files(name: &str, async_mode: bool) -> ScaffoldFiles {
     ScaffoldFiles {
         cargo_toml: scaffold_cargo_toml(name, async_mode),
+        cargo_config_toml: CARGO_CONFIG_TOML.to_string(),
         rust_toolchain_toml: RUST_TOOLCHAIN_TOML.to_string(),
         gitignore: scaffold_gitignore(),
         readme: scaffold_readme(name, async_mode),
@@ -319,10 +325,17 @@ pub fn scaffold_new(name: &str, async_mode: bool) {
         eprintln!("Error creating directory: {}", e);
         std::process::exit(1);
     });
+    let cargo_dir = project_dir.join(".cargo");
+    std::fs::create_dir_all(&cargo_dir).unwrap_or_else(|e| {
+        eprintln!("Error creating directory: {}", e);
+        std::process::exit(1);
+    });
 
     let files = scaffold_files(name, async_mode);
     std::fs::write(project_dir.join("Cargo.toml"), files.cargo_toml)
         .expect("Failed to write Cargo.toml");
+    std::fs::write(cargo_dir.join("config.toml"), files.cargo_config_toml)
+        .expect("Failed to write .cargo/config.toml");
     std::fs::write(
         project_dir.join("rust-toolchain.toml"),
         files.rust_toolchain_toml,

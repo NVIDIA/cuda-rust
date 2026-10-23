@@ -1,10 +1,10 @@
-# TMA Pipelines, Tensor Cores, and `ctm-rs` Interop
+# TMA Pipelines, Tensor Cores, and ctm-rs Interop
 
-The Blackwell kernels in this preview combine multi-stage TMA pipelines, swizzled shared-memory views, and tensor-core MMA operations. Depending on the workload, you can express the entire schedule in **`cute-rs`** (`blockscale_gemm_cute`) or pair **`cute-rs`** with **`ctm-rs`** instruction primitives in the same kernel (`fp16_gemm_256x352_cute`, `sm100_fmha_prefill_cute`, `sm100_mla_decode_fp16_cute`).
+The Blackwell kernels in this preview combine multi-stage TMA pipelines, swizzled shared-memory views, and tensor-core MMA operations. Depending on the workload, you can express the entire schedule in **cute-rs** (`blockscale_gemm_cute`) or pair **cute-rs** with **ctm-rs** instruction primitives in the same kernel (`fp16_gemm_256x352_cute`, `sm100_fmha_prefill_cute`, `sm100_mla_decode_fp16_cute`).
 
 ---
 
-## 1. Block-Scaled MXFP4 GEMM in `cute-rs` (SM120a)
+## 1. Block-Scaled MXFP4 GEMM in cute-rs (SM120a)
 
 In `blockscale_gemm_cute`, one producer warp (warp 8) fills a 3-stage TMA ring buffer in shared memory while eight compute warps (warps `0..7`) load swizzled FP4 fragments and `Float8E8M0FNU` scales into `Mxf4TiledMma`:
 
@@ -44,17 +44,17 @@ consumer = consumer.advance();
 
 ---
 
-## 2. Combining `cute-rs` + `ctm-rs` on SM100a (2-CTA GEMM)
+## 2. Combining cute-rs and ctm-rs on SM100a (2-CTA GEMM)
 
 On datacenter Blackwell (`sm_100a`), two CTAs cooperate on a `256×352` output tile (`256×192` + `256×160` N-partitions sharing the A collector) and accumulate into Tensor Memory (TMEM).
 
-`fp16_gemm_256x352_cute` uses **`cute-rs`** for layout-checked cluster TMA, pipelines, paired MMA, and TMEM epilogue slices (`dialect-cute`), while using **`ctm-rs`** for cluster rank, barriers, and collective `TmemGuard` allocation (`dialect-nvvm`):
+`fp16_gemm_256x352_cute` uses **cute-rs** for layout-checked cluster TMA, pipelines, paired MMA, and TMEM epilogue slices (dialect-cute), while using **ctm-rs** for cluster rank, barriers, and collective `TmemGuard` allocation (dialect-nvvm):
 
 ```{figure} images/sm100-two-cta-gemm.svg
 :align: center
 :width: 100%
 
-In `fp16_gemm_256x352_cute`, `cute-rs` (teal) owns the 5-stage cluster TMA pipeline, paired 2-CTA MMA, and TMEM epilogue, while `ctm-rs` (purple) supplies cluster rank, barriers, and `TmemGuard` lifecycle in the same Pliron module.
+In `fp16_gemm_256x352_cute`, cute-rs (teal) owns the 5-stage cluster TMA pipeline, paired 2-CTA MMA, and TMEM epilogue, while ctm-rs (purple) supplies cluster rank, barriers, and `TmemGuard` lifecycle in the same Pliron module.
 ```
 
 ```rust

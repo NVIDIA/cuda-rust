@@ -35,10 +35,12 @@ This generates a ready-to-run project:
 
 ```text
 my_first_kernel/
+├── .cargo/
+│   └── config.toml     # sets RUSTC_BOOTSTRAP = "1" for cargo check / rust-analyzer
 ├── Cargo.toml          # dependencies on cuda-device, cuda-host, cuda-core
 ├── README.md           # doctor + run instructions
 ├── .gitignore          # target/ and generated device artifacts
-├── rust-toolchain.toml # pins the required nightly toolchain
+├── rust-toolchain.toml # pins the required Rust toolchain (1.99.1)
 └── src/
     └── main.rs          # kernel + host code in one file
 ```

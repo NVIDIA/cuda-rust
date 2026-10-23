@@ -20,7 +20,7 @@ without a driver and fails on that call with `CUDA_ERROR_NOT_INITIALIZED`; the
 error message names the library files the loader tried. A driver whose CUDA
 major version is older than the toolkit's (a 12.x driver with a 13.x build)
 fails the same way with a "driver too old" message.
-| **Rust**         | Nightly (pinned)    | Pinned in `cuda-oxide/rust-toolchain.toml`                    |
+| **Rust**         | 1.99.1 (pinned)     | Pinned in `cuda-oxide/rust-toolchain.toml`                    |
 
 :::{note}
 cuda-oxide currently targets **Linux only**. Windows is not supported.
@@ -32,7 +32,7 @@ cuda-oxide currently targets **Linux only**. Windows is not supported.
 
 The repository includes a cuda-oxide devcontainer in `cuda-oxide/.devcontainer/`.
 Using it is the quickest way to get a reproducible development environment with
-CUDA Toolkit 13.0, LLVM 21, Clang 21, and the pinned Rust nightly already
+CUDA Toolkit 13.0, LLVM 21, Clang 21, and the pinned Rust toolchain already
 installed.
 
 The host does not need the CUDA Toolkit installed. It does need:
@@ -76,7 +76,7 @@ Rust setup sections below.
 ## Nix / flake.nix
 
 The repository also ships `cuda-oxide/flake.nix`, providing a reproducible dev shell
-(CUDA 13, LLVM 22, Clang, pinned Rust nightly). Requires
+(CUDA 13, Clang/libclang, and the pinned Rust toolchain with LLVM 23 `llvm-tools`). Requires
 [Nix](https://nixos.org/download/) with flakes enabled, an NVIDIA driver on
 the host, and Linux (x86\_64 or aarch64).
 

@@ -122,21 +122,6 @@ jobs:
           sub-packages: '["nvcc", "cudart-dev"]'
           non-cuda-sub-packages: '["libcurand-dev"]'
 
-      - name: Install LLVM 21 (llc/opt for the NVPTX backend)
-        if: matrix.package == 'cuda-oxide-codegen'
-        run: |
-          set -euo pipefail
-          source /etc/os-release
-          sudo install -d -m 0755 /etc/apt/keyrings
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-            | sudo tee /etc/apt/keyrings/apt-llvm-org.asc >/dev/null
-          echo "deb [signed-by=/etc/apt/keyrings/apt-llvm-org.asc] https://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-21 main" \
-            | sudo tee /etc/apt/sources.list.d/llvm-21.list
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends llvm-21
-          llc-21 --version | head -2
-          opt-21 --version | head -2
-
       - name: Run crate unit tests
         env:
           CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}

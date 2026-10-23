@@ -196,6 +196,8 @@ dependencies = [
  "proc-macro2",
  "quote",
  "reserved-oxide-symbols",
+ "serde",
+ "serde_json",
  "syn 2.0.119",
 ]
 
@@ -417,8 +419,6 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "oxide-artifacts"
 version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74d9a941c0c43d2dceaf25f5c9ca4c9f9cceb28dfa5e4e3cfd14e476f003e7c9"
 dependencies = [
  "object",
 ]

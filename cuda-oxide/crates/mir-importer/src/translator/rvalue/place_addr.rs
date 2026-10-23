@@ -572,11 +572,11 @@ pub(super) fn emit_array_subslice_value(
 /// Walks the projection chain and emits the correct pliron ops for each
 /// element:
 ///
-/// - `Field(idx, _)`   → [`MirFieldAddrOp`]
+/// - `Field(idx, _)`   → [`MirFieldAddrOp`](dialect_mir::ops::MirFieldAddrOp)
 /// - `ConstantIndex {offset, from_end, ..}` → an element address. Forward
 ///   indexes materialize `offset` directly; from-end indexes on slices extract
 ///   the fat-pointer length and materialize `len - offset` at runtime.
-/// - `Index(local)`    → `load_local(local)` + [`MirArrayElementAddrOp`]
+/// - `Index(local)`    → `load_local(local)` + [`MirArrayElementAddrOp`](dialect_mir::ops::MirArrayElementAddrOp)
 ///   (array pointee) or `load_local(local)` + [`MirPtrOffsetOp`] (slice data pointer)
 /// - `Deref`           → `MirLoadOp` of the pointer (the loaded pointer IS
 ///   the pointee's address); subsequent projections apply to the pointee.

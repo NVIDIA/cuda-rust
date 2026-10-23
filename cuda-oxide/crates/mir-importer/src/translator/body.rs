@@ -2917,7 +2917,7 @@ pub fn cuda_oxide_device_generated_kernel(mut wrapped: Wrapper<u16>) -> u32 {
                         let module = ModuleOp::new(&mut ctx, "test".try_into().unwrap());
                         let region = module.get_operation().deref(&ctx).get_region(0);
                         let block = region.deref(&ctx).iter(&ctx).next().unwrap();
-                        let function = translate_body(
+                        let (function, _) = translate_body(
                             &mut ctx,
                             &body,
                             &instance,
@@ -2930,6 +2930,7 @@ pub fn cuda_oxide_device_generated_kernel(mut wrapped: Wrapper<u16>) -> u32 {
                             kind,
                             Some(&scopes),
                             None,
+                            false,
                         )
                         .unwrap();
                         function.insert_at_back(block, &ctx);

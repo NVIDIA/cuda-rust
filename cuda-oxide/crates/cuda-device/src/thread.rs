@@ -22,9 +22,10 @@
 //! accessing a unique memory location. This is guaranteed as follows:
 //!
 //! 1. **ThreadIndex** can only be constructed by trusted functions:
-//!    `index_1d()`, `index_2d::<S>()`, and `index_2d_runtime(&slice)`.
+//!    `index_1d()`, `index_2d::<S>()`, `index_2d_runtime(&slice)`,
+//!    `warp_index()`, and `block_index()`.
 //! 2. These functions derive the index from hardware built-in variables
-//!    (`threadIdx`, `blockIdx`, `blockDim`) -- read-only special registers
+//!    (`threadIdx`, `blockIdx`, `blockDim`, `gridDim`) -- read-only special registers
 //!    assigned by the runtime at kernel launch. The formula
 //!    `outer * stride + inner` combines these into a scalar index per thread.
 //! 3. `index_1d`: the X-only formula is unique only for a 1D launch. A typed
@@ -72,6 +73,25 @@ pub enum Index2D<const ROW_STRIDE: usize> {}
 /// [`DisjointSlice::get_mut`]: crate::DisjointSlice::get_mut
 pub enum WarpIndex {}
 
+/// Type-level index space with one element per block of the launch.
+///
+/// [`block_index`] mints a witness only for thread `(0, 0, 0)` of each block.
+/// Blocks are numbered with X fastest, then Y, then Z, independently of the
+/// block's thread dimensions. Use the witness with
+/// [`DisjointSlice::get_mut`](crate::DisjointSlice::get_mut) for a bounds-checked
+/// scalar write. The witness proves output ownership, not that a reduction's
+/// result is initialized or complete.
+///
+/// A block witness cannot address a slice in another index space:
+///
+/// ```compile_fail,E0308
+/// use cuda_device::{BlockIndex, DisjointSlice, ThreadIndex, WarpIndex};
+/// fn wrong_space(out: &mut DisjointSlice<'_, u32, WarpIndex>, block: ThreadIndex<'_, BlockIndex>) {
+///     let _ = out.get_mut(block);
+/// }
+/// ```
+pub enum BlockIndex {}
+
 mod flat_index_sealed {
     pub trait Sealed {}
 }
@@ -79,8 +99,8 @@ mod flat_index_sealed {
 /// Index spaces whose `ThreadIndex` stores the flat element index directly.
 ///
 /// `Index1D` and `Index2D<S>` fix their geometry in the type, and a
-/// [`WarpIndex`] witness is minted with its flat warp slot already computed
-/// from the launch geometry, so for all three the flat index is stored at
+/// [`WarpIndex`] or [`BlockIndex`] witness is minted with its flat output slot
+/// already computed from the launch geometry, so the flat index is stored at
 /// minting time and [`ThreadIndex::get`] returns it as-is. [`Runtime2DIndex`]
 /// does **not** impl this: its witness stores the thread's raw `(row, col)`
 /// coordinates and the addressed `DisjointSlice` resolves them against its
@@ -99,6 +119,9 @@ impl<const ROW_STRIDE: usize> FlatIndexSpace for Index2D<ROW_STRIDE> {}
 
 impl flat_index_sealed::Sealed for WarpIndex {}
 impl FlatIndexSpace for WarpIndex {}
+
+impl flat_index_sealed::Sealed for BlockIndex {}
+impl FlatIndexSpace for BlockIndex {}
 
 /// Index spaces whose `ThreadIndex` can be derived from the launch context alone.
 ///
@@ -226,6 +249,8 @@ impl<'kernel, Domain, Coordinates> LaunchContext<'kernel, Domain, Coordinates> {
 /// - [`index_2d()`] for const-stride 2D grids
 /// - [`index_2d_runtime()`] for runtime-row-width 2D grids; safe, the width
 ///   is read from the slice the index will address, bound once by the host
+/// - [`warp_index()`] for lane-zero writes in a 1D launch
+/// - [`block_index()`] for thread-zero writes in a 1D, 2D or 3D launch
 ///
 /// # Where you can call them
 ///
@@ -249,7 +274,8 @@ impl<'kernel, Domain, Coordinates> LaunchContext<'kernel, Domain, Coordinates> {
 /// The macros rewrite a small set of names inside annotated bodies so
 /// the user never has to pass the launch context through by hand:
 ///
-/// - free functions: `index_1d`, `index_2d`, `index_2d_runtime`, `warp_index`
+/// - free functions: `index_1d`, `index_2d`, `index_2d_runtime`, `warp_index`,
+///   `block_index`
 /// - methods (zero-arg call sites): `get_mut_indexed`
 ///
 /// Free-function calls are matched on path tail, so all of these resolve
@@ -504,7 +530,7 @@ impl fmt::Debug for ThreadCoord2D32<'_> {
 #[doc(hidden)]
 pub mod __internal {
     use super::{
-        Index1D, Index2D, LaunchContext, Runtime2DIndex, ThreadCoord2D32, ThreadIndex,
+        BlockIndex, Index1D, Index2D, LaunchContext, Runtime2DIndex, ThreadCoord2D32, ThreadIndex,
         ThreadIndex32, WarpIndex,
     };
 
@@ -685,6 +711,30 @@ pub mod __internal {
             .checked_add((super::threadIdx_x() / WARP_SIZE) as usize)?;
         // SAFETY: distinct warps of a 1D launch get distinct `raw` values, and
         // only lane 0 reaches here, so the witness is unique across the launch.
+        Some(unsafe { ThreadIndex::new(raw, true, scope) })
+    }
+
+    /// Real `block_index` implementation called by the kernel/device macros.
+    /// Only thread `(0, 0, 0)` gets the block's checked x-fastest grid index.
+    #[inline(always)]
+    pub fn block_index<'kernel>(
+        scope: &'kernel LaunchContext<'kernel, impl LaunchDomain, impl Sized>,
+    ) -> Option<ThreadIndex<'kernel, BlockIndex>> {
+        let raw = super::checked_block_index(
+            (
+                super::threadIdx_x(),
+                super::threadIdx_y(),
+                super::threadIdx_z(),
+            ),
+            (
+                super::blockIdx_x(),
+                super::blockIdx_y(),
+                super::blockIdx_z(),
+            ),
+            (super::gridDim_x(), super::gridDim_y()),
+        )?;
+        // SAFETY: exactly one thread per block reaches here, and checked
+        // row-major indexing gives distinct blocks distinct representable slots.
         Some(unsafe { ThreadIndex::new(raw, true, scope) })
     }
 
@@ -1007,6 +1057,60 @@ pub fn warp_index<'kernel>() -> Option<ThreadIndex<'kernel, WarpIndex>> {
     unreachable!(
         "thread::warp_index called outside #[kernel] / #[device] — the macro rewrites real call sites; the public item is a stub"
     )
+}
+
+/// This block's x-fastest grid index, for thread `(0, 0, 0)` alone.
+///
+/// Returns `None` for other threads, arithmetic overflow, or the reserved
+/// invalid-index value `usize::MAX`. Supports 1D, 2D and 3D block/grid shapes.
+/// Pass the witness to [`DisjointSlice::get_mut`](crate::DisjointSlice::get_mut)
+/// on a `DisjointSlice<T, BlockIndex>`; a short output returns `None` at that
+/// access instead of writing out of bounds. One output per block requires
+/// `gridDim.x * gridDim.y * gridDim.z` elements.
+///
+/// ```rust,ignore
+/// // Inside a #[kernel] or #[device] body, after producing a valid result:
+/// if let Some(block) = thread::block_index()
+///     && let Some(slot) = output.get_mut(block)
+/// {
+///     *slot = result;
+/// }
+/// ```
+///
+/// This grants output ownership only; it performs no synchronization and does
+/// not make another lane's result valid. Calls are scoped and rewritten like
+/// [`warp_index`]: plain helpers should receive the witness as an argument,
+/// while a `#[device]` helper may mint and use one locally but cannot return it.
+///
+/// # Stub body
+///
+/// The kernel/device macros rewrite calls to `thread::__internal::block_index`.
+/// A direct call outside an annotated body, including a renamed import that
+/// avoids rewriting, executes this stub and panics.
+#[inline(always)]
+pub fn block_index<'kernel>() -> Option<ThreadIndex<'kernel, BlockIndex>> {
+    unreachable!(
+        "thread::block_index called outside #[kernel] / #[device] — the macro rewrites real call sites; the public item is a stub"
+    )
+}
+
+// Pure part of block_index, shared by the device path and host arithmetic tests.
+// CUDA supplies valid hardware coordinates; no caller-selected stride is used.
+#[inline(always)]
+fn checked_block_index(
+    thread: (u32, u32, u32),
+    block: (u32, u32, u32),
+    grid: (u32, u32),
+) -> Option<usize> {
+    if thread != (0, 0, 0) {
+        return None;
+    }
+    let raw = (block.2 as usize)
+        .checked_mul(grid.1 as usize)?
+        .checked_add(block.1 as usize)?
+        .checked_mul(grid.0 as usize)?
+        .checked_add(block.0 as usize)?;
+    (raw != usize::MAX).then_some(raw)
 }
 
 /// Runtime-stride 2D indexing over the slice that supplies the stride.
@@ -1413,7 +1517,56 @@ const fn validate_unroll_factor(factor: u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::block_linear_thread_id;
+    use super::{block_linear_thread_id, checked_block_index};
+
+    #[test]
+    fn block_output_selects_one_thread_per_block_in_xyz_grid_order() {
+        for (grid, block) in [
+            ((5, 1, 1), (48, 1, 1)),
+            ((3, 2, 1), (4, 3, 1)),
+            ((2, 3, 2), (4, 3, 2)),
+        ] {
+            let mut expected = 0;
+            for bz in 0..grid.2 {
+                for by in 0..grid.1 {
+                    for bx in 0..grid.0 {
+                        let mut leaders = 0;
+                        for tz in 0..block.2 {
+                            for ty in 0..block.1 {
+                                for tx in 0..block.0 {
+                                    if let Some(index) = checked_block_index(
+                                        (tx, ty, tz),
+                                        (bx, by, bz),
+                                        (grid.0, grid.1),
+                                    ) {
+                                        assert_eq!(index, expected);
+                                        leaders += 1;
+                                    }
+                                }
+                            }
+                        }
+                        assert_eq!(leaders, 1);
+                        expected += 1;
+                    }
+                }
+            }
+            assert_eq!(expected, (grid.0 * grid.1 * grid.2) as usize);
+        }
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn block_output_rejects_overflow_and_the_reserved_sentinel() {
+        let max = u32::MAX;
+        assert_eq!(
+            checked_block_index((0, 0, 0), (max - 1, 1, 1), (max, max)),
+            Some(usize::MAX - 1)
+        );
+        assert_eq!(checked_block_index((0, 0, 0), (0, 2, 1), (max, max)), None);
+        // The final addition, then the grid-plane multiplication, overflow.
+        assert_eq!(checked_block_index((0, 0, 0), (1, 2, 1), (max, max)), None);
+        assert_eq!(checked_block_index((0, 0, 0), (0, 0, 2), (max, max)), None);
+    }
 
     /// Number of threads in a `(dx, dy, dz)` block whose block-linear id is
     /// `selected`. `ManagedBarrier::init_by` and `inval_by` make this

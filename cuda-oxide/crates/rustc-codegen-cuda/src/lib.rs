@@ -332,16 +332,19 @@ extern crate rustc_codegen_llvm;
 mod collector;
 mod device_codegen;
 mod generated_intrinsics;
+mod library;
 mod materialize;
 
 use rustc_codegen_ssa::traits::CodegenBackend;
-use rustc_codegen_ssa::{CompiledModule, CompiledModules, CrateInfo, ModuleKind};
+use rustc_codegen_ssa::{CompiledModule, CompiledModules, CrateInfo, ModuleKind, NativeLib};
+use rustc_hir::attrs::NativeLibKind;
 use rustc_metadata::EncodedMetadata;
 use rustc_middle::dep_graph::WorkProductMap;
 use rustc_middle::ty::TyCtxt;
 use rustc_middle::ty::print::with_no_trimmed_paths;
-use rustc_session::config::OutputFilenames;
+use rustc_session::config::{CrateType, OutputFilenames};
 use rustc_session::{IncrCompSession, Session};
+use rustc_span::Symbol;
 use std::any::Any;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -715,7 +718,7 @@ impl CodegenBackend for CudaCodegenBackend {
 
             // Step 2: If device code exists, compile via cuda-oxide
             let _device_result = if has_device_code {
-                let materialization_request =
+                let mut materialization_request =
                     materialize::request_from_env().unwrap_or_else(|error| {
                         tcx.dcx().fatal(format!(
                             "[rustc_codegen_cuda] Invalid cubin materialization request: {error}"
@@ -740,10 +743,15 @@ impl CodegenBackend for CudaCodegenBackend {
                     self.config.verbose,
                 );
 
+                if !collection_result.library_calls.is_empty() && materialization_request.is_none()
+                {
+                    tcx.dcx().fatal(
+                        "native library calls require `cargo oxide build --materialize-cubin`",
+                    );
+                }
                 materialize::validate_collection(
-                    materialization_request,
+                    materialization_request.as_ref(),
                     !collection_result.device_externs.is_empty(),
-                    collection_result.requires_ptx_bundle_merge,
                 )
                 .unwrap_or_else(|error| {
                     tcx.dcx().fatal(format!(
@@ -779,6 +787,16 @@ impl CodegenBackend for CudaCodegenBackend {
                         dump_mir_dialect: self.config.dump_mir_dialect,
                         dump_llvm_dialect: self.config.dump_llvm_dialect,
                     };
+                materialize::validate_output_paths(
+                    materialization_request.as_ref(),
+                    &device_config.output_dir,
+                    &device_config.output_name,
+                )
+                .unwrap_or_else(|error| {
+                    tcx.dcx().fatal(format!(
+                        "[rustc_codegen_cuda] Cannot write device artifacts: {error}"
+                    ))
+                });
 
                 // Run the cuda-oxide pipeline, catching backend panics and
                 // re-emitting them as a cuda-oxide diagnostic. A panic
@@ -813,8 +831,7 @@ impl CodegenBackend for CudaCodegenBackend {
                     let r = catch_unwind(AssertUnwindSafe(|| {
                         device_codegen::generate_device_code(
                             tcx,
-                            device_functions,
-                            &collection_result.device_externs,
+                            &collection_result,
                             &device_config,
                         )
                     }));
@@ -824,6 +841,11 @@ impl CodegenBackend for CudaCodegenBackend {
 
                 match panic_outcome {
                     Err(payload) => {
+                        // rustc fatal diagnostics have already been emitted. Preserve
+                        // their control flow instead of reporting a second ICE.
+                        if payload.is::<rustc_errors::FatalErrorMarker>() {
+                            std::panic::resume_unwind(payload);
+                        }
                         let msg = payload
                             .downcast_ref::<&str>()
                             .map(|s| s.to_string())
@@ -847,7 +869,22 @@ impl CodegenBackend for CudaCodegenBackend {
                              Please file at https://github.com/NVIDIA/cuda-rust/issues"
                         ));
                     }
-                    Ok(Ok(result)) => {
+                    Ok(Ok((result, mut libraries))) => {
+                        if self.config.verbose {
+                            for (kernel, facts) in &result.kernel_launch_facts {
+                                eprintln!(
+                                    "[library] {kernel}: exact block {:?}, scratch {} bytes aligned {}",
+                                    facts.exact_block,
+                                    facts.dynamic_shared_bytes,
+                                    facts.dynamic_shared_alignment
+                                );
+                            }
+                        }
+                        // Native inputs are owned provider bytes; file output and
+                        // collection checks remain before device generation.
+                        if let Some(request) = &mut materialization_request {
+                            request.add_library_inputs(std::mem::take(&mut libraries.inputs));
+                        }
                         if self.config.verbose
                             && let Some(artifact) = result.artifact.as_ref()
                         {
@@ -957,17 +994,12 @@ impl CodegenBackend for CudaCodegenBackend {
             crate_info,
         );
         for (index, object) in ongoing.artifact_objects.into_iter().enumerate() {
-            compiled_modules.modules.push(CompiledModule {
-                name: format!("oxide_artifact_embed_{index}"),
-                kind: ModuleKind::Regular,
-                object: Some(object),
-                dwarf_object: None,
-                bytecode: None,
-                assembly: None,
-                llvm_ir: None,
-                global_asm_object: None,
-                links_from_incr_cache: Vec::new(),
-            });
+            compiled_modules.modules.push(artifact_module(
+                index,
+                object,
+                &crate_info.crate_types,
+                sess.opts.unstable_opts.link_native_libraries,
+            ));
         }
         (compiled_modules, work_products)
     }
@@ -976,10 +1008,25 @@ impl CodegenBackend for CudaCodegenBackend {
         &self,
         sess: &Session,
         compiled_modules: CompiledModules,
-        crate_info: CrateInfo,
+        mut crate_info: CrateInfo,
         metadata: EncodedMetadata,
         outputs: &OutputFilenames,
     ) {
+        for object in artifact_link_args(&compiled_modules.modules, &crate_info.crate_types) {
+            let Some(object) = object.to_str() else {
+                sess.dcx().fatal(format!(
+                    "[rustc_codegen_cuda] The path of the artifact object is not UTF-8: {}",
+                    object.display()
+                ));
+            };
+            crate_info.used_libraries.push(NativeLib {
+                kind: NativeLibKind::LinkArg,
+                name: Symbol::intern(object),
+                cfg: None,
+                verbatim: true,
+                dll_imports: Vec::new(),
+            });
+        }
         self.llvm_backend
             .link(sess, compiled_modules, crate_info, metadata, outputs);
     }
@@ -1002,6 +1049,68 @@ fn write_tile_export_descriptions(
     text.push('\n');
     std::fs::write(&path, text)?;
     Ok(path)
+}
+
+/// The prefix of the names of the artifact modules.
+const ARTIFACT_MODULE_PREFIX: &str = "oxide_artifact_embed_";
+
+/// The module of an artifact object.
+///
+/// rustc keeps a list of the Rust objects in each rlib. This list contains the
+/// objects of all modules. With LTO, rustc reads bitcode from these objects and
+/// removes them from the link. The artifact objects have no bitcode. If the
+/// session writes an rlib, the artifact object is the DWARF object of its
+/// module. rustc puts the DWARF objects in the rlib, but not in the list.
+///
+/// The system linker does not get the DWARF objects. `link` gives the artifact
+/// objects to this linker as link arguments. With `-Zlink-native-libraries=no`,
+/// rustc does not give link arguments to the linker. Then, if the session also
+/// uses the system linker, the artifact objects are Rust objects.
+fn artifact_module(
+    index: usize,
+    object: PathBuf,
+    crate_types: &[CrateType],
+    link_native_libraries: bool,
+) -> CompiledModule {
+    let dwarf = crate_types.contains(&CrateType::Rlib)
+        && (link_native_libraries || !crate_types.iter().any(uses_system_linker));
+    let (object, dwarf_object) = if dwarf {
+        (None, Some(object))
+    } else {
+        (Some(object), None)
+    };
+    CompiledModule {
+        name: format!("{ARTIFACT_MODULE_PREFIX}{index}"),
+        kind: ModuleKind::Regular,
+        object,
+        dwarf_object,
+        bytecode: None,
+        assembly: None,
+        llvm_ir: None,
+        global_asm_object: None,
+        links_from_incr_cache: Vec::new(),
+    }
+}
+
+/// The artifact objects that `link` gives to the system linker.
+fn artifact_link_args<'a>(
+    modules: &'a [CompiledModule],
+    crate_types: &[CrateType],
+) -> Vec<&'a Path> {
+    if !crate_types.iter().any(uses_system_linker) {
+        return Vec::new();
+    }
+    modules
+        .iter()
+        .filter(|module| module.name.starts_with(ARTIFACT_MODULE_PREFIX))
+        .filter_map(|module| module.dwarf_object.as_deref())
+        .collect()
+}
+
+/// rustc writes rlibs and static libraries. The system linker makes the other
+/// crate types.
+fn uses_system_linker(crate_type: &CrateType) -> bool {
+    !matches!(crate_type, CrateType::Rlib | CrateType::StaticLib)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1069,10 +1178,11 @@ fn write_device_artifact_object(
         } else {
             oxide_artifacts::ArtifactEntryKind::DeviceFunction
         };
-        spec = spec.with_entry(oxide_artifacts::ArtifactEntrySpec::new(
-            &function.export_name,
-            kind,
-        ));
+        let mut entry = oxide_artifacts::ArtifactEntrySpec::new(&function.export_name, kind);
+        if let Some(facts) = result.kernel_launch_facts.get(&function.export_name) {
+            entry = entry.with_launch_facts(*facts);
+        }
+        spec = spec.with_entry(entry);
     }
 
     let blob = oxide_artifacts::build_artifact_blob(&spec)?;
@@ -1371,6 +1481,78 @@ pub(crate) fn host_target_supported(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_artifact_objects_of_an_rlib_are_not_rust_objects() {
+        let object = PathBuf::from("library.0.0.embed.o");
+        let rlib_sessions: [&[CrateType]; 6] = [
+            &[CrateType::Rlib],
+            &[CrateType::Rlib, CrateType::Cdylib],
+            &[CrateType::Rlib, CrateType::Dylib],
+            &[CrateType::Rlib, CrateType::StaticLib],
+            &[CrateType::Rlib, CrateType::StaticLib, CrateType::Cdylib],
+            &[CrateType::Rlib, CrateType::StaticLib, CrateType::Dylib],
+        ];
+        for crate_types in rlib_sessions {
+            let module = artifact_module(0, object.clone(), crate_types, true);
+            assert_eq!(module.object, None, "{crate_types:?}");
+            assert_eq!(module.dwarf_object, Some(object.clone()), "{crate_types:?}");
+        }
+
+        // Sessions without an rlib link the artifact objects.
+        let other_sessions: [&[CrateType]; 4] = [
+            &[CrateType::Executable],
+            &[CrateType::Cdylib],
+            &[CrateType::Dylib],
+            &[CrateType::StaticLib],
+        ];
+        for crate_types in other_sessions {
+            let module = artifact_module(0, object.clone(), crate_types, true);
+            assert_eq!(module.object, Some(object.clone()), "{crate_types:?}");
+            assert_eq!(module.dwarf_object, None, "{crate_types:?}");
+        }
+
+        // With `-Zlink-native-libraries=no`, the system linker gets no link
+        // arguments.
+        let mixed = artifact_module(
+            0,
+            object.clone(),
+            &[CrateType::Rlib, CrateType::Cdylib],
+            false,
+        );
+        assert_eq!(mixed.object, Some(object.clone()));
+        let rlib = artifact_module(0, object.clone(), &[CrateType::Rlib], false);
+        assert_eq!(rlib.dwarf_object, Some(object));
+    }
+
+    #[test]
+    fn the_system_linker_gets_the_artifact_objects() {
+        let artifact = PathBuf::from("library.0.0.embed.o");
+        let crate_types = [CrateType::Rlib, CrateType::Cdylib];
+        let modules = [
+            // A module of LLVM with split debug information.
+            CompiledModule {
+                name: "library.0".to_string(),
+                kind: ModuleKind::Regular,
+                object: Some(PathBuf::from("library.0.rcgu.o")),
+                dwarf_object: Some(PathBuf::from("library.0.rcgu.dwo")),
+                bytecode: None,
+                assembly: None,
+                llvm_ir: None,
+                global_asm_object: None,
+                links_from_incr_cache: Vec::new(),
+            },
+            artifact_module(0, artifact.clone(), &crate_types, true),
+        ];
+        assert_eq!(
+            artifact_link_args(&modules, &crate_types),
+            [artifact.as_path()]
+        );
+
+        // rustc puts the DWARF objects in rlibs and static libraries.
+        assert!(artifact_link_args(&modules, &[CrateType::Rlib]).is_empty());
+        assert!(artifact_link_args(&modules, &[CrateType::Rlib, CrateType::StaticLib]).is_empty());
+    }
 
     #[test]
     fn host_targets_that_match_the_ptx_data_model_are_accepted() {

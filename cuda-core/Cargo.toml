@@ -17,7 +17,7 @@ cuda-bindings = { version = "=0.5.0", path = "../cuda-bindings" }
 cuda-core-derive = { version = "=0.5.0", path = "../cuda-core-derive" }
 anyhow = "1"
 half = { version = "2" }
-oxide-artifacts = { version = "0.2.1", features = ["object-read"] }
+oxide-artifacts = { version = "0.2.1", path = "../cuda-oxide/crates/oxide-artifacts", features = ["object-read"] }
 
 [dev-dependencies]
 trybuild = "1"

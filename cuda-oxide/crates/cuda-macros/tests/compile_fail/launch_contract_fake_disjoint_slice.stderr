@@ -10,15 +10,15 @@ help: the trait `for<'__cuda_oxide_disjoint> cuda_device::disjoint::__LaunchCont
  9 | pub struct DisjointSlice<'a, T, IndexSpace = Index1D> {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: the following other types implement trait `cuda_device::disjoint::__LaunchContractDisjointSlice<Element, DOMAIN>`:
+             `cuda_device::DisjointSlice<'a, T, BlockIndex>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
+             `cuda_device::DisjointSlice<'a, T, BlockIndex>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 2>`
+             `cuda_device::DisjointSlice<'a, T, BlockIndex>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 3>`
+             `cuda_device::DisjointSlice<'a, T, CollectiveTiles<CAPACITY>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, DOMAIN>`
              `cuda_device::DisjointSlice<'a, T, Index2D<ROW_STRIDE>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
              `cuda_device::DisjointSlice<'a, T, Index2D<ROW_STRIDE>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 2>`
              `cuda_device::DisjointSlice<'a, T, LinearTiles<N>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
              `cuda_device::DisjointSlice<'a, T, RowMajorTiles<ROWS, COLS, ROW_STRIDE>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 2>`
-             `cuda_device::DisjointSlice<'a, T, Runtime2DIndex>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
-             `cuda_device::DisjointSlice<'a, T, Runtime2DIndex>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 2>`
-             `cuda_device::DisjointSlice<'a, T, RuntimeRowMajorTiles<ROWS, COLS>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 2>`
-             `cuda_device::DisjointSlice<'a, T, WarpIndex>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
-             `cuda_device::DisjointSlice<'a, T>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
+           and $N others
 note: required by a bound in `LoadedModule::prepare_lookalike`
   --> tests/compile_fail/launch_contract_fake_disjoint_slice.rs:15:1
    |

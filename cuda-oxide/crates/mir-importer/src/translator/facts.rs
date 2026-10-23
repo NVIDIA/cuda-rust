@@ -420,6 +420,35 @@ pub(crate) fn library_source_effect(
         let path = tcx.def_path_str(instance.def_id());
         let krate = tcx.crate_name(instance.def_id().krate);
         let name = path.rsplit("::").next().unwrap_or("");
+        // Stable libcore implements these integer operations through borrowed
+        // comparisons, unlike the equivalent integer_min/max intrinsics. Only
+        // the genuine default methods on by-value integers have this summary:
+        // a user Ord implementation may run arbitrary comparison/drop effects.
+        if krate.as_str() == "core"
+            && [rustc_span::sym::cmp_ord_min, rustc_span::sym::cmp_ord_max]
+                .into_iter()
+                .any(|item| tcx.get_diagnostic_item(item) == Some(instance.def_id()))
+            && args.len() == 2
+        {
+            let signature = tcx
+                .fn_sig(instance.def_id())
+                .instantiate(tcx, instance.args)
+                .skip_binder();
+            let output = signature.output();
+            if matches!(output.kind(), TyKind::Int(_) | TyKind::Uint(_))
+                && signature.inputs() == [output, output]
+                && !signature.c_variadic()
+                && args.iter().all(|arg| {
+                    arg.ty(body.locals())
+                        .is_ok_and(|ty| rustc_internal::internal(tcx, ty) == output)
+                })
+                && destination
+                    .ty(body.locals())
+                    .is_ok_and(|ty| rustc_internal::internal(tcx, ty) == output)
+            {
+                return Some(Effect::ScalarIntrinsic);
+            }
+        }
         if krate.as_str() == "cuda_device"
             && super::terminator::intrinsics::asm::InlinePtxCallKind::from_path(&path).is_some()
         {

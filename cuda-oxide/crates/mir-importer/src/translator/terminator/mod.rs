@@ -1081,9 +1081,9 @@ fn translate_call(
         library_site,
     )?;
     if let Some(effect) = effect {
-        // Compiler placeholders inside this genuine source expansion are not
-        // additional source calls. Keep their exact type verifier and attach
-        // the authenticated enclosing event for the stateful consumer.
+        // Mark the original direct scalar source call for the checker's
+        // precision summary. Placeholders keep their existing annotation;
+        // call type verification is independent of this source metadata.
         let operations: Vec<_> = block_ptr.deref(ctx).iter(ctx).collect();
         let start = prev_op
             .and_then(|p| operations.iter().position(|op| *op == p))
@@ -1095,7 +1095,17 @@ fn translate_call(
                         (*callee).clone(),
                     ))
                 });
-                if placeholder {
+                let scalar_source_call = effect.kind
+                    == dialect_mir::library::LibrarySourceEffectKind::ScalarIntrinsic
+                    && call
+                        .get_attr_library_source_site(ctx)
+                        .is_some_and(|site| *site == effect.site)
+                    && call
+                        .get_attr_library_call_target(ctx)
+                        .is_some_and(|target| {
+                            target.kind == dialect_mir::library::LibraryCallKind::Direct
+                        });
+                if placeholder || scalar_source_call {
                     call.set_attr_library_expanded_source(ctx, effect.clone());
                 }
             }
@@ -3716,6 +3726,261 @@ fn try_dispatch_intrinsic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn primitive_ord_summary_authenticates_and_retains_direct_calls() {
+        use crate::translator::body::translate_body;
+        use dialect_mir::library::{LibraryCallKind, LibrarySourceEffectKind};
+        use dialect_mir::ops::MirCallOp;
+        use llvm_export::export::DebugKind;
+        use pliron::common_traits::Verify;
+        use rustc_public::mir::mono::Instance;
+        use rustc_public::ty::{RigidTy, TyKind};
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_ord_summary_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let fixture = root.join("calls.rs");
+        std::fs::write(
+            &fixture,
+            r#"
+#![allow(dead_code)]
+pub fn integer(value: i32, bound: i32) -> i32 { value.max(0).min(bound) }
+pub fn unsigned(value: u32, bound: u32) -> u32 { value.min(bound).max(0) }
+mod spoof { #[inline(never)] pub fn max(a: i32, _: i32) -> i32 { a } }
+pub fn named(a: i32, b: i32) -> i32 { spoof::max(a, b) }
+mod spoof_trait {
+    pub trait Ord { fn min(self, other: Self) -> Self; }
+    impl Ord for i32 { #[inline(never)] fn min(self, _: Self) -> Self { self } }
+}
+pub fn local_trait(a: i32, b: i32) -> i32 { <i32 as spoof_trait::Ord>::min(a, b) }
+#[derive(PartialEq, Eq)] pub struct Effect(i32);
+static mut OBSERVED: i32 = 0;
+impl core::cmp::Ord for Effect {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        unsafe { OBSERVED = self.0; }
+        self.0.cmp(&other.0)
+    }
+}
+impl PartialOrd for Effect {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(core::cmp::Ord::cmp(self, other))
+    }
+}
+pub fn custom(a: Effect, b: Effect) -> Effect { core::cmp::Ord::max(a, b) }
+"#,
+        )
+        .unwrap();
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let sysroot = std::process::Command::new(rustc)
+            .args(["--print", "sysroot"])
+            .output()
+            .unwrap();
+        assert!(sysroot.status.success());
+        let args = vec![
+            "rustc".into(),
+            "--edition=2024".into(),
+            "--crate-type=rlib".into(),
+            "--crate-name=ord_summary".into(),
+            "--emit=metadata".into(),
+            "-Zmir-opt-level=0".into(),
+            format!("--out-dir={}", root.display()),
+            format!(
+                "--sysroot={}",
+                String::from_utf8(sysroot.stdout).unwrap().trim()
+            ),
+            fixture.display().to_string(),
+        ];
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                rustc_public::run!(&args, || {
+                    for (name, scalar_calls) in [
+                        ("integer", 2),
+                        ("unsigned", 2),
+                        ("named", 0),
+                        ("local_trait", 0),
+                        ("custom", 0),
+                    ] {
+                        let item = rustc_public::all_local_items()
+                            .into_iter()
+                            .find(|item| item.name() == format!("ord_summary::{name}"))
+                            .unwrap();
+                        let instance = Instance::try_from(item).unwrap();
+                        let body = instance.body().unwrap();
+                        let calls: Vec<_> = body
+                            .blocks
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(block, bb)| {
+                                let mir::TerminatorKind::Call {
+                                    func,
+                                    args,
+                                    destination,
+                                    ..
+                                } = &bb.terminator.kind
+                                else {
+                                    return None;
+                                };
+                                let effect = crate::translator::facts::library_source_effect(
+                                    func,
+                                    args,
+                                    destination,
+                                    &body,
+                                );
+                                let mir::Operand::Constant(c) = func else {
+                                    panic!("direct fixture call")
+                                };
+                                let TyKind::RigidTy(RigidTy::FnDef(def, args)) =
+                                    c.const_.ty().kind()
+                                else {
+                                    panic!("function item")
+                                };
+                                Some((
+                                    block,
+                                    Instance::resolve(def, &args).unwrap().mangled_name(),
+                                    effect,
+                                ))
+                            })
+                            .collect();
+                        assert_eq!(calls.len(), if scalar_calls == 0 { 1 } else { 2 }, "{name}");
+                        assert_eq!(
+                            calls
+                                .iter()
+                                .filter(|(_, _, effect)| *effect
+                                    == Some(LibrarySourceEffectKind::ScalarIntrinsic))
+                                .count(),
+                            scalar_calls,
+                            "{name}"
+                        );
+                        if scalar_calls == 0 {
+                            continue;
+                        }
+                        for (debug, direct) in [
+                            (DebugKind::Off, true),
+                            (DebugKind::Full, true),
+                            (DebugKind::Off, false),
+                        ] {
+                            crate::library::set_selected_call_targets(
+                                calls
+                                    .iter()
+                                    .filter(|_| direct)
+                                    .map(|(block, marker, _)| {
+                                        (
+                                            crate::LibraryCallSite {
+                                                caller: name.into(),
+                                                block: *block,
+                                            },
+                                            crate::LibraryCallTargetAttr {
+                                                export: marker.clone(),
+                                                marker: marker.clone(),
+                                                kind: LibraryCallKind::Direct,
+                                            },
+                                        )
+                                    })
+                                    .collect(),
+                            );
+                            let mut ctx = Context::new();
+                            crate::translator::register_dialects(&mut ctx);
+                            let successors = body
+                                .blocks
+                                .iter()
+                                .map(|b| b.terminator.successors())
+                                .collect::<Vec<_>>();
+                            let (function, _) = translate_body(
+                                &mut ctx,
+                                &body,
+                                &instance,
+                                body.blocks.len(),
+                                &successors,
+                                false,
+                                None,
+                                Some(name),
+                                &mut Legaliser::default(),
+                                debug,
+                                None,
+                                None,
+                                false,
+                            )
+                            .unwrap();
+                            function.deref(&ctx).verify(&ctx).unwrap();
+                            let scalar = crate::translator::types::translate_type(
+                                &mut ctx,
+                                &body.locals()[1].ty,
+                            )
+                            .unwrap();
+                            let mut retained = Vec::new();
+                            for block in function.deref(&ctx).get_region(0).deref(&ctx).iter(&ctx) {
+                                for op in block.deref(&ctx).iter(&ctx) {
+                                    if let Some(call) = Operation::get_op::<MirCallOp>(op, &ctx) {
+                                        let site = call.get_attr_library_source_site(&ctx).unwrap();
+                                        let effect = call.get_attr_library_expanded_source(&ctx);
+                                        assert_eq!(
+                                            call.get_attr_library_call_target(&ctx).is_some(),
+                                            direct
+                                        );
+                                        if direct {
+                                            let effect =
+                                                effect.expect("genuine scalar call retained");
+                                            assert_eq!(
+                                                effect.kind,
+                                                LibrarySourceEffectKind::ScalarIntrinsic
+                                            );
+                                            assert_eq!(*site, effect.site);
+                                        } else {
+                                            assert!(
+                                                effect.is_none(),
+                                                "call without a selected target must stay ordinary"
+                                            );
+                                        }
+                                        assert_eq!(
+                                            op.deref(&ctx)
+                                                .operands()
+                                                .map(|value| value.get_type(&ctx))
+                                                .collect::<Vec<_>>(),
+                                            vec![scalar, scalar]
+                                        );
+                                        assert_eq!(op.deref(&ctx).get_num_results(), 1);
+                                        assert_eq!(
+                                            op.deref(&ctx).get_result(0).get_type(&ctx),
+                                            scalar
+                                        );
+                                        retained.push((
+                                            site.block,
+                                            String::from(
+                                                (*call.get_attr_callee(&ctx).unwrap()).clone(),
+                                            ),
+                                        ));
+                                    }
+                                }
+                            }
+                            retained.sort();
+                            assert_eq!(
+                                retained,
+                                calls
+                                    .iter()
+                                    .map(|(bb, marker, _)| (*bb, marker.clone()))
+                                    .collect::<Vec<_>>()
+                            );
+                        }
+                    }
+                    crate::library::set_selected_call_targets(Default::default());
+                    std::ops::ControlFlow::<(), _>::Continue(())
+                })
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+            .expect("fixture compilation succeeds");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn native_storage_retention_preserves_original_sites_and_runtime_values() {

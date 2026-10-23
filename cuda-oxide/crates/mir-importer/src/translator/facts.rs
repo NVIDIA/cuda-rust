@@ -549,6 +549,14 @@ pub(crate) fn library_source_effect(
             let unit = destination
                 .ty(body.locals())
                 .is_ok_and(|ty| rustc_internal::internal(tcx, ty).is_unit());
+            if tcx.item_name(instance.def_id()).as_str() == "cold_path"
+                && matches!(krate.as_str(), "core" | "std")
+                && instance.args.is_empty()
+                && args.is_empty()
+                && unit
+            {
+                return Some(Effect::UnitHint);
+            }
             if name == "assert_inhabited"
                 && matches!(krate.as_str(), "core" | "std")
                 && args.is_empty()

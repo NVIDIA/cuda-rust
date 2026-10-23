@@ -62,6 +62,8 @@ pub unsafe fn payload_roundtrip(output: *mut i32) {
     let input = index as i32;
     let mut block_result = 0_i32;
     let mut warp_result = 0_i32;
+    // Retain compiler-hint admission coverage in this checked collective smoke.
+    core::hint::cold_path();
     // SAFETY: each pointer refers to a separate live per-thread scalar; both
     // recipes initialize their output, preserve the input and use no scratch.
     unsafe {

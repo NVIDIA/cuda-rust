@@ -23,7 +23,7 @@ use crate::simt::device_future::DeviceFuture;
 use crate::simt::device_operation::{DeviceOperation, ExecutionContext};
 use crate::simt::error::DeviceError;
 use crate::simt::scheduling_policies::SchedulingPolicy;
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaFunction, CudaStream};
 use std::ffi::c_void;
 use std::future::IntoFuture;
@@ -61,6 +61,7 @@ use std::sync::Arc;
 pub struct AsyncKernelLaunchBuilder<'a> {
     /// Handle to the compiled device function.
     func: Arc<CudaFunction>,
+    resources: Vec<(cuda_core::RawDeviceBuffer, bool)>,
     /// Heap-allocated, type-erased argument storage passed to the CUDA driver.
     args: KernelArgStorage,
     /// Optional thread-block cluster dimensions for `cuLaunchKernelEx`.
@@ -82,7 +83,7 @@ pub struct AsyncKernelLaunchBuilder<'a> {
 ///
 /// ```compile_fail,E0599
 /// use cuda_async::simt::launch::AsyncKernelLaunch;
-/// use cuda_core::simt::LaunchConfig;
+/// use cuda_core::LaunchConfig;
 ///
 /// fn cannot_reconfigure(launch: &mut AsyncKernelLaunch<'_>, config: LaunchConfig) {
 ///     launch.set_launch_config(config);
@@ -92,6 +93,7 @@ pub struct AsyncKernelLaunchBuilder<'a> {
 pub struct AsyncKernelLaunch<'a> {
     /// Handle to the compiled device function.
     func: Arc<CudaFunction>,
+    resources: Vec<(cuda_core::RawDeviceBuffer, bool)>,
     /// Heap-allocated, type-erased argument storage passed to the CUDA driver.
     args: KernelArgStorage,
     /// Complete grid/block dimensions and dynamic shared-memory size.
@@ -157,11 +159,17 @@ impl<'a> AsyncKernelLaunchBuilder<'a> {
     pub fn new(func: Arc<CudaFunction>) -> Self {
         Self {
             func,
+            resources: Vec::new(),
             args: KernelArgStorage::default(),
             cluster_dim: None,
             cooperative: false,
             _borrows: PhantomData,
         }
+    }
+
+    /// Retains a shared allocation and records its access mode for submission.
+    pub fn retain_buffer(&mut self, storage: cuda_core::RawDeviceBuffer, write: bool) {
+        self.resources.push((storage, write));
     }
 
     /// Appends a by-value `Copy` argument to the kernel launch packet.
@@ -261,7 +269,7 @@ impl<'a> AsyncKernelLaunchBuilder<'a> {
     ///
     /// ```compile_fail,E0133
     /// use cuda_async::simt::launch::AsyncKernelLaunchBuilder;
-    /// use cuda_core::simt::LaunchConfig;
+    /// use cuda_core::LaunchConfig;
     ///
     /// fn raw_finalize_requires_unsafe(
     ///     builder: AsyncKernelLaunchBuilder<'static>,
@@ -273,6 +281,7 @@ impl<'a> AsyncKernelLaunchBuilder<'a> {
     pub unsafe fn finalize_unchecked(self, cfg: LaunchConfig) -> AsyncKernelLaunch<'a> {
         AsyncKernelLaunch {
             func: self.func,
+            resources: self.resources,
             args: self.args,
             cfg,
             cluster_dim: self.cluster_dim,
@@ -302,6 +311,17 @@ impl<'a> AsyncKernelLaunch<'a> {
     /// Returns [`DeviceError::Driver`] if context binding or launch submission
     /// fails.
     unsafe fn launch(mut self, stream: &Arc<CudaStream>) -> Result<(), DeviceError> {
+        if self.func.context().as_ref() != stream.context().as_ref() {
+            return Err(DeviceError::Driver(cuda_core::DriverError(
+                cuda_core::sys::cudaError_enum_CUDA_ERROR_INVALID_CONTEXT,
+            )));
+        }
+        let leases = self
+            .resources
+            .iter()
+            .map(|(storage, write)| storage.acquire(stream, *write, false))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DeviceError::Driver)?;
         let cfg = self.cfg;
         let result = match (self.cluster_dim, self.cooperative) {
             (Some(cluster_dim), true) => unsafe {
@@ -347,7 +367,20 @@ impl<'a> AsyncKernelLaunch<'a> {
                 )
             },
         };
+        // The legacy future may hold only borrowed output or (). Retain the
+        // allocations, access leases and module independently of that future.
+        let retained = cuda_core::completion::retain_until_complete(self.func.clone(), stream);
+        let mut access_error = None;
+        for lease in leases {
+            if let Err(error) = lease.retain_until_complete(stream) {
+                access_error = Some(error);
+            }
+        }
         result.map_err(DeviceError::Driver)?;
+        retained.map_err(DeviceError::Driver)?;
+        if let Some(error) = access_error {
+            return Err(DeviceError::Driver(error));
+        }
         Ok(())
     }
 }

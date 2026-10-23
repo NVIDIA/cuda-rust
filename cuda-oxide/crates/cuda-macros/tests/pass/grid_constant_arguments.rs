@@ -42,7 +42,7 @@ fn typed_launches(
     descriptor: Descriptor,
     typed_descriptor: TensorMap<f16, F16Tile128>,
 ) {
-    let config = cuda_core::simt::LaunchConfig::for_num_elems(1);
+    let config = cuda_core::LaunchConfig::for_num_elems(1);
     // SAFETY: this function only type-checks the by-value host ABI; it is never run.
     unsafe {
         module.plain(stream, config, descriptor).unwrap();

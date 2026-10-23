@@ -3,13 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Verifies the ownership contract of `Device::borrow_raw` and
+//! Verifies the ownership contract of `Context::borrow_raw` and
 //! `Stream::borrow_raw`: dropping a borrowed wrapper must not release the
 //! primary context or destroy the stream, so the source handles keep
 //! working afterward.
 
 use core::ffi::{c_int, c_void};
-use cuda_core::{Device, Function, Module, Stream};
+use cuda_core::{Context, Function, Module, Stream};
 
 const NOOP_PTX: &str = "\
 .version 7.0
@@ -23,12 +23,12 @@ const NOOP_PTX: &str = "\
 ";
 
 fn has_gpu() -> bool {
-    Device::device_count().map(|n| n > 0).unwrap_or(false)
+    Context::device_count().map(|n| n > 0).unwrap_or(false)
 }
 
-fn borrow_device(src: &Device) -> std::sync::Arc<Device> {
+fn borrow_device(src: &Context) -> std::sync::Arc<Context> {
     unsafe {
-        Device::borrow_raw(
+        Context::borrow_raw(
             src.cu_ctx() as *mut c_void,
             src.cu_device() as c_int,
             src.ordinal(),
@@ -36,7 +36,7 @@ fn borrow_device(src: &Device) -> std::sync::Arc<Device> {
     }
 }
 
-fn borrow_stream(src: &Stream, dev: &std::sync::Arc<Device>) -> std::sync::Arc<Stream> {
+fn borrow_stream(src: &Stream, dev: &std::sync::Arc<Context>) -> std::sync::Arc<Stream> {
     unsafe { Stream::borrow_raw(src.cu_stream() as *mut c_void, dev) }
 }
 
@@ -45,16 +45,16 @@ fn borrowed_drop_leaves_source_device_usable() {
     if !has_gpu() {
         return;
     }
-    let source = Device::new(0).unwrap();
+    let source = Context::new(0).unwrap();
 
     {
         let borrowed = borrow_device(&source);
         borrowed.bind_to_thread().unwrap();
-        unsafe { borrowed.synchronize() }.unwrap();
+        borrowed.synchronize().unwrap();
     }
 
     source.bind_to_thread().unwrap();
-    unsafe { source.synchronize() }.unwrap();
+    source.synchronize().unwrap();
     let _stream = source.new_stream().unwrap();
 }
 
@@ -63,16 +63,16 @@ fn borrowed_drop_leaves_source_stream_usable() {
     if !has_gpu() {
         return;
     }
-    let source_dev = Device::new(0).unwrap();
+    let source_dev = Context::new(0).unwrap();
     let source_stream = source_dev.new_stream().unwrap();
 
     {
         let borrowed_dev = borrow_device(&source_dev);
         let borrowed_stream = borrow_stream(&source_stream, &borrowed_dev);
-        unsafe { borrowed_stream.synchronize() }.unwrap();
+        borrowed_stream.synchronize().unwrap();
     }
 
-    unsafe { source_stream.synchronize() }.unwrap();
+    source_stream.synchronize().unwrap();
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn borrowed_module_drop_does_not_unload() {
     if !has_gpu() {
         return;
     }
-    let source_dev = Device::new(0).unwrap();
+    let source_dev = Context::new(0).unwrap();
     let source_module = source_dev.load_module_from_ptx_src(NOOP_PTX).unwrap();
 
     {
@@ -100,7 +100,7 @@ fn borrowed_function_uses_parent_module() {
     if !has_gpu() {
         return;
     }
-    let source_dev = Device::new(0).unwrap();
+    let source_dev = Context::new(0).unwrap();
     let source_module = source_dev.load_module_from_ptx_src(NOOP_PTX).unwrap();
     let source_fn = source_module.load_function("noop").unwrap();
 
@@ -116,15 +116,15 @@ fn many_borrowed_drops_do_not_invalidate_source() {
     if !has_gpu() {
         return;
     }
-    let source_dev = Device::new(0).unwrap();
+    let source_dev = Context::new(0).unwrap();
     let source_stream = source_dev.new_stream().unwrap();
 
     for _ in 0..8 {
         let borrowed_dev = borrow_device(&source_dev);
         let borrowed_stream = borrow_stream(&source_stream, &borrowed_dev);
-        unsafe { borrowed_stream.synchronize() }.unwrap();
+        borrowed_stream.synchronize().unwrap();
     }
 
-    unsafe { source_stream.synchronize() }.unwrap();
+    source_stream.synchronize().unwrap();
     let _another = source_dev.new_stream().unwrap();
 }

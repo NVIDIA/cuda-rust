@@ -3,93 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! CUDA context management (primary context, RAII).
-//!
-//! [`CudaContext`] retains the **primary context** for a given device ordinal
-//! via `cuDevicePrimaryCtxRetain` and releases it on [`Drop`]. The primary
-//! context is shared across the process; multiple `CudaContext` instances for
-//! the same device share the same underlying `CUcontext`.
-//!
-//! # Thread binding
-//!
-//! CUDA driver calls are context-scoped and thread-local. [`CudaContext`]
-//! transparently calls `cuCtxSetCurrent` before any driver operation, so
-//! callers do not need to manage the context stack manually.
+//! Context queries and configuration shared by both programming models.
 
-use crate::error::{DriverError, IntoResult};
-use crate::simt::launch::DeviceLaunchLimits;
-use crate::simt::stream::CudaStream;
-use std::ffi::c_int;
-use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
-use std::sync::Arc;
-
-/// Owns a reference to a CUDA device's primary context.
-///
-/// Created via [`CudaContext::new`] and typically held in an `Arc` so streams,
-/// events, and modules can share the same context. Dropping the last reference
-/// releases the primary context (`cuDevicePrimaryCtxRelease`).
-///
-/// Tracks live stream count and accumulated error state atomically for
-/// cross-thread diagnostics.
-#[derive(Debug)]
-pub struct CudaContext {
-    /// Raw CUDA device handle (`CUdevice`).
-    pub(crate) cu_device: cuda_bindings::CUdevice,
-    /// Raw CUDA context handle (`CUcontext`). Set to null on drop.
-    pub(crate) cu_ctx: cuda_bindings::CUcontext,
-    /// Zero-based device ordinal passed to [`CudaContext::new`].
-    pub(crate) ordinal: usize,
-    /// Number of live [`CudaStream`] instances sharing this context.
-    pub(crate) num_streams: AtomicUsize,
-    /// When `true`, the first [`new_stream`](CudaContext::new_stream) call
-    /// synchronizes the context to establish a clean ordering baseline.
-    pub(crate) event_tracking: AtomicBool,
-    /// Sticky error state recorded by [`record_err`](CudaContext::record_err).
-    /// Stores the raw `CUresult` value, or `0` if no error.
-    pub(crate) error_state: AtomicU32,
-}
-
-/// # Safety
-///
-/// `CUdevice` and `CUcontext` are process-wide handles. All mutable state
-/// (`num_streams`, `event_tracking`, `error_state`) uses atomics. The CUDA
-/// driver itself is thread-safe for distinct contexts, and the
-/// [`bind_to_thread`](CudaContext::bind_to_thread) mechanism ensures the
-/// correct context is current before each call.
-unsafe impl Send for CudaContext {}
-/// See [`Send`] impl.
-unsafe impl Sync for CudaContext {}
-
-/// Releases the primary context on drop.
-///
-/// Binds the context to the current thread first (required by
-/// `cuDevicePrimaryCtxRelease`). Errors during teardown are recorded via
-/// [`record_err`](CudaContext::record_err) rather than panicking.
-impl Drop for CudaContext {
-    fn drop(&mut self) {
-        self.record_err(self.bind_to_thread());
-        let ctx = std::mem::replace(&mut self.cu_ctx, std::ptr::null_mut());
-        if !ctx.is_null() {
-            self.record_err(unsafe {
-                cuda_bindings::cuDevicePrimaryCtxRelease_v2(self.cu_device).result()
-            });
-        }
-    }
-}
-
-/// Equality is based on device handle, context handle, and ordinal.
-impl PartialEq for CudaContext {
-    fn eq(&self, other: &Self) -> bool {
-        self.cu_device == other.cu_device
-            && self.cu_ctx == other.cu_ctx
-            && self.ordinal == other.ordinal
-    }
-}
-impl Eq for CudaContext {}
+pub use crate::runtime::{Context, Context as CudaContext};
+use crate::{DeviceLaunchLimits, DriverError, IntoResult, KeepAlive, Stream};
+use std::{
+    ffi::c_int,
+    mem::MaybeUninit,
+    sync::{atomic::Ordering, Arc},
+};
 
 /// The device's meaningful stream priorities, from
-/// [`CudaContext::stream_priority_range`].
+/// [`Context::stream_priority_range`].
 ///
 /// CUDA orders priorities the opposite way round to intuition: **a lower
 /// number is a higher priority**, so the range runs from
@@ -142,17 +67,17 @@ impl StreamPriorityRange {
     /// The value the driver will actually apply for a request of `priority`.
     ///
     /// Answers the silent clamp in
-    /// [`CudaContext::new_stream_with_priority`] ahead of the call.
+    /// [`Context::new_stream_with_priority`] ahead of the call.
     pub fn clamp(&self, priority: i32) -> i32 {
         priority.clamp(self.greatest, self.least)
     }
 }
 
 /// A per-context device limit (`CU_LIMIT_*`), read with
-/// [`CudaContext::limit`] and written with [`CudaContext::set_limit`].
+/// [`Context::limit`] and written with [`Context::set_limit`].
 ///
 /// Every limit is state on the device's **primary** context, so it is shared
-/// by every [`CudaContext`] for that device, by any runtime-API user of the
+/// by every [`Context`] for that device, by any runtime-API user of the
 /// same device in this process, and across library boundaries. A limit set
 /// here is not scoped to the handle that set it.
 ///
@@ -254,8 +179,8 @@ impl ContextLimit {
 /// waits when the calling host thread blocks on GPU work (a stream or
 /// context synchronize).
 ///
-/// Set via [`CudaContext::set_sync_policy`], read via
-/// [`CudaContext::sync_policy`]. The trade-off is host CPU against wake
+/// Set via [`Context::set_sync_policy`], read via
+/// [`Context::sync_policy`]. The trade-off is host CPU against wake
 /// latency: [`Spin`](Self::Spin) burns a full core for the lowest latency,
 /// [`BlockingSync`](Self::BlockingSync) frees the core but wakes later. On a
 /// host with spare cores this trade rarely matters; on a CPU-constrained one
@@ -302,7 +227,7 @@ impl SyncPolicy {
     }
 }
 
-impl CudaContext {
+impl Context {
     fn device_attribute(
         &self,
         attribute: cuda_bindings::CUdevice_attribute,
@@ -316,173 +241,6 @@ impl CudaContext {
                 .map_err(|_| DriverError(cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE))
         }
     }
-
-    /// Creates a new context for the device at `ordinal`.
-    ///
-    /// Calls [`cuInit`](crate::init), obtains the device handle, retains the
-    /// primary context, and binds it to the calling thread. Returns the context
-    /// wrapped in an `Arc` for shared ownership across streams, events, and
-    /// modules.
-    pub fn new(ordinal: usize) -> Result<Arc<Self>, DriverError> {
-        unsafe { crate::init(0)? };
-
-        let cu_device = unsafe {
-            let mut cu_device = MaybeUninit::uninit();
-            cuda_bindings::cuDeviceGet(cu_device.as_mut_ptr(), ordinal as c_int).result()?;
-            cu_device.assume_init()
-        };
-
-        let cu_ctx = unsafe {
-            let mut cu_ctx = MaybeUninit::uninit();
-            cuda_bindings::cuDevicePrimaryCtxRetain(cu_ctx.as_mut_ptr(), cu_device).result()?;
-            cu_ctx.assume_init()
-        };
-
-        let ctx = Arc::new(CudaContext {
-            cu_device,
-            cu_ctx,
-            ordinal,
-            num_streams: AtomicUsize::new(0),
-            event_tracking: AtomicBool::new(true),
-            error_state: AtomicU32::new(0),
-        });
-        ctx.bind_to_thread()?;
-        Ok(ctx)
-    }
-
-    /// Returns the zero-based device ordinal.
-    pub fn ordinal(&self) -> usize {
-        self.ordinal
-    }
-
-    /// Returns the raw `CUdevice` handle.
-    pub fn cu_device(&self) -> cuda_bindings::CUdevice {
-        self.cu_device
-    }
-
-    /// Returns the raw `CUcontext` handle.
-    pub fn cu_ctx(&self) -> cuda_bindings::CUcontext {
-        self.cu_ctx
-    }
-
-    /// Binds this context to the calling thread if not already current.
-    ///
-    /// Checks [`check_err`](Self::check_err) first and propagates any sticky
-    /// error. Skips the `cuCtxSetCurrent` call when the context is already
-    /// bound, avoiding an unnecessary driver round-trip.
-    ///
-    /// Most methods on [`CudaStream`], [`CudaEvent`](crate::CudaEvent), and
-    /// [`CudaModule`](crate::CudaModule) call this internally.
-    ///
-    /// CUcontext is the backing runtime object, and CUmodule / CUfunction / CUstream
-    /// are opaque handles to objects created under that context. bind_to_thread()
-    /// makes that context, the one, the current host thread is operating against.
-    /// If the thread is currently bound to some other context, using those handles
-    /// can fail.
-    pub fn bind_to_thread(&self) -> Result<(), DriverError> {
-        self.check_err()?;
-        let mut current = MaybeUninit::uninit();
-        unsafe {
-            cuda_bindings::cuCtxGetCurrent(current.as_mut_ptr()).result()?;
-            let current = current.assume_init();
-            if current.is_null() || current != self.cu_ctx {
-                cuda_bindings::cuCtxSetCurrent(self.cu_ctx).result()?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Blocks the calling thread until all preceding work in this context
-    /// completes.
-    ///
-    /// Binds the context first, then calls `cuCtxSynchronize`.
-    pub fn synchronize(&self) -> Result<(), DriverError> {
-        self.bind_to_thread()?;
-        unsafe { cuda_bindings::cuCtxSynchronize() }.result()
-    }
-
-    /// Returns a handle to the per-context default stream (stream `0`).
-    ///
-    /// The default stream implicitly synchronizes with all blocking streams in
-    /// the same context. The returned [`CudaStream`] holds a null `CUstream`
-    /// pointer, which the driver interprets as the default stream.
-    pub fn default_stream(self: &Arc<Self>) -> Arc<CudaStream> {
-        Arc::new(CudaStream {
-            cu_stream: std::ptr::null_mut(),
-            ctx: self.clone(),
-        })
-    }
-
-    /// Creates a new non-blocking stream in this context.
-    ///
-    /// The stream is created with `CU_STREAM_NON_BLOCKING`, so it does not
-    /// implicitly synchronize with the default stream.
-    ///
-    /// On the first call (when `num_streams` transitions from 0 to 1), the
-    /// context is synchronized to establish a clean ordering baseline if
-    /// `event_tracking` is enabled.
-    pub fn new_stream(self: &Arc<Self>) -> Result<Arc<CudaStream>, DriverError> {
-        self.create_stream(None)
-    }
-
-    /// Creates a new non-blocking stream at `priority` in this context.
-    ///
-    /// As [`new_stream`](Self::new_stream), with the stream created through
-    /// `cuStreamCreateWithPriority`.
-    ///
-    /// **Lower numbers are higher priorities**, and a value outside the
-    /// device's range is **clamped silently** to the nearest end of it rather
-    /// than refused, so passing [`i32::MIN`] yields the greatest priority the
-    /// device supports and reports nothing. Read
-    /// [`CudaStream::priority`] back to see what the driver applied, or
-    /// consult [`stream_priority_range`](Self::stream_priority_range) first.
-    ///
-    /// Priority orders **compute kernels only**. Host-to-device and
-    /// device-to-host transfers are unaffected, so a high-priority stream does
-    /// not jump a queue of copies. On a device without priority support every
-    /// priority collapses to the single value 0 and the stream still works.
-    pub fn new_stream_with_priority(
-        self: &Arc<Self>,
-        priority: i32,
-    ) -> Result<Arc<CudaStream>, DriverError> {
-        self.create_stream(Some(priority))
-    }
-
-    /// Shared body of [`new_stream`](Self::new_stream) and
-    /// [`new_stream_with_priority`](Self::new_stream_with_priority).
-    ///
-    /// `None` takes `cuStreamCreate`, which is what the driver documents as
-    /// equivalent to a priority of 0, rather than passing 0 explicitly: on a
-    /// device whose range does not contain 0 those are different requests.
-    fn create_stream(
-        self: &Arc<Self>,
-        priority: Option<i32>,
-    ) -> Result<Arc<CudaStream>, DriverError> {
-        self.bind_to_thread()?;
-        let prev = self.num_streams.fetch_add(1, Ordering::Relaxed);
-        if prev == 0 && self.event_tracking.load(Ordering::Relaxed) {
-            self.synchronize()?;
-        }
-        let flags = cuda_bindings::CUstream_flags_enum_CU_STREAM_NON_BLOCKING;
-        let mut cu_stream = MaybeUninit::uninit();
-        let cu_stream = unsafe {
-            match priority {
-                Some(priority) => cuda_bindings::cuStreamCreateWithPriority(
-                    cu_stream.as_mut_ptr(),
-                    flags,
-                    priority,
-                ),
-                None => cuda_bindings::cuStreamCreate(cu_stream.as_mut_ptr(), flags),
-            }
-            .result()?;
-            cu_stream.assume_init()
-        };
-        Ok(Arc::new(CudaStream {
-            cu_stream,
-            ctx: self.clone(),
-        }))
-    }
-
     /// Returns the device's meaningful stream priority range.
     ///
     /// Wraps `cuCtxGetStreamPriorityRange`. See [`StreamPriorityRange`] for
@@ -501,7 +259,6 @@ impl CudaContext {
             })
         }
     }
-
     /// Queries the device's marketing name (e.g. `"NVIDIA GeForce RTX 5090"`).
     ///
     /// Wraps `cuDeviceGetName` with a 256-byte buffer (driver guarantees
@@ -523,7 +280,6 @@ impl CudaContext {
         let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
         Ok(String::from_utf8_lossy(&buf[..end]).into_owned())
     }
-
     /// Queries the compute capability (SM version) of the device.
     ///
     /// Returns `(major, minor)` -- e.g. `(9, 0)` for Hopper H100.
@@ -547,7 +303,6 @@ impl CudaContext {
             Ok((major.assume_init(), minor.assume_init()))
         }
     }
-
     /// Queries dimension, thread-count, and portable shared-memory launch
     /// limits for this device.
     ///
@@ -586,7 +341,6 @@ impl CudaContext {
             )?,
         })
     }
-
     /// Queries the non-portable opt-in shared-memory limit per block.
     ///
     /// Typed launch preparation calls this only when static plus dynamic
@@ -596,7 +350,6 @@ impl CudaContext {
             cuda_bindings::CUdevice_attribute_enum_CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
         )
     }
-
     /// Returns whether this device supports cooperative kernel launches.
     pub fn supports_cooperative_launch(&self) -> Result<bool, DriverError> {
         self.device_attribute(
@@ -604,7 +357,6 @@ impl CudaContext {
         )
         .map(|value| value != 0)
     }
-
     /// Returns whether this device supports thread-block cluster launches.
     pub fn supports_cluster_launch(&self) -> Result<bool, DriverError> {
         self.device_attribute(
@@ -612,14 +364,12 @@ impl CudaContext {
         )
         .map(|value| value != 0)
     }
-
     /// Returns the number of streaming multiprocessors on this device.
     pub fn multiprocessor_count(&self) -> Result<u32, DriverError> {
         self.device_attribute(
             cuda_bindings::CUdevice_attribute_enum_CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
         )
     }
-
     /// Returns the maximum number of threads resident on one streaming
     /// multiprocessor.
     ///
@@ -631,7 +381,6 @@ impl CudaContext {
             cuda_bindings::CUdevice_attribute_enum_CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR,
         )
     }
-
     /// Reads a device limit off this context.
     ///
     /// Wraps `cuCtxGetLimit`. See [`ContextLimit`] for what each limit means,
@@ -645,7 +394,6 @@ impl CudaContext {
             Ok(value.assume_init())
         }
     }
-
     /// Writes a device limit on this context.
     ///
     /// Wraps `cuCtxSetLimit`. The limit is state on the device's primary
@@ -662,7 +410,6 @@ impl CudaContext {
         self.bind_to_thread()?;
         unsafe { cuda_bindings::cuCtxSetLimit(limit.to_raw(), value) }.result()
     }
-
     /// Queries the per-thread device stack size, in bytes.
     ///
     /// Equivalent to [`limit`](Self::limit) with
@@ -671,7 +418,6 @@ impl CudaContext {
     pub fn stack_size(&self) -> Result<usize, DriverError> {
         self.limit(ContextLimit::StackSize)
     }
-
     /// Sets the per-thread device stack size, in bytes.
     ///
     /// Equivalent to [`set_limit`](Self::set_limit) with
@@ -688,19 +434,18 @@ impl CudaContext {
     pub fn set_stack_size(&self, bytes: usize) -> Result<(), DriverError> {
         self.set_limit(ContextLimit::StackSize, bytes)
     }
-
     /// Sets the context's scheduling policy (`CU_CTX_SCHED_*`).
     ///
     /// Wraps `cuDevicePrimaryCtxSetFlags_v2`, scoped to this context's
     /// device rather than `cuCtxSetFlags`'s "whatever is current on this
-    /// thread": [`CudaContext`] retains and owns a specific device's primary
+    /// thread": [`Context`] retains and owns a specific device's primary
     /// context, so the device-scoped call is the one that matches what this
     /// type actually holds. Read-modify-write: only the 3 scheduling bits
     /// (`CU_CTX_SCHED_MASK`) are replaced, any other flag bit the process has
     /// set independently (e.g. `CU_CTX_MAP_HOST`) is preserved.
     ///
     /// The policy is process-wide state on the device's primary context:
-    /// it affects every [`CudaContext`] clone of this device, and any
+    /// it affects every [`Context`] clone of this device, and any
     /// runtime-API user of the same device in this process, not just this
     /// handle. The read-modify-write over `CU_CTX_SCHED_MASK` is also not
     /// atomic: a concurrent flag writer on the same device can interleave
@@ -727,7 +472,6 @@ impl CudaContext {
             cuda_bindings::cuDevicePrimaryCtxSetFlags_v2(self.cu_device, new_flags).result()
         }
     }
-
     /// Returns the context's current scheduling policy (`CU_CTX_SCHED_*`).
     ///
     /// `None` if the driver reports a scheduling value this enum does not
@@ -747,7 +491,6 @@ impl CudaContext {
             Ok(SyncPolicy::from_raw(flags.assume_init()))
         }
     }
-
     /// Atomically reads and clears the sticky error state.
     ///
     /// Returns `Ok(())` if no error was recorded, or the stored
@@ -760,7 +503,6 @@ impl CudaContext {
             Err(DriverError(error_state))
         }
     }
-
     /// Records a driver error into the sticky error state.
     ///
     /// Used during [`Drop`] paths where returning a `Result` is not possible.
@@ -771,5 +513,36 @@ impl CudaContext {
         if let Err(err) = result {
             self.error_state.store(err.0, Ordering::Relaxed)
         }
+    }
+    /// Returns the context's legacy default stream (stream zero).
+    pub fn default_stream(self: &Arc<Self>) -> Arc<Stream> {
+        Arc::new(Stream {
+            cu_stream: std::ptr::null_mut(),
+            context: self.clone(),
+            owned: false,
+            _keep_alive: KeepAlive::none(),
+        })
+    }
+    /// Creates a nonblocking stream with the requested CUDA scheduling priority.
+    pub fn new_stream_with_priority(
+        self: &Arc<Self>,
+        priority: i32,
+    ) -> Result<Arc<Stream>, DriverError> {
+        self.bind_to_thread()?;
+        let mut stream = std::ptr::null_mut();
+        unsafe {
+            cuda_bindings::cuStreamCreateWithPriority(
+                &mut stream,
+                cuda_bindings::CUstream_flags_enum_CU_STREAM_NON_BLOCKING,
+                priority,
+            )
+            .result()?;
+        }
+        Ok(Arc::new(Stream {
+            cu_stream: stream,
+            context: self.clone(),
+            owned: true,
+            _keep_alive: KeepAlive::none(),
+        }))
     }
 }

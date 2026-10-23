@@ -51,7 +51,7 @@
 //! ```ignore
 //! use cuda_device::{kernel, thread, DisjointSlice};
 //! use cuda_host::cuda_module;
-//! use cuda_core::simt::LaunchConfig;
+//! use cuda_core::LaunchConfig;
 //! use cuda_core::{CudaContext, DeviceBuffer};
 //!
 //! #[cuda_module]

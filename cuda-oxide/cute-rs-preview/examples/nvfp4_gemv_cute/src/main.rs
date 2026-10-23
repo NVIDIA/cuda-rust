@@ -21,7 +21,7 @@
 
 use ctm_rs::memory::DisjointSlice;
 use ctm_rs::{cuda_module, kernel, thread};
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cute_rs::{
     BlockScaledTensor, Float4E2M1FN, Float8E8M0FNU, KMajor, Mkl, Nkl, Sm1xxBlockScaleKMajor,

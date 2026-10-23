@@ -7,7 +7,7 @@ use crate::device_context::with_default_device_policy;
 use crate::device_future::DeviceFuture;
 use crate::device_operation::{DeviceOp, ExecutionContext, GraphNode, ReplayResource};
 use crate::error::DeviceError;
-use cuda_core::{sys, Device, IntoResult, Stream};
+use cuda_core::{sys, Context, IntoResult, Stream};
 use std::collections::HashMap;
 use std::future::IntoFuture;
 use std::mem::MaybeUninit;
@@ -67,7 +67,7 @@ struct GraphExecHandle {
     /// Contexts of `update` ops not yet consumed by a replay.
     pending: Mutex<Vec<ExecutionContext>>,
     /// Bound before destruction: the driver needs the owning context current.
-    device: Arc<Device>,
+    device: Arc<Context>,
     cu_graph: sys::CUgraph,
     cu_graph_exec: sys::CUgraphExec,
 }
@@ -85,7 +85,7 @@ impl GraphExecHandle {
     /// instantiation fails, and owned by the returned handle otherwise
     /// (whose `Drop` also covers an upload failure).
     fn instantiate(
-        device: Arc<Device>,
+        device: Arc<Context>,
         cu_graph: sys::CUgraph,
         stream: &Stream,
     ) -> Result<Self, DeviceError> {
@@ -165,7 +165,7 @@ fn capture_on<R>(
     stream: &Arc<Stream>,
     record: impl FnOnce() -> Result<R, DeviceError>,
 ) -> Result<(R, Arc<GraphExecHandle>), DeviceError> {
-    let device = stream.device().clone();
+    let device = stream.context().clone();
     device.bind_to_thread()?;
 
     unsafe {
@@ -204,7 +204,7 @@ fn capture_on<R>(
     let exec = GraphExecHandle::instantiate(device, cu_graph, stream)?;
 
     // Drain the upload. The recorded work itself has *not* run.
-    unsafe { stream.synchronize() }?;
+    stream.synchronize()?;
 
     Ok((output, Arc::new(exec)))
 }

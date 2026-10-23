@@ -7,12 +7,25 @@
 
 #![cfg_attr(feature = "f16", feature(f16))]
 
+pub mod allocation;
 mod api;
+pub use allocation::{AllocationLease, DeviceAllocation, RawDeviceBuffer};
+pub mod completion;
+pub mod context;
 pub(crate) mod cudarc_shim;
+pub mod device_buffer;
 mod dtype;
+pub mod embedded;
 mod error;
+pub mod event;
+pub mod launch;
+mod launch_raw;
+pub mod memory;
+pub mod module;
+pub mod peer;
+pub mod pinned_host_buffer;
 mod runtime;
-pub mod simt;
+pub mod stream;
 pub mod vmm;
 
 pub use api::*;
@@ -26,19 +39,18 @@ pub use dtype::*;
 pub use error::*;
 pub use runtime::*;
 
-// The cuda-oxide surface, re-exported at the root where its consumers
-// expect it. `simt::LaunchConfig` and `simt::vmm` are deliberately absent:
-// they collide with this crate's own `LaunchConfig` and with the reviewed
-// `vmm` module above (both forks of the same cuda-oxide ancestor), and stay
-// reachable only through `simt::`.
-pub use simt::embedded;
-pub use simt::{
-    launch_kernel_cooperative, launch_kernel_cooperative_on_stream, launch_kernel_ex,
-    launch_kernel_ex_cooperative, launch_kernel_ex_cooperative_on_stream,
-    launch_kernel_ex_on_stream, launch_kernel_on_stream, BlockRequirement, ConstantHandle,
-    ContextLimit, CudaContext, CudaEvent, CudaFunction, CudaModule, CudaStream, DeviceBuffer,
-    DeviceCopy, DeviceLaunchLimits, DynamicSharedMemoryRequirement, EmbeddedModule,
-    EmbeddedModuleError, KernelLaunchConfig, KernelLaunchContract, LaunchAxis, LaunchConfig1D,
-    LaunchConfig2D, LaunchConfig3D, LaunchContractError, LaunchContractSpec, LaunchDimension,
-    PinnedHostBuffer, PreparedLaunch, StreamPriorityRange, SyncPolicy,
+pub use context::{ContextLimit, StreamPriorityRange, SyncPolicy};
+pub use cuda_core_derive::DeviceCopy;
+pub use device_buffer::{DeviceBuffer, DeviceBufferView, DeviceCopy};
+pub use embedded::{EmbeddedModule, EmbeddedModuleError};
+pub use launch::*;
+pub use launch_raw::*;
+pub use module::ConstantHandle;
+pub use oxide_artifacts as artifacts;
+pub use pinned_host_buffer::PinnedHostBuffer;
+
+// Compatibility spellings are aliases of the shared handles, not separate runtimes.
+pub use runtime::{
+    Context as CudaContext, Event as CudaEvent, Function as CudaFunction, Module as CudaModule,
+    Stream as CudaStream,
 };

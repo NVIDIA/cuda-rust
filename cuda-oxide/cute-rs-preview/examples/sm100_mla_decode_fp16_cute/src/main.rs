@@ -373,8 +373,10 @@ fn main() -> Result<()> {
                 run()?;
             }
             stream.synchronize()?;
-            let start = context.new_event(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
-            let end = context.new_event(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            let start =
+                context.new_event_with_flags(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            let end =
+                context.new_event_with_flags(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
             start.record(&stream)?;
             for _ in 0..args.iterations {
                 run()?;

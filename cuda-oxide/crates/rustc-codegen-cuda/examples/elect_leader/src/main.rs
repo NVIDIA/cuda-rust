@@ -74,7 +74,7 @@ mod kernels {
 // =============================================================================
 
 fn main() {
-    use cuda_core::simt::LaunchConfig;
+    use cuda_core::LaunchConfig;
     use cuda_core::{CudaContext, DeviceBuffer};
 
     println!("=== elect.sync warp leader election (sm_90+) ===\n");

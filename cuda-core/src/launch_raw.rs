@@ -3,83 +3,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! The cuda-oxide host surface.
-//!
-//! Everything under this module is the cuda-oxide host API, brought over
-//! as-is for the shared host-crate migration rather than reconciled:
-//! [`CudaContext`] lands next to this crate's own `Device`, and
-//! [`LaunchConfig`] next to this crate's own `LaunchConfig`. The two surfaces
-//! get reconciled after the repository migration, with both models in one
-//! tree, and this module is deletable as a unit once that happens.
-//!
-//! Naming: everything cuda-oxide exposed at its crate root is re-exported
-//! here, so `cuda_core::simt::X` is oxide's `cuda_core::X`. The crate root
-//! additionally re-exports every name that does not collide with the
-//! existing surface; the one collision is [`LaunchConfig`], which is
-//! reachable only through this module.
-//!
-//! Differences from the cuda-oxide original, recorded for the
-//! reconciliation:
-//!
-//! - `DeviceCopy` for the unstable `f16` primitive sits behind the
-//!   default-off `f16` cargo feature, since it is nightly-only; the
-//!   `half::f16` and `half::bf16` impls are always present.
-//! - `#[derive(DeviceCopy)]` comes from the sibling `cuda-core-derive`
-//!   crate, extracted from cuda-oxide's `cuda-macros` so it is publishable.
-//! - `vmm` and `peer` are copied like the rest; #202 remains the idiomatic
-//!   port of the VMM wrappers onto this crate's own runtime types.
-//! - `init` and `launch_kernel` are not copied: the crate root already
-//!   exposes identical ones, re-exported below.
-//! - `oxide-artifacts` comes from crates.io (cuda-oxide publishes it) and is
-//!   re-exported as [`artifacts`].
+//! Context-aware raw CUDA launch helpers.
 
-pub mod context;
-pub mod device_buffer;
-pub mod embedded;
-pub mod event;
-pub mod launch;
-pub mod memory;
-pub mod module;
-pub mod peer;
-pub mod pinned_host_buffer;
-pub mod stream;
-pub mod vmm;
+use crate::{launch_kernel, DriverError, Function, IntoResult, Stream};
 
-pub use context::{ContextLimit, CudaContext, StreamPriorityRange, SyncPolicy};
-/// `#[derive(DeviceCopy)]`, re-exported next to the trait so
-/// `use cuda_core::DeviceCopy;` brings both into scope (serde pattern).
-pub use cuda_core_derive::DeviceCopy;
-pub use device_buffer::{DeviceBuffer, DeviceCopy};
-pub use embedded::{EmbeddedModule, EmbeddedModuleError};
-pub use event::CudaEvent;
-pub use launch::{
-    BlockRequirement, DeviceLaunchLimits, DynamicSharedMemoryRequirement, KernelLaunchConfig,
-    KernelLaunchContract, LaunchAxis, LaunchConfig, LaunchConfig1D, LaunchConfig2D, LaunchConfig3D,
-    LaunchContractError, LaunchContractSpec, LaunchDimension, PreparedLaunch,
-};
-pub use module::{ConstantHandle, CudaFunction, CudaModule};
-pub use pinned_host_buffer::PinnedHostBuffer;
-pub use stream::CudaStream;
-
-// The remaining items of oxide's crate root are identical on both surfaces;
-// they are re-exported so `cuda_core::simt` mirrors it completely.
-pub use crate::error::{DriverError, IntoResult};
-pub use crate::init;
-pub use crate::launch_kernel;
-pub use cuda_bindings as sys;
-/// Artifact-bundle metadata, from the published crate cuda-oxide releases.
-pub use oxide_artifacts as artifacts;
-
-/// Launches a CUDA kernel on a specific [`CudaStream`], binding its context first.
+/// Launches a CUDA kernel on a specific [`Stream`], binding its context first.
 ///
 /// This is the usual host-side helper for `cuda_launch!` and async launches.
 /// It ensures the stream's owning context is current before calling the raw
 /// [`launch_kernel`] entry point, so callers do not need to manually call
-/// [`CudaContext::bind_to_thread`] before every launch.
+/// [`crate::Context::bind_to_thread`] before every launch.
 ///
 /// Unlike [`launch_kernel`], this helper works with typed wrappers rather than
 /// raw driver handles. It is therefore the preferred API whenever you already
-/// have a [`CudaFunction`] and [`CudaStream`].
+/// have a [`Function`] and [`Stream`].
 ///
 /// # Safety
 ///
@@ -100,11 +37,11 @@ pub use oxide_artifacts as artifacts;
 /// `cuLaunchKernel` call rejects the launch.
 #[inline]
 pub unsafe fn launch_kernel_on_stream(
-    func: &CudaFunction,
+    func: &Function,
     grid_dim: (u32, u32, u32),
     block_dim: (u32, u32, u32),
     shared_mem_bytes: u32,
-    stream: &CudaStream,
+    stream: &Stream,
     kernel_params: &mut [*mut std::ffi::c_void],
 ) -> Result<(), DriverError> {
     stream.context().bind_to_thread()?;
@@ -218,12 +155,12 @@ pub unsafe fn launch_kernel_ex(
 /// `cuLaunchKernelEx` call rejects the launch.
 #[inline]
 pub unsafe fn launch_kernel_ex_on_stream(
-    func: &CudaFunction,
+    func: &Function,
     grid_dim: (u32, u32, u32),
     block_dim: (u32, u32, u32),
     shared_mem_bytes: u32,
     cluster_dim: (u32, u32, u32),
-    stream: &CudaStream,
+    stream: &Stream,
     kernel_params: &mut [*mut std::ffi::c_void],
 ) -> Result<(), DriverError> {
     stream.context().bind_to_thread()?;
@@ -330,11 +267,11 @@ pub unsafe fn launch_kernel_cooperative(
 /// `cuLaunchKernelEx` call rejects the launch.
 #[inline]
 pub unsafe fn launch_kernel_cooperative_on_stream(
-    func: &CudaFunction,
+    func: &Function,
     grid_dim: (u32, u32, u32),
     block_dim: (u32, u32, u32),
     shared_mem_bytes: u32,
-    stream: &CudaStream,
+    stream: &Stream,
     kernel_params: &mut [*mut std::ffi::c_void],
 ) -> Result<(), DriverError> {
     stream.context().bind_to_thread()?;
@@ -447,12 +384,12 @@ pub unsafe fn launch_kernel_ex_cooperative(
 /// `cuLaunchKernelEx` call rejects the launch.
 #[inline]
 pub unsafe fn launch_kernel_ex_cooperative_on_stream(
-    func: &CudaFunction,
+    func: &Function,
     grid_dim: (u32, u32, u32),
     block_dim: (u32, u32, u32),
     shared_mem_bytes: u32,
     cluster_dim: (u32, u32, u32),
-    stream: &CudaStream,
+    stream: &Stream,
     kernel_params: &mut [*mut std::ffi::c_void],
 ) -> Result<(), DriverError> {
     stream.context().bind_to_thread()?;

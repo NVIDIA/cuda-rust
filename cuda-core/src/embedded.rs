@@ -5,7 +5,7 @@
 
 //! Loading CUDA modules from embedded device artifact bundles.
 
-use crate::{CudaContext, CudaModule, DriverError};
+use crate::{Context, DriverError, Module};
 use oxide_artifacts::ArtifactError;
 pub use oxide_artifacts::{
     ArtifactCompileOptions, ArtifactDebugPolicy, ArtifactPayloadKind, OwnedArtifactBundle,
@@ -43,7 +43,7 @@ impl EmbeddedModule {
         self.bundle.payload(kind)
     }
 
-    pub fn load(&self, ctx: &Arc<CudaContext>) -> Result<Arc<CudaModule>, EmbeddedModuleError> {
+    pub fn load(&self, ctx: &Arc<Context>) -> Result<Arc<Module>, EmbeddedModuleError> {
         let image =
             loadable_payload(&self.bundle).expect("EmbeddedModule always has a loadable payload");
         ctx.load_module_from_image(image)
@@ -78,9 +78,9 @@ pub fn embedded_modules_from_current_exe() -> Result<Vec<EmbeddedModule>, Embedd
 }
 
 pub fn load_embedded_module(
-    ctx: &Arc<CudaContext>,
+    ctx: &Arc<Context>,
     name: &str,
-) -> Result<Arc<CudaModule>, EmbeddedModuleError> {
+) -> Result<Arc<Module>, EmbeddedModuleError> {
     let module = embedded_modules_from_current_exe()?
         .into_iter()
         .find(|module| module.name() == name)
@@ -90,9 +90,7 @@ pub fn load_embedded_module(
     module.load(ctx)
 }
 
-pub fn load_first_embedded_module(
-    ctx: &Arc<CudaContext>,
-) -> Result<Arc<CudaModule>, EmbeddedModuleError> {
+pub fn load_first_embedded_module(ctx: &Arc<Context>) -> Result<Arc<Module>, EmbeddedModuleError> {
     let module = embedded_modules_from_current_exe()?
         .into_iter()
         .next()

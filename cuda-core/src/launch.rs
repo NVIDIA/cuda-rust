@@ -10,7 +10,7 @@
 //! proving that it matches a kernel is unsafe. Use a rank-preserving config and
 //! [`PreparedLaunch`] for the checked path.
 
-use crate::{CudaFunction, CudaStream, DriverError};
+use crate::{DriverError, Function, Stream};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::marker::PhantomData;
@@ -867,7 +867,7 @@ impl From<DriverError> for LaunchContractError {
 /// value performs no contract query; it only compares the stream's context
 /// handle before the normal launch path binds that context.
 pub struct PreparedLaunch<C: KernelLaunchContract> {
-    function: CudaFunction,
+    function: Function,
     config: LaunchConfig,
     _contract: PhantomData<fn(C) -> C>,
 }
@@ -897,7 +897,7 @@ impl<C: KernelLaunchContract> PreparedLaunch<C> {
     /// relationship.
     #[doc(hidden)]
     pub unsafe fn __prepare(
-        function: CudaFunction,
+        function: Function,
         config: C::Config,
     ) -> Result<Self, LaunchContractError> {
         let raw = config.__raw();
@@ -1043,7 +1043,7 @@ impl<C: KernelLaunchContract> PreparedLaunch<C> {
     }
 
     /// Returns the prepared CUDA function.
-    pub fn function(&self) -> &CudaFunction {
+    pub fn function(&self) -> &Function {
         &self.function
     }
 
@@ -1057,7 +1057,7 @@ impl<C: KernelLaunchContract> PreparedLaunch<C> {
     }
 
     /// Rejects a stream from a different context without making a driver call.
-    pub fn validate_stream(&self, stream: &CudaStream) -> Result<(), LaunchContractError> {
+    pub fn validate_stream(&self, stream: &Stream) -> Result<(), LaunchContractError> {
         let function_context = self.function.context();
         let stream_context = stream.context();
         if function_context.cu_ctx() == stream_context.cu_ctx() {

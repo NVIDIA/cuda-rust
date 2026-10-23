@@ -12,8 +12,8 @@
 //! P2P access depends on hardware topology. Use `can_access_peer` to query
 //! support before calling `enable_peer_access`.
 
+use crate::context::Context;
 use crate::error::{DriverError, IntoResult};
-use crate::simt::context::CudaContext;
 use std::mem::MaybeUninit;
 use std::sync::Arc;
 
@@ -25,7 +25,7 @@ use std::sync::Arc;
 ///
 /// This is a query only -- it does not enable access. Call `enable_peer_access`
 /// to actually enable it.
-pub fn can_access_peer(from: &CudaContext, to: &CudaContext) -> Result<bool, DriverError> {
+pub fn can_access_peer(from: &Context, to: &Context) -> Result<bool, DriverError> {
     let mut can_access = MaybeUninit::uninit();
     unsafe {
         cuda_bindings::cuDeviceCanAccessPeer(
@@ -49,10 +49,7 @@ pub fn can_access_peer(from: &CudaContext, to: &CudaContext) -> Result<bool, Dri
 ///
 /// Returns `Ok(())` if access was enabled or was already enabled. Returns an error
 /// if the devices do not support P2P (check with `can_access_peer` first).
-pub fn enable_peer_access(
-    from: &Arc<CudaContext>,
-    to: &Arc<CudaContext>,
-) -> Result<(), DriverError> {
+pub fn enable_peer_access(from: &Arc<Context>, to: &Arc<Context>) -> Result<(), DriverError> {
     from.bind_to_thread()?;
     let result = unsafe { cuda_bindings::cuCtxEnablePeerAccess(to.cu_ctx(), 0) };
     match result {
@@ -67,10 +64,7 @@ pub fn enable_peer_access(
 /// After this call, direct memory access from `from` to `to` is no longer
 /// possible. Any in-flight operations accessing peer memory must have completed
 /// before calling this.
-pub fn disable_peer_access(
-    from: &Arc<CudaContext>,
-    to: &Arc<CudaContext>,
-) -> Result<(), DriverError> {
+pub fn disable_peer_access(from: &Arc<Context>, to: &Arc<Context>) -> Result<(), DriverError> {
     from.bind_to_thread()?;
     let result = unsafe { cuda_bindings::cuCtxDisablePeerAccess(to.cu_ctx()) };
     match result {

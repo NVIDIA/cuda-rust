@@ -32,7 +32,7 @@
 //! Build and run with:
 //!   cargo oxide run tcgen05
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer, sys};
 use cuda_device::barrier::Barrier;
 use cuda_device::shared::{SharedArray, cvta_generic_to_shared_offset};

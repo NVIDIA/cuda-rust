@@ -213,7 +213,7 @@ Here's the generated async vecadd template (with minor formatting edits for read
 ```rust
 use cuda_async::simt::device_context::init_device_contexts;
 use cuda_async::simt::device_operation::DeviceOperation;
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;
 
@@ -234,7 +234,7 @@ mod kernels {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use cuda_async::simt::device_box::DeviceBox;
-    use cuda_core::simt::memory::{malloc_async, memcpy_dtoh_async, memcpy_htod_async};
+    use cuda_core::memory::{malloc_async, memcpy_dtoh_async, memcpy_htod_async};
     use std::mem;
 
     // 1. Initialize the device context map (default device 0, 1 device).

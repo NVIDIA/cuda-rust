@@ -20,8 +20,8 @@
 //! (CUDA 12.1); see cuda-core's build script probe.
 #![cfg(cuda_has_multicast)]
 
-use cuda_core::simt::context::CudaContext;
-use cuda_core::simt::vmm;
+use cuda_core::context::CudaContext;
+use cuda_core::vmm;
 use cuda_core::IntoResult;
 use std::mem::MaybeUninit;
 
@@ -115,7 +115,7 @@ fn multicast_two_gpu_team_roundtrip() {
     let byte_len = pattern.len() * std::mem::size_of::<u32>();
     let stream0 = ctx0.default_stream();
     unsafe {
-        cuda_core::simt::memory::memcpy_htod_async(
+        cuda_core::memory::memcpy_htod_async(
             mappings[0].0.base(),
             pattern.as_ptr(),
             byte_len,
@@ -127,7 +127,7 @@ fn multicast_two_gpu_team_roundtrip() {
 
     let mut readback = vec![0u32; 256];
     unsafe {
-        cuda_core::simt::memory::memcpy_dtoh_async(
+        cuda_core::memory::memcpy_dtoh_async(
             readback.as_mut_ptr(),
             mappings[0].0.base(),
             byte_len,

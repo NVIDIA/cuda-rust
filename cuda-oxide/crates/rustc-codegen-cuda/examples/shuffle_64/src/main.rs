@@ -126,7 +126,7 @@ mod kernels {
 const WARP: usize = 32;
 
 fn main() {
-    use cuda_core::simt::LaunchConfig;
+    use cuda_core::LaunchConfig;
     use cuda_core::{CudaContext, DeviceBuffer};
 
     println!("=== 64-bit warp shuffle (u64 / f64) ===\n");

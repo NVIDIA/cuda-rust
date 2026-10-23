@@ -39,6 +39,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Advance the lockstep Tile and shared host crates to v0.5.0 for the breaking
   safety-contract and host-runtime changes.
+- Tile and SIMT now share the `cuda-core` context, stream, event, module, launch
+  configuration, and allocation types. Replace `cuda_core::simt` imports with
+  crate-root imports; use `Context` for context ownership and `Device` for a
+  physical GPU identity. Foreign allocations must provide their actual context.
+- Typed buffers and tensors can share allocations without copying through
+  `Tensor::from_buffer`, `Tensor::into_buffer`, and contiguous borrowed buffer
+  views. Views share context identity, byte offsets, and access exclusion.
+  Completion leases retain allocations after early drops and forgotten launches;
+  buffer and stream cleanup no longer waits for GPU work on the dropping thread.
+- Tile numeric storage wrappers implement `DeviceCopy` alongside `DType`; the
+  traits remain independent and packed FP4 keeps its byte storage representation.
+
 - cuTile Rust now lives in the [NVIDIA/cuda-rust](https://github.com/NVIDIA/cuda-rust)
   repository under `cutile-rs/`, next to cuda-oxide (SIMT) and the shared host
   crates (`cuda-bindings`, `cuda-core`, `cuda-core-derive`, `cuda-async`) at the

@@ -336,7 +336,7 @@ fn build_pipeline() -> Result<std::path::PathBuf, String> {
 // the results.
 // =============================================================================
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use std::sync::Arc;
 

@@ -9,7 +9,7 @@ use crate::device_context::{pool_for_stream, with_default_device_policy};
 use crate::device_future::DeviceFuture;
 use crate::error::DeviceError;
 use crate::scheduling_policies::SchedulingPolicy;
-use cuda_core::{Device, Event, MemPool, Stream};
+use cuda_core::{Context, Event, MemPool, Stream};
 use std::cell::Cell;
 use std::fmt::Debug;
 use std::future::IntoFuture;
@@ -107,7 +107,7 @@ pub trait ReplayResource: Send + Sync {
 pub struct ExecutionContext {
     ordinal: DeviceOrdinal,
     cuda_stream: Arc<Stream>,
-    device: Arc<Device>,
+    device: Arc<Context>,
     pool: Option<Arc<MemPool>>,
     submission: Arc<crate::submission::Submission>,
     recording: bool,
@@ -115,7 +115,7 @@ pub struct ExecutionContext {
 
 impl ExecutionContext {
     pub fn new(cuda_stream: Arc<Stream>) -> Self {
-        let device = cuda_stream.device().clone();
+        let device = cuda_stream.context().clone();
         let ordinal = device.ordinal();
         let pool = pool_for_stream(&cuda_stream);
         Self {
@@ -186,7 +186,7 @@ impl ExecutionContext {
     pub(crate) unsafe fn complete(&self) {
         self.submission.complete();
     }
-    pub fn device(&self) -> &Arc<Device> {
+    pub fn context(&self) -> &Arc<Context> {
         &self.device
     }
     pub fn get_device_id(&self) -> DeviceOrdinal {
@@ -516,7 +516,7 @@ pub trait DeviceOp:
         let _execution_lock = acquire_execution_lock()?;
         let ctx = ExecutionContext::new(stream.clone());
         let res = unsafe { self.execute(&ctx) };
-        let sync_res = unsafe { stream.synchronize() };
+        let sync_res = stream.synchronize();
         sync_res?;
         unsafe { ctx.complete() };
         res
@@ -600,7 +600,7 @@ impl Producer {
     /// context's stream.
     fn record(ctx: &ExecutionContext) -> Result<Self, DeviceError> {
         let stream = Arc::clone(ctx.get_cuda_stream());
-        let event = stream.device().new_event()?;
+        let event = stream.context().new_event()?;
         event.record(&stream)?;
         Ok(Self { stream, event })
     }

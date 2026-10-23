@@ -153,11 +153,11 @@ impl Drop for Submission {
             .unwrap_or_else(|e| e.into_inner())
             .release(|| {
                 let result = (|| {
-                    self.stream.device().bind_to_thread()?;
+                    self.stream.context().bind_to_thread()?;
                     match probe_stream(&self.stream) {
                         StreamHealth::Idle => Ok(()),
                         StreamHealth::Busy => {
-                            unsafe { self.stream.synchronize() }.map_err(DeviceError::Driver)
+                            self.stream.synchronize().map_err(DeviceError::Driver)
                         }
                         StreamHealth::Faulted(e) => Err(DeviceError::Driver(e)),
                         StreamHealth::Capturing => Err(DeviceError::Internal(

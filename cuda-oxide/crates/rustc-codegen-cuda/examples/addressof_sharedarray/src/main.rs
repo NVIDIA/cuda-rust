@@ -47,7 +47,7 @@
 #![allow(static_mut_refs)]
 #![allow(clippy::assign_op_pattern)] // Expanded assignment preserves the addressof repro CFG.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, SharedArray, device, kernel, thread};
 use cuda_host::{cuda_module, ltoir};

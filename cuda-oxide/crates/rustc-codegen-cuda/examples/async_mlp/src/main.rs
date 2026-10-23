@@ -39,10 +39,8 @@ use cuda_async::simt::device_box::DeviceBox;
 use cuda_async::simt::device_context::init_device_contexts;
 use cuda_async::simt::device_operation::{self, DeviceOperation, Zippable, value};
 use cuda_async::zip;
-use cuda_core::simt::LaunchConfig;
-use cuda_core::simt::memory::{
-    malloc_async, memcpy_dtoh_async, memcpy_htod_async, memset_d8_async,
-};
+use cuda_core::LaunchConfig;
+use cuda_core::memory::{malloc_async, memcpy_dtoh_async, memcpy_htod_async, memset_d8_async};
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;
 use std::future::IntoFuture;
@@ -142,7 +140,7 @@ fn h2d(host_data: Vec<f32>) -> impl DeviceOperation<Output = DeviceBox<[f32]>> {
         unsafe {
             let dptr = malloc_async(stream.cu_stream(), num_bytes).unwrap();
             memcpy_htod_async(dptr, host_data.as_ptr(), num_bytes, stream.cu_stream()).unwrap();
-            value(DeviceBox::from_raw_parts(dptr, n, ctx.get_device_id()))
+            value(DeviceBox::from_raw_parts(dptr, n, stream.clone()))
         }
     })
 }
@@ -156,7 +154,7 @@ fn zeros(n: usize) -> impl DeviceOperation<Output = DeviceBox<[f32]>> {
         unsafe {
             let dptr = malloc_async(stream.cu_stream(), num_bytes).unwrap();
             memset_d8_async(dptr, 0, num_bytes, stream.cu_stream()).unwrap();
-            value(DeviceBox::from_raw_parts(dptr, n, ctx.get_device_id()))
+            value(DeviceBox::from_raw_parts(dptr, n, stream.clone()))
         }
     })
 }

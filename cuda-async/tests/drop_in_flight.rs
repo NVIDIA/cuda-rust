@@ -192,7 +192,7 @@ impl DeviceOp for SlowOp {
                 )));
             }
         }
-        let event = stream.device().new_event()?;
+        let event = stream.context().new_event()?;
         event.record(stream)?;
         Ok(Tracked {
             event,

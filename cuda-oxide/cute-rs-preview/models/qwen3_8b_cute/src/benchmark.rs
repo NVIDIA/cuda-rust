@@ -190,8 +190,8 @@ pub struct Qwen3Engine {
 }
 
 /// Make a 128-thread 1D launch configuration for `work` items.
-fn grid1d(work: usize) -> cuda_core::simt::LaunchConfig {
-    cuda_core::simt::LaunchConfig {
+fn grid1d(work: usize) -> cuda_core::LaunchConfig {
+    cuda_core::LaunchConfig {
         grid_dim: (work.div_ceil(128) as u32, 1, 1),
         block_dim: (128, 1, 1),
         shared_mem_bytes: 0,
@@ -254,7 +254,7 @@ impl Qwen3Engine {
                 )?;
             } else {
                 let tiles = rows.div_ceil(16) * outputs.div_ceil(8);
-                let cfg = cuda_core::simt::LaunchConfig {
+                let cfg = cuda_core::LaunchConfig {
                     grid_dim: (tiles.div_ceil(4) as u32, 1, 1),
                     block_dim: (128, 1, 1),
                     shared_mem_bytes: 0,

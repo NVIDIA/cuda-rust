@@ -77,7 +77,7 @@ launcher.set_launch_config(LaunchConfig {
 launcher.await?;
 ```
 
-Scalar arguments implementing `DType` use the safe `push_arg` method. Device
+Scalar arguments implementing `DType` use the safe `push_arg` method. Context
 pointers require `unsafe { push_device_ptr() }`. The caller must check that
 allocations are valid on the target GPU, large enough for the kernel, and free
 of conflicting accesses. Argument order and types must match the kernel's
@@ -224,13 +224,13 @@ requirements.
 
 ## Borrowing Foreign CUDA Handles
 
-If your application already owns CUDA handles through another Rust binding crate — cudarc, Candle, or a hand-rolled `bindgen` wrapper — wrap them into a cuTile `Device`, `Stream`, `Module`, or `Function` without transferring ownership.
+If your application already owns CUDA handles through another Rust binding crate — cudarc, Candle, or a hand-rolled `bindgen` wrapper — wrap them into a cuTile `Context`, `Stream`, `Module`, or `Function` without transferring ownership.
 
 The `borrow_raw` constructors take raw C primitives (`*mut c_void` for opaque handles, `c_int` for `CUdevice`) rather than `cuda_bindings` typedefs, so no nominal-type mismatch between binding crates gets in the way:
 
 ```rust
 use core::ffi::{c_int, c_void};
-use cuda_core::{Device, Stream};
+use cuda_core::{Context, Stream};
 
 // `foreign` is a handle bundle from another Rust binding crate (cudarc,
 // Candle, a bindgen wrapper, …). Its `CUcontext` / `CUstream` typedefs are
@@ -240,7 +240,7 @@ use cuda_core::{Device, Stream};
 // Safety: the caller guarantees the handles are valid, outlive the returned
 // wrappers, and are not concurrently destroyed.
 let device = unsafe {
-    Device::borrow_raw(
+    Context::borrow_raw(
         foreign.cu_ctx as *mut c_void,
         foreign.cu_device as c_int,
         foreign.ordinal,
@@ -252,7 +252,7 @@ let stream = unsafe { Stream::borrow_raw(foreign.cu_stream as *mut c_void, &devi
 let result = my_kernel(out, x).sync_on(&stream)?;
 ```
 
-Borrowed wrappers skip destruction on drop: `Stream` does not call `cuStreamDestroy`, `Module` does not unload, and `Device` does not release the primary context. The source framework retains full control over handle lifetimes.
+Borrowed wrappers skip destruction on drop: `Stream` does not call `cuStreamDestroy`, `Module` does not unload, and `Context` does not release the primary context. The source framework retains full control over handle lifetimes.
 
 `Module::borrow_raw` and `Function::borrow_raw` follow the same pattern for pre-compiled modules and already-resolved functions. See the `cudarc_interop` example in `cutile-examples/examples/` for an end-to-end walkthrough.
 
@@ -291,4 +291,4 @@ Both front-ends use the same underlying Tile IR compilation pipeline and generat
 
 ---
 
-Continue to [Debugging and Profiling](debugging-and-profiling.md) for troubleshooting. Interop kernels use the `DeviceOp` model described in [Device Operations](device-operations.md).
+Continue to [Debugging and Profiling](debugging-and-profiling.md) for troubleshooting. Interop kernels use the `DeviceOp` model described in [Context Operations](device-operations.md).

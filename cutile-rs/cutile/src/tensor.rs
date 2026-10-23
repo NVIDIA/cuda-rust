@@ -576,6 +576,10 @@ impl StorageHandle {
 
     fn is_unique(&self) -> bool {
         Arc::strong_count(&self.owners) == 1
+            && match &self.allocation {
+                Allocation::Device(buffer) => buffer.is_unique(),
+                Allocation::Meta { .. } => true,
+            }
     }
 }
 
@@ -589,6 +593,13 @@ impl Storage {
             return Err(DeviceError::Internal(
                 "tensor and execution stream are on different devices".into(),
             ));
+        }
+        if let Allocation::Device(buffer) = &self.allocation {
+            if buffer.context().as_ref() != ctx.context().as_ref() {
+                return Err(DeviceError::Internal(
+                    "tensor and execution stream belong to different CUDA contexts".into(),
+                ));
+            }
         }
         let id = self.register_access(
             ctx.get_cuda_stream().cu_stream() as usize,
@@ -644,8 +655,21 @@ impl Storage {
                 "tensor has a conflicting in-flight access on another stream; await its operation before reusing it".into(),
             ));
         }
+        let allocation_lease = match &self.allocation {
+            Allocation::Device(buffer) => Some(
+                buffer
+                    .acquire_on_stream(stream, write, recording)
+                    .map_err(|error| {
+                        DeviceError::Internal(format!(
+                            "allocation has a conflicting in-flight access: {error}"
+                        ))
+                    })?,
+            ),
+            Allocation::Meta { .. } => None,
+        };
         let id = NEXT_ACCESS_ID.fetch_add(1, AtomicOrdering::Relaxed);
         accesses.push(StorageAccess {
+            _allocation_lease: allocation_lease,
             id,
             stream,
             write,
@@ -710,6 +734,7 @@ static NEXT_ACCESS_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug)]
 struct StorageAccess {
+    _allocation_lease: Option<cuda_core::AllocationLease>,
     id: u64,
     stream: usize,
     write: bool,
@@ -1001,18 +1026,92 @@ impl<T: DType> Tensor<T> {
         }
     }
 
+    /// Consumes a typed host-runtime buffer as a contiguous tensor without copying.
+    /// Shape must describe exactly the buffer's element count.
+    pub fn from_buffer(buffer: cuda_core::DeviceBuffer<T>, shape: Vec<i32>) -> Self
+    where
+        T: cuda_core::DeviceCopy,
+    {
+        let len = buffer.len();
+        let strides = contiguous_strides(&shape);
+        let tensor = Self::from_device_buffer(buffer.into_storage(), shape, strides);
+        assert_eq!(
+            tensor.size(),
+            len,
+            "tensor shape must match the buffer's element count"
+        );
+        tensor
+    }
+
+    /// Returns a typed buffer view of contiguous tensor storage without copying.
+    /// Requires unique tensor ownership; otherwise an element cast could mutate
+    /// bytes still exposed through an alias with a different element type.
+    pub fn into_buffer(self) -> cuda_core::DeviceBuffer<T>
+    where
+        T: cuda_core::DeviceCopy,
+    {
+        assert!(
+            self.storage.is_unique(),
+            "cannot transfer aliased tensor storage to a typed buffer"
+        );
+        assert!(
+            self.is_contiguous(),
+            "a strided tensor cannot become a contiguous buffer"
+        );
+        let Allocation::Device(buffer) = &self.storage.allocation else {
+            panic!("metadata-only tensors have no device buffer");
+        };
+        // SAFETY: this tensor holds valid T representations and the same shared
+        // owner/access tracker protects every outstanding alias and submission.
+        unsafe {
+            cuda_core::DeviceBuffer::from_storage_copy(
+                buffer
+                    .slice_bytes(0, self.num_bytes())
+                    .expect("tensor extent"),
+                self.size(),
+            )
+        }
+        .expect("tensor storage must match its typed extent")
+    }
+
+    /// Borrows contiguous tensor storage for a typed SIMT kernel argument.
+    /// The view retains the same allocation and access tracker without copying.
+    pub fn as_buffer(&self) -> Result<cuda_core::DeviceBufferView<'_, T>, Error>
+    where
+        T: cuda_core::DeviceCopy,
+    {
+        if !self.is_contiguous() {
+            return tensor_error_result("strided tensor cannot become a contiguous buffer view");
+        }
+        let Allocation::Device(buffer) = &self.storage.allocation else {
+            return tensor_error_result("metadata-only tensors have no device buffer");
+        };
+        // SAFETY: tensor validity and access tracking apply to this borrowed view.
+        unsafe { cuda_core::DeviceBufferView::borrow_storage(buffer, 0, self.size()) }
+            .map_err(Into::into)
+    }
+
+    /// The actual CUDA context owning this tensor's storage.
+    /// Panics for metadata-only tensors, which have no CUDA resource.
+    pub fn context(&self) -> &Arc<cuda_core::Context> {
+        match &self.storage.allocation {
+            Allocation::Device(buffer) => buffer.context(),
+            Allocation::Meta { .. } => panic!("metadata-only tensors have no CUDA context"),
+        }
+    }
+
     /// Rebuilds a tensor from raw device allocation parts and validates the metadata
     /// against the provided byte length before taking ownership of the pointer.
     pub unsafe fn from_raw_parts(
         dptr: CUdeviceptr,
         len_bytes: usize,
-        device_id: usize,
+        stream: Arc<cuda_core::Stream>,
         shape: Vec<i32>,
         strides: Vec<i32>,
     ) -> Self {
         Self::assert_valid_metadata(&shape, &strides, len_bytes);
         Self::from_device_buffer(
-            DeviceBuffer::from_raw_parts(dptr, len_bytes, device_id),
+            DeviceBuffer::from_raw_parts_async(dptr, len_bytes, stream),
             shape,
             strides,
         )
@@ -1065,18 +1164,18 @@ impl<T: DType> Tensor<T> {
     ///   store only `0` or `1`, since host code reads the bytes back as `bool`
     ///   without validation.
     ///
-    /// [`Device::borrow_raw`]: cuda_core::Device::borrow_raw
+    /// [`Context::borrow_raw`]: cuda_core::Context::borrow_raw
     /// [`Stream::borrow_raw`]: cuda_core::Stream::borrow_raw
     pub unsafe fn borrow_raw_parts(
         dptr: CUdeviceptr,
-        device_id: usize,
+        context: Arc<cuda_core::Context>,
         shape: Vec<i32>,
         strides: Vec<i32>,
     ) -> Self {
         let len_bytes = checked_num_bytes_i32::<T>(&shape)
             .expect("Tensor shape contains invalid dimensions or overflows.");
         Self::from_device_buffer(
-            DeviceBuffer::borrowed_from_raw_parts(dptr, len_bytes, device_id),
+            DeviceBuffer::borrowed_from_raw_parts(dptr, len_bytes, context),
             shape,
             strides,
         )
@@ -1098,7 +1197,7 @@ impl<T: DType> Tensor<T> {
     ///
     /// # Safety
     /// Everything positional is verified at construction: the pointer, length,
-    /// and device ordinal come from `owner`'s one-time
+    /// and CUDA context come from `owner`'s one-time
     /// [`DeviceAllocation`] assertion; liveness is the held refcount; and the
     /// shape/stride addressable extent is checked (overflow-checked) against
     /// `owner.len_bytes()` right here. What cannot be verified at any call
@@ -1118,6 +1217,10 @@ impl<T: DType> Tensor<T> {
     ///   floating-point `T`, but a `Tensor<bool>` over foreign memory requires
     ///   the owner to store only `0` or `1`, because host code reads the bytes
     ///   back as `bool` without validation.
+    /// - Derived typed buffers may change their element representation. The
+    ///   caller must preserve validity for any external typed aliases after
+    ///   those writes too, even when accesses are separated in time. Retaining
+    ///   an owner proves liveness, not exclusive ownership of its typed views.
     ///
     /// Constructing two tensors over the same allocation and using either as
     /// a mutable output is a data race the type system cannot see: distinct
@@ -1486,6 +1589,25 @@ pub struct TensorView<'a, T: DType> {
 }
 
 impl<'a, T: DType> TensorView<'a, T> {
+    /// Borrows this contiguous slice for a typed SIMT kernel argument, preserving
+    /// its byte offset and the base allocation's context and access tracker.
+    pub fn as_buffer(&self) -> Result<cuda_core::DeviceBufferView<'_, T>, Error>
+    where
+        T: cuda_core::DeviceCopy,
+    {
+        if self.strides != contiguous_strides(&self.shape) {
+            return tensor_error_result("strided tensor cannot become a contiguous buffer view");
+        }
+        let Allocation::Device(buffer) = &self.base.storage.allocation else {
+            return tensor_error_result("metadata-only tensors have no device buffer");
+        };
+        // SAFETY: slicing validated the extent; the parent tensor guarantees T
+        // validity and this view shares its allocation and access tracker.
+        unsafe {
+            cuda_core::DeviceBufferView::borrow_storage(buffer, self.offset_bytes, self.size())
+        }
+        .map_err(Into::into)
+    }
     pub fn shape(&self) -> &[i32] {
         &self.shape
     }
@@ -2417,6 +2539,9 @@ mod tests {
         len_bytes: usize,
     }
     unsafe impl DeviceAllocation for FakeAlloc {
+        fn context(&self) -> std::sync::Arc<cuda_core::Context> {
+            unsafe { cuda_core::Context::borrow_raw(0x100usize as *mut _, 0, 0) }
+        }
         fn device_ptr(&self) -> CUdeviceptr {
             16 // 16-aligned sentinel; not dereferenced in from_foreign's spec calc
         }

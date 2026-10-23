@@ -71,7 +71,7 @@ fn main() {
 }
 
 fn run() -> Result<(), Error> {
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
 
     const BM: usize = 16;

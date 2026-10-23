@@ -10,7 +10,7 @@ help: the trait `DeviceRepr<T>` is implemented for `Wrapping<T>`
   | unsafe impl<T: Copy> DeviceRepr<T> for core::num::Wrapping<T> {}
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: required by a bound in `DeviceBuffer::<T>::wrap_elem`
- --> src/simt/device_buffer.rs
+ --> src/device_buffer.rs
   |
   |     pub fn wrap_elem<W: DeviceRepr<T>>(self) -> DeviceBuffer<W> {
   |                         ^^^^^^^^^^^^^ required by this bound in `DeviceBuffer::<T>::wrap_elem`

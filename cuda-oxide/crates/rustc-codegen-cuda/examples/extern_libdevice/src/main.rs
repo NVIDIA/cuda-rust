@@ -24,7 +24,7 @@
 //! Exits 0 on SUCCESS, 1 on FAIL.
 
 use core::marker::PhantomData;
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, device, kernel, thread};
 use cuda_host::{cuda_module, ltoir};

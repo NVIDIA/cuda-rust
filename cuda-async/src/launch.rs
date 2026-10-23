@@ -264,11 +264,17 @@ impl AsyncKernelLaunch {
     /// # Safety
     /// The caller must ensure the kernel arguments and launch config are valid.
     unsafe fn launch(mut self, stream: &Arc<Stream>) -> Result<(), DeviceError> {
+        if self.func.context().as_ref() != stream.context().as_ref() {
+            return Err(DeviceError::Driver(cuda_core::DriverError(
+                cuda_core::sys::cudaError_enum_CUDA_ERROR_INVALID_CONTEXT,
+            )));
+        }
+        stream.context().bind_to_thread()?;
         let cfg = self.cfg.ok_or_else(|| {
             DeviceError::Launch("Await called before launching the kernel.".to_string())
         })?;
         let launch = if self.programmatic_dependent_launch {
-            let architecture = cuda_core::get_device_sm_name(stream.device().cu_device())?;
+            let architecture = cuda_core::get_device_sm_name(stream.context().cu_device())?;
             let sm: u32 = architecture
                 .strip_prefix("sm_")
                 .and_then(|s| s.trim_end_matches(['a', 'f']).parse().ok())

@@ -7,7 +7,7 @@
 //!
 //! ## Architecture
 //!
-//! - **Global (process-wide)**: one [`Device`] per device id, shared across all threads
+//! - **Global (process-wide)**: one [`Context`] per device id, shared across all threads
 //!   via [`OnceLock`].
 //!
 //! - **Per-thread**: Scheduling policy and deallocator stream remain thread-local, since
@@ -18,7 +18,7 @@
 
 use crate::error::{device_assert, device_error, DeviceError};
 use crate::scheduling_policies::{SchedulingPolicy, StreamPoolRoundRobin};
-use cuda_core::{Device, Function, MemPool, Module, Stream};
+use cuda_core::{Context, Function, MemPool, Module, Stream};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -89,28 +89,28 @@ pub struct Validator {
     pub launch_checks: Vec<crate::predicate::LaunchCheck>,
 }
 
-// ── Global Device (process-wide, per-device singleton) ─────────────────────
+// ── Global Context (process-wide, per-device singleton) ─────────────────────
 
 /// Global per-device handles. Shared across all threads so that
 /// `Module`/`Function` loaded against a device can be used from any thread.
-static DEVICES: OnceLock<Mutex<HashMap<usize, Arc<Device>>>> = OnceLock::new();
+static DEVICES: OnceLock<Mutex<HashMap<usize, Arc<Context>>>> = OnceLock::new();
 
-fn devices() -> &'static Mutex<HashMap<usize, Arc<Device>>> {
+fn devices() -> &'static Mutex<HashMap<usize, Arc<Context>>> {
     DEVICES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Get or create the global [`Device`] for a device ordinal.
+/// Get or create the global [`Context`] for a device ordinal.
 ///
 /// The first call for a given `device_id` creates the device handle; subsequent
-/// calls return the same `Arc<Device>`.
-fn get_or_init_device(device_id: usize) -> Result<Arc<Device>, DeviceError> {
+/// calls return the same `Arc<Context>`.
+fn get_or_init_device(device_id: usize) -> Result<Arc<Context>, DeviceError> {
     let mut devices = devices()
         .lock()
         .map_err(|_| device_error(device_id, "device map lock poisoned"))?;
     if let Some(device) = devices.get(&device_id) {
         return Ok(Arc::clone(device));
     }
-    let device = Device::new(device_id)?;
+    let device = Context::new(device_id)?;
     devices.insert(device_id, Arc::clone(&device));
     Ok(device)
 }
@@ -243,7 +243,7 @@ pub fn init_device(
 ) -> Result<(), DeviceError> {
     let device_context = new_device_context(device_id, policy)?;
     let pred = hashmap.insert(device_id, device_context).is_none();
-    device_assert(device_id, pred, "Device is already initialized.")
+    device_assert(device_id, pred, "Context is already initialized.")
 }
 
 pub fn init_with_default_policy(
@@ -260,7 +260,7 @@ pub fn init_with_default_policy(
         pool: None,
     };
     let pred = hashmap.insert(device_id, device_context).is_none();
-    device_assert(device_id, pred, "Device is already initialized.")
+    device_assert(device_id, pred, "Context is already initialized.")
 }
 
 /// Holds the thread's context map while a closure runs against it, and puts it
@@ -371,10 +371,10 @@ where
     })
 }
 
-/// Run a closure with a reference to the [`Device`] for `device_id`.
+/// Run a closure with a reference to the [`Context`] for `device_id`.
 pub fn with_device<F, R>(device_id: usize, f: F) -> Result<R, DeviceError>
 where
-    F: FnOnce(&Arc<Device>) -> R,
+    F: FnOnce(&Arc<Context>) -> R,
 {
     let device = get_or_init_device(device_id)?;
     Ok(f(&device))
@@ -429,7 +429,7 @@ pub fn set_default_device(default_device_id: usize) {
 /// Returns [`DeviceError::Context`](crate::error::DeviceError::Context) if
 /// `pool` was created on a different device than `device_id`.
 pub fn set_device_pool(device_id: usize, pool: Arc<MemPool>) -> Result<(), DeviceError> {
-    let pool_device = pool.device().ordinal();
+    let pool_device = pool.context().ordinal();
     device_assert(
         device_id,
         pool_device == device_id,
@@ -467,7 +467,10 @@ pub fn get_device_pool(device_id: usize) -> Result<Option<Arc<MemPool>>, DeviceE
 /// Errors from the device-context lookup are downgraded to `None`; this is the
 /// single choke-point for that decision so callers don't each re-derive it.
 pub fn pool_for_stream(stream: &Arc<Stream>) -> Option<Arc<MemPool>> {
-    get_device_pool(stream.device().ordinal()).ok().flatten()
+    get_device_pool(stream.context().ordinal())
+        .ok()
+        .flatten()
+        .filter(|pool| pool.context().as_ref() == stream.context().as_ref())
 }
 
 /// Run a closure with the scheduling policy of the current thread's default device.
@@ -495,12 +498,12 @@ pub fn load_module_from_file(filename: &str, device_id: usize) -> Result<Arc<Mod
 }
 
 /// Load a compiled CUDA module from an in-memory **cubin** image. Not for PTX
-/// (see [`cuda_core::Device::load_module_from_bytes`]); use
+/// (see [`cuda_core::Context::load_module_from_bytes`]); use
 /// [`load_module_from_ptx`] for that.
 ///
 /// # Safety
 ///
-/// Same contract as [`cuda_core::Device::load_module_from_bytes`]: `image`
+/// Same contract as [`cuda_core::Context::load_module_from_bytes`]: `image`
 /// must be a complete, well-formed cubin. The driver dereferences the offsets
 /// declared in the image header, so a truncated or malformed image is read
 /// past the end of the slice.

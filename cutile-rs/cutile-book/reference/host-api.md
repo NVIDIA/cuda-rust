@@ -2,9 +2,9 @@
 
 The host API covers tensors, CUDA contexts and streams, kernel launches, and
 `DeviceOp` execution. For an introduction, see
-[Host vs. Device Code](../guide/host-vs-device.md),
+[Host vs. Context Code](../guide/host-vs-device.md),
 [Tensors and Tiles](../guide/tensors-and-tiles.md), and
-[Device Operations](../guide/device-operations.md).
+[Context Operations](../guide/device-operations.md).
 
 ---
 
@@ -156,7 +156,7 @@ existing tensor without allocation or copying.
 
 ---
 
-## Host-Device and Device-Device Transfers
+## Host-Context and Context-Context Transfers
 
 Moving data between CPU and GPU, or between two device tensors, uses APIs that
 return `DeviceOp`s — the copy is scheduled when the op runs, not constructed:
@@ -175,10 +175,10 @@ return `DeviceOp`s — the copy is scheduled when the op runs, not constructed:
 let data: Arc<Vec<f32>> = Arc::new(vec![1.0; 1024]);
 let tensor: Tensor<f32> = api::copy_host_vec_to_device(&data).sync_on(&stream)?;
 
-// Device -> host
+// Context -> host
 let result: Vec<f32> = tensor.to_host_vec().sync_on(&stream)?;
 
-// Device -> device
+// Context -> device
 let copy = tensor.dup().sync_on(&stream)?;
 ```
 
@@ -210,24 +210,24 @@ graph.launch().sync_on(&stream)?;
 
 ## Devices and Streams
 
-Every host program starts with a `Device`, plus one or more `Stream`s for scheduling GPU work:
+Every host program starts with a `Context`, plus one or more `Stream`s for scheduling GPU work:
 
 ```rust
-use cuda_core::Device;
+use cuda_core::Context;
 
-let device = Device::new(0)?;              // Device ordinal 0
+let device = Context::new(0)?;              // Primary context for GPU 0
 let stream = device.new_stream()?;         // A new stream owned by this device
 ```
 
 | Method | Returns | Description |
 |---|---|---|
-| `Device::new(ordinal: usize)` | `Result<Arc<Device>, DriverError>` | Create a device handle bound to a GPU ordinal |
-| `Device::device_count()` | `Result<i32, DriverError>` | Number of CUDA-capable devices |
+| `Context::new(ordinal: usize)` | `Result<Arc<Context>, DriverError>` | Create a device handle bound to a GPU ordinal |
+| `Context::device_count()` | `Result<i32, DriverError>` | Number of CUDA-capable devices |
 | `device.ordinal()` | `usize` | GPU ordinal this handle represents |
-| `device.name()` | `Result<String, DriverError>` | Device name |
+| `device.name()` | `Result<String, DriverError>` | Context name |
 | `device.new_stream()` | `Result<Arc<Stream>, DriverError>` | Create a new stream on this device |
-| `unsafe Device::borrow_raw(cu_ctx, cu_device, ordinal)` | `Arc<Device>` | Borrow an externally owned CUDA context/device for interop |
-| `unsafe Device::borrow_with_owner(cu_ctx, cu_device, ordinal, owner)` | `Arc<Device>` | Same, holding an `Arc<dyn ForeignOwner>` so the foreign owner outlives the handle |
+| `unsafe Context::borrow_raw(cu_ctx, cu_device, ordinal)` | `Arc<Context>` | Borrow an externally owned CUDA context/device for interop |
+| `unsafe Context::borrow_with_owner(cu_ctx, cu_device, ordinal, owner)` | `Arc<Context>` | Same, holding an `Arc<dyn ForeignOwner>` so the foreign owner outlives the handle |
 | `unsafe Stream::borrow_raw(cu_stream, &device)` | `Arc<Stream>` | Borrow an externally owned CUDA stream for interop |
 | `unsafe Stream::borrow_with_owner(cu_stream, &device, owner)` | `Arc<Stream>` | Same, holding an `Arc<dyn ForeignOwner>` |
 | `unsafe Module::borrow_raw(...)` / `unsafe Function::borrow_raw(...)` | CUDA module/function wrappers | Borrow externally owned CUDA handles |
@@ -712,7 +712,7 @@ error short-circuits to the caller.
 | Variant | When it occurs |
 |---|---|
 | `Driver(DriverError)` | CUDA driver call failed (OOM, invalid argument, etc.) |
-| `Context { device_id, message }` | Device context assertion failed |
+| `Context { device_id, message }` | Context context assertion failed |
 | `KernelCache(String)` | Declared, but no current code path constructs it |
 | `Scheduling(String)` | No stream available or policy misconfigured |
 | `Launch(String)` | A launcher-generated precondition failed (`kernel_launch_assert`: argument shapes, declared `preconditions`) |
@@ -836,14 +836,14 @@ Public host-side API not covered in the sections above:
 | launcher `.compile()` / `.compile_on(&stream)` | JIT-compile and cache the specialization without launching |
 | launcher `.specialize()`, `.l1_cache_key()`, `.l2_cache_key()` | Resolve the specialization identity and the in-memory / on-disk cache keys without compiling or launching |
 | `api::meta::<T>(&shape)` | Placeholder tensor carrying shape and dtype without allocating, for `.compile()` warmups |
-| `CompileOptions::{opt_level, device_debug, lineinfo, sanitize_memcheck}` | Device compiler flags; each is part of the cache keys (see [Debugging and Profiling](../guide/debugging-and-profiling.md)) |
-| `cutile::bench::{do_bench, do_bench_paired, BenchOptions, Measurement}` | Device-event kernel timing (see [Performance](../guide/performance.md)) |
+| `CompileOptions::{opt_level, device_debug, lineinfo, sanitize_memcheck}` | Context compiler flags; each is part of the cache keys (see [Debugging and Profiling](../guide/debugging-and-profiling.md)) |
+| `cutile::bench::{do_bench, do_bench_paired, BenchOptions, Measurement}` | Context-event kernel timing (see [Performance](../guide/performance.md)) |
 | `cuda_async::device_context::{set_default_device, global_policy, with_device_policy}` | Set the thread's default device; read or borrow a device's scheduling policy |
 
 ---
 
 ## See Also
 
-- [Device Operations](../guide/device-operations.md) — tutorial-style guide to streams, scheduling, and composition patterns
+- [Context Operations](../guide/device-operations.md) — tutorial-style guide to streams, scheduling, and composition patterns
 - [Tutorial 10](../tutorials/10-cuda-graphs.md) — end-to-end CUDA graph example
 - [Interoperability](../guide/interoperability.md) — integrating custom CUDA C++ kernels into the DeviceOp model

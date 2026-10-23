@@ -289,7 +289,7 @@ jobs:
 
       - name: Native f16 DeviceCopy
         working-directory: ${{ github.workspace }}
-        run: cargo test -p cuda-core --features f16 --test simt_device_copy_impls
+        run: cargo test -p cuda-core --features f16 --test device_copy_impls
 
       - name: loom model check (interleavings + weak memory)
         working-directory: ${{ github.workspace }}

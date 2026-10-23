@@ -46,8 +46,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use cuda_async::simt::device_box::DeviceBox;
     use cuda_async::simt::device_context::init_device_contexts;
     use cuda_async::simt::device_operation::DeviceOperation;
-    use cuda_core::simt::LaunchConfig;
-    use cuda_core::simt::memory::{malloc_async, memcpy_dtoh_async, memcpy_htod_async};
+    use cuda_core::LaunchConfig;
+    use cuda_core::memory::{malloc_async, memcpy_dtoh_async, memcpy_htod_async};
     use std::mem;
 
     println!("=== Async Vector Addition (cuda-async) ===\n");
@@ -83,9 +83,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 stream.synchronize().unwrap();
 
-                let a_dev = DeviceBox::<[f32]>::from_raw_parts(a_dptr, N, 0);
-                let b_dev = DeviceBox::<[f32]>::from_raw_parts(b_dptr, N, 0);
-                let c_dev = DeviceBox::<[f32]>::from_raw_parts(c_dptr, N, 0);
+                let a_dev = DeviceBox::<[f32]>::from_raw_parts(a_dptr, N, stream.clone());
+                let b_dev = DeviceBox::<[f32]>::from_raw_parts(b_dptr, N, stream.clone());
+                let c_dev = DeviceBox::<[f32]>::from_raw_parts(c_dptr, N, stream.clone());
                 (a_dev, b_dev, c_dev)
             }
         })?;

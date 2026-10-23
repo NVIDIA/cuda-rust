@@ -15,7 +15,7 @@
 //!
 //! Run: `cargo oxide run cast_chunks`
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::cuda_module;
 

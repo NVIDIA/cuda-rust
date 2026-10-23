@@ -31,7 +31,7 @@ Please see [CONTRIBUTING.md](../CONTRIBUTING.md) if you're interested in contrib
 
 ```rust
 use cuda_device::{cuda_module, kernel, thread, DisjointSlice};
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 
 // Device: generic kernel that applies any function to each element.
@@ -306,7 +306,7 @@ cargo oxide run gemm_sol_final
 | `cuda-host`         | Typed module loading, launch helpers, LTOIR loader                        |
 | `cuda-macros`       | Proc macros (`#[cuda_module]`, `#[kernel]`, `gpu_printf!`)                |
 | `cuda-bindings`     | Raw `bindgen` FFI bindings to `cuda.h` (shared with cutile-rs)             |
-| `cuda-core`         | Safe RAII wrappers (`CudaContext`, `DeviceBuffer<T>`, ...); SIMT API under `cuda_core::simt` |
+| `cuda-core`         | Safe RAII wrappers (`CudaContext`, `DeviceBuffer<T>`, ...); one host API shared by SIMT and Tile |
 | `cuda-async`        | Async layer (`DeviceOperation`, `DeviceBox<T>`, ...); SIMT API under `cuda_async::simt` |
 | `libnvvm-sys`       | `dlopen` bindings to libNVVM (used by `cuda-host::ltoir`)                 |
 | `cuda-target-spec`  | Shared CUDA target parsing and recorded LLVM PTX-floor policy             |

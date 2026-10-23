@@ -14,7 +14,7 @@ use cuda_async::device_operation::{value, DeviceOp};
 use std::time::Duration;
 
 fn has_gpu() -> bool {
-    cuda_core::Device::device_count()
+    cuda_core::Context::device_count()
         .map(|n| n > 0)
         .unwrap_or(false)
 }
@@ -27,7 +27,7 @@ fn bench_execution_lock(c: &mut Criterion) {
 
     // Run on a fresh thread to get a clean CUDA context.
     let (stream,) = std::thread::spawn(|| {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
         (stream,)
     })
@@ -55,7 +55,7 @@ fn bench_execution_lock(c: &mut Criterion) {
     group.bench_function("async_on_no_lock", |b| {
         b.iter(|| {
             unsafe { value(42).async_on(&stream).unwrap() };
-            unsafe { stream.synchronize() }.unwrap();
+            stream.synchronize().unwrap();
         });
     });
 

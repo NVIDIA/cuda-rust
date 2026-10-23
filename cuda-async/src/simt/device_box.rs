@@ -15,13 +15,9 @@
 //! rather than blocking with `cuMemFree`. Callers **must** synchronize all
 //! streams that reference the allocation before dropping the box.
 
-use crate::simt::device_context::with_deallocator_stream;
-use crate::simt::error::DeviceError;
 use crate::simt::launch::{AsyncKernelLaunchBuilder, KernelArgument};
 use cuda_bindings::CUdeviceptr;
-use cuda_core::simt::memory::free_async;
-use std::io::{self, Write};
-use std::marker::PhantomData;
+use std::{marker::PhantomData, sync::Arc};
 
 /// Non-owning, `Copy` handle to a typed device allocation.
 ///
@@ -54,19 +50,12 @@ impl<T: Send + Sized> KernelArgument for DevicePointer<T> {
     }
 }
 
-/// Owning wrapper around a device allocation that frees memory asynchronously
-/// on drop.
-///
-/// `DeviceBox<[DType]>` represents a contiguous device buffer of `len`
-/// elements. The allocation is freed via `cuMemFreeAsync` on the device's
-/// deallocator stream when the box is dropped.
-///
-/// # Safety contract
-///
-/// All streams that reference this allocation **must** be synchronized before
-/// the box is dropped. Violating this causes use-after-free on the device.
+/// Owning wrapper backed by the shared CUDA allocation owner and access tracker.
+/// Generated launch adapters retain storage until GPU completion. Raw-pointer
+/// callers must independently retain storage and exclude conflicting accesses.
 #[derive(Debug)]
 pub struct DeviceBox<T: Send + ?Sized> {
+    storage: cuda_core::RawDeviceBuffer,
     /// Ordinal of the device that owns this allocation.
     device_id: usize,
     /// Raw CUDA device pointer to the start of the allocation.
@@ -89,49 +78,39 @@ unsafe impl<T: Send + ?Sized> Send for DeviceBox<T> {}
 /// value, which is safe to read from any thread.
 unsafe impl<T: Send + ?Sized> Sync for DeviceBox<T> {}
 
-/// Best-effort enqueue of an asynchronous free on the device's deallocator
-/// stream.
-///
-/// Drop cannot return errors, so failures to access the deallocator stream or
-/// enqueue the free are reported to stderr instead of panicking.
-impl<T: Send + ?Sized> Drop for DeviceBox<T> {
-    fn drop(&mut self) {
-        let result = unsafe {
-            with_deallocator_stream(self.device_id, |stream| {
-                free_async(self.cudptr, stream.cu_stream()).map_err(DeviceError::Driver)
-            })
-        };
-
-        match result {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) | Err(err) => {
-                let mut stderr = io::stderr().lock();
-                let _ = writeln!(
-                    stderr,
-                    "cuda-async: failed to enqueue async free for device pointer on device_id={}: {}",
-                    self.device_id, err
-                );
-            }
-        }
-    }
-}
-
 impl<DType: Send + Sized> DeviceBox<[DType]> {
     /// Constructs a `DeviceBox<[DType]>` from a raw device pointer, element
-    /// count, and device ordinal.
+    /// count, and allocating stream.
     ///
     /// # Safety
     ///
     /// * `dptr` must point to a valid device allocation of at least
-    ///   `len * size_of::<DType>()` bytes on device `device_id`.
+    ///   `len * size_of::<DType>()` bytes, allocated asynchronously on `stream`.
+    /// * Every element must be valid for its device-side type before use.
+    /// * The caller must order uses after allocation and track all raw accesses.
     /// * Ownership of the allocation transfers to the returned `DeviceBox`.
-    pub unsafe fn from_raw_parts(dptr: CUdeviceptr, len: usize, device_id: usize) -> Self {
+    pub unsafe fn from_raw_parts(
+        dptr: CUdeviceptr,
+        len: usize,
+        stream: Arc<cuda_core::Stream>,
+    ) -> Self {
+        let bytes = len
+            .checked_mul(std::mem::size_of::<DType>())
+            .expect("device allocation size overflow");
+        let device_id = stream.context().ordinal();
+        let storage =
+            unsafe { cuda_core::RawDeviceBuffer::from_raw_parts_async(dptr, bytes, stream) };
         Self {
+            storage,
             _marker: PhantomData,
             cudptr: dptr,
             len,
             device_id,
         }
+    }
+
+    pub fn storage(&self) -> &cuda_core::RawDeviceBuffer {
+        &self.storage
     }
 
     /// Returns `true` if the buffer contains zero elements.

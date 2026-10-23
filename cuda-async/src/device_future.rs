@@ -125,7 +125,7 @@ pub(crate) fn probe_stream(stream: &Stream) -> StreamHealth {
         return StreamHealth::Capturing;
     }
     // SAFETY: see above; not capturing, so a query is permitted.
-    match unsafe { stream.query() } {
+    match stream.query() {
         Ok(true) => StreamHealth::Idle,
         Ok(false) => StreamHealth::Busy,
         Err(e) => StreamHealth::Faulted(e),
@@ -334,11 +334,11 @@ impl<T: Send, DO: DeviceOp<Output = T>> DeviceFuture<T, DO> {
             })?;
             // The drop may run on an executor thread that never touched
             // CUDA; the query and synchronize below need a current context.
-            stream.device().bind_to_thread()?;
+            stream.context().bind_to_thread()?;
             match probe_stream(&stream) {
                 StreamHealth::Idle => Ok(()),
                 // SAFETY: the context was bound above; the stream is valid.
-                StreamHealth::Busy => unsafe { stream.synchronize() }.map_err(DeviceError::Driver),
+                StreamHealth::Busy => stream.synchronize().map_err(DeviceError::Driver),
                 StreamHealth::Capturing => Err(DeviceError::Internal(
                     "the future's stream is recording a graph; it cannot be synchronized".into(),
                 )),
@@ -470,7 +470,7 @@ impl<T: Send, DO: DeviceOp<Output = T>> Future for DeviceFuture<T, DO> {
                     let deadline = std::time::Instant::now()
                         + std::time::Duration::from_micros(inline_spin_budget_us());
                     loop {
-                        match unsafe { ctx.get_cuda_stream().query() } {
+                        match ctx.get_cuda_stream().query() {
                             Ok(true) => break 'spin Ok(true),
                             Ok(false) => {}
                             Err(e) => break 'spin Err(e),
@@ -526,7 +526,7 @@ impl<T: Send, DO: DeviceOp<Output = T>> Future for DeviceFuture<T, DO> {
                     Some(ctx) => {
                         // The poll may run on an executor thread that never
                         // touched CUDA; the probe needs a current context.
-                        let _ = ctx.device().bind_to_thread();
+                        let _ = ctx.context().bind_to_thread();
                         probe_stream(ctx.get_cuda_stream())
                     }
                     None => StreamHealth::Busy,

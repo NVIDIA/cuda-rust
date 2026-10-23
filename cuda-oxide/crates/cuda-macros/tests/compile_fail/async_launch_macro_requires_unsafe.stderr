@@ -5,7 +5,7 @@ error[E0133]: call to unsafe function `cuda_async::simt::launch::AsyncKernelLaun
    |  _____________^
 43 | |         kernel: raw,
 44 | |         module: module,
-45 | |         config: cuda_core::simt::LaunchConfig {
+45 | |         config: cuda_core::LaunchConfig {
 ...  |
 50 | |         args: [],
 51 | |     };

@@ -187,6 +187,10 @@ fn owned_wrapper_roundtrip_preserves_allocation_and_stream() {
     assert_eq!(words.to_host_vec(&stream).unwrap(), values);
     drop(words);
     stream.synchronize().unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while Arc::strong_count(&stream) != stream_refs - 1 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
     assert_eq!(Arc::strong_count(&stream), stream_refs - 1);
 }
 
@@ -267,7 +271,7 @@ fn device_buffer_async_compat_methods_roundtrip() {
 }
 
 #[test]
-fn async_allocation_ordinary_drop_waits_for_cross_stream_work() {
+fn async_allocation_ordinary_drop_retires_cross_stream_work() {
     let _gated_test_guard = lock_gated_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let allocation_stream = ctx
@@ -295,13 +299,12 @@ fn async_allocation_ordinary_drop_waits_for_cross_stream_work() {
             .send(())
             .expect("failed to send drop completion");
     });
-    finish_gated_worker(
-        "ordinary async buffer drop",
-        release_gate,
-        started_rx,
-        completion_rx,
-        drop_thread,
-    );
+    started_rx.recv_timeout(COMPLETION_TIMEOUT).unwrap();
+    let completed = completion_rx.recv_timeout(COMPLETION_TIMEOUT);
+    // Release the gate even on failure so the test cannot strand the driver.
+    release_gate.send(()).unwrap();
+    drop_thread.join().unwrap();
+    completed.expect("ordinary buffer drop must not wait for GPU work");
     ctx.synchronize().expect("context cleanup failed");
 }
 
@@ -408,11 +411,19 @@ fn drop_async_bind_error_preserves_ordinary_cleanup() {
 
     ctx.bind_to_thread()
         .expect("ordinary drop should leave the context usable");
-    assert_eq!(
-        unsafe { cuda_bindings::cuMemGetAddressRange_v2(&mut base, &mut size, ptr) },
-        cuda_bindings::cudaError_enum_CUDA_ERROR_NOT_FOUND,
-        "ordinary drop must reclaim the still-armed allocation"
-    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let status = unsafe { cuda_bindings::cuMemGetAddressRange_v2(&mut base, &mut size, ptr) };
+        if status == cuda_bindings::cudaError_enum_CUDA_ERROR_NOT_FOUND {
+            break;
+        }
+        assert_eq!(status, cuda_bindings::cudaError_enum_CUDA_SUCCESS);
+        assert!(
+            std::time::Instant::now() < deadline,
+            "retirement failed to reclaim the allocation"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 #[test]
@@ -458,11 +469,11 @@ fn copy_from_host_with_pinned_source_allows_source_reuse_after_return() {
 
 // Dangerous-path regression: a stream-ordered (`cuMemAllocAsync`) buffer that
 // is dropped *implicitly* while a copy is still in flight, with no explicit
-// synchronization by the caller. Ordinary `Drop` synchronizes the context
-// before enqueueing the free, so the in-flight copy cannot race deallocation.
+// synchronization by the caller. Completion leases retain the allocation
+// until the in-flight copy finishes, so it cannot race deallocation.
 // Run under `compute-sanitizer --tool memcheck` to catch a regression.
 #[test]
-fn uninitialized_async_implicit_drop_waits_for_pending_work() {
+fn uninitialized_async_implicit_drop_retains_pending_work() {
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 

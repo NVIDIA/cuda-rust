@@ -14,7 +14,7 @@
 //! Build and run with:
 //!   cargo oxide run warp_reduce
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::cooperative_groups::{
     ThreadGroup, block_reduce, block_scan, ops::Sum, this_thread_block,

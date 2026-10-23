@@ -5653,7 +5653,7 @@ fn scaffold_async_template_keeps_async_deps_and_docs() {
     assert!(files.cargo_toml.contains("cuda-async = { git = \""));
     assert!(!files.cargo_toml.contains("cuda-async = \""));
     assert!(!files.cargo_toml.contains("cuda-bindings"));
-    assert!(files.main_rs.contains("use cuda_core::simt::LaunchConfig;"));
+    assert!(files.main_rs.contains("use cuda_core::LaunchConfig;"));
     assert!(
         files
             .main_rs

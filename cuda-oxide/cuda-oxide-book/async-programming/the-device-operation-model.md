@@ -75,7 +75,7 @@ returns a recipe instead of cooking immediately:
 
 ```rust
 use cuda_async::simt::device_context::init_device_contexts;
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 
 // One-time setup: create a stream pool for scheduling
 init_device_contexts(0, 1)?;
@@ -298,7 +298,7 @@ until the `ExecutionContext` is available:
 
 ```rust
 use cuda_async::simt::device_operation::{value, with_context};
-use cuda_core::simt::memory::{malloc_async, memcpy_htod_async};
+use cuda_core::memory::{malloc_async, memcpy_htod_async};
 
 fn h2d(host_data: Vec<f32>) -> impl DeviceOperation<Output = DeviceBox<[f32]>> {
     with_context(move |ctx| {

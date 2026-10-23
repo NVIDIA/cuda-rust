@@ -18,9 +18,9 @@ use std::ptr::NonNull;
 use std::slice;
 use std::sync::Arc;
 
+use crate::context::Context;
+use crate::device_buffer::DeviceCopy;
 use crate::error::DriverError;
-use crate::simt::context::CudaContext;
-use crate::simt::device_buffer::DeviceCopy;
 
 /// Owned page-locked host buffer.
 ///
@@ -33,8 +33,8 @@ use crate::simt::device_buffer::DeviceCopy;
 /// as [`String`] are rejected.
 ///
 /// ```compile_fail
-/// # use cuda_core::{CudaContext, PinnedHostBuffer};
-/// # fn rejects_non_device_copy(ctx: &std::sync::Arc<CudaContext>) {
+/// # use cuda_core::{Context, PinnedHostBuffer};
+/// # fn rejects_non_device_copy(ctx: &std::sync::Arc<Context>) {
 /// let _ = PinnedHostBuffer::<String>::zeroed(ctx, 1);
 /// # }
 /// ```
@@ -44,7 +44,7 @@ pub struct PinnedHostBuffer<T: DeviceCopy> {
     allocation: Option<NonNull<u8>>,
     len: usize,
     num_bytes: usize,
-    ctx: Arc<CudaContext>,
+    ctx: Arc<Context>,
     _marker: PhantomData<T>,
 }
 
@@ -56,7 +56,7 @@ unsafe impl<T: DeviceCopy + Sync> Sync for PinnedHostBuffer<T> {}
 
 impl<T: DeviceCopy> PinnedHostBuffer<T> {
     /// Allocates a pinned host buffer and fills it with zero bytes.
-    pub fn zeroed(ctx: &Arc<CudaContext>, len: usize) -> Result<Self, DriverError> {
+    pub fn zeroed(ctx: &Arc<Context>, len: usize) -> Result<Self, DriverError> {
         let mut buffer = Self::allocate(ctx, len)?;
         if buffer.num_bytes != 0 {
             unsafe {
@@ -68,7 +68,7 @@ impl<T: DeviceCopy> PinnedHostBuffer<T> {
     }
 
     /// Allocates a pinned host buffer and copies `data` into it.
-    pub fn from_slice(ctx: &Arc<CudaContext>, data: &[T]) -> Result<Self, DriverError> {
+    pub fn from_slice(ctx: &Arc<Context>, data: &[T]) -> Result<Self, DriverError> {
         let buffer = Self::allocate(ctx, data.len())?;
         if !data.is_empty() {
             unsafe {
@@ -98,7 +98,7 @@ impl<T: DeviceCopy> PinnedHostBuffer<T> {
 
     /// Returns the CUDA context used to allocate this buffer.
     #[inline]
-    pub fn context(&self) -> &Arc<CudaContext> {
+    pub fn context(&self) -> &Arc<Context> {
         &self.ctx
     }
 
@@ -126,13 +126,13 @@ impl<T: DeviceCopy> PinnedHostBuffer<T> {
         unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
     }
 
-    fn allocate(ctx: &Arc<CudaContext>, len: usize) -> Result<Self, DriverError> {
+    fn allocate(ctx: &Arc<Context>, len: usize) -> Result<Self, DriverError> {
         let (num_bytes, allocation_bytes) = allocation_sizes::<T>(len)?;
         let (ptr, allocation) = if num_bytes == 0 {
             (NonNull::dangling(), None)
         } else {
             ctx.bind_to_thread()?;
-            let raw = unsafe { crate::simt::memory::malloc_host(allocation_bytes)? };
+            let raw = unsafe { crate::memory::malloc_host(allocation_bytes)? };
             let allocation = NonNull::new(raw.cast::<u8>()).ok_or(DriverError(
                 cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE,
             ))?;
@@ -162,7 +162,7 @@ impl<T: DeviceCopy> Drop for PinnedHostBuffer<T> {
         if let Some(allocation) = self.allocation {
             self.ctx.record_err(self.ctx.bind_to_thread());
             self.ctx
-                .record_err(unsafe { crate::simt::memory::free_host(allocation.as_ptr().cast()) });
+                .record_err(unsafe { crate::memory::free_host(allocation.as_ptr().cast()) });
         }
     }
 }

@@ -260,8 +260,8 @@ fn run_shape<const CAUSAL: bool, const SQ: u32, const SK: u32, const HEADS: u32>
     let events = (0..args.iters)
         .map(|_| {
             Ok((
-                ctx.new_event(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?,
-                ctx.new_event(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?,
+                ctx.new_event_with_flags(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?,
+                ctx.new_event_with_flags(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?,
             ))
         })
         .collect::<Result<Vec<_>>>()?;

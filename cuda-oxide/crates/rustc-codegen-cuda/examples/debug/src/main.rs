@@ -170,7 +170,7 @@ mod kernels {
 // =============================================================================
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use cuda_core::simt::LaunchConfig;
+    use cuda_core::LaunchConfig;
     use cuda_core::{CudaContext, DeviceBuffer};
 
     println!("=== GPU Debug & Utility Intrinsics Test (Unified) ===\n");

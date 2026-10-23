@@ -23,9 +23,9 @@
 //!
 //! Requires a system with at least 2 CUDA-capable GPUs with P2P support.
 
-use cuda_core::simt::context::CudaContext;
-use cuda_core::simt::peer;
-use cuda_core::simt::vmm;
+use cuda_core::context::CudaContext;
+use cuda_core::peer;
+use cuda_core::vmm;
 use cuda_core::IntoResult;
 use std::mem::MaybeUninit;
 
@@ -62,7 +62,7 @@ fn vmm_alloc_map_set_access_roundtrip() {
     let stream = ctx.default_stream();
     let pattern: Vec<u8> = (0..64).map(|i| (i * 3 + 7) as u8).collect();
     unsafe {
-        cuda_core::simt::memory::memcpy_htod_async(
+        cuda_core::memory::memcpy_htod_async(
             va.base(),
             pattern.as_ptr(),
             pattern.len(),
@@ -74,7 +74,7 @@ fn vmm_alloc_map_set_access_roundtrip() {
 
     let mut readback = vec![0u8; 64];
     unsafe {
-        cuda_core::simt::memory::memcpy_dtoh_async(
+        cuda_core::memory::memcpy_dtoh_async(
             readback.as_mut_ptr(),
             va.base(),
             readback.len(),
@@ -142,7 +142,7 @@ fn p2p_vmm_cross_gpu_access() {
     let stream0 = ctx0.default_stream();
     ctx0.bind_to_thread().expect("bind ctx0");
     unsafe {
-        cuda_core::simt::memory::memcpy_htod_async(
+        cuda_core::memory::memcpy_htod_async(
             va0.base(),
             pattern.as_ptr(),
             byte_len,
@@ -157,7 +157,7 @@ fn p2p_vmm_cross_gpu_access() {
     let stream1 = ctx1.default_stream();
     ctx1.bind_to_thread().expect("bind ctx1");
     unsafe {
-        cuda_core::simt::memory::memcpy_dtoh_async(
+        cuda_core::memory::memcpy_dtoh_async(
             readback.as_mut_ptr(),
             va1.base(),
             byte_len,

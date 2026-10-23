@@ -25,7 +25,7 @@
 //! Build and run with:
 //!   cargo oxide run dotprod --arch sm_80
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::dotprod::{dp2a_s32, dp2a_u32, dp4a_s32, dp4a_u32};
 use cuda_device::{DisjointSlice, kernel, thread};

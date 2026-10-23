@@ -53,7 +53,7 @@ PreparedLaunch<K>  -> safe launch of exactly K
 GPU execution can still overlap the host until you synchronize.
 
 ```rust
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, cuda_module, kernel, thread};
 
@@ -532,7 +532,7 @@ explains why this can differ from the normal LLVM-to-PTX path.
 `LaunchConfig` specifies the grid shape:
 
 ```rust
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 
 let config = LaunchConfig {
     grid_dim: (num_blocks, 1, 1),

@@ -28,7 +28,7 @@
 //!
 //! Run: `cargo oxide run tuple_field_lookup`
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
 use cuda_device::cuda_module;
 

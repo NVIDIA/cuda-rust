@@ -466,6 +466,14 @@ pub fn push_kernel_row_width_device_slice(
 /// `UnsafeCell`-based or atomic element types under their synchronization
 /// contract.
 ///
+/// `storage()` must return the allocation covering this exact view, with the
+/// same CUDA context and shared access tracker as every other safe alias.
+/// When it returns `None`, the implementation must independently retain the
+/// allocation and exclude conflicting accesses until GPU completion, even
+/// when the launch future is dropped or forgotten. Returning `false` from
+/// `shared_access_writes()` additionally promises that the shared reference
+/// cannot write any device memory in this range.
+///
 /// Implementing this trait is unsafe because generated launch methods trust
 /// the pointer and length without inspecting the allocation:
 ///
@@ -491,6 +499,20 @@ pub unsafe trait KernelSliceArg {
     /// Returns the number of `T` elements in the allocation.
     fn len(&self) -> usize;
 
+    /// An independently retained allocation and access tracker for this argument.
+    /// Implementations returning None must themselves keep memory and exclusion
+    /// valid through GPU completion, including dropped and forgotten futures.
+    fn storage(&self) -> Option<cuda_core::RawDeviceBuffer> {
+        None
+    }
+
+    /// Shared references to interior-mutable elements (including device atomics)
+    /// can write. Such arguments require exclusive tracking against ordinary
+    /// reads/copies; the conservative default also covers unknown custom types.
+    fn shared_access_writes(&self) -> bool {
+        true
+    }
+
     /// Returns true when the allocation has zero elements.
     fn is_empty(&self) -> bool {
         self.len() == 0
@@ -514,6 +536,13 @@ pub unsafe trait KernelSliceArgMut: KernelSliceArg {}
 // SAFETY: DeviceBuffer owns the reported allocation and keeps its CUDA context
 // alive; its pointer and length accessors describe that allocation exactly.
 unsafe impl<T> KernelSliceArg for cuda_core::DeviceBuffer<T> {
+    fn storage(&self) -> Option<cuda_core::RawDeviceBuffer> {
+        Some(self.storage().clone())
+    }
+    fn shared_access_writes(&self) -> bool {
+        self.shared_access_writes()
+    }
+
     type Elem = T;
 
     fn cu_deviceptr(&self) -> cuda_core::sys::CUdeviceptr {
@@ -534,6 +563,10 @@ unsafe impl<T> KernelSliceArgMut for cuda_core::DeviceBuffer<T> {}
 // SAFETY: DeviceBox owns the reported allocation and its raw constructor
 // requires the pointer, element count, and device ordinal to be truthful.
 unsafe impl<T: Send> KernelSliceArg for cuda_async::simt::device_box::DeviceBox<[T]> {
+    fn storage(&self) -> Option<cuda_core::RawDeviceBuffer> {
+        Some(self.storage().clone())
+    }
+
     type Elem = T;
 
     fn cu_deviceptr(&self) -> cuda_core::sys::CUdeviceptr {
@@ -557,6 +590,13 @@ unsafe impl<B> KernelSliceArg for Arc<B>
 where
     B: KernelSliceArg + ?Sized,
 {
+    fn storage(&self) -> Option<cuda_core::RawDeviceBuffer> {
+        self.as_ref().storage()
+    }
+    fn shared_access_writes(&self) -> bool {
+        self.as_ref().shared_access_writes()
+    }
+
     type Elem = B::Elem;
 
     fn cu_deviceptr(&self) -> cuda_core::sys::CUdeviceptr {
@@ -565,6 +605,25 @@ where
 
     fn len(&self) -> usize {
         self.as_ref().len()
+    }
+}
+
+#[cfg(feature = "async")]
+// SAFETY: views retain their parent's storage and preserve typed byte extents;
+// launch retention protects the allocation independently of the Rust borrow.
+unsafe impl<T> KernelSliceArg for cuda_core::DeviceBufferView<'_, T> {
+    type Elem = T;
+    fn cu_deviceptr(&self) -> cuda_core::sys::CUdeviceptr {
+        self.cu_deviceptr()
+    }
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn storage(&self) -> Option<cuda_core::RawDeviceBuffer> {
+        Some(self.storage().clone())
+    }
+    fn shared_access_writes(&self) -> bool {
+        self.shared_access_writes()
     }
 }
 
@@ -801,6 +860,9 @@ pub fn push_async_read_only_device_slice<B>(
 ) where
     B: KernelSliceArg + ?Sized,
 {
+    if let Some(storage) = buffer.storage() {
+        launch.retain_buffer(storage, buffer.shared_access_writes());
+    }
     let len = buffer.len();
     launch.push_scalar_arg(kernel_slice_device_ptr::<B::Elem>(
         buffer.cu_deviceptr(),
@@ -824,6 +886,9 @@ pub fn push_async_writable_device_slice<B>(
 ) where
     B: KernelSliceArgMut + ?Sized,
 {
+    if let Some(storage) = buffer.storage() {
+        launch.retain_buffer(storage, true);
+    }
     let len = buffer.len();
     launch.push_scalar_arg(kernel_slice_device_ptr::<B::Elem>(
         buffer.cu_deviceptr(),
@@ -848,6 +913,7 @@ pub fn push_async_row_width_device_slice<T>(
     launch: &mut cuda_async::simt::launch::AsyncKernelLaunchBuilder<'_>,
     bound: RowWidth<'_, T>,
 ) {
+    launch.retain_buffer(bound.buffer.storage().clone(), true);
     let (ptr, len, width) = row_width_device_buffer_arg(bound);
     launch.push_scalar_arg(ptr);
     launch.push_scalar_arg(len);
@@ -869,6 +935,9 @@ pub fn push_async_owned_row_width_device_slice<B>(
 ) where
     B: KernelSliceArgMut,
 {
+    if let Some(storage) = bound.buffer.storage() {
+        launch.retain_buffer(storage, true);
+    }
     let len = bound.buffer.len();
     launch.push_scalar_arg(kernel_slice_device_ptr::<B::Elem>(
         bound.buffer.cu_deviceptr(),

@@ -26,12 +26,12 @@ This chapter covers:
 
 :::{seealso}
 The complete integration test is available in
-[`cuda-core/tests/simt_vmm_p2p.rs`](https://github.com/NVIDIA/cuda-rust/blob/main/cuda-core/tests/simt_vmm_p2p.rs).
+[`cuda-core/tests/vmm_p2p.rs`](https://github.com/NVIDIA/cuda-rust/blob/main/cuda-core/tests/vmm_p2p.rs).
 
 The corresponding implementations are:
 
-* [`cuda-core/src/simt/vmm.rs`](https://github.com/NVIDIA/cuda-rust/blob/main/cuda-core/src/simt/vmm.rs)
-* [`cuda-core/src/simt/peer.rs`](https://github.com/NVIDIA/cuda-rust/blob/main/cuda-core/src/simt/peer.rs)
+* [`cuda-core/src/vmm.rs`](https://github.com/NVIDIA/cuda-rust/blob/main/cuda-core/src/vmm.rs)
+* [`cuda-core/src/peer.rs`](https://github.com/NVIDIA/cuda-rust/blob/main/cuda-core/src/peer.rs)
 :::
 
 ## VMM and P2P solve different problems
@@ -83,7 +83,7 @@ to access each other directly.
 Always query support before enabling peer access:
 
 ```rust
-use cuda_core::simt::peer;
+use cuda_core::peer;
 use cuda_core::{CudaContext, DriverError};
 
 fn check_peer_access() -> Result<(), DriverError> {
@@ -114,7 +114,7 @@ Use `peer::enable_peer_access` to allow one context to access memory associated
 with another device:
 
 ```rust
-use cuda_core::simt::peer;
+use cuda_core::peer;
 use cuda_core::{CudaContext, DriverError};
 
 fn enable_bidirectional_peer_access() -> Result<(), DriverError> {
@@ -183,7 +183,7 @@ of the device's allocation granularity.
 Use `allocation_granularity` and `align_size` before allocating:
 
 ```rust
-use cuda_core::simt::vmm;
+use cuda_core::vmm;
 use cuda_core::{CudaContext, DriverError};
 
 fn aligned_allocation_size(requested: usize) -> Result<usize, DriverError> {
@@ -203,7 +203,7 @@ The following example allocates physical memory, maps it into a virtual address
 range, writes data through the mapping, and reads it back.
 
 ```rust
-use cuda_core::simt::vmm;
+use cuda_core::vmm;
 use cuda_core::{CudaContext, DriverError};
 
 fn single_gpu_vmm_roundtrip() -> Result<(), DriverError> {
@@ -239,7 +239,7 @@ fn single_gpu_vmm_roundtrip() -> Result<(), DriverError> {
     let input: Vec<u8> = (0..64).map(|i| (i * 3 + 7) as u8).collect();
 
     unsafe {
-        cuda_core::simt::memory::memcpy_htod_async(
+        cuda_core::memory::memcpy_htod_async(
             reservation.base(),
             input.as_ptr(),
             input.len(),
@@ -252,7 +252,7 @@ fn single_gpu_vmm_roundtrip() -> Result<(), DriverError> {
     let mut output = vec![0u8; input.len()];
 
     unsafe {
-        cuda_core::simt::memory::memcpy_dtoh_async(
+        cuda_core::memory::memcpy_dtoh_async(
             output.as_mut_ptr(),
             reservation.base(),
             output.len(),
@@ -292,8 +292,8 @@ The following pattern:
 * Reads the same physical memory through GPU 1's mapping.
 
 ```rust
-use cuda_core::simt::{peer, vmm};
 use cuda_core::{CudaContext, DriverError, IntoResult};
+use cuda_core::{peer, vmm};
 use std::mem::MaybeUninit;
 
 fn gpu_count() -> Result<usize, DriverError> {
@@ -380,7 +380,7 @@ fn cross_gpu_vmm_roundtrip() -> Result<(), DriverError> {
     ctx0.bind_to_thread()?;
 
     unsafe {
-        cuda_core::simt::memory::memcpy_htod_async(
+        cuda_core::memory::memcpy_htod_async(
             reservation0.base(),
             input.as_ptr(),
             byte_length,
@@ -395,7 +395,7 @@ fn cross_gpu_vmm_roundtrip() -> Result<(), DriverError> {
     ctx1.bind_to_thread()?;
 
     unsafe {
-        cuda_core::simt::memory::memcpy_dtoh_async(
+        cuda_core::memory::memcpy_dtoh_async(
             output.as_mut_ptr(),
             reservation1.base(),
             byte_length,

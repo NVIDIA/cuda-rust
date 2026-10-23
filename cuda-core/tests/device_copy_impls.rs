@@ -17,6 +17,16 @@ fn device_copy_supports_half_types() {
     assert_device_copy::<half::bf16>();
 }
 
+#[test]
+fn tile_storage_types_also_implement_device_copy() {
+    assert_device_copy::<cuda_core::tf32>();
+    assert_device_copy::<cuda_core::f8e4m3fn>();
+    assert_device_copy::<cuda_core::f8e5m2>();
+    assert_device_copy::<cuda_core::f8e8m0fnu>();
+    assert_device_copy::<cuda_core::f8e5m3fnu>();
+    assert_device_copy::<cuda_core::f4e2m1fnx2>();
+}
+
 #[cfg(feature = "f16")]
 #[test]
 fn device_copy_supports_native_f16() {

@@ -130,9 +130,10 @@ run_step \
 run_step \
     "cuda-core compile-time contract tests" \
     host_cargo test -p cuda-core \
-    --test simt_device_copy_derive \
-    --test simt_device_copy_impls \
-    --test simt_launch_contract_types
+    --test device_copy_derive \
+    --test device_copy_impls \
+    --test device_buffer_casts \
+    --test launch_contract_types
 
 # Builds the compile_fail soundness contracts (non-Send launch storage,
 # brand/rank rejection, buffer aliasing) that no other target covers.

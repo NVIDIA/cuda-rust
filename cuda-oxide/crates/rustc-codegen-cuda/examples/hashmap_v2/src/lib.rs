@@ -61,7 +61,7 @@
 
 use std::sync::Arc;
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
 use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32, DeviceAtomicU64};
 use cuda_device::cooperative_groups::{ThreadGroup, WarpCollective, this_thread_block};
@@ -1142,13 +1142,13 @@ impl GpuSwissMap {
         let ctrl = DeviceBuffer::<u32>::zeroed(stream, capacity / GROUP)?;
         let slots = DeviceBuffer::<u64>::zeroed(stream, capacity)?;
         unsafe {
-            cuda_core::simt::memory::memset_d8_async(
+            cuda_core::memory::memset_d8_async(
                 ctrl.cu_deviceptr(),
                 0xFF,
                 ctrl.num_bytes(),
                 stream.cu_stream(),
             )?;
-            cuda_core::simt::memory::memset_d8_async(
+            cuda_core::memory::memset_d8_async(
                 slots.cu_deviceptr(),
                 0xFF,
                 slots.num_bytes(),

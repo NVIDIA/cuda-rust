@@ -22,7 +22,7 @@ mod cuda_async {
     pub mod simt {
         pub mod launch {
             use cuda_core::CudaFunction;
-            use cuda_core::simt::LaunchConfig;
+            use cuda_core::LaunchConfig;
             use std::sync::Arc;
 
             pub struct AsyncKernelLaunchBuilder;
@@ -42,7 +42,7 @@ fn launch_without_unsafe(module: &FakeModule) {
     let _ = cuda_launch_async! {
         kernel: raw,
         module: module,
-        config: cuda_core::simt::LaunchConfig {
+        config: cuda_core::LaunchConfig {
             grid_dim: (1, 2, 1),
             block_dim: (64, 1, 1),
             shared_mem_bytes: 0,

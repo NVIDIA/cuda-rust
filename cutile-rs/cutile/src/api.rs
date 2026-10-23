@@ -180,7 +180,7 @@ impl<T: DType> DeviceOp for CopyDeviceToDevice<T> {
         let tensor = Tensor::from_raw_parts(
             dst,
             num_bytes,
-            ctx.get_device_id(),
+            ctx.get_cuda_stream().clone(),
             self.shape,
             self.strides,
         );
@@ -349,7 +349,7 @@ impl<T: DType> DeviceOp for CopyDeviceToHostVec<T> {
             };
             // `execute` exposes a Vec to host-side combinators immediately.
             // Prove initialization here, independent of pageable-copy behavior.
-            if let Err(error) = unsafe { ctx.get_cuda_stream().synchronize() } {
+            if let Err(error) = ctx.get_cuda_stream().synchronize() {
                 std::mem::forget(host);
                 return Err(error.into());
             }
@@ -417,7 +417,7 @@ impl<T: DType> DeviceOp for CopyHostVecToDevice<T> {
         let tensor = Tensor::from_raw_parts(
             dptr,
             element_size * num_elements,
-            ctx.get_device_id(),
+            ctx.get_cuda_stream().clone(),
             shape.clone(),
             strides.clone(),
         );
@@ -740,7 +740,7 @@ impl<T: DType> DeviceOp for AllocUninitialized<T> {
             Tensor::from_raw_parts(
                 ptr,
                 num_bytes,
-                ctx.get_device_id(),
+                ctx.get_cuda_stream().clone(),
                 vec![self.len as i32],
                 vec![1],
             )

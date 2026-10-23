@@ -30,6 +30,9 @@ struct Allocation(Tensor<f32>);
 // SAFETY: the owned tensor has a stable, live allocation. The test's rescue
 // handle is used only to observe refcounts, never to access its GPU bytes.
 unsafe impl DeviceAllocation for Allocation {
+    fn context(&self) -> std::sync::Arc<cuda_core::Context> {
+        self.0.context().clone()
+    }
     fn device_ptr(&self) -> u64 {
         self.0.device_pointer().cu_deviceptr()
     }
@@ -81,7 +84,7 @@ impl Gate {
         let expired_flag = expired.clone();
         GATES_ARMED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         *LAST_GATE_ARMED_AT.lock().unwrap() = Some(std::time::Instant::now());
-        unsafe {
+        {
             stream
                 .launch_host_function(move || {
                     GATES_STARTED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -138,7 +141,7 @@ fn assert_gated_pending<T>(
             panic!(
                 "gated submission completed on the first poll while its Gate should still be blocking the stream (newest gate armed {age:?} ago; gates armed: {armed}, callbacks started: {}, finished: {finished}, wait outcomes: {outcomes:?}, stream query now: {:?})",
                 GATES_STARTED.load(std::sync::atomic::Ordering::SeqCst),
-                unsafe { stream.query() },
+                stream.query(),
             )
         }
         Poll::Ready(Err(e)) => panic!("gated submission failed on the first poll: {e}"),
@@ -155,7 +158,7 @@ fn forget_pending<O: DeviceOp>(op: O, stream: &Arc<cuda_core::Stream>, gate: &Ga
 
 fn on_gpu(f: impl FnOnce(Arc<cuda_core::Stream>, Arc<cuda_core::Stream>) + Send + 'static) {
     crate::common::with_test_stack(move || {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
         let other = device.new_stream().unwrap();
         let src = api::ones::<f32>(&[32]).sync_on(&stream).unwrap();
@@ -176,11 +179,9 @@ fn on_gpu(f: impl FnOnce(Arc<cuda_core::Stream>, Arc<cuda_core::Stream>) + Send 
         let _ = api::dup(&src).sync_on(&stream).unwrap();
         api::memcpy(&mut dst, &src).sync_on(&stream).unwrap();
         // Initialize the completion backend before placing any work behind a gate.
-        unsafe {
-            stream
-                .launch_host_function(|| std::thread::sleep(Duration::from_millis(10)))
-                .unwrap()
-        };
+        stream
+            .launch_host_function(|| std::thread::sleep(Duration::from_millis(10)))
+            .unwrap();
         block_on(DeviceFuture::scheduled(
             value(()),
             ExecutionContext::new(stream.clone()),
@@ -220,7 +221,7 @@ fn forgotten_borrowed_kernel_retains_inputs_outputs_and_excludes_conflicts() {
             "borrowed output was released after recover"
         );
         drop(gate);
-        unsafe { stream.synchronize().unwrap() };
+        stream.synchronize().unwrap();
     });
 }
 
@@ -241,7 +242,7 @@ fn forgotten_view_and_mapped_output_keep_their_storage() {
         assert!(Arc::strong_count(&src_owner) > 1);
         assert!(Arc::strong_count(&dst_owner) > 1);
         drop(gate);
-        unsafe { stream.synchronize().unwrap() };
+        stream.synchronize().unwrap();
     });
 }
 
@@ -256,7 +257,7 @@ fn forgotten_memcpy_keeps_both_allocations() {
         assert!(Arc::strong_count(&src_owner) > 1);
         assert!(Arc::strong_count(&dst_owner) > 1);
         drop(gate);
-        unsafe { stream.synchronize().unwrap() };
+        stream.synchronize().unwrap();
     });
 }
 
@@ -304,7 +305,7 @@ fn projected_dup_keeps_source_until_submission_completes() {
         forget_pending(op, &stream, &gate);
         assert!(Arc::strong_count(&owner) > 1);
         drop(gate);
-        unsafe { stream.synchronize().unwrap() };
+        stream.synchronize().unwrap();
     });
 }
 
@@ -394,7 +395,7 @@ fn graph_replay_retains_projected_storage_and_releases_launch_accesses() {
         assert!(Arc::strong_count(&src_owner) > 1);
         assert!(Arc::strong_count(&dst_owner) > 1);
         drop(gate);
-        unsafe { other.synchronize().unwrap() };
+        other.synchronize().unwrap();
     });
 }
 

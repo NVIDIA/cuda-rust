@@ -20,7 +20,7 @@
 //!   cargo oxide run slice_iterators
 //!   CUDA_OXIDE_NO_OPT=1 cargo oxide run slice_iterators
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;

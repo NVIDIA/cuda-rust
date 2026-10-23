@@ -5,7 +5,7 @@
 
 #![allow(dead_code, non_upper_case_globals, clippy::needless_lifetimes)]
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig1D};
 #[cfg(feature = "async")]
 use cuda_host::cuda_async::simt::device_box::DeviceBox;

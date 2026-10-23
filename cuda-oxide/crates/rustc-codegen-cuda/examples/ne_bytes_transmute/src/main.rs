@@ -13,7 +13,7 @@
 // Kernels lock in both directions for u32 and f32, plus `f32::to_bits`,
 // a same-width scalar transmute that must stay on the plain bitcast path.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, cuda_module, kernel, thread};
 

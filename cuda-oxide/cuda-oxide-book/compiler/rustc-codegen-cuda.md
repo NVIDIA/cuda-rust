@@ -411,7 +411,10 @@ without fighting the compiler driver's flag plumbing.
 `CUDA_OXIDE_TARGET` sits in the middle of a precedence chain that
 `cargo oxide` honours: explicit `--arch` wins, then `CUDA_OXIDE_TARGET`,
 then `cargo oxide run`'s host-CC auto-detect (only for `run`, not `build`
-or `pipeline`), and finally the backend's feature-based default.
+or `pipeline`), and finally the backend's feature-based default. That default
+is raised to the device-code floor -- `sm_80`, or the detected GPU if that is
+older -- so the target never falls below what `cuda-device`'s
+`cuda_oxide_sm_at_least` cfg assumed.
 
 ```{note}
 `CUDA_OXIDE_VERBOSE=1 cargo oxide build` is your best friend when debugging

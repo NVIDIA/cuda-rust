@@ -518,3 +518,207 @@ fn malformed_low_width_targets_keep_override_errors() {
         assert_eq!(explicit.to_string(), expected_reason);
     }
 }
+
+/// The property `cuda-device`'s `cuda_oxide_sm_at_least` ladder depends on:
+/// selection never lands below the floor device code was compiled against
+/// (#811).
+///
+/// The build script fixes that ladder before rustc runs, from the same
+/// [`resolve_sm_floor`] both resolvers below consult, so this asserts the
+/// property end to end rather than re-checking that one helper's table. Both
+/// stages are covered because a module reaches PTX through one or the other.
+#[test]
+fn selection_never_lands_below_the_floor_device_code_assumes() {
+    let generated = crate::generated::GeneratedModuleRequirements::default();
+    let [sm_75, sm_86, sm_120a] = ["sm_75", "sm_86", "sm_120a"]
+        .map(|raw| raw.parse::<cuda_target_spec::DeviceArch>().unwrap());
+    for explicit in [None, Some("sm_75"), Some("sm_86"), Some("sm_90a")] {
+        for hint in [None, Some(&sm_75), Some(&sm_86), Some(&sm_120a)] {
+            let floor = cuda_target_spec::resolve_sm_floor(explicit, hint.map(AsRef::as_ref))
+                .expect("floor");
+            for features in [
+                DetectedFeatures::Basic,
+                DetectedFeatures::Ldmatrix,
+                DetectedFeatures::Movmatrix,
+                DetectedFeatures::Sm75,
+                DetectedFeatures::Sm80,
+                DetectedFeatures::Cluster,
+                DetectedFeatures::Wgmma,
+            ] {
+                // An explicit target that cannot host the module is rejected
+                // outright; that is the other half of the contract, asserted
+                // separately below. Only successful selections are bound.
+                if let Ok((target, source)) =
+                    resolve_ptx_target(explicit, "CUDA_OXIDE_TARGET", hint, features)
+                {
+                    assert!(
+                        target.capability() >= floor,
+                        "PTX: {features:?} with explicit={explicit:?} hint={hint:?} \
+                         selected {} (from {source}) below floor {floor}",
+                        target.sm()
+                    );
+                }
+                if let Ok(target) = crate::export::resolve_nvvm_target_with_generated(
+                    explicit,
+                    hint,
+                    Some(features),
+                    &generated,
+                ) {
+                    assert!(
+                        target.capability() >= floor,
+                        "NVVM: {features:?} with explicit={explicit:?} hint={hint:?} \
+                         selected {} below floor {floor}",
+                        target.sm()
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The two cases that motivated the floor, named so a regression says which.
+#[test]
+fn the_floor_is_honoured_without_overriding_a_runnable_device() {
+    let generated = crate::generated::GeneratedModuleRequirements::default();
+
+    // Nothing pinned: the ladder advertises the sm_80 default, so a module
+    // whose features only need sm_75 must not be built for sm_75.
+    let (ptx, _) =
+        resolve_ptx_target(None, "CUDA_OXIDE_TARGET", None, DetectedFeatures::Ldmatrix).unwrap();
+    assert_eq!(ptx.sm(), "sm_80");
+    let nvvm = crate::export::resolve_nvvm_target_with_generated(
+        None,
+        None,
+        Some(DetectedFeatures::Ldmatrix),
+        &generated,
+    )
+    .unwrap();
+    assert_eq!(nvvm.sm(), "sm_80");
+
+    // A detected Blackwell with a WGMMA module still selects sm_90a, because
+    // the hint cannot raise the floor: it is advisory, and this is exactly the
+    // case the backend is documented to build elsewhere for.
+    let blackwell = "sm_120a".parse::<cuda_target_spec::DeviceArch>().unwrap();
+    let (wgmma, _) = resolve_ptx_target(
+        None,
+        "CUDA_OXIDE_TARGET",
+        Some(&blackwell),
+        DetectedFeatures::Wgmma,
+    )
+    .unwrap();
+    assert_eq!(wgmma.sm(), "sm_90a");
+    assert_eq!(
+        cuda_target_spec::resolve_sm_floor(None, Some(blackwell.as_ref())).unwrap(),
+        80
+    );
+
+    // A detected device *below* the default pulls the floor down with it, so
+    // running on Turing still produces sm_75 rather than PTX it cannot load.
+    let sm_75 = "sm_75".parse::<cuda_target_spec::DeviceArch>().unwrap();
+    let (turing, source) = resolve_ptx_target(
+        None,
+        "CUDA_OXIDE_TARGET",
+        Some(&sm_75),
+        DetectedFeatures::Basic,
+    )
+    .unwrap();
+    assert_eq!((turing.sm().as_str(), source), ("sm_75", "detected GPU"));
+    assert_eq!(
+        cuda_target_spec::resolve_sm_floor(None, Some(sm_75.as_ref())).unwrap(),
+        75
+    );
+}
+
+/// An architecture family that cannot host the module is refused where it is
+/// stated, rather than quietly resolved to something else.
+#[test]
+fn an_explicit_target_that_cannot_host_the_module_is_refused() {
+    let error = resolve_ptx_target(
+        Some("sm_120a"),
+        "CUDA_OXIDE_TARGET",
+        None,
+        DetectedFeatures::Wgmma,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("Wgmma"), "{error}");
+
+    // A blank target, which the two stages read differently.
+    //
+    // `resolve_sm_floor` treats a blank `CUDA_OXIDE_TARGET` as unset and falls
+    // back to the default floor, while the backend reads the variable with
+    // `env::var().ok()` and hands the empty string to the target parser, which
+    // refuses it. The strict side is the one that decides whether anything is
+    // built, so the ladder can never be the thing that overstates: the build
+    // fails before a module exists.
+    assert_eq!(
+        cuda_target_spec::resolve_sm_floor(Some("  "), None).unwrap(),
+        80
+    );
+    assert!(
+        resolve_ptx_target(
+            Some("  "),
+            "CUDA_OXIDE_TARGET",
+            None,
+            DetectedFeatures::Basic
+        )
+        .is_err()
+    );
+}
+
+/// The floor's reject arm. A feature-selected target below the floor is
+/// raised only when the floor can host the module: WGMMA exists only on
+/// sm_90a, so a floor of 100 cannot, and that is reported instead of resolved
+/// to another architecture family.
+#[test]
+fn a_floor_that_cannot_host_the_module_is_reported() {
+    let generated = crate::generated::GeneratedModuleRequirements::default();
+    let sm_90a = "sm_90a".parse::<cuda_target_spec::CudaArch>().unwrap();
+
+    let error =
+        honour_sm_floor(sm_90a.clone(), 100, DetectedFeatures::Wgmma, &generated).unwrap_err();
+    assert!(error.contains("compute capability 100"), "{error}");
+    assert!(error.contains("run only on sm_90a"), "{error}");
+
+    // Controls: a floor the selection already meets leaves it alone, and one
+    // that can host the module raises it.
+    let kept = honour_sm_floor(sm_90a, 90, DetectedFeatures::Wgmma, &generated).unwrap();
+    assert_eq!(kept.sm(), "sm_90a");
+    let sm_75 = "sm_75".parse::<cuda_target_spec::CudaArch>().unwrap();
+    let raised = honour_sm_floor(sm_75, 80, DetectedFeatures::Ldmatrix, &generated).unwrap();
+    assert_eq!(raised.sm(), "sm_80");
+}
+
+/// `cuda-device`'s build script reads `CUDA_OXIDE_DEVICE_ARCH` as
+/// `value.parse::<DeviceArch>().ok()`. Its floor matches selection only while
+/// the backend's input boundary accepts exactly those values and rejects the
+/// rest before any target is chosen.
+#[test]
+fn the_build_script_reads_the_device_hint_as_the_backend_does() {
+    for raw in [
+        "sm_75",
+        "sm_86",
+        "sm_120a",
+        "",
+        "  ",
+        " sm_86",
+        "sm_86 ",
+        "86",
+        "sm_9",
+        "compute_86",
+        "sm_100f",
+    ] {
+        let build_script = raw.parse::<cuda_target_spec::DeviceArch>().ok();
+        let backend = crate::options::DeviceArchHint::from_env_value(Ok(raw.to_string()))
+            .expect("a set variable is a hint")
+            .as_device_arch()
+            .ok()
+            .cloned();
+        assert_eq!(build_script, backend, "CUDA_OXIDE_DEVICE_ARCH={raw:?}");
+    }
+    assert!(
+        crate::options::DeviceArchHint::from_env_value(Err(std::env::VarError::NotPresent))
+            .is_none(),
+        "an unset variable is no hint on either side"
+    );
+}

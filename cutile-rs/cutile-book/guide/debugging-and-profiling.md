@@ -230,6 +230,15 @@ when inlined, including across modules. Core operations are attributed to
 the user's call site. Multiple generated instructions can still map to one
 Rust line; this is not a one-to-one mapping, especially with optimization.
 
+Generated const-generic array bindings use the containing function or method's
+signature as their source origin. Generated reduction bodies use the reduction
+call's location, including its inline caller chain.
+
+Checks moved to the host launcher report the original access and its inline
+callers when validation fails, including in builds without device debug info.
+If several accesses share one launch check, its diagnostic retains each
+distinct source origin while the predicate is evaluated only once.
+
 ## Profiling
 
 Use NVIDIA **Nsight Compute** (`ncu`, reports opened with `ncu-ui`) for

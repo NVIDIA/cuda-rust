@@ -196,6 +196,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             }
             // Add function call CGAs arrays as variables.
             for (key, value) in call_generic_vars.ordered_inst_array() {
+                let _source = self.push_opaque_call_site(&fn_item.sig.span());
                 let arr_expr = syn::parse2::<Expr>(format!("{value:?}").parse().unwrap()).unwrap();
                 let arr_ty =
                     syn::parse2::<Type>(format!("[i32;{}]", value.len()).parse().unwrap()).unwrap();
@@ -433,6 +434,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 call_variables.vars.insert(key.to_string(), tr_val);
             }
             for (key, value) in call_generic_vars.ordered_inst_array() {
+                let _source = self.push_opaque_call_site(&impl_method.sig.span());
                 let arr_expr = syn::parse2::<Expr>(format!("{value:?}").parse().unwrap()).unwrap();
                 let arr_ty =
                     syn::parse2::<Type>(format!("[i32;{}]", value.len()).parse().unwrap()).unwrap();

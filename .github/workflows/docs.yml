@@ -50,7 +50,7 @@ jobs:
       - name: Install CUDA toolkit
         # `cargo doc --workspace` compiles cuda-bindings' build-time bindgen,
         # which needs `cuda.h`. Same toolkit pin as the unit-tests job.
-        uses: Jimver/cuda-toolkit@v0.2.35
+        uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76  # v0.2.35
         id: cuda-toolkit
         with:
           cuda: "13.1.1"

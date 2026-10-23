@@ -34,7 +34,7 @@ items are the `epilogue::sm120` items.
 
 ## Checks
 
-Run from the `cuda-oxide/` workspace with its pinned nightly:
+Run from the `cuda-oxide/` workspace with its pinned toolchain:
 
 ```sh
 cargo test -p cute-rs --no-default-features

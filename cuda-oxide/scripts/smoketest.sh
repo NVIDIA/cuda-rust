@@ -2423,7 +2423,7 @@ run_tilelib() {
 # dominant cost of this script. Point all example builds at one shared
 # CARGO_TARGET_DIR: cargo fingerprints each unit by package + features +
 # workspace_root + toolchain, so identical deps built with the same pinned
-# nightly + backend RUSTFLAGS compile exactly once and are reused across every
+# toolchain + backend RUSTFLAGS compile exactly once and are reused across every
 # example. (Same trick the clippy CI job uses for these workspaces.)
 #
 # The codegen backend .so is built FIRST, with CARGO_TARGET_DIR explicitly

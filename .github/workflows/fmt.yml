@@ -20,7 +20,7 @@ jobs:
 
       # rustfmt comes from cuda-oxide/rust-toolchain.toml's component list,
       # like clippy,
-      # so `cargo fmt` resolves against the same nightly as the rest of CI.
+      # so `cargo fmt` resolves against the same toolchain as the rest of CI.
 
       - name: Check stable host workspace formatting
         run: cargo fmt --all -- --check
@@ -61,7 +61,7 @@ jobs:
             example_dir="$(dirname "$manifest")"
             echo "::group::cargo fmt --check ($example_dir)"
             # Run inside the component so rustup discovers CUDA Oxide's
-            # directory-scoped nightly pin.
+            # directory-scoped toolchain pin.
             (cd "$example_dir" && cargo fmt -- --check)
             echo "::endgroup::"
           done

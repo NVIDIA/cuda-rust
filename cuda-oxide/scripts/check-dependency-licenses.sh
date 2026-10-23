@@ -106,7 +106,7 @@ print("\n".join(sorted(names)))
 # here matters:
 #
 #   1. Cargo.toml -- the stable shared-host workspace.
-#   2. cuda-oxide/Cargo.toml -- the nightly SIMT workspace.
+#   2. cuda-oxide/Cargo.toml -- the SIMT workspace.
 #   3. cuda-oxide/crates/rustc-codegen-cuda/Cargo.toml -- its own `[workspace]` for the
 #      rustc-private dylibs, so `-p` from the root cannot reach it and the root
 #      `cargo metadata` stops at that boundary.  That is how the backend crate

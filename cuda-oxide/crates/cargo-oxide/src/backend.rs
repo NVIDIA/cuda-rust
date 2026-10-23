@@ -813,7 +813,7 @@ fn report_unhealable_toolchain_mismatch(current: &str, recorded: &str) {
         toolchain_identity_line(recorded)
     );
     eprintln!(
-        "Your project's rust-toolchain.toml pins a different nightly than the \
+        "Your project's rust-toolchain.toml pins a different toolchain than the \
          cuda-oxide backend source it depends on. Align the pins (and run \
          `cargo oxide update` after changing them), or point CUDA_OXIDE_BACKEND \
          at a backend built with your project's toolchain."

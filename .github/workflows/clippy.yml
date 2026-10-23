@@ -49,7 +49,7 @@ jobs:
       # Point all of those invocations at one shared CARGO_TARGET_DIR under
       # ${RUNNER_TEMP}. Cargo fingerprints each unit by package + features
       # + workspace_root + toolchain, so co-located workspaces using the
-      # same pinned nightly deduplicate on identical deps and compile each
+      # same pinned toolchain deduplicate on identical deps and compile each
       # one once. This is intentionally scoped *not* to cover the
       # `cargo clippy --workspace` step above, which already has a
       # well-defined `target/` under cuda-oxide.

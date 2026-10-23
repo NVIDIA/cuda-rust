@@ -138,7 +138,7 @@ crates (`cuda-device`, `cuda-host`, `cuda-macros`, etc.) and the build tooling
 (`cargo-oxide`). The host runtime (`cuda-bindings`, `cuda-core`, `cuda-async`)
 is shared with cutile-rs and lives at the repository root; the SIMT workspace
 depends on those crates by path. This section, "Verify the installation", and
-"Common commands" run from `cuda-oxide/`, where the nightly pin and the
+"Common commands" run from `cuda-oxide/`, where the SIMT toolchain pin and the
 `cargo oxide` workspace alias apply:
 
 ```bash
@@ -148,8 +148,9 @@ cargo build
 
 ```{note}
 The codegen backend (`cuda-oxide/crates/rustc-codegen-cuda/`) is intentionally **not** a
-workspace member because it requires special nightly features and a different
-build process. `cargo-oxide` handles building it transparently.
+workspace member because it links against `rustc_private` (via `rustc-dev` and
+`RUSTC_BOOTSTRAP=1`) and uses a separate build process. `cargo-oxide` handles
+building it transparently.
 ```
 
 ## Install cargo-oxide
@@ -248,8 +249,8 @@ repository/
 ├── cuda-async/             # Shared async runtime
 ├── cutile-rs/              # Tile DSL (nested import)
 └── cuda-oxide/
-    ├── Cargo.toml          # Nightly SIMT workspace
-    ├── rust-toolchain.toml # Pinned nightly + components
+    ├── Cargo.toml          # SIMT workspace
+    ├── rust-toolchain.toml # Pinned stable toolchain (1.99.1) + components
     ├── crates/
     │   ├── cuda-device/          # Device intrinsics (#![no_std])
     │   ├── cuda-host/            # Host launch APIs
@@ -295,5 +296,5 @@ CUDA driver version mismatch
 
 `cargo oxide doctor` fails on codegen backend
 : The backend is built on first use. If the build fails, check that
-  `rust-src` is installed and that the nightly version matches
-  `rust-toolchain.toml`.
+  `rust-src` and `rustc-dev` are installed and that the active toolchain
+  matches `rust-toolchain.toml`.

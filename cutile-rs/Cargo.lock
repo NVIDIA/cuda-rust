@@ -484,6 +484,7 @@ dependencies = [
  "once_cell",
  "proc-macro2",
  "quote",
+ "rustc-hash 2.1.2",
  "serde",
  "serde_json",
  "sha2",

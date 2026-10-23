@@ -1,9 +1,6 @@
 error[E0080]: evaluation panicked: static layout offset exceeds i64
  --> src/static_layout.rs
   |
-  | impl<A, B, SA, SB> StaticLayout for Layout<(A, B), (SA, SB)>
-...
-  |     const MAX_OFFSET: usize =
   |         checked_offset_add(Layout::<A, SA>::MAX_OFFSET, Layout::<B, SB>::MAX_OFFSET);
   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `<cute_rs::Layout<(cute_rs::C<2>, cute_rs::C<2>), (cute_rs::C<i64::MAX>, cute_rs::C<1>)> as cute_rs::static_layout::StaticLayout>::MAX_OFFSET` failed inside this call
   |

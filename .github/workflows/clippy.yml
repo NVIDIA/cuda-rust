@@ -64,6 +64,7 @@ jobs:
         env:
           CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           CARGO_TARGET_DIR: ${{ runner.temp }}/clippy-shared-target
+          RUSTC_BOOTSTRAP: "1"
         run: |
           set -e
           example_roots=(

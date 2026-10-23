@@ -1718,7 +1718,18 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         )
                     })?;
                 // TileRustTypes needed for closure body variables and result wrapping.
-                let tile_rust_result_type = match TileRustType::from_tile(&element_type, &shape) {
+                // Prefer the annotated type when it describes the same static shape, so
+                // symbolic const-generic dimensions (`{ [BM] }`) survive the reduce.
+                let annotated_result_type = return_type
+                    .as_ref()
+                    .filter(|annotated| {
+                        self.static_shape_from_type(annotated, generic_vars, &call_expr.span())
+                            .is_ok_and(|annotated_shape| annotated_shape == shape)
+                    })
+                    .cloned();
+                let tile_rust_result_type = match annotated_result_type
+                    .or_else(|| TileRustType::from_tile(&element_type, &shape))
+                {
                     Some(t) => t,
                     None => {
                         let ty = syn::parse_str::<syn::Type>(&format!(

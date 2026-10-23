@@ -231,9 +231,6 @@ jobs:
     timeout-minutes: 30
     container:
       image: nvidia/cuda:13.3.0-devel-ubuntu24.04
-      options: -u root --security-opt seccomp=unconfined --shm-size 16g
-      env:
-        NVIDIA_VISIBLE_DEVICES: ${{ env.NVIDIA_VISIBLE_DEVICES }}
     env:
       CUDA_TOOLKIT_PATH: /usr/local/cuda
       CUTILE_TILEIRAS_PATH: /usr/local/cuda/bin/tileiras

@@ -1,0 +1,31 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/two_cta_ring_cursor_wrong_stages.rs:15:29
+   |
+15 |         ring.acquire_cursor(RingCursor::<2, Producer>::new());
+   |              -------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `15`, found `2`
+   |              |
+   |              arguments to this method are incorrect
+   |
+   = note: expected struct `RingCursor<15, Producer>`
+              found struct `RingCursor<2, Producer>`
+note: method defined here
+  --> src/attention/sm100/pipeline.rs
+   |
+   |     pub unsafe fn acquire_cursor(self, cursor: RingCursor<STAGES, Producer>) {
+   |                   ^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+  --> tests/compile_fail/two_cta_ring_cursor_wrong_stages.rs:16:26
+   |
+16 |         ring.wait_cursor(RingCursor::<2, Consumer>::new());
+   |              ----------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `15`, found `2`
+   |              |
+   |              arguments to this method are incorrect
+   |
+   = note: expected struct `RingCursor<15, Consumer>`
+              found struct `RingCursor<2, Consumer>`
+note: method defined here
+  --> src/attention/sm100/pipeline.rs
+   |
+   |     pub unsafe fn wait_cursor(self, cursor: RingCursor<STAGES, Consumer>) {
+   |                   ^^^^^^^^^^^

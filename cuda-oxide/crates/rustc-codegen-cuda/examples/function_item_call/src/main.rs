@@ -18,6 +18,8 @@
 //! `call_once_decoy` proves that an ordinary function whose name contains
 //! trait-like text is not mistaken for a callable-trait shim.
 
+#![feature(never_type)]
+
 use cuda_core::simt::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, device, kernel, thread};

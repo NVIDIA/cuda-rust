@@ -545,19 +545,15 @@ mod kernels {
     pub fn core_atomic_ordering_probe(counter: *mut u32, mut out: DisjointSlice<u32>) {
         let gid = thread::index_1d();
         let pointer = counter;
-        // nightly-2026-08-28 added a `const VOLATILE: bool` generic to the
-        // load/store intrinsics; plain atomics pass `false`.
         let current = unsafe {
-            core::intrinsics::atomic_load::<u32, { core::intrinsics::AtomicOrdering::Acquire }, false>(
+            core::intrinsics::atomic_load::<u32, { core::intrinsics::AtomicOrdering::Acquire }>(
                 pointer,
             )
         };
         unsafe {
-            core::intrinsics::atomic_store::<
-                u32,
-                { core::intrinsics::AtomicOrdering::Release },
-                false,
-            >(pointer, current)
+            core::intrinsics::atomic_store::<u32, { core::intrinsics::AtomicOrdering::Release }>(
+                pointer, current,
+            )
         };
         let swapped = unsafe {
             core::intrinsics::atomic_xchg::<u32, { core::intrinsics::AtomicOrdering::AcqRel }>(

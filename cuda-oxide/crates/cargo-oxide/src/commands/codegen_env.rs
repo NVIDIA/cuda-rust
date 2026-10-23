@@ -4,6 +4,7 @@
  */
 
 use crate::backend;
+use crate::cutlass_toolchain;
 use std::path::Path;
 use std::process::Command;
 
@@ -465,6 +466,7 @@ fn apply_codegen_rustflags(
     append_full_debug_rustflags(&mut encoded, cmd, inherited_debug.as_deref());
 
     cmd.env("CARGO_ENCODED_RUSTFLAGS", encoded)
+        .env("RUSTC_BOOTSTRAP", "1")
         .env_remove("RUSTFLAGS");
     apply_profile_pins(cmd, profile);
 }
@@ -552,6 +554,7 @@ pub fn has_configured_arch(ctx: &Context, cli_arch: Option<&str>) -> bool {
 }
 
 pub(super) fn apply_config_env(cmd: &mut Command, ctx: &Context) {
+    cmd.env("RUSTC_BOOTSTRAP", "1");
     for (key, value) in &ctx.config.env {
         if matches!(key.as_str(), "RUSTFLAGS" | "CARGO_ENCODED_RUSTFLAGS") {
             continue;
@@ -562,6 +565,61 @@ pub(super) fn apply_config_env(cmd: &mut Command, ctx: &Context) {
         if std::env::var_os(key).is_none() {
             cmd.env(key, value);
         }
+    }
+    apply_managed_cutlass_compiler(cmd, ctx);
+}
+
+fn apply_managed_cutlass_compiler(cmd: &mut Command, ctx: &Context) {
+    let backend = std::env::var_os(DEVICE_BACKEND_ENV)
+        .map(|value| value.as_encoded_bytes().to_vec())
+        .or_else(|| {
+            project_config_env(ctx, DEVICE_BACKEND_ENV).map(|value| value.as_bytes().to_vec())
+        });
+    if !backend.as_deref().is_some_and(selector_is_cutlass_mlir) {
+        return;
+    }
+
+    let explicitly_configured = std::env::var_os(cutlass_toolchain::CUTLASS_COMPILER_ENV).is_some()
+        || project_config_env(ctx, cutlass_toolchain::CUTLASS_COMPILER_ENV).is_some();
+    if explicitly_configured {
+        return;
+    }
+
+    match cutlass_toolchain::resolve_official() {
+        Ok(Some(paths)) => apply_resolved_cutlass_compiler(cmd, Some(&paths), false),
+        Ok(None) => {
+            eprintln!(
+                "Error: CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir needs the managed CUTLASS compiler"
+            );
+            eprintln!("Install the pinned official release with:");
+            eprintln!("  cargo oxide toolchain install cutlass");
+            eprintln!(
+                "Or explicitly set {}.",
+                cutlass_toolchain::CUTLASS_COMPILER_ENV
+            );
+            std::process::exit(2);
+        }
+        Err(error) => {
+            eprintln!("Error: managed CUTLASS compiler installation is invalid: {error}");
+            eprintln!("Repair it with `cargo oxide toolchain install cutlass`.");
+            std::process::exit(2);
+        }
+    }
+}
+
+pub(super) fn apply_resolved_cutlass_compiler(
+    cmd: &mut Command,
+    resolved: Option<&cutlass_toolchain::ResolvedCutlass>,
+    explicitly_configured: bool,
+) {
+    if explicitly_configured {
+        return;
+    }
+    if let Some(paths) = resolved {
+        cmd.env(
+            cutlass_toolchain::CUTLASS_COMPILER_ENV,
+            &paths.compiler_library,
+        );
     }
 }
 

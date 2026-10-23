@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 440" width="100%">
+  <defs>
+    <style>
+      .bg { fill: #faf9f5; }
+      .panel { fill: #f3f1ea; stroke: #d4d1c7; }
+      .t { font-family: system-ui, -apple-system, sans-serif; font-size: 14px; font-weight: 600; fill: #1c1c1a; }
+      .ts { font-family: system-ui, -apple-system, sans-serif; font-size: 12px; fill: #575652; }
+      .sec { font-family: system-ui, -apple-system, sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; fill: #6b6963; }
+      .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 12px; }
+      .l { text-anchor: start; dominant-baseline: central; }
+      .bar-bf16 { fill: #0f6e56; }
+      .bar-nvfp4 { fill: #b84a27; }
+      .bar-cutedsl { fill: #534ab7; }
+      @media (prefers-color-scheme: dark) {
+        .bg { fill: #161618; }
+        .panel { fill: #1e1e21; stroke: #38383d; }
+        .t { fill: #eae9e4; }
+        .ts { fill: #a6a49d; }
+        .sec { fill: #8f8d86; }
+        .bar-bf16 { fill: #3ec9a7; }
+        .bar-nvfp4 { fill: #f08868; }
+        .bar-cutedsl { fill: #9b93f3; }
+      }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1040" height="440" rx="12"/>
+  <rect class="panel" x="16" y="16" width="1008" height="408" rx="10" stroke-width="1"/>
+  <text class="sec l" x="36" y="42">RTX 5090 (SM120A) LIVE BENCHMARK — FULL 36-LAYER QWEN/QWEN3-8B (CUTE-RS VS. CUTEDSL)</text>
+
+  <!-- Metric 1: Weight Memory Footprint -->
+  <text class="t l" x="36" y="82">1. 36-Layer Weight Footprint (Lower is Better — 3.56× Compression)</text>
+  <text class="ts l mono" x="36" y="110">cute-rs BF16 (m16n8k16)</text>
+  <rect class="bar-bf16" x="250" y="98" width="520" height="22" rx="4"/>
+  <text class="ts l mono" x="782" y="110">13,248.6 MiB (12.94 GiB)</text>
+
+  <text class="ts l mono" x="36" y="138">cute-rs / CuTeDSL NVFP4</text>
+  <rect class="bar-nvfp4" x="250" y="126" width="146" height="22" rx="4"/>
+  <text class="ts l mono" x="408" y="138">3,726.6 MiB (3.64 GiB — saves 9.30 GiB VRAM)</text>
+
+  <!-- Metric 2: Prefill Throughput -->
+  <text class="t l" x="36" y="182">2. Prefill Throughput (32-Token Prompt, 36 Layers — Higher is Better)</text>
+  <text class="ts l mono" x="36" y="210">cute-rs NVFP4 (E2M1+E4M3)</text>
+  <rect class="bar-nvfp4" x="250" y="198" width="506" height="22" rx="4"/>
+  <text class="ts l mono" x="768" y="210">632.8 tok/s (50.6 ms — 1.89× vs BF16)</text>
+
+  <text class="ts l mono" x="36" y="238">CuTeDSL NVFP4 Reference</text>
+  <rect class="bar-cutedsl" x="250" y="226" width="482" height="22" rx="4"/>
+  <text class="ts l mono" x="744" y="238">602.9 tok/s (53.1 ms)</text>
+
+  <text class="ts l mono" x="36" y="266">cute-rs BF16 (m16n8k16)</text>
+  <rect class="bar-bf16" x="250" y="254" width="267" height="22" rx="4"/>
+  <text class="ts l mono" x="529" y="266">333.7 tok/s (95.9 ms)</text>
+
+  <!-- Metric 3: Autoregressive Decode Throughput -->
+  <text class="t l" x="36" y="312">3. Autoregressive Decode Throughput (B=1, 36 Layers + KV Cache — Higher is Better)</text>
+  <text class="ts l mono" x="36" y="340">cute-rs NVFP4 (E2M1+E4M3)</text>
+  <rect class="bar-nvfp4" x="250" y="328" width="513" height="22" rx="4"/>
+  <text class="ts l mono" x="775" y="340">114.0 tok/s (8.77 ms/tok — 1.63× vs BF16)</text>
+
+  <text class="ts l mono" x="36" y="368">CuTeDSL NVFP4 Reference</text>
+  <rect class="bar-cutedsl" x="250" y="356" width="341" height="22" rx="4"/>
+  <text class="ts l mono" x="603" y="368">75.8 tok/s (13.20 ms/tok)</text>
+
+  <text class="ts l mono" x="36" y="396">cute-rs BF16 (m16n8k16)</text>
+  <rect class="bar-bf16" x="250" y="384" width="314" height="22" rx="4"/>
+  <text class="ts l mono" x="576" y="396">69.8 tok/s (14.32 ms/tok)</text>
+</svg>

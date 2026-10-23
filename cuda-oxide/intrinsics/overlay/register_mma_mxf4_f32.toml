@@ -1,0 +1,42 @@
+# Dense SM120 MXF4 K64 block-scaled register MMA with explicit scale selectors.
+schema = 64
+family = "register_mma"
+
+[[intrinsic]]
+id = "mma_m16n8k64_mxf4_f32"
+abi_id = "i1039"
+operation_key = "matrix.mma.m16n8k64.row.col.kind_mxf4.scale_vec_2x.f32.e2m1.e2m1.f32.ue8m0"
+family = "register_mma"
+source_record = "int_nvvm_mma_block_scale_m16n8k64_row_col_mxf4_scale_2x_f32_e2m1_e2m1_f32_ue8m0"
+rust_module = "matrix"
+rust_name = "mma_m16n8k64_mxf4_f32"
+rust_arguments = ["[f32; 4]", "[u32; 4]", "[u32; 2]", "u32", "u16", "u16", "u32", "u16", "u16"]
+rust_result = "[f32; 4]"
+safe = false
+must_use = true
+public_rust_path = "cuda_intrinsics::matrix::mma_m16n8k64_mxf4_f32"
+compatibility_rust_paths = ["cuda_device::wmma::mma_m16n8k64_mxf4_f32"]
+dialect_op_type = "RegisterMmaOp"
+dialect_op_name = "nvvm.register_mma"
+dialect_operands = ["f32", "f32", "f32", "f32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i16", "i16", "i32", "i16", "i16"]
+dialect_results = ["f32", "f32", "f32", "f32"]
+llvm_symbol = "llvm.nvvm.mma.block.scale.m16n8k64.row.col.mxf4.scale.2x.f32.e2m1.e2m1.f32.ue8m0"
+llvm_arguments = ["i32", "i32", "i32", "i32", "i32", "i32", "f32", "f32", "f32", "f32", "i32", "i16", "i16", "i32", "i16", "i16"]
+llvm_results = ["f32", "f32", "f32", "f32"]
+pure = false
+memory = "none"
+convergent = true
+execution_scope = "warp"
+minimum_ptx = "8.7"
+ptx_result = "[f32; 4]"
+targets = "sm_120a"
+ptx_isa_version = "9.3"
+ptx_isa_section = "9.7.15.5.14 Multiply-and-Accumulate Instruction: mma"
+ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-instructions-mma"
+lowering = "generated_register_mma"
+backend_lowerings = [
+    { backend = "llvm_nvptx", mechanism = "inline_ptx", evidence_profile = "rust-llvm-23.1.3-aab11ee0" },
+]
+register_mma = { operation = "multiply", kind = "mxf4", shape = "m16n8k64", accumulator = "f32", a_element = "e2m1", b_element = "e2m1", a_layout = "row", b_layout = "col", overflow = "not_applicable", participation = "all_warp_lanes_same_instruction_and_qualifiers_no_exited_lanes", adapter = "c4_f32_a4_u32_b2_u32_scales2_u32_selectors4_u16_to_d4_f32", compatibility_source = "generated_stub", runtime_validation = "unexecuted" }
+expected_ptx = { mnemonic = "mma", modifiers = ["sync", "aligned", "m16n8k64", "row", "col", "kind::mxf4", "block_scale", "scale_vec::2X", "f32", "e2m1", "e2m1", "f32", "ue8m0"], operands = [{ kind = "register_list", length = 4 }, { kind = "register_list", length = 4 }, { kind = "register_list", length = 2 }, { kind = "register_list", length = 4 }, { kind = "register" }, { kind = "register_list", length = 2 }, { kind = "register" }, { kind = "register_list", length = 2 }] }
+summary = "Multiplies warp-distributed E2M1 fragments with UE8M0 block scales and adds an F32 accumulator."

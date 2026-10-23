@@ -1,0 +1,25 @@
+Kani mutant m6: warp_index computes index_1d / 32 instead of blockIdx.x * warps_per_block
++ threadIdx.x / 32, so with a partial last warp per block two lane-0
+threads of different warps share one witness.
+
+Must be killed by: kani_proofs::p1_warp_index_bx48
+
+diff --git a/cuda-oxide/crates/cuda-device/src/thread.rs b/cuda-oxide/crates/cuda-device/src/thread.rs
+--- a/cuda-oxide/crates/cuda-device/src/thread.rs
++++ b/cuda-oxide/crates/cuda-device/src/thread.rs
+@@ -679,10 +679,11 @@
+         if crate::warp::lane_id() != 0 {
+             return None;
+         }
+-        let warps_per_block = super::blockDim_x().div_ceil(WARP_SIZE);
+-        let raw = (super::blockIdx_x() as usize)
+-            .checked_mul(warps_per_block as usize)?
+-            .checked_add((super::threadIdx_x() / WARP_SIZE) as usize)?;
++        let raw = checked_axis(
++            super::blockIdx_x(),
++            super::blockDim_x(),
++            super::threadIdx_x(),
++        ) / WARP_SIZE as usize;
+         // SAFETY: distinct warps of a 1D launch get distinct `raw` values, and
+         // only lane 0 reaches here, so the witness is unique across the launch.
+         Some(unsafe { ThreadIndex::new(raw, true, scope) })

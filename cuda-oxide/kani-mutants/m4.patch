@@ -1,0 +1,17 @@
+Kani mutant m4: ThreadIndex::new stores `raw` ignoring `valid`, so a witness the rank
+check rejected still reports is_valid() under a non-1D launch.
+
+Must be killed by: kani_proofs::p2_index_1d_sentinel_d3
+
+diff --git a/cuda-oxide/crates/cuda-device/src/thread.rs b/cuda-oxide/crates/cuda-device/src/thread.rs
+--- a/cuda-oxide/crates/cuda-device/src/thread.rs
++++ b/cuda-oxide/crates/cuda-device/src/thread.rs
+@@ -309,7 +309,7 @@
+             // Keep ThreadIndex a scalar/newtype for the device ABI. usize::MAX
+             // is reserved as the invalid legacy witness; a mathematically
+             // valid 2D index at that one value is conservatively rejected.
+-            raw: if valid && raw != usize::MAX {
++            raw: if raw != usize::MAX {
+                 raw
+             } else {
+                 usize::MAX

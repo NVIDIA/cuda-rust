@@ -1,0 +1,18 @@
+Kani mutant m3: one_dimensional_launch returns true unconditionally, so index_1d hands
+every thread of a 2D or 3D launch a valid X-only witness.
+
+Must be killed by: kani_proofs::p2_index_1d_sentinel_d2
+
+diff --git a/cuda-oxide/crates/cuda-device/src/thread.rs b/cuda-oxide/crates/cuda-device/src/thread.rs
+--- a/cuda-oxide/crates/cuda-device/src/thread.rs
++++ b/cuda-oxide/crates/cuda-device/src/thread.rs
+@@ -623,7 +623,8 @@
+         } else {
+             super::blockDim_z() == 1 && super::gridDim_z() == 1
+         };
+-        y_is_unit && z_is_unit
++        let _ = (y_is_unit, z_is_unit);
++        true
+     }
+ 
+     #[inline(always)]

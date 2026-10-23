@@ -1,0 +1,18 @@
+Kani mutant m8: index_2d_runtime drops the `row > u32::MAX` guard, so a row
+past 2^32 is truncated by the 32-bit pack and aliases a low row.
+
+Must be killed by: kani_proofs::p2_index_2d_runtime_coords
+
+diff --git a/cuda-oxide/crates/cuda-device/src/thread.rs b/cuda-oxide/crates/cuda-device/src/thread.rs
+--- a/cuda-oxide/crates/cuda-device/src/thread.rs
++++ b/cuda-oxide/crates/cuda-device/src/thread.rs
+@@ -760,9 +760,6 @@
+         // Each packed half is 32 bits. `col < row_stride <= u32::MAX` already
+         // fits; reject rows that do not (no real launch reaches them:
+         // `gridDim.y * blockDim.y` tops out below 2^26).
+-        if row > u32::MAX as usize {
+-            return None;
+-        }
+         let raw = super::pack_runtime_2d_coords(row, col);
+         Some(unsafe { ThreadIndex::new(raw, true, scope) })
+     }

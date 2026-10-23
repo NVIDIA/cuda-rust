@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+---
+name: kani
+
+# Runs as a job of the top-level CI workflow (.github/workflows/ci.yml),
+# which is the single push/pull_request entry point. Concurrency is governed
+# by CI's own group, so this workflow declares none of its own.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  KANI_VERSION: 0.68.0
+  # `cargo kani` compiles with the nightly `cargo kani setup` installs and
+  # ignores both rust-toolchain.toml pins, but the rustup `cargo` proxy would
+  # still install the pinned toolchain (cuda-oxide's nightly with rustc-dev)
+  # just to dispatch the subcommand. The runner's stable is enough for that.
+  RUSTUP_TOOLCHAIN: stable
+
+jobs:
+  kani:
+    name: kani ${{ matrix.gate }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - gate: prove
+            script: scripts/kani.sh
+          - gate: mutants
+            script: scripts/kani-mutants.sh
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+
+      # Only the `cargo install` binaries are cached. `cargo kani setup`
+      # links ~/.kani to a nightly under ~/.rustup, so caching ~/.kani alone
+      # would restore a dangling toolchain link; setup reruns every time.
+      - name: Cache cargo-kani
+        id: cache-kani
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-kani
+            ~/.cargo/bin/kani
+          key: kani-verifier-${{ env.KANI_VERSION }}-${{ runner.os }}
+
+      - name: Install Kani
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.cache-kani.outputs.cache-hit }}" != "true" ]; then
+            cargo install --locked kani-verifier --version "${KANI_VERSION}"
+          fi
+          cargo kani setup
+          cargo kani --version
+
+      - name: Run ${{ matrix.script }}
+        working-directory: cuda-oxide
+        run: bash ${{ matrix.script }}

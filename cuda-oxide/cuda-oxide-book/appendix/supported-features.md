@@ -256,8 +256,8 @@ Anonymous promoted allocations remain unsupported.
 | Typed Group Handles | **Full** | `Grid`, `Cluster`, `ThreadBlock`, `WarpTile<N>` (N ∈ {1,2,4,8,16,32}), `CoalescedThreads`. |
 | Group Universal API | **Full** | `size()`, `thread_rank()`, `sync()` on every group handle. |
 | Warp Tile Partitioning | **Full** | `ThreadBlock::tiled_partition::<N>()` partitions a block into fixed-size `WarpTile<N>` groups; the block thread count must be evenly divisible by `N`. `coalesced_threads()` materialises the active-lane group. |
-| Warp Collectives | **Full** | `ballot`, `all`, `any`, `shfl`, `shfl_xor`, `shfl_down`, `shfl_up` (`u32` and `f32`); `match_any` / `match_all` (`i32` and `i64`); `active_mask`. |
-| Warp Reductions / Scans | **Full** | `warp_reduce`, `warp_scan` (inclusive). `Sum`/`Min`/`Max` for `u32`/`i32`/`f32`; `BitAnd`/`BitOr`/`BitXor` for `u32`. |
+| Warp Collectives | **Full** | `ballot`, `all`, `any`, `shfl`, `shfl_xor`, `shfl_down`, `shfl_up` (`u32`, `f32`, and `u64` as two 32-bit shuffles); `match_any` / `match_all` (`i32` and `i64`); `active_mask`. |
+| Warp Reductions / Scans | **Full** | `warp_reduce`, `warp_scan` (inclusive). `Sum`/`Min`/`Max` for `u32`/`i32`/`f32`/`u64`/`i64`; `BitAnd`/`BitOr`/`BitXor` for `u32`/`u64`. |
 | Block Reductions / Scans | **Full** | `block_reduce`, `block_scan` (inclusive). `NUM_WARPS` is the shared-memory capacity in warp totals and must be at least `ceil(block_threads / 32)`; partial final warps are supported. Same op/type matrix as warp variants. |
 | Cooperative Kernel Launch | **Full** | `#[cooperative_launch]` on a `#[cuda_module]` kernel (or `unsafe { cuda_launch! { cooperative: true, ... } }`) enables `Grid::sync()` for grid-wide barriers. |
 

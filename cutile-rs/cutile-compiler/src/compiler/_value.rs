@@ -318,7 +318,7 @@ impl TileRustValue {
     }
 
     pub fn new_value_kind_like(value: Value, ty: TileRustType) -> TileRustValue {
-        let kind = ty.kind.clone();
+        let kind = ty.kind().clone();
         match kind {
             Kind::StructuredType => Self::new_structured_type(
                 value,
@@ -446,7 +446,7 @@ impl TileRustValue {
         let Some(type_meta) = &mut self.type_meta else {
             return JITError::generic(&format!(
                 "type metadata not supported for {:?} values",
-                self.ty.kind
+                self.ty.kind()
             ));
         };
         type_meta.fields.insert(name.to_string(), val.clone());
@@ -458,14 +458,14 @@ impl TileRustValue {
     }
 
     pub fn is_tile(&self) -> bool {
-        let Some(ident) = get_type_ident(&self.ty.rust_ty) else {
+        let Some(ident) = get_type_ident(self.ty.rust_ty()) else {
             return false;
         };
         ident.to_string().starts_with("Tile")
     }
 
     pub fn is_partition(&self) -> bool {
-        let Some(ident) = get_type_ident(&self.ty.rust_ty) else {
+        let Some(ident) = get_type_ident(self.ty.rust_ty()) else {
             return false;
         };
         ident.to_string().starts_with("Partition")

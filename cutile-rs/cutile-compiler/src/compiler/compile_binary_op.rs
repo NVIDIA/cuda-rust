@@ -158,7 +158,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         op_name: &str,
         side_span: &proc_macro2::Span,
     ) -> Result<(), JITError> {
-        let is_bool = matches!(&value.ty.rust_ty, syn::Type::Path(p) if p.path.is_ident("bool"));
+        let is_bool = matches!(value.ty.rust_ty(), syn::Type::Path(p) if p.path.is_ident("bool"));
         let is_scalar = value.value.is_some_and(
             |v| !matches!(module.value_type(v), Type::Tile(tile) if !tile.shape.is_empty()),
         );
@@ -168,7 +168,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 &format!(
                     "the {side} operand of `{op_name}` must be a scalar `bool`, got `{}`; \
                      use `&`/`|` for element-wise tile logic",
-                    value.ty.rust_ty.to_token_stream()
+                    value.ty.rust_ty().to_token_stream()
                 ),
             );
         }
@@ -334,14 +334,14 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         return_type: Option<TileRustType>,
         span: &proc_macro2::Span,
     ) -> Result<TileRustValue, JITError> {
-        if lhs.ty.rust_ty != rhs.ty.rust_ty {
+        if !lhs.ty.same_type(&rhs.ty) {
             return self.jit_error_result(
                 span,
                 &format!(
                     "binary `{:?}` requires operands of the same type, but got `{}` and `{}`",
                     tile_rust_arithmetic_op,
-                    lhs.ty.rust_ty.to_token_stream(),
-                    rhs.ty.rust_ty.to_token_stream()
+                    lhs.ty.rust_ty().to_token_stream(),
+                    rhs.ty.rust_ty().to_token_stream()
                 ),
             );
         }
@@ -362,7 +362,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         }
         let rhs_value = rhs_value.unwrap();
         let operand_type = lhs.ty.clone();
-        let operand_rust_ty = &operand_type.rust_ty;
+        let operand_rust_ty = operand_type.rust_ty();
         let Some(operand_rust_element_type) =
             operand_type.get_instantiated_rust_element_type(self.modules.primitives())
         else {
@@ -371,16 +371,16 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 &format!(
                     "unable to determine element type for `{:?}` on `{}`",
                     tile_rust_arithmetic_op,
-                    operand_type.rust_ty.to_token_stream()
+                    operand_type.rust_ty().to_token_stream()
                 ),
             );
         };
-        let Some(_operand_tile_ir_ty) = &operand_type.tile_ir_ty else {
+        let Some(_operand_tile_ir_ty) = &operand_type.tile_ir_ty() else {
             return self.jit_error_result(
                 span,
                 &format!(
                     "type `{}` cannot be used with binary `{:?}`",
-                    operand_type.rust_ty.to_token_stream(),
+                    operand_type.rust_ty().to_token_stream(),
                     tile_rust_arithmetic_op
                 ),
             );

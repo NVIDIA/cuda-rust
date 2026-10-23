@@ -15,8 +15,9 @@ use super::_function::CUDATileFunctionCompiler;
 use super::_value::{CompilerContext, Mutability, TileRustValue};
 use super::shared_utils::{STACK_GROW_SIZE, STACK_RED_ZONE};
 use super::tile_rust_type::TileRustType;
+use super::type_identity::referent;
 use crate::error::JITError;
-use crate::generics::{GenericArgInference, GenericVars};
+use crate::generics::{GenericArgInference, GenericVars, TypeInstance, TypeInstanceUserType};
 use crate::syn_utils::*;
 use crate::types::*;
 
@@ -63,6 +64,39 @@ fn update_type_meta(
 }
 
 impl<'m> CUDATileFunctionCompiler<'m> {
+    /// An argument takes its parameter's type in the callee's scope.
+    fn adopt_parameter_type(
+        &self,
+        argument: &mut TileRustValue,
+        param_name: &str,
+        param_type: &Type,
+        callee: &syn::Ident,
+        callee_generic_vars: &GenericVars,
+    ) -> Result<(), JITError> {
+        let param_type = self
+            .modules
+            .normalize_type_aliases_in(param_type, Some(&self.current_module()))?;
+        let param_referent = referent(&param_type);
+        let instance =
+            match callee_generic_vars.instantiate_type(param_referent, self.modules.primitives()) {
+                Ok(instance) => instance,
+                // As `compile_type` does for these types.
+                Err(_) if self.is_user_type(param_referent) => {
+                    TypeInstance::UserType(TypeInstanceUserType {
+                        maybe_generic_ty: param_referent.clone(),
+                    })
+                }
+                Err(err) => {
+                    return self.jit_error_result(
+                        &param_type.span(),
+                        &format!("parameter `{param_name}` of `{callee}`: {err}"),
+                    )
+                }
+            };
+        argument.ty.adopt(param_type.clone(), instance);
+        Ok(())
+    }
+
     #[allow(clippy::ptr_arg)] // public signature stays as-is
     pub fn inline_function_call(
         &self,
@@ -106,7 +140,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             let mut generic_arg_inference = GenericArgInference::new_function(fn_item.sig.clone());
             let call_arg_rust_tys = call_arg_values
                 .iter()
-                .map(|arg| arg.ty.rust_ty.clone())
+                .map(|arg| arg.ty.rust_ty().clone())
                 .collect::<Vec<_>>();
             // println!("{call_arg_rust_tys:#?}");
             generic_arg_inference.map_args_to_params(&call_arg_rust_tys, None, generic_vars)?;
@@ -132,6 +166,31 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 && crate::kernel_naming::KernelNaming::canonical_public_name(
                     &fn_item.sig.ident.to_string(),
                 ) == self._function_name;
+            // Remap generic parameters.
+            let expr_generic_args = get_call_expression_generics(call_expr);
+            let mut call_generic_vars = if GenericVars::is_empty(&fn_item.sig.generics) {
+                // If there are no generics, we're done.
+                GenericVars::empty(&fn_item.sig.generics)?
+            } else if expr_generic_args.is_some() {
+                // If the caller specifies generics args, use them.
+                generic_vars.from_expr_generic_args(&fn_item.sig.generics, &expr_generic_args)?
+            } else {
+                // If nothing is specified, try to infer an instance of GenericVars.
+                let mut generic_arg_inference =
+                    GenericArgInference::new_function(fn_item.sig.clone());
+                let call_arg_rust_tys = call_arg_values
+                    .iter()
+                    .map(|arg| arg.ty.rust_ty().clone())
+                    .collect::<Vec<_>>();
+                generic_arg_inference.map_args_to_params(&call_arg_rust_tys, None, generic_vars)?;
+                // println!("inline_function_call {:#?}: generic_vars={generic_vars:#?} \nexpr_generic_args={expr_generic_args:#?} \ngeneric_arg_inference={generic_arg_inference:#?}", fn_item.sig.ident.to_string());
+                generic_arg_inference
+                    .get_generic_vars_instance(generic_vars, self.modules.primitives())
+            };
+            // The callee's body compiles in its own module's scope: its
+            // `const`s, and the consts named in its types, are its module's.
+            let _module_scope = self.push_module_scope(module_name);
+            self.add_module_const_vars(&mut call_generic_vars);
             let mut outer2inner_map = HashMap::new();
             let sig_param_mutability = get_sig_param_mutability(&fn_item.sig);
 
@@ -139,8 +198,13 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 let param_name = &param_names[i];
                 let param_type = &input_params[i];
                 let mut param_val = call_arg_values[i].clone();
-                // TODO (hme): This may not be enough, depending on what level of inspection we require of compound / struct types.
-                param_val.ty.rust_ty = param_type.clone();
+                self.adopt_parameter_type(
+                    &mut param_val,
+                    param_name,
+                    param_type,
+                    &fn_item.sig.ident,
+                    &call_generic_vars,
+                )?;
                 param_val.mutability = if sig_param_mutability[i] {
                     Mutability::Mutable
                 } else {
@@ -159,31 +223,6 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     outer2inner_map.insert(call_arg_name.to_string(), param_name.clone());
                 };
             }
-            // Remap generic parameters.
-            let expr_generic_args = get_call_expression_generics(call_expr);
-            let mut call_generic_vars = if GenericVars::is_empty(&fn_item.sig.generics) {
-                // If there are no generics, we're done.
-                GenericVars::empty(&fn_item.sig.generics)?
-            } else if expr_generic_args.is_some() {
-                // If the caller specifies generics args, use them.
-                generic_vars.from_expr_generic_args(&fn_item.sig.generics, &expr_generic_args)?
-            } else {
-                // If nothing is specified, try to infer an instance of GenericVars.
-                let mut generic_arg_inference =
-                    GenericArgInference::new_function(fn_item.sig.clone());
-                let call_arg_rust_tys = call_arg_values
-                    .iter()
-                    .map(|arg| arg.ty.rust_ty.clone())
-                    .collect::<Vec<_>>();
-                generic_arg_inference.map_args_to_params(&call_arg_rust_tys, None, generic_vars)?;
-                // println!("inline_function_call {:#?}: generic_vars={generic_vars:#?} \nexpr_generic_args={expr_generic_args:#?} \ngeneric_arg_inference={generic_arg_inference:#?}", fn_item.sig.ident.to_string());
-                generic_arg_inference
-                    .get_generic_vars_instance(generic_vars, self.modules.primitives())
-            };
-            // The callee's body compiles in its own module's scope: its
-            // `const`s, and the consts named in its types, are its module's.
-            let _module_scope = self.push_module_scope(module_name);
-            self.add_module_const_vars(&mut call_generic_vars);
             // Add function call const generics as variables.
             for (key, value) in call_generic_vars.ordered_inst_i32() {
                 let tr_val = self.compile_constant(module, block_id, &call_generic_vars, value)?;
@@ -252,11 +291,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             // println!("exit_function_call: {}", call_expr.to_token_stream().to_string());
             if let Some(mut res) = result {
                 if let Some(rt) = return_type {
-                    // Use specified return type.
-                    res.ty = rt;
+                    res.ty
+                        .adopt(rt.rust_ty().clone(), rt.type_instance().clone());
                     return Ok(Some(res));
                 };
-                let type_params = res.ty.params;
+                let type_params = res.ty.params().to_vec();
                 // println!("inline call res.ty.params: {:#?}", type_params);
                 let Some(derived_ret_ty) = self.derive_type(
                     module,
@@ -302,10 +341,10 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             args.insert(0, *method_call_expr.receiver.clone());
             let call_arg_values =
                 self.compile_call_args(module, block_id, &args, generic_vars, ctx)?;
-            let receiver_rust_ty = &call_arg_values[0].ty.rust_ty;
+            let receiver_rust_ty = call_arg_values[0].ty.rust_ty();
             let call_arg_rust_tys = call_arg_values
                 .iter()
-                .map(|arg| arg.ty.rust_ty.clone())
+                .map(|arg| arg.ty.rust_ty().clone())
                 .collect::<Vec<_>>();
             let selected_method = self.typeck_method_selection(method_call_expr);
             let (module_name, impl_item, impl_method, selected_generic_vars) =
@@ -369,33 +408,6 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 ctx.token_update_in_region || ctx.inside_for || ctx.innermost_loop.is_some();
             call_variables.module_scope.push(module_name.clone());
             call_variables.fn_body = true;
-            let mut outer2inner_map = HashMap::new();
-            let sig_param_mutability = get_sig_param_mutability(&impl_method.sig);
-            for i in 0..param_names.len() {
-                let param_name = &param_names[i];
-                let param_type = &input_params[i];
-                let mut param_val = call_arg_values[i].clone();
-                // TODO (hme): This may not be enough, depending on what level of inspection we require of compound / struct types.
-                param_val.ty.rust_ty = param_type.clone();
-                param_val.mutability = if sig_param_mutability[i] {
-                    Mutability::Mutable
-                } else {
-                    Mutability::Immutable
-                };
-                call_variables.vars.insert(param_name.clone(), param_val);
-                // Including self here.
-                if let Some(call_arg_name) = get_ident_from_expr(&args[i]) {
-                    if ctx
-                        .function_level_bindings
-                        .contains(&call_arg_name.to_string())
-                    {
-                        call_variables
-                            .function_level_bindings
-                            .insert(param_name.clone());
-                    }
-                    outer2inner_map.insert(call_arg_name.to_string(), param_name.clone());
-                };
-            }
             // Remap generic parameters.
             // This is different from a function call, because passing generics to a method
             // does not capture all generics available within the method.
@@ -423,6 +435,38 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             // `const`s, and the consts named in its types, are its module's.
             let _module_scope = self.push_module_scope(module_name.as_str());
             self.add_module_const_vars(&mut call_generic_vars);
+            let mut outer2inner_map = HashMap::new();
+            let sig_param_mutability = get_sig_param_mutability(&impl_method.sig);
+            for i in 0..param_names.len() {
+                let param_name = &param_names[i];
+                let param_type = &input_params[i];
+                let mut param_val = call_arg_values[i].clone();
+                self.adopt_parameter_type(
+                    &mut param_val,
+                    param_name,
+                    param_type,
+                    &impl_method.sig.ident,
+                    &call_generic_vars,
+                )?;
+                param_val.mutability = if sig_param_mutability[i] {
+                    Mutability::Mutable
+                } else {
+                    Mutability::Immutable
+                };
+                call_variables.vars.insert(param_name.clone(), param_val);
+                // Including self here.
+                if let Some(call_arg_name) = get_ident_from_expr(&args[i]) {
+                    if ctx
+                        .function_level_bindings
+                        .contains(&call_arg_name.to_string())
+                    {
+                        call_variables
+                            .function_level_bindings
+                            .insert(param_name.clone());
+                    }
+                    outer2inner_map.insert(call_arg_name.to_string(), param_name.clone());
+                };
+            }
 
             // Add method call const generics as variables.
             for (key, value) in call_generic_vars.ordered_inst_i32() {
@@ -509,14 +553,12 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             // println!("exit_method_call: {}", method_call_expr.to_token_stream().to_string());
             if let Some(mut res) = result {
                 if let Some(rt) = return_type {
-                    // Use specified rust type.
-                    // We don't want the entire provided type, because the computed TileRustValue
-                    // contains cuda tile type information that can't be inferred.
-                    res.ty.rust_ty = rt.rust_ty;
+                    res.ty
+                        .adopt(rt.rust_ty().clone(), rt.type_instance().clone());
                     return Ok(Some(res));
                 };
                 // Reverse type inference for resulting rust type in res.
-                let type_params = res.ty.params;
+                let type_params = res.ty.params().to_vec();
                 let Some(derived_ret_ty) = self.derive_type(
                     module,
                     block_id,

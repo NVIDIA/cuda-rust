@@ -910,6 +910,15 @@ impl Instantiable for TypeInstancePtrType {
     }
 }
 
+/// Shaped types whose generic arguments carry map metadata beyond the
+/// element type and shape; `TypeInstanceStructuredType` records neither.
+pub(crate) fn carries_metadata_args(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "MappedPartitionMut" | "PartitionIndices" | "GatherScatterView" | "StridedView"
+    )
+}
+
 #[derive(Debug, Clone)]
 /// A resolved shaped type (e.g. `Tile<f32, {[128, 64]}>`) with element type and shape.
 pub struct TypeInstanceStructuredType {
@@ -934,10 +943,9 @@ impl Instantiable for TypeInstanceStructuredType {
         let mut primitive_type: Option<TypInstancePrimitiveType> = None;
         let mut shape: Option<Vec<i32>> = None;
         let structured_type_name = get_type_ident(maybe_generic_ty).map(|ident| ident.to_string());
-        let allows_extra_cga = matches!(
-            structured_type_name.as_deref(),
-            Some("MappedPartitionMut" | "PartitionIndices" | "GatherScatterView" | "StridedView")
-        );
+        let allows_extra_cga = structured_type_name
+            .as_deref()
+            .is_some_and(carries_metadata_args);
 
         let inst_mut_ref = if let Type::Reference(inner_elem) = &mut instance_ty {
             &mut *inner_elem.elem

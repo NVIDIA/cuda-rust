@@ -227,7 +227,7 @@ jobs:
 
   gpu-tests:
     needs: build
-    runs-on: nv-gpu-amd64-rtxpro6000-1gpu
+    runs-on: linux-amd64-gpu-rtxpro6000-latest-1
     timeout-minutes: 30
     container:
       image: nvidia/cuda:13.3.0-devel-ubuntu24.04

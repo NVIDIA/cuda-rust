@@ -101,6 +101,12 @@ pub const LIBRARY_STORAGE_RELEASE_V1: &str = "cuda_oxide_library_v1_246e25db_sto
 
 /// Resource-checked physical/logical Warp operation.
 pub const LIBRARY_CHECKED_WARP_CALL_V1: &str = "cuda_oxide_library_v1_246e25db_checked_warp_call";
+/// Payload-only full-block operation with planned storage.
+pub const LIBRARY_CHECKED_BLOCK_PAYLOAD_CALL_V1: &str =
+    "cuda_oxide_library_v1_246e25db_checked_block_payload_call";
+/// Payload-only physical/logical Warp operation with implicit storage.
+pub const LIBRARY_CHECKED_WARP_PAYLOAD_CALL_V1: &str =
+    "cuda_oxide_library_v1_246e25db_checked_warp_payload_call";
 /// Pure canonical group index, independent of native provider collection.
 pub const LIBRARY_WARP_GROUP_INDEX_V1: &str = "cuda_oxide_library_v1_246e25db_warp_group_index";
 /// Canonical aligned WarpTile synchronization, independent of native plans.

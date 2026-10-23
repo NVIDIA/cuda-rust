@@ -14,7 +14,7 @@ use dialect_mir::{
         LibraryStorageArg, LibraryWriteKind,
     },
     ops::*,
-    types::MirPtrType,
+    types::{MirPtrType, MirTupleType},
 };
 use pliron::linked_list::ContainsLinkedList;
 use pliron::{
@@ -804,14 +804,18 @@ fn checked(role: Role) -> bool {
                 | Native::CheckedBlockResource { .. }
                 | Native::CheckedBlockStorage { .. }
                 | Native::CheckedWarp { .. }
+                | Native::CheckedBlockPayload { .. }
+                | Native::CheckedWarpPayload { .. }
         )
     )
 }
 fn controls_index(native: Native) -> Option<usize> {
     match native {
         Native::Raw { .. } | Native::Callback { .. } => None,
-        Native::CheckedBlock { .. } => Some(0),
-        Native::CheckedBlockResource { .. } | Native::CheckedWarp { .. } => Some(1),
+        Native::CheckedBlock { .. } | Native::CheckedWarpPayload { .. } => Some(0),
+        Native::CheckedBlockResource { .. }
+        | Native::CheckedWarp { .. }
+        | Native::CheckedBlockPayload { .. } => Some(1),
         Native::CheckedBlockStorage { .. } => Some(2),
     }
 }
@@ -822,6 +826,14 @@ fn scalar_precision(mut facts: impl Iterator<Item = Fact>) -> Fact {
         })
         .map_or(Fact::Varying, Fact::Uniform)
 }
+fn unit(ctx: &Context, value: Value) -> bool {
+    value
+        .get_type(ctx)
+        .deref(ctx)
+        .downcast_ref::<MirTupleType>()
+        .is_some_and(|t| t.get_types().is_empty())
+}
+
 fn integer(ctx: &Context, value: Value) -> Option<u64> {
     let op = value.defining_op()?;
     Operation::get_op::<MirConstantOp>(op, ctx)?
@@ -1113,7 +1125,10 @@ impl Analyzer<'_> {
         let operands: Vec<_> = op.deref(self.ctx).operands().collect();
         let facts: Vec<_> = operands.iter().map(|v| state.fact(*v)).collect();
         let resolved: Vec<_> = facts.iter().cloned().map(|f| call_fact(f, state)).collect();
-        let scope = if let Role::Native(Native::CheckedWarp { width, .. }) = role {
+        let scope = if let Role::Native(
+            Native::CheckedWarp { width, .. } | Native::CheckedWarpPayload { width, .. },
+        ) = role
+        {
             Domain::Warp(width)
         } else {
             Domain::BLOCK
@@ -1181,7 +1196,9 @@ impl Analyzer<'_> {
                 storage_use = true;
                 result = Some(Fact::Reservation(site.clone()));
             }
-            Role::Native(Native::CheckedBlockStorage { .. }) => {
+            Role::Native(
+                Native::CheckedBlockStorage { .. } | Native::CheckedBlockPayload { .. },
+            ) => {
                 storage_use = true;
             }
             Role::Native(_) => {}
@@ -1204,6 +1221,9 @@ impl Analyzer<'_> {
             let (index, implicit) = match role {
                 Role::Native(Native::CheckedBlockStorage { storage, .. }) => {
                     (1, matches!(storage, LibraryStorageArg::Implicit))
+                }
+                Role::Native(Native::CheckedBlockPayload { storage, .. }) => {
+                    (0, matches!(storage, LibraryStorageArg::Implicit))
                 }
                 _ => (0, false),
             };
@@ -1271,11 +1291,16 @@ impl Analyzer<'_> {
         let Role::Native(native) = role else {
             return Ok(result);
         };
+        let payload = matches!(
+            native,
+            Native::CheckedBlockPayload { .. } | Native::CheckedWarpPayload { .. }
+        );
         if validate {
             if !checked(role)
                 || ((self.resource_root || self.storage_root)
                     && resource(role).is_none()
-                    && !storage_operation)
+                    && !storage_operation
+                    && !payload)
             {
                 return Err(self.error(function,call.block,if self.resource_root {"untracked and resource-checked library calls cannot be mixed in one checked root"}
                     else if self.storage_root {"untracked and planned-storage library calls cannot be mixed in one checked root"}
@@ -1288,7 +1313,9 @@ impl Analyzer<'_> {
                     "operation is reached through lane-varying control flow",
                 ));
             }
-            if let Some(index) = controls_index(native) {
+            if let Some(index) = controls_index(native)
+                && !(payload && unit(self.ctx, operands[index]))
+            {
                 let Fact::Fields(fields) = &facts[index] else {
                     return Err(self.error(
                         function,
@@ -1659,7 +1686,7 @@ impl Analyzer<'_> {
 fn aggregate_bottom(ctx: &Context, value: Value) -> Fact {
     let ty = value.get_type(ctx);
     let ty = ty.deref(ctx);
-    if let Some(tuple) = ty.downcast_ref::<dialect_mir::types::MirTupleType>() {
+    if let Some(tuple) = ty.downcast_ref::<MirTupleType>() {
         Fact::Fields(vec![Fact::Unset; tuple.get_types().len()])
     } else if let Some(structure) = ty.downcast_ref::<dialect_mir::types::MirStructType>() {
         Fact::Fields(vec![Fact::Unset; structure.field_count()])

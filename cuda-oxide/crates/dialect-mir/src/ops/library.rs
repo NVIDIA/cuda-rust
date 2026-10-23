@@ -342,7 +342,7 @@ fn native_valid(ctx: &Context, native: LibraryNativeMetadata, args: &[TypeHandle
     if !valid_scalar(spec.scalar) || spec.items == 0 {
         return false;
     }
-    let (uniform_index, payload_index) =
+    let (uniform_index, payload_index, payload_only) =
         match native {
             N::Raw { block_threads, .. } | N::Callback { block_threads, .. } => {
                 let callback = matches!(native, N::Callback { .. });
@@ -364,7 +364,7 @@ fn native_valid(ctx: &Context, native: LibraryNativeMetadata, args: &[TypeHandle
                 if args.len() != 2 {
                     return false;
                 }
-                (0, 1)
+                (0, 1, false)
             }
             N::CheckedBlockResource {
                 access, witness, ..
@@ -375,7 +375,7 @@ fn native_valid(ctx: &Context, native: LibraryNativeMetadata, args: &[TypeHandle
                 if args.len() != 3 || !witness_valid(ctx, witness, access, args[0], spec.scalar) {
                     return false;
                 }
-                (1, 2)
+                (1, 2, false)
             }
             N::CheckedBlockStorage {
                 access,
@@ -389,7 +389,19 @@ fn native_valid(ctx: &Context, native: LibraryNativeMetadata, args: &[TypeHandle
                 {
                     return false;
                 }
-                (2, 3)
+                (2, 3, false)
+            }
+            N::CheckedBlockPayload { storage, .. } => {
+                if args.len() != 3 || !storage_arg_valid(ctx, storage, args[0]) {
+                    return false;
+                }
+                (1, 2, true)
+            }
+            N::CheckedWarpPayload { .. } => {
+                if args.len() != 2 {
+                    return false;
+                }
+                (0, 1, true)
             }
         };
     let Some(uniform) = tuple_fields(ctx, args[uniform_index]) else {
@@ -400,10 +412,14 @@ fn native_valid(ctx: &Context, native: LibraryNativeMetadata, args: &[TypeHandle
     };
     payload.first().and_then(|&ty| pointer_scalar(ctx, ty)) == Some(spec.scalar)
         && payload.iter().all(|&ty| pointer_scalar(ctx, ty).is_some())
-        && uniform.first().and_then(|&ty| pointer_scalar(ctx, ty)) == Some(spec.scalar)
-        && uniform[1..]
-            .iter()
-            .all(|&ty| scalar_type(ctx, ty).is_some())
+        && if payload_only {
+            payload.len() >= 2 && uniform.iter().all(|&ty| scalar_type(ctx, ty).is_some())
+        } else {
+            uniform.first().and_then(|&ty| pointer_scalar(ctx, ty)) == Some(spec.scalar)
+                && uniform[1..]
+                    .iter()
+                    .all(|&ty| scalar_type(ctx, ty).is_some())
+        }
 }
 
 fn verify_call(ctx: &Context, call: &MirLibraryOp, role: LibraryRoleAttr) -> Result<(), Error> {
@@ -439,7 +455,8 @@ fn verify_call(ctx: &Context, call: &MirLibraryOp, role: LibraryRoleAttr) -> Res
     }
     let valid = match role {
         LibraryRoleAttr::Native(native) => {
-            if let LibraryNativeMetadata::CheckedWarp { width, .. } = native
+            if let LibraryNativeMetadata::CheckedWarp { width, .. }
+            | LibraryNativeMetadata::CheckedWarpPayload { width, .. } = native
                 && (width == 0 || width > 32 || !width.is_power_of_two())
             {
                 return verify_err!(

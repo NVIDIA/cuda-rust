@@ -177,6 +177,87 @@ pub unsafe fn cuda_oxide_library_v1_246e25db_checked_warp_call<
 
 pub use cuda_oxide_library_v1_246e25db_checked_warp_call as checked_warp_call_v1;
 
+/// Invoke a full-block operation on per-thread payloads with planned scratch.
+///
+/// The root kernel supplies the exact block shape. `storage` is `()` for
+/// managed reuse or a mutable borrow of a genuine [`StorageDescriptor`].
+/// `uniform` contains only scalar controls (and may be `()`); `payload` starts
+/// with input and output pointers, followed by any auxiliary payload pointers.
+/// Native arguments are input, output, compiler-provided scratch, remaining
+/// payload pointers, then controls. The compiler checks participation, control
+/// uniformity and storage reuse; this call records no global memory access.
+///
+/// # Safety
+///
+/// Payload pointers must denote live, aligned per-thread local storage, not
+/// kernel allocations, planned shared regions or reservations. Inputs must be
+/// initialized before every native read. Outputs must be writable and satisfy
+/// Rust aliasing rules; native code must initialize each output before Rust
+/// reads it or its validity metadata marks it initialized. Const inputs must
+/// not be mutated. Native effects are confined to those payloads and the supplied
+/// scratch, within its declared layout. The call is synchronous: pointers may
+/// not escape. The wrapper supplies the correct recipe and exact native ABI.
+/// Unit storage inserts a block barrier before dirty scratch reuse. Explicit
+/// manual storage requires the caller's barrier before conflicting reuse;
+/// an explicit AUTO_SYNC descriptor inserts a trailing scratch-use barrier.
+/// A scratch-free call provides no completion of pending memory accesses.
+#[inline(never)]
+pub unsafe fn cuda_oxide_library_v1_246e25db_checked_block_payload_call<
+    T: Copy,
+    Registration: Fn() -> &'static str + Copy,
+    Storage,
+    UniformArgs: Copy,
+    PayloadArgs: Copy,
+    const ITEMS: usize,
+>(
+    _registration: Registration,
+    _storage: Storage,
+    _uniform: UniformArgs,
+    _payload: PayloadArgs,
+) {
+    unsafe extern "C" {
+        fn cuda_oxide_checked_block_payload_call_requires_supported_backend();
+    }
+    unsafe { cuda_oxide_checked_block_payload_call_requires_supported_backend() }
+}
+
+pub use cuda_oxide_library_v1_246e25db_checked_block_payload_call as checked_block_payload_call_v1;
+
+/// Invoke a Warp operation on per-thread payloads with implicit scratch.
+///
+/// WIDTH is a power of two in 1..=32, and the exact root block must contain
+/// complete physical warps. Controls and participation agree within WIDTH;
+/// sibling groups may differ. The operands and native ABI follow
+/// [`checked_block_payload_call_v1`], without an explicit storage operand.
+/// The compiler supplies independent aligned scratch replicas and a matching
+/// barrier before dirty reuse. No trailing barrier or global access is implied.
+///
+/// # Safety
+///
+/// The payload lifetime, initialization, aliasing, native effects and ABI
+/// obligations of [`checked_block_payload_call_v1`] apply. Native communication
+/// must stay within the canonical WIDTH group and its supplied scratch replica.
+#[inline(never)]
+pub unsafe fn cuda_oxide_library_v1_246e25db_checked_warp_payload_call<
+    T: Copy,
+    Registration: Fn() -> &'static str + Copy,
+    UniformArgs: Copy,
+    PayloadArgs: Copy,
+    const WIDTH: usize,
+    const ITEMS: usize,
+>(
+    _registration: Registration,
+    _uniform: UniformArgs,
+    _payload: PayloadArgs,
+) {
+    unsafe extern "C" {
+        fn cuda_oxide_checked_warp_payload_call_requires_supported_backend();
+    }
+    unsafe { cuda_oxide_checked_warp_payload_call_requires_supported_backend() }
+}
+
+pub use cuda_oxide_library_v1_246e25db_checked_warp_payload_call as checked_warp_payload_call_v1;
+
 /// Canonical x-fastest group index within the block.
 ///
 /// WIDTH must be a power of two in 1..=32. This pure query does not assert

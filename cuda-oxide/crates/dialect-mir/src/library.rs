@@ -101,6 +101,14 @@ pub enum LibraryNativeMetadata {
         witness: LibraryWitness,
         storage: LibraryStorageArg,
     },
+    CheckedBlockPayload {
+        spec: NativeSpec,
+        storage: LibraryStorageArg,
+    },
+    CheckedWarpPayload {
+        spec: NativeSpec,
+        width: u32,
+    },
 }
 impl LibraryNativeMetadata {
     pub fn spec(self) -> NativeSpec {
@@ -110,7 +118,9 @@ impl LibraryNativeMetadata {
             | Self::CheckedBlock { spec }
             | Self::CheckedBlockResource { spec, .. }
             | Self::CheckedWarp { spec, .. }
-            | Self::CheckedBlockStorage { spec, .. } => spec,
+            | Self::CheckedBlockStorage { spec, .. }
+            | Self::CheckedBlockPayload { spec, .. }
+            | Self::CheckedWarpPayload { spec, .. } => spec,
         }
     }
 }
@@ -381,6 +391,8 @@ pub struct LibraryCallPlan {
     pub checked_block: bool,
     /// An additional typed memory witness, consumed only by compiler checks.
     pub resource_witness: bool,
+    /// Scalar-only controls and local input/output pointers, without memory.
+    pub payload_only: bool,
     /// Append the borrowed callback environment after injected scratch.
     pub callback: bool,
     /// Size of the assigned shared scratch view in bytes.
@@ -404,6 +416,7 @@ impl LibraryCallPlan {
             barrier_after: false,
             checked_block: false,
             resource_witness: false,
+            payload_only: false,
             callback: false,
             scratch_bytes: 0,
             scratch_alignment: 1,

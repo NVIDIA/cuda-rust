@@ -29,6 +29,8 @@ pub(crate) enum MarkerKind {
     CheckedBlockResource,
     CheckedWarp,
     CheckedBlockStorage,
+    CheckedBlockPayload,
+    CheckedWarpPayload,
     StorageNew,
     StorageReconfigure,
     StorageReserve,
@@ -43,6 +45,8 @@ impl MarkerKind {
                 | Self::CheckedWarp
                 | Self::CheckedBlockResource
                 | Self::CheckedBlockStorage
+                | Self::CheckedBlockPayload
+                | Self::CheckedWarpPayload
                 | Self::StorageNew
                 | Self::StorageReconfigure
                 | Self::StorageReserve
@@ -59,6 +63,8 @@ impl MarkerKind {
                 | Self::CheckedWarp
                 | Self::CheckedBlockResource
                 | Self::CheckedBlockStorage
+                | Self::CheckedBlockPayload
+                | Self::CheckedWarpPayload
         )
     }
 
@@ -66,11 +72,41 @@ impl MarkerKind {
         matches!(
             self,
             Self::CheckedBlockStorage
+                | Self::CheckedBlockPayload
                 | Self::StorageNew
                 | Self::StorageReconfigure
                 | Self::StorageReserve
                 | Self::StorageRelease
         )
+    }
+
+    /// Existing descriptor paths plus implicitly planned Warp native calls.
+    pub(crate) fn planned_storage(self) -> bool {
+        self.storage() || matches!(self, Self::CheckedWarp | Self::CheckedWarpPayload)
+    }
+
+    pub(crate) fn payload_only(self) -> bool {
+        matches!(self, Self::CheckedBlockPayload | Self::CheckedWarpPayload)
+    }
+
+    /// Fixed generic positions of the native marker signatures.
+    pub(crate) fn native_signature(self) -> Option<NativeSignature> {
+        let (uniform_type, storage_type, items, warp_width) = match self {
+            Self::Raw | Self::CheckedBlock => (2, None, 4, None),
+            Self::Callback => (2, None, 6, None),
+            Self::CheckedBlockResource => (3, None, 5, None),
+            Self::CheckedBlockStorage => (4, Some(3), 6, None),
+            Self::CheckedWarp => (3, None, 6, Some(5)),
+            Self::CheckedBlockPayload => (3, Some(2), 5, None),
+            Self::CheckedWarpPayload => (2, None, 5, Some(4)),
+            _ => return None,
+        };
+        Some(NativeSignature {
+            uniform_type,
+            storage_type,
+            items,
+            warp_width,
+        })
     }
 
     pub(crate) fn resource(self) -> bool {
@@ -79,6 +115,15 @@ impl MarkerKind {
             Self::CheckedBlockResource | Self::CheckedBlockStorage | Self::CheckedWarp
         )
     }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct NativeSignature {
+    pub uniform_type: usize,
+    /// Generic type index of explicit Block storage.
+    pub storage_type: Option<usize>,
+    pub items: usize,
+    pub warp_width: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,6 +181,12 @@ pub(crate) fn marker_definitions(tcx: TyCtxt<'_>) -> HashMap<DefId, MarkerKind> 
                     }
                     reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_STORAGE_CALL_V1 => {
                         MarkerKind::CheckedBlockStorage
+                    }
+                    reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_PAYLOAD_CALL_V1 => {
+                        MarkerKind::CheckedBlockPayload
+                    }
+                    reserved_oxide_symbols::LIBRARY_CHECKED_WARP_PAYLOAD_CALL_V1 => {
+                        MarkerKind::CheckedWarpPayload
                     }
                     reserved_oxide_symbols::LIBRARY_STORAGE_NEW_V1 => MarkerKind::StorageNew,
                     reserved_oxide_symbols::LIBRARY_STORAGE_RECONFIGURE_V1 => {
@@ -388,8 +439,9 @@ fn validate_storage<'tcx>(tcx: TyCtxt<'tcx>, call: &LibraryCall<'tcx>) -> Result
         MarkerKind::StorageRelease => {
             scalar(args.type_at(0))?;
         }
-        MarkerKind::CheckedBlockStorage => {
-            let ty = args.type_at(3);
+        MarkerKind::CheckedBlockStorage | MarkerKind::CheckedBlockPayload => {
+            let index = call.kind.native_signature().unwrap().storage_type.unwrap();
+            let ty = args.type_at(index);
             if !matches!(ty.kind(), TyKind::Tuple(fields) if fields.is_empty()) {
                 storage_borrow_policy(tcx, ty)?;
             }
@@ -817,13 +869,11 @@ fn extern_argument(argument: &Argument) -> mir_importer::DeviceExternType {
 
 fn call_arguments(call: &LibraryCall<'_>) -> Result<Vec<Argument>, String> {
     let args = call.instance.args;
-    let first = if call.kind == MarkerKind::CheckedBlockStorage {
-        4
-    } else if call.kind.resource() {
-        3
-    } else {
-        2
-    };
+    let first = call
+        .kind
+        .native_signature()
+        .expect("native marker")
+        .uniform_type;
     let TyKind::Tuple(uniform) = args.type_at(first).kind() else {
         return Err("library arguments must be a tuple".into());
     };
@@ -842,6 +892,18 @@ fn call_arguments(call: &LibraryCall<'_>) -> Result<Vec<Argument>, String> {
         .iter()
         .map(argument)
         .collect::<Result<Vec<_>, _>>()?;
+    if call.kind.payload_only() {
+        if payload.len() < 2
+            || !matches!(payload.first(), Some(Argument::ConstPointer(t) | Argument::MutPointer(t)) if *t == dtype)
+            || !payload
+                .iter()
+                .all(|a| matches!(a, Argument::ConstPointer(_) | Argument::MutPointer(_)))
+            || !uniform.iter().all(|a| matches!(a, Argument::Value(_)))
+        {
+            return Err("payload-only call requires scalar controls and at least two payload pointers with the input element type matching T".into());
+        }
+        return Ok(payload.into_iter().chain(uniform).collect());
+    }
     if !matches!(uniform.first(), Some(Argument::ConstPointer(t) | Argument::MutPointer(t)) if *t == dtype)
         || !uniform[1..].iter().all(|a| matches!(a, Argument::Value(_)))
         || !matches!(payload.first(), Some(Argument::ConstPointer(t) | Argument::MutPointer(t)) if *t == dtype)
@@ -887,22 +949,10 @@ fn authenticated_metadata<'tcx>(
         })
     };
     let role = if call.kind.native() {
+        let signature = call.kind.native_signature().unwrap();
         let spec = NativeSpec {
             scalar: scalar_attr(args.type_at(0))?,
-            items: positive(
-                if matches!(
-                    call.kind,
-                    MarkerKind::CheckedBlockStorage
-                        | MarkerKind::Callback
-                        | MarkerKind::CheckedWarp
-                ) {
-                    6
-                } else if call.kind.resource() {
-                    5
-                } else {
-                    4
-                },
-            )?,
+            items: positive(signature.items)?,
         };
         let access_witness = || -> Result<_, String> {
             let TyKind::Ref(_, inner, _) = args.type_at(2).kind() else {
@@ -921,6 +971,19 @@ fn authenticated_metadata<'tcx>(
                 LibraryAccess::Read
             };
             Ok((access, witness))
+        };
+        let storage = || -> Result<_, String> {
+            let index = signature
+                .storage_type
+                .ok_or("native marker has no storage operand")?;
+            let ty = args.type_at(index);
+            Ok(
+                if matches!(ty.kind(), TyKind::Tuple(fields) if fields.is_empty()) {
+                    LibraryStorageArg::Implicit
+                } else {
+                    LibraryStorageArg::Explicit(storage_borrow_policy(tcx, ty)?)
+                },
+            )
         };
         Role::Native(match call.kind {
             MarkerKind::Raw => Native::Raw {
@@ -951,19 +1014,21 @@ fn authenticated_metadata<'tcx>(
             }
             MarkerKind::CheckedBlockStorage => {
                 let (access, witness) = access_witness()?;
-                let ty = args.type_at(3);
-                let storage = if matches!(ty.kind(), TyKind::Tuple(fields) if fields.is_empty()) {
-                    LibraryStorageArg::Implicit
-                } else {
-                    LibraryStorageArg::Explicit(storage_borrow_policy(tcx, ty)?)
-                };
                 Native::CheckedBlockStorage {
                     spec,
                     access,
                     witness,
-                    storage,
+                    storage: storage()?,
                 }
             }
+            MarkerKind::CheckedBlockPayload => Native::CheckedBlockPayload {
+                spec,
+                storage: storage()?,
+            },
+            MarkerKind::CheckedWarpPayload => Native::CheckedWarpPayload {
+                spec,
+                width: positive(4)?,
+            },
             _ => unreachable!("native kind checked above"),
         })
     } else {
@@ -1293,9 +1358,7 @@ pub(crate) fn finalize_provider<'tcx>(
         if calls.is_empty() {
             continue;
         }
-        let storage_root = calls
-            .iter()
-            .any(|call| call.kind.storage() || call.kind == MarkerKind::CheckedWarp);
+        let storage_root = calls.iter().any(|call| call.kind.planned_storage());
         for instance in &reached {
             if !storage_root
                 && tcx.crate_name(instance.def_id().krate).as_str() == "cuda_device"
@@ -1366,36 +1429,20 @@ pub(crate) fn finalize_provider<'tcx>(
                     1,
                 ]
             };
+            let signature = call.kind.native_signature().expect("native marker");
             let request = Request {
                 operation: registration.operation,
                 algorithm: registration.algorithm,
                 dtype: scalar(args.type_at(0)).unwrap_or_else(|error| report(error)),
                 block,
-                items_per_thread: positive(
-                    if matches!(
-                        call.kind,
-                        MarkerKind::CheckedBlockStorage
-                            | MarkerKind::Callback
-                            | MarkerKind::CheckedWarp
-                    ) {
-                        6
-                    } else if call.kind.resource() {
-                        5
-                    } else {
-                        4
-                    },
-                )
-                .map_err(str::to_owned)
-                .unwrap_or_else(|error| report(error)),
-                warp_width: if call.kind == MarkerKind::CheckedWarp {
-                    Some(
-                        positive(5)
-                            .map_err(str::to_owned)
-                            .unwrap_or_else(|error| report(error)),
-                    )
-                } else {
-                    None
-                },
+                items_per_thread: positive(signature.items)
+                    .map_err(str::to_owned)
+                    .unwrap_or_else(|error| report(error)),
+                warp_width: signature.warp_width.map(|index| {
+                    positive(index)
+                        .map_err(str::to_owned)
+                        .unwrap_or_else(|error| report(error))
+                }),
                 callback: if call.kind == MarkerKind::Callback {
                     let thunk =
                         callback_instance(tcx, call.instance).unwrap_or_else(|error| report(error));
@@ -1513,6 +1560,7 @@ pub(crate) fn finalize_provider<'tcx>(
                     marker: tcx.symbol_name(call.instance).name.to_string(),
                     checked_block: call.kind.checked(),
                     resource_witness: call.kind.resource(),
+                    payload_only: call.kind.payload_only(),
                     callback: call.kind == MarkerKind::Callback,
                     scratch_bytes,
                     scratch_alignment,

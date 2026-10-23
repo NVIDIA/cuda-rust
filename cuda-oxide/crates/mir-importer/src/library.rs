@@ -142,6 +142,8 @@ fn runtime_indices(role: LibraryRoleAttr) -> &'static [usize] {
             Native::CheckedBlockResource { .. } | Native::CheckedWarp { .. },
         ) => &[1, 2, 3],
         LibraryRoleAttr::Native(Native::CheckedBlockStorage { .. }) => &[1, 2, 3, 4],
+        LibraryRoleAttr::Native(Native::CheckedBlockPayload { .. }) => &[1, 2, 3],
+        LibraryRoleAttr::Native(Native::CheckedWarpPayload { .. }) => &[1, 2],
         LibraryRoleAttr::StorageNew(_)
         | LibraryRoleAttr::WarpGroupIndex { .. }
         | LibraryRoleAttr::SyncWarp { .. } => &[],

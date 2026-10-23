@@ -13,8 +13,8 @@ The marker must be called directly; pass a wrapper helper rather than the
 marker itself as a callable value.
 
 The `native_library` example is an executable provider with no CUB dependency.
-Its dependency helper is instantiated at one and four items per thread, and
-two concrete kernel roots run through the embedded module loader:
+Its raw dependency helper is instantiated at one and four items per thread.
+Those two roots and a checked payload root run through the embedded module loader:
 
 ```sh
 cargo oxide run native_library --arch sm_120 --materialize-cubin
@@ -94,6 +94,38 @@ Each checked root receives its own helper context, including roots with equal
 block shapes. Planned storage additionally distinguishes static call sites
 within a root when their assigned offsets or synchronization differ. Helpers
 with identical finalized bindings share one emitted body in that root.
+
+## Checked per-thread input and output
+
+`checked_block_payload_call_v1` accepts a registration, planned storage, a tuple
+of uniform scalar controls, and a tuple of per-thread payload pointers. Use `()`
+for empty controls. The pointer tuple starts with input and output, followed by
+auxiliary pointers such as validity metadata. The native ABI is input, output,
+compiler-provided scratch, remaining payload pointers, then controls. Pointer
+element types and mutability must exactly match the provider's declaration.
+The input element type matches `T`; output and auxiliary types may differ.
+
+`checked_warp_payload_call_v1` has the same controls and payload operands without
+explicit storage. Its `WIDTH` must be a power of two in 1..=32, within an exact
+block containing complete physical warps. Controls and participation agree
+within that width; sibling groups may differ. Scratch uses independent aligned
+replicas with matching completion before dirty reuse. The Block form uses the
+storage policies described below. Both markers return unit; a wrapper can own
+and return a fresh Rust result after the native operation initializes it.
+
+These unsafe boundaries require live, aligned per-thread local payloads, with
+initialized inputs and valid, nonaliasing output storage. Native effects must
+stay within those payloads and the supplied scratch. Payload pointers must not
+refer to kernel allocations, planned shared regions or reservations; they must
+not escape the synchronous call. Const inputs remain unchanged, and output
+validity can be established only after initialization. The compiler proves
+participation, scalar uniformity and scratch planning, not these pointer facts.
+
+Payload-only operations can compose with resource-checked Load/Store calls.
+They add no global memory-access event, and a scratch-free operation does not
+complete pending accesses. Only actual planned or explicit barriers supply
+completion. Native-written outputs remain varying for later control checks.
+Raw and legacy participation-only calls retain their existing mixing limits.
 
 ## Planned full-block storage
 

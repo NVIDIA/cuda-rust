@@ -1212,6 +1212,8 @@ fn translate_call_inner(
                     | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_RESOURCE_CALL_V1
                     | reserved_oxide_symbols::LIBRARY_CHECKED_WARP_CALL_V1
                     | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_STORAGE_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_PAYLOAD_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_CHECKED_WARP_PAYLOAD_CALL_V1
                     | reserved_oxide_symbols::LIBRARY_STORAGE_NEW_V1
                     | reserved_oxide_symbols::LIBRARY_STORAGE_RECONFIGURE_V1
                     | reserved_oxide_symbols::LIBRARY_STORAGE_RESERVE_V1
@@ -3690,6 +3692,11 @@ mod tests {
 
     #[test]
     fn native_storage_retention_preserves_original_sites_and_runtime_values() {
+        native_storage_retention_case(true);
+        native_storage_retention_case(false);
+    }
+
+    fn native_storage_retention_case(genuine: bool) {
         use crate::translator::body::translate_body;
         use dialect_mir::library::{
             LibraryAccess, LibraryNativeMetadata, LibraryOperation, LibraryReserveLayout,
@@ -3728,6 +3735,8 @@ mod library {
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_call<R: Copy>(_: R, _: (*const i32,usize), _: (*mut i32,)) {}
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_resource_call<R: Copy>(_: R, _: &[i32], _: (*const i32,usize), _: (*mut i32,)) {}
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_warp_call<R: Copy>(_: R, _: &[i32], _: (*const i32,usize), _: (*mut i32,)) {}
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_payload_call<R: Copy>(_: R, _: &mut StorageDescriptor<128,16,false,true>, _: (), _: (*const i32,*mut i32)) {}
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_warp_payload_call<R: Copy>(_: R, _: (usize,), _: (*const i32,*mut i32)) {}
 }
 fn registration() -> &'static str { "{}" }
 unsafe extern "C" fn thunk(_: *const i32, a: i32, b: i32) -> i32 { a + b }
@@ -3742,6 +3751,8 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
     library::cuda_oxide_library_v1_246e25db_storage_release(reservation);
     library::cuda_oxide_library_v1_246e25db_call_with_callback(registration,(input,output),thunk,&7);
     library::cuda_oxide_library_v1_246e25db_checked_warp_call(registration,slice,(input,7),(output,));
+    library::cuda_oxide_library_v1_246e25db_checked_block_payload_call(registration,&mut storage,(),(input,output));
+    library::cuda_oxide_library_v1_246e25db_checked_warp_payload_call(registration,(7,),(input,output));
 }
 "#).unwrap();
         let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
@@ -3750,11 +3761,16 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
             .output()
             .unwrap();
         assert!(sysroot.status.success());
+        let crate_name = if genuine {
+            "cuda_device"
+        } else {
+            "payload_lookalike"
+        };
         let args = vec![
             "rustc".to_string(),
             "--edition=2024".into(),
             "--crate-type=rlib".into(),
-            "--crate-name=cuda_device".into(),
+            format!("--crate-name={crate_name}"),
             "--emit=metadata".into(),
             "-Zmir-opt-level=0".into(),
             format!("--out-dir={}", root.display()),
@@ -3770,7 +3786,7 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                 rustc_public::run!(&args, || {
                     let item = rustc_public::all_local_items()
                         .into_iter()
-                        .find(|item| item.name() == "cuda_device::entry")
+                        .find(|item| item.name() == format!("{crate_name}::entry"))
                         .unwrap();
                     let instance = Instance::try_from(item).unwrap();
                     let body = instance.body().unwrap();
@@ -3798,7 +3814,42 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                             Some((bb, Instance::resolve(def, &args).unwrap().mangled_name()))
                         })
                         .collect();
-                    assert_eq!(source.len(), 10);
+                    assert_eq!(source.len(), 12);
+                    if !genuine {
+                        for debug in [DebugKind::Off, DebugKind::Full] {
+                            crate::library::set_semantics(Default::default());
+                            let mut ctx = Context::new();
+                            crate::translator::register_dialects(&mut ctx);
+                            let (function, _) = translate_body(
+                                &mut ctx,
+                                &body,
+                                &instance,
+                                body.blocks.len(),
+                                &successors,
+                                false,
+                                None,
+                                Some("lookalike"),
+                                &mut Legaliser::default(),
+                                debug,
+                                None,
+                                None,
+                                false,
+                            )
+                            .unwrap();
+                            let mut ordinary_calls = 0;
+                            for block in function.deref(&ctx).get_region(0).deref(&ctx).iter(&ctx) {
+                                for op in block.deref(&ctx).iter(&ctx) {
+                                    assert!(Operation::get_op::<MirLibraryOp>(op, &ctx).is_none());
+                                    if let Some(call) = Operation::get_op::<MirCallOp>(op, &ctx) {
+                                        call.verify(&ctx).unwrap();
+                                        ordinary_calls += 1;
+                                    }
+                                }
+                            }
+                            assert_eq!(ordinary_calls, source.len());
+                        }
+                        return std::ops::ControlFlow::<(), _>::Continue(());
+                    }
                     let spec = NativeSpec {
                         scalar: LibraryScalar::Signed(32),
                         items: 4,
@@ -3857,6 +3908,14 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                             access: LibraryAccess::Read,
                             witness: LibraryWitness::ReadOnlySlice,
                         }),
+                        LibraryRoleAttr::Native(LibraryNativeMetadata::CheckedBlockPayload {
+                            spec,
+                            storage: LibraryStorageArg::Explicit(policy),
+                        }),
+                        LibraryRoleAttr::Native(LibraryNativeMetadata::CheckedWarpPayload {
+                            spec,
+                            width: 8,
+                        }),
                     ];
                     for (caller, debug) in [
                         ("original_entry", DebugKind::Off),
@@ -3887,7 +3946,7 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                 .contains("no authenticated call-site semantics"),
                             "{error}"
                         );
-                        let semantics = source
+                        let semantics: std::collections::BTreeMap<_, _> = source
                             .iter()
                             .zip(roles)
                             .map(|((block, marker), role)| {
@@ -3903,6 +3962,40 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                 )
                             })
                             .collect();
+                        // Neither genuine payload marker may fall through to an
+                        // ordinary call when its authenticated site is absent.
+                        for missing in [10, 11] {
+                            let mut incomplete = semantics.clone();
+                            incomplete.remove(&crate::LibraryCallSite {
+                                caller: caller.into(),
+                                block: source[missing].0,
+                            });
+                            crate::library::set_semantics(incomplete);
+                            let mut ctx = Context::new();
+                            crate::translator::register_dialects(&mut ctx);
+                            let error = translate_body(
+                                &mut ctx,
+                                &body,
+                                &instance,
+                                body.blocks.len(),
+                                &successors,
+                                false,
+                                None,
+                                Some(caller),
+                                &mut Legaliser::default(),
+                                debug,
+                                None,
+                                None,
+                                false,
+                            )
+                            .unwrap_err();
+                            assert!(
+                                error
+                                    .to_string()
+                                    .contains("no authenticated call-site semantics"),
+                                "{error}"
+                            );
+                        }
                         crate::library::set_semantics(semantics);
                         let mut ctx = Context::new();
                         crate::translator::register_dialects(&mut ctx);
@@ -3972,7 +4065,9 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                     (4, 0),
                                     (1, 0),
                                     (2, 0),
-                                    (3, 0)
+                                    (3, 0),
+                                    (3, 0),
+                                    (2, 0)
                                 ])
                                 .map(|(((bb, _), role), (operands, results))| (
                                     *bb, role, operands, results
@@ -3987,7 +4082,9 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                 source[2].0,
                                 source[6].0,
                                 source[8].0,
-                                source[9].0
+                                source[9].0,
+                                source[10].0,
+                                source[11].0
                             ]
                         );
                         let plans = source
@@ -4031,6 +4128,12 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                             plan.resource_witness =
                                                 index == 2 || index == 6 || index == 9;
                                             plan.storage_witness = index == 6;
+                                            plan.payload_only = index == 10 || index == 11;
+                                            plan.warp_width = match index {
+                                                9 => Some(32),
+                                                11 => Some(8),
+                                                _ => None,
+                                            };
                                             plan.scratch_bytes =
                                                 if index == 2 || index == 9 { 0 } else { 32 };
                                             plan.scratch_alignment = 8;
@@ -4076,9 +4179,9 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                 }
                             }
                         }
-                        assert_eq!(native_arguments, vec![3, 4, 4, 4, 4, 4]);
+                        assert_eq!(native_arguments, vec![3, 4, 4, 4, 4, 4, 3, 4]);
                         assert_eq!(
-                            scratch_views, 7,
+                            scratch_views, 9,
                             "zero-byte native scratch still retains a fixed view"
                         );
                     }

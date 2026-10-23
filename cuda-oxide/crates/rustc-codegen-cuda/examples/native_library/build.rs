@@ -30,7 +30,7 @@ fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .enumerate()
     {
-        assert_eq!(item["operation"], "load_add");
+        let operation = item["operation"].as_str().ok_or("missing operation")?;
         assert_eq!(item["algorithm"], "direct");
         assert_eq!(item["dtype"], scalar);
         let block = item["block"].as_array().ok_or("missing block")?;
@@ -38,19 +38,43 @@ fn serve() -> Result<(), Box<dyn std::error::Error>> {
         let threads = block[0].as_u64().ok_or("invalid block")?;
         let items = item["items_per_thread"].as_u64().ok_or("invalid extent")?;
         assert!((1..=1024).contains(&threads) && (1..=16).contains(&items));
-        let symbol = format!("fixture_load_b{threads}_i{items}");
-        source.push_str(&format!(
-            "extern \"C\" __device__ void {symbol}(const int* memory, int* values, unsigned char*, int add) {{\n#pragma unroll\nfor (int i=0; i<{items}; ++i) values[i]=memory[threadIdx.x*{items}+i]+add;\n}}\n"
-        ));
+        let symbol;
+        let mut arguments = vec![
+            json!({"kind":"const_pointer", "scalar":scalar}),
+            json!({"kind":"mut_pointer", "scalar":scalar}),
+        ];
+        match operation {
+            "load_add" => {
+                symbol = format!("fixture_load_b{threads}_i{items}");
+                source.push_str(&format!(
+                    "extern \"C\" __device__ void {symbol}(const int* memory, int* values, unsigned char*, int add) {{\n#pragma unroll\nfor (int i=0; i<{items}; ++i) values[i]=memory[threadIdx.x*{items}+i]+add;\n}}\n"
+                ));
+                arguments.push(json!({"kind":"value", "scalar":scalar}));
+            }
+            "payload_copy" => {
+                assert_eq!(items, 1);
+                assert!(item.get("warp_width").is_none());
+                symbol = format!("fixture_payload_copy_b{threads}");
+                source.push_str(&format!(
+                    "extern \"C\" __device__ void {symbol}(const int* input, int* output, unsigned char*) {{ *output=*input+1; }}\n"
+                ));
+            }
+            "payload_add" => {
+                assert_eq!(items, 1);
+                assert_eq!(item["warp_width"], 8);
+                symbol = format!("fixture_payload_add_b{threads}_w8");
+                source.push_str(&format!(
+                    "extern \"C\" __device__ void {symbol}(const int* input, int* output, unsigned char*, int add) {{ *output=*input+add; }}\n"
+                ));
+                arguments.push(json!({"kind":"value", "scalar":scalar}));
+            }
+            _ => return Err("unknown fixture operation".into()),
+        }
         entries.push(json!({
             "request_index": index,
             "identity": Sha256::digest(symbol.as_bytes()).to_vec(),
             "symbol": symbol,
-            "arguments": [
-                {"kind":"const_pointer", "scalar":scalar},
-                {"kind":"mut_pointer", "scalar":scalar},
-                {"kind":"value", "scalar":scalar}
-            ],
+            "arguments": arguments,
             "cub_layout": {"size":0,"alignment":1},
             "scratch": {"size":0,"alignment":1},
             "scratch_free": true, "mutates_payload": true
@@ -131,11 +155,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => {}
     }
     println!("cargo::rerun-if-changed=build.rs");
-    let registration = json!({
-        "version":1, "provider":"native_library_fixture",
-        "executable":std::env::current_exe()?,
-        "operation":"load_add", "algorithm":"direct"
-    });
-    println!("cargo::rustc-env=FIXTURE_REGISTRATION={registration}");
+    for (variable, operation) in [
+        ("FIXTURE_REGISTRATION", "load_add"),
+        ("PAYLOAD_COPY_REGISTRATION", "payload_copy"),
+        ("PAYLOAD_ADD_REGISTRATION", "payload_add"),
+    ] {
+        let registration = json!({
+            "version":1, "provider":"native_library_fixture",
+            "executable":std::env::current_exe()?,
+            "operation":operation, "algorithm":"direct"
+        });
+        println!("cargo::rustc-env={variable}={registration}");
+    }
     Ok(())
 }

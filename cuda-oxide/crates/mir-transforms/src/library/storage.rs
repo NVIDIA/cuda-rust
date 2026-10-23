@@ -222,7 +222,12 @@ pub fn planned_storage(role: Role) -> bool {
             | Role::StorageReconfigure { .. }
             | Role::StorageReserve { .. }
             | Role::StorageRelease
-            | Role::Native(Native::CheckedBlockStorage { .. } | Native::CheckedWarp { .. })
+            | Role::Native(
+                Native::CheckedBlockStorage { .. }
+                    | Native::CheckedWarp { .. }
+                    | Native::CheckedBlockPayload { .. }
+                    | Native::CheckedWarpPayload { .. }
+            )
     )
 }
 
@@ -243,7 +248,12 @@ pub fn allocate_library_storage(
         let mut layouts = BTreeMap::new();
         for (site, event) in &trace.events {
             match event.role {
-                Role::Native(Native::CheckedBlockStorage { .. } | Native::CheckedWarp { .. }) => {
+                Role::Native(
+                    Native::CheckedBlockStorage { .. }
+                    | Native::CheckedWarp { .. }
+                    | Native::CheckedBlockPayload { .. }
+                    | Native::CheckedWarpPayload { .. },
+                ) => {
                     let plan = native_plans
                         .get(root)
                         .and_then(|calls| calls.get(&event.call))

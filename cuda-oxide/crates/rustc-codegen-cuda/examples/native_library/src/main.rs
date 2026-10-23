@@ -29,6 +29,14 @@ mod kernels {
             native_library::load_add::<4>(input, output);
         }
     }
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 3, block = (128, 1, 1), dynamic_shared = inferred)]
+    pub unsafe fn payloads(output: *mut i32) {
+        unsafe {
+            native_library::payload_roundtrip(output);
+        }
+    }
 }
 
 fn verify() -> Result<(), Box<dyn std::error::Error>> {
@@ -75,6 +83,20 @@ fn verify() -> Result<(), Box<dyn std::error::Error>> {
         );
         println!("PASS native library: items={items}, {} values", input.len());
     }
+    let output = DeviceBuffer::<i32>::zeroed(&stream, 3 * 128)?;
+    let prepared = module.prepare_payloads(LaunchConfig3D::auto_shared((3, 1, 1), (128, 1, 1)))?;
+    // SAFETY: the output covers three complete, disjoint blocks and outlives
+    // the launch; preparation checks the exact root geometry and scratch facts.
+    unsafe {
+        module.payloads(&stream, &prepared, output.cu_deviceptr() as *mut i32)?;
+    }
+    assert_eq!(
+        output.to_host_vec(&stream)?,
+        (0..3 * 128)
+            .map(|i| i + 1 + (i % 128) / 8)
+            .collect::<Vec<i32>>()
+    );
+    println!("PASS checked payloads: empty Block controls, W8 seed, 384 values");
     Ok(())
 }
 
@@ -90,7 +112,7 @@ fn check_artifact(
         return Err("expected exactly one embedded device bundle".into());
     };
     assert_eq!(bundle.target, target);
-    for symbol in ["one", "four"] {
+    for symbol in ["one", "four", "payloads"] {
         let facts = bundle.entry(symbol).unwrap().launch_facts.unwrap();
         assert_eq!(facts.exact_block, Some((128, 1, 1)));
         assert_eq!(facts.dynamic_shared_bytes, 0);
@@ -106,7 +128,7 @@ fn check_artifact(
         .ok_or("missing embedded CUBIN")?;
     assert!(cubin.starts_with(b"\x7fELF"));
     std::fs::write(output, cubin)?;
-    println!("PASS embedded CUBIN: target={target}, kernels=one,four");
+    println!("PASS embedded CUBIN: target={target}, kernels=one,four,payloads");
     Ok(())
 }
 

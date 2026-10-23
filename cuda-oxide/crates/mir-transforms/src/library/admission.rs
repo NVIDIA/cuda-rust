@@ -101,6 +101,8 @@ fn checked(role: LibraryRoleAttr) -> bool {
                 | LibraryNativeMetadata::CheckedBlockResource { .. }
                 | LibraryNativeMetadata::CheckedBlockStorage { .. }
                 | LibraryNativeMetadata::CheckedWarp { .. }
+                | LibraryNativeMetadata::CheckedBlockPayload { .. }
+                | LibraryNativeMetadata::CheckedWarpPayload { .. }
         )
     ) || super::storage::planned_storage(role)
 }
@@ -167,7 +169,10 @@ pub fn admit_library_roots(
         };
         let shape = [x, y, z];
         for role in &roles {
-            if let LibraryRoleAttr::Native(LibraryNativeMetadata::CheckedWarp { width, .. }) = role
+            if let LibraryRoleAttr::Native(
+                LibraryNativeMetadata::CheckedWarp { width, .. }
+                | LibraryNativeMetadata::CheckedWarpPayload { width, .. },
+            ) = role
                 && (!matches!(*width, 1 | 2 | 4 | 8 | 16 | 32)
                     || x.checked_mul(y)
                         .and_then(|xy| xy.checked_mul(z))

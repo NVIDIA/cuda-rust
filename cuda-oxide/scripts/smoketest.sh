@@ -1315,7 +1315,7 @@ native_library_cubin_verdict() {
             echo "FAIL (native library CUBIN is missing consumable DWARF)"
             return 1
         fi
-        for symbol in one four; do
+        for symbol in one four payloads; do
             if ! grep -Eq "DW_AT_name.*: ${symbol}$" <<<"${dwarf}"; then
                 echo "FAIL (native library CUBIN is missing ${symbol} DWARF)"
                 return 1

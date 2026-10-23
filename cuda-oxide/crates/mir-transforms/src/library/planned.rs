@@ -81,16 +81,22 @@ pub(super) fn validate(ctx: &Context, op: Ptr<Operation>, plan: &LibraryCallPlan
             CheckedBlock { .. } => (true, false, false),
             CheckedBlockResource { .. } | CheckedWarp { .. } => (true, true, false),
             CheckedBlockStorage { .. } => (true, true, true),
+            CheckedBlockPayload { .. } | CheckedWarpPayload { .. } => (true, false, false),
         };
         if (
             plan.checked_block,
             plan.resource_witness,
             plan.storage_witness,
         ) != (checked, resource, storage)
+            || plan.payload_only
+                != matches!(
+                    native,
+                    CheckedBlockPayload { .. } | CheckedWarpPayload { .. }
+                )
             || plan.callback != matches!(native, Callback { .. })
             || plan.warp_width
                 != match native {
-                    CheckedWarp { width, .. } => Some(width),
+                    CheckedWarp { width, .. } | CheckedWarpPayload { width, .. } => Some(width),
                     _ => None,
                 }
             || plan.symbol.is_empty()
@@ -330,6 +336,8 @@ fn native_call(
         CheckedBlock { .. } => &[0, 1],
         CheckedBlockResource { .. } | CheckedWarp { .. } => &[1, 2],
         CheckedBlockStorage { .. } => &[2, 3],
+        CheckedBlockPayload { .. } => &[2, 1],
+        CheckedWarpPayload { .. } => &[1, 0],
     };
     let mut arguments = Vec::new();
     let mut declared = Vec::new();
@@ -640,6 +648,8 @@ mod tests {
                 witness,
                 storage,
             },
+            CheckedBlockPayload { spec, storage },
+            CheckedWarpPayload { spec, width: 8 },
         ];
         for native in roles {
             let ctx = &mut Context::new();
@@ -659,6 +669,11 @@ mod tests {
             let payload = MirTupleType::get(ctx, vec![output, flags]).into();
             let actual_payload = MirTupleType::get(ctx, vec![shared_output, flags]).into();
             let raw = MirTupleType::get(ctx, vec![input, output, scalar]).into();
+            let wide = IntegerType::get(ctx, 64, Signedness::Signed).into();
+            let local_output =
+                MirPtrType::get_generic_with_kind(ctx, wide, true, MirPointerKind::RawMut).into();
+            let local = MirTupleType::get(ctx, vec![input, local_output, flags]).into();
+            let controls = MirTupleType::get(ctx, vec![scalar]).into();
             let empty = MirTupleType::get(ctx, vec![]).into();
             let borrowed =
                 MirSliceType::get_with_kind(ctx, scalar, MirPointerKind::SharedRef).into();
@@ -678,6 +693,8 @@ mod tests {
                     vec![borrowed, uniform, payload]
                 }
                 CheckedBlockStorage { .. } => vec![borrowed, empty, uniform, payload],
+                CheckedBlockPayload { .. } => vec![empty, empty, local],
+                CheckedWarpPayload { .. } => vec![controls, local],
             };
             let site = LibraryCallSite {
                 caller: "root".into(),
@@ -738,8 +755,12 @@ mod tests {
                 CheckedBlockResource { .. } | CheckedBlockStorage { .. } | CheckedWarp { .. }
             );
             plan.storage_witness = matches!(native, CheckedBlockStorage { .. });
+            plan.payload_only = matches!(
+                native,
+                CheckedBlockPayload { .. } | CheckedWarpPayload { .. }
+            );
             plan.warp_width = match native {
-                CheckedWarp { width, .. } => Some(width),
+                CheckedWarp { width, .. } | CheckedWarpPayload { width, .. } => Some(width),
                 _ => None,
             };
             plan.scratch_bytes =
@@ -749,7 +770,7 @@ mod tests {
                     32
                 };
             plan.scratch_alignment = 4;
-            if matches!(native, CheckedWarp { .. }) {
+            if matches!(native, CheckedWarp { .. } | CheckedWarpPayload { .. }) {
                 plan.scratch_bytes = 1184;
                 plan.scratch_stride = 148;
                 plan.scratch_offset = 16;
@@ -776,7 +797,7 @@ mod tests {
                 let barrier = operations
                     .iter()
                     .position(|&op| {
-                        if matches!(native, CheckedWarp { .. }) {
+                        if matches!(native, CheckedWarp { .. } | CheckedWarpPayload { .. }) {
                             Operation::get_op::<dialect_nvvm::ops::BarWarpSyncOp>(op, ctx).is_some()
                         } else {
                             Operation::get_op::<Barrier0Op>(op, ctx).is_some()
@@ -813,6 +834,15 @@ mod tests {
                     (operands[3], 1),
                     (operands[2], 1),
                 ],
+                CheckedBlockPayload { .. } => {
+                    vec![(operands[2], 0), (operands[2], 1), (operands[2], 2)]
+                }
+                CheckedWarpPayload { .. } => vec![
+                    (operands[1], 0),
+                    (operands[1], 1),
+                    (operands[1], 2),
+                    (operands[0], 0),
+                ],
             };
             for (index, expected) in expected.into_iter().enumerate() {
                 let index = index + usize::from(index >= 2);
@@ -845,7 +875,7 @@ mod tests {
                     MirPointerKindAuthorityAttr::RawAddress
                 );
             }
-            if matches!(native, CheckedWarp { .. }) {
+            if matches!(native, CheckedWarp { .. } | CheckedWarpPayload { .. }) {
                 let offset = operations
                     .iter()
                     .find_map(|&op| Operation::get_op::<MirPtrOffsetOp>(op, ctx))

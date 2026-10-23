@@ -1725,6 +1725,11 @@ fn planned_storage_reuses_the_same_proof_for_completion_and_global_resource_conf
             vec![],
         );
         for (index, access) in [(1, LibraryAccess::Read), (2, LibraryAccess::Write)] {
+            // A real payload role with zero native scratch cannot complete the
+            // pending global resource access, even in a planned-storage root.
+            if index == 2 {
+                roles.insert(site(11), local_payload(ctx, block, vec![], None, None, 11));
+            }
             if index == 2
                 && let Some(scope) = completion
             {
@@ -1793,6 +1798,14 @@ fn planned_storage_reuses_the_same_proof_for_completion_and_global_resource_conf
                     })
                     .collect(),
             )]);
+            let mut natives = natives;
+            natives.get_mut("root").unwrap().insert(
+                site(11),
+                dialect_mir::library::LibraryCallPlan::internal(
+                    dialect_mir::library::LibraryOperation::Native,
+                    "payload_marker".into(),
+                ),
+            );
             let mut plans =
                 super::super::storage::allocate_library_storage(&first, &natives).unwrap();
             assert!(manager.try_get_analysis::<PreparedGraph>(module).is_some());
@@ -2051,6 +2064,179 @@ fn warp_storage_reuse_completes_only_covered_accesses_in_both_preparations() {
                         .unwrap_err()
                         .to_string()
                         .contains("conflicting collective resource access")
+                );
+            }
+        }
+    }
+}
+
+#[allow(clippy::disallowed_methods)]
+fn local_payload(
+    ctx: &mut Context,
+    block: Ptr<BasicBlock>,
+    controls: Vec<Value>,
+    output: Option<Value>,
+    width: Option<u32>,
+    index: usize,
+) -> Role {
+    let scalar: TypeHandle = IntegerType::get(ctx, 32, Signedness::Signed).into();
+    let input_ty =
+        MirPtrType::get_generic_with_kind(ctx, scalar, false, MirPointerKind::RawConst).into();
+    let output_ty =
+        MirPtrType::get_generic_with_kind(ctx, scalar, true, MirPointerKind::RawMut).into();
+    let input = value(ctx, block, input_ty);
+    let output = output.unwrap_or_else(|| value(ctx, block, output_ty));
+    let payload_ty = MirTupleType::get(ctx, vec![input_ty, output.get_type(ctx)]).into();
+    let payload = emit::<MirConstructTupleOp>(ctx, block, vec![payload_ty], vec![input, output])
+        .deref(ctx)
+        .get_result(0);
+    let controls_ty =
+        MirTupleType::get(ctx, controls.iter().map(|v| v.get_type(ctx)).collect()).into();
+    let controls = emit::<MirConstructTupleOp>(ctx, block, vec![controls_ty], controls)
+        .deref(ctx)
+        .get_result(0);
+    let spec = NativeSpec {
+        scalar: LibraryScalar::Signed(32),
+        items: 1,
+    };
+    let (native, operands) = if let Some(width) = width {
+        (
+            Native::CheckedWarpPayload { spec, width },
+            vec![controls, payload],
+        )
+    } else {
+        let unit = MirTupleType::get(ctx, vec![]).into();
+        let storage = value(ctx, block, unit);
+        (
+            Native::CheckedBlockPayload {
+                spec,
+                storage: LibraryStorageArg::Implicit,
+            },
+            vec![storage, controls, payload],
+        )
+    };
+    let signature = FunctionType::get(
+        ctx,
+        operands.iter().map(|v| v.get_type(ctx)).collect(),
+        vec![],
+    );
+    let role = Role::Native(native);
+    MirLibraryOp::build_call(
+        ctx,
+        role,
+        site(index),
+        "payload_marker".into(),
+        signature,
+        operands,
+    )
+    .insert_at_back(block, ctx);
+    role
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)]
+fn payload_controls_and_native_written_outputs_keep_the_slot_and_promoted_proof() {
+    use dialect_mir::attributes::{MirCastKindAttr, MirPointerKindAuthorityAttr};
+    for width in [None, Some(8)] {
+        for (kind, written, accepted) in [
+            (None, false, true),
+            (Some(SourceKind::BlockQuery), false, true),
+            (Some(SourceKind::LaneQuery), false, false),
+            (Some(SourceKind::BlockQuery), true, false),
+        ] {
+            let ctx = &mut Context::new();
+            let (module, _, block) = function(ctx);
+            let mut roles = BTreeMap::new();
+            let controls = if let Some(kind) = kind {
+                let initial = source_value(ctx, block, kind, true);
+                let control = if written {
+                    let address = test_slot(ctx, block, initial);
+                    let raw = MirPtrType::get_generic_with_kind(
+                        ctx,
+                        initial.get_type(ctx),
+                        true,
+                        MirPointerKind::RawMut,
+                    )
+                    .into();
+                    let cast = emit::<MirCastOp>(ctx, block, vec![raw], vec![address]);
+                    MirCastOp::new(cast).set_attr_cast_kind(ctx, MirCastKindAttr::PtrToPtr);
+                    MirCastOp::new(cast)
+                        .set_pointer_kind_authority(ctx, MirPointerKindAuthorityAttr::RawAddress);
+                    let output = cast.deref(ctx).get_result(0);
+                    roles.insert(
+                        site(1),
+                        local_payload(ctx, block, vec![], Some(output), width, 1),
+                    );
+                    emit::<MirLoadOp>(ctx, block, vec![initial.get_type(ctx)], vec![address])
+                        .deref(ctx)
+                        .get_result(0)
+                } else {
+                    initial
+                };
+                vec![control]
+            } else {
+                vec![]
+            };
+            roles.insert(site(2), local_payload(ctx, block, controls, None, width, 2));
+            emit::<MirReturnOp>(ctx, block, vec![], vec![]);
+            for verdict in slot_and_promoted_verdicts(ctx, module, &roles) {
+                assert_eq!(
+                    verdict.is_ok(),
+                    accepted,
+                    "{width:?}/{kind:?}/written={written}: {verdict:?}"
+                );
+                if let Err(error) = verdict {
+                    assert!(error.contains("not proved"), "{error}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn zero_layout_payload_roots_retain_planning_and_reject_legacy_mixing() {
+    for width in [None, Some(8)] {
+        for legacy in [false, true] {
+            let ctx = &mut Context::new();
+            let (module, _, block) = function(ctx);
+            let role = local_payload(ctx, block, vec![], None, width, 1);
+            let mut roles = BTreeMap::from([(site(1), role)]);
+            if legacy {
+                let control = source_value(ctx, block, SourceKind::BlockQuery, false);
+                roles.insert(site(2), native(ctx, block, control, 2));
+            }
+            emit::<MirReturnOp>(ctx, block, vec![], vec![]);
+            for verdict in slot_and_promoted_verdicts(ctx, module, &roles) {
+                if legacy {
+                    assert!(
+                        verdict
+                            .unwrap_err()
+                            .contains("untracked and planned-storage")
+                    );
+                } else {
+                    verdict.unwrap();
+                }
+            }
+            if !legacy {
+                let validation =
+                    analyze(ctx, module, &mut AnalysisManager::default(), &roles).unwrap();
+                let mut plan = dialect_mir::library::LibraryCallPlan::internal(
+                    dialect_mir::library::LibraryOperation::Native,
+                    "payload_marker".into(),
+                );
+                plan.payload_only = true;
+                plan.checked_block = true;
+                plan.warp_width = width;
+                let native = super::super::storage::RootedNativePlans::from([(
+                    "root".into(),
+                    BTreeMap::from([(site(1), plan)]),
+                )]);
+                let plans =
+                    super::super::storage::allocate_library_storage(&validation, &native).unwrap();
+                assert_eq!(plans["root"].bytes, 0);
+                assert!(
+                    plans["root"].sites.is_empty(),
+                    "zero layout adds no completion binding"
                 );
             }
         }

@@ -21,7 +21,7 @@ use crate::simt::launch::DeviceLaunchLimits;
 use crate::simt::stream::CudaStream;
 use std::ffi::c_int;
 use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /// Owns a reference to a CUDA device's primary context.
@@ -40,11 +40,10 @@ pub struct CudaContext {
     pub(crate) cu_ctx: cuda_bindings::CUcontext,
     /// Zero-based device ordinal passed to [`CudaContext::new`].
     pub(crate) ordinal: usize,
-    /// Number of live [`CudaStream`] instances sharing this context.
+    /// Number of live non-default [`CudaStream`] instances created through
+    /// this handle. Incremented once `cuStreamCreate` has succeeded,
+    /// decremented by `CudaStream::drop`.
     pub(crate) num_streams: AtomicUsize,
-    /// When `true`, the first [`new_stream`](CudaContext::new_stream) call
-    /// synchronizes the context to establish a clean ordering baseline.
-    pub(crate) event_tracking: AtomicBool,
     /// Sticky error state recorded by [`record_err`](CudaContext::record_err).
     /// Stores the raw `CUresult` value, or `0` if no error.
     pub(crate) error_state: AtomicU32,
@@ -53,8 +52,8 @@ pub struct CudaContext {
 /// # Safety
 ///
 /// `CUdevice` and `CUcontext` are process-wide handles. All mutable state
-/// (`num_streams`, `event_tracking`, `error_state`) uses atomics. The CUDA
-/// driver itself is thread-safe for distinct contexts, and the
+/// (`num_streams`, `error_state`) uses atomics. The CUDA driver itself is
+/// thread-safe for distinct contexts, and the
 /// [`bind_to_thread`](CudaContext::bind_to_thread) mechanism ensures the
 /// correct context is current before each call.
 unsafe impl Send for CudaContext {}
@@ -63,12 +62,14 @@ unsafe impl Sync for CudaContext {}
 
 /// Releases the primary context on drop.
 ///
-/// Binds the context to the current thread first (required by
-/// `cuDevicePrimaryCtxRelease`). Errors during teardown are recorded via
-/// [`record_err`](CudaContext::record_err) rather than panicking.
+/// `cuDevicePrimaryCtxRelease` is addressed by device and does not require
+/// the context to be current, so nothing is bound here: making a context
+/// current only to release it would leave the calling thread with a
+/// dangling current context when this was the last reference. Errors during
+/// teardown are recorded via [`record_err`](CudaContext::record_err) rather
+/// than panicking.
 impl Drop for CudaContext {
     fn drop(&mut self) {
-        self.record_err(self.bind_to_thread());
         let ctx = std::mem::replace(&mut self.cu_ctx, std::ptr::null_mut());
         if !ctx.is_null() {
             self.record_err(unsafe {
@@ -343,7 +344,6 @@ impl CudaContext {
             cu_ctx,
             ordinal,
             num_streams: AtomicUsize::new(0),
-            event_tracking: AtomicBool::new(true),
             error_state: AtomicU32::new(0),
         });
         ctx.bind_to_thread()?;
@@ -368,11 +368,15 @@ impl CudaContext {
     /// Binds this context to the calling thread if not already current.
     ///
     /// Checks [`check_err`](Self::check_err) first and propagates any sticky
-    /// error. Skips the `cuCtxSetCurrent` call when the context is already
-    /// bound, avoiding an unnecessary driver round-trip.
+    /// error, in which case the context is **not** made current. Skips the
+    /// `cuCtxSetCurrent` call when the context is already bound, avoiding an
+    /// unnecessary driver round-trip.
     ///
     /// Most methods on [`CudaStream`], [`CudaEvent`](crate::CudaEvent), and
-    /// [`CudaModule`](crate::CudaModule) call this internally.
+    /// [`CudaModule`](crate::CudaModule) call this internally before they
+    /// enqueue work, so a recorded error surfaces before anything new is
+    /// submitted. The synchronize wrappers deliberately do not: see
+    /// [`synchronize`](Self::synchronize).
     ///
     /// CUcontext is the backing runtime object, and CUmodule / CUfunction / CUstream
     /// are opaque handles to objects created under that context. bind_to_thread()
@@ -381,6 +385,16 @@ impl CudaContext {
     /// can fail.
     pub fn bind_to_thread(&self) -> Result<(), DriverError> {
         self.check_err()?;
+        self.make_current()
+    }
+
+    /// Makes this context current on the calling thread without consulting
+    /// the sticky error state.
+    ///
+    /// This is the half of [`bind_to_thread`](Self::bind_to_thread) that
+    /// synchronize wrappers and `Drop` impls use: a recorded error must not
+    /// stop a wait or a release from reaching the driver.
+    pub(crate) fn make_current(&self) -> Result<(), DriverError> {
         let mut current = MaybeUninit::uninit();
         unsafe {
             cuda_bindings::cuCtxGetCurrent(current.as_mut_ptr()).result()?;
@@ -395,9 +409,24 @@ impl CudaContext {
     /// Blocks the calling thread until all preceding work in this context
     /// completes.
     ///
-    /// Binds the context first, then calls `cuCtxSynchronize`.
+    /// The driver call is issued unconditionally, and only afterwards is the
+    /// sticky error state drained and returned. A `Result::Err` from this
+    /// method therefore never means the wait was skipped: either
+    /// `cuCtxSynchronize` itself failed, or it completed and a previously
+    /// recorded error is being reported. Safe wrappers that hand out host
+    /// memory after an enqueued copy rely on this ordering.
     pub fn synchronize(&self) -> Result<(), DriverError> {
-        self.bind_to_thread()?;
+        self.synchronize_driver()?;
+        self.check_err()
+    }
+
+    /// `cuCtxSynchronize` without consulting the sticky error state.
+    ///
+    /// Returns `Err` only when the driver refused or failed the wait, which
+    /// is the signal callers use to decide that host memory may still be a
+    /// DMA target and must be leaked rather than freed.
+    pub(crate) fn synchronize_driver(&self) -> Result<(), DriverError> {
+        self.make_current()?;
         unsafe { cuda_bindings::cuCtxSynchronize() }.result()
     }
 
@@ -418,9 +447,8 @@ impl CudaContext {
     /// The stream is created with `CU_STREAM_NON_BLOCKING`, so it does not
     /// implicitly synchronize with the default stream.
     ///
-    /// On the first call (when `num_streams` transitions from 0 to 1), the
-    /// context is synchronized to establish a clean ordering baseline if
-    /// `event_tracking` is enabled.
+    /// When this handle has no live streams yet, the context is synchronized
+    /// first to establish a clean ordering baseline for the new stream.
     pub fn new_stream(self: &Arc<Self>) -> Result<Arc<CudaStream>, DriverError> {
         self.create_stream(None)
     }
@@ -459,8 +487,9 @@ impl CudaContext {
         priority: Option<i32>,
     ) -> Result<Arc<CudaStream>, DriverError> {
         self.bind_to_thread()?;
-        let prev = self.num_streams.fetch_add(1, Ordering::Relaxed);
-        if prev == 0 && self.event_tracking.load(Ordering::Relaxed) {
+        // Baseline for the first stream. Two threads racing here may both
+        // synchronize, which is harmless.
+        if self.num_streams.load(Ordering::Relaxed) == 0 {
             self.synchronize()?;
         }
         let flags = cuda_bindings::CUstream_flags_enum_CU_STREAM_NON_BLOCKING;
@@ -477,6 +506,9 @@ impl CudaContext {
             .result()?;
             cu_stream.assume_init()
         };
+        // Count the stream only once it exists: a failed create has no
+        // `CudaStream` whose drop would undo the increment.
+        self.num_streams.fetch_add(1, Ordering::Relaxed);
         Ok(Arc::new(CudaStream {
             cu_stream,
             ctx: self.clone(),
@@ -764,12 +796,65 @@ impl CudaContext {
     /// Records a driver error into the sticky error state.
     ///
     /// Used during [`Drop`] paths where returning a `Result` is not possible.
-    /// If `result` is `Err`, the raw error code is stored; subsequent
-    /// [`check_err`](Self::check_err) or [`bind_to_thread`](Self::bind_to_thread)
-    /// calls will surface it. A later store overwrites an earlier one.
+    /// If `result` is `Err`, the raw error code is stored; a later store
+    /// overwrites an earlier one, and `Ok` values are ignored.
+    ///
+    /// The recorded error is reported by the next fallible call on this
+    /// context: [`check_err`](Self::check_err) and
+    /// [`bind_to_thread`](Self::bind_to_thread) return it up front, before
+    /// doing anything else, so methods that enqueue work refuse to submit
+    /// more while an error is pending. The synchronize wrappers
+    /// ([`synchronize`](Self::synchronize), [`CudaStream::synchronize`],
+    /// [`CudaEvent::synchronize`](crate::CudaEvent::synchronize)) instead
+    /// issue their driver wait first and report the recorded error
+    /// afterwards, and `Drop` impls never consult it, so a recorded error
+    /// cannot skip a wait or leak a release. This method is public so
+    /// callers with their own `Drop` types can participate in the same
+    /// scheme; it is not a way to abort in-flight work.
     pub fn record_err<T>(&self, result: Result<T, DriverError>) {
         if let Err(err) = result {
             self.error_state.store(err.0, Ordering::Relaxed)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    /// `num_streams` counts exactly the live streams created through the
+    /// handle: it moves only when a create has succeeded and when a stream
+    /// drops, and the default stream is never counted.
+    #[test]
+    fn live_stream_count_tracks_creates_and_drops() {
+        let ctx = match CudaContext::new(0) {
+            Ok(ctx) => ctx,
+            Err(error) => {
+                eprintln!("SKIPPED: CUDA unavailable ({error:?})");
+                return;
+            }
+        };
+        let count = || ctx.num_streams.load(Ordering::Relaxed);
+        assert_eq!(count(), 0);
+
+        let default = ctx.default_stream();
+        assert_eq!(count(), 0, "the default stream is not a created stream");
+
+        let first = ctx.new_stream().expect("new_stream");
+        assert_eq!(count(), 1);
+        let forked = first.fork().expect("fork");
+        assert_eq!(count(), 2);
+        let prioritized = ctx
+            .new_stream_with_priority(0)
+            .expect("new_stream_with_priority");
+        assert_eq!(count(), 3);
+
+        drop(forked);
+        assert_eq!(count(), 2);
+        drop(prioritized);
+        drop(first);
+        drop(default);
+        assert_eq!(count(), 0);
     }
 }

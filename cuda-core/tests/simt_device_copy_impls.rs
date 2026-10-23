@@ -33,3 +33,15 @@ fn device_copy_covers_core_parity_types() {
     assert_device_copy::<MaybeUninit<u32>>();
     assert_device_copy::<Wrapping<u64>>();
 }
+
+#[test]
+fn device_copy_covers_thin_raw_pointers_only() {
+    // Thin pointers to any sized pointee, `DeviceCopy` or not: the pointee is
+    // never dereferenced, and every address is a valid pointer value.
+    assert_device_copy::<*const u8>();
+    assert_device_copy::<*mut f32>();
+    assert_device_copy::<*const String>();
+    assert_device_copy::<*mut [u32; 4]>();
+    // Fat pointers (`*const dyn Trait`, `*const [T]`) are intentionally NOT
+    // `DeviceCopy`; the compile_fail doctest on the trait pins the `dyn` case.
+}

@@ -15,8 +15,10 @@
 //! Naming: everything cuda-oxide exposed at its crate root is re-exported
 //! here, so `cuda_core::simt::X` is oxide's `cuda_core::X`. The crate root
 //! additionally re-exports every name that does not collide with the
-//! existing surface; the one collision is [`LaunchConfig`], which is
-//! reachable only through this module.
+//! existing surface. Two do collide and are reachable only through this
+//! module: [`LaunchConfig`] (the crate has its own `LaunchConfig`) and
+//! [`vmm`] (the crate's own reviewed `vmm` module forks the same cuda-oxide
+//! ancestor).
 //!
 //! Differences from the cuda-oxide original, recorded for the
 //! reconciliation:
@@ -53,9 +55,10 @@ pub use device_buffer::{DeviceBuffer, DeviceCopy};
 pub use embedded::{EmbeddedModule, EmbeddedModuleError};
 pub use event::CudaEvent;
 pub use launch::{
-    BlockRequirement, DeviceLaunchLimits, DynamicSharedMemoryRequirement, KernelLaunchConfig,
-    KernelLaunchContract, LaunchAxis, LaunchConfig, LaunchConfig1D, LaunchConfig2D, LaunchConfig3D,
-    LaunchContractError, LaunchContractSpec, LaunchDimension, PreparedLaunch,
+    BlockRequirement, CoordinateRequirement, DeviceLaunchLimits, DynamicSharedMemoryRequirement,
+    KernelLaunchConfig, KernelLaunchContract, LaunchAxis, LaunchConfig, LaunchConfig1D,
+    LaunchConfig2D, LaunchConfig3D, LaunchContractError, LaunchContractSpec, LaunchDimension,
+    PreparedLaunch,
 };
 pub use module::{ConstantHandle, CudaFunction, CudaModule};
 pub use pinned_host_buffer::PinnedHostBuffer;
@@ -152,9 +155,12 @@ pub unsafe fn launch_kernel_ex(
     stream: cuda_bindings::CUstream,
     kernel_params: &mut [*mut std::ffi::c_void],
 ) -> Result<(), DriverError> {
-    // CUlaunchAttribute_st is opaque (see cuda-bindings/build.rs) for CUDA 13.2+
-    // compatibility. C layout: { id: u32 @ 0, pad: [u8;4] @ 4, value: union @ 8 }.
-    // clusterDim is three u32 fields (x, y, z) at offset 0 within the value union.
+    // `CUlaunchAttribute_st` is a plain struct in the generated bindings:
+    // `id` at offset 0, a 4-byte pad, then the 8-aligned 64-byte `value`
+    // union at offset 8. The attribute is written through those byte offsets
+    // rather than the union's members so this does not depend on bindgen's
+    // anonymous-member naming; `clusterDim.{x,y,z}` are the first three u32s
+    // of the union, at 8/12/16.
     let mut cluster_attr: cuda_bindings::CUlaunchAttribute_st = unsafe { std::mem::zeroed() };
     unsafe {
         let base = &mut cluster_attr as *mut _ as *mut u8;
@@ -276,10 +282,9 @@ pub unsafe fn launch_kernel_cooperative(
     stream: cuda_bindings::CUstream,
     kernel_params: &mut [*mut std::ffi::c_void],
 ) -> Result<(), DriverError> {
-    // CUlaunchAttribute_st is opaque (see cuda-bindings/build.rs) for CUDA 13.2+
-    // compatibility. C layout: { id: u32 @ 0, pad: [u8;4] @ 4, value: union @ 8 }.
-    // For the COOPERATIVE attribute the value union holds a single `int cooperative`
-    // at offset 0 — set to 1 to enable, 0 to disable.
+    // Same layout as in `launch_kernel_ex` (`id` at 0, `value` union at 8);
+    // the COOPERATIVE attribute's payload is a single `int cooperative` at the
+    // start of the union: 1 enables, 0 disables.
     let mut coop_attr: cuda_bindings::CUlaunchAttribute_st = unsafe { std::mem::zeroed() };
     unsafe {
         let base = &mut coop_attr as *mut _ as *mut u8;
@@ -385,10 +390,9 @@ pub unsafe fn launch_kernel_ex_cooperative(
     stream: cuda_bindings::CUstream,
     kernel_params: &mut [*mut std::ffi::c_void],
 ) -> Result<(), DriverError> {
-    // CUlaunchAttribute_st is opaque (see cuda-bindings/build.rs) for CUDA 13.2+
-    // compatibility. C layout: { id: u32 @ 0, pad: [u8;4] @ 4, value: union @ 8 }.
-    // attrs[0]: clusterDim — three u32 fields (x, y, z) at offset 0 of the union.
-    // attrs[1]: cooperative — a single `int` at offset 0 of the union; 1 = enabled.
+    // Same layout as in `launch_kernel_ex` (`id` at 0, `value` union at 8).
+    // attrs[0]: clusterDim, three u32s at the start of the union.
+    // attrs[1]: cooperative, a single `int` at the start of the union; 1 = enabled.
     let mut attrs: [cuda_bindings::CUlaunchAttribute_st; 2] = unsafe { std::mem::zeroed() };
     unsafe {
         let base = &mut attrs[0] as *mut _ as *mut u8;

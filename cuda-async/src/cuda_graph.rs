@@ -25,6 +25,31 @@ const CU_STREAM_CAPTURE_MODE_RELAXED: sys::CUstreamCaptureMode = 2;
 /// time. To vary inputs between replays, pre-allocate an input buffer, pass it
 /// into the operation, and memcpy new data into that buffer before each launch.
 ///
+/// # Replay safety
+///
+/// A replay dereferences the device pointers recorded at capture time long
+/// after the capturing code has returned. Two runtime mechanisms keep that
+/// sound without tying the graph to the buffers by borrow:
+///
+/// - **Recorded storage stays alive.** Every device access made while
+///   recording registers the buffer's storage with the graph, so a captured
+///   buffer whose last host handle is dropped is not freed while the graph
+///   can still replay. Only the handle is gone; the data is unreachable until
+///   the graph itself is dropped.
+/// - **Each replay re-leases its accesses.** A launch registers the graph and
+///   one access lease per distinct captured storage on its own submission. A
+///   replay that conflicts with an in-flight access from another stream is
+///   rejected before it is enqueued, and an operation on another stream that
+///   conflicts with an in-flight replay is rejected the same way. Work on the
+///   same stream stays stream-ordered. A launch future forgotten mid-flight
+///   leaks the graph and those leases rather than releasing them early.
+///
+/// What the runtime does not do is order host-side reads for you. The output
+/// `T` from [`take_output`](CudaGraph::take_output) refers to buffers whose
+/// contents exist only once a replay has completed; read them through a
+/// device operation ordered after the launch, on the same stream or after
+/// synchronizing the launch stream.
+///
 /// # Examples
 ///
 /// ```rust,ignore
@@ -252,6 +277,11 @@ impl<T: Send> CudaGraph<T> {
     ///
     /// Returns `Some(T)` on the first call, `None` thereafter. Use this to
     /// recover intermediate buffers or inspect the initial result.
+    ///
+    /// The handle is valid immediately (shapes, strides, device pointers),
+    /// but the buffers behind it hold meaningful data only after a replay has
+    /// completed. The graph keeps their storage alive independently of this
+    /// handle; see [Replay safety](CudaGraph#replay-safety).
     pub fn take_output(&mut self) -> Option<T> {
         self.output.take()
     }
@@ -335,7 +365,11 @@ impl<T: Send> CudaGraph<T> {
     /// ```
     ///
     /// The launch shares ownership of the instantiated graph, so it stays
-    /// valid even if the `CudaGraph` is dropped first.
+    /// valid even if the `CudaGraph` is dropped first. When executed, it
+    /// registers the graph and a lease on every captured buffer with its
+    /// submission, so a conflicting in-flight access on another stream makes
+    /// the launch fail instead of racing; see
+    /// [Replay safety](CudaGraph#replay-safety).
     ///
     /// Operations issued via [`update`](CudaGraph::update) are guaranteed to
     /// complete before the graph runs **only when the launch is executed on
@@ -492,6 +526,18 @@ impl IntoFuture for GraphLaunch {
 /// pre-allocated and passed in via borrows. No tensor created inside
 /// the scope means no tensor dropped inside the scope.
 ///
+/// ## Replay safety after capture
+///
+/// The two mechanisms above make *recording* safe. Replays happen later,
+/// after `record`'s borrows have ended, and are covered by the runtime
+/// contract described under [`CudaGraph`](CudaGraph#replay-safety): every
+/// storage recorded here stays alive while the graph can replay, and each
+/// launch re-leases those accesses, so a conflicting in-flight access on
+/// another stream is rejected rather than raced. Dropping a buffer's host
+/// handle after the scope therefore frees nothing the graph still uses; it
+/// only makes the data unreachable, so keep a handle to whatever you need to
+/// read back or refresh with [`update`](CudaGraph::update).
+///
 /// # What happens if you call other operations inside the closure
 ///
 /// While `s.record(op)` is the intended API, other operations inside
@@ -549,7 +595,9 @@ impl CudaGraph<()> {
     /// next.
     ///
     /// Pre-allocate all buffers before calling this method — the graph
-    /// replays into the same device pointers.
+    /// replays into the same device pointers. The graph retains the storage
+    /// of every buffer it records, so a buffer you will not read or refresh
+    /// again may be dropped after capture without affecting later replays.
     ///
     /// # Example
     ///

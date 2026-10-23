@@ -1,0 +1,43 @@
+error[E0277]: the trait bound `BFloat16: TensorElement<f16>` is not satisfied
+  --> tests/compile_fail/strided_tensor_storage_mismatch.rs:11:19
+   |
+11 |     let _invalid: Option<StridedTensor<'_, BFloat16, Strided1D, f16>> = None;
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `TensorElement<f16>` is not implemented for `BFloat16`
+   |
+help: the trait `TensorElement<f16>` is not implemented for `BFloat16`
+      but trait `TensorElement<BFloat16>` is implemented for it
+  --> src/numeric.rs
+   |
+   | impl TensorElement<BFloat16> for BFloat16 {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for that trait implementation, expected `BFloat16`, found `f16`
+note: required by a bound in `StridedTensor`
+  --> src/tensor/partition.rs
+   |
+   | pub struct StridedTensor<'a, Element, Layout = Strided1D, Storage = Element>
+   |            ------------- required by a bound in this struct
+   | where
+   |     Element: TensorElement<Storage>,
+   |              ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `StridedTensor`
+
+error[E0277]: the trait bound `BFloat16: TensorElement<f16>` is not satisfied
+  --> tests/compile_fail/strided_tensor_storage_mismatch.rs:11:73
+   |
+11 |     let _invalid: Option<StridedTensor<'_, BFloat16, Strided1D, f16>> = None;
+   |                                                                         ^^^^ the trait `TensorElement<f16>` is not implemented for `BFloat16`
+   |
+help: the trait `TensorElement<f16>` is not implemented for `BFloat16`
+      but trait `TensorElement<BFloat16>` is implemented for it
+  --> src/numeric.rs
+   |
+   | impl TensorElement<BFloat16> for BFloat16 {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for that trait implementation, expected `BFloat16`, found `f16`
+note: required by a bound in `StridedTensor`
+  --> src/tensor/partition.rs
+   |
+   | pub struct StridedTensor<'a, Element, Layout = Strided1D, Storage = Element>
+   |            ------------- required by a bound in this struct
+   | where
+   |     Element: TensorElement<Storage>,
+   |              ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `StridedTensor`

@@ -1,0 +1,10 @@
+[package]
+name = "cute-layout"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Coordinate-to-memory mapping and validation for CuTe-style GPU tiles"
+
+[dependencies]

@@ -81,6 +81,11 @@ pub fn translate_place(
     loc: Location,
 ) -> TranslationResult<(Value, Option<Ptr<Operation>>)> {
     let place = &*strip_shared_ptr_field_projections(body, place);
+    if place.projection.is_empty()
+        && let Some(value) = value_map.get_direct_value(place.local)
+    {
+        return Ok((value, prev_op));
+    }
     match classify_place_read_strategy(ctx, place, value_map)? {
         PlaceReadStrategy::Address => {
             if let Some((value, last_op)) = translate_place_load_from_address(

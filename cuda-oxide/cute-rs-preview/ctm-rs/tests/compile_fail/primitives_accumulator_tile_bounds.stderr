@@ -1,0 +1,24 @@
+error[E0080]: evaluation panicked: accumulator fragment out of bounds
+ --> $RUST/core/src/panic.rs
+  |
+  |           $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `ctm_rs::mma::AccumulatorTile16x8::<2, 8>::fragment::<2, 0>::{constant#0}` failed here
+  |
+ ::: src/mma.rs
+  |
+  | /             assert!(
+  | |                 ROW < ROWS && COL < COLS,
+  | |                 "accumulator fragment out of bounds"
+  | |             )
+  | |_____________- in this macro invocation
+
+note: erroneous constant encountered
+ --> src/mma.rs
+  |
+  | /         const {
+  | |             assert!(
+  | |                 ROW < ROWS && COL < COLS,
+  | |                 "accumulator fragment out of bounds"
+  | |             )
+  | |         }
+  | |_________^

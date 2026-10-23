@@ -524,7 +524,7 @@ N_COLS must be a power of 2 in the range [32, 512].
 ### Typed Synchronous
 
 ```rust
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 
 let ctx = CudaContext::new(0).unwrap();
@@ -545,7 +545,7 @@ unsafe {
 ### Typed Async
 
 ```rust
-use cuda_async::simt::device_operation::DeviceOperation;
+use cuda_async::device_operation::DeviceOperation;
 
 let module = kernels::load_async(0)?;
 // SAFETY: this is 1D, buffers contain n elements, and module/scheduler share a context.

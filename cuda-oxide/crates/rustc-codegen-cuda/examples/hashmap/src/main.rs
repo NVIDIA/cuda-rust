@@ -27,7 +27,7 @@
 
 use std::sync::Arc;
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
 use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU64};
 use cuda_device::{DisjointSlice, kernel, thread};
@@ -273,7 +273,7 @@ impl GpuHashMap {
 
         let slots = DeviceBuffer::<u64>::zeroed(stream, capacity)?;
         unsafe {
-            cuda_core::simt::memory::memset_d8_async(
+            cuda_core::memory::memset_d8_async(
                 slots.cu_deviceptr(),
                 0xFF,
                 slots.num_bytes(),
@@ -285,7 +285,7 @@ impl GpuHashMap {
         // through a shared `&[DeviceAtomicU64]` (issue #151). `DeviceAtomicU64`
         // is `#[repr(transparent)]` over `u64`, so the pointer, length, and the
         // `0xFF`-filled bytes are all unchanged.
-        let slots = slots.cast_elem::<DeviceAtomicU64>();
+        let slots = slots.wrap_elem::<DeviceAtomicU64>();
 
         Ok(Self { slots, capacity })
     }

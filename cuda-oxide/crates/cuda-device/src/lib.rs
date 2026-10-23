@@ -10,6 +10,8 @@
 // both here and in downstream device crates.
 extern crate self as cuda_device;
 
+pub use cuda_repr::DeviceRepr;
+
 pub use cuda_macros::{
     cluster_launch, constant, convergent, cooperative_launch, cuda_module, device, gpu_printf,
     kernel, launch_bounds, launch_contract, ptx_asm, pure, readonly, tile_export,

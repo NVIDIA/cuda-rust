@@ -1,0 +1,18 @@
+error[E0308]: arguments to this function are incorrect
+  --> tests/compile_fail/primitives_bf16_mma_roles.rs:10:14
+   |
+10 |     unsafe { mma_bf16(Accumulator16x8::zero(), b, a) };
+   |              ^^^^^^^^                          -  - expected `Bf16B`, found `Bf16A`
+   |                                                |
+   |                                                expected `Bf16A`, found `Bf16B`
+   |
+note: function defined here
+  --> src/mma.rs
+   |
+   | pub unsafe fn mma_bf16(c: Accumulator16x8, a: Bf16A, b: Bf16B) -> Accumulator16x8 {
+   |               ^^^^^^^^
+help: swap these arguments
+   |
+10 -     unsafe { mma_bf16(Accumulator16x8::zero(), b, a) };
+10 +     unsafe { mma_bf16(Accumulator16x8::zero(), a, b) };
+   |

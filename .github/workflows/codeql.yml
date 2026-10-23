@@ -15,7 +15,8 @@ on:
       - '**/*.sh'
       - '**/*.py'
   pull_request:
-    branches: [main]
+    # Include release PRs and stacks targeting prerequisite copy-pr-bot mirrors.
+    branches: [main, "release/v*", "pull-request/[0-9]+"]
     paths:
       - '**/*.rs'
       - '**/Cargo.toml'

@@ -26,7 +26,7 @@ fn main() -> Result<(), Error> {
     }
 
     // Create a context. Device 0 is associated with the context.
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     // Create a new stream on which we run CUDA operations.
     let stream = device.new_stream()?;
     let a = 2.0;

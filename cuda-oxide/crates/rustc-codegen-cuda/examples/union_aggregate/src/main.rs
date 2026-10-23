@@ -11,7 +11,7 @@
 //! passing a union through an ordinary device function. It also checks that
 //! an over-aligned union keeps its size and array stride.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;

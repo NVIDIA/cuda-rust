@@ -168,6 +168,39 @@ pub fn cluster_idx() -> u32 {
     x + y * nx + z * nx * ny
 }
 
+/// Get cluster's X index within the grid.
+///
+/// This is the cluster's coordinate within the grid, analogous to how
+/// `blockIdx.x` is the block's coordinate within the grid.
+///
+/// # PTX
+///
+/// Lowers to: `mov.u32 %r, %clusterid.x`
+#[inline(always)]
+pub fn cluster_idx_x() -> u32 {
+    __cluster_idxX()
+}
+
+/// Get cluster's Y index within the grid.
+///
+/// # PTX
+///
+/// Lowers to: `mov.u32 %r, %clusterid.y`
+#[inline(always)]
+pub fn cluster_idx_y() -> u32 {
+    __cluster_idxY()
+}
+
+/// Get cluster's Z index within the grid.
+///
+/// # PTX
+///
+/// Lowers to: `mov.u32 %r, %clusterid.z`
+#[inline(always)]
+pub fn cluster_idx_z() -> u32 {
+    __cluster_idxZ()
+}
+
 /// Get total number of clusters in the grid.
 ///
 /// # PTX
@@ -176,6 +209,39 @@ pub fn cluster_idx() -> u32 {
 #[inline(always)]
 pub fn num_clusters() -> u32 {
     __cluster_grid_dimX() * __cluster_grid_dimY() * __cluster_grid_dimZ()
+}
+
+/// Get number of clusters in the grid's X dimension.
+///
+/// This is the grid's size in clusters, analogous to how `gridDim.x` is the
+/// grid's size in blocks.
+///
+/// # PTX
+///
+/// Lowers to: `mov.u32 %r, %nclusterid.x`
+#[inline(always)]
+pub fn cluster_grid_dim_x() -> u32 {
+    __cluster_grid_dimX()
+}
+
+/// Get number of clusters in the grid's Y dimension.
+///
+/// # PTX
+///
+/// Lowers to: `mov.u32 %r, %nclusterid.y`
+#[inline(always)]
+pub fn cluster_grid_dim_y() -> u32 {
+    __cluster_grid_dimY()
+}
+
+/// Get number of clusters in the grid's Z dimension.
+///
+/// # PTX
+///
+/// Lowers to: `mov.u32 %r, %nclusterid.z`
+#[inline(always)]
+pub fn cluster_grid_dim_z() -> u32 {
+    __cluster_grid_dimZ()
 }
 
 // =============================================================================

@@ -21,7 +21,7 @@
 //! Build and run with:
 //!   cargo oxide run constant_memory_coeffs
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{ConstantMemory, DisjointSlice, constant, cuda_module, kernel, thread};
 

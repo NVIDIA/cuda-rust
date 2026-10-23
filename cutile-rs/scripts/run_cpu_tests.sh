@@ -45,6 +45,10 @@ run_step \
     "cutile doc tests" \
     cargo test -p cutile --doc
 
+run_step \
+    "cutile compile-fail API contracts" \
+    cargo test -p cutile --test ui
+
 for test_target in \
     basics_and_inlining \
     binary_math_ops \
@@ -57,6 +61,7 @@ for test_target in \
     error_quality \
     flash_attention_compile \
     global_memory \
+    generated_source_locations \
     integer_ops \
     kernel_compiler \
     load_tile_like_examples \
@@ -80,6 +85,10 @@ do
         "cutile CPU integration test ${test_target}" \
         cargo test -p cutile --test "$test_target"
 done
+
+run_step \
+    "cutile generated source locations through the assembler" \
+    cargo test -p cutile --test generated_source_locations generated_locations_survive_assembly -- --ignored
 
 run_step \
     "cutile compile-only control-flow regressions" \
@@ -121,9 +130,10 @@ run_step \
 run_step \
     "cuda-core compile-time contract tests" \
     host_cargo test -p cuda-core \
-    --test simt_device_copy_derive \
-    --test simt_device_copy_impls \
-    --test simt_launch_contract_types
+    --test device_copy_derive \
+    --test device_copy_impls \
+    --test device_buffer_casts \
+    --test launch_contract_types
 
 # Builds the compile_fail soundness contracts (non-Send launch storage,
 # brand/rank rejection, buffer aliasing) that no other target covers.

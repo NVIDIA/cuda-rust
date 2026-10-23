@@ -105,6 +105,9 @@ Run `nix develop` from the relevant component.
   notice plus `Apache-2.0`, in the form shown under "License Headers" in
   `CONTRIBUTING.md`. Preserve existing and third-party notices.
   `cuda-oxide/scripts/check-spdx-headers.sh` enforces the policy.
+- **Create new branches from the user's fork of this repository.** Synchronize
+  the fork's `main` with upstream before branching. For stacked work, base the
+  next branch on the preceding feature branch in that same fork.
 - **Never push to the canonical upstream repository, `NVIDIA/cuda-rust`.
   Treat it as read-only.** Branch and push to a fork. Before pushing, run
   `git remote -v` and confirm the push remote is a fork of the base, comparing

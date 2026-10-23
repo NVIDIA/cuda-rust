@@ -285,6 +285,9 @@
 //! | `CUDA_OXIDE_DUMP_MIR`             | Dump the `dialect-mir` module        |
 //! | `CUDA_OXIDE_DUMP_LLVM`            | Dump the LLVM dialect module         |
 //! | `CUDA_OXIDE_PTX_DIR`              | Override PTX output directory        |
+//! | `CUDA_OXIDE_MLIR_OUTPUT`           | Write prepared CUTLASS MLIR          |
+//! | `CUDA_OXIDE_DEVICE_BACKEND`        | Select `native` or `cutlass-mlir`    |
+//! | `CUDA_OXIDE_CUTLASS_OPT_LEVEL`     | Official compiler level 2 or 3 (default 3) |
 //! | `CUDA_OXIDE_TARGET`               | Override GPU target (e.g., `sm_90a`) |
 //! | `CUDA_OXIDE_DEVICE_CODEGEN_CRATE` | Filter device owner crate names      |
 //!
@@ -375,7 +378,7 @@ static ARTIFACT_OBJECT_COUNTER: AtomicU64 = AtomicU64::new(0);
 ///
 /// All configuration is read from environment variables at backend load time.
 /// This avoids the need to thread configuration through rustc's argument parsing.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct CudaCodegenConfig {
     /// Print detailed compilation progress to stderr.
     pub verbose: bool,
@@ -387,6 +390,10 @@ pub struct CudaCodegenConfig {
     pub dump_llvm_dialect: bool,
     /// Override PTX output directory (defaults to current directory).
     pub ptx_output_dir: Option<std::path::PathBuf>,
+    /// Exact output path for the optional prepared CUTLASS MLIR module.
+    pub mlir_output: Option<std::path::PathBuf>,
+    /// Parsed device backend selection, or the configuration error to report.
+    pub device_backend: Result<mir_importer::DeviceBackend, String>,
     /// When set, emit device code only for these normalized local crate names.
     /// Host code still goes through the wrapped LLVM backend for every crate.
     pub device_codegen_crates: Option<BTreeSet<String>>,
@@ -402,7 +409,11 @@ impl CudaCodegenConfig {
     /// | `CUDA_OXIDE_DUMP_MIR`                | `dump_mir_dialect`       |
     /// | `CUDA_OXIDE_DUMP_LLVM`               | `dump_llvm_dialect`      |
     /// | `CUDA_OXIDE_PTX_DIR`                 | `ptx_output_dir`         |
-    /// | `CUDA_OXIDE_DEVICE_CODEGEN_CRATE`  | `device_codegen_crates`  |
+    /// | `CUDA_OXIDE_MLIR_OUTPUT`             | `mlir_output`            |
+    /// | `CUDA_OXIDE_DEVICE_BACKEND`          | `device_backend`         |
+    /// | `CUDA_OXIDE_CUTLASS_COMPILER`        | `device_backend`         |
+    /// | `CUDA_OXIDE_MLIR_PROFILE`            | `device_backend`         |
+    /// | `CUDA_OXIDE_DEVICE_CODEGEN_CRATE`    | `device_codegen_crates`  |
     pub fn from_env() -> Self {
         Self {
             verbose: std::env::var("CUDA_OXIDE_VERBOSE").is_ok(),
@@ -412,6 +423,8 @@ impl CudaCodegenConfig {
             ptx_output_dir: std::env::var("CUDA_OXIDE_PTX_DIR")
                 .ok()
                 .map(std::path::PathBuf::from),
+            mlir_output: std::env::var_os("CUDA_OXIDE_MLIR_OUTPUT").map(std::path::PathBuf::from),
+            device_backend: device_backend_from_env(),
             device_codegen_crates: parse_device_codegen_crates(
                 std::env::var(reserved_oxide_symbols::DEVICE_CODEGEN_CRATE_ENV)
                     .ok()
@@ -425,6 +438,93 @@ impl CudaCodegenConfig {
             .as_ref()
             .is_none_or(|owners| owners.contains(&normalize_device_crate_name(crate_name)))
     }
+}
+
+impl Default for CudaCodegenConfig {
+    fn default() -> Self {
+        Self {
+            verbose: false,
+            dump_rustc_mir: false,
+            dump_mir_dialect: false,
+            dump_llvm_dialect: false,
+            ptx_output_dir: None,
+            mlir_output: None,
+            device_backend: Ok(mir_importer::DeviceBackend::Native),
+            device_codegen_crates: None,
+        }
+    }
+}
+
+fn device_backend_from_env() -> Result<mir_importer::DeviceBackend, String> {
+    let selector = match std::env::var("CUDA_OXIDE_DEVICE_BACKEND") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err("CUDA_OXIDE_DEVICE_BACKEND is not valid Unicode".to_owned());
+        }
+    };
+    let profile = match std::env::var("CUDA_OXIDE_MLIR_PROFILE") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err("CUDA_OXIDE_MLIR_PROFILE is not valid Unicode".to_owned());
+        }
+    };
+    let mut backend = parse_device_backend(
+        selector.as_deref(),
+        std::env::var_os("CUDA_OXIDE_CUTLASS_COMPILER").map(std::path::PathBuf::from),
+        profile.as_deref(),
+    )?;
+    if let mir_importer::DeviceBackend::CutlassMlir(config) = &mut backend {
+        match std::env::var("CUDA_OXIDE_CUTLASS_OPT_LEVEL") {
+            Ok(value) => {
+                config.optimization_level = value
+                    .parse()
+                    .map_err(|_| "CUDA_OXIDE_CUTLASS_OPT_LEVEL must be 2 or 3")?;
+                if !matches!(config.optimization_level, 2 | 3) {
+                    return Err("CUDA_OXIDE_CUTLASS_OPT_LEVEL must be 2 or 3".into());
+                }
+            }
+            Err(std::env::VarError::NotPresent) => {}
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err("CUDA_OXIDE_CUTLASS_OPT_LEVEL is not valid Unicode".into());
+            }
+        }
+    }
+    Ok(backend)
+}
+
+fn parse_device_backend(
+    selector: Option<&str>,
+    compiler_library: Option<std::path::PathBuf>,
+    profile: Option<&str>,
+) -> Result<mir_importer::DeviceBackend, String> {
+    match selector.map(str::trim).filter(|value| !value.is_empty()) {
+        None | Some("native") => Ok(mir_importer::DeviceBackend::Native),
+        Some("cutlass-mlir") => {
+            let compiler_library = compiler_library
+                .filter(|path| !path.as_os_str().is_empty())
+                .ok_or_else(|| {
+                    "CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir requires CUDA_OXIDE_CUTLASS_COMPILER=<absolute path to libCutlassCompiler.so>"
+                        .to_owned()
+                })?;
+            let mut config = mir_importer::CutlassBackendConfig::new(compiler_library);
+            if let Some(profile) = profile {
+                config.profile = profile.to_owned();
+            }
+            Ok(mir_importer::DeviceBackend::CutlassMlir(config))
+        }
+        Some(value) => Err(format!(
+            "unknown CUDA_OXIDE_DEVICE_BACKEND value {value:?}; expected `native` or `cutlass-mlir`. CUDA_OXIDE_BACKEND is intentionally not used here because cargo-oxide reserves it for the rustc backend library path"
+        )),
+    }
+}
+
+fn device_backend_conflicts_with_materialization(
+    backend: &mir_importer::DeviceBackend,
+    materialization_requested: bool,
+) -> bool {
+    materialization_requested && matches!(backend, mir_importer::DeviceBackend::CutlassMlir(_))
 }
 
 fn normalize_device_crate_name(name: &str) -> String {
@@ -523,6 +623,11 @@ impl CodegenBackend for CudaCodegenBackend {
         // This is necessary because we use tcx.def_path_str() and other functions that
         // trigger trimmed_def_paths. rust-gpu uses the same pattern.
         with_no_trimmed_paths!({
+            let device_backend = self.config.device_backend.clone().unwrap_or_else(|error| {
+                tcx.dcx().fatal(format!(
+                    "[rustc_codegen_cuda] Invalid device backend configuration: {error}"
+                ))
+            });
             // Step 1: Analyze for device code
             let mono_partitions = tcx.collect_and_partition_mono_items(());
             let kernel_count = collector::count_kernels_in_cgus(tcx, mono_partitions.codegen_units);
@@ -616,6 +721,14 @@ impl CodegenBackend for CudaCodegenBackend {
                             "[rustc_codegen_cuda] Invalid cubin materialization request: {error}"
                         ))
                     });
+                if device_backend_conflicts_with_materialization(
+                    &device_backend,
+                    materialization_request.is_some(),
+                ) {
+                    tcx.dcx().fatal(
+                        "[rustc_codegen_cuda] CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir already produces a final cubin and cannot be combined with cargo oxide --materialize-cubin; choose exactly one cubin producer",
+                    );
+                }
                 if self.config.verbose {
                     eprintln!("[rustc_codegen_cuda] Compiling device code via cuda-oxide...");
                 }
@@ -659,6 +772,8 @@ impl CodegenBackend for CudaCodegenBackend {
                             std::env::current_dir().unwrap_or_else(|_| ".".into())
                         }),
                         output_name: tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE).to_string(),
+                        mlir_output: self.config.mlir_output.clone(),
+                        device_backend: device_backend.clone(),
                         verbose: self.config.verbose,
                         dump_rustc_mir: self.config.dump_rustc_mir,
                         dump_mir_dialect: self.config.dump_mir_dialect,
@@ -1272,6 +1387,76 @@ mod tests {
         // Width is reported first when both are wrong.
         let both = host_target_supported(32, Endian::Big).unwrap_err();
         assert!(both.contains("32-bit"), "{both}");
+    }
+
+    #[test]
+    fn device_backend_selector_keeps_native_as_the_explicit_default() {
+        assert_eq!(
+            parse_device_backend(None, None, None).unwrap(),
+            mir_importer::DeviceBackend::Native
+        );
+        assert_eq!(
+            parse_device_backend(Some("native"), None, None).unwrap(),
+            mir_importer::DeviceBackend::Native
+        );
+    }
+
+    #[test]
+    fn cutlass_selector_requires_the_official_compiler_library() {
+        let error = parse_device_backend(Some("cutlass-mlir"), None, None).unwrap_err();
+        assert!(error.contains("CUDA_OXIDE_CUTLASS_COMPILER"));
+
+        let backend = parse_device_backend(
+            Some("cutlass-mlir"),
+            Some("/opt/cutlass/lib/libCutlassCompiler.so".into()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            backend,
+            mir_importer::DeviceBackend::CutlassMlir(mir_importer::CutlassBackendConfig::new(
+                "/opt/cutlass/lib/libCutlassCompiler.so".into(),
+            ))
+        );
+    }
+
+    #[test]
+    fn device_backend_selector_rejects_unknown_values() {
+        let error = parse_device_backend(Some("unknown"), None, None).unwrap_err();
+        assert!(error.contains("expected `native` or `cutlass-mlir`"));
+        assert!(error.contains("CUDA_OXIDE_BACKEND"));
+    }
+
+    #[test]
+    fn device_backend_preserves_explicit_primitives_profile() {
+        let backend = parse_device_backend(
+            Some("cutlass-mlir"),
+            Some("/opt/cutlass/lib/libCutlassCompiler.so".into()),
+            Some("cutlass-primitives-mlir22"),
+        )
+        .unwrap();
+        assert!(
+            matches!(backend, mir_importer::DeviceBackend::CutlassMlir(c)
+            if c.profile == "cutlass-primitives-mlir22")
+        );
+    }
+
+    #[test]
+    fn cutlass_backend_conflicts_with_a_second_cubin_producer() {
+        let native = mir_importer::DeviceBackend::Native;
+        let cutlass =
+            mir_importer::DeviceBackend::CutlassMlir(mir_importer::CutlassBackendConfig::new(
+                "/opt/cutlass/lib/libCutlassCompiler.so".into(),
+            ));
+        assert!(!device_backend_conflicts_with_materialization(
+            &native, true
+        ));
+        assert!(!device_backend_conflicts_with_materialization(
+            &cutlass, false
+        ));
+        assert!(device_backend_conflicts_with_materialization(
+            &cutlass, true
+        ));
     }
 
     #[test]

@@ -16,7 +16,8 @@ on:
       - 'cuda-oxide/scripts/check-reserved-prefixes.sh'
       - '.github/workflows/naming-guard.yml'
   pull_request:
-    branches: [main]
+    # Include release PRs and stacks targeting prerequisite copy-pr-bot mirrors.
+    branches: [main, "release/v*", "pull-request/[0-9]+"]
     paths:
       - 'cuda-oxide/crates/**'
       - 'cuda-oxide/scripts/check-reserved-prefixes.sh'

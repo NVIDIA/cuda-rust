@@ -32,7 +32,7 @@ fn launch(
     // The spelling chose the three-word (ptr, len, width) marshalling, but
     // the resolved device slice is two words. The ABI bound must reject the
     // call before a mis-shaped packet can exist.
-    let cfg = cuda_core::simt::LaunchConfig {
+    let cfg = cuda_core::LaunchConfig {
         grid_dim: (1, 1, 1),
         block_dim: (64, 1, 1),
         shared_mem_bytes: 0,

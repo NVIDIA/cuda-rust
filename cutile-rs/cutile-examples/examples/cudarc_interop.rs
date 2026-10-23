@@ -20,7 +20,7 @@
 
 use cuda_async::device_buffer::DeviceAllocation;
 use cuda_core::sys::CUdeviceptr;
-use cuda_core::{free_async, malloc_async, memcpy_dtoh_async, memcpy_htod_async, Device, Stream};
+use cuda_core::{free_async, malloc_async, memcpy_dtoh_async, memcpy_htod_async, Context, Stream};
 use cutile::error::Error;
 use cutile::prelude::*;
 use std::sync::Arc;
@@ -43,7 +43,7 @@ mod foreign {
             Arc::new(Self {
                 dptr,
                 len_bytes,
-                device_id: stream.device().ordinal(),
+                device_id: stream.context().ordinal(),
                 stream: stream.clone(),
             })
         }
@@ -61,6 +61,9 @@ mod foreign {
     // SAFETY: `dptr` is a live `len_bytes` device allocation on `device_id` for
     // this buffer's whole lifetime (it is freed only in `Drop`).
     unsafe impl DeviceAllocation for Buffer {
+        fn context(&self) -> std::sync::Arc<cuda_core::Context> {
+            self.stream.context().clone()
+        }
         fn device_ptr(&self) -> CUdeviceptr {
             self.dptr
         }
@@ -97,7 +100,7 @@ fn main() -> Result<(), Error> {
     const N: usize = 1024;
     const TILE: usize = 128;
 
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
 
     // The framework allocates and owns three buffers, and fills the inputs.

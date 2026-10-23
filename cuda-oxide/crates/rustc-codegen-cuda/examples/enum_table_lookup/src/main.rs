@@ -41,7 +41,7 @@
 //!
 //! Run: `cargo oxide run enum_table_lookup`
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
 use cuda_device::cuda_module;
 

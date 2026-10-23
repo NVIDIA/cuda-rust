@@ -30,7 +30,7 @@
 //! Usage:
 //!   cargo oxide run shared_ptr_api
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::shared::cvta_generic_to_shared_u32;
 use cuda_device::{DynamicSharedArray, SharedArray, SharedPtr, cuda_module, kernel, thread};

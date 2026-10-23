@@ -10,7 +10,7 @@ use cuda_async::device_operation::value;
 use cuda_async::error::DeviceError;
 
 fn has_gpu() -> bool {
-    cuda_core::Device::device_count()
+    cuda_core::Context::device_count()
         .map(|n| n > 0)
         .unwrap_or(false)
 }
@@ -23,7 +23,7 @@ fn concurrent_capture_same_context() {
         return;
     }
 
-    let device = cuda_core::Device::new(0).unwrap();
+    let device = cuda_core::Context::new(0).unwrap();
     let stream_a = device.new_stream().unwrap();
     let stream_b = device.new_stream().unwrap();
 
@@ -66,7 +66,7 @@ fn new_stream_during_capture_on_another_thread() {
         return;
     }
 
-    let device_a = cuda_core::Device::new(0).unwrap();
+    let device_a = cuda_core::Context::new(0).unwrap();
     let stream_a = device_a.new_stream().unwrap();
 
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
@@ -86,7 +86,7 @@ fn new_stream_during_capture_on_another_thread() {
 
     let handle_b = std::thread::spawn(move || -> Result<(), DeviceError> {
         barrier_b.wait();
-        let device_b = cuda_core::Device::new(0).unwrap();
+        let device_b = cuda_core::Context::new(0).unwrap();
         let _stream = device_b.new_stream()?;
         Ok(())
     });

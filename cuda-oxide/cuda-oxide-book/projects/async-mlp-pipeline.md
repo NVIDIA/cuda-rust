@@ -76,8 +76,8 @@ The `Cargo.toml` pulls in exactly the crates we need:
 ```toml
 [dependencies]
 cuda-device   = { path = "../../../cuda-device" }       # #[kernel], DisjointSlice, thread::*
-cuda-core     = "0.3.1"                                 # shared with cutile-rs: CudaModule, simt::LaunchConfig
-cuda-async    = "0.3.1"                                 # shared with cutile-rs: simt::DeviceOperation, zip!, and_then
+cuda-core     = "0.3.1"                                 # shared with cutile-rs: CudaModule, LaunchConfig
+cuda-async    = "0.3.1"                                 # shared with cutile-rs: DeviceOp, zip!, and_then
 tokio       = { version = "1", features = ["rt", "macros"] }
 ```
 
@@ -207,81 +207,45 @@ A few patterns that recur across all three kernels:
 
 ## Bridging host and device
 
-Three helper functions wrap raw CUDA driver calls into `DeviceOperation`
-values. They use `with_context` to receive the scheduler's stream at
-execution time — not at the call site. This is the key insight: you build
-the recipe now, the scheduler picks the stream later.
-
-### h2d — host to device
+The shared `DeviceBuffer` and `DeviceBox` wrappers transfer ownership without
+copying device memory. A host-to-device source must be retained independently
+of the operation's output; host combinators can discard outputs before GPU
+completion. An ordinary host `Vec` is returned only after its copy completes.
 
 ```rust
 fn h2d(host_data: Vec<f32>) -> impl DeviceOperation<Output = DeviceBox<[f32]>> {
     device_operation::with_context(move |ctx| {
-        let stream = ctx.get_cuda_stream();
-        let n = host_data.len();
-        let num_bytes = n * mem::size_of::<f32>();
-        unsafe {
-            let dptr = malloc_async(stream.cu_stream(), num_bytes).unwrap();
-            memcpy_htod_async(dptr, host_data.as_ptr(), num_bytes, stream.cu_stream())
-                .unwrap();
-            value(DeviceBox::from_raw_parts(dptr, n, ctx.get_device_id()))
-        }
+        let host_data = Arc::new(host_data);
+        // Retain before DMA: dropping or forgetting the operation must not
+        // release the source while the device still reads it.
+        ctx.retain(host_data.clone()).unwrap();
+        let buffer = unsafe {
+            DeviceBuffer::from_host_async_unchecked(ctx.get_cuda_stream(), &host_data)
+        }.unwrap();
+        value(DeviceBox::from_buffer(buffer))
     })
 }
-```
 
-The `host_data` vector is captured by `move`. The closure runs when the
-scheduler executes the operation — at that point it has a real CUDA stream.
-`malloc_async` and `memcpy_htod_async` are stream-ordered, so the allocation
-and copy are serialized on the scheduler's chosen stream.
-
-### zeros — zero-initialized device buffer
-
-```rust
+/// Zero-initialization and later kernels share the same stream and storage.
 fn zeros(n: usize) -> impl DeviceOperation<Output = DeviceBox<[f32]>> {
     device_operation::with_context(move |ctx| {
-        let stream = ctx.get_cuda_stream();
-        let num_bytes = n * mem::size_of::<f32>();
-        unsafe {
-            let dptr = malloc_async(stream.cu_stream(), num_bytes).unwrap();
-            memset_d8_async(dptr, 0, num_bytes, stream.cu_stream()).unwrap();
-            value(DeviceBox::from_raw_parts(dptr, n, ctx.get_device_id()))
-        }
+        value(DeviceBox::from_buffer(DeviceBuffer::zeroed(ctx.get_cuda_stream(), n).unwrap()))
     })
 }
-```
 
-Same pattern as `h2d`, but `memset_d8_async` instead of `memcpy`. The GEMM
-kernel uses `beta = 0.0` so the initial contents do not matter, but zeroing
-is defensive.
-
-### d2h — device to host
-
-```rust
+/// Exposing an ordinary Vec to host combinators requires completion before
+/// returning it. The shared transfer helper also handles partial-error cleanup.
 fn d2h(dev: DeviceBox<[f32]>) -> impl DeviceOperation<Output = Vec<f32>> {
     device_operation::with_context(move |ctx| {
-        let stream = ctx.get_cuda_stream();
-        let n = dev.len();
-        let num_bytes = n * mem::size_of::<f32>();
-        let mut host = vec![0.0f32; n];
-        unsafe {
-            memcpy_dtoh_async(
-                host.as_mut_ptr(), dev.cu_deviceptr(),
-                num_bytes, stream.cu_stream(),
-            ).unwrap();
-        }
-        let _ = &dev;
-        value(host)
+        value(dev.into_buffer().to_host_vec(ctx.get_cuda_stream()).unwrap())
     })
 }
+
 ```
 
-The `let _ = &dev;` line looks like a no-op, but it keeps `dev` alive in the
-closure until the stream synchronizes. Without it, `dev` would be dropped
-after the `memcpy_dtoh_async` call but before the stream finishes the copy —
-a classic use-after-free on the device side.
-
----
+These helpers use the execution context's stream, so their GPU work remains
+ordered with subsequent Tile or SIMT launches. The `DeviceBox` conversions
+preserve the allocation owner, CUDA context and access tracker.
 
 ## Composing the pipeline
 
@@ -339,7 +303,7 @@ copies.
 This is where the magic lives. For each batch, we build a four-stage chain:
 
 ```rust
-    use cuda_async::simt::launch::{AsyncKernelLaunchBuilder, OwnedAsyncKernelLaunch};
+    use cuda_async::launch::{AsyncKernelLaunchBuilder, OwnedAsyncKernelLaunch};
 
     let pipeline = zip!(h2d(batch_data), zeros(DIM * DIM), zeros(DIM))
         .and_then(move |(input, hidden, output)| {

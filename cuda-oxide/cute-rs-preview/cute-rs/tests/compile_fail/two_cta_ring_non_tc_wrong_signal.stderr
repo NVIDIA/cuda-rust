@@ -15,9 +15,8 @@ help: the following other types implement trait `SignalPolicy`
 note: required by a bound in `TwoCtaRing::<STAGES, Full, Empty>::thread_empty`
   --> src/attention/sm100/pipeline.rs
    |
-   | impl<const STAGES: u32, Full: WaitPolicy, Empty: WaitPolicy> TwoCtaRing<STAGES, Full, Empty> {
-...
    |     pub unsafe fn thread_empty(self, ticket: u32)
+   |                   ------------ required by a bound in this associated function
    |     where
    |         Empty: SignalPolicy,
    |                ^^^^^^^^^^^^ required by this bound in `TwoCtaRing::<STAGES, Full, Empty>::thread_empty`
@@ -36,9 +35,8 @@ help: the trait `TmaPolicy` is implemented for `AsyncCompletion`
 note: required by a bound in `TwoCtaRing::<STAGES, Full, Empty>::producer_expect_tx`
   --> src/attention/sm100/pipeline.rs
    |
-   | impl<const STAGES: u32, Full: WaitPolicy, Empty: WaitPolicy> TwoCtaRing<STAGES, Full, Empty> {
-...
    |     pub unsafe fn producer_expect_tx(self, ticket: u32, bytes: u32)
+   |                   ------------------ required by a bound in this associated function
    |     where
    |         Full: TmaPolicy,
    |               ^^^^^^^^^ required by this bound in `TwoCtaRing::<STAGES, Full, Empty>::producer_expect_tx`
@@ -57,9 +55,8 @@ help: the trait `TmaPolicy` is implemented for `AsyncCompletion`
 note: required by a bound in `TwoCtaRing::<STAGES, Full, Empty>::producer_expect_tx`
   --> src/attention/sm100/pipeline.rs
    |
-   | impl<const STAGES: u32, Full: WaitPolicy, Empty: WaitPolicy> TwoCtaRing<STAGES, Full, Empty> {
-...
    |     pub unsafe fn producer_expect_tx(self, ticket: u32, bytes: u32)
+   |                   ------------------ required by a bound in this associated function
    |     where
    |         Full: TmaPolicy,
    |               ^^^^^^^^^ required by this bound in `TwoCtaRing::<STAGES, Full, Empty>::producer_expect_tx`
@@ -87,9 +84,8 @@ help: the following other types implement trait `MmaPolicy`
 note: required by a bound in `TwoCtaRing::<STAGES, Full, Empty>::mma_full`
   --> src/attention/sm100/pipeline.rs
    |
-   | impl<const STAGES: u32, Full: WaitPolicy, Empty: WaitPolicy> TwoCtaRing<STAGES, Full, Empty> {
-...
    |     pub unsafe fn mma_full(self, ticket: u32)
+   |                   -------- required by a bound in this associated function
    |     where
    |         Full: MmaPolicy,
    |               ^^^^^^^^^ required by this bound in `TwoCtaRing::<STAGES, Full, Empty>::mma_full`
@@ -117,9 +113,8 @@ help: the following other types implement trait `MmaPolicy`
 note: required by a bound in `TwoCtaRing::<STAGES, Full, Empty>::mma_empty_cursor`
   --> src/attention/sm100/pipeline.rs
    |
-   | impl<const STAGES: u32, Full: WaitPolicy, Empty: WaitPolicy> TwoCtaRing<STAGES, Full, Empty> {
-...
    |     pub unsafe fn mma_empty_cursor(self, cursor: RingCursor<STAGES, Consumer>)
+   |                   ---------------- required by a bound in this associated function
    |     where
    |         Empty: MmaPolicy,
    |                ^^^^^^^^^ required by this bound in `TwoCtaRing::<STAGES, Full, Empty>::mma_empty_cursor`
@@ -141,9 +136,8 @@ help: the following other types implement trait `SignalPolicy`
 note: required by a bound in `TwoCtaRing::<STAGES, Full, Empty>::thread_full`
   --> src/attention/sm100/pipeline.rs
    |
-   | impl<const STAGES: u32, Full: WaitPolicy, Empty: WaitPolicy> TwoCtaRing<STAGES, Full, Empty> {
-...
    |     pub unsafe fn thread_full(self, ticket: u32)
+   |                   ----------- required by a bound in this associated function
    |     where
    |         Full: SignalPolicy,
    |               ^^^^^^^^^^^^ required by this bound in `TwoCtaRing::<STAGES, Full, Empty>::thread_full`

@@ -2058,7 +2058,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
                             return Ok(None);
                         };
                         let Some(tile_shape) =
-                            get_cga_from_generic_argument(tile_shape_arg, self.generic_vars)
+                            get_cga_from_generic_argument(tile_shape_arg, self.generic_vars)?
                         else {
                             return Ok(None);
                         };
@@ -4491,7 +4491,8 @@ pub fn infer_method_generics(
         Some(self_ty),
         caller_generic_vars,
     )?;
-    let inferred = generic_arg_inference.get_generic_vars_instance(caller_generic_vars, primitives);
+    let inferred =
+        generic_arg_inference.get_generic_vars_instance(caller_generic_vars, primitives)?;
 
     if method_call.turbofish.is_some() {
         let passed = caller_generic_vars

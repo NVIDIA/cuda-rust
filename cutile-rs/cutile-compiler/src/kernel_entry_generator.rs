@@ -773,7 +773,8 @@ pub fn get_tensor_shape(
                                             ),
                                         );
                                     };
-                                    let i = crate::types::parse_signed_literal_as_i32(&index.index);
+                                    let i =
+                                        crate::types::parse_signed_literal_as_i32(&index.index)?;
                                     let Some(dim) = shape.get(i as usize) else {
                                         return SourceLocation::unknown()
                                                 .jit_error_result(&format!(

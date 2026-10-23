@@ -317,3 +317,49 @@ fn untyped_literal_error_location_points_to_this_file() {
         }
     });
 }
+
+#[test]
+fn invalid_shape_index_returns_a_located_jit_error() {
+    common::with_test_stack(|| {
+        // Parse the frontend AST directly so macro validation does not mask a JIT regression.
+        for (index, expected) in [
+            ("0 + 0", "expected an integer literal"),
+            ("true", "expected an integer literal"),
+            ("2147483648", "outside the i32 range"),
+        ] {
+            let source = format!(
+                r#"mod invalid_shape_index {{
+    use cutile::core::*;
+    #[cutile::entry()]
+    fn kernel<const D: [i32; 1]>(output: &mut Tensor<f32, D>) {{
+        let _shape = const_shape![D[{index}]];
+    }}
+}}"#
+            );
+            let kernel = Module::with_span_base(
+                "invalid_shape_index",
+                syn::parse_str(&source).unwrap(),
+                cutile_compiler::ast::SpanBase::new("invalid_shape_index.rs".into(), 100, 0),
+            );
+            let error = common::compile_to_ir(
+                move || kernel.clone(),
+                "invalid_shape_index",
+                "kernel",
+                &["128".into()],
+                &[("output", &[1])],
+                &[],
+                &[],
+                None,
+                &CompileOptions::default(),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains(expected), "{index}: {error}");
+            assert_no_internal_leaks(&error.to_string(), "invalid shape index");
+            let JITError::Located(_, location) = error else {
+                panic!("expected a located JIT error");
+            };
+            assert_eq!(location.file, "invalid_shape_index.rs");
+            assert_eq!(location.line, 104);
+        }
+    });
+}

@@ -520,8 +520,11 @@ pub(crate) fn impl_self_type_rank_matches(
         let Some(&expected_rank) = const_ranks.get(&param_ident.to_string()) else {
             continue;
         };
+        // Rank matching is speculative; type instantiation reports malformed shapes.
         let Some(receiver_cga) =
             crate::generics::get_cga_from_generic_argument(receiver_arg, generic_vars)
+                .ok()
+                .flatten()
         else {
             continue;
         };

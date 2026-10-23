@@ -179,6 +179,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 // println!("inline_function_call {:#?}: generic_vars={generic_vars:#?} \nexpr_generic_args={expr_generic_args:#?} \ngeneric_arg_inference={generic_arg_inference:#?}", fn_item.sig.ident.to_string());
                 generic_arg_inference
                     .get_generic_vars_instance(generic_vars, self.modules.primitives())
+                    .map_err(|err| self.jit_error(&call_expr.span(), &err.to_string()))?
             };
             // The callee's body compiles in its own module's scope: its
             // `const`s, and the consts named in its types, are its module's.

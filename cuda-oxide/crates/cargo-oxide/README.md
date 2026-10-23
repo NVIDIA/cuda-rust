@@ -10,10 +10,10 @@ Replaces the previous `xtask` pattern with a proper cargo subcommand that works 
 
 **External users**:
 
-Install with the project's pinned nightly toolchain:
+Install with the project's pinned toolchain:
 
 ```bash
-cargo +nightly-2026-10-11 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
+cargo +1.99.1 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
 ```
 
 On first run, `cargo-oxide` will automatically fetch and build the codegen backend if it's not already available.

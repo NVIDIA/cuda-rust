@@ -1799,6 +1799,22 @@ fn parse_ptxas_version(stdout: &str, stderr: &str) -> Result<String> {
     Ok(version.to_owned())
 }
 
+fn llvm_major_minor_series(version: &str) -> Option<&str> {
+    let rest = version.strip_prefix("LLVM version ")?;
+    let mut parts = rest.split(['.', '-']);
+    let major = parts.next()?;
+    let minor = parts.next()?;
+    if major.is_empty()
+        || !major.bytes().all(|b| b.is_ascii_digit())
+        || minor.is_empty()
+        || !minor.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let prefix_len = "LLVM version ".len() + major.len() + 1 + minor.len();
+    Some(&version[..prefix_len])
+}
+
 fn validate_backend_identity(
     expected_version: &str,
     expected_commit: &RustcCommit,
@@ -1807,8 +1823,12 @@ fn validate_backend_identity(
     let ProbeBackendIdentity::SelectedEvidence(actual) = actual else {
         return Ok(());
     };
+    let same_version_or_series = actual.tool.version == expected_version
+        || (llvm_major_minor_series(&actual.tool.version).is_some()
+            && llvm_major_minor_series(&actual.tool.version)
+                == llvm_major_minor_series(expected_version));
     ensure!(
-        actual.tool.version == expected_version,
+        same_version_or_series,
         "rust-toolchain llc version mismatch: selected evidence records {expected_version:?}, found {:?}; use an explicit `--llc` only for a comparison probe",
         actual.tool.version
     );

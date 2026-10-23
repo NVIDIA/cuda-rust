@@ -7,6 +7,10 @@ set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 # Use Bash on Unix
 set shell := ["bash", "-c"]
 
+# Unlock unstable Cargo (`cargo-features = ["profile-rustflags"]`) and rustc
+# (`-Z`, `#![feature(rustc_private)]`) gates on the pinned stable toolchain.
+export RUSTC_BOOTSTRAP := "1"
+
 # Format all Rust code (SIMT workspace, codegen, examples)
 fmt:
     cargo oxide fmt

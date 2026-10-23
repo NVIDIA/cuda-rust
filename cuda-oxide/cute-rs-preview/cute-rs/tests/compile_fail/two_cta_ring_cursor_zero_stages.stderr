@@ -1,8 +1,6 @@
 error[E0080]: evaluation panicked: assertion failed: STAGES > 0
  --> src/attention/sm100/pipeline.rs
   |
-  | impl<const STAGES: u32, Role: CursorRole> RingCursor<STAGES, Role> {
-  |     /// Reject zero-stage cursors before any slot arithmetic.
   |     const VALID: () = assert!(STAGES > 0);
   |                       ^^^^^^^^^^^^^^^^^^^ evaluation of `cute_rs::attention::sm100::pipeline::RingCursor::<0, cute_rs::Producer>::VALID` failed here
 

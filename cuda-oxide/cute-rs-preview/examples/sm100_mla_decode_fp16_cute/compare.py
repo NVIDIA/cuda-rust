@@ -8,6 +8,7 @@ import json
 import hashlib
 import os
 import importlib.metadata
+import importlib.util
 from pathlib import Path
 import statistics
 import subprocess
@@ -15,10 +16,24 @@ import tempfile
 import sys
 from datetime import datetime, timezone
 
-import numpy as np
+SETUP_HINT = ("from cuda-oxide/ run `python3 -m venv cute-rs-preview/.venv && "
+              "cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt`, "
+              "then rerun; or set CUDA_OXIDE_CUTE_PYTHON to an environment that has them")
 
-from contract import COMMIT, SOURCE_HASHES, Config, check_close, generate, oracle, write_inputs
-from cutedsl import sm100_mla_decode_fp16_cutedsl
+try:
+    import numpy as np
+
+    from contract import COMMIT, SOURCE_HASHES, Config, check_close, generate, oracle, write_inputs
+    from cutedsl import sm100_mla_decode_fp16_cutedsl
+except ImportError as error:
+    sys.exit(f"missing Python packages ({error}); {SETUP_HINT}")
+
+
+def require_reference_environment():
+    """Stop before any GPU work when the shared comparison environment is missing."""
+    missing = [name for name in ("torch", "cutlass", "cuda") if importlib.util.find_spec(name) is None]
+    if missing:
+        sys.exit(f"missing Python packages: {', '.join(missing)}; {SETUP_HINT}")
 
 
 def run_case(rust_bin, cfg, *, seed=1111, pattern="random", warmup=10, iterations=100,
@@ -133,6 +148,7 @@ def parser():
 
 def main():
     args = parser().parse_args()
+    require_reference_environment()
     cfg = Config(batch=args.batch, kv_length=args.kv_length, splits=args.splits,
                  softmax_scale=args.softmax_scale, output_scale=args.output_scale)
     with redirect_stdout(sys.stderr):

@@ -65,7 +65,7 @@ impl Args {
             match key.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "sm100_fmha_prefill_cute [--shape B,Sq,Sk,Hq,Hkv] [--causal]\n  [--warmup 10] [--iters 100] [--windows 3] [--check-only] [--json FILE]\nDefault: compare the Rust cubin and pinned CuTeDSL on identical FP16 inputs.\nPrints CuTeDSL and CuTe-RS timings; --json saves the full report.\nD=128, top-left causal or dense, MHA/GQA, persistent schedule, SM100 required.\nAdapter interface: --input-dir DIR --oracle oracle.f32 --output o.f16 [--atol 0.1]\nPython: CUDA_OXIDE_CUTE_PYTHON, example .venv, sibling FP16 .venv, then python3."
+                        "sm100_fmha_prefill_cute [--shape B,Sq,Sk,Hq,Hkv] [--causal]\n  [--warmup 10] [--iters 100] [--windows 3] [--check-only] [--json FILE]\nDefault: compare the Rust cubin and pinned CuTeDSL on identical FP16 inputs.\nPrints CuTeDSL and CuTe-RS timings; --json saves the full report.\nD=128, top-left causal or dense, MHA/GQA, persistent schedule, SM100 required.\nAdapter interface: --input-dir DIR --oracle oracle.f32 --output o.f16 [--atol 0.1]\nPython: CUDA_OXIDE_CUTE_PYTHON, example .venv, cute-rs-preview/.venv, then python3."
                     );
                     std::process::exit(0);
                 }
@@ -146,7 +146,7 @@ fn compare(args: &Args) -> Result<()> {
         .or_else(|| {
             [
                 directory.join(".venv/bin/python"),
-                directory.join("../fp16_gemm_256x352_cute/.venv/bin/python"),
+                directory.join("../../.venv/bin/python"),
             ]
             .into_iter()
             .find(|path| path.is_file())
@@ -179,7 +179,7 @@ fn compare(args: &Args) -> Result<()> {
     }
     let status = command.status().map_err(|error| {
         format!(
-            "could not start comparison with {}: {error}; set CUDA_OXIDE_CUTE_PYTHON to the reference Python environment",
+            "could not start comparison with {}: {error}; create cute-rs-preview/.venv as the README shows, or set CUDA_OXIDE_CUTE_PYTHON",
             python.display()
         )
     })?;

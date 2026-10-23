@@ -25,8 +25,15 @@ SM100 hardware; the RTX 5090 / SM120 cannot execute it.
 - MHA or GQA (`Hq % Hkv == 0`), dense attention (default) or top-left causal
   masking. Partial query and KV tiles are supported.
 
-From `cuda-oxide/`, with CUTLASS 4.7 installed (`cargo oxide toolchain install cutlass`)
-and the [Python reference environment](reference/README.md) available:
+From `cuda-oxide/`, once per checkout:
+
+```bash
+cargo oxide toolchain install cutlass
+python3 -m venv cute-rs-preview/.venv
+cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt
+```
+
+Then:
 
 ```bash
 # Compile without launching a GPU kernel

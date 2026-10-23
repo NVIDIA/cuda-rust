@@ -41,7 +41,15 @@ End-to-end 36-layer **Qwen/Qwen3-8B** transformer decoder (`H = 4096`, `I = 1228
 
 ## Quick Start
 
-From `cuda-oxide/`:
+From `cuda-oxide/`, once per checkout:
+
+```bash
+cargo oxide toolchain install cutlass
+python3 -m venv cute-rs-preview/.venv
+cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt
+```
+
+Then:
 
 ```bash
 # Quick 4-layer validation + benchmark on RTX 5090 (sm_120a)
@@ -60,7 +68,7 @@ CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir \
 cargo test --manifest-path cute-rs-preview/models/qwen3_8b_cute/Cargo.toml
 
 # Run the CuTeDSL (cutlass.cute) Python reference benchmark on RTX 5090
-python3 cute-rs-preview/models/qwen3_8b_cute/reference/benchmark_cutedsl.py --layers 36 --prompt-len 32 --decode-steps 16
+cute-rs-preview/.venv/bin/python cute-rs-preview/models/qwen3_8b_cute/reference/benchmark_cutedsl.py --layers 36 --prompt-len 32 --decode-steps 16
 ```
 
 ---

@@ -22,7 +22,7 @@ pub fn dispatch(arguments: &[OsString]) -> super::Result<bool> {
         .any(|argument| argument == "--help" || argument == "-h")
     {
         println!(
-            "sm100_mla_decode_fp16_cute [--batch 1 --kv-length 1024 --splits 2] [--clusters N]\n  [--warmup 10 --iters 100 --windows 3] [--check-only] [--json RESULT.json]\n  [--softmax-scale 0.0416 --output-scale 1.0] [--seed 1111]\n  [--pattern random|zero-query] [--timing-order cutedsl-first|rust-first] [--timeout 180]\nDefault: validate and compare CuTeDSL and CuTe-RS, then print two timing lines.\n--check-only validates both implementations without timing.\nAliases: --iterations, --rounds, --validation-only.\nPython selection: CUDA_OXIDE_CUTE_PYTHON, example .venv, FP16 GEMM .venv, then python3.\nRequires local compare.py and reference/ assets.\n\nAdapter mode: --input-dir DIR --output-dir DIR [--clusters N]\n  [--validation-only] [--warmup 10 --iterations 100 --rounds 3]\nRuns CuTe-RS on serialized inputs and emits JSON for compare.py.\nUse --input-dir DIR --help for the input format."
+            "sm100_mla_decode_fp16_cute [--batch 1 --kv-length 1024 --splits 2] [--clusters N]\n  [--warmup 10 --iters 100 --windows 3] [--check-only] [--json RESULT.json]\n  [--softmax-scale 0.0416 --output-scale 1.0] [--seed 1111]\n  [--pattern random|zero-query] [--timing-order cutedsl-first|rust-first] [--timeout 180]\nDefault: validate and compare CuTeDSL and CuTe-RS, then print two timing lines.\n--check-only validates both implementations without timing.\nAliases: --iterations, --rounds, --validation-only.\nPython selection: CUDA_OXIDE_CUTE_PYTHON, example .venv, cute-rs-preview/.venv, then python3.\nRequires local compare.py and reference/ assets.\n\nAdapter mode: --input-dir DIR --output-dir DIR [--clusters N]\n  [--validation-only] [--warmup 10 --iterations 100 --rounds 3]\nRuns CuTe-RS on serialized inputs and emits JSON for compare.py.\nUse --input-dir DIR --help for the input format."
         );
         return Ok(true);
     }
@@ -32,7 +32,7 @@ pub fn dispatch(arguments: &[OsString]) -> super::Result<bool> {
         .or_else(|| {
             [
                 directory.join(".venv/bin/python"),
-                directory.join("../fp16_gemm_256x352_cute/.venv/bin/python"),
+                directory.join("../../.venv/bin/python"),
             ]
             .into_iter()
             .find(|path| path.is_file())
@@ -72,7 +72,7 @@ fn comparison_command(
 fn run(command: &mut Command) -> super::Result<()> {
     let status = command.status().map_err(|error| {
         format!(
-            "could not start CuTeDSL comparison with {}: {error}; select the Python environment with CUDA_OXIDE_CUTE_PYTHON",
+            "could not start CuTeDSL comparison with {}: {error}; create cute-rs-preview/.venv as the README shows, or set CUDA_OXIDE_CUTE_PYTHON",
             command.get_program().to_string_lossy()
         )
     })?;

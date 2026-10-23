@@ -28,7 +28,15 @@ SM100 hardware; the RTX 5090 / SM120 cannot execute it.
   partial final pages. Attention is noncausal with explicit length masking.
 - Softmax scale defaults to **0.0416** and output scale to **1.0**.
 
-From `cuda-oxide/`, with CUTLASS 4.7 installed (`cargo oxide toolchain install cutlass`):
+From `cuda-oxide/`, once per checkout:
+
+```bash
+cargo oxide toolchain install cutlass
+python3 -m venv cute-rs-preview/.venv
+cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt
+```
+
+Then:
 
 ```bash
 # Compile without launching a GPU kernel
@@ -44,7 +52,6 @@ CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir CUDA_OXIDE_CUTLASS_OPT_LEVEL=2 cargo oxid
 CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir CUDA_OXIDE_CUTLASS_OPT_LEVEL=2 cargo oxide run sm100_mla_decode_fp16_cute --arch sm_100a -- --batch 16 --kv-length 8192 --splits 8 --clusters 74 --warmup 300 --iters 100 --windows 5
 ```
 
-Install the [Python reference dependencies](reference/README.md) before running.
 The default runner compares Rust and pinned CuTeDSL on identical inputs and
 checks both against an independent FP64 oracle before timing. It finishes with:
 

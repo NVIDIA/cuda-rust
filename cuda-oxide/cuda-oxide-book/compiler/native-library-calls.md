@@ -106,12 +106,21 @@ element types and mutability must exactly match the provider's declaration.
 The input element type matches `T`; output and auxiliary types may differ.
 
 `checked_warp_payload_call_v1` has the same controls and payload operands without
-explicit storage. Its `WIDTH` must be a power of two in 1..=32, within an exact
-block containing complete physical warps. Controls and participation agree
-within that width; sibling groups may differ. Scratch uses independent aligned
-replicas with matching completion before dirty reuse. The Block form uses the
-storage policies described below. Both markers return unit; a wrapper can own
-and return a fresh Rust result after the native operation initializes it.
+explicit storage. Its `WIDTH` is a power of two in 1..=32 or a prefix width in
+17..=31, within an exact block containing complete physical warps. Controls and
+participation agree within each group; sibling groups may differ. Scratch uses
+independent aligned replicas with matching completion before dirty reuse.
+
+A prefix call must be guarded by `warp_prefix_member_v1::<WIDTH>() != 0`:
+every low-WIDTH lane participates and every suffix lane skips the call. This
+pure query itself requires neither a provider nor a launch contract. A prefix
+has one scratch replica per physical warp. Reuse uses the unshifted low-WIDTH
+mask and completes only that prefix's scratch, without completing pending
+global-memory accesses.
+
+The Block form uses the storage policies described below. Both markers return
+unit; a wrapper can own and return a fresh Rust result after the native
+operation initializes it.
 
 These unsafe boundaries require live, aligned per-thread local payloads, with
 initialized inputs and valid, nonaliasing output storage. Native effects must

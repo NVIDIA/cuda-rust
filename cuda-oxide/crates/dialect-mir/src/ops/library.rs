@@ -108,6 +108,27 @@ impl MirLibraryOp {
         library.set_attr_library_callee(ctx, StringAttr::new(callee));
         op
     }
+    pub fn build_prefix_query(
+        ctx: &mut Context,
+        site: LibraryCallSite,
+        callee: String,
+        width: u32,
+    ) -> Ptr<Operation> {
+        let result = IntegerType::get(ctx, 8, Signedness::Unsigned).into();
+        let op = Operation::new(
+            ctx,
+            Self::get_concrete_op_info(),
+            vec![result],
+            vec![],
+            vec![],
+            0,
+        );
+        let library = Self::new(op);
+        library.set_attr_role(ctx, LibraryRoleAttr::WarpPrefixMember { width });
+        library.set_attr_site(ctx, site);
+        library.set_attr_library_callee(ctx, StringAttr::new(callee));
+        op
+    }
 }
 impl Verify for MirLibraryOp {
     fn verify(&self, ctx: &Context) -> Result<(), Error> {
@@ -166,6 +187,21 @@ impl Verify for MirLibraryOp {
                 return verify_err!(
                     op.loc(),
                     "warp group index requires width 1/2/4/8/16/32, no operands or signature, and one u32 result"
+                );
+            }
+            return Ok(());
+        }
+        if let LibraryRoleAttr::WarpPrefixMember { width } = *role {
+            if !(17..=31).contains(&width)
+                || op.get_num_operands() != 0
+                || op.get_num_results() != 1
+                || scalar_type(ctx, op.get_result(0).get_type(ctx))
+                    != Some(LibraryScalar::Unsigned(8))
+                || self.get_attr_library_signature(ctx).is_some()
+            {
+                return verify_err!(
+                    op.loc(),
+                    "Warp prefix query requires a width in 17..=31, no operands or signature, and one u8 result"
                 );
             }
             return Ok(());
@@ -457,11 +493,13 @@ fn verify_call(ctx: &Context, call: &MirLibraryOp, role: LibraryRoleAttr) -> Res
         LibraryRoleAttr::Native(native) => {
             if let LibraryNativeMetadata::CheckedWarp { width, .. }
             | LibraryNativeMetadata::CheckedWarpPayload { width, .. } = native
-                && (width == 0 || width > 32 || !width.is_power_of_two())
+                && !(width > 0 && width <= 32 && width.is_power_of_two()
+                    || matches!(native, LibraryNativeMetadata::CheckedWarpPayload { .. })
+                        && (17..=31).contains(&width))
             {
                 return verify_err!(
                     op.loc(),
-                    "checked Warp calls require a power-of-two width in 1..=32"
+                    "checked Warp calls require power-of-two width in 1..=32; payload-only calls also support guarded prefixes 17..=31"
                 );
             }
             results.is_empty() && native_valid(ctx, native, &args)

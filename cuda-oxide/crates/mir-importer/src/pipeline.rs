@@ -908,6 +908,7 @@ impl PreparedImport<'_> {
                 !matches!(
                     role,
                     dialect_mir::library::LibraryRoleAttr::WarpGroupIndex { .. }
+                        | dialect_mir::library::LibraryRoleAttr::WarpPrefixMember { .. }
                         | dialect_mir::library::LibraryRoleAttr::SyncWarp { .. }
                 )
             })
@@ -1350,7 +1351,7 @@ mod tests {
     }
 
     #[test]
-    fn genuine_warp_query_and_sync_finish_without_native_plans() {
+    fn genuine_warp_queries_and_sync_finish_without_native_plans() {
         use dialect_mir::library::LibraryRoleAttr;
         use dialect_mir::ops::{MirCallOp, MirFuncOp, MirLibraryOp};
         use pliron::common_traits::Verify;
@@ -1371,6 +1372,7 @@ mod tests {
 pub mod library {
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_warp_group_index<const WIDTH:usize>() -> u32 { WIDTH as u32 }
     #[inline(never)] pub unsafe fn cuda_oxide_library_v1_246e25db_checked_warp_sync<const WIDTH:u32>() {}
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_warp_prefix_member<const WIDTH:usize>() -> u8 { 1 }
 }
 "#).unwrap();
         let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
@@ -1402,6 +1404,10 @@ pub fn lookalike() -> u32 { cuda_oxide_library_v1_246e25db_warp_group_index::<8>
 pub fn sync() { unsafe { cuda_device::library::cuda_oxide_library_v1_246e25db_checked_warp_sync::<8>() } }
 pub fn invalid_sync() { unsafe { cuda_device::library::cuda_oxide_library_v1_246e25db_checked_warp_sync::<3>() } }
 pub fn sync_lookalike() { unsafe { cuda_oxide_library_v1_246e25db_checked_warp_sync::<8>() } }
+#[inline(never)] pub fn cuda_oxide_library_v1_246e25db_warp_prefix_member<const WIDTH:usize>() -> u8 { 1 }
+pub fn prefix() -> u8 { cuda_device::library::cuda_oxide_library_v1_246e25db_warp_prefix_member::<17>() }
+pub fn invalid_prefix() -> u8 { cuda_device::library::cuda_oxide_library_v1_246e25db_warp_prefix_member::<16>() }
+pub fn prefix_lookalike() -> u8 { cuda_oxide_library_v1_246e25db_warp_prefix_member::<17>() }
 "#).unwrap();
         let sysroot = std::process::Command::new(&rustc)
             .args(["--print", "sysroot"])
@@ -1478,13 +1484,17 @@ pub fn sync_lookalike() { unsafe { cuda_oxide_library_v1_246e25db_checked_warp_s
                     for (name, diagnostic) in [
                         ("invalid_width", "warp group index width"),
                         ("invalid_sync", "warp synchronization width"),
+                        (
+                            "invalid_prefix",
+                            "Warp prefix query requires a width in 17..=31",
+                        ),
                     ] {
                         let invalid = import(collected(name), &config)
                             .err()
                             .expect("invalid genuine width rejected");
                         assert!(invalid.to_string().contains(diagnostic), "{invalid}");
                     }
-                    for name in ["lookalike", "sync_lookalike"] {
+                    for name in ["lookalike", "sync_lookalike", "prefix_lookalike"] {
                         let fake = import(collected(name), &config).unwrap();
                         let mut fake_calls = 0;
                         for block in fake
@@ -1521,6 +1531,7 @@ pub fn sync_lookalike() { unsafe { cuda_oxide_library_v1_246e25db_checked_warp_s
                     for (name, role, results) in [
                         ("query", LibraryRoleAttr::WarpGroupIndex { width: 8 }, 1),
                         ("sync", LibraryRoleAttr::SyncWarp { width: 8 }, 0),
+                        ("prefix", LibraryRoleAttr::WarpPrefixMember { width: 17 }, 1),
                     ] {
                         for debug in [DebugKind::Off, DebugKind::Full] {
                             for bind_empty in [false, true] {
@@ -1601,7 +1612,15 @@ pub fn sync_lookalike() { unsafe { cuda_oxide_library_v1_246e25db_checked_warp_s
                                 }
                                 let result = prepared.finish().unwrap();
                                 let llvm = fs::read_to_string(result.ll_path).unwrap();
-                                if results == 1 {
+                                if name == "prefix" {
+                                    assert!(
+                                        llvm.contains("call i32 @llvm.nvvm.read.ptx.sreg.laneid()"),
+                                        "{llvm}"
+                                    );
+                                    assert!(llvm.contains("icmp ult i32"), "{llvm}");
+                                    assert!(llvm.contains("zext i1"), "{llvm}");
+                                    assert!(!llvm.contains("warp_prefix_member"), "{llvm}");
+                                } else if results == 1 {
                                     for register in ["tid.x", "tid.y", "tid.z", "ntid.x", "ntid.y"]
                                     {
                                         assert!(

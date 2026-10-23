@@ -146,6 +146,7 @@ fn runtime_indices(role: LibraryRoleAttr) -> &'static [usize] {
         LibraryRoleAttr::Native(Native::CheckedWarpPayload { .. }) => &[1, 2],
         LibraryRoleAttr::StorageNew(_)
         | LibraryRoleAttr::WarpGroupIndex { .. }
+        | LibraryRoleAttr::WarpPrefixMember { .. }
         | LibraryRoleAttr::SyncWarp { .. } => &[],
         LibraryRoleAttr::StorageReconfigure { .. }
         | LibraryRoleAttr::StorageReserve { .. }
@@ -249,6 +250,8 @@ pub(crate) fn translate_call(
         };
     let retained = if let LibraryRoleAttr::WarpGroupIndex { width } = metadata.role {
         MirLibraryOp::build_query(ctx, site, metadata.marker.clone(), width)
+    } else if let LibraryRoleAttr::WarpPrefixMember { width } = metadata.role {
+        MirLibraryOp::build_prefix_query(ctx, site, metadata.marker.clone(), width)
     } else if matches!(metadata.role, LibraryRoleAttr::SyncWarp { .. }) {
         MirLibraryOp::build(ctx, metadata.role, site, metadata.marker.clone())
     } else {

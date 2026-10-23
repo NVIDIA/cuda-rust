@@ -173,14 +173,18 @@ pub fn admit_library_roots(
                 LibraryNativeMetadata::CheckedWarp { width, .. }
                 | LibraryNativeMetadata::CheckedWarpPayload { width, .. },
             ) = role
-                && (!matches!(*width, 1 | 2 | 4 | 8 | 16 | 32)
+                && (!(matches!(*width, 1 | 2 | 4 | 8 | 16 | 32)
+                    || matches!(
+                        role,
+                        LibraryRoleAttr::Native(LibraryNativeMetadata::CheckedWarpPayload { .. })
+                    ) && (17..=31).contains(width))
                     || x.checked_mul(y)
                         .and_then(|xy| xy.checked_mul(z))
                         .is_none_or(|threads| threads % 32 != 0))
             {
                 return pliron::verify_err!(
                     function.deref(ctx).loc(),
-                    "checked Warp calls require a power-of-two width in 1..=32 and an exact block containing complete physical warps"
+                    "checked Warp calls require supported width and an exact block containing complete physical warps"
                 );
             }
         }

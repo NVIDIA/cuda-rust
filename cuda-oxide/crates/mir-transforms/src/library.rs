@@ -180,6 +180,8 @@ fn lower(
         let role = *MirLibraryOp::new(op).get_attr_role(ctx).unwrap();
         let result = if let LibraryRoleAttr::WarpGroupIndex { width } = role {
             Some(planned::lower_warp_query(ctx, op, width))
+        } else if let LibraryRoleAttr::WarpPrefixMember { width } = role {
+            Some(planned::lower_warp_prefix_query(ctx, op, width))
         } else if let LibraryRoleAttr::SyncWarp { width } = role {
             planned::lower_warp_sync(ctx, op, width);
             None

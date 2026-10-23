@@ -109,6 +109,8 @@ pub const LIBRARY_CHECKED_WARP_PAYLOAD_CALL_V1: &str =
     "cuda_oxide_library_v1_246e25db_checked_warp_payload_call";
 /// Pure canonical group index, independent of native provider collection.
 pub const LIBRARY_WARP_GROUP_INDEX_V1: &str = "cuda_oxide_library_v1_246e25db_warp_group_index";
+/// Pure low-prefix membership, independent of native provider collection.
+pub const LIBRARY_WARP_PREFIX_MEMBER_V1: &str = "cuda_oxide_library_v1_246e25db_warp_prefix_member";
 /// Canonical aligned WarpTile synchronization, independent of native plans.
 pub const LIBRARY_CHECKED_WARP_SYNC_V1: &str = "cuda_oxide_library_v1_246e25db_checked_warp_sync";
 

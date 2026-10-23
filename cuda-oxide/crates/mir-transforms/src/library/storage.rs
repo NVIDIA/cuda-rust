@@ -15,21 +15,58 @@ pub type Policy = dialect_mir::library::LibraryStoragePolicy;
 pub type Site = Vec<usize>;
 /// Validated provider responses keyed by root and original source call site.
 pub type RootedNativePlans = BTreeMap<String, BTreeMap<LibraryCallSite, LibraryCallPlan>>;
-// Genuine queries supply only the six power-of-two Warp precisions.
+/// Complete aligned partitions. Prefixes never enter this numeric ordering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Domain {
+pub enum Scope {
     Warp(u32),
     Block,
 }
-impl Domain {
-    pub(super) const BLOCK: Self = Self::Block;
+impl Scope {
     pub(super) const LANE: Self = Self::Warp(1);
     pub(super) const HEIGHT: usize = 7;
-    pub(super) fn covers(self, other: Self) -> bool {
-        self >= other
+}
+
+/// A closed value/participation or scratch domain. Ord is only for map keys;
+/// semantic implication and meet always use the explicit methods below.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Domain {
+    Complete(Scope),
+    Prefix(u32),
+}
+impl Domain {
+    pub(super) const BLOCK: Self = Self::Complete(Scope::Block);
+    pub(super) const LANE: Self = Self::Complete(Scope::LANE);
+
+    pub(super) fn covers(self, needed: Self) -> bool {
+        match (self, needed) {
+            (Self::Complete(a), Self::Complete(b)) => a >= b,
+            (Self::Complete(Scope::Block | Scope::Warp(32)), Self::Prefix(_)) => true,
+            (Self::Prefix(a), Self::Prefix(b)) => a == b,
+            (_, Self::LANE) => true,
+            _ => false,
+        }
     }
     pub(super) fn meet(self, other: Self) -> Self {
-        self.min(other)
+        if self.covers(other) {
+            other
+        } else if other.covers(self) {
+            self
+        } else {
+            Self::LANE
+        }
+    }
+    pub(super) fn complete_scope(self) -> Option<Scope> {
+        match self {
+            Self::Complete(scope) => Some(scope),
+            Self::Prefix(_) => None,
+        }
+    }
+    pub(super) fn replica_width(self) -> Option<u32> {
+        match self {
+            Self::Complete(Scope::Warp(w)) => Some(w),
+            Self::Prefix(_) => Some(32),
+            Self::Complete(Scope::Block) => None,
+        }
     }
 }
 
@@ -67,8 +104,15 @@ impl Default for Region {
 }
 impl Region {
     pub(super) fn completed_by(&self, scope: Domain) -> bool {
-        scope == Domain::BLOCK
-            || matches!(self, Self::Implicit(producer) if scope.covers(*producer))
+        match (scope, self) {
+            (Domain::BLOCK, _) => true,
+            (Domain::Complete(scope), Self::Implicit(Domain::Complete(producer))) => {
+                scope >= *producer
+            }
+            (Domain::Complete(Scope::Warp(32)), Self::Implicit(Domain::Prefix(_))) => true,
+            (Domain::Prefix(a), Self::Implicit(Domain::Prefix(b))) => a == *b,
+            _ => false,
+        }
     }
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -162,9 +206,9 @@ pub fn allocate(
                 policy.capacity
             ));
         }
-        let width = match origin {
-            Region::Implicit(Domain::Warp(width)) => Some(width),
-            _ => None,
+        let width = match &origin {
+            Region::Implicit(domain) => domain.replica_width(),
+            Region::Explicit(_) => None,
         };
         let stride = if width.is_some() {
             align_up(end, base_align)?
@@ -304,7 +348,7 @@ mod tests {
                 witness: LibraryWitness::ReadOnlySlice,
             }),
             marker: "warp".into(),
-            scope: Domain::Warp(width),
+            scope: Domain::Complete(Scope::Warp(width)),
             origin: None,
             policy: Policy::default(),
         };
@@ -346,5 +390,31 @@ mod tests {
                 .unwrap()
                 .contains("storage layout exceeds")
         );
+
+        // Prefix widths name distinct pools, but each pool has one replica per
+        // physical Warp rather than per WIDTH lanes.
+        let mut prefix = Trace::default();
+        for width in [17, 31] {
+            let mut use_ = event(width);
+            use_.role = Role::Native(Native::CheckedWarpPayload { spec, width });
+            use_.scope = Domain::Prefix(width);
+            prefix.events.insert(vec![width as usize], use_);
+        }
+        let layouts = BTreeMap::from([(vec![17], (17, 16)), (vec![31], (1, 16))]);
+        let plan = allocate(&prefix, &layouts, 64).unwrap();
+        assert_eq!((plan.bytes, plan.alignment), (96, 16));
+        assert_eq!(
+            (
+                plan.sites[&vec![17]].stride,
+                plan.sites[&vec![17]].declared_bytes
+            ),
+            (32, 64)
+        );
+        assert_eq!(
+            (plan.sites[&vec![31]].stride, plan.sites[&vec![31]].offset),
+            (16, 64)
+        );
+        assert_ne!(plan.sites[&vec![17]].region, plan.sites[&vec![31]].region);
+        assert!(allocate(&prefix, &layouts, 63).is_err());
     }
 }

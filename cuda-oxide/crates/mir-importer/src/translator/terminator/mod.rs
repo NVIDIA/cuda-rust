@@ -1169,6 +1169,13 @@ fn translate_call_inner(
                 width.map(|width| dialect_mir::library::LibraryRoleAttr::WarpGroupIndex { width })
             })
             .or_else(|| {
+                super::facts::library_warp_prefix_member_width(instance).map(|width| {
+                    width.map(
+                        |width| dialect_mir::library::LibraryRoleAttr::WarpPrefixMember { width },
+                    )
+                })
+            })
+            .or_else(|| {
                 super::facts::library_warp_sync_width(instance).map(|width| {
                     width.map(|width| dialect_mir::library::LibraryRoleAttr::SyncWarp { width })
                 })
@@ -4113,6 +4120,7 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                             }
                                             LibraryRoleAttr::NativeOperandBoundary
                                             | LibraryRoleAttr::WarpGroupIndex { .. }
+                                            | LibraryRoleAttr::WarpPrefixMember { .. }
                                             | LibraryRoleAttr::SyncWarp { .. } => {
                                                 unreachable!()
                                             }

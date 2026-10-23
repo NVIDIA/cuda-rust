@@ -191,6 +191,8 @@ pub enum LibraryRoleAttr {
     Native(LibraryNativeMetadata),
     /// Genuine pure x-fastest group index, retained until after admission.
     WarpGroupIndex { width: u32 },
+    /// Genuine low-lane membership predicate for a physical Warp prefix.
+    WarpPrefixMember { width: u32 },
     /// Genuine canonical aligned tile synchronization, independent of native plans.
     SyncWarp { width: u32 },
     /// Create a descriptor with a new source identity.
@@ -376,7 +378,7 @@ pub struct LibraryCallPlan {
     pub operation: LibraryOperation,
     pub storage_witness: bool,
     pub scratch_offset: u32,
-    /// None means Block; Some(width) is a validated aligned Warp scope.
+    /// None means Block; Some(width) is a validated aligned tile or low prefix.
     pub warp_width: Option<u32>,
     /// Padded bytes per replica; zero for nonreplicated views.
     pub scratch_stride: u32,

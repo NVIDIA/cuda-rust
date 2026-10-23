@@ -183,6 +183,31 @@ pub(super) fn lower_warp_query(ctx: &mut Context, anchor: Ptr<Operation>, width:
     arithmetic!(MirDivOp, vec![rank, divisor])
 }
 
+/// Lower a genuine member predicate to physical lane membership.
+pub(super) fn lower_warp_prefix_query(
+    ctx: &mut Context,
+    anchor: Ptr<Operation>,
+    width: u32,
+) -> Value {
+    use dialect_mir::ops::MirLtOp;
+    use dialect_nvvm::ops::ReadPtxSregLaneIdOp;
+    let ty = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
+    let lane = emit::<ReadPtxSregLaneIdOp>(ctx, anchor, vec![ty], vec![]);
+    lane.deref_mut(ctx).attributes.set(
+        "cuda_oxide_intrinsic_marker".try_into().unwrap(),
+        StringAttr::new("v1:i0016".into()),
+    );
+    let lane = lane.deref(ctx).get_result(0);
+    let width = integer(ctx, anchor, 32, width.into());
+    let boolean = IntegerType::get(ctx, 1, Signedness::Signless).into();
+    let comparison = emit::<MirLtOp>(ctx, anchor, vec![boolean], vec![lane, width]);
+    let comparison = comparison.deref(ctx).get_result(0);
+    let byte = IntegerType::get(ctx, 8, Signedness::Unsigned).into();
+    let cast = emit::<MirCastOp>(ctx, anchor, vec![byte], vec![comparison]);
+    MirCastOp::new(cast).set_attr_cast_kind(ctx, MirCastKindAttr::IntToInt);
+    cast.deref(ctx).get_result(0)
+}
+
 /// Emit the canonical aligned tile mask after participation and completion proof.
 pub(super) fn lower_warp_sync(ctx: &mut Context, anchor: Ptr<Operation>, width: u32) {
     use dialect_mir::ops::{MirBitAndOp, MirShlOp};
@@ -190,6 +215,8 @@ pub(super) fn lower_warp_sync(ctx: &mut Context, anchor: Ptr<Operation>, width: 
     let ty = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
     let mask = if width == 32 {
         integer(ctx, anchor, 32, u32::MAX.into())
+    } else if (17..=31).contains(&width) {
+        integer(ctx, anchor, 32, ((1u32 << width) - 1).into())
     } else {
         let lane = emit::<ReadPtxSregLaneIdOp>(ctx, anchor, vec![ty], vec![]);
         lane.deref_mut(ctx).attributes.set(
@@ -371,7 +398,12 @@ fn native_call(
         let width = plan
             .warp_width
             .expect("validated replicated library scratch");
-        let group = lower_warp_query(ctx, anchor, width);
+        let replica_width = if (17..=31).contains(&width) {
+            32
+        } else {
+            width
+        };
+        let group = lower_warp_query(ctx, anchor, replica_width);
         let ty = IntegerType::get(ctx, 64, Signedness::Unsigned).into();
         let cast = emit::<MirCastOp>(ctx, anchor, vec![ty], vec![group]);
         MirCastOp::new(cast).set_attr_cast_kind(ctx, MirCastKindAttr::IntToInt);
@@ -650,6 +682,7 @@ mod tests {
             },
             CheckedBlockPayload { spec, storage },
             CheckedWarpPayload { spec, width: 8 },
+            CheckedWarpPayload { spec, width: 17 },
         ];
         for native in roles {
             let ctx = &mut Context::new();
@@ -894,6 +927,43 @@ mod tests {
                 );
                 let group = product.deref(ctx).get_operand(0).defining_op().unwrap();
                 assert!(Operation::get_op::<MirCastOp>(group, ctx).is_some());
+                let quotient = group.deref(ctx).get_operand(0).defining_op().unwrap();
+                assert!(Operation::get_op::<dialect_mir::ops::MirDivOp>(quotient, ctx).is_some());
+                let divisor = quotient.deref(ctx).get_operand(1).defining_op().unwrap();
+                let expected = match native {
+                    CheckedWarpPayload { width: 17, .. } => 32,
+                    _ => 8,
+                };
+                assert_eq!(
+                    MirConstantOp::new(divisor)
+                        .get_attr_value(ctx)
+                        .unwrap()
+                        .value()
+                        .to_u64(),
+                    expected
+                );
+                if matches!(native, CheckedWarpPayload { width: 17, .. }) {
+                    let barrier = operations
+                        .iter()
+                        .find_map(|&op| {
+                            Operation::get_op::<dialect_nvvm::ops::BarWarpSyncOp>(op, ctx)
+                        })
+                        .unwrap();
+                    let mask = barrier
+                        .get_operation()
+                        .deref(ctx)
+                        .get_operand(0)
+                        .defining_op()
+                        .unwrap();
+                    assert_eq!(
+                        MirConstantOp::new(mask)
+                            .get_attr_value(ctx)
+                            .unwrap()
+                            .value()
+                            .to_u64(),
+                        (1 << 17) - 1
+                    );
+                }
                 let view = operations
                     .iter()
                     .find_map(|&op| Operation::get_op::<MirExternSharedOp>(op, ctx))

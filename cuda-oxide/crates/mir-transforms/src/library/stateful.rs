@@ -5,7 +5,7 @@
 
 //! Bounded per-context collective proof over prepared MIR values and local slots.
 use super::storage::{
-    Domain, Event, Plan, Policy, Region, Site, Trace, Validation, planned_storage,
+    Domain, Event, Plan, Policy, Region, Scope, Site, Trace, Validation, planned_storage,
 };
 use dialect_mir::{
     library::{
@@ -19,7 +19,10 @@ use dialect_mir::{
 use pliron::linked_list::ContainsLinkedList;
 use pliron::{
     basic_block::BasicBlock,
-    builtin::op_interfaces::BranchOpInterface,
+    builtin::{
+        op_interfaces::BranchOpInterface,
+        types::{IntegerType, Signedness},
+    },
     common_traits::Verify,
     context::{Context, Ptr},
     op::op_cast,
@@ -35,6 +38,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Fact {
     Unset,
+    // Exact 0/1 hardware predicate, independent of value uniformity.
+    Member {
+        width: u32,
+        inverted: bool,
+        boolean: bool,
+    },
     Uniform(Domain),
     Kernel(String, Domain),
     Resource(String, Domain),
@@ -133,7 +142,7 @@ impl Fact {
                 tag_uniform: tag_uniform.meet(control),
                 fields: fields.into_iter().map(|f| f.taint(control)).collect(),
             },
-            Self::Local(..) => self,
+            Self::Local(..) | Self::Member { .. } => self,
             Self::Referent(value) => Self::Referent(Box::new(value.taint(control))),
             _ if control == Domain::BLOCK => self,
             _ => Self::Varying,
@@ -230,23 +239,80 @@ impl Fact {
         }
     }
 }
+// The participant set is independent of value uniformity. In particular, a
+// full Warp32 value does not prove that the suffix skipped a prefix call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Members {
+    Full,
+    Prefix(u32),
+    Unknown,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Control {
     domain: Domain,
+    members: Members,
 }
 impl Control {
     const FULL: Self = Self {
         domain: Domain::BLOCK,
+        members: Members::Full,
+    };
+    const UNKNOWN: Self = Self {
+        domain: Domain::LANE,
+        members: Members::Unknown,
     };
     fn admits(self, domain: Domain) -> bool {
         self.domain.covers(domain)
+            && match domain {
+                Domain::Complete(_) => self.members == Members::Full,
+                Domain::Prefix(w) => self.members == Members::Prefix(w),
+            }
+    }
+    fn meet(self, other: Self) -> Self {
+        let members = match (self.members, other.members) {
+            (Members::Full, x) | (x, Members::Full) => x,
+            (Members::Prefix(a), Members::Prefix(b)) if a == b => Members::Prefix(a),
+            _ => Members::Unknown,
+        };
+        Self {
+            domain: self.domain.meet(other.domain),
+            members,
+        }
+    }
+    fn restrict(self, restriction: Self, edge_dominates: bool) -> Self {
+        // Prefix membership enables calls, unlike ordinary domain narrowing.
+        // A reachable backedge or another predecessor cannot establish it.
+        // An enclosing guard or caller may already prove this same prefix.
+        if let Members::Prefix(width) = restriction.members
+            && self.members != Members::Prefix(width)
+            && !edge_dominates
+        {
+            self.meet(Self::UNKNOWN)
+        } else {
+            self.meet(restriction)
+        }
     }
     fn narrow(self, precision: Domain) -> Self {
         Self {
             domain: self.domain.meet(precision),
+            ..self
+        }
+    }
+    fn member_branch(self, width: u32, member: bool) -> Self {
+        if !member {
+            return Self::UNKNOWN;
+        }
+        match self.members {
+            Members::Full if self.domain.covers(Domain::Complete(Scope::Warp(32))) => Self {
+                domain: Domain::Prefix(width),
+                members: Members::Prefix(width),
+            },
+            Members::Prefix(w) if w == width => self,
+            _ => Self::UNKNOWN,
         }
     }
 }
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Access {
     Read,
@@ -254,7 +320,7 @@ enum Access {
 }
 // Retain each producer scope and access kind, together with the weakest
 // completion proved on every incoming path. Only Block completion clears them.
-type Pending = BTreeMap<(String, Domain, Access), Domain>;
+type Pending = BTreeMap<(String, Scope, Access), Scope>;
 fn merge_pending(into: &mut Pending, other: &Pending) -> bool {
     let mut changed = false;
     for (access, completion) in other {
@@ -264,7 +330,7 @@ fn merge_pending(into: &mut Pending, other: &Pending) -> bool {
                 changed = true;
             }
             std::collections::btree_map::Entry::Occupied(mut entry) => {
-                let merged = entry.get().meet(*completion);
+                let merged = (*entry.get()).min(*completion);
                 changed |= merged != *entry.get();
                 entry.insert(merged);
             }
@@ -355,20 +421,24 @@ fn invalidate_borrows(state: &mut State) {
         fact.invalidate_referents();
     }
 }
-fn complete(state: &mut State, scope: Domain) {
-    if scope == Domain::BLOCK {
-        state.pending.clear();
-    } else {
-        for ((_, producer, _), completion) in &mut state.pending {
-            if scope.covers(*producer) {
-                *completion = (*completion).max(scope);
+fn complete(state: &mut State, domain: Domain) {
+    // Prefix synchronization cannot cover the sibling groups represented by
+    // complete-partition global access records.
+    if let Some(scope) = domain.complete_scope() {
+        if scope == Scope::Block {
+            state.pending.clear();
+        } else {
+            for ((_, producer, _), completion) in &mut state.pending {
+                if *producer <= scope {
+                    *completion = (*completion).max(scope);
+                }
             }
         }
     }
     state
         .epochs
         .dirty
-        .retain(|region| !region.completed_by(scope));
+        .retain(|region| !region.completed_by(domain));
 }
 fn dereference(fact: Fact, state: &State) -> Fact {
     match fact {
@@ -456,6 +526,21 @@ fn reachable(edges: &[Vec<usize>], start: usize, stop: Option<usize>) -> BTreeSe
     while let Some(block) = pending.pop() {
         if Some(block) != stop && result.insert(block) {
             pending.extend(edges[block].iter().copied());
+        }
+    }
+    result
+}
+fn reachable_without_edge(edges: &[Vec<usize>], source: usize, target: usize) -> BTreeSet<usize> {
+    let mut result = BTreeSet::new();
+    let mut pending = vec![0];
+    while let Some(block) = pending.pop() {
+        if result.insert(block) {
+            pending.extend(
+                edges[block]
+                    .iter()
+                    .copied()
+                    .filter(|next| block != source || *next != target),
+            );
         }
     }
     result
@@ -632,6 +717,7 @@ struct FunctionGraph {
     edges: Vec<Vec<usize>>,
     successor_ordinals: Vec<Vec<usize>>,
     joins: Vec<Option<usize>>,
+    bypasses: HashMap<(usize, usize), BTreeSet<usize>>,
     slots: HashMap<Ptr<Operation>, usize>,
     escaped_slots: BTreeSet<usize>,
     value_count: usize,
@@ -751,6 +837,13 @@ impl Analysis for PreparedGraph {
                 })
                 .collect();
             let joins = joins(&edges);
+            // Fixed prepared CFG: never derive membership from pruned successors.
+            let bypasses = edges
+                .iter()
+                .enumerate()
+                .flat_map(|(source, targets)| targets.iter().map(move |&target| (source, target)))
+                .map(|edge| (edge, reachable_without_edge(&edges, edge.0, edge.1)))
+                .collect();
             functions.insert(
                 name,
                 FunctionGraph {
@@ -760,6 +853,7 @@ impl Analysis for PreparedGraph {
                     edges,
                     successor_ordinals,
                     joins,
+                    bypasses,
                     slots,
                     escaped_slots,
                     value_count,
@@ -776,15 +870,37 @@ fn branch_controls(
     control: Control,
 ) -> Vec<(usize, Control)> {
     let unique: BTreeSet<_> = targets.iter().map(|(target, _)| *target).collect();
-    let restricted = if unique.len() > 1 {
-        control.narrow(fact.precision().unwrap_or(Domain::LANE))
+    if let Fact::Member {
+        width, inverted, ..
+    } = fact
+    {
+        let known = control.members == Members::Prefix(width);
+        unique
+            .into_iter()
+            .filter_map(|target| {
+                let values: Vec<_> = targets
+                    .iter()
+                    .filter(|(t, v)| *t == target && (!known || *v != inverted))
+                    .map(|(_, v)| *v)
+                    .collect();
+                match values.as_slice() {
+                    [value] => Some((target, control.member_branch(width, *value != inverted))),
+                    [_, _] => Some((target, control)),
+                    _ => None,
+                }
+            })
+            .collect()
     } else {
-        control
-    };
-    unique
-        .into_iter()
-        .map(|target| (target, restricted))
-        .collect()
+        let restricted = if unique.len() > 1 {
+            control.narrow(fact.precision().unwrap_or(Domain::LANE))
+        } else {
+            control
+        };
+        unique
+            .into_iter()
+            .map(|target| (target, restricted))
+            .collect()
+    }
 }
 fn resource(role: Role) -> Option<LibraryAccess> {
     match role {
@@ -947,7 +1063,7 @@ impl Analyzer<'_> {
                     + self.plan.as_ref().map_or(0, |p| p.sites.len() * 4)
                     + 4,
             )
-            .saturating_mul(Domain::HEIGHT)
+            .saturating_mul(Scope::HEIGHT * 3)
             .max(8);
         self.stack.push(function.to_owned());
         let mut settled = false;
@@ -973,7 +1089,8 @@ impl Analyzer<'_> {
                     );
                     for &(target, restriction) in &branches {
                         for member in reachable(&graph.edges, target, graph.joins[block]) {
-                            let restricted = controls[member].narrow(restriction.domain);
+                            let dominates = !graph.bypasses[&(block, target)].contains(&member);
+                            let restricted = controls[member].restrict(restriction, dominates);
                             changed |= restricted != controls[member];
                             controls[member] = restricted;
                         }
@@ -1102,12 +1219,19 @@ impl Analyzer<'_> {
         let role = *library.get_attr_role(self.ctx).unwrap();
         if let Role::WarpGroupIndex { width } = role {
             return Ok(Some(
-                Fact::Uniform(Domain::Warp(width)).taint(control.domain),
+                Fact::Uniform(Domain::Complete(Scope::Warp(width))).taint(control.domain),
             ));
         }
         let call = (*library.get_attr_site(self.ctx).unwrap()).clone();
+        if let Role::WarpPrefixMember { width } = role {
+            return Ok(Some(Fact::Member {
+                width,
+                inverted: false,
+                boolean: false,
+            }));
+        }
         if let Role::SyncWarp { width } = role {
-            let scope = Domain::Warp(width);
+            let scope = Domain::Complete(Scope::Warp(width));
             if validate && !control.admits(scope) {
                 return Err(self.error(
                     function,
@@ -1129,7 +1253,13 @@ impl Analyzer<'_> {
             Native::CheckedWarp { width, .. } | Native::CheckedWarpPayload { width, .. },
         ) = role
         {
-            Domain::Warp(width)
+            if matches!(role, Role::Native(Native::CheckedWarpPayload { .. }))
+                && !width.is_power_of_two()
+            {
+                Domain::Prefix(width)
+            } else {
+                Domain::Complete(Scope::Warp(width))
+            }
         } else {
             Domain::BLOCK
         };
@@ -1138,7 +1268,10 @@ impl Analyzer<'_> {
         let mut result = None;
         let mut storage_use = false;
         match role {
-            Role::NativeOperandBoundary | Role::WarpGroupIndex { .. } | Role::SyncWarp { .. } => {
+            Role::NativeOperandBoundary
+            | Role::WarpGroupIndex { .. }
+            | Role::WarpPrefixMember { .. }
+            | Role::SyncWarp { .. } => {
                 return Ok(None);
             }
             Role::StorageNew(new) => {
@@ -1339,6 +1472,13 @@ impl Analyzer<'_> {
         if let Some(access) = resource(role) {
             let witness = call_fact(facts[0].clone(), state);
             if let Some(origin) = witness.resource_origin() {
+                let scope = scope.complete_scope().ok_or_else(|| {
+                    self.error(
+                        function,
+                        call.block,
+                        "resource calls require a complete power-of-two Warp domain",
+                    )
+                })?;
                 let write = access == LibraryAccess::Write;
                 let kind = if write { Access::Write } else { Access::Read };
                 let conflict =
@@ -1359,7 +1499,7 @@ impl Analyzer<'_> {
                 }
                 state
                     .pending
-                    .insert((origin.to_owned(), scope, kind), Domain::LANE);
+                    .insert((origin.to_owned(), scope, kind), Scope::LANE);
             } else if validate {
                 return Err(self.error(
                     function,
@@ -1623,7 +1763,25 @@ impl Analyzer<'_> {
                 aggregate_bottom(self.ctx, result)
             } else if kind == TransferKind::Cast {
                 let fact = facts[0].clone();
-                if fact.has_local() {
+                if let Fact::Member {
+                    width, inverted, ..
+                } = fact
+                {
+                    let target = result.get_type(self.ctx);
+                    let target = target.deref(self.ctx);
+                    if let Some(target) = target.downcast_ref::<IntegerType>()
+                        && (target.width() == 1
+                            || target.width() == 8 && target.signedness() == Signedness::Unsigned)
+                    {
+                        Fact::Member {
+                            width,
+                            inverted,
+                            boolean: target.width() == 1,
+                        }
+                    } else {
+                        Fact::Varying
+                    }
+                } else if fact.has_local() {
                     let source_ty = operands[0].get_type(self.ctx);
                     let target_ty = result.get_type(self.ctx);
                     let same_pointee = matches!(
@@ -1664,13 +1822,42 @@ impl Analyzer<'_> {
                 }
             } else if kind == TransferKind::ExtractArrayElement {
                 integer(self.ctx, operands[1]).map_or(Fact::Varying, |i| facts[0].field(i as usize))
+            } else if matches!(kind, TransferKind::Eq | TransferKind::Ne) {
+                let predicate = facts.iter().enumerate().find_map(|(i, fact)| {
+                    let Fact::Member {
+                        width, inverted, ..
+                    } = fact
+                    else {
+                        return None;
+                    };
+                    let constant = integer(self.ctx, operands[1 - i])?;
+                    if constant > 1 {
+                        return None;
+                    }
+                    Some(Fact::Member {
+                        width: *width,
+                        inverted: *inverted ^ (constant == 0) ^ (kind == TransferKind::Ne),
+                        boolean: true,
+                    })
+                });
+                predicate.unwrap_or_else(|| scalar_precision(facts.iter().cloned()))
+            } else if kind == TransferKind::Not {
+                match &facts[0] {
+                    Fact::Member {
+                        width,
+                        inverted,
+                        boolean: true,
+                    } => Fact::Member {
+                        width: *width,
+                        inverted: !*inverted,
+                        boolean: true,
+                    },
+                    _ => scalar_precision(facts.iter().cloned()),
+                }
             } else if kind == TransferKind::CheckedArithmetic {
                 let f = scalar_precision(facts.iter().cloned());
                 Fact::Fields(vec![f.clone(), f])
-            } else if matches!(
-                kind,
-                TransferKind::Scalar | TransferKind::Eq | TransferKind::Ne | TransferKind::Not
-            ) {
+            } else if kind == TransferKind::Scalar {
                 scalar_precision(facts.iter().cloned())
             } else {
                 Fact::Varying

@@ -338,6 +338,53 @@ pub(crate) fn library_warp_query_width(
     })
 }
 
+/// Authenticate the independent query by its actual dependency definition and
+/// instantiated signature. Participation and value precision belong to MIR.
+pub(crate) fn library_warp_prefix_member_width(
+    public: rustc_public::mir::mono::Instance,
+) -> Option<Result<u32, &'static str>> {
+    use rustc_public::ty::{Abi, RigidTy, TyKind as PublicTyKind, UintTy};
+    rustc_middle::ty::tls::with(|tcx| {
+        let instance = rustc_public::rustc_internal::internal(tcx, public);
+        if Some(instance.def_id())
+            != library_device_type(
+                tcx,
+                "library",
+                reserved_oxide_symbols::LIBRARY_WARP_PREFIX_MEMBER_V1,
+            )
+        {
+            return None;
+        }
+        let Some(signature) = public.ty().kind().fn_sig() else {
+            return Some(Err(
+                "Warp prefix query requires a resolved function signature",
+            ));
+        };
+        let signature = signature.skip_binder();
+        if signature.abi != Abi::Rust
+            || signature.c_variadic
+            || !signature.inputs().is_empty()
+            || !matches!(
+                signature.output().kind(),
+                PublicTyKind::RigidTy(RigidTy::Uint(UintTy::U8))
+            )
+        {
+            return Some(Err(
+                "Warp prefix query requires a nullary Rust u8 signature",
+            ));
+        }
+        Some(
+            instance
+                .args
+                .const_at(0)
+                .try_to_target_usize(tcx)
+                .and_then(|width| u32::try_from(width).ok())
+                .filter(|width| (17..=31).contains(width))
+                .ok_or("Warp prefix query requires a width in 17..=31 and no operands"),
+        )
+    })
+}
+
 /// Authenticate the canonical tile marker without deciding participation or
 /// completion. Its const parameter is u32, unlike the usize query parameter.
 pub(crate) fn library_warp_sync_width(

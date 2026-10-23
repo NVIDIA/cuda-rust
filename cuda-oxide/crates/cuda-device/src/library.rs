@@ -225,9 +225,12 @@ pub use cuda_oxide_library_v1_246e25db_checked_block_payload_call as checked_blo
 
 /// Invoke a Warp operation on per-thread payloads with implicit scratch.
 ///
-/// WIDTH is a power of two in 1..=32, and the exact root block must contain
-/// complete physical warps. Controls and participation agree within WIDTH;
-/// sibling groups may differ. The operands and native ABI follow
+/// WIDTH is a power of two in 1..=32 or a prefix width in 17..=31. The exact
+/// root block must contain complete physical warps. A prefix call requires
+/// the matching [`warp_prefix_member_v1`] guard: only physical lanes below
+/// WIDTH participate, with one group per physical warp. Controls and
+/// participation agree within each group; sibling groups may differ.
+/// The operands and native ABI follow
 /// [`checked_block_payload_call_v1`], without an explicit storage operand.
 /// The compiler supplies independent aligned scratch replicas and a matching
 /// barrier before dirty reuse. No trailing barrier or global access is implied.
@@ -237,6 +240,7 @@ pub use cuda_oxide_library_v1_246e25db_checked_block_payload_call as checked_blo
 /// The payload lifetime, initialization, aliasing, native effects and ABI
 /// obligations of [`checked_block_payload_call_v1`] apply. Native communication
 /// must stay within the canonical WIDTH group and its supplied scratch replica.
+/// For prefix widths, no suffix lane may call and every prefix member must call.
 #[inline(never)]
 pub unsafe fn cuda_oxide_library_v1_246e25db_checked_warp_payload_call<
     T: Copy,
@@ -273,6 +277,25 @@ pub fn cuda_oxide_library_v1_246e25db_warp_group_index<const WIDTH: usize>() -> 
 }
 
 pub use cuda_oxide_library_v1_246e25db_warp_group_index as warp_group_index_v1;
+
+/// Membership in the low WIDTH lanes of the executing physical warp.
+///
+/// WIDTH must be in 17..=31. Returns exactly one for a member and zero for a
+/// suffix lane. This pure query does not itself assert participation or
+/// synchronize, and requires neither a native provider nor a launch contract.
+/// Checked payload calls recognize a guard on this genuine query; arbitrary
+/// lane predicates do not acquire that meaning.
+#[inline(never)]
+pub fn cuda_oxide_library_v1_246e25db_warp_prefix_member<const WIDTH: usize>() -> u8 {
+    assert!(WIDTH >= 17 && WIDTH <= 31);
+    let rank = crate::thread::threadIdx_x()
+        + crate::thread::blockDim_x()
+            * (crate::thread::threadIdx_y()
+                + crate::thread::blockDim_y() * crate::thread::threadIdx_z());
+    ((rank % 32) < WIDTH as u32) as u8
+}
+
+pub use cuda_oxide_library_v1_246e25db_warp_prefix_member as warp_prefix_member_v1;
 
 /// Synchronize the canonical aligned tile containing the executing lane.
 ///

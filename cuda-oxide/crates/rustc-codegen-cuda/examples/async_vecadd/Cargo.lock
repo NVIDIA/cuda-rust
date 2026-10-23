@@ -204,6 +204,7 @@ dependencies = [
  "cuda-artifact-finalizer",
  "cuda-async",
  "cuda-core",
+ "cuda-device",
  "cuda-macros",
  "half",
  "libc",

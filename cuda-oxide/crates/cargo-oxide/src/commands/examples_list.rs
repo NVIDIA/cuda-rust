@@ -4,7 +4,7 @@
  */
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::*;
 
@@ -32,11 +32,13 @@ pub fn list_examples(ctx: &Context, json: bool) {
     if !ctx.is_workspace {
         eprintln!("Error: `cargo oxide list` must be run from inside a cuda-oxide checkout.");
         eprintln!();
-        eprintln!("The command lists examples under crates/rustc-codegen-cuda/examples/.");
+        eprintln!(
+            "The command lists the standard and CuTe examples and models bundled with the workspace."
+        );
         std::process::exit(1);
     }
 
-    let examples = discover_examples(&ctx.examples_dir).unwrap_or_else(|error| {
+    let examples = discover_examples_from_roots(&example_roots(ctx)).unwrap_or_else(|error| {
         eprintln!("Error: {error}");
         std::process::exit(1);
     });
@@ -51,6 +53,26 @@ pub fn list_examples(ctx: &Context, json: bool) {
     };
 
     print!("{output}");
+}
+
+/// Discover all configured example roots and reject duplicate names.
+pub(super) fn discover_examples_from_roots(roots: &[PathBuf]) -> Result<Vec<ExampleInfo>, String> {
+    let mut examples = Vec::new();
+    for root in roots {
+        examples.extend(discover_examples(root)?);
+    }
+
+    examples.sort_by(|left, right| left.name.cmp(&right.name));
+    if let Some(pair) = examples
+        .windows(2)
+        .find(|pair| pair[0].name == pair[1].name)
+    {
+        return Err(format!(
+            "example name `{}` exists in more than one example root; names must be unique",
+            pair[0].name
+        ));
+    }
+    Ok(examples)
 }
 
 pub(super) fn discover_examples(examples_dir: &Path) -> Result<Vec<ExampleInfo>, String> {

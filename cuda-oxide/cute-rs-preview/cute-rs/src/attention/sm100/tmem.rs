@@ -1,0 +1,196 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+//! Warp-collective register fragments for CTM tensor-memory loads and stores.
+//! Conversion and chunking preserve the explicit completion choices of each API.
+
+use ctm_rs::{memory::CuSimd, tcgen05::tmem, thread};
+
+/// Warp-collective 32-data-path TMEM register fragment, one row per lane.
+pub struct TmemFragment<const REGS: usize> {
+    /// This lane's FP32 register values.
+    pub values: [f32; REGS],
+}
+/// Implement one native TMEM register width with explicit load/store completion variants.
+macro_rules! fragment {
+    ($n:literal,$load:ident,$store:ident) => {
+        impl TmemFragment<$n> {
+            /// Load a fragment and wait for the warp's preceding TMEM loads.
+            /// # Safety
+            /// All 32 lanes must execute with the same live, row-group-aligned
+            /// TMEM address after the producer's completion and thread fence.
+            #[inline(always)]
+            pub unsafe fn load(address: u32) -> Self {
+                let result = unsafe { Self::load_deferred(address) };
+                // SAFETY: the caller supplies the full-warp participation contract.
+                unsafe { tmem::load_wait() };
+                result
+            }
+            /// Load without a completion wait, retaining register dependencies.
+            /// # Safety
+            /// Same participation and producer obligations as `load`. Only true
+            /// register dependencies order subsequent operations. The caller
+            /// must wait before memory anti-dependencies or a consumer-release
+            /// handoff, and apply the required before-thread-sync fence.
+            /// See the [PTX register-dependency rule](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-memory-consistency-model-canonical-sync-patterns-reg-dependency-same-thread).
+            #[inline(always)]
+            pub unsafe fn load_deferred(address: u32) -> Self {
+                let raw = unsafe { tmem::$load(address) }.to_array();
+                let mut values = [0.0; $n];
+                let mut i = 0;
+                while i < $n {
+                    thread::__unroll_config::<0>();
+                    values[i] = f32::from_bits(raw[i]);
+                    i += 1;
+                }
+                Self { values }
+            }
+            /// Store a fragment and wait for the warp's preceding TMEM stores.
+            /// # Safety
+            /// All 32 lanes must participate with the same live TMEM address.
+            /// Complete consumer handoffs only after the returned store wait.
+            #[inline(always)]
+            pub unsafe fn store(&self, address: u32) {
+                unsafe { self.store_deferred(address) };
+                // SAFETY: the caller supplies the full-warp participation contract.
+                unsafe { tmem::store_wait() };
+            }
+            /// Store without waiting, allowing disjoint TMEM chunks to overlap.
+            /// # Safety
+            /// Same participation and lifetime requirements as `store`. The
+            /// caller must wait for stores before conflicting memory operations
+            /// or completion handoffs, with the required thread-sync fence.
+            #[inline(always)]
+            pub unsafe fn store_deferred(&self, address: u32) {
+                let mut raw = [0u32; $n];
+                let mut i = 0;
+                while i < $n {
+                    thread::__unroll_config::<0>();
+                    raw[i] = self.values[i].to_bits();
+                    i += 1;
+                }
+                unsafe { Self::store_packed_deferred(address, raw) }
+            }
+            /// Store packed words unchanged (low FP16 lane in the low 16 bits).
+            /// # Safety
+            /// Same collective and lifetime requirements as `store`.
+            #[inline(always)]
+            pub unsafe fn store_packed(address: u32, raw: [u32; $n]) {
+                unsafe { Self::store_packed_deferred(address, raw) };
+                // SAFETY: the caller supplies the full-warp participation contract.
+                unsafe { tmem::store_wait() };
+            }
+            /// Store packed words without waiting for completion.
+            /// # Safety
+            /// Same participation and explicit completion obligations as
+            /// `store_deferred`.
+            #[inline(always)]
+            pub unsafe fn store_packed_deferred(address: u32, raw: [u32; $n]) {
+                unsafe { tmem::$store(address, CuSimd::new(raw)) };
+            }
+        }
+    };
+}
+fragment!(2, load_32x32b_x2, store_32x32b_x2);
+fragment!(4, load_32x32b_x4, store_32x32b_x4);
+fragment!(8, load_32x32b_x8, store_32x32b_x8);
+fragment!(16, load_32x32b_x16, store_32x32b_x16);
+fragment!(32, load_32x32b_x32, store_32x32b_x32);
+// The attention references transfer larger logical fragments as repeated x32
+// instructions. Wide native transfers pass standalone probes but fail in the
+// full attention compilation context with the pinned compiler.
+/// Build a wider logical fragment from fixed x32 TMEM instruction chunks.
+macro_rules! chunked_fragment {
+    ($n:literal; $($offset:literal => $chunk:ident),+) => {
+        impl TmemFragment<$n> {
+            /// Load the logical fragment in x32 chunks with one completion wait.
+            /// # Safety
+            /// All lanes participate with the same live row-group-aligned TMEM
+            /// address after producer completion and the thread-sync fence.
+            #[inline(always)]
+            pub unsafe fn load(address: u32) -> Self {
+                let result = unsafe { Self::load_deferred(address) };
+                // SAFETY: the caller supplies the full-warp participation contract.
+                unsafe { tmem::load_wait() };
+                result
+            }
+            /// Load x32 chunks without a completion wait.
+            /// # Safety
+            /// Same participation and producer requirements as `load`. Only true
+            /// register dependencies provide ordering. Wait before memory
+            /// anti-dependencies or a consumer-release handoff, and apply the
+            /// required before-thread-sync fence.
+            #[inline(always)]
+            pub unsafe fn load_deferred(address: u32) -> Self {
+                $(let $chunk = unsafe { tmem::load_32x32b_x32(address + $offset) };)+
+                let mut values = [0.0; $n];
+                $(
+                    let raw = $chunk.to_array();
+                    let mut i = 0;
+                    while i < 32 {
+                        thread::__unroll_config::<0>();
+                        values[$offset + i] = f32::from_bits(raw[i]);
+                        i += 1;
+                    }
+                )+
+                Self { values }
+            }
+            /// Store the logical fragment in x32 chunks with one completion wait.
+            /// # Safety
+            /// All lanes participate with the same live TMEM address. Publish
+            /// completion only after a before-thread-sync fence by every lane.
+            #[inline(always)]
+            pub unsafe fn store(&self, address: u32) {
+                unsafe { self.store_deferred(address) };
+                // SAFETY: the caller supplies the full-warp participation contract.
+                unsafe { tmem::store_wait() };
+            }
+            /// Store x32 chunks without waiting for completion.
+            /// # Safety
+            /// Same participation and lifetime requirements as `store`. Wait
+            /// before conflicting memory operations or completion handoffs,
+            /// with the required thread-sync fence.
+            #[inline(always)]
+            pub unsafe fn store_deferred(&self, address: u32) {
+                let mut raw = [0; $n];
+                let mut i = 0;
+                while i < $n {
+                    thread::__unroll_config::<0>();
+                    raw[i] = self.values[i].to_bits();
+                    i += 1;
+                }
+                unsafe { Self::store_packed_deferred(address, raw) }
+            }
+            /// Store packed FP16 words in x32 chunks, preserving every bit.
+            /// # Safety
+            /// Same participation, lifetime, and fence obligations as `store`.
+            #[inline(always)]
+            pub unsafe fn store_packed(address: u32, raw: [u32; $n]) {
+                unsafe { Self::store_packed_deferred(address, raw) };
+                // SAFETY: the caller supplies the full-warp participation contract.
+                unsafe { tmem::store_wait() };
+            }
+            /// Store packed x32 chunks without waiting for completion.
+            /// # Safety
+            /// Same participation and explicit completion obligations as
+            /// `store_deferred`.
+            #[inline(always)]
+            pub unsafe fn store_packed_deferred(address: u32, raw: [u32; $n]) {
+                $(
+                    let mut chunk = [0; 32];
+                    let mut i = 0;
+                    while i < 32 {
+                        thread::__unroll_config::<0>();
+                        chunk[i] = raw[$offset + i];
+                        i += 1;
+                    }
+                    unsafe { tmem::store_32x32b_x32(address + $offset, CuSimd::new(chunk)) };
+                )+
+            }
+        }
+    }
+}
+chunked_fragment!(64; 0 => a, 32 => b);
+chunked_fragment!(128; 0 => a, 32 => b, 64 => c, 96 => d);

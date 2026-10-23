@@ -37,15 +37,15 @@ use dialect_mir::ops::{
     MirStorageLiveOp, MirStoreOp, MirSubOp, MirUndefOp, MirUnreachableOp, MirUnrollHintOp,
 };
 use dialect_nvvm::ops::{
-    AssertFailOp, CvtaGenericToSharedOffsetOp, InlinePtxOp, NvvmAtomicCmpxchgOp, NvvmAtomicFenceOp,
-    NvvmAtomicLoadOp, NvvmAtomicRmwOp, NvvmAtomicStoreOp, ReadPtxSregClusterIdxOp,
-    ReadPtxSregNclusterIdOp, VprintfOp, WgmmaMakeSmemDescOp, WgmmaMmaGroupM64N64K16F32Bf16Op,
-    WgmmaMmaGroupValuesM64N64K8F32Tf32Op, WgmmaMmaGroupValuesM64N64K16F32Bf16Op,
-    WgmmaMmaGroupValuesM64N64K16F32F16Op, WgmmaMmaGroupValuesM64N128K16F32Bf16Op,
-    WgmmaMmaLoopPipelineValuesM64N64K16F32Bf16Op, WgmmaMmaLoopValuesM64N64K16F32Bf16Op,
-    WgmmaMmaLoopValuesM64N64K16F32F16Op, WgmmaMmaM64N64K8F32Tf32Op, WgmmaMmaM64N64K16F32Bf16Op,
-    WgmmaMmaM64N64K16F32F16Op, WgmmaMmaM64N128K16F32Bf16Op,
-    WgmmaMmaPipelineValuesM64N64K16F32Bf16Op,
+    AssertFailOp, CvtaGenericToClusterSharedOffsetOp, CvtaGenericToSharedOffsetOp, InlinePtxOp,
+    NvvmAtomicCmpxchgOp, NvvmAtomicFenceOp, NvvmAtomicLoadOp, NvvmAtomicRmwOp, NvvmAtomicStoreOp,
+    ReadPtxSregClusterIdxOp, ReadPtxSregNclusterIdOp, VprintfOp, WgmmaMakeSmemDescOp,
+    WgmmaMmaGroupM64N64K16F32Bf16Op, WgmmaMmaGroupValuesM64N64K8F32Tf32Op,
+    WgmmaMmaGroupValuesM64N64K16F32Bf16Op, WgmmaMmaGroupValuesM64N64K16F32F16Op,
+    WgmmaMmaGroupValuesM64N128K16F32Bf16Op, WgmmaMmaLoopPipelineValuesM64N64K16F32Bf16Op,
+    WgmmaMmaLoopValuesM64N64K16F32Bf16Op, WgmmaMmaLoopValuesM64N64K16F32F16Op,
+    WgmmaMmaM64N64K8F32Tf32Op, WgmmaMmaM64N64K16F32Bf16Op, WgmmaMmaM64N64K16F32F16Op,
+    WgmmaMmaM64N128K16F32Bf16Op, WgmmaMmaPipelineValuesM64N64K16F32Bf16Op,
 };
 
 // ---- Arithmetic ops --------------------------------------------------------
@@ -1035,6 +1035,23 @@ impl MirToLlvmConversion for CvtaGenericToSharedOffsetOp {
         operands_info: &OperandsInfo,
     ) -> Result<()> {
         super::intrinsics::memory::convert_cvta_generic_to_shared_offset(
+            ctx,
+            rewriter,
+            self.get_operation(),
+            operands_info,
+        )
+    }
+}
+
+#[op_interface_impl]
+impl MirToLlvmConversion for CvtaGenericToClusterSharedOffsetOp {
+    fn convert(
+        &self,
+        ctx: &mut Context,
+        rewriter: &mut DialectConversionRewriter,
+        operands_info: &OperandsInfo,
+    ) -> Result<()> {
+        super::intrinsics::memory::convert_cvta_generic_to_cluster_shared_offset(
             ctx,
             rewriter,
             self.get_operation(),

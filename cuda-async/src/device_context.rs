@@ -77,6 +77,21 @@ pub struct PointerParamType {
 pub struct TensorParamType {
     pub element_type: String,
     pub shape: Vec<i32>,
+    /// Per-axis strides in elements. `-1` denotes a runtime stride; other
+    /// values are constants used by the compiled specialization.
+    pub strides: Vec<i32>,
+}
+
+impl TensorParamType {
+    /// Whether the runtime strides satisfy this specialization's constants.
+    pub fn strides_match(&self, given: &[i32]) -> bool {
+        self.strides.len() == given.len()
+            && self
+                .strides
+                .iter()
+                .zip(given)
+                .all(|(&expected, &given)| expected == -1 || expected == given)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -521,6 +536,52 @@ pub fn load_module_from_ptx(ptx_src: &str, device_id: usize) -> Result<Arc<Modul
         let module = device.load_module_from_ptx_src(ptx_src)?;
         Ok(module)
     })?
+}
+
+#[cfg(test)]
+mod tensor_stride_tests {
+    use super::TensorParamType;
+
+    fn tensor_param(strides: &[i32]) -> TensorParamType {
+        TensorParamType {
+            element_type: "f32".to_string(),
+            shape: vec![-1; strides.len()],
+            strides: strides.to_vec(),
+        }
+    }
+
+    #[test]
+    fn static_strides_must_match() {
+        let param = tensor_param(&[8, 1]);
+        assert!(param.strides_match(&[8, 1]));
+        assert!(!param.strides_match(&[4, 1]));
+        assert!(!param.strides_match(&[8, 2]));
+    }
+
+    #[test]
+    fn dynamic_strides_accept_different_runtime_values() {
+        let param = tensor_param(&[-1, 1]);
+        assert!(param.strides_match(&[8, 1]));
+        assert!(param.strides_match(&[4, 1]));
+        assert!(param.strides_match(&[1, 1]));
+        assert!(!param.strides_match(&[8, 2]));
+    }
+
+    #[test]
+    fn stride_rank_must_match_before_comparing_axes() {
+        let param = tensor_param(&[-1, 1]);
+        assert!(!param.strides_match(&[]));
+        assert!(!param.strides_match(&[8]));
+        assert!(!param.strides_match(&[8, 1, 1]));
+        assert!(!tensor_param(&[-1, -1]).strides_match(&[8]));
+    }
+
+    #[test]
+    fn rank_zero_has_no_strides() {
+        let param = tensor_param(&[]);
+        assert!(param.strides_match(&[]));
+        assert!(!param.strides_match(&[1]));
+    }
 }
 
 #[cfg(test)]

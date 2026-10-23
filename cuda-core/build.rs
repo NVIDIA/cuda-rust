@@ -38,13 +38,21 @@ const TOOLKIT_TARGET_DIR_ENV: &str = "CUDA_TOOLKIT_TARGET_DIR";
 /// `cuda.h` than the one the bindings were generated from.
 #[cfg(windows)]
 const DEFAULT_TOOLKIT_DIRS: &[&str] = &[
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.5",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4",
     r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3",
     r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0",
 ];
 #[cfg(not(windows))]
 const DEFAULT_TOOLKIT_DIRS: &[&str] = &[
+    "/usr/local/cuda-13.5",
+    "/usr/local/cuda-13.4",
     "/usr/local/cuda-13.3",
     "/usr/local/cuda-13.2",
+    "/usr/local/cuda-13.1",
+    "/usr/local/cuda-13.0",
     "/usr/local/cuda-13",
     "/usr/local/cuda",
 ];

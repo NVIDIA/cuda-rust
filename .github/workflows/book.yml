@@ -15,7 +15,8 @@ on:
   # only ever built after merge, so a PR that broke it could not be caught by
   # review or by CI.
   pull_request:
-    branches: [main]
+    # Include PRs stacked on copy-pr-bot mirrors of their prerequisites.
+    branches: [main, "pull-request/[0-9]+"]
     paths:
       - 'cuda-oxide/cuda-oxide-book/**'
       - 'cutile-rs/cutile-book/**'

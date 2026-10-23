@@ -45,6 +45,10 @@ run_step \
     "cutile doc tests" \
     cargo test -p cutile --doc
 
+run_step \
+    "cutile compile-fail API contracts" \
+    cargo test -p cutile --test ui
+
 for test_target in \
     basics_and_inlining \
     binary_math_ops \

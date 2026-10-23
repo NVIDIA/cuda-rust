@@ -444,8 +444,10 @@ name = "cuda-core"
 version = "0.5.0"
 dependencies = [
  "anyhow",
+ "bytemuck",
  "cuda-bindings",
  "cuda-core-derive",
+ "cuda-repr",
  "half",
  "oxide-artifacts",
 ]
@@ -458,6 +460,10 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "cuda-repr"
+version = "0.5.0"
 
 [[package]]
 name = "cuda-tile-rs"

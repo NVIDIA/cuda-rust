@@ -10,17 +10,20 @@ on:
       - 'cuda-bindings/**'
       - 'cuda-core/**'
       - 'cuda-core-derive/**'
+      - 'cuda-repr/**'
       - 'cuda-async/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/**'
   pull_request:
-    branches: [main]
+    # Include PRs stacked on copy-pr-bot mirrors of their prerequisites.
+    branches: [main, "pull-request/[0-9]+"]
     paths:
       - 'cuda-oxide/**'
       - 'cuda-bindings/**'
       - 'cuda-core/**'
       - 'cuda-core-derive/**'
+      - 'cuda-repr/**'
       - 'cuda-async/**'
       - 'Cargo.toml'
       - 'Cargo.lock'

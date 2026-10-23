@@ -25,7 +25,9 @@ use crate::simt::device_buffer::DeviceCopy;
 /// Owned page-locked host buffer.
 ///
 /// The buffer is initialized and exposes normal Rust slices. The backing
-/// allocation is freed with `cuMemFreeHost` on drop.
+/// allocation is freed with `cuMemFreeHost` on drop. Extra space is reserved
+/// when needed to align the elements, even for types whose alignment exceeds
+/// CUDA's host-allocation alignment.
 ///
 /// Pinned transfer buffers require `T: DeviceCopy`, so host-owned values such
 /// as [`String`] are rejected.
@@ -38,6 +40,8 @@ use crate::simt::device_buffer::DeviceCopy;
 /// ```
 pub struct PinnedHostBuffer<T: DeviceCopy> {
     ptr: NonNull<T>,
+    // CUDA must free the original allocation, not the aligned interior pointer.
+    allocation: Option<NonNull<u8>>,
     len: usize,
     num_bytes: usize,
     ctx: Arc<CudaContext>,
@@ -123,19 +127,28 @@ impl<T: DeviceCopy> PinnedHostBuffer<T> {
     }
 
     fn allocate(ctx: &Arc<CudaContext>, len: usize) -> Result<Self, DriverError> {
-        let num_bytes = allocation_size::<T>(len)?;
-        let ptr = if num_bytes == 0 {
-            NonNull::dangling()
+        let (num_bytes, allocation_bytes) = allocation_sizes::<T>(len)?;
+        let (ptr, allocation) = if num_bytes == 0 {
+            (NonNull::dangling(), None)
         } else {
             ctx.bind_to_thread()?;
-            let ptr = unsafe { crate::simt::memory::malloc_host(num_bytes)? };
-            NonNull::new(ptr.cast::<T>()).ok_or(DriverError(
+            let raw = unsafe { crate::simt::memory::malloc_host(allocation_bytes)? };
+            let allocation = NonNull::new(raw.cast::<u8>()).ok_or(DriverError(
                 cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE,
-            ))?
+            ))?;
+            let offset = allocation.as_ptr().align_offset(std::mem::align_of::<T>());
+            // SAFETY: for a byte pointer, align_offset is at most align_of::<T>()
+            // - 1. allocation_sizes reserves that much slack, leaving num_bytes
+            // accessible after this aligned, non-null interior pointer. The
+            // entire allocation fits in isize::MAX for pointer arithmetic.
+            let ptr =
+                unsafe { NonNull::new_unchecked(allocation.as_ptr().add(offset).cast::<T>()) };
+            (ptr, Some(allocation))
         };
 
         Ok(Self {
             ptr,
+            allocation,
             len,
             num_bytes,
             ctx: ctx.clone(),
@@ -146,10 +159,10 @@ impl<T: DeviceCopy> PinnedHostBuffer<T> {
 
 impl<T: DeviceCopy> Drop for PinnedHostBuffer<T> {
     fn drop(&mut self) {
-        if self.num_bytes != 0 {
+        if let Some(allocation) = self.allocation {
             self.ctx.record_err(self.ctx.bind_to_thread());
             self.ctx
-                .record_err(unsafe { crate::simt::memory::free_host(self.ptr.as_ptr().cast()) });
+                .record_err(unsafe { crate::simt::memory::free_host(allocation.as_ptr().cast()) });
         }
     }
 }
@@ -191,8 +204,39 @@ impl<T: DeviceCopy> DerefMut for PinnedHostBuffer<T> {
     }
 }
 
-fn allocation_size<T>(len: usize) -> Result<usize, DriverError> {
-    len.checked_mul(std::mem::size_of::<T>()).ok_or(DriverError(
-        cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE,
-    ))
+fn allocation_sizes<T>(len: usize) -> Result<(usize, usize), DriverError> {
+    let invalid_size = DriverError(cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE);
+    // Rust slices and pointer arithmetic require sizes bounded by isize::MAX,
+    // even when len * size_of::<T>() would fit in usize.
+    let layout = std::alloc::Layout::array::<T>(len).map_err(|_| invalid_size)?;
+    let num_bytes = layout.size();
+    if num_bytes == 0 {
+        return Ok((0, 0));
+    }
+    let allocation_bytes = num_bytes
+        .checked_add(layout.align() - 1)
+        .filter(|&size| size <= isize::MAX as usize)
+        .ok_or(invalid_size)?;
+    Ok((num_bytes, allocation_bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::allocation_sizes;
+
+    #[test]
+    fn rejects_sizes_that_cannot_form_a_rust_slice() {
+        assert!(allocation_sizes::<u8>(isize::MAX as usize + 1).is_err());
+        assert!(allocation_sizes::<u32>(usize::MAX).is_err());
+        assert_eq!(
+            allocation_sizes::<u8>(isize::MAX as usize).unwrap(),
+            (isize::MAX as usize, isize::MAX as usize)
+        );
+    }
+
+    #[test]
+    fn empty_and_zero_sized_buffers_need_no_allocation() {
+        assert_eq!(allocation_sizes::<u64>(0).unwrap(), (0, 0));
+        assert_eq!(allocation_sizes::<()>(usize::MAX).unwrap(), (0, 0));
+    }
 }

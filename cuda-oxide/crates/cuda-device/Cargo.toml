@@ -15,6 +15,11 @@ readme = "README.md"
 # it back on for all of them and defeat the feature. `cuda-host` requests
 # `host` explicitly, so any build that loads or launches a module still has it.
 cuda-macros = { workspace = true }
+# Shared no_std marker for owned-buffer representation changes. Keeping it
+# separate from cuda-core leaves kernel-only builds free of host dependencies.
+cuda-repr = { version = "=0.5.0", path = "../../../cuda-repr" }
+# Vector types implement Pod for safe cast_chunks targets.
+bytemuck = { workspace = true }
 
 [dev-dependencies]
 trybuild = "1"

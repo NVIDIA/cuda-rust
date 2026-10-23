@@ -20,7 +20,7 @@ error[E0277]: the trait bound `impl cutile::prelude::DeviceOp<Output = cutile::p
    = note: 3 redundant requirements hidden
    = note: required for `kernels::Copy<&cutile::prelude::Tensor<f32>, Partition<cutile::prelude::Tensor<f32>>, cutile::tile_kernel::KernelArgs<(cutile::tile_kernel::PrepareOutput<DeviceOperationPartition<1, cutile::prelude::Tensor<f32>, impl cutile::prelude::DeviceOp<Output = cutile::prelude::Tensor<f32>>>, f32>, cutile::tile_kernel::PrepareInput<cutile::prelude::Value<&cutile::prelude::Tensor<f32>>, f32>)>>` to implement `cutile::prelude::GraphNode`
 note: required by a bound in `cutile::prelude::Scope::record`
-  --> $WORKSPACE/cuda-async/src/cuda_graph.rs
+  --> $CUDA_ASYNC/src/cuda_graph.rs
    |
    |     pub fn record<T, N>(&self, op: N) -> Result<T, DeviceError>
    |            ------ required by a bound in this associated function

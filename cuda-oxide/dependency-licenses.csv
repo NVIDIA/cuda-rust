@@ -12,6 +12,7 @@ awint_macro_internals,0.18.1,MIT OR Apache-2.0,Yes,registry+https://github.com/r
 awint_macros,0.18.1,MIT OR Apache-2.0,Yes,registry+https://github.com/rust-lang/crates.io-index,3rd Party (crates.io),https://github.com/AaronKutch/awint,Accompanying procedural macros to `awint`,
 bindgen,0.72.1,BSD-3-Clause,Yes,registry+https://github.com/rust-lang/crates.io-index,3rd Party (crates.io),https://github.com/rust-lang/rust-bindgen,Automatically generates Rust FFI bindings to C and C++ libraries.,Build-time only: generates FFI bindings for libmathdx-sys.
 bitflags,2.10.0,MIT OR Apache-2.0,Yes,registry+https://github.com/rust-lang/crates.io-index,3rd Party (crates.io),https://github.com/bitflags/bitflags,A macro to generate structures which behave like bitflags.,
+bytemuck,1.25.0,Zlib OR Apache-2.0 OR MIT,Yes,registry+https://github.com/rust-lang/crates.io-index,3rd Party (crates.io),https://github.com/Lokathor/bytemuck,A crate for mucking around with piles of bytes.,"AnyBitPattern bounds safe element casts in cuda-core; cuda-device vector types implement Pod."
 bytes,1.11.0,MIT,Yes,registry+https://github.com/rust-lang/crates.io-index,3rd Party (crates.io),https://github.com/tokio-rs/bytes,Types and traits for working with bytes,
 cargo-oxide,0.2.1,Apache-2.0,Yes,local (workspace),1st Party (workspace),https://github.com/NVIDIA/cuda-rust,Cargo subcommand for cuda-oxide: build and run Rust GPU programs,
 cexpr,0.6.0,Apache-2.0/MIT,Yes,registry+https://github.com/rust-lang/crates.io-index,3rd Party (crates.io),https://github.com/jethrogb/rust-cexpr,A C expression parser and evaluator,
@@ -38,6 +39,7 @@ cuda-intrinsics-gen,0.1.0,Apache-2.0,Yes,local (workspace),1st Party (workspace)
 cuda-macros,0.2.1,Apache-2.0,Yes,local (workspace),1st Party (workspace),https://github.com/NVIDIA/cuda-rust,"Procedural macros for CUDA kernel development (#[kernel], #[device], etc.)",
 cuda-oxide-codegen,0.1.0,Apache-2.0,Yes,local (workspace),1st Party (workspace),https://github.com/NVIDIA/cuda-rust,Rustc-independent cuda-oxide PTX backend,
 cuda-oxide-mlir-export,0.1.0,Apache-2.0,Yes,local (workspace),1st Party (workspace),https://github.com/NVIDIA/cuda-rust,CUDA Oxide mapping packs for the official CUTLASS MLIR consumer profile,
+cuda-repr,path,Apache-2.0,Yes,local (git root),1st Party (git root),https://github.com/NVIDIA/cuda-rust,Shared no_std representation contracts for CUDA host and device types,DeviceRepr permits owned-buffer relabeling without shared-reference conversions.
 cuda-target-spec,0.1.0,Apache-2.0,Yes,local (workspace),1st Party (workspace),https://github.com/NVIDIA/cuda-rust,Shared CUDA target parsing and recorded LLVM PTX-floor policy,
 cute-layout,0.1.0,Apache-2.0,Yes,local (workspace),1st Party (workspace),https://github.com/NVIDIA/cuda-rust,Coordinate-to-memory mapping and validation for CuTe-style GPU tiles,
 cute-rs,0.1.0,Apache-2.0,Yes,local (workspace),1st Party (workspace),https://github.com/NVIDIA/cuda-rust,"CuTe-style device library: Tensor, Layout types, partitioning, copy/mma atoms",

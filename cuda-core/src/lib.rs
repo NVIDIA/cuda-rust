@@ -16,7 +16,12 @@ pub mod simt;
 pub mod vmm;
 
 pub use api::*;
+// `DeviceBuffer::cast_elem` and `cast_chunks` are bounded on bytemuck's
+// marker traits. The re-export lets a downstream crate
+// implement them for its own element types against the same bytemuck.
+pub use bytemuck;
 pub use cuda_bindings as sys;
+pub use cuda_repr::DeviceRepr;
 pub use dtype::*;
 pub use error::*;
 pub use runtime::*;

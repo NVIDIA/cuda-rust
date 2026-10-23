@@ -141,7 +141,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-bindings"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bindgen",
  "libloading",
@@ -153,7 +153,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "cuda-bindings",
@@ -164,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-core-derive"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "proc-macro2",
  "quote",

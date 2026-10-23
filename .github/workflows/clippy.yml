@@ -37,7 +37,7 @@ jobs:
         working-directory: cuda-oxide
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # `rustc-codegen-cuda` and each example under examples/ are their own
+      # `rustc-codegen-cuda`, the standard and CuTe examples, and CuTe models have
       # standalone workspaces (the codegen backend is swapped in via
       # RUSTFLAGS, so they can't live in the root [workspace]). That's 60+
       # cargo invocations from different workspace roots. By default each
@@ -60,18 +60,25 @@ jobs:
         working-directory: cuda-oxide/crates/rustc-codegen-cuda
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Run clippy (rustc-codegen-cuda examples)
+      - name: Run clippy (standard and CuTe examples and models)
         env:
           CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           CARGO_TARGET_DIR: ${{ runner.temp }}/clippy-shared-target
         run: |
           set -e
-          for ex in cuda-oxide/crates/rustc-codegen-cuda/examples/*/; do
-            if [ ! -f "$ex/Cargo.toml" ]; then continue; fi
-            name=$(basename "$ex")
-            echo "::group::clippy: $name"
-            (cd "$ex" && cargo clippy --all-targets -- -D warnings)
-            echo "::endgroup::"
+          example_roots=(
+            cuda-oxide/crates/rustc-codegen-cuda/examples
+            cuda-oxide/cute-rs-preview/examples
+            cuda-oxide/cute-rs-preview/models
+          )
+          for example_root in "${example_roots[@]}"; do
+            for ex in "$example_root"/*/; do
+              if [ ! -f "$ex/Cargo.toml" ]; then continue; fi
+              name=$(basename "$ex")
+              echo "::group::clippy: $name"
+              (cd "$ex" && cargo clippy --all-targets -- -D warnings)
+              echo "::endgroup::"
+            done
           done
 
           # The loop above is one level deep. A few examples nest a second
@@ -97,11 +104,11 @@ jobs:
                grep -q "\"${sub}\""; then
               continue
             fi
-            echo "::group::clippy: ${dir#cuda-oxide/crates/rustc-codegen-cuda/examples/}"
+            echo "::group::clippy: ${dir#cuda-oxide/}"
             (cd "${dir}" && cargo clippy --locked --all-targets -- -D warnings)
             echo "::endgroup::"
           done < <(
-            find cuda-oxide/crates/rustc-codegen-cuda/examples -mindepth 3 -name Cargo.toml \
+            find "${example_roots[@]}" -mindepth 3 -name Cargo.toml \
               -not -path '*/target/*' | sort
           )
 

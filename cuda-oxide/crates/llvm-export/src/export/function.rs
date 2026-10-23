@@ -162,7 +162,7 @@ fn export_reference_parameter_attrs(
 /// Shared-global owner attributes carry the raw symbol, so the module prepass,
 /// function definition, and global attachment must all normalize it exactly
 /// once through the same helper.
-pub(super) fn exported_function_name(raw_name: &str) -> String {
+pub fn exported_function_name(raw_name: &str) -> String {
     if raw_name.starts_with("llvm_") {
         decode_intrinsic_identifier(raw_name)
     } else {

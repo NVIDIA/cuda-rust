@@ -22,6 +22,8 @@ pub mod prelude;
 // model-checked through `slot_table`'s mock backend instead.
 #[cfg(not(loom))]
 mod reactor;
+#[cfg(not(loom))]
+pub mod reaper;
 pub mod scheduling_policies;
 /// SIMT-model async surface, copied from cuda-oxide for the shared
 /// host-crate migration. Not re-exported at the root; see the module docs.

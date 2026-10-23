@@ -148,12 +148,13 @@ impl Drop for Gate {
     }
 }
 
-/// What the output's `Drop` observed: whether the device had passed the
-/// event recorded after the op's work when the output was released.
+/// What the retained operand's `Drop` observed: whether the device had
+/// passed the event recorded after the op's work when it was released.
 type DropLog = Arc<Mutex<Vec<bool>>>;
 
-/// The op's output: owns the completion event and reports, on drop, whether
-/// the work had completed by then.
+/// An operand the op retains in its submission (the thing whose release
+/// must wait for the device): owns the completion event and reports, on
+/// drop, whether the work had completed by then.
 struct Tracked {
     event: Event,
     log: DropLog,
@@ -177,8 +178,8 @@ struct SlowOp {
 }
 
 impl DeviceOp for SlowOp {
-    type Output = Tracked;
-    unsafe fn execute(self, context: &ExecutionContext) -> Result<Tracked, DeviceError> {
+    type Output = ();
+    unsafe fn execute(self, context: &ExecutionContext) -> Result<(), DeviceError> {
         let stream = context.get_cuda_stream();
         if let Some(gate) = &self.gate {
             gate.arm(stream.cu_stream())?;
@@ -194,16 +195,17 @@ impl DeviceOp for SlowOp {
         }
         let event = stream.device().new_event()?;
         event.record(stream)?;
-        Ok(Tracked {
+        context.retain(Tracked {
             event,
             log: self.log,
-        })
+        })?;
+        Ok(())
     }
 }
 
 impl IntoFuture for SlowOp {
-    type Output = Result<Tracked, DeviceError>;
-    type IntoFuture = cuda_async::device_future::DeviceFuture<Tracked, SlowOp>;
+    type Output = Result<(), DeviceError>;
+    type IntoFuture = cuda_async::device_future::DeviceFuture<(), SlowOp>;
     fn into_future(self) -> Self::IntoFuture {
         let policy = global_policy(0).expect("global policy");
         match self.schedule(&policy) {
@@ -240,6 +242,19 @@ fn gated_op(dptr: u64, log: &DropLog, gate: &Arc<Gate>) -> SlowOp {
     }
 }
 
+/// Waits until the reaper holds nothing, so releases can be asserted on.
+fn wait_for_reaper(deadline: Duration) {
+    let start = Instant::now();
+    while cuda_async::reaper::parked() != 0 {
+        assert!(
+            start.elapsed() < deadline,
+            "the reaper still holds {} parked submission(s) after {deadline:?}",
+            cuda_async::reaper::parked()
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 fn block_on_with_deadline<F: Future + Unpin>(mut future: F, deadline: Duration) -> F::Output {
     let start = Instant::now();
     let waker = noop_waker();
@@ -259,11 +274,13 @@ fn block_on_with_deadline<F: Future + Unpin>(mut future: F, deadline: Duration) 
 }
 
 /// The core regression: poll once with the work provably in flight (held
-/// behind a closed gate), drop the future, and check that the output was
-/// released only after the device passed the event recorded behind the work.
+/// behind a closed gate), drop the future, and check two things: the drop
+/// returned before the gate opened (it did not block on the device), and
+/// the retained operand was released only after the device passed the event
+/// recorded behind the work (the reaper waited for it).
 ///
-/// The gate opens from a helper thread after `GATE_DELAY`, so a drop that
-/// waits cannot return before then, and one that does not is caught twice:
+/// The gate opens from a helper thread after `GATE_DELAY`, so a blocking
+/// drop cannot return before then, and a premature release is caught twice:
 /// it returns early, and its output's event reports the work still in flight.
 #[test]
 fn dropping_in_flight_future_releases_output_after_the_device_finished() {
@@ -284,6 +301,7 @@ fn dropping_in_flight_future_releases_output_after_the_device_finished() {
 
         for _ in 0..4 {
             let gate = Gate::closed();
+            let released_before = log.lock().unwrap().len();
             let mut future = gated_op(dptr, &log, &gate).into_future();
             let waker = noop_waker();
             let mut cx = Context::from_waker(&waker);
@@ -311,18 +329,28 @@ fn dropping_in_flight_future_releases_output_after_the_device_finished() {
             drop(future);
             let elapsed = started.elapsed();
             assert!(
-                elapsed >= GATE_DELAY,
-                "the drop returned after {elapsed:?}, before the gate opened at {GATE_DELAY:?}: \
-                 it did not wait for the in-flight work"
+                elapsed < GATE_DELAY,
+                "the drop returned only after {elapsed:?}, past the gate's {GATE_DELAY:?}: it \
+                 blocked on the in-flight work instead of parking it"
+            );
+            assert_eq!(
+                log.lock().unwrap().len(),
+                released_before,
+                "an operand was released while the gate still held its work back"
             );
             opener.join().expect("gate opener thread panicked");
+            wait_for_reaper(Duration::from_secs(30));
         }
 
         let log = log.lock().unwrap();
-        assert_eq!(log.len(), 4, "every dropped future must release its output");
+        assert_eq!(
+            log.len(),
+            4,
+            "every dropped future must release its operand"
+        );
         assert!(
             log.iter().all(|&done| done),
-            "an output was released while its GPU work was still in flight: {log:?}"
+            "an operand was released while its GPU work was still in flight: {log:?}"
         );
     });
 }
@@ -343,20 +371,65 @@ fn dropping_unpolled_future_submits_nothing() {
     });
 }
 
-/// After the result has been delivered, dropping the future is a no-op; the
-/// delivered output is the caller's and reports completion when dropped.
+/// A delivered result completes its submission: the retained operand is
+/// released right there, after the work, without involving the reaper.
 #[test]
-fn delivered_result_is_owned_by_the_caller() {
+fn delivered_result_releases_its_operands_on_delivery() {
     on_fresh_thread(|| {
         init_device_contexts(0, 1).expect("init failed (requires GPU)");
         let dptr = alloc_device(BUF);
         let log: DropLog = Arc::new(Mutex::new(Vec::new()));
 
-        let tracked =
-            block_on_with_deadline(slow_op(dptr, &log).into_future(), Duration::from_secs(30))
-                .expect("op failed");
-        assert!(log.lock().unwrap().is_empty(), "nothing dropped yet");
-        drop(tracked);
+        block_on_with_deadline(slow_op(dptr, &log).into_future(), Duration::from_secs(30))
+            .expect("op failed");
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            [true],
+            "the operand is released at delivery, after the work"
+        );
+    });
+}
+
+/// Racing a device future against something that wins first (the `select!`
+/// / timeout shape) must not stall the executor: the losing device future
+/// is dropped mid-flight on the executor thread, which returns promptly,
+/// and its operand is released only after the device finishes.
+#[test]
+fn losing_a_select_does_not_block_the_executor() {
+    on_fresh_thread(|| {
+        init_device_contexts(0, 1).expect("init failed (requires GPU)");
+        let dptr = alloc_device(BUF);
+        let log: DropLog = Arc::new(Mutex::new(Vec::new()));
+        // Warm up the completion path on an ungated op.
+        let scratch: DropLog = Default::default();
+        block_on_with_deadline(
+            slow_op(dptr, &scratch).into_future(),
+            Duration::from_secs(30),
+        )
+        .expect("warm-up op failed");
+
+        let gate = Gate::closed();
+        let opener = gate.open_after(GATE_DELAY);
+        let started = Instant::now();
+        futures::executor::block_on(async {
+            let device = gated_op(dptr, &log, &gate).into_future();
+            let winner = futures::future::ready(());
+            match futures::future::select(device, winner).await {
+                futures::future::Either::Left(_) => panic!("the gated op resolved first"),
+                futures::future::Either::Right(((), device)) => drop(device),
+            }
+        });
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < GATE_DELAY,
+            "the executor was blocked for {elapsed:?} by the losing future's drop"
+        );
+        assert!(
+            log.lock().unwrap().is_empty(),
+            "operand released before the gate opened"
+        );
+        opener.join().expect("gate opener thread panicked");
+        wait_for_reaper(Duration::from_secs(30));
         assert_eq!(log.lock().unwrap().as_slice(), [true]);
     });
 }
@@ -380,6 +453,13 @@ fn later_pipelines_complete_after_cancellations() {
             block_on_with_deadline(slow_op(dptr, &log).into_future(), Duration::from_secs(30))
                 .expect("op after cancellations failed");
         }
-        assert!(log.lock().unwrap().iter().all(|&done| done));
+        wait_for_reaper(Duration::from_secs(30));
+        let log = log.lock().unwrap();
+        assert_eq!(
+            log.len(),
+            12,
+            "8 cancelled + 4 completed operands released: {log:?}"
+        );
+        assert!(log.iter().all(|&done| done), "{log:?}");
     });
 }

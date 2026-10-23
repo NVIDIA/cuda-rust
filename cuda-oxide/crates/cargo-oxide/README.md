@@ -10,10 +10,10 @@ Replaces the previous `xtask` pattern with a proper cargo subcommand that works 
 
 **External users**:
 
-Install with the project's pinned nightly toolchain:
+Install with the project's pinned toolchain:
 
 ```bash
-cargo +nightly-2026-10-11 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
+cargo +1.99.1 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
 ```
 
 On first run, `cargo-oxide` will automatically fetch and build the codegen backend if it's not already available.
@@ -158,8 +158,12 @@ final-output mode, so it cannot be combined with `--emit-nvvm-ir`,
 
 ### `cargo oxide list [--json]`
 
-Lists every example bundled with the cuda-oxide workspace, including its short
-description and any hardware or toolkit requirements documented in its README.
+Lists every example and model bundled with the cuda-oxide workspace, including
+its short description and any hardware or toolkit requirements documented in
+its README. Discovery includes `crates/rustc-codegen-cuda/examples/`,
+`cute-rs-preview/examples/`, and `cute-rs-preview/models/` within the cuda-oxide component.
+Names must be unique across these directories; `run` and `build` accept model
+names in the same way as example names.
 
 ```bash
 cargo oxide list

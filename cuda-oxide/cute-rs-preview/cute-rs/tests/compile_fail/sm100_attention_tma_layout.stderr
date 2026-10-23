@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/sm100_attention_tma_layout.rs:13:43
+   |
+13 |     unsafe { TmaCopy::<Qk, 1>::load(desc, tile, 0, 0, core::ptr::null_mut(), 0) };
+   |              ----------------------       ^^^^ expected `false`, found `true`
+   |              |
+   |              arguments to this function are incorrect
+   |
+   = note: expected mutable reference `&mut SharedTile<SharedLayout<128, 128, false>, _>`
+              found mutable reference `&mut SharedTile<SharedLayout<128, 128, true>, OperandB>`
+note: associated function defined here
+  --> src/attention/sm100/tma.rs
+   |
+   |     pub unsafe fn load<R>(
+   |                   ^^^^

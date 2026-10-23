@@ -11,7 +11,6 @@ use std::process::{Command, Stdio};
 use oxide_artifacts::KernelLaunchFacts;
 use rustc_hir::def_id::{CRATE_DEF_INDEX, DefId};
 use rustc_middle::mir::{BasicBlock, Operand, RETURN_PLACE, Rvalue, StatementKind, TerminatorKind};
-use rustc_middle::ty::consts::ConstExt;
 use rustc_middle::ty::{Instance, InstanceKind, ShimKind, Ty, TyCtxt, TyKind, TypingEnv};
 use rustc_span::Span;
 use serde::{Deserialize, Serialize};

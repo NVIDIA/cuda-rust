@@ -1,0 +1,186 @@
+{
+  "schema": 6,
+  "backend_profile": "rust-llvm-23.1.3-aab11ee0",
+  "backend_kind": "llvm_nvptx",
+  "llvm_revision": "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019",
+  "backend_version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+  "backend_sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+  "records": [
+    {
+      "id": "mbarrier_arrive_cluster_relaxed",
+      "llvm_symbol": null,
+      "expected_ptx": {
+        "mnemonic": "mbarrier",
+        "modifiers": [
+          "arrive",
+          "relaxed",
+          "cluster",
+          "shared::cluster",
+          "b64"
+        ],
+        "operands": [
+          {
+            "kind": "exact",
+            "value": "_"
+          },
+          {
+            "kind": "address"
+          }
+        ]
+      },
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "sm_90",
+      "ptx_feature": "+ptx86",
+      "status": "validated",
+      "runtime_validation": "unexecuted",
+      "source": {
+        "kind": "ptx_native",
+        "instruction": "mbarrier.arrive.relaxed.cluster.shared::cluster.b64"
+      },
+      "stages": [
+        {
+          "targets": [
+            "sm_90",
+            "ptx86"
+          ],
+          "representation": "convergent exact inline-PTX probe",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Compiled and checked the exact instruction on 2026-10-12. PTX SHA-256 95a3f51783825dfa9a4baf9218584d33c8af170f20863e86da5ea8f542bcbec8."
+        },
+        {
+          "targets": [
+            "sm_90",
+            "ptx86"
+          ],
+          "representation": "relocatable cubin retaining the device probe function",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "ptxas -arch=sm_90 -c accepted the generated PTX on 2026-10-12. Cubin SHA-256 59e3616fa4b0e8d6f51b3b333de30dcac74f1ba002744cb6c6c918cae5ae6463.",
+          "tool_path": "/usr/local/cuda/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.4, V13.4.92",
+          "tool_sha256": "6f6a701573ac9f5c2409708b3b700cb9b2a0f11b13c20468153c13b597b2d6d3"
+        }
+      ]
+    },
+    {
+      "id": "mbarrier_try_wait_parity_cluster_relaxed",
+      "llvm_symbol": "llvm.nvvm.mbarrier.try.wait.parity.relaxed.scope.cluster.space.cta",
+      "expected_ptx": {
+        "mnemonic": "mbarrier",
+        "modifiers": [
+          "try_wait",
+          "parity",
+          "relaxed",
+          "cluster",
+          "shared::cta",
+          "b64"
+        ],
+        "operands": [
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "address"
+          },
+          {
+            "kind": "register"
+          }
+        ]
+      },
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "sm_90",
+      "ptx_feature": "+ptx86",
+      "status": "validated",
+      "runtime_validation": "unexecuted",
+      "source_record": "int_nvvm_mbarrier_try_wait_parity_relaxed_scope_cluster_space_cta",
+      "llvm_arguments": [
+        "shared_ptr",
+        "i32"
+      ],
+      "llvm_results": [
+        "i1"
+      ],
+      "stages": [
+        {
+          "targets": [
+            "sm_90",
+            "ptx86"
+          ],
+          "representation": "convergent exact inline-PTX probe",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Compiled and checked the exact instruction on 2026-10-12. PTX SHA-256 5dfa827aa34d633b208aea6582c07db167580a77728889722865433b820756fe."
+        },
+        {
+          "targets": [
+            "sm_90",
+            "ptx86"
+          ],
+          "representation": "relocatable cubin retaining the device probe function",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "ptxas -arch=sm_90 -c accepted the generated PTX on 2026-10-12. Cubin SHA-256 5b48f889f189710480c0d4fd90299a85be5b7a992a14946f0328ab5f4e0ad163.",
+          "tool_path": "/usr/local/cuda/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.4, V13.4.92",
+          "tool_sha256": "6f6a701573ac9f5c2409708b3b700cb9b2a0f11b13c20468153c13b597b2d6d3"
+        }
+      ]
+    },
+    {
+      "id": "fence_acquire_shared_cluster_cluster",
+      "llvm_symbol": "llvm.nvvm.fence.acquire.sync_restrict.space.cluster.scope.cluster",
+      "expected_ptx": {
+        "mnemonic": "fence",
+        "modifiers": [
+          "acquire",
+          "sync_restrict::shared::cluster",
+          "cluster"
+        ],
+        "operands": []
+      },
+      "target_triple": "nvptx64-nvidia-cuda",
+      "status": "validated",
+      "runtime_validation": "unexecuted",
+      "source_record": "int_nvvm_fence_acquire_sync_restrict_space_cluster_scope_cluster",
+      "llvm_arguments": [],
+      "llvm_results": [],
+      "gpu_target": "sm_90",
+      "ptx_feature": "+ptx86",
+      "stages": [
+        {
+          "targets": [
+            "sm_90",
+            "ptx86"
+          ],
+          "representation": "convergent exact inline-PTX probe",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Compiled and checked the retained exact instruction on 2026-10-12. PTX SHA-256 7630a6dc59639dc67bcd19e386d47b226c2b4a4dbc7ad63ffffb3c69b56ebc83."
+        },
+        {
+          "targets": [
+            "sm_90",
+            "ptx86"
+          ],
+          "representation": "relocatable cubin retaining the device probe function",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "CPU terminal validation retained the probe on 2026-10-12. Cubin SHA-256 07eaacbe13a41fb20299adb0fd343b686fbe179cac1a4770c2206421f1eeb630.",
+          "tool_path": "/usr/local/cuda/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.4, V13.4.92",
+          "tool_sha256": "6f6a701573ac9f5c2409708b3b700cb9b2a0f11b13c20468153c13b597b2d6d3"
+        }
+      ]
+    }
+  ]
+}

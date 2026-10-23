@@ -236,31 +236,28 @@ if not quoted:
         "guard) or the fence style changed (fix the pattern)"
     )
 
-# Every dated nightly reference in tracked markdown.  The book's install
-# pages and the READMEs spell the pin inside commands a reader runs outside
-# a checkout (`rustup toolchain install nightly-...`,
-# `cargo +nightly-... install`), where no rust-toolchain.toml can correct a
-# stale date, plus prose naming the pin.  The token itself is the check --
-# any dated nightly a tracked page mentions must be the pinned one -- so the
-# guard survives pages being reworded, moved, or added.  Component lists on
-# `rustup component add` lines stay uncovered, as above; the channel date on
-# those same lines is checked like any other.
-DATED = re.compile(r"nightly-\d{4}-\d{2}-\d{2}")
-if not DATED.fullmatch(root_channel):
+# Every explicit toolchain reference in tracked markdown (excluding historical
+# intrinsic capture evidence under `cuda-oxide/intrinsics/`). The book's
+# install pages and the READMEs spell the pin inside commands a reader runs
+# outside a checkout (`rustup toolchain install <pin>`, `cargo +<pin> install`,
+# `rustup component add ... --toolchain <pin>`), where no rust-toolchain.toml
+# can correct a stale version, plus prose naming the pin.
+EXACT_PIN = re.compile(r"(?:nightly-\d{4}-\d{2}-\d{2}|\d+\.\d+\.\d+)")
+if not EXACT_PIN.fullmatch(root_channel):
     sys.exit(
         f"parse self-test failed: {root_path} channel {root_channel!r} is "
-        "not a dated nightly; this guard assumes an exact pin"
+        "not an exact release or dated nightly pin"
     )
 markdown = sorted(
     path
     for path in subprocess.run(
-        ["git", "-C", git_root, "ls-files", "-z", "--", "*.md"],
+        ["git", "-C", git_root, "ls-files", "-z", "--", "cuda-oxide/*.md", "cuda-oxide/**/*.md"],
         stdout=subprocess.PIPE,
         check=True,
     )
     .stdout.decode()
     .split("\0")
-    if path
+    if path and not path.startswith("cuda-oxide/intrinsics/")
 )
 if len(markdown) < 20:
     sys.exit(
@@ -268,20 +265,33 @@ if len(markdown) < 20:
         "markdown files"
     )
 
-dated = 0
+DATED_NIGHTLY = re.compile(r"nightly-\d{4}-\d{2}-\d{2}")
+COMMAND_PIN = re.compile(
+    r"(?:rustup\s+toolchain\s+install\s+|"
+    r"--toolchain\s+|"
+    r"cargo\s+\+)([A-Za-z0-9._-]+)"
+)
+pinned_refs = 0
 for path in markdown:
     for number, line in enumerate(read(os.path.join(git_root, path)).splitlines(), start=1):
-        for token in DATED.findall(line):
-            dated += 1
+        for token in DATED_NIGHTLY.findall(line):
+            pinned_refs += 1
+            if token != root_channel:
+                failures.append(
+                    f"{path}:{number} spells {token!r}, "
+                    f"{root_path} pins {root_channel!r}"
+                )
+        for token in COMMAND_PIN.findall(line):
+            pinned_refs += 1
             if token != root_channel:
                 failures.append(
                     f"{path}:{number} spells {token!r}, "
                     f"{root_path} pins {root_channel!r}"
                 )
 
-if not dated:
+if not pinned_refs:
     sys.exit(
-        "parse self-test failed: no dated nightly reference found in any "
+        "parse self-test failed: no toolchain command reference found in any "
         "tracked markdown; either the docs stopped spelling the pin (delete "
         "this block of the guard) or the pattern is stale (fix it)"
     )
@@ -295,7 +305,7 @@ if failures:
         f"Every copy must state the same channel and components as {root_path}. "
         "The `cargo oxide new` scaffold must match exactly "
         "(rustc_private dylibs);\nthe book's blocks are presented to readers as "
-        "the repo's real file, and the\ndated commands run where no "
+        "the repo's real file, and the\nexplicit toolchain commands run where no "
         "rust-toolchain.toml can correct them.",
         file=sys.stderr,
     )
@@ -304,7 +314,7 @@ if failures:
 print(
     f"OK: {root_path} pins {root_channel} with {len(root_components)} components; "
     "the `cargo oxide new` scaffold, the devcontainer, all "
-    f"{quoted} block(s) quoted in the book, and all {dated} dated reference(s) "
+    f"{quoted} block(s) quoted in the book, and all {pinned_refs} toolchain reference(s) "
     "in tracked markdown agree."
 )
 PY

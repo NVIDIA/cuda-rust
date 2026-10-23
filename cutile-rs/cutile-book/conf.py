@@ -59,28 +59,28 @@ html_theme_options = {
             "icon": "fa-brands fa-github",
         },
     ],
-    
+
     # Navbar - minimal like TileIR
     "navbar_start": ["navbar-logo"],
     "navbar_center": [],
     "navbar_end": ["github_links", "navbar-icon-links", "search-button", "theme-switcher"],
     "navbar_persistent": [],
-    
+
     # LEFT SIDEBAR - Show global TOC
     "primary_sidebar_end": [],
     "show_nav_level": 2,
     "navigation_depth": 4,
     "collapse_navigation": False,
-    
+
     # RIGHT SIDEBAR - On this page
     "secondary_sidebar_items": ["page-toc"],
     "show_toc_level": 2,
-    
+
     # Footer - NVIDIA branding like TileIR
     "footer_start": [],
     "footer_center": ["footer"],
     "footer_end": [],
-    
+
     # Misc
     "pygments_light_style": "default",
     "pygments_dark_style": "monokai",

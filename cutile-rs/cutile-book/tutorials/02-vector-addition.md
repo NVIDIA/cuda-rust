@@ -37,21 +37,21 @@ use my_module::add;
 fn main() -> Result<(), Error> {
     let device = Device::new(0)?;
     let stream = device.new_stream()?;
-    
+
     // Create input tensors: 32×32 matrices filled with 1.0
     let x: Arc<Tensor<f32>> = ones(&[32, 32]).sync_on(&stream)?.into();
     let y: Arc<Tensor<f32>> = ones(&[32, 32]).sync_on(&stream)?.into();
-    
+
     // Create output tensor, PARTITIONED into 4×4 sub-tensors.
     let z = zeros(&[32, 32]).sync_on(&stream)?.partition([4, 4]);
-    
+
     // Run the kernel — one tile thread per sub-tensor, for a total of 64 threads.
     let (z, _x, _y) = add(z, x, y).sync_on(&stream)?;
-    
+
     // Verify results.
     let z_host: Vec<f32> = z.unpartition().to_host_vec().sync_on(&stream)?;
     println!("z[0] = {} (expected 2.0)", z_host[0]);
-    
+
     Ok(())
 }
 ```
@@ -147,10 +147,10 @@ fn my_kernel(...) {
     // 1. LOAD: Global memory → tiles (registers).
     let tile_a = load_something(...);
     let tile_b = load_something_else(...);
-    
+
     // 2. COMPUTE: Operate on tiles in registers.
     let result = tile_a + tile_b;
-    
+
     // 3. STORE: Tiles (registers) → global memory.
     output.store(result);
 }

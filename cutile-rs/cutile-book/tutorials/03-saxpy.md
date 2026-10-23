@@ -52,23 +52,23 @@ use my_module::saxpy;
 fn main() -> Result<(), Error> {
     let device = Device::new(0)?;
     let stream = device.new_stream()?;
-    
+
     let a = 2.0f32;  // Our scalar multiplier
-    
+
     // Create x and y as [0, 1, 2, ..., 31] reshaped to 4×8
     let input: Arc<Tensor<f32>> = arange(32usize).sync_on(&stream)?.into();
     let x: Arc<Tensor<f32>> = input.dup().sync_on(&stream)?.reshape(&[4, 8])?.into();
     let y = input.dup().sync_on(&stream)?.reshape(&[4, 8])?.partition([2, 2]);
-    
+
     // Run: y = 2.0 * x + y = 2*x + x = 3*x
     let (y, a, _x) = saxpy(y, a, x).sync_on(&stream)?;
     let y_host: Vec<f32> = y.unpartition().to_host_vec().sync_on(&stream)?;
-    
+
     // Verify
     for i in 0..5 {
         println!("{} * {} + {} = {} (got {})", a, i, i, 3 * i, y_host[i]);
     }
-    
+
     Ok(())
 }
 ```

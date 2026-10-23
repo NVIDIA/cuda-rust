@@ -11,7 +11,7 @@ mod common;
 mod debug_helpers_file;
 
 use cutile::compile_api::{CompileArtifacts, KernelCompiler};
-use cutile::tile_kernel::{CompileOptions, DebugInfoLevel};
+use cutile::tile_kernel::{CodegenMode, CompileOptions, DebugInfoLevel};
 use cutile_ir::ir::{DebugScope, Location, Module, OpId, Operation};
 use std::path::PathBuf;
 use std::process::Command;
@@ -129,10 +129,16 @@ fn explicit_debug_modes_override_build_default_and_change_cache_keys() {
     use std::collections::HashSet;
     let mut l1 = HashSet::new();
     let mut l2 = HashSet::new();
-    for (level, opt, debug, line) in [
-        (DebugInfoLevel::None, 3, false, false),
-        (DebugInfoLevel::Line, 3, false, true),
-        (DebugInfoLevel::Full, 0, true, false),
+    for (level, codegen) in [
+        (DebugInfoLevel::None, CodegenMode::RELEASE),
+        (
+            DebugInfoLevel::Line,
+            CodegenMode::Optimized {
+                level: 3,
+                lineinfo: true,
+            },
+        ),
+        (DebugInfoLevel::Full, CodegenMode::Debug),
     ] {
         let options = CompileOptions::new()
             .debug_info(DebugInfoLevel::Full)
@@ -141,10 +147,7 @@ fn explicit_debug_modes_override_build_default_and_change_cache_keys() {
             .sanitize_memcheck(true);
         assert_eq!(options.occupancy, Some(2));
         let flags = TileirasOptions::from_compile_options(&options);
-        assert_eq!(
-            (flags.opt_level, flags.device_debug, flags.lineinfo),
-            (opt, debug, line)
-        );
+        assert_eq!(flags.codegen, codegen);
         assert!(flags.sanitize_memcheck);
         assert!(l1.insert(
             cutile::tile_kernel::TileFunctionKey::builder("m", "k")
@@ -171,7 +174,6 @@ fn build_time_default() {
         .ok()
         .or_else(|| option_env!("CUDA_RUST_DEBUG").map(str::to_owned));
     let options = CompileOptions::new();
-    assert!(!(options.device_debug && options.lineinfo));
     if let Some(expected) = expected {
         let level = match expected.as_str() {
             "none" => DebugInfoLevel::None,

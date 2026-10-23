@@ -223,14 +223,16 @@ pub unsafe fn cuda_oxide_library_v1_246e25db_checked_block_payload_call<
 
 pub use cuda_oxide_library_v1_246e25db_checked_block_payload_call as checked_block_payload_call_v1;
 
-/// Invoke a checked full-block payload operation with a stateless i32 callback.
+/// Invoke a checked full-block payload operation with an i32 callback.
 ///
 /// Storage and payload effects follow [`checked_block_payload_call_v1`].
 /// `uniform` must be `()` and `payload` must be
 /// `(*const i32, *mut i32, *const u8, *mut u8)`: input, output, input validity
 /// bits and output validity bits.
 /// `environment` must be a genuine function item or an immutable closure with
-/// no captures. `thunk` is a function item with the instantiated signature
+/// no captures or one i32 captured by value. The compiler must prove that
+/// the captured value is block-uniform through the actual shared environment.
+/// `thunk` is a function item with the instantiated signature
 /// `unsafe extern "C" fn(*const Environment, i32, i32) -> i32`.
 /// The compiler retains that definition and checks its original reachable body.
 /// Native arguments are input, output, scratch, input bits, output bits,

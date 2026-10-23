@@ -179,7 +179,11 @@ pub struct LibraryCallbackFunction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LibraryCallbackEnvironment {
     FunctionItem,
-    Closure { capture_count: usize },
+    Closure {
+        capture_count: usize,
+        /// Actual upvar type when exactly one capture exists, not a value proof.
+        single_capture: Option<LibraryScalar>,
+    },
 }
 
 /// Original selected callback roots and complete collector identities, including

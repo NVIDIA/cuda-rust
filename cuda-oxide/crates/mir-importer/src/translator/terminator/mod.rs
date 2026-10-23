@@ -4032,6 +4032,8 @@ pub fn custom(a: Effect, b: Effect) -> Effect { core::cmp::Ord::max(a, b) }
         let fixture = root.join("calls.rs");
         // Nominal import fixture; the backend authenticates these declarations
         // independently. No finalized provider plan is supplied to the importer.
+        // The synthetic checked callback witness is unchanged: this fixture
+        // tests capture operand/type transport, not backend thunk authentication.
         std::fs::write(&fixture,r#"
 mod library {
     pub struct StorageDescriptor<const C:u32,const A:u32,const AUTO:bool,const EXCLUSIVE:bool> { token: u8 }
@@ -4047,7 +4049,7 @@ mod library {
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_resource_call<R: Copy>(_: R, _: &[i32], _: (*const i32,usize), _: (*mut i32,)) {}
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_warp_call<R: Copy>(_: R, _: &[i32], _: (*const i32,usize), _: (*mut i32,)) {}
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_payload_call<R: Copy>(_: R, _: &mut StorageDescriptor<128,16,false,true>, _: (), _: (*const i32,*mut i32)) {}
-    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_payload_callback_call<R: Copy,F:Copy>(_: R, _: &mut StorageDescriptor<128,16,false,true>, _: (), _: (*const i32,*mut i32,*const u8,*mut u8), _: F, _: &()) {}
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_payload_callback_call<R: Copy,F:Copy,E:Copy>(_: R, _: &mut StorageDescriptor<128,16,false,true>, _: (), _: (*const i32,*mut i32,*const u8,*mut u8), _: F, _: &E) {}
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_warp_payload_call<R: Copy>(_: R, _: (usize,), _: (*const i32,*mut i32)) {}
 }
 fn registration() -> &'static str { "{}" }
@@ -4066,7 +4068,9 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
     library::cuda_oxide_library_v1_246e25db_checked_warp_call(registration,slice,(input,7),(output,));
     library::cuda_oxide_library_v1_246e25db_checked_block_payload_call(registration,&mut storage,(),(input,output));
     library::cuda_oxide_library_v1_246e25db_checked_warp_payload_call(registration,(7,),(input,output));
-    library::cuda_oxide_library_v1_246e25db_checked_block_payload_callback_call(registration,&mut storage,(),(input,output,input as *const u8,output as *mut u8),payload_thunk,&());
+    let bias = 7_i32;
+    let environment = move |left:i32,right:i32| left + right + bias;
+    library::cuda_oxide_library_v1_246e25db_checked_block_payload_callback_call(registration,&mut storage,(),(input,output,input as *const u8,output as *mut u8),payload_thunk,&environment);
 }
 "#).unwrap();
         let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
@@ -4359,6 +4363,19 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                         assert_eq!(op.deref(&ctx).get_num_results(), 0);
                                         boundaries.push(site.block);
                                         continue;
+                                    }
+                                    if matches!(*library.get_attr_role(&ctx).unwrap(),
+                                        LibraryRoleAttr::Native(LibraryNativeMetadata::CheckedBlockPayloadCallback { .. })) {
+                                        let environment_type = op.deref(&ctx).get_operand(3).get_type(&ctx);
+                                        let environment_type = environment_type.deref(&ctx);
+                                        let pointer = environment_type.downcast_ref::<dialect_mir::types::MirPtrType>().unwrap();
+                                        let pointee = pointer.pointee.deref(&ctx);
+                                        let captures = pointee.downcast_ref::<dialect_mir::types::MirStructType>().unwrap();
+                                        assert_eq!(captures.field_count(), 1);
+                                        let field = captures.field_types()[0].deref(&ctx);
+                                        let integer = field.downcast_ref::<pliron::builtin::types::IntegerType>().unwrap();
+                                        assert_eq!(integer.width(), 32);
+                                        assert_eq!(integer.signedness(), pliron::builtin::types::Signedness::Signed);
                                     }
                                     retained.push((
                                         site.block,

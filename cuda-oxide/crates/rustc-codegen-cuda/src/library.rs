@@ -1144,9 +1144,23 @@ fn callback_sources<'tcx>(
                 .type_at(call.kind.callback_types().unwrap().0);
             let shape = match environment.kind() {
                 TyKind::FnDef(..) => LibraryCallbackEnvironment::FunctionItem,
-                TyKind::Closure(_, args) => LibraryCallbackEnvironment::Closure {
-                    capture_count: rustc_middle::ty::UpvarArgs::Closure(args).upvar_tys().len(),
-                },
+                TyKind::Closure(_, args) => {
+                    let captures = rustc_middle::ty::UpvarArgs::Closure(args).upvar_tys();
+                    LibraryCallbackEnvironment::Closure {
+                        capture_count: captures.len(),
+                        single_capture: if captures.len() == 1 {
+                            Some(match scalar(captures.iter().next().unwrap())? {
+                                Scalar::Signed(bits) => mir_importer::LibraryScalar::Signed(bits),
+                                Scalar::Unsigned(bits) => {
+                                    mir_importer::LibraryScalar::Unsigned(bits)
+                                }
+                                Scalar::Float(bits) => mir_importer::LibraryScalar::Float(bits),
+                            })
+                        } else {
+                            None
+                        },
+                    }
+                }
                 _ => unreachable!("callback_instance authenticated the nominal environment"),
             };
             sources.checked_environments.insert(site, shape);

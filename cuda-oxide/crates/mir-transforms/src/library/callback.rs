@@ -73,10 +73,17 @@ pub fn admit_library_callbacks(
         if !matches!(
             environment,
             LibraryCallbackEnvironment::FunctionItem
-                | LibraryCallbackEnvironment::Closure { capture_count: 0 }
+                | LibraryCallbackEnvironment::Closure {
+                    capture_count: 0,
+                    single_capture: None,
+                }
+                | LibraryCallbackEnvironment::Closure {
+                    capture_count: 1,
+                    single_capture: Some(dialect_mir::library::LibraryScalar::Signed(32)),
+                }
         ) {
             return Err(format!(
-                "checked callback requires a function item or zero-capture Fn closure at {} block {}",
+                "checked callback requires a function item or Fn closure with zero captures or one i32 capture at {} block {}",
                 site.caller, site.block
             ));
         }

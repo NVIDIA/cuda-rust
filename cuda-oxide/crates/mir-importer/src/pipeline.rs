@@ -728,6 +728,7 @@ impl PreparedImport<'_> {
             &self.symbols,
             &self.original_roles,
             &shapes,
+            &self.callback_sources.checked_environments,
             None,
         )
         .map_err(|error| PipelineError::Translation(error.disp(ctx).to_string()))?;
@@ -763,6 +764,7 @@ impl PreparedImport<'_> {
             &self.symbols,
             &self.original_roles,
             &validation.shapes,
+            &self.callback_sources.checked_environments,
             Some(&mut plans),
         )
         .map_err(|error| PipelineError::Translation(error.disp(ctx).to_string()))?;

@@ -148,6 +148,7 @@ fn analyze(
         &BTreeMap::from([("root".into(), "root".into())]),
         roles,
         &BTreeMap::from([("root".into(), [64, 1, 1])]),
+        &BTreeMap::new(),
         None,
     )
 }
@@ -368,6 +369,7 @@ fn separate_helper_returns_keep_selection_taint_after_promotion() {
                 ]),
                 &roles,
                 &BTreeMap::from([("root".into(), [64, 1, 1])]),
+                &BTreeMap::new(),
                 None,
             );
             assert_eq!(
@@ -601,6 +603,25 @@ fn slot_and_promoted_verdicts(
     module: Ptr<Operation>,
     roles: &BTreeMap<LibraryCallSite, Role>,
 ) -> Vec<Result<(), String>> {
+    let environments = roles
+        .iter()
+        .filter(|(_, role)| {
+            matches!(
+                role,
+                Role::Native(Native::CheckedBlockPayloadCallback { .. })
+            )
+        })
+        .map(|(site, _)| (site.clone(), LibraryCallbackEnvironment::FunctionItem))
+        .collect();
+    callback_slot_and_promoted_verdicts(ctx, module, roles, &environments)
+}
+
+fn callback_slot_and_promoted_verdicts(
+    ctx: &mut Context,
+    module: Ptr<Operation>,
+    roles: &BTreeMap<LibraryCallSite, Role>,
+    environments: &BTreeMap<LibraryCallSite, LibraryCallbackEnvironment>,
+) -> Vec<Result<(), String>> {
     let manager = &mut AnalysisManager::default();
     let roots = BTreeMap::from([(
         "root".into(),
@@ -628,6 +649,7 @@ fn slot_and_promoted_verdicts(
                 &symbols,
                 roles,
                 &BTreeMap::from([("root".into(), [64, 1, 1])]),
+                environments,
                 None,
             )
             .map_err(|error| error.to_string())?;
@@ -661,6 +683,7 @@ fn slot_and_promoted_verdicts(
                 &symbols,
                 roles,
                 &first.shapes,
+                environments,
                 Some(&mut plans),
             )
             .map(|_| ())
@@ -1922,6 +1945,7 @@ fn planned_storage_reuses_the_same_proof_for_completion_and_global_resource_conf
                 &BTreeMap::from([("root".into(), "root".into())]),
                 &roles,
                 &first.shapes,
+                &BTreeMap::new(),
                 Some(&mut plans),
             );
             if let Some(expected) = expected {
@@ -2074,6 +2098,7 @@ fn reservations_require_release_and_completion_or_disjoint_exclusive_placement()
                 &BTreeMap::from([("root".into(), "root".into())]),
                 &roles,
                 &first.shapes,
+                &BTreeMap::new(),
                 Some(&mut plans),
             );
             if let Some(expected) = expected {
@@ -2157,6 +2182,7 @@ fn warp_storage_reuse_completes_only_covered_accesses_in_both_preparations() {
                 &BTreeMap::from([("root".into(), "root".into())]),
                 &roles,
                 &first.shapes,
+                &BTreeMap::new(),
                 Some(&mut plans),
             );
             assert_eq!(
@@ -2656,6 +2682,173 @@ fn checked_callback_payload_keeps_output_taint_and_planned_root_mixing() {
                     } else {
                         "not proved"
                     }),
+                    "{error}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)]
+fn checked_capture_proves_contents_through_helpers_and_keeps_native_invalidation() {
+    use dialect_mir::{
+        attributes::{MirCastKindAttr, MirPointerKindAuthorityAttr},
+        types::MirStructType,
+    };
+    for (kind, helper, initialized, repeat, interference, accepted) in [
+        (SourceKind::BlockQuery, false, true, false, None, true),
+        (SourceKind::BlockQuery, true, true, false, None, true),
+        (SourceKind::LaneQuery, true, true, false, None, false),
+        (SourceKind::BlockQuery, true, false, false, None, false),
+        (SourceKind::BlockQuery, true, true, true, None, false),
+        (
+            SourceKind::BlockQuery,
+            false,
+            true,
+            false,
+            Some(false),
+            true,
+        ),
+        (
+            SourceKind::BlockQuery,
+            false,
+            true,
+            false,
+            Some(true),
+            false,
+        ),
+    ] {
+        let ctx = &mut Context::new();
+        let (module, _, root) = function(ctx);
+        let bias = source_value(ctx, root, kind, true);
+        let scalar = bias.get_type(ctx);
+        let environment_type = MirStructType::get(
+            ctx,
+            "closure".into(),
+            vec!["capture_0".into()],
+            vec![scalar],
+        )
+        .into();
+        let pointer_type = MirPtrType::get_generic(ctx, environment_type, true).into();
+        let slot = emit::<MirAllocaOp>(ctx, root, vec![pointer_type], vec![])
+            .deref(ctx)
+            .get_result(0);
+        if initialized {
+            let environment =
+                emit::<MirConstructStructOp>(ctx, root, vec![environment_type], vec![bias])
+                    .deref(ctx)
+                    .get_result(0);
+            emit::<MirStoreOp>(ctx, root, vec![], vec![slot, environment]);
+        }
+        if let Some(already_exposed) = interference {
+            let earlier_helper = test_helper(ctx, module, vec![pointer_type], vec![]);
+            emit::<MirReturnOp>(ctx, earlier_helper, vec![], vec![]);
+            let environment =
+                emit::<MirConstructStructOp>(ctx, root, vec![environment_type], vec![bias])
+                    .deref(ctx)
+                    .get_result(0);
+            if already_exposed {
+                test_call(ctx, root, vec![slot], vec![]);
+                // Reinitializing contents does not revoke an escaped alias.
+                emit::<MirStoreOp>(ctx, root, vec![], vec![slot, environment]);
+            }
+            // Match unrelated output initialization and storage conversion before
+            // the first environment borrow. They must still invalidate a slot
+            // whose address was exposed by an earlier call.
+            let unknown_address = value(ctx, root, pointer_type);
+            emit::<MirStoreOp>(ctx, root, vec![], vec![unknown_address, environment]);
+            let unrelated = test_slot(ctx, root, environment);
+            test_call(ctx, root, vec![unrelated], vec![]);
+        }
+        let reference_type = MirPtrType::get_generic_with_kind(
+            ctx,
+            environment_type,
+            false,
+            MirPointerKind::SharedRef,
+        )
+        .into();
+        let reference = emit::<MirCastOp>(ctx, root, vec![reference_type], vec![slot]);
+        MirCastOp::new(reference).set_attr_cast_kind(ctx, MirCastKindAttr::PtrToPtr);
+        MirCastOp::new(reference)
+            .set_pointer_kind_authority(ctx, MirPointerKindAuthorityAttr::Reborrow);
+        let environment = reference.deref(ctx).get_result(0);
+        let (block, environment, caller) = if helper {
+            let block = test_helper(ctx, module, vec![reference_type], vec![]);
+            test_call(ctx, root, vec![environment], vec![]);
+            emit::<MirReturnOp>(ctx, root, vec![], vec![]);
+            (block, block.deref(ctx).get_argument(0), "helper")
+        } else {
+            (root, environment, "root")
+        };
+        let byte = IntegerType::get(ctx, 8, Signedness::Unsigned).into();
+        let payload_fields = [(scalar, false), (scalar, true), (byte, false), (byte, true)].map(
+            |(pointee, mutable)| {
+                MirPtrType::get_generic_with_kind(
+                    ctx,
+                    pointee,
+                    mutable,
+                    if mutable {
+                        MirPointerKind::RawMut
+                    } else {
+                        MirPointerKind::RawConst
+                    },
+                )
+                .into()
+            },
+        );
+        let payload_type = MirTupleType::get(ctx, payload_fields.to_vec()).into();
+        let unit = MirTupleType::get(ctx, vec![]).into();
+        let mut roles = BTreeMap::new();
+        let mut environments = BTreeMap::new();
+        for index in 1..=if repeat { 2 } else { 1 } {
+            let site = LibraryCallSite {
+                caller: caller.into(),
+                block: index,
+            };
+            let role = Role::Native(Native::CheckedBlockPayloadCallback {
+                spec: NativeSpec {
+                    scalar: LibraryScalar::Signed(32),
+                    items: 1,
+                },
+                storage: LibraryStorageArg::Implicit,
+            });
+            let operands = vec![
+                value(ctx, block, unit),
+                value(ctx, block, unit),
+                value(ctx, block, payload_type),
+                environment,
+            ];
+            let signature =
+                FunctionType::get(ctx, vec![unit, unit, payload_type, reference_type], vec![]);
+            MirLibraryOp::build_call(
+                ctx,
+                role,
+                site.clone(),
+                "callback".into(),
+                signature,
+                operands,
+            )
+            .insert_at_back(block, ctx);
+            roles.insert(site.clone(), role);
+            environments.insert(
+                site,
+                LibraryCallbackEnvironment::Closure {
+                    capture_count: 1,
+                    single_capture: Some(LibraryScalar::Signed(32)),
+                },
+            );
+        }
+        emit::<MirReturnOp>(ctx, block, vec![], vec![]);
+        for verdict in callback_slot_and_promoted_verdicts(ctx, module, &roles, &environments) {
+            assert_eq!(
+                verdict.is_ok(),
+                accepted,
+                "{kind:?}, helper={helper}, initialized={initialized}, repeat={repeat}, interference={interference:?}: {verdict:?}"
+            );
+            if let Err(error) = verdict {
+                assert!(
+                    error.contains("capture is not proved block-uniform"),
                     "{error}"
                 );
             }

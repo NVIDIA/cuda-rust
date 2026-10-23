@@ -672,7 +672,7 @@ fn contexts_preserve_original_calls_statics_and_cross_block_values() {
 }
 
 #[test]
-fn checked_callbacks_require_nominal_empty_environments_even_after_call_erasure() {
+fn checked_callbacks_require_nominal_capture_shapes_even_after_call_erasure() {
     use super::callback::admit_library_callbacks;
     use dialect_mir::library::{
         LibraryCallbackDefinition as D, LibraryCallbackDispatch as Dispatch,
@@ -723,7 +723,14 @@ fn checked_callbacks_require_nominal_empty_environments_even_after_call_erasure(
     );
     for environment in [
         Environment::FunctionItem,
-        Environment::Closure { capture_count: 0 },
+        Environment::Closure {
+            capture_count: 0,
+            single_capture: None,
+        },
+        Environment::Closure {
+            capture_count: 1,
+            single_capture: Some(LibraryScalar::Signed(32)),
+        },
     ] {
         sources
             .checked_environments
@@ -734,15 +741,26 @@ fn checked_callbacks_require_nominal_empty_environments_even_after_call_erasure(
         );
     }
     // The retained environment has an empty IR pointee. Only genuine source
-    // shape authorizes statelessness; this captured closure must still reject.
-    sources
-        .checked_environments
-        .insert(site("root", 7), Environment::Closure { capture_count: 1 });
-    assert!(
-        admit_library_callbacks(module, ctx, &sources, &symbols)
-            .unwrap_err()
-            .contains("zero-capture")
-    );
+    // shape authorizes statelessness; an unsupported capture still rejects.
+    for environment in [
+        Environment::Closure {
+            capture_count: 1,
+            single_capture: Some(LibraryScalar::Unsigned(32)),
+        },
+        Environment::Closure {
+            capture_count: 2,
+            single_capture: None,
+        },
+    ] {
+        sources
+            .checked_environments
+            .insert(site("root", 7), environment);
+        assert!(
+            admit_library_callbacks(module, ctx, &sources, &symbols)
+                .unwrap_err()
+                .contains("zero captures or one i32 capture")
+        );
+    }
     sources.checked_environments.clear();
     sources
         .checked_environments
@@ -753,13 +771,17 @@ fn checked_callbacks_require_nominal_empty_environments_even_after_call_erasure(
             .contains("nominal environment")
     );
     sources.checked_environments.clear();
-    sources
-        .checked_environments
-        .insert(site("root", 7), Environment::Closure { capture_count: 1 });
+    sources.checked_environments.insert(
+        site("root", 7),
+        Environment::Closure {
+            capture_count: 1,
+            single_capture: Some(LibraryScalar::Unsigned(32)),
+        },
+    );
     Operation::erase(callback, ctx);
     assert!(
         admit_library_callbacks(module, ctx, &sources, &symbols)
             .unwrap_err()
-            .contains("zero-capture")
+            .contains("zero captures or one i32 capture")
     );
 }

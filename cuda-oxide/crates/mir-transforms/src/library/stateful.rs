@@ -9,9 +9,9 @@ use super::storage::{
 };
 use dialect_mir::{
     library::{
-        self, LibraryAccess, LibraryCallKind, LibraryCallSite, LibraryNativeMetadata as Native,
-        LibraryRoleAttr as Role, LibraryRootArgumentClass, LibrarySourceEffectKind as SourceKind,
-        LibraryStorageArg, LibraryWriteKind,
+        self, LibraryAccess, LibraryCallKind, LibraryCallSite, LibraryCallbackEnvironment,
+        LibraryNativeMetadata as Native, LibraryRoleAttr as Role, LibraryRootArgumentClass,
+        LibrarySourceEffectKind as SourceKind, LibraryStorageArg, LibraryWriteKind,
     },
     ops::*,
     types::{MirPtrType, MirTupleType},
@@ -719,18 +719,20 @@ struct FunctionGraph {
     joins: Vec<Option<usize>>,
     bypasses: HashMap<(usize, usize), BTreeSet<usize>>,
     slots: HashMap<Ptr<Operation>, usize>,
-    escaped_slots: BTreeSet<usize>,
+    exposed_slots: HashMap<Ptr<Operation>, BTreeSet<usize>>,
     value_count: usize,
 }
 struct PreparedGraph {
     functions: BTreeMap<String, FunctionGraph>,
 }
 
-// Ordinary importer slots are not source borrows. Mark only addresses used
-// beyond direct memory access, before joins or opaque operations lose Local.
-fn slot_escapes(ctx: &Context, address: Value) -> bool {
+// Ordinary importer slots are not source borrows. Record each exposing use so
+// it activates before joins or opaque operations lose Local, but not before
+// earlier operations that cannot yet observe the address.
+fn slot_exposures(ctx: &Context, address: Value) -> HashSet<Ptr<Operation>> {
     let mut pending = vec![address];
     let mut visited = HashSet::new();
+    let mut exposures = HashSet::new();
     while let Some(value) = pending.pop() {
         if !visited.insert(value) {
             continue;
@@ -750,11 +752,13 @@ fn slot_escapes(ctx: &Context, address: Value) -> bool {
                 {
                     pending.extend(op.deref(ctx).results());
                 }
-                _ => return true,
+                _ => {
+                    exposures.insert(op);
+                }
             }
         }
     }
-    false
+    exposures
 }
 
 impl Analysis for PreparedGraph {
@@ -830,12 +834,12 @@ impl Analysis for PreparedGraph {
                 edges.push(targets);
                 successor_ordinals.push(ordinals);
             }
-            let escaped_slots = slots
-                .iter()
-                .filter_map(|(&op, &slot)| {
-                    slot_escapes(ctx, op.deref(ctx).get_result(0)).then_some(slot)
-                })
-                .collect();
+            let mut exposed_slots: HashMap<_, BTreeSet<_>> = HashMap::new();
+            for (&op, &slot) in &slots {
+                for exposure in slot_exposures(ctx, op.deref(ctx).get_result(0)) {
+                    exposed_slots.entry(exposure).or_default().insert(slot);
+                }
+            }
             let joins = joins(&edges);
             // Fixed prepared CFG: never derive membership from pruned successors.
             let bypasses = edges
@@ -855,7 +859,7 @@ impl Analysis for PreparedGraph {
                     joins,
                     bypasses,
                     slots,
-                    escaped_slots,
+                    exposed_slots,
                     value_count,
                 },
             );
@@ -962,6 +966,7 @@ struct Analyzer<'a> {
     ctx: &'a Context,
     graph: &'a PreparedGraph,
     symbols: &'a BTreeMap<String, String>,
+    callback_environments: &'a BTreeMap<LibraryCallSite, LibraryCallbackEnvironment>,
     root: &'a str,
     resource_root: bool,
     storage_root: bool,
@@ -1043,7 +1048,7 @@ impl Analyzer<'_> {
         let mut entry = State {
             values: FxHashMap::default(),
             slots: vec![Fact::Unset; graph.slots.len()],
-            borrowed: graph.escaped_slots.clone(),
+            borrowed: BTreeSet::new(),
             pending,
             epochs,
         };
@@ -1453,6 +1458,61 @@ impl Analyzer<'_> {
                     "operation is reached through lane-varying control flow",
                 ));
             }
+            if matches!(native, Native::CheckedBlockPayloadCallback { .. }) {
+                match self.callback_environments.get(&call) {
+                    Some(
+                        LibraryCallbackEnvironment::FunctionItem
+                        | LibraryCallbackEnvironment::Closure {
+                            capture_count: 0,
+                            single_capture: None,
+                        },
+                    ) => {}
+                    Some(LibraryCallbackEnvironment::Closure {
+                        capture_count: 1,
+                        single_capture: Some(library::LibraryScalar::Signed(32)),
+                    }) => {
+                        let environment_type = operands[3].get_type(self.ctx);
+                        let environment_type = environment_type.deref(self.ctx);
+                        let field =
+                            environment_type
+                                .downcast_ref::<MirPtrType>()
+                                .and_then(|pointer| {
+                                    pointer
+                                        .pointee
+                                        .deref(self.ctx)
+                                        .downcast_ref::<dialect_mir::types::MirStructType>()
+                                        .and_then(|structure| {
+                                            (structure.field_count() == 1)
+                                                .then(|| structure.get_field_type(0))
+                                                .flatten()
+                                        })
+                                });
+                        let i32_field = field.is_some_and(|field| {
+                            field
+                                .deref(self.ctx)
+                                .downcast_ref::<IntegerType>()
+                                .is_some_and(|ty| {
+                                    ty.width() == 32 && ty.signedness() == Signedness::Signed
+                                })
+                        });
+                        let contents = dereference(resolved[3].clone(), state);
+                        if !i32_field
+                            || !matches!(contents, Fact::Fields(ref fields)
+                            if fields.len() == 1 && fields[0].uniform_at(Domain::BLOCK))
+                        {
+                            return Err(self.error(function, call.block,
+                                "callback i32 capture is not proved block-uniform through its shared environment"));
+                        }
+                    }
+                    _ => {
+                        return Err(self.error(
+                            function,
+                            call.block,
+                            "checked callback nominal environment is missing or unsupported",
+                        ));
+                    }
+                }
+            }
             if let Some(index) = controls_index(native)
                 && !(payload && unit(self.ctx, operands[index]))
             {
@@ -1541,6 +1601,9 @@ impl Analyzer<'_> {
         let mut facts = Vec::new();
         for prepared in &graph.operations[block] {
             let op = prepared.op;
+            if let Some(slots) = graph.exposed_slots.get(&op) {
+                state.borrowed.extend(slots);
+            }
             let operands = &prepared.operands;
             let kind = prepared.kind;
             if kind == TransferKind::Library {
@@ -1903,6 +1966,7 @@ pub fn analyze_libraries(
     symbols: &BTreeMap<String, String>,
     original_roles: &BTreeMap<LibraryCallSite, Role>,
     admitted_shapes: &BTreeMap<String, [u32; 3]>,
+    callback_environments: &BTreeMap<LibraryCallSite, LibraryCallbackEnvironment>,
     mut plans: Option<&mut BTreeMap<String, Plan>>,
 ) -> pliron::result::Result<Validation> {
     let graph = analyses.get_analysis::<PreparedGraph>(module, ctx)?;
@@ -1955,6 +2019,7 @@ pub fn analyze_libraries(
             ctx,
             graph: &graph,
             symbols,
+            callback_environments,
             root,
             resource_root,
             storage_root,

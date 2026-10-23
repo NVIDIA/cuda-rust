@@ -319,7 +319,10 @@ Dynamic dimensions (`-1`) are resolved at runtime from the tensor's actual shape
 
 ```rust
 let ptr: PointerTile<*mut f32, { [] }> = pointer_to_tile(raw_ptr);
-let offset_ptrs: PointerTile<*mut f32, { [128] }> = ptr.broadcast(shape![128]).offset_tile(offsets);
+// `broadcast` keeps the rank, so reshape the scalar pointer tile to rank 1 first.
+let ptr1: PointerTile<*mut f32, { [1] }> = reshape_ptr(ptr, shape![1]);
+let wide: PointerTile<*mut f32, { [128] }> = broadcast_ptr(ptr1, shape![128]);
+let offset_ptrs: PointerTile<*mut f32, { [128] }> = wide.offset_tile(offsets);
 ```
 
 ### Token
@@ -768,7 +771,9 @@ block for brevity.
 
 ```rust
 let base: PointerTile<*mut f32, { [] }> = pointer_to_tile(ptr);
-let ptrs: PointerTile<*mut f32, { [128] }> = base.broadcast(shape![128]).offset_tile(offsets);
+let base1: PointerTile<*mut f32, { [1] }> = reshape_ptr(base, shape![1]);
+let wide: PointerTile<*mut f32, { [128] }> = broadcast_ptr(base1, shape![128]);
+let ptrs: PointerTile<*mut f32, { [128] }> = wide.offset_tile(offsets);
 let (values, token): (Tile<f32, { [128] }>, Token) =
     load_ptr_tko(ptrs, ordering::Weak, None::<scope::TileBlock>, None, None, None, Latency::<0>);
 ```

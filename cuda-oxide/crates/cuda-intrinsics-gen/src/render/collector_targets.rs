@@ -191,6 +191,7 @@ pub(super) fn generated_intrinsic_variant(record: &CatalogIntrinsic) -> String {
             RegisterMmaKind::Standard => "GeneratedRegisterMmaKind::Standard",
             RegisterMmaKind::F8f6f4 => "GeneratedRegisterMmaKind::F8f6f4",
             RegisterMmaKind::Mxf8f6f4 => "GeneratedRegisterMmaKind::Mxf8f6f4",
+            RegisterMmaKind::Mxf4 => "GeneratedRegisterMmaKind::Mxf4",
         };
         let accumulator = match mma.accumulator {
             RegisterMmaAccumulator::F16 => "GeneratedRegisterMmaAccumulator::F16",
@@ -571,7 +572,7 @@ impl GeneratedIntrinsicTarget {
     replace_exact_render_fragment(
         &mut output,
         "pub enum GeneratedRegisterMmaAccumulator { F32, F64, S32 }",
-        "pub enum GeneratedRegisterMmaOperation { Multiply, AndPopc, XorPopc }\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum GeneratedRegisterMmaKind { Standard, F8f6f4, Mxf8f6f4 }\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum GeneratedRegisterMmaAccumulator { F16, F32, F64, S32 }",
+        "pub enum GeneratedRegisterMmaOperation { Multiply, AndPopc, XorPopc }\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum GeneratedRegisterMmaKind { Standard, F8f6f4, Mxf8f6f4, Mxf4 }\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum GeneratedRegisterMmaAccumulator { F16, F32, F64, S32 }",
     );
     replace_exact_render_fragment(
         &mut output,
@@ -762,7 +763,7 @@ impl GeneratedIntrinsicTarget {
     replace_exact_render_fragment(
         &mut output,
         "            };\n            let accumulator_matches = match accumulator {",
-        "            };\n            let operation_matches = match mma_operation {\n                GeneratedRegisterMmaOperation::Multiply => op.operation_or_multiply(ctx) == RegisterMmaOperationAttr::Multiply,\n                GeneratedRegisterMmaOperation::AndPopc => op.operation_or_multiply(ctx) == RegisterMmaOperationAttr::AndPopc,\n                GeneratedRegisterMmaOperation::XorPopc => op.operation_or_multiply(ctx) == RegisterMmaOperationAttr::XorPopc,\n            };\n            let kind_matches = match kind {\n                GeneratedRegisterMmaKind::Standard => op.kind_or_inferred(ctx) == RegisterMmaKindAttr::Standard,\n                GeneratedRegisterMmaKind::F8f6f4 => op.kind_or_inferred(ctx) == RegisterMmaKindAttr::F8f6f4,\n                GeneratedRegisterMmaKind::Mxf8f6f4 => op.kind_or_inferred(ctx) == RegisterMmaKindAttr::Mxf8f6f4,\n            };\n            let accumulator_matches = match accumulator {",
+        "            };\n            let operation_matches = match mma_operation {\n                GeneratedRegisterMmaOperation::Multiply => op.operation_or_multiply(ctx) == RegisterMmaOperationAttr::Multiply,\n                GeneratedRegisterMmaOperation::AndPopc => op.operation_or_multiply(ctx) == RegisterMmaOperationAttr::AndPopc,\n                GeneratedRegisterMmaOperation::XorPopc => op.operation_or_multiply(ctx) == RegisterMmaOperationAttr::XorPopc,\n            };\n            let kind_matches = match kind {\n                GeneratedRegisterMmaKind::Standard => op.kind_or_inferred(ctx) == RegisterMmaKindAttr::Standard,\n                GeneratedRegisterMmaKind::F8f6f4 => op.kind_or_inferred(ctx) == RegisterMmaKindAttr::F8f6f4,\n                GeneratedRegisterMmaKind::Mxf8f6f4 => op.kind_or_inferred(ctx) == RegisterMmaKindAttr::Mxf8f6f4,\n                GeneratedRegisterMmaKind::Mxf4 => op.kind_or_inferred(ctx) == RegisterMmaKindAttr::Mxf4,\n            };\n            let accumulator_matches = match accumulator {",
     );
     replace_exact_render_fragment(
         &mut output,

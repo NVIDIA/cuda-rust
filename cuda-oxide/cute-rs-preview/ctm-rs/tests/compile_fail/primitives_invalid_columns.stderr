@@ -1,0 +1,8 @@
+error[E0599]: the associated function or constant `from_raw_slot` exists for struct `TmemGuard<TmemUninit, 33, CtaGroup2>`, but its trait bounds were not satisfied
+ --> tests/compile_fail/primitives_invalid_columns.rs:8:82
+  |
+8 | fn wrong(slot:*mut u32) { let _ = unsafe { TmemGuard::<TmemUninit,33,CtaGroup2>::from_raw_slot(slot) }; }
+  |                                                                                  ^^^^^^^^^^^^^ associated function or constant cannot be called on `TmemGuard<TmemUninit, 33, CtaGroup2>` due to unsatisfied trait bounds
+  |
+  = note: the following trait bounds were not satisfied:
+          `(): ValidColumns<33>`

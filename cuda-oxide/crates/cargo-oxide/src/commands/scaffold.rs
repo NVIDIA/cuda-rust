@@ -14,7 +14,7 @@ use super::*;
 const GIT_REPO: &str = "https://github.com/NVIDIA/cuda-rust.git";
 
 const RUST_TOOLCHAIN_TOML: &str = r#"[toolchain]
-channel = "nightly-2026-10-11"
+channel = "1.99.1"
 components = ["rust-src", "rustc-dev", "rust-analyzer", "clippy", "rustfmt", "llvm-tools"]
 "#;
 

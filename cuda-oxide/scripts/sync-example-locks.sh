@@ -2,12 +2,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Keep every example workspace's Cargo.lock resolving the same dependency
+# Keep every example and model workspace's Cargo.lock resolving the same dependency
 # versions.
 #
-# Why this matters: each example under crates/rustc-codegen-cuda/examples/
-# is its own cargo workspace with its own committed Cargo.lock. CI builds
-# them all into one shared CARGO_TARGET_DIR, and cargo keys its build cache
+# Why this matters: examples under crates/rustc-codegen-cuda/examples/ and
+# cute-rs-preview/examples/, plus models under cute-rs-preview/models/, have their own cargo
+# workspaces and committed Cargo.lock.
+# CI builds them all into one shared CARGO_TARGET_DIR, and cargo keys its build cache
 # on the resolved versions of a unit's whole dependency subtree. When two
 # examples pin different versions of, say, syn or memchr, the first example
 # to use each resolution recompiles a private variant of the entire shared
@@ -42,6 +43,8 @@
 #       `cargo update -p <name>@<from> --precise <to>` (never touches git
 #       pins). With no arguments, aligns every drifted lock. Use this for a
 #       newly added example, or for git-dependency workspaces after --bump.
+#       Use a short example or model name from any root, or a root-qualified path
+#       such as cute-rs-preview/examples/elementwise_cute to select one explicitly.
 #
 # Adding a new example? Copy an existing example's Cargo.lock (e.g.
 # vecadd's) into the new workspace before the first build; cargo keeps the
@@ -50,7 +53,7 @@
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-EXAMPLES_ROOT="crates/rustc-codegen-cuda/examples"
+EXAMPLES_ROOTS=("crates/rustc-codegen-cuda/examples" "cute-rs-preview/examples" "cute-rs-preview/models")
 
 usage() {
     # The doc block above: everything after the shebang + SPDX lines, up to
@@ -61,7 +64,8 @@ usage() {
 # Print every example Cargo.lock path (top-level workspaces and nested
 # device workspaces alike), one per line.
 all_locks() {
-    find "${EXAMPLES_ROOT}" -name Cargo.lock | sort
+    find "${EXAMPLES_ROOTS[@]}" -type d \( -name target -o -name .oxide-artifacts \) -prune \
+        -o -name Cargo.lock -print | sort
 }
 
 # ---- check ---------------------------------------------------------------
@@ -70,7 +74,7 @@ all_locks() {
 # version across all example locks AND no two example workspaces define
 # same-named local crates; otherwise list each conflict.
 run_check() {
-    LOCK_PATHS="$(all_locks)" EXAMPLES_ROOT="${EXAMPLES_ROOT}" python3 - <<'PY'
+    LOCK_PATHS="$(all_locks)" EXAMPLES_ROOTS="$(printf '%s\n' "${EXAMPLES_ROOTS[@]}")" python3 - <<'PY'
 import os
 import re
 import sys
@@ -132,19 +136,20 @@ name_re = re.compile(r'^name\s*=\s*"([^"]+)"', re.M)
 version_re = re.compile(r'^version\s*=\s*"([^"]+)"', re.M)
 local_crates = defaultdict(set)
 manifest_count = 0
-for dirpath, dirnames, filenames in os.walk(os.environ["EXAMPLES_ROOT"]):
-    dirnames[:] = [d for d in dirnames if d not in ("target", ".oxide-artifacts", "src")]
-    if "Cargo.toml" not in filenames:
-        continue
-    manifest_count += 1
-    text = open(os.path.join(dirpath, "Cargo.toml"), encoding="utf-8").read()
-    package = text.split("[package]", 1)
-    if len(package) < 2:
-        continue
-    body = package[1].split("\n[", 1)[0]
-    name, version = name_re.search(body), version_re.search(body)
-    if name and version:
-        local_crates[(name.group(1), version.group(1))].add(dirpath)
+for root in os.environ["EXAMPLES_ROOTS"].splitlines():
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in ("target", ".oxide-artifacts", "src")]
+        if "Cargo.toml" not in filenames:
+            continue
+        manifest_count += 1
+        text = open(os.path.join(dirpath, "Cargo.toml"), encoding="utf-8").read()
+        package = text.split("[package]", 1)
+        if len(package) < 2:
+            continue
+        body = package[1].split("\n[", 1)[0]
+        name, version = name_re.search(body), version_re.search(body)
+        if name and version:
+            local_crates[(name.group(1), version.group(1))].add(dirpath)
 if manifest_count < 100:
     sys.exit(f"parse self-test failed: only {manifest_count} example manifests found")
 duplicated = {key: dirs for key, dirs in local_crates.items() if len(dirs) > 1}
@@ -194,31 +199,27 @@ run_bump() {
 # exact version disagrees with the majority across all locks, restricted to
 # the requested lock dirs (or all locks when none are given).
 plan_align() {
-    LOCK_PATHS="$(all_locks)" EXAMPLES_ROOT="${EXAMPLES_ROOT}" python3 - "$@" <<'PY'
+    LOCK_PATHS="$(all_locks)" EXAMPLES_ROOTS="$(printf '%s\n' "${EXAMPLES_ROOTS[@]}")" python3 - "$@" <<'PY'
 import os
 import re
 import sys
 from collections import defaultdict
 
-examples_root = os.environ["EXAMPLES_ROOT"]
+examples_roots = os.environ["EXAMPLES_ROOTS"].splitlines()
 
-# A target selects one example workspace by its directory name (nested
-# device workspaces included). Exact path-component matching: "gemm" must
-# not also select "tiled_gemm".
+# A root-qualified target selects only that root. A short example name or
+# nested path selects matching workspaces from any root. Matching whole
+# path components keeps "gemm" from also selecting "tiled_gemm".
 def normalize(target):
-    target = target.rstrip("/")
-    for prefix in (examples_root + "/", "./" + examples_root + "/"):
-        if target.startswith(prefix):
-            target = target[len(prefix):]
-    return target
+    target = os.path.normpath(target)
+    if any(target == root or target.startswith(root + "/") for root in examples_roots):
+        return {target}
+    return {os.path.join(root, target) for root in examples_roots}
 
-targets = {normalize(t) for t in sys.argv[1:]}
+targets = {path for target in sys.argv[1:] for path in normalize(target)}
 
 def selected(lock_dir):
-    if not targets:
-        return True
-    rel = os.path.relpath(lock_dir, examples_root)
-    return any(rel == t or rel.startswith(t + "/") for t in targets)
+    return not targets or any(lock_dir == t or lock_dir.startswith(t + "/") for t in targets)
 
 # Cargo's compatibility rule: leftmost non-zero component; each 0.0.z
 # version is its own range. Keep textually identical to run_check's copy.

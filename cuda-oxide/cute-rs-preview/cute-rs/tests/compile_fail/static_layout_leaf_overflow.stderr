@@ -1,0 +1,28 @@
+error[E0080]: evaluation panicked: static layout physical offset overflow
+ --> src/static_layout.rs
+  |
+  |         checked_offset_mul(parameter(N - 1), parameter(S))
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `<cute_rs::Layout<cute_rs::C<4>, cute_rs::C<i64::MAX>> as cute_rs::static_layout::StaticLayout>::MAX_OFFSET` failed inside this call
+  |
+note: inside `static_layout::checked_offset_mul`
+ --> $RUST/core/src/panic.rs
+  |
+  |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
+  |
+ ::: src/static_layout.rs
+  |
+  |         None => panic!("static layout physical offset overflow"),
+  |                 ------------------------------------------------ in this macro invocation
+
+note: erroneous constant encountered
+ --> src/static_layout.rs
+  |
+  |         let _ = Self::MAX_OFFSET;
+  |                 ^^^^^^^^^^^^^^^^
+
+note: erroneous constant encountered
+  --> tests/compile_fail/static_layout_leaf_overflow.rs:10:18
+   |
+10 | const _: usize = Invalid::SIZE;
+   |                  ^^^^^^^^^^^^^

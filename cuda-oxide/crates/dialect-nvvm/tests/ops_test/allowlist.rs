@@ -47,6 +47,8 @@ fn handwritten_ops_match_reviewed_allowlist() {
         ("debug.rs", "AssertFailOp"),
         ("debug.rs", "VprintfOp"),
         ("grid.rs", "GridSyncOp"),
+        // Address-domain conversions are handwritten, like the CTA CVTA.
+        ("memory.rs", "CvtaGenericToClusterSharedOffsetOp"),
         ("memory.rs", "CvtaGenericToSharedOffsetOp"),
         ("wgmma.rs", "WgmmaMakeSmemDescOp"),
         ("wgmma.rs", "WgmmaMmaM64N64K16F32Bf16Op"),

@@ -381,7 +381,7 @@ fn cfg_gated_generic_uses_the_same_gate_for_marker_and_loader() {
         "loader selection must inherit the generic kernel's cfg:\n{expanded}"
     );
     assert!(
-            expanded.contains(&format!("if__cuda_oxide_has_enabled_generic_kernel{{let_=name;::cuda_host::load_all_ptx_bundles_merged(ctx)?}}else{{{ANCHORED_EMBEDDED_LOADER}}}")),
+            expanded.contains(&format!("if__cuda_oxide_has_enabled_generic_kernel{{let_=name;#[cfg(any(target_os=\"linux\",target_os=\"android\"))]{{static__CUDA_OXIDE_GENERIC_IMAGE:u8=0;::cuda_host::load_generic_embedded_module_from_anchor(ctx,&__CUDA_OXIDE_GENERIC_IMAGE,)?}}#[cfg(not(any(target_os=\"linux\",target_os=\"android\")))]{{::cuda_host::load_generic_embedded_module(ctx)?}}}}else{{{ANCHORED_EMBEDDED_LOADER}}}")),
             "loader must fall back to the embedded artifact when no generic kernel is enabled:\n{expanded}"
         );
 }
@@ -1492,4 +1492,19 @@ fn non_generic_kernel_lookups_never_consult_the_divergence_diagnosis() {
         !expanded.contains("diagnose_generic_kernel_load_error"),
         "non-generic lookups must keep the ordinary error path: {expanded}"
     );
+}
+
+#[test]
+fn inferred_shared_contract_rejects_a_separate_alignment_promise() {
+    let module: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            #[launch_contract(domain = 1, block = (32, 1, 1), dynamic_shared = inferred,
+                dynamic_shared_alignment = 128)]
+            pub fn map() {}
+        }
+    };
+    let error =
+        expand_cuda_module(module).expect_err("inferred alignment belongs to the compiler layout");
+    assert!(error.to_string().contains("inferred"));
 }

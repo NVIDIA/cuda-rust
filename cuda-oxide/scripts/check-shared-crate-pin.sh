@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-# Verify that CUDA Oxide consumes the shared host crates at tip of tree.
+# Verify that cuda-oxide consumes the shared host crates at tip of tree.
 #
 # cuda-bindings, cuda-core, cuda-core-derive, and cuda-async live at the git
 # root and are consumed by path. In-tree manifests must not carry a version
@@ -10,8 +10,8 @@
 # tree (#1459). Three things are checked:
 #
 #   1. The four root crates agree on one version.
-#   2. CUDA Oxide's [workspace.dependencies] and every example workspace name
-#      cuda-bindings, cuda-core, and cuda-async as path dependencies with no
+#   2. cuda-oxide's [workspace.dependencies] and every example or model workspace
+#      name cuda-bindings, cuda-core, and cuda-async as path dependencies with no
 #      `version` field. Examples are their own [workspace], so they cannot
 #      inherit the SIMT entry, and a crates.io copy there would resolve a
 #      second cuda_core and break type unification with path cuda-host.
@@ -56,14 +56,20 @@ check_manifest() {
     done < <(grep -E '^(cuda-bindings|cuda-core|cuda-async)[[:space:]]*=|^[A-Za-z0-9_-]+[[:space:]]*=[[:space:]]*\{[^}]*package[[:space:]]*=[[:space:]]*"cuda-(bindings|core|async)"' "${file}" || true)
 }
 
-# 2. CUDA Oxide and the example workspaces (nested member crates included).
+# 2. cuda-oxide and the example and model workspaces (nested member crates included).
 check_manifest "${OXIDE}"
 while IFS= read -r manifest; do
     check_manifest "${GIT_ROOT}/${manifest}"
 done < <(git -C "${GIT_ROOT}" ls-files \
     'cuda-oxide/crates/rustc-codegen-cuda/examples/*/Cargo.toml' \
     'cuda-oxide/crates/rustc-codegen-cuda/examples/*/*/Cargo.toml' \
-    'cuda-oxide/crates/rustc-codegen-cuda/examples/*/*/*/Cargo.toml')
+    'cuda-oxide/crates/rustc-codegen-cuda/examples/*/*/*/Cargo.toml' \
+    'cuda-oxide/cute-rs-preview/examples/*/Cargo.toml' \
+    'cuda-oxide/cute-rs-preview/examples/*/*/Cargo.toml' \
+    'cuda-oxide/cute-rs-preview/examples/*/*/*/Cargo.toml' \
+    'cuda-oxide/cute-rs-preview/models/*/Cargo.toml' \
+    'cuda-oxide/cute-rs-preview/models/*/*/Cargo.toml' \
+    'cuda-oxide/cute-rs-preview/models/*/*/*/Cargo.toml')
 
 # 3. The scaffold names every host crate from GIT_REPO.
 scaffold_lines="$(grep -E '^(cuda-bindings|cuda-core|cuda-async)[[:space:]]*=' "${SCAFFOLD}" || true)"

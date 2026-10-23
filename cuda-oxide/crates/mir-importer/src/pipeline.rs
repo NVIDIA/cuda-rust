@@ -38,8 +38,8 @@
 //! Override with `CUDA_OXIDE_TARGET=<target>` environment variable.
 
 use cuda_oxide_codegen::__private::{
-    BackendOptions, ModuleArtifactKind, ModulePipelineRequest, OutputFiles, PipelineTrace,
-    append_to_module, compile_translated_module, verify_operation,
+    BackendOptions, DeviceBackend, ModuleArtifactKind, ModulePipelineRequest, OutputFiles,
+    PipelineTrace, append_to_module, compile_translated_module, verify_operation,
 };
 pub use cuda_oxide_codegen::__private::{
     DeviceArchHint, DeviceExternAttrs, DeviceExternDecl, PipelineError,
@@ -191,6 +191,13 @@ pub struct PipelineConfig {
     pub output_dir: std::path::PathBuf,
     /// Base name for output files (e.g., `"kernel"` → `kernel.ll`, `kernel.ptx`).
     pub output_name: String,
+    /// Optional exact path for a textual CUTLASS MLIR observation.
+    ///
+    /// The export observes the prepared semantic module before the selected
+    /// backend continuation; failures are compilation errors.
+    pub mlir_output: Option<std::path::PathBuf>,
+    /// Device artifact backend. The ordinary backend remains the default.
+    pub device_backend: DeviceBackend,
     /// Print progress messages to stdout.
     pub verbose: bool,
     /// Dump the `dialect-mir` module after translation (for debugging).
@@ -265,6 +272,8 @@ impl Default for PipelineConfig {
         Self {
             output_dir: std::env::current_dir().unwrap_or_else(|_| ".".into()),
             output_name: "kernel".to_string(),
+            mlir_output: None,
+            device_backend: DeviceBackend::Native,
             verbose: true,
             show_mir_dialect: false,
             show_llvm_dialect: false,
@@ -544,6 +553,7 @@ pub fn run_pipeline_with_libraries(
 
     let mut legaliser = Legaliser::default();
     let mut kernel_launch_bounds = BTreeMap::new();
+    let mut expected_kernels = Vec::new();
 
     // Step 3: Translate all functions
     for func in functions {
@@ -612,6 +622,9 @@ pub fn run_pipeline_with_libraries(
         {
             kernel_launch_bounds.insert(func.export_name.clone(), bounds);
         }
+        if func.is_kernel {
+            expected_kernels.push(func.export_name.clone());
+        }
 
         // Append to module
         append_to_module(&ctx, module_op_ptr, func_op_ptr);
@@ -634,6 +647,9 @@ pub fn run_pipeline_with_libraries(
     let ptx_path = config
         .output_dir
         .join(format!("{}.ptx", config.output_name));
+    let cubin_path = config
+        .output_dir
+        .join(format!("{}.cubin", config.output_name));
     let stale_artifacts = stale_compilation_artifact_paths(&config.output_dir, &config.output_name);
 
     let backend_options = backend_options_for(config);
@@ -643,9 +659,16 @@ pub fn run_pipeline_with_libraries(
         config.emit_nvvm_ir,
         &backend_options,
         config.debug_kind,
+        match &config.device_backend {
+            DeviceBackend::Native => None,
+            DeviceBackend::CutlassMlir(config) => Some(config),
+        },
+        &expected_kernels,
         OutputFiles {
             llvm_ir: &ll_path,
             ptx: &ptx_path,
+            cubin: &cubin_path,
+            mlir: config.mlir_output.as_deref(),
             stale_before_export: &stale_artifacts,
         },
         PipelineTrace {
@@ -682,6 +705,16 @@ pub fn run_pipeline_with_libraries(
         ModuleArtifactKind::Ptx => Ok(CompilationResult {
             artifact_path: ptx_path.clone(),
             artifact_kind: CompilationArtifactKind::Ptx,
+            ll_path,
+            ptx_path,
+            target: generated.target,
+            allow_fma_contraction: config.allow_fma_contraction,
+            kernel_launch_bounds,
+            kernel_launch_facts,
+        }),
+        ModuleArtifactKind::Cubin => Ok(CompilationResult {
+            artifact_path: cubin_path,
+            artifact_kind: CompilationArtifactKind::Cubin,
             ll_path,
             ptx_path,
             target: generated.target,
@@ -815,6 +848,8 @@ mod tests {
         let config = PipelineConfig::default();
 
         assert_eq!(config.output_name, "kernel");
+        assert_eq!(config.mlir_output, None);
+        assert_eq!(config.device_backend, DeviceBackend::Native);
         assert!(config.verbose);
         assert!(!config.show_mir_dialect);
         assert!(!config.show_llvm_dialect);
@@ -1345,6 +1380,8 @@ fn adversarial_export_name() -> u64 {
         let config = PipelineConfig {
             output_dir: root.clone(),
             output_name: "kernel".to_string(),
+            mlir_output: None,
+            device_backend: DeviceBackend::Native,
             verbose: false,
             show_mir_dialect: false,
             show_llvm_dialect: false,
@@ -1399,6 +1436,8 @@ fn adversarial_export_name() -> u64 {
         let config = PipelineConfig {
             output_dir: output_dir.clone(),
             output_name: "empty".to_string(),
+            mlir_output: None,
+            device_backend: DeviceBackend::Native,
             verbose: false,
             show_mir_dialect: false,
             show_llvm_dialect: false,
@@ -1491,6 +1530,8 @@ fn adversarial_export_name() -> u64 {
         let config = PipelineConfig {
             output_dir: root.clone(),
             output_name: "extern_only".to_string(),
+            mlir_output: None,
+            device_backend: DeviceBackend::Native,
             verbose: false,
             show_mir_dialect: false,
             show_llvm_dialect: false,

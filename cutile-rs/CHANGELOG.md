@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and release tags are namespaced `cutile-rs/vX.Y.Z`. Crate names and versions
   are unchanged.
 
+### Fixed
+
+- `.const_grid(grid)` with a zero dimension now fails the launch, warmup
+  (`.compile()`) and `specialize()` with an error naming the grid. Before,
+  the kernel was compiled for the empty grid first. A `(0, 0, 0)` const grid
+  then launched on the grid inferred from an exact partition binding, or
+  failed with "Launch grid required" when there was none.
+
 ## [0.4.0] - 2026-09-25
 
 Debug builds support cuda-gdb and Nsight. DGX Spark is now supported.

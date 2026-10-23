@@ -148,8 +148,8 @@ and executes only after all preceding work on that stream completes. Critically,
 it does **not** synchronize the device:
 
 ```rust
-use cuda_async::simt::device_box::DeviceBox;
-use cuda_async::simt::device_context::init_device_contexts;
+use cuda_async::device_box::DeviceBox;
+use cuda_async::device_context::init_device_contexts;
 
 init_device_contexts(0, 1)?;  // Initialize device context map (default device 0)
 

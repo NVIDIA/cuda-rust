@@ -3,7 +3,7 @@
 
 // A safe implementation must not relabel arbitrary bytes as boolean input.
 use cutile::cuda_async::{
-    device_operation::ExecutionContext, error::DeviceError, launch::AsyncKernelLaunch,
+    device_operation::ExecutionContext, error::DeviceError, launch::AsyncKernelLaunchBuilder,
 };
 use cutile::cutile_compiler::specialization::SpecializationBits;
 use cutile::tensor::{KernelInput, KernelInputStored, Tensor};
@@ -14,7 +14,7 @@ impl KernelInputStored for Mislabelled {
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.0.retain(ctx)
     }
-    fn push_kernel_args(&self, launch: &mut AsyncKernelLaunch) {
+    fn push_kernel_args(&self, launch: &mut AsyncKernelLaunchBuilder) {
         self.0.push_kernel_args(launch);
     }
     fn shape(&self) -> &[i32] {

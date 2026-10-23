@@ -12,12 +12,9 @@
 //! [`DeviceBuffer::uninitialized_async`] retain their allocation stream for
 //! deallocation.
 //!
-//! Ordinary drop synchronizes the context before freeing an asynchronous
-//! allocation, because safe operations may have submitted work using the
-//! buffer on any stream in that context. The unsafe
-//! [`DeviceBuffer::drop_async`] avoids that host-side synchronization by
-//! freeing on a chosen stream; its caller takes over the obligation to
-//! order every other stream that uses the buffer before that stream.
+//! Drop does not wait for GPU work. Safe launch and transfer APIs retain the
+//! shared allocation owner and access leases independently until completion.
+//! Unsafe raw-pointer callers must retain storage and order accesses themselves.
 //!
 //! # Quick start
 //!

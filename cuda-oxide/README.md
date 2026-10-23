@@ -95,7 +95,7 @@ lazy `DeviceOperation`, and execution happens when you call `.sync()` or
 `.await`.
 
 ```rust
-use cuda_async::simt::device_operation::DeviceOperation;
+use cuda_async::device_operation::DeviceOperation;
 
 // Assuming `module`, `input`, and `output` come from the cuda-async setup:
 let factor = 2.5f32;
@@ -307,7 +307,7 @@ cargo oxide run gemm_sol_final
 | `cuda-macros`       | Proc macros (`#[cuda_module]`, `#[kernel]`, `gpu_printf!`)                |
 | `cuda-bindings`     | Raw `bindgen` FFI bindings to `cuda.h` (shared with cutile-rs)             |
 | `cuda-core`         | Safe RAII wrappers (`CudaContext`, `DeviceBuffer<T>`, ...); one host API shared by SIMT and Tile |
-| `cuda-async`        | Async layer (`DeviceOperation`, `DeviceBox<T>`, ...); SIMT API under `cuda_async::simt` |
+| `cuda-async`        | Async layer (`DeviceOperation`, `DeviceBox<T>`, ...); one runtime for Tile and SIMT |
 | `libnvvm-sys`       | `dlopen` bindings to libNVVM (used by `cuda-host::ltoir`)                 |
 | `cuda-target-spec`  | Shared CUDA target parsing and recorded LLVM PTX-floor policy             |
 | `nvjitlink-sys`     | `dlopen` bindings to nvJitLink (used by `cuda-host::ltoir`)               |

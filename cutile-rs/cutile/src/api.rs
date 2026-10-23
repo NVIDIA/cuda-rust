@@ -504,7 +504,9 @@ pub fn meta<T: DType>(shape: &[usize]) -> impl DeviceOp<Output = Tensor<T>> {
 /// // 3D tensor
 /// let volume = api::zeros::<i32>(&[64, 64, 64]).await;
 /// ```
-pub fn zeros<T: DType>(shape: &[usize]) -> impl DeviceOp<Output = Tensor<T>> {
+pub fn zeros<T: DType + cuda_core::DeviceCopy>(
+    shape: &[usize],
+) -> impl DeviceOp<Output = Tensor<T>> {
     full(T::zero(), shape)
 }
 
@@ -521,7 +523,9 @@ pub fn zeros<T: DType>(shape: &[usize]) -> impl DeviceOp<Output = Tensor<T>> {
 /// let x = api::ones::<f32>(&[1024]).await;
 /// let matrix = api::ones::<f16>(&[256, 256]).await;
 /// ```
-pub fn ones<T: DType>(shape: &[usize]) -> impl DeviceOp<Output = Tensor<T>> {
+pub fn ones<T: DType + cuda_core::DeviceCopy>(
+    shape: &[usize],
+) -> impl DeviceOp<Output = Tensor<T>> {
     full(T::one(), shape)
 }
 
@@ -539,7 +543,10 @@ pub fn ones<T: DType>(shape: &[usize]) -> impl DeviceOp<Output = Tensor<T>> {
 /// let x = api::full(3.14f32, &[1024]).await;
 /// let matrix = api::full(-1, &[128, 128]).await;
 /// ```
-pub fn full<T: DType>(val: T, shape: &[usize]) -> impl DeviceOp<Output = Tensor<T>> {
+pub fn full<T: DType + cuda_core::DeviceCopy>(
+    val: T,
+    shape: &[usize],
+) -> impl DeviceOp<Output = Tensor<T>> {
     let shape = shape.to_vec();
     let len = shape.iter().product::<usize>();
     Tensor::<T>::uninitialized(len).then(move |t| {
@@ -551,7 +558,10 @@ pub fn full<T: DType>(val: T, shape: &[usize]) -> impl DeviceOp<Output = Tensor<
     })
 }
 
-pub fn fill<T: DType>(tensor: Tensor<T>, val: T) -> impl DeviceOp<Output = Tensor<T>> {
+pub fn fill<T: DType + cuda_core::DeviceCopy>(
+    tensor: Tensor<T>,
+    val: T,
+) -> impl DeviceOp<Output = Tensor<T>> {
     value(tensor).then(move |t| {
         let partition_size = 128;
         let result = t.partition([partition_size]);

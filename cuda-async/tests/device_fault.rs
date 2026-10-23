@@ -18,7 +18,7 @@
 use cuda_async::device_context::{global_policy, init_device_contexts, load_module_from_ptx};
 use cuda_async::device_operation::{value, DeviceOp, ExecutionContext};
 use cuda_async::error::DeviceError;
-use cuda_async::launch::AsyncKernelLaunch;
+use cuda_async::launch::AsyncKernelLaunchBuilder;
 use cuda_core::{Function, LaunchConfig};
 use std::future::{Future, IntoFuture};
 use std::pin::Pin;
@@ -86,11 +86,13 @@ struct FaultingOp {
     bytes: usize,
     passes: usize,
     trap: Arc<Function>,
+    owner: Arc<()>,
 }
 
 impl DeviceOp for FaultingOp {
     type Output = ();
     unsafe fn execute(self, context: &ExecutionContext) -> Result<(), DeviceError> {
+        context.retain(self.owner)?;
         let stream = context.get_cuda_stream().cu_stream();
         for _ in 0..self.passes {
             let code = cuda_bindings::cuMemsetD8Async(self.dptr, 0x11, self.bytes, stream);
@@ -100,7 +102,7 @@ impl DeviceOp for FaultingOp {
                 )));
             }
         }
-        let mut launch = AsyncKernelLaunch::new(self.trap);
+        let mut launch = AsyncKernelLaunchBuilder::new(self.trap);
         launch.set_launch_config(LaunchConfig {
             grid_dim: (1, 1, 1),
             block_dim: (1, 1, 1),
@@ -134,11 +136,13 @@ fn device_fault_resolves_the_awaiting_future_with_the_driver_error() {
         // 1. Fault after registration. Before the fix this never resolved
         //    (the flag write never lands; nothing wakes the future) and the
         //    reactor spun at 100% CPU on the armed slot.
+        let owner = Arc::new(());
         let op = FaultingOp {
             dptr,
             bytes,
             passes: 32,
             trap,
+            owner: owner.clone(),
         };
         let started = Instant::now();
         let result = block_on_with_deadline(op.into_future(), Duration::from_secs(30));
@@ -146,6 +150,12 @@ fn device_fault_resolves_the_awaiting_future_with_the_driver_error() {
             matches!(result, Err(DeviceError::Driver(_))),
             "a faulted stream must surface the driver error, got {result:?} after {:?}",
             started.elapsed()
+        );
+
+        assert_eq!(
+            Arc::strong_count(&owner),
+            2,
+            "a faulted submission must preserve its independently registered owners"
         );
 
         // 2. The context is now dead. A fresh future's inline spin sees the

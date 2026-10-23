@@ -403,7 +403,7 @@ fn module_inner(
                 use #tile_rust_crate_root::tile_kernel::{*};
                 use #tile_rust_crate_root::cuda_async::error::{*};
                 use #tile_rust_crate_root::cuda_async::scheduling_policies::SchedulingPolicy;
-                use #tile_rust_crate_root::cuda_core::{Context, Function, Module, Stream, DriverError, LaunchConfig};
+                use #tile_rust_crate_root::cuda_core::{DeviceCopy, Context, Function, Module, Stream, DriverError, LaunchConfig};
                 // use #tile_rust_crate_root::cutile_compiler::cuda_tile::ModuleOperation;
                 // use #tile_rust_crate_root::cutile_compiler::compiler::{CUDATileModules, CUDATileFunctionCompiler};
                 // Module asts and generated type data.

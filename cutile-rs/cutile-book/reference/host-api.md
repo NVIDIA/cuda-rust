@@ -234,7 +234,7 @@ let stream = device.new_stream()?;         // A new stream owned by this device
 
 Devices are `Arc`-wrapped for sharing across threads; streams are also `Arc`-wrapped and can be passed to `.sync_on(&stream)` for explicit stream scheduling.
 
-The default round-robin scheduling policy handles stream assignment automatically for most workloads — these APIs are for when you need explicit stream control (debugging, deterministic ordering, paired with `AsyncKernelLaunch`, or overlapping compute with transfers on dedicated streams).
+The default round-robin scheduling policy handles stream assignment automatically for most workloads — these APIs are for when you need explicit stream control (debugging, deterministic ordering, paired with `AsyncKernelLaunchBuilder`, or overlapping compute with transfers on dedicated streams).
 
 The `borrow_raw` constructors do not take ownership of the underlying CUDA
 handles and therefore do not destroy them on drop. They are `unsafe fn`s: the
@@ -296,7 +296,7 @@ can pin one of those versions, but cannot force a version that the selected
 assembler does not support. Configure these variables before launching;
 already-resolved launch sites retain their toolchain snapshot.
 
-**`LaunchConfig`** — grid/block/shared-memory specification for `AsyncKernelLaunch` (raw CUDA kernels launched outside the `#[cutile::entry]` path):
+**`LaunchConfig`** — grid/block/shared-memory specification for `AsyncKernelLaunchBuilder` (raw CUDA kernels launched outside the `#[cutile::entry]` path):
 
 ```rust
 use cuda_core::LaunchConfig;
@@ -308,12 +308,12 @@ LaunchConfig {
 }
 ```
 
-**`AsyncKernelLaunch`** — wraps a CUDA driver kernel launch as a `DeviceOp`. Build the argument list with `push_arg` (safe, for `DType` scalars) or `push_device_ptr` (`unsafe`, for raw device pointers), set the launch config, then `.await` or `.sync_on()`:
+**`AsyncKernelLaunchBuilder`** — wraps a CUDA driver kernel launch as a `DeviceOp`. Build the argument list with `push_arg` (safe, for `DType` scalars) or `push_device_ptr` (`unsafe`, for raw device pointers), set the launch config, then `.await` or `.sync_on()`:
 
 ```rust
-use cuda_async::launch::AsyncKernelLaunch;
+use cuda_async::launch::AsyncKernelLaunchBuilder;
 
-let mut launcher = AsyncKernelLaunch::new(function.clone());
+let mut launcher = AsyncKernelLaunchBuilder::new(function.clone());
 launcher.push_arg(num_elements as u32);
 launcher.push_arg(scale);
 let input_ptr = input.device_pointer();
@@ -356,7 +356,7 @@ The generated kernel builder has an unsafe, consuming
 `.programmatic_dependent_launch()` method. It is disabled by default and is
 separate from `CompileOptions`. It requires Tile IR 13.4, sm_90 or newer,
 and a driver providing `cuLaunchKernelEx`; unsupported requests fail rather
-than silently using ordinary serialization. `cuda_async::AsyncKernelLaunch`
+than silently using ordinary serialization. `cuda_async::AsyncKernelLaunchBuilder`
 also exposes an unsafe mutable-builder method for lower-level callers.
 
 Enqueue both kernels on the same stream, enabling PDL on the **consumer**:

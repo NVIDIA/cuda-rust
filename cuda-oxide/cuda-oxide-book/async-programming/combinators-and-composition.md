@@ -254,7 +254,7 @@ every combinator working together. This function returns a single
 `DeviceOperation` describing the entire forward pass for one batch:
 
 ```rust
-use cuda_async::simt::launch::{AsyncKernelLaunchBuilder, OwnedAsyncKernelLaunch};
+use cuda_async::launch::{AsyncKernelLaunchBuilder, OwnedAsyncKernelLaunch};
 
 fn forward_pass(
     batch: Vec<f32>,

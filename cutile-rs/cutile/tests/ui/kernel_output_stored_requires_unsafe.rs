@@ -5,7 +5,7 @@
 use cuda_async::{
     device_operation::{value, DeviceOp, ExecutionContext},
     error::DeviceError,
-    launch::AsyncKernelLaunch,
+    launch::AsyncKernelLaunchBuilder,
 };
 use cutile::cutile_compiler::specialization::SpecializationBits;
 use cutile::error::Error;
@@ -20,7 +20,7 @@ impl KernelOutputStored<u8> for Mislabelled {
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.0.retain(ctx)
     }
-    fn push_kernel_args(&self, launch: &mut AsyncKernelLaunch) {
+    fn push_kernel_args(&self, launch: &mut AsyncKernelLaunchBuilder) {
         self.0.push_kernel_args(launch);
     }
     fn grid(&self) -> Result<(u32, u32, u32), Error> {

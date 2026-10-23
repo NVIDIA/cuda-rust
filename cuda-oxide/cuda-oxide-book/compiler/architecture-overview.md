@@ -145,7 +145,7 @@ cuda-oxide is split into focused crates. Here is every one and its role:
 | `cuda-host`          | Host-side typed module loading and launch helpers                                      |
 | `cuda-core`          | Shared with cutile-rs: safe Driver API bindings; shared context, stream and buffer types   |
 | `cuda-core-derive`   | Shared with cutile-rs: `#[derive(DeviceCopy)]` proc-macro for `cuda-core`              |
-| `cuda-async`         | Shared with cutile-rs: `DeviceOperation` model and combinators under `cuda_async::simt` |
+| `cuda-async`         | Shared with cutile-rs: `DeviceOperation` model and combinators shared by Tile and SIMT |
 | `cuda-bindings`      | Shared with cutile-rs: FFI to the CUDA driver; `libcuda` is loaded at run time         |
 | `cuda-intrinsics`    | Generated low-level CUDA intrinsic declarations                                        |
 | `cuda-intrinsics-gen`| Extractor and deterministic source generator for the intrinsics                        |

@@ -592,8 +592,8 @@ instead of enqueuing immediately. No stream is specified at launch time -- the
 scheduling policy chooses one when the operation is executed:
 
 ```rust
-use cuda_async::simt::device_context::init_device_contexts;
-use cuda_async::simt::device_operation::DeviceOperation;
+use cuda_async::device_context::init_device_contexts;
+use cuda_async::device_operation::DeviceOperation;
 
 init_device_contexts(0, 1)?;
 let module = kernels::load_async(0)?;

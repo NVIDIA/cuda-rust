@@ -74,7 +74,7 @@ method. It looks like the sync method, but without the stream argument, and it
 returns a recipe instead of cooking immediately:
 
 ```rust
-use cuda_async::simt::device_context::init_device_contexts;
+use cuda_async::device_context::init_device_contexts;
 use cuda_core::LaunchConfig;
 
 // One-time setup: create a stream pool for scheduling
@@ -177,7 +177,7 @@ Operations never create streams themselves. The scheduling policy (covered in
 separation: operations describe *what*, the context provides *where*.
 
 Inside an `execute` implementation, you access the stream with
-`ctx.get_cuda_stream()` and the CUDA context with `ctx.get_cuda_context()`.
+`ctx.get_cuda_stream()` and the CUDA context with `ctx.context()`.
 For most operations this is all you need -- enqueue a kernel or a memory copy
 on the stream, and you are done.
 
@@ -265,7 +265,7 @@ weight vector -- into a chain of device operations. The `value()` function
 wraps any `Send` type in a no-op `DeviceOperation` that returns it immediately:
 
 ```rust
-use cuda_async::simt::device_operation::value;
+use cuda_async::device_operation::value;
 
 let weights = vec![1.0f32; 1024];
 let op = value(weights);  // impl DeviceOperation<Output = Vec<f32>>
@@ -297,7 +297,7 @@ The stream is assigned later, by the scheduling policy.
 until the `ExecutionContext` is available:
 
 ```rust
-use cuda_async::simt::device_operation::{value, with_context};
+use cuda_async::device_operation::{value, with_context};
 use cuda_core::memory::{malloc_async, memcpy_htod_async};
 
 fn h2d(host_data: Vec<f32>) -> impl DeviceOperation<Output = DeviceBox<[f32]>> {
@@ -309,7 +309,7 @@ fn h2d(host_data: Vec<f32>) -> impl DeviceOperation<Output = DeviceBox<[f32]>> {
             let dptr = malloc_async(stream.cu_stream(), num_bytes).unwrap();
             memcpy_htod_async(dptr, host_data.as_ptr(), num_bytes, stream.cu_stream())
                 .unwrap();
-            value(DeviceBox::from_raw_parts(dptr, n, ctx.get_device_id()))
+            value(DeviceBox::from_raw_parts(dptr, n, stream.clone()))
         }
     })
 }

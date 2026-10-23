@@ -143,21 +143,17 @@ context; a future awaiting through them may not resolve after a fault.
 
 ### Cancellation and Forgotten Futures
 
-Dropping a `DeviceFuture` does not cancel submitted GPU work. It controls
-when the host releases the resources that work uses. A future dropped after
-its first poll but before completion therefore **waits for its stream to
-drain** before dropping its undelivered output (tensors, `Vec<T>` DMA
-targets, borrowed inputs). If the wait cannot be performed — the context
-has faulted, or the stream is recording a graph — the output is leaked
-with a message on stderr rather than freed under a running kernel. A
-future dropped before its first poll submitted nothing and waits for
-nothing.
+Dropping a `DeviceFuture` does not cancel submitted GPU work and does not wait
+for it. Its output drops normally. GPU allocations, DMA owners and access leases
+are registered independently with the submission before work is enqueued; they
+retire after a CUDA event proves completion. If the driver cannot establish
+completion, those owners and leases are deliberately leaked. An unpolled future
+has submitted no work.
 
-cuTile submissions retain storage independently of their outputs. Borrowed
-kernel arguments, tensor views, copies, and values discarded by `.then()`
-or tuple projection remain alive until completion, including when submission
-fails or panics after enqueueing some work. On success these owners are
-released before the future returns its result.
+Tile and SIMT launches use this same runtime. Borrowed arguments, tensor views,
+copies and values discarded by `.then()` or tuple projection remain protected
+through GPU completion, including partial submission errors and panics. Successful
+completion releases submission owners before returning the result.
 
 `mem::forget(future)` deliberately leaks those owners and their device access
 leases. It does not cancel work or release the leases when the GPU finishes.
@@ -166,11 +162,15 @@ access on another stream returns an error. Await or drop a future normally to
 release its leases. Mutable partitions and `memcpy` destinations must also have
 unique user-visible storage; internal submission owners do not count as aliases.
 
-For 0.4.0, custom `KernelInputStored` and `KernelOutputStored` implementations
+Custom `KernelInputStored` and `KernelOutputStored` implementations
 must implement `retain`. Custom `DeviceOp`s must register owned resources with
 `ExecutionContext::retain` before enqueueing work. The unsafe `async_on` escape
-hatch leaves resource lifetime and access ordering to its caller. Device-to-host
-`Vec` copies synchronize before exposing initialized elements to host combinators.
+hatch leaves resource lifetime and access ordering to its caller. On return,
+including an error, it releases registered owners and access leases without
+synchronizing or arranging background retention. The caller must keep every
+submitted allocation, module, graph and DMA buffer alive until completion,
+including resources discarded by combinators. Device-to-host `Vec` copies
+synchronize before exposing initialized elements to host combinators.
 
 ## CUDA Graphs
 
@@ -234,3 +234,27 @@ is why it holds a single test and runs as its own process. To exercise the
 reactor rather than the inline spin, run the GPU tests with
 `CUDA_ASYNC_SPIN_BUDGET_US=0`; to exercise the host-callback fallback, add
 `CUDA_ASYNC_HOST_SYNC=spin` (or `block`).
+
+## Shared host API migration
+
+`cuda_async::simt` has been removed. Import `device_operation`, `device_future`,
+`device_context`, `scheduling_policies`, `device_box` and `launch` directly from
+`cuda_async`. `DeviceOperation` aliases `DeviceOp`; `and_then`, `apply` and `arc`
+delegate to the shared combinators. `SingleStream::from_stream(stream)` schedules
+both programming models on an existing shared `cuda_core::Stream`.
+
+Raw launches use `AsyncKernelLaunchBuilder`, followed by an explicit unsafe
+`finalize_unchecked(config)` to produce an immutable `AsyncKernelLaunch`.
+Tile's generated launchers perform this step internally. Kernel scalar arguments
+share one `KernelArgument` blanket implementation for `DeviceCopy`. A generic
+Tile scalar therefore needs both `DType` and `DeviceCopy`; tensor-only generic
+parameters keep their `DType` bound. Over-aligned arguments are supported.
+Non-`DeviceCopy` boxed arguments require `push_boxed_arg_unchecked` and an
+explicit ABI proof.
+
+Custom `DeviceOp::execute` implementations must return valid Rust values that
+can be dropped immediately: host combinators may discard them before completion.
+Retain GPU/DMA resources independently before enqueueing them. Bare borrowed
+host slices cannot provide ownership for a forgettable asynchronous transfer;
+use an owned retained source or a synchronous transfer. Device-to-host Vec
+transfers complete before exposing the Vec to host code.

@@ -27,6 +27,12 @@ pub trait SchedulingPolicy: Send + Sync {
     fn next_stream(&self) -> Result<Arc<Stream>, DeviceError>;
 }
 
+impl<P: SchedulingPolicy + ?Sized> SchedulingPolicy for Arc<P> {
+    fn next_stream(&self) -> Result<Arc<Stream>, DeviceError> {
+        self.as_ref().next_stream()
+    }
+}
+
 /// Distributes operations across a fixed-size pool of CUDA streams using round-robin assignment.
 ///
 /// This is the **default scheduling policy**. Each call to `next_stream()` picks the
@@ -67,6 +73,11 @@ pub struct SingleStream {
 }
 
 impl SingleStream {
+    /// Uses an existing shared CUDA stream.
+    pub fn from_stream(stream: Arc<Stream>) -> Self {
+        Self { stream }
+    }
+
     /// Creates a single-stream policy on the given device.
     pub fn new(device: &Arc<Context>) -> Result<Self, DeviceError> {
         Ok(Self {

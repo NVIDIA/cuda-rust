@@ -211,8 +211,8 @@ The `--async` flag generates a project with `tokio` and `cuda-async` dependencie
 Here's the generated async vecadd template (with minor formatting edits for readability):
 
 ```rust
-use cuda_async::simt::device_context::init_device_contexts;
-use cuda_async::simt::device_operation::DeviceOperation;
+use cuda_async::device_context::init_device_contexts;
+use cuda_async::device_operation::DeviceOperation;
 use cuda_core::LaunchConfig;
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;
@@ -233,7 +233,7 @@ mod kernels {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use cuda_async::simt::device_box::DeviceBox;
+    use cuda_async::device_box::DeviceBox;
     use cuda_core::memory::{malloc_async, memcpy_dtoh_async, memcpy_htod_async};
     use std::mem;
 
@@ -250,7 +250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 3. Allocate device memory and copy host data.
     let (a_dev, b_dev, mut c_dev) =
-        cuda_async::simt::device_context::with_cuda_context(0, |ctx| {
+        cuda_async::device_context::with_cuda_context(0, |ctx| {
             let stream = ctx.default_stream();
             let num_bytes = N * mem::size_of::<f32>();
             unsafe {
@@ -261,9 +261,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 memcpy_htod_async(b, b_host.as_ptr(), num_bytes, stream.cu_stream()).unwrap();
                 stream.synchronize().unwrap();
                 (
-                    DeviceBox::<[f32]>::from_raw_parts(a, N, 0),
-                    DeviceBox::<[f32]>::from_raw_parts(b, N, 0),
-                    DeviceBox::<[f32]>::from_raw_parts(c, N, 0),
+                    DeviceBox::<[f32]>::from_raw_parts(a, N, stream.clone()),
+                    DeviceBox::<[f32]>::from_raw_parts(b, N, stream.clone()),
+                    DeviceBox::<[f32]>::from_raw_parts(c, N, stream.clone()),
                 )
             }
         })?;
@@ -283,7 +283,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 5. Copy results back to host.
     let mut c_host = vec![0.0f32; N];
-    cuda_async::simt::device_context::with_cuda_context(0, |ctx| {
+    cuda_async::device_context::with_cuda_context(0, |ctx| {
         let stream = ctx.default_stream();
         unsafe {
             memcpy_dtoh_async(

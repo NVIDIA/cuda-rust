@@ -4,7 +4,7 @@
  */
 
 //! Dropping a `DeviceFuture` while its GPU work is in flight must not release
-//! the operation's output before the device has finished with it.
+//! independently retained owners before the device has finished with them.
 //!
 //! The op enqueues a chain of memsets and then records a CUDA event on the
 //! same stream, handing the event back inside its output. The output's
@@ -17,7 +17,7 @@
 //! nothing behind the gate can run, whatever the device's memset throughput
 //! or the inline-spin budget (`CUDA_ASYNC_SPIN_BUDGET_US`), so the first poll
 //! is guaranteed to find the work in flight and the drop is guaranteed to
-//! have to wait for it. Requires a GPU.
+//! return while the retained owner stays alive. Requires a GPU.
 
 use cuda_async::device_context::{global_policy, init_device_contexts, with_device};
 use cuda_async::device_operation::{DeviceOp, ExecutionContext};
@@ -177,10 +177,11 @@ struct SlowOp {
 }
 
 impl DeviceOp for SlowOp {
-    type Output = Tracked;
-    unsafe fn execute(self, context: &ExecutionContext) -> Result<Tracked, DeviceError> {
+    type Output = Arc<Tracked>;
+    unsafe fn execute(self, context: &ExecutionContext) -> Result<Arc<Tracked>, DeviceError> {
         let stream = context.get_cuda_stream();
         if let Some(gate) = &self.gate {
+            context.retain(gate.clone())?;
             gate.arm(stream.cu_stream())?;
         }
         for _ in 0..self.passes {
@@ -194,16 +195,18 @@ impl DeviceOp for SlowOp {
         }
         let event = stream.context().new_event()?;
         event.record(stream)?;
-        Ok(Tracked {
+        let tracked = Arc::new(Tracked {
             event,
             log: self.log,
-        })
+        });
+        context.retain(tracked.clone())?;
+        Ok(tracked)
     }
 }
 
 impl IntoFuture for SlowOp {
-    type Output = Result<Tracked, DeviceError>;
-    type IntoFuture = cuda_async::device_future::DeviceFuture<Tracked, SlowOp>;
+    type Output = Result<Arc<Tracked>, DeviceError>;
+    type IntoFuture = cuda_async::device_future::DeviceFuture<Arc<Tracked>, SlowOp>;
     fn into_future(self) -> Self::IntoFuture {
         let policy = global_policy(0).expect("global policy");
         match self.schedule(&policy) {
@@ -266,7 +269,7 @@ fn block_on_with_deadline<F: Future + Unpin>(mut future: F, deadline: Duration) 
 /// waits cannot return before then, and one that does not is caught twice:
 /// it returns early, and its output's event reports the work still in flight.
 #[test]
-fn dropping_in_flight_future_releases_output_after_the_device_finished() {
+fn dropping_in_flight_future_returns_promptly_and_retires_owners() {
     on_fresh_thread(|| {
         init_device_contexts(0, 1).expect("init failed (requires GPU)");
         let dptr = alloc_device(BUF);
@@ -308,16 +311,20 @@ fn dropping_in_flight_future_releases_output_after_the_device_finished() {
                     panic!("the first poll failed instead of leaving the op in flight: {error}")
                 }
             }
+            let drop_started = Instant::now();
             drop(future);
-            let elapsed = started.elapsed();
+            let elapsed = drop_started.elapsed();
             assert!(
-                elapsed >= GATE_DELAY,
-                "the drop returned after {elapsed:?}, before the gate opened at {GATE_DELAY:?}: \
-                 it did not wait for the in-flight work"
+                elapsed < GATE_DELAY / 2,
+                "dropping async work waited for GPU completion: {elapsed:?}"
             );
             opener.join().expect("gate opener thread panicked");
         }
 
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while log.lock().unwrap().len() != 4 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
         let log = log.lock().unwrap();
         assert_eq!(log.len(), 4, "every dropped future must release its output");
         assert!(

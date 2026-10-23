@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 # Reject paths into the removed cuda-core SIMT namespace. Shared handles and
-# typed buffers now live at the crate root. cuda-async is migrated separately.
+# typed buffers now live at the crate root, as does the shared async runtime.
 set -euo pipefail
 export LC_ALL=C
 cd "$(dirname "$0")/.."
@@ -27,7 +27,7 @@ mapfile -t files < <(git -C "${GIT_ROOT}" ls-files \
 patterns=(
     'cuda_core::simt'
     'cuda_core::error::'
-    'cuda_async::simt::simt'
+    'cuda_async::simt'
 )
 
 status=0

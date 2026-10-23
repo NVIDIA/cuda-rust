@@ -16,25 +16,18 @@
 //!
 //! # Cancellation
 //!
-//! Dropping the future never cancels submitted GPU work; kernels run to
-//! completion regardless. What the drop decides is *when the host releases
-//! the resources that work still uses*. A future dropped while its work is
-//! in flight therefore waits for the stream to drain before dropping its
-//! undelivered result (the owned output — buffers, DMA targets — plus the
-//! execution context's stream and pool handles). If the wait cannot be
-//! performed (a faulted context, a stream mid-capture) the result is leaked:
-//! releasing memory the device may still write to is the worse failure. The
-//! leak is reported on stderr unless the future already resolved with the
-//! stream's fault — then the caller has the error and the leak is its
-//! documented consequence. See [`DeviceFuture`]'s type docs for why the
-//! wait is synchronous.
+//! Dropping a future does not cancel submitted GPU work or wait for it.
+//! The output drops normally; independently registered resource owners and
+//! access leases retire after completion. If the driver cannot establish
+//! completion, those owners and leases are deliberately leaked. Forgetting a
+//! future also leaks its submission, preserving resources and access exclusion.
 
 use crate::device_operation::{DeviceOp, ExecutionContext};
 use crate::error::DeviceError;
 use cuda_core::{DriverError, Stream};
 use futures::task::AtomicWaker;
 use std::future::Future;
-use std::mem::{self, MaybeUninit};
+use std::mem::MaybeUninit;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -134,35 +127,15 @@ pub(crate) fn probe_stream(stream: &Stream) -> StreamHealth {
 
 /// A future that executes a [`DeviceOp`] on a CUDA stream and resolves upon completion.
 ///
-/// # Cancellation and the in-flight result
+/// # Cancellation and retained resources
 ///
-/// Dropping a `DeviceFuture` after its first poll — after `execute` has
-/// enqueued GPU work — but before it resolved leaves an *undelivered
-/// result*: the operation's output, which owns the buffers the GPU is still
-/// writing (a tensor, a `Vec<T>` DMA target), or borrows the caller's. The
-/// drop waits for the stream to drain and only then drops that result. On a
-/// wait failure the result is leaked — loudly, unless the future already
-/// delivered the stream's fault to its caller.
-///
-/// cuTile registers owned storage and device access leases with the execution
-/// context before enqueueing work. These survive argument recovery, output
-/// projection, partial submission failures, and `mem::forget`. Forgetting the
-/// future leaks both storage and leases; conflicting cross-stream use remains
-/// rejected even after the original Rust borrow ends. Successful completion
-/// releases the registered owners before returning the result.
-///
-/// The wait is synchronous by necessity, not preference. The alternative —
-/// parking the result behind a CUDA event and dropping it later, once
-/// `cuEventQuery` passes (the design used by `simt::device_future`) — needs
-/// the result to be `'static`, and `DeviceOp::Output` is not: cutile
-/// launchers return borrowed inputs (`&'a Tensor<T>`,
-/// `Partition<&'a mut Tensor<T>>`) as part of their output. For those the
-/// result itself cannot be handed to a background thread. Registered storage
-/// owners are independent of these borrows, but arbitrary custom outputs may
-/// still require waiting before destruction. Rust cannot specialize on `'static`, so
-/// the same rule applies to every output type until `Output: 'static` is a
-/// trait-level requirement; at that point the event-gated limbo becomes the
-/// default and blocking the last-resort fallback.
+/// Dropping a future never waits for GPU work. Its possibly borrowed output is
+/// dropped normally, just as an output projection can discard it during enqueue.
+/// Every operation must independently register GPU/DMA owners and access leases
+/// before submitting work. The submission retires those owners on a CUDA event;
+/// error paths retain resources if completion cannot be established. Forgetting
+/// a future leaks its submission and therefore preserves ownership and access
+/// exclusion. Successful completion releases registered owners before delivery.
 #[derive(Debug)]
 pub struct DeviceFuture<T: Send, DO: DeviceOp<Output = T>> {
     pub(crate) device_operation: Option<DO>,
@@ -171,10 +144,6 @@ pub struct DeviceFuture<T: Send, DO: DeviceOp<Output = T>> {
     pub(crate) error: Option<DeviceError>,
     pub(crate) state: DeviceFutureState,
     pub(crate) callback_state: Option<Arc<StreamCallbackState>>,
-    /// Set when `poll` resolved with the stream's fault: the caller has the
-    /// error, so the drop-time leak of the stored result is the documented
-    /// consequence of that fault, not news worth reporting again.
-    pub(crate) fault_delivered: bool,
 }
 
 impl<T: Send, DO: DeviceOp<Output = T>> DeviceFuture<T, DO> {
@@ -196,7 +165,6 @@ impl<T: Send, DO: DeviceOp<Output = T>> DeviceFuture<T, DO> {
             error: None,
             state: DeviceFutureState::Idle,
             callback_state: None,
-            fault_delivered: false,
         }
     }
 
@@ -213,7 +181,6 @@ impl<T: Send, DO: DeviceOp<Output = T>> DeviceFuture<T, DO> {
             callback_state: None,
             result: None,
             error: Some(error),
-            fault_delivered: false,
         }
     }
 
@@ -294,89 +261,10 @@ impl<T: Send, DO: DeviceOp<Output = T>> DeviceFuture<T, DO> {
             .expect("Expected future result to be Some.")
     }
 
-    /// Returns `true` when GPU work was submitted but the stored result has
-    /// not been handed to the caller.
-    ///
-    /// `result` is only populated by a successful [`execute`], so a stored
-    /// result implies submitted GPU work. The state check excludes futures
-    /// that never submitted anything (`Idle`, `Failed`); a `Complete` future
-    /// can still hold a result when completion registration failed after a
-    /// successful launch, or when the stream faulted before completion.
-    ///
-    /// [`execute`]: Self::execute
-    fn has_undelivered_submission(&self) -> bool {
-        matches!(
-            self.state,
-            DeviceFutureState::Executing | DeviceFutureState::Complete
-        ) && self.result.is_some()
-    }
-
-    /// Waits for the submitted work, then drops the undelivered result.
-    ///
-    /// A stream that is idle costs one query; a busy one is synchronized. A
-    /// capturing stream cannot be waited on (querying it would invalidate
-    /// the capture) and a faulted one cannot prove completion; both fall
-    /// through to the loud leak in
-    /// [`release_in_flight_result_with`](Self::release_in_flight_result_with).
+    /// Release the host output immediately; its GPU owners belong to the
+    /// submission, which retires independently when the context is dropped.
     fn release_in_flight_result(&mut self) {
-        if !self.has_undelivered_submission() {
-            return;
-        }
-        let stream = self
-            .execution_context
-            .as_ref()
-            .map(|ctx| Arc::clone(ctx.get_cuda_stream()));
-        self.release_in_flight_result_with(move || {
-            let stream = stream.ok_or_else(|| {
-                DeviceError::Internal(
-                    "Cannot release an in-flight future without an execution context.".to_string(),
-                )
-            })?;
-            // The drop may run on an executor thread that never touched
-            // CUDA; the query and synchronize below need a current context.
-            stream.context().bind_to_thread()?;
-            match probe_stream(&stream) {
-                StreamHealth::Idle => Ok(()),
-                // SAFETY: the context was bound above; the stream is valid.
-                StreamHealth::Busy => stream.synchronize().map_err(DeviceError::Driver),
-                StreamHealth::Capturing => Err(DeviceError::Internal(
-                    "the future's stream is recording a graph; it cannot be synchronized".into(),
-                )),
-                StreamHealth::Faulted(e) => Err(DeviceError::Driver(e)),
-            }
-        });
-    }
-
-    /// Runs `wait` and drops the stored result on success; on failure the
-    /// result is leaked loudly, because dropping resources the device may
-    /// still use is worse than leaking them.
-    fn release_in_flight_result_with<F>(&mut self, wait: F)
-    where
-        F: FnOnce() -> Result<(), DeviceError>,
-    {
-        if !self.has_undelivered_submission() {
-            return;
-        }
-        let Some(result) = self.result.take() else {
-            return;
-        };
-        if let Err(error) = wait() {
-            if self.fault_delivered {
-                // The caller already received this stream's fault from
-                // `poll`; the leak is its documented consequence. A test
-                // (or program) that handled the error correctly should not
-                // see an error report for it.
-                mem::forget(result);
-                return;
-            }
-            crate::leak::report_leak(format_args!(
-                "cuda-async: leaking the result of a dropped in-flight future; the driver \
-                 could not prove its GPU work finished: {error}"
-            ));
-            mem::forget(result);
-            return;
-        }
-        drop(result);
+        drop(self.result.take());
     }
 }
 
@@ -395,7 +283,6 @@ impl<T: Send, DO: DeviceOp<Output = T>> Default for DeviceFuture<T, DO> {
             error: None,
             state: DeviceFutureState::Idle,
             callback_state: None,
-            fault_delivered: false,
         }
     }
 }
@@ -488,11 +375,9 @@ impl<T: Send, DO: DeviceOp<Output = T>> Future for DeviceFuture<T, DO> {
                     }
                     Ok(false) => {}
                     Err(e) => {
-                        // The result stays stored; `Drop` decides how to
-                        // release it (it will leak, quietly, on a dead
-                        // context — the caller receives the fault here).
+                        // The output can drop normally. The submission preserves
+                        // owners and access leases when completion is unknown.
                         self.state = DeviceFutureState::Complete;
-                        self.fault_delivered = true;
                         return Poll::Ready(Err(DeviceError::Driver(e)));
                     }
                 }
@@ -533,10 +418,9 @@ impl<T: Send, DO: DeviceOp<Output = T>> Future for DeviceFuture<T, DO> {
                 };
                 match health {
                     StreamHealth::Faulted(e) => {
-                        // The result stays stored for `Drop` (which leaks it,
-                        // quietly — the caller receives the fault here).
+                        // Submission owners and leases remain retained after
+                        // the fault; the output itself can drop normally.
                         self.state = DeviceFutureState::Complete;
-                        self.fault_delivered = true;
                         return Poll::Ready(Err(DeviceError::Driver(e)));
                     }
                     StreamHealth::Idle => {
@@ -579,26 +463,6 @@ mod release_tests {
     use super::*;
     use crate::device_operation::Value;
     use std::sync::atomic::AtomicUsize;
-    use std::sync::Mutex;
-
-    #[derive(Clone)]
-    struct DropTracker {
-        events: Arc<Mutex<Vec<&'static str>>>,
-    }
-
-    impl Drop for DropTracker {
-        fn drop(&mut self) {
-            self.events.lock().unwrap().push("drop");
-        }
-    }
-
-    struct CountDrop(Arc<AtomicUsize>);
-
-    impl Drop for CountDrop {
-        fn drop(&mut self) {
-            self.0.fetch_add(1, Ordering::Relaxed);
-        }
-    }
 
     fn future_in_state<T: Send>(
         state: DeviceFutureState,
@@ -611,129 +475,23 @@ mod release_tests {
             error: None,
             state,
             callback_state: None,
-            fault_delivered: false,
         }
     }
 
-    /// An `Executing` future waits before its result drops.
     #[test]
-    fn release_waits_before_dropping_the_result() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let tracker = DropTracker {
-            events: Arc::clone(&events),
-        };
-        let mut future = future_in_state(DeviceFutureState::Executing, Some(tracker));
-
-        future.release_in_flight_result_with(|| {
-            events.lock().unwrap().push("wait");
-            Ok(())
-        });
-
-        assert_eq!(events.lock().unwrap().as_slice(), ["wait", "drop"]);
-        assert!(future.result.is_none());
-        assert!(!future.has_undelivered_submission());
-    }
-
-    /// If the wait fails the result is leaked, never dropped early.
-    #[test]
-    fn release_leaks_when_the_wait_fails() {
-        let drops = Arc::new(AtomicUsize::new(0));
-        let mut future = future_in_state(
-            DeviceFutureState::Executing,
-            Some(CountDrop(Arc::clone(&drops))),
-        );
-
-        let mut capture = crate::leak::capture::start();
-        future.release_in_flight_result_with(|| Err(DeviceError::Internal("boom".to_string())));
-        let reports = capture.take();
-
-        assert_eq!(drops.load(Ordering::Relaxed), 0);
-        assert!(future.result.is_none());
-        assert_eq!(reports.len(), 1, "the leak must be reported: {reports:?}");
-        assert!(reports[0].contains("dropped in-flight future"));
-    }
-
-    /// A future that already delivered the stream's fault to its caller
-    /// leaks its stored result *quietly*: the caller has the error, the
-    /// leak is its documented consequence.
-    #[test]
-    fn release_leaks_quietly_after_the_fault_was_delivered() {
-        let drops = Arc::new(AtomicUsize::new(0));
-        let mut future = future_in_state(
-            DeviceFutureState::Complete,
-            Some(CountDrop(Arc::clone(&drops))),
-        );
-        future.fault_delivered = true;
-
-        let mut capture = crate::leak::capture::start();
-        future.release_in_flight_result_with(|| Err(DeviceError::Internal("boom".to_string())));
-        let reports = capture.take();
-
-        assert_eq!(
-            drops.load(Ordering::Relaxed),
-            0,
-            "must still leak, not drop"
-        );
-        assert!(future.result.is_none());
-        assert!(
-            reports.is_empty(),
-            "a delivered fault must not be re-reported: {reports:?}"
-        );
-    }
-
-    /// The registration-failure shape: `execute` succeeded (work submitted,
-    /// result stored) but completion registration failed, so poll flipped
-    /// the state to `Complete` with the result still stored. Release must
-    /// treat it exactly like a cancelled `Executing` future.
-    #[test]
-    fn release_covers_complete_future_left_by_registration_failure() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let tracker = DropTracker {
-            events: Arc::clone(&events),
-        };
-        let mut future = future_in_state(DeviceFutureState::Complete, Some(tracker));
-
-        assert!(future.has_undelivered_submission());
-        future.release_in_flight_result_with(|| {
-            events.lock().unwrap().push("wait");
-            Ok(())
-        });
-
-        assert_eq!(events.lock().unwrap().as_slice(), ["wait", "drop"]);
-        assert!(!future.has_undelivered_submission());
-    }
-
-    /// A delivered result leaves nothing to release: no wait happens.
-    #[test]
-    fn release_is_noop_after_result_delivery() {
-        let mut future: DeviceFuture<u32, Value<u32>> =
-            future_in_state(DeviceFutureState::Complete, None);
-
-        assert!(!future.has_undelivered_submission());
-        future.release_in_flight_result_with(|| {
-            panic!("delivered futures must not wait during release")
-        });
-        future.release_in_flight_result();
-    }
-
-    /// An `Idle` future never submitted work: no wait, and dropping it drops
-    /// its contents normally.
-    #[test]
-    fn release_is_noop_for_idle_future() {
-        let drops = Arc::new(AtomicUsize::new(0));
-        let mut future =
-            future_in_state(DeviceFutureState::Idle, Some(CountDrop(Arc::clone(&drops))));
-
-        future
-            .release_in_flight_result_with(|| panic!("idle futures must not wait during release"));
-        assert_eq!(drops.load(Ordering::Relaxed), 0);
-        assert!(future.result.is_some());
-
+    fn cancellation_drops_borrowed_outputs_without_waiting() {
+        struct Borrowed<'a>(&'a AtomicUsize);
+        impl Drop for Borrowed<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let drops = AtomicUsize::new(0);
+        let future = future_in_state(DeviceFutureState::Executing, Some(Borrowed(&drops)));
         drop(future);
         assert_eq!(drops.load(Ordering::Relaxed), 1);
     }
 
-    /// `Drop` on a `Failed` future (a scheduling error) is a plain drop.
     #[test]
     fn dropping_failed_future_is_a_noop() {
         let future: DeviceFuture<u32, Value<u32>> =

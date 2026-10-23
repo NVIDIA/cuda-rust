@@ -8,9 +8,9 @@
 use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig1D};
 #[cfg(feature = "async")]
-use cuda_host::cuda_async::simt::device_box::DeviceBox;
+use cuda_host::cuda_async::device_box::DeviceBox;
 #[cfg(feature = "async")]
-use cuda_host::cuda_async::simt::device_operation::DeviceOperation;
+use cuda_host::cuda_async::device_operation::DeviceOperation;
 use cuda_host::cuda_module;
 use cuda_macros::{cooperative_launch, kernel, launch_contract};
 

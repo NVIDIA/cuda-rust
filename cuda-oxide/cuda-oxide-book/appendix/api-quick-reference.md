@@ -545,7 +545,7 @@ unsafe {
 ### Typed Async
 
 ```rust
-use cuda_async::simt::device_operation::DeviceOperation;
+use cuda_async::device_operation::DeviceOperation;
 
 let module = kernels::load_async(0)?;
 // SAFETY: this is 1D, buffers contain n elements, and module/scheduler share a context.

@@ -7,48 +7,14 @@
 //!
 //! [`DevicePointer`] is a thin, `Copy` handle to device memory suitable for
 //! passing as a kernel argument. [`DeviceBox`] owns device memory and frees it
-//! asynchronously through a dedicated deallocator stream on drop.
-//!
-//! # Async deallocation
-//!
-//! [`DeviceBox`] enqueues `cuMemFreeAsync` on a per-device deallocator stream
-//! rather than blocking with `cuMemFree`. Callers **must** synchronize all
-//! streams that reference the allocation before dropping the box.
+//! through the shared allocation owner without waiting on drop. Generated
+//! launches retain that owner and its access leases until GPU completion.
+//! Raw-pointer callers must register storage with `ExecutionContext::retain_buffer`
+//! before enqueueing work, or establish completion themselves.
 
-use crate::simt::launch::{AsyncKernelLaunchBuilder, KernelArgument};
+pub use crate::device_buffer::DevicePointer;
 use cuda_bindings::CUdeviceptr;
 use std::{marker::PhantomData, sync::Arc};
-
-/// Non-owning, `Copy` handle to a typed device allocation.
-///
-/// Does not manage lifetime -- the underlying memory must outlive all uses.
-#[derive(Debug, Copy, Clone)]
-pub struct DevicePointer<T> {
-    /// Ties the pointer to element type `T` without owning one.
-    _marker: PhantomData<T>,
-    /// Raw CUDA device pointer.
-    pub dptr: CUdeviceptr,
-}
-
-/// # Safety
-///
-/// `DevicePointer` is a plain integer handle with no thread-affine state.
-/// Sending it across threads does not violate CUDA's driver API contract.
-unsafe impl<T> Send for DevicePointer<T> {}
-
-impl<T> DevicePointer<T> {
-    /// Returns the raw [`CUdeviceptr`].
-    pub fn cu_deviceptr(&self) -> CUdeviceptr {
-        self.dptr
-    }
-}
-
-/// Pushes the underlying device address as a kernel argument.
-impl<T: Send + Sized> KernelArgument for DevicePointer<T> {
-    fn push_arg(self, launcher: &mut AsyncKernelLaunchBuilder<'_>) {
-        launcher.push_arg(self.cu_deviceptr());
-    }
-}
 
 /// Owning wrapper backed by the shared CUDA allocation owner and access tracker.
 /// Generated launch adapters retain storage until GPU completion. Raw-pointer
@@ -56,6 +22,7 @@ impl<T: Send + Sized> KernelArgument for DevicePointer<T> {
 #[derive(Debug)]
 pub struct DeviceBox<T: Send + ?Sized> {
     storage: cuda_core::RawDeviceBuffer,
+    shared_access_writes: bool,
     /// Ordinal of the device that owns this allocation.
     device_id: usize,
     /// Raw CUDA device pointer to the start of the allocation.
@@ -93,7 +60,10 @@ impl<DType: Send + Sized> DeviceBox<[DType]> {
         dptr: CUdeviceptr,
         len: usize,
         stream: Arc<cuda_core::Stream>,
-    ) -> Self {
+    ) -> Self
+    where
+        DType: Copy,
+    {
         let bytes = len
             .checked_mul(std::mem::size_of::<DType>())
             .expect("device allocation size overflow");
@@ -102,11 +72,18 @@ impl<DType: Send + Sized> DeviceBox<[DType]> {
             unsafe { cuda_core::RawDeviceBuffer::from_raw_parts_async(dptr, bytes, stream) };
         Self {
             storage,
+            shared_access_writes: false,
             _marker: PhantomData,
             cudptr: dptr,
             len,
             device_id,
         }
+    }
+
+    /// Whether a shared reference may mutate through interior mutability.
+    #[doc(hidden)]
+    pub fn shared_access_writes(&self) -> bool {
+        self.shared_access_writes
     }
 
     pub fn storage(&self) -> &cuda_core::RawDeviceBuffer {
@@ -135,9 +112,30 @@ impl<DType: Send + Sized> DeviceBox<[DType]> {
 
     /// Creates a non-owning [`DevicePointer`] into this allocation.
     pub fn device_pointer(&self) -> DevicePointer<DType> {
-        DevicePointer {
+        // SAFETY: this box retains the allocation described by its pointer.
+        unsafe { DevicePointer::from_cu_deviceptr(self.cudptr) }
+    }
+}
+
+impl<T: cuda_core::DeviceCopy + Send> DeviceBox<[T]> {
+    /// Transfers a typed buffer without copying device memory. Storage identity,
+    /// context, allocation extent and access tracking remain unchanged.
+    pub fn from_buffer(buffer: cuda_core::DeviceBuffer<T>) -> Self {
+        Self {
+            cudptr: buffer.cu_deviceptr(),
+            len: buffer.len(),
+            device_id: buffer.context().ordinal(),
+            shared_access_writes: buffer.shared_access_writes(),
+            storage: buffer.into_storage(),
             _marker: PhantomData,
-            dptr: self.cudptr,
         }
+    }
+
+    /// Transfers ownership back to the shared typed buffer without a GPU copy.
+    pub fn into_buffer(self) -> cuda_core::DeviceBuffer<T> {
+        // SAFETY: this box owns valid T elements; consuming it transfers that
+        // ownership and the same access tracker without creating a typed alias.
+        unsafe { cuda_core::DeviceBuffer::from_storage_copy(self.storage, self.len) }
+            .expect("DeviceBox storage must cover its elements")
     }
 }

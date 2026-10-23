@@ -8,13 +8,13 @@ error[E0277]: the trait bound `impl cutile::prelude::DeviceOp<Output = cutile::p
    |
    = help: the following other types implement trait `cutile::prelude::GraphNode`:
              Arange<T, _P0, DI>
+             AsyncKernelLaunch<'_>
              Convert<SrcType, DstType, _K0, _P0, DI>
              DeviceOperationPartition<RANK, I, DI>
              Eye<_P0, DI>
              Linspace<_P0, DI>
              Memcpy<'a>
-             UnwrapPartition<I, DI>
-             cutile::kernels::creation::Full<T, _P0, DI>
+             OwnedAsyncKernelLaunch<R>
            and $N others
    = note: required for `DeviceOperationPartition<1, cutile::prelude::Tensor<f32>, impl cutile::prelude::DeviceOp<Output = cutile::prelude::Tensor<f32>>>` to implement `cutile::prelude::GraphNode`
    = note: 3 redundant requirements hidden

@@ -76,13 +76,8 @@ impl Owners {
         Ok(())
     }
 
-    fn release(&mut self, wait: impl FnOnce() -> Result<(), DeviceError>) {
-        let Some(owners) = self.0.take() else { return };
-        if !owners.is_empty() && wait().is_err() {
-            // This includes access leases, not just allocations. Unblocking an
-            // access when completion is unknown would permit a device data race.
-            std::mem::forget(owners);
-        }
+    fn complete(&mut self) {
+        self.0.take();
     }
 }
 
@@ -134,43 +129,52 @@ impl Submission {
         std::mem::take(&mut *self.recorded.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
-    /// No further work may be submitted using this submission.
+    /// Releases tracking; no further work may use this submission.
+    ///
+    /// # Safety
+    /// GPU work must be complete, or the caller must independently keep all
+    /// resources alive and prevent conflicting accesses until completion.
     pub(crate) unsafe fn complete(&self) {
-        let owners = self
-            .owners
+        self.owners
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .0
-            .take();
-        drop(owners);
+            .complete();
     }
 }
 
 impl Drop for Submission {
     fn drop(&mut self) {
-        self.owners
+        let Some(owners) = self
+            .owners
             .get_mut()
             .unwrap_or_else(|e| e.into_inner())
-            .release(|| {
-                let result = (|| {
-                    self.stream.context().bind_to_thread()?;
-                    match probe_stream(&self.stream) {
-                        StreamHealth::Idle => Ok(()),
-                        StreamHealth::Busy => {
-                            self.stream.synchronize().map_err(DeviceError::Driver)
-                        }
-                        StreamHealth::Faulted(e) => Err(DeviceError::Driver(e)),
-                        StreamHealth::Capturing => Err(DeviceError::Internal(
-                            "submission is still being captured".into(),
-                        )),
-                    }
-                })();
-                if result.is_err() {
-                    // Keep the stream identity valid for leaked access leases too.
-                    std::mem::forget(self.stream.clone());
-                }
-                result
-            });
+            .0
+            .take()
+        else {
+            return;
+        };
+        if owners.is_empty() {
+            return;
+        }
+        let stream = self.stream.clone();
+        let health = match stream.context().bind_to_thread() {
+            Ok(()) => probe_stream(&stream),
+            Err(error) => StreamHealth::Faulted(error),
+        };
+        match health {
+            StreamHealth::Idle => drop(owners),
+            StreamHealth::Busy => {
+                // CUDA events retain context; explicitly retain the stream too,
+                // so access tracker stream identities remain valid until release.
+                let _ =
+                    cuda_core::completion::retain_until_complete((owners, stream.clone()), &stream);
+            }
+            StreamHealth::Faulted(_) | StreamHealth::Capturing => {
+                // Completion cannot be established. Preserve both allocations
+                // and exclusion instead of freeing storage or allowing a race.
+                std::mem::forget((owners, stream));
+            }
+        }
     }
 }
 
@@ -185,10 +189,7 @@ mod tests {
         let mut submission = Owners(Some(OwnerSet::default()));
         submission.retain(owner).unwrap();
         assert!(weak.upgrade().is_some());
-        submission.release(|| {
-            assert!(weak.upgrade().is_some());
-            Ok(())
-        });
+        submission.complete();
         assert!(weak.upgrade().is_none());
         assert!(submission.retain(()).is_err());
     }
@@ -200,16 +201,6 @@ mod tests {
         let mut submission = Owners(Some(OwnerSet::default()));
         submission.retain(owner).unwrap();
         std::mem::forget(submission);
-        assert!(weak.upgrade().is_some());
-    }
-
-    #[test]
-    fn failed_wait_keeps_owners_and_access_leases() {
-        let owner = Arc::new(());
-        let weak = Arc::downgrade(&owner);
-        let mut submission = Owners(Some(OwnerSet::default()));
-        submission.retain(owner).unwrap();
-        submission.release(|| Err(DeviceError::Internal("fault".into())));
         assert!(weak.upgrade().is_some());
     }
 }

@@ -584,6 +584,13 @@ impl StorageHandle {
 }
 
 impl Storage {
+    pub(crate) fn device_buffer(&self) -> Option<&cuda_core::RawDeviceBuffer> {
+        match &self.allocation {
+            Allocation::Device(buffer) => Some(buffer),
+            Allocation::Meta { .. } => None,
+        }
+    }
+
     pub(crate) fn retain(
         self: &Arc<Self>,
         ctx: &ExecutionContext,
@@ -1991,7 +1998,7 @@ impl<'a, T: DType + Sync> IntoDeviceOp<&'a Tensor<T>> for &'a Tensor<T> {
 
 // KernelInput impls — how &Tensor kernel params are held and recovered.
 
-use cuda_async::launch::AsyncKernelLaunch;
+use cuda_async::launch::AsyncKernelLaunchBuilder;
 
 // ── KernelOutput trait ──────────────────────────────────────────────────────
 //
@@ -2032,7 +2039,7 @@ pub enum GridBound {
 pub unsafe trait KernelOutputStored<T: DType>: Send {
     /// Retain storage and acquire exclusive device access before enqueueing.
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError>;
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch);
+    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunchBuilder);
     fn grid(&self) -> Result<(u32, u32, u32), Error>;
     /// This binding's launch-grid constraint. Defaults to exact coverage;
     /// only bindings that explicitly opted into partial coverage return
@@ -2085,7 +2092,7 @@ unsafe impl<T: DType> KernelOutputStored<T> for Partition<Tensor<T>> {
         })
     }
 
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunchBuilder) {
         unsafe {
             launcher.push_device_ptr(self.object.cu_deviceptr());
         }
@@ -2146,7 +2153,7 @@ unsafe impl<T: DType> KernelOutputStored<T> for Partition<&mut Tensor<T>> {
         })
     }
 
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunchBuilder) {
         unsafe {
             launcher.push_device_ptr(self.object.cu_deviceptr());
         }
@@ -2197,7 +2204,7 @@ unsafe impl<T: DType> KernelOutputStored<T> for MappedLaunchPartition<Partition<
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.partition.retain(ctx)
     }
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunchBuilder) {
         self.partition.push_kernel_args(launcher);
     }
 
@@ -2239,7 +2246,7 @@ unsafe impl<T: DType> KernelOutputStored<T> for MappedLaunchPartition<Partition<
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.partition.retain(ctx)
     }
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunchBuilder) {
         self.partition.push_kernel_args(launcher);
     }
 
@@ -2351,7 +2358,7 @@ impl<'a, T: DType> KernelOutput<T> for MappedLaunchPartition<Partition<&'a mut T
 pub unsafe trait KernelInputStored: Send {
     /// Retain storage and acquire shared device access before enqueueing.
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError>;
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch);
+    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunchBuilder);
     fn shape(&self) -> &[i32];
     fn strides(&self) -> &[i32];
     fn spec(&self) -> &SpecializationBits;
@@ -2384,7 +2391,7 @@ unsafe impl<T: DType> KernelInputStored for Arc<Tensor<T>> {
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.storage.retain(ctx, false)
     }
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunchBuilder) {
         unsafe {
             launcher.push_device_ptr(self.cu_deviceptr());
         }
@@ -2415,7 +2422,7 @@ unsafe impl<T: DType + Sync> KernelInputStored for &Tensor<T> {
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.storage.retain(ctx, false)
     }
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunchBuilder) {
         unsafe {
             launcher.push_device_ptr(self.cu_deviceptr());
         }
@@ -2484,7 +2491,7 @@ unsafe impl<'a, T: DType + Sync> KernelInputStored for &'a TensorView<'a, T> {
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.base.storage.retain(ctx, false)
     }
-    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch) {
+    fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunchBuilder) {
         // Push the already-offset device pointer. The offset is applied
         // host-side so the kernel sees the correct base address directly.
         unsafe {

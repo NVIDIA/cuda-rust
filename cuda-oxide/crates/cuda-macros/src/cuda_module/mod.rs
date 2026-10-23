@@ -236,7 +236,7 @@ pub(crate) fn expand_cuda_module_inner(
             /// specialization and no conflicting entry definition.
             pub unsafe fn load_async(
                 device_id: usize,
-            ) -> ::core::result::Result<LoadedModule, ::cuda_host::cuda_async::simt::error::DeviceError> {
+            ) -> ::core::result::Result<LoadedModule, ::cuda_host::cuda_async::error::DeviceError> {
                 // SAFETY: upheld by this function's caller.
                 unsafe { load_async_named(device_id, env!("CARGO_PKG_NAME")) }
             }
@@ -251,7 +251,7 @@ pub(crate) fn expand_cuda_module_inner(
             pub unsafe fn load_async_named(
                 device_id: usize,
                 name: &str,
-            ) -> ::core::result::Result<LoadedModule, ::cuda_host::cuda_async::simt::error::DeviceError> {
+            ) -> ::core::result::Result<LoadedModule, ::cuda_host::cuda_async::error::DeviceError> {
                 ::cuda_host::load_cuda_module_from_async_context(device_id, |ctx| {
                     // SAFETY: upheld by this function's caller.
                     unsafe { load_named(ctx, name) }
@@ -262,14 +262,14 @@ pub(crate) fn expand_cuda_module_inner(
         quote! {
             pub fn load_async(
                 device_id: usize,
-            ) -> ::core::result::Result<LoadedModule, ::cuda_host::cuda_async::simt::error::DeviceError> {
+            ) -> ::core::result::Result<LoadedModule, ::cuda_host::cuda_async::error::DeviceError> {
                 load_async_named(device_id, env!("CARGO_PKG_NAME"))
             }
 
             pub fn load_async_named(
                 device_id: usize,
                 name: &str,
-            ) -> ::core::result::Result<LoadedModule, ::cuda_host::cuda_async::simt::error::DeviceError> {
+            ) -> ::core::result::Result<LoadedModule, ::cuda_host::cuda_async::error::DeviceError> {
                 ::cuda_host::load_cuda_module_from_async_context(device_id, |ctx| load_named(ctx, name))
             }
         }

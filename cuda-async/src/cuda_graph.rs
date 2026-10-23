@@ -367,6 +367,12 @@ impl DeviceOp for GraphLaunch {
     type Output = ();
 
     unsafe fn execute(self, context: &ExecutionContext) -> Result<(), DeviceError> {
+        if self.exec.device.as_ref() != context.context().as_ref() {
+            return Err(DeviceError::Internal(
+                "graph and launch stream belong to different CUDA contexts".into(),
+            ));
+        }
+        context.context().bind_to_thread()?;
         context.retain(self.exec.clone())?;
         // Reacquire every captured buffer for this replay: one lease per
         // distinct storage, registered on the launch submission so other
@@ -377,7 +383,7 @@ impl DeviceOp for GraphLaunch {
             }
         }
         // Pending updates need not accumulate over the graph's lifetime.
-        // The launch submission now owns them; their contexts wait on the
+        // The launch submission now owns them; their contexts retain owners on the
         // update stream if it differs from the launch stream.
         let pending =
             std::mem::take(&mut *self.exec.pending.lock().unwrap_or_else(|e| e.into_inner()));

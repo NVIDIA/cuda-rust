@@ -371,6 +371,9 @@ where
     })
 }
 
+/// Run a closure with the shared primary CUDA context for a device ordinal.
+pub use with_device as with_cuda_context;
+
 /// Run a closure with a reference to the [`Context`] for `device_id`.
 pub fn with_device<F, R>(device_id: usize, f: F) -> Result<R, DeviceError>
 where
@@ -426,7 +429,7 @@ pub fn set_default_device(default_device_id: usize) {
 ///
 /// # Errors
 ///
-/// Returns [`DeviceError::Context`](crate::error::DeviceError::Context) if
+/// Returns [`DeviceError::Context`] if
 /// `pool` was created on a different device than `device_id`.
 pub fn set_device_pool(device_id: usize, pool: Arc<MemPool>) -> Result<(), DeviceError> {
     let pool_device = pool.context().ordinal();

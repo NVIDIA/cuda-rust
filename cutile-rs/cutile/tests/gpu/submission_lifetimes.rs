@@ -326,6 +326,59 @@ impl IntoFuture for Fail {
     }
 }
 
+fn async_on_leaves_lifetimes_to_caller(fail: bool) {
+    on_gpu(move |stream, _| {
+        let (src, src_owner) = tracked(&stream);
+        let (dst, dst_owner) = tracked(&stream);
+        let gate = Gate::arm(&stream);
+        let start = std::time::Instant::now();
+        // SAFETY: the rescue owners keep both allocations alive until the
+        // explicit synchronization below, even when the combinator discards
+        // the tensors or returns an error. No conflicting accesses are made.
+        // The warmed kernel remains cached throughout this isolated test.
+        let result = unsafe {
+            if fail {
+                kernels::copy(dst.partition([4]), src)
+                    .then(|_| Fail)
+                    .async_on(&stream)
+            } else {
+                kernels::copy(dst.partition([4]), src)
+                    .then(|_| value(()))
+                    .async_on(&stream)
+            }
+        };
+        let elapsed = start.elapsed();
+        let caller_is_only_owner =
+            Arc::strong_count(&src_owner) == 1 && Arc::strong_count(&dst_owner) == 1;
+        let still_pending = matches!(stream.query(), Ok(false));
+        let expired = gate.expired();
+        // Drain before asserting so a regression cannot free the rescue owners
+        // while the GPU is using their allocations.
+        drop(gate);
+        stream.synchronize().unwrap();
+        assert_eq!(result.is_err(), fail);
+        assert!(
+            !expired && still_pending,
+            "async_on waited for GPU completion"
+        );
+        assert!(elapsed < Duration::from_secs(1));
+        assert!(
+            caller_is_only_owner,
+            "async_on retained resources after returning to the unsafe caller"
+        );
+    });
+}
+
+#[test]
+fn async_on_releases_tracking_without_waiting() {
+    async_on_leaves_lifetimes_to_caller(false);
+}
+
+#[test]
+fn async_on_error_leaves_submitted_resources_with_caller() {
+    async_on_leaves_lifetimes_to_caller(true);
+}
+
 #[test]
 fn partial_submission_error_retains_discarded_resources() {
     on_gpu(|stream, _| {
@@ -340,9 +393,26 @@ fn partial_submission_error_retains_discarded_resources() {
         let result = Pin::new(&mut future).poll(&mut Context::from_waker(&waker));
         assert!(matches!(result, std::task::Poll::Ready(Err(_))));
         assert!(Arc::strong_count(&owner) > 1);
-        drop(gate);
+        let start = std::time::Instant::now();
         drop(future);
-        assert_eq!(Arc::strong_count(&owner), 1);
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "drop waited on a gated stream"
+        );
+        assert!(
+            Arc::strong_count(&owner) > 1,
+            "drop released GPU storage before completion"
+        );
+        drop(gate);
+        stream.synchronize().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while Arc::strong_count(&owner) != 1 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "completed storage was not retired"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
     });
 }
 
@@ -363,9 +433,26 @@ fn partial_submission_panic_retains_discarded_resources() {
         }));
         assert!(panic.is_err());
         assert!(Arc::strong_count(&owner) > 1);
-        drop(gate);
+        let start = std::time::Instant::now();
         drop(future);
-        assert_eq!(Arc::strong_count(&owner), 1);
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "drop waited on a gated stream"
+        );
+        assert!(
+            Arc::strong_count(&owner) > 1,
+            "drop released GPU storage before completion"
+        );
+        drop(gate);
+        stream.synchronize().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while Arc::strong_count(&owner) != 1 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "completed storage was not retired"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
     });
 }
 

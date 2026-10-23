@@ -130,8 +130,10 @@ do
         host_cargo test -p cuda-async --test "$test_target"
 done
 
+run_step "shared Tile and SIMT host buffer interop" cargo test -p cutile --test shared_host_buffers -- --test-threads=1
+
+run_step "shared async Tile and SIMT graph replay" cargo test -p cutile --test shared_async_runtime -- --test-threads=1
+
 print_summary_and_exit \
     "All GPU tests passed!" \
     "Some GPU tests failed. See output above for details."
-
-run_step "shared Tile and SIMT host buffer interop" cargo test -p cutile --test shared_host_buffers -- --test-threads=1

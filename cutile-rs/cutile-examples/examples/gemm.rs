@@ -36,7 +36,7 @@ mod my_module {
     }
 }
 
-fn gemm<T: DType + std::fmt::Display>() -> Result<(), Error> {
+fn gemm<T: DType + cuda_core::DeviceCopy + std::fmt::Display>() -> Result<(), Error> {
     let device = Context::new(0)?;
     let stream = device.new_stream()?;
     let scale = 2usize.pow(10); // On the order of megabytes.

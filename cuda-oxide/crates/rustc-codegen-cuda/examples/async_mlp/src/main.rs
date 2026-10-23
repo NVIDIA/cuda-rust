@@ -35,16 +35,15 @@
 //! Build and run with:
 //!   cargo oxide run async_mlp
 
-use cuda_async::simt::device_box::DeviceBox;
-use cuda_async::simt::device_context::init_device_contexts;
-use cuda_async::simt::device_operation::{self, DeviceOperation, Zippable, value};
+use cuda_async::device_box::DeviceBox;
+use cuda_async::device_context::init_device_contexts;
+use cuda_async::device_operation::{self, DeviceOperation, Zippable, value};
 use cuda_async::zip;
+use cuda_core::DeviceBuffer;
 use cuda_core::LaunchConfig;
-use cuda_core::memory::{malloc_async, memcpy_dtoh_async, memcpy_htod_async, memset_d8_async};
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;
 use std::future::IntoFuture;
-use std::mem;
 use std::sync::Arc;
 
 // =============================================================================
@@ -134,51 +133,35 @@ mod kernels {
 /// and carries the assigned CUDA stream for this operation.
 fn h2d(host_data: Vec<f32>) -> impl DeviceOperation<Output = DeviceBox<[f32]>> {
     device_operation::with_context(move |ctx| {
-        let stream = ctx.get_cuda_stream();
-        let n = host_data.len();
-        let num_bytes = n * mem::size_of::<f32>();
-        unsafe {
-            let dptr = malloc_async(stream.cu_stream(), num_bytes).unwrap();
-            memcpy_htod_async(dptr, host_data.as_ptr(), num_bytes, stream.cu_stream()).unwrap();
-            value(DeviceBox::from_raw_parts(dptr, n, stream.clone()))
-        }
+        let host_data = Arc::new(host_data);
+        // Retain before DMA: dropping or forgetting the operation must not
+        // release the source while the device still reads it.
+        ctx.retain(host_data.clone()).unwrap();
+        let buffer =
+            unsafe { DeviceBuffer::from_host_async_unchecked(ctx.get_cuda_stream(), &host_data) }
+                .unwrap();
+        value(DeviceBox::from_buffer(buffer))
     })
 }
 
-/// Allocates zero-initialized device memory.
-/// `ctx` is provided by the scheduler at execution time.
+/// Zero-initialization and later kernels share the same stream and storage.
 fn zeros(n: usize) -> impl DeviceOperation<Output = DeviceBox<[f32]>> {
     device_operation::with_context(move |ctx| {
-        let stream = ctx.get_cuda_stream();
-        let num_bytes = n * mem::size_of::<f32>();
-        unsafe {
-            let dptr = malloc_async(stream.cu_stream(), num_bytes).unwrap();
-            memset_d8_async(dptr, 0, num_bytes, stream.cu_stream()).unwrap();
-            value(DeviceBox::from_raw_parts(dptr, n, stream.clone()))
-        }
+        value(DeviceBox::from_buffer(
+            DeviceBuffer::zeroed(ctx.get_cuda_stream(), n).unwrap(),
+        ))
     })
 }
 
-/// Copies device memory back to host (D2H).
-/// `ctx` is provided by the scheduler at execution time.
+/// Exposing an ordinary Vec to host combinators requires completion before
+/// returning it. The shared transfer helper also handles partial-error cleanup.
 fn d2h(dev: DeviceBox<[f32]>) -> impl DeviceOperation<Output = Vec<f32>> {
     device_operation::with_context(move |ctx| {
-        let stream = ctx.get_cuda_stream();
-        let n = dev.len();
-        let num_bytes = n * mem::size_of::<f32>();
-        let mut host = vec![0.0f32; n];
-        unsafe {
-            memcpy_dtoh_async(
-                host.as_mut_ptr(),
-                dev.cu_deviceptr(),
-                num_bytes,
-                stream.cu_stream(),
-            )
-            .unwrap();
-        }
-        // dev is kept alive in this closure until the stream synchronizes
-        let _ = &dev;
-        value(host)
+        value(
+            dev.into_buffer()
+                .to_host_vec(ctx.get_cuda_stream())
+                .unwrap(),
+        )
     })
 }
 

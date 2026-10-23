@@ -89,6 +89,9 @@ impl Drop for ExecutionLockRelease {
     }
 }
 
+/// Compatibility spelling of the single shared operation trait.
+pub use DeviceOp as DeviceOperation;
+
 pub type DeviceOrdinal = usize;
 
 pub use crate::submission::{AccessLease, AccessTracked};
@@ -101,6 +104,22 @@ pub trait ReplayResource: Send + Sync {
     /// `(storage identity, writes)`: resources with the same identity are
     /// reacquired once per replay, a write subsuming reads.
     fn replay_identity(&self) -> (usize, bool);
+}
+
+struct BufferAccess {
+    storage: cuda_core::RawDeviceBuffer,
+    write: bool,
+}
+impl ReplayResource for BufferAccess {
+    fn retain_for_launch(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
+        let lease = self
+            .storage
+            .acquire(ctx.get_cuda_stream(), self.write, ctx.is_recording())?;
+        ctx.retain(lease)
+    }
+    fn replay_identity(&self) -> (usize, bool) {
+        (self.storage.allocation_id(), self.write)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -135,8 +154,25 @@ impl ExecutionContext {
     /// operation's output. A forgotten future deliberately leaks these owners.
     ///
     /// Clones share the submission; a completed context cannot be reused.
+    /// [`DeviceOp::async_on`] releases these owners on return instead: its
+    /// unsafe caller independently guarantees resource lifetimes and ordering.
     pub fn retain(&self, owner: impl Send + 'static) -> Result<(), DeviceError> {
         self.submission.retain(owner)
+    }
+
+    /// Registers shared allocation storage before submitting a kernel or copy.
+    /// Capture retains a descriptor and each graph replay reacquires access.
+    pub fn retain_buffer(
+        &self,
+        storage: cuda_core::RawDeviceBuffer,
+        write: bool,
+    ) -> Result<(), DeviceError> {
+        let descriptor = Arc::new(BufferAccess { storage, write });
+        descriptor.retain_for_launch(self)?;
+        if self.recording {
+            self.record_resource(descriptor);
+        }
+        Ok(())
     }
 
     /// Retain an in-flight access lease until this submission completes.
@@ -181,8 +217,8 @@ impl ExecutionContext {
         self.submission.take_recorded()
     }
 
-    /// The caller has proved completion, or explicitly assumes responsibility
-    /// for all submitted resources (the unsafe `async_on` escape hatch).
+    /// The caller has proved completion, or independently guarantees resource
+    /// lifetimes and ordering (the unsafe `async_on` escape hatch).
     pub(crate) unsafe fn complete(&self) {
         self.submission.complete();
     }
@@ -313,10 +349,16 @@ pub trait DeviceOp:
     /// Implementations must register owned resources with [`ExecutionContext::retain`]
     /// before submitting work. Returning them or borrowing them in the output
     /// is insufficient: safe callers may discard outputs or forget futures.
+    /// The output must be a valid Rust value immediately, including safe Drop:
+    /// combinators and cancelled futures may destroy it before GPU completion.
+    /// Any host memory still used by DMA needs an independent retained owner;
+    /// a borrowed host slice alone cannot support a forgettable submission.
     ///
     /// # Safety
     /// The caller must establish completion before host access to the output,
-    /// and must retain the context until completion or deliberately leak it.
+    /// and retain the context until completion, deliberately leak it, or
+    /// independently uphold the resource lifetime and ordering requirements
+    /// documented on [`async_on`](Self::async_on).
     unsafe fn execute(
         self,
         context: &ExecutionContext,
@@ -324,7 +366,7 @@ pub trait DeviceOp:
     /// Schedule this operation on a specific policy and return a [`DeviceFuture`].
     fn schedule(
         self,
-        policy: &Arc<dyn SchedulingPolicy>,
+        policy: &(impl SchedulingPolicy + ?Sized),
     ) -> Result<DeviceFuture<<Self as DeviceOp>::Output, Self>, DeviceError> {
         let stream = policy.next_stream()?;
         let mut future = DeviceFuture::new();
@@ -334,9 +376,9 @@ pub trait DeviceOp:
     }
     /// Chain a follow-up operation that runs **on the same stream** as `self`.
     ///
-    /// Because both operations share a stream, `f` is guaranteed to see `self`'s output
-    /// fully written. This is the recommended way to express data dependencies without
-    /// manual synchronization.
+    /// GPU work enqueued by the returned operation runs after the preceding
+    /// work. The host closure itself runs during submission, before completion;
+    /// it must not read device results directly.
     ///
     /// The closure must not execute other DeviceOps (e.g., via `sync_on` or `sync`).
     /// This is enforced at runtime by the thread-local execution lock — attempting
@@ -351,6 +393,29 @@ pub trait DeviceOp:
             op: self,
             closure: f,
         }
+    }
+    /// Compatibility spelling of [`then`](Self::then), using the same runtime.
+    fn and_then<O: Send, DO, F>(self, f: F) -> AndThen<<Self as DeviceOp>::Output, Self, O, DO, F>
+    where
+        DO: DeviceOp<Output = O>,
+        F: FnOnce(<Self as DeviceOp>::Output) -> DO + Send,
+    {
+        self.then(f)
+    }
+    /// Compatibility spelling of [`then`](Self::then).
+    fn apply<O: Send, DO, F>(self, f: F) -> AndThen<<Self as DeviceOp>::Output, Self, O, DO, F>
+    where
+        DO: DeviceOp<Output = O>,
+        F: FnOnce(<Self as DeviceOp>::Output) -> DO + Send,
+    {
+        self.then(f)
+    }
+    /// Wraps the output in an [`Arc`] through the shared map combinator.
+    fn arc(self) -> impl DeviceOp<Output = Arc<<Self as DeviceOp>::Output>>
+    where
+        <Self as DeviceOp>::Output: Sync,
+    {
+        self.map(Arc::new)
     }
     /// Like [`then`](DeviceOp::then), but the closure runs with the
     /// thread-local execution lock **released**, so it may execute other
@@ -492,17 +557,24 @@ pub trait DeviceOp:
     ///
     /// # Safety
     ///
-    /// The caller must ensure the stream is synchronized before accessing
-    /// GPU data from the output, and must keep every submitted resource alive
-    /// and prevent conflicting accesses until completion, including resources
-    /// discarded by combinators. Unlike safe execution, this method does not
-    /// retain resources after it returns.
+    /// The caller must establish GPU completion before host access to the
+    /// output, keep every submitted resource alive, and prevent conflicting
+    /// accesses until completion. This includes allocations, kernel modules,
+    /// graph executables, DMA buffers, and resources discarded by combinators.
+    /// These obligations also apply to work submitted before an error.
+    ///
+    /// Unlike safe future execution, this method releases registered owners
+    /// and access leases on return, even on error. It does not synchronize or
+    /// arrange background retention of those resources.
     unsafe fn async_on(
         self,
         stream: &Arc<Stream>,
     ) -> Result<<Self as DeviceOp>::Output, DeviceError> {
         let ctx = ExecutionContext::new(stream.clone());
         let result = unsafe { self.execute(&ctx) };
+        // SAFETY: the unsafe caller independently retains all resources and
+        // orders their accesses, including work submitted before an error.
+        // Release tracking now so context drop needs no completion probe/event.
         unsafe { ctx.complete() };
         result
     }
@@ -942,6 +1014,8 @@ impl<T: Send + Sync, DI: DeviceOp<Output = Arc<T>>> DeviceOpUnwrapArc<T> for DI 
 
 // AndThen
 
+// Send follows the stored operation and closure. A manual impl with FnOnce
+// bounds over-constrains lifetime-bearing launch outputs in async blocks.
 pub struct AndThen<I: Send, DI, O: Send, DO, F>
 where
     DI: DeviceOp<Output = I>,
@@ -950,14 +1024,6 @@ where
 {
     op: DI,
     closure: F,
-}
-
-unsafe impl<I: Send, DI, O: Send, DO, F> Send for AndThen<I, DI, O, DO, F>
-where
-    DI: DeviceOp<Output = I>,
-    DO: DeviceOp<Output = O>,
-    F: FnOnce(I) -> DO + Send,
-{
 }
 
 impl<I: Send, DI, O: Send, DO, F> DeviceOp for AndThen<I, DI, O, DO, F>
@@ -1741,14 +1807,6 @@ where
 {
     op: DI,
     closure: F,
-}
-
-unsafe impl<I: Send, DI, O: Send, DO, F> Send for AndThenWithContext<I, DI, O, DO, F>
-where
-    DI: DeviceOp<Output = I>,
-    DO: DeviceOp<Output = O>,
-    F: FnOnce(&ExecutionContext, I) -> DO + Send,
-{
 }
 
 impl<I: Send, DI, O: Send, DO, F> DeviceOp for AndThenWithContext<I, DI, O, DO, F>

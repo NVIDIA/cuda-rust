@@ -5648,8 +5648,7 @@ fn scaffold_async_template_keeps_async_deps_and_docs() {
     assert!(files.main_rs.contains("vecadd_async"));
     assert!(files.main_rs.contains("use cuda_host::cuda_module;"));
     assert!(!files.main_rs.contains("use cuda_device::{cuda_module"));
-    // Shared host runtime from the same git source as cuda-host; the SIMT
-    // surface lives under simt::.
+    // Shared host runtime from the same git source as cuda-host.
     assert!(files.cargo_toml.contains("cuda-async = { git = \""));
     assert!(!files.cargo_toml.contains("cuda-async = \""));
     assert!(!files.cargo_toml.contains("cuda-bindings"));
@@ -5657,7 +5656,7 @@ fn scaffold_async_template_keeps_async_deps_and_docs() {
     assert!(
         files
             .main_rs
-            .contains("use cuda_async::simt::device_operation::DeviceOperation;")
+            .contains("use cuda_async::device_operation::DeviceOperation;")
     );
 }
 

@@ -487,10 +487,17 @@ fn index_device_externs(
         validate_device_extern_function_shape(state, decl)?;
         if let Some(previous) = state.device_externs.get(&decl.export_name) {
             if previous != decl {
-                return Err(format!(
+                let conflict = format!(
                     "conflicting device-extern declarations for `@{}`",
                     decl.export_name
-                ));
+                );
+                if previous.attrs.is_convergent != decl.attrs.is_convergent {
+                    return Err(format!(
+                        "{conflict}: convergent is {} versus {}",
+                        previous.attrs.is_convergent, decl.attrs.is_convergent
+                    ));
+                }
+                return Err(conflict);
             }
             continue;
         }
@@ -610,12 +617,9 @@ pub(super) fn export_module_with_externs_impl(
 
     // 2. Device extern declarations (before function definitions)
     //
-    // NOTE: We intentionally do NOT emit LLVM attributes on these declarations.
-    // The external LTOIR (from nvcc -dc -dlto) already contains proper attributes
-    // (convergent, nounwind, memory, etc.) on the function DEFINITIONS.
-    // When nvJitLink performs LTO linking, it uses the definition's attributes.
-    // Attributes on declarations are redundant and were causing issues where
-    // all externs incorrectly got the same attribute group.
+    // Convergence must be visible before libNVVM optimizes this module, not
+    // only when external definitions arrive at LTO. Emit it per declaration
+    // so unrelated externs do not inherit a shared attribute group.
     if !device_externs.is_empty() {
         writeln!(
             &mut output,
@@ -643,7 +647,11 @@ pub(super) fn export_module_with_externs_impl(
                 }
                 param.write_llvm_with_attr(&mut output, state.legacy_typed_pointers())?;
             }
-            writeln!(&mut output, ")").unwrap();
+            write!(&mut output, ")").unwrap();
+            if decl.attrs.is_convergent {
+                write!(&mut output, " convergent").unwrap();
+            }
+            writeln!(&mut output).unwrap();
         }
         writeln!(&mut output).unwrap();
     }
@@ -711,7 +719,7 @@ pub(super) fn export_module_with_externs_impl(
     }
 
     // 6. Emit attribute groups for convergent intrinsics used by module functions
-    // Note: Device extern declarations no longer get attribute groups - see section 2 comment.
+    // Device extern convergence is emitted inline, independently of this group.
     if state.convergent_used {
         writeln!(&mut output).unwrap();
         writeln!(&mut output, "attributes #0 = {{ convergent }}").unwrap();

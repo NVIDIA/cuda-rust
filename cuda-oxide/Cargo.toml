@@ -105,13 +105,10 @@ cuda-async = { path = "../cuda-async" }
 libnvvm-sys = { path = "crates/libnvvm-sys" }
 nvjitlink-sys = { path = "crates/nvjitlink-sys" }
 reserved-oxide-symbols = { path = "crates/reserved-oxide-symbols" }
-# The crates.io release, not the in-tree path: the shared cuda-core (cutile-rs)
-# reads artifact bundles through crates.io oxide-artifacts, and a path copy of
-# the same version is a second crate to rustc. crates/oxide-artifacts
-# stays in the workspace as the source this release is published from; bump,
-# publish, then move this line.
-# scripts/check-oxide-artifacts-parity.sh keeps them equal.
-oxide-artifacts = "0.2.1"
+# Keep the compiler, shared host runtime, and tools on the same artifact
+# implementation. The shared runtime and isolated backend use this path too;
+# scripts/check-oxide-artifacts-parity.sh verifies the source and version.
+oxide-artifacts = { version = "0.2.1", path = "crates/oxide-artifacts" }
 # Tile export descriptions shared by `#[tile_export]`, the backend, and
 # `cargo oxide tilelib`.
 oxide-tile-export = { path = "crates/oxide-tile-export" }

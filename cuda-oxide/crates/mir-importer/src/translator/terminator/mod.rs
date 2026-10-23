@@ -1193,6 +1193,25 @@ fn translate_call_inner(
         );
     }
 
+    // Keep CuTe calls as CuTe operations while their tensor and layout
+    // meaning is still visible. Ordinary source helpers continue through the
+    // normal Rust-body path.
+    if let Some(result) = crate::translator::cute::try_translate_cute_call(
+        ctx,
+        body,
+        func,
+        args,
+        destination,
+        &target.map(|block| block),
+        block_ptr,
+        prev_op,
+        value_map,
+        block_map,
+        &loc,
+    ) {
+        return result;
+    }
+
     // Share intrinsic dispatch classification with the destination-slot model.
     let on_shared_array = substs_args.as_ref().is_some_and(self_ty_is_shared_array);
 
@@ -2340,6 +2359,7 @@ fn extract_function_item_target(
             || instance.is_foreign_item()
             || !instance.has_body()
             || matches!(crate_name.as_str(), "cuda_device" | "cuda-device" | "libm")
+            || super::cute::function_item_requires_direct_dispatch(&fn_def)
             || generated_direct_call_only,
     }))
 }
@@ -3588,6 +3608,7 @@ fn try_dispatch_intrinsic(
                 block_map,
                 loc,
                 64,
+                false,
             )?,
         )),
         "cuda_device::shared::cvta_generic_to_shared_u32" => Ok(Some(
@@ -3603,9 +3624,26 @@ fn try_dispatch_intrinsic(
                 block_map,
                 loc,
                 32,
+                false,
             )?,
         )),
 
+        "cuda_device::shared::cvta_generic_to_cluster_shared_offset" => Ok(Some(
+            intrinsics::memory::emit_cvta_generic_to_shared_offset(
+                ctx,
+                body,
+                args,
+                destination,
+                target,
+                block_ptr,
+                prev_op,
+                value_map,
+                block_map,
+                loc,
+                64,
+                true,
+            )?,
+        )),
         // Public SharedArray pointer conversions all narrow the shared-memory
         // base to a generic pointer. Recognition is shared with destination
         // address-space classification in translator::values.

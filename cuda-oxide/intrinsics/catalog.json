@@ -11,8 +11,8 @@
   },
   "inputs": {
     "imported_sha256": "54d47b8e281dd953dc95fe16f834ff38164d9809171c9a1af097231b0bc45cab",
-    "overlay_sha256": "bdfaca84cf4ed51ee06ef7caf5ce1acc979849117f7fd7afcd65b8b8397bdb37",
-    "abi_ledger_sha256": "f4cf9e3a7cf9f40725d1e5a2645796167e9615c3c47d2998c67ab1c3952fb210",
+    "overlay_sha256": "7cbb76a20d8a969f3411089c264bef87cfdb355224b22655a6de03251df2ad6c",
+    "abi_ledger_sha256": "813b4bc05e144d72760148d8693257adf34957a4cdb4bd8c42f48e6e1aa07eea",
     "evidence_sha256": [
       "cuda-12.0-libnvvm-12.0.140-ex2-f16.json:7102ea7d567ff2d2eb75a0384148d2e5eb6e605c26a5b98c71371fa3c46adef6",
       "cuda-12.9-libnvvm-12.9.86-f32x2.json:bc5bb505677989affa9ac1044da772b4eb349700dc65e16f09fffffa1f5c493e",
@@ -75,6 +75,7 @@
       "cuda-13.3-libnvvm-13.3.73-tma-descriptor-control.json:ac44f485122404f9a900cfb94bff658160a6c23d9e2f8ef74bb751f044b848fc",
       "cuda-13.3-libnvvm-13.3.73-tma-reduce.json:f5df5bb51068966594660cb01b1b28c3b72cb004c456fcd8dff377ff0bee4fc0",
       "cuda-13.3-libnvvm-13.3.73-tma.json:8607f93605f215858a98075a0ea1394f2718d090538bcaf0a795e11b4cb66d47",
+      "cuda-13.4-libnvvm-13.4.92-mbarrier-relaxed-cluster.json:6c32ccf10d7979fd48d720960466933f0e2677357317a1c2aceb562f55bad20f",
       "rust-llvm-23.1.3-aab11ee0-blackwell-ldmatrix.json:d97aa88300a7b6cf355711ce82d1a719ba27c1f8dce4d94a746ee664973dd309",
       "rust-llvm-23.1.3-aab11ee0-clc.json:5eb99c01287207b78db2a7cf3b2b60d932a64377120e65b39121f4bb65028061",
       "rust-llvm-23.1.3-aab11ee0-cluster-barrier.json:2a32bd2e2e58ac8f48fc9eb590c44985ac9ac5ffefb62374f84138d267dfb824",
@@ -90,6 +91,7 @@
       "rust-llvm-23.1.3-aab11ee0-integer-minmax.json:94bfd0d84bf57737acda19278a10cb566c25677c5688e6a918c83da822100480",
       "rust-llvm-23.1.3-aab11ee0-mbarrier-basic.json:193966219733100689a43dfde7e9f8aba1f3e3ba2cf80b14bd4893504f900489",
       "rust-llvm-23.1.3-aab11ee0-mbarrier-extended.json:c92addb73ebd8ef4f3bb2d5902a9e7f280ba898d10b54682d44f26cd2968fcd8",
+      "rust-llvm-23.1.3-aab11ee0-mbarrier-relaxed-cluster.json:62e040b1dce055edae2ab2897608a219e9b1e5cd0242e29ffca70117827223bf",
       "rust-llvm-23.1.3-aab11ee0-packed-conversion-fp8-bf16x2.json:2e4a3ce7e895c4a39ea9fccd7b9580ce5e87d2e900cc5ea5853588d836bd12e3",
       "rust-llvm-23.1.3-aab11ee0-packed-conversion-fp8-f16x2.json:20124138104fe9f71a583a73cb8656c7d91aa10366e9e041499e024578c1a2e3",
       "rust-llvm-23.1.3-aab11ee0-packed-conversion-fp8.json:42561b5ee707545ccabe2b3b78de12a31614893611e0deccbb498a3ba2967fd1",
@@ -104,6 +106,7 @@
       "rust-llvm-23.1.3-aab11ee0-register-mma-int4-m8.json:79cc39c9713df2dda432ce7c3008ad671f220184125dca6b3d169884029b1490",
       "rust-llvm-23.1.3-aab11ee0-register-mma-int8-m8.json:cad96d998bb1d6c4bfd3b99e9b89f09dbcf2c736db0e0e72a75e92c48887431c",
       "rust-llvm-23.1.3-aab11ee0-register-mma-int8.json:7b30ec02a709517c4e2c8158044e26710a9a0362b91e2ef09856292f9c18541c",
+      "rust-llvm-23.1.3-aab11ee0-register-mma-mxf4-f32.json:deac7d035909ec8f3dbde26bd5e8857e48e72059232665b7181d2555dcdd366d",
       "rust-llvm-23.1.3-aab11ee0-register-mma-mxf8f6f4-f32.json:74930317085a35821ff129a56351901c784e07d28fdc8b89cae608dc32e95802",
       "rust-llvm-23.1.3-aab11ee0-register-mma.json:85e30e8e7c3db6ab6e14cf364e16ca761bcca123e8fcf378080b82cd8c025f75",
       "rust-llvm-23.1.3-aab11ee0-scalar-arithmetic.json:2b75b6fabd4baec416c2836d54d0ec9f2d2f0381f6a22e0b6b923703c729419f",
@@ -59162,6 +59165,217 @@
       "summary": "Computes unary ex2 with approx precision."
     },
     {
+      "id": "fence_acquire_shared_cluster_cluster",
+      "operation_key": "fence.acquire.sync_restrict.shared_cluster.cluster",
+      "family": "mbarrier_extended",
+      "source": {
+        "kind": "llvm_imported",
+        "source_record": "int_nvvm_fence_acquire_sync_restrict_space_cluster_scope_cluster"
+      },
+      "selections": [
+        {
+          "source_record": "INT_FENCE_ACQUIRE_SYNC_RESTRICT_CLUSTER_CLUSTER",
+          "asm": "fence.acquire.sync_restrict::shared::cluster.cluster;",
+          "predicates": [
+            "Subtarget->getSmVersion() >= 90",
+            "Subtarget->getPTXVersion() >= 86"
+          ]
+        }
+      ],
+      "rust": {
+        "abi_id": "i1042",
+        "module": "barrier",
+        "name": "fence_acquire_shared_cluster_cluster",
+        "arguments": [],
+        "result": "()",
+        "safe": false,
+        "must_use": false,
+        "safe_allowlist_reason": null,
+        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1042",
+        "public_path": "cuda_intrinsics::barrier::fence_acquire_shared_cluster_cluster",
+        "compatibility_paths": [
+          "cuda_device::barrier::fence_acquire_shared_cluster_cluster"
+        ]
+      },
+      "dialect": {
+        "op_type": "FenceAcquireSharedClusterClusterOp",
+        "op_name": "nvvm.fence_acquire_shared_cluster_cluster",
+        "operands": [],
+        "results": []
+      },
+      "llvm": {
+        "symbol": "llvm.nvvm.fence.acquire.sync_restrict.space.cluster.scope.cluster",
+        "arguments": [],
+        "results": [],
+        "properties": [
+          "IntrNoCallback"
+        ],
+        "result_facts": {
+          "no_undef": false,
+          "range": null
+        }
+      },
+      "semantics": {
+        "pure": false,
+        "memory": "read_write",
+        "convergent": true,
+        "execution_scope": "cluster"
+      },
+      "target": {
+        "minimum_ptx": "8.6",
+        "hardware": {
+          "kind": "any_of",
+          "alternatives": [
+            {
+              "kind": "minimum_sm",
+              "sm": 90
+            }
+          ]
+        },
+        "ptx_result": "()",
+        "targets": "all",
+        "ptx_isa_version": "9.3",
+        "ptx_isa_section": "Parallel Synchronization and Communication Instructions: membar / fence",
+        "ptx_isa_url": "https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-membar"
+      },
+      "backend": {
+        "profile": "rust-llvm-23.1.3-aab11ee0",
+        "version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+        "sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+        "status": "validated",
+        "target_triple": "nvptx64-nvidia-cuda",
+        "gpu_target": "sm_90",
+        "ptx_feature": "+ptx86"
+      },
+      "backend_lowerings": [
+        {
+          "backend": "llvm_nvptx",
+          "mechanism": "inline_ptx",
+          "evidence_profile": "rust-llvm-23.1.3-aab11ee0",
+          "target": {
+            "minimum_ptx": "8.6",
+            "hardware": {
+              "kind": "any_of",
+              "alternatives": [
+                {
+                  "kind": "minimum_sm",
+                  "sm": 90
+                }
+              ]
+            }
+          },
+          "version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+          "sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+          "artifact_path": null,
+          "build_id_prefix": null,
+          "status": "validated",
+          "stages": [
+            {
+              "targets": [
+                "sm_90",
+                "ptx86"
+              ],
+              "representation": "convergent exact inline-PTX probe",
+              "stage": "backend_codegen",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "Compiled and checked the retained exact instruction on 2026-10-12. PTX SHA-256 7630a6dc59639dc67bcd19e386d47b226c2b4a4dbc7ad63ffffb3c69b56ebc83.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_90",
+                "ptx86"
+              ],
+              "representation": "relocatable cubin retaining the device probe function",
+              "stage": "ptx_assembly",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CPU terminal validation retained the probe on 2026-10-12. Cubin SHA-256 07eaacbe13a41fb20299adb0fd343b686fbe179cac1a4770c2206421f1eeb630.",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda/bin/ptxas",
+              "tool_version": "Cuda compilation tools, release 13.4, V13.4.92",
+              "tool_sha256": "6f6a701573ac9f5c2409708b3b700cb9b2a0f11b13c20468153c13b597b2d6d3"
+            }
+          ]
+        },
+        {
+          "backend": "lib_nvvm",
+          "mechanism": "inline_ptx",
+          "evidence_profile": "cuda-13.4-libnvvm-13.4.92-mbarrier-relaxed-cluster",
+          "target": {
+            "minimum_ptx": "8.6",
+            "hardware": {
+              "kind": "any_of",
+              "alternatives": [
+                {
+                  "kind": "minimum_sm",
+                  "sm": 90
+                }
+              ]
+            }
+          },
+          "version": "CUDA toolkit 13.4; nvcc/libNVVM release V13.4.92",
+          "sha256": "eeef1ca79dc4ded9cc4ceb69a12f6d7148b5ccb5fc9f997a8ef40ff050be7092",
+          "artifact_path": "/usr/local/cuda/nvvm/lib64/libnvvm.so.4.0.0",
+          "build_id_prefix": "38855100",
+          "status": "validated",
+          "stages": [
+            {
+              "targets": [
+                "sm_90",
+                "ptx94"
+              ],
+              "representation": "convergent exact inline-PTX probe",
+              "stage": "backend_codegen",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "Compiled and checked the retained exact instruction on 2026-10-12. PTX SHA-256 e6cee64c4899ecdfb58ea4e3a87f6e6c917dba0b489fd7d48a1897fd54ba3b31.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_90",
+                "ptx94"
+              ],
+              "representation": "nvJitLink cubin retaining the annotated probe kernel",
+              "stage": "device_link",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CPU terminal validation retained the probe on 2026-10-12. Cubin SHA-256 3d6f528ee6d25eb65d606570926cf4d6eb0f595427a1423b08877d8e7113cde7.",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda/lib64/libnvJitLink.so.13.4.92",
+              "tool_version": "V13.4.92",
+              "tool_sha256": "3afdb9677477dd584d3712a9bf2978d085729f0ed6e6432027e925d1e312e3c9"
+            }
+          ]
+        }
+      ],
+      "mbarrier_extended": {
+        "operation": "fence_acquire_shared_cluster_cluster",
+        "adapter": "zero_operands_to_void",
+        "source_contract": "llvm_imported",
+        "runtime_validation": "unexecuted"
+      },
+      "lowering": "generated_mbarrier_extended_inline_ptx",
+      "expected_ptx": {
+        "mnemonic": "fence",
+        "modifiers": [
+          "acquire",
+          "sync_restrict::shared::cluster",
+          "cluster"
+        ],
+        "operands": []
+      },
+      "summary": "Acquires cluster-shared memory at cluster scope, without ordering global memory."
+    },
+    {
       "id": "fence_mbarrier_init_release_cluster",
       "operation_key": "fence.mbarrier_init.release.cluster",
       "family": "mbarrier_extended",
@@ -96632,6 +96846,210 @@
       "summary": "Arrives at a remote cluster-shared barrier through its raw address."
     },
     {
+      "id": "mbarrier_arrive_cluster_relaxed",
+      "operation_key": "barrier.mbarrier.arrive.shared.cluster.relaxed.cluster.raw_address",
+      "family": "mbarrier_extended",
+      "source": {
+        "kind": "ptx_native",
+        "instruction": "mbarrier.arrive.relaxed.cluster.shared::cluster.b64"
+      },
+      "selections": [],
+      "rust": {
+        "abi_id": "i1040",
+        "module": "barrier",
+        "name": "mbarrier_arrive_cluster_relaxed",
+        "arguments": [
+          "u64"
+        ],
+        "result": "()",
+        "safe": false,
+        "must_use": false,
+        "safe_allowlist_reason": null,
+        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1040",
+        "public_path": "cuda_intrinsics::barrier::mbarrier_arrive_cluster_relaxed",
+        "compatibility_paths": [
+          "cuda_device::barrier::mbarrier_arrive_cluster_relaxed"
+        ]
+      },
+      "dialect": {
+        "op_type": "MbarrierArriveClusterRelaxedOp",
+        "op_name": "nvvm.mbarrier_arrive_cluster_relaxed",
+        "operands": [
+          "i64"
+        ],
+        "results": []
+      },
+      "semantics": {
+        "pure": false,
+        "memory": "read_write",
+        "convergent": true,
+        "execution_scope": "cluster"
+      },
+      "target": {
+        "minimum_ptx": "8.6",
+        "hardware": {
+          "kind": "any_of",
+          "alternatives": [
+            {
+              "kind": "minimum_sm",
+              "sm": 90
+            }
+          ]
+        },
+        "ptx_result": "()",
+        "targets": "all",
+        "ptx_isa_version": "9.3",
+        "ptx_isa_section": "Parallel Synchronization and Communication Instructions: mbarrier.arrive",
+        "ptx_isa_url": "https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier-arrive"
+      },
+      "backend": {
+        "profile": "rust-llvm-23.1.3-aab11ee0",
+        "version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+        "sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+        "status": "validated",
+        "target_triple": "nvptx64-nvidia-cuda",
+        "gpu_target": "sm_90",
+        "ptx_feature": "+ptx86"
+      },
+      "backend_lowerings": [
+        {
+          "backend": "llvm_nvptx",
+          "mechanism": "inline_ptx",
+          "evidence_profile": "rust-llvm-23.1.3-aab11ee0",
+          "target": {
+            "minimum_ptx": "8.6",
+            "hardware": {
+              "kind": "any_of",
+              "alternatives": [
+                {
+                  "kind": "minimum_sm",
+                  "sm": 90
+                }
+              ]
+            }
+          },
+          "version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+          "sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+          "artifact_path": null,
+          "build_id_prefix": null,
+          "status": "validated",
+          "stages": [
+            {
+              "targets": [
+                "sm_90",
+                "ptx86"
+              ],
+              "representation": "convergent exact inline-PTX probe",
+              "stage": "backend_codegen",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "Compiled and checked the exact instruction on 2026-10-12. PTX SHA-256 95a3f51783825dfa9a4baf9218584d33c8af170f20863e86da5ea8f542bcbec8.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_90",
+                "ptx86"
+              ],
+              "representation": "relocatable cubin retaining the device probe function",
+              "stage": "ptx_assembly",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "ptxas -arch=sm_90 -c accepted the generated PTX on 2026-10-12. Cubin SHA-256 59e3616fa4b0e8d6f51b3b333de30dcac74f1ba002744cb6c6c918cae5ae6463.",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda/bin/ptxas",
+              "tool_version": "Cuda compilation tools, release 13.4, V13.4.92",
+              "tool_sha256": "6f6a701573ac9f5c2409708b3b700cb9b2a0f11b13c20468153c13b597b2d6d3"
+            }
+          ]
+        },
+        {
+          "backend": "lib_nvvm",
+          "mechanism": "inline_ptx",
+          "evidence_profile": "cuda-13.4-libnvvm-13.4.92-mbarrier-relaxed-cluster",
+          "target": {
+            "minimum_ptx": "8.6",
+            "hardware": {
+              "kind": "any_of",
+              "alternatives": [
+                {
+                  "kind": "minimum_sm",
+                  "sm": 90
+                }
+              ]
+            }
+          },
+          "version": "CUDA toolkit 13.4; nvcc/libNVVM release V13.4.92",
+          "sha256": "eeef1ca79dc4ded9cc4ceb69a12f6d7148b5ccb5fc9f997a8ef40ff050be7092",
+          "artifact_path": "/usr/local/cuda/nvvm/lib64/libnvvm.so.4.0.0",
+          "build_id_prefix": "38855100",
+          "status": "validated",
+          "stages": [
+            {
+              "targets": [
+                "sm_90",
+                "ptx94"
+              ],
+              "representation": "convergent exact inline-PTX probe",
+              "stage": "backend_codegen",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "NVVM verified and compiled an annotated kernel retaining the exact instruction on 2026-10-12. PTX SHA-256 967320791ceec33c1182d5db28170645c6977475e98c6198e8ff2ae9434f5fb6.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_90",
+                "ptx94"
+              ],
+              "representation": "nvJitLink cubin retaining the annotated probe kernel",
+              "stage": "device_link",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "nvJitLink13.4 linked libNVVM-produced PTX on2026-10-12. Cubin SHA-256 43d34256a5eb2a13965870356cdf8739e5d16a1036ee654f9ce51494728e089d.",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda/lib64/libnvJitLink.so.13.4.92",
+              "tool_version": "V13.4.92",
+              "tool_sha256": "3afdb9677477dd584d3712a9bf2978d085729f0ed6e6432027e925d1e312e3c9"
+            }
+          ]
+        }
+      ],
+      "mbarrier_extended": {
+        "operation": "arrive_remote_cluster_relaxed",
+        "adapter": "raw_cluster_address_to_void",
+        "source_contract": "ptx_native_raw_cluster_address",
+        "runtime_validation": "unexecuted"
+      },
+      "lowering": "generated_mbarrier_extended_inline_ptx",
+      "expected_ptx": {
+        "mnemonic": "mbarrier",
+        "modifiers": [
+          "arrive",
+          "relaxed",
+          "cluster",
+          "shared::cluster",
+          "b64"
+        ],
+        "operands": [
+          {
+            "kind": "exact",
+            "value": "_"
+          },
+          {
+            "kind": "address"
+          }
+        ]
+      },
+      "summary": "Arrives at a remote cluster-shared barrier with relaxed memory ordering."
+    },
+    {
       "id": "mbarrier_arrive_expect_tx",
       "operation_key": "barrier.mbarrier.arrive.expect_tx.shared.cta.release.cta",
       "family": "mbarrier_extended",
@@ -98755,6 +99173,238 @@
         ]
       },
       "summary": "Tests barrier parity with cluster-scope acquire ordering."
+    },
+    {
+      "id": "mbarrier_try_wait_parity_cluster_relaxed",
+      "operation_key": "barrier.mbarrier.try_wait.parity.shared.cta.relaxed.cluster",
+      "family": "mbarrier_extended",
+      "source": {
+        "kind": "llvm_imported",
+        "source_record": "int_nvvm_mbarrier_try_wait_parity_relaxed_scope_cluster_space_cta"
+      },
+      "selections": [],
+      "rust": {
+        "abi_id": "i1041",
+        "module": "barrier",
+        "name": "mbarrier_try_wait_parity_cluster_relaxed",
+        "arguments": [
+          "*const u64",
+          "u32"
+        ],
+        "result": "bool",
+        "safe": false,
+        "must_use": true,
+        "safe_allowlist_reason": null,
+        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1041",
+        "public_path": "cuda_intrinsics::barrier::mbarrier_try_wait_parity_cluster_relaxed",
+        "compatibility_paths": [
+          "cuda_device::barrier::mbarrier_try_wait_parity_cluster_relaxed"
+        ]
+      },
+      "dialect": {
+        "op_type": "MbarrierTryWaitParityClusterRelaxedOp",
+        "op_name": "nvvm.mbarrier_try_wait_parity_cluster_relaxed",
+        "operands": [
+          "ptr",
+          "i32"
+        ],
+        "results": [
+          "i1"
+        ]
+      },
+      "llvm": {
+        "symbol": "llvm.nvvm.mbarrier.try.wait.parity.relaxed.scope.cluster.space.cta",
+        "arguments": [
+          "shared_ptr",
+          "i32"
+        ],
+        "results": [
+          "i1"
+        ],
+        "properties": [
+          "IntrArgMemOnly",
+          "IntrConvergent",
+          "IntrNoCallback",
+          "IntrReadMem",
+          "NoCapture<arg0>"
+        ],
+        "result_facts": {
+          "no_undef": false,
+          "range": null
+        }
+      },
+      "semantics": {
+        "pure": false,
+        "memory": "read_write",
+        "convergent": true,
+        "execution_scope": "cluster"
+      },
+      "target": {
+        "minimum_ptx": "8.6",
+        "hardware": {
+          "kind": "any_of",
+          "alternatives": [
+            {
+              "kind": "minimum_sm",
+              "sm": 90
+            }
+          ]
+        },
+        "ptx_result": "bool",
+        "targets": "all",
+        "ptx_isa_version": "9.3",
+        "ptx_isa_section": "Parallel Synchronization and Communication Instructions: mbarrier.test_wait / mbarrier.try_wait",
+        "ptx_isa_url": "https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier-test-wait-mbarrier-try-wait"
+      },
+      "backend": {
+        "profile": "rust-llvm-23.1.3-aab11ee0",
+        "version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+        "sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+        "status": "validated",
+        "target_triple": "nvptx64-nvidia-cuda",
+        "gpu_target": "sm_90",
+        "ptx_feature": "+ptx86"
+      },
+      "backend_lowerings": [
+        {
+          "backend": "llvm_nvptx",
+          "mechanism": "inline_ptx",
+          "evidence_profile": "rust-llvm-23.1.3-aab11ee0",
+          "target": {
+            "minimum_ptx": "8.6",
+            "hardware": {
+              "kind": "any_of",
+              "alternatives": [
+                {
+                  "kind": "minimum_sm",
+                  "sm": 90
+                }
+              ]
+            }
+          },
+          "version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+          "sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+          "artifact_path": null,
+          "build_id_prefix": null,
+          "status": "validated",
+          "stages": [
+            {
+              "targets": [
+                "sm_90",
+                "ptx86"
+              ],
+              "representation": "convergent exact inline-PTX probe",
+              "stage": "backend_codegen",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "Compiled and checked the exact instruction on 2026-10-12. PTX SHA-256 5dfa827aa34d633b208aea6582c07db167580a77728889722865433b820756fe.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_90",
+                "ptx86"
+              ],
+              "representation": "relocatable cubin retaining the device probe function",
+              "stage": "ptx_assembly",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "ptxas -arch=sm_90 -c accepted the generated PTX on 2026-10-12. Cubin SHA-256 5b48f889f189710480c0d4fd90299a85be5b7a992a14946f0328ab5f4e0ad163.",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda/bin/ptxas",
+              "tool_version": "Cuda compilation tools, release 13.4, V13.4.92",
+              "tool_sha256": "6f6a701573ac9f5c2409708b3b700cb9b2a0f11b13c20468153c13b597b2d6d3"
+            }
+          ]
+        },
+        {
+          "backend": "lib_nvvm",
+          "mechanism": "inline_ptx",
+          "evidence_profile": "cuda-13.4-libnvvm-13.4.92-mbarrier-relaxed-cluster",
+          "target": {
+            "minimum_ptx": "8.6",
+            "hardware": {
+              "kind": "any_of",
+              "alternatives": [
+                {
+                  "kind": "minimum_sm",
+                  "sm": 90
+                }
+              ]
+            }
+          },
+          "version": "CUDA toolkit 13.4; nvcc/libNVVM release V13.4.92",
+          "sha256": "eeef1ca79dc4ded9cc4ceb69a12f6d7148b5ccb5fc9f997a8ef40ff050be7092",
+          "artifact_path": "/usr/local/cuda/nvvm/lib64/libnvvm.so.4.0.0",
+          "build_id_prefix": "38855100",
+          "status": "validated",
+          "stages": [
+            {
+              "targets": [
+                "sm_90",
+                "ptx94"
+              ],
+              "representation": "convergent exact inline-PTX probe",
+              "stage": "backend_codegen",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "NVVM verified and compiled an annotated kernel retaining the exact instruction on 2026-10-12. PTX SHA-256 455a80dd009512b448d952113f7fe899b5921f3aab1dafc256e7adc0d61098b1.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_90",
+                "ptx94"
+              ],
+              "representation": "nvJitLink cubin retaining the annotated probe kernel",
+              "stage": "device_link",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "nvJitLink13.4 linked libNVVM-produced PTX on2026-10-12. Cubin SHA-256 0776be219a56271a716559b413dcf4ca826e561812e72d9b98c3d0f1e4c1153c.",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda/lib64/libnvJitLink.so.13.4.92",
+              "tool_version": "V13.4.92",
+              "tool_sha256": "3afdb9677477dd584d3712a9bf2978d085729f0ed6e6432027e925d1e312e3c9"
+            }
+          ]
+        }
+      ],
+      "mbarrier_extended": {
+        "operation": "try_wait_parity_cluster_relaxed",
+        "adapter": "pointer_parity_to_predicate",
+        "source_contract": "llvm_imported",
+        "runtime_validation": "unexecuted"
+      },
+      "lowering": "generated_mbarrier_extended_inline_ptx",
+      "expected_ptx": {
+        "mnemonic": "mbarrier",
+        "modifiers": [
+          "try_wait",
+          "parity",
+          "relaxed",
+          "cluster",
+          "shared::cta",
+          "b64"
+        ],
+        "operands": [
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "address"
+          },
+          {
+            "kind": "register"
+          }
+        ]
+      },
+      "summary": "Tests barrier parity at cluster scope with relaxed memory ordering."
     },
     {
       "id": "min_bf16",
@@ -172105,6 +172755,267 @@
         ]
       },
       "summary": "Executes the mma_m16n8k4_f32_tf32 dense floating-point MMA form."
+    },
+    {
+      "id": "mma_m16n8k64_mxf4_f32",
+      "operation_key": "matrix.mma.m16n8k64.row.col.kind_mxf4.scale_vec_2x.f32.e2m1.e2m1.f32.ue8m0",
+      "family": "register_mma",
+      "source": {
+        "kind": "llvm_imported",
+        "source_record": "int_nvvm_mma_block_scale_m16n8k64_row_col_mxf4_scale_2x_f32_e2m1_e2m1_f32_ue8m0"
+      },
+      "selections": [
+        {
+          "source_record": "anonymous_19058",
+          "asm": "mma.sync.aligned.m16n8k64.row.col.kind::mxf4.block_scale.scale_vec::2X.f32.e2m1.e2m1.f32.ue8m0 \n\t\t{{$rd0, $rd1, $rd2, $rd3}},\n\t\t{{$ra0, $ra1, $ra2, $ra3}},\n\t\t{{$rb0, $rb1}},\n\t\t{{$rc0, $rc1, $rc2, $rc3}},\n\t\t$scale_a, {{$byte_id_a, $thread_id_a}},\n\t\t$scale_b, {{$byte_id_b, $thread_id_b}};",
+          "predicates": [
+            "Subtarget->hasMMABlockScale()"
+          ]
+        }
+      ],
+      "rust": {
+        "abi_id": "i1039",
+        "module": "matrix",
+        "name": "mma_m16n8k64_mxf4_f32",
+        "arguments": [
+          "[f32; 4]",
+          "[u32; 4]",
+          "[u32; 2]",
+          "u32",
+          "u16",
+          "u16",
+          "u32",
+          "u16",
+          "u16"
+        ],
+        "result": "[f32; 4]",
+        "safe": false,
+        "must_use": true,
+        "safe_allowlist_reason": null,
+        "canonical_path": "cuda_intrinsics::__cuda_oxide_intrinsic_abi_v1::i1039",
+        "public_path": "cuda_intrinsics::matrix::mma_m16n8k64_mxf4_f32",
+        "compatibility_paths": [
+          "cuda_device::wmma::mma_m16n8k64_mxf4_f32"
+        ]
+      },
+      "dialect": {
+        "op_type": "RegisterMmaOp",
+        "op_name": "nvvm.register_mma",
+        "operands": [
+          "f32",
+          "f32",
+          "f32",
+          "f32",
+          "i32",
+          "i32",
+          "i32",
+          "i32",
+          "i32",
+          "i32",
+          "i32",
+          "i16",
+          "i16",
+          "i32",
+          "i16",
+          "i16"
+        ],
+        "results": [
+          "f32",
+          "f32",
+          "f32",
+          "f32"
+        ]
+      },
+      "llvm": {
+        "symbol": "llvm.nvvm.mma.block.scale.m16n8k64.row.col.mxf4.scale.2x.f32.e2m1.e2m1.f32.ue8m0",
+        "arguments": [
+          "i32",
+          "i32",
+          "i32",
+          "i32",
+          "i32",
+          "i32",
+          "f32",
+          "f32",
+          "f32",
+          "f32",
+          "i32",
+          "i16",
+          "i16",
+          "i32",
+          "i16",
+          "i16"
+        ],
+        "results": [
+          "f32",
+          "f32",
+          "f32",
+          "f32"
+        ],
+        "properties": [
+          "IntrNoCallback",
+          "IntrNoMem"
+        ],
+        "result_facts": {
+          "no_undef": false,
+          "range": null
+        }
+      },
+      "semantics": {
+        "pure": false,
+        "memory": "none",
+        "convergent": true,
+        "execution_scope": "warp"
+      },
+      "target": {
+        "minimum_ptx": "8.7",
+        "hardware": {
+          "kind": "any_of",
+          "alternatives": [
+            {
+              "kind": "exact_architecture",
+              "sm": 120
+            }
+          ]
+        },
+        "ptx_result": "[f32; 4]",
+        "targets": "sm_120a",
+        "ptx_isa_version": "9.3",
+        "ptx_isa_section": "9.7.15.5.14 Multiply-and-Accumulate Instruction: mma",
+        "ptx_isa_url": "https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-instructions-mma"
+      },
+      "backend": {
+        "profile": "rust-llvm-23.1.3-aab11ee0",
+        "version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+        "sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+        "status": "validated",
+        "target_triple": "nvptx64-nvidia-cuda",
+        "gpu_target": "sm_120a",
+        "ptx_feature": "+ptx87"
+      },
+      "backend_lowerings": [
+        {
+          "backend": "llvm_nvptx",
+          "mechanism": "inline_ptx",
+          "evidence_profile": "rust-llvm-23.1.3-aab11ee0",
+          "target": {
+            "minimum_ptx": "8.7",
+            "hardware": {
+              "kind": "any_of",
+              "alternatives": [
+                {
+                  "kind": "exact_architecture",
+                  "sm": 120
+                }
+              ]
+            }
+          },
+          "version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+          "sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+          "artifact_path": null,
+          "build_id_prefix": null,
+          "status": "validated",
+          "stages": [
+            {
+              "targets": [
+                "sm_120a",
+                "ptx87"
+              ],
+              "representation": "generated dense kind::mxf4 K64 scale_vec::2X inline PTX",
+              "stage": "backend_codegen",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "Revalidated with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): candidate probe emitted the exact MXF4 K64 instruction; PTX SHA-256 23784ae5da0c4556e644c1add6f5f420c27829f08ced3e4740fa323553908a95.",
+              "artifact_kind": null,
+              "tool_path": null,
+              "tool_version": null,
+              "tool_sha256": null
+            },
+            {
+              "targets": [
+                "sm_120a",
+                "ptx87"
+              ],
+              "representation": "exact dense kind::mxf4 K64 scale_vec::2X PTX",
+              "stage": "ptx_assembly",
+              "mechanism": "inline_ptx",
+              "outcome": "succeeded",
+              "detail": "CUDA 13.3 ptxas accepted the regenerated nightly-2026-10-11 probe for sm_120a; CUBIN SHA-256 dc2453a1298c2e8c20a23f0835fb64fb00ff66ea75fd468f5d0973e763f08741.",
+              "artifact_kind": "cubin",
+              "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+              "tool_version": "Cuda compilation tools, release 13.3, V13.3.73",
+              "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+            }
+          ]
+        }
+      ],
+      "register_mma": {
+        "shape": "m16n8k64",
+        "operation": "multiply",
+        "kind": "mxf4",
+        "accumulator": "f32",
+        "a_element": "e2m1",
+        "b_element": "e2m1",
+        "a_layout": "row",
+        "b_layout": "col",
+        "overflow": "not_applicable",
+        "participation": "all_warp_lanes_same_instruction_and_qualifiers_no_exited_lanes",
+        "adapter": "c4_f32_a4_u32_b2_u32_scales2_u32_selectors4_u16_to_d4_f32",
+        "compatibility_source": "generated_stub",
+        "runtime_validation": "unexecuted"
+      },
+      "lowering": "generated_register_mma",
+      "expected_ptx": {
+        "mnemonic": "mma",
+        "modifiers": [
+          "sync",
+          "aligned",
+          "m16n8k64",
+          "row",
+          "col",
+          "kind::mxf4",
+          "block_scale",
+          "scale_vec::2X",
+          "f32",
+          "e2m1",
+          "e2m1",
+          "f32",
+          "ue8m0"
+        ],
+        "operands": [
+          {
+            "kind": "register_list",
+            "length": 4
+          },
+          {
+            "kind": "register_list",
+            "length": 4
+          },
+          {
+            "kind": "register_list",
+            "length": 2
+          },
+          {
+            "kind": "register_list",
+            "length": 4
+          },
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "register_list",
+            "length": 2
+          },
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "register_list",
+            "length": 2
+          }
+        ]
+      },
+      "summary": "Multiplies warp-distributed E2M1 fragments with UE8M0 block scales and adds an F32 accumulator."
     },
     {
       "id": "mma_m16n8k64_s32_s4",

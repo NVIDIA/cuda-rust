@@ -400,6 +400,45 @@ pub fn emit_function_call_at_site(
         last_op = arg_last_op;
     }
 
+    // Ordinary Rust helper signatures also expose generic pointers. Resolve
+    // the monomorphized operand type (not an unresolved trait signature), and
+    // adapt only address space. All other type/provenance mismatches still
+    // reach the independently typed callee's verifier unchanged.
+    if external_callee_type.is_none() {
+        for (argument, operand) in arg_values.iter_mut().zip(args) {
+            if argument
+                .get_type(ctx)
+                .deref(ctx)
+                .downcast_ref::<MirPtrType>()
+                .is_none()
+            {
+                continue;
+            }
+            let rust_type = match operand.ty(body.locals()) {
+                Ok(ty) => ty,
+                Err(error) => {
+                    return input_err!(
+                        loc.clone(),
+                        TranslationErr::unsupported(format!(
+                            "failed to resolve Rust call argument type: {error:?}"
+                        ))
+                    );
+                }
+            };
+            let declared = crate::translator::types::translate_type(ctx, &rust_type)?;
+            let (normalized, tail) = normalize_call_pointer_argument(
+                ctx,
+                *argument,
+                declared,
+                block_ptr,
+                last_op,
+                loc.clone(),
+            );
+            *argument = normalized;
+            last_op = tail;
+        }
+    }
+
     emit_function_call_values(
         ctx,
         body,
@@ -455,7 +494,7 @@ pub(crate) fn emit_function_call_values(
         // arity is invalid and must remain visible to MirCallOp verification.
         if arg_values.len() == expected_arguments.len() {
             for (argument, expected) in arg_values.iter_mut().zip(expected_arguments) {
-                let (normalized, normalized_last_op) = normalize_foreign_pointer_argument(
+                let (normalized, normalized_last_op) = normalize_call_pointer_argument(
                     ctx,
                     *argument,
                     expected,
@@ -637,7 +676,7 @@ pub(crate) fn normalize_internal_shared_pointer_arguments(
                 }
             };
             if matching_shared_raw {
-                let (value, last) = normalize_foreign_pointer_argument(
+                let (value, last) = normalize_call_pointer_argument(
                     ctx,
                     value,
                     expected,
@@ -652,9 +691,9 @@ pub(crate) fn normalize_internal_shared_pointer_arguments(
     }
 }
 
-/// Adapt a foreign-call pointer argument only when the address space is the
+/// Adapt a call pointer argument only when the address space is the
 /// sole difference from its declared ABI parameter type.
-fn normalize_foreign_pointer_argument(
+fn normalize_call_pointer_argument(
     ctx: &mut Context,
     value: Value,
     declared_type: TypeHandle,
@@ -1264,7 +1303,7 @@ mod tests {
         let block = BasicBlock::new(&mut ctx, None, vec![shared_raw_mut]);
         let argument = block.deref(&ctx).get_argument(0);
 
-        let (normalized, cast_op) = normalize_foreign_pointer_argument(
+        let (normalized, cast_op) = normalize_call_pointer_argument(
             &mut ctx,
             argument,
             abi_raw_mut,
@@ -1305,7 +1344,7 @@ mod tests {
         let block = BasicBlock::new(&mut ctx, None, vec![shared_raw_mut]);
         let argument = block.deref(&ctx).get_argument(0);
 
-        let (unchanged, cast_op) = normalize_foreign_pointer_argument(
+        let (unchanged, cast_op) = normalize_call_pointer_argument(
             &mut ctx,
             argument,
             abi_unique_ref,
@@ -1333,7 +1372,7 @@ mod tests {
         let block = BasicBlock::new(&mut ctx, None, vec![abi_raw_mut]);
         let argument = block.deref(&ctx).get_argument(0);
 
-        let (unchanged, cast_op) = normalize_foreign_pointer_argument(
+        let (unchanged, cast_op) = normalize_call_pointer_argument(
             &mut ctx,
             argument,
             abi_raw_mut,
@@ -1366,7 +1405,7 @@ mod tests {
         let block = BasicBlock::new(&mut ctx, None, vec![shared_raw_mut]);
         let argument = block.deref(&ctx).get_argument(0);
 
-        let (unchanged, cast_op) = normalize_foreign_pointer_argument(
+        let (unchanged, cast_op) = normalize_call_pointer_argument(
             &mut ctx,
             argument,
             wrong_pointee,
@@ -1396,7 +1435,7 @@ mod tests {
         let erased_block = BasicBlock::new(&mut ctx, None, vec![mutable_erased]);
         let erased_argument = erased_block.deref(&ctx).get_argument(0);
 
-        let (unchanged, cast_op) = normalize_foreign_pointer_argument(
+        let (unchanged, cast_op) = normalize_call_pointer_argument(
             &mut ctx,
             erased_argument,
             immutable_erased,

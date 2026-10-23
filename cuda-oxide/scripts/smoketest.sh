@@ -90,7 +90,7 @@ set -uo pipefail
 TCGEN05_EXAMPLES=(gemm_sol gemm_sol_final tcgen05 tcgen05_matmul)
 WGMMA_EXAMPLES=(wgmma)
 BLACKWELL_MMA_EXAMPLES=(mma_mxf8f6f4)
-LTOIR_EXAMPLES=(addressof_sharedarray constant_memory cpp_consumes_rust_device device_ffi_test legacy_atomic_fadd legacy_atomic_rmw_cas legacy_nvvm_pointer_shapes manual_launch_libdevice mathdx_ffi_test primitive_stress)
+LTOIR_EXAMPLES=(addressof_sharedarray constant_memory cpp_consumes_rust_device device_ffi_test external_ltoir legacy_atomic_fadd legacy_atomic_rmw_cas legacy_nvvm_pointer_shapes manual_launch_libdevice mathdx_ffi_test primitive_stress)
 LTOIR_MODERN_EXAMPLES=(small_type_ffi_test)
 TILELIB_EXAMPLES=(tilelib_relu)
 AUTO_NVVM_EXAMPLES=(libdevice_math)
@@ -127,13 +127,13 @@ NO_LAUNCH_EXAMPLES=(wgmma_mma_bf16)
 # afterwards purely to produce the artifacts the shape check reads.
 NO_OPT_SHAPE_EXAMPLES=(const_bool_dead_branch shared_memory_helper)
 
-# This example intentionally configures a cubin artifact in Cargo metadata.
-# Its supported project route necessarily includes NVVM IR + libNVVM +
+# These examples require cubin artifacts, through Cargo metadata or native
+# library materialization. Their supported route includes NVVM IR + libNVVM +
 # nvJitLink; the full-debug census must exercise that reality rather than
 # silently rewriting the project to PTX. It is reported separately from the
-# direct-LLVM census so the one accommodation cannot be mistaken for direct
+# direct-LLVM census so these accommodations cannot be mistaken for direct
 # backend coverage.
-FULL_DEBUG_CONFIGURED_ROUTE_EXAMPLES=(interop_cubin_identity)
+FULL_DEBUG_CONFIGURED_ROUTE_EXAMPLES=(interop_cubin_identity native_library)
 
 classify() {
     local ex="$1" cat
@@ -263,14 +263,14 @@ OPTIONS
                        is missing or too old). Error examples must still
                        fail. Works on GPU-less CI.
       --full-debug     Compile selected examples through the normal LLVM
-                       `cargo oxide build --device-debug` route (except an
-                       explicitly configured cubin project, reported as a
+                       `cargo oxide build --device-debug` route (except the
+                       configured cubin projects, reported as a
                        separate configured-route accommodation). Validates
                        fresh artifacts, ptxas assembly, permanent
                        verify-debug-info.sh contracts, and intentional error
                        diagnostics, but skips libNVVM and optimized code-shape
                        gates because those do not accept/describe full-debug
-                       output. Nothing is executed. Cannot be combined with
+                       output. No kernels execute. Cannot be combined with
                        --compile-only.
   -x, --fail-fast      Stop at the first failure.
   -v, --verbose        Stream cargo output live (instead of capturing to
@@ -539,9 +539,9 @@ printf "%scuda-oxide smoketest%s @ %s%s%s (%s)\n" "${C_BOLD}" "${C_RESET}" "${C_
 printf "GPU: %s\n" "${gpu_info}"
 printf "LTOIR arch: %s (modern: %s)\n" "${LTOIR_ARCH}" "${LTOIR_MODERN_ARCH}"
 if [[ ${COMPILE_ONLY} -eq 1 ]]; then
-    printf "Mode: compile-only (device artifacts only; nothing is executed)\n"
+    printf "Mode: compile-only (device artifacts only; no kernels execute)\n"
 elif [[ ${FULL_DEBUG} -eq 1 ]]; then
-    printf "Mode: full-debug compile census (direct LLVM plus explicit configured routes; nothing is executed)\n"
+    printf "Mode: full-debug compile census (direct LLVM plus explicit configured routes; no kernels execute)\n"
 fi
 if [[ -n "${ONLY}" ]]; then printf "Filter --only: %s\n" "${ONLY}"; fi
 if [[ -n "${SKIP}" ]]; then printf "Filter --skip: %s\n" "${SKIP}"; fi
@@ -1026,6 +1026,10 @@ verdict_compile() {
     local artifact="${ex//-/_}"
     if [[ ${ec} -gt 128 ]]; then echo "FAIL (crashed, signal $((ec - 128)))"; return 1; fi
     if [[ ${ec} -ne 0 ]]; then   echo "FAIL (exit=${ec})";                    return 1; fi
+    if [[ "${ex}" == "native_library" ]]; then
+        native_library_cubin_verdict "${log}"
+        return
+    fi
     if [[ ${FULL_DEBUG} -eq 1 ]]; then
         case "${ex}" in
             device_ffi_test|mathdx_ffi_test|small_type_ffi_test)
@@ -1034,6 +1038,11 @@ verdict_compile() {
                 # external LTOIR later.  An executable ptxas link must fail,
                 # so validate a relocatable object and its exact undefined
                 # interface instead.
+                full_debug_relocatable_ffi_verdict \
+                    "${ex}" "${ex_dir}/${artifact}.ptx"
+                return
+                ;;
+            external_ltoir)
                 full_debug_relocatable_ffi_verdict \
                     "${ex}" "${ex_dir}/${artifact}.ptx"
                 return
@@ -1180,6 +1189,9 @@ full_debug_relocatable_ffi_verdict() {
         mathdx_ffi_test)
             expected_undefined=$'cublasdx_gemm_32x32x32_block_dim_x\ncublasdx_gemm_32x32x32_block_dim_y\ncublasdx_gemm_32x32x32_block_dim_z\ncublasdx_gemm_32x32x32_f32\ncublasdx_gemm_32x32x32_f32_alphabeta\ncublasdx_gemm_32x32x32_smem_size\ncublasdx_gemm_32x32x32_smem_size_ab\ncufftdx_fft_16_c2c_f32_forward\ncufftdx_fft_16_c2c_f32_inverse\ncufftdx_fft_16_elements_per_thread\ncufftdx_fft_16_storage_size\ncufftdx_fft_32_storage_size\ncufftdx_fft_8_c2c_f32_forward\ncufftdx_fft_8_c2c_f32_inverse\ncufftdx_fft_8_elements_per_thread\ncufftdx_fft_8_storage_size\ndebug_extern_double_array'
             ;;
+        external_ltoir)
+            expected_undefined='external_scale_add'
+            ;;
         small_type_ffi_test)
             expected_undefined=$'small_add_u16\nsmall_add_u8\nsmall_half_add\nsmall_not_bool\nsmall_scale_i16\nsmall_scale_i8\nsmall_widen_i8\nsmall_widen_u16'
             ;;
@@ -1264,6 +1276,56 @@ full_debug_relocatable_ffi_verdict() {
         return 1
     fi
     echo "PASS (full-debug FFI PTX assembled relocatably for ${arch}; DWARF and undefined interface verified)"
+}
+
+# The native-library fixture embeds its final image in the host executable.
+# Its host-only check extracts that exact CUBIN without loading the CUDA driver.
+native_library_cubin_verdict() {
+    local log="$1" target="${LTOIR_ARCH}" cubin elf_reader sections dwarf symbol
+    local binary="${CARGO_TARGET_DIR}/release/native_library"
+    # cargo oxide builds with the example as cwd; Cargo resolves relative
+    # target directories there, while this verdict runs from the repo root.
+    if [[ "${CARGO_TARGET_DIR}" != /* ]]; then
+        binary="${repo_root}/crates/rustc-codegen-cuda/examples/native_library/${binary}"
+    fi
+    local -a args=("--check-artifact")
+    if [[ ${FULL_DEBUG} -eq 1 ]]; then target="${LTOIR_MODERN_ARCH}"; fi
+    cubin="$(mktemp "${TMPDIR:-/tmp}/native-library.XXXXXX.cubin")" || return 1
+    args+=("${target}" "${cubin}")
+    if [[ ${FULL_DEBUG} -eq 1 ]]; then args+=("--full-debug"); fi
+    if ! "${binary}" "${args[@]}" >>"${log}" 2>&1; then
+        rm -f "${cubin}"
+        echo "FAIL (native library embedded CUBIN check failed)"
+        return 1
+    fi
+    if [[ ${FULL_DEBUG} -eq 1 ]]; then
+        elf_reader="$(command -v readelf || command -v llvm-readelf || true)"
+        if [[ -z "${elf_reader}" ]] \
+            || ! sections="$("${elf_reader}" -W -S "${cubin}" 2>>"${log}")" \
+            || ! dwarf="$("${elf_reader}" --debug-dump=info "${cubin}" 2>>"${log}")"; then
+            rm -f "${cubin}"
+            echo "FAIL (could not inspect native library CUBIN DWARF with readelf)"
+            return 1
+        fi
+        rm -f "${cubin}"
+        if ! grep -q '[.]debug_info' <<<"${sections}" \
+            || ! grep -q '[.]debug_line' <<<"${sections}" \
+            || ! grep -q 'DW_TAG_compile_unit' <<<"${dwarf}" \
+            || ! grep -q 'DW_TAG_subprogram' <<<"${dwarf}"; then
+            echo "FAIL (native library CUBIN is missing consumable DWARF)"
+            return 1
+        fi
+        for symbol in one four payloads; do
+            if ! grep -Eq "DW_AT_name.*: ${symbol}$" <<<"${dwarf}"; then
+                echo "FAIL (native library CUBIN is missing ${symbol} DWARF)"
+                return 1
+            fi
+        done
+        echo "PASS (embedded CUBIN recorded debug=full and contains consumable DWARF)"
+    else
+        rm -f "${cubin}"
+        echo "PASS (embedded CUBIN and launch facts verified for ${target})"
+    fi
 }
 
 # The one configured cubin project cannot be judged through the root PTX
@@ -1362,11 +1424,12 @@ run_full_debug_build() {
         # Full debug is unsupported by the legacy LLVM 7 NVVM dialect. Keep
         # the project's configured cubin path, but use the supported modern
         # dialect at the host target or its GPU-less sm_100 floor.
-        interop_cubin_identity) arch="${LTOIR_MODERN_ARCH}" ;;
+        interop_cubin_identity|native_library) arch="${LTOIR_MODERN_ARCH}" ;;
     esac
     if [[ -n "${arch}" ]]; then
         args+=("--arch=${arch}")
     fi
+    if [[ "${ex}" == "native_library" ]]; then args+=("--materialize-cubin"); fi
 
     if [[ ${VERBOSE} -eq 1 ]]; then
         cargo oxide "${args[@]}" 2>&1 | tee "${log}"
@@ -1403,6 +1466,15 @@ run_cargo() {
     local ex="$1" log="$2" cat="$3"
     if [[ ${FULL_DEBUG} -eq 1 ]]; then
         run_full_debug_build "${ex}" "${log}" "${cat}"
+        return
+    fi
+    # This fixture exercises compile-time linking of external device libraries.
+    # Its script supplies those inputs and verifies the embedded executable.
+    # Compile-only and full-debug retain the ordinary artifact-only FFI routes.
+    if [[ ${COMPILE_ONLY} -eq 0 && "${ex}" == "external_ltoir" ]]; then
+        bash scripts/check-external-ltoir.sh "${LTOIR_ARCH}" >"${log}" 2>&1
+        CARGO_EC=$?
+        if [[ ${VERBOSE} -eq 1 ]]; then cat "${log}"; fi
         return
     fi
     # Rust `char` must remain plain i32 in both NVVM dialects. A runtime
@@ -2192,6 +2264,9 @@ run_cargo() {
     local verb="run"
     if [[ ${COMPILE_ONLY} -eq 1 ]]; then verb="build"; fi
     local -a args=("${verb}" "${ex}")
+    if [[ "${ex}" == "native_library" ]]; then
+        args+=("--materialize-cubin" "--arch=${LTOIR_ARCH}")
+    fi
     if [[ ${COMPILE_ONLY} -eq 0 && "${ex}" == "ex2_approx_f16" \
         && "${host_cc}" =~ ^[0-9]+\.[0-9]+$ \
         && $((10#${host_cc//./})) -lt 75 ]]; then

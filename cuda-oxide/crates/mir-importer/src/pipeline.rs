@@ -11,12 +11,13 @@
 //! # Pipeline Steps
 //!
 //! ```text
-//! MIR -> dialect-mir -> verify -> mem2reg -> annotated loop unroll
-//!     -> LLVM dialect -> LLVM IR -> PTX
+//! MIR -> dialect-mir -> verify -> prepare -> library proof/provider binding
+//!     -> optional transforms -> LLVM dialect -> LLVM IR -> PTX
 //! ```
 //!
-//! Builds with variable debug information skip `mem2reg` and loop unrolling so
-//! source variables remain in stable stack slots.
+//! Normal preparation promotes locals with `mem2reg`. Full variable debug keeps
+//! stack slots and skips optional transforms; the required library proof uses
+//! those slots at the same preparation boundary.
 //!
 //! # GPU Target Selection
 //!
@@ -39,7 +40,8 @@
 
 use cuda_oxide_codegen::__private::{
     BackendOptions, DeviceBackend, ModuleArtifactKind, ModulePipelineRequest, OutputFiles,
-    PipelineTrace, append_to_module, compile_translated_module, verify_operation,
+    PipelineTrace, PreparedModuleStage, append_to_module, prepare_translated_module,
+    verify_operation,
 };
 pub use cuda_oxide_codegen::__private::{
     DeviceArchHint, DeviceExternAttrs, DeviceExternDecl, PipelineError,
@@ -57,8 +59,8 @@ use pliron::printable::Printable;
 use pliron::r#type::Typed;
 use rustc_public::mir::mono::Instance;
 use rustc_public::ty::Ty;
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 fn stderr_pipeline_trace(message: &str) {
     eprintln!("{message}");
@@ -83,6 +85,10 @@ pub struct CollectedFunction {
     pub is_kernel: bool,
     /// The name to export in PTX. For kernels, this is the user-visible name.
     pub export_name: String,
+    /// Original source identity used by the retained library analyses.
+    pub library_source: Option<dialect_mir::library::LibraryFunctionSourceAttr>,
+    /// Authenticated classes in original kernel argument order.
+    pub library_root_arguments: Vec<dialect_mir::library::LibraryRootArgumentClass>,
     /// rustc MIR source-scope data used to build inlined debug scopes.
     pub debug_source_scopes: Option<llvm_export::ops::DebugSourceScopeMap>,
     /// rustc's statement-level debug assignments, aligned with stable MIR.
@@ -181,9 +187,12 @@ pub struct CompilationResult {
     pub allow_fma_contraction: bool,
     /// Per-kernel source launch bounds preserved for post-link diagnostics.
     pub kernel_launch_bounds: BTreeMap<String, KernelLaunchBounds>,
+    /// Finalized resource requirements, keyed by concrete exported kernel name.
+    pub kernel_launch_facts: BTreeMap<String, oxide_artifacts::KernelLaunchFacts>,
 }
 
 /// Configuration for the compilation pipeline.
+#[derive(Clone)]
 pub struct PipelineConfig {
     /// Directory for output files (`.ll`, `.ptx`).
     pub output_dir: std::path::PathBuf,
@@ -459,6 +468,21 @@ fn backend_options_for(config: &PipelineConfig) -> BackendOptions {
     backend_options
 }
 
+/// Select single-block-cluster semantics only for a known pre-sm90 target.
+/// Invalid inputs are still diagnosed by the shared backend validator.
+fn cluster_query_fallback_target(options: &BackendOptions) -> Option<String> {
+    if let Some(target) = &options.target_arch {
+        let target = cuda_oxide_codegen::experimental::Target::parse(target).ok()?;
+        return (target.capability() < 90).then(|| target.sm());
+    }
+    match &options.device_arch_hint {
+        Some(DeviceArchHint::Valid(arch)) if arch.as_ref().capability() < 90 => {
+            Some(arch.as_ref().sm())
+        }
+        _ => None,
+    }
+}
+
 /// Runs the full compilation pipeline on collected functions.
 ///
 /// # Pipeline Steps
@@ -501,6 +525,517 @@ pub fn run_pipeline(
     config: &PipelineConfig,
     known_defs: crate::translator::facts::KnownDefs,
 ) -> Result<CompilationResult, PipelineError> {
+    import_pipeline_with_libraries(
+        functions,
+        device_externs,
+        config,
+        known_defs,
+        BTreeMap::new(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        Default::default(),
+    )?
+    .finish()
+}
+
+/// An imported module and the configuration captured for its compilation.
+///
+/// The returned state retains no rustc-facing identities. Preparation borrows
+/// this owner and takes its completion data once; the paused stage never owns
+/// references into itself.
+#[doc(hidden)]
+#[must_use = "finish the imported module to emit its artifact"]
+pub struct ImportedModule {
+    ctx: Context,
+    module_op_ptr: pliron::context::Ptr<Operation>,
+    config: PipelineConfig,
+    backend_options: BackendOptions,
+    device_externs: Vec<DeviceExternDecl>,
+    expected_kernels: Vec<String>,
+    legaliser: Legaliser,
+    symbols: BTreeMap<String, String>,
+    marker_exports: BTreeMap<String, String>,
+    source_targets: BTreeMap<crate::LibraryCallSite, BTreeSet<String>>,
+    callback_sources: crate::LibraryCallbackSources,
+    outputs: ImportOutputs,
+    completion: Option<ImportCompletion>,
+}
+
+struct ImportOutputs {
+    llvm_ir: PathBuf,
+    ptx: PathBuf,
+    cubin: PathBuf,
+    stale: Vec<PathBuf>,
+}
+
+struct ImportCompletion {
+    kernel_names: Vec<String>,
+    kernel_launch_bounds: BTreeMap<String, KernelLaunchBounds>,
+    library_roots: BTreeMap<String, oxide_artifacts::KernelLaunchFacts>,
+}
+
+/// An imported module paused at the mandatory library-analysis boundary.
+///
+/// Normal builds have promoted locals; Full debug keeps the original slots.
+/// The importer owner must outlive this consuming stage. Its saved ordinary
+/// resource constraints survive preparation even when operations are removed.
+#[doc(hidden)]
+#[must_use = "finish the prepared import to emit its artifact"]
+pub struct PreparedImport<'a> {
+    stage: PreparedModuleStage<'a, 'a>,
+    config: &'a PipelineConfig,
+    outputs: &'a ImportOutputs,
+    completion: ImportCompletion,
+    ordinary: crate::kernel_resources::OrdinaryResources,
+    legaliser: &'a mut Legaliser,
+    symbols: BTreeMap<String, String>,
+    marker_exports: BTreeMap<String, String>,
+    source_targets: BTreeMap<crate::LibraryCallSite, BTreeSet<String>>,
+    callback_sources: crate::LibraryCallbackSources,
+    original_roles: BTreeMap<crate::LibraryCallSite, dialect_mir::library::LibraryRoleAttr>,
+    library_rooted_functions: BTreeMap<String, BTreeSet<String>>,
+    library_validation: Option<mir_transforms::library::Validation>,
+    callback_symbols: BTreeMap<String, String>,
+    libraries_bound: bool,
+    library_calls: BTreeMap<crate::LibraryCallSite, crate::LibraryCallPlan>,
+    library_externs: Vec<DeviceExternDecl>,
+}
+
+impl ImportedModule {
+    /// Prepare this module once, preserving the ordinary resource constraints.
+    pub fn prepare(&mut self) -> Result<PreparedImport<'_>, PipelineError> {
+        let completion = self.completion.take().ok_or_else(|| {
+            PipelineError::Translation("this imported module was already prepared".into())
+        })?;
+        let ordinary = crate::kernel_resources::capture_ordinary(
+            &self.ctx,
+            self.module_op_ptr,
+            completion.kernel_names.clone(),
+        )
+        .map_err(PipelineError::Translation)?;
+        let original_roles = mir_transforms::library::capture_library_roles(
+            self.module_op_ptr,
+            &self.ctx,
+            &self.symbols,
+        )
+        .map_err(|error| PipelineError::Translation(error.disp(&self.ctx).to_string()))?;
+        let request = ModulePipelineRequest::for_rust_pipeline(
+            &self.device_externs,
+            self.config.emit_nvvm_ir,
+            &self.backend_options,
+            self.config.debug_kind,
+            match &self.config.device_backend {
+                DeviceBackend::Native => None,
+                DeviceBackend::CutlassMlir(config) => Some(config),
+            },
+            &self.expected_kernels,
+            OutputFiles {
+                llvm_ir: &self.outputs.llvm_ir,
+                ptx: &self.outputs.ptx,
+                cubin: &self.outputs.cubin,
+                mlir: self.config.mlir_output.as_deref(),
+                stale_before_export: &self.outputs.stale,
+            },
+            PipelineTrace {
+                verbose: self.config.verbose,
+                dump_mir: self.config.show_mir_dialect,
+                dump_llvm: self.config.show_llvm_dialect,
+                sink: Some(stderr_pipeline_trace),
+            },
+        );
+        let stage = prepare_translated_module(&mut self.ctx, self.module_op_ptr, &request)?;
+        Ok(PreparedImport {
+            stage,
+            config: &self.config,
+            outputs: &self.outputs,
+            completion,
+            ordinary,
+            legaliser: &mut self.legaliser,
+            symbols: std::mem::take(&mut self.symbols),
+            marker_exports: std::mem::take(&mut self.marker_exports),
+            source_targets: std::mem::take(&mut self.source_targets),
+            callback_sources: std::mem::take(&mut self.callback_sources),
+            callback_symbols: BTreeMap::new(),
+            original_roles,
+            library_rooted_functions: BTreeMap::new(),
+            library_validation: None,
+            libraries_bound: false,
+            library_calls: BTreeMap::new(),
+            library_externs: Vec::new(),
+        })
+    }
+
+    /// Prepare, lower library operations and emit the captured compilation.
+    pub fn finish(mut self) -> Result<CompilationResult, PipelineError> {
+        self.prepare()?.finish()
+    }
+}
+
+impl PreparedImport<'_> {
+    /// Admit source-root geometry before native provider or layout work.
+    pub fn admit_library_geometry(
+        &mut self,
+        rooted_functions: &BTreeMap<String, BTreeSet<String>>,
+    ) -> Result<BTreeMap<String, [u32; 3]>, PipelineError> {
+        let (ctx, module, _) = self.stage.ir();
+        mir_transforms::library::admit_library_roots(
+            module,
+            ctx,
+            rooted_functions,
+            &self.symbols,
+            &self.original_roles,
+        )
+        .map_err(|error| PipelineError::Translation(error.disp(ctx).to_string()))
+    }
+
+    /// Prove the prepared library program before executing its native provider.
+    pub fn validate_libraries(
+        &mut self,
+        rooted_functions: &BTreeMap<String, BTreeSet<String>>,
+    ) -> Result<BTreeMap<String, [u32; 3]>, PipelineError> {
+        if self.library_validation.is_some() || self.libraries_bound {
+            return Err(PipelineError::Translation(
+                "this prepared import already has its library proof".into(),
+            ));
+        }
+        let shapes = self.admit_library_geometry(rooted_functions)?;
+        let (ctx, module, analyses) = self.stage.ir();
+        let callback_symbols = mir_transforms::library::admit_library_callbacks(
+            module,
+            ctx,
+            &self.callback_sources,
+            &self.symbols,
+        )
+        .map_err(PipelineError::Translation)?;
+        let retained = callback_symbols.values().cloned().collect::<Vec<_>>();
+        let module_op = Operation::get_op::<pliron::builtin::ops::ModuleOp>(module, ctx)
+            .expect("imported module");
+        llvm_export::export::retain_functions(ctx, &module_op, &retained);
+        self.callback_symbols = callback_symbols
+            .into_iter()
+            .map(|(identity, symbol)| {
+                (
+                    identity,
+                    llvm_export::export::exported_function_name(&symbol),
+                )
+            })
+            .collect();
+        let validation = mir_transforms::library::analyze_libraries(
+            module,
+            ctx,
+            analyses,
+            rooted_functions,
+            &self.symbols,
+            &self.original_roles,
+            &shapes,
+            &self.callback_sources.checked_environments,
+            None,
+        )
+        .map_err(|error| PipelineError::Translation(error.disp(ctx).to_string()))?;
+        self.library_rooted_functions = rooted_functions.clone();
+        self.library_validation = Some(validation);
+        Ok(shapes)
+    }
+
+    /// Actual emitted thunk names available only after callback admission.
+    pub fn callback_symbols(&self) -> &BTreeMap<String, String> {
+        &self.callback_symbols
+    }
+
+    /// Join provider layouts with the proof, then bind the final shared plan.
+    pub fn finish_library_planning(
+        &mut self,
+        native_plans: &mir_transforms::library::RootedNativePlans,
+        externs: Vec<DeviceExternDecl>,
+        roots: BTreeMap<String, oxide_artifacts::KernelLaunchFacts>,
+    ) -> Result<(), PipelineError> {
+        let validation = self.library_validation.take().ok_or_else(|| {
+            PipelineError::Translation("native library planning requires its source proof".into())
+        })?;
+        let mut plans =
+            mir_transforms::library::allocate_library_storage(&validation, native_plans)
+                .map_err(PipelineError::Translation)?;
+        let (ctx, module, analyses) = self.stage.ir();
+        mir_transforms::library::analyze_libraries(
+            module,
+            ctx,
+            analyses,
+            &self.library_rooted_functions,
+            &self.symbols,
+            &self.original_roles,
+            &validation.shapes,
+            &self.callback_sources.checked_environments,
+            Some(&mut plans),
+        )
+        .map_err(|error| PipelineError::Translation(error.disp(ctx).to_string()))?;
+        let assembly = mir_transforms::library::assemble_library_plans(
+            module,
+            ctx,
+            &self.library_rooted_functions,
+            &self.source_targets,
+            &validation,
+            &plans,
+            native_plans,
+            roots,
+        )
+        .map_err(PipelineError::Translation)?;
+        self.bind_libraries(
+            assembly.contexts,
+            assembly.calls,
+            assembly.redirects,
+            externs,
+            assembly.roots,
+        )
+    }
+
+    /// Bind the actual provider/layout result and materialize its helper contexts.
+    /// Source names and physical symbols remain distinct throughout this step.
+    fn bind_libraries(
+        &mut self,
+        contexts: BTreeMap<String, String>,
+        mut calls: BTreeMap<crate::LibraryCallSite, crate::LibraryCallPlan>,
+        redirects: crate::CallTargetRedirects,
+        externs: Vec<DeviceExternDecl>,
+        roots: BTreeMap<String, oxide_artifacts::KernelLaunchFacts>,
+    ) -> Result<(), PipelineError> {
+        if self.libraries_bound {
+            return Err(PipelineError::Translation(
+                "this prepared import already has its library plan".into(),
+            ));
+        }
+        for name in contexts.keys() {
+            self.symbols
+                .entry(name.clone())
+                .or_insert_with(|| self.legaliser.legalise(name).to_string());
+        }
+        // Resource tags use the physical module names. Source sites and
+        // authenticated redirect identities keep their raw-name conventions.
+        for call in calls.values_mut() {
+            if let Some(root) = &mut call.planned_root {
+                *root = self.symbols.get(root).cloned().ok_or_else(|| {
+                    PipelineError::Translation("planned root has no imported symbol".into())
+                })?;
+            }
+        }
+        let physical_contexts = contexts
+            .iter()
+            .map(|(emitted, source)| {
+                let emitted = self.symbols.get(emitted).cloned();
+                let source = self.symbols.get(source).cloned();
+                match (emitted, source) {
+                    (Some(emitted), Some(source)) => Ok((emitted, source)),
+                    _ => Err(PipelineError::Translation(
+                        "library context has no imported source symbol".into(),
+                    )),
+                }
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        let materialize = !contexts.is_empty()
+            || !redirects.is_empty()
+            || calls
+                .values()
+                .any(|plan| plan.operation == crate::LibraryOperation::Redirect);
+        if materialize {
+            let raw_names: BTreeMap<_, _> = self
+                .symbols
+                .iter()
+                .map(|(raw, symbol)| (symbol.clone(), raw.clone()))
+                .collect();
+            crate::kernel_resources::bind_ordinary_contexts(
+                &mut self.ordinary,
+                &physical_contexts,
+                |site, caller, callee| {
+                    let raw_caller = raw_names
+                        .get(caller)
+                        .ok_or("saved resource caller has no original name")?;
+                    mir_transforms::library::resolve_library_call_target(
+                        site,
+                        raw_caller,
+                        callee,
+                        &self.symbols,
+                        &self.source_targets,
+                        &self.marker_exports,
+                        &calls,
+                        &redirects,
+                    )
+                },
+            )
+            .map_err(PipelineError::Translation)?;
+        }
+        crate::kernel_resources::validate_ordinary_compatibility(&self.ordinary, &calls)
+            .map_err(PipelineError::Translation)?;
+        let (ctx, module, analyses) = self.stage.ir();
+        if materialize {
+            mir_transforms::library::materialize_library_contexts(
+                module,
+                ctx,
+                analyses,
+                &contexts,
+                &self.symbols,
+                &self.source_targets,
+                &self.marker_exports,
+                &calls,
+                &redirects,
+            )
+            .map_err(|error| PipelineError::Translation(error.disp(ctx).to_string()))?;
+        }
+        let physical_roots = roots
+            .into_iter()
+            .map(|(root, facts)| {
+                self.symbols
+                    .get(&root)
+                    .cloned()
+                    .map(|symbol| (symbol, facts))
+                    .ok_or_else(|| {
+                        PipelineError::Translation("library root has no imported symbol".into())
+                    })
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        let functions: Vec<_> = module
+            .deref(ctx)
+            .regions()
+            .flat_map(|region| {
+                region
+                    .deref(ctx)
+                    .iter(ctx)
+                    .flat_map(|block| block.deref(ctx).iter(ctx))
+            })
+            .filter_map(|op| dialect_mir::ops::MirFuncOp::wrap(ctx, op))
+            .collect();
+        for function in functions {
+            let op = function.get_operation();
+            let symbol = function.get_symbol_name(ctx).to_string();
+            if let Some(plan) = physical_roots.get(&symbol) {
+                crate::kernel_resources::apply_library_block(ctx, op, plan)
+                    .map_err(PipelineError::Translation)?;
+            }
+            if self.config.debug_kind.variables_enabled() {
+                // The clone keeps static identities and source scopes. Only
+                // the containing emitted function's linkage identity changes.
+                attach_debug_global_variables(ctx, op, &self.config.debug_global_variables);
+            }
+        }
+        self.library_calls = calls;
+        self.library_externs = externs;
+        self.completion.library_roots = physical_roots;
+        self.libraries_bound = true;
+        Ok(())
+    }
+
+    /// Lower the validated library plan and finalize resources exactly once.
+    pub fn finish(self) -> Result<CompilationResult, PipelineError> {
+        if !self.libraries_bound
+            && self.original_roles.values().any(|role| {
+                !matches!(
+                    role,
+                    dialect_mir::library::LibraryRoleAttr::WarpGroupIndex { .. }
+                        | dialect_mir::library::LibraryRoleAttr::WarpPrefixMember { .. }
+                        | dialect_mir::library::LibraryRoleAttr::SyncWarp { .. }
+                )
+            })
+        {
+            return Err(PipelineError::Translation(
+                "native library operations require a finalized library plan".into(),
+            ));
+        }
+        if !self.libraries_bound {
+            // Direct callers have no native plan to bind. Library callers
+            // validate the same saved ordinary facts during binding.
+            crate::kernel_resources::validate_ordinary_compatibility(
+                &self.ordinary,
+                &self.library_calls,
+            )
+            .map_err(PipelineError::Translation)?;
+        }
+        let Self {
+            stage,
+            config,
+            outputs,
+            completion,
+            ordinary,
+            library_calls,
+            library_externs,
+            ..
+        } = self;
+        let mut stage = stage.bind_device_externs(library_externs)?;
+        let (ctx, module, analyses) = stage.ir();
+        mir_transforms::library::lower_planned_library_operations(
+            module,
+            ctx,
+            analyses,
+            &library_calls,
+        )
+        .map_err(|error| PipelineError::Translation(error.disp(ctx).to_string()))?;
+        let kernel_launch_facts = crate::kernel_resources::complete_planned(
+            ctx,
+            module,
+            ordinary,
+            &completion.library_roots,
+        )
+        .map_err(PipelineError::Translation)?;
+        // Resource relocation changes MIR addresses and root attributes.
+        let mut invalidated = pliron::pass::PassResult::default();
+        invalidated.ir_changed = pliron::irbuild::IRStatus::Changed;
+        analyses.retain_preserved(&invalidated);
+        let generated = stage.finish()?;
+        let artifact_kind = match generated.artifact_kind {
+            ModuleArtifactKind::NvvmIr => {
+                write_nvvm_compile_options_sidecar(
+                    &config.output_dir,
+                    &config.output_name,
+                    config.allow_fma_contraction,
+                    config.debug_kind,
+                )?;
+                // The target is the completion record for the options sidecar.
+                write_nvvm_target_sidecar(
+                    &config.output_dir,
+                    &config.output_name,
+                    &generated.target,
+                )?;
+                CompilationArtifactKind::NvvmIr
+            }
+            ModuleArtifactKind::Ptx => CompilationArtifactKind::Ptx,
+            ModuleArtifactKind::Cubin => CompilationArtifactKind::Cubin,
+        };
+        Ok(CompilationResult {
+            artifact_path: match generated.artifact_kind {
+                ModuleArtifactKind::NvvmIr => outputs.llvm_ir.clone(),
+                ModuleArtifactKind::Ptx => outputs.ptx.clone(),
+                ModuleArtifactKind::Cubin => outputs.cubin.clone(),
+            },
+            artifact_kind,
+            ll_path: outputs.llvm_ir.clone(),
+            ptx_path: outputs.ptx.clone(),
+            target: generated.target,
+            allow_fma_contraction: config.allow_fma_contraction,
+            kernel_launch_bounds: completion.kernel_launch_bounds,
+            kernel_launch_facts,
+        })
+    }
+}
+
+/// Import and verify functions without starting resource finalization or codegen.
+///
+/// Rustc identities are used only during import. The returned module owns its
+/// context and snapshots configuration, authenticated typed operations and
+/// original call identities. Provider plans are bound after the prepared-MIR proof.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn import_pipeline_with_libraries(
+    functions: &[CollectedFunction],
+    device_externs: &[DeviceExternDecl],
+    config: &PipelineConfig,
+    known_defs: crate::translator::facts::KnownDefs,
+    library_semantics: BTreeMap<crate::LibraryCallSite, crate::LibraryCallMetadata>,
+    source_targets: BTreeMap<crate::LibraryCallSite, BTreeSet<String>>,
+    selected_call_targets: BTreeMap<
+        crate::LibraryCallSite,
+        dialect_mir::library::LibraryCallTargetAttr,
+    >,
+    callback_sources: crate::LibraryCallbackSources,
+) -> Result<ImportedModule, PipelineError> {
+    crate::library::set_semantics(library_semantics);
+    crate::library::set_selected_call_targets(selected_call_targets);
     // Install the driver-resolved lang-item ids and emitted-function identities
     // for this run. Replace (rather than merge) both thread-local sets so
     // stale state from a previous run on this thread cannot survive.
@@ -513,6 +1048,10 @@ pub fn run_pipeline(
     );
 
     prepare_output_dir(&config.output_dir)?;
+
+    let mut backend_options = backend_options_for(config);
+    let cluster_query_target = cluster_query_fallback_target(&backend_options);
+    let mut used_cluster_query_fallback = false;
 
     let mut ctx = Context::new();
 
@@ -529,6 +1068,8 @@ pub fn run_pipeline(
     let module_op_ptr = module.get_operation();
 
     let mut legaliser = Legaliser::default();
+    let mut symbols = BTreeMap::new();
+    let mut marker_exports = BTreeMap::new();
     let mut kernel_launch_bounds = BTreeMap::new();
     let mut expected_kernels = Vec::new();
 
@@ -551,7 +1092,32 @@ pub fn run_pipeline(
             .body()
             .ok_or_else(|| PipelineError::NoBody(func.export_name.clone()))?;
 
-        let func_op_ptr = crate::translator::body::translate_body(
+        if let Some(source) = &func.library_source {
+            if source.export != func.export_name || source.mangled != func.instance.mangled_name() {
+                return Err(PipelineError::Translation(format!(
+                    "{}: library source identity does not match the imported function",
+                    func.export_name
+                )));
+            }
+            let expected_arguments = if func.is_kernel {
+                body.arg_locals().len()
+            } else {
+                0
+            };
+            if func.library_root_arguments.len() != expected_arguments {
+                return Err(PipelineError::Translation(format!(
+                    "{}: library argument classes do not match the imported root arguments",
+                    func.export_name
+                )));
+            }
+        } else if !func.library_root_arguments.is_empty() {
+            return Err(PipelineError::Translation(format!(
+                "{}: library argument classes require their source identity",
+                func.export_name
+            )));
+        }
+
+        let (func_op_ptr, used_fallback) = crate::translator::body::translate_body(
             &mut ctx,
             &body,
             &func.instance,
@@ -564,11 +1130,28 @@ pub fn run_pipeline(
             config.debug_kind,
             func.debug_source_scopes.as_ref(),
             func.statement_debug_info.as_ref(),
+            cluster_query_target.is_some(),
         )
         .map_err(|e| {
             // Use .disp(&ctx) for rich error formatting with location and backtrace
             PipelineError::Translation(format!("{}: {}", func.export_name, e.disp(&ctx)))
         })?;
+        used_cluster_query_fallback |= used_fallback;
+
+        let imported_function = Operation::get_op::<dialect_mir::ops::MirFuncOp>(func_op_ptr, &ctx)
+            .expect("body translation produces a MIR function");
+        if let Some(source) = &func.library_source {
+            imported_function.set_library_function_source(&mut ctx, source.clone());
+        }
+        for (index, &class) in func.library_root_arguments.iter().enumerate() {
+            imported_function.set_library_root_argument(&mut ctx, index, class);
+        }
+
+        symbols.insert(
+            func.export_name.clone(),
+            legaliser.legalise(&func.export_name).to_string(),
+        );
+        marker_exports.insert(func.instance.mangled_name(), func.export_name.clone());
 
         if config.debug_kind.variables_enabled() {
             attach_debug_global_variables(&mut ctx, func_op_ptr, &config.debug_global_variables);
@@ -601,83 +1184,61 @@ pub fn run_pipeline(
         append_to_module(&ctx, module_op_ptr, func_op_ptr);
     }
 
-    let ll_path = config.output_dir.join(format!("{}.ll", config.output_name));
-    let ptx_path = config
-        .output_dir
-        .join(format!("{}.ptx", config.output_name));
-    let cubin_path = config
-        .output_dir
-        .join(format!("{}.cubin", config.output_name));
-    let stale_artifacts = stale_compilation_artifact_paths(&config.output_dir, &config.output_name);
-
-    let backend_options = backend_options_for(config);
-
-    let request = ModulePipelineRequest::for_rust_pipeline(
-        device_externs,
-        config.emit_nvvm_ir,
-        &backend_options,
-        config.debug_kind,
-        match &config.device_backend {
-            DeviceBackend::Native => None,
-            DeviceBackend::CutlassMlir(config) => Some(config),
-        },
-        &expected_kernels,
-        OutputFiles {
-            llvm_ir: &ll_path,
-            ptx: &ptx_path,
-            cubin: &cubin_path,
-            mlir: config.mlir_output.as_deref(),
-            stale_before_export: &stale_artifacts,
-        },
-        PipelineTrace {
-            verbose: config.verbose,
-            dump_mir: config.show_mir_dialect,
-            dump_llvm: config.show_llvm_dialect,
-            sink: Some(stderr_pipeline_trace),
-        },
+    // Ordinary Rust calls cross from shared-address-space values to generic
+    // pointer parameters. Use the imported callee's real signature, retaining
+    // all unsupported mismatches for the normal module verifier.
+    crate::translator::terminator::helpers::normalize_internal_shared_pointer_arguments(
+        &mut ctx,
+        module_op_ptr,
     );
-    let generated = compile_translated_module(&mut ctx, module_op_ptr, &request)?;
-
-    match generated.artifact_kind {
-        ModuleArtifactKind::NvvmIr => {
-            write_nvvm_compile_options_sidecar(
-                &config.output_dir,
-                &config.output_name,
-                config.allow_fma_contraction,
-                config.debug_kind,
-            )?;
-            // Publish the target last: its version marker is the completion record
-            // that says the sibling options file is required.
-            write_nvvm_target_sidecar(&config.output_dir, &config.output_name, &generated.target)?;
-            Ok(CompilationResult {
-                artifact_path: ll_path.clone(),
-                artifact_kind: CompilationArtifactKind::NvvmIr,
-                ll_path,
-                ptx_path,
-                target: generated.target,
-                allow_fma_contraction: config.allow_fma_contraction,
-                kernel_launch_bounds,
-            })
-        }
-        ModuleArtifactKind::Ptx => Ok(CompilationResult {
-            artifact_path: ptx_path.clone(),
-            artifact_kind: CompilationArtifactKind::Ptx,
-            ll_path,
-            ptx_path,
-            target: generated.target,
-            allow_fma_contraction: config.allow_fma_contraction,
-            kernel_launch_bounds,
-        }),
-        ModuleArtifactKind::Cubin => Ok(CompilationResult {
-            artifact_path: cubin_path,
-            artifact_kind: CompilationArtifactKind::Cubin,
-            ll_path,
-            ptx_path,
-            target: generated.target,
-            allow_fma_contraction: config.allow_fma_contraction,
-            kernel_launch_bounds,
-        }),
+    for declaration in device_externs {
+        symbols.insert(
+            declaration.export_name.clone(),
+            legaliser.legalise(&declaration.export_name).to_string(),
+        );
     }
+
+    // Cluster fallback has already selected a target-dependent implementation.
+    // Pin its advisory target before preparing the module.
+    if used_cluster_query_fallback && backend_options.target_arch.is_none() {
+        backend_options.target_arch = cluster_query_target;
+        backend_options.target_arch_source =
+            "the device hint, pinned by pre-sm90 cluster query fallback";
+    }
+    let outputs = ImportOutputs {
+        llvm_ir: config.output_dir.join(format!("{}.ll", config.output_name)),
+        ptx: config
+            .output_dir
+            .join(format!("{}.ptx", config.output_name)),
+        cubin: config
+            .output_dir
+            .join(format!("{}.cubin", config.output_name)),
+        stale: stale_compilation_artifact_paths(&config.output_dir, &config.output_name),
+    };
+    let kernel_names = functions
+        .iter()
+        .filter(|function| function.is_kernel)
+        .map(|function| symbols[&function.export_name].clone())
+        .collect();
+    Ok(ImportedModule {
+        ctx,
+        module_op_ptr,
+        config: config.clone(),
+        backend_options,
+        device_externs: device_externs.to_vec(),
+        expected_kernels,
+        legaliser,
+        symbols,
+        marker_exports,
+        source_targets,
+        callback_sources,
+        outputs,
+        completion: Some(ImportCompletion {
+            kernel_names,
+            kernel_launch_bounds,
+            library_roots: BTreeMap::new(),
+        }),
+    })
 }
 
 fn launch_bounds_from_mir_func(
@@ -770,7 +1331,9 @@ fn write_nvvm_compile_options_sidecar(
     })
 }
 
-fn stale_compilation_artifact_paths(
+/// Paths the pipeline may remove or replace when compiling one module.
+/// Callers can preflight these before compilation to protect external inputs.
+pub fn stale_compilation_artifact_paths(
     output_dir: &Path,
     output_name: &str,
 ) -> Vec<std::path::PathBuf> {
@@ -795,6 +1358,558 @@ mod tests {
     use super::*;
     use llvm_export::ops::DebugLocalTypeKind;
     use std::fs;
+
+    #[test]
+    fn cluster_query_fallback_requires_a_known_pre90_target() {
+        for (explicit, hint, expected) in [
+            (None, None, None),
+            (None, Some("sm_80"), Some("sm_80")),
+            (None, Some("sm_120"), None),
+            (None, Some("invalid"), None),
+            (Some("sm_80"), Some("sm_120"), Some("sm_80")),
+            (Some("sm_120"), Some("sm_80"), None),
+            (Some("invalid"), Some("sm_80"), None),
+        ] {
+            let mut options = BackendOptions::default();
+            options.target_arch = explicit.map(str::to_owned);
+            options.device_arch_hint = hint.map(|hint| DeviceArchHint::parse(hint.to_owned()));
+            assert_eq!(
+                cluster_query_fallback_target(&options).as_deref(),
+                expected,
+                "explicit={explicit:?}, hint={hint:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn genuine_warp_queries_and_sync_finish_without_native_plans() {
+        use dialect_mir::library::LibraryRoleAttr;
+        use dialect_mir::ops::{MirCallOp, MirFuncOp, MirLibraryOp};
+        use pliron::common_traits::Verify;
+        use rustc_public::{CrateDef, mir};
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_warp_query_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        // A real external definition exercises the module/DefId lookup; the
+        // same-spelled local function must remain an ordinary Rust call.
+        let dependency = root.join("device.rs");
+        fs::write(&dependency, r#"
+pub mod library {
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_warp_group_index<const WIDTH:usize>() -> u32 { WIDTH as u32 }
+    #[inline(never)] pub unsafe fn cuda_oxide_library_v1_246e25db_checked_warp_sync<const WIDTH:u32>() {}
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_warp_prefix_member<const WIDTH:usize>() -> u8 { 1 }
+}
+"#).unwrap();
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let output = std::process::Command::new(&rustc)
+            .args([
+                "--edition=2024",
+                "--crate-type=rlib",
+                "--crate-name=cuda_device",
+                "--emit=metadata",
+            ])
+            .arg("--out-dir")
+            .arg(&root)
+            .arg(&dependency)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let fixture = root.join("query.rs");
+        fs::write(&fixture, r#"
+extern crate cuda_device;
+#[inline(never)] pub fn cuda_oxide_library_v1_246e25db_warp_group_index<const WIDTH:usize>() -> u32 { 77 }
+pub fn query() -> u32 { cuda_device::library::cuda_oxide_library_v1_246e25db_warp_group_index::<8>() }
+pub fn invalid_width() -> u32 { cuda_device::library::cuda_oxide_library_v1_246e25db_warp_group_index::<3>() }
+pub fn lookalike() -> u32 { cuda_oxide_library_v1_246e25db_warp_group_index::<8>() }
+#[inline(never)] pub unsafe fn cuda_oxide_library_v1_246e25db_checked_warp_sync<const WIDTH:u32>() {}
+pub fn sync() { unsafe { cuda_device::library::cuda_oxide_library_v1_246e25db_checked_warp_sync::<8>() } }
+pub fn invalid_sync() { unsafe { cuda_device::library::cuda_oxide_library_v1_246e25db_checked_warp_sync::<3>() } }
+pub fn sync_lookalike() { unsafe { cuda_oxide_library_v1_246e25db_checked_warp_sync::<8>() } }
+#[inline(never)] pub fn cuda_oxide_library_v1_246e25db_warp_prefix_member<const WIDTH:usize>() -> u8 { 1 }
+pub fn prefix() -> u8 { cuda_device::library::cuda_oxide_library_v1_246e25db_warp_prefix_member::<17>() }
+pub fn invalid_prefix() -> u8 { cuda_device::library::cuda_oxide_library_v1_246e25db_warp_prefix_member::<16>() }
+pub fn prefix_lookalike() -> u8 { cuda_oxide_library_v1_246e25db_warp_prefix_member::<17>() }
+"#).unwrap();
+        let sysroot = std::process::Command::new(&rustc)
+            .args(["--print", "sysroot"])
+            .output()
+            .unwrap();
+        assert!(sysroot.status.success());
+        let args = vec![
+            "rustc".to_string(),
+            "--edition=2024".into(),
+            "--crate-type=rlib".into(),
+            "--crate-name=query_fixture".into(),
+            "--emit=metadata".into(),
+            "-Zmir-opt-level=0".into(),
+            format!(
+                "--extern=cuda_device={}",
+                root.join("libcuda_device.rmeta").display()
+            ),
+            format!("--out-dir={}", root.display()),
+            format!(
+                "--sysroot={}",
+                String::from_utf8(sysroot.stdout).unwrap().trim()
+            ),
+            fixture.display().to_string(),
+        ];
+        let output_dir = root.join("output");
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                rustc_public::run!(&args, || {
+                    let collected = |name: &str| {
+                        let item = rustc_public::all_local_items()
+                            .into_iter()
+                            .find(|i| i.name() == format!("query_fixture::{name}"))
+                            .unwrap();
+                        let instance = Instance::try_from(item).unwrap();
+                        let body = instance.body().unwrap();
+                        CollectedFunction {
+                            instance,
+                            rustc_mir_block_count: body.blocks.len(),
+                            rustc_mono_successors: body
+                                .blocks
+                                .iter()
+                                .map(|b| b.terminator.successors())
+                                .collect(),
+                            is_kernel: false,
+                            export_name: name.into(),
+                            library_source: None,
+                            library_root_arguments: Vec::new(),
+                            debug_source_scopes: None,
+                            statement_debug_info: None,
+                            inline: None,
+                        }
+                    };
+                    let config = PipelineConfig {
+                        output_dir,
+                        output_name: "query".into(),
+                        verbose: false,
+                        emit_nvvm_ir: true,
+                        target_arch: Some("sm_100".into()),
+                        ..PipelineConfig::default()
+                    };
+                    let import = |function, config: &PipelineConfig| {
+                        import_pipeline_with_libraries(
+                            &[function],
+                            &[],
+                            config,
+                            Default::default(),
+                            Default::default(),
+                            Default::default(),
+                            Default::default(),
+                            Default::default(),
+                        )
+                    };
+                    for (name, diagnostic) in [
+                        ("invalid_width", "warp group index width"),
+                        ("invalid_sync", "warp synchronization width"),
+                        (
+                            "invalid_prefix",
+                            "Warp prefix query requires a width in 17..=31",
+                        ),
+                    ] {
+                        let invalid = import(collected(name), &config)
+                            .err()
+                            .expect("invalid genuine width rejected");
+                        assert!(invalid.to_string().contains(diagnostic), "{invalid}");
+                    }
+                    for name in ["lookalike", "sync_lookalike", "prefix_lookalike"] {
+                        let fake = import(collected(name), &config).unwrap();
+                        let mut fake_calls = 0;
+                        for block in fake
+                            .module_op_ptr
+                            .deref(&fake.ctx)
+                            .get_region(0)
+                            .deref(&fake.ctx)
+                            .iter(&fake.ctx)
+                        {
+                            for op in block.deref(&fake.ctx).iter(&fake.ctx) {
+                                if Operation::get_op::<MirFuncOp>(op, &fake.ctx).is_none() {
+                                    continue;
+                                }
+                                for block in op
+                                    .deref(&fake.ctx)
+                                    .get_region(0)
+                                    .deref(&fake.ctx)
+                                    .iter(&fake.ctx)
+                                {
+                                    for op in block.deref(&fake.ctx).iter(&fake.ctx) {
+                                        assert!(
+                                            Operation::get_op::<MirLibraryOp>(op, &fake.ctx)
+                                                .is_none()
+                                        );
+                                        fake_calls += usize::from(
+                                            Operation::get_op::<MirCallOp>(op, &fake.ctx).is_some(),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        assert_eq!(fake_calls, 1, "same spelling gains no query/sync authority");
+                    }
+                    for (name, role, results) in [
+                        ("query", LibraryRoleAttr::WarpGroupIndex { width: 8 }, 1),
+                        ("sync", LibraryRoleAttr::SyncWarp { width: 8 }, 0),
+                        ("prefix", LibraryRoleAttr::WarpPrefixMember { width: 17 }, 1),
+                    ] {
+                        for debug in [DebugKind::Off, DebugKind::Full] {
+                            for bind_empty in [false, true] {
+                                let function = collected(name);
+                                let body = function.instance.body().unwrap();
+                                let site = body
+                                    .blocks
+                                    .iter()
+                                    .position(|b| {
+                                        matches!(
+                                            b.terminator.kind,
+                                            mir::TerminatorKind::Call { .. }
+                                        )
+                                    })
+                                    .unwrap();
+                                let mut config = config.clone();
+                                config.debug_kind = debug;
+                                let mut imported = import(function, &config).unwrap();
+                                let mut prepared = imported.prepare().unwrap();
+                                assert_eq!(prepared.original_roles.len(), 1);
+                                assert_eq!(
+                                    prepared.original_roles.get(&crate::LibraryCallSite {
+                                        caller: name.into(),
+                                        block: site
+                                    }),
+                                    Some(&role)
+                                );
+                                let (ctx, module, _) = prepared.stage.ir();
+                                let mut queries = 0;
+                                for block in module.deref(ctx).get_region(0).deref(ctx).iter(ctx) {
+                                    for op in block.deref(ctx).iter(ctx) {
+                                        if Operation::get_op::<MirFuncOp>(op, ctx).is_none() {
+                                            continue;
+                                        }
+                                        for block in
+                                            op.deref(ctx).get_region(0).deref(ctx).iter(ctx)
+                                        {
+                                            for op in block.deref(ctx).iter(ctx) {
+                                                if let Some(query) =
+                                                    Operation::get_op::<MirLibraryOp>(op, ctx)
+                                                {
+                                                    query.verify(ctx).unwrap();
+                                                    queries += 1;
+                                                    assert_eq!(op.deref(ctx).get_num_operands(), 0);
+                                                    assert_eq!(
+                                                        op.deref(ctx).get_num_results(),
+                                                        results
+                                                    );
+                                                    assert!(
+                                                        query
+                                                            .get_attr_library_signature(ctx)
+                                                            .is_none()
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                assert_eq!(
+                                    queries, 1,
+                                    "query/sync survives actual Normal/Full preparation"
+                                );
+                                if bind_empty {
+                                    let roots = BTreeMap::from([(
+                                        name.into(),
+                                        BTreeSet::from([name.into()]),
+                                    )]);
+                                    assert!(
+                                        prepared.validate_libraries(&roots).unwrap().is_empty()
+                                    );
+                                    prepared
+                                        .finish_library_planning(
+                                            &BTreeMap::new(),
+                                            Vec::new(),
+                                            BTreeMap::new(),
+                                        )
+                                        .unwrap();
+                                }
+                                let result = prepared.finish().unwrap();
+                                let llvm = fs::read_to_string(result.ll_path).unwrap();
+                                if name == "prefix" {
+                                    assert!(
+                                        llvm.contains("call i32 @llvm.nvvm.read.ptx.sreg.laneid()"),
+                                        "{llvm}"
+                                    );
+                                    assert!(llvm.contains("icmp ult i32"), "{llvm}");
+                                    assert!(llvm.contains("zext i1"), "{llvm}");
+                                    assert!(!llvm.contains("warp_prefix_member"), "{llvm}");
+                                } else if results == 1 {
+                                    for register in ["tid.x", "tid.y", "tid.z", "ntid.x", "ntid.y"]
+                                    {
+                                        assert!(
+                                            llvm.contains(&format!(
+                                                "call i32 @llvm.nvvm.read.ptx.sreg.{register}()"
+                                            )),
+                                            "{llvm}"
+                                        );
+                                    }
+                                    assert!(llvm.contains("udiv i32"), "{llvm}");
+                                    assert!(!llvm.contains(
+                                        "call i32 @cuda_oxide_library_v1_246e25db_warp_group_index"
+                                    ));
+                                } else {
+                                    assert_eq!(
+                                        llvm.matches("call void @llvm.nvvm.bar.warp.sync").count(),
+                                        1,
+                                        "{llvm}"
+                                    );
+                                    assert!(
+                                        llvm.contains("call i32 @llvm.nvvm.read.ptx.sreg.laneid()"),
+                                        "{llvm}"
+                                    );
+                                    assert!(!llvm.contains("checked_warp_sync"), "{llvm}");
+                                }
+                            }
+                        }
+                    }
+                    std::ops::ControlFlow::<(), _>::Continue(())
+                })
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+            .expect("query fixture compiles");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cluster_query_lowering_preserves_target_selection_and_raw_floors() {
+        const CHILD: &str = "CUDA_OXIDE_TEST_CLUSTER_QUERY_PIPELINE";
+        if std::env::var_os(CHILD).is_none() {
+            // Hint-only cases must not inherit an explicit target. Keep
+            // environment changes out of the parallel test process.
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "pipeline::tests::cluster_query_lowering_preserves_target_selection_and_raw_floors",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env_remove("CUDA_OXIDE_TARGET")
+                .env_remove("CUDA_OXIDE_DEVICE_ARCH")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_cluster_queries_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let fixture = root.join("queries.rs");
+        // These non-inlined placeholders reproduce the defining paths at the
+        // importer boundary. Their bodies are not collected: actual dispatch
+        // must replace each call, never execute the sentinel value.
+        fs::write(
+            &fixture,
+            r#"
+#![allow(dead_code, non_snake_case)]
+macro_rules! queries {
+    ($($name:ident),*) => {$(
+        #[inline(never)] pub fn $name() -> u32 { 99 }
+    )*};
+}
+mod cluster {
+    queries!(cluster_ctaidX, cluster_ctaidY, cluster_ctaidZ,
+             cluster_nctaidX, cluster_nctaidY, cluster_nctaidZ,
+             __cluster_idxX, __cluster_idxY, __cluster_idxZ,
+             __cluster_grid_dimX, __cluster_grid_dimY, __cluster_grid_dimZ);
+}
+mod warp {
+    #[inline(never)] pub fn elect_sync(_: u32) -> (u32, bool) { (99, false) }
+}
+mod __cuda_oxide_intrinsic_abi_v1 { queries!(i0266); }
+fn compatibility() -> (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) {
+    use cluster::*;
+    (cluster_ctaidX(), cluster_ctaidY(), cluster_ctaidZ(),
+     cluster_nctaidX(), cluster_nctaidY(), cluster_nctaidZ(),
+     __cluster_idxX(), __cluster_idxY(), __cluster_idxZ(),
+     __cluster_grid_dimX(), __cluster_grid_dimY(), __cluster_grid_dimZ())
+}
+fn compatibility_and_elect() -> (u32, u32) {
+    (cluster::cluster_nctaidX(), warp::elect_sync(u32::MAX).0)
+}
+fn elect_only() -> u32 { warp::elect_sync(u32::MAX).0 }
+fn raw() -> u32 { __cuda_oxide_intrinsic_abi_v1::i0266() }
+"#,
+        )
+        .unwrap();
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let sysroot = std::process::Command::new(rustc)
+            .args(["--print", "sysroot"])
+            .output()
+            .unwrap();
+        assert!(sysroot.status.success());
+        let sysroot = String::from_utf8(sysroot.stdout).unwrap();
+
+        for crate_name in ["cuda_device", "cuda_intrinsics"] {
+            let args = vec![
+                "rustc".to_string(),
+                "--edition=2024".to_string(),
+                "--crate-type=rlib".to_string(),
+                format!("--crate-name={crate_name}"),
+                "--emit=metadata".to_string(),
+                "-Zmir-opt-level=0".to_string(),
+                format!("--out-dir={}", root.display()),
+                format!("--sysroot={}", sysroot.trim()),
+                fixture.display().to_string(),
+            ];
+            let output_dir = root.join(crate_name);
+            std::thread::Builder::new()
+                .stack_size(64 * 1024 * 1024)
+                .spawn(move || {
+                    rustc_public::run!(&args, || {
+                        use rustc_public::CrateDef as _;
+
+                        let compile = |name: &str, target: Option<&str>, hint: Option<&str>| {
+                            let item = rustc_public::all_local_items()
+                                .into_iter()
+                                .find(|item| item.name() == format!("{crate_name}::{name}"))
+                                .expect("fixture entry");
+                            let instance = Instance::try_from(item).unwrap();
+                            let body = instance.body().unwrap();
+                            let function = CollectedFunction {
+                                instance,
+                                rustc_mir_block_count: body.blocks.len(),
+                                // These monomorphic, branch-free fixtures have
+                                // no specialization-dependent dead successors.
+                                rustc_mono_successors: body
+                                    .blocks
+                                    .iter()
+                                    .map(|block| block.terminator.successors())
+                                    .collect(),
+                                is_kernel: false,
+                                export_name: name.to_string(),
+                                library_source: None,
+                                library_root_arguments: Vec::new(),
+                                debug_source_scopes: None,
+                                statement_debug_info: None,
+                                inline: None,
+                            };
+                            let config = PipelineConfig {
+                                output_dir: output_dir.clone(),
+                                output_name: name.to_string(),
+                                verbose: false,
+                                emit_nvvm_ir: true,
+                                target_arch: target.map(str::to_string),
+                                device_arch_hint: hint
+                                    .map(|hint| DeviceArchHint::parse(hint.to_string())),
+                                ..PipelineConfig::default()
+                            };
+                            run_pipeline(&[function], &[], &config, Default::default())
+                                .map(|result| {
+                                    (result.target, fs::read_to_string(result.ll_path).unwrap())
+                                })
+                                .map_err(|error| error.to_string())
+                        };
+                        if crate_name == "cuda_device" {
+                            for (target, hint) in
+                                [(Some("sm_80"), Some("sm_120")), (None, Some("sm_80"))]
+                            {
+                                let (target, ir) = compile("compatibility", target, hint).unwrap();
+                                assert_eq!(target, "sm_80");
+                                for (register_index, register) in
+                                    ["ctaid", "nctaid"].iter().enumerate()
+                                {
+                                    for (axis_index, axis) in ["x", "y", "z"].iter().enumerate() {
+                                        let instruction = format!(
+                                            "call i32 @llvm.nvvm.read.ptx.sreg.{register}.{axis}()"
+                                        );
+                                        let value = ir
+                                            .lines()
+                                            .find_map(|line| {
+                                                line.contains(&instruction).then(|| {
+                                                    line.trim().split_once(" = ").unwrap().0
+                                                })
+                                            })
+                                            .expect("compatibility register read");
+                                        let slot = 6 + register_index * 3 + axis_index;
+                                        assert!(
+                                            ir.lines().any(|line| {
+                                                line.contains("insertvalue")
+                                                    && line
+                                                        .contains(&format!("i32 {value}, {slot}"))
+                                            }),
+                                            "{ir}"
+                                        );
+                                    }
+                                }
+                                assert!(!ir.contains("sreg.cluster"));
+                                assert!(!ir.contains("sreg.ncluster"));
+                                for index in 0..6 {
+                                    let value = u32::from(index >= 3);
+                                    assert!(
+                                        ir.lines().any(|line| {
+                                            line.contains("insertvalue")
+                                                && line.contains(&format!("i32 {value}, {index}"))
+                                        }),
+                                        "{ir}"
+                                    );
+                                }
+                            }
+                            let error = compile("compatibility_and_elect", None, Some("sm_80"))
+                                .expect_err("used fallback must pin the advisory hint");
+                            assert!(error.contains("sm_80") && error.contains("Sm90"), "{error}");
+                            let (target, _) = compile("elect_only", None, Some("sm_80")).unwrap();
+                            assert_eq!(target, "sm_90", "unused fallback must not pin the hint");
+                            let (target, ir) = compile("compatibility", None, None).unwrap();
+                            assert_eq!(target, "sm_90");
+                            assert!(
+                                ir.contains("call i32 @llvm.nvvm.read.ptx.sreg.cluster.nctaid.x()")
+                            );
+                        } else {
+                            let error = compile("raw", Some("sm_80"), None)
+                                .expect_err("raw intrinsics retain their native target floor");
+                            assert!(
+                                error.contains("v1:i0266") && error.contains("sm_90"),
+                                "{error}"
+                            );
+                            let (target, ir) = compile("raw", Some("sm_120"), None).unwrap();
+                            assert_eq!(target, "sm_120");
+                            assert!(
+                                ir.contains("call i32 @llvm.nvvm.read.ptx.sreg.cluster.nctaid.x()")
+                            );
+                        }
+                        std::ops::ControlFlow::<(), ()>::Continue(())
+                    })
+                })
+                .unwrap()
+                .join()
+                .unwrap()
+                .expect("in-process fixture compilation succeeds");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn test_pipeline_config_default_values() {
@@ -1426,6 +2541,81 @@ fn adversarial_export_name() -> u64 {
         );
 
         fs::remove_dir_all(&root).expect("clean up temp output dir");
+    }
+
+    #[test]
+    fn paused_import_owns_emission_settings_and_externs() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_paused_import_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        let mut config = PipelineConfig {
+            output_dir: root.clone(),
+            output_name: "captured".to_string(),
+            verbose: false,
+            emit_nvvm_ir: true,
+            target_arch: Some("sm_86".to_string()),
+            allow_fma_contraction: false,
+            ..PipelineConfig::default()
+        };
+        let mut externs = vec![DeviceExternDecl {
+            export_name: "captured_extern".to_string(),
+            param_types: vec![],
+            return_type: DeviceExternType::Void,
+            attrs: DeviceExternAttrs::default(),
+        }];
+        let first = import_pipeline_with_libraries(
+            &[],
+            &externs,
+            &config,
+            Default::default(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Default::default(),
+        )
+        .unwrap();
+        verify_operation(&first.ctx, first.module_op_ptr, "paused import").unwrap();
+        assert!(!root.join("captured.ll").exists());
+
+        // A second import replaces the importer thread-local state. Neither it
+        // nor later caller changes may alter the first module's emission.
+        config.output_name = "later".to_string();
+        config.target_arch = Some("sm_80".to_string());
+        config.allow_fma_contraction = true;
+        externs.clear();
+        let later = run_pipeline(&[], &externs, &config, Default::default()).unwrap();
+        drop(config);
+        drop(externs);
+        let captured = first.finish().unwrap();
+
+        assert_eq!(later.target, "sm_80");
+        assert_eq!(captured.target, "sm_86");
+        assert_eq!(captured.ll_path, root.join("captured.ll"));
+        assert_eq!(captured.artifact_kind, CompilationArtifactKind::NvvmIr);
+        assert!(!captured.allow_fma_contraction);
+        assert!(
+            fs::read_to_string(&captured.ll_path)
+                .unwrap()
+                .contains("declare void @captured_extern()")
+        );
+        assert!(
+            !fs::read_to_string(&later.ll_path)
+                .unwrap()
+                .contains("captured_extern")
+        );
+        let options = fs::read_to_string(root.join("captured.options")).unwrap();
+        assert!(
+            !oxide_artifacts::ArtifactCompileOptions::from_sidecar_text(&options)
+                .unwrap()
+                .fma_contraction_enabled()
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

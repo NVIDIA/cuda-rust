@@ -127,7 +127,7 @@ pub mod __private {
     #[doc(hidden)]
     pub use crate::pipeline::{
         ModuleArtifactKind, ModulePipelineOutput, ModulePipelineRequest, OutputFiles,
-        PipelineTrace, compile_translated_module,
+        PipelineTrace, PreparedModuleStage, compile_translated_module, prepare_translated_module,
     };
     #[doc(hidden)]
     pub use crate::verify::verify_operation;

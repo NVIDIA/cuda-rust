@@ -114,11 +114,9 @@ fn main() {
     // The device code is embedded in this binary, so there is no loose `.ptx`
     // to locate or keep in step.
     //
-    // `kernels` is generic, and a generic module's generated loader merges the
-    // PTX bundles of every crate in the build instead of selecting one by name
-    // (it discards the crate-name hint outright). That merge is what makes the
-    // specializations below resolvable at all: they are monomorphized here, in
-    // the binary, from kernels declared in kernel-lib.
+    // These specializations belong to the consuming binary. Generic loading
+    // merges its PTX bundles or loads the sole complete materialized artifact,
+    // then resolves each exact specialization name in that one CUDA module.
     let module = kernels::load(&ctx).expect("Failed to load embedded CUDA module");
 
     // Test data
@@ -300,7 +298,7 @@ fn main() {
     println!("\nThis demonstrates:");
     println!("  - Generic kernels can be defined in library crates");
     println!("  - They are monomorphized when used in the application");
-    println!("  - PTX is generated for all used instantiations");
+    println!("  - Device code is generated for all used instantiations");
     println!("  - Const values participate in cross-crate kernel identity");
     println!("  - Device helper functions from libraries also work");
 }

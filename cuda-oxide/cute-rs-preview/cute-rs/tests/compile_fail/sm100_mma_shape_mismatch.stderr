@@ -1,0 +1,11 @@
+error[E0080]: evaluation panicked: assertion failed: B0L::SHAPE.0 == (N0 / 2) as i64 && B0L::SHAPE.1 == K as i64
+ --> src/sm100/mma.rs
+  |
+  |         assert!(B0L::SHAPE.0 == (N0 / 2) as i64 && B0L::SHAPE.1 == K as i64);
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `cute_rs::Sm100TiledMma::<cute_rs::ComposedLayout<cute_rs::Swizzle<3, 3, 3>, 0, cute_rs::RowMajor<128, 64>>, cute_rs::ComposedLayout<cute_rs::Swizzle<3, 3, 3>, 0, cute_rs::RowMajor<80, 64>>, cute_rs::ComposedLayout<cute_rs::Swizzle<3, 3, 3>, 0, cute_rs::RowMajor<96, 64>>, 192, 160>::VALID` failed here
+
+note: erroneous constant encountered
+ --> src/sm100/mma.rs
+  |
+  |         let () = Self::VALID;
+  |                  ^^^^^^^^^^^

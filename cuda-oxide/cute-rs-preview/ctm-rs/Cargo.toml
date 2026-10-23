@@ -1,0 +1,23 @@
+[package]
+name = "ctm-rs"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Typed instruction-level CUDA primitives for cuda-oxide kernels"
+
+[dependencies]
+cuda-device = { workspace = true }
+cuda-core = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+
+[features]
+default = []
+# Host-side TMA descriptor encoding is kept out of kernel dependency graphs.
+host = ["dep:cuda-core", "dep:thiserror"]
+
+[dev-dependencies]
+# Kernel macro tests also emit host metadata when workspace features unify.
+cuda-host = { workspace = true }
+trybuild = "1"

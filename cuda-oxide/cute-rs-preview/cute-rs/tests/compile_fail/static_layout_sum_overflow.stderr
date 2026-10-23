@@ -1,0 +1,31 @@
+error[E0080]: evaluation panicked: static layout offset exceeds i64
+ --> src/static_layout.rs
+  |
+  |         checked_offset_add(Layout::<A, SA>::MAX_OFFSET, Layout::<B, SB>::MAX_OFFSET);
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `<cute_rs::Layout<(cute_rs::C<2>, cute_rs::C<2>), (cute_rs::C<i64::MAX>, cute_rs::C<1>)> as cute_rs::static_layout::StaticLayout>::MAX_OFFSET` failed inside this call
+  |
+note: inside `static_layout::checked_offset_add`
+ --> $RUST/core/src/panic.rs
+  |
+  |           $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
+  |
+ ::: src/static_layout.rs
+  |
+  | /     assert!(
+  | |         result as u128 <= i64::MAX as u128,
+  | |         "static layout offset exceeds i64"
+  | |     );
+  | |_____- in this macro invocation
+
+note: erroneous constant encountered
+ --> src/static_layout.rs
+  |
+  |         let _ = Self::MAX_OFFSET;
+  |                 ^^^^^^^^^^^^^^^^
+
+note: erroneous constant encountered
+  --> tests/compile_fail/static_layout_sum_overflow.rs:10:18
+   |
+10 | const _: usize = Invalid::SIZE;
+   |                  ^^^^^^^^^^^^^

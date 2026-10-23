@@ -161,17 +161,17 @@ cargo oxide update
 
 From `cuda-oxide/`, `cargo oxide` works out of the box via a workspace alias.
 
-For use outside the repo (your own projects), install it with the pinned nightly toolchain:
+For use outside the repo (your own projects), install it with the pinned toolchain:
 
 ```bash
-cargo +nightly-2026-10-11 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
+cargo +1.99.1 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
 ```
 
 On first run, `cargo-oxide` will automatically fetch and build the codegen backend.
 
 #### Nix (alternative)
 
-If you have Nix with flakes enabled, `nix develop` from `cuda-oxide/` gives you a reproducible shell with CUDA 13, LLVM 22, Clang, and the pinned Rust nightly — no manual apt installs. The shellHook auto-discovers host NVIDIA drivers on NixOS and non-NixOS systems.
+If you have Nix with flakes enabled, `nix develop` from `cuda-oxide/` gives you a reproducible shell with CUDA 13, LLVM 22, Clang, and the pinned Rust toolchain - no manual apt installs. The shellHook auto-discovers host NVIDIA drivers on NixOS and non-NixOS systems.
 
 ```bash
 # From the repository root:
@@ -187,8 +187,8 @@ nix run 'github:NVIDIA/cuda-rust?dir=cuda-oxide#new' -- my-project
 ```bash
 # Toolchain installed automatically via rust-toolchain.toml
 # Manual install if needed:
-rustup toolchain install nightly-2026-10-11
-rustup component add rust-src rustc-dev rust-analyzer clippy rustfmt llvm-tools --toolchain nightly-2026-10-11
+rustup toolchain install 1.99.1
+rustup component add rust-src rustc-dev rust-analyzer clippy rustfmt llvm-tools --toolchain 1.99.1
 ```
 
 #### CUDA

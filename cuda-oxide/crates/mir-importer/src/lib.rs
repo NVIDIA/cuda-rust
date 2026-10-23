@@ -86,6 +86,7 @@ extern crate rustc_middle;
 extern crate rustc_public;
 extern crate rustc_public_bridge;
 extern crate rustc_span;
+extern crate rustc_target;
 
 /// Value used for every rustc `Operand::RuntimeChecks` query in device MIR.
 ///

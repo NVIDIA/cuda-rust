@@ -33,6 +33,7 @@
 set -euo pipefail
 
 export LC_ALL=C
+export RUSTC_BOOTSTRAP=1
 
 cd "$(dirname "$0")/.."
 

@@ -392,6 +392,46 @@ fn detect_contract_block_config(
     Ok(detected)
 }
 
+/// Read the same exact root shape used by kernel translation, before library
+/// specialization. Validate the internal/public MIR bridge before scanning.
+pub fn kernel_exact_block(
+    instance: &mono::Instance,
+    block_count: usize,
+    successors: &[Vec<usize>],
+) -> Result<Option<[u32; 3]>, String> {
+    let body = instance.body().ok_or("kernel has no MIR body")?;
+    validate_monomorphized_successors(&body, block_count, successors)?;
+    let reachable = compute_reachable_blocks(&body, successors);
+    Ok(detect_contract_block_config(&body, &reachable)?.map(|shape| [shape.x, shape.y, shape.z]))
+}
+
+/// Device CFG for checked collectives, using exactly the importer's unwind and
+/// bounds-check policies. Checked calls may not rely on elided bounds checks.
+pub fn checked_collective_successors(
+    body: &mir::Body,
+    block_count: usize,
+    successors: &[Vec<usize>],
+) -> Result<Vec<Vec<usize>>, String> {
+    validate_monomorphized_successors(body, block_count, successors)?;
+    let reachable = compute_reachable_blocks(body, successors);
+    if detect_unchecked_indexing_config(body, &reachable)? || unchecked_indexing_env_enabled() {
+        return Err("checked block collectives do not support unchecked indexing; retain runtime bounds checks".into());
+    }
+    Ok(body
+        .blocks
+        .iter()
+        .zip(successors)
+        .map(|(block, exact)| {
+            let normal = non_unwind_successors(block);
+            exact
+                .iter()
+                .copied()
+                .filter(|target| normal.contains(target))
+                .collect()
+        })
+        .collect())
+}
+
 /// Rejects an exact block shape that needs more threads than
 /// `#[launch_bounds]` allows.
 ///
@@ -525,6 +565,27 @@ fn detect_dynamic_shared_alignment(
         return Some(DynamicSharedAlignment { bytes });
     }
     None
+}
+
+fn has_inferred_dynamic_shared(
+    body: &mir::Body,
+    reachable: &std::collections::BTreeSet<usize>,
+) -> bool {
+    reachable.iter().any(|&index| {
+        let mir::TerminatorKind::Call {
+            func: mir::Operand::Constant(constant),
+            ..
+        } = &body.blocks[index].terminator.kind
+        else {
+            return false;
+        };
+        let TyKind::RigidTy(RigidTy::FnDef(def_id, _)) = constant.const_.ty().kind() else {
+            return false;
+        };
+        def_id.krate().name.as_str() == "cuda_device"
+            && (def_id.name() == "__dynamic_shared_inferred"
+                || def_id.name().ends_with("::__dynamic_shared_inferred"))
+    })
 }
 
 /// Return the non-unwind successors of a block's terminator.
@@ -1883,6 +1944,10 @@ fn emit_entry_allocas(
 /// * `inline` - The `#[inline]` request, recorded as [`InlineIntentAttr`] on
 ///   non-kernel functions (`set_inline_intent_attr`)
 /// * `override_name` - Custom export name (defaults to instance name)
+/// * `pre90_cluster_queries` - Use single-block-cluster query semantics
+///
+/// Returns the function operation and whether it used a pre-sm90 cluster
+/// query fallback. The caller must preserve that target choice.
 pub fn translate_body(
     ctx: &mut Context,
     body: &mir::Body,
@@ -1896,7 +1961,8 @@ pub fn translate_body(
     debug_kind: DebugKind,
     debug_source_scopes: Option<&DebugSourceScopeMap>,
     statement_debug_info: Option<&StatementDebugInfoMap>,
-) -> TranslationResult<Ptr<Operation>> {
+    pre90_cluster_queries: bool,
+) -> TranslationResult<(Ptr<Operation>, bool)> {
     if let Some(statement_debug_info) = statement_debug_info {
         if statement_debug_info.blocks.len() != body.blocks.len() {
             return input_err_noloc!(TranslationErr::invalid_op(format!(
@@ -1935,6 +2001,7 @@ pub fn translate_body(
     let num_locals = body.locals().len();
     let mut value_map = ValueMap::new(num_locals);
     value_map.set_debug_variables(debug_kind.variables_enabled());
+    value_map.pre90_cluster_queries = pre90_cluster_queries;
 
     // Resolve the per-body unchecked-indexing policy. Like the dynamic-shared
     // marker, the `#[kernel(unchecked_indexing)]` marker is scanned on any
@@ -2114,6 +2181,7 @@ pub fn translate_body(
 
     // Create MirFuncOp and set the function type attribute and symbol name
     let mir_func_op = MirFuncOp::new(ctx, op_ptr, func_type_attr);
+    mir_func_op.set_library_unchecked_indexing(ctx, unchecked_indexing);
 
     let name_str = if let Some(name) = override_name {
         name.to_string()
@@ -2348,6 +2416,22 @@ pub fn translate_body(
         }
     }
 
+    if has_inferred_dynamic_shared(body, &reachable) {
+        use pliron::builtin::{
+            attributes::IntegerAttr,
+            types::{IntegerType, Signedness},
+        };
+        use pliron::utils::apint::APInt;
+        let ty = IntegerType::get(ctx, 32, Signedness::Unsigned);
+        mir_func_op.get_operation().deref_mut(ctx).attributes.set(
+            crate::kernel_resources::INFERRED_SHARED.try_into().unwrap(),
+            IntegerAttr::new(
+                ty,
+                APInt::from_u32(1, std::num::NonZeroUsize::new(32).unwrap()),
+            ),
+        );
+    }
+
     // Attribute macros may run before `#[kernel]`. Generic expansion forwards
     // that marker to the entry but also keeps the original in its helper, so
     // record markers on any function. mir-lower treats every marked local
@@ -2468,7 +2552,10 @@ pub fn translate_body(
             ctx,
             body,
             mir_block,
-            idx,
+            crate::LibraryCallSite {
+                caller: name_str.clone(),
+                block: idx,
+            },
             block_ptr,
             &mut value_map,
             &block_map,
@@ -2498,7 +2585,7 @@ pub fn translate_body(
         }
     }
 
-    Ok(op_ptr)
+    Ok((op_ptr, value_map.used_cluster_query_fallback))
 }
 
 /// Choose the debugger-visible spelling independently of a function's symbol.

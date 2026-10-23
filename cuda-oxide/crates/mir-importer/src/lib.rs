@@ -95,6 +95,7 @@ extern crate rustc_target;
 pub const DEVICE_RUNTIME_CHECKS_VALUE: bool = false;
 
 pub mod error;
+mod kernel_resources;
 pub mod pipeline;
 // Crate-internal: every caller reaches the translator through `pipeline`, and
 // the handful of predicates outsiders need are re-exported below. Keeping the
@@ -114,4 +115,18 @@ pub use pipeline::{
 pub use translator::cute::is_cute_compiler_hook_path;
 pub use translator::facts::KnownDefs;
 pub use translator::terminator::drop_glue::{drop_glue_is_noop, drop_instance_is_noop};
-pub use translator::terminator::is_panic_entry_path;
+pub use translator::terminator::{is_dropped_panic_call, is_panic_entry_path};
+
+mod library;
+pub use dialect_mir::library::{
+    LibraryAccess, LibraryCallKind, LibraryCallTargetAttr, LibraryCallbackCall,
+    LibraryCallbackDefinition, LibraryCallbackDispatch, LibraryCallbackFunction,
+    LibraryCallbackSources, LibraryFunctionSourceAttr, LibraryNativeMetadata, LibraryOperation,
+    LibraryReserveLayout, LibraryRoleAttr, LibraryRootArgumentClass, LibraryScalar,
+    LibraryStorageArg, LibraryStoragePolicy, LibraryWitness, NativeSpec,
+};
+pub use library::{CallTargetRedirects, LibraryCallMetadata, LibraryCallPlan, LibraryCallSite};
+pub use pipeline::{ImportedModule, PreparedImport, import_pipeline_with_libraries};
+pub use translator::body::{checked_collective_successors, kernel_exact_block};
+
+pub use mir_transforms::library::RootedNativePlans;

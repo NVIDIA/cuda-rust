@@ -219,6 +219,293 @@ pub(crate) fn validate_grid_constant_marker_owner(
     })
 }
 
+// Source facts consumed by the prepared library checker. These are nominal
+// identity/signature questions only; no participation or alias proof runs here.
+use rustc_middle::ty::{Instance, Ty, TyCtxt, TyKind, TypingEnv};
+use rustc_span::def_id::{CRATE_DEF_INDEX, DefId};
+
+fn library_device_type(tcx: TyCtxt<'_>, module_name: &str, name: &str) -> Option<DefId> {
+    for &krate in tcx.crates(()) {
+        if tcx.crate_name(krate).as_str() != "cuda_device" {
+            continue;
+        }
+        let root = DefId {
+            krate,
+            index: CRATE_DEF_INDEX,
+        };
+        let module = tcx
+            .module_children(root)
+            .iter()
+            .find(|item| item.ident.name.as_str() == module_name)?
+            .res
+            .opt_def_id()?;
+        return tcx
+            .module_children(module)
+            .iter()
+            .find(|item| item.ident.name.as_str() == name)
+            .and_then(|item| item.res.opt_def_id());
+    }
+    None
+}
+
+fn library_dynamic_shared_getter<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> bool {
+    let Some(name) = tcx.opt_item_name(instance.def_id()) else {
+        return false;
+    };
+    if !matches!(name.as_str(), "get" | "get_raw" | "get_fixed" | "offset") {
+        return false;
+    }
+    let Some(implementation) = tcx.impl_of_assoc(instance.def_id()) else {
+        return false;
+    };
+    if tcx.impl_is_of_trait(implementation) {
+        return false;
+    }
+    let owner = tcx.normalize_erasing_regions(
+        TypingEnv::fully_monomorphized(),
+        tcx.type_of(implementation).instantiate(tcx, instance.args),
+    );
+    let TyKind::Adt(def, args) = owner.kind() else {
+        return false;
+    };
+    if Some(def.did()) != library_device_type(tcx, "shared", "DynamicSharedArray") {
+        return false;
+    }
+    let signature = tcx
+        .fn_sig(instance.def_id())
+        .instantiate(tcx, instance.args)
+        .skip_binder();
+    let inputs = signature.inputs();
+    let expected = if name.as_str() == "get_raw" {
+        tcx.types.u8
+    } else {
+        args.type_at(0)
+    };
+    !signature.c_variadic()
+        && (if name.as_str() == "offset" {
+            inputs == [tcx.types.usize]
+        } else {
+            inputs.is_empty()
+        })
+        && matches!(signature.output().kind(), TyKind::RawPtr(ty, rustc_middle::ty::Mutability::Mut) if *ty == expected)
+}
+
+/// Authenticate the independent query by its actual dependency definition and
+/// instantiated signature. Participation and value precision belong to MIR.
+pub(crate) fn library_warp_query_width(
+    public: rustc_public::mir::mono::Instance,
+) -> Option<Result<u32, &'static str>> {
+    use rustc_public::ty::{Abi, RigidTy, TyKind as PublicTyKind, UintTy};
+    rustc_middle::ty::tls::with(|tcx| {
+        let instance = rustc_public::rustc_internal::internal(tcx, public);
+        if Some(instance.def_id())
+            != library_device_type(
+                tcx,
+                "library",
+                reserved_oxide_symbols::LIBRARY_WARP_GROUP_INDEX_V1,
+            )
+        {
+            return None;
+        }
+        let Some(signature) = public.ty().kind().fn_sig() else {
+            return Some(Err(
+                "warp group index requires a resolved function signature",
+            ));
+        };
+        let signature = signature.skip_binder();
+        if signature.abi != Abi::Rust
+            || signature.c_variadic
+            || !signature.inputs().is_empty()
+            || !matches!(
+                signature.output().kind(),
+                PublicTyKind::RigidTy(RigidTy::Uint(UintTy::U32))
+            )
+        {
+            return Some(Err(
+                "warp group index requires a nullary Rust u32 signature",
+            ));
+        }
+        Some(
+            instance
+                .args
+                .const_at(0)
+                .try_to_target_usize(tcx)
+                .and_then(|width| u32::try_from(width).ok())
+                .filter(|width| *width > 0 && *width <= 32 && width.is_power_of_two())
+                .ok_or("warp group index width must be one of 1, 2, 4, 8, 16, 32"),
+        )
+    })
+}
+
+fn library_collective_carrier<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<(Ty<'tcx>, u64)> {
+    let TyKind::Adt(def, args) = ty.kind() else {
+        return None;
+    };
+    if Some(def.did()) != library_device_type(tcx, "disjoint", "DisjointSlice") {
+        return None;
+    }
+    let mut types = args.types();
+    let element = types.next()?;
+    let TyKind::Adt(space, args) = types.next()?.kind() else {
+        return None;
+    };
+    if Some(space.did()) != library_device_type(tcx, "disjoint", "CollectiveTiles") {
+        return None;
+    }
+    Some((element, args.const_at(0).try_to_target_usize(tcx)?))
+}
+
+fn library_resource_parameter<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    library_collective_carrier(tcx, ty).is_some()
+        || matches!(ty.kind(), TyKind::Ref(_, inner, rustc_middle::ty::Mutability::Not)
+            if matches!(inner.kind(), TyKind::Slice(_)))
+}
+
+/// Nominal source restriction for one indirect assignment prefix.
+pub(crate) fn library_contains_resource(ty: rustc_public::ty::Ty) -> bool {
+    use rustc_public::rustc_internal;
+    rustc_middle::ty::tls::with(|tcx| {
+        let mut pending = vec![rustc_internal::internal(tcx, ty)];
+        let mut visited = std::collections::HashSet::new();
+        while let Some(ty) = pending.pop() {
+            if !visited.insert(ty) {
+                continue;
+            }
+            if library_resource_parameter(tcx, ty)
+                || matches!(ty.kind(), TyKind::Adt(def, _) if ["StorageDescriptor", "StorageReservation"].iter().any(|name| Some(def.did()) == library_device_type(tcx, "library", name)))
+            {
+                return true;
+            }
+            match ty.kind() {
+                TyKind::Ref(_, inner, _)
+                | TyKind::RawPtr(inner, _)
+                | TyKind::Array(inner, _)
+                | TyKind::Slice(inner) => pending.push(*inner),
+                TyKind::Tuple(fields) => pending.extend(fields.iter()),
+                TyKind::Adt(def, args) => pending.extend(def.all_fields().map(|field| {
+                    tcx.normalize_erasing_regions(
+                        TypingEnv::fully_monomorphized(),
+                        field.ty(tcx, args),
+                    )
+                })),
+                TyKind::Closure(_, args) => pending.push(args.as_closure().tupled_upvars_ty()),
+                _ => {}
+            }
+        }
+        false
+    })
+}
+
+/// Classify only genuine source calls whose expansion would erase checker facts.
+pub(crate) fn library_source_effect(
+    func: &mir::Operand,
+    args: &[mir::Operand],
+    destination: &mir::Place,
+    body: &mir::Body,
+) -> Option<dialect_mir::library::LibrarySourceEffectKind> {
+    use dialect_mir::library::LibrarySourceEffectKind as Effect;
+    use rustc_public::{
+        rustc_internal,
+        ty::{RigidTy, TyKind as PublicTyKind},
+    };
+    let mir::Operand::Constant(constant) = func else {
+        return None;
+    };
+    let PublicTyKind::RigidTy(RigidTy::FnDef(def, substs)) = constant.const_.ty().kind() else {
+        return None;
+    };
+    let public = mir::mono::Instance::resolve(def, &substs).ok()?;
+    rustc_middle::ty::tls::with(|tcx| {
+        let instance = rustc_internal::internal(tcx, public);
+        let path = tcx.def_path_str(instance.def_id());
+        let krate = tcx.crate_name(instance.def_id().krate);
+        let name = path.rsplit("::").next().unwrap_or("");
+        // Stable libcore implements these integer operations through borrowed
+        // comparisons, unlike the equivalent integer_min/max intrinsics. Only
+        // the genuine default methods on by-value integers have this summary:
+        // a user Ord implementation may run arbitrary comparison/drop effects.
+        if krate.as_str() == "core"
+            && [rustc_span::sym::cmp_ord_min, rustc_span::sym::cmp_ord_max]
+                .into_iter()
+                .any(|item| tcx.get_diagnostic_item(item) == Some(instance.def_id()))
+            && args.len() == 2
+        {
+            let signature = tcx
+                .fn_sig(instance.def_id())
+                .instantiate(tcx, instance.args)
+                .skip_binder();
+            let output = signature.output();
+            if matches!(output.kind(), TyKind::Int(_) | TyKind::Uint(_))
+                && signature.inputs() == [output, output]
+                && !signature.c_variadic()
+                && args.iter().all(|arg| {
+                    arg.ty(body.locals())
+                        .is_ok_and(|ty| rustc_internal::internal(tcx, ty) == output)
+                })
+                && destination
+                    .ty(body.locals())
+                    .is_ok_and(|ty| rustc_internal::internal(tcx, ty) == output)
+            {
+                return Some(Effect::ScalarIntrinsic);
+            }
+        }
+        if krate.as_str() == "cuda_device"
+            && super::terminator::intrinsics::asm::InlinePtxCallKind::from_path(&path).is_some()
+        {
+            return Some(Effect::InlineAssembly);
+        }
+        if library_dynamic_shared_getter(tcx, instance) {
+            return Some(Effect::DynamicShared);
+        }
+        if (krate.as_str() == "cuda_device" && path.ends_with("::sync_threads"))
+            || (krate.as_str() == "cuda_intrinsics" && path.ends_with("::i0034"))
+        {
+            return Some(Effect::BlockSync);
+        }
+        let generated = &super::terminator::intrinsics::generated::is_generated_intrinsic_path;
+        let raw = &super::terminator::intrinsics::generated::is_raw_generated_intrinsic_path;
+        if (matches!(krate.as_str(), "cuda_device" | "cuda-device") && generated(&path))
+            || (krate.as_str() == "cuda_intrinsics" && raw(&path))
+        {
+            return Some(match name {
+                "blockDim_x" | "blockDim_y" | "blockDim_z" | "blockIdx_x" | "blockIdx_y"
+                | "blockIdx_z" | "gridDim_x" | "gridDim_y" | "gridDim_z" | "i0003" | "i0007"
+                | "i0011" | "i0002" | "i0006" | "i0010" | "i0004" | "i0008" | "i0012" => {
+                    Effect::BlockQuery
+                }
+                "threadIdx_x" | "threadIdx_y" | "threadIdx_z" | "i0001" | "i0005" | "i0009" => {
+                    Effect::LaneQuery
+                }
+                _ => Effect::UnsupportedIntrinsic,
+            });
+        }
+        if matches!(instance.def, rustc_middle::ty::InstanceKind::Intrinsic(_)) {
+            let unit = destination
+                .ty(body.locals())
+                .is_ok_and(|ty| rustc_internal::internal(tcx, ty).is_unit());
+            if name == "assert_inhabited"
+                && matches!(krate.as_str(), "core" | "std")
+                && args.is_empty()
+                && unit
+                && instance.args.len() == 1
+                && instance.args.types().next().is_some_and(|ty| {
+                    tcx.layout_of(TypingEnv::fully_monomorphized().as_query_input(ty))
+                        .is_ok_and(|layout| !layout.is_uninhabited())
+                })
+            {
+                return Some(Effect::UnitHint);
+            }
+            return Some(match name {
+                "integer_min" | "integer_max" | "unchecked_add" | "unchecked_sub"
+                | "unchecked_mul" => Effect::ScalarIntrinsic,
+                "arith_offset" => Effect::PointerOffset,
+                _ => Effect::UnsupportedIntrinsic,
+            });
+        }
+        None
+    })
+}
+
 // ============================================================================
 // Identity facts (crate-anchored; a miss falls through, never errors)
 // ============================================================================

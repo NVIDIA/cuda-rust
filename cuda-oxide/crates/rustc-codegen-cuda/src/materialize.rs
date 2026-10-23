@@ -27,10 +27,18 @@ pub(crate) const MATERIALIZER_HANDSHAKE_ENV: &str =
     reserved_oxide_symbols::MATERIALIZER_HANDSHAKE_ENV;
 pub(crate) const CODEGEN_FINGERPRINT_ENV: &str = reserved_oxide_symbols::CODEGEN_FINGERPRINT_ENV;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct MaterializationRequest {
     expected_provenance: [u8; 32],
     tool_identity_handshake: cuda_artifact_finalizer::MaterializerHandshakeV1,
+    external_inputs: Vec<(String, Vec<u8>)>,
+    library_inputs: Vec<(String, Vec<u8>)>,
+}
+
+impl MaterializationRequest {
+    pub(crate) fn add_library_inputs(&mut self, inputs: Vec<(String, Vec<u8>)>) {
+        self.library_inputs.extend(inputs);
+    }
 }
 
 /// Cubin bytes plus ptxas resource diagnostics from the final link.
@@ -92,14 +100,12 @@ pub(crate) enum MaterializeError {
     ProvenanceMismatch { expected: String, actual: String },
 
     #[error(
-        "build-time cubin materialization does not yet support generic #[cuda_module] loading because it merges PTX bundles across crates at run time"
-    )]
-    RequiresPtxBundleMerge,
-
-    #[error(
-        "build-time cubin materialization does not yet support #[device] extern declarations because their ordered external link inputs are not available to the backend"
+        "build-time cubin materialization of #[device] extern declarations requires their definitions; supply ordered --link-ltoir inputs"
     )]
     HasDeviceExterns,
+
+    #[error("invalid cargo-oxide external LTO-IR input list: {reason}")]
+    InvalidExternalInputs { reason: String },
 
     #[error(
         "build-time cubin materialization requires an NVVM IR or LTOIR artifact, but codegen produced PTX; use cargo-oxide so materialization can force NVVM IR emission"
@@ -147,10 +153,36 @@ pub(crate) fn request_from_env() -> Result<Option<MaterializationRequest>, Mater
         })?;
     validate_tool_identity_handshake(expected_provenance, &handshake)?;
     validate_codegen_fingerprint()?;
+    let external_inputs = external_inputs_from_env()?;
     Ok(Some(MaterializationRequest {
         expected_provenance,
         tool_identity_handshake: handshake,
+        external_inputs,
+        library_inputs: Vec::new(),
     }))
+}
+
+fn external_inputs_from_env() -> Result<Vec<(String, Vec<u8>)>, MaterializeError> {
+    let value = match std::env::var(reserved_oxide_symbols::EXTERNAL_LTOIR_ENV) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(MaterializeError::InvalidExternalInputs {
+                reason: error.to_string(),
+            });
+        }
+    };
+    let files: Vec<cuda_artifact_finalizer::LtoirFile> =
+        serde_json::from_str(&value).map_err(|error| MaterializeError::InvalidExternalInputs {
+            reason: error.to_string(),
+        })?;
+    files
+        .into_iter()
+        .map(|file| {
+            let bytes = file.read_verified()?;
+            Ok((file.name()?.to_owned(), bytes))
+        })
+        .collect()
 }
 
 fn validate_tool_identity_handshake(
@@ -174,18 +206,39 @@ fn validate_tool_identity_handshake(
 /// Reject artifact-loading models the finalizer cannot reproduce, before any
 /// CUDA compiler library is discovered or loaded.
 pub(crate) fn validate_collection(
-    request: Option<MaterializationRequest>,
+    request: Option<&MaterializationRequest>,
     has_device_externs: bool,
-    requires_ptx_bundle_merge: bool,
 ) -> Result<(), MaterializeError> {
-    if request.is_none() {
+    let Some(request) = request else {
         return Ok(());
-    }
-    if requires_ptx_bundle_merge {
-        return Err(MaterializeError::RequiresPtxBundleMerge);
-    }
-    if has_device_externs {
+    };
+    if has_device_externs && request.external_inputs.is_empty() && request.library_inputs.is_empty()
+    {
         return Err(MaterializeError::HasDeviceExterns);
+    }
+    Ok(())
+}
+
+/// Use the actual rustc crate name and configured output directory, including
+/// for Cargo passthrough builds whose working directory differs from the CLI's.
+pub(crate) fn validate_output_paths(
+    request: Option<&MaterializationRequest>,
+    output_dir: &std::path::Path,
+    output_name: &str,
+) -> Result<(), MaterializeError> {
+    let Some(request) = request else {
+        return Ok(());
+    };
+    let mut outputs =
+        mir_importer::pipeline::stale_compilation_artifact_paths(output_dir, output_name);
+    outputs.push(output_dir.join(format!(
+        "{output_name}.{}",
+        oxide_tile_export::DESCRIPTIONS_SUFFIX
+    )));
+    for (input, _) in &request.external_inputs {
+        for output in &outputs {
+            cuda_artifact_finalizer::check_ltoir_input_output(std::path::Path::new(input), output)?;
+        }
     }
     Ok(())
 }
@@ -199,8 +252,13 @@ pub(crate) fn nvvm_ir_to_cubin(
     debug_policy: DebugPolicy,
 ) -> Result<MaterializedCubin, MaterializeError> {
     let options = options(target, allow_fma_contraction, debug_policy)?;
-    let finalizer = checked_finalizer(request)?;
-    let report = finalizer.materialize_nvvm_ir_with_report(module_name, nvvm_ir, &options)?;
+    let finalizer = checked_finalizer(&request)?;
+    let ltoir = finalizer
+        .compiler()
+        .compile_nvvm_ir_to_ltoir(module_name, nvvm_ir, &options)?;
+    let name = format!("{module_name}.ltoir");
+    let inputs = link_inputs(&request, &name, &ltoir);
+    let report = finalizer.link_ltoir_with_report(&inputs, &options, FinalizerOutput::Cubin)?;
     Ok(MaterializedCubin {
         bytes: report.image,
         resource_usage: report.resource_usage,
@@ -216,16 +274,29 @@ pub(crate) fn ltoir_to_cubin(
     debug_policy: DebugPolicy,
 ) -> Result<MaterializedCubin, MaterializeError> {
     let options = options(target, allow_fma_contraction, debug_policy)?;
-    let finalizer = checked_finalizer(request)?;
-    let report = finalizer.link_ltoir_with_report(
-        &[NamedInput::new(module_name, ltoir)],
-        &options,
-        FinalizerOutput::Cubin,
-    )?;
+    let finalizer = checked_finalizer(&request)?;
+    let inputs = link_inputs(&request, module_name, ltoir);
+    let report = finalizer.link_ltoir_with_report(&inputs, &options, FinalizerOutput::Cubin)?;
     Ok(MaterializedCubin {
         bytes: report.image,
         resource_usage: report.resource_usage,
     })
+}
+
+fn link_inputs<'a>(
+    request: &'a MaterializationRequest,
+    name: &'a str,
+    bytes: &'a [u8],
+) -> Vec<NamedInput<'a>> {
+    std::iter::once(NamedInput::new(name, bytes))
+        .chain(
+            request
+                .external_inputs
+                .iter()
+                .chain(&request.library_inputs)
+                .map(|(name, bytes)| NamedInput::new(name, bytes)),
+        )
+        .collect()
 }
 
 fn options(
@@ -239,7 +310,7 @@ fn options(
         .with_debug_policy(debug_policy))
 }
 
-fn checked_finalizer(request: MaterializationRequest) -> Result<Finalizer, MaterializeError> {
+fn checked_finalizer(request: &MaterializationRequest) -> Result<Finalizer, MaterializeError> {
     let finalizer = Finalizer::discover_with_handshake(&request.tool_identity_handshake)?;
     let actual = finalizer
         .provenance_digest()
@@ -385,21 +456,58 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_collection_models_fail_without_tools() {
+    fn output_overlap_uses_the_actual_crate_and_output_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "oxide-materialize-overlap-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let input = root.join("custom_target.ll");
+        std::fs::write(&input, b"external input").unwrap();
         let handshake = test_handshake();
-        let request = Some(MaterializationRequest {
+        let request = MaterializationRequest {
             expected_provenance: handshake.provenance_sha256,
             tool_identity_handshake: handshake,
-        });
+            library_inputs: Vec::new(),
+            external_inputs: vec![(
+                input.to_str().unwrap().to_owned(),
+                b"external input".to_vec(),
+            )],
+        };
+        assert!(validate_output_paths(Some(&request), &root, "package_name").is_ok());
         assert!(matches!(
-            validate_collection(request, false, true),
-            Err(MaterializeError::RequiresPtxBundleMerge)
+            validate_output_paths(Some(&request), &root, "custom_target"),
+            Err(MaterializeError::Finalizer(
+                FinalizerError::LtoirInputOutputOverlap { .. }
+            ))
         ));
+        assert_eq!(std::fs::read(&input).unwrap(), b"external input");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unsupported_collection_models_fail_without_tools() {
+        let handshake = test_handshake();
+        let mut request = MaterializationRequest {
+            expected_provenance: handshake.provenance_sha256,
+            tool_identity_handshake: handshake,
+            library_inputs: Vec::new(),
+            external_inputs: Vec::new(),
+        };
+        assert!(validate_collection(Some(&request), false).is_ok());
         assert!(matches!(
-            validate_collection(request, true, false),
+            validate_collection(Some(&request), true),
             Err(MaterializeError::HasDeviceExterns)
         ));
-        assert!(validate_collection(None, true, true).is_ok());
+        assert!(validate_collection(None, true).is_ok());
+        request
+            .external_inputs
+            .push(("definition.ltoir".into(), vec![1]));
+        assert!(validate_collection(Some(&request), true).is_ok());
     }
 
     #[test]

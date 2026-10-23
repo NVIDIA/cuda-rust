@@ -72,6 +72,37 @@ pub const MATERIALIZER_PROVENANCE_ENV: &str = "CUDA_OXIDE_INTERNAL_MATERIALIZER_
 /// code remains keyed by the content-derived provenance digest.
 pub const MATERIALIZER_HANDSHAKE_ENV: &str = "CUDA_OXIDE_INTERNAL_MATERIALIZER_HANDSHAKE";
 
+/// Ordered, content-bound external LTO-IR files supplied by cargo-oxide.
+pub const EXTERNAL_LTOIR_ENV: &str = "CUDA_OXIDE_INTERNAL_EXTERNAL_LTOIR_V1";
+
+/// Definition name in `cuda_device::library`; consumers resolve its actual DefId.
+pub const LIBRARY_CALL_V1: &str = "cuda_oxide_library_v1_246e25db_call";
+/// Compiler-rooted synchronous scalar callback marker.
+pub const LIBRARY_CALLBACK_CALL_V1: &str = "cuda_oxide_library_v1_246e25db_call_with_callback";
+
+/// Full-block marker whose controls and participation require compiler proof.
+pub const LIBRARY_CHECKED_BLOCK_CALL_V1: &str = "cuda_oxide_library_v1_246e25db_checked_block_call";
+/// Full-block marker retaining a typed allocation witness and access mode.
+pub const LIBRARY_CHECKED_BLOCK_RESOURCE_CALL_V1: &str =
+    "cuda_oxide_library_v1_246e25db_checked_block_resource_call";
+
+/// Internal full-block storage marker.
+pub const LIBRARY_CHECKED_BLOCK_STORAGE_CALL_V1: &str =
+    "cuda_oxide_library_v1_246e25db_checked_block_storage_call";
+/// Internal full-block storage marker.
+pub const LIBRARY_STORAGE_NEW_V1: &str = "cuda_oxide_library_v1_246e25db_storage_new";
+/// Internal full-block storage marker.
+pub const LIBRARY_STORAGE_RECONFIGURE_V1: &str =
+    "cuda_oxide_library_v1_246e25db_storage_reconfigure";
+/// Internal full-block storage marker.
+pub const LIBRARY_STORAGE_RESERVE_V1: &str = "cuda_oxide_library_v1_246e25db_storage_reserve";
+/// Internal full-block storage marker.
+pub const LIBRARY_STORAGE_RELEASE_V1: &str = "cuda_oxide_library_v1_246e25db_storage_release";
+
+/// Final emitted identity for a helper specialized to one checked kernel root.
+/// Embedded Rust symbols may contain device prefixes and must not be stripped.
+pub const LIBRARY_CONTEXT_PREFIX: &str = "cuda_oxide_library_context_246e25db_";
+
 /// Optional comma-separated filter selecting crates that may own device code.
 pub const DEVICE_CODEGEN_CRATE_ENV: &str = "CUDA_OXIDE_DEVICE_CODEGEN_CRATE";
 
@@ -142,6 +173,11 @@ pub const LEGACY_DEVICE_PREFIX: &str = "cuda_oxide_device_246e25db_";
 /// strips this prefix when emitting the LLVM `declare` so that the LTOIR
 /// linker resolves against the original (unprefixed) external symbol.
 pub const DEVICE_EXTERN_PREFIX: &str = "cuda_oxide_device_extern_246e25db_";
+
+/// Doc-alias marker retained after `#[convergent]` macro expansion.
+/// Unlike doc comments, aliases survive dependency metadata even for private
+/// externs reached through a downstream generic instantiation.
+pub const DEVICE_EXTERN_CONVERGENT_MARKER: &str = "cuda_oxide_device_extern_convergent_246e25db";
 
 /// Prefix added to closure-monomorphization helper functions generated
 /// by `#[kernel]` for kernels that take a closure parameter.

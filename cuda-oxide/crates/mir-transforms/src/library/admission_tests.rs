@@ -128,6 +128,24 @@ fn native(ctx: &mut Context, block: Ptr<BasicBlock>, caller: &str, kind: Native)
             tuple,
             MirPtrType::get_generic_with_kind(ctx, scalar, false, MirPointerKind::SharedRef).into(),
         ],
+        Native::CheckedBlockPayloadCallback { .. } => {
+            let byte = IntegerType::get(ctx, 8, Signedness::Unsigned).into();
+            let input =
+                MirPtrType::get_generic_with_kind(ctx, scalar, false, MirPointerKind::RawConst)
+                    .into();
+            let input_bits =
+                MirPtrType::get_generic_with_kind(ctx, byte, false, MirPointerKind::RawConst)
+                    .into();
+            let output_bits =
+                MirPtrType::get_generic_with_kind(ctx, byte, true, MirPointerKind::RawMut).into();
+            let payload =
+                MirTupleType::get(ctx, vec![input, pointer, input_bits, output_bits]).into();
+            let empty = MirTupleType::get(ctx, vec![]).into();
+            let environment =
+                MirPtrType::get_generic_with_kind(ctx, empty, false, MirPointerKind::SharedRef)
+                    .into();
+            vec![empty, empty, payload, environment]
+        }
         _ => vec![tuple, tuple],
     };
     let values = args
@@ -308,6 +326,7 @@ fn callbacks_preserve_erased_source_obligations_and_actual_thunk_identity() {
         ("source::thunk".into(), "physical_thunk".into()),
     ]);
     let mut sources = LibraryCallbackSources {
+        checked_environments: BTreeMap::new(),
         roots: BTreeMap::from([(site("root", 7), identity.clone())]),
         functions: BTreeMap::from([(
             identity.clone(),
@@ -406,6 +425,7 @@ fn callbacks_follow_receiver_edges_and_reject_missing_or_unavailable_bodies() {
     shim.dispatch = Dispatch::FunctionItemShim;
     shim.has_body = false;
     let mut sources = LibraryCallbackSources {
+        checked_environments: BTreeMap::new(),
         roots: BTreeMap::from([(site("root", 7), "mangled_thunk".into())]),
         functions: BTreeMap::from([
             ("mangled_thunk".into(), thunk),
@@ -649,4 +669,97 @@ fn contexts_preserve_original_calls_statics_and_cross_block_values() {
         "foreign"
     );
     module.deref(ctx).verify(ctx).unwrap();
+}
+
+#[test]
+fn checked_callbacks_require_nominal_empty_environments_even_after_call_erasure() {
+    use super::callback::admit_library_callbacks;
+    use dialect_mir::library::{
+        LibraryCallbackDefinition as D, LibraryCallbackDispatch as Dispatch,
+        LibraryCallbackEnvironment as Environment, LibraryCallbackFunction, LibraryCallbackSources,
+        LibraryStorageArg,
+    };
+    let ctx = &mut Context::new();
+    let module = module(ctx);
+    let (_, body) = function(ctx, module, "root", "root", vec![]);
+    let callback = native(
+        ctx,
+        body,
+        "root",
+        Native::CheckedBlockPayloadCallback {
+            spec: SPEC,
+            storage: LibraryStorageArg::Implicit,
+        },
+    );
+    ret(ctx, body, vec![]);
+    let (_, thunk_body) = function(ctx, module, "physical_thunk", "source::thunk", vec![]);
+    ret(ctx, thunk_body, vec![]);
+    let identity = "mangled_source::thunk".to_string();
+    let symbols = BTreeMap::from([
+        ("root".into(), "root".into()),
+        ("source::thunk".into(), "physical_thunk".into()),
+    ]);
+    let mut sources = LibraryCallbackSources {
+        checked_environments: BTreeMap::new(),
+        roots: BTreeMap::from([(site("root", 7), identity.clone())]),
+        functions: BTreeMap::from([(
+            identity.clone(),
+            LibraryCallbackFunction {
+                diagnostic: "source::thunk".into(),
+                export: Some("source::thunk".into()),
+                definition: D::Rust,
+                dispatch: Dispatch::Direct,
+                has_body: true,
+                cuda_local_types: vec![],
+                calls: vec![],
+                callees: vec![],
+            },
+        )]),
+    };
+    assert!(
+        admit_library_callbacks(module, ctx, &sources, &symbols)
+            .unwrap_err()
+            .contains("nominal environment")
+    );
+    for environment in [
+        Environment::FunctionItem,
+        Environment::Closure { capture_count: 0 },
+    ] {
+        sources
+            .checked_environments
+            .insert(site("root", 7), environment);
+        assert_eq!(
+            admit_library_callbacks(module, ctx, &sources, &symbols).unwrap(),
+            BTreeMap::from([(identity.clone(), "physical_thunk".into())])
+        );
+    }
+    // The retained environment has an empty IR pointee. Only genuine source
+    // shape authorizes statelessness; this captured closure must still reject.
+    sources
+        .checked_environments
+        .insert(site("root", 7), Environment::Closure { capture_count: 1 });
+    assert!(
+        admit_library_callbacks(module, ctx, &sources, &symbols)
+            .unwrap_err()
+            .contains("zero-capture")
+    );
+    sources.checked_environments.clear();
+    sources
+        .checked_environments
+        .insert(site("root", 8), Environment::FunctionItem);
+    assert!(
+        admit_library_callbacks(module, ctx, &sources, &symbols)
+            .unwrap_err()
+            .contains("nominal environment")
+    );
+    sources.checked_environments.clear();
+    sources
+        .checked_environments
+        .insert(site("root", 7), Environment::Closure { capture_count: 1 });
+    Operation::erase(callback, ctx);
+    assert!(
+        admit_library_callbacks(module, ctx, &sources, &symbols)
+            .unwrap_err()
+            .contains("zero-capture")
+    );
 }

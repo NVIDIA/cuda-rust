@@ -104,6 +104,9 @@ pub const LIBRARY_CHECKED_WARP_CALL_V1: &str = "cuda_oxide_library_v1_246e25db_c
 /// Payload-only full-block operation with planned storage.
 pub const LIBRARY_CHECKED_BLOCK_PAYLOAD_CALL_V1: &str =
     "cuda_oxide_library_v1_246e25db_checked_block_payload_call";
+/// Checked full-block payload operation with an authenticated scalar callback.
+pub const LIBRARY_CHECKED_BLOCK_PAYLOAD_CALLBACK_CALL_V1: &str =
+    "cuda_oxide_library_v1_246e25db_checked_block_payload_callback_call";
 /// Payload-only physical/logical Warp operation with implicit storage.
 pub const LIBRARY_CHECKED_WARP_PAYLOAD_CALL_V1: &str =
     "cuda_oxide_library_v1_246e25db_checked_warp_payload_call";

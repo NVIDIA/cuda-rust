@@ -1230,6 +1230,7 @@ fn translate_call_inner(
                     | reserved_oxide_symbols::LIBRARY_CHECKED_WARP_CALL_V1
                     | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_STORAGE_CALL_V1
                     | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_PAYLOAD_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_PAYLOAD_CALLBACK_CALL_V1
                     | reserved_oxide_symbols::LIBRARY_CHECKED_WARP_PAYLOAD_CALL_V1
                     | reserved_oxide_symbols::LIBRARY_STORAGE_NEW_V1
                     | reserved_oxide_symbols::LIBRARY_STORAGE_RECONFIGURE_V1
@@ -4046,10 +4047,12 @@ mod library {
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_resource_call<R: Copy>(_: R, _: &[i32], _: (*const i32,usize), _: (*mut i32,)) {}
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_warp_call<R: Copy>(_: R, _: &[i32], _: (*const i32,usize), _: (*mut i32,)) {}
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_payload_call<R: Copy>(_: R, _: &mut StorageDescriptor<128,16,false,true>, _: (), _: (*const i32,*mut i32)) {}
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_payload_callback_call<R: Copy,F:Copy>(_: R, _: &mut StorageDescriptor<128,16,false,true>, _: (), _: (*const i32,*mut i32,*const u8,*mut u8), _: F, _: &()) {}
     #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_warp_payload_call<R: Copy>(_: R, _: (usize,), _: (*const i32,*mut i32)) {}
 }
 fn registration() -> &'static str { "{}" }
 unsafe extern "C" fn thunk(_: *const i32, a: i32, b: i32) -> i32 { a + b }
+unsafe extern "C" fn payload_thunk(_: *const (), a: i32, b: i32) -> i32 { a + b }
 pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
     library::cuda_oxide_library_v1_246e25db_call(registration,(input,output));
     library::cuda_oxide_library_v1_246e25db_checked_block_call(registration,(input,7),(output,));
@@ -4063,6 +4066,7 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
     library::cuda_oxide_library_v1_246e25db_checked_warp_call(registration,slice,(input,7),(output,));
     library::cuda_oxide_library_v1_246e25db_checked_block_payload_call(registration,&mut storage,(),(input,output));
     library::cuda_oxide_library_v1_246e25db_checked_warp_payload_call(registration,(7,),(input,output));
+    library::cuda_oxide_library_v1_246e25db_checked_block_payload_callback_call(registration,&mut storage,(),(input,output,input as *const u8,output as *mut u8),payload_thunk,&());
 }
 "#).unwrap();
         let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
@@ -4124,7 +4128,7 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                             Some((bb, Instance::resolve(def, &args).unwrap().mangled_name()))
                         })
                         .collect();
-                    assert_eq!(source.len(), 12);
+                    assert_eq!(source.len(), 13);
                     if !genuine {
                         for debug in [DebugKind::Off, DebugKind::Full] {
                             crate::library::set_semantics(Default::default());
@@ -4226,6 +4230,12 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                             spec,
                             width: 8,
                         }),
+                        LibraryRoleAttr::Native(
+                            LibraryNativeMetadata::CheckedBlockPayloadCallback {
+                                spec,
+                                storage: LibraryStorageArg::Explicit(policy),
+                            },
+                        ),
                     ];
                     for (caller, debug) in [
                         ("original_entry", DebugKind::Off),
@@ -4272,9 +4282,9 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                 )
                             })
                             .collect();
-                        // Neither genuine payload marker may fall through to an
+                        // No genuine payload marker may fall through to an
                         // ordinary call when its authenticated site is absent.
-                        for missing in [10, 11] {
+                        for missing in [10, 11, 12] {
                             let mut incomplete = semantics.clone();
                             incomplete.remove(&crate::LibraryCallSite {
                                 caller: caller.into(),
@@ -4377,7 +4387,8 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                     (2, 0),
                                     (3, 0),
                                     (3, 0),
-                                    (2, 0)
+                                    (2, 0),
+                                    (4, 0)
                                 ])
                                 .map(|(((bb, _), role), (operands, results))| (
                                     *bb, role, operands, results
@@ -4394,7 +4405,8 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                 source[8].0,
                                 source[9].0,
                                 source[10].0,
-                                source[11].0
+                                source[11].0,
+                                source[12].0
                             ]
                         );
                         let plans = source
@@ -4435,11 +4447,12 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                         if matches!(roles[index], LibraryRoleAttr::Native(_)) {
                                             plan.symbol = format!("native_{index}");
                                             plan.checked_block = index != 0 && index != 8;
-                                            plan.callback = index == 8;
+                                            plan.callback = index == 8 || index == 12;
                                             plan.resource_witness =
                                                 index == 2 || index == 6 || index == 9;
                                             plan.storage_witness = index == 6;
-                                            plan.payload_only = index == 10 || index == 11;
+                                            plan.payload_only =
+                                                index == 10 || index == 11 || index == 12;
                                             plan.warp_width = match index {
                                                 9 => Some(32),
                                                 11 => Some(8),
@@ -4490,9 +4503,9 @@ pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
                                 }
                             }
                         }
-                        assert_eq!(native_arguments, vec![3, 4, 4, 4, 4, 4, 3, 4]);
+                        assert_eq!(native_arguments, vec![3, 4, 4, 4, 4, 4, 3, 4, 6]);
                         assert_eq!(
-                            scratch_views, 9,
+                            scratch_views, 10,
                             "zero-byte native scratch still retains a fixed view"
                         );
                     }

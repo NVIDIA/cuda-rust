@@ -433,6 +433,39 @@ fn native_valid(ctx: &Context, native: LibraryNativeMetadata, args: &[TypeHandle
                 }
                 (1, 2, true)
             }
+            N::CheckedBlockPayloadCallback { storage, .. } => {
+                if args.len() != 4
+                    || spec.scalar != LibraryScalar::Signed(32)
+                    || !storage_arg_valid(ctx, storage, args[0])
+                    || !tuple_fields(ctx, args[1]).is_some_and(|fields| fields.is_empty())
+                    || !args[3]
+                        .deref(ctx)
+                        .downcast_ref::<MirPtrType>()
+                        .is_some_and(|ptr| ptr.kind == MirPointerKind::SharedRef && !ptr.is_mutable)
+                {
+                    return false;
+                }
+                let Some(payload) = tuple_fields(ctx, args[2]) else {
+                    return false;
+                };
+                let expected = [
+                    (LibraryScalar::Signed(32), false),
+                    (LibraryScalar::Signed(32), true),
+                    (LibraryScalar::Unsigned(8), false),
+                    (LibraryScalar::Unsigned(8), true),
+                ];
+                return payload.len() == expected.len()
+                    && payload
+                        .iter()
+                        .zip(expected)
+                        .all(|(&ty, (scalar, mutable))| {
+                            pointer_scalar(ctx, ty) == Some(scalar)
+                                && ty
+                                    .deref(ctx)
+                                    .downcast_ref::<MirPtrType>()
+                                    .is_some_and(|ptr| ptr.is_mutable == mutable)
+                        });
+            }
             N::CheckedWarpPayload { .. } => {
                 if args.len() != 2 {
                     return false;

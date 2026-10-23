@@ -105,6 +105,10 @@ pub enum LibraryNativeMetadata {
         spec: NativeSpec,
         storage: LibraryStorageArg,
     },
+    CheckedBlockPayloadCallback {
+        spec: NativeSpec,
+        storage: LibraryStorageArg,
+    },
     CheckedWarpPayload {
         spec: NativeSpec,
         width: u32,
@@ -120,6 +124,7 @@ impl LibraryNativeMetadata {
             | Self::CheckedWarp { spec, .. }
             | Self::CheckedBlockStorage { spec, .. }
             | Self::CheckedBlockPayload { spec, .. }
+            | Self::CheckedBlockPayloadCallback { spec, .. }
             | Self::CheckedWarpPayload { spec, .. } => spec,
         }
     }
@@ -169,10 +174,20 @@ pub struct LibraryCallbackFunction {
     pub callees: Vec<String>,
 }
 
+/// Genuine nominal environment shape, tied to the original selected callback site.
+/// Capture contents are not values or uniformity claims in this source record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LibraryCallbackEnvironment {
+    FunctionItem,
+    Closure { capture_count: usize },
+}
+
 /// Original selected callback roots and complete collector identities, including
 /// callees that have no imported symbol. Missing records cannot imply admission.
 #[derive(Clone, Debug, Default)]
 pub struct LibraryCallbackSources {
+    pub checked_environments:
+        std::collections::BTreeMap<LibraryCallSite, LibraryCallbackEnvironment>,
     pub roots: std::collections::BTreeMap<LibraryCallSite, String>,
     pub functions: std::collections::BTreeMap<String, LibraryCallbackFunction>,
 }

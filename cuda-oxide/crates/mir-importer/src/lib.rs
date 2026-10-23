@@ -120,10 +120,11 @@ pub use translator::terminator::{is_dropped_panic_call, is_panic_entry_path};
 mod library;
 pub use dialect_mir::library::{
     LibraryAccess, LibraryCallKind, LibraryCallTargetAttr, LibraryCallbackCall,
-    LibraryCallbackDefinition, LibraryCallbackDispatch, LibraryCallbackFunction,
-    LibraryCallbackSources, LibraryFunctionSourceAttr, LibraryNativeMetadata, LibraryOperation,
-    LibraryReserveLayout, LibraryRoleAttr, LibraryRootArgumentClass, LibraryScalar,
-    LibraryStorageArg, LibraryStoragePolicy, LibraryWitness, NativeSpec,
+    LibraryCallbackDefinition, LibraryCallbackDispatch, LibraryCallbackEnvironment,
+    LibraryCallbackFunction, LibraryCallbackSources, LibraryFunctionSourceAttr,
+    LibraryNativeMetadata, LibraryOperation, LibraryReserveLayout, LibraryRoleAttr,
+    LibraryRootArgumentClass, LibraryScalar, LibraryStorageArg, LibraryStoragePolicy,
+    LibraryWitness, NativeSpec,
 };
 pub use library::{CallTargetRedirects, LibraryCallMetadata, LibraryCallPlan, LibraryCallSite};
 pub use pipeline::{ImportedModule, PreparedImport, import_pipeline_with_libraries};

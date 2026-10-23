@@ -9,8 +9,8 @@ use super::admission;
 use dialect_mir::{
     library::{
         LibraryCallbackCall, LibraryCallbackDefinition as Definition,
-        LibraryCallbackDispatch as Dispatch, LibraryCallbackSources, LibraryNativeMetadata,
-        LibraryRoleAttr,
+        LibraryCallbackDispatch as Dispatch, LibraryCallbackEnvironment, LibraryCallbackSources,
+        LibraryNativeMetadata, LibraryRoleAttr,
     },
     ops::MirFuncOp,
 };
@@ -43,11 +43,40 @@ pub fn admit_library_callbacks(
     for (site, role) in &roles {
         let callback = matches!(
             role,
-            LibraryRoleAttr::Native(LibraryNativeMetadata::Callback { .. })
+            LibraryRoleAttr::Native(
+                LibraryNativeMetadata::Callback { .. }
+                    | LibraryNativeMetadata::CheckedBlockPayloadCallback { .. }
+            )
         );
+        let checked = matches!(
+            role,
+            LibraryRoleAttr::Native(LibraryNativeMetadata::CheckedBlockPayloadCallback { .. })
+        );
+        if checked != sources.checked_environments.contains_key(site) {
+            return Err(format!(
+                "checked callback nominal environment is missing or mismatched at {} block {}",
+                site.caller, site.block
+            ));
+        }
         if callback != sources.roots.contains_key(site) {
             return Err(format!(
                 "retained callback source identity disagrees at {} block {}",
+                site.caller, site.block
+            ));
+        }
+    }
+    // Original checked obligations survive even if preparation removes a call.
+    for (site, environment) in &sources.checked_environments {
+        if !sources.roots.contains_key(site) {
+            return Err("checked callback environment has no selected source thunk".into());
+        }
+        if !matches!(
+            environment,
+            LibraryCallbackEnvironment::FunctionItem
+                | LibraryCallbackEnvironment::Closure { capture_count: 0 }
+        ) {
+            return Err(format!(
+                "checked callback requires a function item or zero-capture Fn closure at {} block {}",
                 site.caller, site.block
             ));
         }

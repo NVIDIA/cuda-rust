@@ -2111,14 +2111,14 @@ impl<'tcx> DeviceCollector<'tcx> {
         };
         self.call_edges.push(site);
         if let Some(&kind) = self.library_defs.get(&resolved.def_id()) {
-            if kind == crate::library::MarkerKind::Callback {
-                crate::library::callback_instance(self.tcx, resolved)
+            if kind.callback() {
+                crate::library::callback_instance(self.tcx, resolved, kind)
                     .unwrap_or_else(|error| self.tcx.dcx().span_fatal(call_span, error));
                 // This callable edge exists even when the thunk body was already
                 // collected through another root. No Rust anchor call is needed.
                 self.enqueue_callable_trait_receiver_body(
                     block,
-                    resolved.args.type_at(4),
+                    resolved.args.type_at(kind.callback_types().unwrap().1),
                     call_span,
                     caller,
                     &callee_ctx,

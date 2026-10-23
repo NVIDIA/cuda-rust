@@ -81,7 +81,9 @@ pub(super) fn validate(ctx: &Context, op: Ptr<Operation>, plan: &LibraryCallPlan
             CheckedBlock { .. } => (true, false, false),
             CheckedBlockResource { .. } | CheckedWarp { .. } => (true, true, false),
             CheckedBlockStorage { .. } => (true, true, true),
-            CheckedBlockPayload { .. } | CheckedWarpPayload { .. } => (true, false, false),
+            CheckedBlockPayload { .. }
+            | CheckedBlockPayloadCallback { .. }
+            | CheckedWarpPayload { .. } => (true, false, false),
         };
         if (
             plan.checked_block,
@@ -91,9 +93,12 @@ pub(super) fn validate(ctx: &Context, op: Ptr<Operation>, plan: &LibraryCallPlan
             || plan.payload_only
                 != matches!(
                     native,
-                    CheckedBlockPayload { .. } | CheckedWarpPayload { .. }
+                    CheckedBlockPayload { .. }
+                        | CheckedBlockPayloadCallback { .. }
+                        | CheckedWarpPayload { .. }
                 )
-            || plan.callback != matches!(native, Callback { .. })
+            || plan.callback
+                != matches!(native, Callback { .. } | CheckedBlockPayloadCallback { .. })
             || plan.warp_width
                 != match native {
                     CheckedWarp { width, .. } | CheckedWarpPayload { width, .. } => Some(width),
@@ -363,7 +368,7 @@ fn native_call(
         CheckedBlock { .. } => &[0, 1],
         CheckedBlockResource { .. } | CheckedWarp { .. } => &[1, 2],
         CheckedBlockStorage { .. } => &[2, 3],
-        CheckedBlockPayload { .. } => &[2, 1],
+        CheckedBlockPayload { .. } | CheckedBlockPayloadCallback { .. } => &[2, 1],
         CheckedWarpPayload { .. } => &[1, 0],
     };
     let mut arguments = Vec::new();
@@ -428,8 +433,12 @@ fn native_call(
     );
     arguments.insert(2, scratch);
     declared.insert(2, scratch_pointer(ctx, byte, false));
-    if matches!(native, Callback { .. }) {
-        let environment = operands[1];
+    if let Some(index) = match native {
+        Callback { .. } => Some(1),
+        CheckedBlockPayloadCallback { .. } => Some(3),
+        _ => None,
+    } {
+        let environment = operands[index];
         let pointee = environment
             .get_type(ctx)
             .deref(ctx)
@@ -681,6 +690,7 @@ mod tests {
                 storage,
             },
             CheckedBlockPayload { spec, storage },
+            CheckedBlockPayloadCallback { spec, storage },
             CheckedWarpPayload { spec, width: 8 },
             CheckedWarpPayload { spec, width: 17 },
         ];
@@ -718,6 +728,14 @@ mod tests {
                 MirPointerKind::SharedRef,
             )
             .into();
+            let input_bits =
+                MirPtrType::get_generic_with_kind(ctx, byte, false, MirPointerKind::RawConst)
+                    .into();
+            let callable_payload =
+                MirTupleType::get(ctx, vec![input, output, input_bits, flags]).into();
+            let callable_environment =
+                MirPtrType::get_generic_with_kind(ctx, empty, false, MirPointerKind::SharedRef)
+                    .into();
             let types = match native {
                 Raw { .. } => vec![raw],
                 Callback { .. } => vec![raw, environment],
@@ -727,6 +745,9 @@ mod tests {
                 }
                 CheckedBlockStorage { .. } => vec![borrowed, empty, uniform, payload],
                 CheckedBlockPayload { .. } => vec![empty, empty, local],
+                CheckedBlockPayloadCallback { .. } => {
+                    vec![empty, empty, callable_payload, callable_environment]
+                }
                 CheckedWarpPayload { .. } => vec![controls, local],
             };
             let site = LibraryCallSite {
@@ -782,7 +803,7 @@ mod tests {
             let mut plan = LibraryCallPlan::internal(LibraryOperation::Native, "marker".into());
             plan.symbol = "native_body".into();
             plan.checked_block = !matches!(native, Raw { .. } | Callback { .. });
-            plan.callback = matches!(native, Callback { .. });
+            plan.callback = matches!(native, Callback { .. } | CheckedBlockPayloadCallback { .. });
             plan.resource_witness = matches!(
                 native,
                 CheckedBlockResource { .. } | CheckedBlockStorage { .. } | CheckedWarp { .. }
@@ -790,7 +811,9 @@ mod tests {
             plan.storage_witness = matches!(native, CheckedBlockStorage { .. });
             plan.payload_only = matches!(
                 native,
-                CheckedBlockPayload { .. } | CheckedWarpPayload { .. }
+                CheckedBlockPayload { .. }
+                    | CheckedBlockPayloadCallback { .. }
+                    | CheckedWarpPayload { .. }
             );
             plan.warp_width = match native {
                 CheckedWarp { width, .. } | CheckedWarpPayload { width, .. } => Some(width),
@@ -870,6 +893,12 @@ mod tests {
                 CheckedBlockPayload { .. } => {
                     vec![(operands[2], 0), (operands[2], 1), (operands[2], 2)]
                 }
+                CheckedBlockPayloadCallback { .. } => vec![
+                    (operands[2], 0),
+                    (operands[2], 1),
+                    (operands[2], 2),
+                    (operands[2], 3),
+                ],
                 CheckedWarpPayload { .. } => vec![
                     (operands[1], 0),
                     (operands[1], 1),
@@ -885,9 +914,14 @@ mod tests {
                     "{native:?}"
                 );
             }
-            if matches!(native, Callback { .. }) {
-                assert_eq!(call_op.deref(ctx).get_num_operands(), 5);
-                let environment = call_op.deref(ctx).get_operand(4);
+            if matches!(native, Callback { .. } | CheckedBlockPayloadCallback { .. }) {
+                let (count, source_index) = if matches!(native, Callback { .. }) {
+                    (5, 1)
+                } else {
+                    (6, 3)
+                };
+                assert_eq!(call_op.deref(ctx).get_num_operands(), count);
+                let environment = call_op.deref(ctx).get_operand(count - 1);
                 let ty = environment.get_type(ctx);
                 let ty = ty.deref(ctx);
                 let pointer = ty.downcast_ref::<MirPtrType>().unwrap();
@@ -900,7 +934,7 @@ mod tests {
                 erase.deref(ctx).verify(ctx).unwrap();
                 let raw = erase.deref(ctx).get_operand(0).defining_op().unwrap();
                 raw.deref(ctx).verify(ctx).unwrap();
-                assert_eq!(raw.deref(ctx).get_operand(0), operands[1]);
+                assert_eq!(raw.deref(ctx).get_operand(0), operands[source_index]);
                 assert_eq!(
                     *MirCastOp::new(raw)
                         .get_attr_pointer_kind_authority(ctx)

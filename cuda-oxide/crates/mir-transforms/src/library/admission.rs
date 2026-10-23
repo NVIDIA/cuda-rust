@@ -102,6 +102,7 @@ fn checked(role: LibraryRoleAttr) -> bool {
                 | LibraryNativeMetadata::CheckedBlockStorage { .. }
                 | LibraryNativeMetadata::CheckedWarp { .. }
                 | LibraryNativeMetadata::CheckedBlockPayload { .. }
+                | LibraryNativeMetadata::CheckedBlockPayloadCallback { .. }
                 | LibraryNativeMetadata::CheckedWarpPayload { .. }
         )
     ) || super::storage::planned_storage(role)

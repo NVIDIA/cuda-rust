@@ -2561,3 +2561,104 @@ fn membership_byte_not_is_not_logical_not() {
         }
     }
 }
+
+#[test]
+#[allow(clippy::disallowed_methods)]
+fn checked_callback_payload_keeps_output_taint_and_planned_root_mixing() {
+    use dialect_mir::attributes::{MirCastKindAttr, MirPointerKindAuthorityAttr};
+    for (written, legacy, accepted) in [
+        (false, false, true),
+        (true, false, false),
+        (false, true, false),
+    ] {
+        let ctx = &mut Context::new();
+        let (module, _, block) = function(ctx);
+        let scalar: TypeHandle = IntegerType::get(ctx, 32, Signedness::Signed).into();
+        let byte: TypeHandle = IntegerType::get(ctx, 8, Signedness::Unsigned).into();
+        let unit = MirTupleType::get(ctx, vec![]).into();
+        let input_ty =
+            MirPtrType::get_generic_with_kind(ctx, scalar, false, MirPointerKind::RawConst).into();
+        let output_ty =
+            MirPtrType::get_generic_with_kind(ctx, scalar, true, MirPointerKind::RawMut).into();
+        let input_bits_ty =
+            MirPtrType::get_generic_with_kind(ctx, byte, false, MirPointerKind::RawConst).into();
+        let output_bits_ty =
+            MirPtrType::get_generic_with_kind(ctx, byte, true, MirPointerKind::RawMut).into();
+        let initial = source_value(ctx, block, SourceKind::BlockQuery, true);
+        let slot = test_slot(ctx, block, initial);
+        let output = if written {
+            let cast = emit::<MirCastOp>(ctx, block, vec![output_ty], vec![slot]);
+            MirCastOp::new(cast).set_attr_cast_kind(ctx, MirCastKindAttr::PtrToPtr);
+            MirCastOp::new(cast)
+                .set_pointer_kind_authority(ctx, MirPointerKindAuthorityAttr::RawAddress);
+            cast.deref(ctx).get_result(0)
+        } else {
+            value(ctx, block, output_ty)
+        };
+        let input = value(ctx, block, input_ty);
+        let input_bits = value(ctx, block, input_bits_ty);
+        let output_bits = value(ctx, block, output_bits_ty);
+        let tuple = MirTupleType::get(
+            ctx,
+            vec![input_ty, output_ty, input_bits_ty, output_bits_ty],
+        )
+        .into();
+        let payload = emit::<MirConstructTupleOp>(
+            ctx,
+            block,
+            vec![tuple],
+            vec![input, output, input_bits, output_bits],
+        )
+        .deref(ctx)
+        .get_result(0);
+        let environment_ty =
+            MirPtrType::get_generic_with_kind(ctx, unit, false, MirPointerKind::SharedRef).into();
+        let storage = value(ctx, block, unit);
+        let controls = value(ctx, block, unit);
+        let environment = value(ctx, block, environment_ty);
+        let role = Role::Native(Native::CheckedBlockPayloadCallback {
+            spec: NativeSpec {
+                scalar: LibraryScalar::Signed(32),
+                items: 1,
+            },
+            storage: LibraryStorageArg::Implicit,
+        });
+        let signature = FunctionType::get(ctx, vec![unit, unit, tuple, environment_ty], vec![]);
+        MirLibraryOp::build_call(
+            ctx,
+            role,
+            site(1),
+            "callback".into(),
+            signature,
+            vec![storage, controls, payload, environment],
+        )
+        .insert_at_back(block, ctx);
+        let control = emit::<MirLoadOp>(ctx, block, vec![scalar], vec![slot])
+            .deref(ctx)
+            .get_result(0);
+        let second = if legacy {
+            native(ctx, block, control, 2)
+        } else {
+            local_payload(ctx, block, vec![control], None, None, 2)
+        };
+        let roles = BTreeMap::from([(site(1), role), (site(2), second)]);
+        emit::<MirReturnOp>(ctx, block, vec![], vec![]);
+        for verdict in slot_and_promoted_verdicts(ctx, module, &roles) {
+            assert_eq!(
+                verdict.is_ok(),
+                accepted,
+                "written={written}, legacy={legacy}: {verdict:?}"
+            );
+            if let Err(error) = verdict {
+                assert!(
+                    error.contains(if legacy {
+                        "untracked and planned-storage"
+                    } else {
+                        "not proved"
+                    }),
+                    "{error}"
+                );
+            }
+        }
+    }
+}

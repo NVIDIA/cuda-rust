@@ -29,6 +29,7 @@ pub(crate) enum MarkerKind {
     CheckedWarp,
     CheckedBlockStorage,
     CheckedBlockPayload,
+    CheckedBlockPayloadCallback,
     CheckedWarpPayload,
     StorageNew,
     StorageReconfigure,
@@ -45,6 +46,7 @@ impl MarkerKind {
                 | Self::CheckedBlockResource
                 | Self::CheckedBlockStorage
                 | Self::CheckedBlockPayload
+                | Self::CheckedBlockPayloadCallback
                 | Self::CheckedWarpPayload
                 | Self::StorageNew
                 | Self::StorageReconfigure
@@ -63,6 +65,7 @@ impl MarkerKind {
                 | Self::CheckedBlockResource
                 | Self::CheckedBlockStorage
                 | Self::CheckedBlockPayload
+                | Self::CheckedBlockPayloadCallback
                 | Self::CheckedWarpPayload
         )
     }
@@ -72,6 +75,7 @@ impl MarkerKind {
             self,
             Self::CheckedBlockStorage
                 | Self::CheckedBlockPayload
+                | Self::CheckedBlockPayloadCallback
                 | Self::StorageNew
                 | Self::StorageReconfigure
                 | Self::StorageReserve
@@ -85,7 +89,24 @@ impl MarkerKind {
     }
 
     pub(crate) fn payload_only(self) -> bool {
-        matches!(self, Self::CheckedBlockPayload | Self::CheckedWarpPayload)
+        matches!(
+            self,
+            Self::CheckedBlockPayload
+                | Self::CheckedBlockPayloadCallback
+                | Self::CheckedWarpPayload
+        )
+    }
+
+    pub(crate) fn callback_types(self) -> Option<(usize, usize)> {
+        match self {
+            Self::Callback => Some((3, 4)),
+            Self::CheckedBlockPayloadCallback => Some((5, 6)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn callback(self) -> bool {
+        self.callback_types().is_some()
     }
 
     /// Fixed generic positions of the native marker signatures.
@@ -97,6 +118,7 @@ impl MarkerKind {
             Self::CheckedBlockStorage => (4, Some(3), 6, None),
             Self::CheckedWarp => (3, None, 6, Some(5)),
             Self::CheckedBlockPayload => (3, Some(2), 5, None),
+            Self::CheckedBlockPayloadCallback => (3, Some(2), 7, None),
             Self::CheckedWarpPayload => (2, None, 5, Some(4)),
             _ => return None,
         };
@@ -183,6 +205,9 @@ pub(crate) fn marker_definitions(tcx: TyCtxt<'_>) -> HashMap<DefId, MarkerKind> 
                     }
                     reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_PAYLOAD_CALL_V1 => {
                         MarkerKind::CheckedBlockPayload
+                    }
+                    reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_PAYLOAD_CALLBACK_CALL_V1 => {
+                        MarkerKind::CheckedBlockPayloadCallback
                     }
                     reserved_oxide_symbols::LIBRARY_CHECKED_WARP_PAYLOAD_CALL_V1 => {
                         MarkerKind::CheckedWarpPayload
@@ -438,7 +463,9 @@ fn validate_storage<'tcx>(tcx: TyCtxt<'tcx>, call: &LibraryCall<'tcx>) -> Result
         MarkerKind::StorageRelease => {
             scalar(args.type_at(0))?;
         }
-        MarkerKind::CheckedBlockStorage | MarkerKind::CheckedBlockPayload => {
+        MarkerKind::CheckedBlockStorage
+        | MarkerKind::CheckedBlockPayload
+        | MarkerKind::CheckedBlockPayloadCallback => {
             let index = call.kind.native_signature().unwrap().storage_type.unwrap();
             let ty = args.type_at(index);
             if !matches!(ty.kind(), TyKind::Tuple(fields) if fields.is_empty()) {
@@ -603,8 +630,12 @@ fn argument(ty: Ty<'_>) -> Result<Argument, String> {
 pub(crate) fn callback_instance<'tcx>(
     tcx: TyCtxt<'tcx>,
     marker: Instance<'tcx>,
+    kind: MarkerKind,
 ) -> Result<Instance<'tcx>, String> {
-    let environment = marker.args.type_at(3);
+    let (environment_index, thunk_index) = kind
+        .callback_types()
+        .ok_or("marker has no callback signature")?;
+    let environment = marker.args.type_at(environment_index);
     match environment.kind() {
         TyKind::FnDef(..) => {}
         TyKind::Closure(_, args) => {
@@ -625,7 +656,7 @@ pub(crate) fn callback_instance<'tcx>(
     if scalar(marker.args.type_at(0))? != Scalar::Signed(32) {
         return Err("callback version one supports i32 only".into());
     }
-    let witness = marker.args.type_at(4);
+    let witness = marker.args.type_at(thunk_index);
     let TyKind::FnDef(def, args) = witness.kind() else {
         return Err(
             "callback thunk must be a function item, not a closure or function pointer".into(),
@@ -1024,6 +1055,10 @@ fn authenticated_metadata<'tcx>(
                 spec,
                 storage: storage()?,
             },
+            MarkerKind::CheckedBlockPayloadCallback => Native::CheckedBlockPayloadCallback {
+                spec,
+                storage: storage()?,
+            },
             MarkerKind::CheckedWarpPayload => Native::CheckedWarpPayload {
                 spec,
                 width: positive(4)?,
@@ -1069,7 +1104,8 @@ fn callback_sources<'tcx>(
 ) -> Result<mir_importer::LibraryCallbackSources, String> {
     use mir_importer::{
         LibraryCallbackCall as Call, LibraryCallbackDefinition as Definition,
-        LibraryCallbackDispatch as Dispatch, LibraryCallbackFunction, LibraryCallbackSources,
+        LibraryCallbackDispatch as Dispatch, LibraryCallbackEnvironment, LibraryCallbackFunction,
+        LibraryCallbackSources,
     };
     let definition = |def: DefId| {
         let name = tcx.crate_name(def.krate);
@@ -1089,20 +1125,32 @@ fn callback_sources<'tcx>(
     let mut sources = LibraryCallbackSources::default();
     let mut instances = HashSet::new();
     for call in &collection.library_calls {
-        if call.kind != MarkerKind::Callback || !rooted.contains(&call.site.caller) {
+        if !call.kind.callback() || !rooted.contains(&call.site.caller) {
             continue;
         }
-        let thunk = callback_instance(tcx, call.instance)?;
-        sources.roots.insert(
-            mir_importer::LibraryCallSite {
-                caller: names
-                    .get(&call.site.caller)
-                    .ok_or("callback caller was not collected")?
-                    .clone(),
-                block: call.site.block.index(),
-            },
-            identity(thunk),
-        );
+        let thunk = callback_instance(tcx, call.instance, call.kind)?;
+        let site = mir_importer::LibraryCallSite {
+            caller: names
+                .get(&call.site.caller)
+                .ok_or("callback caller was not collected")?
+                .clone(),
+            block: call.site.block.index(),
+        };
+        sources.roots.insert(site.clone(), identity(thunk));
+        if call.kind == MarkerKind::CheckedBlockPayloadCallback {
+            let environment = call
+                .instance
+                .args
+                .type_at(call.kind.callback_types().unwrap().0);
+            let shape = match environment.kind() {
+                TyKind::FnDef(..) => LibraryCallbackEnvironment::FunctionItem,
+                TyKind::Closure(_, args) => LibraryCallbackEnvironment::Closure {
+                    capture_count: rustc_middle::ty::UpvarArgs::Closure(args).upvar_tys().len(),
+                },
+                _ => unreachable!("callback_instance authenticated the nominal environment"),
+            };
+            sources.checked_environments.insert(site, shape);
+        }
         instances.extend(reachable_instances(collection, thunk));
     }
     for instance in instances {
@@ -1442,9 +1490,9 @@ pub(crate) fn finalize_provider<'tcx>(
                         .map_err(str::to_owned)
                         .unwrap_or_else(|error| report(error))
                 }),
-                callback: if call.kind == MarkerKind::Callback {
-                    let thunk =
-                        callback_instance(tcx, call.instance).unwrap_or_else(|error| report(error));
+                callback: if call.kind.callback() {
+                    let thunk = callback_instance(tcx, call.instance, call.kind)
+                        .unwrap_or_else(|error| report(error));
                     let identity = tcx.symbol_name(thunk).name.to_string();
                     let symbol = callback_symbols.get(&identity).unwrap_or_else(|| {
                         report("callback thunk has no admitted emitted symbol".into())
@@ -1560,7 +1608,7 @@ pub(crate) fn finalize_provider<'tcx>(
                     checked_block: call.kind.checked(),
                     resource_witness: call.kind.resource(),
                     payload_only: call.kind.payload_only(),
-                    callback: call.kind == MarkerKind::Callback,
+                    callback: call.kind.callback(),
                     scratch_bytes,
                     scratch_alignment,
                 };

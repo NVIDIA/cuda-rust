@@ -223,6 +223,56 @@ pub unsafe fn cuda_oxide_library_v1_246e25db_checked_block_payload_call<
 
 pub use cuda_oxide_library_v1_246e25db_checked_block_payload_call as checked_block_payload_call_v1;
 
+/// Invoke a checked full-block payload operation with a stateless i32 callback.
+///
+/// Storage and payload effects follow [`checked_block_payload_call_v1`].
+/// `uniform` must be `()` and `payload` must be
+/// `(*const i32, *mut i32, *const u8, *mut u8)`: input, output, input validity
+/// bits and output validity bits.
+/// `environment` must be a genuine function item or an immutable closure with
+/// no captures. `thunk` is a function item with the instantiated signature
+/// `unsafe extern "C" fn(*const Environment, i32, i32) -> i32`.
+/// The compiler retains that definition and checks its original reachable body.
+/// Native arguments are input, output, scratch, input bits, output bits,
+/// then the opaque environment pointer. Neither witness is a runtime
+/// function pointer. This version supports i32 callbacks only.
+///
+/// # Safety
+///
+/// All payload, storage, participation, initialization and native-effect
+/// requirements of [`checked_block_payload_call_v1`] apply. The selected
+/// operation must satisfy the algorithm's algebraic contract. The environment
+/// remains live throughout this synchronous call; the provider may pass its
+/// opaque pointer back to the selected thunk but must not inspect, mutate,
+/// retain, free or publish it. The callback must not perform collectives,
+/// synchronization, shared-memory access, foreign calls or indirect calls.
+/// Callback selection adds no memory or scratch-reuse completion.
+#[inline(never)]
+pub unsafe fn cuda_oxide_library_v1_246e25db_checked_block_payload_callback_call<
+    T: Copy,
+    Registration: Fn() -> &'static str + Copy,
+    Storage,
+    UniformArgs: Copy,
+    PayloadArgs: Copy,
+    Environment: Copy,
+    Thunk: Copy,
+    const ITEMS_PER_THREAD: usize,
+>(
+    _registration: Registration,
+    _storage: Storage,
+    _uniform: UniformArgs,
+    _payload: PayloadArgs,
+    _thunk: Thunk,
+    _environment: &Environment,
+) {
+    unsafe extern "C" {
+        fn cuda_oxide_checked_block_payload_callback_call_requires_supported_backend();
+    }
+    unsafe { cuda_oxide_checked_block_payload_callback_call_requires_supported_backend() }
+}
+
+pub use cuda_oxide_library_v1_246e25db_checked_block_payload_callback_call as checked_block_payload_callback_call_v1;
+
 /// Invoke a Warp operation on per-thread payloads with implicit scratch.
 ///
 /// WIDTH is a power of two in 1..=32 or a prefix width in 17..=31. The exact

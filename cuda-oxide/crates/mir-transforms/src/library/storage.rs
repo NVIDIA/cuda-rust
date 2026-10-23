@@ -270,6 +270,7 @@ pub fn planned_storage(role: Role) -> bool {
                 Native::CheckedBlockStorage { .. }
                     | Native::CheckedWarp { .. }
                     | Native::CheckedBlockPayload { .. }
+                    | Native::CheckedBlockPayloadCallback { .. }
                     | Native::CheckedWarpPayload { .. }
             )
     )
@@ -296,6 +297,7 @@ pub fn allocate_library_storage(
                     Native::CheckedBlockStorage { .. }
                     | Native::CheckedWarp { .. }
                     | Native::CheckedBlockPayload { .. }
+                    | Native::CheckedBlockPayloadCallback { .. }
                     | Native::CheckedWarpPayload { .. },
                 ) => {
                     let plan = native_plans

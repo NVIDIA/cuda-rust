@@ -921,6 +921,7 @@ fn checked(role: Role) -> bool {
                 | Native::CheckedBlockStorage { .. }
                 | Native::CheckedWarp { .. }
                 | Native::CheckedBlockPayload { .. }
+                | Native::CheckedBlockPayloadCallback { .. }
                 | Native::CheckedWarpPayload { .. }
         )
     )
@@ -931,7 +932,8 @@ fn controls_index(native: Native) -> Option<usize> {
         Native::CheckedBlock { .. } | Native::CheckedWarpPayload { .. } => Some(0),
         Native::CheckedBlockResource { .. }
         | Native::CheckedWarp { .. }
-        | Native::CheckedBlockPayload { .. } => Some(1),
+        | Native::CheckedBlockPayload { .. }
+        | Native::CheckedBlockPayloadCallback { .. } => Some(1),
         Native::CheckedBlockStorage { .. } => Some(2),
     }
 }
@@ -1330,7 +1332,9 @@ impl Analyzer<'_> {
                 result = Some(Fact::Reservation(site.clone()));
             }
             Role::Native(
-                Native::CheckedBlockStorage { .. } | Native::CheckedBlockPayload { .. },
+                Native::CheckedBlockStorage { .. }
+                | Native::CheckedBlockPayload { .. }
+                | Native::CheckedBlockPayloadCallback { .. },
             ) => {
                 storage_use = true;
             }
@@ -1355,9 +1359,10 @@ impl Analyzer<'_> {
                 Role::Native(Native::CheckedBlockStorage { storage, .. }) => {
                     (1, matches!(storage, LibraryStorageArg::Implicit))
                 }
-                Role::Native(Native::CheckedBlockPayload { storage, .. }) => {
-                    (0, matches!(storage, LibraryStorageArg::Implicit))
-                }
+                Role::Native(
+                    Native::CheckedBlockPayload { storage, .. }
+                    | Native::CheckedBlockPayloadCallback { storage, .. },
+                ) => (0, matches!(storage, LibraryStorageArg::Implicit)),
                 _ => (0, false),
             };
             if let Some((id, p)) = resolved[index].descriptor() {
@@ -1426,7 +1431,9 @@ impl Analyzer<'_> {
         };
         let payload = matches!(
             native,
-            Native::CheckedBlockPayload { .. } | Native::CheckedWarpPayload { .. }
+            Native::CheckedBlockPayload { .. }
+                | Native::CheckedBlockPayloadCallback { .. }
+                | Native::CheckedWarpPayload { .. }
         );
         if validate {
             if !checked(role)

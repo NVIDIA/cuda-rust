@@ -17,6 +17,11 @@ use cuda_device::{DisjointSlice, cuda_module, kernel, thread};
 pub mod kernels {
     use super::*;
 
+    /// Emits a separate library artifact for the native ambiguity check.
+    #[cfg(feature = "native-ambiguity")]
+    #[kernel]
+    pub fn concrete() {}
+
     /// Generic scale kernel - multiplies each element by a factor.
     ///
     /// This kernel is exported from the library and can be instantiated

@@ -72,10 +72,13 @@ pub(super) fn has_device_prefix(name: &str) -> bool {
 ///
 /// The reserved prefix is needed internally for MIR-level detection but
 /// should not leak into the final LLVM IR / PTX / LTOIR output. Returns
-/// `name` unchanged for non-device symbols and for device-extern declarations
-/// (those keep their original-name `link_name` attribute).
+/// `name` unchanged for root-specialized helpers, non-device symbols and
+/// device-extern declarations (those keep their original-name `link_name`
+/// attribute).
 pub(super) fn strip_device_prefix(name: &str) -> String {
-    if is_device_extern_symbol(name) {
+    if name.starts_with(reserved_oxide_symbols::LIBRARY_CONTEXT_PREFIX)
+        || is_device_extern_symbol(name)
+    {
         return name.to_string();
     }
     device_base_name(name)
@@ -85,7 +88,25 @@ pub(super) fn strip_device_prefix(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_intrinsic_identifier, legacy_nvvm_atomic_add_signature};
+    use super::{
+        decode_intrinsic_identifier, legacy_nvvm_atomic_add_signature, strip_device_prefix,
+    };
+
+    #[test]
+    fn root_context_keeps_marked_helper_identity() {
+        for root in ["kernel_a", "kernel_b"] {
+            let name = format!(
+                "{}8_{}_cuda_oxide_device_246e25db_helper",
+                reserved_oxide_symbols::LIBRARY_CONTEXT_PREFIX,
+                root
+            );
+            assert_eq!(strip_device_prefix(&name), name);
+        }
+        assert_eq!(
+            strip_device_prefix("mycrate__cuda_oxide_device_246e25db_helper"),
+            "helper"
+        );
+    }
 
     #[test]
     fn intrinsic_identifier_decoding_preserves_dots_and_literal_underscores() {

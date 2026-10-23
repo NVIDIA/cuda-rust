@@ -27,6 +27,7 @@
 //! │ cast         │ Type conversions                     │ 1   │
 //! │ storage      │ Variable lifetime markers            │ 2   │
 //! │ call         │ Function calls                       │ 1   │
+//! │ library      │ Native hooks and source proof events │ 3   │
 //! └──────────────┴──────────────────────────────────────┴─────┘
 //! ```
 //!
@@ -114,6 +115,7 @@ pub mod control_flow;
 pub mod debug;
 pub mod enum_ops;
 pub mod function;
+pub mod library;
 pub mod memory;
 pub mod storage;
 
@@ -128,6 +130,7 @@ pub use control_flow::*;
 pub use debug::*;
 pub use enum_ops::*;
 pub use function::*;
+pub use library::*;
 pub use memory::*;
 pub use storage::*;
 
@@ -145,4 +148,5 @@ pub fn register(ctx: &mut Context) {
     cast::register(ctx);
     storage::register(ctx);
     call::register(ctx);
+    library::register(ctx);
 }

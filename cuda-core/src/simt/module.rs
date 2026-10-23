@@ -29,7 +29,9 @@
 
 use crate::error::{DriverError, IntoResult};
 use crate::simt::context::CudaContext;
+use oxide_artifacts::KernelLaunchFacts;
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::ffi::{c_void, CString};
 use std::mem::MaybeUninit;
 use std::sync::Arc;
@@ -44,6 +46,7 @@ pub struct CudaModule {
     pub(crate) cu_module: cuda_bindings::CUmodule,
     /// Owning context. Kept alive for the lifetime of this module.
     pub(crate) ctx: Arc<CudaContext>,
+    kernel_launch_facts: BTreeMap<String, KernelLaunchFacts>,
 }
 
 /// # Safety
@@ -92,6 +95,7 @@ impl CudaContext {
         Ok(Arc::new(CudaModule {
             cu_module,
             ctx: self.clone(),
+            kernel_launch_facts: BTreeMap::new(),
         }))
     }
 
@@ -105,6 +109,22 @@ impl CudaContext {
         self: &Arc<Self>,
         image: &[u8],
     ) -> Result<Arc<CudaModule>, DriverError> {
+        self.load_module_from_image_with_launch_facts(image, BTreeMap::new())
+    }
+
+    /// Loads an image together with its compiler-produced per-entry facts.
+    ///
+    /// The facts must come from the same artifact bundle as `image`. This is
+    /// intended for artifact loaders; raw image loading leaves facts absent.
+    /// Loading does not validate the facts against device instructions. Binding
+    /// this module to a checked launch API is unsafe and requires truthful facts
+    /// for the exact loaded image and entry.
+    #[doc(hidden)]
+    pub fn load_module_from_image_with_launch_facts(
+        self: &Arc<Self>,
+        image: &[u8],
+        kernel_launch_facts: BTreeMap<String, KernelLaunchFacts>,
+    ) -> Result<Arc<CudaModule>, DriverError> {
         self.bind_to_thread()?;
         let image = null_terminated_image(image);
         let cu_module = unsafe {
@@ -116,6 +136,7 @@ impl CudaContext {
         Ok(Arc::new(CudaModule {
             cu_module,
             ctx: self.clone(),
+            kernel_launch_facts,
         }))
     }
 
@@ -141,6 +162,7 @@ impl CudaContext {
         Ok(Arc::new(CudaModule {
             cu_module,
             ctx: self.clone(),
+            kernel_launch_facts: BTreeMap::new(),
         }))
     }
 }
@@ -168,6 +190,7 @@ pub struct CudaFunction {
     /// Owning module. Prevents unloading while this function handle exists.
     #[allow(unused)]
     pub(crate) module: Arc<CudaModule>,
+    launch_facts: Option<KernelLaunchFacts>,
 }
 
 /// # Safety
@@ -254,6 +277,7 @@ impl CudaModule {
         Ok(CudaFunction {
             cu_function,
             module: self.clone(),
+            launch_facts: self.kernel_launch_facts.get(fn_name).copied(),
         })
     }
 }
@@ -445,6 +469,11 @@ impl CudaModule {
 }
 
 impl CudaFunction {
+    /// Returns finalized requirements attached to this concrete kernel artifact.
+    pub fn launch_facts(&self) -> Option<KernelLaunchFacts> {
+        self.launch_facts
+    }
+
     fn attribute(
         &self,
         attribute: cuda_bindings::CUfunction_attribute,

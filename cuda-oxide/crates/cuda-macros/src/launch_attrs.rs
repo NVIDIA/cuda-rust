@@ -181,7 +181,14 @@ pub(crate) fn inject_launch_contract_markers(args: &LaunchContractArgs, input: &
         next += 1;
     }
 
-    if dynamic_shared_max(args.dynamic_shared) != 0 {
+    if args.dynamic_shared == crate::cuda_module::contract::DynamicSharedContract::Inferred {
+        input.block.stmts.insert(
+            next,
+            parse_quote! {
+                ::cuda_device::shared::__dynamic_shared_inferred();
+            },
+        );
+    } else if dynamic_shared_max(args.dynamic_shared) != 0 {
         let alignment = args.dynamic_shared_alignment as usize;
         let alignment_marker: syn::Stmt = parse_quote! {
             ::cuda_device::shared::__dynamic_shared_alignment::<#alignment>();

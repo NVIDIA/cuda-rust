@@ -12,6 +12,7 @@
 
 mod diagnostics;
 mod link;
+mod ltoir_file;
 mod nvvm;
 mod options;
 mod provenance;
@@ -21,6 +22,7 @@ mod validation;
 pub use diagnostics::KernelResourceUsage;
 pub use libnvvm_sys::{CudaArch, CudaArchParseError, LibdeviceNotFound, NvvmError, find_libdevice};
 pub use link::{LinkReport, LtoLinker};
+pub use ltoir_file::{LtoirFile, check_ltoir_input_output};
 pub use nvjitlink_sys::NvJitLinkError;
 pub use nvvm::NvvmCompiler;
 pub use options::{DebugPolicy, FinalizationOptions, FinalizerOutput, NamedInput};
@@ -37,6 +39,20 @@ use thiserror::Error;
 /// Failures while compiling or linking CUDA artifacts.
 #[derive(Debug, Error)]
 pub enum FinalizerError {
+    /// A file path cannot be transported losslessly to the CUDA linker.
+    #[error("external LTO-IR path is not Unicode: {path:?}")]
+    InvalidLtoirPath { path: PathBuf },
+
+    /// A link input changed after the wrapper computed Cargo's fingerprint.
+    #[error("external LTO-IR input changed after Cargo fingerprinting: {path}; rerun cargo oxide")]
+    LtoirInputChanged { path: PathBuf },
+
+    /// An output would delete or overwrite an explicitly supplied link input.
+    #[error(
+        "external LTO-IR input {input} overlaps generated artifact {output}; move the external input to a separate directory"
+    )]
+    LtoirInputOutputOverlap { input: PathBuf, output: PathBuf },
+
     /// libNVVM failed to load, validate, or compile.
     #[error("libnvvm: {0}")]
     Nvvm(#[from] libnvvm_sys::NvvmError),

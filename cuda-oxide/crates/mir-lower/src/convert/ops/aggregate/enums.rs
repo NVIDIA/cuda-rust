@@ -109,6 +109,17 @@ pub(crate) fn convert_construct_enum(
 
     // Insert every payload field that owns a struct slot; remember the
     // slotless ones for the memory pass below.
+    let storage_field_tys: Vec<TypeHandle> = {
+        let storage_type = llvm_struct_ty.deref(ctx);
+        let storage_struct = storage_type
+            .downcast_ref::<llvm_types::StructType>()
+            .ok_or_else(|| {
+                pliron::input_error_noloc!(
+                    "MirConstructEnumOp physical storage is not an LLVM struct"
+                )
+            })?;
+        storage_struct.fields().collect()
+    };
     let mut deferred: Vec<(usize, Value)> = Vec::new();
     for (i, operand) in operands.into_iter().enumerate() {
         let flat = field_base + i;
@@ -120,25 +131,37 @@ pub(crate) fn convert_construct_enum(
                 slot_map.field_slots.len()
             );
         };
+        // A decomposed aggregate field: one insertvalue per leaf, extracted
+        // from the operand and coerced to its slot's storage type. No spill.
+        if let Some(leaves) = slot_map.field_leaf_slots.get(flat).and_then(|l| l.as_ref()) {
+            for (path, leaf_slot) in leaves {
+                let extract_op = llvm::ExtractValueOp::new(ctx, operand, path.clone())?;
+                rewriter.insert_operation(ctx, extract_op.get_operation());
+                let leaf = extract_op.get_operation().deref(ctx).get_result(0);
+                let storage_slot = *leaf_slot as usize;
+                let Some(storage_ty) = storage_field_tys.get(storage_slot).copied() else {
+                    return pliron::input_err_noloc!(
+                        "MirConstructEnumOp physical field slot {} is out of range",
+                        leaf_slot
+                    );
+                };
+                let stored_leaf = coerce_enum_payload_storage(ctx, rewriter, leaf, storage_ty)?;
+                let insert_op =
+                    llvm::InsertValueOp::new(ctx, current_struct, stored_leaf, vec![*leaf_slot]);
+                rewriter.insert_operation(ctx, insert_op.get_operation());
+                current_struct = insert_op.get_operation().deref(ctx).get_result(0);
+                last_op = insert_op.get_operation();
+            }
+            continue;
+        }
         match slot {
             Some(slot) => {
-                let storage_ty = {
-                    let storage_type = llvm_struct_ty.deref(ctx);
-                    let storage_struct = storage_type
-                        .downcast_ref::<llvm_types::StructType>()
-                        .ok_or_else(|| {
-                            pliron::input_error_noloc!(
-                                "MirConstructEnumOp physical storage is not an LLVM struct"
-                            )
-                        })?;
-                    let storage_slot = *slot as usize;
-                    if storage_slot >= storage_struct.num_fields() {
-                        return pliron::input_err_noloc!(
-                            "MirConstructEnumOp physical field slot {} is out of range",
-                            slot
-                        );
-                    }
-                    storage_struct.field_type(storage_slot)
+                let storage_slot = *slot as usize;
+                let Some(storage_ty) = storage_field_tys.get(storage_slot).copied() else {
+                    return pliron::input_err_noloc!(
+                        "MirConstructEnumOp physical field slot {} is out of range",
+                        slot
+                    );
                 };
                 let stored_operand =
                     coerce_enum_payload_storage(ctx, rewriter, operand, storage_ty)?;
@@ -444,12 +467,26 @@ pub(crate) fn convert_get_discriminant(
     Ok(())
 }
 
+/// The LLVM type at an `extractvalue`/`insertvalue` index `path` into `ty`.
+fn llvm_type_at_path(ctx: &Context, mut ty: TypeHandle, path: &[u32]) -> Option<TypeHandle> {
+    for &index in path {
+        ty = ty
+            .deref(ctx)
+            .downcast_ref::<llvm_types::StructType>()?
+            .field_type(index as usize);
+    }
+    Some(ty)
+}
+
 /// Convert `mir.enum_payload` (reading a variant's field, e.g. the `x`
 /// in `E::A(x) => x`) to a payload-field read.
 ///
-/// Three cases, decided by the [`EnumSlotMap`]:
+/// Four cases, decided by the [`EnumSlotMap`]:
 ///
 /// - The field owns a struct slot: a plain `llvm.extractvalue`.
+/// - The field was decomposed into leaf slots: rebuild the aggregate in
+///   SSA, one `llvm.extractvalue` per leaf slot and one `llvm.insertvalue`
+///   per leaf path, coercing each leaf back to its semantic type. No spill.
 /// - The field has no slot (its bytes are shared with a different-typed
 ///   field of another variant): go through memory. Copy the enum to a
 ///   stack slot, point at the field's byte position, and load it with
@@ -505,6 +542,33 @@ pub(crate) fn convert_enum_payload(
             slot_map.field_slots.len()
         );
     };
+
+    // A decomposed aggregate field: rebuild the whole value leaf by leaf
+    // from the enum's SSA slots, with no round-trip through memory.
+    if let Some(leaves) = slot_map.field_leaf_slots.get(flat).and_then(|l| l.as_ref()) {
+        let semantic_ty = slot_map.field_llvm_types[flat];
+        let undef_op = llvm::UndefOp::new(ctx, semantic_ty);
+        rewriter.insert_operation(ctx, undef_op.get_operation());
+        let mut current = undef_op.get_operation().deref(ctx).get_result(0);
+        for (path, leaf_slot) in leaves {
+            let extract_op = llvm::ExtractValueOp::new(ctx, enum_val, vec![*leaf_slot])?;
+            rewriter.insert_operation(ctx, extract_op.get_operation());
+            let stored_leaf = extract_op.get_operation().deref(ctx).get_result(0);
+            let Some(semantic_leaf_ty) = llvm_type_at_path(ctx, semantic_ty, path) else {
+                return pliron::input_err_noloc!(
+                    "MirEnumPayloadOp leaf path {:?} does not resolve inside the field type",
+                    path
+                );
+            };
+            let semantic_leaf =
+                coerce_enum_payload_storage(ctx, rewriter, stored_leaf, semantic_leaf_ty)?;
+            let insert_op = llvm::InsertValueOp::new(ctx, current, semantic_leaf, path.clone());
+            rewriter.insert_operation(ctx, insert_op.get_operation());
+            current = insert_op.get_operation().deref(ctx).get_result(0);
+        }
+        rewriter.replace_operation_with_values(ctx, op, vec![current]);
+        return Ok(());
+    }
 
     match slot {
         Some(slot) => {
@@ -631,6 +695,19 @@ mod tests {
         );
     }
 
+    /// `Option<(usize, &T)>` with the niche on the tuple's pointer: the
+    /// aggregate payload is decomposed into leaf slots (the `usize` leaf at
+    /// byte 0, the pointer leaf reusing the carrier at byte 8), so construct
+    /// and payload read rebuild the value entirely in SSA.
+    ///
+    /// This test used to pin the spill design ("the payload moves as one
+    /// unit through memory, never field by field"): construction and
+    /// extraction each spilled the enum and moved the whole tuple through
+    /// the slot. The leaf-slot rule (enum-typed-payload round) replaced that
+    /// with typed leaf traffic on purpose: byte-wise spills of mixed-type
+    /// filler were what SROA could not promote, leaving local-memory
+    /// traffic in `opt -O2` output. Both leaves still round-trip — now as
+    /// `extractvalue`/`insertvalue` pairs, with zero memory ops.
     #[test]
     fn nested_pointer_niche_tuple_construct_extract_and_discriminant_lower() {
         let mut ctx = make_ctx();
@@ -664,7 +741,6 @@ mod tests {
         let slot_map = build_enum_slot_map(&mut ctx, enum_ty).unwrap();
         assert_eq!(slot_map.carrier_slot, Some(1));
         assert_eq!(slot_map.field_slots, vec![None]);
-        let lowered_tuple = convert_type(&mut ctx, tuple_ty).unwrap();
 
         let (module, block) = build_kernel(&mut ctx, vec![index, pointer], vec![]);
         let index_value = block.deref(&ctx).get_argument(0);
@@ -730,78 +806,503 @@ mod tests {
             "reading the pointer niche should inspect the carrier exactly once"
         );
         assert_eq!(
+            count_ops::<llvm::AllocaOp>(&ctx, &body),
+            0,
+            "leaf slots keep construction and extraction out of memory entirely"
+        );
+        assert_eq!(
             count_ops::<llvm::StoreOp>(&ctx, &body),
-            3,
-            "construction and extraction should each spill the enum, plus one tuple payload store"
+            0,
+            "the decomposed payload must not spill through a stack slot"
         );
         assert_eq!(
             count_ops::<llvm::LoadOp>(&ctx, &body),
-            2,
-            "construction should reload the enum and extraction should load the tuple payload"
+            0,
+            "the decomposed payload must be rebuilt from SSA slots, not loads"
         );
-        // What this test is about is that the payload moves as one unit, never
-        // field by field. Assert that property directly instead of counting
-        // whole-aggregate accesses.
-        //
-        // Counting was the fragile form. The enum's physical storage here is
-        // `{i64, ptr}` -- the *same interned type* as the lowered payload tuple,
-        // since the niche carrier claims the pointer at byte 8 and the 8 bytes
-        // below it become one `i64` filler. So a count of `lowered_tuple`-typed
-        // accesses cannot separate the payload write from the enum spill, and
-        // the expected numbers move whenever that coincidence appears or
-        // disappears -- which has nothing to do with the property under test.
-        //
-        // A lowering that decomposed the payload is recognisable by what it
-        // emits instead: traffic in the tuple's *field* types. Look for that,
-        // and the assertion holds whatever the enum storage type happens to be.
-        let field_tys: Vec<TypeHandle> = lowered_tuple
-            .deref(&ctx)
-            .downcast_ref::<llvm_types::StructType>()
-            .expect("the lowered tuple is an LLVM struct")
-            .fields()
+        // Both leaves must actually move: the tuple's own construction,
+        // the enum construction, and the payload rebuild each insert both
+        // leaves, and the discriminant read extracts the carrier once.
+        // (The enum's physical storage here is `{i64, ptr}` -- the same
+        // interned type as the lowered payload tuple, since the carrier
+        // claims the pointer at byte 8 -- so the counts, not the aggregate
+        // types, carry the assertion.)
+        let mut inserted: Vec<Vec<u32>> =
+            insert_indices(&ctx, &find_all::<llvm::InsertValueOp>(&ctx, &body));
+        inserted.sort();
+        assert_eq!(
+            inserted,
+            vec![vec![0], vec![0], vec![0], vec![1], vec![1], vec![1]],
+            "the tuple build, the enum build, and the payload rebuild each insert both leaves"
+        );
+        let mut extracted: Vec<Vec<u32>> = find_all::<llvm::ExtractValueOp>(&ctx, &body)
+            .iter()
+            .map(|extract| extract.indices(&ctx))
             .collect();
+        extracted.sort();
+        assert_eq!(
+            extracted,
+            vec![vec![0], vec![0], vec![1], vec![1], vec![1]],
+            "each leaf is read from the operand tuple, from the enum slots, plus the carrier"
+        );
+    }
 
-        let store_tys: Vec<TypeHandle> = find_all::<llvm::StoreOp>(&ctx, &body)
-            .iter()
-            .map(|store| store.get_operand_value(&ctx).get_type(&ctx))
-            .collect();
-        let load_tys: Vec<TypeHandle> = find_all::<llvm::LoadOp>(&ctx, &body)
-            .iter()
-            .map(|load| {
-                load.get_operation()
+    /// The `Option<RopePair>` shape ({&mut T, usize, usize}, niche on the
+    /// pointer): one fixture shared by the SSA and niche tests below.
+    fn rope_pair_enum(ctx: &mut Context) -> (TypeHandle, TypeHandle, TypeHandle) {
+        let logical: TypeHandle = IntegerType::get(ctx, 64, Signedness::Unsigned).into();
+        let word: TypeHandle = IntegerType::get(ctx, 64, Signedness::Unsigned).into();
+        let pointee: TypeHandle = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
+        let pointer: TypeHandle = MirPtrType::get_generic(ctx, pointee, false).into();
+        let payload: TypeHandle = MirStructType::get_with_full_layout(
+            ctx,
+            "RopePair".into(),
+            vec!["rope".into(), "base".into(), "cache".into()],
+            vec![pointer, word, word],
+            vec![0, 1, 2],
+            vec![0, 8, 16],
+            24,
+            8,
+        )
+        .into();
+        let enum_ty: TypeHandle = MirEnumType::get_with_encoding(
+            ctx,
+            "MaybeRopePair".into(),
+            logical,
+            vec![0, 1],
+            vec![
+                EnumVariant::unit("None".into()),
+                EnumVariant::new_with_layout("Some".into(), vec![payload], vec![0], vec![24]),
+            ],
+            EnumEncoding {
+                tag_offset: 0,
+                total_size: 24,
+                abi_align: 8,
+                layout_kind: EnumLayoutKind::Niche,
+                carrier_kind: EnumCarrierKind::Pointer,
+                carrier_width: 64,
+                untagged_variant: 1,
+                variant_inhabited: vec![1, 1],
+                ..EnumEncoding::default()
+            },
+        )
+        .into();
+        (enum_ty, payload, pointer)
+    }
+
+    /// The `Option<(f32, f32, &mut f32)>` shape: floats below the pointer
+    /// that carries the niche.
+    fn float_pair_enum(ctx: &mut Context) -> (TypeHandle, TypeHandle, TypeHandle, TypeHandle) {
+        use pliron::builtin::types::FP32Type;
+        let logical: TypeHandle = IntegerType::get(ctx, 64, Signedness::Unsigned).into();
+        let float: TypeHandle = FP32Type::get(ctx).into();
+        let pointee: TypeHandle = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
+        let pointer: TypeHandle = MirPtrType::get_generic(ctx, pointee, false).into();
+        let payload: TypeHandle = MirTupleType::get_with_layout(
+            ctx,
+            vec![float, float, pointer],
+            vec![0, 1, 2],
+            vec![0, 4, 8],
+            16,
+            8,
+        )
+        .into();
+        let enum_ty: TypeHandle = MirEnumType::get_with_encoding(
+            ctx,
+            "MaybeFloatPair".into(),
+            logical,
+            vec![0, 1],
+            vec![
+                EnumVariant::unit("None".into()),
+                EnumVariant::new_with_layout("Some".into(), vec![payload], vec![0], vec![16]),
+            ],
+            EnumEncoding {
+                tag_offset: 8,
+                total_size: 16,
+                abi_align: 8,
+                layout_kind: EnumLayoutKind::Niche,
+                carrier_kind: EnumCarrierKind::Pointer,
+                carrier_width: 64,
+                untagged_variant: 1,
+                variant_inhabited: vec![1, 1],
+                ..EnumEncoding::default()
+            },
+        )
+        .into();
+        (enum_ty, payload, pointer, float)
+    }
+
+    /// Construct-then-payload-read of a decomposed aggregate payload stays
+    /// in SSA: no `alloca`, no `store`, no `load`. The spill the old lowering
+    /// needed here (byte stores into filler, one wide load back) is exactly
+    /// what SROA cannot promote, and what survived `opt -O2` as local-memory
+    /// traffic in the rms_norm/rope kernels. The tagged no-niche pair is the
+    /// regression guard: it was already whole-slot SSA before the leaf rule.
+    #[test]
+    fn aggregate_payload_construct_and_read_stay_in_ssa() {
+        // Option<RopePair>: {&mut T, usize, usize} built from its fields.
+        {
+            let mut ctx = make_ctx();
+            let (enum_ty, payload, pointer) = rope_pair_enum(&mut ctx);
+            let word: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Unsigned).into();
+            let (module, block) = build_kernel(&mut ctx, vec![pointer, word, word], vec![]);
+            let rope = block.deref(&ctx).get_argument(0);
+            let base = block.deref(&ctx).get_argument(1);
+            let cache = block.deref(&ctx).get_argument(2);
+            let struct_op = Operation::new(
+                &mut ctx,
+                mir::MirConstructStructOp::get_concrete_op_info(),
+                vec![payload],
+                vec![rope, base, cache],
+                vec![],
+                0,
+            );
+            struct_op.insert_at_back(block, &ctx);
+            let struct_value = struct_op.deref(&ctx).get_result(0);
+            let construct = Operation::new(
+                &mut ctx,
+                mir::MirConstructEnumOp::get_concrete_op_info(),
+                vec![enum_ty],
+                vec![struct_value],
+                vec![],
+                0,
+            );
+            mir::MirConstructEnumOp::new(construct)
+                .set_attr_construct_enum_variant_index(&ctx, VariantIndexAttr(1));
+            construct.insert_at_back(block, &ctx);
+            let enum_value = construct.deref(&ctx).get_result(0);
+            let payload_read = Operation::new(
+                &mut ctx,
+                mir::MirEnumPayloadOp::get_concrete_op_info(),
+                vec![payload],
+                vec![enum_value],
+                vec![],
+                0,
+            );
+            mir::MirEnumPayloadOp::new(payload_read)
+                .set_attr_payload_variant_index(&ctx, VariantIndexAttr(1));
+            mir::MirEnumPayloadOp::new(payload_read)
+                .set_attr_payload_field_index(&ctx, FieldIndexAttr(0));
+            payload_read.insert_at_back(block, &ctx);
+            append_mir_return(&mut ctx, block, vec![]);
+
+            crate::lower_mir_to_llvm(&mut ctx, module).expect("lowering failed");
+            let body = kernel_blocks(&ctx, module);
+            assert_eq!(
+                count_ops::<llvm::AllocaOp>(&ctx, &body),
+                0,
+                "the RopePair payload must not spill through a stack slot"
+            );
+            assert_eq!(count_ops::<llvm::StoreOp>(&ctx, &body), 0);
+            assert_eq!(count_ops::<llvm::LoadOp>(&ctx, &body), 0);
+        }
+        // Option<(f32, f32, &mut f32)>: tuple built from its elements.
+        {
+            let mut ctx = make_ctx();
+            let (enum_ty, payload, pointer, float) = float_pair_enum(&mut ctx);
+            let (module, block) = build_kernel(&mut ctx, vec![float, float, pointer], vec![]);
+            let first = block.deref(&ctx).get_argument(0);
+            let second = block.deref(&ctx).get_argument(1);
+            let cell = block.deref(&ctx).get_argument(2);
+            let tuple_op = Operation::new(
+                &mut ctx,
+                mir::MirConstructTupleOp::get_concrete_op_info(),
+                vec![payload],
+                vec![first, second, cell],
+                vec![],
+                0,
+            );
+            tuple_op.insert_at_back(block, &ctx);
+            let tuple_value = tuple_op.deref(&ctx).get_result(0);
+            let construct = Operation::new(
+                &mut ctx,
+                mir::MirConstructEnumOp::get_concrete_op_info(),
+                vec![enum_ty],
+                vec![tuple_value],
+                vec![],
+                0,
+            );
+            mir::MirConstructEnumOp::new(construct)
+                .set_attr_construct_enum_variant_index(&ctx, VariantIndexAttr(1));
+            construct.insert_at_back(block, &ctx);
+            let enum_value = construct.deref(&ctx).get_result(0);
+            let payload_read = Operation::new(
+                &mut ctx,
+                mir::MirEnumPayloadOp::get_concrete_op_info(),
+                vec![payload],
+                vec![enum_value],
+                vec![],
+                0,
+            );
+            mir::MirEnumPayloadOp::new(payload_read)
+                .set_attr_payload_variant_index(&ctx, VariantIndexAttr(1));
+            mir::MirEnumPayloadOp::new(payload_read)
+                .set_attr_payload_field_index(&ctx, FieldIndexAttr(0));
+            payload_read.insert_at_back(block, &ctx);
+            append_mir_return(&mut ctx, block, vec![]);
+
+            crate::lower_mir_to_llvm(&mut ctx, module).expect("lowering failed");
+            let body = kernel_blocks(&ctx, module);
+            assert_eq!(
+                count_ops::<llvm::AllocaOp>(&ctx, &body),
+                0,
+                "the float-pair payload must not spill through a stack slot"
+            );
+            assert_eq!(count_ops::<llvm::StoreOp>(&ctx, &body), 0);
+            assert_eq!(count_ops::<llvm::LoadOp>(&ctx, &body), 0);
+        }
+        // Option<(u32, u32)>: tagged, no niche, whole-slot payload — the
+        // regression guard that passes with and without the leaf rule.
+        {
+            let mut ctx = make_ctx();
+            let logical: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+            let word: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+            let payload: TypeHandle = MirTupleType::get_with_layout(
+                &mut ctx,
+                vec![word, word],
+                vec![0, 1],
+                vec![0, 4],
+                8,
+                4,
+            )
+            .into();
+            let enum_ty: TypeHandle = MirEnumType::get_with_layout(
+                &mut ctx,
+                "MaybeWords".into(),
+                logical,
+                vec![0, 1],
+                vec![
+                    EnumVariant::unit("None".into()),
+                    EnumVariant::new_with_layout("Some".into(), vec![payload], vec![4], vec![8]),
+                ],
+                0,
+                12,
+                4,
+            )
+            .into();
+            let (module, block) = build_kernel(&mut ctx, vec![word, word], vec![]);
+            let first = block.deref(&ctx).get_argument(0);
+            let second = block.deref(&ctx).get_argument(1);
+            let tuple_op = Operation::new(
+                &mut ctx,
+                mir::MirConstructTupleOp::get_concrete_op_info(),
+                vec![payload],
+                vec![first, second],
+                vec![],
+                0,
+            );
+            tuple_op.insert_at_back(block, &ctx);
+            let tuple_value = tuple_op.deref(&ctx).get_result(0);
+            let construct = Operation::new(
+                &mut ctx,
+                mir::MirConstructEnumOp::get_concrete_op_info(),
+                vec![enum_ty],
+                vec![tuple_value],
+                vec![],
+                0,
+            );
+            mir::MirConstructEnumOp::new(construct)
+                .set_attr_construct_enum_variant_index(&ctx, VariantIndexAttr(1));
+            construct.insert_at_back(block, &ctx);
+            let enum_value = construct.deref(&ctx).get_result(0);
+            let payload_read = Operation::new(
+                &mut ctx,
+                mir::MirEnumPayloadOp::get_concrete_op_info(),
+                vec![payload],
+                vec![enum_value],
+                vec![],
+                0,
+            );
+            mir::MirEnumPayloadOp::new(payload_read)
+                .set_attr_payload_variant_index(&ctx, VariantIndexAttr(1));
+            mir::MirEnumPayloadOp::new(payload_read)
+                .set_attr_payload_field_index(&ctx, FieldIndexAttr(0));
+            payload_read.insert_at_back(block, &ctx);
+            append_mir_return(&mut ctx, block, vec![]);
+
+            crate::lower_mir_to_llvm(&mut ctx, module).expect("lowering failed");
+            let body = kernel_blocks(&ctx, module);
+            assert_eq!(count_ops::<llvm::AllocaOp>(&ctx, &body), 0);
+            assert_eq!(count_ops::<llvm::StoreOp>(&ctx, &body), 0);
+            assert_eq!(count_ops::<llvm::LoadOp>(&ctx, &body), 0);
+        }
+    }
+
+    /// The leaf rule must not disturb the niche encoding. `None` still
+    /// writes a null pointer into the carrier slot and the discriminant read
+    /// still inspects exactly that slot; `Some` still writes the payload's
+    /// pointer there — now as the leaf insert instead of a memory spill.
+    #[test]
+    fn pointer_niche_leaf_slots_keep_null_none_and_payload_pointer_some() {
+        let check = |carrier_slot: u32, pointer_path: Vec<u32>, is_struct_payload: bool| {
+            // None: the carrier write is IntToPtr(constant 0), and the
+            // discriminant reads the carrier slot once.
+            {
+                let mut ctx = make_ctx();
+                let (enum_ty, payload) = if is_struct_payload {
+                    let (enum_ty, payload, _) = rope_pair_enum(&mut ctx);
+                    (enum_ty, payload)
+                } else {
+                    let (enum_ty, payload, _, _) = float_pair_enum(&mut ctx);
+                    (enum_ty, payload)
+                };
+                let _ = &payload;
+                let logical: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Unsigned).into();
+                let (module, block) = build_kernel(&mut ctx, vec![], vec![logical]);
+                let construct = Operation::new(
+                    &mut ctx,
+                    mir::MirConstructEnumOp::get_concrete_op_info(),
+                    vec![enum_ty],
+                    vec![],
+                    vec![],
+                    0,
+                );
+                mir::MirConstructEnumOp::new(construct)
+                    .set_attr_construct_enum_variant_index(&ctx, VariantIndexAttr(0));
+                construct.insert_at_back(block, &ctx);
+                let enum_value = construct.deref(&ctx).get_result(0);
+                let get = Operation::new(
+                    &mut ctx,
+                    mir::MirGetDiscriminantOp::get_concrete_op_info(),
+                    vec![logical],
+                    vec![enum_value],
+                    vec![],
+                    0,
+                );
+                get.insert_at_back(block, &ctx);
+                let discriminant = get.deref(&ctx).get_result(0);
+                append_mir_return(&mut ctx, block, vec![discriminant]);
+
+                crate::lower_mir_to_llvm(&mut ctx, module).expect("lowering failed");
+                let body = kernel_blocks(&ctx, module);
+                let carrier_inserts: Vec<_> = find_all::<llvm::InsertValueOp>(&ctx, &body)
+                    .into_iter()
+                    .filter(|insert| insert.indices(&ctx) == vec![carrier_slot])
+                    .collect();
+                assert_eq!(
+                    carrier_inserts.len(),
+                    1,
+                    "constructing None writes the carrier slot exactly once"
+                );
+                let value = carrier_inserts[0]
+                    .get_operation()
                     .deref(&ctx)
-                    .get_result(0)
-                    .get_type(&ctx)
-            })
-            .collect();
+                    .get_operand(1);
+                let int_to_ptr = Operation::get_op::<llvm::IntToPtrOp>(
+                    value.defining_op().expect("carrier value must be defined"),
+                    &ctx,
+                )
+                .expect("None's carrier write is a null pointer, not a payload");
+                let bits = int_to_ptr.get_operation().deref(&ctx).get_operand(0);
+                let bits_constant = Operation::get_op::<llvm::ConstantOp>(
+                    bits.defining_op().expect("null bits must be defined"),
+                    &ctx,
+                )
+                .expect("None's niche bits must be a constant");
+                let attr = bits_constant.get_value(&ctx);
+                let integer = (&*attr as &dyn pliron::attribute::Attribute)
+                    .downcast_ref::<IntegerAttr>()
+                    .expect("niche bits must be an integer");
+                assert_eq!(
+                    integer.value().to_u64(),
+                    0,
+                    "None must encode as the null pointer niche"
+                );
+                let ptr_to_ints = find_all::<llvm::PtrToIntOp>(&ctx, &body);
+                assert_eq!(
+                    ptr_to_ints.len(),
+                    1,
+                    "the discriminant reads the carrier once"
+                );
+                let carrier_read = ptr_to_ints[0].get_operation().deref(&ctx).get_operand(0);
+                let extract = Operation::get_op::<llvm::ExtractValueOp>(
+                    carrier_read
+                        .defining_op()
+                        .expect("carrier read must be defined"),
+                    &ctx,
+                )
+                .expect("the discriminant must read the carrier slot");
+                assert_eq!(extract.indices(&ctx), vec![carrier_slot]);
+            }
+            // Some: the carrier slot receives the payload's pointer leaf.
+            {
+                let mut ctx = make_ctx();
+                let (enum_ty, payload, operands, pointer) = if is_struct_payload {
+                    let (enum_ty, payload, pointer) = rope_pair_enum(&mut ctx);
+                    let word: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Unsigned).into();
+                    (enum_ty, payload, vec![pointer, word, word], pointer)
+                } else {
+                    let (enum_ty, payload, pointer, float) = float_pair_enum(&mut ctx);
+                    (enum_ty, payload, vec![float, float, pointer], pointer)
+                };
+                let _ = pointer;
+                let (module, block) = build_kernel(&mut ctx, operands.clone(), vec![]);
+                let values: Vec<_> = (0..operands.len())
+                    .map(|index| block.deref(&ctx).get_argument(index))
+                    .collect();
+                let build_info = if is_struct_payload {
+                    mir::MirConstructStructOp::get_concrete_op_info()
+                } else {
+                    mir::MirConstructTupleOp::get_concrete_op_info()
+                };
+                let payload_op =
+                    Operation::new(&mut ctx, build_info, vec![payload], values, vec![], 0);
+                payload_op.insert_at_back(block, &ctx);
+                let payload_value = payload_op.deref(&ctx).get_result(0);
+                let construct = Operation::new(
+                    &mut ctx,
+                    mir::MirConstructEnumOp::get_concrete_op_info(),
+                    vec![enum_ty],
+                    vec![payload_value],
+                    vec![],
+                    0,
+                );
+                mir::MirConstructEnumOp::new(construct)
+                    .set_attr_construct_enum_variant_index(&ctx, VariantIndexAttr(1));
+                construct.insert_at_back(block, &ctx);
+                append_mir_return(&mut ctx, block, vec![]);
 
-        let describe = |tys: &[TypeHandle]| -> Vec<String> {
-            tys.iter()
-                .filter(|ty| field_tys.contains(ty))
-                .map(|ty| ty.deref(&ctx).disp(&ctx).to_string())
-                .collect()
+                crate::lower_mir_to_llvm(&mut ctx, module).expect("lowering failed");
+                let body = kernel_blocks(&ctx, module);
+                // Inserts at the carrier slot come from two builds here: the
+                // payload's own construction (same index inside the payload
+                // struct) and the enum's. Exactly one of them must receive
+                // the payload's pointer leaf as an SSA extract — never a
+                // constant or a load.
+                let carrier_inserts: Vec<_> = find_all::<llvm::InsertValueOp>(&ctx, &body)
+                    .into_iter()
+                    .filter(|insert| insert.indices(&ctx) == vec![carrier_slot])
+                    .collect();
+                assert!(
+                    !carrier_inserts.is_empty(),
+                    "constructing Some must write the carrier slot"
+                );
+                let mut leaf_into_carrier = 0;
+                for insert in &carrier_inserts {
+                    let value = insert.get_operation().deref(&ctx).get_operand(1);
+                    let Some(def) = value.defining_op() else {
+                        continue;
+                    };
+                    let Some(extract) = Operation::get_op::<llvm::ExtractValueOp>(def, &ctx) else {
+                        continue;
+                    };
+                    assert_eq!(
+                        extract.indices(&ctx),
+                        pointer_path,
+                        "the carrier receives the payload's pointer leaf, not a constant or a load"
+                    );
+                    leaf_into_carrier += 1;
+                }
+                assert_eq!(
+                    leaf_into_carrier, 1,
+                    "exactly one carrier write carries the payload pointer leaf"
+                );
+            }
         };
-        assert!(
-            describe(&store_tys).is_empty(),
-            "the payload must be stored whole, but these field-typed stores appear: {:?}",
-            describe(&store_tys)
-        );
-        assert!(
-            describe(&load_tys).is_empty(),
-            "the payload must be read whole, but these field-typed loads appear: {:?}",
-            describe(&load_tys)
-        );
-
-        // And it must actually be moved: without this the checks above would
-        // also pass a lowering that emitted no payload traffic at all.
-        assert!(
-            store_tys.contains(&lowered_tuple),
-            "at least one store must move the complete {{i64, ptr}} payload"
-        );
-        assert!(
-            load_tys.contains(&lowered_tuple),
-            "at least one load must read the complete {{i64, ptr}} payload"
-        );
+        // RopePair: carrier at slot 0, pointer leaf at payload path [0].
+        check(0, vec![0], true);
+        // Float pair: carrier at slot 2, pointer leaf at payload path [2].
+        check(2, vec![2], false);
     }
 
     /// SetDiscriminant must use the slot map instead of assuming that the tag

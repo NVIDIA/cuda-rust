@@ -302,7 +302,7 @@ impl<F: Fn() -> crate::ast::Module> KernelCompiler<F> {
             hoisted: compiler.check_stats.hoisted.get(),
             in_place: compiler.check_stats.in_place.get(),
         };
-        let launch_checks = compiler.launch_checks.borrow().clone();
+        let launch_checks = compiler.launch_checks();
         Ok(CompileArtifacts {
             module,
             bytecode_version: self.bytecode_version,

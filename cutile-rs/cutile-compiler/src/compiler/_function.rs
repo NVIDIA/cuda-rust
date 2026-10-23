@@ -9,6 +9,7 @@
 //! the old CUDATileFunctionCompiler.
 
 use super::_module::CUDATileModules;
+use super::launch_checks::LaunchChecks;
 use crate::ast::{SourceLocation, SpanBase};
 use crate::bounds::Bounds;
 use crate::error::{JITError, SpannedJITError};
@@ -72,7 +73,7 @@ pub struct CUDATileFunctionCompiler<'m> {
     /// (`Resolution::Launch`). Interior-mutable because compile passes take
     /// `&self`; merged into the `Validator` in [`Self::get_validator`] and run
     /// once per launch by the host `validate_launch`.
-    pub(crate) launch_checks: RefCell<Vec<cuda_async::predicate::LaunchCheck>>,
+    launch_checks: RefCell<LaunchChecks>,
     pub(crate) gpu_name: String,
     pub(crate) target_capabilities: Option<cutile_ir::capabilities::TargetCapabilities>,
     pub(crate) optimization_hints: OptimizationHints,
@@ -187,6 +188,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         a_axis: usize,
         b_tensor: &str,
         b_axis: usize,
+        span: &proc_macro2::Span,
     ) -> bool {
         use cuda_async::predicate::{Atom, Predicate, Term};
         // Resolve both tensor names to param indices; if either is not a
@@ -212,6 +214,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         self.lower_obligation(
             predicate,
             format!("dim({a_tensor}, {a_axis}) == dim({b_tensor}, {b_axis})"),
+            span,
         )
     }
 
@@ -238,6 +241,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         b_tensor: &str,
         b_axis: usize,
         tile: i32,
+        span: &proc_macro2::Span,
     ) -> bool {
         use crate::passes::obligation::{resolve, Obligation, Resolution};
         use cuda_async::predicate::{Atom, Predicate, Term};
@@ -296,6 +300,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             format!(
                 "ceil(dim({a_tensor}, {a_axis})/{tile}) <= ceil(dim({b_tensor}, {b_axis})/{tile})"
             ),
+            span,
         )
     }
 
@@ -315,23 +320,26 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         &self,
         predicate: cuda_async::predicate::Predicate,
         cause: impl Into<String>,
+        span: &proc_macro2::Span,
     ) -> bool {
         use crate::passes::obligation::{resolve, Obligation, Resolution};
         let obligation = Obligation::new(predicate, cause);
         match resolve(&obligation, &self.assumptions) {
             Resolution::Jit => true,
             Resolution::Launch(check) => {
-                // Canonical predicates make duplicate detection exact. Two
-                // obligations reducing to the same host compare (e.g. a shared
-                // `Dim`'s divisibility, once per binding) cost one check.
-                let mut checks = self.launch_checks.borrow_mut();
-                if !checks.iter().any(|c| c.predicate == check.predicate) {
-                    checks.push(check);
-                }
+                self.launch_checks
+                    .borrow_mut()
+                    .insert(check, &self.ir_location(span));
                 true
             }
             Resolution::Device => false,
         }
+    }
+
+    /// Export checks with their source origins rendered in the existing host
+    /// diagnostic field. Structured origins remain internal to the compiler.
+    pub(crate) fn launch_checks(&self) -> Vec<cuda_async::predicate::LaunchCheck> {
+        self.launch_checks.borrow().to_host_checks()
     }
 
     /// The kernel-visible extent of `partition`'s axis `axis`, taken from the
@@ -660,7 +668,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             assumptions,
             param_index,
             param_is_mutable,
-            launch_checks: RefCell::new(Vec::new()),
+            launch_checks: RefCell::new(LaunchChecks::default()),
             gpu_name,
             target_capabilities: None,
             optimization_hints,
@@ -1177,6 +1185,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
 
         // Add arrays as variables.
         for (key, value) in generic_vars.ordered_inst_array() {
+            // Binding materialization has no expression in the source. Use
+            // the user signature, not the generated ABI wrapper's span.
+            let _source = self.push_opaque_call_site(&self._function.sig.span());
             let arr_expr = syn::parse2::<syn::Expr>(format!("{value:?}").parse().unwrap()).unwrap();
             let arr_ty =
                 syn::parse2::<syn::Type>(format!("[i32;{}]", value.len()).parse().unwrap())
@@ -1253,7 +1264,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         let mut validator = self.validator.clone();
         // Surface the launch checks hoisted during compilation so the host runs
         // them at launch.
-        validator.launch_checks = self.launch_checks.borrow().clone();
+        validator.launch_checks = self.launch_checks();
         validator
     }
 

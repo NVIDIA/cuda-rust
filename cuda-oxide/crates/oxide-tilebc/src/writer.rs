@@ -70,8 +70,10 @@ enum Type {
 }
 
 /// Interning tables, filled in first-use order.
-#[derive(Default)]
 struct Tables {
+    /// The version the module is written at; the fragment type's symbolic
+    /// shape is encoded differently before 13.6.
+    version: BytecodeVersion,
     strings: Vec<String>,
     string_index: HashMap<String, u64>,
     types: Vec<Type>,
@@ -79,6 +81,16 @@ struct Tables {
 }
 
 impl Tables {
+    fn new(version: BytecodeVersion) -> Self {
+        Self {
+            version,
+            strings: Default::default(),
+            string_index: Default::default(),
+            types: Default::default(),
+            type_index: Default::default(),
+        }
+    }
+
     fn string(&mut self, text: &str) -> u64 {
         if let Some(&index) = self.string_index.get(text) {
             return index;
@@ -177,13 +189,28 @@ fn write_type(w: &mut Writer, tables: &mut Tables, ty: &Type) {
                 w.varint(tables.ty(result));
             }
         }
-        // Tagged empty symbolic shape (the shape is static), the static
-        // shape, element type, memory space, both layouts tagged, then the
-        // alignment as a tagged symbolic integer, always 1.
+        // Tagged symbolic shape, the static shape, element type, memory
+        // space, both layouts tagged, then the alignment as a tagged symbolic
+        // integer, always 1.
+        //
+        // The symbolic shape's contents depend on the version. The 13.5
+        // assembler keeps one integer-valued expression per dimension and
+        // rejects a rank mismatch ("concrete shape cache rank 1 does not
+        // match symbolic shape rank 0"). The compiler trunk switched on
+        // 2026-09-08 to holding only the dynamic dimensions, so a static
+        // shape writes an empty tuple from 13.6 on.
         Type::Fragment(fragment) => {
             w.varint(TAG_FRAGMENT);
             w.varint(ATTR_SYMBOLIC_TUPLE);
-            w.varint(0);
+            if tables.version < BytecodeVersion::new(13, 6) {
+                w.varint(fragment.shape.len() as u64);
+                for &dim in &fragment.shape {
+                    w.varint(ATTR_SYMBOLIC_INT);
+                    w.signed_varint(dim);
+                }
+            } else {
+                w.varint(0);
+            }
             w.le_var_size_i64(&fragment.shape);
             w.varint(tables.ty(&Type::Scalar(fragment.element)));
             w.varint(fragment.memory_space.value());
@@ -335,7 +362,7 @@ fn write_module(
     if version < BytecodeVersion::PREVIEW_FIRST {
         return Err(Error::Version(version));
     }
-    let mut tables = Tables::default();
+    let mut tables = Tables::new(version);
     let mut functions = Writer::new();
     functions.varint(entries as u64);
     write_entries(&mut functions, &mut tables);

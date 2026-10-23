@@ -249,7 +249,8 @@ mod tests {
         expected.resize(24, 0xCB);
         assert_eq!(section(&bytes, 2), expected);
 
-        // The fragment type entry: tagged empty symbolic shape, static shape
+        // The fragment type entry at 13.5: tagged symbolic shape holding one
+        // integer per dimension (the 13.5 assembler requires full rank), static shape
         // [1], element f32 (index 0), local, (1):(1), (128, 1, 1):(1, 0, 0),
         // alignment 1.
         let types = section(&bytes, 5);
@@ -257,7 +258,8 @@ mod tests {
         assert_eq!(
             &entries[1..],
             &[
-                0xD2, 0x01, 0xD8, 0x01, 0x00, 0x01, 1, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x00, //
+                0xD2, 0x01, 0xD8, 0x01, 0x01, 0xD1, 0x01, 0x02, 0x01, 1, 0, 0, 0, 0, 0, 0, 0, 0x00,
+                0x00, //
                 0xD9, 0x01, 0x01, 0xD1, 0x01, 0x02, 0x01, 0xD1, 0x01, 0x02, //
                 0xD9, 0x01, 0x03, 0xD1, 0x01, 0x80, 0x02, 0xD1, 0x01, 0x02, 0xD1, 0x01,
                 0x02, //

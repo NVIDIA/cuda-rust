@@ -41,6 +41,8 @@ pub mod grid;
 pub mod i16x2;
 pub mod iket;
 pub mod int;
+#[doc(hidden)]
+pub mod library;
 pub mod mma_frag;
 pub mod prmt;
 pub mod ptx;

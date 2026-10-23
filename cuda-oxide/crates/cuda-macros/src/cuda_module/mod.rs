@@ -342,7 +342,8 @@ pub(crate) fn expand_cuda_module_inner(
             ///
             /// Every loaded kernel must have the exact ABI and resource
             /// semantics declared by this `cuda_module`. A matching symbol
-            /// name alone is not sufficient.
+            /// name alone is not sufficient. Any attached compiled launch facts
+            /// must truthfully describe that exact loaded image and entry.
             pub unsafe fn from_module(
                 module: ::std::sync::Arc<::cuda_core::CudaModule>,
             ) -> ::core::result::Result<LoadedModule, ::cuda_core::DriverError> {

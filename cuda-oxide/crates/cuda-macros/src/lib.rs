@@ -29,7 +29,7 @@
 //! so the same switch that turns host emission on also adds the `cuda-host`
 //! dependency that resolves it.
 
-#![feature(proc_macro_def_site, proc_macro_tracked_env)]
+#![feature(proc_macro_def_site, proc_macro_tracked_env, proc_macro_tracked_path)]
 
 mod common;
 mod cuda_module;
@@ -37,6 +37,7 @@ mod device;
 mod kernel;
 mod launch;
 mod launch_attrs;
+mod library;
 mod printf;
 mod ptx_asm;
 mod tile_export;
@@ -649,8 +650,23 @@ pub fn launch_bounds(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// the rest of the declared contract without preparation.
 ///
 /// Dynamic shared memory may be fixed with `dynamic_shared = BYTES` or bounded
-/// with `dynamic_shared_range = (MIN, MAX)`. The byte extent remains an author
-/// contract because arbitrary pointer arithmetic cannot be inferred. When the
+/// with `dynamic_shared_range = (MIN, MAX)`. With `dynamic_shared = inferred`,
+/// the compiler records the complete byte extent and alignment of unsafe
+/// `DynamicSharedArray::get_fixed` views, including calls through helpers.
+/// These views alias one dynamic base region; their extents combine by maximum,
+/// not by addition. Mixing inferred views with unconstrained `get`, `get_raw`,
+/// or `offset` access is rejected. Prepared launches require the matching
+/// compiled artifact facts; `LaunchConfig1D::auto_shared` (and its 2D/3D
+/// counterparts) selects the recorded byte count. An explicit byte count is
+/// still checked before launch. Inferred alignment comes from the compiled
+/// layouts, so it cannot be combined with `dynamic_shared_alignment`.
+/// Inference follows Rust views through direct calls. Unsafe external code,
+/// indirect calls and inline assembly may use the dynamic base only within a
+/// fixed view declared on that path; their accesses are not analyzed. An inferred
+/// kernel with no declared views records zero bytes.
+///
+/// For raw dynamic pointers, the byte extent remains an author contract because
+/// arbitrary pointer arithmetic cannot be inferred. When the
 /// maximum is non-zero, the macro injects a compiler marker whose call is
 /// removed before code generation. The declared `dynamic_shared_alignment`
 /// therefore becomes a minimum alignment in generated PTX without adding
@@ -1015,10 +1031,14 @@ pub fn tile_export(attr: TokenStream, item: TokenStream) -> TokenStream {
 // NVVM Attributes for Device FFI
 // ============================================================================
 
-/// Marks a device function as convergent.
+/// Marks an external device function declaration as convergent.
 ///
-/// Convergent functions must be called by all threads in a warp/block together.
-/// This prevents the optimizer from moving calls across control flow boundaries.
+/// LLVM forbids transformations that add control dependencies to the call,
+/// including before external device definitions are linked. The annotation
+/// does not make threads reach the call or guarantee reconvergence. Callers
+/// must satisfy the function's warp or block participation requirements.
+/// Every declaration of the same symbol reachable in a device module must
+/// agree on this annotation; conflicting declarations are rejected.
 ///
 /// # When to Use
 ///
@@ -1039,77 +1059,32 @@ pub fn tile_export(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// # Generated LLVM IR
 ///
 /// ```llvm
-/// declare float @cub_block_reduce_sum(float, ptr) #0
-/// attributes #0 = { convergent nounwind }
+/// declare float @cub_block_reduce_sum(float, ptr) convergent
 /// ```
 #[proc_macro_attribute]
 pub fn convergent(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    // This is a marker attribute - just pass through the item unchanged.
-    // The collector will read this attribute and apply the LLVM convergent attribute.
-    item
+    // The procedural attribute disappears during expansion. A doc alias is
+    // retained in metadata even for private foreign items, unlike doc comments.
+    let marker = reserved_oxide_symbols::DEVICE_EXTERN_CONVERGENT_MARKER;
+    let item = proc_macro2::TokenStream::from(item);
+    quote::quote!(#[doc(alias = #marker)] #item).into()
 }
 
-/// Marks a device function as pure (no side effects).
+/// Compatibility annotation for a pure device function.
 ///
-/// Pure functions only depend on their inputs and have no side effects.
-/// This enables aggressive optimizations like CSE and dead code elimination.
-///
-/// # When to Use
-///
-/// - Math functions that don't access memory
-/// - Functions that compute results purely from input arguments
-///
-/// # Example
-///
-/// ```ignore
-/// #[device]
-/// extern "C" {
-///     #[pure]
-///     fn fast_rsqrt(x: f32) -> f32;
-/// }
-/// ```
-///
-/// # Generated LLVM IR
-///
-/// ```llvm
-/// declare float @fast_rsqrt(float) #0
-/// attributes #0 = { nounwind readnone }
-/// ```
+/// This annotation is currently inactive: it records no compiler effect and
+/// emits no LLVM memory-effect attributes.
 #[proc_macro_attribute]
 pub fn pure(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    // Marker attribute - collector will read and apply LLVM readnone attribute
     item
 }
 
-/// Marks a device function as read-only.
+/// Compatibility annotation for a read-only device function.
 ///
-/// Read-only functions may read memory but never write to it.
-/// This enables optimizations like load hoisting and caching.
-///
-/// # When to Use
-///
-/// - Lookup table functions
-/// - Functions that only read from input arrays
-///
-/// # Example
-///
-/// ```ignore
-/// #[device]
-/// extern "C" {
-///     #[readonly]
-///     fn lookup_table(table: *const f32, idx: i32) -> f32;
-/// }
-/// ```
-///
-/// # Generated LLVM IR
-///
-/// ```llvm
-/// declare float @lookup_table(ptr, i32) #0
-/// attributes #0 = { nounwind readonly }
-/// ```
+/// This annotation is currently inactive: it records no compiler effect and
+/// emits no LLVM memory-effect attributes.
 #[proc_macro_attribute]
 pub fn readonly(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    // Marker attribute - collector will read and apply LLVM readonly attribute
     item
 }
 
@@ -1274,4 +1249,17 @@ pub fn cuda_launch_async(input: TokenStream) -> TokenStream {
     track_codegen_environment();
     let input = parse_macro_input!(input as CudaLaunchAsyncInput);
     expand_cuda_launch_async(input).into()
+}
+
+/// Embed a native library registration from a tracked environment variable.
+///
+/// Re-exported as `cuda_device::library::registration!`. Tracks the provider
+/// executable and, during CUBIN materialization, its declared native inputs.
+/// Ordinary host and documentation builds do not query CUDA toolkit inputs.
+#[proc_macro]
+pub fn library_registration(input: TokenStream) -> TokenStream {
+    let variable = parse_macro_input!(input as syn::LitStr);
+    library::expand(&variable)
+        .unwrap_or_else(|error| syn::Error::new(variable.span(), error).to_compile_error())
+        .into()
 }

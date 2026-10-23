@@ -23,6 +23,113 @@ use pliron::{
 
 use crate::common::module_top_block;
 
+fn mixed_convergence_module(ctx: &mut Context) -> (ModuleOp, Vec<DeviceExternDecl>) {
+    let module = ModuleOp::new(ctx, "mixed_convergence".try_into().unwrap());
+    let module_block = module_top_block(ctx, &module);
+    let ptr_ty = PointerType::get(ctx, 0);
+    let void_ty = VoidType::get(ctx);
+    let external_ty = FuncType::get(ctx, void_ty.into(), vec![ptr_ty.into()], false);
+    let caller = FuncOp::new(ctx, "caller".try_into().unwrap(), external_ty);
+    let entry = caller.get_or_create_entry_block(ctx);
+    let pointer = entry.deref(ctx).get_argument(0);
+    let mut externs = Vec::new();
+    for (name, is_convergent) in [("collective", true), ("ordinary", false)] {
+        FuncOp::new(ctx, name.try_into().unwrap(), external_ty)
+            .get_operation()
+            .insert_at_back(module_block, ctx);
+        CallOp::new(
+            ctx,
+            CallOpCallable::Direct(name.try_into().unwrap()),
+            external_ty,
+            vec![pointer],
+        )
+        .get_operation()
+        .insert_at_back(entry, ctx);
+        externs.push(DeviceExternDecl {
+            export_name: name.to_string(),
+            param_types: vec![DeviceExternType::pointer_to(
+                DeviceExternType::Integer(32),
+                0,
+            )],
+            return_type: DeviceExternType::Void,
+            attrs: DeviceExternAttrs {
+                is_convergent,
+                ..DeviceExternAttrs::default()
+            },
+        });
+    }
+    ReturnOp::new(ctx, None)
+        .get_operation()
+        .insert_at_back(entry, ctx);
+    caller.get_operation().insert_at_back(module_block, ctx);
+    (module, externs)
+}
+
+#[test]
+fn device_extern_convergence_is_per_declaration_in_both_dialects() {
+    let mut ctx = Context::new();
+    let (module, mut externs) = mixed_convergence_module(&mut ctx);
+    // Repeated identical declarations are still emitted exactly once.
+    externs.push(externs[0].clone());
+    for (dialect, pointer) in [
+        (NvvmIrDialect::Modern, "ptr"),
+        (NvvmIrDialect::LegacyLlvm7, "i32*"),
+    ] {
+        let ir =
+            export_module_with_externs(&ctx, &module, &externs, &NvvmExportConfig::new(dialect))
+                .unwrap();
+        let declarations: Vec<_> = ir
+            .lines()
+            .filter(|line| line.starts_with("declare "))
+            .collect();
+        assert_eq!(
+            declarations,
+            [
+                format!("declare void @collective({pointer}) convergent"),
+                format!("declare void @ordinary({pointer})"),
+            ],
+            "{ir}"
+        );
+        assert!(
+            ir.lines().any(|line| {
+                line.contains(&format!("call void @collective({pointer} ")) && line.ends_with(" #0")
+            }),
+            "{ir}"
+        );
+        if dialect == NvvmIrDialect::LegacyLlvm7 {
+            assert!(ir.contains("bitcast i8* %v0 to i32*"), "{ir}");
+        }
+    }
+
+    externs[2].attrs.is_convergent = false;
+    let error = export_module_with_externs(&ctx, &module, &externs, &NvvmExportConfig::default())
+        .expect_err("conflicting convergence requirements must fail");
+    assert!(
+        error.contains("conflicting device-extern declarations for `@collective`: convergent is true versus false"),
+        "{error}"
+    );
+}
+
+#[test]
+#[ignore = "requires an installed CUDA Toolkit with modern and legacy libNVVM"]
+fn device_extern_convergence_compiles_with_libnvvm_in_both_dialects() {
+    let nvvm = libnvvm_sys::LibNvvm::load().expect("CUDA Toolkit with libNVVM required");
+    let mut ctx = Context::new();
+    let (module, externs) = mixed_convergence_module(&mut ctx);
+    for (dialect, arch) in [
+        (NvvmIrDialect::Modern, "-arch=compute_120"),
+        (NvvmIrDialect::LegacyLlvm7, "-arch=compute_80"),
+    ] {
+        let ir =
+            export_module_with_externs(&ctx, &module, &externs, &NvvmExportConfig::new(dialect))
+                .unwrap();
+        let mut program = libnvvm_sys::Program::new(&nvvm).unwrap();
+        program.add_module(ir.as_bytes(), "convergence.ll").unwrap();
+        let lto = program.compile(&[arch, "-gen-lto"]).unwrap();
+        assert!(!lto.is_empty());
+    }
+}
+
 #[test]
 fn legacy_device_extern_adapts_exact_pointer_arguments_and_results() {
     let mut ctx = Context::new();

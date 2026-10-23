@@ -493,27 +493,20 @@ pub struct DeviceExternDecl {
 
 /// NVVM attributes for device extern declarations.
 ///
-/// NOTE: These attributes are currently **not emitted** to the LLVM IR output.
-/// When linking LTOIR via nvJitLink, the external library's LTOIR already contains
-/// proper attributes (convergent, nounwind, memory, etc.) on the function DEFINITIONS.
-/// nvJitLink uses the definition's attributes during LTO, making attributes on our
-/// declarations redundant.
-///
-/// The `#[convergent]`, `#[pure]`, and `#[readonly]` Rust attributes are still parsed
-/// but their values are not used in code generation. This struct is retained for
-/// potential future use or debugging.
+/// Convergence is emitted on the declaration before libNVVM optimization.
+/// Memory-effect annotations remain inactive; they are not inferred from external
+/// definitions that become available only during LTO.
 #[derive(Debug, Clone, Default)]
 pub struct DeviceExternAttrs {
-    /// Function is convergent (all threads must execute together).
-    /// NOTE: Not currently emitted - external LTOIR has proper convergent attrs.
+    /// Function has convergence requirements for its participating threads.
     pub is_convergent: bool,
 
     /// Function is pure (no side effects, result depends only on inputs).
-    /// NOTE: Not currently emitted - external LTOIR has proper memory attrs.
+    /// Inactive for Rust source annotations.
     pub is_pure: bool,
 
     /// Function is read-only (only reads memory, doesn't write).
-    /// NOTE: Not currently emitted - external LTOIR has proper memory attrs.
+    /// Inactive for Rust source annotations.
     pub is_readonly: bool,
 }
 
@@ -523,6 +516,10 @@ pub struct DeviceExternAttrs {
 /// declarations (for FFI with external LTOIR).
 #[derive(Debug)]
 pub struct CollectionResult<'tcx> {
+    /// Calls to the exact compiler library marker, before body deduplication.
+    pub library_calls: Vec<crate::library::LibraryCall<'tcx>>,
+    /// Every resolved edge, retaining all kernel contexts of shared helpers.
+    pub call_edges: Vec<(Instance<'tcx>, Instance<'tcx>)>,
     /// Functions to compile (kernels and device helpers with MIR bodies).
     pub functions: Vec<CollectedFunction<'tcx>>,
 
@@ -954,7 +951,10 @@ fn rust_alloc_shim_name(fn_path: &str) -> Option<&str> {
 /// fat-pointer string constants are inspected; everything else returns
 /// `None`. Evaluation failures (e.g. a constant in still-generic MIR)
 /// also return `None`, which simply means "no message found".
-fn const_str_text<'tcx>(tcx: TyCtxt<'tcx>, constant: &ConstOperand<'tcx>) -> Option<String> {
+pub(crate) fn const_str_text<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    constant: &ConstOperand<'tcx>,
+) -> Option<String> {
     let ty = constant.const_.ty();
     let TyKind::Ref(_, pointee, _) = ty.kind() else {
         return None;
@@ -1420,6 +1420,9 @@ struct DeviceCollector<'tcx> {
     /// once per program — the message is procedural advice about the
     /// kernel-launch contract, not anything per-call.
     warned_dynamic_shared_array: bool,
+    library_defs: HashSet<DefId>,
+    library_calls: Vec<crate::library::LibraryCall<'tcx>>,
+    call_edges: Vec<(Instance<'tcx>, Instance<'tcx>)>,
     /// Print progress to stderr.
     verbose: bool,
 }
@@ -1436,6 +1439,9 @@ impl<'tcx> DeviceCollector<'tcx> {
             device_externs: Vec::new(),
             seen_device_externs: HashSet::new(),
             warned_dynamic_shared_array: false,
+            library_defs: crate::library::marker_definitions(tcx),
+            library_calls: Vec::new(),
+            call_edges: Vec::new(),
             verbose,
         }
     }
@@ -1598,6 +1604,8 @@ impl<'tcx> DeviceCollector<'tcx> {
         }
 
         CollectionResult {
+            library_calls: self.library_calls,
+            call_edges: self.call_edges,
             functions: self.result,
             device_externs: self.device_externs,
             requires_ptx_bundle_merge: false,
@@ -1648,7 +1656,12 @@ impl<'tcx> DeviceCollector<'tcx> {
                 .next()
                 .is_some()
         };
-        attrs.is_convergent = check("convergent");
+        attrs.is_convergent = rustc_attr_ir::find_attr!(
+            self.tcx, def_id, Doc(doc)
+            if doc.aliases.contains_key(&Symbol::intern(
+                reserved_oxide_symbols::DEVICE_EXTERN_CONVERGENT_MARKER
+            ))
+        );
         attrs.is_pure = check("pure");
         attrs.is_readonly = check("readonly");
 
@@ -1733,6 +1746,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             return;
         }
 
+        self.call_edges.push((caller.instance, drop_instance));
         let mangled = self.tcx.symbol_name(drop_instance).name.to_string();
         if self.seen.contains(&mangled) {
             return;
@@ -2029,6 +2043,17 @@ impl<'tcx> DeviceCollector<'tcx> {
             return;
         };
 
+        // Preserve edges before deduplicating bodies: the same helper can be
+        // reached from several kernels with distinct resource requirements.
+        self.call_edges.push((caller.instance, resolved));
+        if self.library_defs.contains(&resolved.def_id()) {
+            self.library_calls.push(crate::library::LibraryCall {
+                instance: resolved,
+                span: call_span,
+            });
+            return;
+        }
+
         // Skip already-seen monomorphizations (use mangled name as unique key)
         let mangled = self.tcx.symbol_name(resolved).name.to_string();
         if self.seen.contains(&mangled) {
@@ -2267,6 +2292,13 @@ impl<'tcx> DeviceCollector<'tcx> {
             _ => return,
         };
 
+        if self.library_defs.contains(&instance.def_id()) {
+            self.tcx.dcx().span_fatal(
+                call_span,
+                "the native library marker requires a direct call; pass a wrapper helper instead",
+            );
+        }
+        self.call_edges.push((caller.instance, instance));
         let target = self.tcx.def_path_str(instance.def_id());
         let crate_name = self.tcx.crate_name(instance.def_id().krate);
         if self.is_generated_intrinsic_placeholder_or_report_mismatch(

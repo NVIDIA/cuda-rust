@@ -100,7 +100,9 @@ impl DeviceOp for FaultingOp {
                 )));
             }
         }
-        let mut launch = AsyncKernelLaunch::new(self.trap);
+        // SAFETY: `trap` is the known zero-parameter kernel compiled from
+        // TRAP_PTX and is launched on the context's device and stream.
+        let mut launch = unsafe { AsyncKernelLaunch::new(self.trap) };
         launch.set_launch_config(LaunchConfig {
             grid_dim: (1, 1, 1),
             block_dim: (1, 1, 1),

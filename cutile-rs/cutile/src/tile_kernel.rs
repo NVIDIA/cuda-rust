@@ -1429,16 +1429,17 @@ where
 /// Pushes the device pointer, shape, and stride information to the kernel launcher
 /// in the order expected by compiled tile functions.
 impl<T: DType> ArcKernelArgument for Tensor<T> {
-    fn push_arg_arc(self: &Arc<Self>, launcher: &mut AsyncKernelLaunch) {
-        // TODO (hme): document safety
+    unsafe fn push_arg_arc(self: &Arc<Self>, launcher: &mut AsyncKernelLaunch) {
+        // SAFETY: callers must use a Tile function with the generated
+        // tensor-input ABI and retain this storage through kernel completion.
         unsafe {
             launcher.push_device_ptr(self.cu_deviceptr());
-        }
-        for dim in self.shape.iter() {
-            launcher.push_arg(*dim);
-        }
-        for stride in self.strides.iter() {
-            launcher.push_arg(*stride);
+            for dim in self.shape.iter() {
+                launcher.push_arg(*dim);
+            }
+            for stride in self.strides.iter() {
+                launcher.push_arg(*stride);
+            }
         }
     }
 }
@@ -1449,43 +1450,46 @@ impl<T: DType> ArcKernelArgument for Tensor<T> {
 /// and strides. This allows kernels to access both the full tensor and the partition
 /// information for block-level indexing.
 impl<T: DType> KernelArgument for &Partition<Tensor<T>> {
-    fn push_arg(self, launcher: &mut AsyncKernelLaunch) {
-        // TODO (hme): document safety
+    unsafe fn push_arg(self, launcher: &mut AsyncKernelLaunch) {
+        // SAFETY: callers must use a Tile function with the generated
+        // partitioned-input ABI and retain the tensor through completion.
         unsafe {
             launcher.push_device_ptr(self.object.cu_deviceptr());
-        }
-        for dim in self.object.shape.iter() {
-            launcher.push_arg(*dim);
-        }
-        for stride in self.object.strides.iter() {
-            launcher.push_arg(*stride);
-        }
-        for dim in self.partition_shape.iter() {
-            launcher.push_arg(*dim as i32);
-        }
-        for stride in self.partition_strides.iter() {
-            launcher.push_arg(*stride as i32);
+            for dim in self.object.shape.iter() {
+                launcher.push_arg(*dim);
+            }
+            for stride in self.object.strides.iter() {
+                launcher.push_arg(*stride);
+            }
+            for dim in self.partition_shape.iter() {
+                launcher.push_arg(*dim as i32);
+            }
+            for stride in self.partition_strides.iter() {
+                launcher.push_arg(*stride as i32);
+            }
         }
     }
 }
 
 /// Same as above but for borrowed mutable tensor partitions.
 impl<T: DType> KernelArgument for &Partition<&mut Tensor<T>> {
-    fn push_arg(self, launcher: &mut AsyncKernelLaunch) {
+    unsafe fn push_arg(self, launcher: &mut AsyncKernelLaunch) {
+        // SAFETY: callers must use a Tile function with the generated
+        // partitioned-output ABI and retain the tensor through completion.
         unsafe {
             launcher.push_device_ptr(self.object.cu_deviceptr());
-        }
-        for dim in self.object.shape.iter() {
-            launcher.push_arg(*dim);
-        }
-        for stride in self.object.strides.iter() {
-            launcher.push_arg(*stride);
-        }
-        for dim in self.partition_shape.iter() {
-            launcher.push_arg(*dim as i32);
-        }
-        for stride in self.partition_strides.iter() {
-            launcher.push_arg(*stride as i32);
+            for dim in self.object.shape.iter() {
+                launcher.push_arg(*dim);
+            }
+            for stride in self.object.strides.iter() {
+                launcher.push_arg(*stride);
+            }
+            for dim in self.partition_shape.iter() {
+                launcher.push_arg(*dim as i32);
+            }
+            for stride in self.partition_strides.iter() {
+                launcher.push_arg(*stride as i32);
+            }
         }
     }
 }

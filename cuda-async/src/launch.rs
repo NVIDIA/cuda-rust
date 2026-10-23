@@ -23,11 +23,12 @@ use std::vec::Vec;
 ///
 /// Arguments are copied into an inline arena by [`push_arg`](Self::push_arg) /
 /// [`push_device_ptr`](Self::push_device_ptr) and handed to the driver as a
-/// `*mut c_void` array at launch; the driver copies the parameter values out
-/// before `cuLaunchKernel` returns, so nothing outlives the launch.
+/// `*mut c_void` array at launch. The driver copies the parameter values out
+/// before `cuLaunchKernel` returns, but device addresses in those values must
+/// remain valid until the kernel has finished.
 #[derive(Debug)]
 pub struct AsyncKernelLaunch {
-    pub func: Arc<Function>,
+    func: Arc<Function>,
     args: KernelArgStorage,
     cfg: Option<LaunchConfig>,
     programmatic_dependent_launch: bool,
@@ -196,7 +197,22 @@ impl KernelArgStorage {
 
 impl AsyncKernelLaunch {
     /// Creates a new kernel launch builder for the given CUDA function.
-    pub fn new(func: Arc<Function>) -> AsyncKernelLaunch {
+    ///
+    /// ```compile_fail,E0133
+    /// use cuda_async::launch::AsyncKernelLaunch;
+    /// use cuda_core::Function;
+    /// use std::sync::Arc;
+    ///
+    /// fn function() -> Arc<Function> { panic!("compile-only example") }
+    /// AsyncKernelLaunch::new(function());
+    /// ```
+    ///
+    /// # Safety
+    /// Before the builder is executed, its complete argument list must match
+    /// the function's parameter ABI. The function must be valid to execute on
+    /// the selected device, and any device allocations it accesses must remain
+    /// valid until the kernel completes.
+    pub unsafe fn new(func: Arc<Function>) -> AsyncKernelLaunch {
         AsyncKernelLaunch {
             func,
             args: KernelArgStorage::default(),
@@ -205,17 +221,84 @@ impl AsyncKernelLaunch {
         }
     }
 
+    /// Returns the CUDA function this builder will launch.
+    pub fn function(&self) -> &Arc<Function> {
+        &self.func
+    }
+
     /// Pushes a kernel argument by value.
+    ///
+    /// ```compile_fail,E0133
+    /// use cuda_async::launch::AsyncKernelLaunch;
+    /// use cuda_core::Function;
+    /// use std::sync::Arc;
+    ///
+    /// fn function() -> Arc<Function> { panic!("compile-only example") }
+    /// let mut launch = unsafe { AsyncKernelLaunch::new(function()) };
+    /// launch.push_arg(0xdead_beef_u64);
+    /// ```
+    ///
+    /// Calling the trait method directly is unsafe as well:
+    ///
+    /// ```compile_fail,E0133
+    /// use cuda_async::launch::{AsyncKernelLaunch, KernelArgument};
+    /// use cuda_core::Function;
+    /// use std::sync::Arc;
+    ///
+    /// fn function() -> Arc<Function> { panic!("compile-only example") }
+    /// let mut launch = unsafe { AsyncKernelLaunch::new(function()) };
+    /// KernelArgument::push_arg(0xdead_beef_u64, &mut launch);
+    /// ```
+    ///
+    /// The function cannot be replaced through this builder:
+    ///
+    /// ```compile_fail,E0616
+    /// use cuda_async::launch::AsyncKernelLaunch;
+    /// use cuda_core::Function;
+    /// use std::sync::Arc;
+    ///
+    /// fn function() -> Arc<Function> { panic!("compile-only example") }
+    /// let mut launch = unsafe { AsyncKernelLaunch::new(function()) };
+    /// launch.func = function();
+    /// ```
+    ///
+    /// # Safety
+    /// The value must match the ABI and meaning of the next formal parameter
+    /// in `func`. If it encodes a device address, the allocation must be valid
+    /// on the launch's device and remain alive until the kernel completes.
     #[inline(always)]
-    pub fn push_arg<T: KernelArgument>(&mut self, arg: T) -> &mut Self {
-        arg.push_arg(self);
+    pub unsafe fn push_arg<T: KernelArgument>(&mut self, arg: T) -> &mut Self {
+        // SAFETY: the caller guarantees that the argument matches `func`.
+        unsafe { arg.push_arg(self) };
         self
     }
 
     /// Pushes a kernel argument from an `Arc` reference.
+    ///
+    /// ```compile_fail,E0133
+    /// use cuda_async::launch::{ArcKernelArgument, AsyncKernelLaunch};
+    /// use cuda_core::Function;
+    /// use std::sync::Arc;
+    ///
+    /// struct Arg;
+    /// impl ArcKernelArgument for Arg {
+    ///     unsafe fn push_arg_arc(self: &Arc<Self>, _: &mut AsyncKernelLaunch) {}
+    /// }
+    /// fn function() -> Arc<Function> { panic!("compile-only example") }
+    /// let mut launch = unsafe { AsyncKernelLaunch::new(function()) };
+    /// launch.push_arg_arc(&Arc::new(Arg));
+    /// ```
+    ///
+    /// # Safety
+    /// The arguments appended by `arg` must match the next formal parameters
+    /// in `func`. Any device allocations they reference must remain valid on
+    /// the launch's device until the kernel completes. This method borrows the
+    /// `Arc`; it does not retain it for the duration of the kernel.
     #[inline(always)]
-    pub fn push_arg_arc<T: ArcKernelArgument>(&mut self, arg: &Arc<T>) -> &mut Self {
-        arg.push_arg_arc(self);
+    pub unsafe fn push_arg_arc<T: ArcKernelArgument>(&mut self, arg: &Arc<T>) -> &mut Self {
+        // SAFETY: the caller guarantees that the arguments match `func` and
+        // their referenced allocations remain valid through kernel completion.
+        unsafe { arg.push_arg_arc(self) };
         self
     }
 
@@ -310,27 +393,46 @@ impl AsyncKernelLaunch {
 /// A kernel argument that can be pushed from an `Arc` reference.
 pub trait ArcKernelArgument {
     // #[inline(always)] Dont think this is necessary. This will be deprecated for required trait methods
-    fn push_arg_arc(self: &Arc<Self>, launcher: &mut AsyncKernelLaunch);
+    /// ```compile_fail,E0133
+    /// use cuda_async::launch::{ArcKernelArgument, AsyncKernelLaunch};
+    /// use cuda_core::Function;
+    /// use std::sync::Arc;
+    ///
+    /// struct Arg;
+    /// impl ArcKernelArgument for Arg {
+    ///     unsafe fn push_arg_arc(self: &Arc<Self>, _: &mut AsyncKernelLaunch) {}
+    /// }
+    /// fn function() -> Arc<Function> { panic!("compile-only example") }
+    /// let mut launch = unsafe { AsyncKernelLaunch::new(function()) };
+    /// <Arg as ArcKernelArgument>::push_arg_arc(&Arc::new(Arg), &mut launch);
+    /// ```
+    ///
+    /// # Safety
+    /// The arguments appended by this method must match the next formal
+    /// parameters of the launch's function, and any referenced device
+    /// allocations must remain valid until the kernel completes.
+    unsafe fn push_arg_arc(self: &Arc<Self>, launcher: &mut AsyncKernelLaunch);
 }
 
 /// A kernel argument that can be pushed by value into an `AsyncKernelLaunch`.
 pub trait KernelArgument {
     // #[inline(always)] Dont think this is necessary. This will be deprecated for required trait methods
-    fn push_arg(self, launcher: &mut AsyncKernelLaunch);
+    ///
+    /// # Safety
+    /// The arguments appended by this method must match the next formal
+    /// parameters of the launch's function, including their ABI and meaning.
+    /// Any device allocations they reference must remain valid until the
+    /// kernel completes.
+    unsafe fn push_arg(self, launcher: &mut AsyncKernelLaunch);
 }
 
-/// Safe implementation for scalar types. Values implementing `DType` are copied
-/// into the kernel's parameter space during launch — the kernel reads the value,
-/// not a device pointer, so no `unsafe` is required.
+/// Implementation for scalar types. `DType` guarantees the host representation
+/// of the value, but the caller must still ensure it matches the kernel ABI.
 impl<T: DType> KernelArgument for T {
-    fn push_arg(self, launcher: &mut AsyncKernelLaunch) {
-        // SAFETY: a `DType` scalar is a plain `Copy` value with the layout the
-        // compiled kernel declares for that scalar type; the launcher's
-        // signature validation (in cutile) checks the position, and the value
-        // is copied out by the driver at launch, so nothing outlives the box.
-        unsafe {
-            launcher.push_arg_raw(self);
-        }
+    unsafe fn push_arg(self, launcher: &mut AsyncKernelLaunch) {
+        // SAFETY: the caller guarantees that this `DType` scalar matches the
+        // kernel's parameter at this position.
+        unsafe { launcher.push_arg_raw(self) };
     }
 }
 

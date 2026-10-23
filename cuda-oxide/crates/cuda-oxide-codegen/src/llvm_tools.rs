@@ -127,6 +127,22 @@ impl LlvmToolchain {
         // for libdevice kernels).
         let llvm_link =
             resolve_sibling_tool("llvm-link", "CUDA_OXIDE_LLVM_LINK", &llc_path, llc_major);
+        // The anchor itself: `llc` decides which `opt` and `llvm-link` are
+        // accepted, but nothing checked it against the compiler writing the
+        // IR. That identity is carried in by the owning frontend.
+        if let Some(warning) = ir_llvm_mismatch_warning(
+            opts.ir_llvm_major,
+            opts.ir_llvm_major_source,
+            &llc_path,
+            llc_major,
+            if llc_from_env {
+                LlcOrigin::Override
+            } else {
+                LlcOrigin::Discovered
+            },
+        ) {
+            diagnostics.push(warning);
+        }
         if let Some(warning) = llvm_link_mismatch_warning(
             std::env::var("CUDA_OXIDE_LLVM_LINK").ok().as_deref(),
             llvm_link.as_ref().and_then(|tool| tool.major),
@@ -377,6 +393,80 @@ pub(crate) fn resolve_sibling_tool(
     }
 }
 
+/// Where the chosen `llc` came from, which decides what remedy a producer
+/// mismatch can offer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LlcOrigin {
+    /// `opts.llc_override`, historically `CUDA_OXIDE_LLC`.
+    Override,
+    /// Found in the Rust sysroot or on `PATH`.
+    Discovered,
+    /// Handed in by a caller of the standalone API, which reads no
+    /// environment knobs for `llc` at all.
+    Explicit,
+}
+
+/// Warns when the compiler that writes the IR and the chosen `llc` are
+/// different LLVM majors.
+///
+/// `llc` is the pipeline's anchor: `opt` and `llvm-link` are matched against
+/// it and a mismatch there is reported. Nothing matched the anchor to the
+/// compiler that produces the IR it lowers, so an `llc` from an unrelated
+/// toolchain was accepted silently and changed what the backend emitted.
+/// Issue #1234 was diagnosed twice over because of it: the same reproducer
+/// emitted a CAS loop under one `llc` and `atom.global.add.f32` under
+/// another.
+///
+/// The producer's identity arrives in [`BackendOptions::ir_llvm_major`],
+/// carried by whichever frontend owns that compiler and recorded when that
+/// frontend was built. It is never probed from `PATH` here: this resolver
+/// finds `llc` through `PATH` too, so a probe could agree with the very
+/// toolchain the comparison exists to catch (#1300). A caller that states no
+/// identity gets no warning, rather than a guess.
+///
+/// Both routes into the resolver carry their own producer. The rustc frontend
+/// states the compiler that loads it (`librustc_driver`'s toolchain); the
+/// standalone API states its own textual exporter, since the module arrives as
+/// pliron IR and no `rustc` writes it at all.
+///
+/// This warns rather than fails: mixing majors is often tolerable, and a hard
+/// error would break setups that work today.
+pub(crate) fn ir_llvm_mismatch_warning(
+    ir_major: Option<u32>,
+    ir_major_source: &str,
+    llc_path: &str,
+    llc_major: Option<u32>,
+    origin: LlcOrigin,
+) -> Option<String> {
+    let (ir_major, llc_major) = (ir_major?, llc_major?);
+    if ir_major == llc_major {
+        return None;
+    }
+    let remedy = match origin {
+        LlcOrigin::Override => format!(
+            "unset CUDA_OXIDE_LLC (or point it at an LLVM {ir_major} llc) to match the producer"
+        ),
+        LlcOrigin::Discovered => format!(
+            "install llvm-tools for the pinned toolchain, or set CUDA_OXIDE_LLC to an LLVM \
+             {ir_major} llc"
+        ),
+        // Nothing in the environment chose this one, so neither remedy above
+        // applies: the caller passed the path in and is the only one who can
+        // change it.
+        LlcOrigin::Explicit => {
+            format!("pass an LLVM {ir_major} llc instead, or build against LLVM {llc_major}")
+        }
+    };
+    Some(format!(
+        "warning: LLVM version mismatch between the IR producer and llc:\n\
+         warning:   producer = LLVM {ir_major} ({ir_major_source}, writes the IR)\n\
+         warning:   llc      = {llc_path} (LLVM {llc_major}, lowers it)\n\
+         warning: textual IR is not stable across majors, so the instructions selected\n\
+         warning: (and the bugs reproduced) depend on which llc is picked.\n\
+         warning: {remedy}."
+    ))
+}
+
 /// Warning for an explicit `CUDA_OXIDE_LLVM_LINK` whose LLVM major differs from
 /// the chosen `llc`'s, or `None` when there is nothing to say.
 ///
@@ -489,6 +579,95 @@ mod tests {
         assert_eq!(parse_llvm_major("no version banner here"), None);
         assert_eq!(parse_llvm_major("LLVM version x.y.z"), None);
         assert_eq!(parse_llvm_major(""), None);
+    }
+
+    #[test]
+    fn producer_llc_mismatch_warns_and_names_both_sides() {
+        let warning = ir_llvm_mismatch_warning(
+            Some(23),
+            "the rustc that built this backend",
+            "/rustup/other/bin/llc",
+            Some(22),
+            LlcOrigin::Discovered,
+        )
+        .expect("a major mismatch warns");
+        assert!(
+            warning.contains("producer = LLVM 23 (the rustc that built this backend"),
+            "{warning}"
+        );
+        assert!(
+            warning.contains("/rustup/other/bin/llc (LLVM 22"),
+            "{warning}"
+        );
+        // Without an override the remedy is to install matching llvm-tools.
+        assert!(warning.contains("install llvm-tools"), "{warning}");
+
+        // A pinned CUDA_OXIDE_LLC gets the remedy that applies to it.
+        let pinned = ir_llvm_mismatch_warning(
+            Some(23),
+            "the rustc that built this backend",
+            "/opt/llvm-22/bin/llc",
+            Some(22),
+            LlcOrigin::Override,
+        )
+        .expect("a major mismatch warns");
+        assert!(pinned.contains("unset CUDA_OXIDE_LLC"), "{pinned}");
+        assert!(pinned.contains("LLVM 23 llc"), "{pinned}");
+    }
+
+    #[test]
+    fn explicit_toolchain_remedy_names_no_environment_knob() {
+        // `Toolchain::from_paths` reads no environment for `llc`, so telling
+        // its caller to unset CUDA_OXIDE_LLC would be a dead end.
+        let warning = ir_llvm_mismatch_warning(
+            Some(23),
+            "cuda-oxide-codegen's LLVM exporter",
+            "/opt/llvm-22/bin/llc",
+            Some(22),
+            LlcOrigin::Explicit,
+        )
+        .expect("a major mismatch warns");
+        assert!(warning.contains("pass an LLVM 23 llc"), "{warning}");
+        assert!(!warning.contains("CUDA_OXIDE_LLC"), "{warning}");
+    }
+
+    #[test]
+    fn unstated_producer_or_unknown_major_is_quiet() {
+        // The whole point of #1300: with no stated producer we say nothing
+        // rather than probing PATH, which could agree with the wrong llc.
+        assert_eq!(
+            ir_llvm_mismatch_warning(
+                None,
+                "unstated",
+                "/usr/bin/llc",
+                Some(22),
+                LlcOrigin::Discovered
+            ),
+            None,
+            "an unstated producer must not warn"
+        );
+        assert_eq!(
+            ir_llvm_mismatch_warning(
+                Some(23),
+                "frontend",
+                "/usr/bin/llc",
+                Some(23),
+                LlcOrigin::Discovered
+            ),
+            None,
+            "same major must not warn"
+        );
+        assert_eq!(
+            ir_llvm_mismatch_warning(
+                Some(23),
+                "frontend",
+                "/usr/bin/llc",
+                None,
+                LlcOrigin::Discovered
+            ),
+            None,
+            "an unparseable llc banner must not invent a mismatch"
+        );
     }
 
     #[test]

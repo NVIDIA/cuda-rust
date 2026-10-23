@@ -85,6 +85,18 @@ pub struct BackendOptions {
     pub target_arch_source: &'static str,
     /// Advisory local-GPU arch; used only when it satisfies detected features.
     pub device_arch_hint: Option<DeviceArchHint>,
+    /// LLVM major of the compiler that produces the IR this backend hands to
+    /// `llc`, carried from the frontend that owns that compiler.
+    ///
+    /// `None` means no caller stated one, and no rustc-versus-`llc`
+    /// comparison is made. It is never probed from `PATH`: the resolver also
+    /// finds `llc` through `PATH`, so a probe could agree with the very
+    /// toolchain the comparison exists to catch (#1300).
+    pub ir_llvm_major: Option<u32>,
+    /// Human-readable name for whatever set `ir_llvm_major`, used in the
+    /// mismatch diagnostic. Same contract as `target_arch_source`: whoever
+    /// writes one writes the other.
+    pub ir_llvm_major_source: &'static str,
     /// Skip the `opt -O2` middle-end.
     pub no_opt: bool,
     /// Suppress `llc -fp-contract=fast` (fmul+fadd fusion to fma).
@@ -121,6 +133,8 @@ impl Default for BackendOptions {
             target_arch: None,
             target_arch_source: "CUDA_OXIDE_TARGET",
             device_arch_hint: None,
+            ir_llvm_major: None,
+            ir_llvm_major_source: "unstated",
             no_opt: false,
             no_fma: false,
             verbose: false,
@@ -162,6 +176,11 @@ impl BackendOptions {
             iket,
             target_arch: std::env::var("CUDA_OXIDE_TARGET").ok(),
             target_arch_source: "CUDA_OXIDE_TARGET",
+            // Deliberately unset here: the environment cannot tell us which
+            // compiler runs the backend. The rustc frontend fills this in
+            // from its own build-time identity (mir-importer).
+            ir_llvm_major: None,
+            ir_llvm_major_source: "unstated",
             device_arch_hint: device_arch_hint.or_else(|| {
                 DeviceArchHint::from_env_value(std::env::var("CUDA_OXIDE_DEVICE_ARCH"))
             }),

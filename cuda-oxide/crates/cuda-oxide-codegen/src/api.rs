@@ -4,7 +4,10 @@
  */
 
 use crate::error::PipelineError;
-use crate::llvm_tools::{LlvmToolchain, OptTool, probe_runnable, resolve_sibling_tool};
+use crate::llvm_tools::{
+    LlcOrigin, LlvmToolchain, OptTool, ir_llvm_mismatch_warning, probe_runnable,
+    resolve_sibling_tool,
+};
 use crate::options::BackendOptions;
 use crate::pipeline::{
     ModuleArtifactKind, ModulePipelineRequest, OutputFiles, compile_translated_module,
@@ -428,6 +431,23 @@ fn validate_live_module_op(
     Ok(())
 }
 
+/// Names the producer this API states to the tool resolver.
+///
+/// A module reaches this API as pliron IR and `llvm-export` writes the `.ll`
+/// text, so no `rustc` on `PATH` produced it (#1300) and probing one would
+/// describe an unrelated toolchain.
+const EXPORTER_SOURCE: &str = "cuda-oxide-codegen's LLVM exporter";
+
+/// LLVM major the exporter's text is written for, recorded by `build.rs` from
+/// the toolchain that compiled this crate -- the one supplying the
+/// `llvm-tools` that output is validated against.
+///
+/// `None` when the build-time probe could not answer, which the resolver
+/// reads as "no stated producer" and leaves alone rather than guessing.
+fn exporter_llvm_major() -> Option<u32> {
+    option_env!("CUDA_OXIDE_CODEGEN_LLVM_MAJOR").and_then(|major| major.parse().ok())
+}
+
 /// Explicit, reusable pair of LLVM tools.
 #[derive(Clone, Debug)]
 pub struct Toolchain {
@@ -444,7 +464,15 @@ impl Toolchain {
     /// `llc`'s LLVM major. It may return a toolchain without `opt`; that
     /// toolchain can compile only with [`Optimization::None`].
     pub fn discover() -> Result<Self, CompileError> {
-        let opts = BackendOptions::default();
+        // Discovery walks the sysroot and `PATH` for `llc`, so this is the
+        // route that can pick up an unrelated toolchain. State our own
+        // producer and the resolver reports the skew instead of selecting
+        // silently (#1300).
+        let opts = BackendOptions {
+            ir_llvm_major: exporter_llvm_major(),
+            ir_llvm_major_source: EXPORTER_SOURCE,
+            ..BackendOptions::default()
+        };
         let inner = LlvmToolchain::resolve(&opts).ok_or_else(|| CompileError::Toolchain {
             message: "no runnable LLVM 21+ `llc` was found in the Rust sysroot or PATH".to_string(),
         })?;
@@ -513,11 +541,21 @@ impl Toolchain {
             llvm_link,
             diagnostics: Vec::new(),
         };
-        let selection = describe_selection("explicit toolchain", &inner);
-        Ok(Self {
-            inner,
-            diagnostics: vec![selection],
-        })
+        let mut diagnostics = vec![describe_selection("explicit toolchain", &inner)];
+        // This constructor never reaches `LlvmToolchain::resolve`, so the
+        // producer comparison has to be made here too -- an explicitly
+        // supplied `llc` from the wrong major was the one route that stayed
+        // silent (#1300).
+        if let Some(warning) = ir_llvm_mismatch_warning(
+            exporter_llvm_major(),
+            EXPORTER_SOURCE,
+            &inner.llc_path,
+            inner.llc_major,
+            LlcOrigin::Explicit,
+        ) {
+            diagnostics.push(Diagnostic::warning(CompilationStage::Toolchain, warning));
+        }
+        Ok(Self { inner, diagnostics })
     }
 
     /// Selected `llc` path.
@@ -671,6 +709,11 @@ impl Compiler {
             target_arch: Some(options.target.sm()),
             target_arch_source: "the requested Target",
             device_arch_hint: None,
+            // Same producer the toolchain constructors state: this pipeline
+            // exports its own LLVM text, and the identity is recorded at
+            // build time rather than probed (#1300).
+            ir_llvm_major: exporter_llvm_major(),
+            ir_llvm_major_source: EXPORTER_SOURCE,
             no_opt: options.optimization == Optimization::None,
             no_fma: !options.fma_contraction,
             verbose: options.verbose,
@@ -1047,6 +1090,17 @@ mod mir_pass_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_build_recorded_the_exporters_llvm_major() {
+        // Both standalone constructors state this producer, so if build.rs
+        // never recorded it the #1300 comparison is dead on this route.
+        assert!(
+            exporter_llvm_major().is_some_and(|major| major >= 21),
+            "build.rs must record the compiling toolchain's LLVM major, got {:?}",
+            exporter_llvm_major()
+        );
+    }
 
     #[test]
     fn erase_guard_runs_even_when_the_guarded_closure_panics() {

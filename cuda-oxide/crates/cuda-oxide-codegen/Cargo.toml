@@ -10,6 +10,12 @@ repository.workspace = true
 description = "Rustc-independent cuda-oxide PTX backend"
 readme = "README.md"
 
+# Records the LLVM major this crate's textual IR is written for (#1300).
+# cuda-target-spec has no dependencies of its own, so it is safe here and
+# keeps one `rustc -vV` parser in the tree.
+[build-dependencies]
+cuda-target-spec = { workspace = true }
+
 [dependencies]
 cuda-target-spec = { workspace = true }
 pliron = { workspace = true }

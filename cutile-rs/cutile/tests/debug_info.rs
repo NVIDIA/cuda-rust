@@ -393,3 +393,447 @@ fn lowered_dispatch_call_keeps_its_call_site() {
         );
     });
 }
+
+#[cutile::module]
+mod assertion_kernel {
+    use cutile::core::*;
+
+    #[cutile::entry()]
+    fn checked_scale<const S: [i32; 1]>(
+        out: &mut Tensor<f32, S>,
+        x: &Tensor<f32, { [-1] }>,
+        factor: f32,
+    ) {
+        validate_factor(factor);
+        let tile_x = x.load_like(out);
+        out.store(tile_x * factor.broadcast(out.shape()));
+    }
+
+    fn validate_factor(factor: f32) {
+        assert_in_range(factor, 0.0f32, 1000.0f32);
+    }
+
+    #[allow(unreachable_code, unused_variables)]
+    fn assert_in_range(value: f32, lo: f32, hi: f32) {
+        cuda_tile_assert!(value >= lo, "checked_scale: factor below the allowed range");
+        cuda_tile_assert!(value <= hi, "checked_scale: factor above the allowed range");
+    }
+}
+
+/// Renders a location as `callee <- caller`, each frame as
+/// `subprogram[definition line]@file:line`. The outermost frame of a kernel is
+/// rendered as `file:line`.
+fn describe(location: &Location) -> String {
+    let base = |file: &str| file.rsplit('/').next().unwrap().to_string();
+    match location {
+        Location::FileLineCol { filename, line, .. } => format!("{}:{line}", base(filename)),
+        Location::DebugInfo(info) => match &info.scope {
+            DebugScope::Subprogram(scope) => format!(
+                "{}[{}]@{}:{}",
+                scope.name,
+                scope.line,
+                base(&info.filename),
+                info.line
+            ),
+            other => panic!("unexpected scope {other:?}"),
+        },
+        Location::CallSite { callee, caller } => {
+            format!("{} <- {}", describe(callee), describe(caller))
+        }
+        other => panic!("unexpected location {other:?}"),
+    }
+}
+
+/// Every constant in the module as (little-endian value bytes, described location).
+fn constant_locations(artifacts: &CompileArtifacts) -> Vec<(Vec<u8>, String)> {
+    let mut constants = Vec::new();
+    visit_ops(
+        artifacts.module(),
+        &artifacts.module().functions,
+        &mut |op| {
+            if op.opcode != cutile_ir::bytecode::Opcode::Constant {
+                return;
+            }
+            let Some((_, cutile_ir::ir::Attribute::DenseElements(value))) =
+                op.attributes.iter().find(|(name, _)| name == "value")
+            else {
+                panic!("constant without a dense value: {op:?}");
+            };
+            constants.push((value.data.clone(), describe(&op.location)));
+        },
+    );
+    constants
+}
+
+/// The set of locations stored in the serialized debug section, rendered like `describe`.
+fn decoded_locations(bytecode: &[u8]) -> std::collections::HashSet<String> {
+    use std::collections::HashMap;
+    fn field<'a>(entry: &'a str, key: &str) -> &'a str {
+        let start = entry.find(&format!("{key}=")).unwrap() + key.len() + 1;
+        let rest = &entry[start..];
+        match rest.strip_prefix('"') {
+            Some(quoted) => &quoted[..quoted.find('"').unwrap()],
+            None => &rest[..rest.find([',', ')']).unwrap()],
+        }
+    }
+    let dump = cutile_ir::decode_bytecode(bytecode).expect("decode");
+    let debug = dump.split("=== Debug").nth(1).expect("debug section");
+    let mut entries: HashMap<&str, &str> = HashMap::new();
+    for line in debug
+        .lines()
+        .map(str::trim_start)
+        .filter(|line| line.starts_with("di["))
+    {
+        let (id, body) = line.split_once(" = ").unwrap();
+        entries.insert(id, body);
+    }
+    fn render(id: &str, entries: &HashMap<&str, &str>) -> String {
+        let body = entries[id];
+        if body.starts_with("CallSite(") {
+            return format!(
+                "{} <- {}",
+                render(field(body, "callee"), entries),
+                render(field(body, "caller"), entries)
+            );
+        }
+        let scope = entries[field(body, "scope")];
+        let quoted = body.split('"').nth(1).unwrap();
+        let line = body.split('"').nth(2).unwrap()[1..]
+            .split(':')
+            .next()
+            .unwrap();
+        let file = quoted.rsplit('/').next().unwrap();
+        if field(scope, "linkage").ends_with("_entry") {
+            format!("{file}:{line}")
+        } else {
+            format!(
+                "{}[{}]@{file}:{line}",
+                field(scope, "name"),
+                field(scope, "line")
+            )
+        }
+    }
+    entries
+        .iter()
+        .filter(|(_, body)| body.starts_with("DILoc(") || body.starts_with("CallSite("))
+        .map(|(id, _)| render(id, &entries))
+        .collect()
+}
+
+/// Checks the exact location of the selected constants, rejects any location
+/// outside the allowed set, and checks the same locations after serialization.
+fn check_constant_locations(
+    artifacts: &CompileArtifacts,
+    allowed: &[String],
+    required: &[(Vec<u8>, String)],
+) {
+    let constants = constant_locations(artifacts);
+    assert!(!constants.is_empty(), "expected generated constants");
+    let unexpected: Vec<_> = constants
+        .iter()
+        .filter(|(_, location)| !allowed.contains(location))
+        .collect();
+    assert!(
+        unexpected.is_empty(),
+        "unexpected locations: {unexpected:#?}"
+    );
+    for (value, location) in required {
+        assert!(
+            constants
+                .iter()
+                .any(|(bytes, found)| bytes == value && found == location),
+            "no constant {value:?} at {location}, found {constants:#?}"
+        );
+    }
+    let decoded = decoded_locations(&artifacts.bytecode().expect("serialize"));
+    for (value, location) in &constants {
+        assert!(
+            decoded.contains(location),
+            "location of constant {value:?} lost in serialization: {location}\n{decoded:#?}"
+        );
+    }
+}
+
+fn check_generated_constant_locations(level: DebugInfoLevel) {
+    common::with_test_stack(move || {
+        let artifacts = KernelCompiler::new(
+            assertion_kernel::__module_ast_self,
+            "assertion_kernel",
+            "checked_scale",
+        )
+        .target("sm_120")
+        .generics(vec!["128".into()])
+        .strides(&[("out", &[1]), ("x", &[1])])
+        .options(CompileOptions::new().debug_info(level))
+        .compile()
+        .expect("compile assertion kernel");
+        let source = include_str!("debug_info.rs");
+        let kernel = source_line(source, "fn checked_scale<const S: [i32; 1]>(");
+        let validator = source_line(source, "fn validate_factor(factor: f32) {");
+        let validate_call = source_line(source, "validate_factor(factor);");
+        let range_call = source_line(source, "assert_in_range(factor, 0.0f32, 1000.0f32);");
+        let load = source_line(source, "let tile_x = x.load_like(out);");
+        let store = source_line(source, "out.store(tile_x * factor.broadcast(out.shape()));");
+        let root = format!("debug_info.rs:{kernel}");
+        // Generated constants without a source span fall back to the kernel definition.
+        let fallback = format!("checked_scale[{kernel}]@debug_info.rs:{kernel} <- {root}");
+        let statement =
+            |line: u32| format!("checked_scale[{kernel}]@debug_info.rs:{line} <- {root}");
+        // The literals written in the user's helper keep their own line and caller chain.
+        let literal = format!(
+            "validate_factor[{validator}]@debug_info.rs:{range_call} <- \
+             checked_scale[{kernel}]@debug_info.rs:{validate_call} <- {root}"
+        );
+        let allowed = [
+            root.clone(),
+            fallback.clone(),
+            statement(load),
+            statement(store),
+            literal.clone(),
+        ];
+        check_constant_locations(
+            &artifacts,
+            &allowed,
+            &[
+                (128i32.to_le_bytes().to_vec(), fallback),
+                (0.0f32.to_le_bytes().to_vec(), literal.clone()),
+                (1000.0f32.to_le_bytes().to_vec(), literal.clone()),
+            ],
+        );
+        for (value, location) in constant_locations(&artifacts) {
+            if value == 1000.0f32.to_le_bytes() {
+                assert_eq!(location, literal, "user literal replaced by a fallback");
+            }
+        }
+    });
+}
+
+#[test]
+fn generated_constants_keep_function_locations_line() {
+    check_generated_constant_locations(DebugInfoLevel::Line);
+}
+
+#[test]
+fn generated_constants_keep_function_locations_full() {
+    check_generated_constant_locations(DebugInfoLevel::Full);
+}
+
+#[cutile::module]
+mod generated_helper_kernel {
+    use super::debug_helpers_file::debug_helpers::generated;
+    use cutile::core::*;
+
+    #[cutile::entry()]
+    fn generated_source<const S: [i32; 1]>(out: &mut Tensor<i32, S>, x: i32) {
+        let value = generated::<{ [-17, 23] }, true>(x);
+        out.store(value.broadcast(out.shape()));
+    }
+}
+
+#[cutile::module]
+mod nested_helper_kernel {
+    use super::debug_helpers_file::debug_helpers::generated_nested;
+    use cutile::core::*;
+
+    #[cutile::entry()]
+    fn nested_source<const S: [i32; 1]>(out: &mut Tensor<i32, S>, x: i32) {
+        let total = generated_nested::<{ [-17, 23] }>(x);
+        out.store(total.broadcast(out.shape()));
+    }
+}
+
+fn check_cross_file_constant_locations(level: DebugInfoLevel, nested: bool) {
+    common::with_test_stack(move || {
+        macro_rules! compile_helper {
+            ($module:ident, $entry:literal) => {
+                KernelCompiler::new($module::__module_ast_self, stringify!($module), $entry)
+                    .target("sm_120")
+                    .generics(vec!["32".into()])
+                    .strides(&[("out", &[1])])
+                    .options(CompileOptions::new().debug_info(level))
+                    .compile()
+                    .expect("compile cross-file helper")
+            };
+        }
+        let artifacts = if nested {
+            compile_helper!(nested_helper_kernel, "nested_source")
+        } else {
+            compile_helper!(generated_helper_kernel, "generated_source")
+        };
+        let source = include_str!("debug_info.rs");
+        let helpers = include_str!("fixtures/debug_helpers.rs");
+        let (name, signature, call, store) = if nested {
+            (
+                "nested_source",
+                "fn nested_source<const S: [i32; 1]>(out: &mut Tensor<i32, S>, x: i32) {",
+                "let total = generated_nested::<{ [-17, 23] }>(x);",
+                "out.store(total.broadcast(out.shape()));",
+            )
+        } else {
+            (
+                "generated_source",
+                "fn generated_source<const S: [i32; 1]>(out: &mut Tensor<i32, S>, x: i32) {",
+                "let value = generated::<{ [-17, 23] }, true>(x);",
+                "out.store(value.broadcast(out.shape()));",
+            )
+        };
+        let kernel = source_line(source, signature);
+        let call_line = source_line(source, call);
+        let store = source_line(source, store);
+        let definition = source_line(
+            helpers,
+            "pub fn generated<const VALUES: [i32; 2], const FLAG: bool>(x: i32) -> i32 {",
+        );
+        let indexing = source_line(helpers, "x + VALUES[0] + VALUES[1]");
+        let root = format!("debug_info.rs:{kernel}");
+        let fallback = format!("{name}[{kernel}]@debug_info.rs:{kernel} <- {root}");
+        let call_site = format!("{name}[{kernel}]@debug_info.rs:{call_line} <- {root}");
+        let store_site = format!("{name}[{kernel}]@debug_info.rs:{store} <- {root}");
+        let mut allowed = vec![root, fallback, store_site];
+        let mut required = Vec::new();
+        // Caller chain of the inner `generated` call, as seen by its constants.
+        let inner_caller = if nested {
+            let nested_definition = source_line(
+                helpers,
+                "pub fn generated_nested<const VALUES: [i32; 2]>(x: i32) -> i32 {",
+            );
+            let nested_call = source_line(helpers, "generated::<VALUES, true>(x) + 1");
+            let frame = |line: u32| {
+                format!(
+                    "generated_nested[{nested_definition}]@debug_helpers.rs:{line} <- {call_site}"
+                )
+            };
+            let outer_values = frame(nested_definition);
+            let outer_call = frame(nested_call);
+            for value in [-17i32, 23] {
+                required.push((value.to_le_bytes().to_vec(), outer_values.clone()));
+            }
+            // The `+ 1` written in the outer helper keeps the outer helper's own line.
+            required.push((1i32.to_le_bytes().to_vec(), outer_call.clone()));
+            allowed.push(outer_values);
+            allowed.push(outer_call.clone());
+            outer_call
+        } else {
+            call_site
+        };
+        let values =
+            format!("generated[{definition}]@debug_helpers.rs:{definition} <- {inner_caller}");
+        let index =
+            format!("generated[{definition}]@debug_helpers.rs:{indexing} <- {inner_caller}");
+        for value in [-17i32, 23] {
+            required.push((value.to_le_bytes().to_vec(), values.clone()));
+        }
+        for value in [0i32, 1] {
+            required.push((value.to_le_bytes().to_vec(), index.clone()));
+        }
+        allowed.push(values);
+        allowed.push(index);
+        check_constant_locations(&artifacts, &allowed, &required);
+    });
+}
+
+#[test]
+fn generated_helper_constants_keep_definition_at_line_level() {
+    check_cross_file_constant_locations(DebugInfoLevel::Line, false);
+}
+
+#[test]
+fn generated_helper_constants_keep_definition_at_full_level() {
+    check_cross_file_constant_locations(DebugInfoLevel::Full, false);
+}
+
+#[test]
+fn nested_helper_constants_keep_caller_chain_at_line_level() {
+    check_cross_file_constant_locations(DebugInfoLevel::Line, true);
+}
+
+#[test]
+fn nested_helper_constants_keep_caller_chain_at_full_level() {
+    check_cross_file_constant_locations(DebugInfoLevel::Full, true);
+}
+
+// Opt-in, like `cubin_has_rust_lines_and_inline_frames`: the line table the
+// device compiler emits for generated constants must stay inside the kernel
+// and the helpers it calls.
+#[test]
+#[ignore = "requires tileiras, nvdisasm, and readelf"]
+fn nested_helper_cubin_lines_stay_inside_their_functions() {
+    common::with_test_stack(|| {
+        use cutile_compiler::cuda_tile_runtime_utils::{run_tileiras, TileirasOptions};
+        let source = include_str!("debug_info.rs");
+        let helpers = include_str!("fixtures/debug_helpers.rs");
+        let kernel = source_line(
+            source,
+            "fn nested_source<const S: [i32; 1]>(out: &mut Tensor<i32, S>, x: i32) {",
+        );
+        let store = source_line(source, "out.store(total.broadcast(out.shape()));");
+        let first_helper = source_line(
+            helpers,
+            "pub fn generated<const VALUES: [i32; 2], const FLAG: bool>(x: i32) -> i32 {",
+        );
+        let last_helper = source_line(helpers, "generated::<VALUES, true>(x) + 1");
+        let directory = CubinDirectory::new();
+        for level in [DebugInfoLevel::Line, DebugInfoLevel::Full] {
+            let artifacts = KernelCompiler::new(
+                nested_helper_kernel::__module_ast_self,
+                "nested_helper_kernel",
+                "nested_source",
+            )
+            .target("sm_120")
+            .generics(vec!["32".into()])
+            .strides(&[("out", &[1])])
+            .options(CompileOptions::new().debug_info(level))
+            .compile()
+            .expect("compile nested helper kernel");
+            let flags =
+                TileirasOptions::from_compile_options(&CompileOptions::new().debug_info(level));
+            let cubin = run_tileiras(&artifacts.bytecode().unwrap(), "sm_120", &flags)
+                .expect("tileiras must accept the generated locations");
+            let path = directory.0.join(format!("{level:?}.cubin"));
+            std::fs::write(&path, cubin).unwrap();
+            let sass = output(Command::new("nvdisasm").arg("--print-line-info").arg(&path));
+            let mut kernel_lines = Vec::new();
+            let mut helper_lines = Vec::new();
+            for entry in sass
+                .lines()
+                .filter_map(|line| line.trim().strip_prefix("//## File \""))
+            {
+                let (file, line) = entry.split_once("\", line ").unwrap();
+                let line: u32 = line.trim().parse().unwrap();
+                if file.ends_with("fixtures/debug_helpers.rs") {
+                    helper_lines.push(line);
+                } else if file.ends_with("tests/debug_info.rs") {
+                    kernel_lines.push(line);
+                } else {
+                    panic!("line entry outside the kernel and its helpers: {entry}");
+                }
+            }
+            assert!(
+                !kernel_lines.is_empty(),
+                "{level:?}: no kernel lines\n{sass}"
+            );
+            assert!(
+                !helper_lines.is_empty(),
+                "{level:?}: no helper lines\n{sass}"
+            );
+            assert!(
+                kernel_lines
+                    .iter()
+                    .all(|line| (kernel..=store).contains(line)),
+                "{level:?}: kernel lines {kernel_lines:?} outside {kernel}..={store}\n{sass}"
+            );
+            assert!(
+                helper_lines
+                    .iter()
+                    .all(|line| (first_helper..=last_helper).contains(line)),
+                "{level:?}: helper lines {helper_lines:?} outside {first_helper}..={last_helper}\n{sass}"
+            );
+            if level == DebugInfoLevel::Full {
+                let dwarf = output(Command::new("readelf").arg("--debug-dump=info").arg(&path));
+                for name in ["nested_source", "generated_nested"] {
+                    assert!(dwarf.contains(name), "missing {name} in {dwarf}");
+                }
+            }
+        }
+    });
+}

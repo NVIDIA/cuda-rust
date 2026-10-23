@@ -1081,9 +1081,9 @@ fn translate_call(
         library_site,
     )?;
     if let Some(effect) = effect {
-        // Keep exact type verification for compiler placeholders and for the
-        // original direct call of an authenticated scalar source operation.
-        // Other helper calls retain their ordinary conservative effects.
+        // Mark the original direct scalar source call for the checker's
+        // precision summary. Placeholders keep their existing annotation;
+        // call type verification is independent of this source metadata.
         let operations: Vec<_> = block_ptr.deref(ctx).iter(ctx).collect();
         let start = prev_op
             .and_then(|p| operations.iter().position(|op| *op == p))
@@ -3829,13 +3829,18 @@ pub fn custom(a: Effect, b: Effect) -> Effect { core::cmp::Ord::max(a, b) }
                             scalar_calls,
                             "{name}"
                         );
-                        if name != "integer" {
+                        if scalar_calls == 0 {
                             continue;
                         }
-                        for debug in [DebugKind::Off, DebugKind::Full] {
+                        for (debug, direct) in [
+                            (DebugKind::Off, true),
+                            (DebugKind::Full, true),
+                            (DebugKind::Off, false),
+                        ] {
                             crate::library::set_selected_call_targets(
                                 calls
                                     .iter()
+                                    .filter(|_| direct)
                                     .map(|(block, marker, _)| {
                                         (
                                             crate::LibraryCallSite {
@@ -3884,17 +3889,26 @@ pub fn custom(a: Effect, b: Effect) -> Effect { core::cmp::Ord::max(a, b) }
                             for block in function.deref(&ctx).get_region(0).deref(&ctx).iter(&ctx) {
                                 for op in block.deref(&ctx).iter(&ctx) {
                                     if let Some(call) = Operation::get_op::<MirCallOp>(op, &ctx) {
-                                        let effect = call
-                                            .get_attr_library_expanded_source(&ctx)
-                                            .expect("genuine scalar call retained");
+                                        let site = call.get_attr_library_source_site(&ctx).unwrap();
+                                        let effect = call.get_attr_library_expanded_source(&ctx);
                                         assert_eq!(
-                                            effect.kind,
-                                            LibrarySourceEffectKind::ScalarIntrinsic
+                                            call.get_attr_library_call_target(&ctx).is_some(),
+                                            direct
                                         );
-                                        assert_eq!(
-                                            *call.get_attr_library_source_site(&ctx).unwrap(),
-                                            effect.site
-                                        );
+                                        if direct {
+                                            let effect =
+                                                effect.expect("genuine scalar call retained");
+                                            assert_eq!(
+                                                effect.kind,
+                                                LibrarySourceEffectKind::ScalarIntrinsic
+                                            );
+                                            assert_eq!(*site, effect.site);
+                                        } else {
+                                            assert!(
+                                                effect.is_none(),
+                                                "call without a selected target must stay ordinary"
+                                            );
+                                        }
                                         assert_eq!(
                                             op.deref(&ctx)
                                                 .operands()
@@ -3908,7 +3922,7 @@ pub fn custom(a: Effect, b: Effect) -> Effect { core::cmp::Ord::max(a, b) }
                                             scalar
                                         );
                                         retained.push((
-                                            effect.site.block,
+                                            site.block,
                                             String::from(
                                                 (*call.get_attr_callee(&ctx).unwrap()).clone(),
                                             ),

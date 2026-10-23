@@ -30,7 +30,7 @@
 /// aarch64 returns both server and Tegra names because a Rust aarch64 Linux
 /// triple does not distinguish them -- Jetson builds natively as
 /// `aarch64-unknown-linux-gnu`, exactly like a Grace server. The callers probe
-/// these in order and take the first that actually contains `cuda.h`, so a
+/// these in order and take the first that contains both required headers, so a
 /// single-target install resolves unambiguously either way. `sbsa-linux` is
 /// listed first so that an install carrying both trees resolves to the server
 /// directory.
@@ -50,7 +50,7 @@ fn toolkit_target_dirs(target_arch: &str, target_os: &str) -> &'static [&'static
     }
 }
 
-/// Include directories to probe for `cuda.h`, in priority order.
+/// Include directories to probe for `cuda.h` and `curand.h`, in priority order.
 ///
 /// When `override_dir` carries a non-blank `CUDA_TOOLKIT_TARGET_DIR` value,
 /// that names one `targets/` tree by hand, like nvcc's `-target-dir` flag,
@@ -86,7 +86,13 @@ fn resolve_toolkit_include_candidates(
     }
 }
 
-/// The first candidate that actually contains `cuda.h`.
+const REQUIRED_CUDA_HEADERS: [&str; 2] = ["cuda.h", "curand.h"];
+
+/// The first candidate containing every header used to generate the bindings.
 fn select_include_dir(candidates: &[std::path::PathBuf]) -> Option<&std::path::PathBuf> {
-    candidates.iter().find(|dir| dir.join("cuda.h").is_file())
+    candidates.iter().find(|dir| {
+        REQUIRED_CUDA_HEADERS
+            .iter()
+            .all(|header| dir.join(header).is_file())
+    })
 }

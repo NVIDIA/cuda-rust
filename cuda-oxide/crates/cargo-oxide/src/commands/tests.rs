@@ -4157,6 +4157,7 @@ fn toolkit_resolution_preserves_non_unicode_explicit_paths() {
     let root = parent.join(std::ffi::OsString::from_vec(b"cuda-\xff".to_vec()));
     fs::create_dir_all(root.join("include")).unwrap();
     fs::write(root.join("include/cuda.h"), "#define CUDA_VERSION 13000\n").unwrap();
+    fs::write(root.join("include/curand.h"), "/* cuRAND */\n").unwrap();
 
     let resolve = || {
         resolve_cuda_toolkit(
@@ -4223,6 +4224,7 @@ fn validate_cuda_toolkit_applies_the_build_scripts_acceptance() {
     let root_str = root.to_str().unwrap().to_string();
 
     fs::write(&cuda_h, "#define CUDA_VERSION 13030\n").unwrap();
+    fs::write(root.join("include/curand.h"), "/* cuRAND */\n").unwrap();
     assert_eq!(validate_cuda_toolkit(&root_str, None), Ok(13_030));
 
     // A host include directory must never shadow an explicit target tree.
@@ -4230,6 +4232,7 @@ fn validate_cuda_toolkit_applies_the_build_scripts_acceptance() {
     let target = root.join("targets/test-target/include");
     fs::create_dir_all(&target).unwrap();
     fs::write(target.join("cuda.h"), "#define CUDA_VERSION 13000\n").unwrap();
+    fs::write(target.join("curand.h"), "/* cuRAND */\n").unwrap();
     assert_eq!(
         validate_cuda_toolkit(&root_str, Some("test-target")),
         Ok(13_000)
@@ -4246,15 +4249,62 @@ fn validate_cuda_toolkit_applies_the_build_scripts_acceptance() {
 
     fs::remove_file(&cuda_h).unwrap();
     let headerless = validate_cuda_toolkit(&root_str, None).unwrap_err();
-    assert!(
-        headerless.contains("does not contain cuda.h"),
-        "{headerless}"
-    );
+    assert!(headerless.contains("missing cuda.h"), "{headerless}");
 
     let absent = validate_cuda_toolkit(format!("{root_str}/nope"), None).unwrap_err();
     assert!(absent.contains("is not a directory"), "{absent}");
 
     fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn discovery_skips_a_toolkit_missing_curand_for_a_complete_toolkit() {
+    let root = unique_temp_dir("cargo_oxide_toolkit_partial");
+    let partial = root.join("partial");
+    let complete = root.join("complete");
+    for toolkit in [&partial, &complete] {
+        fs::create_dir_all(toolkit.join("include")).unwrap();
+        fs::write(
+            toolkit.join("include/cuda.h"),
+            "#define CUDA_VERSION 13030\n",
+        )
+        .unwrap();
+    }
+    fs::write(complete.join("include/curand.h"), "/* cuRAND */\n").unwrap();
+
+    let choice = resolve_cuda_toolkit(
+        |_| None,
+        |candidate| {
+            let fixture = if candidate == Path::new(DEFAULT_TOOLKIT_CANDIDATES[0]) {
+                &partial
+            } else {
+                &complete
+            };
+            validate_cuda_toolkit(fixture, None)
+        },
+    );
+    assert_eq!(choice.source, ToolkitSource::Discovered);
+    assert_eq!(choice.root, Path::new(DEFAULT_TOOLKIT_CANDIDATES[1]));
+    assert_eq!(choice.rejected.len(), 1);
+    assert!(choice.rejected[0].contains("curand.h"), "{choice:?}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn explicit_incomplete_toolkit_is_rejected_without_fallback() {
+    let root = unique_temp_dir("cargo_oxide_toolkit_partial_explicit");
+    fs::create_dir_all(root.join("include")).unwrap();
+    fs::write(root.join("include/cuda.h"), "#define CUDA_VERSION 13030\n").unwrap();
+
+    let choice = resolve_cuda_toolkit(
+        |key| (key == "CUDA_TOOLKIT_PATH").then(|| root.clone().into_os_string()),
+        |candidate| validate_cuda_toolkit(candidate, None),
+    );
+    assert_eq!(choice.source, ToolkitSource::Unresolved);
+    assert_eq!(choice.root, root);
+    assert_eq!(choice.rejected.len(), 1);
+    assert!(choice.rejected[0].contains("curand.h"), "{choice:?}");
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

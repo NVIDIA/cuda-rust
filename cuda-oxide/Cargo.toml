@@ -1,6 +1,11 @@
 [workspace]
 resolver = "3"
 members = [
+    # CuTe frontend and semantic IR shared by every CuTe backend.
+    "cute-rs-preview/cute-layout",
+    "cute-rs-preview/cute-rs",
+    "cute-rs-preview/ctm-rs",
+    "cute-rs-preview/dialect-cute",
     # Core crates
     "crates/cuda-target-spec",
     "crates/cuda-intrinsics",
@@ -13,6 +18,7 @@ members = [
     "crates/cuda-host",
     "crates/cuda-macros",
     "crates/llvm-export",
+    "crates/cuda-oxide-mlir-export",
     "crates/dialect-mir",
     "crates/dialect-iket",
     "crates/dialect-nvvm",
@@ -44,7 +50,8 @@ repository = "https://github.com/NVIDIA/cuda-rust"
 # Note: crates/rustc-codegen-cuda is NOT a workspace member because it requires
 # special rustc nightly features and a different build process.
 # Build and run examples with: cargo oxide run <example>
-# Examples are in: crates/rustc-codegen-cuda/examples/
+# Examples are in: crates/rustc-codegen-cuda/examples/ and cute-rs-preview/examples/
+# Complete model workloads are in: cute-rs-preview/models/
 
 [workspace.dependencies]
 # Pliron MLIR framework, pinned to the published 0.20.0 release, retaining
@@ -63,6 +70,12 @@ pliron-llvm = { version = "=0.20.0", default-features = false, features = [
 # Internal crates
 cuda-target-spec = { path = "crates/cuda-target-spec" }
 llvm-export = { path = "crates/llvm-export" }
+# Published printer; version-specific compatibility stays in the export adapter.
+pliron-mlir-interop = { version = "=0.1.0" }
+cuda-oxide-mlir-export = { path = "crates/cuda-oxide-mlir-export" }
+cute-layout = { path = "cute-rs-preview/cute-layout" }
+ctm-rs = { path = "cute-rs-preview/ctm-rs" }
+dialect-cute = { path = "cute-rs-preview/dialect-cute" }
 dialect-mir = { path = "crates/dialect-mir" }
 dialect-iket = { path = "crates/dialect-iket" }
 dialect-ptx = { path = "crates/dialect-ptx" }
@@ -119,6 +132,7 @@ combine = "4.6.8"
 log = "0.4"
 half = "2.7"
 libloading = "0.8"
+object = { version = "0.36", default-features = false, features = ["read", "std", "write"] }
 sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

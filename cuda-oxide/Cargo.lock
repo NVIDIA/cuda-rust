@@ -360,6 +360,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctm-rs"
+version = "0.1.0"
+dependencies = [
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
+ "thiserror 2.0.21",
+ "trybuild",
+]
+
+[[package]]
 name = "cuda-artifact-finalizer"
 version = "0.2.1"
 dependencies = [
@@ -373,7 +384,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-async"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "cuda-bindings",
@@ -388,7 +399,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-bindings"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bindgen",
  "libloading",
@@ -400,7 +411,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "cuda-bindings",
@@ -411,7 +422,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-core-derive"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -465,6 +476,7 @@ dependencies = [
 name = "cuda-macros"
 version = "0.2.1"
 dependencies = [
+ "ctm-rs",
  "cuda-core",
  "cuda-device",
  "cuda-host",
@@ -480,26 +492,67 @@ dependencies = [
 name = "cuda-oxide-codegen"
 version = "0.1.0"
 dependencies = [
+ "cuda-oxide-mlir-export",
  "cuda-target-spec",
+ "dialect-cute",
  "dialect-iket",
  "dialect-mir",
  "dialect-nvvm",
  "iket-lower",
+ "libloading",
  "libnvvm-sys",
  "llvm-export",
  "mir-lower",
  "mir-transforms",
  "nvvm-transforms",
+ "object",
  "pliron",
  "ptx-parse",
  "rustc-demangle",
+ "serde_json",
+ "sha2",
  "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "cuda-oxide-mlir-export"
+version = "0.1.0"
+dependencies = [
+ "cute-layout",
+ "dialect-cute",
+ "dialect-mir",
+ "dialect-nvvm",
+ "llvm-export",
+ "pliron",
+ "pliron-derive",
+ "pliron-mlir-interop",
+ "reserved-oxide-symbols",
+ "serde",
+ "serde_json",
+ "sha2",
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "cuda-target-spec"
 version = "0.1.0"
+
+[[package]]
+name = "cute-layout"
+version = "0.1.0"
+
+[[package]]
+name = "cute-rs"
+version = "0.1.0"
+dependencies = [
+ "ctm-rs",
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
+ "cute-layout",
+ "trybuild",
+]
 
 [[package]]
 name = "dashmap"
@@ -513,6 +566,20 @@ dependencies = [
  "lock_api",
  "once_cell",
  "parking_lot_core",
+]
+
+[[package]]
+name = "dialect-cute"
+version = "0.1.0"
+dependencies = [
+ "combine",
+ "cute-layout",
+ "dialect-mir",
+ "linkme",
+ "once_cell",
+ "pliron",
+ "pliron-derive",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -989,6 +1056,8 @@ version = "0.2.1"
 dependencies = [
  "combine",
  "cuda-oxide-codegen",
+ "cute-layout",
+ "dialect-cute",
  "dialect-iket",
  "dialect-mir",
  "dialect-nvvm",
@@ -1191,6 +1260,17 @@ dependencies = [
  "bitflags",
  "log",
  "pliron",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pliron-mlir-interop"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08d58884474a71b0e9216d69be5c99dd1b945541f38a3acd76046d7c192a991a"
+dependencies = [
+ "pliron",
+ "pliron-llvm",
  "thiserror 2.0.21",
 ]
 

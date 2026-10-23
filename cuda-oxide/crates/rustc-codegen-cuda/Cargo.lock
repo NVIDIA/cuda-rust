@@ -204,26 +204,69 @@ dependencies = [
 name = "cuda-oxide-codegen"
 version = "0.1.0"
 dependencies = [
+ "cuda-oxide-mlir-export",
  "cuda-target-spec",
+ "dialect-cute",
  "dialect-iket",
  "dialect-mir",
  "dialect-nvvm",
  "iket-lower",
+ "libloading",
  "libnvvm-sys",
  "llvm-export",
  "mir-lower",
  "mir-transforms",
  "nvvm-transforms",
+ "object",
  "pliron",
  "ptx-parse",
  "rustc-demangle",
+ "serde_json",
+ "sha2",
  "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "cuda-oxide-mlir-export"
+version = "0.1.0"
+dependencies = [
+ "cute-layout",
+ "dialect-cute",
+ "dialect-mir",
+ "dialect-nvvm",
+ "llvm-export",
+ "pliron",
+ "pliron-derive",
+ "pliron-mlir-interop",
+ "reserved-oxide-symbols",
+ "serde",
+ "serde_json",
+ "sha2",
  "thiserror",
 ]
 
 [[package]]
 name = "cuda-target-spec"
 version = "0.1.0"
+
+[[package]]
+name = "cute-layout"
+version = "0.1.0"
+
+[[package]]
+name = "dialect-cute"
+version = "0.1.0"
+dependencies = [
+ "combine",
+ "cute-layout",
+ "dialect-mir",
+ "linkme",
+ "once_cell",
+ "pliron",
+ "pliron-derive",
+ "thiserror",
+]
 
 [[package]]
 name = "dialect-iket"
@@ -497,6 +540,8 @@ version = "0.2.1"
 dependencies = [
  "combine",
  "cuda-oxide-codegen",
+ "cute-layout",
+ "dialect-cute",
  "dialect-iket",
  "dialect-mir",
  "dialect-nvvm",
@@ -649,6 +694,17 @@ dependencies = [
  "bitflags",
  "log",
  "pliron",
+ "thiserror",
+]
+
+[[package]]
+name = "pliron-mlir-interop"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08d58884474a71b0e9216d69be5c99dd1b945541f38a3acd76046d7c192a991a"
+dependencies = [
+ "pliron",
+ "pliron-llvm",
  "thiserror",
 ]
 

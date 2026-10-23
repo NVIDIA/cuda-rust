@@ -178,6 +178,30 @@ for the supported driver ranges and PTX limitation.
 
 ---
 
+## Official CUTLASS compiler (optional)
+
+The high-level CuTe translation backend uses NVIDIA's official CUTLASS 4.7
+compiler library. Install the repository-pinned archive with:
+
+```bash
+cargo oxide toolchain install cutlass
+```
+
+The installer verifies the archive and compiler-library SHA-256 digests and
+stores the toolchain in Cargo's managed data directory. Select it per build:
+
+```bash
+CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir \
+  cargo oxide build elementwise_cute --arch sm_120a
+```
+
+Set `CUDA_OXIDE_CUTLASS_COMPILER` to an absolute
+`libCutlassCompiler.so` path only when intentionally overriding the managed
+installation. The CuTe chapter's [Build with the CUTLASS Compiler](../cute/build-with-cutlass.md)
+page lists the two supported targets, the options and the failure rules.
+
+---
+
 ## LLVM 21+ (optional)
 
 cuda-oxide uses LLVM's NVPTX backend to lower LLVM IR to PTX.
@@ -346,6 +370,7 @@ The full set, as `cargo oxide --help` reports it:
 | `doctor` | Check that your environment is set up correctly |
 | `setup` | Build and cache the codegen backend |
 | `update` | Refresh the cached codegen backend (or run `setup` inside the workspace) |
+| `toolchain` | Install compiler toolchains managed by cargo-oxide |
 
 Four of these are worth calling out, because they do something `cargo` itself
 cannot:

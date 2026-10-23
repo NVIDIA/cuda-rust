@@ -68,7 +68,7 @@ runs:
     # the workflow at startup. Dependabot keeps the version comment current.
     - name: Restore the Rust build cache
       if: inputs.cache == 'true'
-      uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
       with:
         # One cache per job: the CUDA image differs per lane and bindgen output
         # with it, so artifacts are not interchangeable across lanes.

@@ -599,6 +599,20 @@ pub unsafe fn cvta_generic_to_shared_offset(ptr: *const u8) -> u64 {
     unreachable!("cvta_generic_to_shared_offset called outside CUDA kernel context")
 }
 
+/// Convert a generic pointer to its cluster shared-memory window offset.
+///
+/// Unlike CTA shared offsets, this retains the remote CTA rank encoded by mapa.
+///
+/// # Safety
+/// The pointer must refer to shared memory in the current cluster. The caller
+/// must ensure its allocation and cluster lifetime remain valid.
+// Keep this definition in `shared`: importer recognition uses the exact path.
+#[inline(never)]
+pub unsafe fn cvta_generic_to_cluster_shared_offset(ptr: *const u8) -> u64 {
+    let _ = ptr;
+    unreachable!("cvta_generic_to_cluster_shared_offset called outside CUDA kernel context")
+}
+
 /// Convert a generic address into its 32-bit `.shared::cta` state-space address.
 ///
 /// Unlike [`cvta_generic_to_shared_offset`], which returns the `u64` carrier

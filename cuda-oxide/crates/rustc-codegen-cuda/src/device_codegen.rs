@@ -350,6 +350,10 @@ pub struct DeviceCodegenConfig {
     pub output_dir: PathBuf,
     /// Base name for output files (e.g., "kernel" → kernel.ll, kernel.ptx).
     pub output_name: String,
+    /// Optional exact path for the prepared semantic CUTLASS MLIR module.
+    pub mlir_output: Option<PathBuf>,
+    /// Device artifact backend selected by the rustc frontend.
+    pub device_backend: mir_importer::DeviceBackend,
     /// Print verbose progress to stderr.
     pub verbose: bool,
     /// Dump raw rustc MIR before translation.
@@ -365,6 +369,8 @@ impl Default for DeviceCodegenConfig {
         Self {
             output_dir: std::env::current_dir().unwrap_or_else(|_| ".".into()),
             output_name: "kernel".to_string(),
+            mlir_output: None,
+            device_backend: mir_importer::DeviceBackend::Native,
             verbose: false,
             dump_rustc_mir: false,
             dump_mir_dialect: false,
@@ -1021,6 +1027,8 @@ pub fn generate_device_code<'tcx>(
 
     let output_dir = config.output_dir.clone();
     let output_name = config.output_name.clone();
+    let mlir_output = config.mlir_output.clone();
+    let device_backend = config.device_backend.clone();
     let verbose = config.verbose;
     let show_rustc_mir = config.dump_rustc_mir;
     let show_mir = config.dump_mir_dialect;
@@ -1247,6 +1255,8 @@ pub fn generate_device_code<'tcx>(
         let pipeline_config = mir_importer::PipelineConfig {
             output_dir: output_dir.clone(),
             output_name: output_name.clone(),
+            mlir_output: mlir_output.clone(),
+            device_backend: device_backend.clone(),
             verbose,
             show_mir_dialect: show_mir,
             show_llvm_dialect: show_llvm,
@@ -1409,6 +1419,8 @@ mod tests {
         let config = DeviceCodegenConfig::default();
         assert!(!config.verbose);
         assert_eq!(config.output_name, "kernel");
+        assert_eq!(config.mlir_output, None);
+        assert_eq!(config.device_backend, mir_importer::DeviceBackend::Native);
     }
 
     #[test]

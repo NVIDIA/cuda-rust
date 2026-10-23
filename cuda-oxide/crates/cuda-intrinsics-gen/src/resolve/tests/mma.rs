@@ -26,6 +26,68 @@ use crate::resolve::guards::*;
 use crate::resolve::overlay::*;
 
 #[test]
+fn dense_mxf4_k64_preserves_selector_abi_and_rejects_contract_drift() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let (overlay, _) =
+        read_overlay(&repo_root, &repo_root.join("intrinsics/overlay.toml")).unwrap();
+    let policy = overlay
+        .intrinsics
+        .iter()
+        .find(|record| record.id == "mma_m16n8k64_mxf4_f32")
+        .expect("canonical dense MXF4 K64 admission");
+    let imported: ImportedFile = read_json(&repo_root.join("intrinsics/imported.json")).unwrap();
+    let declaration = imported
+        .intrinsics
+        .iter()
+        .find(|record| Some(&record.source_record) == policy.source_record.as_ref())
+        .unwrap();
+    validate_register_mma_policy(policy, declaration).unwrap();
+    resolve_candidate(
+        &repo_root,
+        &policy.id,
+        "test-llvm",
+        &"a".repeat(64),
+        "sm_120a",
+        "+ptx87",
+    )
+    .unwrap();
+    assert_eq!(policy.abi_id, "i1039");
+    assert_eq!(
+        policy.rust_arguments,
+        [
+            "[f32; 4]", "[u32; 4]", "[u32; 2]", "u32", "u16", "u16", "u32", "u16", "u16"
+        ]
+    );
+    assert_eq!(
+        policy.expected_ptx.modifiers,
+        [
+            "sync",
+            "aligned",
+            "m16n8k64",
+            "row",
+            "col",
+            "kind::mxf4",
+            "block_scale",
+            "scale_vec::2X",
+            "f32",
+            "e2m1",
+            "e2m1",
+            "f32",
+            "ue8m0"
+        ]
+    );
+    let mut wrong_shape = policy.clone();
+    wrong_shape.register_mma.as_mut().unwrap().shape = RegisterMmaShape::M16n8k32;
+    assert!(validate_register_mma_policy(&wrong_shape, declaration).is_err());
+    let mut wrong_selector = policy.clone();
+    wrong_selector.rust_arguments[4] = "u32".into();
+    assert!(validate_register_mma_policy(&wrong_selector, declaration).is_err());
+    let mut wrong_scale = policy.clone();
+    wrong_scale.expected_ptx.modifiers[7] = "scale_vec::4X".into();
+    assert!(validate_register_mma_policy(&wrong_scale, declaration).is_err());
+}
+
+#[test]
 fn stmatrix_admission_is_closed_and_uses_schema_35() {
     let shard = |schema| {
         toml::from_str::<OverlayShardFile>(&format!(
@@ -1134,7 +1196,7 @@ fn pinned_register_mma_records_match_the_closed_recipes_and_fail_closed() {
         .iter()
         .filter(|record| record.family == "register_mma")
         .collect();
-    assert_eq!(records.len(), 154);
+    assert_eq!(records.len(), 155);
 
     let dense_f8f6f4_records = records
         .iter()

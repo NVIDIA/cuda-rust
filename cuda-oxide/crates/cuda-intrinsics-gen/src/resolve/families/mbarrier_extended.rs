@@ -203,6 +203,50 @@ pub(in crate::resolve) fn mbarrier_extended_recipe(
             ptx_isa_url: "https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier-arrive",
             summary: "Arrives at a remote cluster-shared barrier through its raw address.",
         },
+        MbarrierExtendedOperation::ArriveRemoteClusterRelaxed => MbarrierExtendedRecipe {
+            operation,
+            abi_id: "i1040",
+            id: "mbarrier_arrive_cluster_relaxed",
+            operation_key: "barrier.mbarrier.arrive.shared.cluster.relaxed.cluster.raw_address",
+            source_record: None,
+            llvm_symbol: None,
+            ptx_native_instruction: Some("mbarrier.arrive.relaxed.cluster.shared::cluster.b64"),
+            rust_arguments: &["u64"],
+            rust_result: "()",
+            must_use: false,
+            dialect_op_type: "MbarrierArriveClusterRelaxedOp",
+            dialect_op_name: "nvvm.mbarrier_arrive_cluster_relaxed",
+            dialect_operands: &["i64"],
+            dialect_results: &[],
+            llvm_arguments: &[],
+            llvm_results: &[],
+            llvm_properties: &[],
+            adapter: MbarrierExtendedAdapter::RawClusterAddressToVoid,
+            source_contract: MbarrierExtendedSourceContract::PtxNativeRawClusterAddress,
+            execution_scope: "cluster",
+            minimum_ptx: "8.6",
+            minimum_sm: "sm_90",
+            ptx_result: "()",
+            expected_ptx: instruction(
+                &[
+                    "mbarrier",
+                    "arrive",
+                    "relaxed",
+                    "cluster",
+                    "shared::cluster",
+                    "b64",
+                ],
+                vec![
+                    OperandPattern::Exact { value: "_".into() },
+                    OperandPattern::Address,
+                ],
+            ),
+            inline_ptx: "mbarrier.arrive.relaxed.cluster.shared::cluster.b64 _, [$0];",
+            inline_constraints: "l,~{memory}",
+            ptx_isa_section: "Parallel Synchronization and Communication Instructions: mbarrier.arrive",
+            ptx_isa_url: "https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier-arrive",
+            summary: "Arrives at a remote cluster-shared barrier with relaxed memory ordering.",
+        },
         MbarrierExtendedOperation::TryWaitTokenCta => MbarrierExtendedRecipe {
             operation,
             abi_id: "i0309",
@@ -324,6 +368,60 @@ pub(in crate::resolve) fn mbarrier_extended_recipe(
             ptx_isa_section: "Parallel Synchronization and Communication Instructions: mbarrier.test_wait / mbarrier.try_wait",
             ptx_isa_url: "https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier-test-wait-mbarrier-try-wait",
             summary: "Tests barrier parity with cluster-scope acquire ordering.",
+        },
+        MbarrierExtendedOperation::TryWaitParityClusterRelaxed => MbarrierExtendedRecipe {
+            operation,
+            abi_id: "i1041",
+            id: "mbarrier_try_wait_parity_cluster_relaxed",
+            operation_key: "barrier.mbarrier.try_wait.parity.shared.cta.relaxed.cluster",
+            source_record: Some(
+                "int_nvvm_mbarrier_try_wait_parity_relaxed_scope_cluster_space_cta",
+            ),
+            llvm_symbol: Some("llvm.nvvm.mbarrier.try.wait.parity.relaxed.scope.cluster.space.cta"),
+            ptx_native_instruction: None,
+            rust_arguments: &["*const u64", "u32"],
+            rust_result: "bool",
+            must_use: true,
+            dialect_op_type: "MbarrierTryWaitParityClusterRelaxedOp",
+            dialect_op_name: "nvvm.mbarrier_try_wait_parity_cluster_relaxed",
+            dialect_operands: &["ptr", "i32"],
+            dialect_results: &["i1"],
+            llvm_arguments: &["shared_ptr", "i32"],
+            llvm_results: &["i1"],
+            llvm_properties: &[
+                "IntrArgMemOnly",
+                "IntrConvergent",
+                "IntrNoCallback",
+                "IntrReadMem",
+                "NoCapture<arg0>",
+            ],
+            adapter: MbarrierExtendedAdapter::PointerParityToPredicate,
+            source_contract: MbarrierExtendedSourceContract::LlvmImported,
+            execution_scope: "cluster",
+            minimum_ptx: "8.6",
+            minimum_sm: "sm_90",
+            ptx_result: "bool",
+            expected_ptx: instruction(
+                &[
+                    "mbarrier",
+                    "try_wait",
+                    "parity",
+                    "relaxed",
+                    "cluster",
+                    "shared::cta",
+                    "b64",
+                ],
+                vec![
+                    OperandPattern::Register,
+                    OperandPattern::Address,
+                    OperandPattern::Register,
+                ],
+            ),
+            inline_ptx: "{ .reg .pred %p0; mbarrier.try_wait.parity.relaxed.cluster.shared::cta.b64 %p0, [$1], $2; selp.b32 $0, 1, 0, %p0; }",
+            inline_constraints: "=r,l,r,~{memory}",
+            ptx_isa_section: "Parallel Synchronization and Communication Instructions: mbarrier.test_wait / mbarrier.try_wait",
+            ptx_isa_url: "https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier-test-wait-mbarrier-try-wait",
+            summary: "Tests barrier parity at cluster scope with relaxed memory ordering.",
         },
         MbarrierExtendedOperation::FenceProxyAsyncSharedCta => MbarrierExtendedRecipe {
             operation,
@@ -481,6 +579,45 @@ pub(in crate::resolve) fn mbarrier_extended_recipe(
                 summary: "Acquires cluster-shared async-proxy writes through the generic proxy.",
             }
         }
+        MbarrierExtendedOperation::FenceAcquireSharedClusterCluster => MbarrierExtendedRecipe {
+            operation,
+            abi_id: "i1042",
+            id: "fence_acquire_shared_cluster_cluster",
+            operation_key: "fence.acquire.sync_restrict.shared_cluster.cluster",
+            source_record: Some("int_nvvm_fence_acquire_sync_restrict_space_cluster_scope_cluster"),
+            llvm_symbol: Some("llvm.nvvm.fence.acquire.sync_restrict.space.cluster.scope.cluster"),
+            ptx_native_instruction: None,
+            rust_arguments: &[],
+            rust_result: "()",
+            must_use: false,
+            dialect_op_type: "FenceAcquireSharedClusterClusterOp",
+            dialect_op_name: "nvvm.fence_acquire_shared_cluster_cluster",
+            dialect_operands: &[],
+            dialect_results: &[],
+            llvm_arguments: &[],
+            llvm_results: &[],
+            llvm_properties: &["IntrNoCallback"],
+            adapter: MbarrierExtendedAdapter::ZeroOperandsToVoid,
+            source_contract: MbarrierExtendedSourceContract::LlvmImported,
+            execution_scope: "cluster",
+            minimum_ptx: "8.6",
+            minimum_sm: "sm_90",
+            ptx_result: "()",
+            expected_ptx: instruction(
+                &[
+                    "fence",
+                    "acquire",
+                    "sync_restrict::shared::cluster",
+                    "cluster",
+                ],
+                vec![],
+            ),
+            inline_ptx: "fence.acquire.sync_restrict::shared::cluster.cluster;",
+            inline_constraints: "~{memory}",
+            ptx_isa_section: "Parallel Synchronization and Communication Instructions: membar / fence",
+            ptx_isa_url: "https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-membar",
+            summary: "Acquires cluster-shared memory at cluster scope, without ordering global memory.",
+        },
         MbarrierExtendedOperation::Nanosleep => MbarrierExtendedRecipe {
             operation,
             abi_id: "i0316",
@@ -560,6 +697,9 @@ pub(in crate::resolve) fn expand_mbarrier_extended_admission(
         MbarrierExtendedOperation::FenceProxyAsyncGenericReleaseSharedCtaCluster,
         MbarrierExtendedOperation::FenceProxyAsyncGenericAcquireSharedClusterCluster,
         MbarrierExtendedOperation::Nanosleep,
+        MbarrierExtendedOperation::ArriveRemoteClusterRelaxed,
+        MbarrierExtendedOperation::TryWaitParityClusterRelaxed,
+        MbarrierExtendedOperation::FenceAcquireSharedClusterCluster,
     ]);
     let actual_operations = admission
         .variants
@@ -658,7 +798,12 @@ pub(in crate::resolve) fn expand_mbarrier_extended_admission(
                                     admission.llvm_evidence_profile.clone()
                                 }
                                 IntrinsicBackend::LibNvvm => {
-                                    admission.libnvvm_evidence_profile.clone()
+                                    if matches!(recipe.operation, MbarrierExtendedOperation::ArriveRemoteClusterRelaxed | MbarrierExtendedOperation::TryWaitParityClusterRelaxed | MbarrierExtendedOperation::FenceAcquireSharedClusterCluster) {
+                                        admission.relaxed_libnvvm_evidence_profile.as_ref()
+                                            .unwrap_or(&admission.libnvvm_evidence_profile).clone()
+                                    } else {
+                                        admission.libnvvm_evidence_profile.clone()
+                                    }
                                 }
                             },
                             targets: None,

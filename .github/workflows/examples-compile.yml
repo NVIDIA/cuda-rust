@@ -256,6 +256,51 @@ jobs:
             "${RUNNER_TEMP}/cross-crate-sm90-build.log" \
             '^(kernel-lib|cross_crate_kernel)$' kernel-lib cross_crate_kernel
 
+      # With LTO, rustc reads bitcode from the Rust objects of each rlib and
+      # removes these objects from the link. The artifact objects of the
+      # libraries must not be Rust objects.
+      - name: LTO keeps the PTX bundles of libraries
+        timeout-minutes: 15
+        working-directory: cuda-oxide
+        env:
+          CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          CUDA_OXIDE_LLC: /usr/bin/llc-23
+          CARGO_TARGET_DIR: ${{ runner.temp }}/examples-shared-target
+          CARGO_INCREMENTAL: "0"
+          CARGO_PROFILE_RELEASE_LTO: fat
+        run: |
+          set -euo pipefail
+          sysroot="$(rustc --print sysroot)"
+          export LIBRARY_PATH="${sysroot}/lib:${LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="${CUDA_TOOLKIT_PATH}/lib64:${sysroot}/lib:${LD_LIBRARY_PATH:-}"
+
+          assert_bundles() {
+            local file="$1"
+            shift
+            local section="${RUNNER_TEMP}/$(basename "${file}").oxart"
+            objcopy --dump-section ".oxart=${section}" "${file}"
+            local bundle
+            for bundle in "$@"; do
+              grep -aFq "${bundle}" "${section}"
+            done
+          }
+          binary="${CARGO_TARGET_DIR}/release/cuda_module_in_lib"
+
+          cargo oxide build cuda_module_in_lib --arch sm_86 2>&1 \
+            | tee "${RUNNER_TEMP}/cross-crate-lto-build.log"
+          assert_bundles "${binary}" cuda_module_in_lib module-kernels
+
+          # If a session writes an rlib and a dynamic library, the system
+          # linker gets the artifact objects as link arguments.
+          manifest=crates/rustc-codegen-cuda/examples/cuda_module_in_lib/kernel-lib/Cargo.toml
+          printf '\n[lib]\ncrate-type = ["rlib", "cdylib"]\n' >> "${manifest}"
+          cargo oxide build cuda_module_in_lib --arch sm_86 2>&1 \
+            | tee "${RUNNER_TEMP}/cross-crate-lto-cdylib-build.log"
+          git checkout -- "${manifest}"
+          assert_bundles "${binary}" cuda_module_in_lib module-kernels
+          assert_bundles \
+            "$(find "${CARGO_TARGET_DIR}/release" -name libmodule_kernels.so)" module-kernels
+
       - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@v4

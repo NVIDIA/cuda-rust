@@ -82,6 +82,11 @@ The generated method forces monomorphization of `scale::<f32>` so the
 instantiation appears in the compiled PTX even though it is never called
 directly on the CPU.
 
+The generated name helper retains the concrete function-item type for device
+collection. It does not take a host function pointer to the kernel, so looking
+up a specialization's name does not require host definitions of its device-only
+callees. The host and device still use the same function-item hash.
+
 ### Compile-time kernel policies
 
 A policy type groups tuning choices for one generic kernel:

@@ -25,6 +25,7 @@ pub struct OxideConfig {
 ///
 /// Built once at startup by [`resolve_context`] and passed by reference to
 /// every command handler. Avoids repeated filesystem walks and backend builds.
+#[derive(Clone)]
 pub struct Context {
     /// Absolute path to the workspace root (contains top-level `Cargo.toml`).
     pub workspace_root: PathBuf,
@@ -39,6 +40,8 @@ pub struct Context {
     pub is_workspace: bool,
     /// Project-local cuda-oxide defaults.
     pub config: OxideConfig,
+    /// Ordered external LTO-IR inputs from the command line.
+    pub link_ltoir: Vec<PathBuf>,
 }
 
 impl Context {
@@ -74,6 +77,7 @@ pub fn resolve_context() -> Context {
         let config = load_oxide_config(&workspace_root);
         let backend_so = backend::find_or_build_backend(&workspace_root, config.backend.as_deref());
         return Context {
+            link_ltoir: Vec::new(),
             workspace_root,
             codegen_crate,
             examples_dir,
@@ -92,6 +96,7 @@ pub fn resolve_context() -> Context {
         let config = load_oxide_config(&cwd);
         let backend_so = backend::find_or_build_backend(&cwd, config.backend.as_deref());
         return Context {
+            link_ltoir: Vec::new(),
             workspace_root: cwd.clone(),
             codegen_crate: cwd.clone(),
             examples_dir: cwd.clone(),
@@ -124,6 +129,7 @@ pub fn resolve_passive_context() -> Context {
         let config = load_oxide_config_lenient(&workspace_root);
         let backend_so = backend::backend_so_candidate(&workspace_root, config.backend.as_deref());
         return Context {
+            link_ltoir: Vec::new(),
             workspace_root,
             codegen_crate,
             examples_dir,
@@ -142,6 +148,7 @@ pub fn resolve_passive_context() -> Context {
         let config = load_oxide_config_lenient(&cwd);
         let backend_so = backend::backend_so_candidate(&cwd, config.backend.as_deref());
         return Context {
+            link_ltoir: Vec::new(),
             workspace_root: cwd.clone(),
             codegen_crate: cwd.clone(),
             examples_dir: cwd.clone(),

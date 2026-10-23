@@ -239,6 +239,9 @@ pub(super) fn generate_cuda_module_launch_contract_impl(
     });
     let alignment = contract.dynamic_shared_alignment;
     let dynamic_shared = match contract.dynamic_shared {
+        DynamicSharedContract::Inferred => {
+            quote! { ::cuda_core::DynamicSharedMemoryRequirement::Inferred }
+        }
         DynamicSharedContract::Exact(bytes) => quote! {
             ::cuda_core::DynamicSharedMemoryRequirement::Exact {
                 bytes: #bytes,

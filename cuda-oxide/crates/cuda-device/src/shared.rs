@@ -496,6 +496,28 @@ impl<T, const ALIGN: usize> DynamicSharedArray<T, ALIGN> {
         unreachable!("DynamicSharedArray::get called outside CUDA kernel context")
     }
 
+    /// Gets the block's dynamic shared-memory base with a fixed `T` extent.
+    ///
+    /// The compiler records `size_of::<T>()` and the stronger of `ALIGN` and
+    /// `align_of::<T>()` for checked launch preparation. Use an array or a
+    /// structure to describe the complete region. Every call returns the same
+    /// base address: multiple views share storage, they do not allocate separate
+    /// regions. Their required extents and alignments combine by maximum.
+    /// Inference follows Rust views through direct calls. Dynamic-base use in
+    /// external code, indirect calls, or inline assembly must fit a fixed view
+    /// declared on that path; the compiler does not inspect those accesses.
+    ///
+    /// # Safety
+    ///
+    /// Access only the declared `T` region, initialize values before reading,
+    /// and synchronize conflicting accesses across threads. Concurrent views
+    /// alias; this function establishes neither exclusive ownership nor a
+    /// synchronization barrier. Raw launches must allocate sufficient memory.
+    #[inline(never)]
+    pub unsafe fn get_fixed() -> *mut T {
+        unreachable!("DynamicSharedArray::get_fixed called outside CUDA kernel context")
+    }
+
     /// Get a raw byte pointer to the start of dynamic shared memory.
     ///
     /// This is useful for manual memory management or when working
@@ -766,3 +788,9 @@ impl<T> SharedPtr<T> {
 }
 
 include!("generated/shared_sreg.rs");
+
+/// Selects compiler-produced dynamic shared-memory requirements.
+/// Emitted by `#[launch_contract(dynamic_shared = inferred)]`.
+#[doc(hidden)]
+#[inline(never)]
+pub fn __dynamic_shared_inferred() {}

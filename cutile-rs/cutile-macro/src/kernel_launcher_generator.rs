@@ -1854,7 +1854,7 @@ fn get_tensor_code(
                 let valid_shape = &tensor_validator.shape;
                 let given_shape: &[usize] = KernelOutputStored::partition_shape(&#var_ident);
                 kernel_launch_assert_with(valid_shape.len() == given_shape.len(), || format!("{} rank mismatch: Expected {}, got {}", #var_name, valid_shape.len(), given_shape.len()))?;
-                kernel_launch_assert_with(zip(valid_shape, given_shape).all(|(&expected, &given)| expected as i64 == given as i64), || format!("{} partition shape mismatch. Expected {:?}, got {:?}", #var_name, valid_shape, given_shape))?;
+                kernel_launch_assert_with(zip(valid_shape, given_shape).all(|(&expected, &given)| expected == -1 || expected as i64 == given as i64), || format!("{} partition shape mismatch. Expected {:?}, got {:?}", #var_name, valid_shape, given_shape))?;
                 // Runtime extents for launch-time check hoisting (indexed by
                 // signature position): root shape resolves `Dim` atoms, and the
                 // partition slab -- this param's kernel-visible view -- resolves

@@ -1883,6 +1883,10 @@ fn emit_entry_allocas(
 /// * `inline` - The `#[inline]` request, recorded as [`InlineIntentAttr`] on
 ///   non-kernel functions (`set_inline_intent_attr`)
 /// * `override_name` - Custom export name (defaults to instance name)
+/// * `pre90_cluster_queries` - Use single-block-cluster query semantics
+///
+/// Returns the function operation and whether it used a pre-sm90 cluster
+/// query fallback. The caller must preserve that target choice.
 pub fn translate_body(
     ctx: &mut Context,
     body: &mir::Body,
@@ -1896,7 +1900,8 @@ pub fn translate_body(
     debug_kind: DebugKind,
     debug_source_scopes: Option<&DebugSourceScopeMap>,
     statement_debug_info: Option<&StatementDebugInfoMap>,
-) -> TranslationResult<Ptr<Operation>> {
+    pre90_cluster_queries: bool,
+) -> TranslationResult<(Ptr<Operation>, bool)> {
     if let Some(statement_debug_info) = statement_debug_info {
         if statement_debug_info.blocks.len() != body.blocks.len() {
             return input_err_noloc!(TranslationErr::invalid_op(format!(
@@ -1935,6 +1940,7 @@ pub fn translate_body(
     let num_locals = body.locals().len();
     let mut value_map = ValueMap::new(num_locals);
     value_map.set_debug_variables(debug_kind.variables_enabled());
+    value_map.pre90_cluster_queries = pre90_cluster_queries;
 
     // Resolve the per-body unchecked-indexing policy. Like the dynamic-shared
     // marker, the `#[kernel(unchecked_indexing)]` marker is scanned on any
@@ -2498,7 +2504,7 @@ pub fn translate_body(
         }
     }
 
-    Ok(op_ptr)
+    Ok((op_ptr, value_map.used_cluster_query_fallback))
 }
 
 /// Choose the debugger-visible spelling independently of a function's symbol.

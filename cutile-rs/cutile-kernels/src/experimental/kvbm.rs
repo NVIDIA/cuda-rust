@@ -103,7 +103,7 @@ pub mod copy_stacked_to_contiguous_f16_module {
         (block_idx, h_idx, l_idx, o_idx)
     }
 
-    /// Copies f16 KVBM stacked NHD/HND block chunks into a contiguous operational or universal block. This is used when cache blocks leave per-layer chunk storage for compact transfer or backend-neutral storage.
+    /// Copies stacked f16 KVBM chunks into contiguous blocks.
     #[cutile::entry(print_ir=false,
                        unchecked_accesses=true,
                        optimization_hints = (
@@ -183,6 +183,185 @@ pub mod copy_stacked_to_contiguous_f16_module {
 }
 
 pub use copy_stacked_to_contiguous_f16_module::copy_stacked_to_contiguous_f16;
+
+#[allow(clippy::too_many_arguments)]
+#[cutile::module]
+pub mod copy_stacked_to_contiguous_module {
+    use cutile::core::*;
+
+    fn load_ptr_tensor_tile<
+        E: ElementType,
+        const TILE_SHAPE: [i32; 5],
+        const TILE_VIEW_SHAPE: [i32; 3],
+    >(
+        tensors: &Tensor<i64, { [-1] }>,
+        shape_dims: &[i32],
+        tensor_idx: [i32; 1],
+        tile_idx: [i32; 5],
+    ) -> Tile<E, TILE_SHAPE> {
+        let flat_shape: Shape<{ [-1, -1, -1] }> = Shape::<{ [-1, -1, -1] }> {
+            dims: &[
+                shape_dims[0] * shape_dims[1] * shape_dims[2],
+                shape_dims[3],
+                shape_dims[4],
+            ],
+        };
+        let flat_strides: Array<{ [-1, -1, 1] }> = Array::<{ [-1, -1, 1] }> {
+            dims: &[shape_dims[3] * shape_dims[4], shape_dims[4]],
+        };
+        let flat_tile_idx = [
+            (tile_idx[0] * shape_dims[1] + tile_idx[1]) * shape_dims[2] + tile_idx[2],
+            tile_idx[3],
+            tile_idx[4],
+        ];
+        unsafe {
+            let one_shape: Shape<{ [1] }> = Shape::<{ [1] }> { dims: &[] };
+            let ptr_part: Partition<i64, { [1] }> = tensors.partition(one_shape);
+            let ptr_int: Tile<i64, { [1] }> = ptr_part.load(tensor_idx);
+            let ptr_int: Tile<i64, { [] }> = ptr_int.reshape(const_shape![]);
+            let ptr: PointerTile<*mut E, { [] }> = int_to_ptr(ptr_int);
+            let ptr: PointerTile<*mut E, { [] }> = assume_div_by::<_, 16>(ptr);
+            let tensor: Tensor<E, { [-1, -1, -1] }> =
+                make_tensor_view(ptr, flat_shape, flat_strides, new_token_unordered());
+            let tensor_part: Partition<E, TILE_VIEW_SHAPE> =
+                tensor.partition(const_shape!(TILE_VIEW_SHAPE));
+            let tile: Tile<E, TILE_VIEW_SHAPE> = tensor_part.load(flat_tile_idx);
+            tile.reshape(const_shape!(TILE_SHAPE))
+        }
+    }
+
+    fn store_ptr_tensor_tile<
+        E: ElementType,
+        const TILE_SHAPE: [i32; 5],
+        const TILE_VIEW_SHAPE: [i32; 3],
+    >(
+        tensors: &Tensor<i64, { [-1] }>,
+        shape_dims: &[i32],
+        tile: Tile<E, TILE_SHAPE>,
+        tensor_idx: [i32; 1],
+        tile_idx: [i32; 5],
+    ) {
+        let flat_shape: Shape<{ [-1, -1, -1] }> = Shape::<{ [-1, -1, -1] }> {
+            dims: &[
+                shape_dims[0] * shape_dims[1] * shape_dims[2],
+                shape_dims[3],
+                shape_dims[4],
+            ],
+        };
+        let flat_strides: Array<{ [-1, -1, 1] }> = Array::<{ [-1, -1, 1] }> {
+            dims: &[shape_dims[3] * shape_dims[4], shape_dims[4]],
+        };
+        let flat_tile_idx = [
+            (tile_idx[0] * shape_dims[1] + tile_idx[1]) * shape_dims[2] + tile_idx[2],
+            tile_idx[3],
+            tile_idx[4],
+        ];
+        unsafe {
+            let one_shape: Shape<{ [1] }> = Shape::<{ [1] }> { dims: &[] };
+            let ptr_part: Partition<i64, { [1] }> = tensors.partition(one_shape);
+            let ptr_int: Tile<i64, { [1] }> = ptr_part.load(tensor_idx);
+            let ptr_int: Tile<i64, { [] }> = ptr_int.reshape(const_shape![]);
+            let ptr: PointerTile<*mut E, { [] }> = int_to_ptr(ptr_int);
+            let ptr: PointerTile<*mut E, { [] }> = assume_div_by::<_, 16>(ptr);
+            let mut tensor: Tensor<E, { [-1, -1, -1] }> =
+                make_tensor_view(ptr, flat_shape, flat_strides, new_token_unordered());
+            let mut tensor_part: PartitionMut<E, TILE_VIEW_SHAPE> =
+                tensor.partition_mut(const_shape!(TILE_VIEW_SHAPE));
+            let tile: Tile<E, TILE_VIEW_SHAPE> = tile.reshape(const_shape!(TILE_VIEW_SHAPE));
+            tensor_part.store(tile, flat_tile_idx);
+        }
+    }
+
+    fn fold_iteration_indexes(tile_idx: i32, shape: [i32; 4]) -> (i32, i32, i32, i32) {
+        let o_idx = tile_idx % shape[3];
+        let rest_idx = tile_idx / shape[3];
+        let l_idx = rest_idx % shape[2];
+        let rest_idx = rest_idx / shape[2];
+        let h_idx = rest_idx % shape[1];
+        let block_idx = rest_idx / shape[1];
+        (block_idx, h_idx, l_idx, o_idx)
+    }
+
+    /// Copies stacked KVBM chunks into contiguous blocks.
+    #[cutile::entry(print_ir=false,
+                       unchecked_accesses=true,
+                       optimization_hints = (
+                         sm_120 = (num_cta_in_cga=2, max_divisibility=16,),
+                       ))]
+    unsafe fn copy_stacked_to_contiguous<
+        E: ElementType,
+        const STACKED_TILE: [i32; 5],
+        const CONTIGUOUS_TILE: [i32; 5],
+        const STACKED_TILE_VIEW: [i32; 3],
+        const CONTIGUOUS_TILE_VIEW: [i32; 3],
+        const UNIVERSAL_TO_STACKED_MAP: [i32; 5],
+        const STACKED_TO_CONTIGUOUS_MAP: [i32; 5],
+    >(
+        num_blocks: i32,
+        stacked_tensors: &Tensor<i64, { [-1] }>,
+        contiguous_tensors: &Tensor<i64, { [-1] }>,
+        nh: i32,
+        nl: i32,
+        no: i32,
+        nt: i32,
+        hd: i32,
+    ) {
+        let universal_shape: [i32; 5] = [nh, nl, no, nt, hd];
+        let stacked_shape: [i32; 5] =
+            permute_array(universal_shape, const_array!(UNIVERSAL_TO_STACKED_MAP));
+        let contiguous_shape: [i32; 5] =
+            permute_array(stacked_shape, const_array!(STACKED_TO_CONTIGUOUS_MAP));
+
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let t_idx = pid.1;
+        let d_idx = pid.2;
+
+        for tile_idx in 0i32..(num_blocks * nh * nl * no) {
+            let (block_idx, h_idx, l_idx, o_idx) =
+                fold_iteration_indexes(tile_idx, [num_blocks, nh, nl, no]);
+            let universal_tile_idx: [i32; 5] = [h_idx, l_idx, o_idx, t_idx, d_idx];
+            let stacked_tile_idx: [i32; 5] =
+                permute_array(universal_tile_idx, const_array!(UNIVERSAL_TO_STACKED_MAP));
+            let contiguous_tile_idx: [i32; 5] =
+                permute_array(stacked_tile_idx, const_array!(STACKED_TO_CONTIGUOUS_MAP));
+
+            let stacked_tensor_shape_dims: &[i32] = &[
+                1i32,
+                1i32,
+                stacked_shape[2],
+                stacked_shape[3],
+                stacked_shape[4],
+            ];
+            let stacked_tensor_idx = [stacked_shape[0] * stacked_shape[1] * block_idx
+                + stacked_shape[1] * stacked_tile_idx[0]
+                + stacked_tile_idx[1]];
+            let stacked_tile_idx = [
+                0i32,
+                0i32,
+                stacked_tile_idx[2],
+                stacked_tile_idx[3],
+                stacked_tile_idx[4],
+            ];
+            let stacked_tile: Tile<E, STACKED_TILE> =
+                load_ptr_tensor_tile::<E, STACKED_TILE, STACKED_TILE_VIEW>(
+                    stacked_tensors,
+                    stacked_tensor_shape_dims,
+                    stacked_tensor_idx,
+                    stacked_tile_idx,
+                );
+            let contiguous_tile: Tile<E, CONTIGUOUS_TILE> =
+                permute(stacked_tile, const_array!(STACKED_TO_CONTIGUOUS_MAP));
+            store_ptr_tensor_tile::<E, CONTIGUOUS_TILE, CONTIGUOUS_TILE_VIEW>(
+                contiguous_tensors,
+                &contiguous_shape,
+                contiguous_tile,
+                [block_idx],
+                contiguous_tile_idx,
+            );
+        }
+    }
+}
+pub use copy_stacked_to_contiguous_module::copy_stacked_to_contiguous;
 
 #[allow(clippy::too_many_arguments)]
 #[cutile::module]
@@ -274,7 +453,7 @@ pub mod copy_contiguous_to_stacked_f16_module {
         (block_idx, h_idx, l_idx, o_idx)
     }
 
-    /// Copies f16 KVBM contiguous operational or universal blocks back into stacked NHD/HND block chunks. This restores per-layer cache block tensors after compact storage or transfer.
+    /// Copies contiguous f16 KVBM blocks back into stacked chunks.
     #[cutile::entry(print_ir=false,
                        unchecked_accesses=true,
                        optimization_hints = (
@@ -355,6 +534,186 @@ pub mod copy_contiguous_to_stacked_f16_module {
 }
 
 pub use copy_contiguous_to_stacked_f16_module::copy_contiguous_to_stacked_f16;
+
+#[allow(clippy::too_many_arguments)]
+#[cutile::module]
+pub mod copy_contiguous_to_stacked_module {
+    use cutile::core::*;
+
+    fn load_ptr_tensor_tile<
+        E: ElementType,
+        const TILE_SHAPE: [i32; 5],
+        const TILE_VIEW_SHAPE: [i32; 3],
+    >(
+        tensors: &Tensor<i64, { [-1] }>,
+        shape_dims: &[i32],
+        tensor_idx: [i32; 1],
+        tile_idx: [i32; 5],
+    ) -> Tile<E, TILE_SHAPE> {
+        let flat_shape: Shape<{ [-1, -1, -1] }> = Shape::<{ [-1, -1, -1] }> {
+            dims: &[
+                shape_dims[0] * shape_dims[1] * shape_dims[2],
+                shape_dims[3],
+                shape_dims[4],
+            ],
+        };
+        let flat_strides: Array<{ [-1, -1, 1] }> = Array::<{ [-1, -1, 1] }> {
+            dims: &[shape_dims[3] * shape_dims[4], shape_dims[4]],
+        };
+        let flat_tile_idx = [
+            (tile_idx[0] * shape_dims[1] + tile_idx[1]) * shape_dims[2] + tile_idx[2],
+            tile_idx[3],
+            tile_idx[4],
+        ];
+        unsafe {
+            let one_shape: Shape<{ [1] }> = Shape::<{ [1] }> { dims: &[] };
+            let ptr_part: Partition<i64, { [1] }> = tensors.partition(one_shape);
+            let ptr_int: Tile<i64, { [1] }> = ptr_part.load(tensor_idx);
+            let ptr_int: Tile<i64, { [] }> = ptr_int.reshape(const_shape![]);
+            let ptr: PointerTile<*mut E, { [] }> = int_to_ptr(ptr_int);
+            let ptr: PointerTile<*mut E, { [] }> = assume_div_by::<_, 16>(ptr);
+            let tensor: Tensor<E, { [-1, -1, -1] }> =
+                make_tensor_view(ptr, flat_shape, flat_strides, new_token_unordered());
+            let tensor_part: Partition<E, TILE_VIEW_SHAPE> =
+                tensor.partition(const_shape!(TILE_VIEW_SHAPE));
+            let tile: Tile<E, TILE_VIEW_SHAPE> = tensor_part.load(flat_tile_idx);
+            tile.reshape(const_shape!(TILE_SHAPE))
+        }
+    }
+
+    fn store_ptr_tensor_tile<
+        E: ElementType,
+        const TILE_SHAPE: [i32; 5],
+        const TILE_VIEW_SHAPE: [i32; 3],
+    >(
+        tensors: &Tensor<i64, { [-1] }>,
+        shape_dims: &[i32],
+        tile: Tile<E, TILE_SHAPE>,
+        tensor_idx: [i32; 1],
+        tile_idx: [i32; 5],
+    ) {
+        let flat_shape: Shape<{ [-1, -1, -1] }> = Shape::<{ [-1, -1, -1] }> {
+            dims: &[
+                shape_dims[0] * shape_dims[1] * shape_dims[2],
+                shape_dims[3],
+                shape_dims[4],
+            ],
+        };
+        let flat_strides: Array<{ [-1, -1, 1] }> = Array::<{ [-1, -1, 1] }> {
+            dims: &[shape_dims[3] * shape_dims[4], shape_dims[4]],
+        };
+        let flat_tile_idx = [
+            (tile_idx[0] * shape_dims[1] + tile_idx[1]) * shape_dims[2] + tile_idx[2],
+            tile_idx[3],
+            tile_idx[4],
+        ];
+        unsafe {
+            let one_shape: Shape<{ [1] }> = Shape::<{ [1] }> { dims: &[] };
+            let ptr_part: Partition<i64, { [1] }> = tensors.partition(one_shape);
+            let ptr_int: Tile<i64, { [1] }> = ptr_part.load(tensor_idx);
+            let ptr_int: Tile<i64, { [] }> = ptr_int.reshape(const_shape![]);
+            let ptr: PointerTile<*mut E, { [] }> = int_to_ptr(ptr_int);
+            let ptr: PointerTile<*mut E, { [] }> = assume_div_by::<_, 16>(ptr);
+            let mut tensor: Tensor<E, { [-1, -1, -1] }> =
+                make_tensor_view(ptr, flat_shape, flat_strides, new_token_unordered());
+            let mut tensor_part: PartitionMut<E, TILE_VIEW_SHAPE> =
+                tensor.partition_mut(const_shape!(TILE_VIEW_SHAPE));
+            let tile: Tile<E, TILE_VIEW_SHAPE> = tile.reshape(const_shape!(TILE_VIEW_SHAPE));
+            tensor_part.store(tile, flat_tile_idx);
+        }
+    }
+
+    fn fold_iteration_indexes(tile_idx: i32, shape: [i32; 4]) -> (i32, i32, i32, i32) {
+        let o_idx = tile_idx % shape[3];
+        let rest_idx = tile_idx / shape[3];
+        let l_idx = rest_idx % shape[2];
+        let rest_idx = rest_idx / shape[2];
+        let h_idx = rest_idx % shape[1];
+        let block_idx = rest_idx / shape[1];
+        (block_idx, h_idx, l_idx, o_idx)
+    }
+
+    /// Copies contiguous KVBM blocks back into stacked chunks.
+    #[cutile::entry(print_ir=false,
+                       unchecked_accesses=true,
+                       optimization_hints = (
+                         sm_120 = (num_cta_in_cga=2, max_divisibility=16,),
+                       ))]
+    unsafe fn copy_contiguous_to_stacked<
+        E: ElementType,
+        const STACKED_TILE: [i32; 5],
+        const CONTIGUOUS_TILE: [i32; 5],
+        const STACKED_TILE_VIEW: [i32; 3],
+        const CONTIGUOUS_TILE_VIEW: [i32; 3],
+        const UNIVERSAL_TO_STACKED_MAP: [i32; 5],
+        const STACKED_TO_CONTIGUOUS_MAP: [i32; 5],
+        const CONTIGUOUS_TO_STACKED_MAP: [i32; 5],
+    >(
+        num_blocks: i32,
+        stacked_tensors: &Tensor<i64, { [-1] }>,
+        contiguous_tensors: &Tensor<i64, { [-1] }>,
+        nh: i32,
+        nl: i32,
+        no: i32,
+        nt: i32,
+        hd: i32,
+    ) {
+        let universal_shape: [i32; 5] = [nh, nl, no, nt, hd];
+        let stacked_shape: [i32; 5] =
+            permute_array(universal_shape, const_array!(UNIVERSAL_TO_STACKED_MAP));
+        let contiguous_shape: [i32; 5] =
+            permute_array(stacked_shape, const_array!(STACKED_TO_CONTIGUOUS_MAP));
+
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let t_idx = pid.1;
+        let d_idx = pid.2;
+
+        for tile_idx in 0i32..(num_blocks * nh * nl * no) {
+            let (block_idx, h_idx, l_idx, o_idx) =
+                fold_iteration_indexes(tile_idx, [num_blocks, nh, nl, no]);
+            let universal_tile_idx: [i32; 5] = [h_idx, l_idx, o_idx, t_idx, d_idx];
+            let stacked_tile_idx: [i32; 5] =
+                permute_array(universal_tile_idx, const_array!(UNIVERSAL_TO_STACKED_MAP));
+            let contiguous_tile_idx: [i32; 5] =
+                permute_array(stacked_tile_idx, const_array!(STACKED_TO_CONTIGUOUS_MAP));
+
+            let stacked_tensor_shape_dims: &[i32] = &[
+                1i32,
+                1i32,
+                stacked_shape[2],
+                stacked_shape[3],
+                stacked_shape[4],
+            ];
+            let stacked_tensor_idx = [stacked_shape[0] * stacked_shape[1] * block_idx
+                + stacked_shape[1] * stacked_tile_idx[0]
+                + stacked_tile_idx[1]];
+            let stacked_tile_idx = [
+                0i32,
+                0i32,
+                stacked_tile_idx[2],
+                stacked_tile_idx[3],
+                stacked_tile_idx[4],
+            ];
+            let contiguous_tile: Tile<E, CONTIGUOUS_TILE> =
+                load_ptr_tensor_tile::<E, CONTIGUOUS_TILE, CONTIGUOUS_TILE_VIEW>(
+                    contiguous_tensors,
+                    &contiguous_shape,
+                    [block_idx],
+                    contiguous_tile_idx,
+                );
+            let stacked_tile: Tile<E, STACKED_TILE> =
+                permute(contiguous_tile, const_array!(CONTIGUOUS_TO_STACKED_MAP));
+            store_ptr_tensor_tile::<E, STACKED_TILE, STACKED_TILE_VIEW>(
+                stacked_tensors,
+                stacked_tensor_shape_dims,
+                stacked_tile,
+                stacked_tensor_idx,
+                stacked_tile_idx,
+            );
+        }
+    }
+}
+pub use copy_contiguous_to_stacked_module::copy_contiguous_to_stacked;
 
 /// Stacked KVBM block chunk layout.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

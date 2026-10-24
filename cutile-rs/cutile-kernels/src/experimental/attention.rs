@@ -20,6 +20,7 @@ pub mod fmha_prefill_gqa_lpt_module {
                          sm_120 = (occupancy=2, max_divisibility=16,),
                        ))]
     unsafe fn fmha_prefill_gqa_lpt<
+        E: FloatElement,
         const BM: i32,
         const BN: i32,
         const D: i32,
@@ -31,10 +32,10 @@ pub mod fmha_prefill_gqa_lpt_module {
         const SCHED: i32,
         const MASK_SPLIT: i32,
     >(
-        q_ptr: *mut f16,   // [q_len, q_heads, D]
-        k_ptr: *mut f16,   // [kv_heads, kv_len, D]
-        v_ptr: *mut f16,   // [kv_heads, kv_len, D]
-        out_ptr: *mut f16, // [q_len, q_heads, D]
+        q_ptr: *mut E,   // [q_len, q_heads, D]
+        k_ptr: *mut E,   // [kv_heads, kv_len, D]
+        v_ptr: *mut E,   // [kv_heads, kv_len, D]
+        out_ptr: *mut E, // [q_len, q_heads, D]
         qk_scale: f32,
         query_group_size: i32,
         q_len: i32,
@@ -46,10 +47,10 @@ pub mod fmha_prefill_gqa_lpt_module {
         num_hb_quotient: i32,
         num_hb_remainder: i32,
     ) {
-        let q_ptr: *mut f16 = unsafe { assume_div_by::<_, 16>(q_ptr) };
-        let k_ptr: *mut f16 = unsafe { assume_div_by::<_, 16>(k_ptr) };
-        let v_ptr: *mut f16 = unsafe { assume_div_by::<_, 16>(v_ptr) };
-        let out_ptr: *mut f16 = unsafe { assume_div_by::<_, 16>(out_ptr) };
+        let q_ptr: *mut E = unsafe { assume_div_by::<_, 16>(q_ptr) };
+        let k_ptr: *mut E = unsafe { assume_div_by::<_, 16>(k_ptr) };
+        let v_ptr: *mut E = unsafe { assume_div_by::<_, 16>(v_ptr) };
+        let out_ptr: *mut E = unsafe { assume_div_by::<_, 16>(out_ptr) };
         let q_len: i32 = unsafe { assume_bounds_lower::<_, 0>(q_len) };
         let kv_len: i32 = unsafe { assume_bounds_lower::<_, 0>(kv_len) };
         let num_head_groups: i32 = unsafe { assume_bounds_lower::<_, 0>(num_head_groups) };
@@ -63,7 +64,7 @@ pub mod fmha_prefill_gqa_lpt_module {
         let q_strides: Array<{ [-1, -1, 1] }> = Array::<{ [-1, -1, 1] }> {
             dims: &[q_heads * D, D],
         };
-        let q_tv: Tensor<f16, { [-1, -1, D] }> =
+        let q_tv: Tensor<E, { [-1, -1, D] }> =
             unsafe { make_tensor_view(pointer_to_tile(q_ptr), q_shape, q_strides, tok) };
         let kv_shape: Shape<{ [-1, -1, D] }> = Shape::<{ [-1, -1, D] }> {
             dims: &[kv_heads, kv_len],
@@ -71,9 +72,9 @@ pub mod fmha_prefill_gqa_lpt_module {
         let kv_strides: Array<{ [-1, -1, 1] }> = Array::<{ [-1, -1, 1] }> {
             dims: &[kv_len * D, D],
         };
-        let k_tv: Tensor<f16, { [-1, -1, D] }> =
+        let k_tv: Tensor<E, { [-1, -1, D] }> =
             unsafe { make_tensor_view(pointer_to_tile(k_ptr), kv_shape, kv_strides, tok) };
-        let v_tv: Tensor<f16, { [-1, -1, D] }> =
+        let v_tv: Tensor<E, { [-1, -1, D] }> =
             unsafe { make_tensor_view(pointer_to_tile(v_ptr), kv_shape, kv_strides, tok) };
         let out_shape: Shape<{ [-1, -1, D] }> = Shape::<{ [-1, -1, D] }> {
             dims: &[q_len, q_heads],
@@ -81,7 +82,7 @@ pub mod fmha_prefill_gqa_lpt_module {
         let out_strides: Array<{ [-1, -1, 1] }> = Array::<{ [-1, -1, 1] }> {
             dims: &[q_heads * D, D],
         };
-        let out_tv: Tensor<f16, { [-1, -1, D] }> =
+        let out_tv: Tensor<E, { [-1, -1, D] }> =
             unsafe { make_tensor_view(pointer_to_tile(out_ptr), out_shape, out_strides, tok) };
 
         let pid: (i32, i32, i32) = get_tile_block_id();
@@ -171,9 +172,9 @@ pub mod fmha_prefill_gqa_lpt_module {
             let mut l_i: Tile<f32, { [M_EFF, 1] }> = constant(0.0f32, const_shape![M_EFF, 1]);
             let mut acc: Tile<f32, { [M_EFF, D] }> = constant(0.0f32, const_shape![M_EFF, D]);
 
-            let q_part: Partition<f16, { [BM, GROUP, D] }> =
+            let q_part: Partition<E, { [BM, GROUP, D] }> =
                 q_tv.partition_permuted(const_shape![BM, GROUP, D], const_array![0, 1, 2]);
-            let tq_raw: Tile<f16, { [BM, GROUP, D] }> = load_view_tko(
+            let tq_raw: Tile<E, { [BM, GROUP, D] }> = load_view_tko(
                 &q_part,
                 [q_m_idx, q_head_group_idx, 0i32],
                 ordering::Weak,
@@ -181,7 +182,7 @@ pub mod fmha_prefill_gqa_lpt_module {
                 Some(LATENCY),
                 tma::Enabled,
             );
-            let tq: Tile<f16, { [M_EFF, D] }> = tq_raw.reshape(const_shape![M_EFF, D]);
+            let tq: Tile<E, { [M_EFF, D] }> = tq_raw.reshape(const_shape![M_EFF, D]);
 
             let m_end: i32 = query_start + (q_m_idx + 1i32) * BM;
             let k_seqlen_tiles: i32 = kv_len / BN;
@@ -193,9 +194,9 @@ pub mod fmha_prefill_gqa_lpt_module {
                 tc = ceil_div(min(m_end, kv_len), BN);
             }
 
-            let k_part: Partition<f16, { [1, BN, D] }> =
+            let k_part: Partition<E, { [1, BN, D] }> =
                 k_tv.partition_permuted(const_shape![1, BN, D], const_array![0, 1, 2]);
-            let v_part: Partition<f16, { [1, BN, D] }> =
+            let v_part: Partition<E, { [1, BN, D] }> =
                 v_tv.partition_permuted(const_shape![1, BN, D], const_array![0, 1, 2]);
             let transpose: Array<{ [1, 0] }> = Array::<{ [1, 0] }> {
                 dims: &[1i32, 0i32],
@@ -203,7 +204,7 @@ pub mod fmha_prefill_gqa_lpt_module {
 
             if MASK_SPLIT == 1i32 && CAUSAL == 1i32 {
                 for j in 0i32..mask_start {
-                    let k_tile: Tile<f16, { [1, BN, D] }> = load_view_tko(
+                    let k_tile: Tile<E, { [1, BN, D] }> = load_view_tko(
                         &k_part,
                         [kv_head_idx, j, 0i32],
                         ordering::Weak,
@@ -211,8 +212,8 @@ pub mod fmha_prefill_gqa_lpt_module {
                         Some(LATENCY),
                         tma::Enabled,
                     );
-                    let k_tile: Tile<f16, { [BN, D] }> = k_tile.reshape(const_shape![BN, D]);
-                    let k_trans: Tile<f16, { [D, BN] }> = permute(k_tile, transpose);
+                    let k_tile: Tile<E, { [BN, D] }> = k_tile.reshape(const_shape![BN, D]);
+                    let k_trans: Tile<E, { [D, BN] }> = permute(k_tile, transpose);
                     let mut qk: Tile<f32, { [M_EFF, BN] }> =
                         constant(0.0f32, const_shape![M_EFF, BN]);
                     qk = mma(tq, k_trans, qk);
@@ -231,7 +232,7 @@ pub mod fmha_prefill_gqa_lpt_module {
                     l_i = l_i * alpha + l_ij;
                     acc = acc * alpha.broadcast(const_shape![M_EFF, D]);
 
-                    let v_tile: Tile<f16, { [1, BN, D] }> = load_view_tko(
+                    let v_tile: Tile<E, { [1, BN, D] }> = load_view_tko(
                         &v_part,
                         [kv_head_idx, j, 0i32],
                         ordering::Weak,
@@ -239,13 +240,13 @@ pub mod fmha_prefill_gqa_lpt_module {
                         Some(LATENCY),
                         tma::Enabled,
                     );
-                    let p_f16: Tile<f16, { [M_EFF, BN] }> = convert_tile(p);
-                    let v_tile: Tile<f16, { [BN, D] }> = v_tile.reshape(const_shape![BN, D]);
-                    acc = mma(p_f16, v_tile, acc);
+                    let p_e: Tile<E, { [M_EFF, BN] }> = convert_tile(p);
+                    let v_tile: Tile<E, { [BN, D] }> = v_tile.reshape(const_shape![BN, D]);
+                    acc = mma(p_e, v_tile, acc);
                     m_i = m_ij;
                 }
                 for j in mask_start..tc {
-                    let k_tile: Tile<f16, { [1, BN, D] }> = load_view_tko(
+                    let k_tile: Tile<E, { [1, BN, D] }> = load_view_tko(
                         &k_part,
                         [kv_head_idx, j, 0i32],
                         ordering::Weak,
@@ -253,8 +254,8 @@ pub mod fmha_prefill_gqa_lpt_module {
                         Some(LATENCY),
                         tma::Enabled,
                     );
-                    let k_tile: Tile<f16, { [BN, D] }> = k_tile.reshape(const_shape![BN, D]);
-                    let k_trans: Tile<f16, { [D, BN] }> = permute(k_tile, transpose);
+                    let k_tile: Tile<E, { [BN, D] }> = k_tile.reshape(const_shape![BN, D]);
+                    let k_trans: Tile<E, { [D, BN] }> = permute(k_tile, transpose);
                     let mut qk: Tile<f32, { [M_EFF, BN] }> =
                         constant(0.0f32, const_shape![M_EFF, BN]);
                     qk = mma(tq, k_trans, qk);
@@ -287,7 +288,7 @@ pub mod fmha_prefill_gqa_lpt_module {
                     l_i = l_i * alpha + l_ij;
                     acc = acc * alpha.broadcast(const_shape![M_EFF, D]);
 
-                    let v_tile: Tile<f16, { [1, BN, D] }> = load_view_tko(
+                    let v_tile: Tile<E, { [1, BN, D] }> = load_view_tko(
                         &v_part,
                         [kv_head_idx, j, 0i32],
                         ordering::Weak,
@@ -295,14 +296,14 @@ pub mod fmha_prefill_gqa_lpt_module {
                         Some(LATENCY),
                         tma::Enabled,
                     );
-                    let p_f16: Tile<f16, { [M_EFF, BN] }> = convert_tile(p);
-                    let v_tile: Tile<f16, { [BN, D] }> = v_tile.reshape(const_shape![BN, D]);
-                    acc = mma(p_f16, v_tile, acc);
+                    let p_e: Tile<E, { [M_EFF, BN] }> = convert_tile(p);
+                    let v_tile: Tile<E, { [BN, D] }> = v_tile.reshape(const_shape![BN, D]);
+                    acc = mma(p_e, v_tile, acc);
                     m_i = m_ij;
                 }
             } else {
                 for j in 0i32..tc {
-                    let k_tile: Tile<f16, { [1, BN, D] }> = load_view_tko(
+                    let k_tile: Tile<E, { [1, BN, D] }> = load_view_tko(
                         &k_part,
                         [kv_head_idx, j, 0i32],
                         ordering::Weak,
@@ -310,8 +311,8 @@ pub mod fmha_prefill_gqa_lpt_module {
                         Some(LATENCY),
                         tma::Enabled,
                     );
-                    let k_tile: Tile<f16, { [BN, D] }> = k_tile.reshape(const_shape![BN, D]);
-                    let k_trans: Tile<f16, { [D, BN] }> = permute(k_tile, transpose);
+                    let k_tile: Tile<E, { [BN, D] }> = k_tile.reshape(const_shape![BN, D]);
+                    let k_trans: Tile<E, { [D, BN] }> = permute(k_tile, transpose);
                     let mut qk: Tile<f32, { [M_EFF, BN] }> =
                         constant(0.0f32, const_shape![M_EFF, BN]);
                     qk = mma(tq, k_trans, qk);
@@ -348,7 +349,7 @@ pub mod fmha_prefill_gqa_lpt_module {
                     l_i = l_i * alpha + l_ij;
                     acc = acc * alpha.broadcast(const_shape![M_EFF, D]);
 
-                    let v_tile: Tile<f16, { [1, BN, D] }> = load_view_tko(
+                    let v_tile: Tile<E, { [1, BN, D] }> = load_view_tko(
                         &v_part,
                         [kv_head_idx, j, 0i32],
                         ordering::Weak,
@@ -356,9 +357,9 @@ pub mod fmha_prefill_gqa_lpt_module {
                         Some(LATENCY),
                         tma::Enabled,
                     );
-                    let p_f16: Tile<f16, { [M_EFF, BN] }> = convert_tile(p);
-                    let v_tile: Tile<f16, { [BN, D] }> = v_tile.reshape(const_shape![BN, D]);
-                    acc = mma(p_f16, v_tile, acc);
+                    let p_e: Tile<E, { [M_EFF, BN] }> = convert_tile(p);
+                    let v_tile: Tile<E, { [BN, D] }> = v_tile.reshape(const_shape![BN, D]);
+                    acc = mma(p_e, v_tile, acc);
                     m_i = m_ij;
                 }
             }
@@ -367,10 +368,10 @@ pub mod fmha_prefill_gqa_lpt_module {
             let l_safe: Tile<f32, { [M_EFF, 1] }> = max_tile(l_i, eps);
             let acc_norm: Tile<f32, { [M_EFF, D] }> =
                 true_div(acc, l_safe.broadcast(const_shape![M_EFF, D]));
-            let out_tile: Tile<f16, { [BM, GROUP, D] }> =
+            let out_tile: Tile<E, { [BM, GROUP, D] }> =
                 convert_tile(acc_norm.reshape(const_shape![BM, GROUP, D]));
 
-            let mut out_part: PartitionMut<f16, { [BM, GROUP, D] }> =
+            let mut out_part: PartitionMut<E, { [BM, GROUP, D] }> =
                 unsafe { out_tv.partition_full_mut(const_shape![BM, GROUP, D]) };
             out_part.store(out_tile, [q_m_idx, q_head_group_idx, 0i32]);
         }

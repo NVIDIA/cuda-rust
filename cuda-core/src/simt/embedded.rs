@@ -46,8 +46,19 @@ impl EmbeddedModule {
     pub fn load(&self, ctx: &Arc<CudaContext>) -> Result<Arc<CudaModule>, EmbeddedModuleError> {
         let image =
             loadable_payload(&self.bundle).expect("EmbeddedModule always has a loadable payload");
-        ctx.load_module_from_image(image)
-            .map_err(EmbeddedModuleError::Driver)
+        ctx.load_module_from_image_with_launch_facts(
+            image,
+            self.bundle
+                .entries
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .launch_facts
+                        .map(|facts| (entry.symbol.clone(), facts))
+                })
+                .collect(),
+        )
+        .map_err(EmbeddedModuleError::Driver)
     }
 }
 

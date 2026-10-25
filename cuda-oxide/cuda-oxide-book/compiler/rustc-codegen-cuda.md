@@ -122,20 +122,17 @@ the host pipeline always runs.
 
 The `CodegenBackend` trait also requires `join_codegen()` and `link()`. These
 handle waiting for parallel codegen threads and invoking the linker,
-respectively. In cuda-oxide, both are pure delegation:
+respectively. In cuda-oxide, both call the LLVM backend. The backend also
+writes artifact objects for the embedded artifact bundles. `join_codegen()` and
+`link()` make sure that the outputs contain these objects:
 
-```rust
-fn join_codegen(&self, ongoing: Box<dyn Any>, sess: &Session) -> ... {
-    self.llvm_backend.join_codegen(ongoing, sess)
-}
+- `join_codegen()` adds a module for each artifact object.
+- `link()` can give artifact objects to the system linker as link arguments.
 
-fn link(&self, sess: &Session, codegen: ..., outputs: &OutputFilenames) -> ... {
-    self.llvm_backend.link(sess, codegen, outputs)
-}
-```
-
-No interception, no modification. The LLVM backend handles linking exactly as
-it normally would.
+With LTO, rustc reads bitcode from the Rust objects of each rlib. The artifact
+objects contain no bitcode. The doc comment of `artifact_module()` shows which
+artifact objects are Rust objects and which `link()` gives to the system
+linker.
 
 ```{note}
 For most crates in the dependency tree -- `core`, `cuda-core`, random

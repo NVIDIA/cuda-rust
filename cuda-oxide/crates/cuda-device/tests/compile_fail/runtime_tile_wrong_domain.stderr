@@ -6,6 +6,7 @@ error[E0277]: the trait bound `DisjointSlice<'static, f32, RuntimeRowMajorTiles<
    |
    = help: the trait `cuda_device::disjoint::__LaunchContractDisjointSlice<f32, 1>` is not implemented for `DisjointSlice<'static, f32, RuntimeRowMajorTiles<1, 1>>`
    = help: the following other types implement trait `cuda_device::disjoint::__LaunchContractDisjointSlice<Element, DOMAIN>`:
+             `DisjointSlice<'_, T, CollectiveTiles<CAPACITY>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, DOMAIN>`
              `DisjointSlice<'_, T, Index2D<ROW_STRIDE>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
              `DisjointSlice<'_, T, Index2D<ROW_STRIDE>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 2>`
              `DisjointSlice<'_, T, LinearTiles<N>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
@@ -13,8 +14,7 @@ error[E0277]: the trait bound `DisjointSlice<'static, f32, RuntimeRowMajorTiles<
              `DisjointSlice<'_, T, Runtime2DIndex>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
              `DisjointSlice<'_, T, Runtime2DIndex>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 2>`
              `DisjointSlice<'_, T, RuntimeRowMajorTiles<ROWS, COLS>>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 2>`
-             `DisjointSlice<'_, T, WarpIndex>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
-             `DisjointSlice<'_, T>` implements `cuda_device::disjoint::__LaunchContractDisjointSlice<T, 1>`
+           and $N others
 note: required by a bound in `requires_one_dimensional_contract`
   --> tests/compile_fail/runtime_tile_wrong_domain.rs:10:41
    |

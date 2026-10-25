@@ -6676,3 +6676,69 @@ fn the_smoketest_greps_the_summary_markers_this_command_prints() {
     assert!(!DESCRIPTIONS_WRITTEN_MARKER.contains(LIBRARY_SKIPPED_MARKER));
     assert!(!LIBRARY_WRITTEN_MARKER.contains(LIBRARY_SKIPPED_MARKER));
 }
+
+#[test]
+fn test_host_linker_unset_or_default_keeps_rustc_linker() {
+    for value in [None, Some(""), Some("default"), Some("  default  ")] {
+        let flags = host_linker_rustflags_for(value.map(OsStr::new), || {
+            panic!("wild lookup must not run for {value:?}")
+        });
+        assert_eq!(flags, Ok(Vec::new()), "value {value:?}");
+    }
+}
+
+#[test]
+fn test_host_linker_wild_uses_clang_ld_path() {
+    let flags = host_linker_rustflags_for(Some(OsStr::new(" wild ")), || {
+        Some(PathBuf::from("/opt/bin/wild"))
+    });
+    assert_eq!(
+        flags,
+        Ok(vec![
+            "-Clinker=clang".to_string(),
+            "-Clink-arg=--ld-path=/opt/bin/wild".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn test_host_linker_wild_missing_is_an_error() {
+    let err = host_linker_rustflags_for(Some(OsStr::new("wild")), || None).unwrap_err();
+    assert!(err.contains("`wild` was not found on PATH"), "{err}");
+    assert!(err.contains("cargo install wild-linker"), "{err}");
+}
+
+#[test]
+fn test_host_linker_rejects_unsupported_value() {
+    let err = host_linker_rustflags_for(Some(OsStr::new("mold")), || {
+        panic!("wild lookup must not run for an unsupported value")
+    })
+    .unwrap_err();
+    assert!(err.contains("unsupported CUDA_OXIDE_LINKER value"), "{err}");
+}
+
+#[test]
+fn test_host_linker_flags_follow_user_rustflags() {
+    let linker = host_linker_rustflags_for(Some(OsStr::new("wild")), || {
+        Some(PathBuf::from("/opt/bin/wild"))
+    })
+    .unwrap();
+    let rustflags = build_encoded_rustflags_with_existing(
+        Path::new("/tmp/librustc_codegen_cuda.so"),
+        CargoPassthroughSubcommand::Test.codegen_profile(false),
+        &[],
+        &linker,
+        None,
+        Some("-Clinker=gcc"),
+    );
+    let flags = decoded_rustflags(&rustflags);
+    let user = flags
+        .iter()
+        .position(|flag| *flag == "-Clinker=gcc")
+        .unwrap();
+    let ours = flags
+        .iter()
+        .position(|flag| *flag == "-Clinker=clang")
+        .unwrap();
+    assert!(user < ours, "{flags:?}");
+}

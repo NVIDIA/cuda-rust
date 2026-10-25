@@ -242,35 +242,53 @@ pub(super) const HOST_LINKER_ENV: &str = "CUDA_OXIDE_LINKER";
 
 /// rustc flags for the host linker requested via [`HOST_LINKER_ENV`].
 ///
+/// Reads the environment and exits with a clear message on an invalid
+/// value or a missing `wild`; the decision itself lives in
+/// [`host_linker_rustflags_for`] so it can be tested without either.
+fn host_linker_rustflags() -> Vec<String> {
+    let value = std::env::var_os(HOST_LINKER_ENV);
+    match host_linker_rustflags_for(value.as_deref(), || {
+        super::toolkit::find_executable("wild", &[])
+    }) {
+        Ok(flags) => flags,
+        Err(message) => {
+            eprintln!("Error: {message}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// [`host_linker_rustflags`] with the environment value and the `wild`
+/// lookup injected.
+///
 /// wild is driven through clang's `--ld-path`, the setup wild documents for
 /// Rust; GCC has no equivalent option. The path is resolved up front so a
 /// missing `wild` fails here with a clear message instead of an obscure
 /// link error later.
-fn host_linker_rustflags() -> Vec<String> {
-    let Some(value) = std::env::var_os(HOST_LINKER_ENV) else {
-        return Vec::new();
+pub(super) fn host_linker_rustflags_for(
+    value: Option<&std::ffi::OsStr>,
+    find_wild: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> Result<Vec<String>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
     };
     match value.to_str().map(str::trim) {
-        Some("" | "default") => Vec::new(),
+        Some("" | "default") => Ok(Vec::new()),
         Some("wild") => {
-            let Some(wild) = super::toolkit::find_executable("wild", &[]) else {
-                eprintln!("Error: {HOST_LINKER_ENV}=wild, but `wild` was not found on PATH.");
-                eprintln!(
-                    "Install it with `cargo install wild-linker`, or unset {HOST_LINKER_ENV}."
-                );
-                std::process::exit(1);
-            };
-            vec![
+            let wild = find_wild().ok_or_else(|| {
+                format!(
+                    "{HOST_LINKER_ENV}=wild, but `wild` was not found on PATH.\n\
+                     Install it with `cargo install wild-linker`, or unset {HOST_LINKER_ENV}."
+                )
+            })?;
+            Ok(vec![
                 "-Clinker=clang".to_string(),
                 format!("-Clink-arg=--ld-path={}", wild.display()),
-            ]
+            ])
         }
-        _ => {
-            eprintln!(
-                "Error: unsupported {HOST_LINKER_ENV} value {value:?}; expected `wild` or `default`."
-            );
-            std::process::exit(1);
-        }
+        _ => Err(format!(
+            "unsupported {HOST_LINKER_ENV} value {value:?}; expected `wild` or `default`."
+        )),
     }
 }
 

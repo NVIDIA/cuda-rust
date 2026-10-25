@@ -117,8 +117,9 @@ GPU Compute Capability: sm_100
 
 ### On Consumer Blackwell (sm_120)
 
-`cargo oxide run` builds `.target sm_120a` for an RTX 5090 (first verified
-in #668). Transcript captured on an RTX 5090:
+`cargo oxide run` builds `.target sm_120a` for an RTX 5090. Consumer
+Blackwell supports TMA multicast; this was first verified in #668. Transcript
+captured on an RTX 5090:
 
 ```text
 === TMA Multicast Example ===

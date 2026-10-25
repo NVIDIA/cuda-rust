@@ -1,42 +1,49 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Special scalar math
+# Special math
 
-Exercises the first scalar additions for issue #1224:
+The scalar tests cover `tgamma`, standard-library `gamma()`, `ilogb`, and
+`ldexp`/`scalbn` for f32/f64. The frexp tests additionally exercise
+`libm::frexpf(f32) -> (f32, i32)` and `libm::frexp(f64) -> (f64, i32)`.
 
-| Rust call | f32 libdevice symbol | f64 libdevice symbol |
-| --- | --- | --- |
-| `libm::tgamma{f}` and `f32/f64::gamma` | `__nv_tgammaf` | `__nv_tgamma` |
-| `libm::ilogb{f}` | `__nv_ilogbf` | `__nv_ilogb` |
-| `libm::ldexp{f}`, `libm::scalbn{f}` | `__nv_ldexpf` | `__nv_ldexp` |
+Libdevice returns a scalar fraction and writes an exponent through a pointer.
+The lowering adapts this ABI to Rust's tuple using a function-local slot,
+a libdevice call, a load and tuple construction. The slot lives in the function's
+entry block so loop iterations reuse static storage. Tuple fields use the
+existing layout map, including reordered fields and padding.
 
-`ilogb` returns an `i32`; the exponent argument of `ldexp`/`scalbn` is
-an `i32`. `float_gamma` is enabled to exercise the standard-library cmath
-shim as well as the `libm` entry points. Use the repository's pinned toolchain
-and its existing `RUSTC_BOOTSTRAP` configuration.
+For infinities and NaNs, libm returns `(x, 0)`, whereas libdevice leaves the
+exponent unspecified. The adapter initializes the exponent slot and explicitly
+selects the original input and zero exponent for non-finite inputs. Integer
+bit tests preserve NaN payloads and do not introduce floating-point comparisons.
 
-Before these mappings are added, the standard gamma path is rejected by the
-collector and the libm paths have no dedicated libdevice lowering. Capture the
-baseline diagnostic on the unmodified tree; no local baseline/GPU run is claimed
-by this source package.
+References:
 
-The example checks 264 results: 22 inputs, six checks per input, and two widths.
-It compares gamma to host libm within a relative tolerance, compares integer
-logarithms exactly, and compares scaled values bit for bit. The inputs include
-negative non-integers, both exponent signs, subnormals, scaling overflow and
-underflow. A user function with a libm-like module name must retain its own
-body. `ilogb` inputs are finite and nonzero; its domain-error sentinels are
-outside this example's comparison.
+- [libm frexp implementation](https://github.com/rust-lang/libm/blob/master/libm/src/math/frexp.rs)
+- [libm frexpf implementation](https://github.com/rust-lang/libm/blob/master/libm/src/math/frexpf.rs)
+- [NVIDIA libdevice frexp contract](https://docs.nvidia.com/cuda/libdevice-users-guide/libdevice_users_guide/function_device__functions__decls_8h_1addcff9bac6691e5d398a2f8e684ae441.html)
 
-The lowering tests independently verify all six libdevice signatures on both
-backends, reject malformed calls, and retain `powi` as a mixed-signature control.
-Importer tests check public/internal libm spellings, aliases, cmath gamma,
-unrelated names, and functions deferred to later PRs.
+## Coverage
+
+The example retains the 264 scalar checks and adds 512 frexp checks, for an
+expected total of 776. Each width has 32 frexp inputs: finite values, signed
+zeros, normal limits, subnormal limits, infinities and positive/negative quiet
+and signaling NaNs with payloads. Four routes check both tuple components:
+
+- A device-function boundary returning the tuple.
+- Assignment into a nested tuple field.
+- A call inside a loop.
+- An unrelated user function with a libm-like name, which must retain its body.
+
+The host compares both frexp components exactly, including fraction bits.
+Lowering tests cover both intrinsic backends, an out-of-entry-block call,
+reordered tuple layouts, and rejected arities and types. Importer tests cover
+public/internal libm spellings and unrelated names.
 
 ## Validation
 
-Run from `cuda-oxide/` after copying the files into the existing checkout:
+Run from `cuda-oxide/` using the pinned toolchain:
 
 ```bash
 cargo oxide fmt
@@ -45,26 +52,19 @@ git diff --check
 cargo test -p dialect-mir -p mir-importer -p mir-lower --all-targets
 cargo clippy -p dialect-mir -p mir-importer -p mir-lower --all-targets -- -D warnings
 (cd crates/rustc-codegen-cuda && cargo test --lib)
-(cd crates/rustc-codegen-cuda && cargo clippy --all-targets -- -D warnings)
 (cd crates/rustc-codegen-cuda/examples/math_special && cargo clippy --locked --all-targets -- -D warnings)
-cargo oxide build math_special
 cargo oxide run math_special
 cargo oxide run libm_math
 cargo oxide run math_hyperbolic
-bash scripts/check-example-smoketest-contract.sh
-bash scripts/sync-example-locks.sh --check
+just check
 ```
 
-`math_special` must print `SUCCESS: math_special passed 264 checks across f32 and f64`.
-GPU commands require a working CUDA toolkit, driver and device. The example is
-a separate workspace; the parent workspace's tests do not build it.
+Expected output from the extended example:
 
-Before marking the PR ready, run the repository gate from the repository root:
-
-```bash
-just -f cuda-oxide/Justfile check
+```text
+SUCCESS: math_special passed 776 checks across f32 and f64
 ```
 
-This package has undergone static source and archive checks only. Rust, Cargo,
-and CUDA were unavailable in the preparation environment; compile, clippy and
-GPU validation are pending execution on a configured checkout.
+The tuple-returning helpers are marked `#[inline(never)]` to exercise the
+device-function ABI in the optimized run, together with libdevice linking.
+`cargo oxide run` uses the release profile and does not accept `--profile`.

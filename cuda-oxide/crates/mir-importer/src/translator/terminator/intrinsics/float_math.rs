@@ -173,6 +173,10 @@ pub enum RustFloatMathIntrinsic {
     LdexpF32,
     /// `libm::ldexp`.
     LdexpF64,
+    /// `libm::frexpf`, returning `(f32, i32)`.
+    FrexpF32,
+    /// `libm::frexp`, returning `(f64, i32)`.
+    FrexpF64,
     /// Generic `core::intrinsics::fadd_fast` (lowered to `llvm.fadd` + fast-math).
     FaddFast,
     /// Generic `core::intrinsics::fsub_fast` (lowered to `llvm.fsub` + fast-math).
@@ -448,6 +452,8 @@ impl RustFloatMathIntrinsic {
             "ilogb" => Some(Self::IlogbF64),
             "ldexpf" | "scalbnf" => Some(Self::LdexpF32),
             "ldexp" | "scalbn" => Some(Self::LdexpF64),
+            "frexpf" => Some(Self::FrexpF32),
+            "frexp" => Some(Self::FrexpF64),
             _ => None,
         }
     }
@@ -549,6 +555,8 @@ impl RustFloatMathIntrinsic {
             Self::IlogbF64 => rust_intrinsics::CALLEE_ILOGB_F64,
             Self::LdexpF32 => rust_intrinsics::CALLEE_LDEXP_F32,
             Self::LdexpF64 => rust_intrinsics::CALLEE_LDEXP_F64,
+            Self::FrexpF32 => rust_intrinsics::CALLEE_FREXP_F32,
+            Self::FrexpF64 => rust_intrinsics::CALLEE_FREXP_F64,
             Self::FaddFast => rust_intrinsics::CALLEE_FADD_FAST,
             Self::FsubFast => rust_intrinsics::CALLEE_FSUB_FAST,
             Self::FmulFast => rust_intrinsics::CALLEE_FMUL_FAST,
@@ -568,8 +576,8 @@ pub fn is_libm_path(name: &str) -> bool {
 }
 
 /// Recognize `libm::sincosf` / `libm::sincos` (glam's `nostd-libm` lowering of
-/// `f32::sin_cos`). These return a `(sin, cos)` tuple, so they do not fit the
-/// scalar `RustFloatMathIntrinsic` dispatch; [`emit_sincos`] handles them.
+/// `f32::sin_cos`). [`emit_sincos`] handles these separately by emitting
+/// two scalar placeholders and constructing their tuple in the importer.
 /// Returns `Some(is_f64)` when `name` is a libm sincos function.
 pub fn libm_sincos_is_f64(name: &str) -> Option<bool> {
     if !is_libm_path(name) {
@@ -763,6 +771,38 @@ mod tests {
     use dialect_mir::rust_intrinsics;
 
     #[test]
+    fn frexp_paths_resolve_only_libm_entry_points() {
+        use RustFloatMathIntrinsic as I;
+        for (name, variant, placeholder) in [
+            ("frexpf", I::FrexpF32, rust_intrinsics::CALLEE_FREXP_F32),
+            ("frexp", I::FrexpF64, rust_intrinsics::CALLEE_FREXP_F64),
+        ] {
+            for path in [
+                format!("libm::{name}"),
+                format!("libm::math::{name}::{name}"),
+            ] {
+                assert_eq!(I::from_core_path(&path), Some(variant), "{path}");
+                assert_eq!(variant.placeholder_callee(), placeholder);
+                assert!(rust_intrinsics::is_libdevice_backed_placeholder(
+                    placeholder
+                ));
+            }
+            for root in [
+                "user::libm",
+                "libm_lookalike",
+                "std::sys::cmath",
+                "core::intrinsics",
+            ] {
+                let path = format!("{root}::{name}");
+                assert_eq!(I::from_core_path(&path), None, "{path}");
+            }
+        }
+        assert_eq!(I::from_core_path("libm::sincos"), None);
+        assert_eq!(libm_sincos_is_f64("libm::sincos"), Some(true));
+        assert_eq!(I::from_core_path("libm::ldexp"), Some(I::LdexpF64));
+    }
+
+    #[test]
     fn special_math_paths_resolve_to_typed_placeholders() {
         use RustFloatMathIntrinsic as I;
         for (name, intrinsic, callee) in [
@@ -806,7 +846,7 @@ mod tests {
             Some(I::PowiF32)
         );
         assert_eq!(libm_sincos_is_f64("libm::sincosf"), Some(false));
-        for name in ["frexp", "modf", "remquo", "lgamma_r", "tgammaf128"] {
+        for name in ["modf", "remquo", "lgamma_r", "tgammaf128"] {
             assert_eq!(I::from_core_path(&format!("libm::{name}")), None);
         }
     }

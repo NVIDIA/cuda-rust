@@ -66,6 +66,7 @@ use std::num::NonZeroUsize;
 ///
 /// The last inserted operation (for chaining), or `prev_op` if no ops were created.
 /// For `Rvalue::Use`, no operation is created - just updates `value_map`.
+#[allow(clippy::too_many_arguments)]
 pub fn translate_statement(
     ctx: &mut Context,
     body: &mir::Body,
@@ -73,9 +74,101 @@ pub fn translate_statement(
     value_map: &mut ValueMap,
     block_ptr: Ptr<BasicBlock>,
     prev_op: Option<Ptr<Operation>>,
+    site: &crate::LibraryCallSite,
+    statement: usize,
 ) -> TranslationResult<Option<Ptr<Operation>>> {
+    use dialect_mir::library::{LibraryWriteKind, LibraryWriteSourceAttr};
     let loc = span_to_location(ctx, stmt.source_info.span);
+    let kind = match &stmt.kind {
+        mir::StatementKind::Intrinsic(mir::NonDivergingIntrinsic::CopyNonOverlapping(_)) => {
+            Some(LibraryWriteKind::Bulk)
+        }
+        mir::StatementKind::Assign(place, _)
+        | mir::StatementKind::SetDiscriminant { place, .. } => {
+            classify_indirect_write(body, place, &loc)?
+        }
+        _ => None,
+    };
+    let source = kind.map(|kind| LibraryWriteSourceAttr {
+        site: site.clone(),
+        statement,
+        kind,
+    });
+    translate_statement_inner(
+        ctx,
+        body,
+        stmt,
+        value_map,
+        block_ptr,
+        prev_op,
+        source.as_ref(),
+        loc,
+    )
+}
 
+/// Classify a surviving indirect destination from its original place types.
+/// Dynamic address provenance remains the stateful consumer's responsibility.
+pub(crate) fn classify_indirect_write(
+    body: &mir::Body,
+    place: &mir::Place,
+    loc: &Location,
+) -> TranslationResult<Option<dialect_mir::library::LibraryWriteKind>> {
+    if !place
+        .projection
+        .iter()
+        .any(|p| matches!(p, mir::ProjectionElem::Deref))
+    {
+        return Ok(None);
+    }
+    let mut nominal_protected = false;
+    for length in 0..=place.projection.len() {
+        let prefix = mir::Place {
+            local: place.local,
+            projection: place.projection[..length].to_vec(),
+        };
+        let ty = prefix.ty(body.locals()).map_err(|error| {
+            input_error!(
+                loc.clone(),
+                TranslationErr::invalid_op(format!(
+                    "cannot resolve a resource mutation target type: {error:?}"
+                ))
+            )
+        })?;
+        nominal_protected |= facts::library_contains_resource(ty);
+    }
+    Ok(Some(dialect_mir::library::LibraryWriteKind::Indirect {
+        nominal_protected,
+    }))
+}
+
+/// Attach the source check to the actual destination mutation, after its
+/// address was evaluated and before any destination bytes are overwritten.
+pub(crate) fn retain_source_write(
+    ctx: &mut Context,
+    mutation: Ptr<Operation>,
+    source: Option<&dialect_mir::library::LibraryWriteSourceAttr>,
+) {
+    if let Some(source) = source {
+        let address = mutation.deref(ctx).get_operand(0);
+        let check =
+            dialect_mir::ops::MirLibraryWriteCheckOp::build(ctx, source.clone(), vec![address]);
+        let event_loc = mutation.deref(ctx).loc().clone();
+        check.deref_mut(ctx).set_loc(event_loc);
+        check.insert_before(ctx, mutation);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn translate_statement_inner(
+    ctx: &mut Context,
+    body: &mir::Body,
+    stmt: &mir::Statement,
+    value_map: &mut ValueMap,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    write_source: Option<&dialect_mir::library::LibraryWriteSourceAttr>,
+    loc: Location,
+) -> TranslationResult<Option<Ptr<Operation>>> {
     match &stmt.kind {
         mir::StatementKind::Assign(place, rvalue) => {
             // Fast paths: array initializers assigned to an addressable local.
@@ -85,7 +178,15 @@ pub fn translate_statement(
                 match rvalue {
                     mir::Rvalue::Aggregate(mir::AggregateKind::Array(_), operands) => {
                         return translate_array_agg_into_alloca(
-                            ctx, body, place, operands, value_map, block_ptr, prev_op, loc,
+                            ctx,
+                            body,
+                            place,
+                            operands,
+                            value_map,
+                            block_ptr,
+                            prev_op,
+                            loc,
+                            write_source,
                         );
                     }
                     // A fully-constant array: copy it in from an immutable
@@ -103,6 +204,7 @@ pub fn translate_statement(
                             prev_op,
                             loc.clone(),
                         )? {
+                            retain_source_write(ctx, last, write_source);
                             return Ok(Some(last));
                         }
                     }
@@ -117,7 +219,16 @@ pub fn translate_statement(
                             )
                         })? as usize;
                         return translate_repeat_into_alloca(
-                            ctx, body, place, operand, n, value_map, block_ptr, prev_op, loc,
+                            ctx,
+                            body,
+                            place,
+                            operand,
+                            n,
+                            value_map,
+                            block_ptr,
+                            prev_op,
+                            loc,
+                            write_source,
                         );
                     }
                     _ => {}
@@ -220,7 +331,10 @@ pub fn translate_statement(
                             store_op.insert_at_front(block_ptr, ctx);
                         }
 
-                        Ok(Some(store_op))
+                        {
+                            retain_source_write(ctx, store_op, write_source);
+                            Ok(Some(store_op))
+                        }
                     }
                     mir::ProjectionElem::Field(field_idx, field_ty) => {
                         // struct.field = value (field assignment)
@@ -290,7 +404,10 @@ pub fn translate_statement(
                         );
                         store_op.deref_mut(ctx).set_loc(loc);
                         store_op.insert_after(ctx, field_addr_op);
-                        Ok(Some(store_op))
+                        {
+                            retain_source_write(ctx, store_op, write_source);
+                            Ok(Some(store_op))
+                        }
                     }
                     mir::ProjectionElem::ConstantIndex {
                         offset,
@@ -388,7 +505,10 @@ pub fn translate_statement(
                             current_prev,
                             loc,
                         );
-                        Ok(Some(store_op))
+                        {
+                            retain_source_write(ctx, store_op, write_source);
+                            Ok(Some(store_op))
+                        }
                     }
                     mir::ProjectionElem::Index(index_local) => {
                         // arr[i] = value with runtime index.
@@ -453,7 +573,10 @@ pub fn translate_statement(
                             current_prev,
                             loc,
                         );
-                        Ok(Some(store_op))
+                        {
+                            retain_source_write(ctx, store_op, write_source);
+                            Ok(Some(store_op))
+                        }
                     }
                     _ => input_err!(
                         loc,
@@ -546,7 +669,10 @@ pub fn translate_statement(
                         store_op.deref_mut(ctx).set_loc(loc);
                         store_op.insert_after(ctx, addr_op);
 
-                        Ok(Some(store_op))
+                        {
+                            retain_source_write(ctx, store_op, write_source);
+                            Ok(Some(store_op))
+                        }
                     }
                     (
                         mir::ProjectionElem::Field(outer_field_idx, outer_field_ty),
@@ -652,7 +778,10 @@ pub fn translate_statement(
                         store_op.deref_mut(ctx).set_loc(loc);
                         store_op.insert_after(ctx, inner_addr_op);
 
-                        Ok(Some(store_op))
+                        {
+                            retain_source_write(ctx, store_op, write_source);
+                            Ok(Some(store_op))
+                        }
                     }
                     (
                         mir::ProjectionElem::Deref,
@@ -676,6 +805,7 @@ pub fn translate_statement(
                             prev_op,
                             block_ptr,
                             loc,
+                            write_source,
                         )
                     }
                     (
@@ -709,6 +839,7 @@ pub fn translate_statement(
                             prev_op,
                             block_ptr,
                             loc,
+                            write_source,
                         )
                     }
                     (
@@ -729,6 +860,7 @@ pub fn translate_statement(
                             prev_op,
                             block_ptr,
                             loc,
+                            write_source,
                         )
                     }
                     (
@@ -753,6 +885,7 @@ pub fn translate_statement(
                             prev_op,
                             block_ptr,
                             loc,
+                            write_source,
                         )
                     }
                     (mir::ProjectionElem::Downcast(_), mir::ProjectionElem::Field(_, _)) => {
@@ -773,6 +906,7 @@ pub fn translate_statement(
                             prev_op,
                             block_ptr,
                             loc,
+                            write_source,
                         )
                     }
                     _ => input_err!(
@@ -802,6 +936,7 @@ pub fn translate_statement(
                     prev_op,
                     block_ptr,
                     loc,
+                    write_source,
                 )
             }
         }
@@ -905,7 +1040,10 @@ pub fn translate_statement(
             } else {
                 memcpy_op.insert_at_front(block_ptr, ctx);
             }
-            Ok(Some(memcpy_op))
+            {
+                retain_source_write(ctx, memcpy_op, write_source);
+                Ok(Some(memcpy_op))
+            }
         }
 
         // Statements with observable runtime effect that are not yet lowered.
@@ -1029,7 +1167,10 @@ pub fn translate_statement(
                 set_op.insert_at_front(block_ptr, ctx);
             }
 
-            Ok(Some(set_op))
+            {
+                retain_source_write(ctx, set_op, write_source);
+                Ok(Some(set_op))
+            }
         }
     }
 }
@@ -1060,6 +1201,7 @@ fn store_through_place_address(
     prev_op: Option<Ptr<Operation>>,
     block_ptr: Ptr<BasicBlock>,
     loc: Location,
+    write_source: Option<&dialect_mir::library::LibraryWriteSourceAttr>,
 ) -> TranslationResult<Option<Ptr<Operation>>> {
     let mut current_prev = prev_op;
     if let Some(rvalue_op) = rvalue_op_opt {
@@ -1092,6 +1234,9 @@ fn store_through_place_address(
             loc.clone(),
         )?
     {
+        if let Some(last) = result {
+            retain_source_write(ctx, last, write_source);
+        }
         return Ok(result);
     }
 
@@ -1133,7 +1278,10 @@ fn store_through_place_address(
         Some(prev) => store_op.insert_after(ctx, prev),
         None => store_op.insert_at_front(block_ptr, ctx),
     }
-    Ok(Some(store_op))
+    {
+        retain_source_write(ctx, store_op, write_source);
+        Ok(Some(store_op))
+    }
 }
 
 /// Extract the element type and address space from a pointer that points
@@ -1316,6 +1464,7 @@ fn translate_repeat_into_alloca(
     block_ptr: Ptr<BasicBlock>,
     prev_op: Option<Ptr<Operation>>,
     loc: Location,
+    write_source: Option<&dialect_mir::library::LibraryWriteSourceAttr>,
 ) -> TranslationResult<Option<Ptr<Operation>>> {
     let (elem_val, after_operand) = rvalue::translate_operand(
         ctx,
@@ -1354,6 +1503,7 @@ fn translate_repeat_into_alloca(
             current_prev,
             block_ptr,
             loc.clone(),
+            write_source,
         )?;
         current_prev = after_store.or(current_prev);
     }
@@ -1375,6 +1525,7 @@ fn translate_array_agg_into_alloca(
     block_ptr: Ptr<BasicBlock>,
     prev_op: Option<Ptr<Operation>>,
     loc: Location,
+    write_source: Option<&dialect_mir::library::LibraryWriteSourceAttr>,
 ) -> TranslationResult<Option<Ptr<Operation>>> {
     let mut current_prev = prev_op;
 
@@ -1416,6 +1567,7 @@ fn translate_array_agg_into_alloca(
             current_prev,
             block_ptr,
             loc.clone(),
+            write_source,
         )?;
         current_prev = after_store.or(current_prev);
     }

@@ -235,6 +235,45 @@ pub(super) fn codegen_option_names(flags: &[String]) -> Vec<String> {
     names
 }
 
+/// Selects an alternative host linker for the final link of host binaries.
+/// Currently only `wild` is supported; unset, empty, or `default` keeps
+/// rustc's default linker.
+pub(super) const HOST_LINKER_ENV: &str = "CUDA_OXIDE_LINKER";
+
+/// rustc flags for the host linker requested via [`HOST_LINKER_ENV`].
+///
+/// wild is driven through clang's `--ld-path`, the setup wild documents for
+/// Rust; GCC has no equivalent option. The path is resolved up front so a
+/// missing `wild` fails here with a clear message instead of an obscure
+/// link error later.
+fn host_linker_rustflags() -> Vec<String> {
+    let Some(value) = std::env::var_os(HOST_LINKER_ENV) else {
+        return Vec::new();
+    };
+    match value.to_str().map(str::trim) {
+        Some("" | "default") => Vec::new(),
+        Some("wild") => {
+            let Some(wild) = super::toolkit::find_executable("wild", &[]) else {
+                eprintln!("Error: {HOST_LINKER_ENV}=wild, but `wild` was not found on PATH.");
+                eprintln!(
+                    "Install it with `cargo install wild-linker`, or unset {HOST_LINKER_ENV}."
+                );
+                std::process::exit(1);
+            };
+            vec![
+                "-Clinker=clang".to_string(),
+                format!("-Clink-arg=--ld-path={}", wild.display()),
+            ]
+        }
+        _ => {
+            eprintln!(
+                "Error: unsupported {HOST_LINKER_ENV} value {value:?}; expected `wild` or `default`."
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Construct boundary-preserving rustc flags for Cargo.
 ///
 /// `RUSTFLAGS` is whitespace-split by Cargo, which corrupts a single flag
@@ -252,6 +291,7 @@ fn build_encoded_rustflags(
         explicit_rustflags.push("--cfg".to_string());
         explicit_rustflags.push(cfg.clone());
     }
+    explicit_rustflags.extend(host_linker_rustflags());
     build_encoded_rustflags_with_existing(
         &ctx.backend_so,
         profile,

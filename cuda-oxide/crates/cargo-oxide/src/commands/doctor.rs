@@ -364,7 +364,7 @@ pub(super) fn backend_source_check(
 /// backend `.so` (informational), CUDA headers (`cuda.h`), CUDA toolkit
 /// (`nvcc`, libNVVM, nvJitLink, libdevice), LLVM (`llc`), clang/libclang,
 /// the NVIDIA driver / GPU (informational), and optionally `cuda-gdb` /
-/// `compute-sanitizer`.
+/// `compute-sanitizer` / the `wild` host linker.
 /// Exits non-zero if any required check fails.
 ///
 /// Doctor itself needs neither the CUDA toolkit nor a driver: every check
@@ -792,6 +792,37 @@ pub fn doctor(ctx: &Context) {
         None => {
             println!("- not found (only needed for `cargo oxide sanitize`)");
         }
+    }
+
+    // 11. wild (optional) -- the same PATH lookup `CUDA_OXIDE_LINKER=wild`
+    // uses, so doctor and the build always agree on whether wild is found.
+    let wild_requested = std::env::var(super::codegen_env::HOST_LINKER_ENV)
+        .is_ok_and(|value| value.trim() == "wild");
+    print!("wild linker (optional)... ");
+    match super::toolkit::find_executable("wild", &[]) {
+        Some(path) => match Command::new(&path).arg("--version").output() {
+            Ok(output) if output.status.success() => {
+                let version = String::from_utf8_lossy(&output.stdout);
+                if let Some(line) = version.lines().next() {
+                    println!("✓ {} ({})", line.trim(), path.display());
+                } else {
+                    println!("✓ {}", path.display());
+                }
+            }
+            _ => println!("✓ {}", path.display()),
+        },
+        None if wild_requested => {
+            println!(
+                "✗ not found, but {}=wild is set",
+                super::codegen_env::HOST_LINKER_ENV
+            );
+            eprintln!("  Install it with `cargo install wild-linker`.");
+            ok = false;
+        }
+        None => println!(
+            "- not found (only needed for {}=wild)",
+            super::codegen_env::HOST_LINKER_ENV
+        ),
     }
 
     println!();

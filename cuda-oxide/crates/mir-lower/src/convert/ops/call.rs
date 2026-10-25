@@ -87,7 +87,7 @@ use pliron::builtin::type_interfaces::FunctionTypeInterface;
 use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
 use pliron::irbuild::dialect_conversion::{DialectConversionRewriter, OperandsInfo};
-use pliron::irbuild::inserter::Inserter;
+use pliron::irbuild::inserter::{Inserter, OpInsertionPoint};
 use pliron::irbuild::rewriter::Rewriter;
 use pliron::linked_list::ContainsLinkedList;
 use pliron::op::Op;
@@ -268,6 +268,8 @@ enum RustFloatMathIntrinsic {
     IlogbF64,
     LdexpF32,
     LdexpF64,
+    FrexpF32,
+    FrexpF64,
     FaddFast,
     FsubFast,
     FmulFast,
@@ -356,6 +358,8 @@ impl RustFloatMathIntrinsic {
             rust_intrinsics::CALLEE_ILOGB_F64 => Some(Self::IlogbF64),
             rust_intrinsics::CALLEE_LDEXP_F32 => Some(Self::LdexpF32),
             rust_intrinsics::CALLEE_LDEXP_F64 => Some(Self::LdexpF64),
+            rust_intrinsics::CALLEE_FREXP_F32 => Some(Self::FrexpF32),
+            rust_intrinsics::CALLEE_FREXP_F64 => Some(Self::FrexpF64),
             rust_intrinsics::CALLEE_FADD_FAST => Some(Self::FaddFast),
             rust_intrinsics::CALLEE_FSUB_FAST => Some(Self::FsubFast),
             rust_intrinsics::CALLEE_FMUL_FAST => Some(Self::FmulFast),
@@ -466,6 +470,8 @@ impl RustFloatMathIntrinsic {
             Self::IlogbF64 => Ok("__nv_ilogb"),
             Self::LdexpF32 => Ok("__nv_ldexpf"),
             Self::LdexpF64 => Ok("__nv_ldexp"),
+            Self::FrexpF32 => Ok("__nv_frexpf"),
+            Self::FrexpF64 => Ok("__nv_frexp"),
             Self::FaddFast | Self::FsubFast | Self::FmulFast | Self::FdivFast | Self::FremFast => {
                 // The `f*_fast` intrinsics lower directly to LLVM `fadd`/`fsub`/
                 // `fmul`/`fdiv`/`frem` with fast-math flags, not to a libdevice
@@ -480,7 +486,7 @@ impl RustFloatMathIntrinsic {
         }
     }
 
-    /// Number of operands expected by the libdevice function.
+    /// Number of operands expected by the Rust placeholder.
     fn arg_count(self) -> usize {
         match self {
             Self::PowiF32
@@ -1317,6 +1323,13 @@ fn convert_rust_float_math_intrinsic(
         return lower_float_minmax_nsz(ctx, rewriter, op, &args, predicate);
     }
 
+    if matches!(
+        intrinsic,
+        RustFloatMathIntrinsic::FrexpF32 | RustFloatMathIntrinsic::FrexpF64
+    ) {
+        return convert_rust_frexp(ctx, rewriter, op, intrinsic, args[0]);
+    }
+
     let result_mir_ty = op.deref(ctx).get_result(0).get_type(ctx);
     let result_ty = convert_type(ctx, result_mir_ty).map_err(anyhow_to_pliron)?;
 
@@ -1374,6 +1387,174 @@ fn convert_rust_float_math_intrinsic(
     rewriter.insert_operation(ctx, llvm_call.get_operation());
     rewriter.replace_operation(ctx, op, llvm_call.get_operation());
 
+    Ok(())
+}
+
+/// Emit a libdevice scalar return plus one out-parameter. The caller supplies
+/// the initial out value and handles its Rust tuple and semantic adjustments.
+/// Keeping storage and ABI construction here lets modf/remquo share the path.
+fn emit_libdevice_out_param_call(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+    symbol: &str,
+    args: &[Value],
+    scalar_ty: TypeHandle,
+    initial_out: Value,
+) -> Result<(Value, Value)> {
+    let loc = op.deref(ctx).loc().clone();
+    let block = op.deref(ctx).get_parent_block().ok_or_else(|| {
+        pliron::input_error!(
+            loc.clone(),
+            "libdevice out-parameter call has no parent block"
+        )
+    })?;
+    let parent = helpers::get_parent_func(ctx, block).map_err(anyhow_to_pliron)?;
+    let entry = parent
+        .deref(ctx)
+        .get_region(0)
+        .deref(ctx)
+        .iter(ctx)
+        .next()
+        .ok_or_else(|| {
+            pliron::input_error!(
+                loc.clone(),
+                "libdevice out-parameter call has no entry block"
+            )
+        })?;
+    let first = entry.deref(ctx).iter(ctx).next().ok_or_else(|| {
+        pliron::input_error!(
+            loc.clone(),
+            "libdevice out-parameter call has an empty entry block"
+        )
+    })?;
+    // A call inside a loop must reuse a static slot, rather than allocate
+    // additional stack storage on every iteration. Its size constant must
+    // dominate it too; initialization stays at the actual call site.
+    let one_attr = IntegerAttr::new(
+        IntegerType::get(ctx, 32, Signedness::Signless),
+        APInt::from_u64(1, NonZeroUsize::new(32).unwrap()),
+    );
+    let one = llvm::ConstantOp::new(ctx, Box::new(one_attr));
+    let saved_ip = rewriter.get_insertion_point();
+    rewriter.set_insertion_point(OpInsertionPoint::BeforeOperation(first));
+    rewriter.insert_operation(ctx, one.get_operation());
+    let out_ty = initial_out.get_type(ctx);
+    let one_value = one.get_operation().deref(ctx).get_result(0);
+    let slot = llvm::AllocaOp::new(ctx, out_ty, one_value, 0);
+    rewriter.insert_operation(ctx, slot.get_operation());
+    rewriter.set_insertion_point(saved_ip);
+    let ptr = slot.get_operation().deref(ctx).get_result(0);
+    let initialize = llvm::StoreOp::new(ctx, initial_out, ptr);
+    rewriter.insert_operation(ctx, initialize.get_operation());
+    let mut call_args = args.to_vec();
+    call_args.push(ptr);
+    let arg_types = call_args.iter().map(|arg| arg.get_type(ctx)).collect();
+    let func_ty = llvm_types::FuncType::get(ctx, scalar_ty, arg_types, false);
+    helpers::ensure_intrinsic_declared(ctx, block, symbol, func_ty).map_err(|error| {
+        pliron::input_error!(loc.clone(), "Failed to declare {symbol}: {error}")
+    })?;
+    let symbol = symbol
+        .try_into()
+        .map_err(|error| pliron::input_error!(loc.clone(), "Invalid libdevice name: {error:?}"))?;
+    let call = llvm::CallOp::new(ctx, CallOpCallable::Direct(symbol), func_ty, call_args);
+    crate::convert::preserve_location(ctx, op, call.get_operation());
+    rewriter.insert_operation(ctx, call.get_operation());
+    let out = llvm::LoadOp::new(ctx, ptr, out_ty);
+    rewriter.insert_operation(ctx, out.get_operation());
+    Ok((
+        call.get_operation().deref(ctx).get_result(0),
+        out.get_operation().deref(ctx).get_result(0),
+    ))
+}
+
+/// Adapt libdevice's `(F, i32*) -> F` ABI to libm's `(F) -> (F, i32)`.
+fn convert_rust_frexp(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+    intrinsic: RustFloatMathIntrinsic,
+    x: Value,
+) -> Result<()> {
+    let loc = op.deref(ctx).loc().clone();
+    let (float_ty, width, exponent_mask): (TypeHandle, u32, u64) = match intrinsic {
+        RustFloatMathIntrinsic::FrexpF32 => (FP32Type::get(ctx).into(), 32, 0x7f80_0000),
+        RustFloatMathIntrinsic::FrexpF64 => (FP64Type::get(ctx).into(), 64, 0x7ff0_0000_0000_0000),
+        _ => unreachable!("frexp converter requires a frexp placeholder"),
+    };
+    let result_mir_ty = op.deref(ctx).get_result(0).get_type(ctx);
+    let layout = {
+        let ty = result_mir_ty.deref(ctx);
+        let Some(tuple) = ty.downcast_ref::<MirTupleType>() else {
+            return pliron::input_err!(loc, "Rust frexp intrinsic requires a (float, i32) result");
+        };
+        let fields = tuple.get_types();
+        let i32_mir: TypeHandle = IntegerType::get(ctx, 32, Signedness::Signed).into();
+        if fields != [float_ty, i32_mir] || x.get_type(ctx) != float_ty {
+            return pliron::input_err!(loc, "Rust frexp intrinsic signature mismatch");
+        }
+        StructLayoutInfo::of_tuple(tuple)
+    };
+    let map = build_struct_slot_map(ctx, &layout).map_err(anyhow_to_pliron)?;
+    let mut constant = |ctx: &mut Context, value: u64, bits: u32| {
+        let ty = IntegerType::get(ctx, bits, Signedness::Signless);
+        let attr = IntegerAttr::new(
+            ty,
+            APInt::from_u64(value, NonZeroUsize::new(bits as usize).unwrap()),
+        );
+        let constant = llvm::ConstantOp::new(ctx, Box::new(attr));
+        rewriter.insert_operation(ctx, constant.get_operation());
+        constant.get_operation().deref(ctx).get_result(0)
+    };
+    let zero = constant(ctx, 0, 32);
+    let mask = constant(ctx, exponent_mask, width);
+    let symbol = intrinsic.libdevice_name(ctx, float_ty, loc.clone())?;
+    let (fraction, exponent) =
+        emit_libdevice_out_param_call(ctx, rewriter, op, symbol, &[x], float_ty, zero)?;
+    // libm returns (x, 0) for infinities and NaNs; libdevice leaves the
+    // exponent unspecified. Bit tests preserve NaN payloads without floating
+    // comparisons or fast-math assumptions. The select preserves x itself.
+    let bits_ty = IntegerType::get(ctx, width, Signedness::Signless).into();
+    let bits = llvm::BitcastOp::new(ctx, x, bits_ty);
+    rewriter.insert_operation(ctx, bits.get_operation());
+    let bits_value = bits.get_operation().deref(ctx).get_result(0);
+    let masked = llvm::AndOp::new(ctx, bits_value, mask);
+    rewriter.insert_operation(ctx, masked.get_operation());
+    let masked_value = masked.get_operation().deref(ctx).get_result(0);
+    let non_finite = llvm::ICmpOp::new(
+        ctx,
+        llvm_export::attributes::ICmpPredicateAttr::EQ,
+        masked_value,
+        mask,
+    );
+    rewriter.insert_operation(ctx, non_finite.get_operation());
+    let predicate = non_finite.get_operation().deref(ctx).get_result(0);
+    let fraction = llvm::SelectOp::new(ctx, predicate, x, fraction);
+    rewriter.insert_operation(ctx, fraction.get_operation());
+    let exponent = llvm::SelectOp::new(ctx, predicate, zero, exponent);
+    rewriter.insert_operation(ctx, exponent.get_operation());
+    let fields = [
+        fraction.get_operation().deref(ctx).get_result(0),
+        exponent.get_operation().deref(ctx).get_result(0),
+    ];
+    let undef = llvm::UndefOp::new(ctx, map.llvm_struct_ty);
+    rewriter.insert_operation(ctx, undef.get_operation());
+    let mut value = undef.get_operation().deref(ctx).get_result(0);
+    let mut last = undef.get_operation();
+    for (field, operand) in fields.into_iter().enumerate() {
+        let slot = map.decl_to_llvm[field].ok_or_else(|| {
+            pliron::input_error!(
+                loc.clone(),
+                "Rust frexp result field has no LLVM storage slot"
+            )
+        })?;
+        let insert = llvm::InsertValueOp::new(ctx, value, operand, vec![slot]);
+        rewriter.insert_operation(ctx, insert.get_operation());
+        value = insert.get_operation().deref(ctx).get_result(0);
+        last = insert.get_operation();
+    }
+    crate::convert::preserve_location(ctx, op, last);
+    rewriter.replace_operation(ctx, op, last);
     Ok(())
 }
 

@@ -16,6 +16,265 @@ use pliron::operation::Operation;
 use crate::common::{append_return, build_test_kernel, lowered_kernel_body, make_test_ctx};
 
 #[test]
+fn test_frexp_out_parameter_lowering_on_both_backends() -> Result<(), anyhow::Error> {
+    use dialect_mir::rust_intrinsics as ri;
+    use dialect_mir::types::MirTupleType;
+    use pliron::basic_block::BasicBlock;
+    use pliron::builtin::attributes::StringAttr;
+    use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
+    use pliron::r#type::{TypeHandle, Typed};
+
+    for backend in [
+        mir_lower::IntrinsicBackend::LlvmNvptx,
+        mir_lower::IntrinsicBackend::LibNvvm,
+    ] {
+        for wide in [false, true] {
+            // The reordered case also carries real padding. Tuple packing
+            // must use the declared-field map rather than hardcoded slots.
+            for reordered in [false, true] {
+                let mut ctx = make_test_ctx();
+                let float_ty: TypeHandle = if wide {
+                    FP64Type::get(&ctx).into()
+                } else {
+                    FP32Type::get(&ctx).into()
+                };
+                let i32_mir: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Signed).into();
+                let tuple_ty: TypeHandle = if reordered {
+                    MirTupleType::get_with_layout(
+                        &mut ctx,
+                        vec![float_ty, i32_mir],
+                        vec![1, 0],
+                        vec![if wide { 8 } else { 4 }, 0],
+                        if wide { 16 } else { 8 },
+                        if wide { 8 } else { 4 },
+                    )
+                    .into()
+                } else {
+                    MirTupleType::get(&mut ctx, vec![float_ty, i32_mir]).into()
+                };
+                let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![float_ty]);
+                let x = entry.deref(&ctx).get_argument(0);
+                let parent = entry.deref(&ctx).get_parent_op(&ctx).unwrap();
+                let region = parent.deref(&ctx).get_region(0);
+                let body = BasicBlock::new(&mut ctx, None, vec![]);
+                body.insert_at_back(region, &ctx);
+                Operation::new(
+                    &mut ctx,
+                    mir::MirGotoOp::get_concrete_op_info(),
+                    vec![],
+                    vec![],
+                    vec![body],
+                    0,
+                )
+                .insert_at_back(entry, &ctx);
+                let placeholder = if wide {
+                    ri::CALLEE_FREXP_F64
+                } else {
+                    ri::CALLEE_FREXP_F32
+                };
+                let call = Operation::new(
+                    &mut ctx,
+                    mir::MirCallOp::get_concrete_op_info(),
+                    vec![tuple_ty],
+                    vec![x],
+                    vec![],
+                    0,
+                );
+                mir::MirCallOp::new(call)
+                    .set_attr_callee(&ctx, StringAttr::new(placeholder.to_string()));
+                call.insert_at_back(body, &ctx);
+                append_return(&mut ctx, body);
+                mir_lower::lower_mir_to_llvm_with_options(
+                    &mut ctx,
+                    module_ptr,
+                    mir_lower::LoweringOptions {
+                        intrinsic_backend: backend,
+                        ..Default::default()
+                    },
+                )
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
+                pliron::operation::verify_operation(module_ptr, &ctx)
+                    .map_err(|error| anyhow::anyhow!("{error}"))?;
+                let module_block = module_ptr
+                    .deref(&ctx)
+                    .get_region(0)
+                    .deref(&ctx)
+                    .iter(&ctx)
+                    .next()
+                    .unwrap();
+                let func = module_block
+                    .deref(&ctx)
+                    .iter(&ctx)
+                    .find_map(|op| {
+                        let func = Operation::get_op::<llvm::FuncOp>(op, &ctx)?;
+                        (func.get_symbol_name(&ctx).to_string() == "kernel_func").then_some(func)
+                    })
+                    .unwrap();
+                let blocks = func
+                    .get_operation()
+                    .deref(&ctx)
+                    .get_region(0)
+                    .deref(&ctx)
+                    .iter(&ctx)
+                    .collect::<Vec<_>>();
+                let operations = blocks
+                    .iter()
+                    .flat_map(|block| block.deref(&ctx).iter(&ctx))
+                    .collect::<Vec<_>>();
+                let allocas = operations
+                    .iter()
+                    .filter(|&&op| Operation::get_op::<llvm::AllocaOp>(op, &ctx).is_some())
+                    .copied()
+                    .collect::<Vec<_>>();
+                assert_eq!(allocas.len(), 1);
+                assert_eq!(
+                    allocas[0].deref(&ctx).get_parent_block(),
+                    Some(blocks[0]),
+                    "out slot must be static even for a call outside the entry block"
+                );
+                let calls = operations
+                    .iter()
+                    .filter_map(|&op| Operation::get_op::<llvm::CallOp>(op, &ctx))
+                    .collect::<Vec<_>>();
+                assert_eq!(calls.len(), 1);
+                let call = &calls[0];
+                let CallOpCallable::Direct(symbol) = call.callee(&ctx) else {
+                    panic!("expected a direct libdevice call")
+                };
+                assert_eq!(
+                    symbol.to_string(),
+                    if wide { "__nv_frexp" } else { "__nv_frexpf" }
+                );
+                let call_op = call.get_operation().deref(&ctx);
+                assert_eq!(call_op.get_num_operands(), 2);
+                assert_eq!(call_op.get_result(0).get_type(&ctx), float_ty);
+                let out_ptr = call_op.get_operand(1);
+                assert_eq!(out_ptr, allocas[0].deref(&ctx).get_result(0));
+                assert!(
+                    operations
+                        .iter()
+                        .any(|&op| Operation::get_op::<llvm::StoreOp>(op, &ctx).is_some()
+                            && op.deref(&ctx).get_operand(1) == out_ptr)
+                );
+                assert!(
+                    operations
+                        .iter()
+                        .any(|&op| Operation::get_op::<llvm::LoadOp>(op, &ctx).is_some()
+                            && op.deref(&ctx).get_operand(0) == out_ptr)
+                );
+                assert_eq!(
+                    operations
+                        .iter()
+                        .filter(|&&op| Operation::get_op::<llvm::SelectOp>(op, &ctx).is_some())
+                        .count(),
+                    2,
+                    "non-finite fraction and exponent must both be normalized"
+                );
+                let module = Operation::get_op::<ModuleOp>(module_ptr, &ctx).unwrap();
+                let ir = llvm_export::export::export_module_to_string(&ctx, &module)
+                    .expect("frexp module must export");
+                assert!(
+                    ir.contains(if wide {
+                        "declare double @__nv_frexp(double, ptr)"
+                    } else {
+                        "declare float @__nv_frexpf(float, ptr)"
+                    }),
+                    "{ir}"
+                );
+                assert!(
+                    ir.contains(if wide { "and i64" } else { "and i32" }),
+                    "{ir}"
+                );
+                assert!(!ir.contains(ri::PLACEHOLDER_PREFIX), "{ir}");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn test_frexp_rejects_malformed_calls() {
+    use dialect_mir::rust_intrinsics as ri;
+    use dialect_mir::types::MirTupleType;
+    use pliron::builtin::attributes::StringAttr;
+    use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
+    use pliron::r#type::TypeHandle;
+
+    for backend in [
+        mir_lower::IntrinsicBackend::LlvmNvptx,
+        mir_lower::IntrinsicBackend::LibNvvm,
+    ] {
+        for wide in [false, true] {
+            for invalid in 0..7 {
+                let mut ctx = make_test_ctx();
+                let float_ty: TypeHandle = if wide {
+                    FP64Type::get(&ctx).into()
+                } else {
+                    FP32Type::get(&ctx).into()
+                };
+                let other_ty: TypeHandle = if wide {
+                    FP32Type::get(&ctx).into()
+                } else {
+                    FP64Type::get(&ctx).into()
+                };
+                let i32_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Signed).into();
+                let i64_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Signed).into();
+                let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![float_ty, other_ty]);
+                let x = entry.deref(&ctx).get_argument(0);
+                let other = entry.deref(&ctx).get_argument(1);
+                let fields = match invalid {
+                    3 => vec![float_ty, i64_ty],
+                    4 => vec![other_ty, i32_ty],
+                    5 => vec![float_ty],
+                    _ => vec![float_ty, i32_ty],
+                };
+                let tuple: TypeHandle = MirTupleType::get(&mut ctx, fields).into();
+                let result = if invalid == 2 { float_ty } else { tuple };
+                let args = match invalid {
+                    0 => vec![],
+                    1 => vec![x, x],
+                    6 => vec![other],
+                    _ => vec![x],
+                };
+                let placeholder = if wide {
+                    ri::CALLEE_FREXP_F64
+                } else {
+                    ri::CALLEE_FREXP_F32
+                };
+                let call = Operation::new(
+                    &mut ctx,
+                    mir::MirCallOp::get_concrete_op_info(),
+                    vec![result],
+                    args,
+                    vec![],
+                    0,
+                );
+                mir::MirCallOp::new(call)
+                    .set_attr_callee(&ctx, StringAttr::new(placeholder.to_string()));
+                call.insert_at_back(entry, &ctx);
+                append_return(&mut ctx, entry);
+                let error = mir_lower::lower_mir_to_llvm_with_options(
+                    &mut ctx,
+                    module_ptr,
+                    mir_lower::LoweringOptions {
+                        intrinsic_backend: backend,
+                        ..Default::default()
+                    },
+                )
+                .expect_err("malformed frexp ABI must fail")
+                .to_string();
+                let expected = match invalid {
+                    0 | 1 => "requires 1 operand(s)",
+                    2 => "requires a (float, i32) result",
+                    _ => "signature mismatch",
+                };
+                assert!(error.contains(expected), "case {invalid}: {error}");
+            }
+        }
+    }
+}
+
+#[test]
 fn test_special_math_mixed_signatures_on_both_backends() -> Result<(), anyhow::Error> {
     use dialect_mir::rust_intrinsics as ri;
     use pliron::builtin::attributes::StringAttr;

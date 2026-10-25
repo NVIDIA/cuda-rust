@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! tgamma, ilogb, ldexp and scalbn in f32/f64 device code.
+//! Scalar math and tuple-returning frexp in f32/f64 device code.
 //! Run with `cargo oxide run math_special`.
 #![feature(float_gamma)]
 // The width-generic host macro casts both f32 and f64 results to f64.
@@ -23,6 +23,29 @@ mod libm_lookalike {
     #[inline(never)]
     pub fn tgamma(x: f64) -> f64 {
         x + 1000.0
+    }
+
+    #[inline(never)]
+    pub fn frexpf(x: f32) -> (f32, i32) {
+        (x, 12345)
+    }
+
+    #[inline(never)]
+    pub fn frexp(x: f64) -> (f64, i32) {
+        (x, 12345)
+    }
+}
+
+// Exercise an ordinary device-function boundary with a tuple return.
+mod frexp_helpers {
+    #[inline(never)]
+    pub fn split_f32(x: f32) -> (f32, i32) {
+        libm::frexpf(x)
+    }
+
+    #[inline(never)]
+    pub fn split_f64(x: f64) -> (f64, i32) {
+        libm::frexp(x)
     }
 }
 
@@ -96,6 +119,108 @@ mod kernels {
             }
             if let Some(out) = control.get_mut(thread::index_1d()) {
                 *out = libm_lookalike::tgamma(x);
+            }
+        }
+    }
+
+    #[kernel]
+    pub fn frexp_f32(
+        xs: &[f32],
+        mut direct_fraction: DisjointSlice<f32>,
+        mut direct_exponent: DisjointSlice<i32>,
+        mut projected_fraction: DisjointSlice<f32>,
+        mut projected_exponent: DisjointSlice<i32>,
+        mut loop_fraction: DisjointSlice<f32>,
+        mut loop_exponent: DisjointSlice<i32>,
+        mut control_fraction: DisjointSlice<f32>,
+        mut control_exponent: DisjointSlice<i32>,
+    ) {
+        let i = thread::index_1d().get();
+        if i < xs.len() {
+            let x = xs[i];
+            let direct = frexp_helpers::split_f32(x);
+            let mut projected = (17_u32, (x, 0_i32));
+            projected.1 = libm::frexpf(projected.1.0);
+            let mut repeated = (0.0, 0_i32);
+            for step in 0..3 {
+                let input = if step == 1 { -x } else { x };
+                repeated = libm::frexpf(input);
+            }
+            let control = libm_lookalike::frexpf(x);
+            if let Some(out) = direct_fraction.get_mut(thread::index_1d()) {
+                *out = direct.0;
+            }
+            if let Some(out) = direct_exponent.get_mut(thread::index_1d()) {
+                *out = direct.1;
+            }
+            if let Some(out) = projected_fraction.get_mut(thread::index_1d()) {
+                *out = projected.1.0;
+            }
+            if let Some(out) = projected_exponent.get_mut(thread::index_1d()) {
+                *out = projected.1.1;
+            }
+            if let Some(out) = loop_fraction.get_mut(thread::index_1d()) {
+                *out = repeated.0;
+            }
+            if let Some(out) = loop_exponent.get_mut(thread::index_1d()) {
+                *out = repeated.1;
+            }
+            if let Some(out) = control_fraction.get_mut(thread::index_1d()) {
+                *out = control.0;
+            }
+            if let Some(out) = control_exponent.get_mut(thread::index_1d()) {
+                *out = control.1;
+            }
+        }
+    }
+
+    #[kernel]
+    pub fn frexp_f64(
+        xs: &[f64],
+        mut direct_fraction: DisjointSlice<f64>,
+        mut direct_exponent: DisjointSlice<i32>,
+        mut projected_fraction: DisjointSlice<f64>,
+        mut projected_exponent: DisjointSlice<i32>,
+        mut loop_fraction: DisjointSlice<f64>,
+        mut loop_exponent: DisjointSlice<i32>,
+        mut control_fraction: DisjointSlice<f64>,
+        mut control_exponent: DisjointSlice<i32>,
+    ) {
+        let i = thread::index_1d().get();
+        if i < xs.len() {
+            let x = xs[i];
+            let direct = frexp_helpers::split_f64(x);
+            let mut projected = (17_u32, (x, 0_i32));
+            projected.1 = libm::frexp(projected.1.0);
+            let mut repeated = (0.0, 0_i32);
+            for step in 0..3 {
+                let input = if step == 1 { -x } else { x };
+                repeated = libm::frexp(input);
+            }
+            let control = libm_lookalike::frexp(x);
+            if let Some(out) = direct_fraction.get_mut(thread::index_1d()) {
+                *out = direct.0;
+            }
+            if let Some(out) = direct_exponent.get_mut(thread::index_1d()) {
+                *out = direct.1;
+            }
+            if let Some(out) = projected_fraction.get_mut(thread::index_1d()) {
+                *out = projected.1.0;
+            }
+            if let Some(out) = projected_exponent.get_mut(thread::index_1d()) {
+                *out = projected.1.1;
+            }
+            if let Some(out) = loop_fraction.get_mut(thread::index_1d()) {
+                *out = repeated.0;
+            }
+            if let Some(out) = loop_exponent.get_mut(thread::index_1d()) {
+                *out = repeated.1;
+            }
+            if let Some(out) = control_fraction.get_mut(thread::index_1d()) {
+                *out = control.0;
+            }
+            if let Some(out) = control_exponent.get_mut(thread::index_1d()) {
+                *out = control.1;
             }
         }
     }
@@ -225,6 +350,124 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             (-1.0, 1024),
         ]
     );
+    macro_rules! check_frexp_width {
+        ($ty:ty, $kernel:ident, $frexp:ident, $extra:expr) => {{
+            let mut xs: Vec<$ty> = vec![
+                0.0, -0.0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.0, -2.0, 3.25, -3.25, 0.75, -0.75,
+                42.0, -42.0, 0.125, -0.125,
+            ];
+            xs.extend($extra);
+            let n = xs.len();
+            let inputs = DeviceBuffer::from_host(&stream, &xs)?;
+            let mut direct_fraction = DeviceBuffer::<$ty>::zeroed(&stream, n)?;
+            let mut direct_exponent = DeviceBuffer::<i32>::zeroed(&stream, n)?;
+            let mut projected_fraction = DeviceBuffer::<$ty>::zeroed(&stream, n)?;
+            let mut projected_exponent = DeviceBuffer::<i32>::zeroed(&stream, n)?;
+            let mut loop_fraction = DeviceBuffer::<$ty>::zeroed(&stream, n)?;
+            let mut loop_exponent = DeviceBuffer::<i32>::zeroed(&stream, n)?;
+            let mut control_fraction = DeviceBuffer::<$ty>::zeroed(&stream, n)?;
+            let mut control_exponent = DeviceBuffer::<i32>::zeroed(&stream, n)?;
+            // SAFETY: every buffer contains n elements and each output is
+            // written only by its matching thread, with an input bounds check.
+            unsafe {
+                module.$kernel(
+                    &stream,
+                    LaunchConfig::for_num_elems(n as u32),
+                    &inputs,
+                    &mut direct_fraction,
+                    &mut direct_exponent,
+                    &mut projected_fraction,
+                    &mut projected_exponent,
+                    &mut loop_fraction,
+                    &mut loop_exponent,
+                    &mut control_fraction,
+                    &mut control_exponent,
+                )?;
+            }
+            let fractions = [
+                direct_fraction.to_host_vec(&stream)?,
+                projected_fraction.to_host_vec(&stream)?,
+                loop_fraction.to_host_vec(&stream)?,
+                control_fraction.to_host_vec(&stream)?,
+            ];
+            let exponents = [
+                direct_exponent.to_host_vec(&stream)?,
+                projected_exponent.to_host_vec(&stream)?,
+                loop_exponent.to_host_vec(&stream)?,
+                control_exponent.to_host_vec(&stream)?,
+            ];
+            for (i, &x) in xs.iter().enumerate() {
+                let expected = libm::$frexp(x);
+                for (route, name) in ["tuple return", "projected tuple", "loop", "user control"]
+                    .iter()
+                    .enumerate()
+                {
+                    let (fraction, exponent) = if route == 3 { (x, 12345) } else { expected };
+                    checks += 2;
+                    if fractions[route][i].to_bits() != fraction.to_bits() {
+                        failures += 1;
+                        eprintln!(
+                            "{} frexp {name}[{i}] fraction: got={:#x} expected={:#x}",
+                            stringify!($ty),
+                            fractions[route][i].to_bits(),
+                            fraction.to_bits()
+                        );
+                    }
+                    if exponents[route][i] != exponent {
+                        failures += 1;
+                        eprintln!(
+                            "{} frexp {name}[{i}] exponent: got={} expected={exponent}",
+                            stringify!($ty),
+                            exponents[route][i]
+                        );
+                    }
+                }
+            }
+        }};
+    }
+    check_frexp_width!(
+        f32,
+        frexp_f32,
+        frexpf,
+        [
+            f32::MIN_POSITIVE,
+            -f32::MIN_POSITIVE,
+            f32::MAX,
+            -f32::MAX,
+            f32::from_bits(1),
+            f32::from_bits(0x8000_0001),
+            f32::from_bits(0x007f_ffff),
+            f32::from_bits(0x807f_ffff),
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::from_bits(0x7fc1_2345),
+            f32::from_bits(0xffc1_2345),
+            f32::from_bits(0x7f81_2345),
+            f32::from_bits(0xff81_2345),
+        ]
+    );
+    check_frexp_width!(
+        f64,
+        frexp_f64,
+        frexp,
+        [
+            f64::MIN_POSITIVE,
+            -f64::MIN_POSITIVE,
+            f64::MAX,
+            -f64::MAX,
+            f64::from_bits(1),
+            f64::from_bits(0x8000_0000_0000_0001),
+            f64::from_bits(0x000f_ffff_ffff_ffff),
+            f64::from_bits(0x800f_ffff_ffff_ffff),
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::from_bits(0x7ff8_0000_0001_2345),
+            f64::from_bits(0xfff8_0000_0001_2345),
+            f64::from_bits(0x7ff0_0000_0001_2345),
+            f64::from_bits(0xfff0_0000_0001_2345),
+        ]
+    );
+
     if failures != 0 {
         return Err(format!("FAILED: {failures} of {checks} checks failed").into());
     }

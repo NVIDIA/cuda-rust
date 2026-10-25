@@ -466,11 +466,9 @@ impl<const N: u32> ThreadGroup for WarpTile<N> {
 
     #[inline(always)]
     fn sync(&self) {
-        if N == 32 {
-            warp::sync_mask(u32::MAX);
-        } else {
-            warp::sync_mask(self.mask());
-        }
+        // SAFETY: WarpTile construction validates N, and ThreadGroup::sync
+        // requires participation by every lane in this canonical tile.
+        unsafe { crate::library::checked_warp_sync_v1::<N>() }
     }
 }
 

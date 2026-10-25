@@ -78,10 +78,7 @@ const RETURN_ABI_ALIGN_ATTR: &str = "cuda_oxide_return_abi_align";
 /// shared-memory access can also live in a deeper ordinary helper. Shared
 /// helpers receive the maximum requirement from every marked root that can
 /// reach them.
-pub(crate) fn propagate_kernel_dynamic_shared_alignments(
-    ctx: &mut Context,
-    module_op: Ptr<Operation>,
-) {
+pub fn propagate_kernel_dynamic_shared_alignments(ctx: &mut Context, module_op: Ptr<Operation>) {
     let mut functions = FxHashMap::default();
     for region in module_op.deref(ctx).regions() {
         for block in region.deref(ctx).iter(ctx) {

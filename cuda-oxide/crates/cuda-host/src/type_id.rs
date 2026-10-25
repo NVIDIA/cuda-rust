@@ -65,7 +65,11 @@ pub fn type_id_u128<T: ?Sized>() -> u128 {
 /// hashes the concrete `kernel::<T, 4>` function-item type rather than its
 /// coerced function-pointer signature. Keeping the item uncoerced is important:
 /// the item type retains both the function definition and its generic arguments.
-#[inline]
+// rustc-codegen-cuda/src/collector.rs::kernel_root_instance recognizes this
+// exact crate/module/item path and recovers the concrete function-item type.
+// Keep the call through optimized MIR collection by disabling MIR inlining;
+// reifying a function pointer instead would also emit the kernel body on host.
+#[inline(never)]
 pub fn type_id_u128_of_val<T: ?Sized>(_: &T) -> u128 {
     type_id_u128::<T>()
 }
@@ -137,6 +141,10 @@ mod tests {
     fn function_item_hash_includes_const_arguments() {
         fn const_item<const N: usize>() {}
 
+        assert_eq!(
+            core::any::type_name_of_val(&type_id_u128_of_val::<u8>),
+            "cuda_host::type_id::type_id_u128_of_val<u8>"
+        );
         assert_ne!(
             type_id_u128_of_val(&const_item::<0>),
             type_id_u128_of_val(&const_item::<1>)

@@ -7,7 +7,8 @@
 //!
 //! This module translates MIR terminators (return, goto, call, switch, etc.)
 //! into `dialect-mir` operations. GPU intrinsics from `cuda_device` are
-//! expanded inline to `dialect-nvvm` operations.
+//! expanded inline to `dialect-nvvm` operations. Authenticated native library
+//! calls remain typed until the mandatory prepared-MIR proof and lowering.
 //!
 //! All non-entry blocks are argument-less: cross-block data flow travels
 //! through the per-local alloca slots owned by [`ValueMap`], so every branch
@@ -100,7 +101,7 @@ use rustc_public::ty::ConstantKind;
 ///
 /// Calls to `cuda_device` functions are expanded inline to `dialect-nvvm` operations.
 /// This includes thread indexing, synchronization, warp primitives, and
-/// tensor core operations.
+/// tensor core operations. Native library calls remain typed until mandatory lowering.
 #[allow(clippy::too_many_arguments)]
 pub fn translate_terminator(
     ctx: &mut Context,
@@ -112,6 +113,52 @@ pub fn translate_terminator(
     block_map: &[Ptr<BasicBlock>],
     rustc_mono_successors: &[usize],
     legaliser: &mut Legaliser,
+    library_site: crate::LibraryCallSite,
+) -> TranslationResult<Ptr<Operation>> {
+    let site = library_site.clone();
+    let translated = translate_terminator_inner(
+        ctx,
+        body,
+        term,
+        value_map,
+        block_ptr,
+        prev_op,
+        block_map,
+        rustc_mono_successors,
+        legaliser,
+        library_site,
+    )?;
+    if matches!(term.kind, mir::TerminatorKind::Drop { .. })
+        && crate::library::get_selected_call_target(&site).is_some()
+    {
+        let marker = dialect_mir::ops::MirLibrarySourceOp::build(
+            ctx,
+            dialect_mir::library::LibrarySourceEffectAttr {
+                site: site.clone(),
+                kind: dialect_mir::library::LibrarySourceEffectKind::NontrivialDrop,
+            },
+            None,
+        );
+        let event_loc = translated.deref(ctx).loc().clone();
+        marker.deref_mut(ctx).set_loc(event_loc);
+        marker.insert_before(ctx, translated);
+    }
+    dialect_mir::library::set_library_source_site(ctx, translated, site);
+    Ok(translated)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn translate_terminator_inner(
+    ctx: &mut Context,
+    body: &mir::Body,
+    term: &mir::Terminator,
+    value_map: &mut ValueMap,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    block_map: &[Ptr<BasicBlock>],
+    rustc_mono_successors: &[usize],
+    legaliser: &mut Legaliser,
+    library_site: crate::LibraryCallSite,
 ) -> TranslationResult<Ptr<Operation>> {
     let loc = span_to_location(ctx, term.source_info.span);
 
@@ -155,6 +202,7 @@ pub fn translate_terminator(
             block_map,
             loc,
             legaliser,
+            library_site,
         ),
 
         mir::TerminatorKind::SwitchInt { discr, targets } => match rustc_mono_successors {
@@ -169,7 +217,16 @@ pub fn translate_terminator(
                 )
             ),
             _ => translate_switch(
-                ctx, body, discr, targets, block_ptr, prev_op, value_map, block_map, loc,
+                ctx,
+                body,
+                discr,
+                targets,
+                block_ptr,
+                prev_op,
+                value_map,
+                block_map,
+                loc,
+                library_site,
             ),
         },
 
@@ -178,8 +235,18 @@ pub fn translate_terminator(
             target,
             unwind,
         } => translate_drop(
-            ctx, body, place, *target, unwind, block_ptr, prev_op, value_map, block_map, legaliser,
+            ctx,
+            body,
+            place,
+            *target,
+            unwind,
+            block_ptr,
+            prev_op,
+            value_map,
+            block_map,
+            legaliser,
             loc,
+            library_site,
         ),
 
         mir::TerminatorKind::Unreachable => {
@@ -525,6 +592,7 @@ fn translate_switch(
     value_map: &mut ValueMap,
     block_map: &[Ptr<BasicBlock>],
     loc: Location,
+    library_site: crate::LibraryCallSite,
 ) -> TranslationResult<Ptr<Operation>> {
     // Translate discriminant
     let (discr_value, last_op) = match discr {
@@ -538,6 +606,11 @@ fn translate_switch(
 
     let branches: Vec<_> = targets.branches().collect();
     let otherwise_idx: usize = targets.otherwise();
+    let impossible = body.blocks[otherwise_idx].statements.is_empty()
+        && matches!(
+            body.blocks[otherwise_idx].terminator.kind,
+            mir::TerminatorKind::Unreachable
+        );
 
     // For bool switches (2 branches), use MirCondBranchOp
     if branches.len() == 1 {
@@ -653,6 +726,10 @@ fn translate_switch(
         Operation::get_op::<MirCondBranchOp>(op, ctx)
             .expect("MirCondBranchOp")
             .set_operand_segment_sizes(ctx, segment_sizes);
+        dialect_mir::library::set_library_source_site(ctx, op, library_site.clone());
+        if impossible {
+            dialect_mir::library::set_library_impossible_successor(ctx, op, 1);
+        }
         op.deref_mut(ctx).set_loc(loc);
 
         // Use last_inserted_op (which accounts for NOT/EQ ops created above)
@@ -766,6 +843,10 @@ fn translate_switch(
         Operation::get_op::<MirCondBranchOp>(branch_op, ctx)
             .expect("MirCondBranchOp")
             .set_operand_segment_sizes(ctx, segment_sizes);
+        dialect_mir::library::set_library_source_site(ctx, branch_op, library_site.clone());
+        if impossible && i == n - 1 {
+            dialect_mir::library::set_library_impossible_successor(ctx, branch_op, 1);
+        }
         branch_op.deref_mut(ctx).set_loc(loc.clone());
         branch_op.insert_after(ctx, cmp_op);
 
@@ -825,6 +906,7 @@ fn translate_drop(
     block_map: &[Ptr<BasicBlock>],
     legaliser: &mut Legaliser,
     loc: Location,
+    library_site: crate::LibraryCallSite,
 ) -> TranslationResult<Ptr<Operation>> {
     let dropped_ty = place.ty(body.locals()).map_err(|e| {
         input_error!(
@@ -842,8 +924,18 @@ fn translate_drop(
 
     // Fallback: emit a device-side call to drop_in_place::<T>(ptr).
     drop_glue::emit_drop_glue(
-        ctx, body, place, dropped_ty, target, block_ptr, prev_op, value_map, block_map, legaliser,
+        ctx,
+        body,
+        place,
+        dropped_ty,
+        target,
+        block_ptr,
+        prev_op,
+        value_map,
+        block_map,
+        legaliser,
         loc,
+        library_site,
     )
 }
 
@@ -957,6 +1049,88 @@ fn translate_call(
     block_map: &[Ptr<BasicBlock>],
     loc: Location,
     legaliser: &mut Legaliser,
+    library_site: crate::LibraryCallSite,
+) -> TranslationResult<Ptr<Operation>> {
+    let effect = super::facts::library_source_effect(func, args, destination, body).map(|kind| {
+        dialect_mir::library::LibrarySourceEffectAttr {
+            site: library_site.clone(),
+            kind,
+        }
+    });
+    let destination_write = super::statement::classify_indirect_write(body, destination, &loc)?
+        .map(|kind| dialect_mir::library::LibraryWriteSourceAttr {
+            site: library_site.clone(),
+            statement: body.blocks[library_site.block].statements.len(),
+            kind,
+        });
+    let guard = crate::library::SourceEffectGuard::new(effect.clone(), destination_write);
+    let translated = translate_call_inner(
+        ctx,
+        body,
+        func,
+        args,
+        destination,
+        target,
+        unwind,
+        block_ptr,
+        prev_op,
+        value_map,
+        block_map,
+        loc,
+        legaliser,
+        library_site,
+    )?;
+    if let Some(effect) = effect {
+        // Mark the original direct scalar source call for the checker's
+        // precision summary. Placeholders keep their existing annotation;
+        // call type verification is independent of this source metadata.
+        let operations: Vec<_> = block_ptr.deref(ctx).iter(ctx).collect();
+        let start = prev_op
+            .and_then(|p| operations.iter().position(|op| *op == p))
+            .map_or(0, |n| n + 1);
+        for &op in &operations[start..] {
+            if let Some(call) = Operation::get_op::<dialect_mir::ops::MirCallOp>(op, ctx) {
+                let placeholder = call.get_attr_callee(ctx).is_some_and(|callee| {
+                    dialect_mir::rust_intrinsics::is_known_placeholder(&String::from(
+                        (*callee).clone(),
+                    ))
+                });
+                let scalar_source_call = effect.kind
+                    == dialect_mir::library::LibrarySourceEffectKind::ScalarIntrinsic
+                    && call
+                        .get_attr_library_source_site(ctx)
+                        .is_some_and(|site| *site == effect.site)
+                    && call
+                        .get_attr_library_call_target(ctx)
+                        .is_some_and(|target| {
+                            target.kind == dialect_mir::library::LibraryCallKind::Direct
+                        });
+                if placeholder || scalar_source_call {
+                    call.set_attr_library_expanded_source(ctx, effect.clone());
+                }
+            }
+        }
+    }
+    guard.finish(ctx, translated);
+    Ok(translated)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn translate_call_inner(
+    ctx: &mut Context,
+    body: &mir::Body,
+    func: &mir::Operand,
+    args: &[mir::Operand],
+    destination: &mir::Place,
+    target: &Option<mir::BasicBlockIdx>,
+    unwind: &mir::UnwindAction,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+    legaliser: &mut Legaliser,
+    library_site: crate::LibraryCallSite,
 ) -> TranslationResult<Ptr<Operation>> {
     // See comment in translate_assert for rationale.
     let _ = unwind;
@@ -967,6 +1141,101 @@ fn translate_call(
     // Extract function info
     let (pattern_name, call_name, substs_args, type_substs) = extract_func_info(func, &loc)?;
     let loc = call_debug_location(pattern_name.as_deref(), loc);
+
+    if let mir::Operand::Constant(constant) = func
+        && let rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::FnDef(def, substs)) =
+            constant.const_.ty().kind()
+        && let Ok(instance) = rustc_public::mir::mono::Instance::resolve(def, &substs)
+    {
+        // Authentication precedes provider/layout finalization. Retaining the
+        // original call needs its genuine role and signature, never a plan.
+        if let Some(metadata) = crate::library::get_semantics(&library_site) {
+            if metadata.marker != instance.mangled_name() {
+                return input_err!(
+                    loc,
+                    TranslationErr::invalid_op(
+                        "library semantic site changed after authentication"
+                    )
+                );
+            }
+            return crate::library::translate_call(
+                ctx,
+                body,
+                &metadata,
+                library_site,
+                instance,
+                args,
+                destination,
+                &target_usize,
+                block_ptr,
+                prev_op,
+                value_map,
+                block_map,
+                loc,
+            );
+        }
+        let independent_role = super::facts::library_warp_query_width(instance)
+            .map(|width| {
+                width.map(|width| dialect_mir::library::LibraryRoleAttr::WarpGroupIndex { width })
+            })
+            .or_else(|| {
+                super::facts::library_warp_sync_width(instance).map(|width| {
+                    width.map(|width| dialect_mir::library::LibraryRoleAttr::SyncWarp { width })
+                })
+            });
+        if let Some(role) = independent_role {
+            let role = role.map_err(|message| {
+                pliron::input_error!(loc.clone(), TranslationErr::invalid_op(message))
+            })?;
+            let metadata = crate::LibraryCallMetadata {
+                marker: instance.mangled_name(),
+                role,
+            };
+            return crate::library::translate_call(
+                ctx,
+                body,
+                &metadata,
+                library_site,
+                instance,
+                args,
+                destination,
+                &target_usize,
+                block_ptr,
+                prev_op,
+                value_map,
+                block_map,
+                loc,
+            );
+        }
+    }
+
+    if let mir::Operand::Constant(constant) = func
+        && let rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::FnDef(def, _)) =
+            constant.const_.ty().kind()
+        && def.krate().name == "cuda_device"
+        && matches!(
+            def.def_id().name().as_str().rsplit("::").next(),
+            Some(
+                reserved_oxide_symbols::LIBRARY_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_CALLBACK_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_RESOURCE_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_CHECKED_WARP_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_CHECKED_BLOCK_STORAGE_CALL_V1
+                    | reserved_oxide_symbols::LIBRARY_STORAGE_NEW_V1
+                    | reserved_oxide_symbols::LIBRARY_STORAGE_RECONFIGURE_V1
+                    | reserved_oxide_symbols::LIBRARY_STORAGE_RESERVE_V1
+                    | reserved_oxide_symbols::LIBRARY_STORAGE_RELEASE_V1
+            )
+        )
+    {
+        return input_err!(
+            loc,
+            TranslationErr::invalid_op(
+                "native library marker has no authenticated call-site semantics"
+            )
+        );
+    }
 
     // Keep CuTe calls as CuTe operations while their tensor and layout
     // meaning is still visible. Ordinary source helpers continue through the
@@ -987,14 +1256,9 @@ fn translate_call(
         return result;
     }
 
-    // Is the trait-method Self type SharedArray? Shared with
-    // `values::classify_call` so intrinsic dispatch and destination-slot
-    // classification can't drift.
+    // Share intrinsic dispatch classification with the destination-slot model.
     let on_shared_array = substs_args.as_ref().is_some_and(self_ty_is_shared_array);
 
-    // Skip precondition_check calls - these are UB check assertions that are
-    // dead code because we return false for RuntimeChecks(UbChecks).
-    // The MIR still contains these calls, but they're in dead branches.
     if let Some(target_idx) = target_usize
         && let mir::Operand::Constant(const_op) = func
         && let rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::FnDef(fn_def, _)) =
@@ -1056,6 +1320,7 @@ fn translate_call(
                 block_map,
                 loc,
                 legaliser,
+                library_site,
             );
         }
         if let Some(function_item) = extract_function_item_target(&args[0], body, &loc)? {
@@ -1072,6 +1337,7 @@ fn translate_call(
                 block_map,
                 loc,
                 legaliser,
+                library_site,
             );
         }
     }
@@ -1169,6 +1435,7 @@ fn translate_call(
                 loc,
                 0,         // byte_offset = 0 for get() and get_raw()
                 alignment, // User-specified or default alignment
+                name.contains("::get_fixed"),
             );
         } else if name.contains("::offset") {
             // DynamicSharedArray::offset(byte_offset) - get pointer at byte offset
@@ -1378,7 +1645,7 @@ fn translate_call(
     // normalized the same way, so caller and callee stay consistent.
     let return_type = types::translate_destination_type(ctx, body, destination, &loc)?;
 
-    helpers::emit_function_call(
+    helpers::emit_function_call_at_site(
         ctx,
         body,
         legal_name.as_ref(),
@@ -1392,6 +1659,7 @@ fn translate_call(
         value_map,
         block_map,
         loc,
+        Some(library_site),
     )
 }
 
@@ -1496,6 +1764,7 @@ const KERNEL_METADATA_MARKERS: &[&str] = &[
     "cuda_device::thread::__unchecked_indexing_config",
     "cuda_device::cluster::__cluster_config",
     "cuda_device::shared::__dynamic_shared_alignment",
+    "cuda_device::shared::__dynamic_shared_inferred",
 ];
 
 /// Keep the macro-injected launch-context constructor out of user line tables.
@@ -1538,6 +1807,7 @@ fn translate_function_item_call(
     block_map: &[Ptr<BasicBlock>],
     loc: Location,
     legaliser: &mut Legaliser,
+    library_site: crate::LibraryCallSite,
 ) -> TranslationResult<Ptr<Operation>> {
     use dialect_mir::ops::{MirCallOp, MirExtractFieldOp};
     use pliron::builtin::attributes::StringAttr;
@@ -1632,6 +1902,7 @@ fn translate_function_item_call(
         0,
     );
     call_op.deref_mut(ctx).set_loc(loc.clone());
+    crate::library::attach_call_source(ctx, call_op, library_site);
 
     call_op.deref_mut(ctx).attributes.set(
         Identifier::try_from("callee").unwrap(),
@@ -1705,6 +1976,7 @@ fn translate_closure_call(
     block_map: &[Ptr<BasicBlock>],
     loc: Location,
     legaliser: &mut Legaliser,
+    library_site: crate::LibraryCallSite,
 ) -> TranslationResult<Ptr<Operation>> {
     use dialect_mir::ops::{MirCallOp, MirExtractFieldOp};
     use pliron::builtin::attributes::StringAttr;
@@ -1923,6 +2195,7 @@ fn translate_closure_call(
         0,
     );
     call_op.deref_mut(ctx).set_loc(loc.clone());
+    crate::library::attach_call_source(ctx, call_op, library_site);
 
     // Set callee attribute
     let callee_attr = StringAttr::new(callee);
@@ -1977,7 +2250,7 @@ fn translate_closure_call(
 ///
 /// Runtime-reachable panic paths whose diverging call is dropped must use
 /// [`emit_trap_unreachable_after`] instead.
-fn emit_unreachable_after(
+pub(crate) fn emit_unreachable_after(
     ctx: &mut Context,
     block_ptr: Ptr<BasicBlock>,
     prev_op: Option<Ptr<Operation>>,
@@ -2721,6 +2994,22 @@ fn try_dispatch_intrinsic(
         return Ok(Some(operation));
     }
 
+    if let Some(operation) = intrinsics::cluster_query::try_dispatch(
+        ctx,
+        body,
+        name,
+        args,
+        destination,
+        target,
+        block_ptr,
+        prev_op,
+        value_map,
+        block_map,
+        loc.clone(),
+    )? {
+        return Ok(Some(operation));
+    }
+
     if let Some(operation) = intrinsics::generated::try_dispatch_generated_intrinsic(
         ctx,
         body,
@@ -3197,7 +3486,8 @@ fn try_dispatch_intrinsic(
                 loc,
             )))
         }
-        "cuda_device::shared::__dynamic_shared_alignment" => {
+        "cuda_device::shared::__dynamic_shared_alignment"
+        | "cuda_device::shared::__dynamic_shared_inferred" => {
             // Zero-cost marker injected by #[launch_contract]. body.rs records
             // the const alignment on the kernel; no runtime call survives.
             let actual_prev_op = match prev_op {
@@ -3445,6 +3735,667 @@ fn try_dispatch_intrinsic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn primitive_ord_summary_authenticates_and_retains_direct_calls() {
+        use crate::translator::body::translate_body;
+        use dialect_mir::library::{LibraryCallKind, LibrarySourceEffectKind};
+        use dialect_mir::ops::MirCallOp;
+        use llvm_export::export::DebugKind;
+        use pliron::common_traits::Verify;
+        use rustc_public::mir::mono::Instance;
+        use rustc_public::ty::{RigidTy, TyKind};
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_ord_summary_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let fixture = root.join("calls.rs");
+        std::fs::write(
+            &fixture,
+            r#"
+#![allow(dead_code)]
+pub fn integer(value: i32, bound: i32) -> i32 { value.max(0).min(bound) }
+pub fn unsigned(value: u32, bound: u32) -> u32 { value.min(bound).max(0) }
+mod spoof { #[inline(never)] pub fn max(a: i32, _: i32) -> i32 { a } }
+pub fn named(a: i32, b: i32) -> i32 { spoof::max(a, b) }
+mod spoof_trait {
+    pub trait Ord { fn min(self, other: Self) -> Self; }
+    impl Ord for i32 { #[inline(never)] fn min(self, _: Self) -> Self { self } }
+}
+pub fn local_trait(a: i32, b: i32) -> i32 { <i32 as spoof_trait::Ord>::min(a, b) }
+#[derive(PartialEq, Eq)] pub struct Effect(i32);
+static mut OBSERVED: i32 = 0;
+impl core::cmp::Ord for Effect {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        unsafe { OBSERVED = self.0; }
+        self.0.cmp(&other.0)
+    }
+}
+impl PartialOrd for Effect {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(core::cmp::Ord::cmp(self, other))
+    }
+}
+pub fn custom(a: Effect, b: Effect) -> Effect { core::cmp::Ord::max(a, b) }
+"#,
+        )
+        .unwrap();
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let sysroot = std::process::Command::new(rustc)
+            .args(["--print", "sysroot"])
+            .output()
+            .unwrap();
+        assert!(sysroot.status.success());
+        let args = vec![
+            "rustc".into(),
+            "--edition=2024".into(),
+            "--crate-type=rlib".into(),
+            "--crate-name=ord_summary".into(),
+            "--emit=metadata".into(),
+            "-Zmir-opt-level=0".into(),
+            format!("--out-dir={}", root.display()),
+            format!(
+                "--sysroot={}",
+                String::from_utf8(sysroot.stdout).unwrap().trim()
+            ),
+            fixture.display().to_string(),
+        ];
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                rustc_public::run!(&args, || {
+                    for (name, scalar_calls) in [
+                        ("integer", 2),
+                        ("unsigned", 2),
+                        ("named", 0),
+                        ("local_trait", 0),
+                        ("custom", 0),
+                    ] {
+                        let item = rustc_public::all_local_items()
+                            .into_iter()
+                            .find(|item| item.name() == format!("ord_summary::{name}"))
+                            .unwrap();
+                        let instance = Instance::try_from(item).unwrap();
+                        let body = instance.body().unwrap();
+                        let calls: Vec<_> = body
+                            .blocks
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(block, bb)| {
+                                let mir::TerminatorKind::Call {
+                                    func,
+                                    args,
+                                    destination,
+                                    ..
+                                } = &bb.terminator.kind
+                                else {
+                                    return None;
+                                };
+                                let effect = crate::translator::facts::library_source_effect(
+                                    func,
+                                    args,
+                                    destination,
+                                    &body,
+                                );
+                                let mir::Operand::Constant(c) = func else {
+                                    panic!("direct fixture call")
+                                };
+                                let TyKind::RigidTy(RigidTy::FnDef(def, args)) =
+                                    c.const_.ty().kind()
+                                else {
+                                    panic!("function item")
+                                };
+                                Some((
+                                    block,
+                                    Instance::resolve(def, &args).unwrap().mangled_name(),
+                                    effect,
+                                ))
+                            })
+                            .collect();
+                        assert_eq!(calls.len(), if scalar_calls == 0 { 1 } else { 2 }, "{name}");
+                        assert_eq!(
+                            calls
+                                .iter()
+                                .filter(|(_, _, effect)| *effect
+                                    == Some(LibrarySourceEffectKind::ScalarIntrinsic))
+                                .count(),
+                            scalar_calls,
+                            "{name}"
+                        );
+                        if scalar_calls == 0 {
+                            continue;
+                        }
+                        for (debug, direct) in [
+                            (DebugKind::Off, true),
+                            (DebugKind::Full, true),
+                            (DebugKind::Off, false),
+                        ] {
+                            crate::library::set_selected_call_targets(
+                                calls
+                                    .iter()
+                                    .filter(|_| direct)
+                                    .map(|(block, marker, _)| {
+                                        (
+                                            crate::LibraryCallSite {
+                                                caller: name.into(),
+                                                block: *block,
+                                            },
+                                            crate::LibraryCallTargetAttr {
+                                                export: marker.clone(),
+                                                marker: marker.clone(),
+                                                kind: LibraryCallKind::Direct,
+                                            },
+                                        )
+                                    })
+                                    .collect(),
+                            );
+                            let mut ctx = Context::new();
+                            crate::translator::register_dialects(&mut ctx);
+                            let successors = body
+                                .blocks
+                                .iter()
+                                .map(|b| b.terminator.successors())
+                                .collect::<Vec<_>>();
+                            let (function, _) = translate_body(
+                                &mut ctx,
+                                &body,
+                                &instance,
+                                body.blocks.len(),
+                                &successors,
+                                false,
+                                None,
+                                Some(name),
+                                &mut Legaliser::default(),
+                                debug,
+                                None,
+                                None,
+                                false,
+                            )
+                            .unwrap();
+                            function.deref(&ctx).verify(&ctx).unwrap();
+                            let scalar = crate::translator::types::translate_type(
+                                &mut ctx,
+                                &body.locals()[1].ty,
+                            )
+                            .unwrap();
+                            let mut retained = Vec::new();
+                            for block in function.deref(&ctx).get_region(0).deref(&ctx).iter(&ctx) {
+                                for op in block.deref(&ctx).iter(&ctx) {
+                                    if let Some(call) = Operation::get_op::<MirCallOp>(op, &ctx) {
+                                        let site = call.get_attr_library_source_site(&ctx).unwrap();
+                                        let effect = call.get_attr_library_expanded_source(&ctx);
+                                        assert_eq!(
+                                            call.get_attr_library_call_target(&ctx).is_some(),
+                                            direct
+                                        );
+                                        if direct {
+                                            let effect =
+                                                effect.expect("genuine scalar call retained");
+                                            assert_eq!(
+                                                effect.kind,
+                                                LibrarySourceEffectKind::ScalarIntrinsic
+                                            );
+                                            assert_eq!(*site, effect.site);
+                                        } else {
+                                            assert!(
+                                                effect.is_none(),
+                                                "call without a selected target must stay ordinary"
+                                            );
+                                        }
+                                        assert_eq!(
+                                            op.deref(&ctx)
+                                                .operands()
+                                                .map(|value| value.get_type(&ctx))
+                                                .collect::<Vec<_>>(),
+                                            vec![scalar, scalar]
+                                        );
+                                        assert_eq!(op.deref(&ctx).get_num_results(), 1);
+                                        assert_eq!(
+                                            op.deref(&ctx).get_result(0).get_type(&ctx),
+                                            scalar
+                                        );
+                                        retained.push((
+                                            site.block,
+                                            String::from(
+                                                (*call.get_attr_callee(&ctx).unwrap()).clone(),
+                                            ),
+                                        ));
+                                    }
+                                }
+                            }
+                            retained.sort();
+                            assert_eq!(
+                                retained,
+                                calls
+                                    .iter()
+                                    .map(|(bb, marker, _)| (*bb, marker.clone()))
+                                    .collect::<Vec<_>>()
+                            );
+                        }
+                    }
+                    crate::library::set_selected_call_targets(Default::default());
+                    std::ops::ControlFlow::<(), _>::Continue(())
+                })
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+            .expect("fixture compilation succeeds");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_storage_retention_preserves_original_sites_and_runtime_values() {
+        use crate::translator::body::translate_body;
+        use dialect_mir::library::{
+            LibraryAccess, LibraryNativeMetadata, LibraryOperation, LibraryReserveLayout,
+            LibraryRoleAttr, LibraryScalar, LibraryStorageArg, LibraryStoragePolicy,
+            LibraryWitness, NativeSpec,
+        };
+        use dialect_mir::ops::{MirCallOp, MirExternSharedOp, MirLibraryOp};
+        use llvm_export::export::DebugKind;
+        use pliron::common_traits::Verify;
+        use rustc_public::mir::mono::Instance;
+        use rustc_public::ty::{RigidTy, TyKind};
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_block_retention_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let fixture = root.join("calls.rs");
+        // Nominal import fixture; the backend authenticates these declarations
+        // independently. No finalized provider plan is supplied to the importer.
+        std::fs::write(&fixture,r#"
+mod library {
+    pub struct StorageDescriptor<const C:u32,const A:u32,const AUTO:bool,const EXCLUSIVE:bool> { token: u8 }
+    pub struct StorageReservation<T,const N:usize> { pointer: *mut T }
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_storage_new() -> StorageDescriptor<0,0,false,false> { StorageDescriptor { token: 0 } }
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_storage_reconfigure(_: StorageDescriptor<0,0,false,false>) -> StorageDescriptor<128,16,false,true> { StorageDescriptor { token: 0 } }
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_storage_reserve(_: &mut StorageDescriptor<128,16,false,true>) -> StorageReservation<i32,4> { StorageReservation { pointer: core::ptr::null_mut() } }
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_storage_release(_: StorageReservation<i32,4>) {}
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_storage_call<R: Copy>(_: R, _: &[i32], _: &mut StorageDescriptor<128,16,false,true>, _: (*const i32,usize), _: (*mut i32,)) {}
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_call<R: Copy>(_: R, _: (*const i32,*mut i32)) {}
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_call_with_callback<R: Copy,F:Copy>(_: R, _: (*const i32,*mut i32), _: F, _: &i32) {}
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_call<R: Copy>(_: R, _: (*const i32,usize), _: (*mut i32,)) {}
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_block_resource_call<R: Copy>(_: R, _: &[i32], _: (*const i32,usize), _: (*mut i32,)) {}
+    #[inline(never)] pub fn cuda_oxide_library_v1_246e25db_checked_warp_call<R: Copy>(_: R, _: &[i32], _: (*const i32,usize), _: (*mut i32,)) {}
+}
+fn registration() -> &'static str { "{}" }
+unsafe extern "C" fn thunk(_: *const i32, a: i32, b: i32) -> i32 { a + b }
+pub fn entry(input: *const i32, output: *mut i32, slice: &[i32]) {
+    library::cuda_oxide_library_v1_246e25db_call(registration,(input,output));
+    library::cuda_oxide_library_v1_246e25db_checked_block_call(registration,(input,7),(output,));
+    library::cuda_oxide_library_v1_246e25db_checked_block_resource_call(registration,slice,(input,7),(output,));
+    let old = library::cuda_oxide_library_v1_246e25db_storage_new();
+    let mut storage = library::cuda_oxide_library_v1_246e25db_storage_reconfigure(old);
+    let reservation = library::cuda_oxide_library_v1_246e25db_storage_reserve(&mut storage);
+    library::cuda_oxide_library_v1_246e25db_checked_block_storage_call(registration,slice,&mut storage,(input,7),(output,));
+    library::cuda_oxide_library_v1_246e25db_storage_release(reservation);
+    library::cuda_oxide_library_v1_246e25db_call_with_callback(registration,(input,output),thunk,&7);
+    library::cuda_oxide_library_v1_246e25db_checked_warp_call(registration,slice,(input,7),(output,));
+}
+"#).unwrap();
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let sysroot = std::process::Command::new(rustc)
+            .args(["--print", "sysroot"])
+            .output()
+            .unwrap();
+        assert!(sysroot.status.success());
+        let args = vec![
+            "rustc".to_string(),
+            "--edition=2024".into(),
+            "--crate-type=rlib".into(),
+            "--crate-name=cuda_device".into(),
+            "--emit=metadata".into(),
+            "-Zmir-opt-level=0".into(),
+            format!("--out-dir={}", root.display()),
+            format!(
+                "--sysroot={}",
+                String::from_utf8(sysroot.stdout).unwrap().trim()
+            ),
+            fixture.display().to_string(),
+        ];
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                rustc_public::run!(&args, || {
+                    let item = rustc_public::all_local_items()
+                        .into_iter()
+                        .find(|item| item.name() == "cuda_device::entry")
+                        .unwrap();
+                    let instance = Instance::try_from(item).unwrap();
+                    let body = instance.body().unwrap();
+                    let successors: Vec<_> = body
+                        .blocks
+                        .iter()
+                        .map(|b| b.terminator.successors())
+                        .collect();
+                    let source: Vec<_> = body
+                        .blocks
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(bb, block)| {
+                            let mir::TerminatorKind::Call {
+                                func: mir::Operand::Constant(c),
+                                ..
+                            } = &block.terminator.kind
+                            else {
+                                return None;
+                            };
+                            let TyKind::RigidTy(RigidTy::FnDef(def, args)) = c.const_.ty().kind()
+                            else {
+                                return None;
+                            };
+                            Some((bb, Instance::resolve(def, &args).unwrap().mangled_name()))
+                        })
+                        .collect();
+                    assert_eq!(source.len(), 10);
+                    let spec = NativeSpec {
+                        scalar: LibraryScalar::Signed(32),
+                        items: 4,
+                    };
+                    let roles = [
+                        LibraryNativeMetadata::Raw {
+                            spec,
+                            block_threads: 64,
+                        },
+                        LibraryNativeMetadata::CheckedBlock { spec },
+                        LibraryNativeMetadata::CheckedBlockResource {
+                            spec,
+                            access: LibraryAccess::Read,
+                            witness: LibraryWitness::ReadOnlySlice,
+                        },
+                    ]
+                    .map(LibraryRoleAttr::Native);
+                    let policy = LibraryStoragePolicy {
+                        capacity: 128,
+                        alignment: 16,
+                        auto_sync: false,
+                        exclusive: true,
+                    };
+                    let roles = [
+                        roles[0],
+                        roles[1],
+                        roles[2],
+                        LibraryRoleAttr::StorageNew(LibraryStoragePolicy::default()),
+                        LibraryRoleAttr::StorageReconfigure {
+                            old: LibraryStoragePolicy::default(),
+                            new: policy,
+                        },
+                        LibraryRoleAttr::StorageReserve {
+                            policy,
+                            layout: LibraryReserveLayout {
+                                scalar: spec.scalar,
+                                count: 4,
+                                bytes: 16,
+                                alignment: 16,
+                            },
+                        },
+                        LibraryRoleAttr::Native(LibraryNativeMetadata::CheckedBlockStorage {
+                            spec,
+                            access: LibraryAccess::Read,
+                            witness: LibraryWitness::ReadOnlySlice,
+                            storage: LibraryStorageArg::Explicit(policy),
+                        }),
+                        LibraryRoleAttr::StorageRelease,
+                        LibraryRoleAttr::Native(LibraryNativeMetadata::Callback {
+                            spec,
+                            block_threads: 64,
+                        }),
+                        LibraryRoleAttr::Native(LibraryNativeMetadata::CheckedWarp {
+                            spec,
+                            width: 32,
+                            access: LibraryAccess::Read,
+                            witness: LibraryWitness::ReadOnlySlice,
+                        }),
+                    ];
+                    for (caller, debug) in [
+                        ("original_entry", DebugKind::Off),
+                        ("alternate_entry", DebugKind::Full),
+                    ] {
+                        crate::library::set_semantics(Default::default());
+                        let mut ctx = Context::new();
+                        crate::translator::register_dialects(&mut ctx);
+                        let error = translate_body(
+                            &mut ctx,
+                            &body,
+                            &instance,
+                            body.blocks.len(),
+                            &successors,
+                            false,
+                            None,
+                            Some(caller),
+                            &mut Legaliser::default(),
+                            debug,
+                            None,
+                            None,
+                            false,
+                        )
+                        .unwrap_err();
+                        assert!(
+                            error
+                                .to_string()
+                                .contains("no authenticated call-site semantics"),
+                            "{error}"
+                        );
+                        let semantics = source
+                            .iter()
+                            .zip(roles)
+                            .map(|((block, marker), role)| {
+                                (
+                                    crate::LibraryCallSite {
+                                        caller: caller.into(),
+                                        block: *block,
+                                    },
+                                    crate::LibraryCallMetadata {
+                                        marker: marker.clone(),
+                                        role,
+                                    },
+                                )
+                            })
+                            .collect();
+                        crate::library::set_semantics(semantics);
+                        let mut ctx = Context::new();
+                        crate::translator::register_dialects(&mut ctx);
+                        let (function, _) = translate_body(
+                            &mut ctx,
+                            &body,
+                            &instance,
+                            body.blocks.len(),
+                            &successors,
+                            false,
+                            None,
+                            Some(caller),
+                            &mut Legaliser::default(),
+                            debug,
+                            None,
+                            None,
+                            false,
+                        )
+                        .unwrap();
+                        let mut retained = Vec::new();
+                        let mut boundaries = Vec::new();
+                        for block in function.deref(&ctx).get_region(0).deref(&ctx).iter(&ctx) {
+                            for op in block.deref(&ctx).iter(&ctx) {
+                                assert!(Operation::get_op::<MirExternSharedOp>(op, &ctx).is_none());
+                                assert!(Operation::get_op::<MirCallOp>(op, &ctx).is_none());
+                                if let Some(library) = Operation::get_op::<MirLibraryOp>(op, &ctx) {
+                                    library.verify(&ctx).unwrap();
+                                    let site = library.get_attr_site(&ctx).unwrap();
+                                    assert_eq!(site.caller, caller);
+                                    let marker = String::from(
+                                        (*library.get_attr_library_callee(&ctx).unwrap()).clone(),
+                                    );
+                                    assert_eq!(
+                                        marker,
+                                        source.iter().find(|(bb, _)| *bb == site.block).unwrap().1
+                                    );
+                                    if *library.get_attr_role(&ctx).unwrap()
+                                        == LibraryRoleAttr::NativeOperandBoundary
+                                    {
+                                        assert_eq!(op.deref(&ctx).get_num_operands(), 0);
+                                        assert_eq!(op.deref(&ctx).get_num_results(), 0);
+                                        boundaries.push(site.block);
+                                        continue;
+                                    }
+                                    retained.push((
+                                        site.block,
+                                        *library.get_attr_role(&ctx).unwrap(),
+                                        op.deref(&ctx).get_num_operands(),
+                                        op.deref(&ctx).get_num_results(),
+                                    ));
+                                }
+                            }
+                        }
+                        retained.sort_by_key(|row| row.0);
+                        assert_eq!(
+                            retained,
+                            source
+                                .iter()
+                                .zip(roles)
+                                .zip([
+                                    (1, 0),
+                                    (2, 0),
+                                    (3, 0),
+                                    (0, 1),
+                                    (1, 1),
+                                    (1, 1),
+                                    (4, 0),
+                                    (1, 0),
+                                    (2, 0),
+                                    (3, 0)
+                                ])
+                                .map(|(((bb, _), role), (operands, results))| (
+                                    *bb, role, operands, results
+                                ))
+                                .collect::<Vec<_>>()
+                        );
+                        assert_eq!(
+                            boundaries,
+                            [
+                                source[0].0,
+                                source[1].0,
+                                source[2].0,
+                                source[6].0,
+                                source[8].0,
+                                source[9].0
+                            ]
+                        );
+                        let plans = source
+                            .iter()
+                            .enumerate()
+                            .map(|(index, (block, marker))| {
+                                (
+                                    crate::LibraryCallSite {
+                                        caller: caller.into(),
+                                        block: *block,
+                                    },
+                                    {
+                                        let operation = match roles[index] {
+                                            LibraryRoleAttr::Native(_) => LibraryOperation::Native,
+                                            LibraryRoleAttr::StorageNew(_) => {
+                                                LibraryOperation::StorageNew
+                                            }
+                                            LibraryRoleAttr::StorageReconfigure { .. } => {
+                                                LibraryOperation::StorageReconfigure
+                                            }
+                                            LibraryRoleAttr::StorageReserve { .. } => {
+                                                LibraryOperation::StorageReserve
+                                            }
+                                            LibraryRoleAttr::StorageRelease => {
+                                                LibraryOperation::StorageRelease
+                                            }
+                                            LibraryRoleAttr::NativeOperandBoundary
+                                            | LibraryRoleAttr::WarpGroupIndex { .. }
+                                            | LibraryRoleAttr::SyncWarp { .. } => {
+                                                unreachable!()
+                                            }
+                                        };
+                                        let mut plan = crate::LibraryCallPlan::internal(
+                                            operation,
+                                            marker.clone(),
+                                        );
+                                        if matches!(roles[index], LibraryRoleAttr::Native(_)) {
+                                            plan.symbol = format!("native_{index}");
+                                            plan.checked_block = index != 0 && index != 8;
+                                            plan.callback = index == 8;
+                                            plan.resource_witness =
+                                                index == 2 || index == 6 || index == 9;
+                                            plan.storage_witness = index == 6;
+                                            plan.warp_width = (index == 9).then_some(32);
+                                            plan.scratch_bytes =
+                                                if index == 2 || index == 9 { 0 } else { 32 };
+                                            plan.scratch_alignment = 8;
+                                        } else if index == 5 {
+                                            plan.scratch_bytes = 16;
+                                            plan.scratch_alignment = 16;
+                                        }
+                                        plan
+                                    },
+                                )
+                            })
+                            .collect();
+                        mir_transforms::library::lower_planned_library_operations(
+                            function,
+                            &mut ctx,
+                            &mut pliron::pass::AnalysisManager::default(),
+                            &plans,
+                        )
+                        .unwrap();
+                        let mut native_arguments = Vec::new();
+                        let mut scratch_views = 0;
+                        for block in function.deref(&ctx).get_region(0).deref(&ctx).iter(&ctx) {
+                            for op in block.deref(&ctx).iter(&ctx) {
+                                assert!(Operation::get_op::<MirLibraryOp>(op, &ctx).is_none());
+                                if let Some(call) = Operation::get_op::<MirCallOp>(op, &ctx) {
+                                    call.verify(&ctx).unwrap();
+                                    let scratch = op.deref(&ctx).get_operand(2).get_type(&ctx);
+                                    let scratch = scratch.deref(&ctx);
+                                    let scratch = scratch
+                                        .downcast_ref::<dialect_mir::types::MirPtrType>()
+                                        .unwrap();
+                                    assert_eq!(scratch.address_space, 0);
+                                    assert_eq!(
+                                        scratch.kind,
+                                        dialect_mir::types::MirPointerKind::RawMut
+                                    );
+                                    native_arguments.push(op.deref(&ctx).get_num_operands());
+                                }
+                                if let Some(view) = Operation::get_op::<MirExternSharedOp>(op, &ctx)
+                                {
+                                    assert_eq!(view.get_byte_offset_value(&ctx), 0);
+                                    scratch_views += 1;
+                                }
+                            }
+                        }
+                        assert_eq!(native_arguments, vec![3, 4, 4, 4, 4, 4]);
+                        assert_eq!(
+                            scratch_views, 7,
+                            "zero-byte native scratch still retains a fixed view"
+                        );
+                    }
+                    crate::library::set_semantics(Default::default());
+                    std::ops::ControlFlow::<(), _>::Continue(())
+                })
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+            .expect("fixture compilation succeeds");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn foreign_signature_rejects_c_variadic_before_claiming_an_exact_abi() {

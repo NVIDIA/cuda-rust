@@ -222,6 +222,21 @@ fn kernel_launch_context_uses_the_contract_domain_and_coordinate_width_in_either
 }
 
 #[test]
+fn block_index_uses_the_scoped_witness_path() {
+    let mut input: ItemFn = parse_quote! {
+        fn output() {
+            let index = thread::block_index();
+        }
+    };
+    inject_thread_index_scope(&mut input);
+    let expanded = quote!(#input).to_string().replace(' ', "");
+    assert!(expanded.contains("make_kernel_scope::<"));
+    assert!(expanded.contains(&format!(
+        "thread::__internal::block_index(&{KERNEL_SCOPE_LOCAL})"
+    )));
+}
+
+#[test]
 fn thread_index_rewrite_preserves_the_user_call_span_with_multiple_attributes() {
     let mut input: ItemFn = syn::parse_str(
         r#"
@@ -689,6 +704,7 @@ fn generic_kernel_forwards_only_exact_top_level_configuration_markers() {
             ::cuda_device::thread::__launch_contract_block_config::<64, 1, 1>();
             ::cuda_device::cluster::__cluster_config::<2, 1, 1>();
             ::cuda_device::shared::__dynamic_shared_alignment::<128>();
+            ::cuda_device::shared::__dynamic_shared_inferred();
             cuda_device::thread::__launch_bounds_config::<4, 1>();
             unrelated();
             other::cuda_device::thread::__launch_bounds_config::<32, 1>();
@@ -702,12 +718,13 @@ fn generic_kernel_forwards_only_exact_top_level_configuration_markers() {
     let markers = top_level_kernel_configuration_markers(&kernel);
     let forwarded = quote!(#(#markers)*).to_string().replace(' ', "");
 
-    assert_eq!(markers.len(), 5);
+    assert_eq!(markers.len(), 6);
     assert!(forwarded.contains("__launch_bounds_config::<64,2>()"));
     assert!(forwarded.contains("__launch_contract_config::<1,true>()"));
     assert!(forwarded.contains("__launch_contract_block_config::<64,1,1>()"));
     assert!(forwarded.contains("__cluster_config::<2,1,1>()"));
     assert!(forwarded.contains("__dynamic_shared_alignment::<128>()"));
+    assert!(forwarded.contains("__dynamic_shared_inferred()"));
     assert!(!forwarded.contains("unrelated"));
     assert!(!forwarded.contains("::<4,1>()"));
     assert!(!forwarded.contains("other::cuda_device"));

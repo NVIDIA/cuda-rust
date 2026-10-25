@@ -11,6 +11,7 @@ readme = "README.md"
 [dependencies]
 pliron = { workspace = true }
 dialect-mir = { workspace = true }
+oxide-artifacts = { workspace = true }
 reserved-oxide-symbols = { workspace = true }
 rustc-hash = { workspace = true }
 thiserror = { workspace = true }

@@ -149,7 +149,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 /// host compilation session. The MIR importer deliberately emits every such
 /// query as `false` on device. Override only that operand shape here so call
 /// collection and MIR import cannot choose different switch arms.
-fn device_mono_reachable_as_bitset<'tcx>(
+pub(crate) fn device_mono_reachable_as_bitset<'tcx>(
     body: &rustc_middle::mir::Body<'tcx>,
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
@@ -493,27 +493,20 @@ pub struct DeviceExternDecl {
 
 /// NVVM attributes for device extern declarations.
 ///
-/// NOTE: These attributes are currently **not emitted** to the LLVM IR output.
-/// When linking LTOIR via nvJitLink, the external library's LTOIR already contains
-/// proper attributes (convergent, nounwind, memory, etc.) on the function DEFINITIONS.
-/// nvJitLink uses the definition's attributes during LTO, making attributes on our
-/// declarations redundant.
-///
-/// The `#[convergent]`, `#[pure]`, and `#[readonly]` Rust attributes are still parsed
-/// but their values are not used in code generation. This struct is retained for
-/// potential future use or debugging.
+/// Convergence is emitted on the declaration before libNVVM optimization.
+/// Memory-effect annotations remain inactive; they are not inferred from external
+/// definitions that become available only during LTO.
 #[derive(Debug, Clone, Default)]
 pub struct DeviceExternAttrs {
-    /// Function is convergent (all threads must execute together).
-    /// NOTE: Not currently emitted - external LTOIR has proper convergent attrs.
+    /// Function has convergence requirements for its participating threads.
     pub is_convergent: bool,
 
     /// Function is pure (no side effects, result depends only on inputs).
-    /// NOTE: Not currently emitted - external LTOIR has proper memory attrs.
+    /// Inactive for Rust source annotations.
     pub is_pure: bool,
 
     /// Function is read-only (only reads memory, doesn't write).
-    /// NOTE: Not currently emitted - external LTOIR has proper memory attrs.
+    /// Inactive for Rust source annotations.
     pub is_readonly: bool,
 }
 
@@ -523,6 +516,10 @@ pub struct DeviceExternAttrs {
 /// declarations (for FFI with external LTOIR).
 #[derive(Debug)]
 pub struct CollectionResult<'tcx> {
+    /// Calls to the exact compiler library marker, before body deduplication.
+    pub library_calls: Vec<crate::library::LibraryCall<'tcx>>,
+    /// Every resolved edge, retaining all kernel contexts of shared helpers.
+    pub call_edges: Vec<crate::library::CallSite<'tcx>>,
     /// Functions to compile (kernels and device helpers with MIR bodies).
     pub functions: Vec<CollectedFunction<'tcx>>,
 
@@ -533,8 +530,8 @@ pub struct CollectionResult<'tcx> {
     ///
     /// This is true for a `#[cuda_module]` containing a generic kernel and
     /// for a concrete specialization of a generic kernel imported from a
-    /// dependency. Cubin materialization must reject this case until it can
-    /// reproduce the same cross-crate linking semantics.
+    /// dependency. Materialized loading instead requires one complete native
+    /// artifact; this existing marker remains the generic-module classification.
     pub requires_ptx_bundle_merge: bool,
 
     /// `#[tile_export]` descriptions read from this crate's metadata
@@ -544,7 +541,50 @@ pub struct CollectionResult<'tcx> {
     pub tile_exports: Vec<TileExportDesc>,
 }
 
-/// Counts kernel functions across all codegen units.
+/// Recovers a kernel root from a direct mono item or its host naming helper.
+///
+/// The noinline type-hash helper retains the concrete `FnDef` without taking a
+/// function pointer. This lets us compile its body for the device without also
+/// requiring host codegen of device-only calls. Other type hashes are unrelated
+/// to device collection; inspect only this helper's immediate type argument.
+fn kernel_root_instance<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> Option<Instance<'tcx>> {
+    let def_id = instance.def_id();
+    if is_kernel_function(tcx, def_id) {
+        return Some(instance);
+    }
+    // Use definition ownership, not a diagnostic path: rustc may print the
+    // public reexport as `cuda_host::type_id_u128_of_val`.
+    if tcx.crate_name(def_id.krate).as_str() != "cuda_host"
+        || tcx.opt_item_name(def_id)?.as_str() != "type_id_u128_of_val"
+    {
+        return None;
+    }
+    let module = tcx.opt_parent(def_id)?;
+    if tcx.opt_item_name(module)?.as_str() != "type_id" || !tcx.opt_parent(module)?.is_crate_root()
+    {
+        return None;
+    }
+    let [arg] = instance.args.as_slice() else {
+        return None;
+    };
+    let TyKind::FnDef(def_id, args) = *arg.as_type()?.kind() else {
+        return None;
+    };
+    if !is_kernel_function(tcx, def_id) {
+        return None;
+    }
+    let args = args
+        .no_bound_vars()
+        .expect("FnDef args in a monomorphized naming helper carry no late-bound vars");
+    Instance::try_resolve(tcx, TypingEnv::fully_monomorphized(), def_id, args)
+        .ok()
+        .flatten()
+}
+
+/// Counts kernel roots across all codegen units, including host naming helpers.
 ///
 /// This is a quick scan to determine if device compilation is needed.
 /// Returns 0 if no kernels are found, allowing the backend to skip device codegen entirely.
@@ -556,8 +596,8 @@ pub fn count_kernels_in_cgus<'tcx>(tcx: TyCtxt<'tcx>, cgus: &[CodegenUnit<'tcx>]
     for cgu in cgus {
         for (item, _data) in cgu.items() {
             if let MonoItem::Fn(instance) = item
-                && is_kernel_function(tcx, instance.def_id())
-                && is_fully_monomorphized(tcx, *instance)
+                && let Some(instance) = kernel_root_instance(tcx, *instance)
+                && is_fully_monomorphized(tcx, instance)
             {
                 count += 1;
             }
@@ -602,7 +642,9 @@ pub fn unsupported_codegen_protocol_root_in_cgus<'tcx>(
             let MonoItem::Fn(instance) = item else {
                 return None;
             };
-            let def_id = instance.def_id();
+            let def_id = kernel_root_instance(tcx, *instance)
+                .unwrap_or(*instance)
+                .def_id();
             let item_name = tcx.opt_item_name(def_id)?;
             unsupported_codegen_protocol_root(item_name.as_str()).then(|| tcx.def_path_str(def_id))
         })
@@ -954,7 +996,10 @@ fn rust_alloc_shim_name(fn_path: &str) -> Option<&str> {
 /// fat-pointer string constants are inspected; everything else returns
 /// `None`. Evaluation failures (e.g. a constant in still-generic MIR)
 /// also return `None`, which simply means "no message found".
-fn const_str_text<'tcx>(tcx: TyCtxt<'tcx>, constant: &ConstOperand<'tcx>) -> Option<String> {
+pub(crate) fn const_str_text<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    constant: &ConstOperand<'tcx>,
+) -> Option<String> {
     let ty = constant.const_.ty();
     let TyKind::Ref(_, pointee, _) = ty.kind() else {
         return None;
@@ -1241,13 +1286,13 @@ pub fn collect_device_functions<'tcx>(
         for (item, _data) in cgu.items() {
             if let MonoItem::Fn(instance) = item
                 && !is_tile_export_meta_symbol(&tcx.def_path_str(instance.def_id()))
-                && is_kernel_function(tcx, instance.def_id())
+                && let Some(instance) = kernel_root_instance(tcx, *instance)
             {
                 // Skip generic (non-monomorphized) instances.
                 // For generic kernels like scale<T>, the CGU contains both:
                 // - The generic definition (scale<T>) - skip this
                 // - Concrete instantiations (scale::<f32>) - process this
-                if !is_fully_monomorphized(tcx, *instance) {
+                if !is_fully_monomorphized(tcx, instance) {
                     if verbose {
                         let name = tcx.def_path_str(instance.def_id());
                         eprintln!(
@@ -1260,9 +1305,8 @@ pub fn collect_device_functions<'tcx>(
 
                 // A downstream monomorphization of a generic kernel may be
                 // present even when the defining crate's private module
-                // marker is not. Such modules use the all-PTX-bundles loader,
-                // so strict ahead-of-time cubin materialization cannot safely
-                // compile only this crate's artifact.
+                // marker is not. Keep its generic-module classification even
+                // when only the consuming crate has concrete kernel entries.
                 requires_ptx_bundle_merge |= tcx
                     .generics_of(instance.def_id())
                     .requires_monomorphization(tcx);
@@ -1283,13 +1327,13 @@ pub fn collect_device_functions<'tcx>(
                 // concrete kernel function-item type. The host-side
                 // `ptx_name()` emitted by `#[kernel]` / `#[cuda_module]`
                 // computes the same string from the same `FnDef` type.
-                let export_name = compute_kernel_export_name(tcx, *instance, &base_name);
+                let export_name = compute_kernel_export_name(tcx, instance, &base_name);
 
                 if verbose {
                     eprintln!("[collector] Found kernel: {} -> {}", name, export_name);
                 }
 
-                collector.add_root(*instance, true, export_name);
+                collector.add_root(instance, true, export_name);
             }
         }
     }
@@ -1420,6 +1464,9 @@ struct DeviceCollector<'tcx> {
     /// once per program — the message is procedural advice about the
     /// kernel-launch contract, not anything per-call.
     warned_dynamic_shared_array: bool,
+    library_defs: HashMap<DefId, crate::library::MarkerKind>,
+    library_calls: Vec<crate::library::LibraryCall<'tcx>>,
+    call_edges: Vec<crate::library::CallSite<'tcx>>,
     /// Print progress to stderr.
     verbose: bool,
 }
@@ -1436,6 +1483,9 @@ impl<'tcx> DeviceCollector<'tcx> {
             device_externs: Vec::new(),
             seen_device_externs: HashSet::new(),
             warned_dynamic_shared_array: false,
+            library_defs: crate::library::marker_definitions(tcx),
+            library_calls: Vec::new(),
+            call_edges: Vec::new(),
             verbose,
         }
     }
@@ -1589,7 +1639,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                         continue;
                     }
                     if let Some(ref terminator) = bb_data.terminator {
-                        self.process_terminator(terminator, mir, &func, &ctx);
+                        self.process_terminator(bb, terminator, mir, &func, &ctx);
                     }
                 }
             }
@@ -1598,6 +1648,8 @@ impl<'tcx> DeviceCollector<'tcx> {
         }
 
         CollectionResult {
+            library_calls: self.library_calls,
+            call_edges: self.call_edges,
             functions: self.result,
             device_externs: self.device_externs,
             requires_ptx_bundle_merge: false,
@@ -1648,7 +1700,12 @@ impl<'tcx> DeviceCollector<'tcx> {
                 .next()
                 .is_some()
         };
-        attrs.is_convergent = check("convergent");
+        attrs.is_convergent = rustc_attr_ir::find_attr!(
+            self.tcx, def_id, Doc(doc)
+            if doc.aliases.contains_key(&Symbol::intern(
+                reserved_oxide_symbols::DEVICE_EXTERN_CONVERGENT_MARKER
+            ))
+        );
         attrs.is_pure = check("pure");
         attrs.is_readonly = check("readonly");
 
@@ -1663,6 +1720,7 @@ impl<'tcx> DeviceCollector<'tcx> {
     /// diagnostics to the right kernel and user-code span.
     fn process_terminator(
         &mut self,
+        block: BasicBlock,
         terminator: &rustc_middle::mir::Terminator<'tcx>,
         mir: &rustc_middle::mir::Body<'tcx>,
         caller: &CollectedFunction<'tcx>,
@@ -1675,13 +1733,13 @@ impl<'tcx> DeviceCollector<'tcx> {
                 // (The function operand's own span is reset to a dummy by MIR
                 // inlining, so it is useless for diagnostics.)
                 let call_span = outermost_user_span(mir, terminator.source_info);
-                self.process_call_operand(func, call_span, caller, ctx);
+                self.process_call_operand(block, func, call_span, caller, ctx);
             }
             TerminatorKind::Drop { place, .. } => {
                 // Collect `drop_in_place::<T>` when T has non-trivial drop glue.
                 // Without this, the MIR translator would emit a call to a
                 // `drop_in_place` symbol that has no definition in the module.
-                self.process_drop_place(place, mir, caller, ctx);
+                self.process_drop_place(block, place, mir, caller, ctx);
             }
             _ => {}
         }
@@ -1706,6 +1764,7 @@ impl<'tcx> DeviceCollector<'tcx> {
     /// directly and enqueues it.
     fn process_drop_place(
         &mut self,
+        block: BasicBlock,
         place: &rustc_middle::mir::Place<'tcx>,
         mir: &rustc_middle::mir::Body<'tcx>,
         caller: &CollectedFunction<'tcx>,
@@ -1733,6 +1792,12 @@ impl<'tcx> DeviceCollector<'tcx> {
             return;
         }
 
+        self.call_edges.push(crate::library::CallSite {
+            caller: caller.instance,
+            block,
+            callee: drop_instance,
+            kind: crate::library::EdgeKind::Drop,
+        });
         let mangled = self.tcx.symbol_name(drop_instance).name.to_string();
         if self.seen.contains(&mangled) {
             return;
@@ -1829,6 +1894,7 @@ impl<'tcx> DeviceCollector<'tcx> {
     /// `ctx` is the caller's discovery provenance, used for diagnostics.
     fn process_call_operand(
         &mut self,
+        block: BasicBlock,
         func: &rustc_middle::mir::Operand<'tcx>,
         call_span: Span,
         caller: &CollectedFunction<'tcx>,
@@ -2014,7 +2080,13 @@ impl<'tcx> DeviceCollector<'tcx> {
         if is_callable_trait_method
             && let Some(receiver_ty) = args.iter().next().and_then(|arg| arg.as_type())
         {
-            self.enqueue_callable_trait_receiver_body(receiver_ty, call_span, caller, &callee_ctx);
+            self.enqueue_callable_trait_receiver_body(
+                block,
+                receiver_ty,
+                call_span,
+                caller,
+                &callee_ctx,
+            );
             // Don't return - continue to try resolving the trait method too
             // (even though it may fail, we still want to try).
         }
@@ -2028,6 +2100,25 @@ impl<'tcx> DeviceCollector<'tcx> {
         else {
             return;
         };
+
+        // Preserve edges before deduplicating bodies: the same helper can be
+        // reached from several kernels with distinct resource requirements.
+        let site = crate::library::CallSite {
+            caller: caller.instance,
+            block,
+            callee: resolved,
+            kind: crate::library::EdgeKind::Direct,
+        };
+        self.call_edges.push(site);
+        if let Some(&kind) = self.library_defs.get(&resolved.def_id()) {
+            self.library_calls.push(crate::library::LibraryCall {
+                instance: resolved,
+                site,
+                kind,
+                span: call_span,
+            });
+            return;
+        }
 
         // Skip already-seen monomorphizations (use mangled name as unique key)
         let mangled = self.tcx.symbol_name(resolved).name.to_string();
@@ -2229,6 +2320,7 @@ impl<'tcx> DeviceCollector<'tcx> {
 
     fn enqueue_callable_trait_receiver_body(
         &mut self,
+        block: BasicBlock,
         ty: Ty<'tcx>,
         call_span: Span,
         caller: &CollectedFunction<'tcx>,
@@ -2267,6 +2359,18 @@ impl<'tcx> DeviceCollector<'tcx> {
             _ => return,
         };
 
+        if self.library_defs.contains_key(&instance.def_id()) {
+            self.tcx.dcx().span_fatal(
+                call_span,
+                "the native library marker requires a direct call; pass a wrapper helper instead",
+            );
+        }
+        self.call_edges.push(crate::library::CallSite {
+            caller: caller.instance,
+            block,
+            callee: instance,
+            kind: crate::library::EdgeKind::Callable,
+        });
         let target = self.tcx.def_path_str(instance.def_id());
         let crate_name = self.tcx.crate_name(instance.def_id().krate);
         if self.is_generated_intrinsic_placeholder_or_report_mismatch(

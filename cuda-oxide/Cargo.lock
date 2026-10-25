@@ -211,7 +211,7 @@ dependencies = [
  "cuda-artifact-finalizer",
  "libnvvm-sys",
  "nvjitlink-sys",
- "oxide-artifacts 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oxide-artifacts",
  "oxide-tile-export",
  "oxide-tilebc",
  "ptx-parse",
@@ -417,7 +417,7 @@ dependencies = [
  "cuda-bindings",
  "cuda-core-derive",
  "half",
- "oxide-artifacts 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oxide-artifacts",
 ]
 
 [[package]]
@@ -449,7 +449,7 @@ dependencies = [
  "half",
  "libc",
  "libloading",
- "oxide-artifacts 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oxide-artifacts",
  "ptx-parse",
  "sha2",
  "thiserror 2.0.21",
@@ -484,6 +484,8 @@ dependencies = [
  "proc-macro2",
  "quote",
  "reserved-oxide-symbols",
+ "serde",
+ "serde_json",
  "syn 2.0.117",
  "trybuild",
 ]
@@ -1064,8 +1066,9 @@ dependencies = [
  "linkme",
  "llvm-export",
  "mir-lower",
+ "mir-transforms",
  "once_cell",
- "oxide-artifacts 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oxide-artifacts",
  "pliron",
  "pliron-derive",
  "reserved-oxide-symbols",
@@ -1095,6 +1098,7 @@ name = "mir-transforms"
 version = "0.2.1"
 dependencies = [
  "dialect-mir",
+ "oxide-artifacts",
  "pliron",
  "reserved-oxide-symbols",
  "rustc-hash 2.1.3",
@@ -1160,15 +1164,6 @@ checksum = "0b61fbf7ec37342ce171d9f5e3b82be74bda6c4e84e3b28338a03d553913e6aa"
 [[package]]
 name = "oxide-artifacts"
 version = "0.2.1"
-dependencies = [
- "object",
-]
-
-[[package]]
-name = "oxide-artifacts"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74d9a941c0c43d2dceaf25f5c9ca4c9f9cceb28dfa5e4e3cfd14e476f003e7c9"
 dependencies = [
  "object",
 ]
@@ -1303,7 +1298,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "dialect-ptx",
- "oxide-artifacts 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oxide-artifacts",
  "ptx-parse",
  "serde",
  "serde_json",

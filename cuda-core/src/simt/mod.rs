@@ -67,7 +67,7 @@ pub use crate::error::{DriverError, IntoResult};
 pub use crate::init;
 pub use crate::launch_kernel;
 pub use cuda_bindings as sys;
-/// Artifact-bundle metadata, from the published crate cuda-oxide releases.
+/// Artifact-bundle metadata shared with the CUDA compiler and loaders.
 pub use oxide_artifacts as artifacts;
 
 /// Launches a CUDA kernel on a specific [`CudaStream`], binding its context first.

@@ -22,6 +22,7 @@ use syn::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DynamicSharedContract {
+    Inferred,
     Exact(u32),
     Range { min_bytes: u32, max_bytes: u32 },
 }
@@ -95,8 +96,19 @@ impl Parse for LaunchContractArgs {
                 }
                 "dynamic_shared" => {
                     reject_duplicate(&key, dynamic_shared.is_some())?;
-                    let value: syn::LitInt = input.parse()?;
-                    dynamic_shared = Some(value.base10_parse::<u32>()?);
+                    dynamic_shared = Some(if input.peek(syn::LitInt) {
+                        let value: syn::LitInt = input.parse()?;
+                        DynamicSharedContract::Exact(value.base10_parse::<u32>()?)
+                    } else {
+                        let value: Ident = input.parse()?;
+                        if value != "inferred" {
+                            return Err(syn::Error::new(
+                                value.span(),
+                                "dynamic_shared expects a byte count or `inferred`",
+                            ));
+                        }
+                        DynamicSharedContract::Inferred
+                    });
                 }
                 "dynamic_shared_range" => {
                     reject_duplicate(&key, dynamic_shared_range.is_some())?;
@@ -149,7 +161,7 @@ impl Parse for LaunchContractArgs {
             ));
         }
         let dynamic_shared = match (dynamic_shared, dynamic_shared_range) {
-            (Some(bytes), None) => DynamicSharedContract::Exact(bytes),
+            (Some(requirement), None) => requirement,
             (None, Some((min_bytes, max_bytes))) if min_bytes <= max_bytes => {
                 DynamicSharedContract::Range {
                     min_bytes,
@@ -165,6 +177,12 @@ impl Parse for LaunchContractArgs {
             (None, None) => DynamicSharedContract::Exact(0),
             (Some(_), Some(_)) => unreachable!(),
         };
+        if dynamic_shared == DynamicSharedContract::Inferred && dynamic_shared_alignment.is_some() {
+            return Err(syn::Error::new(
+                input.span(),
+                "inferred dynamic shared memory obtains alignment from the compiled layout",
+            ));
+        }
         let dynamic_shared_alignment = dynamic_shared_alignment.unwrap_or_else(|| {
             if dynamic_shared_max(dynamic_shared) == 0 {
                 1
@@ -216,6 +234,7 @@ fn parse_requires_relations(input: ParseStream) -> syn::Result<Vec<Expr>> {
 
 pub(crate) fn dynamic_shared_max(contract: DynamicSharedContract) -> u32 {
     match contract {
+        DynamicSharedContract::Inferred => 0,
         DynamicSharedContract::Exact(bytes) => bytes,
         DynamicSharedContract::Range { max_bytes, .. } => max_bytes,
     }

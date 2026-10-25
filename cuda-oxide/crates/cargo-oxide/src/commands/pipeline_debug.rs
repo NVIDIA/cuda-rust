@@ -41,7 +41,10 @@ pub fn codegen_show_pipeline(
         reject_interop_output_mode(emit_nvvm_ir, &materialization);
     }
 
-    clean_generated_files(&example_dir, example);
+    clean_generated_files(&example_dir, example, &ctx.link_ltoir).unwrap_or_else(|error| {
+        eprintln!("Error: {error}");
+        std::process::exit(2);
+    });
 
     println!("=========================================");
     println!("RUSTC-CODEGEN-CUDA PIPELINE: {}", example);
@@ -196,7 +199,10 @@ pub fn codegen_debug(
         println!("Detected GPU arch: {dev} (via nvidia-smi)");
     }
 
-    clean_generated_files(&example_dir, example);
+    clean_generated_files(&example_dir, example, &ctx.link_ltoir).unwrap_or_else(|error| {
+        eprintln!("Error: {error}");
+        std::process::exit(2);
+    });
 
     touch_main_rs(&example_dir);
 

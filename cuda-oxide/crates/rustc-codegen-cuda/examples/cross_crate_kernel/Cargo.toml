@@ -17,3 +17,7 @@ cuda-device = { path = "../../../cuda-device" }
 cuda-host = { path = "../../../cuda-host" }
 cuda-core = { path = "../../../../../cuda-core" }
 ptx-parse = { path = "../../../ptx-parse" }
+
+[features]
+# Adds a second emitting crate to exercise the native-loader diagnostic.
+native-ambiguity = ["kernel-lib/native-ambiguity"]

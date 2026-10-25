@@ -134,12 +134,25 @@ pub(super) fn generated_artifact_paths(project_dir: &Path, package_name: &str) -
 
 /// Remove stale generated artifacts (`.ptx`, `.ll`, `.ltoir`, `.cubin`) from a
 /// previous run so we can verify the build produces fresh output.
-pub(super) fn clean_generated_files(example_dir: &Path, example: &str) {
-    for file in generated_artifact_paths(example_dir, example) {
+pub(super) fn clean_generated_files(
+    example_dir: &Path,
+    example: &str,
+    external_inputs: &[PathBuf],
+) -> Result<(), String> {
+    let outputs = generated_artifact_paths(example_dir, example);
+    // Check the whole deletion set before removing even the first file.
+    for output in &outputs {
+        for input in external_inputs {
+            cuda_artifact_finalizer::check_ltoir_input_output(input, output)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    for file in outputs {
         if file.exists() {
             let _ = std::fs::remove_file(file);
         }
     }
+    Ok(())
 }
 
 /// Human-readable label for the selected output format.

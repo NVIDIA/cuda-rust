@@ -87,7 +87,10 @@ pub fn codegen_run(
         std::process::exit(2);
     }
 
-    clean_generated_files(&example_dir, example);
+    clean_generated_files(&example_dir, example, &ctx.link_ltoir).unwrap_or_else(|error| {
+        eprintln!("Error: {error}");
+        std::process::exit(2);
+    });
 
     println!("=========================================");
     println!("RUSTC-CODEGEN-CUDA: {}", example);
@@ -256,7 +259,10 @@ pub fn codegen_sanitize(
         return;
     }
 
-    clean_generated_files(&example_dir, example);
+    clean_generated_files(&example_dir, example, &ctx.link_ltoir).unwrap_or_else(|error| {
+        eprintln!("Error: {error}");
+        std::process::exit(2);
+    });
 
     println!("=========================================");
     println!("RUSTC-CODEGEN-CUDA SANITIZE: {}", example);
@@ -381,7 +387,10 @@ pub fn codegen_build(
         std::process::exit(2);
     }
 
-    clean_generated_files(&example_dir, example);
+    clean_generated_files(&example_dir, example, &ctx.link_ltoir).unwrap_or_else(|error| {
+        eprintln!("Error: {error}");
+        std::process::exit(2);
+    });
 
     println!("=========================================");
     println!("RUSTC-CODEGEN-CUDA BUILD: {}", example);

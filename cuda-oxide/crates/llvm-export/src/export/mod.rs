@@ -53,6 +53,9 @@ pub use config::{
     DebugKind, ExportBackendConfig, FunctionLocalStaticPlacement, NvvmExportConfig, NvvmIrDialect,
     PtxExportConfig,
 };
+pub use function::exported_function_name;
+pub use module::retain_functions;
+
 pub use externs::{AsDeviceExtern, DeviceExternAttrs, DeviceExternDecl, DeviceExternType};
 
 use pliron::{builtin::ops::ModuleOp, context::Context};

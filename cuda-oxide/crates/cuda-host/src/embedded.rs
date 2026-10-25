@@ -12,6 +12,7 @@ pub use cuda_core::embedded::{
     embedded_modules_from_current_exe,
 };
 use cuda_core::{CudaContext, CudaModule, DriverError};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -44,6 +45,16 @@ pub enum EmbeddedModuleError {
     /// PTX source could not be parsed or edited safely while merging bundles.
     #[error("embedded CUDA module '{name}' contains invalid PTX: {reason}")]
     InvalidPtx { name: String, reason: String },
+
+    /// Bundles disagree about the requirements of the same concrete entry.
+    #[error("conflicting compiled launch facts for kernel '{symbol}'")]
+    ConflictingLaunchFacts { symbol: String },
+
+    /// Generic loading needs one complete native image or a PTX-only bundle set.
+    #[error(
+        "generic CUDA loading requires one complete cubin bundle or only PTX bundles; incompatible embedded bundles: {names:?}"
+    )]
+    IncompatibleGenericArtifacts { names: Vec<String> },
 
     /// NVVM IR or LTOIR payload compilation failed.
     #[error("failed to build embedded CUDA module: {0}")]
@@ -135,9 +146,99 @@ pub fn load_all_ptx_bundles_merged(
     ctx: &Arc<CudaContext>,
 ) -> Result<Arc<CudaModule>, EmbeddedModuleError> {
     let bundles = artifact_bundles_from_current_exe()?;
-    let merged = merge_ptx_bundles(&bundles)?;
+    load_merged_ptx(ctx, &bundles)
+}
 
-    let module = ctx.load_module_from_image(merged.as_bytes())?;
+/// Load generic kernel specializations from the image containing `anchor`.
+///
+/// A single materialized cubin contains all required concrete entries and keeps
+/// their globals in one CUDA module. Multiple native bundles, or native and PTX
+/// bundles together, are rejected because independently loaded images would
+/// not preserve shared device globals. A PTX-only set uses the existing merge.
+/// Empty anchor-only bundles do not participate in payload selection.
+///
+/// `anchor` must belong to the host image whose artifacts are to be loaded.
+/// Generated loaders anchor the defining crate's host code; the instantiating
+/// crate must be linked into that same image. This applies to PTX builds too.
+/// Image discovery has the same platform and file-identity requirements as
+/// [`load_embedded_module_from_anchor`]. Entry lookup uses the exact concrete
+/// symbol name and retains each entry's compiled launch facts.
+pub fn load_generic_embedded_module_from_anchor(
+    ctx: &Arc<CudaContext>,
+    anchor: &u8,
+) -> Result<Arc<CudaModule>, EmbeddedModuleError> {
+    let bundles = artifact_bundles_containing(anchor)?;
+    load_generic_bundles(ctx, &bundles)
+}
+
+/// Load generic kernel specializations from the current executable.
+///
+/// Uses the same native-artifact selection and PTX merge as
+/// [`load_generic_embedded_module_from_anchor`]. Generated loaders use this
+/// executable-only discovery on platforms without mapped-image support.
+pub fn load_generic_embedded_module(
+    ctx: &Arc<CudaContext>,
+) -> Result<Arc<CudaModule>, EmbeddedModuleError> {
+    let bundles = artifact_bundles_from_current_exe()?;
+    load_generic_bundles(ctx, &bundles)
+}
+
+fn load_generic_bundles(
+    ctx: &Arc<CudaContext>,
+    bundles: &[OwnedArtifactBundle],
+) -> Result<Arc<CudaModule>, EmbeddedModuleError> {
+    if let Some(bundle) = generic_cubin_bundle(bundles)? {
+        let module = load_bundle(ctx, bundle)?;
+        crate::entry_registry::register_module_entries(
+            &module,
+            bundle
+                .entries
+                .iter()
+                .filter(|entry| entry.kind == oxide_artifacts::ArtifactEntryKind::Kernel)
+                .map(|entry| entry.symbol.clone())
+                .collect(),
+        );
+        Ok(module)
+    } else {
+        load_merged_ptx(ctx, bundles)
+    }
+}
+
+fn generic_cubin_bundle(
+    bundles: &[OwnedArtifactBundle],
+) -> Result<Option<&OwnedArtifactBundle>, EmbeddedModuleError> {
+    let active: Vec<_> = bundles
+        .iter()
+        .filter(|bundle| !bundle.payloads.is_empty())
+        .collect();
+    match active.as_slice() {
+        [] => Err(EmbeddedModuleError::NoModules),
+        [bundle] if bundle.payload(ArtifactPayloadKind::Cubin).is_some() => Ok(Some(bundle)),
+        _ if active.iter().all(|bundle| {
+            bundle.payload(ArtifactPayloadKind::Cubin).is_none()
+                && bundle.payload(ArtifactPayloadKind::Ptx).is_some()
+        }) =>
+        {
+            Ok(None)
+        }
+        _ => Err(EmbeddedModuleError::IncompatibleGenericArtifacts {
+            names: active.iter().map(|bundle| bundle.name.clone()).collect(),
+        }),
+    }
+}
+
+fn load_merged_ptx(
+    ctx: &Arc<CudaContext>,
+    bundles: &[OwnedArtifactBundle],
+) -> Result<Arc<CudaModule>, EmbeddedModuleError> {
+    let merged = merge_ptx_bundles(bundles)?;
+
+    let facts = merged_launch_facts(
+        bundles
+            .iter()
+            .filter(|bundle| bundle.payload(ArtifactPayloadKind::Ptx).is_some()),
+    )?;
+    let module = ctx.load_module_from_image_with_launch_facts(merged.as_bytes(), facts)?;
     // Retain the merged module's `.entry` names (a few dozen bytes per
     // kernel). If a later `_TID_` generic-kernel lookup misses while a
     // same-base entry exists under a different hash, the launch paths can
@@ -145,6 +246,32 @@ pub fn load_all_ptx_bundles_merged(
     // opaque "named symbol not found". See `crate::entry_registry`.
     crate::entry_registry::register_merged_module_entries(&module, &merged);
     Ok(module)
+}
+
+fn merged_launch_facts<'a>(
+    bundles: impl IntoIterator<Item = &'a OwnedArtifactBundle>,
+) -> Result<BTreeMap<String, oxide_artifacts::KernelLaunchFacts>, EmbeddedModuleError> {
+    // Keep None in the comparison: absent facts must not silently replace a
+    // known zero-size plan, or inherit another bundle's contract.
+    let mut entries = BTreeMap::new();
+    for bundle in bundles {
+        for entry in &bundle.entries {
+            if entry.kind != oxide_artifacts::ArtifactEntryKind::Kernel {
+                continue;
+            }
+            if let Some(previous) = entries.insert(entry.symbol.clone(), entry.launch_facts)
+                && previous != entry.launch_facts
+            {
+                return Err(EmbeddedModuleError::ConflictingLaunchFacts {
+                    symbol: entry.symbol.clone(),
+                });
+            }
+        }
+    }
+    Ok(entries
+        .into_iter()
+        .filter_map(|(symbol, facts)| facts.map(|facts| (symbol, facts)))
+        .collect())
 }
 
 /// Merge the PTX payloads of `bundles`, in iteration order, into one PTX
@@ -297,12 +424,13 @@ fn load_bundle(
     ctx: &Arc<CudaContext>,
     bundle: &OwnedArtifactBundle,
 ) -> Result<Arc<CudaModule>, EmbeddedModuleError> {
+    let facts = merged_launch_facts([bundle])?;
     if let Some(cubin) = bundle.payload(ArtifactPayloadKind::Cubin) {
-        return Ok(ctx.load_module_from_image(cubin)?);
+        return Ok(ctx.load_module_from_image_with_launch_facts(cubin, facts)?);
     }
 
     if let Some(ptx) = bundle.payload(ArtifactPayloadKind::Ptx) {
-        return Ok(ctx.load_module_from_image(ptx)?);
+        return Ok(ctx.load_module_from_image_with_launch_facts(ptx, facts)?);
     }
 
     if let Some(nvvm_ir) = bundle.payload(ArtifactPayloadKind::NvvmIr) {
@@ -322,7 +450,7 @@ fn load_bundle(
                 bundle.compile_options,
             )?,
         };
-        return Ok(ctx.load_module_from_image(&image)?);
+        return Ok(ctx.load_module_from_image_with_launch_facts(&image, facts)?);
     }
 
     if let Some(ltoir) = bundle.payload(ArtifactPayloadKind::Ltoir) {
@@ -342,7 +470,7 @@ fn load_bundle(
                 bundle.compile_options,
             )?,
         };
-        return Ok(ctx.load_module_from_image(&image)?);
+        return Ok(ctx.load_module_from_image_with_launch_facts(&image, facts)?);
     }
 
     Err(EmbeddedModuleError::UnsupportedPayload {
@@ -390,6 +518,59 @@ mod tests {
     }
 
     #[test]
+    fn merged_kernel_facts_preserve_identity_and_reject_conflicts() {
+        use oxide_artifacts::{
+            ArtifactBundleSpec, ArtifactEntryKind, ArtifactEntrySpec, ArtifactPayloadSpec,
+            KernelLaunchFacts,
+        };
+        let facts = KernelLaunchFacts {
+            exact_block: Some((32, 1, 1)),
+            dynamic_shared_bytes: 0,
+            dynamic_shared_alignment: 16,
+        };
+        let bundle = |symbol: &str, facts| {
+            let mut entry = ArtifactEntrySpec::new(symbol, ArtifactEntryKind::Kernel);
+            entry.launch_facts = facts;
+            let spec = ArtifactBundleSpec::new("test", "sm_120")
+                .with_payload(ArtifactPayloadSpec::new(
+                    ArtifactPayloadKind::Ptx,
+                    "test.ptx",
+                    b"ptx",
+                ))
+                .with_entry(entry);
+            let bytes = oxide_artifacts::build_artifact_blob(&spec).unwrap();
+            OwnedArtifactBundle::from(oxide_artifacts::parse_artifact_blob(&bytes).unwrap())
+        };
+        let first = bundle("apply_items_1", Some(facts));
+        let second = bundle(
+            "apply_items_4",
+            Some(KernelLaunchFacts {
+                dynamic_shared_bytes: 512,
+                ..facts
+            }),
+        );
+        let merged = merged_launch_facts([&first, &second]).unwrap();
+        assert_eq!(merged["apply_items_1"].dynamic_shared_bytes, 0);
+        assert_eq!(merged["apply_items_4"].dynamic_shared_bytes, 512);
+        for conflict in [
+            bundle("apply_items_1", None),
+            bundle(
+                "apply_items_1",
+                Some(KernelLaunchFacts {
+                    dynamic_shared_bytes: 128,
+                    ..facts
+                }),
+            ),
+        ] {
+            assert!(matches!(
+                merged_launch_facts([&first, &conflict]),
+                Err(EmbeddedModuleError::ConflictingLaunchFacts { .. })
+            ));
+        }
+        assert_eq!(merged_launch_facts([&first, &first]).unwrap().len(), 1);
+    }
+
+    #[test]
     fn target_arch_uses_bundle_sm_target() {
         assert_eq!(
             concrete_bundle_target("sm_90")
@@ -411,6 +592,49 @@ mod tests {
                 bytes: ptx.as_bytes().to_vec(),
             }],
             entries: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn generic_loading_selects_one_native_image_or_merges_ptx() {
+        let mut native = ptx_bundle("consumer", "native bytes");
+        native.payloads[0].kind = ArtifactPayloadKind::Cubin;
+        let bundles = [bundle_with_target("sm_120"), native];
+        assert!(std::ptr::eq(
+            generic_cubin_bundle(&bundles).unwrap().unwrap(),
+            &bundles[1]
+        ));
+        assert!(
+            generic_cubin_bundle(&[ptx_bundle("library", "ptx"), ptx_bundle("consumer", "ptx")])
+                .unwrap()
+                .is_none()
+        );
+        assert!(matches!(
+            generic_cubin_bundle(&[bundle_with_target("sm_120")]),
+            Err(EmbeddedModuleError::NoModules)
+        ));
+    }
+
+    #[test]
+    fn generic_loading_rejects_native_ambiguity_and_mixed_payloads() {
+        for kind in [
+            ArtifactPayloadKind::Cubin,
+            ArtifactPayloadKind::Ptx,
+            ArtifactPayloadKind::NvvmIr,
+            ArtifactPayloadKind::Ltoir,
+        ] {
+            let mut native = ptx_bundle("consumer", "native bytes");
+            native.payloads[0].kind = ArtifactPayloadKind::Cubin;
+            let mut other = ptx_bundle("library", "other bytes");
+            other.payloads[0].kind = kind;
+            // Entry-free payloads can still define device globals.
+            assert!(other.entries.is_empty());
+            let error = generic_cubin_bundle(&[native, other]).unwrap_err();
+            assert!(matches!(
+                error,
+                EmbeddedModuleError::IncompatibleGenericArtifacts { names }
+                    if names == ["consumer", "library"]
+            ));
         }
     }
 

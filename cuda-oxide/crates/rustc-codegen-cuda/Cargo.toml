@@ -26,7 +26,7 @@ dialect-nvvm = { path = "../dialect-nvvm" }
 reserved-oxide-symbols = { path = "../reserved-oxide-symbols" }
 # `#[tile_export]` descriptions, read back out of the metadata functions' MIR.
 oxide-tile-export = { path = "../oxide-tile-export" }
-oxide-artifacts = { version = "0.2.1", features = ["object-write"] }
+oxide-artifacts = { version = "0.2.1", path = "../oxide-artifacts", features = ["object-write"] }
 # Shared driver-independent libNVVM + nvJitLink finalization policy. This
 # crate loads CUDA compiler libraries at run time and never links libcuda.
 cuda-artifact-finalizer = { path = "../cuda-artifact-finalizer" }
@@ -42,6 +42,7 @@ combine = "4.6.8"         # must match workspace; Pliron needs SourcePosition: H
 once_cell = "1.18"        # must match workspace
 thiserror = "2"           # must match workspace
 serde_json = "1"          # must match workspace
+serde = { version = "1", features = ["derive"] }
 
 # Note: rustc internal crates are NOT listed here.
 # They're accessed via `extern crate` with #![feature(rustc_private)]

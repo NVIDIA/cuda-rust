@@ -14,7 +14,7 @@ use pliron::{
     attribute::attr_cast,
     builtin::{
         attr_interfaces::TypedAttrInterface,
-        attributes::{StringAttr, TypeAttr},
+        attributes::{BoolAttr, StringAttr, TypeAttr},
         op_interfaces::{
             ATTR_KEY_SYM_NAME, IsolatedFromAboveInterface, NOpdsInterface, NRegionsInterface,
             NResultsInterface, OneRegionInterface, SymbolOpInterface,
@@ -44,10 +44,12 @@ use pliron_derive::pliron_op;
 
 use crate::{
     attributes::{InlineIntentAttr, ReferenceParamValidityAttr},
+    library::{LibraryFunctionSourceAttr, LibraryRootArgumentClass},
     types::{MirPtrType, MirSliceType},
 };
 
 const REFERENCE_PARAM_VALIDITY_ATTR_PREFIX: &str = "reference_param_validity_";
+const LIBRARY_UNCHECKED_INDEXING_ATTR_KEY: &str = "library_unchecked_indexing";
 
 /// Operation attribute key carrying a `mir.func`'s [`InlineIntentAttr`].
 pub const INLINE_INTENT_ATTR_KEY: &str = "inline_intent";
@@ -75,6 +77,7 @@ fn inline_intent_key() -> Identifier {
 /// | `mir_func_type`| TypeAttr  | Function type (mir.func_type)      |
 /// | `reference_param_validity_N` | ReferenceParamValidityAttr | Proven reference facts for source argument `N` on a kernel entry |
 /// | `inline_intent` | InlineIntentAttr | The source function's `#[inline]` request; never on a kernel entry |
+/// | `library_unchecked_indexing` | BoolAttr | The effective source bounds-check elision option |
 /// ```
 ///
 /// # Verification
@@ -120,6 +123,77 @@ impl MirFuncOp {
             .unwrap()
             .get_type(ctx);
         TypedHandle::from_handle(ty, ctx).unwrap()
+    }
+
+    /// Attach the authenticated original function identity before preparation.
+    pub fn set_library_function_source(
+        &self,
+        ctx: &mut Context,
+        source: LibraryFunctionSourceAttr,
+    ) {
+        self.get_operation().deref_mut(ctx).attributes.set(
+            Identifier::try_new("library_function_source".to_string()).unwrap(),
+            source,
+        );
+    }
+
+    /// Original identity, independent from the legalised or contextual symbol.
+    pub fn library_function_source(&self, ctx: &Context) -> Option<LibraryFunctionSourceAttr> {
+        self.get_operation()
+            .deref(ctx)
+            .attributes
+            .get::<LibraryFunctionSourceAttr>(
+                &Identifier::try_new("library_function_source".to_string()).unwrap(),
+            )
+            .cloned()
+    }
+
+    /// Retain the effective source option without deciding library admission.
+    pub fn set_library_unchecked_indexing(&self, ctx: &mut Context, enabled: bool) {
+        self.get_operation().deref_mut(ctx).attributes.set(
+            Identifier::try_new(LIBRARY_UNCHECKED_INDEXING_ATTR_KEY.to_string()).unwrap(),
+            BoolAttr::new(enabled),
+        );
+    }
+
+    /// Whether this function's bounds checks may be elided; absent means false.
+    pub fn library_unchecked_indexing(&self, ctx: &Context) -> bool {
+        self.get_operation()
+            .deref(ctx)
+            .attributes
+            .get::<BoolAttr>(
+                &Identifier::try_new(LIBRARY_UNCHECKED_INDEXING_ATTR_KEY.to_string()).unwrap(),
+            )
+            .map(|attr| bool::from(attr.clone()))
+            .unwrap_or(false)
+    }
+
+    /// Retain the original, zero-based source kernel argument classification.
+    pub fn set_library_root_argument(
+        &self,
+        ctx: &mut Context,
+        index: usize,
+        class: LibraryRootArgumentClass,
+    ) {
+        self.get_operation().deref_mut(ctx).attributes.set(
+            Identifier::try_new(format!("library_root_argument_{index}")).unwrap(),
+            class,
+        );
+    }
+
+    /// Source classification before LLVM argument flattening.
+    pub fn library_root_argument(
+        &self,
+        ctx: &Context,
+        index: usize,
+    ) -> Option<LibraryRootArgumentClass> {
+        self.get_operation()
+            .deref(ctx)
+            .attributes
+            .get::<LibraryRootArgumentClass>(
+                &Identifier::try_new(format!("library_root_argument_{index}")).unwrap(),
+            )
+            .copied()
     }
 
     /// Record rustc-proven validity for one source-level kernel argument.

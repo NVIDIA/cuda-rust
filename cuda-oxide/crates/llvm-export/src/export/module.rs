@@ -47,6 +47,24 @@ fn validate_export_config(config: &dyn ExportBackendConfig) -> Result<(), String
     Ok(())
 }
 
+const RETAINED_FUNCTIONS: &str = "cuda_oxide_retained_functions";
+
+/// Retain selected definitions consumed by native code in the same artifact.
+/// Names use the collector's identity; export applies its ordinary normalization.
+/// The module survives MIR lowering, so no per-function attribute copy is needed.
+pub fn retain_functions(ctx: &mut Context, module: &ModuleOp, names: &[String]) {
+    use pliron::builtin::attributes::{StringAttr, VecAttr};
+    module.get_operation().deref_mut(ctx).attributes.set(
+        RETAINED_FUNCTIONS.try_into().unwrap(),
+        VecAttr::new(
+            names
+                .iter()
+                .map(|name| StringAttr::new(name.clone()).into())
+                .collect(),
+        ),
+    );
+}
+
 fn index_module_symbols(
     state: &mut ModuleExportState<'_>,
     module: &ModuleOp,
@@ -55,7 +73,34 @@ fn index_module_symbols(
     let Some(block) = region.iter(state.ctx).next() else {
         return Ok(());
     };
+    let mut retained = std::collections::HashSet::new();
+    {
+        use pliron::builtin::attributes::{StringAttr, VecAttr};
+        let operation = module.get_operation().deref(state.ctx);
+        if let Some(names) = operation
+            .attributes
+            .get::<VecAttr>(&RETAINED_FUNCTIONS.try_into().unwrap())
+        {
+            for name in names.0.iter() {
+                let name = name
+                    .downcast_ref::<StringAttr>()
+                    .ok_or("invalid retained function name")?;
+                retained.insert(String::from(name.clone()));
+            }
+        }
+    }
     for operation in block.deref(state.ctx).iter(state.ctx) {
+        if let Some(function) = Operation::get_op::<ops::FuncOp>(operation, state.ctx) {
+            let name = function.get_symbol_name(state.ctx).to_string();
+            if retained.remove(&name) {
+                if function.get_entry_block(state.ctx).is_none() {
+                    return Err(format!("retained callback `{name}` has no definition"));
+                }
+                state
+                    .device_functions
+                    .push(super::function::exported_function_name(&name));
+            }
+        }
         if let Some(global) = Operation::get_op::<ops::GlobalOp>(operation, state.ctx) {
             let symbol = global.get_symbol_name(state.ctx).to_string();
             let value_type = global.get_type(state.ctx);
@@ -124,6 +169,11 @@ fn index_module_symbols(
                 state.function_definitions.insert(exported_name);
             }
         }
+    }
+    if !retained.is_empty() {
+        return Err(format!(
+            "retained callback definitions are missing: {retained:?}"
+        ));
     }
     Ok(())
 }
@@ -487,10 +537,17 @@ fn index_device_externs(
         validate_device_extern_function_shape(state, decl)?;
         if let Some(previous) = state.device_externs.get(&decl.export_name) {
             if previous != decl {
-                return Err(format!(
+                let conflict = format!(
                     "conflicting device-extern declarations for `@{}`",
                     decl.export_name
-                ));
+                );
+                if previous.attrs.is_convergent != decl.attrs.is_convergent {
+                    return Err(format!(
+                        "{conflict}: convergent is {} versus {}",
+                        previous.attrs.is_convergent, decl.attrs.is_convergent
+                    ));
+                }
+                return Err(conflict);
             }
             continue;
         }
@@ -610,12 +667,9 @@ pub(super) fn export_module_with_externs_impl(
 
     // 2. Device extern declarations (before function definitions)
     //
-    // NOTE: We intentionally do NOT emit LLVM attributes on these declarations.
-    // The external LTOIR (from nvcc -dc -dlto) already contains proper attributes
-    // (convergent, nounwind, memory, etc.) on the function DEFINITIONS.
-    // When nvJitLink performs LTO linking, it uses the definition's attributes.
-    // Attributes on declarations are redundant and were causing issues where
-    // all externs incorrectly got the same attribute group.
+    // Convergence must be visible before libNVVM optimizes this module, not
+    // only when external definitions arrive at LTO. Emit it per declaration
+    // so unrelated externs do not inherit a shared attribute group.
     if !device_externs.is_empty() {
         writeln!(
             &mut output,
@@ -643,7 +697,11 @@ pub(super) fn export_module_with_externs_impl(
                 }
                 param.write_llvm_with_attr(&mut output, state.legacy_typed_pointers())?;
             }
-            writeln!(&mut output, ")").unwrap();
+            write!(&mut output, ")").unwrap();
+            if decl.attrs.is_convergent {
+                write!(&mut output, " convergent").unwrap();
+            }
+            writeln!(&mut output).unwrap();
         }
         writeln!(&mut output).unwrap();
     }
@@ -711,7 +769,7 @@ pub(super) fn export_module_with_externs_impl(
     }
 
     // 6. Emit attribute groups for convergent intrinsics used by module functions
-    // Note: Device extern declarations no longer get attribute groups - see section 2 comment.
+    // Device extern convergence is emitted inline, independently of this group.
     if state.convergent_used {
         writeln!(&mut output).unwrap();
         writeln!(&mut output, "attributes #0 = {{ convergent }}").unwrap();

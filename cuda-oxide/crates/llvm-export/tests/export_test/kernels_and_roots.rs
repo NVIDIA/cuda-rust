@@ -504,3 +504,64 @@ fn kernel_keeps_host_addressable_pointer_parameters_and_device_functions_keep_sh
         "{ir}"
     );
 }
+
+#[test]
+fn native_callback_and_kernel_share_external_roots() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "native_callback_roots".try_into().unwrap());
+    let block = module_top_block(&mut ctx, &module);
+    let ty = FuncType::get(&ctx, VoidType::get(&ctx).into(), vec![], false);
+    for name in ["entry", "selected_thunk", "ordinary_helper"] {
+        let function = FuncOp::new(&mut ctx, name.try_into().unwrap(), ty);
+        if name == "entry" {
+            function.get_operation().deref_mut(&ctx).attributes.set(
+                "gpu_kernel".try_into().unwrap(),
+                StringAttr::new("true".into()),
+            );
+        }
+        let entry = function.get_or_create_entry_block(&mut ctx);
+        ReturnOp::new(&mut ctx, None)
+            .get_operation()
+            .insert_at_back(entry, &ctx);
+        function.get_operation().insert_at_back(block, &ctx);
+    }
+    llvm_export::export::retain_functions(&mut ctx, &module, &["selected_thunk".into()]);
+    let result = export_module_with_externs_and_roots::<DeviceExternDecl>(
+        &ctx,
+        &module,
+        &[],
+        &PtxExportConfig,
+    )
+    .unwrap();
+    assert_eq!(result.public_symbols, ["entry", "selected_thunk"]);
+    assert!(
+        result
+            .llvm_ir
+            .contains("@llvm.used = appending global [2 x ptr] [ptr @entry, ptr @selected_thunk]")
+    );
+    llvm_export::export::retain_functions(&mut ctx, &module, &["missing_thunk".into()]);
+    assert!(
+        export_module_with_externs_and_roots::<DeviceExternDecl>(
+            &ctx,
+            &module,
+            &[],
+            &PtxExportConfig
+        )
+        .unwrap_err()
+        .contains("definitions are missing")
+    );
+    FuncOp::new(&mut ctx, "declared_thunk".try_into().unwrap(), ty)
+        .get_operation()
+        .insert_at_back(block, &ctx);
+    llvm_export::export::retain_functions(&mut ctx, &module, &["declared_thunk".into()]);
+    assert!(
+        export_module_with_externs_and_roots::<DeviceExternDecl>(
+            &ctx,
+            &module,
+            &[],
+            &PtxExportConfig
+        )
+        .unwrap_err()
+        .contains("has no definition")
+    );
+}

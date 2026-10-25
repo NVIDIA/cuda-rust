@@ -392,6 +392,46 @@ fn detect_contract_block_config(
     Ok(detected)
 }
 
+/// Read the same exact root shape used by kernel translation, before library
+/// specialization. Validate the internal/public MIR bridge before scanning.
+pub fn kernel_exact_block(
+    instance: &mono::Instance,
+    block_count: usize,
+    successors: &[Vec<usize>],
+) -> Result<Option<[u32; 3]>, String> {
+    let body = instance.body().ok_or("kernel has no MIR body")?;
+    validate_monomorphized_successors(&body, block_count, successors)?;
+    let reachable = compute_reachable_blocks(&body, successors);
+    Ok(detect_contract_block_config(&body, &reachable)?.map(|shape| [shape.x, shape.y, shape.z]))
+}
+
+/// Device CFG for checked collectives, using exactly the importer's unwind and
+/// bounds-check policies. Checked calls may not rely on elided bounds checks.
+pub fn checked_collective_successors(
+    body: &mir::Body,
+    block_count: usize,
+    successors: &[Vec<usize>],
+) -> Result<Vec<Vec<usize>>, String> {
+    validate_monomorphized_successors(body, block_count, successors)?;
+    let reachable = compute_reachable_blocks(body, successors);
+    if detect_unchecked_indexing_config(body, &reachable)? || unchecked_indexing_env_enabled() {
+        return Err("checked block collectives do not support unchecked indexing; retain runtime bounds checks".into());
+    }
+    Ok(body
+        .blocks
+        .iter()
+        .zip(successors)
+        .map(|(block, exact)| {
+            let normal = non_unwind_successors(block);
+            exact
+                .iter()
+                .copied()
+                .filter(|target| normal.contains(target))
+                .collect()
+        })
+        .collect())
+}
+
 /// Rejects an exact block shape that needs more threads than
 /// `#[launch_bounds]` allows.
 ///
@@ -525,6 +565,27 @@ fn detect_dynamic_shared_alignment(
         return Some(DynamicSharedAlignment { bytes });
     }
     None
+}
+
+fn has_inferred_dynamic_shared(
+    body: &mir::Body,
+    reachable: &std::collections::BTreeSet<usize>,
+) -> bool {
+    reachable.iter().any(|&index| {
+        let mir::TerminatorKind::Call {
+            func: mir::Operand::Constant(constant),
+            ..
+        } = &body.blocks[index].terminator.kind
+        else {
+            return false;
+        };
+        let TyKind::RigidTy(RigidTy::FnDef(def_id, _)) = constant.const_.ty().kind() else {
+            return false;
+        };
+        def_id.krate().name.as_str() == "cuda_device"
+            && (def_id.name() == "__dynamic_shared_inferred"
+                || def_id.name().ends_with("::__dynamic_shared_inferred"))
+    })
 }
 
 /// Return the non-unwind successors of a block's terminator.
@@ -1883,6 +1944,10 @@ fn emit_entry_allocas(
 /// * `inline` - The `#[inline]` request, recorded as [`InlineIntentAttr`] on
 ///   non-kernel functions (`set_inline_intent_attr`)
 /// * `override_name` - Custom export name (defaults to instance name)
+/// * `pre90_cluster_queries` - Use single-block-cluster query semantics
+///
+/// Returns the function operation and whether it used a pre-sm90 cluster
+/// query fallback. The caller must preserve that target choice.
 pub fn translate_body(
     ctx: &mut Context,
     body: &mir::Body,
@@ -1896,7 +1961,8 @@ pub fn translate_body(
     debug_kind: DebugKind,
     debug_source_scopes: Option<&DebugSourceScopeMap>,
     statement_debug_info: Option<&StatementDebugInfoMap>,
-) -> TranslationResult<Ptr<Operation>> {
+    pre90_cluster_queries: bool,
+) -> TranslationResult<(Ptr<Operation>, bool)> {
     if let Some(statement_debug_info) = statement_debug_info {
         if statement_debug_info.blocks.len() != body.blocks.len() {
             return input_err_noloc!(TranslationErr::invalid_op(format!(
@@ -1935,6 +2001,7 @@ pub fn translate_body(
     let num_locals = body.locals().len();
     let mut value_map = ValueMap::new(num_locals);
     value_map.set_debug_variables(debug_kind.variables_enabled());
+    value_map.pre90_cluster_queries = pre90_cluster_queries;
 
     // Resolve the per-body unchecked-indexing policy. Like the dynamic-shared
     // marker, the `#[kernel(unchecked_indexing)]` marker is scanned on any
@@ -2114,6 +2181,7 @@ pub fn translate_body(
 
     // Create MirFuncOp and set the function type attribute and symbol name
     let mir_func_op = MirFuncOp::new(ctx, op_ptr, func_type_attr);
+    mir_func_op.set_library_unchecked_indexing(ctx, unchecked_indexing);
 
     let name_str = if let Some(name) = override_name {
         name.to_string()
@@ -2348,6 +2416,22 @@ pub fn translate_body(
         }
     }
 
+    if has_inferred_dynamic_shared(body, &reachable) {
+        use pliron::builtin::{
+            attributes::IntegerAttr,
+            types::{IntegerType, Signedness},
+        };
+        use pliron::utils::apint::APInt;
+        let ty = IntegerType::get(ctx, 32, Signedness::Unsigned);
+        mir_func_op.get_operation().deref_mut(ctx).attributes.set(
+            crate::kernel_resources::INFERRED_SHARED.try_into().unwrap(),
+            IntegerAttr::new(
+                ty,
+                APInt::from_u32(1, std::num::NonZeroUsize::new(32).unwrap()),
+            ),
+        );
+    }
+
     // Attribute macros may run before `#[kernel]`. Generic expansion forwards
     // that marker to the entry but also keeps the original in its helper, so
     // record markers on any function. mir-lower treats every marked local
@@ -2376,7 +2460,7 @@ pub fn translate_body(
     }
 
     if let Some(scope_map) = debug_source_scopes
-        && debug_kind.variables_enabled()
+        && debug_kind.line_tables_enabled()
     {
         llvm_export::ops::set_debug_source_scope_map(ctx, op_ptr, scope_map);
     }
@@ -2468,7 +2552,10 @@ pub fn translate_body(
             ctx,
             body,
             mir_block,
-            idx,
+            crate::LibraryCallSite {
+                caller: name_str.clone(),
+                block: idx,
+            },
             block_ptr,
             &mut value_map,
             &block_map,
@@ -2498,7 +2585,7 @@ pub fn translate_body(
         }
     }
 
-    Ok(op_ptr)
+    Ok((op_ptr, value_map.used_cluster_query_fallback))
 }
 
 /// Choose the debugger-visible spelling independently of a function's symbol.
@@ -2741,6 +2828,139 @@ pub fn cuda_oxide_device_generated_kernel(mut wrapped: Wrapper<u16>) -> u32 {
                 "expected a Rust linkage symbol, got {mangled_name}"
             );
         }
+    }
+
+    /// Import a real MIR body with the source-scope sidecar supplied by the
+    /// codegen bridge, then verify its inline provenance survives MIR lowering.
+    /// Line tables need these scopes even when variable debug info is disabled.
+    #[test]
+    fn imported_inline_scopes_survive_lowering_in_line_table_and_full_modes() {
+        use llvm_export::ops::{DebugInlinedScope, DebugSourceScope};
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_inline_scopes_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let fixture = root.join("entry.rs");
+        std::fs::write(&fixture, "pub fn entry() {}\n").unwrap();
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let sysroot = std::process::Command::new(rustc)
+            .args(["--print", "sysroot"])
+            .output()
+            .unwrap();
+        assert!(sysroot.status.success());
+        let args = vec![
+            "rustc".to_string(),
+            "--edition=2024".to_string(),
+            "--crate-type=rlib".to_string(),
+            "--emit=metadata".to_string(),
+            format!("--out-dir={}", root.display()),
+            format!(
+                "--sysroot={}",
+                String::from_utf8(sysroot.stdout).unwrap().trim()
+            ),
+            fixture.display().to_string(),
+        ];
+        let worker_root = root.clone();
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                rustc_public::run!(&args, || {
+                    let item = rustc_public::all_local_items()
+                        .into_iter()
+                        .find(|item| item.name().ends_with("::entry"))
+                        .unwrap();
+                    let instance = mono::Instance::try_from(item).unwrap();
+                    let body = instance.body().unwrap();
+                    let successors: Vec<_> = body
+                        .blocks
+                        .iter()
+                        .map(|block| block.terminator.successors())
+                        .collect();
+                    let caller = DebugSourcePosition {
+                        file: fixture,
+                        line: 1,
+                        column: 1,
+                    };
+                    let scopes = DebugSourceScopeMap {
+                        scopes: vec![
+                            DebugSourceScope {
+                                id: 0,
+                                parent: None,
+                                span: Some(caller.clone()),
+                                inlined: None,
+                            },
+                            DebugSourceScope {
+                                id: 1,
+                                parent: Some(0),
+                                span: Some(DebugSourcePosition {
+                                    file: worker_root.join("helper.rs"),
+                                    line: 279,
+                                    column: 5,
+                                }),
+                                inlined: Some(DebugInlinedScope {
+                                    callee_name: "helper::group_rank".to_string(),
+                                    callsite: Some(caller),
+                                }),
+                            },
+                        ],
+                        locations: vec![],
+                    };
+                    for kind in [DebugKind::Off, DebugKind::LineTables, DebugKind::Full] {
+                        let mut ctx = Context::new();
+                        crate::translator::register_dialects(&mut ctx);
+                        let module = ModuleOp::new(&mut ctx, "test".try_into().unwrap());
+                        let region = module.get_operation().deref(&ctx).get_region(0);
+                        let block = region.deref(&ctx).iter(&ctx).next().unwrap();
+                        let (function, _) = translate_body(
+                            &mut ctx,
+                            &body,
+                            &instance,
+                            body.blocks.len(),
+                            &successors,
+                            false,
+                            None,
+                            Some("entry"),
+                            &mut Legaliser::default(),
+                            kind,
+                            Some(&scopes),
+                            None,
+                            false,
+                        )
+                        .unwrap();
+                        function.insert_at_back(block, &ctx);
+                        mir_lower::register(&mut ctx);
+                        mir_lower::lower_mir_to_llvm(&mut ctx, module.get_operation()).unwrap();
+                        let lowered = block
+                            .deref(&ctx)
+                            .iter(&ctx)
+                            .find(|op| {
+                                Operation::get_op::<llvm_export::ops::FuncOp>(*op, &ctx).is_some()
+                            })
+                            .unwrap();
+                        let expected = match kind {
+                            DebugKind::Off => None,
+                            DebugKind::LineTables | DebugKind::Full => Some(scopes.clone()),
+                        };
+                        assert_eq!(
+                            llvm_export::ops::debug_source_scope_map(&ctx, lowered),
+                            expected
+                        );
+                    }
+                    std::ops::ControlFlow::<(), _>::Continue(())
+                })
+                .expect("fixture compilation succeeds");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]

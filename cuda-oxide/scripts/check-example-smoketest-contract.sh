@@ -228,7 +228,7 @@ if not re.search(
     r'\[\[ \$\{FULL_DEBUG\} -eq 0 \]\] && verify_nvvm_in_compile_only', source
 ):
     sys.exit("full-debug verdict contract missing: libNVVM artifact branch is not excluded")
-if "FULL_DEBUG_CONFIGURED_ROUTE_EXAMPLES=(interop_cubin_identity)" not in source:
+if "FULL_DEBUG_CONFIGURED_ROUTE_EXAMPLES=(interop_cubin_identity native_library)" not in source:
     sys.exit("full-debug route contract missing: explicit cubin-project accommodation")
 if "Full-debug configured route: %d / %d passed" not in source:
     sys.exit("full-debug route contract missing: configured-route summary")

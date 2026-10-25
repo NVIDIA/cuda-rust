@@ -181,6 +181,8 @@ pub struct CompilationResult {
     pub allow_fma_contraction: bool,
     /// Per-kernel source launch bounds preserved for post-link diagnostics.
     pub kernel_launch_bounds: BTreeMap<String, KernelLaunchBounds>,
+    /// Finalized resource requirements, keyed by concrete exported kernel name.
+    pub kernel_launch_facts: BTreeMap<String, oxide_artifacts::KernelLaunchFacts>,
 }
 
 /// Configuration for the compilation pipeline.
@@ -501,6 +503,27 @@ pub fn run_pipeline(
     config: &PipelineConfig,
     known_defs: crate::translator::facts::KnownDefs,
 ) -> Result<CompilationResult, PipelineError> {
+    run_pipeline_with_libraries(
+        functions,
+        device_externs,
+        config,
+        known_defs,
+        BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+}
+
+/// Run the pipeline with compiler-validated, monomorphized library calls.
+/// The map keys are resolved instance mangled names, not source spellings.
+pub fn run_pipeline_with_libraries(
+    functions: &[CollectedFunction],
+    device_externs: &[DeviceExternDecl],
+    config: &PipelineConfig,
+    known_defs: crate::translator::facts::KnownDefs,
+    libraries: BTreeMap<String, crate::LibraryCallPlan>,
+    library_roots: &BTreeMap<String, oxide_artifacts::KernelLaunchFacts>,
+) -> Result<CompilationResult, PipelineError> {
+    crate::library::set_calls(libraries);
     // Install the driver-resolved lang-item ids and emitted-function identities
     // for this run. Replace (rather than merge) both thread-local sets so
     // stale state from a previous run on this thread cannot survive.
@@ -570,6 +593,12 @@ pub fn run_pipeline(
             PipelineError::Translation(format!("{}: {}", func.export_name, e.disp(&ctx)))
         })?;
 
+        if let Some(plan) = library_roots.get(&func.export_name) {
+            crate::kernel_resources::apply_library_block(&mut ctx, func_op_ptr, plan).map_err(
+                |error| PipelineError::Translation(format!("{}: {error}", func.export_name)),
+            )?;
+        }
+
         if config.debug_kind.variables_enabled() {
             attach_debug_global_variables(&mut ctx, func_op_ptr, &config.debug_global_variables);
         }
@@ -600,6 +629,19 @@ pub fn run_pipeline(
         // Append to module
         append_to_module(&ctx, module_op_ptr, func_op_ptr);
     }
+
+    // Facts need the same helper alignment as lowering. This max-only call-graph
+    // propagation is idempotent; lowering also runs it for its other callers.
+    mir_lower::propagate_kernel_dynamic_shared_alignments(&mut ctx, module_op_ptr);
+    let kernel_launch_facts = crate::kernel_resources::collect(
+        &ctx,
+        module_op_ptr,
+        functions
+            .iter()
+            .filter(|function| function.is_kernel)
+            .map(|function| function.export_name.clone()),
+    )
+    .map_err(PipelineError::Translation)?;
 
     let ll_path = config.output_dir.join(format!("{}.ll", config.output_name));
     let ptx_path = config
@@ -657,6 +699,7 @@ pub fn run_pipeline(
                 target: generated.target,
                 allow_fma_contraction: config.allow_fma_contraction,
                 kernel_launch_bounds,
+                kernel_launch_facts,
             })
         }
         ModuleArtifactKind::Ptx => Ok(CompilationResult {
@@ -667,6 +710,7 @@ pub fn run_pipeline(
             target: generated.target,
             allow_fma_contraction: config.allow_fma_contraction,
             kernel_launch_bounds,
+            kernel_launch_facts,
         }),
         ModuleArtifactKind::Cubin => Ok(CompilationResult {
             artifact_path: cubin_path,
@@ -676,6 +720,7 @@ pub fn run_pipeline(
             target: generated.target,
             allow_fma_contraction: config.allow_fma_contraction,
             kernel_launch_bounds,
+            kernel_launch_facts,
         }),
     }
 }
@@ -770,7 +815,9 @@ fn write_nvvm_compile_options_sidecar(
     })
 }
 
-fn stale_compilation_artifact_paths(
+/// Paths the pipeline may remove or replace when compiling one module.
+/// Callers can preflight these before compilation to protect external inputs.
+pub fn stale_compilation_artifact_paths(
     output_dir: &Path,
     output_name: &str,
 ) -> Vec<std::path::PathBuf> {

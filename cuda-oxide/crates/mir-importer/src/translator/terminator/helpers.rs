@@ -350,39 +350,6 @@ pub fn emit_function_call(
         last_op = arg_last_op;
     }
 
-    // A Rust foreign declaration uses generic pointers at its ABI surface,
-    // while an argument may retain a concrete GPU address space internally
-    // (for example, `*mut T` in shared memory). Adapt that representation at
-    // the frozen declaration boundary, but only when pointee, mutability, and
-    // source pointer kind already agree exactly. This is not authority to turn
-    // a raw pointer into a reference or otherwise manufacture provenance.
-    if let Some(signature) = external_callee_type {
-        let expected_arguments = {
-            let signature_ref = signature.deref(ctx);
-            let signature = signature_ref
-                .downcast_ref::<pliron::builtin::types::FunctionType>()
-                .expect("foreign callee type must be a builtin FunctionType");
-            signature.arg_types()
-        };
-
-        // Variadic declarations are rejected before this point, so unequal
-        // arity is invalid and must remain visible to MirCallOp verification.
-        if arg_values.len() == expected_arguments.len() {
-            for (argument, expected) in arg_values.iter_mut().zip(expected_arguments) {
-                let (normalized, normalized_last_op) = normalize_call_pointer_argument(
-                    ctx,
-                    *argument,
-                    expected,
-                    block_ptr,
-                    last_op,
-                    loc.clone(),
-                );
-                *argument = normalized;
-                last_op = normalized_last_op;
-            }
-        }
-    }
-
     // Ordinary Rust helper signatures also expose generic pointers. Resolve
     // the monomorphized operand type (not an unresolved trait signature), and
     // adapt only address space. All other type/provenance mismatches still
@@ -419,6 +386,73 @@ pub fn emit_function_call(
             );
             *argument = normalized;
             last_op = tail;
+        }
+    }
+
+    emit_function_call_values(
+        ctx,
+        body,
+        callee_name,
+        arg_values,
+        destination,
+        return_type,
+        external_callee_type,
+        target,
+        block_ptr,
+        last_op,
+        value_map,
+        block_map,
+        loc,
+    )
+}
+
+/// Emit already translated arguments at an explicit foreign ABI boundary.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_function_call_values(
+    ctx: &mut Context,
+    body: &mir::Body,
+    callee_name: &str,
+    mut arg_values: Vec<Value>,
+    destination: &mir::Place,
+    return_type: TypeHandle,
+    external_callee_type: Option<TypeHandle>,
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    mut last_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    // A Rust foreign declaration uses generic pointers at its ABI surface,
+    // while an argument may retain a concrete GPU address space internally
+    // (for example, `*mut T` in shared memory). Adapt that representation at
+    // the frozen declaration boundary, but only when pointee, mutability, and
+    // source pointer kind already agree exactly. This is not authority to turn
+    // a raw pointer into a reference or otherwise manufacture provenance.
+    if let Some(signature) = external_callee_type {
+        let expected_arguments = {
+            let signature_ref = signature.deref(ctx);
+            let signature = signature_ref
+                .downcast_ref::<pliron::builtin::types::FunctionType>()
+                .expect("foreign callee type must be a builtin FunctionType");
+            signature.arg_types()
+        };
+
+        // Variadic declarations are rejected before this point, so unequal
+        // arity is invalid and must remain visible to MirCallOp verification.
+        if arg_values.len() == expected_arguments.len() {
+            for (argument, expected) in arg_values.iter_mut().zip(expected_arguments) {
+                let (normalized, normalized_last_op) = normalize_call_pointer_argument(
+                    ctx,
+                    *argument,
+                    expected,
+                    block_ptr,
+                    last_op,
+                    loc.clone(),
+                );
+                *argument = normalized;
+                last_op = normalized_last_op;
+            }
         }
     }
 

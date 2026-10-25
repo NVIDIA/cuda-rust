@@ -398,6 +398,22 @@ cargo oxide emit-ltoir my_kernels --arch sm_90
 
 Every command takes `--help`, which lists the flags each one accepts.
 
+For non-generic kernels that call external device functions, `--materialize-cubin`
+links their CUDA LTO-IR definitions during the ordinary Cargo build. Pass each
+input with `--link-ltoir` after the subcommand, in link order:
+
+```bash
+cargo oxide run --materialize-cubin --arch sm_120 \
+  --link-ltoir build/device-libs/scale.ltoir --link-ltoir build/device-libs/add.ltoir
+```
+
+Inputs must be raw CUDA LTO-IR, not object files or fatbins. Every supplied
+file is linked into each materialized device artifact in the Cargo invocation.
+This requires a build-host CUDA Toolkit compatible with the external inputs.
+The resulting executable embeds the final cubin. Input names and contents are
+part of Cargo's device-code fingerprint, so a changed definition rebuilds the
+artifact. See the `external_ltoir` example for C++ sources and generation commands.
+
 ---
 
 ## Verifying your installation

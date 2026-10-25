@@ -16,6 +16,267 @@ use pliron::operation::Operation;
 use crate::common::{append_return, build_test_kernel, lowered_kernel_body, make_test_ctx};
 
 #[test]
+fn test_special_math_mixed_signatures_on_both_backends() -> Result<(), anyhow::Error> {
+    use dialect_mir::rust_intrinsics as ri;
+    use pliron::builtin::attributes::StringAttr;
+    use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
+    use pliron::r#type::{TypeHandle, Typed};
+
+    for backend in [
+        mir_lower::IntrinsicBackend::LlvmNvptx,
+        mir_lower::IntrinsicBackend::LibNvvm,
+    ] {
+        let mut ctx = make_test_ctx();
+        let f32_ty: TypeHandle = FP32Type::get(&ctx).into();
+        let f64_ty: TypeHandle = FP64Type::get(&ctx).into();
+        let i32_mir: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Signed).into();
+        let i32_llvm: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Signless).into();
+        let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![f32_ty, f64_ty, i32_mir]);
+        let x32 = entry.deref(&ctx).get_argument(0);
+        let x64 = entry.deref(&ctx).get_argument(1);
+        let exponent = entry.deref(&ctx).get_argument(2);
+        let cases = [
+            (
+                ri::CALLEE_TGAMMA_F32,
+                "__nv_tgammaf",
+                f32_ty,
+                vec![x32],
+                vec![f32_ty],
+            ),
+            (
+                ri::CALLEE_TGAMMA_F64,
+                "__nv_tgamma",
+                f64_ty,
+                vec![x64],
+                vec![f64_ty],
+            ),
+            (
+                ri::CALLEE_ILOGB_F32,
+                "__nv_ilogbf",
+                i32_mir,
+                vec![x32],
+                vec![f32_ty],
+            ),
+            (
+                ri::CALLEE_ILOGB_F64,
+                "__nv_ilogb",
+                i32_mir,
+                vec![x64],
+                vec![f64_ty],
+            ),
+            (
+                ri::CALLEE_LDEXP_F32,
+                "__nv_ldexpf",
+                f32_ty,
+                vec![x32, exponent],
+                vec![f32_ty, i32_llvm],
+            ),
+            (
+                ri::CALLEE_LDEXP_F64,
+                "__nv_ldexp",
+                f64_ty,
+                vec![x64, exponent],
+                vec![f64_ty, i32_llvm],
+            ),
+            // Control: the pre-existing mixed float/integer powi path.
+            (
+                ri::CALLEE_POWI_F32,
+                "__nv_powif",
+                f32_ty,
+                vec![x32, exponent],
+                vec![f32_ty, i32_llvm],
+            ),
+            (
+                ri::CALLEE_POWI_F64,
+                "__nv_powi",
+                f64_ty,
+                vec![x64, exponent],
+                vec![f64_ty, i32_llvm],
+            ),
+        ];
+        for (callee, _, result_ty, operands, _) in &cases {
+            let call = Operation::new(
+                &mut ctx,
+                mir::MirCallOp::get_concrete_op_info(),
+                vec![*result_ty],
+                operands.clone(),
+                vec![],
+                0,
+            );
+            mir::MirCallOp::new(call).set_attr_callee(&ctx, StringAttr::new((*callee).to_string()));
+            call.insert_at_back(entry, &ctx);
+        }
+        append_return(&mut ctx, entry);
+        mir_lower::lower_mir_to_llvm_with_options(
+            &mut ctx,
+            module_ptr,
+            mir_lower::LoweringOptions {
+                intrinsic_backend: backend,
+                ..Default::default()
+            },
+        )
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+
+        let calls = lowered_kernel_body(&ctx, module_ptr)
+            .into_iter()
+            .filter_map(|op| Operation::get_op::<llvm::CallOp>(op, &ctx))
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), cases.len());
+        for call in calls {
+            let CallOpCallable::Direct(symbol) = call.callee(&ctx) else {
+                panic!("special math must lower to a direct call");
+            };
+            let name = symbol.to_string();
+            let (_, _, mir_result, _, expected_args) = cases
+                .iter()
+                .find(|(_, symbol, _, _, _)| *symbol == name)
+                .expect("unexpected libdevice symbol");
+            let expected_result = if *mir_result == i32_mir {
+                i32_llvm
+            } else {
+                *mir_result
+            };
+            let op = call.get_operation().deref(&ctx);
+            assert_eq!(op.get_num_results(), 1, "{name}");
+            assert_eq!(op.get_result(0).get_type(&ctx), expected_result, "{name}");
+            assert_eq!(
+                op.operands()
+                    .map(|arg| arg.get_type(&ctx))
+                    .collect::<Vec<_>>(),
+                *expected_args,
+                "{name}"
+            );
+        }
+        let module = Operation::get_op::<ModuleOp>(module_ptr, &ctx).unwrap();
+        let ir = llvm_export::export::export_module_to_string(&ctx, &module)
+            .expect("mixed-signature math must export to LLVM IR");
+        for declaration in [
+            "declare float @__nv_tgammaf(float",
+            "declare double @__nv_tgamma(double",
+            "declare i32 @__nv_ilogbf(float",
+            "declare i32 @__nv_ilogb(double",
+            "declare float @__nv_ldexpf(float",
+            "declare double @__nv_ldexp(double",
+        ] {
+            assert!(ir.contains(declaration), "missing {declaration}:\n{ir}");
+        }
+        assert!(!ir.contains(ri::PLACEHOLDER_PREFIX), "{ir}");
+    }
+    Ok(())
+}
+
+#[test]
+fn test_special_math_lowering_rejects_bad_arity_and_types() {
+    use dialect_mir::rust_intrinsics as ri;
+    use pliron::builtin::attributes::StringAttr;
+    use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
+    use pliron::r#type::TypeHandle;
+
+    for backend in [
+        mir_lower::IntrinsicBackend::LlvmNvptx,
+        mir_lower::IntrinsicBackend::LibNvvm,
+    ] {
+        for bad_case in 0..10 {
+            let mut ctx = make_test_ctx();
+            let f32_ty: TypeHandle = FP32Type::get(&ctx).into();
+            let f64_ty: TypeHandle = FP64Type::get(&ctx).into();
+            let i32_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Signed).into();
+            let i64_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Signed).into();
+            let (module_ptr, entry) =
+                build_test_kernel(&mut ctx, vec![f32_ty, f64_ty, i32_ty, i64_ty]);
+            let x32 = entry.deref(&ctx).get_argument(0);
+            let x64 = entry.deref(&ctx).get_argument(1);
+            let exponent = entry.deref(&ctx).get_argument(2);
+            let wide_exponent = entry.deref(&ctx).get_argument(3);
+            let (callee, results, args, diagnostic) = match bad_case {
+                0 => (
+                    ri::CALLEE_TGAMMA_F32,
+                    vec![f32_ty],
+                    vec![],
+                    "requires 1 operand(s)",
+                ),
+                1 => (
+                    ri::CALLEE_LDEXP_F64,
+                    vec![f64_ty],
+                    vec![x64],
+                    "requires 2 operand(s)",
+                ),
+                2 => (
+                    ri::CALLEE_ILOGB_F32,
+                    vec![f32_ty],
+                    vec![x32],
+                    "signature mismatch",
+                ),
+                3 => (
+                    ri::CALLEE_LDEXP_F32,
+                    vec![f32_ty],
+                    vec![x32, x32],
+                    "signature mismatch",
+                ),
+                4 => (
+                    ri::CALLEE_LDEXP_F64,
+                    vec![f64_ty],
+                    vec![x64, wide_exponent],
+                    "signature mismatch",
+                ),
+                5 => (
+                    ri::CALLEE_TGAMMA_F32,
+                    vec![f32_ty],
+                    vec![x64],
+                    "signature mismatch",
+                ),
+                6 => (
+                    ri::CALLEE_TGAMMA_F64,
+                    vec![f32_ty],
+                    vec![x64],
+                    "signature mismatch",
+                ),
+                7 => (
+                    ri::CALLEE_ILOGB_F64,
+                    vec![i64_ty],
+                    vec![x64],
+                    "signature mismatch",
+                ),
+                8 => (
+                    ri::CALLEE_LDEXP_F32,
+                    vec![f64_ty],
+                    vec![x32, exponent],
+                    "signature mismatch",
+                ),
+                _ => (
+                    ri::CALLEE_TGAMMA_F64,
+                    vec![],
+                    vec![x64],
+                    "must have one result",
+                ),
+            };
+            let call = Operation::new(
+                &mut ctx,
+                mir::MirCallOp::get_concrete_op_info(),
+                results,
+                args,
+                vec![],
+                0,
+            );
+            mir::MirCallOp::new(call).set_attr_callee(&ctx, StringAttr::new(callee.to_string()));
+            call.insert_at_back(entry, &ctx);
+            append_return(&mut ctx, entry);
+            let error = mir_lower::lower_mir_to_llvm_with_options(
+                &mut ctx,
+                module_ptr,
+                mir_lower::LoweringOptions {
+                    intrinsic_backend: backend,
+                    ..Default::default()
+                },
+            )
+            .expect_err("malformed special math calls must fail")
+            .to_string();
+            assert!(error.contains(diagnostic), "case {bad_case}: {error}");
+        }
+    }
+}
+
+#[test]
 fn test_fast_float_intrinsics_lower_to_explicit_fast_binops() -> Result<(), anyhow::Error> {
     use dialect_mir::rust_intrinsics;
     use llvm_export::attributes::{FastmathFlags, FastmathFlagsAttr};

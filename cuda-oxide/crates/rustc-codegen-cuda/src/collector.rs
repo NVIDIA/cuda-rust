@@ -776,6 +776,8 @@ fn is_intrinsic_lowered_cmath_shim(fn_path: &str) -> bool {
             | "std::sys::cmath::log1p"
             | "std::sys::cmath::hypotf"
             | "std::sys::cmath::hypot"
+            | "std::sys::cmath::tgammaf"
+            | "std::sys::cmath::tgamma"
     )
 }
 
@@ -795,9 +797,9 @@ fn is_intrinsic_lowered_cmath_shim(fn_path: &str) -> bool {
 ///
 /// Nothing in these wrappers touches the OS or the heap, so collect them like
 /// any other reachable pure function. Every stable method's shim is in
-/// `is_intrinsic_lowered_cmath_shim`; the unstable `gamma`/`erf` family and
-/// `f128` still stop one level deeper, at their shim, with the guard naming
-/// that shim.
+/// `is_intrinsic_lowered_cmath_shim`; `gamma` is also intercepted for f32/f64.
+/// Unsupported methods such as `erf`, and f128 shims, still stop one level
+/// deeper with the guard naming that shim.
 fn is_std_float_inherent_method(fn_path: &str) -> bool {
     ["f16", "f32", "f64", "f128"]
         .iter()
@@ -3211,6 +3213,26 @@ mod tests {
         PTX_MERGE_REQUIRED_PREFIX, is_ptx_merge_required_marker, ptx_merge_required_marker,
     };
     use rustc_middle::mir::BasicBlock;
+
+    #[test]
+    fn special_math_cmath_shims_are_an_exact_allowlist() {
+        for path in ["std::sys::cmath::tgammaf", "std::sys::cmath::tgamma"] {
+            assert!(super::is_intrinsic_lowered_cmath_shim(path), "{path}");
+        }
+        for path in [
+            "user::std::sys::cmath::tgamma",
+            "std::sys::cmath::tgammaf128",
+            "std::sys::cmath::lgamma_r",
+            "std::sys::cmath::frexp",
+            "std::sys::cmath::erf",
+            "std::io::stdio::_print",
+        ] {
+            assert!(!super::is_intrinsic_lowered_cmath_shim(path), "{path}");
+        }
+        assert!(super::is_intrinsic_lowered_cmath_shim(
+            "std::sys::cmath::hypot"
+        ));
+    }
 
     #[test]
     fn std_float_wrappers_are_collected_not_forbidden() {

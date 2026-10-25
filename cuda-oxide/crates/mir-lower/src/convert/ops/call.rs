@@ -262,6 +262,12 @@ enum RustFloatMathIntrinsic {
     Log1pF64,
     HypotF32,
     HypotF64,
+    TgammaF32,
+    TgammaF64,
+    IlogbF32,
+    IlogbF64,
+    LdexpF32,
+    LdexpF64,
     FaddFast,
     FsubFast,
     FmulFast,
@@ -344,6 +350,12 @@ impl RustFloatMathIntrinsic {
             rust_intrinsics::CALLEE_LOG1P_F64 => Some(Self::Log1pF64),
             rust_intrinsics::CALLEE_HYPOT_F32 => Some(Self::HypotF32),
             rust_intrinsics::CALLEE_HYPOT_F64 => Some(Self::HypotF64),
+            rust_intrinsics::CALLEE_TGAMMA_F32 => Some(Self::TgammaF32),
+            rust_intrinsics::CALLEE_TGAMMA_F64 => Some(Self::TgammaF64),
+            rust_intrinsics::CALLEE_ILOGB_F32 => Some(Self::IlogbF32),
+            rust_intrinsics::CALLEE_ILOGB_F64 => Some(Self::IlogbF64),
+            rust_intrinsics::CALLEE_LDEXP_F32 => Some(Self::LdexpF32),
+            rust_intrinsics::CALLEE_LDEXP_F64 => Some(Self::LdexpF64),
             rust_intrinsics::CALLEE_FADD_FAST => Some(Self::FaddFast),
             rust_intrinsics::CALLEE_FSUB_FAST => Some(Self::FsubFast),
             rust_intrinsics::CALLEE_FMUL_FAST => Some(Self::FmulFast),
@@ -448,6 +460,12 @@ impl RustFloatMathIntrinsic {
             Self::Log1pF64 => Ok("__nv_log1p"),
             Self::HypotF32 => Ok("__nv_hypotf"),
             Self::HypotF64 => Ok("__nv_hypot"),
+            Self::TgammaF32 => Ok("__nv_tgammaf"),
+            Self::TgammaF64 => Ok("__nv_tgamma"),
+            Self::IlogbF32 => Ok("__nv_ilogbf"),
+            Self::IlogbF64 => Ok("__nv_ilogb"),
+            Self::LdexpF32 => Ok("__nv_ldexpf"),
+            Self::LdexpF64 => Ok("__nv_ldexp"),
             Self::FaddFast | Self::FsubFast | Self::FmulFast | Self::FdivFast | Self::FremFast => {
                 // The `f*_fast` intrinsics lower directly to LLVM `fadd`/`fsub`/
                 // `fmul`/`fdiv`/`frem` with fast-math flags, not to a libdevice
@@ -479,6 +497,8 @@ impl RustFloatMathIntrinsic {
             | Self::Atan2F64
             | Self::HypotF32
             | Self::HypotF64
+            | Self::LdexpF32
+            | Self::LdexpF64
             | Self::FaddFast
             | Self::FsubFast
             | Self::FmulFast
@@ -1300,6 +1320,35 @@ fn convert_rust_float_math_intrinsic(
     let result_mir_ty = op.deref(ctx).get_result(0).get_type(ctx);
     let result_ty = convert_type(ctx, result_mir_ty).map_err(anyhow_to_pliron)?;
 
+    // These libdevice signatures mix integer and float types. Validate the
+    // complete signature before declaring the callee: deriving it solely from
+    // a malformed placeholder would silently declare the wrong libdevice ABI.
+    let special_float_ty: Option<TypeHandle> = match intrinsic {
+        RustFloatMathIntrinsic::TgammaF32
+        | RustFloatMathIntrinsic::IlogbF32
+        | RustFloatMathIntrinsic::LdexpF32 => Some(FP32Type::get(ctx).into()),
+        RustFloatMathIntrinsic::TgammaF64
+        | RustFloatMathIntrinsic::IlogbF64
+        | RustFloatMathIntrinsic::LdexpF64 => Some(FP64Type::get(ctx).into()),
+        _ => None,
+    };
+    if let Some(float_ty) = special_float_ty {
+        let i32_ty: TypeHandle = IntegerType::get(ctx, 32, Signedness::Signless).into();
+        let expected_result = match intrinsic {
+            RustFloatMathIntrinsic::IlogbF32 | RustFloatMathIntrinsic::IlogbF64 => i32_ty,
+            _ => float_ty,
+        };
+        if result_ty != expected_result
+            || args[0].get_type(ctx) != float_ty
+            || (matches!(
+                intrinsic,
+                RustFloatMathIntrinsic::LdexpF32 | RustFloatMathIntrinsic::LdexpF64
+            ) && args[1].get_type(ctx) != i32_ty)
+        {
+            return pliron::input_err!(loc, "Rust special math intrinsic signature mismatch");
+        }
+    }
+
     // The rounding and sign intrinsics have direct LLVM equivalents that the
     // NVPTX backend selects without a libdevice call; everything else (and
     // every op under the libNVVM backend) stays on libdevice. See
@@ -2004,6 +2053,86 @@ fn resolve_device_extern_symbol(callee_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn special_math_symbols_and_arities_match_on_both_backends() {
+        use RustFloatMathIntrinsic as I;
+        for backend in [
+            crate::IntrinsicBackend::LlvmNvptx,
+            crate::IntrinsicBackend::LibNvvm,
+        ] {
+            let mut ctx = Context::new();
+            crate::context::set_lowering_options(
+                &mut ctx,
+                crate::LoweringOptions {
+                    intrinsic_backend: backend,
+                    ..Default::default()
+                },
+            );
+            let f32_ty = FP32Type::get(&ctx).into();
+            let f64_ty = FP64Type::get(&ctx).into();
+            let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signless).into();
+            for (callee, intrinsic, result_ty, symbol, arity) in [
+                (
+                    rust_intrinsics::CALLEE_TGAMMA_F32,
+                    I::TgammaF32,
+                    f32_ty,
+                    "__nv_tgammaf",
+                    1,
+                ),
+                (
+                    rust_intrinsics::CALLEE_TGAMMA_F64,
+                    I::TgammaF64,
+                    f64_ty,
+                    "__nv_tgamma",
+                    1,
+                ),
+                (
+                    rust_intrinsics::CALLEE_ILOGB_F32,
+                    I::IlogbF32,
+                    i32_ty,
+                    "__nv_ilogbf",
+                    1,
+                ),
+                (
+                    rust_intrinsics::CALLEE_ILOGB_F64,
+                    I::IlogbF64,
+                    i32_ty,
+                    "__nv_ilogb",
+                    1,
+                ),
+                (
+                    rust_intrinsics::CALLEE_LDEXP_F32,
+                    I::LdexpF32,
+                    f32_ty,
+                    "__nv_ldexpf",
+                    2,
+                ),
+                (
+                    rust_intrinsics::CALLEE_LDEXP_F64,
+                    I::LdexpF64,
+                    f64_ty,
+                    "__nv_ldexp",
+                    2,
+                ),
+            ] {
+                assert_eq!(I::from_placeholder_callee(callee), Some(intrinsic));
+                assert_eq!(intrinsic.arg_count(), arity);
+                assert_eq!(
+                    float_math_intrinsic_symbol(
+                        &ctx,
+                        intrinsic,
+                        result_ty,
+                        pliron::location::Location::Unknown,
+                    )
+                    .unwrap(),
+                    symbol
+                );
+                assert!(rust_intrinsics::is_libdevice_backed_placeholder(callee));
+                assert!(!rust_intrinsics::is_backend_dependent_libdevice_placeholder(callee));
+            }
+        }
+    }
 
     #[test]
     fn no_fma_policy_removes_only_contract_from_fast_float_intrinsics() {

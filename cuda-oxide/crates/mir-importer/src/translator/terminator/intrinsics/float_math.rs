@@ -16,7 +16,7 @@ use pliron::location::Location;
 use pliron::operation::Operation;
 use rustc_public::mir;
 
-/// Floating-point math intrinsic from libcore.
+/// Floating-point math intrinsic from core, std, or libm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RustFloatMathIntrinsic {
     /// `core::intrinsics::sqrtf32`.
@@ -161,6 +161,18 @@ pub enum RustFloatMathIntrinsic {
     HypotF32,
     /// `f64::hypot` / `std::sys::cmath::hypot` (binary).
     HypotF64,
+    /// `libm::tgammaf`.
+    TgammaF32,
+    /// `libm::tgamma`.
+    TgammaF64,
+    /// `libm::ilogbf`.
+    IlogbF32,
+    /// `libm::ilogb`.
+    IlogbF64,
+    /// `libm::ldexpf`.
+    LdexpF32,
+    /// `libm::ldexp`.
+    LdexpF64,
     /// Generic `core::intrinsics::fadd_fast` (lowered to `llvm.fadd` + fast-math).
     FaddFast,
     /// Generic `core::intrinsics::fsub_fast` (lowered to `llvm.fsub` + fast-math).
@@ -341,6 +353,8 @@ impl RustFloatMathIntrinsic {
             "std::sys::cmath::log1p" => Some(Self::Log1pF64),
             "std::sys::cmath::hypotf" => Some(Self::HypotF32),
             "std::sys::cmath::hypot" => Some(Self::HypotF64),
+            "std::sys::cmath::tgammaf" => Some(Self::TgammaF32),
+            "std::sys::cmath::tgamma" => Some(Self::TgammaF64),
             other => Self::from_libm_path(other).or_else(|| Self::from_fast_intrinsic_path(other)),
         }
     }
@@ -428,6 +442,12 @@ impl RustFloatMathIntrinsic {
             "log1p" => Some(Self::Log1pF64),
             "hypotf" => Some(Self::HypotF32),
             "hypot" => Some(Self::HypotF64),
+            "tgammaf" => Some(Self::TgammaF32),
+            "tgamma" => Some(Self::TgammaF64),
+            "ilogbf" => Some(Self::IlogbF32),
+            "ilogb" => Some(Self::IlogbF64),
+            "ldexpf" | "scalbnf" => Some(Self::LdexpF32),
+            "ldexp" | "scalbn" => Some(Self::LdexpF64),
             _ => None,
         }
     }
@@ -523,6 +543,12 @@ impl RustFloatMathIntrinsic {
             Self::Log1pF64 => rust_intrinsics::CALLEE_LOG1P_F64,
             Self::HypotF32 => rust_intrinsics::CALLEE_HYPOT_F32,
             Self::HypotF64 => rust_intrinsics::CALLEE_HYPOT_F64,
+            Self::TgammaF32 => rust_intrinsics::CALLEE_TGAMMA_F32,
+            Self::TgammaF64 => rust_intrinsics::CALLEE_TGAMMA_F64,
+            Self::IlogbF32 => rust_intrinsics::CALLEE_ILOGB_F32,
+            Self::IlogbF64 => rust_intrinsics::CALLEE_ILOGB_F64,
+            Self::LdexpF32 => rust_intrinsics::CALLEE_LDEXP_F32,
+            Self::LdexpF64 => rust_intrinsics::CALLEE_LDEXP_F64,
             Self::FaddFast => rust_intrinsics::CALLEE_FADD_FAST,
             Self::FsubFast => rust_intrinsics::CALLEE_FSUB_FAST,
             Self::FmulFast => rust_intrinsics::CALLEE_FMUL_FAST,
@@ -735,6 +761,55 @@ pub fn emit_rust_float_math_intrinsic(
 mod tests {
     use super::*;
     use dialect_mir::rust_intrinsics;
+
+    #[test]
+    fn special_math_paths_resolve_to_typed_placeholders() {
+        use RustFloatMathIntrinsic as I;
+        for (name, intrinsic, callee) in [
+            ("tgammaf", I::TgammaF32, rust_intrinsics::CALLEE_TGAMMA_F32),
+            ("tgamma", I::TgammaF64, rust_intrinsics::CALLEE_TGAMMA_F64),
+            ("ilogbf", I::IlogbF32, rust_intrinsics::CALLEE_ILOGB_F32),
+            ("ilogb", I::IlogbF64, rust_intrinsics::CALLEE_ILOGB_F64),
+            ("ldexpf", I::LdexpF32, rust_intrinsics::CALLEE_LDEXP_F32),
+            ("ldexp", I::LdexpF64, rust_intrinsics::CALLEE_LDEXP_F64),
+            ("scalbnf", I::LdexpF32, rust_intrinsics::CALLEE_LDEXP_F32),
+            ("scalbn", I::LdexpF64, rust_intrinsics::CALLEE_LDEXP_F64),
+        ] {
+            for path in [
+                format!("libm::{name}"),
+                format!("libm::math::{name}::{name}"),
+            ] {
+                assert_eq!(I::from_core_path(&path), Some(intrinsic), "{path}");
+                assert_eq!(intrinsic.placeholder_callee(), callee);
+            }
+            for path in [
+                format!("my_app::libm_compat::{name}"),
+                format!("my_app::libm::{name}"),
+                format!("libm_lookalike::{name}"),
+                format!("std::sys::cmath::{name}_unsupported"),
+            ] {
+                assert_eq!(I::from_core_path(&path), None, "{path}");
+            }
+        }
+        assert_eq!(
+            I::from_core_path("std::sys::cmath::tgammaf"),
+            Some(I::TgammaF32)
+        );
+        assert_eq!(
+            I::from_core_path("std::sys::cmath::tgamma"),
+            Some(I::TgammaF64)
+        );
+        // Existing scalar and tuple dispatch must keep their identities.
+        assert_eq!(I::from_core_path("libm::hypot"), Some(I::HypotF64));
+        assert_eq!(
+            I::from_core_path("core::intrinsics::powif32"),
+            Some(I::PowiF32)
+        );
+        assert_eq!(libm_sincos_is_f64("libm::sincosf"), Some(false));
+        for name in ["frexp", "modf", "remquo", "lgamma_r", "tgammaf128"] {
+            assert_eq!(I::from_core_path(&format!("libm::{name}")), None);
+        }
+    }
 
     #[test]
     fn generic_float_intrinsics_resolve_only_the_declared_float_type() {

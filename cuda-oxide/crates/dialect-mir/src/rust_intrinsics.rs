@@ -211,6 +211,19 @@ pub const CALLEE_HYPOT_F32: &str = placeholder!("hypotf32");
 /// Placeholder call used for `f64::hypot` / `std::sys::cmath::hypot` (binary).
 pub const CALLEE_HYPOT_F64: &str = placeholder!("hypotf64");
 
+/// Placeholder call used for `libm::tgammaf`.
+pub const CALLEE_TGAMMA_F32: &str = placeholder!("tgammaf32");
+/// Placeholder call used for `libm::tgamma`.
+pub const CALLEE_TGAMMA_F64: &str = placeholder!("tgammaf64");
+/// Placeholder call used for `libm::ilogbf`.
+pub const CALLEE_ILOGB_F32: &str = placeholder!("ilogbf32");
+/// Placeholder call used for `libm::ilogb`.
+pub const CALLEE_ILOGB_F64: &str = placeholder!("ilogbf64");
+/// Placeholder call used for `libm::ldexpf`.
+pub const CALLEE_LDEXP_F32: &str = placeholder!("ldexpf32");
+/// Placeholder call used for `libm::ldexp`.
+pub const CALLEE_LDEXP_F64: &str = placeholder!("ldexpf64");
+
 /// Placeholder call used for `core::intrinsics::fadd_fast` (generic over float type).
 ///
 /// Lowered to `llvm.fadd` with explicit `fast` fast-math flags. The `f*_fast` intrinsics
@@ -350,6 +363,12 @@ pub fn is_libdevice_backed_placeholder(callee: &str) -> bool {
             | CALLEE_LOG1P_F64
             | CALLEE_HYPOT_F32
             | CALLEE_HYPOT_F64
+            | CALLEE_TGAMMA_F32
+            | CALLEE_TGAMMA_F64
+            | CALLEE_ILOGB_F32
+            | CALLEE_ILOGB_F64
+            | CALLEE_LDEXP_F32
+            | CALLEE_LDEXP_F64
     )
 }
 
@@ -452,6 +471,12 @@ mod tests {
         CALLEE_LOG1P_F64,
         CALLEE_HYPOT_F32,
         CALLEE_HYPOT_F64,
+        CALLEE_TGAMMA_F32,
+        CALLEE_TGAMMA_F64,
+        CALLEE_ILOGB_F32,
+        CALLEE_ILOGB_F64,
+        CALLEE_LDEXP_F32,
+        CALLEE_LDEXP_F64,
     ];
 
     /// Every placeholder that is libdevice-backed only under the libNVVM

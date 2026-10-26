@@ -34,7 +34,8 @@ use super::{
     mma::{build_mma_facts, require_smem_overlay_pair, verify_mma_use_closure},
     pipeline::require_producer_pipeline_order,
     provenance::{
-        is_local_cell_pointer_alias_cast, is_semantic_pointer_carrier_cast, local_cell_is_closed,
+        OrdinaryFacts, is_local_cell_pointer_alias_cast, is_semantic_pointer_carrier_cast,
+        local_cell_is_closed,
     },
     scheduler::{build_scheduler_facts, scheduler_root},
     *,
@@ -386,6 +387,52 @@ fn factless_block_argument_store_poisons_a_valid_scheduler_cell() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("merges values"), "{error}");
+}
+
+/// Fact lookups see only the named carrier, and a copy forwards the source as it was when the copy began.
+#[test]
+fn ordinary_facts_forward_a_snapshot_of_one_carrier() {
+    let mut ctx = Context::new();
+    let (_, block) = module_top(&mut ctx);
+    let u64_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Unsigned).into();
+    let source = undef(&mut ctx, block, u64_ty);
+    let other = undef(&mut ctx, block, u64_ty);
+    let destination = undef(&mut ctx, block, u64_ty);
+    let sorted = |facts: &OrdinaryFacts<u32>, value| {
+        let mut entries = facts.entries(value);
+        entries.sort();
+        entries
+    };
+
+    let mut facts = OrdinaryFacts::default();
+    assert!(facts.insert_path(source, vec![0], 1));
+    assert!(facts.insert_path(source, vec![1, 2], 2));
+    assert!(!facts.insert_path(source, vec![1, 2], 2));
+    assert!(facts.insert(other, 3));
+    assert_eq!(sorted(&facts, source), vec![(vec![0], 1), (vec![1, 2], 2)]);
+    assert_eq!(sorted(&facts, other), vec![(vec![], 3)]);
+    assert!(sorted(&facts, destination).is_empty());
+    assert_eq!(
+        facts.at_path(source, &[1, 2]).map(|found| found.len()),
+        Some(1)
+    );
+    assert!(facts.at_path(source, &[1]).is_none());
+    assert!(facts.at(other).is_some_and(|found| found.contains(&3)));
+
+    assert!(facts.copy_entries(source, source, &[], &[5]));
+    assert_eq!(
+        sorted(&facts, source),
+        vec![
+            (vec![0], 1),
+            (vec![1, 2], 2),
+            (vec![5, 0], 1),
+            (vec![5, 1, 2], 2)
+        ]
+    );
+    assert!(facts.copy_entries(source, destination, &[1], &[]));
+    assert!(!facts.copy_entries(source, destination, &[1], &[]));
+    assert_eq!(sorted(&facts, destination), vec![(vec![2], 2)]);
+    assert_eq!(sorted(&facts, other), vec![(vec![], 3)]);
 }
 
 /// Casts that change pointee, address space, or write capability cannot establish closed-cell aliases.

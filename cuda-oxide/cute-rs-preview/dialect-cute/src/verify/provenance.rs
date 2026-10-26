@@ -35,21 +35,15 @@ use pliron::{
     value::Value,
 };
 
-/// Identity of a whole SSA carrier or one nested aggregate field.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(super) struct CarrierKey {
-    /// The whole SSA carrier before following any aggregate field path.
-    pub(super) value: Value,
-    /// Empty means the value itself.  Non-empty paths describe a field inside
-    /// an ordinary aggregate before a matching `mir.extract_field` exposes it.
-    pub(super) path: Vec<u32>,
-}
-
 /// Monotone sets of possible semantic origins, indexed by carrier and field path.
 #[derive(Clone)]
 pub(super) struct OrdinaryFacts<F> {
-    /// Accumulated origins; multiple entries at one key represent a merge that consumers must resolve.
-    pub(super) facts: HashMap<CarrierKey, HashSet<F>>,
+    /// Accumulated origins by SSA carrier, then by field path inside it. An
+    /// empty path means the value itself; a non-empty path describes a field
+    /// inside an ordinary aggregate before a matching `mir.extract_field`
+    /// exposes it. Multiple origins at one path represent a merge that
+    /// consumers must resolve.
+    pub(super) facts: HashMap<Value, HashMap<Vec<u32>, HashSet<F>>>,
 }
 
 impl<F> Default for OrdinaryFacts<F> {
@@ -67,7 +61,9 @@ where
     /// Add one origin to a field path and report whether the fixed-point state changed.
     pub(super) fn insert_path(&mut self, value: Value, path: Vec<u32>, fact: F) -> bool {
         self.facts
-            .entry(CarrierKey { value, path })
+            .entry(value)
+            .or_default()
+            .entry(path)
             .or_default()
             .insert(fact)
     }
@@ -79,10 +75,7 @@ where
 
     /// Borrow the possible origins at an exact carrier field path.
     pub(super) fn at_path(&self, value: Value, path: &[u32]) -> Option<&HashSet<F>> {
-        self.facts.get(&CarrierKey {
-            value,
-            path: path.to_vec(),
-        })
+        self.facts.get(&value)?.get(path)
     }
 
     /// Borrow origins attached directly to a whole SSA carrier.
@@ -93,9 +86,10 @@ where
     /// Collect all nested field origins carried by one SSA value.
     pub(super) fn entries(&self, value: Value) -> Vec<(Vec<u32>, F)> {
         self.facts
-            .iter()
-            .filter(|(key, _)| key.value == value)
-            .flat_map(|(key, facts)| facts.iter().cloned().map(|fact| (key.path.clone(), fact)))
+            .get(&value)
+            .into_iter()
+            .flatten()
+            .flat_map(|(path, facts)| facts.iter().cloned().map(|fact| (path.clone(), fact)))
             .collect()
     }
 

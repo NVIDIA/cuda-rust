@@ -186,6 +186,12 @@ impl ExecutionContext {
     pub(crate) unsafe fn complete(&self) {
         self.submission.complete();
     }
+
+    /// The owning future delivered this stream's fault to its caller; a
+    /// leak on release is then not reported again.
+    pub(crate) fn mark_fault_delivered(&self) {
+        self.submission.mark_fault_delivered();
+    }
     pub fn device(&self) -> &Arc<Device> {
         &self.device
     }

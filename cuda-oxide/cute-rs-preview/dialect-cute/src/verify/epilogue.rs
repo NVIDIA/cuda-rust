@@ -29,7 +29,7 @@ use super::{
     ghosts::epilogue_semantic_ids,
     invalid,
     mma::{MmaFact, build_mma_facts, one_mma_fact},
-    provenance::{is_semantic_pointer_carrier_cast, local_cell, local_cell_is_closed},
+    provenance::{LocalCells, is_semantic_pointer_carrier_cast},
     tma::direct_tma_view_producer,
 };
 use crate::{
@@ -49,21 +49,25 @@ fn is_epilogue_pointer_identity_cast(ctx: &Context, operation: Ptr<Operation>) -
 }
 
 /// Recognize carrier-only operations allowed between writer synchronization anchors.
-fn is_epilogue_writer_plumbing(ctx: &Context, operation: Ptr<Operation>) -> bool {
+fn is_epilogue_writer_plumbing(
+    ctx: &Context,
+    cells: &LocalCells,
+    operation: Ptr<Operation>,
+) -> bool {
     let opid = Operation::get_opid(operation, ctx);
     opid == MirGotoOp::get_opid_static()
         || opid == MirStorageLiveOp::get_opid_static()
         || opid == MirStorageDeadOp::get_opid_static()
         || opid == MirExtractFieldOp::get_opid_static()
         || is_epilogue_pointer_identity_cast(ctx, operation)
-        || is_closed_local_cell_load(ctx, operation)
+        || is_closed_local_cell_load(ctx, cells, operation)
 }
 
 /// A non-volatile `mir.load` from a closed compiler-created local cell only
 /// re-materializes carrier state (e.g. the epilogue handle struct spilled to
 /// an alloca slot); it cannot touch tile memory, so it is admissible plumbing
 /// between the writer-protocol anchor operations.
-fn is_closed_local_cell_load(ctx: &Context, operation: Ptr<Operation>) -> bool {
+fn is_closed_local_cell_load(ctx: &Context, cells: &LocalCells, operation: Ptr<Operation>) -> bool {
     if Operation::get_opid(operation, ctx) != MirLoadOp::get_opid_static() {
         return false;
     }
@@ -77,10 +81,7 @@ fn is_closed_local_cell_load(ctx: &Context, operation: Ptr<Operation>) -> bool {
     if load.is_volatile(ctx) {
         return false;
     }
-    let Some((root, _path)) = local_cell(ctx, load.address_opd(ctx)) else {
-        return false;
-    };
-    local_cell_is_closed(ctx, root)
+    cells.closed_cell(ctx, load.address_opd(ctx)).is_some()
 }
 
 /// Accept only the dead immutable reference Rust leaves around a no-inline
@@ -149,9 +150,13 @@ fn is_dead_epilogue_store_pipeline_ref(ctx: &Context, operation: Ptr<Operation>)
 }
 
 /// Recognize harmless carrier assembly and indexing between TMA issuer anchors.
-fn is_epilogue_issuer_plumbing(ctx: &Context, operation: Ptr<Operation>) -> bool {
+fn is_epilogue_issuer_plumbing(
+    ctx: &Context,
+    cells: &LocalCells,
+    operation: Ptr<Operation>,
+) -> bool {
     let opid = Operation::get_opid(operation, ctx);
-    is_epilogue_writer_plumbing(ctx, operation)
+    is_epilogue_writer_plumbing(ctx, cells, operation)
         || opid == MirUndefOp::get_opid_static()
         || opid == MirInsertFieldOp::get_opid_static()
         || opid == MirConstructStructOp::get_opid_static()
@@ -528,6 +533,7 @@ pub(super) fn verify_epilogue_story(ctx: &Context, all_ops: &[Ptr<Operation>]) -
         )?;
     }
 
+    let cells = LocalCells::new(ctx, all_ops);
     let writer_range = require_linear_protocol_order(
         ctx,
         "epilogue writer protocol",
@@ -535,7 +541,7 @@ pub(super) fn verify_epilogue_story(ctx: &Context, all_ops: &[Ptr<Operation>]) -
     )?;
     for operation in &writer_range {
         let expected = [reusable_sync, store_fragment, ready_sync].contains(operation);
-        if !expected && !is_epilogue_writer_plumbing(ctx, *operation) {
+        if !expected && !is_epilogue_writer_plumbing(ctx, &cells, *operation) {
             return Err(invalid(format!(
                 "epilogue writer protocol has interposed non-carrier operation `{}`",
                 Operation::get_opid(*operation, ctx)
@@ -663,7 +669,7 @@ pub(super) fn verify_epilogue_story(ctx: &Context, all_ops: &[Ptr<Operation>]) -
             commit,
         ]
         .contains(&operation);
-        if !allowed_tma_view && !expected && !is_epilogue_issuer_plumbing(ctx, operation) {
+        if !allowed_tma_view && !expected && !is_epilogue_issuer_plumbing(ctx, &cells, operation) {
             return Err(invalid(format!(
                 "epilogue TMA issuer protocol has interposed operation `{opid}`"
             )));

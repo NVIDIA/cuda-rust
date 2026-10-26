@@ -34,7 +34,7 @@ use super::{
     mma::{build_mma_facts, require_smem_overlay_pair, verify_mma_use_closure},
     pipeline::require_producer_pipeline_order,
     provenance::{
-        CarrierFact, OrdinaryFacts, is_local_cell_pointer_alias_cast,
+        CarrierFact, LocalCells, OrdinaryFacts, is_local_cell_pointer_alias_cast,
         is_semantic_pointer_carrier_cast, local_cell_is_closed,
     },
     scheduler::{build_scheduler_facts, scheduler_root},
@@ -401,6 +401,44 @@ fn factless_block_argument_store_poisons_a_valid_scheduler_cell() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("merges values"), "{error}");
+}
+
+/// A scope's cell table answers every pointer as walking that pointer's cell aliases does,
+/// including cells allocated outside the scope.
+#[test]
+fn local_cells_agree_with_the_alias_walk() {
+    let mut ctx = Context::new();
+    module_top(&mut ctx);
+    let u64_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Unsigned).into();
+    let block = BasicBlock::new(&mut ctx, None, vec![]);
+    let closed = local_cell(&mut ctx, block, u64_ty);
+    let read_only_type: TypeHandle = MirPtrType::get_generic(&mut ctx, u64_ty, false).into();
+    let alias_cast = pointer_cast(&mut ctx, block, closed, read_only_type);
+    let alias = alias_cast.deref(&ctx).get_result(0);
+    let value = undef(&mut ctx, block, u64_ty);
+    store(&mut ctx, block, closed, value);
+    load(&mut ctx, block, alias, u64_ty);
+    let escaped = local_cell(&mut ctx, block, u64_ty);
+    let pointer_type = escaped.get_type(&ctx);
+    let holder = local_cell(&mut ctx, block, pointer_type);
+    store(&mut ctx, block, holder, escaped);
+    let operations: Vec<_> = block.deref(&ctx).iter(&ctx).collect();
+    let without_allocas: Vec<_> = operations
+        .iter()
+        .copied()
+        .filter(|operation| Operation::get_opid(*operation, &ctx) != MirAllocaOp::get_opid_static())
+        .collect();
+
+    for scope in [&operations, &without_allocas] {
+        let cells = LocalCells::new(&ctx, scope);
+        for pointer in [closed, alias, escaped, holder] {
+            let walked = super::provenance::local_cell(&ctx, pointer)
+                .filter(|(root, _)| local_cell_is_closed(&ctx, *root));
+            assert_eq!(cells.closed_cell(&ctx, pointer), walked);
+        }
+        assert!(cells.closed_cell(&ctx, alias).is_some());
+        assert!(cells.closed_cell(&ctx, escaped).is_none());
+    }
 }
 
 /// Fact lookups see only the named carrier, and a copy forwards the source as it was when the copy began.

@@ -27,6 +27,7 @@ use dialect_mir::{
     types::{MirArrayType, MirPtrType, MirStructType, MirTupleType, address_space},
 };
 use pliron::{
+    basic_block::BasicBlock,
     builtin::{op_interfaces::BranchOpInterface, types::IntegerType},
     context::{Context, Ptr},
     op::{Op, op_cast},
@@ -278,6 +279,51 @@ pub(super) fn local_cell_is_closed(ctx: &Context, root: Value) -> bool {
     true
 }
 
+/// Closedness of every local cell allocated in one scope. The verifier never
+/// mutates the IR it reads, so each cell's alias graph is walked once and
+/// shared by all accesses and fixed-point iterations.
+pub(super) struct LocalCells {
+    closed: HashMap<Value, bool>,
+}
+
+impl LocalCells {
+    /// Check the alias graph of each `mir.alloca` result in the scope.
+    pub(super) fn new(ctx: &Context, operations: &[Ptr<Operation>]) -> Self {
+        let closed = operations
+            .iter()
+            .filter(|operation| {
+                Operation::get_opid(**operation, ctx) == MirAllocaOp::get_opid_static()
+                    && operation.deref(ctx).get_num_results() == 1
+            })
+            .map(|operation| {
+                let root = operation.deref(ctx).get_result(0);
+                (root, local_cell_is_closed(ctx, root))
+            })
+            .collect();
+        Self { closed }
+    }
+
+    /// Resolve a pointer to a closed local cell and the field path inside it.
+    pub(super) fn closed_cell(&self, ctx: &Context, pointer: Value) -> Option<(Value, Vec<u32>)> {
+        let (root, path) = local_cell(ctx, pointer)?;
+        let closed = self
+            .closed
+            .get(&root)
+            .copied()
+            .unwrap_or_else(|| local_cell_is_closed(ctx, root));
+        closed.then_some((root, path))
+    }
+}
+
+/// Read the operands each incoming edge passes to a block, once per edge.
+fn incoming_edge_operands(ctx: &Context, block: Ptr<BasicBlock>) -> Vec<Vec<Value>> {
+    block
+        .uses(ctx)
+        .into_iter()
+        .filter_map(|edge| branch_successor_operands(ctx, edge.user_op(), edge.find_index(ctx)))
+        .collect()
+}
+
 /// Propagate semantic facts through the exact ordinary SSA adapters that can
 /// remain after common CuTe preparation.  This is deliberately a monotone
 /// fixed-point transfer: loop block arguments become known once their entry
@@ -286,6 +332,7 @@ pub(super) fn local_cell_is_closed(ctx: &Context, root: Value) -> bool {
 pub(super) fn propagate_ordinary_plumbing<F>(
     ctx: &Context,
     operations: &[Ptr<Operation>],
+    cells: &LocalCells,
     facts: &mut OrdinaryFacts<F>,
 ) -> bool
 where
@@ -350,8 +397,7 @@ where
         } else if opid == MirStoreOp::get_opid_static() && operation_ref.get_num_operands() == 2 {
             let store = MirStoreOp::new(*operation);
             if !store.is_volatile(ctx)
-                && let Some((root, path)) = local_cell(ctx, store.address_opd(ctx))
-                && local_cell_is_closed(ctx, root)
+                && let Some((root, path)) = cells.closed_cell(ctx, store.address_opd(ctx))
             {
                 changed |= facts.copy_entries(store.value_opd(ctx), root, &[], &path);
             }
@@ -361,8 +407,7 @@ where
         {
             let load = MirLoadOp::new(*operation);
             if !load.is_volatile(ctx)
-                && let Some((root, path)) = local_cell(ctx, load.address_opd(ctx))
-                && local_cell_is_closed(ctx, root)
+                && let Some((root, path)) = cells.closed_cell(ctx, load.address_opd(ctx))
             {
                 changed |= facts.copy_entries(root, operation_ref.get_result(0), &path, &[]);
             }
@@ -370,16 +415,11 @@ where
     }
 
     for block in blocks {
+        let edges = incoming_edge_operands(ctx, block);
         let block_ref = block.deref(ctx);
         for argument_index in 0..block_ref.get_num_arguments() {
             let argument = block_ref.get_argument(argument_index);
-            for edge in block.uses(ctx) {
-                let terminator = edge.user_op();
-                let Some(operands) =
-                    branch_successor_operands(ctx, terminator, edge.find_index(ctx))
-                else {
-                    continue;
-                };
+            for operands in &edges {
                 if let Some(incoming) = operands.get(argument_index).copied() {
                     changed |= facts.copy_entries(incoming, argument, &[], &[]);
                 }
@@ -477,6 +517,7 @@ pub(super) fn seed_unknown_integer_carriers<F>(
 pub(super) fn poison_missing_forwarding_sources<F>(
     ctx: &Context,
     operations: &[Ptr<Operation>],
+    cells: &LocalCells,
     facts: &mut OrdinaryFacts<F>,
     unknown: impl Fn(Value) -> F + Copy,
 ) -> bool
@@ -493,12 +534,9 @@ where
             continue;
         }
         let store = MirStoreOp::new(*operation);
-        let Some((root, cell_path)) = local_cell(ctx, store.address_opd(ctx)) else {
+        let Some((root, cell_path)) = cells.closed_cell(ctx, store.address_opd(ctx)) else {
             continue;
         };
-        if !local_cell_is_closed(ctx, root) {
-            continue;
-        }
         for (path, _) in facts.entries(root) {
             let Some(source_path) = path.strip_prefix(cell_path.as_slice()) else {
                 continue;
@@ -514,6 +552,7 @@ where
     }
 
     for block in blocks {
+        let edges = incoming_edge_operands(ctx, block);
         let block_ref = block.deref(ctx);
         for argument_index in 0..block_ref.get_num_arguments() {
             let argument = block_ref.get_argument(argument_index);
@@ -521,13 +560,7 @@ where
             if argument_entries.is_empty() {
                 continue;
             }
-            for edge in block.uses(ctx) {
-                let terminator = edge.user_op();
-                let Some(operands) =
-                    branch_successor_operands(ctx, terminator, edge.find_index(ctx))
-                else {
-                    continue;
-                };
+            for operands in &edges {
                 let Some(incoming) = operands.get(argument_index).copied() else {
                     continue;
                 };

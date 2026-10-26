@@ -21,8 +21,8 @@ use super::{
     ghosts::pipeline_semantic_ids,
     invalid,
     provenance::{
-        CarrierFact, OrdinaryFacts, poison_missing_forwarding_sources, propagate_ordinary_plumbing,
-        seed_unknown_integer_carriers,
+        CarrierFact, LocalCells, OrdinaryFacts, poison_missing_forwarding_sources,
+        propagate_ordinary_plumbing, seed_unknown_integer_carriers,
     },
 };
 use crate::{
@@ -212,6 +212,7 @@ fn build_pipeline_facts(
     ctx: &Context,
     operations: &[Ptr<Operation>],
 ) -> OrdinaryFacts<PipelineFact> {
+    let cells = LocalCells::new(ctx, operations);
     let mut facts = OrdinaryFacts::default();
     for operation in operations {
         if Operation::get_opid(*operation, ctx) == CutePipelineStateNewOp::get_opid_static() {
@@ -222,7 +223,7 @@ fn build_pipeline_facts(
     }
 
     loop {
-        let mut changed = propagate_ordinary_plumbing(ctx, operations, &mut facts);
+        let mut changed = propagate_ordinary_plumbing(ctx, operations, &cells, &mut facts);
         for operation in operations {
             if Operation::get_opid(*operation, ctx) != CutePipelineStateAdvanceOp::get_opid_static()
             {
@@ -254,9 +255,14 @@ fn build_pipeline_facts(
 
     seed_unknown_integer_carriers(ctx, operations, &mut facts, 32, PipelineFact::Unknown);
     loop {
-        let poisoned =
-            poison_missing_forwarding_sources(ctx, operations, &mut facts, PipelineFact::Unknown);
-        let propagated = propagate_ordinary_plumbing(ctx, operations, &mut facts);
+        let poisoned = poison_missing_forwarding_sources(
+            ctx,
+            operations,
+            &cells,
+            &mut facts,
+            PipelineFact::Unknown,
+        );
+        let propagated = propagate_ordinary_plumbing(ctx, operations, &cells, &mut facts);
         if !poisoned && !propagated {
             break;
         }

@@ -24,8 +24,8 @@ use super::{
     ghosts::smem_mma_semantic_ids,
     invalid,
     provenance::{
-        CarrierFact, OrdinaryFacts, branch_successor_operands, is_semantic_pointer_carrier_cast,
-        local_cell, local_cell_is_closed, poison_missing_forwarding_sources,
+        CarrierFact, LocalCells, OrdinaryFacts, branch_successor_operands,
+        is_semantic_pointer_carrier_cast, poison_missing_forwarding_sources,
         propagate_ordinary_plumbing, seed_unknown_integer_carriers,
     },
 };
@@ -198,6 +198,7 @@ pub(super) fn build_mma_facts(
     ctx: &Context,
     operations: &[Ptr<Operation>],
 ) -> OrdinaryFacts<MmaFact> {
+    let cells = LocalCells::new(ctx, operations);
     let mut facts = OrdinaryFacts::default();
     for operation in operations {
         let opid = Operation::get_opid(*operation, ctx);
@@ -240,7 +241,7 @@ pub(super) fn build_mma_facts(
     }
 
     loop {
-        let mut changed = propagate_ordinary_plumbing(ctx, operations, &mut facts);
+        let mut changed = propagate_ordinary_plumbing(ctx, operations, &cells, &mut facts);
         for operation in operations {
             if Operation::get_opid(*operation, ctx) != CuteTiledGemmOp::get_opid_static() {
                 continue;
@@ -266,9 +267,14 @@ pub(super) fn build_mma_facts(
     seed_unknown_integer_carriers(ctx, operations, &mut facts, 32, MmaFact::Scalar);
     seed_unknown_integer_carriers(ctx, operations, &mut facts, 64, MmaFact::Scalar);
     loop {
-        let poisoned =
-            poison_missing_forwarding_sources(ctx, operations, &mut facts, MmaFact::Unknown);
-        let propagated = propagate_ordinary_plumbing(ctx, operations, &mut facts);
+        let poisoned = poison_missing_forwarding_sources(
+            ctx,
+            operations,
+            &cells,
+            &mut facts,
+            MmaFact::Unknown,
+        );
+        let propagated = propagate_ordinary_plumbing(ctx, operations, &cells, &mut facts);
         if !poisoned && !propagated {
             break;
         }
@@ -364,8 +370,10 @@ fn mma_branch_forwards_fact(
 }
 
 /// Check that ordinary casts, aggregates, or closed local cells forward the tracked fact without escape.
+#[allow(clippy::too_many_arguments)]
 fn mma_ordinary_use_forwards_fact(
     ctx: &Context,
+    cells: &LocalCells,
     facts: &OrdinaryFacts<MmaFact>,
     value: Value,
     path: &[u32],
@@ -425,12 +433,11 @@ fn mma_ordinary_use_forwards_fact(
     if opid == MirStoreOp::get_opid_static() && operation.get_num_operands() == 2 {
         let store = MirStoreOp::new(user);
         if operand_index == 0 {
-            return local_cell(ctx, store.address_opd(ctx))
-                .is_some_and(|(root, _)| local_cell_is_closed(ctx, root));
+            return cells.closed_cell(ctx, store.address_opd(ctx)).is_some();
         }
         if operand_index == 1
-            && let Some((root, mut destination_path)) = local_cell(ctx, store.address_opd(ctx))
-            && local_cell_is_closed(ctx, root)
+            && let Some((root, mut destination_path)) =
+                cells.closed_cell(ctx, store.address_opd(ctx))
         {
             destination_path.extend_from_slice(path);
             return mma_fact_at_path(facts, root, &destination_path, fact);
@@ -442,12 +449,9 @@ fn mma_ordinary_use_forwards_fact(
         && operation.get_num_results() == 1
     {
         let load = MirLoadOp::new(user);
-        let Some((root, cell_path)) = local_cell(ctx, load.address_opd(ctx)) else {
+        let Some((_, cell_path)) = cells.closed_cell(ctx, load.address_opd(ctx)) else {
             return false;
         };
-        if !local_cell_is_closed(ctx, root) {
-            return false;
-        }
         let Some(result_path) = path.strip_prefix(cell_path.as_slice()) else {
             return true;
         };
@@ -460,8 +464,7 @@ fn mma_ordinary_use_forwards_fact(
             .get_attr_field_index(ctx)
             .is_some()
     {
-        return local_cell(ctx, operation.get_result(0))
-            .is_some_and(|(root, _)| local_cell_is_closed(ctx, root));
+        return cells.closed_cell(ctx, operation.get_result(0)).is_some();
     }
     if opid == MirCondBranchOp::get_opid_static() && operand_index == 0 {
         return false;
@@ -476,6 +479,7 @@ pub(super) fn verify_mma_use_closure(
     facts: &OrdinaryFacts<MmaFact>,
 ) -> Result {
     let scope: HashSet<Ptr<Operation>> = operations.iter().copied().collect();
+    let cells = LocalCells::new(ctx, operations);
     for (value, paths) in &facts.facts {
         for (path, found) in paths {
             for fact in found.iter().copied() {
@@ -489,6 +493,7 @@ pub(super) fn verify_mma_use_closure(
                         && (mma_semantic_consumer(ctx, user, operand_index, fact)
                             || mma_ordinary_use_forwards_fact(
                                 ctx,
+                                &cells,
                                 facts,
                                 *value,
                                 path,

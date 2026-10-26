@@ -52,6 +52,13 @@ pub const CALLEE_SATURATING_SUB: &str = placeholder!("saturating_sub");
 /// chunk count with `exact_div(self.len(), N)`.
 pub const CALLEE_EXACT_DIV: &str = placeholder!("exact_div");
 
+/// Placeholder call used for `core::intrinsics::float_to_int_unchecked`.
+///
+/// Float-to-integer conversion where the caller guarantees the value is finite
+/// and fits the destination type once truncated. Backs `f32::to_int_unchecked`
+/// and `f64::to_int_unchecked`.
+pub const CALLEE_FLOAT_TO_INT_UNCHECKED: &str = placeholder!("float_to_int_unchecked");
+
 /// Placeholder call used for `core::intrinsics::carrying_mul_add`.
 /// Backs the bigint helper methods `carrying_mul_add`, `carrying_mul`,
 /// and `widening_mul` on integer types.
@@ -105,6 +112,7 @@ pub fn is_known_placeholder(callee: &str) -> bool {
                 | CALLEE_SATURATING_ADD
                 | CALLEE_SATURATING_SUB
                 | CALLEE_EXACT_DIV
+                | CALLEE_FLOAT_TO_INT_UNCHECKED
                 | CALLEE_CARRYING_MUL_ADD
                 | CALLEE_SELECT_UNPREDICTABLE
         )
@@ -308,6 +316,7 @@ mod tests {
         CALLEE_SATURATING_ADD,
         CALLEE_SATURATING_SUB,
         CALLEE_EXACT_DIV,
+        CALLEE_FLOAT_TO_INT_UNCHECKED,
         CALLEE_CARRYING_MUL_ADD,
         CALLEE_FADD_FAST,
         CALLEE_FSUB_FAST,

@@ -1349,7 +1349,7 @@ fn translate_call(
             loc,
             TranslationErr::unsupported(format!(
                 "libm function `{name}` is not yet mapped to a libdevice intrinsic; \
-                 add it to `from_libm_path` in the mir-importer float-math dispatch"
+                 add a row to `intrinsics/overlay/libdevice_math.toml` and regenerate"
             ))
         );
     }
@@ -2890,11 +2890,8 @@ fn try_dispatch_intrinsic(
     }
 
     if let Some(intrinsic) =
-        intrinsics::float_math::RustFloatMathIntrinsic::from_core_path_with_substs(
-            name,
-            type_substs,
-        )
-        .map_err(|error| input_error!(loc.clone(), TranslationErr::unsupported(error)))?
+        intrinsics::float_math::from_core_path_with_substs(name, type_substs)
+            .map_err(|error| input_error!(loc.clone(), TranslationErr::unsupported(error)))?
     {
         return Ok(Some(
             intrinsics::float_math::emit_rust_float_math_intrinsic(

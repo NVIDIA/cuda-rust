@@ -3,8 +3,9 @@
 
 # Libdevice math ABI capture
 
-`cuda-13.0.json` contains 64 distinct exported function signatures referenced by
-the initial libdevice math shard. They were extracted from NVIDIA's CUDA
+`cuda-13.0.json` contains 74 distinct exported function signatures referenced by
+the compiler math shard, including tgamma, ilogb, ldexp, frexp, and core powi.
+They were extracted from NVIDIA's CUDA
 13.0.88 `libdevice.10.bc` with LLVM 23.1.1 from the pinned Rust 1.99.1 toolchain.
 
 Source: [NVIDIA nvidia-nvvm 13.0.88](https://pypi.org/project/nvidia-nvvm/13.0.88/),

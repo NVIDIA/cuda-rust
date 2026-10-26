@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Separate libdevice evidence domain; not part of the hardware ABI shard index.
-# PR3 stages the existing 72 libm exports. Compiler tables are migrated later.
-schema = 1
+# Source of compiler math dispatch, placeholders, symbols, and link requirements.
+schema = 2
 family = "libdevice_math"
 
 [libdevice_math]
@@ -49,23 +49,27 @@ cmath = "atanh{suffix}"
 [[libdevice_math.function]]
 name = "cbrt"
 signature = "(F) -> F"
+paths = ["core::num::imp::libm::cbrt{suffix}"]
 cmath = "cbrt{suffix}"
 
 [[libdevice_math.function]]
 name = "ceil"
 signature = "(F) -> F"
+core = ["ceil{width}"]
 llvm = "llvm_ceil_{width}"
 link = "libnvvm"
 
 [[libdevice_math.function]]
 name = "copysign"
 signature = "(F, F) -> F"
+core = ["copysign{width}"]
 llvm = "llvm_copysign_{width}"
 link = "libnvvm"
 
 [[libdevice_math.function]]
 name = "cos"
 signature = "(F) -> F"
+core = ["cos{width}"]
 cmath = "cos{suffix}"
 
 [[libdevice_math.function]]
@@ -76,10 +80,12 @@ cmath = "cosh{suffix}"
 [[libdevice_math.function]]
 name = "exp"
 signature = "(F) -> F"
+core = ["exp{width}"]
 
 [[libdevice_math.function]]
 name = "exp2"
 signature = "(F) -> F"
+core = ["exp2{width}"]
 
 [[libdevice_math.function]]
 name = "expm1"
@@ -89,6 +95,9 @@ cmath = "expm1{suffix}"
 [[libdevice_math.function]]
 name = "fabs"
 signature = "(F) -> F"
+variant = "Fabs"
+constant = "CALLEE_FABS"
+core = ["fabs"]
 placeholders = ["fabs"]
 llvm = "llvm_fabs_{width}"
 link = "libnvvm"
@@ -96,16 +105,21 @@ link = "libnvvm"
 [[libdevice_math.function]]
 name = "floor"
 signature = "(F) -> F"
+core = ["floor{width}"]
 llvm = "llvm_floor_{width}"
 link = "libnvvm"
 
 [[libdevice_math.function]]
 name = "fma"
 signature = "(F, F, F) -> F"
+core = ["fma{width}"]
 
 [[libdevice_math.function]]
 name = "fmax"
 signature = "(F, F) -> F"
+variant = "MaxNumNsz{Width}"
+constant = "CALLEE_MAXNUM_NSZ_{WIDTH}"
+core = ["maximum_number_nsz_{width}"]
 placeholders = ["maximum_number_nsz_{width}"]
 lowering = "handwritten:lower_float_minmax_nsz"
 link = "never"
@@ -113,6 +127,9 @@ link = "never"
 [[libdevice_math.function]]
 name = "fmin"
 signature = "(F, F) -> F"
+variant = "MinNumNsz{Width}"
+constant = "CALLEE_MINNUM_NSZ_{WIDTH}"
+core = ["minimum_number_nsz_{width}"]
 placeholders = ["minimum_number_nsz_{width}"]
 lowering = "handwritten:lower_float_minmax_nsz"
 link = "never"
@@ -125,10 +142,12 @@ cmath = "hypot{suffix}"
 [[libdevice_math.function]]
 name = "log"
 signature = "(F) -> F"
+core = ["log{width}"]
 
 [[libdevice_math.function]]
 name = "log10"
 signature = "(F) -> F"
+core = ["log10{width}"]
 
 [[libdevice_math.function]]
 name = "log1p"
@@ -138,14 +157,21 @@ cmath = "log1p{suffix}"
 [[libdevice_math.function]]
 name = "log2"
 signature = "(F) -> F"
+core = ["log2{width}"]
 
 [[libdevice_math.function]]
 name = "pow"
 signature = "(F, F) -> F"
+variant = "Powf{Width}"
+constant = "CALLEE_POWF_{WIDTH}"
+core = ["pow{width}"]
 
 [[libdevice_math.function]]
 name = "rint"
 signature = "(F) -> F"
+variant = "Roundeven{Width}"
+constant = "CALLEE_ROUNDEVEN_{WIDTH}"
+core = ["round_ties_even_{width}"]
 libm = ["rint", "roundeven"]
 placeholders = ["round_ties_even_{width}"]
 llvm = "llvm_roundeven_{width}"
@@ -154,12 +180,14 @@ link = "libnvvm"
 [[libdevice_math.function]]
 name = "round"
 signature = "(F) -> F"
+core = ["round{width}"]
 llvm = "llvm_round_{width}"
 link = "libnvvm"
 
 [[libdevice_math.function]]
 name = "sin"
 signature = "(F) -> F"
+core = ["sin{width}"]
 cmath = "sin{suffix}"
 
 [[libdevice_math.function]]
@@ -176,10 +204,12 @@ cmath = "sinh{suffix}"
 [[libdevice_math.function]]
 name = "sqrt"
 signature = "(F) -> F"
+core = ["sqrt{width}"]
 
 [[libdevice_math.function]]
 name = "tan"
 signature = "(F) -> F"
+core = ["tan{width}"]
 cmath = "tan{suffix}"
 
 [[libdevice_math.function]]
@@ -190,5 +220,39 @@ cmath = "tanh{suffix}"
 [[libdevice_math.function]]
 name = "trunc"
 signature = "(F) -> F"
+core = ["trunc{width}"]
 llvm = "llvm_trunc_{width}"
 link = "libnvvm"
+
+[[libdevice_math.function]]
+name = "tgamma"
+signature = "(F) -> F"
+cmath = "tgamma{suffix}"
+
+[[libdevice_math.function]]
+name = "ilogb"
+signature = "(F) -> i32"
+
+[[libdevice_math.function]]
+name = "ldexp"
+signature = "(F, i32) -> F"
+libm = ["ldexp", "scalbn"]
+
+[[libdevice_math.function]]
+name = "frexp"
+signature = "(F) -> (F, i32)"
+lowering = "handwritten:emit_frexp"
+libdevice = "__nv_frexp{suffix}"
+
+[[libdevice_math.function]]
+name = "powi"
+signature = "(F, i32) -> F"
+core = ["powi{width}"]
+libm = []
+
+[[libdevice_math.function]]
+name = "fmuladd"
+signature = "(F, F, F) -> F"
+core = ["fmuladd{width}"]
+libm = []
+libdevice = "__nv_fma{suffix}"

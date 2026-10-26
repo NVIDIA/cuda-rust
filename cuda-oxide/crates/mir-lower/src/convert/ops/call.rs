@@ -188,188 +188,27 @@ impl RustBigIntIntrinsic {
     }
 }
 
-/// Internal placeholder for rustc float math intrinsics.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RustFloatMathIntrinsic {
-    SqrtF32,
-    SqrtF64,
-    PowiF32,
-    PowiF64,
-    SinF32,
-    SinF64,
-    CosF32,
-    CosF64,
-    TanF32,
-    TanF64,
-    PowfF32,
-    PowfF64,
-    ExpF32,
-    ExpF64,
-    Exp2F32,
-    Exp2F64,
-    LogF32,
-    LogF64,
-    Log2F32,
-    Log2F64,
-    Log10F32,
-    Log10F64,
-    FmaF32,
-    FmaF64,
-    FmuladdF32,
-    FmuladdF64,
-    FloorF32,
-    FloorF64,
-    CeilF32,
-    CeilF64,
-    TruncF32,
-    TruncF64,
-    RoundF32,
-    RoundF64,
-    RoundevenF32,
-    RoundevenF64,
-    Fabs,
-    CopysignF32,
-    CopysignF64,
-    MaxNumNszF32,
-    MaxNumNszF64,
-    MinNumNszF32,
-    MinNumNszF64,
-    AsinF32,
-    AsinF64,
-    AcosF32,
-    AcosF64,
-    Atan2F32,
-    Atan2F64,
-    AtanF32,
-    AtanF64,
-    CbrtF32,
-    CbrtF64,
-    SinhF32,
-    SinhF64,
-    CoshF32,
-    CoshF64,
-    TanhF32,
-    TanhF64,
-    AsinhF32,
-    AsinhF64,
-    AcoshF32,
-    AcoshF64,
-    AtanhF32,
-    AtanhF64,
-    Expm1F32,
-    Expm1F64,
-    Log1pF32,
-    Log1pF64,
-    HypotF32,
-    HypotF64,
-    TgammaF32,
-    TgammaF64,
-    IlogbF32,
-    IlogbF64,
-    LdexpF32,
-    LdexpF64,
-    FrexpF32,
-    FrexpF64,
-    FaddFast,
-    FsubFast,
-    FmulFast,
-    FdivFast,
-    FremFast,
+use dialect_mir::rust_intrinsics::RustFloatMathIntrinsic;
+
+/// Type-aware semantic lowering around the generated shared math dispatch.
+trait FloatMathLowering {
+    fn minmax_nsz_predicate(self) -> Option<FCmpPredicateAttr>;
+    fn libdevice_name(
+        self,
+        ctx: &Context,
+        result_ty: TypeHandle,
+        loc: pliron::location::Location,
+    ) -> Result<&'static str>;
+    fn llvm_intrinsic_name(
+        self,
+        ctx: &Context,
+        result_ty: TypeHandle,
+        loc: pliron::location::Location,
+    ) -> Result<Option<&'static str>>;
+    fn fast_binop(self) -> Option<FastFloatBinop>;
 }
 
-impl RustFloatMathIntrinsic {
-    /// Convert an importer placeholder name back into the intrinsic it represents.
-    fn from_placeholder_callee(callee: &str) -> Option<Self> {
-        match callee {
-            rust_intrinsics::CALLEE_SQRT_F32 => Some(Self::SqrtF32),
-            rust_intrinsics::CALLEE_SQRT_F64 => Some(Self::SqrtF64),
-            rust_intrinsics::CALLEE_POWI_F32 => Some(Self::PowiF32),
-            rust_intrinsics::CALLEE_POWI_F64 => Some(Self::PowiF64),
-            rust_intrinsics::CALLEE_SIN_F32 => Some(Self::SinF32),
-            rust_intrinsics::CALLEE_SIN_F64 => Some(Self::SinF64),
-            rust_intrinsics::CALLEE_COS_F32 => Some(Self::CosF32),
-            rust_intrinsics::CALLEE_COS_F64 => Some(Self::CosF64),
-            rust_intrinsics::CALLEE_TAN_F32 => Some(Self::TanF32),
-            rust_intrinsics::CALLEE_TAN_F64 => Some(Self::TanF64),
-            rust_intrinsics::CALLEE_POWF_F32 => Some(Self::PowfF32),
-            rust_intrinsics::CALLEE_POWF_F64 => Some(Self::PowfF64),
-            rust_intrinsics::CALLEE_EXP_F32 => Some(Self::ExpF32),
-            rust_intrinsics::CALLEE_EXP_F64 => Some(Self::ExpF64),
-            rust_intrinsics::CALLEE_EXP2_F32 => Some(Self::Exp2F32),
-            rust_intrinsics::CALLEE_EXP2_F64 => Some(Self::Exp2F64),
-            rust_intrinsics::CALLEE_LOG_F32 => Some(Self::LogF32),
-            rust_intrinsics::CALLEE_LOG_F64 => Some(Self::LogF64),
-            rust_intrinsics::CALLEE_LOG2_F32 => Some(Self::Log2F32),
-            rust_intrinsics::CALLEE_LOG2_F64 => Some(Self::Log2F64),
-            rust_intrinsics::CALLEE_LOG10_F32 => Some(Self::Log10F32),
-            rust_intrinsics::CALLEE_LOG10_F64 => Some(Self::Log10F64),
-            rust_intrinsics::CALLEE_FMA_F32 => Some(Self::FmaF32),
-            rust_intrinsics::CALLEE_FMA_F64 => Some(Self::FmaF64),
-            rust_intrinsics::CALLEE_FMULADD_F32 => Some(Self::FmuladdF32),
-            rust_intrinsics::CALLEE_FMULADD_F64 => Some(Self::FmuladdF64),
-            rust_intrinsics::CALLEE_FLOOR_F32 => Some(Self::FloorF32),
-            rust_intrinsics::CALLEE_FLOOR_F64 => Some(Self::FloorF64),
-            rust_intrinsics::CALLEE_CEIL_F32 => Some(Self::CeilF32),
-            rust_intrinsics::CALLEE_CEIL_F64 => Some(Self::CeilF64),
-            rust_intrinsics::CALLEE_TRUNC_F32 => Some(Self::TruncF32),
-            rust_intrinsics::CALLEE_TRUNC_F64 => Some(Self::TruncF64),
-            rust_intrinsics::CALLEE_ROUND_F32 => Some(Self::RoundF32),
-            rust_intrinsics::CALLEE_ROUND_F64 => Some(Self::RoundF64),
-            rust_intrinsics::CALLEE_ROUNDEVEN_F32 => Some(Self::RoundevenF32),
-            rust_intrinsics::CALLEE_ROUNDEVEN_F64 => Some(Self::RoundevenF64),
-            rust_intrinsics::CALLEE_FABS => Some(Self::Fabs),
-            rust_intrinsics::CALLEE_COPYSIGN_F32 => Some(Self::CopysignF32),
-            rust_intrinsics::CALLEE_COPYSIGN_F64 => Some(Self::CopysignF64),
-            rust_intrinsics::CALLEE_MAXNUM_NSZ_F32 => Some(Self::MaxNumNszF32),
-            rust_intrinsics::CALLEE_MAXNUM_NSZ_F64 => Some(Self::MaxNumNszF64),
-            rust_intrinsics::CALLEE_MINNUM_NSZ_F32 => Some(Self::MinNumNszF32),
-            rust_intrinsics::CALLEE_MINNUM_NSZ_F64 => Some(Self::MinNumNszF64),
-            rust_intrinsics::CALLEE_ASIN_F32 => Some(Self::AsinF32),
-            rust_intrinsics::CALLEE_ASIN_F64 => Some(Self::AsinF64),
-            rust_intrinsics::CALLEE_ACOS_F32 => Some(Self::AcosF32),
-            rust_intrinsics::CALLEE_ACOS_F64 => Some(Self::AcosF64),
-            rust_intrinsics::CALLEE_ATAN2_F32 => Some(Self::Atan2F32),
-            rust_intrinsics::CALLEE_ATAN2_F64 => Some(Self::Atan2F64),
-            rust_intrinsics::CALLEE_ATAN_F32 => Some(Self::AtanF32),
-            rust_intrinsics::CALLEE_ATAN_F64 => Some(Self::AtanF64),
-            rust_intrinsics::CALLEE_CBRT_F32 => Some(Self::CbrtF32),
-            rust_intrinsics::CALLEE_CBRT_F64 => Some(Self::CbrtF64),
-            rust_intrinsics::CALLEE_SINH_F32 => Some(Self::SinhF32),
-            rust_intrinsics::CALLEE_SINH_F64 => Some(Self::SinhF64),
-            rust_intrinsics::CALLEE_COSH_F32 => Some(Self::CoshF32),
-            rust_intrinsics::CALLEE_COSH_F64 => Some(Self::CoshF64),
-            rust_intrinsics::CALLEE_TANH_F32 => Some(Self::TanhF32),
-            rust_intrinsics::CALLEE_TANH_F64 => Some(Self::TanhF64),
-            rust_intrinsics::CALLEE_ASINH_F32 => Some(Self::AsinhF32),
-            rust_intrinsics::CALLEE_ASINH_F64 => Some(Self::AsinhF64),
-            rust_intrinsics::CALLEE_ACOSH_F32 => Some(Self::AcoshF32),
-            rust_intrinsics::CALLEE_ACOSH_F64 => Some(Self::AcoshF64),
-            rust_intrinsics::CALLEE_ATANH_F32 => Some(Self::AtanhF32),
-            rust_intrinsics::CALLEE_ATANH_F64 => Some(Self::AtanhF64),
-            rust_intrinsics::CALLEE_EXPM1_F32 => Some(Self::Expm1F32),
-            rust_intrinsics::CALLEE_EXPM1_F64 => Some(Self::Expm1F64),
-            rust_intrinsics::CALLEE_LOG1P_F32 => Some(Self::Log1pF32),
-            rust_intrinsics::CALLEE_LOG1P_F64 => Some(Self::Log1pF64),
-            rust_intrinsics::CALLEE_HYPOT_F32 => Some(Self::HypotF32),
-            rust_intrinsics::CALLEE_HYPOT_F64 => Some(Self::HypotF64),
-            rust_intrinsics::CALLEE_TGAMMA_F32 => Some(Self::TgammaF32),
-            rust_intrinsics::CALLEE_TGAMMA_F64 => Some(Self::TgammaF64),
-            rust_intrinsics::CALLEE_ILOGB_F32 => Some(Self::IlogbF32),
-            rust_intrinsics::CALLEE_ILOGB_F64 => Some(Self::IlogbF64),
-            rust_intrinsics::CALLEE_LDEXP_F32 => Some(Self::LdexpF32),
-            rust_intrinsics::CALLEE_LDEXP_F64 => Some(Self::LdexpF64),
-            rust_intrinsics::CALLEE_FREXP_F32 => Some(Self::FrexpF32),
-            rust_intrinsics::CALLEE_FREXP_F64 => Some(Self::FrexpF64),
-            rust_intrinsics::CALLEE_FADD_FAST => Some(Self::FaddFast),
-            rust_intrinsics::CALLEE_FSUB_FAST => Some(Self::FsubFast),
-            rust_intrinsics::CALLEE_FMUL_FAST => Some(Self::FmulFast),
-            rust_intrinsics::CALLEE_FDIV_FAST => Some(Self::FdivFast),
-            rust_intrinsics::CALLEE_FREM_FAST => Some(Self::FremFast),
-            _ => None,
-        }
-    }
-
-    /// Whether this is Rust's NaN-ignoring scalar maximum/minimum operation.
+impl FloatMathLowering for RustFloatMathIntrinsic {
     fn minmax_nsz_predicate(self) -> Option<FCmpPredicateAttr> {
         match self {
             Self::MaxNumNszF32 | Self::MaxNumNszF64 => Some(FCmpPredicateAttr::OGE),
@@ -378,210 +217,36 @@ impl RustFloatMathIntrinsic {
         }
     }
 
-    /// CUDA libdevice function name for this Rust math intrinsic.
     fn libdevice_name(
         self,
         ctx: &Context,
         result_ty: TypeHandle,
         loc: pliron::location::Location,
     ) -> Result<&'static str> {
-        match self {
-            Self::SqrtF32 => Ok("__nv_sqrtf"),
-            Self::SqrtF64 => Ok("__nv_sqrt"),
-            Self::PowiF32 => Ok("__nv_powif"),
-            Self::PowiF64 => Ok("__nv_powi"),
-            Self::SinF32 => Ok("__nv_sinf"),
-            Self::SinF64 => Ok("__nv_sin"),
-            Self::CosF32 => Ok("__nv_cosf"),
-            Self::CosF64 => Ok("__nv_cos"),
-            Self::TanF32 => Ok("__nv_tanf"),
-            Self::TanF64 => Ok("__nv_tan"),
-            Self::PowfF32 => Ok("__nv_powf"),
-            Self::PowfF64 => Ok("__nv_pow"),
-            Self::ExpF32 => Ok("__nv_expf"),
-            Self::ExpF64 => Ok("__nv_exp"),
-            Self::Exp2F32 => Ok("__nv_exp2f"),
-            Self::Exp2F64 => Ok("__nv_exp2"),
-            Self::LogF32 => Ok("__nv_logf"),
-            Self::LogF64 => Ok("__nv_log"),
-            Self::Log2F32 => Ok("__nv_log2f"),
-            Self::Log2F64 => Ok("__nv_log2"),
-            Self::Log10F32 => Ok("__nv_log10f"),
-            Self::Log10F64 => Ok("__nv_log10"),
-            Self::FmaF32 | Self::FmuladdF32 => Ok("__nv_fmaf"),
-            Self::FmaF64 | Self::FmuladdF64 => Ok("__nv_fma"),
-            Self::FloorF32 => Ok("__nv_floorf"),
-            Self::FloorF64 => Ok("__nv_floor"),
-            Self::CeilF32 => Ok("__nv_ceilf"),
-            Self::CeilF64 => Ok("__nv_ceil"),
-            Self::TruncF32 => Ok("__nv_truncf"),
-            Self::TruncF64 => Ok("__nv_trunc"),
-            Self::RoundF32 => Ok("__nv_roundf"),
-            Self::RoundF64 => Ok("__nv_round"),
-            Self::RoundevenF32 => Ok("__nv_rintf"),
-            Self::RoundevenF64 => Ok("__nv_rint"),
-            Self::Fabs => fabs_libdevice_name(ctx, result_ty, loc),
-            Self::CopysignF32 => Ok("__nv_copysignf"),
-            Self::CopysignF64 => Ok("__nv_copysign"),
-            // `f32::max` / `f32::min` (and the f64 forms) call the `_nsz`
-            // intrinsics, i.e. IEEE-754 maxNum/minNum with the "no signed
-            // zero" relaxation. They expand to an ordered compare/select
-            // sequence under every intrinsic backend (the caller routes them
-            // through `lower_float_minmax_nsz` before any symbol lookup), so
-            // they must never reach a libdevice name.
-            Self::MaxNumNszF32 | Self::MaxNumNszF64 | Self::MinNumNszF32 | Self::MinNumNszF64 => {
-                pliron::input_err!(
-                    loc,
-                    "float max/min intrinsics lower to a compare/select \
-                     expansion, never to libdevice"
-                )
-            }
-            Self::AsinF32 => Ok("__nv_asinf"),
-            Self::AsinF64 => Ok("__nv_asin"),
-            Self::AcosF32 => Ok("__nv_acosf"),
-            Self::AcosF64 => Ok("__nv_acos"),
-            Self::Atan2F32 => Ok("__nv_atan2f"),
-            Self::Atan2F64 => Ok("__nv_atan2"),
-            Self::AtanF32 => Ok("__nv_atanf"),
-            Self::AtanF64 => Ok("__nv_atan"),
-            Self::CbrtF32 => Ok("__nv_cbrtf"),
-            Self::CbrtF64 => Ok("__nv_cbrt"),
-            Self::SinhF32 => Ok("__nv_sinhf"),
-            Self::SinhF64 => Ok("__nv_sinh"),
-            Self::CoshF32 => Ok("__nv_coshf"),
-            Self::CoshF64 => Ok("__nv_cosh"),
-            Self::TanhF32 => Ok("__nv_tanhf"),
-            Self::TanhF64 => Ok("__nv_tanh"),
-            Self::AsinhF32 => Ok("__nv_asinhf"),
-            Self::AsinhF64 => Ok("__nv_asinh"),
-            Self::AcoshF32 => Ok("__nv_acoshf"),
-            Self::AcoshF64 => Ok("__nv_acosh"),
-            Self::AtanhF32 => Ok("__nv_atanhf"),
-            Self::AtanhF64 => Ok("__nv_atanh"),
-            Self::Expm1F32 => Ok("__nv_expm1f"),
-            Self::Expm1F64 => Ok("__nv_expm1"),
-            Self::Log1pF32 => Ok("__nv_log1pf"),
-            Self::Log1pF64 => Ok("__nv_log1p"),
-            Self::HypotF32 => Ok("__nv_hypotf"),
-            Self::HypotF64 => Ok("__nv_hypot"),
-            Self::TgammaF32 => Ok("__nv_tgammaf"),
-            Self::TgammaF64 => Ok("__nv_tgamma"),
-            Self::IlogbF32 => Ok("__nv_ilogbf"),
-            Self::IlogbF64 => Ok("__nv_ilogb"),
-            Self::LdexpF32 => Ok("__nv_ldexpf"),
-            Self::LdexpF64 => Ok("__nv_ldexp"),
-            Self::FrexpF32 => Ok("__nv_frexpf"),
-            Self::FrexpF64 => Ok("__nv_frexp"),
-            Self::FaddFast | Self::FsubFast | Self::FmulFast | Self::FdivFast | Self::FremFast => {
-                // The `f*_fast` intrinsics lower directly to LLVM `fadd`/`fsub`/
-                // `fmul`/`fdiv`/`frem` with fast-math flags, not to a libdevice
-                // call. The caller (`convert_rust_float_math_intrinsic`) routes
-                // them through `lower_fast_binop` and never reaches this branch.
-                pliron::input_err!(
-                    loc,
-                    "f*_fast intrinsics have no libdevice equivalent; \
-                     they lower to llvm float binops with fast-math flags"
-                )
-            }
+        if self == Self::Fabs {
+            return fabs_libdevice_name(ctx, result_ty, loc);
         }
+        self.libdevice_symbol(false).ok_or_else(|| {
+        if self.minmax_nsz_predicate().is_some() {
+            pliron::input_error!(loc, "float max/min intrinsics lower to a compare/select expansion, never to libdevice")
+        } else {
+            pliron::input_error!(loc, "f*_fast intrinsics have no libdevice equivalent; they lower to llvm float binops with fast-math flags")
+        }
+    })
     }
 
-    /// Number of operands expected by the Rust placeholder.
-    fn arg_count(self) -> usize {
-        match self {
-            Self::PowiF32
-            | Self::PowiF64
-            | Self::PowfF32
-            | Self::PowfF64
-            | Self::CopysignF32
-            | Self::CopysignF64
-            | Self::MaxNumNszF32
-            | Self::MaxNumNszF64
-            | Self::MinNumNszF32
-            | Self::MinNumNszF64
-            | Self::Atan2F32
-            | Self::Atan2F64
-            | Self::HypotF32
-            | Self::HypotF64
-            | Self::LdexpF32
-            | Self::LdexpF64
-            | Self::FaddFast
-            | Self::FsubFast
-            | Self::FmulFast
-            | Self::FdivFast
-            | Self::FremFast => 2,
-            Self::FmaF32 | Self::FmaF64 | Self::FmuladdF32 | Self::FmuladdF64 => 3,
-            _ => 1,
-        }
-    }
-
-    /// Return the LLVM intrinsic name for operations that can bypass
-    /// libdevice: the rounding family plus `fabs` and `copysign`.
-    ///
-    /// The NVPTX backend selects these without a libdevice call. Measured with
-    /// LLVM 21.1 `llc -march=nvptx64 -mcpu=sm_80`, counting only the body:
-    ///
-    /// | Intrinsic | PTX | Instructions |
-    /// |-----------|-----|--------------|
-    /// | `floor` | `cvt.rmi` | 1 |
-    /// | `ceil` | `cvt.rpi` | 1 |
-    /// | `trunc` | `cvt.rzi` | 1 |
-    /// | `roundeven` | `cvt.rni` | 1 |
-    /// | `round` | expanded sequence | 11 (f32), 8 (f64) |
-    /// | `fabs` | `abs` | 1 |
-    /// | `copysign` | `copysign` | 1 |
-    ///
-    /// `round` is the one exception, and deliberately so. It rounds halfway
-    /// cases away from zero, which is not one of the four hardware `cvt` modes
-    /// (`rni` is ties-to-even), so no single instruction can express it. LLVM
-    /// expands it inline into compare/select over `cvt.rzi` rather than
-    /// emitting a `roundf` libcall, so routing it here still removes the
-    /// libdevice call without introducing an unresolved symbol.
-    ///
-    /// Using LLVM intrinsics avoids a libdevice function call and removes the
-    /// libNVVM dependency for kernels that only use these operations.
-    ///
-    /// Scope: `max`/`min` deliberately return `None` here. They cannot use
-    /// `llvm.maxnum`/`llvm.minnum` at all, because under LLVM 21 those
-    /// propagate signaling NaNs and so contradict Rust's contract; they lower
-    /// as an ordered compare/select instead (`lower_float_minmax_nsz`, see
-    /// #390) and never reach this table.
-    ///
-    /// Naming: pliron identifiers cannot contain dots, so intrinsic symbols
-    /// use the underscore encoding (`llvm_floor_f32`) that the textual `.ll`
-    /// exporter decodes back to the dotted LLVM name (`llvm.floor.f32`),
-    /// exactly like the `llvm_ctpop_i*` bit-intrinsic family above.
     fn llvm_intrinsic_name(
         self,
         ctx: &Context,
         result_ty: TypeHandle,
         loc: pliron::location::Location,
     ) -> Result<Option<&'static str>> {
-        match self {
-            // Rounding: each maps to a single PTX `cvt` instruction, except
-            // `round`; see the note above.
-            Self::FloorF32 => Ok(Some("llvm_floor_f32")),
-            Self::FloorF64 => Ok(Some("llvm_floor_f64")),
-            Self::CeilF32 => Ok(Some("llvm_ceil_f32")),
-            Self::CeilF64 => Ok(Some("llvm_ceil_f64")),
-            Self::TruncF32 => Ok(Some("llvm_trunc_f32")),
-            Self::TruncF64 => Ok(Some("llvm_trunc_f64")),
-            Self::RoundF32 => Ok(Some("llvm_round_f32")),
-            Self::RoundF64 => Ok(Some("llvm_round_f64")),
-            Self::RoundevenF32 => Ok(Some("llvm_roundeven_f32")),
-            Self::RoundevenF64 => Ok(Some("llvm_roundeven_f64")),
-            // Sign operations: `llvm.fabs.*` / `llvm.copysign.*` select to
-            // single PTX `abs` / `copysign` instructions. `fabs` is the one
-            // placeholder that is generic over the float width, so its name
-            // dispatches on the result type.
-            Self::Fabs => fabs_llvm_intrinsic_name(ctx, result_ty, loc).map(Some),
-            Self::CopysignF32 => Ok(Some("llvm_copysign_f32")),
-            Self::CopysignF64 => Ok(Some("llvm_copysign_f64")),
-            _ => Ok(None),
+        if self == Self::Fabs {
+            return fabs_llvm_intrinsic_name(ctx, result_ty, loc).map(Some);
         }
+        Ok(self.llvm_symbol(false))
     }
 
-    /// Return the equivalent fast-math binop kind, if this intrinsic is one.
     fn fast_binop(self) -> Option<FastFloatBinop> {
         match self {
             Self::FaddFast => Some(FastFloatBinop::Add),
@@ -1727,17 +1392,10 @@ fn fabs_llvm_intrinsic_name(
     ty: TypeHandle,
     loc: pliron::location::Location,
 ) -> Result<&'static str> {
-    let ty_ref = ty.deref(ctx);
-    if ty_ref.is::<FP32Type>() {
-        Ok("llvm_fabs_f32")
-    } else if ty_ref.is::<FP64Type>() {
-        Ok("llvm_fabs_f64")
-    } else {
-        pliron::input_err!(
-            loc,
-            "expected f32 or f64 type for Rust float math intrinsic"
-        )
-    }
+    let is_f64 = float_math_is_f64(ctx, ty, loc)?;
+    Ok(RustFloatMathIntrinsic::Fabs
+        .llvm_symbol(is_f64)
+        .expect("generated fabs LLVM symbol"))
 }
 
 /// Return the libdevice `fabs` entry point for the concrete float type.
@@ -1746,11 +1404,23 @@ fn fabs_libdevice_name(
     ty: TypeHandle,
     loc: pliron::location::Location,
 ) -> Result<&'static str> {
+    let is_f64 = float_math_is_f64(ctx, ty, loc)?;
+    Ok(RustFloatMathIntrinsic::Fabs
+        .libdevice_symbol(is_f64)
+        .expect("generated fabs libdevice symbol"))
+}
+
+/// Generic math placeholders recover their width from the concrete float type.
+fn float_math_is_f64(
+    ctx: &Context,
+    ty: TypeHandle,
+    loc: pliron::location::Location,
+) -> Result<bool> {
     let ty_ref = ty.deref(ctx);
     if ty_ref.is::<FP32Type>() {
-        Ok("__nv_fabsf")
+        Ok(false)
     } else if ty_ref.is::<FP64Type>() {
-        Ok("__nv_fabs")
+        Ok(true)
     } else {
         pliron::input_err!(
             loc,

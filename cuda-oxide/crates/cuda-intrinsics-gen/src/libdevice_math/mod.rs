@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Staged libm mappings. This family has bitcode evidence, not hardware ABI IDs.
+//! Compiler math mappings. This family has bitcode evidence, not hardware ABI IDs.
 
+mod compiler;
 mod evidence;
 mod render;
 #[cfg(test)]
@@ -45,7 +46,15 @@ struct Function {
     name: String,
     signature: Signature,
     #[serde(default)]
-    libm: Vec<String>,
+    libm: Option<Vec<String>>,
+    #[serde(default)]
+    core: Vec<String>,
+    #[serde(default)]
+    paths: Vec<String>,
+    #[serde(default)]
+    variant: Option<String>,
+    #[serde(default)]
+    constant: Option<String>,
     #[serde(default)]
     cmath: Option<String>,
     #[serde(default)]
@@ -130,7 +139,11 @@ impl Link {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Mapping {
-    libm: String,
+    libm: Option<String>,
+    width: String,
+    variant: Option<String>,
+    constant: Option<String>,
+    paths: Vec<String>,
     signature: String,
     placeholders: Vec<String>,
     cmath: Option<String>,
@@ -161,6 +174,8 @@ fn identifier(value: &str) -> bool {
 fn expand(template: &str, width: &str) -> Result<String> {
     let value = template
         .replace("{width}", width)
+        .replace("{Width}", if width == "f32" { "F32" } else { "F64" })
+        .replace("{WIDTH}", if width == "f32" { "F32" } else { "F64" })
         .replace("{suffix}", if width == "f32" { "f" } else { "" });
     ensure!(
         identifier(&value),
@@ -171,7 +186,7 @@ fn expand(template: &str, width: &str) -> Result<String> {
 
 fn parse(bytes: &[u8]) -> Result<Shard> {
     let shard: Shard = toml::from_slice(bytes).context("parse libdevice_math shard")?;
-    ensure!(shard.schema == 1, "unsupported libdevice_math schema");
+    ensure!(shard.schema == 2, "unsupported libdevice_math schema");
     ensure!(
         shard.family == "libdevice_math",
         "wrong libdevice_math family"
@@ -215,6 +230,10 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
     let mut exports = BTreeSet::new();
     let mut cmath_paths = BTreeSet::new();
     let mut scalar_placeholders = BTreeSet::new();
+    let mut compiler_paths = BTreeMap::new();
+    let mut variants = BTreeMap::new();
+    let mut constants = BTreeMap::new();
+    let mut registered_placeholders = BTreeMap::new();
     let mut result = Vec::new();
     for function in &shard.libdevice_math.functions {
         ensure!(identifier(&function.name), "invalid math function name");
@@ -230,6 +249,15 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
                     .is_some_and(identifier),
                 "invalid handwritten math lowering {lowering:?}"
             );
+            ensure!(
+                matches!(
+                    lowering.as_str(),
+                    "handwritten:emit_sincos"
+                        | "handwritten:emit_frexp"
+                        | "handwritten:lower_float_minmax_nsz"
+                ),
+                "unsupported handwritten math lowering {lowering:?}"
+            );
         } else {
             ensure!(
                 !matches!(
@@ -239,11 +267,42 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
                 "tuple-returning math requires an explicit handwritten adapter"
             );
         }
-        let aliases = if function.libm.is_empty() {
-            vec![function.name.clone()]
-        } else {
-            function.libm.clone()
-        };
+        let aliases = function
+            .libm
+            .clone()
+            .unwrap_or_else(|| vec![function.name.clone()]);
+        let sincos = function.lowering.as_deref() == Some("handwritten:emit_sincos");
+        if sincos {
+            ensure!(
+                function.signature == Signature::FloatPair
+                    && function.libdevice.is_none()
+                    && function.link == Link::Always,
+                "sincos must expand a float pair without a direct libdevice call"
+            );
+            ensure!(
+                !aliases.is_empty()
+                    && function.variant.is_none()
+                    && function.constant.is_none()
+                    && function.core.is_empty()
+                    && function.paths.is_empty()
+                    && function.cmath.is_none(),
+                "sincos must use its handwritten libm tuple route"
+            );
+        }
+        if function.lowering.as_deref() == Some("handwritten:emit_frexp") {
+            ensure!(
+                function.signature == Signature::FloatIntegerPair
+                    && function.link == Link::Always
+                    && function.libdevice.is_some(),
+                "frexp requires its float/i32 tuple ABI and libdevice symbol"
+            );
+        }
+        if function.lowering.as_deref() == Some("handwritten:lower_float_minmax_nsz") {
+            ensure!(
+                function.signature == Signature::Binary && function.link == Link::Never,
+                "min/max must use the handwritten binary never-linked route"
+            );
+        }
         for width in &shard.libdevice_math.widths {
             let symbol = if let Some(symbol) = &function.libdevice {
                 Some(expand(symbol, width)?)
@@ -288,6 +347,18 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
                 .iter()
                 .map(|name| expand(name, width))
                 .collect::<Result<Vec<_>>>()?;
+            ensure!(!placeholders.is_empty(), "math requires a placeholder");
+            if sincos {
+                ensure!(
+                    placeholders.len() == 2,
+                    "sincos requires two scalar placeholders"
+                );
+            } else {
+                ensure!(
+                    placeholders.len() == 1,
+                    "plain math requires one placeholder"
+                );
+            }
             if function.lowering.is_none() {
                 ensure!(
                     placeholders.len() == 1,
@@ -310,15 +381,159 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
                     "duplicate cmath spelling {path}"
                 );
             }
-            for alias in &aliases {
-                ensure!(identifier(alias), "invalid libm alias {alias:?}");
-                let libm = format!("{alias}{}", if width == "f32" { "f" } else { "" });
-                ensure!(
-                    exports.insert(libm.clone()),
-                    "duplicate libm spelling {libm}"
+            let mut paths = Vec::new();
+            for core in &function.core {
+                let name = expand(core, width)?;
+                paths.extend([
+                    format!("core::intrinsics::{name}"),
+                    format!("std::intrinsics::{name}"),
+                ]);
+            }
+            for path in &function.paths {
+                paths.push(
+                    path.split("::")
+                        .map(|segment| expand(segment, width))
+                        .collect::<Result<Vec<_>>>()?
+                        .join("::"),
                 );
+            }
+            paths.extend(cmath.clone());
+            ensure!(
+                !aliases.is_empty() || !paths.is_empty(),
+                "math row has no compiler entry point"
+            );
+            let (variant, constant) = if sincos {
+                (None, None)
+            } else {
+                let title = format!(
+                    "{}{}",
+                    function.name[..1].to_ascii_uppercase(),
+                    &function.name[1..]
+                );
+                let variant = expand(
+                    function
+                        .variant
+                        .as_deref()
+                        .unwrap_or(&format!("{title}{{Width}}")),
+                    width,
+                )?;
+                let constant = expand(
+                    function.constant.as_deref().unwrap_or(&format!(
+                        "CALLEE_{}_{{WIDTH}}",
+                        function.name.to_ascii_uppercase()
+                    )),
+                    width,
+                )?;
+                ensure!(
+                    variant.as_bytes()[0].is_ascii_uppercase() && !variant.contains('_'),
+                    "math variant must be CamelCase"
+                );
+                ensure!(
+                    !compiler::FAST
+                        .iter()
+                        .any(|(name, callee, suffix)| *name == variant
+                            || *callee == constant
+                            || *suffix == placeholders[0]),
+                    "math row collides with fast arithmetic"
+                );
+                ensure!(
+                    constant.starts_with("CALLEE_")
+                        && constant.bytes().all(|byte| byte.is_ascii_uppercase()
+                            || byte.is_ascii_digit()
+                            || byte == b'_'),
+                    "math constant must start with CALLEE_ and use uppercase identifiers"
+                );
+                let role = if width == "f32" { "F32" } else { "F64" };
+                ensure!(
+                    (variant == format!("Frexp{role}"))
+                        == (function.lowering.as_deref() == Some("handwritten:emit_frexp")),
+                    "frexp identity must use the matching handwritten adapter"
+                );
+                ensure!(
+                    (variant == format!("MaxNumNsz{role}")
+                        || variant == format!("MinNumNsz{role}"))
+                        == (function.lowering.as_deref()
+                            == Some("handwritten:lower_float_minmax_nsz")),
+                    "min/max identity must use the matching handwritten expansion"
+                );
+                if variant == "Fabs" {
+                    ensure!(
+                        function.signature == Signature::Unary && function.link == Link::Libnvvm,
+                        "generic fabs requires its unary backend-dependent route"
+                    );
+                }
+                let identity = (
+                    function.name.clone(),
+                    constant.clone(),
+                    placeholders[0].clone(),
+                );
+                if let Some(previous) = variants.insert(variant.clone(), identity.clone()) {
+                    ensure!(previous == identity, "duplicate math variant {variant}");
+                    ensure!(
+                        variant == "Fabs",
+                        "only fabs uses a generic-width math identity"
+                    );
+                }
+                let identity = (
+                    function.name.clone(),
+                    variant.clone(),
+                    placeholders[0].clone(),
+                );
+                if let Some(previous) = constants.insert(constant.clone(), identity.clone()) {
+                    ensure!(previous == identity, "duplicate math constant {constant}");
+                }
+                if let Some(previous) =
+                    registered_placeholders.insert(placeholders[0].clone(), variant.clone())
+                {
+                    ensure!(
+                        previous == variant,
+                        "duplicate compiler math placeholder {}",
+                        placeholders[0]
+                    );
+                }
+                for path in &paths {
+                    ensure!(
+                        !compiler::FAST.iter().any(|(_, _, suffix)| path
+                            == &format!("core::intrinsics::{suffix}")
+                            || path == &format!("std::intrinsics::{suffix}")),
+                        "compiler math path collides with fast arithmetic"
+                    );
+                }
+                (Some(variant), Some(constant))
+            };
+            for path in &paths {
+                if let Some((previous_variant, previous_width)) =
+                    compiler_paths.insert(path.clone(), (variant.clone(), width.clone()))
+                {
+                    ensure!(
+                        previous_variant == variant && previous_width != *width,
+                        "duplicate compiler math path {path}"
+                    );
+                }
+            }
+            let libm_names = if aliases.is_empty() {
+                vec![None]
+            } else {
+                aliases
+                    .iter()
+                    .map(|alias| {
+                        ensure!(identifier(alias), "invalid libm alias {alias:?}");
+                        let libm = format!("{alias}{}", if width == "f32" { "f" } else { "" });
+                        ensure!(
+                            exports.insert(libm.clone()),
+                            "duplicate libm spelling {libm}"
+                        );
+                        Ok(Some(libm))
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            };
+            for libm in libm_names {
                 result.push(Mapping {
                     libm,
+                    width: width.clone(),
+                    variant: variant.clone(),
+                    constant: constant.clone(),
+                    paths: paths.clone(),
                     signature: function.signature.rust(width),
                     placeholders: placeholders.clone(),
                     cmath: cmath.clone(),
@@ -331,7 +546,9 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
             }
         }
     }
-    result.sort_by(|left, right| left.libm.cmp(&right.libm));
+    result.sort_by(|left, right| {
+        (&left.libm, &left.variant, &left.width).cmp(&(&right.libm, &right.variant, &right.width))
+    });
     Ok(result)
 }
 

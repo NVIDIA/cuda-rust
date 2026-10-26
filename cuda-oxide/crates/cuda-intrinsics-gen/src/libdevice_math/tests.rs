@@ -17,18 +17,26 @@ fn root() -> PathBuf {
 }
 
 fn fixture(functions: &str) -> Shard {
-    parse(format!("schema = 1\nfamily = \"libdevice_math\"\n[libdevice_math]\nevidence = \"evidence/test.json\"\nlibdevice_sha256 = \"{}\"\nwidths = [\"f32\", \"f64\"]\n{functions}", "a".repeat(64)).as_bytes()).unwrap()
+    parse(format!("schema = 2\nfamily = \"libdevice_math\"\n[libdevice_math]\nevidence = \"evidence/test.json\"\nlibdevice_sha256 = \"{}\"\nwidths = [\"f32\", \"f64\"]\n{functions}", "a".repeat(64)).as_bytes()).unwrap()
 }
 
 #[test]
-fn staged_snapshot_has_exactly_the_original_72_exports() {
+fn generated_metadata_covers_the_existing_82_exports_and_core_only_routes() {
     let shard = read(&root()).unwrap();
     let rows = mappings(&shard).unwrap();
-    assert_eq!(rows.len(), 72);
-    assert_eq!(expected_symbols(&rows).unwrap().len(), 64);
+    assert_eq!(rows.len(), 86);
+    assert_eq!(rows.iter().filter(|row| row.libm.is_some()).count(), 82);
+    assert_eq!(expected_symbols(&rows).unwrap().len(), 74);
     assert_eq!(generated::MAPPINGS.len(), rows.len());
     for (actual, row) in generated::MAPPINGS.iter().zip(&rows) {
-        assert_eq!(actual.libm, row.libm);
+        assert_eq!(actual.libm, row.libm.as_deref());
+        assert_eq!(actual.width, row.width);
+        assert_eq!(actual.variant, row.variant.as_deref());
+        assert_eq!(actual.constant, row.constant.as_deref());
+        assert_eq!(
+            actual.paths,
+            row.paths.iter().map(String::as_str).collect::<Vec<_>>()
+        );
         assert_eq!(actual.signature, row.signature);
         assert_eq!(
             actual.placeholders,
@@ -42,136 +50,181 @@ fn staged_snapshot_has_exactly_the_original_72_exports() {
         assert_eq!(actual.llvm, row.llvm.as_deref());
         assert_eq!(actual.lowering, row.lowering.as_deref());
         assert_eq!(actual.link, row.link.as_str());
-    }
-}
-
-fn quoted(text: &str) -> impl Iterator<Item = &str> {
-    text.split('"').skip(1).step_by(2)
-}
-
-fn function_body<'a>(source: &'a str, name: &str) -> &'a str {
-    let start = source.find(&format!("fn {name}(")).unwrap();
-    let rest = &source[start..];
-    let end = [rest.find("\n    fn "), rest.find("\n}\n")]
-        .into_iter()
-        .flatten()
-        .min()
-        .unwrap();
-    &rest[..end]
-}
-
-fn variants(source: &str, name: &str, target: &str) -> BTreeMap<String, String> {
-    let mut result = BTreeMap::new();
-    for line in function_body(source, name).lines() {
-        let Some((left, right)) = line.split_once(target) else {
-            continue;
-        };
-        for variant in left.split('|') {
-            if let Some(variant) = variant.trim().strip_prefix("Self::") {
-                result.insert(
-                    variant.into(),
-                    right.split([')', ',']).next().unwrap().trim().into(),
+        if let Some(variant) = &row.variant {
+            let callee = format!("{}{}", compiled::PLACEHOLDER_PREFIX, row.placeholders[0]);
+            let intrinsic =
+                compiled::RustFloatMathIntrinsic::from_placeholder_callee(&callee).unwrap();
+            assert_eq!(format!("{intrinsic:?}"), *variant);
+            assert_eq!(intrinsic.placeholder_callee(), callee);
+            assert_eq!(
+                intrinsic.libdevice_symbol(row.width == "f64"),
+                row.libdevice.as_deref()
+            );
+            assert_eq!(
+                intrinsic.llvm_symbol(row.width == "f64"),
+                row.llvm.as_deref()
+            );
+            for path in &row.paths {
+                assert_eq!(
+                    compiled::RustFloatMathIntrinsic::from_core_path(path),
+                    Some(intrinsic)
+                );
+            }
+            if let Some(alias) = &row.libm {
+                assert_eq!(
+                    compiled::RustFloatMathIntrinsic::from_libm_path(&format!("libm::{alias}")),
+                    Some(intrinsic)
                 );
             }
         }
     }
-    result
 }
 
-/// Compare staged rows against the live handwritten routes, not another copy
-/// of an expected mapping list. Additional hand-landed functions may coexist
-/// until the compiler-table migration, without making this PR depend on them.
+// Compile the actual compiler consumer, including its generated dispatch. The
+// baseline records the handwritten routes from PRs #1638 and #1645, integrated
+// with #1646 before migration. It is independent of the new generator/shard and
+// remains unchanged when later PRs add aliases.
+#[path = "../../../dialect-mir/src/rust_intrinsics.rs"]
+mod compiled;
+
+#[derive(Deserialize)]
+struct LegacyRoute {
+    path: String,
+    variant: String,
+    placeholder: String,
+    libdevice: Option<String>,
+    llvm: Option<String>,
+    link: String,
+}
+
 #[test]
-fn staged_rows_preserve_existing_import_placeholder_symbol_and_link_routes() {
-    let importer =
-        include_str!("../../../mir-importer/src/translator/terminator/intrinsics/float_math.rs");
-    let dialect = include_str!("../../../dialect-mir/src/rust_intrinsics.rs");
-    let lower = include_str!("../../../mir-lower/src/convert/ops/call.rs");
-    let start = importer.find("fn from_libm_path(").unwrap();
-    let end = start
-        + importer[start..]
-            .find("fn from_fast_intrinsic_path(")
-            .unwrap();
-    let mut imports = BTreeMap::new();
-    for line in importer[start..end].lines() {
-        if let Some((left, right)) = line.split_once("=> Some(Self::") {
-            for name in quoted(left) {
-                imports.insert(name, right.split(')').next().unwrap());
-            }
-        }
-    }
-    let placeholders = variants(importer, "placeholder_callee", "=> rust_intrinsics::");
-    let constants: BTreeMap<_, _> = dialect
-        .lines()
-        .filter_map(|line| {
-            let line = line.strip_prefix("pub const ")?;
-            let (name, _) = line.split_once(':')?;
-            Some((name, quoted(line).next()?))
-        })
+fn compiler_dispatch_preserves_every_pre_migration_path_symbol_and_link_route() {
+    let expected: Vec<LegacyRoute> =
+        serde_json::from_str(include_str!("migration-baseline.json")).unwrap();
+    assert_eq!(expected.len(), 214);
+    let shard = read(&root()).unwrap();
+    let rows = mappings(&shard).unwrap();
+    let mut actual_paths: BTreeSet<_> = rows
+        .iter()
+        .flat_map(|row| row.paths.iter().cloned())
         .collect();
-    let symbols = variants(lower, "libdevice_name", "=> Ok(");
-    let native = variants(lower, "llvm_intrinsic_name", "=> Ok(Some(");
-    let always = function_body(dialect, "is_libdevice_backed_placeholder");
-    let conditional = function_body(dialect, "is_backend_dependent_libdevice_placeholder");
-    let contains_constant = |body: &str, name: &str| {
-        body.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
-            .any(|token| token == name)
-    };
-    for row in mappings(&read(&root()).unwrap()).unwrap() {
-        if row.libm == "sincos" || row.libm == "sincosf" {
-            assert!(importer.contains(&format!("\"{}\" => Some(", row.libm)));
-            assert_eq!(row.placeholders.len(), 2);
-            assert_eq!(row.lowering.as_deref(), Some("handwritten:emit_sincos"));
-            continue;
-        }
-        let variant = imports[row.libm.as_str()];
-        let constant = &placeholders[variant];
+    actual_paths.extend(
+        rows.iter()
+            .filter(|row| row.variant.is_some())
+            .filter_map(|row| row.libm.as_ref().map(|name| format!("libm::{name}"))),
+    );
+    for (_, _, name) in compiler::FAST {
+        actual_paths.extend([
+            format!("core::intrinsics::{name}"),
+            format!("std::intrinsics::{name}"),
+        ]);
+    }
+    let legacy_paths: BTreeSet<_> = expected.iter().map(|row| row.path.clone()).collect();
+    assert!(legacy_paths.is_subset(&actual_paths));
+    for row in expected {
+        let intrinsic = compiled::RustFloatMathIntrinsic::from_core_path(&row.path).unwrap();
+        assert_eq!(format!("{intrinsic:?}"), row.variant, "{}", row.path);
+        let placeholder = format!("{}{}", compiled::PLACEHOLDER_PREFIX, row.placeholder);
+        assert_eq!(intrinsic.placeholder_callee(), placeholder, "{}", row.path);
         assert_eq!(
-            row.placeholders,
-            [constants[constant.as_str()]],
+            compiled::RustFloatMathIntrinsic::from_placeholder_callee(&placeholder),
+            Some(intrinsic)
+        );
+        let is_f64 = row.variant == "Fabs" && row.path.ends_with("fabs");
+        assert_eq!(
+            intrinsic.libdevice_symbol(is_f64),
+            row.libdevice.as_deref(),
             "{}",
-            row.libm
+            row.path
         );
         assert_eq!(
-            contains_constant(always, constant),
-            row.link == Link::Always,
+            intrinsic.llvm_symbol(is_f64),
+            row.llvm.as_deref(),
             "{}",
-            row.libm
+            row.path
         );
         assert_eq!(
-            contains_constant(conditional, constant),
-            row.link == Link::Libnvvm,
+            compiled::is_libdevice_backed_placeholder(&placeholder),
+            row.link == "always",
             "{}",
-            row.libm
+            row.path
         );
-        if variant == "Fabs" {
-            for symbol in [&row.libdevice, &row.llvm].into_iter().flatten() {
-                assert!(lower.contains(&format!("\"{symbol}\"")));
-            }
-        } else {
+        assert_eq!(
+            compiled::is_backend_dependent_libdevice_placeholder(&placeholder),
+            row.link == "libnvvm",
+            "{}",
+            row.path
+        );
+        assert!(compiled::is_known_placeholder(&placeholder));
+        assert_eq!(
+            compiled::is_intrinsic_lowered_cmath_shim(&row.path),
+            row.path.starts_with("std::sys::cmath::")
+        );
+        if let Some(alias) = row.path.strip_prefix("libm::") {
             assert_eq!(
-                symbols.get(variant).map(|name| name.trim_matches('"')),
-                row.libdevice.as_deref(),
-                "{}",
-                row.libm
+                compiled::RustFloatMathIntrinsic::from_core_path(&format!(
+                    "libm::math::module::{alias}"
+                )),
+                Some(intrinsic)
             );
             assert_eq!(
-                native.get(variant).map(|name| name.trim_matches('"')),
-                row.llvm.as_deref(),
-                "{}",
-                row.libm
+                compiled::RustFloatMathIntrinsic::from_core_path(&format!("user::libm::{alias}")),
+                None
             );
-        }
-        if let Some(path) = &row.cmath {
-            assert!(importer.contains(&format!("\"{path}\" => Some(Self::{variant})")));
         }
     }
+}
+
+#[test]
+fn unregistered_aliases_and_unknown_placeholders_remain_rejected() {
+    for path in [
+        "libm::erf",
+        "libm::modf",
+        "libm::remquo",
+        "libm::sqrtf128",
+        "user::std::sys::cmath::tgamma",
+        "libmath::sqrtf",
+    ] {
+        assert_eq!(
+            compiled::RustFloatMathIntrinsic::from_core_path(path),
+            None,
+            "{path}"
+        );
+        assert!(!compiled::is_intrinsic_lowered_cmath_shim(path));
+    }
+    let unknown = format!("{}future_math_f32", compiled::PLACEHOLDER_PREFIX);
+    assert_eq!(
+        compiled::RustFloatMathIntrinsic::from_placeholder_callee(&unknown),
+        None
+    );
+    assert!(!compiled::is_known_placeholder(&unknown));
+    assert!(!compiled::is_libdevice_backed_placeholder(&unknown));
+    assert!(!compiled::is_backend_dependent_libdevice_placeholder(
+        &unknown
+    ));
+    assert_eq!(
+        compiled::RustFloatMathIntrinsic::from_libm_path("libm::sincosf"),
+        None
+    );
+    assert_eq!(compiled::libm_sincos_is_f64("libm::sincosf"), Some(false));
+    assert_eq!(
+        compiled::libm_sincos_is_f64("libm::math::sincos::sincos"),
+        Some(true)
+    );
+    assert_eq!(compiled::libm_sincos_is_f64("user::libm::sincos"), None);
+    assert_eq!(compiled::RustFloatMathIntrinsic::LdexpF64.arg_count(), 2);
+    assert_eq!(compiled::RustFloatMathIntrinsic::FmaF32.arg_count(), 3);
+    assert_eq!(compiled::RustFloatMathIntrinsic::FrexpF64.arg_count(), 1);
 }
 
 #[test]
 fn aliases_and_handwritten_controls_keep_their_semantics() {
     let rows = mappings(&read(&root()).unwrap()).unwrap();
-    let find = |name: &str| rows.iter().find(|row| row.libm == name).unwrap();
+    let find = |name: &str| {
+        rows.iter()
+            .find(|row| row.libm.as_deref() == Some(name))
+            .unwrap()
+    };
     for (alias, original) in [("roundeven", "rint"), ("roundevenf", "rintf")] {
         assert_eq!(find(alias).placeholders, find(original).placeholders);
         assert_eq!(find(alias).libdevice, find(original).libdevice);
@@ -185,6 +238,54 @@ fn aliases_and_handwritten_controls_keep_their_semantics() {
     assert_eq!(find("fabs").placeholders, find("fabsf").placeholders);
     assert_eq!(find("floor").link, Link::Libnvvm);
     assert_eq!(find("sqrt").link, Link::Always);
+}
+
+#[test]
+fn compiler_identities_and_handwritten_handlers_fail_closed() {
+    let base = "[[libdevice_math.function]]\nname = \"demo\"\nsignature = \"(F) -> F\"\n";
+    for (suffix, expected) in [
+        ("libm = []\n", "no compiler entry point"),
+        ("variant = \"demo{width}\"\n", "CamelCase"),
+        ("constant = \"callee_demo\"\n", "CALLEE_"),
+        ("variant = \"FaddFast\"\n", "collides with fast arithmetic"),
+        ("core = [\"fadd_fast\"]\n", "collides with fast arithmetic"),
+        ("variant = \"Demo\"\n", "duplicate math variant"),
+        (
+            "variant = \"Demo\"\nconstant = \"CALLEE_DEMO\"\nplaceholders = [\"demo\"]\n",
+            "generic-width math identity",
+        ),
+        ("variant = \"Frexp{Width}\"\n", "frexp identity"),
+        ("variant = \"MaxNumNsz{Width}\"\n", "min/max identity"),
+        (
+            "variant = \"Fabs\"\nconstant = \"CALLEE_FABS\"\nplaceholders = [\"fabs\"]\n",
+            "generic fabs",
+        ),
+        (
+            "core = [\"demo{width}\", \"demo{width}\"]\n",
+            "duplicate compiler math path",
+        ),
+        (
+            "lowering = \"handwritten:unknown_adapter\"\n",
+            "unsupported handwritten",
+        ),
+        (
+            "lowering = \"handwritten:emit_frexp\"\nlibdevice = \"__nv_demo{suffix}\"\n",
+            "float/i32 tuple ABI",
+        ),
+        (
+            "[[libdevice_math.function]]\nname = \"other\"\nsignature = \"(F) -> F\"\nvariant = \"Demo{Width}\"\n",
+            "duplicate math variant",
+        ),
+        (
+            "[[libdevice_math.function]]\nname = \"other\"\nsignature = \"(F) -> F\"\nconstant = \"CALLEE_DEMO_{WIDTH}\"\n",
+            "duplicate math constant",
+        ),
+    ] {
+        let error = mappings(&fixture(&format!("{base}{suffix}")))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{suffix}: {error}");
+    }
 }
 
 #[test]
@@ -285,7 +386,7 @@ fn malformed_rows_fail_closed() {
         ),
         (
             "lowering = \"handwritten:emit_demo\"\nllvm = \"llvm_demo_{width}\"\nlink = \"libnvvm\"\n",
-            "libdevice ABI",
+            "unsupported handwritten",
         ),
         (
             "[[libdevice_math.function]]\nname = \"other\"\nsignature = \"(F) -> F\"\nplaceholders = [\"demo{width}\"]\n",
@@ -335,7 +436,7 @@ fn malformed_rows_fail_closed() {
 fn schema_and_evidence_pins_are_strict() {
     let source = fs::read_to_string(root().join("intrinsics").join(SHARD)).unwrap();
     for changed in [
-        source.replacen("schema = 1", "schema = 2", 1),
+        source.replacen("schema = 2", "schema = 3", 1),
         source.replacen("family = \"libdevice_math\"", "family = \"scalar_math\"", 1),
         source.replacen("[\"f32\", \"f64\"]", "[\"f16\"]", 1),
         source.replacen(
@@ -343,7 +444,7 @@ fn schema_and_evidence_pins_are_strict() {
             "evidence/../outside.json",
             1,
         ),
-        source.replacen("schema = 1", "schema = 1\nunknown = true", 1),
+        source.replacen("schema = 2", "schema = 2\nunknown = true", 1),
         source.replacen("(F) -> F", "(F) -> bool", 1),
     ] {
         assert!(parse(changed.as_bytes()).is_err());

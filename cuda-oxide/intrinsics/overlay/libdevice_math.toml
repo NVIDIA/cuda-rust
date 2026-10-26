@@ -1,0 +1,194 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Separate libdevice evidence domain; not part of the hardware ABI shard index.
+# PR3 stages the existing 72 libm exports. Compiler tables are migrated later.
+schema = 1
+family = "libdevice_math"
+
+[libdevice_math]
+evidence = "evidence/libdevice_math/cuda-13.0.json"
+libdevice_sha256 = "91334d6e12748f6cb5bbf0a1cd965a56bcd93dc4f496d2e5c5f8c6e523094356"
+widths = ["f32", "f64"]
+
+[[libdevice_math.function]]
+name = "acos"
+signature = "(F) -> F"
+cmath = "acos{suffix}"
+
+[[libdevice_math.function]]
+name = "acosh"
+signature = "(F) -> F"
+cmath = "acosh{suffix}"
+
+[[libdevice_math.function]]
+name = "asin"
+signature = "(F) -> F"
+cmath = "asin{suffix}"
+
+[[libdevice_math.function]]
+name = "asinh"
+signature = "(F) -> F"
+cmath = "asinh{suffix}"
+
+[[libdevice_math.function]]
+name = "atan"
+signature = "(F) -> F"
+cmath = "atan{suffix}"
+
+[[libdevice_math.function]]
+name = "atan2"
+signature = "(F, F) -> F"
+cmath = "atan2{suffix}"
+
+[[libdevice_math.function]]
+name = "atanh"
+signature = "(F) -> F"
+cmath = "atanh{suffix}"
+
+[[libdevice_math.function]]
+name = "cbrt"
+signature = "(F) -> F"
+cmath = "cbrt{suffix}"
+
+[[libdevice_math.function]]
+name = "ceil"
+signature = "(F) -> F"
+llvm = "llvm_ceil_{width}"
+link = "libnvvm"
+
+[[libdevice_math.function]]
+name = "copysign"
+signature = "(F, F) -> F"
+llvm = "llvm_copysign_{width}"
+link = "libnvvm"
+
+[[libdevice_math.function]]
+name = "cos"
+signature = "(F) -> F"
+cmath = "cos{suffix}"
+
+[[libdevice_math.function]]
+name = "cosh"
+signature = "(F) -> F"
+cmath = "cosh{suffix}"
+
+[[libdevice_math.function]]
+name = "exp"
+signature = "(F) -> F"
+
+[[libdevice_math.function]]
+name = "exp2"
+signature = "(F) -> F"
+
+[[libdevice_math.function]]
+name = "expm1"
+signature = "(F) -> F"
+cmath = "expm1{suffix}"
+
+[[libdevice_math.function]]
+name = "fabs"
+signature = "(F) -> F"
+placeholders = ["fabs"]
+llvm = "llvm_fabs_{width}"
+link = "libnvvm"
+
+[[libdevice_math.function]]
+name = "floor"
+signature = "(F) -> F"
+llvm = "llvm_floor_{width}"
+link = "libnvvm"
+
+[[libdevice_math.function]]
+name = "fma"
+signature = "(F, F, F) -> F"
+
+[[libdevice_math.function]]
+name = "fmax"
+signature = "(F, F) -> F"
+placeholders = ["maximum_number_nsz_{width}"]
+lowering = "handwritten:lower_float_minmax_nsz"
+link = "never"
+
+[[libdevice_math.function]]
+name = "fmin"
+signature = "(F, F) -> F"
+placeholders = ["minimum_number_nsz_{width}"]
+lowering = "handwritten:lower_float_minmax_nsz"
+link = "never"
+
+[[libdevice_math.function]]
+name = "hypot"
+signature = "(F, F) -> F"
+cmath = "hypot{suffix}"
+
+[[libdevice_math.function]]
+name = "log"
+signature = "(F) -> F"
+
+[[libdevice_math.function]]
+name = "log10"
+signature = "(F) -> F"
+
+[[libdevice_math.function]]
+name = "log1p"
+signature = "(F) -> F"
+cmath = "log1p{suffix}"
+
+[[libdevice_math.function]]
+name = "log2"
+signature = "(F) -> F"
+
+[[libdevice_math.function]]
+name = "pow"
+signature = "(F, F) -> F"
+
+[[libdevice_math.function]]
+name = "rint"
+signature = "(F) -> F"
+libm = ["rint", "roundeven"]
+placeholders = ["round_ties_even_{width}"]
+llvm = "llvm_roundeven_{width}"
+link = "libnvvm"
+
+[[libdevice_math.function]]
+name = "round"
+signature = "(F) -> F"
+llvm = "llvm_round_{width}"
+link = "libnvvm"
+
+[[libdevice_math.function]]
+name = "sin"
+signature = "(F) -> F"
+cmath = "sin{suffix}"
+
+[[libdevice_math.function]]
+name = "sincos"
+signature = "(F) -> (F, F)"
+placeholders = ["sin{width}", "cos{width}"]
+lowering = "handwritten:emit_sincos"
+
+[[libdevice_math.function]]
+name = "sinh"
+signature = "(F) -> F"
+cmath = "sinh{suffix}"
+
+[[libdevice_math.function]]
+name = "sqrt"
+signature = "(F) -> F"
+
+[[libdevice_math.function]]
+name = "tan"
+signature = "(F) -> F"
+cmath = "tan{suffix}"
+
+[[libdevice_math.function]]
+name = "tanh"
+signature = "(F) -> F"
+cmath = "tanh{suffix}"
+
+[[libdevice_math.function]]
+name = "trunc"
+signature = "(F) -> F"
+llvm = "llvm_trunc_{width}"
+link = "libnvvm"

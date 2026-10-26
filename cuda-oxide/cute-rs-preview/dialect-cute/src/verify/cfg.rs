@@ -12,7 +12,7 @@ use pliron::{
     basic_block::BasicBlock,
     context::{Context, Ptr},
     linked_list::ContainsLinkedList,
-    op::Op,
+    op::{Op, OpId},
     operation::Operation,
 };
 
@@ -51,6 +51,13 @@ pub(super) fn operations_by_scope(
         scopes.entry(scope).or_default().push(*operation);
     }
     scopes.into_values().collect()
+}
+
+/// Test whether a scope holds any operation of one semantic family.
+pub(super) fn scope_has_any(ctx: &Context, scope: &[Ptr<Operation>], ids: &[OpId]) -> bool {
+    scope
+        .iter()
+        .any(|operation| ids.contains(&Operation::get_opid(*operation, ctx)))
 }
 
 /// Test whether any successor path in the same region reaches the destination block.

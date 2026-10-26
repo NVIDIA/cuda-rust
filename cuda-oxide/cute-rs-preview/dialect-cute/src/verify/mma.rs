@@ -20,6 +20,7 @@ use pliron::{
 
 use super::{
     Result,
+    cfg::scope_has_any,
     ghosts::smem_mma_semantic_ids,
     invalid,
     provenance::{
@@ -523,6 +524,10 @@ fn require_same_mma_plan(
 /// Validate shared overlays, lazy B partitions, scale/A fragments, and accumulator provenance together.
 pub(super) fn verify_smem_mma_story(ctx: &Context, all_ops: &[Ptr<Operation>]) -> Result {
     let ids = smem_mma_semantic_ids();
+    // Facts start only at this family's operations; a scope without one has nothing to check.
+    if !scope_has_any(ctx, all_ops, &ids) {
+        return Ok(());
+    }
     let facts = build_mma_facts(ctx, all_ops);
     let mut overlays = HashSet::new();
     let mut used_overlays = HashSet::new();

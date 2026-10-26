@@ -19,7 +19,7 @@ use pliron::{
 
 use super::{
     Result,
-    cfg::{block_reaches, operation_reaches},
+    cfg::{block_reaches, operation_reaches, scope_has_any},
     ghosts::scheduler_semantic_ids,
     invalid,
     provenance::{
@@ -198,6 +198,10 @@ fn scheduler_guard(
 /// Check one scheduler's state origins, loop advance, work guard, and coordinate consumers.
 pub(super) fn verify_scheduler_story(ctx: &Context, all_ops: &[Ptr<Operation>]) -> Result {
     let ids = scheduler_semantic_ids();
+    // Facts start only at this family's operations; a scope without one has nothing to check.
+    if !scope_has_any(ctx, all_ops, &ids) {
+        return Ok(());
+    }
     let facts = build_scheduler_facts(ctx, all_ops);
     let mut roots = HashSet::new();
     let mut has_work_roots = HashSet::new();

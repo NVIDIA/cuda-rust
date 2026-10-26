@@ -17,7 +17,7 @@ use pliron::{
 
 use super::{
     Result,
-    cfg::{operation_dominates, operation_reaches},
+    cfg::{operation_dominates, operation_reaches, scope_has_any},
     ghosts::pipeline_semantic_ids,
     invalid,
     provenance::{
@@ -302,6 +302,10 @@ pub(super) fn require_producer_pipeline_order(
 /// Validate handle ownership, complete cursor lifecycles, CFG order, and expected TMA byte totals.
 pub(super) fn verify_pipeline_story(ctx: &Context, all_ops: &[Ptr<Operation>]) -> Result {
     let ids = pipeline_semantic_ids();
+    // Facts start only at this family's operations; a scope without one has nothing to check.
+    if !scope_has_any(ctx, all_ops, &ids) {
+        return Ok(());
+    }
     let facts = build_pipeline_facts(ctx, all_ops);
     let makes: Vec<_> = all_ops
         .iter()

@@ -246,52 +246,11 @@ jobs:
         run: |
           tar -xf "$RUNNER_TEMP/gpu-tests/cutile-gpu-tests.tar" -C "$RUNNER_TEMP/gpu-tests"
           test "$(cat "$RUNNER_TEMP/gpu-tests/revision.txt")" = "$GITHUB_SHA"
-          echo "$RUNNER_TEMP/gpu-tests" >> "$GITHUB_PATH"
           nvidia-smi
           "$CUTILE_TILEIRAS_PATH" --version
 
-      # Mirror scripts/run_gpu_tests.sh's runtime selection. Archive mode uses
-      # the checked-out sources for fixtures and remaps the two workspace roots.
-      # Serial execution prevents unrelated GPU tests competing for resources.
-      - name: Tile GPU runtime tests
-        run: |
-          cargo-nextest nextest run --archive-file "$RUNNER_TEMP/gpu-tests/tile-tests.tar.zst" \
-            --workspace-remap "$PWD" --test-threads 1 --no-fail-fast \
-            -E 'package(=cutile) & (
-              binary(/^(arange|autotune|do_bench|dtype_float_ops|gpu_execution_ops|nested_partition_mut|slice_non_divisible|tensor_reinterpret|tensor_views|warmup_suite|gpu)$/)
-              | (binary(=control_flow_ops) & not test(compile_))
-              | (binary(/^(tensor_and_matrix_ops|type_conversion_ops)$/) & test(execute_))
-              | (binary(=specialization_bits) & test(raw_pointer_launch))
-            )'
-
-      - name: Submission lifetime tests (default, reactor, spin)
-        run: |
-          for budget in default 0 200000; do
-            echo "CUDA_ASYNC_SPIN_BUDGET_US=$budget"
-            if [[ "$budget" == default ]]; then
-              unset CUDA_ASYNC_SPIN_BUDGET_US
-            else
-              export CUDA_ASYNC_SPIN_BUDGET_US="$budget"
-            fi
-            cargo-nextest nextest run --archive-file "$RUNNER_TEMP/gpu-tests/tile-tests.tar.zst" \
-              --workspace-remap "$PWD" --test-threads 1 --no-fail-fast \
-              -E 'package(=cutile) & binary(=submission_lifetimes)'
-          done
-
-      - name: Cross-file debug source kernel
-        run: |
-          cargo-nextest nextest run --archive-file "$RUNNER_TEMP/gpu-tests/tile-tests.tar.zst" \
-            --workspace-remap "$PWD" --test-threads 1 --run-ignored only \
-            -E 'package(=cutile) & binary(=debug_info) & test(=kernel_executes_in_all_debug_modes)'
-
-      - name: Shared-host GPU runtime tests
-        working-directory: ${{ github.workspace }}
-        run: |
-          cargo-nextest nextest run --archive-file "$RUNNER_TEMP/gpu-tests/host-tests.tar.zst" \
-            --workspace-remap "$PWD" --test-threads 1 --no-fail-fast \
-            -E 'package(=cuda-bindings)
-              | (package(=cuda-core) & binary(/^(vmm|vmm_multicast|borrow_raw|simt_context_limits|simt_context_sync_policy|simt_device_buffer|simt_device_buffer_leaks|simt_pinned_host_buffer|simt_stream_priority|simt_stream_query|simt_vmm_multicast|simt_vmm_p2p)$/))
-              | (package(=cuda-async) & (kind(lib) | binary(/^(concurrent_capture|cuda_graph|device_fault|drop_in_flight|execute_once|execution_lock|pool_allocation|reactor_correctness)$/)))'
+      - name: GPU runtime tests
+        run: ./scripts/run_gpu_tests.sh --archive-dir "$RUNNER_TEMP/gpu-tests"
 
   # Breaking API changes must ship with the right version bump: compare each
   # publishable crate's API against its latest crates.io release and fail the

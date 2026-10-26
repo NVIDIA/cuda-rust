@@ -35,6 +35,19 @@ use pliron::{
     value::Value,
 };
 
+/// One possible origin of an ordinary carrier.
+pub(super) trait CarrierFact: Clone + Eq + std::hash::Hash {
+    /// True for a fact that names an ordinary SSA value instead of a semantic
+    /// origin: an input without provenance, or an ordinary scalar.
+    fn is_opaque(&self) -> bool;
+}
+
+/// Consumers read an origin set only through its size, its sole origin, and
+/// whether it holds a given semantic origin. Two opaque origins therefore show
+/// a merge exactly as any larger number does, and keeping more would let the
+/// sets grow with every merge they flow through.
+const OPAQUE_FACTS_KEPT: usize = 2;
+
 /// Monotone sets of possible semantic origins, indexed by carrier and field path.
 #[derive(Clone)]
 pub(super) struct OrdinaryFacts<F> {
@@ -54,18 +67,21 @@ impl<F> Default for OrdinaryFacts<F> {
     }
 }
 
-impl<F> OrdinaryFacts<F>
-where
-    F: Clone + Eq + std::hash::Hash,
-{
+impl<F: CarrierFact> OrdinaryFacts<F> {
     /// Add one origin to a field path and report whether the fixed-point state changed.
     pub(super) fn insert_path(&mut self, value: Value, path: Vec<u32>, fact: F) -> bool {
-        self.facts
+        let found = self
+            .facts
             .entry(value)
             .or_default()
             .entry(path)
-            .or_default()
-            .insert(fact)
+            .or_default();
+        if fact.is_opaque()
+            && found.iter().filter(|kept| kept.is_opaque()).count() >= OPAQUE_FACTS_KEPT
+        {
+            return false;
+        }
+        found.insert(fact)
     }
 
     /// Add an origin for the whole SSA carrier, with an empty field path.
@@ -273,7 +289,7 @@ pub(super) fn propagate_ordinary_plumbing<F>(
     facts: &mut OrdinaryFacts<F>,
 ) -> bool
 where
-    F: Clone + Eq + std::hash::Hash,
+    F: CarrierFact,
 {
     let mut changed = false;
     let mut blocks = HashSet::new();
@@ -427,7 +443,7 @@ pub(super) fn seed_unknown_integer_carriers<F>(
     width: u32,
     unknown: impl Fn(Value) -> F,
 ) where
-    F: Clone + Eq + std::hash::Hash,
+    F: CarrierFact,
 {
     let mut values = Vec::new();
     let mut blocks = HashSet::new();
@@ -465,7 +481,7 @@ pub(super) fn poison_missing_forwarding_sources<F>(
     unknown: impl Fn(Value) -> F + Copy,
 ) -> bool
 where
-    F: Clone + Eq + std::hash::Hash,
+    F: CarrierFact,
 {
     let mut changed = false;
     let mut blocks = HashSet::new();

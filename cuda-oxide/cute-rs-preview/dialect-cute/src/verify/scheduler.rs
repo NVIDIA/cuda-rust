@@ -23,7 +23,7 @@ use super::{
     ghosts::scheduler_semantic_ids,
     invalid,
     provenance::{
-        OrdinaryFacts, poison_missing_forwarding_sources, propagate_ordinary_plumbing,
+        CarrierFact, OrdinaryFacts, poison_missing_forwarding_sources, propagate_ordinary_plumbing,
         seed_unknown_integer_carriers,
     },
 };
@@ -72,6 +72,12 @@ pub(super) enum SchedulerFact {
     Stride(#[doc = "Operation identifying the semantic origin of this carrier."] Ptr<Operation>),
     /// Scalar without scheduler provenance, invalid in a scheduler-state merge.
     Unknown(#[doc = "Original SSA value lacking semantic provenance."] Value),
+}
+
+impl CarrierFact for SchedulerFact {
+    fn is_opaque(&self) -> bool {
+        matches!(self, Self::Unknown(_))
+    }
 }
 
 /// Require exactly one current-index or stride origin of the requested kind.

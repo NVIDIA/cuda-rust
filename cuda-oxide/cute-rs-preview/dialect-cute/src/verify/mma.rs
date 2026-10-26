@@ -24,9 +24,9 @@ use super::{
     ghosts::smem_mma_semantic_ids,
     invalid,
     provenance::{
-        OrdinaryFacts, branch_successor_operands, is_semantic_pointer_carrier_cast, local_cell,
-        local_cell_is_closed, poison_missing_forwarding_sources, propagate_ordinary_plumbing,
-        seed_unknown_integer_carriers,
+        CarrierFact, OrdinaryFacts, branch_successor_operands, is_semantic_pointer_carrier_cast,
+        local_cell, local_cell_is_closed, poison_missing_forwarding_sources,
+        propagate_ordinary_plumbing, seed_unknown_integer_carriers,
     },
 };
 use crate::{
@@ -100,6 +100,12 @@ pub(super) enum MmaFact {
     Scalar(#[doc = "Original SSA value lacking semantic provenance."] Value),
     /// An input without a proven semantic origin; merging it poisons provenance.
     Unknown(#[doc = "Original SSA value lacking semantic provenance."] Value),
+}
+
+impl CarrierFact for MmaFact {
+    fn is_opaque(&self) -> bool {
+        matches!(self, Self::Scalar(_) | Self::Unknown(_))
+    }
 }
 
 /// Return the sole carrier fact, rejecting absent or conflicting facts; callers validate its kind.
@@ -473,7 +479,7 @@ pub(super) fn verify_mma_use_closure(
     for (value, paths) in &facts.facts {
         for (path, found) in paths {
             for fact in found.iter().copied() {
-                if matches!(fact, MmaFact::Scalar(_) | MmaFact::Unknown(_)) {
+                if fact.is_opaque() {
                     continue;
                 }
                 for r#use in value.uses(ctx) {

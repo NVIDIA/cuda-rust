@@ -21,7 +21,7 @@ use super::{
     ghosts::pipeline_semantic_ids,
     invalid,
     provenance::{
-        OrdinaryFacts, poison_missing_forwarding_sources, propagate_ordinary_plumbing,
+        CarrierFact, OrdinaryFacts, poison_missing_forwarding_sources, propagate_ordinary_plumbing,
         seed_unknown_integer_carriers,
     },
 };
@@ -173,6 +173,12 @@ enum PipelineFact {
     Phase(#[doc = "Operation identifying the semantic origin of this carrier."] Ptr<Operation>),
     /// Scalar without a proven cursor origin; it cannot satisfy lifecycle checks.
     Unknown(#[doc = "Original SSA value lacking semantic provenance."] Value),
+}
+
+impl CarrierFact for PipelineFact {
+    fn is_opaque(&self) -> bool {
+        matches!(self, Self::Unknown(_))
+    }
 }
 
 /// Require an unambiguous slot or phase fact rooted at cursor creation.

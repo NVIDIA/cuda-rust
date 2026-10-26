@@ -248,6 +248,15 @@ when inlined, including across modules. Core operations are attributed to
 the user's call site. Multiple generated instructions can still map to one
 Rust line; this is not a one-to-one mapping, especially with optimization.
 
+Generated const-generic array bindings use the containing function or method's
+signature as their source origin. Generated reduction bodies use the reduction
+call's location, including its inline caller chain.
+
+Checks moved to the host launcher report the original access and its inline
+callers when validation fails, including in builds without device debug info.
+If several accesses share one launch check, its diagnostic retains each
+distinct source origin while the predicate is evaluated only once.
+
 ## Profiling
 
 Use NVIDIA **Nsight Compute** (`ncu`, reports opened with `ncu-ui`) for
@@ -333,3 +342,15 @@ cargo test -p cutile --test debug_info cuda_gdb_stops_in_cross_file_helper -- --
 ---
 
 Review [Performance](performance.md) for optimization strategies or [Interoperability](interoperability.md) for custom CUDA kernels.
+
+## Migrating compile options to v0.5.0
+
+Use `debug_info(DebugInfoLevel::Full)` instead of `device_debug(true)`, and
+`debug_info(DebugInfoLevel::Line)` instead of `lineinfo(true)`. Use
+`debug_info(DebugInfoLevel::None)` to disable both kinds of debug information.
+The old public `opt_level`, `device_debug`, and `lineinfo` fields are replaced
+by `codegen: CodegenMode`; prefer the builder setters when constructing options.
+
+Setter order is significant: `.debug_info(Full).opt_level(3)` selects optimized
+code, while `.opt_level(3).debug_info(Full)` selects full debugging at level zero.
+Runtime `CUTILE_JIT_*` overrides are applied after these programmatic options.

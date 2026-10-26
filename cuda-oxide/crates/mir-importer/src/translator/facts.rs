@@ -505,6 +505,7 @@ pub(crate) struct ReferenceParamValidity {
 /// `DisjointSlice` produce no fact. Unsupported reference pass modes and source
 /// argument mismatches are errors rather than guesses about the ABI mapping.
 pub(crate) fn reference_param_validity(
+    instance: &rustc_public::mir::mono::Instance,
     ty: &rustc_public::ty::Ty,
     fn_abi: &rustc_public::abi::FnAbi,
     source_index: usize,
@@ -542,15 +543,45 @@ pub(crate) fn reference_param_validity(
         return Ok(None);
     }
 
-    let attrs = match (&argument.mode, is_slice) {
-        (PassMode::Direct(attrs), false) | (PassMode::Pair(attrs, _), true) => attrs,
+    match (&argument.mode, is_slice) {
+        (PassMode::Direct(_), false) | (PassMode::Pair(_, _), true) => {}
         _ => {
             return Err(format!(
                 "kernel reference argument {source_index} has an unsupported rustc FnAbi pass mode"
             ));
         }
-    };
-    let flags = attrs.regular();
+    }
+
+    let (no_alias, no_free, pointee_size_bytes) = rustc_middle::ty::tls::with(|tcx| {
+        use rustc_middle::ty::{List, TypingEnv};
+        use rustc_target::callconv::{ArgAttribute, PassMode as InternalPassMode};
+
+        let internal_instance = rustc_public::rustc_internal::internal(tcx, *instance);
+        let query_input =
+            TypingEnv::fully_monomorphized().as_query_input((internal_instance, List::empty()));
+        let internal_fn_abi = tcx
+            .fn_abi_of_instance(query_input)
+            .map_err(|err| format!("could not query internal FnAbi: {err:?}"))?;
+        let internal_arg = internal_fn_abi.args.get(source_index).ok_or_else(|| {
+            format!("kernel source argument index {source_index} is absent from internal FnAbi")
+        })?;
+        let attrs = match (&internal_arg.mode, is_slice) {
+            (InternalPassMode::Direct(attrs), false) | (InternalPassMode::Pair(attrs, _), true) => {
+                attrs
+            }
+            _ => {
+                return Err(format!(
+                    "kernel reference argument {source_index} has an unsupported rustc FnAbi pass mode"
+                ));
+            }
+        };
+        Ok((
+            attrs.regular.contains(ArgAttribute::NoAlias),
+            attrs.regular.contains(ArgAttribute::NoFree),
+            attrs.pointee_size.bytes(),
+        ))
+    })?;
+
     // Do not consume rustc's `read_only`: NVPTX (including libNVVM) can lower
     // volatile reads through a readonly + noalias kernel parameter to cached
     // non-volatile loads. Let the optimizer infer read-only access from the
@@ -560,14 +591,10 @@ pub(crate) fn reference_param_validity(
     // dereferenceability as lasting for the whole call. rustc's NoFree is the
     // proof needed by all supported consumers; producer LLVM version alone is
     // insufficient. Zero covers both ZST pointees and unknown slice lengths.
-    let dereferenceable_bytes = if flags.no_free {
-        attrs.pointee_size().bytes() as u64
-    } else {
-        0
-    };
+    let dereferenceable_bytes = if no_free { pointee_size_bytes } else { 0 };
     Ok(Some(ReferenceParamValidity {
         pointee_alignment: shape.abi_align,
-        no_alias: flags.no_alias,
+        no_alias,
         dereferenceable_bytes,
     }))
 }
@@ -1055,7 +1082,7 @@ pub fn reference_validity(
                         .iter()
                         .enumerate()
                         .map(|(index, ty)| {
-                            reference_param_validity(ty, &fn_abi, index)
+                            reference_param_validity(&instance, ty, &fn_abi, index)
                                 .expect("source parameter matches ABI")
                         })
                         .collect::<Vec<_>>();
@@ -1063,19 +1090,27 @@ pub fn reference_validity(
                     // Reusing a neighboring argument after dropping an ignored
                     // ZST or flattening a slice must not mint reference facts.
                     let mut errors = vec![
-                        reference_param_validity(&source_types[1], &fn_abi, 0).unwrap_err(),
-                        reference_param_validity(&source_types[1], &fn_abi, fn_abi.args.len())
+                        reference_param_validity(&instance, &source_types[1], &fn_abi, 0)
                             .unwrap_err(),
+                        reference_param_validity(
+                            &instance,
+                            &source_types[1],
+                            &fn_abi,
+                            fn_abi.args.len(),
+                        )
+                        .unwrap_err(),
                     ];
                     let mut wrong_mode = fn_abi.clone();
                     wrong_mode.args[1].mode = fn_abi.args[15].mode.clone();
                     assert!(matches!(wrong_mode.args[1].mode, PassMode::Indirect { .. }));
                     errors.push(
-                        reference_param_validity(&source_types[1], &wrong_mode, 1).unwrap_err(),
+                        reference_param_validity(&instance, &source_types[1], &wrong_mode, 1)
+                            .unwrap_err(),
                     );
                     wrong_mode.args[3].mode = fn_abi.args[1].mode.clone();
                     errors.push(
-                        reference_param_validity(&source_types[3], &wrong_mode, 3).unwrap_err(),
+                        reference_param_validity(&instance, &source_types[3], &wrong_mode, 3)
+                            .unwrap_err(),
                     );
                     std::ops::ControlFlow::<(), _>::Continue((facts, errors))
                 })

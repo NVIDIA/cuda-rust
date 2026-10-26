@@ -1,0 +1,110 @@
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg class="cute-rs-preview" xmlns="http://www.w3.org/2000/svg" width="1040" height="510" viewBox="0 0 1040 510" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif">
+<title>How custom Rust backends ship in production and why stable rustc already contains everything cuda-oxide needs</title>
+<style>
+  .cute-rs-preview text { dominant-baseline:central; text-anchor:middle }
+  .cute-rs-preview .l { text-anchor:start }
+  .cute-rs-preview .r { text-anchor:end }
+  .cute-rs-preview .bg { fill:#faf9f5 }
+  .cute-rs-preview .title { font-size:17px; font-weight:700; fill:#1e1e1e }
+  .cute-rs-preview .sec { font-size:11px; font-weight:700; letter-spacing:0.06em; fill:#5c5c5c }
+  .cute-rs-preview .th { font-size:13.5px; font-weight:600; fill:#1e1e1e }
+  .cute-rs-preview .ts { font-size:12px; fill:#5c5c5c }
+  .cute-rs-preview .tm { font-family:'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size:11.5px; font-weight:500 }
+  .cute-rs-preview .k-box { fill:#f1efe9; stroke:#c8c5be }
+  .cute-rs-preview .tx-box { fill:#1e1e1e }
+  .cute-rs-preview .k-purple { fill:#ebe9fb; stroke:#7f77dd }
+  .cute-rs-preview .tx-purple { fill:#3a3490 }
+  .cute-rs-preview .k-teal { fill:#dff3ec; stroke:#3aa47f }
+  .cute-rs-preview .tx-teal { fill:#1f5c47 }
+  .cute-rs-preview .k-amber { fill:#fdeed3; stroke:#ef9f27 }
+  .cute-rs-preview .tx-amber { fill:#6b4100 }
+  .cute-rs-preview .k-coral { fill:#fde7e2; stroke:#e0735c }
+  .cute-rs-preview .tx-coral { fill:#7d2f1f }
+  .cute-rs-preview .dash { fill:none; stroke:#b8b4ac; stroke-dasharray:5 4 }
+  .cute-rs-preview .hair { stroke:#d4d1c9 }
+  .cute-rs-preview .arr { fill:none; stroke:#7b7b7b; stroke-width:1.5 }
+  .cute-rs-preview .arrhead { fill:none; stroke:#7b7b7b; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round }
+  @media (prefers-color-scheme: dark) {
+    .cute-rs-preview .bg { fill:#1b1d23 }
+    .cute-rs-preview .title, .cute-rs-preview .th { fill:#f5f6f8 }
+    .cute-rs-preview .sec { fill:#b8beca }
+    .cute-rs-preview .ts { fill:#cfd4de }
+    .cute-rs-preview .k-box { fill:#2e323c; stroke:#5c6375 }
+    .cute-rs-preview .tx-box { fill:#f5f6f8 }
+    .cute-rs-preview .dash { stroke:#606675 }
+    .cute-rs-preview .hair { stroke:#5c6375 }
+    .cute-rs-preview .arr, .cute-rs-preview .arrhead { stroke:#b6bcc8 }
+    .cute-rs-preview .k-purple { fill:#524e7d; stroke:#bab5f4 }
+    .cute-rs-preview .tx-purple { fill:#f6f5ff }
+    .cute-rs-preview .k-teal { fill:#346357; stroke:#7ed8bb }
+    .cute-rs-preview .tx-teal { fill:#f0fdf8 }
+    .cute-rs-preview .k-amber { fill:#735a3c; stroke:#f4c474 }
+    .cute-rs-preview .tx-amber { fill:#fff8eb }
+    .cute-rs-preview .k-coral { fill:#6b443e; stroke:#f29b8a }
+    .cute-rs-preview .tx-coral { fill:#fff0ed }
+  }
+</style>
+<defs>
+  <marker id="arr-eco" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path class="arrhead" d="M2 1L8 5L2 9"/>
+  </marker>
+</defs>
+
+<rect class="bg" width="1040" height="510" rx="10"/>
+<text class="title l" x="36" y="32">The Ecosystem Playbook &amp; Why Stable rustc Already Has Everything We Need</text>
+<text class="ts l" x="36" y="54">Official stable Rust releases ship the exact same backend hooks and rustc_public crates as nightly behind RUSTC_BOOTSTRAP=1.</text>
+
+<!-- Left Half: Ecosystem -->
+<text class="sec l" x="36" y="88">1 · WHAT OTHER RUST COMPILER / BACKEND PROJECTS DO</text>
+
+<rect class="k-box" x="36" y="102" width="460" height="84" rx="8" stroke-width="0.9"/>
+<text class="th tx-box l" x="54" y="124">A. Reimplement Frontend (rust-analyzer, cutile-rs)</text>
+<text class="ts tx-box l" x="54" y="146">• Zero rustc code; custom parser + type solver on stable.</text>
+<text class="ts tx-box l" x="54" y="166">• Works for IDEs, not codegen (no borrowck, mono, or LLVM).</text>
+
+<rect class="k-amber" x="36" y="198" width="460" height="84" rx="8" stroke-width="0.9"/>
+<text class="th tx-amber l" x="54" y="220">B. Out-of-Tree Nightly Pin (rust-gpu, Kani, Charon)</text>
+<text class="ts tx-amber l" x="54" y="242">• Uses #![feature(rustc_private)] on a daily nightly pin.</text>
+<text class="ts tx-amber l" x="54" y="262">• Pain point: users need nightly; daily builds can hit ICEs.</text>
+
+<rect class="k-purple" x="36" y="294" width="460" height="84" rx="8" stroke-width="0.9"/>
+<text class="th tx-purple l" x="54" y="316">C. In-Tree Upstream (rustc_codegen_cranelift / gcc)</text>
+<text class="ts tx-purple l" x="54" y="338">• Lives inside rust-lang/rust; built by upstream Rust CI.</text>
+<text class="ts tx-purple l" x="54" y="358">• Only possible if upstream Rust owns your target backend.</text>
+
+<rect class="k-teal" x="36" y="390" width="460" height="94" rx="8" stroke-width="1.2"/>
+<text class="th tx-teal l" x="54" y="412">D. Stable-Tag SDK Bundle (MS codegen_utc, Ferrocene)</text>
+<text class="ts tx-teal l" x="54" y="434">• Uses the exact same CodegenBackend trait we use!</text>
+<text class="ts tx-teal l" x="54" y="454">• Builds against a vetted STABLE release (e.g. 1.90 / 1.99)</text>
+<text class="ts tx-teal l" x="54" y="472">  and ships rustc + .so + sysroot as one standalone bundle.</text>
+
+<!-- Right Half: Inside Stable rustc -->
+<text class="sec l" x="530" y="88">2 · WHAT IS ACTUALLY INSIDE AN OFFICIAL STABLE RUST RELEASE</text>
+
+<rect class="dash" x="530" y="102" width="474" height="382" rx="10" stroke-width="1.2"/>
+<text class="th tx-box l" x="550" y="128">Official rustup Stable Toolchain (e.g. 1.99.1)</text>
+
+<!-- Gatekeeper box -->
+<rect class="k-coral" x="550" y="148" width="434" height="68" rx="7" stroke-width="0.9"/>
+<text class="th tx-coral l" x="568" y="170">Startup Gatekeeper in rustc</text>
+<text class="tm tx-coral l" x="568" y="194">if channel == "nightly" || RUSTC_BOOTSTRAP == "1"</text>
+
+<line class="arr" x1="767" y1="216" x2="767" y2="246" marker-end="url(#arr-eco)"/>
+<text class="ts" x="838" y="232">Unlocks on Stable:</text>
+
+<!-- Unlocked capabilities -->
+<rect class="k-purple" x="550" y="250" width="434" height="62" rx="7" stroke-width="0.9"/>
+<text class="th tx-purple l" x="568" y="271">1. Unstable Compiler Flags (-Z)</text>
+<text class="tm tx-purple l" x="568" y="293">-Z codegen-backend=...  -Z mir-enable-passes=...</text>
+
+<rect class="k-teal" x="550" y="324" width="434" height="68" rx="7" stroke-width="0.9"/>
+<text class="th tx-teal l" x="568" y="345">2. rustc-dev Component (Ships on Stable rustup!)</text>
+<text class="tm tx-teal l" x="568" y="366">librustc_driver.so + librustc_public.rlib</text>
+<text class="ts tx-teal l" x="568" y="382">(Verified: rustc_public &amp; bridge come for free!)</text>
+
+<rect class="k-amber" x="550" y="404" width="434" height="62" rx="7" stroke-width="0.9"/>
+<text class="th tx-amber l" x="568" y="425">3. Scoped Feature Gate (-Z allow-features=...)</text>
+<text class="ts tx-amber l" x="568" y="447">Unlocks rustc_private for us; user code stays stable.</text>
+</svg>

@@ -20,7 +20,7 @@ without a driver and fails on that call with `CUDA_ERROR_NOT_INITIALIZED`; the
 error message names the library files the loader tried. A driver whose CUDA
 major version is older than the toolkit's (a 12.x driver with a 13.x build)
 fails the same way with a "driver too old" message.
-| **Rust**         | Nightly (pinned)    | Pinned in `cuda-oxide/rust-toolchain.toml`                    |
+| **Rust**         | 1.99.1 (pinned)     | Pinned in `cuda-oxide/rust-toolchain.toml`                    |
 
 :::{note}
 cuda-oxide currently targets **Linux only**. Windows is not supported.
@@ -32,7 +32,7 @@ cuda-oxide currently targets **Linux only**. Windows is not supported.
 
 The repository includes a cuda-oxide devcontainer in `cuda-oxide/.devcontainer/`.
 Using it is the quickest way to get a reproducible development environment with
-CUDA Toolkit 13.0, LLVM 21, Clang 21, and the pinned Rust nightly already
+CUDA Toolkit 13.0, LLVM 21, Clang 21, and the pinned Rust toolchain already
 installed.
 
 The host does not need the CUDA Toolkit installed. It does need:
@@ -76,7 +76,7 @@ Rust setup sections below.
 ## Nix / flake.nix
 
 The repository also ships `cuda-oxide/flake.nix`, providing a reproducible dev shell
-(CUDA 13, LLVM 22, Clang, pinned Rust nightly). Requires
+(CUDA 13, Clang/libclang, and the pinned Rust toolchain with LLVM 23 `llvm-tools`). Requires
 [Nix](https://nixos.org/download/) with flakes enabled, an NVIDIA driver on
 the host, and Linux (x86\_64 or aarch64).
 
@@ -178,6 +178,30 @@ for the supported driver ranges and PTX limitation.
 
 ---
 
+## Official CUTLASS compiler (optional)
+
+The high-level CuTe translation backend uses NVIDIA's official CUTLASS 4.7
+compiler library. Install the repository-pinned archive with:
+
+```bash
+cargo oxide toolchain install cutlass
+```
+
+The installer verifies the archive and compiler-library SHA-256 digests and
+stores the toolchain in Cargo's managed data directory. Select it per build:
+
+```bash
+CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir \
+  cargo oxide build elementwise_cute --arch sm_120a
+```
+
+Set `CUDA_OXIDE_CUTLASS_COMPILER` to an absolute
+`libCutlassCompiler.so` path only when intentionally overriding the managed
+installation. The CuTe chapter's [Build with the CUTLASS Compiler](../cute/build-with-cutlass.md)
+page lists the two supported targets, the options and the failure rules.
+
+---
+
 ## LLVM 21+ (optional)
 
 cuda-oxide uses LLVM's NVPTX backend to lower LLVM IR to PTX.
@@ -255,15 +279,15 @@ Validated on Asus GX10 / NVIDIA DGX Spark.
 ## Rust toolchain
 
 The CUDA Oxide workspace ships `cuda-oxide/rust-toolchain.toml`, which pins the
-exact nightly version and required components. When you first run a `cargo`
+exact stable release and required components. When you first run a `cargo`
 command inside `cuda-oxide/`, rustup installs the correct toolchain
-automatically. Commands at the repository root and in `cutile-rs/` use stable.
+automatically.
 
 If you need to install it manually:
 
 ```bash
-rustup toolchain install nightly-2026-10-11
-rustup component add rust-src rustc-dev rust-analyzer clippy rustfmt llvm-tools --toolchain nightly-2026-10-11
+rustup toolchain install 1.99.1
+rustup component add rust-src rustc-dev rust-analyzer clippy rustfmt llvm-tools --toolchain 1.99.1
 ```
 
 Three of these components are what the codegen backend and doctor need:
@@ -282,10 +306,10 @@ The other three are not needed to build: `rust-analyzer` powers IDE support, `cl
 
 **Inside the cuda-oxide repo**, it works out of the box via a workspace alias -- no extra install step.
 
-**For use outside the repo** (your own projects), install it with the pinned nightly toolchain:
+**For use outside the repo** (your own projects), install it with the pinned toolchain:
 
 ```bash
-cargo +nightly-2026-10-11 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
+cargo +1.99.1 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
 ```
 
 On first run, `cargo-oxide` will automatically fetch and build the codegen backend. Subsequent runs reuse the cached build.
@@ -346,6 +370,7 @@ The full set, as `cargo oxide --help` reports it:
 | `doctor` | Check that your environment is set up correctly |
 | `setup` | Build and cache the codegen backend |
 | `update` | Refresh the cached codegen backend (or run `setup` inside the workspace) |
+| `toolchain` | Install compiler toolchains managed by cargo-oxide |
 
 Four of these are worth calling out, because they do something `cargo` itself
 cannot:
@@ -405,8 +430,8 @@ If everything is configured correctly, this compiles a Rust kernel to PTX, launc
 :::{tip}
 **Common issues:**
 
-- `No working llc found` -- prefer `rustup component add llvm-tools --toolchain nightly-2026-10-11`, or install LLVM 21+ (`sudo apt install llvm-21`), add `/usr/lib/llvm-21/bin` to your `PATH`, or set `CUDA_OXIDE_LLC=/usr/bin/llc-21`.
+- `No working llc found` -- prefer `rustup component add llvm-tools --toolchain 1.99.1`, or install LLVM 21+ (`sudo apt install llvm-21`), add `/usr/lib/llvm-21/bin` to your `PATH`, or set `CUDA_OXIDE_LLC=/usr/bin/llc-21`.
 - `'stddef.h' file not found` when building host `cuda-bindings` -- install clang dev headers: `sudo apt install clang-21` (or `libclang-common-21-dev`).
 - `cuda.h not found` -- Set `CUDA_TOOLKIT_PATH` to your CUDA install root, or ensure `/usr/local/cuda/include/cuda.h` exists.
-- `rust-src` / `llvm-tools` component missing -- Run `rustup component add rust-src llvm-tools --toolchain nightly-2026-10-11`.
+- `rust-src` / `llvm-tools` component missing -- Run `rustup component add rust-src llvm-tools --toolchain 1.99.1`.
 :::

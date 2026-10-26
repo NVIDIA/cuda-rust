@@ -150,7 +150,7 @@ cargo oxide update
 ### Requirements
 
 - **cargo-oxide** — cargo subcommand that drives the build pipeline (`cargo oxide run`, `build`, `sanitize`, `debug`, etc.)
-- **Rust nightly** with `rust-src` and `rustc-dev` and `llvm-tools` components (pinned in `rust-toolchain.toml`)
+- **Rust 1.99.1 (stable)** with `rust-src`, `rustc-dev`, and `llvm-tools` components (pinned in `rust-toolchain.toml`)
 - **CUDA Toolkit** (13.0+, including the cuRAND headers; `libcurand-dev` on Ubuntu). The shared `cuda-bindings` crate loads `libcuda` at run time and needs a CUDA 13.x driver (R580+)
 - **Clang + libclang dev headers** (`clang-21` / `libclang-common-21-dev`) — needed by `bindgen` when building the host `cuda-bindings` crate
 - **Linux** (tested on Ubuntu 24.04)
@@ -161,17 +161,17 @@ cargo oxide update
 
 From `cuda-oxide/`, `cargo oxide` works out of the box via a workspace alias.
 
-For use outside the repo (your own projects), install it with the pinned nightly toolchain:
+For use outside the repo (your own projects), install it with the pinned toolchain:
 
 ```bash
-cargo +nightly-2026-10-11 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
+cargo +1.99.1 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
 ```
 
 On first run, `cargo-oxide` will automatically fetch and build the codegen backend.
 
 #### Nix (alternative)
 
-If you have Nix with flakes enabled, `nix develop` from `cuda-oxide/` gives you a reproducible shell with CUDA 13, LLVM 22, Clang, and the pinned Rust nightly — no manual apt installs. The shellHook auto-discovers host NVIDIA drivers on NixOS and non-NixOS systems.
+If you have Nix with flakes enabled, `nix develop` from `cuda-oxide/` gives you a reproducible shell with CUDA 13, LLVM 22, Clang, and the pinned Rust toolchain - no manual apt installs. The shellHook auto-discovers host NVIDIA drivers on NixOS and non-NixOS systems.
 
 ```bash
 # From the repository root:
@@ -187,8 +187,8 @@ nix run 'github:NVIDIA/cuda-rust?dir=cuda-oxide#new' -- my-project
 ```bash
 # Toolchain installed automatically via rust-toolchain.toml
 # Manual install if needed:
-rustup toolchain install nightly-2026-10-11
-rustup component add rust-src rustc-dev rust-analyzer clippy rustfmt llvm-tools --toolchain nightly-2026-10-11
+rustup toolchain install 1.99.1
+rustup component add rust-src rustc-dev rust-analyzer clippy rustfmt llvm-tools --toolchain 1.99.1
 ```
 
 #### CUDA
@@ -299,6 +299,9 @@ cargo oxide run gemm_sol_final
 | Crate               | Description                                                               |
 |---------------------|---------------------------------------------------------------------------|
 | `cuda-device`       | Device intrinsics (`thread::*`, `warp::*`, barriers)                      |
+| `cute-layout`       | CuTe-style layout algebra and coordinate mapping |
+| `cute-rs`           | Typed CuTe tensors, tiles, copies, pipelines, and MMA operations |
+| `ctm-rs`            | Typed instruction-level CUDA primitives |
 | `cuda-intrinsics`   | Generated low-level CUDA intrinsic declarations                           |
 | `cuda-host`         | Typed module loading, launch helpers, LTOIR loader                        |
 | `cuda-macros`       | Proc macros (`#[cuda_module]`, `#[kernel]`, `gpu_printf!`)                |
@@ -321,6 +324,8 @@ cargo oxide run gemm_sol_final
 | `dialect-iket`       | pliron dialect modelling in-kernel event tracing      |
 | `iket-lower`         | `dialect-iket` profiles + instrumentation lowering    |
 | `llvm-export`        | pliron-llvm shim + textual `.ll` exporter             |
+| `dialect-cute`       | Backend-neutral semantic IR for CuTe tensor programs |
+| `cuda-oxide-mlir-export` | CUTLASS 4.7 mappings and profiles; upstream MLIR printing |
 | `dialect-nvvm`       | pliron dialect modelling NVVM intrinsics              |
 | `dialect-ptx`        | pliron dialect modelling structured PTX               |
 | `mir-transforms`     | Optimization passes over the MIR dialect (loop unroll, ...) |

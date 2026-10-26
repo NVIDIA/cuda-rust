@@ -7,7 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Const-generic array bindings retain their function or method signature as
+  their source origin, and generated reduction bodies retain the reduction
+  call's location and inline chain.
+- Failed host launch checks report their original accesses and inline callers,
+  retaining distinct origins when equivalent predicates share one comparison.
+
 ### Changed
+
+- `CompileOptions` uses one `CodegenMode` for device debugging and optimization.
+  The last `debug_info(...)` or `opt_level(...)` setter wins; full debugging
+  always uses optimization level zero. Replace `device_debug(true)` with
+  `debug_info(DebugInfoLevel::Full)` and `lineinfo(true)` with
+  `debug_info(DebugInfoLevel::Line)`. The old public `opt_level`, `device_debug`,
+  and `lineinfo` fields are replaced by `codegen` (v0.5.0 API change).
+- `CUTILE_JIT_DEBUG=none|line|full`, `CUTILE_JIT_OPT_LEVEL=0|1|2|3`, and
+  `CUTILE_JIT_SANITIZE=none|memcheck` override kernel options at runtime, before
+  frontend compilation and assembler/cache selection. Overrides are read once
+  per process; invalid values or full debug combined with an explicit runtime
+  optimization level fail with a named JIT error.
 
 - cuTile Rust now lives in the [NVIDIA/cuda-rust](https://github.com/NVIDIA/cuda-rust)
   repository under `cutile-rs/`, next to cuda-oxide (SIMT) and the shared host

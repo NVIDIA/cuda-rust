@@ -1,0 +1,66 @@
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg class="cute-rs-preview" xmlns="http://www.w3.org/2000/svg" width="1040" height="672" viewBox="0 0 1040 672" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif">
+<title>The cute-rs-preview stack: cute-rs over ctm-rs, lowered through dialect-cute to CUTLASS MLIR</title>
+<style>.cute-rs-preview text { dominant-baseline:central; text-anchor:middle } .cute-rs-preview .l { text-anchor:start } .cute-rs-preview .r { text-anchor:end } .cute-rs-preview .bg { fill:#faf9f5 } .cute-rs-preview .title { font-size:17px; font-weight:700; fill:#1e1e1e } .cute-rs-preview .sec { font-size:11.5px; font-weight:700; letter-spacing:0.05em; fill:#5c5c5c } .cute-rs-preview .th { font-size:14px; font-weight:600; fill:#1e1e1e } .cute-rs-preview .t { font-size:13px; fill:#2b2b2b } .cute-rs-preview .ts { font-size:12.5px; fill:#5c5c5c } .cute-rs-preview .tm { font-family:'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size:12px; font-weight:500 } .cute-rs-preview .k-box { fill:#f1efe9; stroke:#c8c5be } .cute-rs-preview .tx-box { fill:#1e1e1e } .cute-rs-preview .k-purple { fill:#ebe9fb; stroke:#7f77dd } .cute-rs-preview .tx-purple { fill:#3a3490 } .cute-rs-preview .k-teal { fill:#dff3ec; stroke:#3aa47f } .cute-rs-preview .tx-teal { fill:#1f5c47 } .cute-rs-preview .k-amber { fill:#fdeed3; stroke:#ef9f27 } .cute-rs-preview .tx-amber { fill:#6b4100 } .cute-rs-preview .k-gray { fill:#e8e6e0; stroke:#a9a69f } .cute-rs-preview .tx-gray { fill:#2b2b2b } .cute-rs-preview .dash { fill:none; stroke:#b8b4ac; stroke-dasharray:5 4 } .cute-rs-preview .hair { stroke:#d4d1c9 } .cute-rs-preview .arr { fill:none; stroke:#7b7b7b; stroke-width:1.5 } .cute-rs-preview .arrhead { fill:none; stroke:#7b7b7b; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round } @media (prefers-color-scheme: dark) { .cute-rs-preview .bg { fill:#1b1d23 } .cute-rs-preview .title, .cute-rs-preview .th { fill:#f5f6f8 } .cute-rs-preview .sec { fill:#b8beca } .cute-rs-preview .t { fill:#eceef2 } .cute-rs-preview .ts { fill:#cfd4de } .cute-rs-preview .k-box { fill:#2e323c; stroke:#5c6375 } .cute-rs-preview .tx-box { fill:#f5f6f8 } .cute-rs-preview .dash { stroke:#606675 } .cute-rs-preview .hair { stroke:#917a58 } .cute-rs-preview .arr, .cute-rs-preview .arrhead { stroke:#b6bcc8 } .cute-rs-preview .k-purple { fill:#524e7d; stroke:#bab5f4 } .cute-rs-preview .tx-purple { fill:#f6f5ff } .cute-rs-preview .k-teal { fill:#346357; stroke:#7ed8bb } .cute-rs-preview .tx-teal { fill:#f0fdf8 } .cute-rs-preview .k-amber { fill:#735a3c; stroke:#f4c474 } .cute-rs-preview .tx-amber { fill:#fff8eb } .cute-rs-preview .k-gray { fill:#414654; stroke:#7c8496 } .cute-rs-preview .tx-gray { fill:#f2f4f7 } }</style>
+<defs><marker id="arrow-stack" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="arrhead" d="M2 1L8 5L2 9"/></marker></defs>
+<rect class="bg" width="1040" height="672" rx="10"/>
+<text class="title l" x="36" y="34">The cute-rs-preview stack: cute-rs over ctm-rs, lowered through dialect-cute to CUTLASS MLIR</text>
+<text class="ts l" x="36" y="56">cute-rs encodes tensor layouts and pipelines in Rust types; ctm-rs supplies instruction primitives and the kernel ABI.</text>
+<text class="sec l" x="36" y="88">1 · KERNEL AUTHORING IN RUST</text>
+<rect class="dash" x="36" y="102" width="688" height="212" rx="10" stroke-width="1.2"/>
+<rect class="k-teal" x="54" y="118" width="652" height="84" rx="8" stroke-width="0.9"/>
+<text class="th tx-teal l" x="72" y="140">cute-rs — Semantic CuTe abstractions</text>
+<text class="ts tx-teal r" x="688" y="140">layout-driven</text>
+<rect class="k-box" x="72" y="158" width="136" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="140" y="174">Tensor / Tile</text>
+<rect class="k-box" x="220" y="158" width="136" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="288" y="174">TMA / Copy</text>
+<rect class="k-box" x="368" y="158" width="132" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="434" y="174">Pipelines</text>
+<rect class="k-box" x="512" y="158" width="176" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="600" y="174">TiledMma / Epilogue</text>
+<rect class="k-purple" x="54" y="214" width="652" height="84" rx="8" stroke-width="0.9"/>
+<text class="th tx-purple l" x="72" y="236">ctm-rs — Instruction primitives &amp; kernel ABI</text>
+<text class="ts tx-purple r" x="688" y="236">over cuda-device</text>
+<rect class="k-box" x="72" y="254" width="148" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="146" y="270">#[kernel] / ABI</text>
+<rect class="k-box" x="232" y="254" width="156" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="310" y="270">thread / cluster</text>
+<rect class="k-box" x="400" y="254" width="124" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="462" y="270">mbarrier</text>
+<rect class="k-box" x="536" y="254" width="152" height="32" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="612" y="270">tcgen05 / TMEM</text>
+<rect class="k-amber" x="756" y="118" width="248" height="180" rx="8" stroke-width="0.9"/>
+<text class="th tx-amber" x="880" y="144">cute-layout</text>
+<text class="ts tx-amber" x="880" y="166">Shared layout algebra</text>
+<line class="hair" x1="780" y1="182" x2="980" y2="182" stroke-width="0.8"/>
+<text class="tm tx-amber" x="880" y="204">IntTuple / Layout</text>
+<text class="tm tx-amber" x="880" y="226">ComposedLayout / Swizzle</text>
+<text class="ts tx-amber" x="880" y="252">Static TMA, copy &amp;</text>
+<text class="ts tx-amber" x="880" y="270">ldmatrix proofs</text>
+<line class="arr" x1="756" y1="160" x2="712" y2="160" marker-end="url(#arrow-stack)"/>
+<path class="arr" d="M880 298 V388 H766" marker-end="url(#arrow-stack)"/>
+<line class="arr" x1="480" y1="314" x2="480" y2="352" marker-end="url(#arrow-stack)"/>
+<text class="sec l" x="36" y="342">2 · COMPILE-TIME RECOGNITION &amp; IR IMPORT</text>
+<rect class="k-box" x="200" y="356" width="560" height="64" rx="8" stroke-width="0.9"/>
+<text class="th tx-box" x="480" y="377">mir-importer (on rustc Stable MIR)</text>
+<text class="ts tx-box" x="480" y="399">Matches canonical DefId paths · Decodes generic type markers · Emits Pliron ops</text>
+<line class="arr" x1="480" y1="420" x2="480" y2="462" marker-end="url(#arrow-stack)"/>
+<text class="sec l" x="36" y="450">3 · ONE PLIRON MODULE (COEXISTING DIALECTS)</text>
+<rect class="dash" x="36" y="466" width="968" height="88" rx="10" stroke-width="1.2"/>
+<rect class="k-teal" x="56" y="480" width="288" height="60" rx="7" stroke-width="0.9"/>
+<text class="th tx-teal" x="200" y="500">dialect-cute</text>
+<text class="ts tx-teal" x="200" y="521">Tensors, TMA, pipelines, MMA</text>
+<rect class="k-gray" x="376" y="480" width="288" height="60" rx="7" stroke-width="0.9"/>
+<text class="th tx-gray" x="520" y="500">dialect-mir</text>
+<text class="ts tx-gray" x="520" y="521">Control flow, scalars, pointers</text>
+<rect class="k-purple" x="696" y="480" width="288" height="60" rx="7" stroke-width="0.9"/>
+<text class="th tx-purple" x="840" y="500">dialect-nvvm</text>
+<text class="ts tx-purple" x="840" y="521">Coords, barriers, TMEM, math</text>
+<text class="sec l" x="36" y="574">4 · VERIFY, EXPORT &amp; COMPILE</text>
+<line class="arr" x1="290" y1="554" x2="290" y2="588" marker-end="url(#arrow-stack)"/>
+<rect class="k-box" x="56" y="592" width="288" height="60" rx="8" stroke-width="0.9"/>
+<text class="th tx-box" x="200" y="612">Verify &amp; Prepare</text>
+<text class="ts tx-box" x="200" y="633">Provenance &amp; protocol checks</text>
+<line class="arr" x1="344" y1="622" x2="372" y2="622" marker-end="url(#arrow-stack)"/>
+<rect class="k-amber" x="376" y="592" width="288" height="60" rx="8" stroke-width="0.9"/>
+<text class="th tx-amber" x="520" y="612">cuda-oxide-mlir-export</text>
+<text class="ts tx-amber" x="520" y="633">cute + cute_nvgpu + nvvm MLIR</text>
+<line class="arr" x1="664" y1="622" x2="692" y2="622" marker-end="url(#arrow-stack)"/>
+<rect class="k-teal" x="696" y="592" width="288" height="60" rx="8" stroke-width="0.9"/>
+<text class="th tx-teal" x="840" y="612">CUTLASS 4.7 → Cubin</text>
+<text class="ts tx-teal" x="840" y="633">Validated &amp; embedded in host</text>
+</svg>

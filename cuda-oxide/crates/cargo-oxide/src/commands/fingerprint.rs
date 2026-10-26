@@ -31,7 +31,7 @@ pub(super) fn passthrough_codegen_fingerprint(
         owner_filter,
         target_arch,
         materialization,
-        &inherited_process_env(),
+        &inherited_process_env_with_cutlass_compiler_identity(ctx),
     )
 }
 
@@ -163,7 +163,7 @@ pub(super) fn sanitize_codegen_fingerprint(
         detected_device_arch,
         ptx_dir,
         materialization,
-        &inherited_process_env(),
+        &inherited_process_env_with_cutlass_compiler_identity(ctx),
     )
 }
 

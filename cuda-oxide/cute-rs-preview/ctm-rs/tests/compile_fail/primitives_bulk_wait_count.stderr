@@ -1,0 +1,23 @@
+error[E0277]: the trait bound `(): ValidWaitCount<8>` is not satisfied
+ --> tests/compile_fail/primitives_bulk_wait_count.rs:8:46
+  |
+8 | fn wrong() { cp_async_bulk_wait_group_read::<8>(); }
+  |                                              ^ the trait `ValidWaitCount<8>` is not implemented for `()`
+  |
+  = help: `()` implements trait `ValidWaitCount<N>`:
+            ValidWaitCount<0>
+            ValidWaitCount<1>
+            ValidWaitCount<2>
+            ValidWaitCount<3>
+            ValidWaitCount<4>
+            ValidWaitCount<5>
+            ValidWaitCount<6>
+            ValidWaitCount<7>
+note: required by a bound in `cp_async_bulk_wait_group_read`
+ --> src/tma.rs
+  |
+  | pub fn cp_async_bulk_wait_group_read<const N: u32>()
+  |        ----------------------------- required by a bound in this function
+  | where
+  |     (): ValidWaitCount<N>,
+  |         ^^^^^^^^^^^^^^^^^ required by this bound in `cp_async_bulk_wait_group_read`

@@ -142,13 +142,16 @@ Each product has its own workspace and toolchain under `cuda-oxide/` or
 `cutile-rs/`. The setup commands below cover cuda-oxide; the Tile checks have
 their own section further down.
 
-cuda-oxide requires the Rust nightly toolchain with `rustc_private` support.
-See the [cuda-oxide README](cuda-oxide/README.md) for setup instructions.
+cuda-oxide pins its stable Rust toolchain (`1.99.1`) and required `rustc-dev`
+and `llvm-tools` components in `cuda-oxide/rust-toolchain.toml` (with
+`RUSTC_BOOTSTRAP=1` configured via `cuda-oxide/.cargo/config.toml` and
+`cargo-oxide`). See the [cuda-oxide README](cuda-oxide/README.md) for setup
+instructions.
 
-`cuda-oxide/flake.nix` provides the CUDA 13, LLVM 22, Clang, and pinned nightly
-development environment. From the repository root, run `cd cuda-oxide` and
-then `nix develop` with flakes enabled. Container setup is documented in
-[cuda-oxide/.devcontainer/README.md](cuda-oxide/.devcontainer/README.md).
+`cuda-oxide/flake.nix` provides the CUDA 13, Clang/libclang, and pinned Rust
+(with LLVM 23 `llvm-tools`) development environment. From the repository root,
+run `cd cuda-oxide` and then `nix develop` with flakes enabled. Container setup
+is documented in [cuda-oxide/.devcontainer/README.md](cuda-oxide/.devcontainer/README.md).
 
 ### Running the cuda-oxide checks
 

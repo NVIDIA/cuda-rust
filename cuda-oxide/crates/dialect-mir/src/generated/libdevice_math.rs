@@ -124,6 +124,10 @@ pub const CALLEE_LGAMMA_F32: &str = placeholder!("lgammaf32");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_LGAMMA_F64: &str = placeholder!("lgammaf64");
 /// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_LGAMMA_R_F32: &str = placeholder!("lgamma_rf32");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_LGAMMA_R_F64: &str = placeholder!("lgamma_rf64");
+/// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_LOG10_F32: &str = placeholder!("log10f32");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_LOG10_F64: &str = placeholder!("log10f64");
@@ -278,6 +282,8 @@ pub enum RustFloatMathIntrinsic {
     LdexpF64,
     LgammaF32,
     LgammaF64,
+    LgammaRF32,
+    LgammaRF64,
     Log10F32,
     Log10F64,
     Log1pF32,
@@ -551,7 +557,9 @@ impl RustFloatMathIntrinsic {
             "ldexp" => Some(Self::LdexpF64),
             "ldexpf" => Some(Self::LdexpF32),
             "lgamma" => Some(Self::LgammaF64),
+            "lgamma_r" => Some(Self::LgammaRF64),
             "lgammaf" => Some(Self::LgammaF32),
+            "lgammaf_r" => Some(Self::LgammaRF32),
             "log" => Some(Self::LogF64),
             "log10" => Some(Self::Log10F64),
             "log10f" => Some(Self::Log10F32),
@@ -662,6 +670,8 @@ impl RustFloatMathIntrinsic {
             Self::LdexpF64 => CALLEE_LDEXP_F64,
             Self::LgammaF32 => CALLEE_LGAMMA_F32,
             Self::LgammaF64 => CALLEE_LGAMMA_F64,
+            Self::LgammaRF32 => CALLEE_LGAMMA_R_F32,
+            Self::LgammaRF64 => CALLEE_LGAMMA_R_F64,
             Self::Log10F32 => CALLEE_LOG10_F32,
             Self::Log10F64 => CALLEE_LOG10_F64,
             Self::Log1pF32 => CALLEE_LOG1P_F32,
@@ -778,6 +788,8 @@ impl RustFloatMathIntrinsic {
             CALLEE_LDEXP_F64 => Some(Self::LdexpF64),
             CALLEE_LGAMMA_F32 => Some(Self::LgammaF32),
             CALLEE_LGAMMA_F64 => Some(Self::LgammaF64),
+            CALLEE_LGAMMA_R_F32 => Some(Self::LgammaRF32),
+            CALLEE_LGAMMA_R_F64 => Some(Self::LgammaRF64),
             CALLEE_LOG10_F32 => Some(Self::Log10F32),
             CALLEE_LOG10_F64 => Some(Self::Log10F64),
             CALLEE_LOG1P_F32 => Some(Self::Log1pF32),
@@ -895,6 +907,8 @@ impl RustFloatMathIntrinsic {
             Self::LdexpF64 => 2,
             Self::LgammaF32 => 1,
             Self::LgammaF64 => 1,
+            Self::LgammaRF32 => 1,
+            Self::LgammaRF64 => 1,
             Self::Log10F32 => 1,
             Self::Log10F64 => 1,
             Self::Log1pF32 => 1,
@@ -1084,6 +1098,8 @@ impl RustFloatMathIntrinsic {
             )),
             Self::LgammaF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
             Self::LgammaF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::LgammaRF32 => None,
+            Self::LgammaRF64 => None,
             Self::Log10F32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
             Self::Log10F64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
             Self::Log1pF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
@@ -1236,6 +1252,8 @@ impl RustFloatMathIntrinsic {
             Self::LdexpF64 => MathLink::Always,
             Self::LgammaF32 => MathLink::Always,
             Self::LgammaF64 => MathLink::Always,
+            Self::LgammaRF32 => MathLink::Always,
+            Self::LgammaRF64 => MathLink::Always,
             Self::Log10F32 => MathLink::Always,
             Self::Log10F64 => MathLink::Always,
             Self::Log1pF32 => MathLink::Always,
@@ -1358,6 +1376,8 @@ impl RustFloatMathIntrinsic {
             Self::LdexpF64 => Some("__nv_ldexp"),
             Self::LgammaF32 => Some("__nv_lgammaf"),
             Self::LgammaF64 => Some("__nv_lgamma"),
+            Self::LgammaRF32 => None,
+            Self::LgammaRF64 => None,
             Self::Log10F32 => Some("__nv_log10f"),
             Self::Log10F64 => Some("__nv_log10"),
             Self::Log1pF32 => Some("__nv_log1pf"),
@@ -1480,6 +1500,8 @@ impl RustFloatMathIntrinsic {
             Self::LdexpF64 => None,
             Self::LgammaF32 => None,
             Self::LgammaF64 => None,
+            Self::LgammaRF32 => None,
+            Self::LgammaRF64 => None,
             Self::Log10F32 => None,
             Self::Log10F64 => None,
             Self::Log1pF32 => None,

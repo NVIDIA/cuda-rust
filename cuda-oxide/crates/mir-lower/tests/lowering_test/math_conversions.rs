@@ -16,6 +16,185 @@ use pliron::operation::Operation;
 use crate::common::{append_return, build_test_kernel, lowered_kernel_body, make_test_ctx};
 
 #[test]
+fn test_lgamma_r_composed_tuple_and_special_cases_on_both_backends() -> Result<(), anyhow::Error> {
+    use dialect_mir::rust_intrinsics as ri;
+    use dialect_mir::types::MirTupleType;
+    use pliron::builtin::attributes::StringAttr;
+    use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
+    use pliron::r#type::TypeHandle;
+
+    for backend in [
+        mir_lower::IntrinsicBackend::LlvmNvptx,
+        mir_lower::IntrinsicBackend::LibNvvm,
+    ] {
+        for wide in [false, true] {
+            for reordered in [false, true] {
+                let mut ctx = make_test_ctx();
+                let float_ty: TypeHandle = if wide {
+                    FP64Type::get(&ctx).into()
+                } else {
+                    FP32Type::get(&ctx).into()
+                };
+                let int_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Signed).into();
+                let tuple: TypeHandle = if reordered {
+                    MirTupleType::get_with_layout(
+                        &mut ctx,
+                        vec![float_ty, int_ty],
+                        vec![1, 0],
+                        vec![if wide { 8 } else { 4 }, 0],
+                        if wide { 16 } else { 8 },
+                        if wide { 8 } else { 4 },
+                    )
+                    .into()
+                } else {
+                    MirTupleType::get(&mut ctx, vec![float_ty, int_ty]).into()
+                };
+                let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![float_ty]);
+                let x = entry.deref(&ctx).get_argument(0);
+                let call = Operation::new(
+                    &mut ctx,
+                    mir::MirCallOp::get_concrete_op_info(),
+                    vec![tuple],
+                    vec![x],
+                    vec![],
+                    0,
+                );
+                mir::MirCallOp::new(call).set_attr_callee(
+                    &ctx,
+                    StringAttr::new(
+                        if wide {
+                            ri::CALLEE_LGAMMA_R_F64
+                        } else {
+                            ri::CALLEE_LGAMMA_R_F32
+                        }
+                        .to_string(),
+                    ),
+                );
+                call.insert_at_back(entry, &ctx);
+                append_return(&mut ctx, entry);
+                mir_lower::lower_mir_to_llvm_with_options(
+                    &mut ctx,
+                    module_ptr,
+                    mir_lower::LoweringOptions {
+                        intrinsic_backend: backend,
+                        ..Default::default()
+                    },
+                )
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
+                pliron::operation::verify_operation(module_ptr, &ctx)
+                    .map_err(|error| anyhow::anyhow!("{error}"))?;
+                let module = Operation::get_op::<ModuleOp>(module_ptr, &ctx).unwrap();
+                let ir = llvm_export::export::export_module_to_string(&ctx, &module)
+                    .expect("lgamma_r module must export");
+                let scalar = if wide { "double" } else { "float" };
+                let suffix = if wide { "" } else { "f" };
+                for signature in [
+                    format!("declare {scalar} @__nv_lgamma{suffix}({scalar})"),
+                    format!("declare {scalar} @__nv_floor{suffix}({scalar})"),
+                    format!("declare {scalar} @__nv_fmod{suffix}({scalar}, {scalar})"),
+                ] {
+                    assert!(ir.contains(&signature), "{signature}: {ir}");
+                }
+                assert!(!ir.contains(ri::PLACEHOLDER_PREFIX), "{ir}");
+                assert_eq!(ir.matches("insertvalue").count(), 2, "{ir}");
+                assert!(ir.matches("select i1").count() >= 5, "{ir}");
+                assert!(
+                    ir.contains("fcmp olt") && ir.contains("fcmp oeq") && ir.contains("icmp eq"),
+                    "{ir}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn test_lgamma_r_rejects_malformed_tuple_and_operands() {
+    use dialect_mir::rust_intrinsics as ri;
+    use dialect_mir::types::MirTupleType;
+    use pliron::builtin::attributes::StringAttr;
+    use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
+    use pliron::r#type::TypeHandle;
+
+    for backend in [
+        mir_lower::IntrinsicBackend::LlvmNvptx,
+        mir_lower::IntrinsicBackend::LibNvvm,
+    ] {
+        for wide in [false, true] {
+            for invalid in 0..7 {
+                let mut ctx = make_test_ctx();
+                let float_ty: TypeHandle = if wide {
+                    FP64Type::get(&ctx).into()
+                } else {
+                    FP32Type::get(&ctx).into()
+                };
+                let other_ty: TypeHandle = if wide {
+                    FP32Type::get(&ctx).into()
+                } else {
+                    FP64Type::get(&ctx).into()
+                };
+                let i32_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Signed).into();
+                let i64_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Signed).into();
+                let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![float_ty, other_ty]);
+                let x = entry.deref(&ctx).get_argument(0);
+                let other = entry.deref(&ctx).get_argument(1);
+                let fields = match invalid {
+                    3 => vec![float_ty, i64_ty],
+                    4 => vec![other_ty, i32_ty],
+                    5 => vec![i32_ty, float_ty],
+                    _ => vec![float_ty, i32_ty],
+                };
+                let tuple: TypeHandle = MirTupleType::get(&mut ctx, fields).into();
+                let result = if invalid == 2 { float_ty } else { tuple };
+                let args = match invalid {
+                    0 => vec![],
+                    1 => vec![x, x],
+                    6 => vec![other],
+                    _ => vec![x],
+                };
+                let call = Operation::new(
+                    &mut ctx,
+                    mir::MirCallOp::get_concrete_op_info(),
+                    vec![result],
+                    args,
+                    vec![],
+                    0,
+                );
+                mir::MirCallOp::new(call).set_attr_callee(
+                    &ctx,
+                    StringAttr::new(
+                        if wide {
+                            ri::CALLEE_LGAMMA_R_F64
+                        } else {
+                            ri::CALLEE_LGAMMA_R_F32
+                        }
+                        .to_string(),
+                    ),
+                );
+                call.insert_at_back(entry, &ctx);
+                append_return(&mut ctx, entry);
+                let error = mir_lower::lower_mir_to_llvm_with_options(
+                    &mut ctx,
+                    module_ptr,
+                    mir_lower::LoweringOptions {
+                        intrinsic_backend: backend,
+                        ..Default::default()
+                    },
+                )
+                .expect_err("malformed lgamma_r must fail")
+                .to_string();
+                let expected = match invalid {
+                    0 | 1 => "requires 1 operand(s)",
+                    2 => "requires a (float, i32) tuple",
+                    _ => "signature mismatch",
+                };
+                assert!(error.contains(expected), "case {invalid}: {error}");
+            }
+        }
+    }
+}
+
+#[test]
 fn test_modf_remquo_out_parameter_lowering_and_tuple_layout() -> Result<(), anyhow::Error> {
     use dialect_mir::rust_intrinsics as ri;
     use dialect_mir::types::MirTupleType;

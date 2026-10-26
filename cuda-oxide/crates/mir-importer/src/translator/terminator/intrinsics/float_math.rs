@@ -379,9 +379,29 @@ mod tests {
             Some(I::PowiF32)
         );
         assert_eq!(libm_sincos_is_f64("libm::sincosf"), Some(false));
-        for name in ["lgamma_r", "tgammaf128"] {
-            assert_eq!(I::from_core_path(&format!("libm::{name}")), None);
+        for (name, intrinsic, callee) in [
+            (
+                "lgammaf_r",
+                I::LgammaRF32,
+                rust_intrinsics::CALLEE_LGAMMA_R_F32,
+            ),
+            (
+                "lgamma_r",
+                I::LgammaRF64,
+                rust_intrinsics::CALLEE_LGAMMA_R_F64,
+            ),
+        ] {
+            assert_eq!(I::from_core_path(&format!("libm::{name}")), Some(intrinsic));
+            assert_eq!(
+                I::from_core_path(&format!("libm::math::{name}::{name}")),
+                Some(intrinsic)
+            );
+            assert_eq!(intrinsic.placeholder_callee(), callee);
+            assert_eq!(intrinsic.arg_count(), 1);
+            assert_eq!(intrinsic.scalar_signature(false), None);
+            assert_eq!(I::from_core_path(&format!("user::libm::{name}")), None);
         }
+        assert_eq!(I::from_core_path("libm::tgammaf128"), None);
     }
 
     #[test]

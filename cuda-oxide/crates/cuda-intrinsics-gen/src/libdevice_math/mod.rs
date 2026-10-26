@@ -256,6 +256,7 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
                         | "handwritten:emit_frexp"
                         | "handwritten:emit_modf"
                         | "handwritten:emit_remquo"
+                        | "handwritten:emit_lgamma_r"
                         | "handwritten:lower_float_minmax_nsz"
                 ),
                 "unsupported handwritten math lowering {lowering:?}"
@@ -297,6 +298,19 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
                     && function.link == Link::Always
                     && function.libdevice.is_some(),
                 "frexp requires its float/i32 tuple ABI and libdevice symbol"
+            );
+        }
+        if function.lowering.as_deref() == Some("handwritten:emit_lgamma_r") {
+            ensure!(
+                function.name == "lgamma_r"
+                    && function.signature == Signature::FloatIntegerPair
+                    && function.link == Link::Always
+                    && function.libdevice.is_none()
+                    && function.llvm.is_none()
+                    && function.core.is_empty()
+                    && function.paths.is_empty()
+                    && function.cmath.is_none(),
+                "lgamma_r requires its composed float/i32 tuple ABI without a direct symbol"
             );
         }
         for (adapter, signature) in [
@@ -465,6 +479,11 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
                         == (function.lowering.as_deref() == Some("handwritten:emit_frexp")),
                     "frexp identity must use the matching handwritten adapter"
                 );
+                ensure!(
+                    (variant == format!("LgammaR{role}"))
+                        == (function.lowering.as_deref() == Some("handwritten:emit_lgamma_r")),
+                    "lgamma_r identity must use the matching handwritten adapter"
+                );
                 for adapter in ["Modf", "Remquo"] {
                     let handler = format!("handwritten:emit_{}", adapter.to_ascii_lowercase());
                     ensure!(
@@ -541,8 +560,14 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
                 aliases
                     .iter()
                     .map(|alias| {
-                        ensure!(identifier(alias), "invalid libm alias {alias:?}");
-                        let libm = format!("{alias}{}", if width == "f32" { "f" } else { "" });
+                        // libm's lgammaf_r puts the precision suffix before _r.
+                        // Plain aliases keep their existing suffix-at-end spelling.
+                        let libm = if alias.contains('{') {
+                            expand(alias, width)?
+                        } else {
+                            ensure!(identifier(alias), "invalid libm alias {alias:?}");
+                            format!("{alias}{}", if width == "f32" { "f" } else { "" })
+                        };
                         ensure!(
                             exports.insert(libm.clone()),
                             "duplicate libm spelling {libm}"

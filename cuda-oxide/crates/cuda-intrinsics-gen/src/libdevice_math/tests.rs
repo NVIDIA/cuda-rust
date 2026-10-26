@@ -21,11 +21,11 @@ fn fixture(functions: &str) -> Shard {
 }
 
 #[test]
-fn generated_metadata_covers_108_exports_and_core_only_routes() {
+fn generated_metadata_covers_110_exports_and_core_only_routes() {
     let shard = read(&root()).unwrap();
     let rows = mappings(&shard).unwrap();
-    assert_eq!(rows.len(), 112);
-    assert_eq!(rows.iter().filter(|row| row.libm.is_some()).count(), 108);
+    assert_eq!(rows.len(), 114);
+    assert_eq!(rows.iter().filter(|row| row.libm.is_some()).count(), 110);
     assert_eq!(expected_symbols(&rows).unwrap().len(), 100);
     assert_eq!(generated::MAPPINGS.len(), rows.len());
     for (actual, row) in generated::MAPPINGS.iter().zip(&rows) {
@@ -182,7 +182,6 @@ fn compiler_dispatch_preserves_every_pre_migration_path_symbol_and_link_route() 
 fn unregistered_aliases_and_unknown_placeholders_remain_rejected() {
     for path in [
         "libm::unknown_future_math",
-        "libm::lgamma_r",
         "libm::fmaximum",
         "libm::sqrtf128",
         "user::std::sys::cmath::tgamma",
@@ -241,6 +240,20 @@ fn aliases_and_handwritten_controls_keep_their_semantics() {
     assert_eq!(find("fabs").placeholders, find("fabsf").placeholders);
     assert_eq!(find("floor").link, Link::Libnvvm);
     assert_eq!(find("sqrt").link, Link::Always);
+    for name in ["lgamma_r", "lgammaf_r"] {
+        let row = find(name);
+        assert_eq!(row.link, Link::Always);
+        assert_eq!(row.lowering.as_deref(), Some("handwritten:emit_lgamma_r"));
+        assert_eq!(
+            row.signature,
+            if name == "lgamma_r" {
+                "(f64) -> (f64, i32)"
+            } else {
+                "(f32) -> (f32, i32)"
+            }
+        );
+        assert!(row.libdevice.is_none());
+    }
 }
 
 #[test]
@@ -258,6 +271,7 @@ fn compiler_identities_and_handwritten_handlers_fail_closed() {
             "generic-width math identity",
         ),
         ("variant = \"Frexp{Width}\"\n", "frexp identity"),
+        ("variant = \"LgammaR{Width}\"\n", "lgamma_r identity"),
         ("variant = \"MaxNumNsz{Width}\"\n", "min/max identity"),
         (
             "variant = \"Fabs\"\nconstant = \"CALLEE_FABS\"\nplaceholders = [\"fabs\"]\n",
@@ -274,6 +288,10 @@ fn compiler_identities_and_handwritten_handlers_fail_closed() {
         (
             "lowering = \"handwritten:emit_frexp\"\nlibdevice = \"__nv_demo{suffix}\"\n",
             "float/i32 tuple ABI",
+        ),
+        (
+            "lowering = \"handwritten:emit_lgamma_r\"\n",
+            "composed float/i32 tuple ABI",
         ),
         (
             "lowering = \"handwritten:emit_modf\"\nlibdevice = \"__nv_demo{suffix}\"\n",
@@ -560,8 +578,6 @@ fn libm_0_2_16_coverage_leaves_only_semantic_functions() {
     assert_eq!(
         missing,
         BTreeSet::from([
-            "lgamma_r",
-            "lgammaf_r",
             "fmaximum",
             "fmaximumf",
             "fminimum",

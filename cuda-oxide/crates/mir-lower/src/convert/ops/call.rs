@@ -996,6 +996,12 @@ fn convert_rust_float_math_intrinsic(
     }
     if matches!(
         intrinsic,
+        RustFloatMathIntrinsic::LgammaRF32 | RustFloatMathIntrinsic::LgammaRF64
+    ) {
+        return convert_rust_lgamma_r(ctx, rewriter, op, intrinsic, args[0]);
+    }
+    if matches!(
+        intrinsic,
         RustFloatMathIntrinsic::ModfF32
             | RustFloatMathIntrinsic::ModfF64
             | RustFloatMathIntrinsic::RemquoF32
@@ -1170,6 +1176,169 @@ fn pack_math_out_param_pair(
     crate::convert::preserve_location(ctx, op, last);
     rewriter.replace_operation(ctx, op, last);
     Ok(())
+}
+
+/// Call an already validated scalar libdevice mapping from a tuple adapter.
+fn call_scalar_math_for_pair(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+    intrinsic: RustFloatMathIntrinsic,
+    args: Vec<Value>,
+    float_ty: TypeHandle,
+) -> Result<Value> {
+    let loc = op.deref(ctx).loc().clone();
+    let name = intrinsic.libdevice_name(ctx, float_ty, loc.clone())?;
+    let block = op.deref(ctx).get_parent_block().ok_or_else(|| {
+        pliron::input_error!(loc.clone(), "libdevice scalar call has no parent block")
+    })?;
+    let arg_types = args.iter().map(|arg| arg.get_type(ctx)).collect();
+    let signature = llvm_types::FuncType::get(ctx, float_ty, arg_types, false);
+    helpers::ensure_intrinsic_declared(ctx, block, name, signature)
+        .map_err(|error| pliron::input_error!(loc.clone(), "Failed to declare {name}: {error}"))?;
+    let name = name
+        .try_into()
+        .map_err(|error| pliron::input_error!(loc, "Invalid libdevice name: {error:?}"))?;
+    let call = llvm::CallOp::new(ctx, CallOpCallable::Direct(name), signature, args);
+    rewriter.insert_operation(ctx, call.get_operation());
+    Ok(call.get_operation().deref(ctx).get_result(0))
+}
+
+/// Compose libm's `(log(abs(gamma(x))), signgam)` from validated scalar
+/// libdevice entries. floor/fmod determine the parity of negative intervals;
+/// bitwise special cases preserve -0 and normalize lgamma(-infinity) on
+/// backends that return negative infinity.
+fn convert_rust_lgamma_r(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+    intrinsic: RustFloatMathIntrinsic,
+    x: Value,
+) -> Result<()> {
+    let loc = op.deref(ctx).loc().clone();
+    let (float_ty, width, sign_mask, infinity_mask, lgamma, floor, fmod): (
+        TypeHandle,
+        u32,
+        u64,
+        u64,
+        RustFloatMathIntrinsic,
+        RustFloatMathIntrinsic,
+        RustFloatMathIntrinsic,
+    ) = match intrinsic {
+        RustFloatMathIntrinsic::LgammaRF32 => (
+            FP32Type::get(ctx).into(),
+            32,
+            0x8000_0000,
+            0x7f80_0000,
+            RustFloatMathIntrinsic::LgammaF32,
+            RustFloatMathIntrinsic::FloorF32,
+            RustFloatMathIntrinsic::FmodF32,
+        ),
+        RustFloatMathIntrinsic::LgammaRF64 => (
+            FP64Type::get(ctx).into(),
+            64,
+            0x8000_0000_0000_0000,
+            0x7ff0_0000_0000_0000,
+            RustFloatMathIntrinsic::LgammaF64,
+            RustFloatMathIntrinsic::FloorF64,
+            RustFloatMathIntrinsic::FmodF64,
+        ),
+        _ => unreachable!("lgamma_r converter requires its tuple placeholder"),
+    };
+    let layout = {
+        let result = op.deref(ctx).get_result(0).get_type(ctx);
+        let result = result.deref(ctx);
+        let Some(tuple) = result.downcast_ref::<MirTupleType>() else {
+            return pliron::input_err!(loc, "Rust lgamma_r requires a (float, i32) tuple");
+        };
+        let i32_mir: TypeHandle = IntegerType::get(ctx, 32, Signedness::Signed).into();
+        if tuple.get_types() != [float_ty, i32_mir] || x.get_type(ctx) != float_ty {
+            return pliron::input_err!(loc, "Rust lgamma_r signature mismatch");
+        }
+        StructLayoutInfo::of_tuple(tuple)
+    };
+    let mut integer = |ctx: &mut Context, bits: u32, value: u64| {
+        let ty = IntegerType::get(ctx, bits, Signedness::Signless);
+        let attr = IntegerAttr::new(
+            ty,
+            APInt::from_u64(value, NonZeroUsize::new(bits as usize).unwrap()),
+        );
+        let op = llvm::ConstantOp::new(ctx, Box::new(attr));
+        rewriter.insert_operation(ctx, op.get_operation());
+        op.get_operation().deref(ctx).get_result(0)
+    };
+    let plus_one = integer(ctx, 32, 1);
+    let minus_one = integer(ctx, 32, u32::MAX.into());
+    let positive_zero_bits = integer(ctx, width, 0);
+    let negative_zero_bits = integer(ctx, width, sign_mask);
+    let negative_infinity_bits = integer(ctx, width, sign_mask | infinity_mask);
+    let positive_infinity_bits = integer(ctx, width, infinity_mask);
+    let two_bits = integer(
+        ctx,
+        width,
+        if width == 32 {
+            2.0f32.to_bits() as u64
+        } else {
+            2.0f64.to_bits()
+        },
+    );
+    let mut as_float = |ctx: &mut Context, bits: Value| {
+        let cast = llvm::BitcastOp::new(ctx, bits, float_ty);
+        rewriter.insert_operation(ctx, cast.get_operation());
+        cast.get_operation().deref(ctx).get_result(0)
+    };
+    let zero = as_float(ctx, positive_zero_bits);
+    let two = as_float(ctx, two_bits);
+    let positive_infinity = as_float(ctx, positive_infinity_bits);
+    let magnitude = call_scalar_math_for_pair(ctx, rewriter, op, lgamma, vec![x], float_ty)?;
+    let whole = call_scalar_math_for_pair(ctx, rewriter, op, floor, vec![x], float_ty)?;
+    let parity = call_scalar_math_for_pair(ctx, rewriter, op, fmod, vec![whole, two], float_ty)?;
+    let mut compare_float =
+        |ctx: &mut Context, predicate: FCmpPredicateAttr, a: Value, b: Value| {
+            let cmp = llvm::FCmpOp::new(ctx, predicate, a, b);
+            set_empty_fastmath_flags(ctx, cmp.get_operation());
+            rewriter.insert_operation(ctx, cmp.get_operation());
+            cmp.get_operation().deref(ctx).get_result(0)
+        };
+    let negative = compare_float(ctx, FCmpPredicateAttr::OLT, x, zero);
+    let odd = compare_float(ctx, FCmpPredicateAttr::OLT, parity, zero);
+    let is_pole = compare_float(ctx, FCmpPredicateAttr::OEQ, x, whole);
+    let parity_sign = llvm::SelectOp::new(ctx, odd, minus_one, plus_one);
+    rewriter.insert_operation(ctx, parity_sign.get_operation());
+    let parity_sign = parity_sign.get_operation().deref(ctx).get_result(0);
+    let negative_sign = llvm::SelectOp::new(ctx, negative, parity_sign, plus_one);
+    rewriter.insert_operation(ctx, negative_sign.get_operation());
+    let negative_sign = negative_sign.get_operation().deref(ctx).get_result(0);
+    let pole_sign = llvm::SelectOp::new(ctx, is_pole, plus_one, negative_sign);
+    rewriter.insert_operation(ctx, pole_sign.get_operation());
+    let pole_sign = pole_sign.get_operation().deref(ctx).get_result(0);
+    let bits_ty: TypeHandle = IntegerType::get(ctx, width, Signedness::Signless).into();
+    let x_bits = llvm::BitcastOp::new(ctx, x, bits_ty);
+    rewriter.insert_operation(ctx, x_bits.get_operation());
+    let x_bits = x_bits.get_operation().deref(ctx).get_result(0);
+    let minus_zero = llvm::ICmpOp::new(
+        ctx,
+        llvm_export::attributes::ICmpPredicateAttr::EQ,
+        x_bits,
+        negative_zero_bits,
+    );
+    rewriter.insert_operation(ctx, minus_zero.get_operation());
+    let minus_zero = minus_zero.get_operation().deref(ctx).get_result(0);
+    let sign = llvm::SelectOp::new(ctx, minus_zero, minus_one, pole_sign);
+    rewriter.insert_operation(ctx, sign.get_operation());
+    let sign = sign.get_operation().deref(ctx).get_result(0);
+    let minus_infinity = llvm::ICmpOp::new(
+        ctx,
+        llvm_export::attributes::ICmpPredicateAttr::EQ,
+        x_bits,
+        negative_infinity_bits,
+    );
+    rewriter.insert_operation(ctx, minus_infinity.get_operation());
+    let minus_infinity = minus_infinity.get_operation().deref(ctx).get_result(0);
+    let normalized = llvm::SelectOp::new(ctx, minus_infinity, positive_infinity, magnitude);
+    rewriter.insert_operation(ctx, normalized.get_operation());
+    let magnitude = normalized.get_operation().deref(ctx).get_result(0);
+    pack_math_out_param_pair(ctx, rewriter, op, &layout, [magnitude, sign])
 }
 
 /// Adapt libdevice's scalar return and pointer result to libm's tuple ABI.

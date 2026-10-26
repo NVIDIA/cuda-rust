@@ -299,6 +299,13 @@ name = "lgamma"
 signature = "(F) -> F"
 
 [[libdevice_math.function]]
+name = "lgamma_r"
+signature = "(F) -> (F, i32)"
+libm = ["lgamma{suffix}_r"]
+variant = "LgammaR{Width}"
+lowering = "handwritten:emit_lgamma_r"
+
+[[libdevice_math.function]]
 name = "nextafter"
 signature = "(F, F) -> F"
 

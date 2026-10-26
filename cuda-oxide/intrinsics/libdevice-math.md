@@ -4,11 +4,11 @@
 
 # Compiler math mappings
 
-108 mapped f32/f64 libm exports, plus core-only compiler routes.
+110 mapped f32/f64 libm exports, plus core-only compiler routes.
 
 The same shard generates compiler dispatch, placeholder constants, symbol lookup,
 operand counts, cmath interception, and libdevice link requirements. Handwritten
-semantic expansions remain responsible for sincos, frexp, modf, remquo, min/max, and fast binops.
+semantic expansions remain responsible for sincos, frexp, modf, remquo, lgamma_r, min/max, and fast binops.
 
 Libdevice bitcode SHA-256: `91334d6e12748f6cb5bbf0a1cd965a56bcd93dc4f496d2e5c5f8c6e523094356`.
 
@@ -82,7 +82,9 @@ a handwritten expansion. Aliases are separate exports sharing a mapping.
 | `ldexp` | `(f64, i32) -> f64` | `__nv_ldexp` |   |   | `always` |
 | `ldexpf` | `(f32, i32) -> f32` | `__nv_ldexpf` |   |   | `always` |
 | `lgamma` | `(f64) -> f64` | `__nv_lgamma` |   |   | `always` |
+| `lgamma_r` | `(f64) -> (f64, i32)` |   |   | `handwritten:emit_lgamma_r` | `always` |
 | `lgammaf` | `(f32) -> f32` | `__nv_lgammaf` |   |   | `always` |
+| `lgammaf_r` | `(f32) -> (f32, i32)` |   |   | `handwritten:emit_lgamma_r` | `always` |
 | `log` | `(f64) -> f64` | `__nv_log` |   |   | `always` |
 | `log10` | `(f64) -> f64` | `__nv_log10` |   |   | `always` |
 | `log10f` | `(f32) -> f32` | `__nv_log10f` |   |   | `always` |

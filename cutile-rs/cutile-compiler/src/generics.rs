@@ -993,6 +993,31 @@ impl Instantiable for TypeInstanceStructuredType {
                                     )
                                     .unwrap(),
                                 );
+                            } else if let Some(ptr_inst) = generic_vars
+                                .inst_types
+                                .get(&last_ident)
+                                .and_then(|bound| syn::parse_str::<Type>(bound).ok())
+                                .filter(|bound| matches!(bound, syn::Type::Ptr(_)))
+                                .and_then(|bound| {
+                                    TypeInstancePtrType::instantiate(
+                                        &bound,
+                                        generic_vars,
+                                        primitives,
+                                    )
+                                })
+                            {
+                                // This is something like P for `P: Pointer`, bound to
+                                // `*mut f32`. Taken as an element type like T, the
+                                // pointer drops out of the Tile IR type (`tile<1>`,
+                                // issue #1596), so instantiate it as a pointer, as
+                                // the `Type::Ptr` arm below does for `*mut f32`.
+                                let instance_ty = ptr_inst.instance_ty.clone();
+                                primitive_type =
+                                    Some(TypInstancePrimitiveType::PtrType(TypeInstancePtrType {
+                                        generic_ty: type_param.clone(),
+                                        ..ptr_inst
+                                    }));
+                                *generic_arg = GenericArgument::Type(instance_ty);
                             } else if let Some(local_rust_element_instance_ty) =
                                 generic_vars.inst_types.get(&last_ident)
                             {

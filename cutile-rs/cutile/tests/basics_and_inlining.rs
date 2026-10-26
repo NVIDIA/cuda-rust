@@ -414,6 +414,34 @@ mod basics_and_inlining_module {
         let _broadcast: PointerTile<*mut f32, { [128] }> = reshaped.broadcast(const_shape![128]);
     }
 
+    // The receivers and the call argument below have no annotated type, so
+    // their type comes from a `PointerTile<P, R>` signature with `P` bound
+    // to `*mut f32` (issue #1596).
+    #[cutile::entry]
+    unsafe fn ptr_tile_method_chain_kernel(ptr: *mut f32) {
+        let ptr_tile: PointerTile<*mut f32, { [] }> = pointer_to_tile(ptr);
+        let offsets: Tile<i32, { [128] }> = iota(shape![128]);
+        let gather: PointerTile<*mut f32, { [128] }> = ptr_tile
+            .reshape(shape![1])
+            .broadcast(shape![128])
+            .offset_tile(offsets);
+        let (_values, _token): (Tile<f32, { [128] }>, Token) = unsafe {
+            load_ptr_tko(
+                gather,
+                ordering::Weak,
+                None::<scope::TileBlock>,
+                None,
+                None,
+                None,
+                Latency::<0>,
+            )
+        };
+        let _offset_reshaped: PointerTile<*mut f32, { [1] }> =
+            ptr_tile.offset(1).reshape(shape![1]);
+        let _reshaped_arg: PointerTile<*mut f32, { [1] }> =
+            reshape_ptr(ptr_tile.offset(1), shape![1]);
+    }
+
     #[cutile::entry]
     fn negative_constant_kernel<const S: [i32; 1]>(output: &mut Tensor<f32, S>) {
         let shape = output.shape();
@@ -640,6 +668,26 @@ fn compile_ptr_tile_reshape() {
             module_op_str.contains("broadcast"),
             "Expected broadcast operation on pointer tile type"
         );
+    });
+}
+
+#[test]
+fn compile_ptr_tile_method_chain() {
+    common::with_test_stack(|| {
+        let module_op_str = compile_ir("ptr_tile_method_chain_kernel", &[], &[]);
+        println!("{module_op_str}");
+        for expected in [
+            "tile<ptr<f32>> -> tile<1xptr<f32>>",
+            "tile<1xptr<f32>> -> tile<128xptr<f32>>",
+            "tile<128xptr<f32>>, tile<128xi32> -> tile<128xptr<f32>>",
+            "tile<128xptr<f32>> -> tile<128xf32>",
+            "tile<ptr<f32>>, tile<i32> -> tile<ptr<f32>>",
+        ] {
+            assert!(
+                module_op_str.contains(expected),
+                "Expected `{expected}` in the pointer tile chain IR"
+            );
+        }
     });
 }
 

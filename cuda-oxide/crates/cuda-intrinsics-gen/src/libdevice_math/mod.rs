@@ -258,6 +258,7 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
                         | "handwritten:emit_remquo"
                         | "handwritten:emit_lgamma_r"
                         | "handwritten:lower_float_minmax_nsz"
+                        | "handwritten:lower_float_ieee_minmax"
                 ),
                 "unsupported handwritten math lowering {lowering:?}"
             );
@@ -331,6 +332,22 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
             ensure!(
                 function.signature == Signature::Binary && function.link == Link::Never,
                 "min/max must use the handwritten binary never-linked route"
+            );
+        }
+        if function.lowering.as_deref() == Some("handwritten:lower_float_ieee_minmax") {
+            ensure!(
+                matches!(
+                    function.name.as_str(),
+                    "fmaximum" | "fminimum" | "fmaximum_num" | "fminimum_num"
+                ) && function.signature == Signature::Binary
+                    && function.link == Link::Never
+                    && function.libdevice.is_none()
+                    && function.llvm.is_none()
+                    && function.libm.is_none()
+                    && function.core.is_empty()
+                    && function.paths.is_empty()
+                    && function.cmath.is_none(),
+                "C23 min/max requires its exact binary never-linked libm route"
             );
         }
         for width in &shard.libdevice_math.widths {
@@ -498,6 +515,30 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
                         == (function.lowering.as_deref()
                             == Some("handwritten:lower_float_minmax_nsz")),
                     "min/max identity must use the matching handwritten expansion"
+                );
+                let ieee_variant = match function.name.as_str() {
+                    "fmaximum" => Some(format!("Maximum{role}")),
+                    "fminimum" => Some(format!("Minimum{role}")),
+                    "fmaximum_num" => Some(format!("MaximumNumber{role}")),
+                    "fminimum_num" => Some(format!("MinimumNumber{role}")),
+                    _ => None,
+                };
+                ensure!(
+                    ieee_variant.is_some()
+                        == (function.lowering.as_deref()
+                            == Some("handwritten:lower_float_ieee_minmax"))
+                        && ieee_variant
+                            .as_deref()
+                            .is_none_or(|expected| variant == expected)
+                        && (ieee_variant.is_some()
+                            || ![
+                                format!("Maximum{role}"),
+                                format!("Minimum{role}"),
+                                format!("MaximumNumber{role}"),
+                                format!("MinimumNumber{role}"),
+                            ]
+                            .contains(&variant)),
+                    "C23 min/max identity must match its libm operation"
                 );
                 if variant == "Fabs" {
                     ensure!(

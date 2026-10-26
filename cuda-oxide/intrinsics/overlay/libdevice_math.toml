@@ -135,6 +135,34 @@ lowering = "handwritten:lower_float_minmax_nsz"
 link = "never"
 
 [[libdevice_math.function]]
+name = "fmaximum"
+signature = "(F, F) -> F"
+variant = "Maximum{Width}"
+lowering = "handwritten:lower_float_ieee_minmax"
+link = "never"
+
+[[libdevice_math.function]]
+name = "fminimum"
+signature = "(F, F) -> F"
+variant = "Minimum{Width}"
+lowering = "handwritten:lower_float_ieee_minmax"
+link = "never"
+
+[[libdevice_math.function]]
+name = "fmaximum_num"
+signature = "(F, F) -> F"
+variant = "MaximumNumber{Width}"
+lowering = "handwritten:lower_float_ieee_minmax"
+link = "never"
+
+[[libdevice_math.function]]
+name = "fminimum_num"
+signature = "(F, F) -> F"
+variant = "MinimumNumber{Width}"
+lowering = "handwritten:lower_float_ieee_minmax"
+link = "never"
+
+[[libdevice_math.function]]
 name = "hypot"
 signature = "(F, F) -> F"
 cmath = "hypot{suffix}"

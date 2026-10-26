@@ -984,6 +984,20 @@ fn convert_rust_float_math_intrinsic(
         return lower_fast_binop(ctx, rewriter, op, &args, binop, loc);
     }
 
+    if matches!(
+        intrinsic,
+        RustFloatMathIntrinsic::MaximumF32
+            | RustFloatMathIntrinsic::MaximumF64
+            | RustFloatMathIntrinsic::MinimumF32
+            | RustFloatMathIntrinsic::MinimumF64
+            | RustFloatMathIntrinsic::MaximumNumberF32
+            | RustFloatMathIntrinsic::MaximumNumberF64
+            | RustFloatMathIntrinsic::MinimumNumberF32
+            | RustFloatMathIntrinsic::MinimumNumberF64
+    ) {
+        return lower_float_ieee_minmax(ctx, rewriter, op, intrinsic, &args);
+    }
+
     if let Some(predicate) = intrinsic.minmax_nsz_predicate() {
         return lower_float_minmax_nsz(ctx, rewriter, op, &args, predicate);
     }
@@ -1515,6 +1529,124 @@ fn float_math_intrinsic_symbol(
         }
         crate::IntrinsicBackend::LibNvvm => intrinsic.libdevice_name(ctx, result_ty, loc),
     }
+}
+
+/// Preserve IEEE-754-2019 minimum/maximum and minimumNumber/maximumNumber.
+/// Ordered comparisons select unequal operands, while the sign bit of x
+/// breaks zero ties. The final NaN selects implement propagation or numeric
+/// preference without NSZ/NNAN flags, unlike legacy fmin/fmax.
+fn lower_float_ieee_minmax(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+    intrinsic: RustFloatMathIntrinsic,
+    args: &[Value],
+) -> Result<()> {
+    let [x, y] = args else {
+        return pliron::input_err!(op.deref(ctx).loc(), "C23 min/max requires two operands");
+    };
+    let (width, is_max, propagate_nan) = match intrinsic {
+        RustFloatMathIntrinsic::MaximumF32 => (32, true, true),
+        RustFloatMathIntrinsic::MaximumF64 => (64, true, true),
+        RustFloatMathIntrinsic::MinimumF32 => (32, false, true),
+        RustFloatMathIntrinsic::MinimumF64 => (64, false, true),
+        RustFloatMathIntrinsic::MaximumNumberF32 => (32, true, false),
+        RustFloatMathIntrinsic::MaximumNumberF64 => (64, true, false),
+        RustFloatMathIntrinsic::MinimumNumberF32 => (32, false, false),
+        RustFloatMathIntrinsic::MinimumNumberF64 => (64, false, false),
+        _ => unreachable!("C23 min/max converter requires its own placeholder"),
+    };
+    let loc = op.deref(ctx).loc().clone();
+    let float_ty: TypeHandle = if width == 32 {
+        FP32Type::get(ctx).into()
+    } else {
+        FP64Type::get(ctx).into()
+    };
+    let mir_result_ty = op.deref(ctx).get_result(0).get_type(ctx);
+    let result_ty = convert_type(ctx, mir_result_ty).map_err(anyhow_to_pliron)?;
+    if result_ty != float_ty || x.get_type(ctx) != float_ty || y.get_type(ctx) != float_ty {
+        return pliron::input_err!(loc, "C23 min/max signature mismatch");
+    }
+
+    let x_bits_ty: TypeHandle = IntegerType::get(ctx, width, Signedness::Signless).into();
+    let x_bits = llvm::BitcastOp::new(ctx, *x, x_bits_ty);
+    rewriter.insert_operation(ctx, x_bits.get_operation());
+    let x_bits = x_bits.get_operation().deref(ctx).get_result(0);
+    let sign_attr = IntegerAttr::new(
+        IntegerType::get(ctx, width, Signedness::Signless),
+        APInt::from_u64(
+            1_u64 << (width - 1),
+            NonZeroUsize::new(width as usize).unwrap(),
+        ),
+    );
+    let sign_mask = llvm::ConstantOp::new(ctx, Box::new(sign_attr));
+    rewriter.insert_operation(ctx, sign_mask.get_operation());
+    let sign_mask = sign_mask.get_operation().deref(ctx).get_result(0);
+    let zero_attr = IntegerAttr::new(
+        IntegerType::get(ctx, width, Signedness::Signless),
+        APInt::from_u64(0, NonZeroUsize::new(width as usize).unwrap()),
+    );
+    let zero = llvm::ConstantOp::new(ctx, Box::new(zero_attr));
+    rewriter.insert_operation(ctx, zero.get_operation());
+    let zero = zero.get_operation().deref(ctx).get_result(0);
+    let masked = llvm::AndOp::new(ctx, x_bits, sign_mask);
+    rewriter.insert_operation(ctx, masked.get_operation());
+    let masked = masked.get_operation().deref(ctx).get_result(0);
+    let is_positive = llvm::ICmpOp::new(
+        ctx,
+        llvm_export::attributes::ICmpPredicateAttr::EQ,
+        masked,
+        zero,
+    );
+    rewriter.insert_operation(ctx, is_positive.get_operation());
+    let is_positive = is_positive.get_operation().deref(ctx).get_result(0);
+
+    let mut compare = |ctx: &mut Context, predicate: FCmpPredicateAttr, a: Value, b: Value| {
+        let cmp = llvm::FCmpOp::new(ctx, predicate, a, b);
+        set_empty_fastmath_flags(ctx, cmp.get_operation());
+        rewriter.insert_operation(ctx, cmp.get_operation());
+        cmp.get_operation().deref(ctx).get_result(0)
+    };
+    let better_x = compare(
+        ctx,
+        if is_max {
+            FCmpPredicateAttr::OGT
+        } else {
+            FCmpPredicateAttr::OLT
+        },
+        *x,
+        *y,
+    );
+    let better_y = compare(
+        ctx,
+        if is_max {
+            FCmpPredicateAttr::OLT
+        } else {
+            FCmpPredicateAttr::OGT
+        },
+        *x,
+        *y,
+    );
+    let x_nan = compare(ctx, FCmpPredicateAttr::UNO, *x, *x);
+    let y_nan = compare(ctx, FCmpPredicateAttr::UNO, *y, *y);
+
+    let (tie_positive, tie_negative) = if is_max { (*x, *y) } else { (*y, *x) };
+    let tie = llvm::SelectOp::new(ctx, is_positive, tie_positive, tie_negative);
+    rewriter.insert_operation(ctx, tie.get_operation());
+    let tie = tie.get_operation().deref(ctx).get_result(0);
+    let ordered_y = llvm::SelectOp::new(ctx, better_y, *y, tie);
+    rewriter.insert_operation(ctx, ordered_y.get_operation());
+    let ordered_y = ordered_y.get_operation().deref(ctx).get_result(0);
+    let ordered = llvm::SelectOp::new(ctx, better_x, *x, ordered_y);
+    rewriter.insert_operation(ctx, ordered.get_operation());
+    let ordered = ordered.get_operation().deref(ctx).get_result(0);
+    let y_case = llvm::SelectOp::new(ctx, y_nan, if propagate_nan { *y } else { *x }, ordered);
+    rewriter.insert_operation(ctx, y_case.get_operation());
+    let y_case = y_case.get_operation().deref(ctx).get_result(0);
+    let result = llvm::SelectOp::new(ctx, x_nan, if propagate_nan { *x } else { *y }, y_case);
+    rewriter.insert_operation(ctx, result.get_operation());
+    rewriter.replace_operation(ctx, op, result.get_operation());
+    Ok(())
 }
 
 /// Lower Rust's NaN-ignoring `min` and `max` contract without libdevice.

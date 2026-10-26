@@ -88,9 +88,25 @@ pub const CALLEE_FLOOR_F32: &str = placeholder!("floorf32");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_FLOOR_F64: &str = placeholder!("floorf64");
 /// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_FMAXIMUM_F32: &str = placeholder!("fmaximumf32");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_FMAXIMUM_F64: &str = placeholder!("fmaximumf64");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_FMAXIMUM_NUM_F32: &str = placeholder!("fmaximum_numf32");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_FMAXIMUM_NUM_F64: &str = placeholder!("fmaximum_numf64");
+/// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_FMA_F32: &str = placeholder!("fmaf32");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_FMA_F64: &str = placeholder!("fmaf64");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_FMINIMUM_F32: &str = placeholder!("fminimumf32");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_FMINIMUM_F64: &str = placeholder!("fminimumf64");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_FMINIMUM_NUM_F32: &str = placeholder!("fminimum_numf32");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_FMINIMUM_NUM_F64: &str = placeholder!("fminimum_numf64");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_FMOD_F32: &str = placeholder!("fmodf32");
 /// Internal math placeholder generated from the libdevice shard.
@@ -294,8 +310,16 @@ pub enum RustFloatMathIntrinsic {
     LogF64,
     MaxNumNszF32,
     MaxNumNszF64,
+    MaximumF32,
+    MaximumF64,
+    MaximumNumberF32,
+    MaximumNumberF64,
     MinNumNszF32,
     MinNumNszF64,
+    MinimumF32,
+    MinimumF64,
+    MinimumNumberF32,
+    MinimumNumberF64,
     ModfF32,
     ModfF64,
     NextafterF32,
@@ -542,8 +566,16 @@ impl RustFloatMathIntrinsic {
             "fmaf" => Some(Self::FmaF32),
             "fmax" => Some(Self::MaxNumNszF64),
             "fmaxf" => Some(Self::MaxNumNszF32),
+            "fmaximum" => Some(Self::MaximumF64),
+            "fmaximum_num" => Some(Self::MaximumNumberF64),
+            "fmaximum_numf" => Some(Self::MaximumNumberF32),
+            "fmaximumf" => Some(Self::MaximumF32),
             "fmin" => Some(Self::MinNumNszF64),
             "fminf" => Some(Self::MinNumNszF32),
+            "fminimum" => Some(Self::MinimumF64),
+            "fminimum_num" => Some(Self::MinimumNumberF64),
+            "fminimum_numf" => Some(Self::MinimumNumberF32),
+            "fminimumf" => Some(Self::MinimumF32),
             "fmod" => Some(Self::FmodF64),
             "fmodf" => Some(Self::FmodF32),
             "frexp" => Some(Self::FrexpF64),
@@ -682,8 +714,16 @@ impl RustFloatMathIntrinsic {
             Self::LogF64 => CALLEE_LOG_F64,
             Self::MaxNumNszF32 => CALLEE_MAXNUM_NSZ_F32,
             Self::MaxNumNszF64 => CALLEE_MAXNUM_NSZ_F64,
+            Self::MaximumF32 => CALLEE_FMAXIMUM_F32,
+            Self::MaximumF64 => CALLEE_FMAXIMUM_F64,
+            Self::MaximumNumberF32 => CALLEE_FMAXIMUM_NUM_F32,
+            Self::MaximumNumberF64 => CALLEE_FMAXIMUM_NUM_F64,
             Self::MinNumNszF32 => CALLEE_MINNUM_NSZ_F32,
             Self::MinNumNszF64 => CALLEE_MINNUM_NSZ_F64,
+            Self::MinimumF32 => CALLEE_FMINIMUM_F32,
+            Self::MinimumF64 => CALLEE_FMINIMUM_F64,
+            Self::MinimumNumberF32 => CALLEE_FMINIMUM_NUM_F32,
+            Self::MinimumNumberF64 => CALLEE_FMINIMUM_NUM_F64,
             Self::ModfF32 => CALLEE_MODF_F32,
             Self::ModfF64 => CALLEE_MODF_F64,
             Self::NextafterF32 => CALLEE_NEXTAFTER_F32,
@@ -800,8 +840,16 @@ impl RustFloatMathIntrinsic {
             CALLEE_LOG_F64 => Some(Self::LogF64),
             CALLEE_MAXNUM_NSZ_F32 => Some(Self::MaxNumNszF32),
             CALLEE_MAXNUM_NSZ_F64 => Some(Self::MaxNumNszF64),
+            CALLEE_FMAXIMUM_F32 => Some(Self::MaximumF32),
+            CALLEE_FMAXIMUM_F64 => Some(Self::MaximumF64),
+            CALLEE_FMAXIMUM_NUM_F32 => Some(Self::MaximumNumberF32),
+            CALLEE_FMAXIMUM_NUM_F64 => Some(Self::MaximumNumberF64),
             CALLEE_MINNUM_NSZ_F32 => Some(Self::MinNumNszF32),
             CALLEE_MINNUM_NSZ_F64 => Some(Self::MinNumNszF64),
+            CALLEE_FMINIMUM_F32 => Some(Self::MinimumF32),
+            CALLEE_FMINIMUM_F64 => Some(Self::MinimumF64),
+            CALLEE_FMINIMUM_NUM_F32 => Some(Self::MinimumNumberF32),
+            CALLEE_FMINIMUM_NUM_F64 => Some(Self::MinimumNumberF64),
             CALLEE_MODF_F32 => Some(Self::ModfF32),
             CALLEE_MODF_F64 => Some(Self::ModfF64),
             CALLEE_NEXTAFTER_F32 => Some(Self::NextafterF32),
@@ -919,8 +967,16 @@ impl RustFloatMathIntrinsic {
             Self::LogF64 => 1,
             Self::MaxNumNszF32 => 2,
             Self::MaxNumNszF64 => 2,
+            Self::MaximumF32 => 2,
+            Self::MaximumF64 => 2,
+            Self::MaximumNumberF32 => 2,
+            Self::MaximumNumberF64 => 2,
             Self::MinNumNszF32 => 2,
             Self::MinNumNszF64 => 2,
+            Self::MinimumF32 => 2,
+            Self::MinimumF64 => 2,
+            Self::MinimumNumberF32 => 2,
+            Self::MinimumNumberF64 => 2,
             Self::ModfF32 => 1,
             Self::ModfF64 => 1,
             Self::NextafterF32 => 2,
@@ -1116,11 +1172,43 @@ impl RustFloatMathIntrinsic {
                 &[MathScalarType::F64, MathScalarType::F64],
                 MathScalarType::F64,
             )),
+            Self::MaximumF32 => Some((
+                &[MathScalarType::F32, MathScalarType::F32],
+                MathScalarType::F32,
+            )),
+            Self::MaximumF64 => Some((
+                &[MathScalarType::F64, MathScalarType::F64],
+                MathScalarType::F64,
+            )),
+            Self::MaximumNumberF32 => Some((
+                &[MathScalarType::F32, MathScalarType::F32],
+                MathScalarType::F32,
+            )),
+            Self::MaximumNumberF64 => Some((
+                &[MathScalarType::F64, MathScalarType::F64],
+                MathScalarType::F64,
+            )),
             Self::MinNumNszF32 => Some((
                 &[MathScalarType::F32, MathScalarType::F32],
                 MathScalarType::F32,
             )),
             Self::MinNumNszF64 => Some((
+                &[MathScalarType::F64, MathScalarType::F64],
+                MathScalarType::F64,
+            )),
+            Self::MinimumF32 => Some((
+                &[MathScalarType::F32, MathScalarType::F32],
+                MathScalarType::F32,
+            )),
+            Self::MinimumF64 => Some((
+                &[MathScalarType::F64, MathScalarType::F64],
+                MathScalarType::F64,
+            )),
+            Self::MinimumNumberF32 => Some((
+                &[MathScalarType::F32, MathScalarType::F32],
+                MathScalarType::F32,
+            )),
+            Self::MinimumNumberF64 => Some((
                 &[MathScalarType::F64, MathScalarType::F64],
                 MathScalarType::F64,
             )),
@@ -1264,8 +1352,16 @@ impl RustFloatMathIntrinsic {
             Self::LogF64 => MathLink::Always,
             Self::MaxNumNszF32 => MathLink::Never,
             Self::MaxNumNszF64 => MathLink::Never,
+            Self::MaximumF32 => MathLink::Never,
+            Self::MaximumF64 => MathLink::Never,
+            Self::MaximumNumberF32 => MathLink::Never,
+            Self::MaximumNumberF64 => MathLink::Never,
             Self::MinNumNszF32 => MathLink::Never,
             Self::MinNumNszF64 => MathLink::Never,
+            Self::MinimumF32 => MathLink::Never,
+            Self::MinimumF64 => MathLink::Never,
+            Self::MinimumNumberF32 => MathLink::Never,
+            Self::MinimumNumberF64 => MathLink::Never,
             Self::ModfF32 => MathLink::Always,
             Self::ModfF64 => MathLink::Always,
             Self::NextafterF32 => MathLink::Always,
@@ -1388,8 +1484,16 @@ impl RustFloatMathIntrinsic {
             Self::LogF64 => Some("__nv_log"),
             Self::MaxNumNszF32 => None,
             Self::MaxNumNszF64 => None,
+            Self::MaximumF32 => None,
+            Self::MaximumF64 => None,
+            Self::MaximumNumberF32 => None,
+            Self::MaximumNumberF64 => None,
             Self::MinNumNszF32 => None,
             Self::MinNumNszF64 => None,
+            Self::MinimumF32 => None,
+            Self::MinimumF64 => None,
+            Self::MinimumNumberF32 => None,
+            Self::MinimumNumberF64 => None,
             Self::ModfF32 => Some("__nv_modff"),
             Self::ModfF64 => Some("__nv_modf"),
             Self::NextafterF32 => Some("__nv_nextafterf"),
@@ -1512,8 +1616,16 @@ impl RustFloatMathIntrinsic {
             Self::LogF64 => None,
             Self::MaxNumNszF32 => None,
             Self::MaxNumNszF64 => None,
+            Self::MaximumF32 => None,
+            Self::MaximumF64 => None,
+            Self::MaximumNumberF32 => None,
+            Self::MaximumNumberF64 => None,
             Self::MinNumNszF32 => None,
             Self::MinNumNszF64 => None,
+            Self::MinimumF32 => None,
+            Self::MinimumF64 => None,
+            Self::MinimumNumberF32 => None,
+            Self::MinimumNumberF64 => None,
             Self::ModfF32 => None,
             Self::ModfF64 => None,
             Self::NextafterF32 => None,

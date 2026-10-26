@@ -16,6 +16,152 @@ use pliron::operation::Operation;
 use crate::common::{append_return, build_test_kernel, lowered_kernel_body, make_test_ctx};
 
 #[test]
+fn test_c23_minmax_uses_ieee_order_nan_and_signed_zero_on_both_backends()
+-> Result<(), anyhow::Error> {
+    use dialect_mir::rust_intrinsics as ri;
+    use pliron::builtin::attributes::StringAttr;
+    use pliron::builtin::types::{FP32Type, FP64Type};
+    use pliron::r#type::TypeHandle;
+
+    for backend in [
+        mir_lower::IntrinsicBackend::LlvmNvptx,
+        mir_lower::IntrinsicBackend::LibNvvm,
+    ] {
+        for wide in [false, true] {
+            for op_id in 0..4 {
+                let mut ctx = make_test_ctx();
+                let float_ty: TypeHandle = if wide {
+                    FP64Type::get(&ctx).into()
+                } else {
+                    FP32Type::get(&ctx).into()
+                };
+                let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![float_ty, float_ty]);
+                let x = entry.deref(&ctx).get_argument(0);
+                let y = entry.deref(&ctx).get_argument(1);
+                let placeholder = match (wide, op_id) {
+                    (false, 0) => ri::CALLEE_FMAXIMUM_F32,
+                    (true, 0) => ri::CALLEE_FMAXIMUM_F64,
+                    (false, 1) => ri::CALLEE_FMINIMUM_F32,
+                    (true, 1) => ri::CALLEE_FMINIMUM_F64,
+                    (false, 2) => ri::CALLEE_FMAXIMUM_NUM_F32,
+                    (true, 2) => ri::CALLEE_FMAXIMUM_NUM_F64,
+                    (false, _) => ri::CALLEE_FMINIMUM_NUM_F32,
+                    (true, _) => ri::CALLEE_FMINIMUM_NUM_F64,
+                };
+                let call = Operation::new(
+                    &mut ctx,
+                    mir::MirCallOp::get_concrete_op_info(),
+                    vec![float_ty],
+                    vec![x, y],
+                    vec![],
+                    0,
+                );
+                mir::MirCallOp::new(call)
+                    .set_attr_callee(&ctx, StringAttr::new(placeholder.to_string()));
+                call.insert_at_back(entry, &ctx);
+                append_return(&mut ctx, entry);
+                mir_lower::lower_mir_to_llvm_with_options(
+                    &mut ctx,
+                    module_ptr,
+                    mir_lower::LoweringOptions {
+                        intrinsic_backend: backend,
+                        ..Default::default()
+                    },
+                )
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
+                pliron::operation::verify_operation(module_ptr, &ctx)
+                    .map_err(|error| anyhow::anyhow!("{error}"))?;
+                let module = Operation::get_op::<ModuleOp>(module_ptr, &ctx).unwrap();
+                let ir = llvm_export::export::export_module_to_string(&ctx, &module)
+                    .expect("C23 min/max IR export");
+                assert!(ir.contains("fcmp olt") && ir.contains("fcmp ogt"), "{ir}");
+                assert_eq!(ir.matches("fcmp uno").count(), 2, "{ir}");
+                assert!(ir.contains("icmp eq"), "{ir}");
+                assert_eq!(ir.matches("select i1").count(), 5, "{ir}");
+                assert!(
+                    !ir.contains(ri::PLACEHOLDER_PREFIX) && !ir.contains("@__nv_"),
+                    "{ir}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn test_c23_minmax_rejects_malformed_signatures() {
+    use dialect_mir::rust_intrinsics as ri;
+    use pliron::builtin::attributes::StringAttr;
+    use pliron::builtin::types::{FP32Type, FP64Type};
+    use pliron::r#type::TypeHandle;
+
+    for backend in [
+        mir_lower::IntrinsicBackend::LlvmNvptx,
+        mir_lower::IntrinsicBackend::LibNvvm,
+    ] {
+        for wide in [false, true] {
+            for invalid in 0..5 {
+                let mut ctx = make_test_ctx();
+                let float_ty: TypeHandle = if wide {
+                    FP64Type::get(&ctx).into()
+                } else {
+                    FP32Type::get(&ctx).into()
+                };
+                let other_ty: TypeHandle = if wide {
+                    FP32Type::get(&ctx).into()
+                } else {
+                    FP64Type::get(&ctx).into()
+                };
+                let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![float_ty, other_ty]);
+                let x = entry.deref(&ctx).get_argument(0);
+                let other = entry.deref(&ctx).get_argument(1);
+                let args = match invalid {
+                    0 => vec![],
+                    1 => vec![x],
+                    2 => vec![x, x, x],
+                    3 => vec![x, other],
+                    _ => vec![x, x],
+                };
+                let result = if invalid == 4 { other_ty } else { float_ty };
+                let placeholder = if wide {
+                    ri::CALLEE_FMAXIMUM_NUM_F64
+                } else {
+                    ri::CALLEE_FMAXIMUM_F32
+                };
+                let call = Operation::new(
+                    &mut ctx,
+                    mir::MirCallOp::get_concrete_op_info(),
+                    vec![result],
+                    args,
+                    vec![],
+                    0,
+                );
+                mir::MirCallOp::new(call)
+                    .set_attr_callee(&ctx, StringAttr::new(placeholder.to_string()));
+                call.insert_at_back(entry, &ctx);
+                append_return(&mut ctx, entry);
+                let error = mir_lower::lower_mir_to_llvm_with_options(
+                    &mut ctx,
+                    module_ptr,
+                    mir_lower::LoweringOptions {
+                        intrinsic_backend: backend,
+                        ..Default::default()
+                    },
+                )
+                .expect_err("malformed C23 min/max must fail")
+                .to_string();
+                let expected = if invalid <= 2 {
+                    "requires 2 operand(s)"
+                } else {
+                    "C23 min/max signature mismatch"
+                };
+                assert!(error.contains(expected), "{invalid}: {error}");
+            }
+        }
+    }
+}
+
+#[test]
 fn test_lgamma_r_composed_tuple_and_special_cases_on_both_backends() -> Result<(), anyhow::Error> {
     use dialect_mir::rust_intrinsics as ri;
     use dialect_mir::types::MirTupleType;

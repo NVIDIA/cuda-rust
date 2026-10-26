@@ -401,6 +401,59 @@ mod tests {
             assert_eq!(intrinsic.scalar_signature(false), None);
             assert_eq!(I::from_core_path(&format!("user::libm::{name}")), None);
         }
+        for (name, intrinsic, callee) in [
+            (
+                "fmaximumf",
+                I::MaximumF32,
+                rust_intrinsics::CALLEE_FMAXIMUM_F32,
+            ),
+            (
+                "fmaximum",
+                I::MaximumF64,
+                rust_intrinsics::CALLEE_FMAXIMUM_F64,
+            ),
+            (
+                "fminimumf",
+                I::MinimumF32,
+                rust_intrinsics::CALLEE_FMINIMUM_F32,
+            ),
+            (
+                "fminimum",
+                I::MinimumF64,
+                rust_intrinsics::CALLEE_FMINIMUM_F64,
+            ),
+            (
+                "fmaximum_numf",
+                I::MaximumNumberF32,
+                rust_intrinsics::CALLEE_FMAXIMUM_NUM_F32,
+            ),
+            (
+                "fmaximum_num",
+                I::MaximumNumberF64,
+                rust_intrinsics::CALLEE_FMAXIMUM_NUM_F64,
+            ),
+            (
+                "fminimum_numf",
+                I::MinimumNumberF32,
+                rust_intrinsics::CALLEE_FMINIMUM_NUM_F32,
+            ),
+            (
+                "fminimum_num",
+                I::MinimumNumberF64,
+                rust_intrinsics::CALLEE_FMINIMUM_NUM_F64,
+            ),
+        ] {
+            assert_eq!(I::from_core_path(&format!("libm::{name}")), Some(intrinsic));
+            assert_eq!(
+                I::from_core_path(&format!("libm::math::{name}::{name}")),
+                Some(intrinsic)
+            );
+            assert_eq!(intrinsic.placeholder_callee(), callee);
+            assert_eq!(intrinsic.arg_count(), 2);
+            assert!(rust_intrinsics::is_known_placeholder(callee));
+            assert!(!rust_intrinsics::is_libdevice_backed_placeholder(callee));
+            assert_eq!(I::from_core_path(&format!("user::libm::{name}")), None);
+        }
         assert_eq!(I::from_core_path("libm::tgammaf128"), None);
     }
 

@@ -21,11 +21,11 @@ fn fixture(functions: &str) -> Shard {
 }
 
 #[test]
-fn generated_metadata_covers_110_exports_and_core_only_routes() {
+fn generated_metadata_covers_118_exports_and_core_only_routes() {
     let shard = read(&root()).unwrap();
     let rows = mappings(&shard).unwrap();
-    assert_eq!(rows.len(), 114);
-    assert_eq!(rows.iter().filter(|row| row.libm.is_some()).count(), 110);
+    assert_eq!(rows.len(), 122);
+    assert_eq!(rows.iter().filter(|row| row.libm.is_some()).count(), 118);
     assert_eq!(expected_symbols(&rows).unwrap().len(), 100);
     assert_eq!(generated::MAPPINGS.len(), rows.len());
     for (actual, row) in generated::MAPPINGS.iter().zip(&rows) {
@@ -182,7 +182,7 @@ fn compiler_dispatch_preserves_every_pre_migration_path_symbol_and_link_route() 
 fn unregistered_aliases_and_unknown_placeholders_remain_rejected() {
     for path in [
         "libm::unknown_future_math",
-        "libm::fmaximum",
+        "libm::fmaximumf128",
         "libm::sqrtf128",
         "user::std::sys::cmath::tgamma",
         "libmath::sqrtf",
@@ -237,6 +237,33 @@ fn aliases_and_handwritten_controls_keep_their_semantics() {
         assert!(find(name).libdevice.is_none());
         assert!(find(name).llvm.is_none());
     }
+    for name in [
+        "fmaximum",
+        "fmaximumf",
+        "fminimum",
+        "fminimumf",
+        "fmaximum_num",
+        "fmaximum_numf",
+        "fminimum_num",
+        "fminimum_numf",
+    ] {
+        let row = find(name);
+        assert_eq!(row.link, Link::Never);
+        assert_eq!(
+            row.lowering.as_deref(),
+            Some("handwritten:lower_float_ieee_minmax")
+        );
+        assert_eq!(
+            row.signature,
+            if name.ends_with('f') {
+                "(f32, f32) -> f32"
+            } else {
+                "(f64, f64) -> f64"
+            }
+        );
+        assert!(row.libdevice.is_none());
+        assert!(row.llvm.is_none());
+    }
     assert_eq!(find("fabs").placeholders, find("fabsf").placeholders);
     assert_eq!(find("floor").link, Link::Libnvvm);
     assert_eq!(find("sqrt").link, Link::Always);
@@ -273,6 +300,11 @@ fn compiler_identities_and_handwritten_handlers_fail_closed() {
         ("variant = \"Frexp{Width}\"\n", "frexp identity"),
         ("variant = \"LgammaR{Width}\"\n", "lgamma_r identity"),
         ("variant = \"MaxNumNsz{Width}\"\n", "min/max identity"),
+        ("variant = \"Maximum{Width}\"\n", "C23 min/max identity"),
+        (
+            "lowering = \"handwritten:lower_float_ieee_minmax\"\nlink = \"never\"\n",
+            "C23 min/max requires its exact binary",
+        ),
         (
             "variant = \"Fabs\"\nconstant = \"CALLEE_FABS\"\nplaceholders = [\"fabs\"]\n",
             "generic fabs",
@@ -577,22 +609,7 @@ fn libm_0_2_16_coverage_leaves_only_semantic_functions() {
         .collect();
     assert_eq!(
         missing,
-        BTreeSet::from([
-            "fmaximum",
-            "fmaximumf",
-            "fminimum",
-            "fminimumf",
-            "fmaximum_num",
-            "fmaximum_numf",
-            "fminimum_num",
-            "fminimum_numf",
-            "j1",
-            "j1f",
-            "jn",
-            "jnf",
-            "yn",
-            "ynf",
-        ])
+        BTreeSet::from(["j1", "j1f", "jn", "jnf", "yn", "ynf",])
     );
     for name in upstream.exports {
         let path = format!("libm::{name}");

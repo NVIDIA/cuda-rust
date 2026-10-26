@@ -16,6 +16,189 @@ use pliron::operation::Operation;
 use crate::common::{append_return, build_test_kernel, lowered_kernel_body, make_test_ctx};
 
 #[test]
+fn test_modf_remquo_out_parameter_lowering_and_tuple_layout() -> Result<(), anyhow::Error> {
+    use dialect_mir::rust_intrinsics as ri;
+    use dialect_mir::types::MirTupleType;
+    use pliron::builtin::attributes::StringAttr;
+    use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
+    use pliron::r#type::TypeHandle;
+
+    for backend in [
+        mir_lower::IntrinsicBackend::LlvmNvptx,
+        mir_lower::IntrinsicBackend::LibNvvm,
+    ] {
+        for wide in [false, true] {
+            for remquo in [false, true] {
+                for reordered in [false, true] {
+                    let mut ctx = make_test_ctx();
+                    let float_ty: TypeHandle = if wide {
+                        FP64Type::get(&ctx).into()
+                    } else {
+                        FP32Type::get(&ctx).into()
+                    };
+                    let i32_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Signed).into();
+                    let fields = vec![float_ty, if remquo { i32_ty } else { float_ty }];
+                    let tuple_ty: TypeHandle = if reordered {
+                        MirTupleType::get_with_layout(
+                            &mut ctx,
+                            fields,
+                            vec![1, 0],
+                            vec![if wide { 8 } else { 4 }, 0],
+                            if wide { 16 } else { 8 },
+                            if wide { 8 } else { 4 },
+                        )
+                        .into()
+                    } else {
+                        MirTupleType::get(&mut ctx, fields).into()
+                    };
+                    let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![float_ty]);
+                    let x = entry.deref(&ctx).get_argument(0);
+                    let placeholder = match (remquo, wide) {
+                        (false, false) => ri::CALLEE_MODF_F32,
+                        (false, true) => ri::CALLEE_MODF_F64,
+                        (true, false) => ri::CALLEE_REMQUO_F32,
+                        (true, true) => ri::CALLEE_REMQUO_F64,
+                    };
+                    let args = if remquo { vec![x, x] } else { vec![x] };
+                    let call = Operation::new(
+                        &mut ctx,
+                        mir::MirCallOp::get_concrete_op_info(),
+                        vec![tuple_ty],
+                        args,
+                        vec![],
+                        0,
+                    );
+                    mir::MirCallOp::new(call)
+                        .set_attr_callee(&ctx, StringAttr::new(placeholder.to_string()));
+                    call.insert_at_back(entry, &ctx);
+                    append_return(&mut ctx, entry);
+                    mir_lower::lower_mir_to_llvm_with_options(
+                        &mut ctx,
+                        module_ptr,
+                        mir_lower::LoweringOptions {
+                            intrinsic_backend: backend,
+                            ..Default::default()
+                        },
+                    )
+                    .map_err(|error| anyhow::anyhow!("{error}"))?;
+                    pliron::operation::verify_operation(module_ptr, &ctx)
+                        .map_err(|error| anyhow::anyhow!("{error}"))?;
+                    let module = Operation::get_op::<ModuleOp>(module_ptr, &ctx).unwrap();
+                    let ir = llvm_export::export::export_module_to_string(&ctx, &module)
+                        .expect("out-parameter module must export");
+                    let name = match (remquo, wide) {
+                        (false, false) => "__nv_modff",
+                        (false, true) => "__nv_modf",
+                        (true, false) => "__nv_remquof",
+                        (true, true) => "__nv_remquo",
+                    };
+                    let scalar = if wide { "double" } else { "float" };
+                    let signature = if remquo {
+                        format!("declare {scalar} @{name}({scalar}, {scalar}, ptr)")
+                    } else {
+                        format!("declare {scalar} @{name}({scalar}, ptr)")
+                    };
+                    assert!(ir.contains(&signature), "{signature}: {ir}");
+                    assert!(!ir.contains(ri::PLACEHOLDER_PREFIX), "{ir}");
+                    assert_eq!(ir.matches("alloca").count(), 1, "{ir}");
+                    assert_eq!(ir.matches("insertvalue").count(), 2, "{ir}");
+                    assert_eq!(ir.matches("select i1").count(), usize::from(remquo), "{ir}");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn test_modf_remquo_reject_malformed_calls() {
+    use dialect_mir::rust_intrinsics as ri;
+    use dialect_mir::types::MirTupleType;
+    use pliron::builtin::attributes::StringAttr;
+    use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
+    use pliron::r#type::TypeHandle;
+
+    for backend in [
+        mir_lower::IntrinsicBackend::LlvmNvptx,
+        mir_lower::IntrinsicBackend::LibNvvm,
+    ] {
+        for wide in [false, true] {
+            for remquo in [false, true] {
+                for invalid in 0..4 {
+                    let mut ctx = make_test_ctx();
+                    let float_ty: TypeHandle = if wide {
+                        FP64Type::get(&ctx).into()
+                    } else {
+                        FP32Type::get(&ctx).into()
+                    };
+                    let other_ty: TypeHandle = if wide {
+                        FP32Type::get(&ctx).into()
+                    } else {
+                        FP64Type::get(&ctx).into()
+                    };
+                    let i32_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Signed).into();
+                    let fields = vec![float_ty, if remquo { i32_ty } else { float_ty }];
+                    let tuple: TypeHandle = MirTupleType::get(
+                        &mut ctx,
+                        if invalid == 2 {
+                            vec![other_ty, float_ty]
+                        } else {
+                            fields
+                        },
+                    )
+                    .into();
+                    let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![float_ty, other_ty]);
+                    let x = entry.deref(&ctx).get_argument(0);
+                    let other = entry.deref(&ctx).get_argument(1);
+                    let placeholder = match (remquo, wide) {
+                        (false, false) => ri::CALLEE_MODF_F32,
+                        (false, true) => ri::CALLEE_MODF_F64,
+                        (true, false) => ri::CALLEE_REMQUO_F32,
+                        (true, true) => ri::CALLEE_REMQUO_F64,
+                    };
+                    let mut args = if remquo { vec![x, x] } else { vec![x] };
+                    if invalid == 0 {
+                        args.pop();
+                    } else if invalid == 3 {
+                        *args.last_mut().unwrap() = other;
+                    }
+                    let call = Operation::new(
+                        &mut ctx,
+                        mir::MirCallOp::get_concrete_op_info(),
+                        vec![if invalid == 1 { float_ty } else { tuple }],
+                        args,
+                        vec![],
+                        0,
+                    );
+                    mir::MirCallOp::new(call)
+                        .set_attr_callee(&ctx, StringAttr::new(placeholder.to_string()));
+                    call.insert_at_back(entry, &ctx);
+                    append_return(&mut ctx, entry);
+                    let error = mir_lower::lower_mir_to_llvm_with_options(
+                        &mut ctx,
+                        module_ptr,
+                        mir_lower::LoweringOptions {
+                            intrinsic_backend: backend,
+                            ..Default::default()
+                        },
+                    )
+                    .expect_err("malformed tuple math ABI must fail")
+                    .to_string();
+                    let expected = if invalid == 0 {
+                        "requires"
+                    } else if invalid == 1 {
+                        "requires a tuple result"
+                    } else {
+                        "signature mismatch"
+                    };
+                    assert!(error.contains(expected), "{invalid}: {error}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn test_frexp_out_parameter_lowering_on_both_backends() -> Result<(), anyhow::Error> {
     use dialect_mir::rust_intrinsics as ri;
     use dialect_mir::types::MirTupleType;

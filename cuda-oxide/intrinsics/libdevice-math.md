@@ -4,11 +4,11 @@
 
 # Compiler math mappings
 
-104 mapped f32/f64 libm exports, plus core-only compiler routes.
+108 mapped f32/f64 libm exports, plus core-only compiler routes.
 
 The same shard generates compiler dispatch, placeholder constants, symbol lookup,
 operand counts, cmath interception, and libdevice link requirements. Handwritten
-semantic expansions remain responsible for sincos, frexp, min/max, and fast binops.
+semantic expansions remain responsible for sincos, frexp, modf, remquo, min/max, and fast binops.
 
 Libdevice bitcode SHA-256: `91334d6e12748f6cb5bbf0a1cd965a56bcd93dc4f496d2e5c5f8c6e523094356`.
 
@@ -91,12 +91,16 @@ a handwritten expansion. Aliases are separate exports sharing a mapping.
 | `log2` | `(f64) -> f64` | `__nv_log2` |   |   | `always` |
 | `log2f` | `(f32) -> f32` | `__nv_log2f` |   |   | `always` |
 | `logf` | `(f32) -> f32` | `__nv_logf` |   |   | `always` |
+| `modf` | `(f64) -> (f64, f64)` | `__nv_modf` |   | `handwritten:emit_modf` | `always` |
+| `modff` | `(f32) -> (f32, f32)` | `__nv_modff` |   | `handwritten:emit_modf` | `always` |
 | `nextafter` | `(f64, f64) -> f64` | `__nv_nextafter` |   |   | `always` |
 | `nextafterf` | `(f32, f32) -> f32` | `__nv_nextafterf` |   |   | `always` |
 | `pow` | `(f64, f64) -> f64` | `__nv_pow` |   |   | `always` |
 | `powf` | `(f32, f32) -> f32` | `__nv_powf` |   |   | `always` |
 | `remainder` | `(f64, f64) -> f64` | `__nv_remainder` |   |   | `always` |
 | `remainderf` | `(f32, f32) -> f32` | `__nv_remainderf` |   |   | `always` |
+| `remquo` | `(f64, f64) -> (f64, i32)` | `__nv_remquo` |   | `handwritten:emit_remquo` | `always` |
+| `remquof` | `(f32, f32) -> (f32, i32)` | `__nv_remquof` |   | `handwritten:emit_remquo` | `always` |
 | `rint` | `(f64) -> f64` | `__nv_rint` | `llvm_roundeven_f64` |   | `libnvvm` |
 | `rintf` | `(f32) -> f32` | `__nv_rintf` | `llvm_roundeven_f32` |   | `libnvvm` |
 | `round` | `(f64) -> f64` | `__nv_round` | `llvm_round_f64` |   | `libnvvm` |

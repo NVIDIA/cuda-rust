@@ -994,6 +994,15 @@ fn convert_rust_float_math_intrinsic(
     ) {
         return convert_rust_frexp(ctx, rewriter, op, intrinsic, args[0]);
     }
+    if matches!(
+        intrinsic,
+        RustFloatMathIntrinsic::ModfF32
+            | RustFloatMathIntrinsic::ModfF64
+            | RustFloatMathIntrinsic::RemquoF32
+            | RustFloatMathIntrinsic::RemquoF64
+    ) {
+        return convert_rust_out_param_pair(ctx, rewriter, op, intrinsic, &args);
+    }
 
     let result_mir_ty = op.deref(ctx).get_result(0).get_type(ctx);
     let result_ty = convert_type(ctx, result_mir_ty).map_err(anyhow_to_pliron)?;
@@ -1132,6 +1141,107 @@ fn emit_libdevice_out_param_call(
     ))
 }
 
+/// Build a Rust tuple using declared field order and the target LLVM layout.
+fn pack_math_out_param_pair(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+    layout: &StructLayoutInfo,
+    fields: [Value; 2],
+) -> Result<()> {
+    let loc = op.deref(ctx).loc().clone();
+    let map = build_struct_slot_map(ctx, layout).map_err(anyhow_to_pliron)?;
+    let undef = llvm::UndefOp::new(ctx, map.llvm_struct_ty);
+    rewriter.insert_operation(ctx, undef.get_operation());
+    let mut value = undef.get_operation().deref(ctx).get_result(0);
+    let mut last = undef.get_operation();
+    for (field, operand) in fields.into_iter().enumerate() {
+        let slot = map.decl_to_llvm[field].ok_or_else(|| {
+            pliron::input_error!(
+                loc.clone(),
+                "Rust math result field has no LLVM storage slot"
+            )
+        })?;
+        let insert = llvm::InsertValueOp::new(ctx, value, operand, vec![slot]);
+        rewriter.insert_operation(ctx, insert.get_operation());
+        value = insert.get_operation().deref(ctx).get_result(0);
+        last = insert.get_operation();
+    }
+    crate::convert::preserve_location(ctx, op, last);
+    rewriter.replace_operation(ctx, op, last);
+    Ok(())
+}
+
+/// Adapt libdevice's scalar return and pointer result to libm's tuple ABI.
+fn convert_rust_out_param_pair(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+    intrinsic: RustFloatMathIntrinsic,
+    args: &[Value],
+) -> Result<()> {
+    let loc = op.deref(ctx).loc().clone();
+    let (float_ty, is_remquo) = match intrinsic {
+        RustFloatMathIntrinsic::ModfF32 | RustFloatMathIntrinsic::RemquoF32 => (
+            FP32Type::get(ctx).into(),
+            matches!(intrinsic, RustFloatMathIntrinsic::RemquoF32),
+        ),
+        RustFloatMathIntrinsic::ModfF64 | RustFloatMathIntrinsic::RemquoF64 => (
+            FP64Type::get(ctx).into(),
+            matches!(intrinsic, RustFloatMathIntrinsic::RemquoF64),
+        ),
+        _ => unreachable!("out-parameter pair converter requires modf or remquo"),
+    };
+    let i32_mir: TypeHandle = IntegerType::get(ctx, 32, Signedness::Signed).into();
+    let second_ty = if is_remquo { i32_mir } else { float_ty };
+    let result_ty = op.deref(ctx).get_result(0).get_type(ctx);
+    let layout = {
+        let result = result_ty.deref(ctx);
+        let Some(tuple) = result.downcast_ref::<MirTupleType>() else {
+            return pliron::input_err!(loc, "Rust math out-parameter requires a tuple result");
+        };
+        if tuple.get_types() != [float_ty, second_ty]
+            || args.iter().any(|arg| arg.get_type(ctx) != float_ty)
+        {
+            return pliron::input_err!(loc, "Rust math out-parameter signature mismatch");
+        }
+        StructLayoutInfo::of_tuple(tuple)
+    };
+    let zero_ty = if is_remquo { i32_mir } else { float_ty };
+    let zero = if is_remquo {
+        let attr = IntegerAttr::new(
+            IntegerType::get(ctx, 32, Signedness::Signless),
+            APInt::from_u64(0, NonZeroUsize::new(32).unwrap()),
+        );
+        let constant = llvm::ConstantOp::new(ctx, Box::new(attr));
+        rewriter.insert_operation(ctx, constant.get_operation());
+        constant.get_operation().deref(ctx).get_result(0)
+    } else {
+        // The out slot is overwritten by libdevice; its initial value only
+        // prevents an undefined read if a backend optimizes a special case.
+        let constant = llvm::UndefOp::new(ctx, zero_ty);
+        rewriter.insert_operation(ctx, constant.get_operation());
+        constant.get_operation().deref(ctx).get_result(0)
+    };
+    let symbol = intrinsic.libdevice_name(ctx, float_ty, loc.clone())?;
+    let (result, out) =
+        emit_libdevice_out_param_call(ctx, rewriter, op, symbol, args, float_ty, zero)?;
+    // libm returns quotient zero for invalid remquo inputs. CUDA specifies
+    // a NaN remainder but does not define the pointer result in those cases.
+    let out = if is_remquo {
+        let invalid = llvm::FCmpOp::new(ctx, FCmpPredicateAttr::UNO, result, result);
+        set_empty_fastmath_flags(ctx, invalid.get_operation());
+        rewriter.insert_operation(ctx, invalid.get_operation());
+        let predicate = invalid.get_operation().deref(ctx).get_result(0);
+        let normalized = llvm::SelectOp::new(ctx, predicate, zero, out);
+        rewriter.insert_operation(ctx, normalized.get_operation());
+        normalized.get_operation().deref(ctx).get_result(0)
+    } else {
+        out
+    };
+    pack_math_out_param_pair(ctx, rewriter, op, &layout, [result, out])
+}
+
 /// Adapt libdevice's `(F, i32*) -> F` ABI to libm's `(F) -> (F, i32)`.
 fn convert_rust_frexp(
     ctx: &mut Context,
@@ -1159,7 +1269,6 @@ fn convert_rust_frexp(
         }
         StructLayoutInfo::of_tuple(tuple)
     };
-    let map = build_struct_slot_map(ctx, &layout).map_err(anyhow_to_pliron)?;
     let mut constant = |ctx: &mut Context, value: u64, bits: u32| {
         let ty = IntegerType::get(ctx, bits, Signedness::Signless);
         let attr = IntegerAttr::new(
@@ -1201,25 +1310,7 @@ fn convert_rust_frexp(
         fraction.get_operation().deref(ctx).get_result(0),
         exponent.get_operation().deref(ctx).get_result(0),
     ];
-    let undef = llvm::UndefOp::new(ctx, map.llvm_struct_ty);
-    rewriter.insert_operation(ctx, undef.get_operation());
-    let mut value = undef.get_operation().deref(ctx).get_result(0);
-    let mut last = undef.get_operation();
-    for (field, operand) in fields.into_iter().enumerate() {
-        let slot = map.decl_to_llvm[field].ok_or_else(|| {
-            pliron::input_error!(
-                loc.clone(),
-                "Rust frexp result field has no LLVM storage slot"
-            )
-        })?;
-        let insert = llvm::InsertValueOp::new(ctx, value, operand, vec![slot]);
-        rewriter.insert_operation(ctx, insert.get_operation());
-        value = insert.get_operation().deref(ctx).get_result(0);
-        last = insert.get_operation();
-    }
-    crate::convert::preserve_location(ctx, op, last);
-    rewriter.replace_operation(ctx, op, last);
-    Ok(())
+    pack_math_out_param_pair(ctx, rewriter, op, &layout, fields)
 }
 
 /// Resolve the callee symbol a float-math intrinsic lowers to under the

@@ -21,12 +21,12 @@ fn fixture(functions: &str) -> Shard {
 }
 
 #[test]
-fn generated_metadata_covers_104_exports_and_core_only_routes() {
+fn generated_metadata_covers_108_exports_and_core_only_routes() {
     let shard = read(&root()).unwrap();
     let rows = mappings(&shard).unwrap();
-    assert_eq!(rows.len(), 108);
-    assert_eq!(rows.iter().filter(|row| row.libm.is_some()).count(), 104);
-    assert_eq!(expected_symbols(&rows).unwrap().len(), 96);
+    assert_eq!(rows.len(), 112);
+    assert_eq!(rows.iter().filter(|row| row.libm.is_some()).count(), 108);
+    assert_eq!(expected_symbols(&rows).unwrap().len(), 100);
     assert_eq!(generated::MAPPINGS.len(), rows.len());
     for (actual, row) in generated::MAPPINGS.iter().zip(&rows) {
         assert_eq!(actual.libm, row.libm.as_deref());
@@ -182,8 +182,8 @@ fn compiler_dispatch_preserves_every_pre_migration_path_symbol_and_link_route() 
 fn unregistered_aliases_and_unknown_placeholders_remain_rejected() {
     for path in [
         "libm::unknown_future_math",
-        "libm::modf",
-        "libm::remquo",
+        "libm::lgamma_r",
+        "libm::fmaximum",
         "libm::sqrtf128",
         "user::std::sys::cmath::tgamma",
         "libmath::sqrtf",
@@ -276,6 +276,14 @@ fn compiler_identities_and_handwritten_handlers_fail_closed() {
             "float/i32 tuple ABI",
         ),
         (
+            "lowering = \"handwritten:emit_modf\"\nlibdevice = \"__nv_demo{suffix}\"\n",
+            "exact tuple ABI",
+        ),
+        (
+            "lowering = \"handwritten:emit_remquo\"\nlibdevice = \"__nv_demo{suffix}\"\n",
+            "exact tuple ABI",
+        ),
+        (
             "[[libdevice_math.function]]\nname = \"other\"\nsignature = \"(F) -> F\"\nvariant = \"Demo{Width}\"\n",
             "duplicate math variant",
         ),
@@ -365,6 +373,24 @@ fn signature_classes_distinguish_integer_results_arguments_and_out_parameters() 
         "float(float, ptr)"
     );
     assert_eq!(rows[0].signature, "(f64) -> (f64, i32)");
+    for (name, signature, adapter, abi) in [
+        ("modf", "(F) -> (F, F)", "emit_modf", "float(float, ptr)"),
+        (
+            "remquo",
+            "(F, F) -> (F, i32)",
+            "emit_remquo",
+            "float(float, float, ptr)",
+        ),
+    ] {
+        let input = fixture(&format!(
+            "[[libdevice_math.function]]\nname = \"{name}\"\nsignature = \"{signature}\"\nlowering = \"handwritten:{adapter}\"\nlibdevice = \"__nv_{name}{{suffix}}\"\n"
+        ));
+        let rows = mappings(&input).unwrap();
+        assert_eq!(
+            expected_symbols(&rows).unwrap()[&format!("__nv_{name}f")],
+            abi
+        );
+    }
 }
 
 #[test]
@@ -504,7 +530,7 @@ fn llvm_evidence_requires_exported_definitions_and_exact_signatures() {
 }
 
 #[test]
-fn libm_0_2_16_coverage_leaves_only_out_parameters_and_semantic_functions() {
+fn libm_0_2_16_coverage_leaves_only_semantic_functions() {
     #[derive(Deserialize)]
     struct PublicExports {
         #[serde(rename = "crate")]
@@ -534,10 +560,6 @@ fn libm_0_2_16_coverage_leaves_only_out_parameters_and_semantic_functions() {
     assert_eq!(
         missing,
         BTreeSet::from([
-            "modf",
-            "modff",
-            "remquo",
-            "remquof",
             "lgamma_r",
             "lgammaf_r",
             "fmaximum",

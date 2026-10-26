@@ -245,6 +245,18 @@ lowering = "handwritten:emit_frexp"
 libdevice = "__nv_frexp{suffix}"
 
 [[libdevice_math.function]]
+name = "modf"
+signature = "(F) -> (F, F)"
+lowering = "handwritten:emit_modf"
+libdevice = "__nv_modf{suffix}"
+
+[[libdevice_math.function]]
+name = "remquo"
+signature = "(F, F) -> (F, i32)"
+lowering = "handwritten:emit_remquo"
+libdevice = "__nv_remquo{suffix}"
+
+[[libdevice_math.function]]
 name = "powi"
 signature = "(F, i32) -> F"
 core = ["powi{width}"]
@@ -257,7 +269,7 @@ core = ["fmuladd{width}"]
 libm = []
 libdevice = "__nv_fma{suffix}"
 
-# Plain libm aliases; Bessel exceptions and out-parameter adapters are separate.
+# Plain libm aliases; Bessel exceptions require separate semantics.
 [[libdevice_math.function]]
 name = "erf"
 signature = "(F) -> F"

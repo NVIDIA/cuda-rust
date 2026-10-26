@@ -254,6 +254,8 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
                     lowering.as_str(),
                     "handwritten:emit_sincos"
                         | "handwritten:emit_frexp"
+                        | "handwritten:emit_modf"
+                        | "handwritten:emit_remquo"
                         | "handwritten:lower_float_minmax_nsz"
                 ),
                 "unsupported handwritten math lowering {lowering:?}"
@@ -296,6 +298,20 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
                     && function.libdevice.is_some(),
                 "frexp requires its float/i32 tuple ABI and libdevice symbol"
             );
+        }
+        for (adapter, signature) in [
+            ("handwritten:emit_modf", Signature::FloatPair),
+            ("handwritten:emit_remquo", Signature::RemainderPair),
+        ] {
+            if function.lowering.as_deref() == Some(adapter) {
+                ensure!(
+                    function.name == adapter.trim_start_matches("handwritten:emit_")
+                        && function.signature == signature
+                        && function.link == Link::Always
+                        && function.libdevice.is_some(),
+                    "{adapter} requires its exact tuple ABI and libdevice symbol"
+                );
+            }
         }
         if function.lowering.as_deref() == Some("handwritten:lower_float_minmax_nsz") {
             ensure!(
@@ -449,6 +465,14 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
                         == (function.lowering.as_deref() == Some("handwritten:emit_frexp")),
                     "frexp identity must use the matching handwritten adapter"
                 );
+                for adapter in ["Modf", "Remquo"] {
+                    let handler = format!("handwritten:emit_{}", adapter.to_ascii_lowercase());
+                    ensure!(
+                        (variant == format!("{adapter}{role}"))
+                            == (function.lowering.as_deref() == Some(handler.as_str())),
+                        "{adapter} identity must use the matching handwritten adapter"
+                    );
+                }
                 ensure!(
                     (variant == format!("MaxNumNsz{role}")
                         || variant == format!("MinNumNsz{role}"))

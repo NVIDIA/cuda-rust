@@ -300,6 +300,42 @@ mod tests {
     }
 
     #[test]
+    fn out_parameter_pairs_resolve_only_libm_entry_points() {
+        use RustFloatMathIntrinsic as I;
+        for (name, variant, placeholder, argc) in [
+            ("modff", I::ModfF32, rust_intrinsics::CALLEE_MODF_F32, 1),
+            ("modf", I::ModfF64, rust_intrinsics::CALLEE_MODF_F64, 1),
+            (
+                "remquof",
+                I::RemquoF32,
+                rust_intrinsics::CALLEE_REMQUO_F32,
+                2,
+            ),
+            (
+                "remquo",
+                I::RemquoF64,
+                rust_intrinsics::CALLEE_REMQUO_F64,
+                2,
+            ),
+        ] {
+            assert_eq!(I::from_core_path(&format!("libm::{name}")), Some(variant));
+            assert_eq!(
+                I::from_core_path(&format!("libm::math::{name}::{name}")),
+                Some(variant)
+            );
+            assert_eq!(variant.placeholder_callee(), placeholder);
+            assert_eq!(variant.arg_count(), argc);
+            assert_eq!(variant.scalar_signature(false), None);
+            assert!(rust_intrinsics::is_libdevice_backed_placeholder(
+                placeholder
+            ));
+            for root in ["user::libm", "libm_lookalike", "core::intrinsics"] {
+                assert_eq!(I::from_core_path(&format!("{root}::{name}")), None);
+            }
+        }
+    }
+
+    #[test]
     fn special_math_paths_resolve_to_typed_placeholders() {
         use RustFloatMathIntrinsic as I;
         for (name, intrinsic, callee) in [
@@ -343,7 +379,7 @@ mod tests {
             Some(I::PowiF32)
         );
         assert_eq!(libm_sincos_is_f64("libm::sincosf"), Some(false));
-        for name in ["modf", "remquo", "lgamma_r", "tgammaf128"] {
+        for name in ["lgamma_r", "tgammaf128"] {
             assert_eq!(I::from_core_path(&format!("libm::{name}")), None);
         }
     }

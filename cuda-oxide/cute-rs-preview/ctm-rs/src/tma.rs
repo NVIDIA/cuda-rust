@@ -55,7 +55,7 @@ pub unsafe fn cp_async_bulk_tensor_shared_cta_global<T, F: PhysicalFormat<Elemen
     completion: SharedAddress<'_, Barrier>,
 ) {
     unsafe {
-        cuda_device::tma::cp_async_bulk_tensor_2d_g2s(
+        cuda_device::tma::cp_async_bulk_tensor_2d_g2s_cta(
             dst.address().as_raw().cast(),
             map.as_descriptor(),
             coords.inner,

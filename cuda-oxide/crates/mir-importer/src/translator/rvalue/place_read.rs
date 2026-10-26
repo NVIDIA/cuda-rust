@@ -80,7 +80,6 @@ pub fn translate_place(
     prev_op: Option<Ptr<Operation>>,
     loc: Location,
 ) -> TranslationResult<(Value, Option<Ptr<Operation>>)> {
-    let place = &*strip_shared_ptr_field_projections(body, place);
     if place.projection.is_empty()
         && let Some(value) = value_map.get_direct_value(place.local)
     {
@@ -112,59 +111,6 @@ pub fn translate_place(
         PlaceReadStrategy::ValueFallback => {
             translate_place_value_fallback(ctx, body, place, value_map, block_ptr, prev_op, loc)
         }
-    }
-}
-
-/// Drop the projections of a place onto the field of a `cuda_device::SharedPtr`.
-///
-/// `SharedPtr<T> { ptr: *mut SharedSlot<T> }` is a scalar-lowered newtype: its
-/// value is its one field, a CTA-shared pointer (see `types::translate_type`).
-/// Projecting that field is therefore the identity. Without this, the place
-/// walkers would read the pointer value of a `SharedPtr` nested in another
-/// place, such as `(region.base).ptr`, as the address of an aggregate.
-///
-/// `ThreadIndex`, the other scalar-lowered newtype, needs no strip. Its scalar
-/// is an integer, and `dialect-mir` and `mir-lower` already treat
-/// `extract_field` on an integer scalar as the identity. The iterative place
-/// walker in `place_iter.rs` takes any pointer-typed current value as an
-/// address to load from, so only a newtype whose scalar is itself a pointer is
-/// misread. Follow-up: have that walker track whether its current value is an
-/// address or a value, then drop this strip.
-pub(crate) fn strip_shared_ptr_field_projections<'a>(
-    body: &mir::Body,
-    place: &'a mir::Place,
-) -> std::borrow::Cow<'a, mir::Place> {
-    use rustc_public::ty::{RigidTy, TyKind};
-
-    if !place
-        .projection
-        .iter()
-        .any(|elem| matches!(elem, mir::ProjectionElem::Field(0, _)))
-    {
-        return std::borrow::Cow::Borrowed(place);
-    }
-    let mut place_ty = body.locals()[place.local].ty;
-    let mut kept = Vec::with_capacity(place.projection.len());
-    for elem in &place.projection {
-        let is_shared_ptr = matches!(
-            place_ty.kind(),
-            TyKind::RigidTy(RigidTy::Adt(adt_def, _)) if facts::is_cuda_device_adt(&adt_def, "SharedPtr")
-        );
-        let Ok(next_ty) = elem.ty(place_ty) else {
-            return std::borrow::Cow::Borrowed(place);
-        };
-        if !(is_shared_ptr && matches!(elem, mir::ProjectionElem::Field(0, _))) {
-            kept.push(elem.clone());
-        }
-        place_ty = next_ty;
-    }
-    if kept.len() == place.projection.len() {
-        std::borrow::Cow::Borrowed(place)
-    } else {
-        std::borrow::Cow::Owned(mir::Place {
-            local: place.local,
-            projection: kept,
-        })
     }
 }
 

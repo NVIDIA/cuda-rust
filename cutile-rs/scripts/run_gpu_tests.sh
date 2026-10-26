@@ -57,6 +57,7 @@ if [[ -n "$ARCHIVE_DIR" ]]; then
     EXTRACT_DIR="$(mktemp -d)" || exit 1
     trap 'rm -rf "$EXTRACT_DIR"' EXIT
     for workspace in tile host; do
+        mkdir -p "$EXTRACT_DIR/$workspace" || exit 1
         workspace_root="$REPO_ROOT"
         if [[ "$workspace" == host ]]; then
             workspace_root="$GIT_ROOT"

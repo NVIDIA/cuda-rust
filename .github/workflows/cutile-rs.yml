@@ -223,7 +223,7 @@ jobs:
           path: ${{ runner.temp }}/cutile-gpu-tests.tar
           if-no-files-found: error
           compression-level: 0 # The nested nextest archives are already compressed.
-          retention-days: 7
+          retention-days: 1
 
   gpu-tests:
     needs: build

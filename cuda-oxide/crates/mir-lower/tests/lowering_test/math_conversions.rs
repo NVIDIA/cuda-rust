@@ -536,6 +536,192 @@ fn test_special_math_lowering_rejects_bad_arity_and_types() {
 }
 
 #[test]
+fn test_plain_libm_aliases_lower_with_typed_abi_on_both_backends() -> Result<(), anyhow::Error> {
+    use dialect_mir::rust_intrinsics as ri;
+    use pliron::builtin::attributes::StringAttr;
+    use pliron::builtin::types::{FP32Type, FP64Type};
+    use pliron::r#type::{TypeHandle, Typed};
+
+    // 0 = unary, 1 = binary.
+    let families = [
+        ("erf", 0),
+        ("erfc", 0),
+        ("exp10", 0),
+        ("j0", 0),
+        ("lgamma", 0),
+        ("y0", 0),
+        ("y1", 0),
+        ("fdim", 1),
+        ("fmod", 1),
+        ("nextafter", 1),
+        ("remainder", 1),
+    ];
+    for backend in [
+        mir_lower::IntrinsicBackend::LlvmNvptx,
+        mir_lower::IntrinsicBackend::LibNvvm,
+    ] {
+        let mut ctx = make_test_ctx();
+        let f32_ty: TypeHandle = FP32Type::get(&ctx).into();
+        let f64_ty: TypeHandle = FP64Type::get(&ctx).into();
+        let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![f32_ty, f64_ty]);
+        let float_values = [
+            entry.deref(&ctx).get_argument(0),
+            entry.deref(&ctx).get_argument(1),
+        ];
+        for (wide, float_ty) in [(false, f32_ty), (true, f64_ty)] {
+            let value = float_values[usize::from(wide)];
+            for (family, signature) in families {
+                let alias = if wide {
+                    family.to_owned()
+                } else {
+                    format!("{family}f")
+                };
+                let intrinsic =
+                    ri::RustFloatMathIntrinsic::from_libm_path(&format!("libm::{alias}"))
+                        .expect("the alias must be registered");
+                let operands = match signature {
+                    0 => vec![value],
+                    1 => vec![value, value],
+                    _ => unreachable!(),
+                };
+                let call = Operation::new(
+                    &mut ctx,
+                    mir::MirCallOp::get_concrete_op_info(),
+                    vec![float_ty],
+                    operands,
+                    vec![],
+                    0,
+                );
+                mir::MirCallOp::new(call).set_attr_callee(
+                    &ctx,
+                    StringAttr::new(intrinsic.placeholder_callee().to_string()),
+                );
+                call.insert_at_back(entry, &ctx);
+            }
+        }
+        append_return(&mut ctx, entry);
+        mir_lower::lower_mir_to_llvm_with_options(
+            &mut ctx,
+            module_ptr,
+            mir_lower::LoweringOptions {
+                intrinsic_backend: backend,
+                ..Default::default()
+            },
+        )
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+        pliron::operation::verify_operation(module_ptr, &ctx)
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+        let calls = lowered_kernel_body(&ctx, module_ptr)
+            .into_iter()
+            .filter_map(|op| Operation::get_op::<llvm::CallOp>(op, &ctx))
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), families.len() * 2);
+        for call in calls {
+            let CallOpCallable::Direct(symbol) = call.callee(&ctx) else {
+                panic!("expected a direct libdevice call");
+            };
+            let name = symbol.to_string();
+            // The width is taken from the call result, since __nv_erf ends in f.
+            let op = call.get_operation().deref(&ctx);
+            let float_ty = op.get_result(0).get_type(&ctx);
+            let wide = float_ty == f64_ty;
+            let suffix = if wide { "" } else { "f" };
+            let family = families
+                .iter()
+                .find(|(family, _)| name == format!("__nv_{family}{suffix}"))
+                .expect("unexpected libdevice symbol");
+            let arguments = match family.1 {
+                0 => vec![float_ty],
+                1 => vec![float_ty, float_ty],
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                op.operands()
+                    .map(|arg| arg.get_type(&ctx))
+                    .collect::<Vec<_>>(),
+                arguments,
+                "{name}"
+            );
+            assert_eq!(op.get_num_results(), 1, "{name}");
+        }
+        let module = Operation::get_op::<ModuleOp>(module_ptr, &ctx).unwrap();
+        let ir = llvm_export::export::export_module_to_string(&ctx, &module)
+            .expect("plain alias module must export to LLVM IR");
+        for declaration in [
+            "declare float @__nv_erff(float)",
+            "declare double @__nv_erf(double)",
+            "declare float @__nv_nextafterf(float, float)",
+            "declare double @__nv_nextafter(double, double)",
+        ] {
+            assert!(ir.contains(declaration), "missing {declaration}:\n{ir}");
+        }
+        assert!(!ir.contains(ri::PLACEHOLDER_PREFIX), "{ir}");
+    }
+    Ok(())
+}
+
+#[test]
+fn test_plain_libm_aliases_reject_invalid_scalar_signatures() {
+    use dialect_mir::rust_intrinsics as ri;
+    use pliron::builtin::attributes::StringAttr;
+    use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
+    use pliron::r#type::TypeHandle;
+
+    for backend in [
+        mir_lower::IntrinsicBackend::LlvmNvptx,
+        mir_lower::IntrinsicBackend::LibNvvm,
+    ] {
+        for case in 0..8 {
+            let mut ctx = make_test_ctx();
+            let f32_ty: TypeHandle = FP32Type::get(&ctx).into();
+            let f64_ty: TypeHandle = FP64Type::get(&ctx).into();
+            let i32_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Signed).into();
+            let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![f32_ty, f64_ty, i32_ty]);
+            let x32 = entry.deref(&ctx).get_argument(0);
+            let x64 = entry.deref(&ctx).get_argument(1);
+            let n32 = entry.deref(&ctx).get_argument(2);
+            let (alias, result, operands, diagnostic) = match case {
+                0 => ("fmodf", f32_ty, vec![x32, n32], "signature mismatch"),
+                1 => ("erf", f64_ty, vec![x32], "signature mismatch"),
+                2 => ("lgammaf", f32_ty, vec![], "requires 1 operand(s)"),
+                3 => ("nextafter", f64_ty, vec![x64], "requires 2 operand(s)"),
+                4 => ("nextafterf", f64_ty, vec![x32, x32], "signature mismatch"),
+                5 => ("y0f", f32_ty, vec![x64], "signature mismatch"),
+                6 => ("fdim", f64_ty, vec![x64, x32], "signature mismatch"),
+                _ => ("j0", f32_ty, vec![x64], "signature mismatch"),
+            };
+            let intrinsic =
+                ri::RustFloatMathIntrinsic::from_libm_path(&format!("libm::{alias}")).unwrap();
+            let call = Operation::new(
+                &mut ctx,
+                mir::MirCallOp::get_concrete_op_info(),
+                vec![result],
+                operands,
+                vec![],
+                0,
+            );
+            mir::MirCallOp::new(call).set_attr_callee(
+                &ctx,
+                StringAttr::new(intrinsic.placeholder_callee().to_string()),
+            );
+            call.insert_at_back(entry, &ctx);
+            append_return(&mut ctx, entry);
+            let error = mir_lower::lower_mir_to_llvm_with_options(
+                &mut ctx,
+                module_ptr,
+                mir_lower::LoweringOptions {
+                    intrinsic_backend: backend,
+                    ..Default::default()
+                },
+            )
+            .expect_err("malformed alias must fail")
+            .to_string();
+            assert!(error.contains(diagnostic), "case {case}: {error}");
+        }
+    }
+}
+
+#[test]
 fn test_fast_float_intrinsics_lower_to_explicit_fast_binops() -> Result<(), anyhow::Error> {
     use dialect_mir::rust_intrinsics;
     use llvm_export::attributes::{FastmathFlags, FastmathFlagsAttr};

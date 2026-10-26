@@ -256,3 +256,48 @@ signature = "(F, F, F) -> F"
 core = ["fmuladd{width}"]
 libm = []
 libdevice = "__nv_fma{suffix}"
+
+# Plain libm aliases; Bessel exceptions and out-parameter adapters are separate.
+[[libdevice_math.function]]
+name = "erf"
+signature = "(F) -> F"
+
+[[libdevice_math.function]]
+name = "erfc"
+signature = "(F) -> F"
+
+[[libdevice_math.function]]
+name = "exp10"
+signature = "(F) -> F"
+
+[[libdevice_math.function]]
+name = "fdim"
+signature = "(F, F) -> F"
+
+[[libdevice_math.function]]
+name = "fmod"
+signature = "(F, F) -> F"
+
+[[libdevice_math.function]]
+name = "j0"
+signature = "(F) -> F"
+
+[[libdevice_math.function]]
+name = "lgamma"
+signature = "(F) -> F"
+
+[[libdevice_math.function]]
+name = "nextafter"
+signature = "(F, F) -> F"
+
+[[libdevice_math.function]]
+name = "remainder"
+signature = "(F, F) -> F"
+
+[[libdevice_math.function]]
+name = "y0"
+signature = "(F) -> F"
+
+[[libdevice_math.function]]
+name = "y1"
+signature = "(F) -> F"

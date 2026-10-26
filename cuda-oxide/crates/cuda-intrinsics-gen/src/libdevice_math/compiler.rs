@@ -52,7 +52,7 @@ pub(super) fn render(rows: &[Mapping]) -> String {
     {
         writeln!(out, "{variant},").unwrap();
     }
-    out.push_str("}\n\n/// Whether a math placeholder needs libdevice under the selected backend.\n#[derive(Clone, Copy, Debug, PartialEq, Eq)]\npub enum MathLink { Always, Libnvvm, Never }\n\nimpl RustFloatMathIntrinsic {\n");
+    out.push_str("}\n\n/// Whether a math placeholder needs libdevice under the selected backend.\n#[derive(Clone, Copy, Debug, PartialEq, Eq)]\npub enum MathLink { Always, Libnvvm, Never }\n\n/// Scalar types in a Rust math placeholder signature.\n#[derive(Clone, Copy, Debug, PartialEq, Eq)]\npub enum MathScalarType { F32, F64, I32 }\n\nimpl RustFloatMathIntrinsic {\n");
 
     out.push_str("/// Recognize exact core, cmath, or libm compiler paths.\npub fn from_core_path(name: &str) -> Option<Self> { match name {\n");
     for (path, variant) in paths {
@@ -101,6 +101,28 @@ pub(super) fn render(rows: &[Mapping]) -> String {
     }
     for (variant, _, _) in FAST {
         writeln!(out, "Self::{variant} => 2,").unwrap();
+    }
+    out.push_str("} }\n\n/// Typed scalar ABI before libdevice lookup; tuples and fast arithmetic use handwritten lowerings.\npub fn scalar_signature(self, is_f64: bool) -> Option<(&'static [MathScalarType], MathScalarType)> { match self {\n");
+    for (variant, widths) in &variants {
+        if widths.len() == 2 {
+            writeln!(
+                out,
+                "Self::{variant} => if is_f64 {{ {} }} else {{ {} }},",
+                scalar_signature(widths["f64"]),
+                scalar_signature(widths["f32"])
+            )
+            .unwrap();
+        } else {
+            writeln!(
+                out,
+                "Self::{variant} => {},",
+                scalar_signature(widths.values().next().unwrap())
+            )
+            .unwrap();
+        }
+    }
+    for (variant, _, _) in FAST {
+        writeln!(out, "Self::{variant} => None,").unwrap();
     }
     out.push_str("} }\n\n/// Classify libdevice linking without accepting unknown placeholder prefixes.\npub fn link_requirement(self) -> MathLink { match self {\n");
     for (variant, widths) in &variants {
@@ -176,4 +198,25 @@ fn symbol(row: &Mapping, llvm: bool) -> Option<&str> {
     } else {
         row.libdevice.as_deref()
     }
+}
+
+fn scalar_signature(row: &Mapping) -> String {
+    let (arguments, result) = row.signature.split_once(" -> ").unwrap();
+    if result.starts_with('(') {
+        return "None".into();
+    }
+    let scalar = |name: &str| match name.trim() {
+        "f32" => "MathScalarType::F32",
+        "f64" => "MathScalarType::F64",
+        "i32" => "MathScalarType::I32",
+        _ => unreachable!("validated math signature"),
+    };
+    let arguments = arguments
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .split(',')
+        .map(scalar)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("Some((&[{arguments}], {}))", scalar(result))
 }

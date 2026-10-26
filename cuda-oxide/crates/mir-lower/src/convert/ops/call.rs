@@ -998,33 +998,32 @@ fn convert_rust_float_math_intrinsic(
     let result_mir_ty = op.deref(ctx).get_result(0).get_type(ctx);
     let result_ty = convert_type(ctx, result_mir_ty).map_err(anyhow_to_pliron)?;
 
-    // These libdevice signatures mix integer and float types. Validate the
-    // complete signature before declaring the callee: deriving it solely from
-    // a malformed placeholder would silently declare the wrong libdevice ABI.
-    let special_float_ty: Option<TypeHandle> = match intrinsic {
-        RustFloatMathIntrinsic::TgammaF32
-        | RustFloatMathIntrinsic::IlogbF32
-        | RustFloatMathIntrinsic::LdexpF32 => Some(FP32Type::get(ctx).into()),
-        RustFloatMathIntrinsic::TgammaF64
-        | RustFloatMathIntrinsic::IlogbF64
-        | RustFloatMathIntrinsic::LdexpF64 => Some(FP64Type::get(ctx).into()),
-        _ => None,
+    // The same shard verifies libdevice ABI evidence and generates this Rust
+    // signature. Preserve integer argument order, especially jn/yn's (i32, F).
+    let is_f64 = if intrinsic == RustFloatMathIntrinsic::Fabs {
+        float_math_is_f64(ctx, result_ty, loc.clone())?
+    } else {
+        false
     };
-    if let Some(float_ty) = special_float_ty {
-        let i32_ty: TypeHandle = IntegerType::get(ctx, 32, Signedness::Signless).into();
-        let expected_result = match intrinsic {
-            RustFloatMathIntrinsic::IlogbF32 | RustFloatMathIntrinsic::IlogbF64 => i32_ty,
-            _ => float_ty,
-        };
-        if result_ty != expected_result
-            || args[0].get_type(ctx) != float_ty
-            || (matches!(
-                intrinsic,
-                RustFloatMathIntrinsic::LdexpF32 | RustFloatMathIntrinsic::LdexpF64
-            ) && args[1].get_type(ctx) != i32_ty)
-        {
-            return pliron::input_err!(loc, "Rust special math intrinsic signature mismatch");
-        }
+    let Some((argument_types, result_type)) = intrinsic.scalar_signature(is_f64) else {
+        return pliron::input_err!(loc, "Rust float math intrinsic requires a scalar signature");
+    };
+    let f32_ty: TypeHandle = FP32Type::get(ctx).into();
+    let f64_ty: TypeHandle = FP64Type::get(ctx).into();
+    let i32_ty: TypeHandle = IntegerType::get(ctx, 32, Signedness::Signless).into();
+    let concrete_type = |ty| match ty {
+        rust_intrinsics::MathScalarType::F32 => f32_ty,
+        rust_intrinsics::MathScalarType::F64 => f64_ty,
+        rust_intrinsics::MathScalarType::I32 => i32_ty,
+    };
+    if result_ty != concrete_type(result_type)
+        || args.len() != argument_types.len()
+        || args
+            .iter()
+            .zip(argument_types)
+            .any(|(arg, expected)| arg.get_type(ctx) != concrete_type(*expected))
+    {
+        return pliron::input_err!(loc, "Rust float math intrinsic signature mismatch");
     }
 
     // The rounding and sign intrinsics have direct LLVM equivalents that the

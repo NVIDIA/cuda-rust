@@ -21,12 +21,12 @@ fn fixture(functions: &str) -> Shard {
 }
 
 #[test]
-fn generated_metadata_covers_the_existing_82_exports_and_core_only_routes() {
+fn generated_metadata_covers_104_exports_and_core_only_routes() {
     let shard = read(&root()).unwrap();
     let rows = mappings(&shard).unwrap();
-    assert_eq!(rows.len(), 86);
-    assert_eq!(rows.iter().filter(|row| row.libm.is_some()).count(), 82);
-    assert_eq!(expected_symbols(&rows).unwrap().len(), 74);
+    assert_eq!(rows.len(), 108);
+    assert_eq!(rows.iter().filter(|row| row.libm.is_some()).count(), 104);
+    assert_eq!(expected_symbols(&rows).unwrap().len(), 96);
     assert_eq!(generated::MAPPINGS.len(), rows.len());
     for (actual, row) in generated::MAPPINGS.iter().zip(&rows) {
         assert_eq!(actual.libm, row.libm.as_deref());
@@ -56,6 +56,9 @@ fn generated_metadata_covers_the_existing_82_exports_and_core_only_routes() {
                 compiled::RustFloatMathIntrinsic::from_placeholder_callee(&callee).unwrap();
             assert_eq!(format!("{intrinsic:?}"), *variant);
             assert_eq!(intrinsic.placeholder_callee(), callee);
+            if let Some((arguments, _)) = intrinsic.scalar_signature(row.width == "f64") {
+                assert_eq!(arguments.len(), intrinsic.arg_count());
+            }
             assert_eq!(
                 intrinsic.libdevice_symbol(row.width == "f64"),
                 row.libdevice.as_deref()
@@ -178,7 +181,7 @@ fn compiler_dispatch_preserves_every_pre_migration_path_symbol_and_link_route() 
 #[test]
 fn unregistered_aliases_and_unknown_placeholders_remain_rejected() {
     for path in [
-        "libm::erf",
+        "libm::unknown_future_math",
         "libm::modf",
         "libm::remquo",
         "libm::sqrtf128",
@@ -498,4 +501,134 @@ fn llvm_evidence_requires_exported_definitions_and_exact_signatures() {
     }
     let typed = ir.replace("ptr nocapture", "i32* nocapture");
     assert_eq!(evidence::signatures(&typed, &expected).unwrap(), expected);
+}
+
+#[test]
+fn libm_0_2_16_coverage_leaves_only_out_parameters_and_semantic_functions() {
+    #[derive(Deserialize)]
+    struct PublicExports {
+        #[serde(rename = "crate")]
+        name: String,
+        version: String,
+        crate_sha256: String,
+        exports: BTreeSet<String>,
+    }
+    // Public f32/f64 exports from the published crate, independently of our shard.
+    let upstream: PublicExports =
+        serde_json::from_str(include_str!("libm-0.2.16-exports.json")).unwrap();
+    assert_eq!(upstream.name, "libm");
+    assert_eq!(upstream.version, "0.2.16");
+    assert_eq!(
+        upstream.crate_sha256,
+        "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
+    );
+    assert_eq!(upstream.exports.len(), 124);
+    let rows = mappings(&read(&root()).unwrap()).unwrap();
+    let mapped: BTreeSet<_> = rows.iter().filter_map(|row| row.libm.clone()).collect();
+    assert!(mapped.is_subset(&upstream.exports));
+    let missing: BTreeSet<_> = upstream
+        .exports
+        .difference(&mapped)
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        missing,
+        BTreeSet::from([
+            "modf",
+            "modff",
+            "remquo",
+            "remquof",
+            "lgamma_r",
+            "lgammaf_r",
+            "fmaximum",
+            "fmaximumf",
+            "fminimum",
+            "fminimumf",
+            "fmaximum_num",
+            "fmaximum_numf",
+            "fminimum_num",
+            "fminimum_numf",
+            "j1",
+            "j1f",
+            "jn",
+            "jnf",
+            "yn",
+            "ynf",
+        ])
+    );
+    for name in upstream.exports {
+        let path = format!("libm::{name}");
+        let recognized = compiled::RustFloatMathIntrinsic::from_libm_path(&path).is_some()
+            || compiled::libm_sincos_is_f64(&path).is_some();
+        assert_eq!(recognized, mapped.contains(&name), "{path}");
+    }
+}
+
+#[test]
+fn new_plain_aliases_preserve_width_and_namespace_controls() {
+    use compiled::MathScalarType::{F32, F64};
+    for (name, arity) in [
+        ("erf", 1),
+        ("erfc", 1),
+        ("exp10", 1),
+        ("fdim", 2),
+        ("fmod", 2),
+        ("j0", 1),
+        ("lgamma", 1),
+        ("nextafter", 2),
+        ("remainder", 2),
+        ("y0", 1),
+        ("y1", 1),
+    ] {
+        for wide in [false, true] {
+            let alias = format!("{name}{}", if wide { "" } else { "f" });
+            let float = if wide { F64 } else { F32 };
+            let intrinsic =
+                compiled::RustFloatMathIntrinsic::from_libm_path(&format!("libm::{alias}"))
+                    .unwrap();
+            let symbol = format!("__nv_{alias}");
+            assert_eq!(intrinsic.libdevice_symbol(wide), Some(symbol.as_str()));
+            assert_eq!(intrinsic.llvm_symbol(wide), None);
+            assert_eq!(intrinsic.arg_count(), arity);
+            let arguments = vec![float; arity];
+            assert_eq!(
+                intrinsic.scalar_signature(wide),
+                Some((arguments.as_slice(), float))
+            );
+            assert!(compiled::is_libdevice_backed_placeholder(
+                intrinsic.placeholder_callee()
+            ));
+            assert!(!compiled::is_backend_dependent_libdevice_placeholder(
+                intrinsic.placeholder_callee()
+            ));
+            assert_eq!(
+                compiled::RustFloatMathIntrinsic::from_core_path(&format!(
+                    "libm::math::module::{alias}"
+                )),
+                Some(intrinsic)
+            );
+            for root in ["user::libm", "libm_lookalike", "libmath"] {
+                assert_eq!(
+                    compiled::RustFloatMathIntrinsic::from_core_path(&format!("{root}::{alias}")),
+                    None
+                );
+            }
+            assert_eq!(
+                compiled::RustFloatMathIntrinsic::from_core_path(&format!("libm::{name}f128")),
+                None
+            );
+            assert!(!compiled::is_intrinsic_lowered_cmath_shim(&format!(
+                "std::sys::cmath::{alias}"
+            )));
+        }
+    }
+    // These names compile in libm, but direct libdevice substitution changes
+    // their behavior for negative orders or signed zero at infinity.
+    for alias in ["j1", "j1f", "jn", "jnf", "yn", "ynf"] {
+        assert_eq!(
+            compiled::RustFloatMathIntrinsic::from_libm_path(&format!("libm::{alias}")),
+            None,
+            "{alias} requires a semantic adapter"
+        );
+    }
 }

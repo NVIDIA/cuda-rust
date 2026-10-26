@@ -54,6 +54,18 @@ pub const CALLEE_COS_F32: &str = placeholder!("cosf32");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_COS_F64: &str = placeholder!("cosf64");
 /// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_ERFC_F32: &str = placeholder!("erfcf32");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_ERFC_F64: &str = placeholder!("erfcf64");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_ERF_F32: &str = placeholder!("erff32");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_ERF_F64: &str = placeholder!("erff64");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_EXP10_F32: &str = placeholder!("exp10f32");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_EXP10_F64: &str = placeholder!("exp10f64");
+/// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_EXP2_F32: &str = placeholder!("exp2f32");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_EXP2_F64: &str = placeholder!("exp2f64");
@@ -68,6 +80,10 @@ pub const CALLEE_EXP_F64: &str = placeholder!("expf64");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_FABS: &str = placeholder!("fabs");
 /// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_FDIM_F32: &str = placeholder!("fdimf32");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_FDIM_F64: &str = placeholder!("fdimf64");
+/// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_FLOOR_F32: &str = placeholder!("floorf32");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_FLOOR_F64: &str = placeholder!("floorf64");
@@ -75,6 +91,10 @@ pub const CALLEE_FLOOR_F64: &str = placeholder!("floorf64");
 pub const CALLEE_FMA_F32: &str = placeholder!("fmaf32");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_FMA_F64: &str = placeholder!("fmaf64");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_FMOD_F32: &str = placeholder!("fmodf32");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_FMOD_F64: &str = placeholder!("fmodf64");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_FMULADD_F32: &str = placeholder!("fmuladdf32");
 /// Internal math placeholder generated from the libdevice shard.
@@ -92,9 +112,17 @@ pub const CALLEE_ILOGB_F32: &str = placeholder!("ilogbf32");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_ILOGB_F64: &str = placeholder!("ilogbf64");
 /// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_J0_F32: &str = placeholder!("j0f32");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_J0_F64: &str = placeholder!("j0f64");
+/// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_LDEXP_F32: &str = placeholder!("ldexpf32");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_LDEXP_F64: &str = placeholder!("ldexpf64");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_LGAMMA_F32: &str = placeholder!("lgammaf32");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_LGAMMA_F64: &str = placeholder!("lgammaf64");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_LOG10_F32: &str = placeholder!("log10f32");
 /// Internal math placeholder generated from the libdevice shard.
@@ -120,6 +148,10 @@ pub const CALLEE_MINNUM_NSZ_F32: &str = placeholder!("minimum_number_nsz_f32");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_MINNUM_NSZ_F64: &str = placeholder!("minimum_number_nsz_f64");
 /// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_NEXTAFTER_F32: &str = placeholder!("nextafterf32");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_NEXTAFTER_F64: &str = placeholder!("nextafterf64");
+/// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_POWF_F32: &str = placeholder!("powf32");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_POWF_F64: &str = placeholder!("powf64");
@@ -127,6 +159,10 @@ pub const CALLEE_POWF_F64: &str = placeholder!("powf64");
 pub const CALLEE_POWI_F32: &str = placeholder!("powif32");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_POWI_F64: &str = placeholder!("powif64");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_REMAINDER_F32: &str = placeholder!("remainderf32");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_REMAINDER_F64: &str = placeholder!("remainderf64");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_ROUNDEVEN_F32: &str = placeholder!("round_ties_even_f32");
 /// Internal math placeholder generated from the libdevice shard.
@@ -163,6 +199,14 @@ pub const CALLEE_TGAMMA_F64: &str = placeholder!("tgammaf64");
 pub const CALLEE_TRUNC_F32: &str = placeholder!("truncf32");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_TRUNC_F64: &str = placeholder!("truncf64");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_Y0_F32: &str = placeholder!("y0f32");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_Y0_F64: &str = placeholder!("y0f64");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_Y1_F32: &str = placeholder!("y1f32");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_Y1_F64: &str = placeholder!("y1f64");
 
 /// Shared math identity. Semantic expansions remain in the importer and lowerer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -191,6 +235,12 @@ pub enum RustFloatMathIntrinsic {
     CosF64,
     CoshF32,
     CoshF64,
+    ErfF32,
+    ErfF64,
+    ErfcF32,
+    ErfcF64,
+    Exp10F32,
+    Exp10F64,
     Exp2F32,
     Exp2F64,
     ExpF32,
@@ -198,10 +248,14 @@ pub enum RustFloatMathIntrinsic {
     Expm1F32,
     Expm1F64,
     Fabs,
+    FdimF32,
+    FdimF64,
     FloorF32,
     FloorF64,
     FmaF32,
     FmaF64,
+    FmodF32,
+    FmodF64,
     FmuladdF32,
     FmuladdF64,
     FrexpF32,
@@ -210,8 +264,12 @@ pub enum RustFloatMathIntrinsic {
     HypotF64,
     IlogbF32,
     IlogbF64,
+    J0F32,
+    J0F64,
     LdexpF32,
     LdexpF64,
+    LgammaF32,
+    LgammaF64,
     Log10F32,
     Log10F64,
     Log1pF32,
@@ -224,10 +282,14 @@ pub enum RustFloatMathIntrinsic {
     MaxNumNszF64,
     MinNumNszF32,
     MinNumNszF64,
+    NextafterF32,
+    NextafterF64,
     PowfF32,
     PowfF64,
     PowiF32,
     PowiF64,
+    RemainderF32,
+    RemainderF64,
     RoundF32,
     RoundF64,
     RoundevenF32,
@@ -246,6 +308,10 @@ pub enum RustFloatMathIntrinsic {
     TgammaF64,
     TruncF32,
     TruncF64,
+    Y0F32,
+    Y0F64,
+    Y1F32,
+    Y1F64,
     FaddFast,
     FsubFast,
     FmulFast,
@@ -259,6 +325,14 @@ pub enum MathLink {
     Always,
     Libnvvm,
     Never,
+}
+
+/// Scalar types in a Rust math placeholder signature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MathScalarType {
+    F32,
+    F64,
+    I32,
 }
 
 impl RustFloatMathIntrinsic {
@@ -428,7 +502,13 @@ impl RustFloatMathIntrinsic {
             "cosf" => Some(Self::CosF32),
             "cosh" => Some(Self::CoshF64),
             "coshf" => Some(Self::CoshF32),
+            "erf" => Some(Self::ErfF64),
+            "erfc" => Some(Self::ErfcF64),
+            "erfcf" => Some(Self::ErfcF32),
+            "erff" => Some(Self::ErfF32),
             "exp" => Some(Self::ExpF64),
+            "exp10" => Some(Self::Exp10F64),
+            "exp10f" => Some(Self::Exp10F32),
             "exp2" => Some(Self::Exp2F64),
             "exp2f" => Some(Self::Exp2F32),
             "expf" => Some(Self::ExpF32),
@@ -436,6 +516,8 @@ impl RustFloatMathIntrinsic {
             "expm1f" => Some(Self::Expm1F32),
             "fabs" => Some(Self::Fabs),
             "fabsf" => Some(Self::Fabs),
+            "fdim" => Some(Self::FdimF64),
+            "fdimf" => Some(Self::FdimF32),
             "floor" => Some(Self::FloorF64),
             "floorf" => Some(Self::FloorF32),
             "fma" => Some(Self::FmaF64),
@@ -444,14 +526,20 @@ impl RustFloatMathIntrinsic {
             "fmaxf" => Some(Self::MaxNumNszF32),
             "fmin" => Some(Self::MinNumNszF64),
             "fminf" => Some(Self::MinNumNszF32),
+            "fmod" => Some(Self::FmodF64),
+            "fmodf" => Some(Self::FmodF32),
             "frexp" => Some(Self::FrexpF64),
             "frexpf" => Some(Self::FrexpF32),
             "hypot" => Some(Self::HypotF64),
             "hypotf" => Some(Self::HypotF32),
             "ilogb" => Some(Self::IlogbF64),
             "ilogbf" => Some(Self::IlogbF32),
+            "j0" => Some(Self::J0F64),
+            "j0f" => Some(Self::J0F32),
             "ldexp" => Some(Self::LdexpF64),
             "ldexpf" => Some(Self::LdexpF32),
+            "lgamma" => Some(Self::LgammaF64),
+            "lgammaf" => Some(Self::LgammaF32),
             "log" => Some(Self::LogF64),
             "log10" => Some(Self::Log10F64),
             "log10f" => Some(Self::Log10F32),
@@ -460,8 +548,12 @@ impl RustFloatMathIntrinsic {
             "log2" => Some(Self::Log2F64),
             "log2f" => Some(Self::Log2F32),
             "logf" => Some(Self::LogF32),
+            "nextafter" => Some(Self::NextafterF64),
+            "nextafterf" => Some(Self::NextafterF32),
             "pow" => Some(Self::PowfF64),
             "powf" => Some(Self::PowfF32),
+            "remainder" => Some(Self::RemainderF64),
+            "remainderf" => Some(Self::RemainderF32),
             "rint" => Some(Self::RoundevenF64),
             "rintf" => Some(Self::RoundevenF32),
             "round" => Some(Self::RoundF64),
@@ -484,6 +576,10 @@ impl RustFloatMathIntrinsic {
             "tgammaf" => Some(Self::TgammaF32),
             "trunc" => Some(Self::TruncF64),
             "truncf" => Some(Self::TruncF32),
+            "y0" => Some(Self::Y0F64),
+            "y0f" => Some(Self::Y0F32),
+            "y1" => Some(Self::Y1F64),
+            "y1f" => Some(Self::Y1F32),
             _ => None,
         }
     }
@@ -515,6 +611,12 @@ impl RustFloatMathIntrinsic {
             Self::CosF64 => CALLEE_COS_F64,
             Self::CoshF32 => CALLEE_COSH_F32,
             Self::CoshF64 => CALLEE_COSH_F64,
+            Self::ErfF32 => CALLEE_ERF_F32,
+            Self::ErfF64 => CALLEE_ERF_F64,
+            Self::ErfcF32 => CALLEE_ERFC_F32,
+            Self::ErfcF64 => CALLEE_ERFC_F64,
+            Self::Exp10F32 => CALLEE_EXP10_F32,
+            Self::Exp10F64 => CALLEE_EXP10_F64,
             Self::Exp2F32 => CALLEE_EXP2_F32,
             Self::Exp2F64 => CALLEE_EXP2_F64,
             Self::ExpF32 => CALLEE_EXP_F32,
@@ -522,10 +624,14 @@ impl RustFloatMathIntrinsic {
             Self::Expm1F32 => CALLEE_EXPM1_F32,
             Self::Expm1F64 => CALLEE_EXPM1_F64,
             Self::Fabs => CALLEE_FABS,
+            Self::FdimF32 => CALLEE_FDIM_F32,
+            Self::FdimF64 => CALLEE_FDIM_F64,
             Self::FloorF32 => CALLEE_FLOOR_F32,
             Self::FloorF64 => CALLEE_FLOOR_F64,
             Self::FmaF32 => CALLEE_FMA_F32,
             Self::FmaF64 => CALLEE_FMA_F64,
+            Self::FmodF32 => CALLEE_FMOD_F32,
+            Self::FmodF64 => CALLEE_FMOD_F64,
             Self::FmuladdF32 => CALLEE_FMULADD_F32,
             Self::FmuladdF64 => CALLEE_FMULADD_F64,
             Self::FrexpF32 => CALLEE_FREXP_F32,
@@ -534,8 +640,12 @@ impl RustFloatMathIntrinsic {
             Self::HypotF64 => CALLEE_HYPOT_F64,
             Self::IlogbF32 => CALLEE_ILOGB_F32,
             Self::IlogbF64 => CALLEE_ILOGB_F64,
+            Self::J0F32 => CALLEE_J0_F32,
+            Self::J0F64 => CALLEE_J0_F64,
             Self::LdexpF32 => CALLEE_LDEXP_F32,
             Self::LdexpF64 => CALLEE_LDEXP_F64,
+            Self::LgammaF32 => CALLEE_LGAMMA_F32,
+            Self::LgammaF64 => CALLEE_LGAMMA_F64,
             Self::Log10F32 => CALLEE_LOG10_F32,
             Self::Log10F64 => CALLEE_LOG10_F64,
             Self::Log1pF32 => CALLEE_LOG1P_F32,
@@ -548,10 +658,14 @@ impl RustFloatMathIntrinsic {
             Self::MaxNumNszF64 => CALLEE_MAXNUM_NSZ_F64,
             Self::MinNumNszF32 => CALLEE_MINNUM_NSZ_F32,
             Self::MinNumNszF64 => CALLEE_MINNUM_NSZ_F64,
+            Self::NextafterF32 => CALLEE_NEXTAFTER_F32,
+            Self::NextafterF64 => CALLEE_NEXTAFTER_F64,
             Self::PowfF32 => CALLEE_POWF_F32,
             Self::PowfF64 => CALLEE_POWF_F64,
             Self::PowiF32 => CALLEE_POWI_F32,
             Self::PowiF64 => CALLEE_POWI_F64,
+            Self::RemainderF32 => CALLEE_REMAINDER_F32,
+            Self::RemainderF64 => CALLEE_REMAINDER_F64,
             Self::RoundF32 => CALLEE_ROUND_F32,
             Self::RoundF64 => CALLEE_ROUND_F64,
             Self::RoundevenF32 => CALLEE_ROUNDEVEN_F32,
@@ -570,6 +684,10 @@ impl RustFloatMathIntrinsic {
             Self::TgammaF64 => CALLEE_TGAMMA_F64,
             Self::TruncF32 => CALLEE_TRUNC_F32,
             Self::TruncF64 => CALLEE_TRUNC_F64,
+            Self::Y0F32 => CALLEE_Y0_F32,
+            Self::Y0F64 => CALLEE_Y0_F64,
+            Self::Y1F32 => CALLEE_Y1_F32,
+            Self::Y1F64 => CALLEE_Y1_F64,
             Self::FaddFast => CALLEE_FADD_FAST,
             Self::FsubFast => CALLEE_FSUB_FAST,
             Self::FmulFast => CALLEE_FMUL_FAST,
@@ -605,6 +723,12 @@ impl RustFloatMathIntrinsic {
             CALLEE_COS_F64 => Some(Self::CosF64),
             CALLEE_COSH_F32 => Some(Self::CoshF32),
             CALLEE_COSH_F64 => Some(Self::CoshF64),
+            CALLEE_ERF_F32 => Some(Self::ErfF32),
+            CALLEE_ERF_F64 => Some(Self::ErfF64),
+            CALLEE_ERFC_F32 => Some(Self::ErfcF32),
+            CALLEE_ERFC_F64 => Some(Self::ErfcF64),
+            CALLEE_EXP10_F32 => Some(Self::Exp10F32),
+            CALLEE_EXP10_F64 => Some(Self::Exp10F64),
             CALLEE_EXP2_F32 => Some(Self::Exp2F32),
             CALLEE_EXP2_F64 => Some(Self::Exp2F64),
             CALLEE_EXP_F32 => Some(Self::ExpF32),
@@ -612,10 +736,14 @@ impl RustFloatMathIntrinsic {
             CALLEE_EXPM1_F32 => Some(Self::Expm1F32),
             CALLEE_EXPM1_F64 => Some(Self::Expm1F64),
             CALLEE_FABS => Some(Self::Fabs),
+            CALLEE_FDIM_F32 => Some(Self::FdimF32),
+            CALLEE_FDIM_F64 => Some(Self::FdimF64),
             CALLEE_FLOOR_F32 => Some(Self::FloorF32),
             CALLEE_FLOOR_F64 => Some(Self::FloorF64),
             CALLEE_FMA_F32 => Some(Self::FmaF32),
             CALLEE_FMA_F64 => Some(Self::FmaF64),
+            CALLEE_FMOD_F32 => Some(Self::FmodF32),
+            CALLEE_FMOD_F64 => Some(Self::FmodF64),
             CALLEE_FMULADD_F32 => Some(Self::FmuladdF32),
             CALLEE_FMULADD_F64 => Some(Self::FmuladdF64),
             CALLEE_FREXP_F32 => Some(Self::FrexpF32),
@@ -624,8 +752,12 @@ impl RustFloatMathIntrinsic {
             CALLEE_HYPOT_F64 => Some(Self::HypotF64),
             CALLEE_ILOGB_F32 => Some(Self::IlogbF32),
             CALLEE_ILOGB_F64 => Some(Self::IlogbF64),
+            CALLEE_J0_F32 => Some(Self::J0F32),
+            CALLEE_J0_F64 => Some(Self::J0F64),
             CALLEE_LDEXP_F32 => Some(Self::LdexpF32),
             CALLEE_LDEXP_F64 => Some(Self::LdexpF64),
+            CALLEE_LGAMMA_F32 => Some(Self::LgammaF32),
+            CALLEE_LGAMMA_F64 => Some(Self::LgammaF64),
             CALLEE_LOG10_F32 => Some(Self::Log10F32),
             CALLEE_LOG10_F64 => Some(Self::Log10F64),
             CALLEE_LOG1P_F32 => Some(Self::Log1pF32),
@@ -638,10 +770,14 @@ impl RustFloatMathIntrinsic {
             CALLEE_MAXNUM_NSZ_F64 => Some(Self::MaxNumNszF64),
             CALLEE_MINNUM_NSZ_F32 => Some(Self::MinNumNszF32),
             CALLEE_MINNUM_NSZ_F64 => Some(Self::MinNumNszF64),
+            CALLEE_NEXTAFTER_F32 => Some(Self::NextafterF32),
+            CALLEE_NEXTAFTER_F64 => Some(Self::NextafterF64),
             CALLEE_POWF_F32 => Some(Self::PowfF32),
             CALLEE_POWF_F64 => Some(Self::PowfF64),
             CALLEE_POWI_F32 => Some(Self::PowiF32),
             CALLEE_POWI_F64 => Some(Self::PowiF64),
+            CALLEE_REMAINDER_F32 => Some(Self::RemainderF32),
+            CALLEE_REMAINDER_F64 => Some(Self::RemainderF64),
             CALLEE_ROUND_F32 => Some(Self::RoundF32),
             CALLEE_ROUND_F64 => Some(Self::RoundF64),
             CALLEE_ROUNDEVEN_F32 => Some(Self::RoundevenF32),
@@ -660,6 +796,10 @@ impl RustFloatMathIntrinsic {
             CALLEE_TGAMMA_F64 => Some(Self::TgammaF64),
             CALLEE_TRUNC_F32 => Some(Self::TruncF32),
             CALLEE_TRUNC_F64 => Some(Self::TruncF64),
+            CALLEE_Y0_F32 => Some(Self::Y0F32),
+            CALLEE_Y0_F64 => Some(Self::Y0F64),
+            CALLEE_Y1_F32 => Some(Self::Y1F32),
+            CALLEE_Y1_F64 => Some(Self::Y1F64),
             CALLEE_FADD_FAST => Some(Self::FaddFast),
             CALLEE_FSUB_FAST => Some(Self::FsubFast),
             CALLEE_FMUL_FAST => Some(Self::FmulFast),
@@ -696,6 +836,12 @@ impl RustFloatMathIntrinsic {
             Self::CosF64 => 1,
             Self::CoshF32 => 1,
             Self::CoshF64 => 1,
+            Self::ErfF32 => 1,
+            Self::ErfF64 => 1,
+            Self::ErfcF32 => 1,
+            Self::ErfcF64 => 1,
+            Self::Exp10F32 => 1,
+            Self::Exp10F64 => 1,
             Self::Exp2F32 => 1,
             Self::Exp2F64 => 1,
             Self::ExpF32 => 1,
@@ -703,10 +849,14 @@ impl RustFloatMathIntrinsic {
             Self::Expm1F32 => 1,
             Self::Expm1F64 => 1,
             Self::Fabs => 1,
+            Self::FdimF32 => 2,
+            Self::FdimF64 => 2,
             Self::FloorF32 => 1,
             Self::FloorF64 => 1,
             Self::FmaF32 => 3,
             Self::FmaF64 => 3,
+            Self::FmodF32 => 2,
+            Self::FmodF64 => 2,
             Self::FmuladdF32 => 3,
             Self::FmuladdF64 => 3,
             Self::FrexpF32 => 1,
@@ -715,8 +865,12 @@ impl RustFloatMathIntrinsic {
             Self::HypotF64 => 2,
             Self::IlogbF32 => 1,
             Self::IlogbF64 => 1,
+            Self::J0F32 => 1,
+            Self::J0F64 => 1,
             Self::LdexpF32 => 2,
             Self::LdexpF64 => 2,
+            Self::LgammaF32 => 1,
+            Self::LgammaF64 => 1,
             Self::Log10F32 => 1,
             Self::Log10F64 => 1,
             Self::Log1pF32 => 1,
@@ -729,10 +883,14 @@ impl RustFloatMathIntrinsic {
             Self::MaxNumNszF64 => 2,
             Self::MinNumNszF32 => 2,
             Self::MinNumNszF64 => 2,
+            Self::NextafterF32 => 2,
+            Self::NextafterF64 => 2,
             Self::PowfF32 => 2,
             Self::PowfF64 => 2,
             Self::PowiF32 => 2,
             Self::PowiF64 => 2,
+            Self::RemainderF32 => 2,
+            Self::RemainderF64 => 2,
             Self::RoundF32 => 1,
             Self::RoundF64 => 1,
             Self::RoundevenF32 => 1,
@@ -751,11 +909,236 @@ impl RustFloatMathIntrinsic {
             Self::TgammaF64 => 1,
             Self::TruncF32 => 1,
             Self::TruncF64 => 1,
+            Self::Y0F32 => 1,
+            Self::Y0F64 => 1,
+            Self::Y1F32 => 1,
+            Self::Y1F64 => 1,
             Self::FaddFast => 2,
             Self::FsubFast => 2,
             Self::FmulFast => 2,
             Self::FdivFast => 2,
             Self::FremFast => 2,
+        }
+    }
+
+    /// Typed scalar ABI before libdevice lookup; tuples and fast arithmetic use handwritten lowerings.
+    pub fn scalar_signature(
+        self,
+        is_f64: bool,
+    ) -> Option<(&'static [MathScalarType], MathScalarType)> {
+        match self {
+            Self::AcosF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::AcosF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::AcoshF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::AcoshF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::AsinF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::AsinF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::AsinhF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::AsinhF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::Atan2F32 => Some((
+                &[MathScalarType::F32, MathScalarType::F32],
+                MathScalarType::F32,
+            )),
+            Self::Atan2F64 => Some((
+                &[MathScalarType::F64, MathScalarType::F64],
+                MathScalarType::F64,
+            )),
+            Self::AtanF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::AtanF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::AtanhF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::AtanhF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::CbrtF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::CbrtF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::CeilF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::CeilF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::CopysignF32 => Some((
+                &[MathScalarType::F32, MathScalarType::F32],
+                MathScalarType::F32,
+            )),
+            Self::CopysignF64 => Some((
+                &[MathScalarType::F64, MathScalarType::F64],
+                MathScalarType::F64,
+            )),
+            Self::CosF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::CosF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::CoshF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::CoshF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::ErfF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::ErfF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::ErfcF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::ErfcF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::Exp10F32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::Exp10F64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::Exp2F32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::Exp2F64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::ExpF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::ExpF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::Expm1F32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::Expm1F64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::Fabs => {
+                if is_f64 {
+                    Some((&[MathScalarType::F64], MathScalarType::F64))
+                } else {
+                    Some((&[MathScalarType::F32], MathScalarType::F32))
+                }
+            }
+            Self::FdimF32 => Some((
+                &[MathScalarType::F32, MathScalarType::F32],
+                MathScalarType::F32,
+            )),
+            Self::FdimF64 => Some((
+                &[MathScalarType::F64, MathScalarType::F64],
+                MathScalarType::F64,
+            )),
+            Self::FloorF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::FloorF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::FmaF32 => Some((
+                &[
+                    MathScalarType::F32,
+                    MathScalarType::F32,
+                    MathScalarType::F32,
+                ],
+                MathScalarType::F32,
+            )),
+            Self::FmaF64 => Some((
+                &[
+                    MathScalarType::F64,
+                    MathScalarType::F64,
+                    MathScalarType::F64,
+                ],
+                MathScalarType::F64,
+            )),
+            Self::FmodF32 => Some((
+                &[MathScalarType::F32, MathScalarType::F32],
+                MathScalarType::F32,
+            )),
+            Self::FmodF64 => Some((
+                &[MathScalarType::F64, MathScalarType::F64],
+                MathScalarType::F64,
+            )),
+            Self::FmuladdF32 => Some((
+                &[
+                    MathScalarType::F32,
+                    MathScalarType::F32,
+                    MathScalarType::F32,
+                ],
+                MathScalarType::F32,
+            )),
+            Self::FmuladdF64 => Some((
+                &[
+                    MathScalarType::F64,
+                    MathScalarType::F64,
+                    MathScalarType::F64,
+                ],
+                MathScalarType::F64,
+            )),
+            Self::FrexpF32 => None,
+            Self::FrexpF64 => None,
+            Self::HypotF32 => Some((
+                &[MathScalarType::F32, MathScalarType::F32],
+                MathScalarType::F32,
+            )),
+            Self::HypotF64 => Some((
+                &[MathScalarType::F64, MathScalarType::F64],
+                MathScalarType::F64,
+            )),
+            Self::IlogbF32 => Some((&[MathScalarType::F32], MathScalarType::I32)),
+            Self::IlogbF64 => Some((&[MathScalarType::F64], MathScalarType::I32)),
+            Self::J0F32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::J0F64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::LdexpF32 => Some((
+                &[MathScalarType::F32, MathScalarType::I32],
+                MathScalarType::F32,
+            )),
+            Self::LdexpF64 => Some((
+                &[MathScalarType::F64, MathScalarType::I32],
+                MathScalarType::F64,
+            )),
+            Self::LgammaF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::LgammaF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::Log10F32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::Log10F64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::Log1pF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::Log1pF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::Log2F32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::Log2F64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::LogF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::LogF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::MaxNumNszF32 => Some((
+                &[MathScalarType::F32, MathScalarType::F32],
+                MathScalarType::F32,
+            )),
+            Self::MaxNumNszF64 => Some((
+                &[MathScalarType::F64, MathScalarType::F64],
+                MathScalarType::F64,
+            )),
+            Self::MinNumNszF32 => Some((
+                &[MathScalarType::F32, MathScalarType::F32],
+                MathScalarType::F32,
+            )),
+            Self::MinNumNszF64 => Some((
+                &[MathScalarType::F64, MathScalarType::F64],
+                MathScalarType::F64,
+            )),
+            Self::NextafterF32 => Some((
+                &[MathScalarType::F32, MathScalarType::F32],
+                MathScalarType::F32,
+            )),
+            Self::NextafterF64 => Some((
+                &[MathScalarType::F64, MathScalarType::F64],
+                MathScalarType::F64,
+            )),
+            Self::PowfF32 => Some((
+                &[MathScalarType::F32, MathScalarType::F32],
+                MathScalarType::F32,
+            )),
+            Self::PowfF64 => Some((
+                &[MathScalarType::F64, MathScalarType::F64],
+                MathScalarType::F64,
+            )),
+            Self::PowiF32 => Some((
+                &[MathScalarType::F32, MathScalarType::I32],
+                MathScalarType::F32,
+            )),
+            Self::PowiF64 => Some((
+                &[MathScalarType::F64, MathScalarType::I32],
+                MathScalarType::F64,
+            )),
+            Self::RemainderF32 => Some((
+                &[MathScalarType::F32, MathScalarType::F32],
+                MathScalarType::F32,
+            )),
+            Self::RemainderF64 => Some((
+                &[MathScalarType::F64, MathScalarType::F64],
+                MathScalarType::F64,
+            )),
+            Self::RoundF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::RoundF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::RoundevenF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::RoundevenF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::SinF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::SinF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::SinhF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::SinhF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::SqrtF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::SqrtF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::TanF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::TanF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::TanhF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::TanhF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::TgammaF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::TgammaF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::TruncF32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::TruncF64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::Y0F32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::Y0F64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::Y1F32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::Y1F64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::FaddFast => None,
+            Self::FsubFast => None,
+            Self::FmulFast => None,
+            Self::FdivFast => None,
+            Self::FremFast => None,
         }
     }
 
@@ -786,6 +1169,12 @@ impl RustFloatMathIntrinsic {
             Self::CosF64 => MathLink::Always,
             Self::CoshF32 => MathLink::Always,
             Self::CoshF64 => MathLink::Always,
+            Self::ErfF32 => MathLink::Always,
+            Self::ErfF64 => MathLink::Always,
+            Self::ErfcF32 => MathLink::Always,
+            Self::ErfcF64 => MathLink::Always,
+            Self::Exp10F32 => MathLink::Always,
+            Self::Exp10F64 => MathLink::Always,
             Self::Exp2F32 => MathLink::Always,
             Self::Exp2F64 => MathLink::Always,
             Self::ExpF32 => MathLink::Always,
@@ -793,10 +1182,14 @@ impl RustFloatMathIntrinsic {
             Self::Expm1F32 => MathLink::Always,
             Self::Expm1F64 => MathLink::Always,
             Self::Fabs => MathLink::Libnvvm,
+            Self::FdimF32 => MathLink::Always,
+            Self::FdimF64 => MathLink::Always,
             Self::FloorF32 => MathLink::Libnvvm,
             Self::FloorF64 => MathLink::Libnvvm,
             Self::FmaF32 => MathLink::Always,
             Self::FmaF64 => MathLink::Always,
+            Self::FmodF32 => MathLink::Always,
+            Self::FmodF64 => MathLink::Always,
             Self::FmuladdF32 => MathLink::Always,
             Self::FmuladdF64 => MathLink::Always,
             Self::FrexpF32 => MathLink::Always,
@@ -805,8 +1198,12 @@ impl RustFloatMathIntrinsic {
             Self::HypotF64 => MathLink::Always,
             Self::IlogbF32 => MathLink::Always,
             Self::IlogbF64 => MathLink::Always,
+            Self::J0F32 => MathLink::Always,
+            Self::J0F64 => MathLink::Always,
             Self::LdexpF32 => MathLink::Always,
             Self::LdexpF64 => MathLink::Always,
+            Self::LgammaF32 => MathLink::Always,
+            Self::LgammaF64 => MathLink::Always,
             Self::Log10F32 => MathLink::Always,
             Self::Log10F64 => MathLink::Always,
             Self::Log1pF32 => MathLink::Always,
@@ -819,10 +1216,14 @@ impl RustFloatMathIntrinsic {
             Self::MaxNumNszF64 => MathLink::Never,
             Self::MinNumNszF32 => MathLink::Never,
             Self::MinNumNszF64 => MathLink::Never,
+            Self::NextafterF32 => MathLink::Always,
+            Self::NextafterF64 => MathLink::Always,
             Self::PowfF32 => MathLink::Always,
             Self::PowfF64 => MathLink::Always,
             Self::PowiF32 => MathLink::Always,
             Self::PowiF64 => MathLink::Always,
+            Self::RemainderF32 => MathLink::Always,
+            Self::RemainderF64 => MathLink::Always,
             Self::RoundF32 => MathLink::Libnvvm,
             Self::RoundF64 => MathLink::Libnvvm,
             Self::RoundevenF32 => MathLink::Libnvvm,
@@ -841,6 +1242,10 @@ impl RustFloatMathIntrinsic {
             Self::TgammaF64 => MathLink::Always,
             Self::TruncF32 => MathLink::Libnvvm,
             Self::TruncF64 => MathLink::Libnvvm,
+            Self::Y0F32 => MathLink::Always,
+            Self::Y0F64 => MathLink::Always,
+            Self::Y1F32 => MathLink::Always,
+            Self::Y1F64 => MathLink::Always,
             Self::FaddFast => MathLink::Never,
             Self::FsubFast => MathLink::Never,
             Self::FmulFast => MathLink::Never,
@@ -876,6 +1281,12 @@ impl RustFloatMathIntrinsic {
             Self::CosF64 => Some("__nv_cos"),
             Self::CoshF32 => Some("__nv_coshf"),
             Self::CoshF64 => Some("__nv_cosh"),
+            Self::ErfF32 => Some("__nv_erff"),
+            Self::ErfF64 => Some("__nv_erf"),
+            Self::ErfcF32 => Some("__nv_erfcf"),
+            Self::ErfcF64 => Some("__nv_erfc"),
+            Self::Exp10F32 => Some("__nv_exp10f"),
+            Self::Exp10F64 => Some("__nv_exp10"),
             Self::Exp2F32 => Some("__nv_exp2f"),
             Self::Exp2F64 => Some("__nv_exp2"),
             Self::ExpF32 => Some("__nv_expf"),
@@ -889,10 +1300,14 @@ impl RustFloatMathIntrinsic {
                     Some("__nv_fabsf")
                 }
             }
+            Self::FdimF32 => Some("__nv_fdimf"),
+            Self::FdimF64 => Some("__nv_fdim"),
             Self::FloorF32 => Some("__nv_floorf"),
             Self::FloorF64 => Some("__nv_floor"),
             Self::FmaF32 => Some("__nv_fmaf"),
             Self::FmaF64 => Some("__nv_fma"),
+            Self::FmodF32 => Some("__nv_fmodf"),
+            Self::FmodF64 => Some("__nv_fmod"),
             Self::FmuladdF32 => Some("__nv_fmaf"),
             Self::FmuladdF64 => Some("__nv_fma"),
             Self::FrexpF32 => Some("__nv_frexpf"),
@@ -901,8 +1316,12 @@ impl RustFloatMathIntrinsic {
             Self::HypotF64 => Some("__nv_hypot"),
             Self::IlogbF32 => Some("__nv_ilogbf"),
             Self::IlogbF64 => Some("__nv_ilogb"),
+            Self::J0F32 => Some("__nv_j0f"),
+            Self::J0F64 => Some("__nv_j0"),
             Self::LdexpF32 => Some("__nv_ldexpf"),
             Self::LdexpF64 => Some("__nv_ldexp"),
+            Self::LgammaF32 => Some("__nv_lgammaf"),
+            Self::LgammaF64 => Some("__nv_lgamma"),
             Self::Log10F32 => Some("__nv_log10f"),
             Self::Log10F64 => Some("__nv_log10"),
             Self::Log1pF32 => Some("__nv_log1pf"),
@@ -915,10 +1334,14 @@ impl RustFloatMathIntrinsic {
             Self::MaxNumNszF64 => None,
             Self::MinNumNszF32 => None,
             Self::MinNumNszF64 => None,
+            Self::NextafterF32 => Some("__nv_nextafterf"),
+            Self::NextafterF64 => Some("__nv_nextafter"),
             Self::PowfF32 => Some("__nv_powf"),
             Self::PowfF64 => Some("__nv_pow"),
             Self::PowiF32 => Some("__nv_powif"),
             Self::PowiF64 => Some("__nv_powi"),
+            Self::RemainderF32 => Some("__nv_remainderf"),
+            Self::RemainderF64 => Some("__nv_remainder"),
             Self::RoundF32 => Some("__nv_roundf"),
             Self::RoundF64 => Some("__nv_round"),
             Self::RoundevenF32 => Some("__nv_rintf"),
@@ -937,6 +1360,10 @@ impl RustFloatMathIntrinsic {
             Self::TgammaF64 => Some("__nv_tgamma"),
             Self::TruncF32 => Some("__nv_truncf"),
             Self::TruncF64 => Some("__nv_trunc"),
+            Self::Y0F32 => Some("__nv_y0f"),
+            Self::Y0F64 => Some("__nv_y0"),
+            Self::Y1F32 => Some("__nv_y1f"),
+            Self::Y1F64 => Some("__nv_y1"),
             Self::FaddFast => None,
             Self::FsubFast => None,
             Self::FmulFast => None,
@@ -972,6 +1399,12 @@ impl RustFloatMathIntrinsic {
             Self::CosF64 => None,
             Self::CoshF32 => None,
             Self::CoshF64 => None,
+            Self::ErfF32 => None,
+            Self::ErfF64 => None,
+            Self::ErfcF32 => None,
+            Self::ErfcF64 => None,
+            Self::Exp10F32 => None,
+            Self::Exp10F64 => None,
             Self::Exp2F32 => None,
             Self::Exp2F64 => None,
             Self::ExpF32 => None,
@@ -985,10 +1418,14 @@ impl RustFloatMathIntrinsic {
                     Some("llvm_fabs_f32")
                 }
             }
+            Self::FdimF32 => None,
+            Self::FdimF64 => None,
             Self::FloorF32 => Some("llvm_floor_f32"),
             Self::FloorF64 => Some("llvm_floor_f64"),
             Self::FmaF32 => None,
             Self::FmaF64 => None,
+            Self::FmodF32 => None,
+            Self::FmodF64 => None,
             Self::FmuladdF32 => None,
             Self::FmuladdF64 => None,
             Self::FrexpF32 => None,
@@ -997,8 +1434,12 @@ impl RustFloatMathIntrinsic {
             Self::HypotF64 => None,
             Self::IlogbF32 => None,
             Self::IlogbF64 => None,
+            Self::J0F32 => None,
+            Self::J0F64 => None,
             Self::LdexpF32 => None,
             Self::LdexpF64 => None,
+            Self::LgammaF32 => None,
+            Self::LgammaF64 => None,
             Self::Log10F32 => None,
             Self::Log10F64 => None,
             Self::Log1pF32 => None,
@@ -1011,10 +1452,14 @@ impl RustFloatMathIntrinsic {
             Self::MaxNumNszF64 => None,
             Self::MinNumNszF32 => None,
             Self::MinNumNszF64 => None,
+            Self::NextafterF32 => None,
+            Self::NextafterF64 => None,
             Self::PowfF32 => None,
             Self::PowfF64 => None,
             Self::PowiF32 => None,
             Self::PowiF64 => None,
+            Self::RemainderF32 => None,
+            Self::RemainderF64 => None,
             Self::RoundF32 => Some("llvm_round_f32"),
             Self::RoundF64 => Some("llvm_round_f64"),
             Self::RoundevenF32 => Some("llvm_roundeven_f32"),
@@ -1033,6 +1478,10 @@ impl RustFloatMathIntrinsic {
             Self::TgammaF64 => None,
             Self::TruncF32 => Some("llvm_trunc_f32"),
             Self::TruncF64 => Some("llvm_trunc_f64"),
+            Self::Y0F32 => None,
+            Self::Y0F64 => None,
+            Self::Y1F32 => None,
+            Self::Y1F64 => None,
             Self::FaddFast => None,
             Self::FsubFast => None,
             Self::FmulFast => None,

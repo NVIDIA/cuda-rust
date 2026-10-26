@@ -4,7 +4,7 @@
 
 # Compiler math mappings
 
-82 mapped f32/f64 libm exports, plus core-only compiler routes.
+104 mapped f32/f64 libm exports, plus core-only compiler routes.
 
 The same shard generates compiler dispatch, placeholder constants, symbol lookup,
 operand counts, cmath interception, and libdevice link requirements. Handwritten
@@ -45,7 +45,13 @@ a handwritten expansion. Aliases are separate exports sharing a mapping.
 | `cosf` | `(f32) -> f32` | `__nv_cosf` |   |   | `always` |
 | `cosh` | `(f64) -> f64` | `__nv_cosh` |   |   | `always` |
 | `coshf` | `(f32) -> f32` | `__nv_coshf` |   |   | `always` |
+| `erf` | `(f64) -> f64` | `__nv_erf` |   |   | `always` |
+| `erfc` | `(f64) -> f64` | `__nv_erfc` |   |   | `always` |
+| `erfcf` | `(f32) -> f32` | `__nv_erfcf` |   |   | `always` |
+| `erff` | `(f32) -> f32` | `__nv_erff` |   |   | `always` |
 | `exp` | `(f64) -> f64` | `__nv_exp` |   |   | `always` |
+| `exp10` | `(f64) -> f64` | `__nv_exp10` |   |   | `always` |
+| `exp10f` | `(f32) -> f32` | `__nv_exp10f` |   |   | `always` |
 | `exp2` | `(f64) -> f64` | `__nv_exp2` |   |   | `always` |
 | `exp2f` | `(f32) -> f32` | `__nv_exp2f` |   |   | `always` |
 | `expf` | `(f32) -> f32` | `__nv_expf` |   |   | `always` |
@@ -53,6 +59,8 @@ a handwritten expansion. Aliases are separate exports sharing a mapping.
 | `expm1f` | `(f32) -> f32` | `__nv_expm1f` |   |   | `always` |
 | `fabs` | `(f64) -> f64` | `__nv_fabs` | `llvm_fabs_f64` |   | `libnvvm` |
 | `fabsf` | `(f32) -> f32` | `__nv_fabsf` | `llvm_fabs_f32` |   | `libnvvm` |
+| `fdim` | `(f64, f64) -> f64` | `__nv_fdim` |   |   | `always` |
+| `fdimf` | `(f32, f32) -> f32` | `__nv_fdimf` |   |   | `always` |
 | `floor` | `(f64) -> f64` | `__nv_floor` | `llvm_floor_f64` |   | `libnvvm` |
 | `floorf` | `(f32) -> f32` | `__nv_floorf` | `llvm_floor_f32` |   | `libnvvm` |
 | `fma` | `(f64, f64, f64) -> f64` | `__nv_fma` |   |   | `always` |
@@ -61,14 +69,20 @@ a handwritten expansion. Aliases are separate exports sharing a mapping.
 | `fmaxf` | `(f32, f32) -> f32` |   |   | `handwritten:lower_float_minmax_nsz` | `never` |
 | `fmin` | `(f64, f64) -> f64` |   |   | `handwritten:lower_float_minmax_nsz` | `never` |
 | `fminf` | `(f32, f32) -> f32` |   |   | `handwritten:lower_float_minmax_nsz` | `never` |
+| `fmod` | `(f64, f64) -> f64` | `__nv_fmod` |   |   | `always` |
+| `fmodf` | `(f32, f32) -> f32` | `__nv_fmodf` |   |   | `always` |
 | `frexp` | `(f64) -> (f64, i32)` | `__nv_frexp` |   | `handwritten:emit_frexp` | `always` |
 | `frexpf` | `(f32) -> (f32, i32)` | `__nv_frexpf` |   | `handwritten:emit_frexp` | `always` |
 | `hypot` | `(f64, f64) -> f64` | `__nv_hypot` |   |   | `always` |
 | `hypotf` | `(f32, f32) -> f32` | `__nv_hypotf` |   |   | `always` |
 | `ilogb` | `(f64) -> i32` | `__nv_ilogb` |   |   | `always` |
 | `ilogbf` | `(f32) -> i32` | `__nv_ilogbf` |   |   | `always` |
+| `j0` | `(f64) -> f64` | `__nv_j0` |   |   | `always` |
+| `j0f` | `(f32) -> f32` | `__nv_j0f` |   |   | `always` |
 | `ldexp` | `(f64, i32) -> f64` | `__nv_ldexp` |   |   | `always` |
 | `ldexpf` | `(f32, i32) -> f32` | `__nv_ldexpf` |   |   | `always` |
+| `lgamma` | `(f64) -> f64` | `__nv_lgamma` |   |   | `always` |
+| `lgammaf` | `(f32) -> f32` | `__nv_lgammaf` |   |   | `always` |
 | `log` | `(f64) -> f64` | `__nv_log` |   |   | `always` |
 | `log10` | `(f64) -> f64` | `__nv_log10` |   |   | `always` |
 | `log10f` | `(f32) -> f32` | `__nv_log10f` |   |   | `always` |
@@ -77,8 +91,12 @@ a handwritten expansion. Aliases are separate exports sharing a mapping.
 | `log2` | `(f64) -> f64` | `__nv_log2` |   |   | `always` |
 | `log2f` | `(f32) -> f32` | `__nv_log2f` |   |   | `always` |
 | `logf` | `(f32) -> f32` | `__nv_logf` |   |   | `always` |
+| `nextafter` | `(f64, f64) -> f64` | `__nv_nextafter` |   |   | `always` |
+| `nextafterf` | `(f32, f32) -> f32` | `__nv_nextafterf` |   |   | `always` |
 | `pow` | `(f64, f64) -> f64` | `__nv_pow` |   |   | `always` |
 | `powf` | `(f32, f32) -> f32` | `__nv_powf` |   |   | `always` |
+| `remainder` | `(f64, f64) -> f64` | `__nv_remainder` |   |   | `always` |
+| `remainderf` | `(f32, f32) -> f32` | `__nv_remainderf` |   |   | `always` |
 | `rint` | `(f64) -> f64` | `__nv_rint` | `llvm_roundeven_f64` |   | `libnvvm` |
 | `rintf` | `(f32) -> f32` | `__nv_rintf` | `llvm_roundeven_f32` |   | `libnvvm` |
 | `round` | `(f64) -> f64` | `__nv_round` | `llvm_round_f64` |   | `libnvvm` |
@@ -103,3 +121,7 @@ a handwritten expansion. Aliases are separate exports sharing a mapping.
 | `tgammaf` | `(f32) -> f32` | `__nv_tgammaf` |   |   | `always` |
 | `trunc` | `(f64) -> f64` | `__nv_trunc` | `llvm_trunc_f64` |   | `libnvvm` |
 | `truncf` | `(f32) -> f32` | `__nv_truncf` | `llvm_trunc_f32` |   | `libnvvm` |
+| `y0` | `(f64) -> f64` | `__nv_y0` |   |   | `always` |
+| `y0f` | `(f32) -> f32` | `__nv_y0f` |   |   | `always` |
+| `y1` | `(f64) -> f64` | `__nv_y1` |   |   | `always` |
+| `y1f` | `(f32) -> f32` | `__nv_y1f` |   |   | `always` |

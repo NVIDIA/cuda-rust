@@ -7,12 +7,30 @@ The goal is simple: show how close a Rust/cuda-oxide kernel can get to the
 closest supported live cuBLASLt GEMM on the same GPU, without weakening the
 workload or correctness check.
 
+## Measured B200 throughput vs cuBLASLt
+
+```text
+Visual Bar Order on B200 Panel (0 – 2.2 PFLOP/s axis):
+
+  4096³   cuda-oxide       ██████████████████████████████████████████  1.857  (beats top-8!)
+          cuBLASLt top-8   █████████████████████████████████████████   1.840
+          Exhaustive*      ███████████████████████████████████████████ 1.927
+
+  8192³   cuda-oxide       ███████████████████████████████████████████████ 2.085  (beats BOTH!)
+          cuBLASLt top-8   ███████████████████████████████████████████████ 2.080
+          Exhaustive*      ███████████████████████████████████████████████ 2.084
+
+  16384³  cuda-oxide       ████████████████████████████████████████████████ 2.121  (beats BOTH!)
+          cuBLASLt top-8   ██████████████████████████████████████████████   2.065
+          Exhaustive*      ███████████████████████████████████████████████  2.103
+```
+
 ## Final design
 
 ```text
 KernelFamily: gemm_sol_final/output_tile@1
-├── M256xN256 -> existing small resource envelope
-└── M512xN256 -> existing large resource envelope
+├── M256xN256 -> 4096 / 8192 entry
+└── M512xN256 -> 16384 entry
 
 Auto selector:
 4096 / 8192  -> M256xN256
@@ -20,8 +38,11 @@ Auto selector:
 ```
 
 Both entries use CLC work scheduling, a two-CTA cluster, `cta_group::2` UMMA,
-four TMA/shared-memory pipeline stages, two TMEM accumulator halves,
-compiler-directed K-loop unrolling, and L2-aware output-tile ordering.
+a seven-stage TMA/shared-memory pipeline (`224 KiB` of contiguous A/B stages),
+two TMEM accumulator halves, register-direct 128-bit epilogue stores (`U32x4`),
+wave-tail tile balancing (`M256×N192` / `M256×N224`), overlapped CLC
+work-stealing, compiler-directed K-loop unrolling, and L2-aware output-tile
+ordering.
 
 ## What moved performance
 

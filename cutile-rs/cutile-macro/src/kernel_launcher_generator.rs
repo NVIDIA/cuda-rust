@@ -590,7 +590,9 @@ pub fn generate_kernel_launcher(
                         Some(format!("vec![{type_name}::DTYPE.as_str().to_string()]")),
                     );
                 }
-                builder_statements.push(parse_stmt(format!("kernel_launch.push_arg({var_name});")));
+                builder_statements.push(parse_stmt(format!(
+                    "// SAFETY: the generated argument order follows this kernel signature.\nunsafe {{ kernel_launch.push_arg({var_name}); }}"
+                )));
                 // For integer scalar params, auto-compute DivHint at launch time.
                 if cutile_compiler::specialization::is_integer_scalar(&type_name) {
                     scalar_hint_exprs.push(format!(
@@ -1053,7 +1055,7 @@ pub fn generate_kernel_launcher(
     ));
 
     let mut launch_only_stmts: Vec<Stmt> = vec![parse_stmt(
-        "let mut kernel_launch = AsyncKernelLaunch::new(function.clone());".to_string(),
+        "// SAFETY: this generated launcher supplies the complete ABI derived from the compiled Tile function.\nlet mut kernel_launch = unsafe { AsyncKernelLaunch::new(function.clone()) };".to_string(),
     )];
     launch_only_stmts.extend(builder_statements);
     launch_only_stmts.extend(
@@ -1838,7 +1840,7 @@ fn get_tensor_code(
             "KernelOutputStored::retain(&{var_name}, ctx)?;"
         )));
         builder_statements.push(parse_stmt(format!(
-            "KernelOutputStored::push_kernel_args(&{var_name}, &mut kernel_launch);"
+            "// SAFETY: the generated Tile binding and this stored output use the same parameter ABI.\nunsafe {{ KernelOutputStored::push_kernel_args(&{var_name}, &mut kernel_launch); }}"
         )));
         launch_grid_expr_strs.push(format!("KernelOutputStored::grid_bound(&{var_name})?"));
         syn::parse2::<ExprBlock>(quote! {{
@@ -1871,7 +1873,7 @@ fn get_tensor_code(
             "KernelInputStored::retain(&{var_name}, ctx)?;"
         )));
         builder_statements.push(parse_stmt(format!(
-            "KernelInputStored::push_kernel_args(&{var_name}, &mut kernel_launch);"
+            "// SAFETY: the generated Tile binding and this stored input use the same parameter ABI.\nunsafe {{ KernelInputStored::push_kernel_args(&{var_name}, &mut kernel_launch); }}"
         )));
 
         syn::parse2::<ExprBlock>(quote! {{

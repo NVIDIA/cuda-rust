@@ -508,6 +508,7 @@ mod kernels {
                         let tmem_row = warp_id * 32 + tmem_row_block * 16;
 
                         let mut col_block = 0u32;
+                        #[unroll(never)]
                         while col_block < 16 {
                             let col_offset = (col_block * 16) as usize;
 
@@ -1179,6 +1180,7 @@ mod kernels {
                                 let scratch_row_base = tmem_row_block as usize * 16;
 
                                 let mut col_block = 0u32;
+                                #[unroll(never)]
                                 while col_block < 8 {
                                     let col_offset = (col_block * 16) as usize;
 

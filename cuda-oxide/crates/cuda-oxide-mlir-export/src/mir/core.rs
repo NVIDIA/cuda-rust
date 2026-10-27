@@ -17,7 +17,7 @@ use crate::{
 use dialect_mir::{
     attributes::{
         InlineIntentAttr, MirCastKindAttr, MirFP16Attr, MirPointerKindAuthorityAttr,
-        ReferenceParamValidityAttr,
+        ReferenceParamValidityAttr, UnrollAttr,
     },
     ops::{
         MirAddOp, MirBitAndOp, MirBitOrOp, MirBitXorOp, MirCastOp, MirCondBranchOp, MirConstantOp,
@@ -54,6 +54,7 @@ pub fn register_mir_core_pack(registry: &mut TranslationRegistry) -> Result<(), 
     // These optional optimization hints use Rust argument indices. Drop them
     // until they can be remapped to the launch arguments after slice flattening.
     registry.register_attribute::<ReferenceParamValidityAttr>(DropAttribute)?;
+    registry.register_attribute::<UnrollAttr>(DropAttribute)?;
 
     registry.register_operation::<MirFuncOp>(FunctionTranslation)?;
     registry.register_operation::<MirReturnOp>(RenameOperation("func.return"))?;

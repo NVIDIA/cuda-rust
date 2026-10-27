@@ -259,6 +259,7 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
                         | "handwritten:emit_lgamma_r"
                         | "handwritten:lower_float_minmax_nsz"
                         | "handwritten:lower_float_ieee_minmax"
+                        | "handwritten:lower_bessel_j1"
                 ),
                 "unsupported handwritten math lowering {lowering:?}"
             );
@@ -348,6 +349,20 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
                     && function.paths.is_empty()
                     && function.cmath.is_none(),
                 "C23 min/max requires its exact binary never-linked libm route"
+            );
+        }
+        if function.lowering.as_deref() == Some("handwritten:lower_bessel_j1") {
+            ensure!(
+                function.name == "j1"
+                    && function.signature == Signature::Unary
+                    && function.link == Link::Always
+                    && function.libdevice.as_deref() == Some("__nv_j1{suffix}")
+                    && function.llvm.is_none()
+                    && function.libm.is_none()
+                    && function.core.is_empty()
+                    && function.paths.is_empty()
+                    && function.cmath.is_none(),
+                "j1 requires its exact unary libdevice ABI with infinity correction"
             );
         }
         for width in &shard.libdevice_math.widths {
@@ -539,6 +554,11 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
                             ]
                             .contains(&variant)),
                     "C23 min/max identity must match its libm operation"
+                );
+                ensure!(
+                    (variant == format!("J1{role}"))
+                        == (function.lowering.as_deref() == Some("handwritten:lower_bessel_j1")),
+                    "j1 identity must use its infinity correction"
                 );
                 if variant == "Fabs" {
                     ensure!(

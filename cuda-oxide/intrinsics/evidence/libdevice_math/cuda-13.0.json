@@ -57,6 +57,8 @@
     "__nv_ilogbf": "i32(float)",
     "__nv_j0": "double(double)",
     "__nv_j0f": "float(float)",
+    "__nv_j1": "double(double)",
+    "__nv_j1f": "float(float)",
     "__nv_ldexp": "double(double, i32)",
     "__nv_ldexpf": "float(float, i32)",
     "__nv_lgamma": "double(double)",

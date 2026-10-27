@@ -454,6 +454,21 @@ mod tests {
             assert!(!rust_intrinsics::is_libdevice_backed_placeholder(callee));
             assert_eq!(I::from_core_path(&format!("user::libm::{name}")), None);
         }
+        for (name, intrinsic, callee, symbol) in [
+            ("j1f", I::J1F32, rust_intrinsics::CALLEE_J1_F32, "__nv_j1f"),
+            ("j1", I::J1F64, rust_intrinsics::CALLEE_J1_F64, "__nv_j1"),
+        ] {
+            assert_eq!(I::from_core_path(&format!("libm::{name}")), Some(intrinsic));
+            assert_eq!(
+                I::from_core_path(&format!("libm::math::{name}::{name}")),
+                Some(intrinsic)
+            );
+            assert_eq!(intrinsic.placeholder_callee(), callee);
+            assert_eq!(intrinsic.libdevice_symbol(false), Some(symbol));
+            assert_eq!(intrinsic.arg_count(), 1);
+            assert!(rust_intrinsics::is_libdevice_backed_placeholder(callee));
+            assert_eq!(I::from_core_path(&format!("user::libm::{name}")), None);
+        }
         assert_eq!(I::from_core_path("libm::tgammaf128"), None);
     }
 

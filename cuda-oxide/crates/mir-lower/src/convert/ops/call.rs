@@ -1076,8 +1076,76 @@ fn convert_rust_float_math_intrinsic(
     let sym_name: pliron::identifier::Identifier = intrinsic_name
         .try_into()
         .map_err(|e| pliron::input_error!(loc.clone(), "Invalid intrinsic name: {:?}", e))?;
+    let j1_input = if matches!(
+        intrinsic,
+        RustFloatMathIntrinsic::J1F32 | RustFloatMathIntrinsic::J1F64
+    ) {
+        Some(args[0])
+    } else {
+        None
+    };
     let llvm_call = llvm::CallOp::new(ctx, CallOpCallable::Direct(sym_name), func_ty, args);
     rewriter.insert_operation(ctx, llvm_call.get_operation());
+    if matches!(
+        intrinsic,
+        RustFloatMathIntrinsic::J1F32 | RustFloatMathIntrinsic::J1F64
+    ) {
+        // CUDA documents j1(-inf) as -0, while libm 0.2.16 returns +0
+        // for either infinity. Match the Rust export without touching NaNs.
+        let width = if intrinsic == RustFloatMathIntrinsic::J1F32 {
+            32
+        } else {
+            64
+        };
+        let int_ty = IntegerType::get(ctx, width, Signedness::Signless);
+        let bits = llvm::BitcastOp::new(ctx, j1_input.expect("j1 has one operand"), int_ty.into());
+        rewriter.insert_operation(ctx, bits.get_operation());
+        let bits = bits.get_operation().deref(ctx).get_result(0);
+        let constant = |ctx: &mut Context, rewriter: &mut DialectConversionRewriter, value| {
+            let attr = IntegerAttr::new(
+                int_ty,
+                APInt::from_u64(value, NonZeroUsize::new(width as usize).unwrap()),
+            );
+            let op = llvm::ConstantOp::new(ctx, Box::new(attr));
+            rewriter.insert_operation(ctx, op.get_operation());
+            op.get_operation().deref(ctx).get_result(0)
+        };
+        let infinity = if width == 32 {
+            0x7f80_0000
+        } else {
+            0x7ff0_0000_0000_0000
+        };
+        let abs_mask = constant(
+            ctx,
+            rewriter,
+            if width == 32 {
+                0x7fff_ffff
+            } else {
+                0x7fff_ffff_ffff_ffff
+            },
+        );
+        let infinity_bits = constant(ctx, rewriter, infinity);
+        let zero_bits = constant(ctx, rewriter, 0);
+        let magnitude = llvm::AndOp::new(ctx, bits, abs_mask);
+        rewriter.insert_operation(ctx, magnitude.get_operation());
+        let magnitude = magnitude.get_operation().deref(ctx).get_result(0);
+        let is_infinite = llvm::ICmpOp::new(
+            ctx,
+            llvm_export::attributes::ICmpPredicateAttr::EQ,
+            magnitude,
+            infinity_bits,
+        );
+        rewriter.insert_operation(ctx, is_infinite.get_operation());
+        let is_infinite = is_infinite.get_operation().deref(ctx).get_result(0);
+        let positive_zero = llvm::BitcastOp::new(ctx, zero_bits, result_ty);
+        rewriter.insert_operation(ctx, positive_zero.get_operation());
+        let positive_zero = positive_zero.get_operation().deref(ctx).get_result(0);
+        let call_result = llvm_call.get_operation().deref(ctx).get_result(0);
+        let adjusted = llvm::SelectOp::new(ctx, is_infinite, positive_zero, call_result);
+        rewriter.insert_operation(ctx, adjusted.get_operation());
+        rewriter.replace_operation(ctx, op, adjusted.get_operation());
+        return Ok(());
+    }
     rewriter.replace_operation(ctx, op, llvm_call.get_operation());
 
     Ok(())

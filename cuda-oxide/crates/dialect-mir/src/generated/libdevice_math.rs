@@ -132,6 +132,10 @@ pub const CALLEE_J0_F32: &str = placeholder!("j0f32");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_J0_F64: &str = placeholder!("j0f64");
 /// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_J1_F32: &str = placeholder!("j1f32");
+/// Internal math placeholder generated from the libdevice shard.
+pub const CALLEE_J1_F64: &str = placeholder!("j1f64");
+/// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_LDEXP_F32: &str = placeholder!("ldexpf32");
 /// Internal math placeholder generated from the libdevice shard.
 pub const CALLEE_LDEXP_F64: &str = placeholder!("ldexpf64");
@@ -294,6 +298,8 @@ pub enum RustFloatMathIntrinsic {
     IlogbF64,
     J0F32,
     J0F64,
+    J1F32,
+    J1F64,
     LdexpF32,
     LdexpF64,
     LgammaF32,
@@ -586,6 +592,8 @@ impl RustFloatMathIntrinsic {
             "ilogbf" => Some(Self::IlogbF32),
             "j0" => Some(Self::J0F64),
             "j0f" => Some(Self::J0F32),
+            "j1" => Some(Self::J1F64),
+            "j1f" => Some(Self::J1F32),
             "ldexp" => Some(Self::LdexpF64),
             "ldexpf" => Some(Self::LdexpF32),
             "lgamma" => Some(Self::LgammaF64),
@@ -698,6 +706,8 @@ impl RustFloatMathIntrinsic {
             Self::IlogbF64 => CALLEE_ILOGB_F64,
             Self::J0F32 => CALLEE_J0_F32,
             Self::J0F64 => CALLEE_J0_F64,
+            Self::J1F32 => CALLEE_J1_F32,
+            Self::J1F64 => CALLEE_J1_F64,
             Self::LdexpF32 => CALLEE_LDEXP_F32,
             Self::LdexpF64 => CALLEE_LDEXP_F64,
             Self::LgammaF32 => CALLEE_LGAMMA_F32,
@@ -824,6 +834,8 @@ impl RustFloatMathIntrinsic {
             CALLEE_ILOGB_F64 => Some(Self::IlogbF64),
             CALLEE_J0_F32 => Some(Self::J0F32),
             CALLEE_J0_F64 => Some(Self::J0F64),
+            CALLEE_J1_F32 => Some(Self::J1F32),
+            CALLEE_J1_F64 => Some(Self::J1F64),
             CALLEE_LDEXP_F32 => Some(Self::LdexpF32),
             CALLEE_LDEXP_F64 => Some(Self::LdexpF64),
             CALLEE_LGAMMA_F32 => Some(Self::LgammaF32),
@@ -951,6 +963,8 @@ impl RustFloatMathIntrinsic {
             Self::IlogbF64 => 1,
             Self::J0F32 => 1,
             Self::J0F64 => 1,
+            Self::J1F32 => 1,
+            Self::J1F64 => 1,
             Self::LdexpF32 => 2,
             Self::LdexpF64 => 2,
             Self::LgammaF32 => 1,
@@ -1144,6 +1158,8 @@ impl RustFloatMathIntrinsic {
             Self::IlogbF64 => Some((&[MathScalarType::F64], MathScalarType::I32)),
             Self::J0F32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
             Self::J0F64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
+            Self::J1F32 => Some((&[MathScalarType::F32], MathScalarType::F32)),
+            Self::J1F64 => Some((&[MathScalarType::F64], MathScalarType::F64)),
             Self::LdexpF32 => Some((
                 &[MathScalarType::F32, MathScalarType::I32],
                 MathScalarType::F32,
@@ -1336,6 +1352,8 @@ impl RustFloatMathIntrinsic {
             Self::IlogbF64 => MathLink::Always,
             Self::J0F32 => MathLink::Always,
             Self::J0F64 => MathLink::Always,
+            Self::J1F32 => MathLink::Always,
+            Self::J1F64 => MathLink::Always,
             Self::LdexpF32 => MathLink::Always,
             Self::LdexpF64 => MathLink::Always,
             Self::LgammaF32 => MathLink::Always,
@@ -1468,6 +1486,8 @@ impl RustFloatMathIntrinsic {
             Self::IlogbF64 => Some("__nv_ilogb"),
             Self::J0F32 => Some("__nv_j0f"),
             Self::J0F64 => Some("__nv_j0"),
+            Self::J1F32 => Some("__nv_j1f"),
+            Self::J1F64 => Some("__nv_j1"),
             Self::LdexpF32 => Some("__nv_ldexpf"),
             Self::LdexpF64 => Some("__nv_ldexp"),
             Self::LgammaF32 => Some("__nv_lgammaf"),
@@ -1600,6 +1620,8 @@ impl RustFloatMathIntrinsic {
             Self::IlogbF64 => None,
             Self::J0F32 => None,
             Self::J0F64 => None,
+            Self::J1F32 => None,
+            Self::J1F64 => None,
             Self::LdexpF32 => None,
             Self::LdexpF64 => None,
             Self::LgammaF32 => None,

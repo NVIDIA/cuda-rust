@@ -323,6 +323,12 @@ name = "j0"
 signature = "(F) -> F"
 
 [[libdevice_math.function]]
+name = "j1"
+signature = "(F) -> F"
+libdevice = "__nv_j1{suffix}"
+lowering = "handwritten:lower_bessel_j1"
+
+[[libdevice_math.function]]
 name = "lgamma"
 signature = "(F) -> F"
 

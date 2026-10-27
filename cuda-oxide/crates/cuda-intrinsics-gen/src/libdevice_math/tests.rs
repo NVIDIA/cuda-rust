@@ -21,12 +21,12 @@ fn fixture(functions: &str) -> Shard {
 }
 
 #[test]
-fn generated_metadata_covers_118_exports_and_core_only_routes() {
+fn generated_metadata_covers_120_exports_and_core_only_routes() {
     let shard = read(&root()).unwrap();
     let rows = mappings(&shard).unwrap();
-    assert_eq!(rows.len(), 122);
-    assert_eq!(rows.iter().filter(|row| row.libm.is_some()).count(), 118);
-    assert_eq!(expected_symbols(&rows).unwrap().len(), 100);
+    assert_eq!(rows.len(), 124);
+    assert_eq!(rows.iter().filter(|row| row.libm.is_some()).count(), 120);
+    assert_eq!(expected_symbols(&rows).unwrap().len(), 102);
     assert_eq!(generated::MAPPINGS.len(), rows.len());
     for (actual, row) in generated::MAPPINGS.iter().zip(&rows) {
         assert_eq!(actual.libm, row.libm.as_deref());
@@ -281,6 +281,20 @@ fn aliases_and_handwritten_controls_keep_their_semantics() {
         );
         assert!(row.libdevice.is_none());
     }
+    for (name, symbol) in [("j1", "__nv_j1"), ("j1f", "__nv_j1f")] {
+        let row = find(name);
+        assert_eq!(row.link, Link::Always);
+        assert_eq!(row.libdevice.as_deref(), Some(symbol));
+        assert_eq!(row.lowering.as_deref(), Some("handwritten:lower_bessel_j1"));
+        assert_eq!(
+            row.signature,
+            if name == "j1" {
+                "(f64) -> f64"
+            } else {
+                "(f32) -> f32"
+            }
+        );
+    }
 }
 
 #[test]
@@ -301,6 +315,11 @@ fn compiler_identities_and_handwritten_handlers_fail_closed() {
         ("variant = \"LgammaR{Width}\"\n", "lgamma_r identity"),
         ("variant = \"MaxNumNsz{Width}\"\n", "min/max identity"),
         ("variant = \"Maximum{Width}\"\n", "C23 min/max identity"),
+        ("variant = \"J1{Width}\"\n", "j1 identity"),
+        (
+            "lowering = \"handwritten:lower_bessel_j1\"\nlibdevice = \"__nv_demo{suffix}\"\n",
+            "j1 requires its exact unary",
+        ),
         (
             "lowering = \"handwritten:lower_float_ieee_minmax\"\nlink = \"never\"\n",
             "C23 min/max requires its exact binary",
@@ -607,10 +626,7 @@ fn libm_0_2_16_coverage_leaves_only_semantic_functions() {
         .difference(&mapped)
         .map(String::as_str)
         .collect();
-    assert_eq!(
-        missing,
-        BTreeSet::from(["j1", "j1f", "jn", "jnf", "yn", "ynf",])
-    );
+    assert_eq!(missing, BTreeSet::from(["jn", "jnf", "yn", "ynf"]));
     for name in upstream.exports {
         let path = format!("libm::{name}");
         let recognized = compiled::RustFloatMathIntrinsic::from_libm_path(&path).is_some()
@@ -679,7 +695,7 @@ fn new_plain_aliases_preserve_width_and_namespace_controls() {
     }
     // These names compile in libm, but direct libdevice substitution changes
     // their behavior for negative orders or signed zero at infinity.
-    for alias in ["j1", "j1f", "jn", "jnf", "yn", "ynf"] {
+    for alias in ["jn", "jnf", "yn", "ynf"] {
         assert_eq!(
             compiled::RustFloatMathIntrinsic::from_libm_path(&format!("libm::{alias}")),
             None,

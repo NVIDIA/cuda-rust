@@ -16,6 +16,124 @@ use pliron::operation::Operation;
 use crate::common::{append_return, build_test_kernel, lowered_kernel_body, make_test_ctx};
 
 #[test]
+fn test_j1_infinity_correction_on_both_backends() -> Result<(), anyhow::Error> {
+    use dialect_mir::rust_intrinsics as ri;
+    use pliron::builtin::attributes::StringAttr;
+    use pliron::builtin::types::{FP32Type, FP64Type};
+    use pliron::r#type::TypeHandle;
+
+    for backend in [
+        mir_lower::IntrinsicBackend::LlvmNvptx,
+        mir_lower::IntrinsicBackend::LibNvvm,
+    ] {
+        for wide in [false, true] {
+            let mut ctx = make_test_ctx();
+            let ty: TypeHandle = if wide {
+                FP64Type::get(&ctx).into()
+            } else {
+                FP32Type::get(&ctx).into()
+            };
+            let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![ty]);
+            let x = entry.deref(&ctx).get_argument(0);
+            let call = Operation::new(
+                &mut ctx,
+                mir::MirCallOp::get_concrete_op_info(),
+                vec![ty],
+                vec![x],
+                vec![],
+                0,
+            );
+            let callee = if wide {
+                ri::CALLEE_J1_F64
+            } else {
+                ri::CALLEE_J1_F32
+            };
+            mir::MirCallOp::new(call).set_attr_callee(&ctx, StringAttr::new(callee.to_string()));
+            call.insert_at_back(entry, &ctx);
+            append_return(&mut ctx, entry);
+            mir_lower::lower_mir_to_llvm_with_options(
+                &mut ctx,
+                module_ptr,
+                mir_lower::LoweringOptions {
+                    intrinsic_backend: backend,
+                    ..Default::default()
+                },
+            )
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+            pliron::operation::verify_operation(module_ptr, &ctx)
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
+            let module = Operation::get_op::<ModuleOp>(module_ptr, &ctx).unwrap();
+            let ir =
+                llvm_export::export::export_module_to_string(&ctx, &module).expect("j1 IR export");
+            let symbol = if wide { "__nv_j1" } else { "__nv_j1f" };
+            assert!(
+                ir.contains(&format!(
+                    "call {} @{symbol}(",
+                    if wide { "double" } else { "float" }
+                )),
+                "{ir}"
+            );
+            assert!(
+                ir.contains("icmp eq") && ir.contains("select i1") && ir.contains("and i"),
+                "{ir}"
+            );
+            assert!(!ir.contains(ri::PLACEHOLDER_PREFIX), "{ir}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn test_j1_rejects_malformed_scalar_signatures() {
+    use dialect_mir::rust_intrinsics as ri;
+    use pliron::builtin::attributes::StringAttr;
+    use pliron::builtin::types::{FP32Type, FP64Type};
+    use pliron::r#type::TypeHandle;
+
+    for wide in [false, true] {
+        for bad in 0..3 {
+            let mut ctx = make_test_ctx();
+            let ty: TypeHandle = if wide {
+                FP64Type::get(&ctx).into()
+            } else {
+                FP32Type::get(&ctx).into()
+            };
+            let other: TypeHandle = if wide {
+                FP32Type::get(&ctx).into()
+            } else {
+                FP64Type::get(&ctx).into()
+            };
+            let (module, entry) = build_test_kernel(&mut ctx, vec![ty, other]);
+            let x = entry.deref(&ctx).get_argument(0);
+            let y = entry.deref(&ctx).get_argument(1);
+            let operands = match bad {
+                0 => vec![],
+                1 => vec![y],
+                _ => vec![x],
+            };
+            let result = if bad == 2 { other } else { ty };
+            let call = Operation::new(
+                &mut ctx,
+                mir::MirCallOp::get_concrete_op_info(),
+                vec![result],
+                operands,
+                vec![],
+                0,
+            );
+            let callee = if wide {
+                ri::CALLEE_J1_F64
+            } else {
+                ri::CALLEE_J1_F32
+            };
+            mir::MirCallOp::new(call).set_attr_callee(&ctx, StringAttr::new(callee.to_string()));
+            call.insert_at_back(entry, &ctx);
+            append_return(&mut ctx, entry);
+            assert!(mir_lower::lower_mir_to_llvm(&mut ctx, module).is_err());
+        }
+    }
+}
+
+#[test]
 fn test_c23_minmax_uses_ieee_order_nan_and_signed_zero_on_both_backends()
 -> Result<(), anyhow::Error> {
     use dialect_mir::rust_intrinsics as ri;

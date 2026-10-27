@@ -2,6 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Resolve typed library markers and finalize one batch per native provider.
+//!
+//! This rustc boundary authenticates definitions, types and signatures, captures
+//! source facts, and orchestrates provider requests after the prepared-MIR proof.
+//! `mir-transforms::library` owns collective and callback analysis, scratch
+//! allocation, helper-context materialization and native ABI lowering.
+//!
+//! Early emission restrictions remain here: deferred helpers have no concrete
+//! kernel root for this import, fixed external symbols cannot acquire per-root
+//! helper names, and legacy scratch paths cannot mix native dynamic shared views.
+//! These checks use source reachability and rustc attributes; rooted collective
+//! participation and planned-storage checks use the dialect-MIR pipeline.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{Read, Write};

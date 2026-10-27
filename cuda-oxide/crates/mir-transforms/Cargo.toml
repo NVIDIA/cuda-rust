@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Optimization passes over the MIR dialect (loop unroll, ...)"
+description = "Required library analysis, lowering and optimization passes over the MIR dialect"
 readme = "README.md"
 
 [dependencies]

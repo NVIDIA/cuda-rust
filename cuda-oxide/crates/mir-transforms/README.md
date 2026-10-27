@@ -1,18 +1,34 @@
 # mir-transforms
 
-Optimization passes over the `dialect-mir` IR.
+Required library analysis and lowering, plus optional optimization passes,
+over the `dialect-mir` IR. These operate on Rust-level structure such as typed
+aggregates, slices and checked arithmetic before lowering to LLVM.
 
-These run in the middle of cuda-oxide's pipeline: after `mem2reg` has promoted
-memory slots to plain SSA values, and before the IR is lowered to the LLVM
-dialect on its way to PTX. Running here means a pass sees Rust-level structure
-— typed aggregates, slices, checked arithmetic — that is gone by the time LLVM
-IR exists.
+Library checks run on the prepared module before native provider execution.
+Normal preparation promotes memory slots to SSA with `mem2reg`; Full variable
+debug retains unpromoted locals, which the same analysis also handles. The
+shared Pliron `AnalysisManager` caches the prepared graph. Provider results
+supply layouts for storage planning, then native ABI lowering runs before
+optional post-mem2reg passes and annotated loop unrolling.
 
-The first pass is loop unrolling, requested by the `#[unroll]` /
+The library implementation is divided by responsibility:
+
+- [`library/admission.rs`](src/library/admission.rs) checks root geometry;
+  [`library/stateful.rs`](src/library/stateful.rs) proves collective
+  participation, uniformity, output ownership and storage reuse.
+- [`library/callback.rs`](src/library/callback.rs) checks callback bodies using
+  retained MIR and original source facts.
+- [`library/storage.rs`](src/library/storage.rs) allocates scratch from the
+  proof and provider layouts; [`library/context_plans.rs`](src/library/context_plans.rs)
+  assembles root and helper plans.
+- [`library.rs`](src/library.rs) and [`library/contexts.rs`](src/library/contexts.rs)
+  lower native operations and materialize helper contexts with those plans.
+
+Loop unrolling is requested by the `#[unroll]` /
 `#[unroll(N)]` annotation, which the importer records as a `mir.unroll_hint`
 operation inside the annotated loop. Further loop passes belong here too.
 
-Two more sources ship with it. `canonicalize.rs` prepares a loop for the
+`canonicalize.rs` prepares a loop for the
 unroller: it merges multiple back-edges (several `continue`s) into one
 synthetic latch and forwards header-carried values out of each loop exit so
 full unrolling can resolve uses past an early `break`.

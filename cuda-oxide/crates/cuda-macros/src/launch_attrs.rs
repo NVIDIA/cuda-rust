@@ -30,24 +30,72 @@ pub(crate) fn launch_bounds_entry(attr: TokenStream, item: TokenStream) -> Token
     let args: LaunchBoundsArgs = parse_macro_input!(attr as LaunchBoundsArgs);
     let mut input = parse_macro_input!(item as ItemFn);
 
-    let max_threads = &args.max_threads.expr;
-    let min_blocks = &args.min_blocks.expr;
-
-    add_const_evaluatable_bound(&mut input.sig.generics, &args.max_threads);
-    add_const_evaluatable_bound(&mut input.sig.generics, &args.min_blocks);
-
-    // Inject the launch bounds config marker at the start of the function body
-    let marker_call: syn::Stmt = syn::parse_quote! {
-        ::cuda_device::thread::__launch_bounds_config::<{ #max_threads }, { #min_blocks }>();
-    };
+    // This attribute has already been removed from `input.attrs`, so any
+    // `launch_bounds` left there is a second one. Checking here as well as in
+    // `#[kernel]` catches it whichever attribute expands first.
+    if let Some(duplicate) = input
+        .attrs
+        .iter()
+        .find(|attr| attr_path_ends_with(attr, "launch_bounds"))
+    {
+        return duplicate_launch_bounds_error(duplicate)
+            .to_compile_error()
+            .into();
+    }
 
     // Prepend the marker to the function body
-    input.block.stmts.insert(0, marker_call);
+    input.block.stmts.insert(0, launch_bounds_marker(&args));
 
     quote! {
         #input
     }
     .into()
+}
+
+/// Returns the only `#[launch_bounds]` attribute in `attrs`, if there is one.
+///
+/// A kernel has one launch-bounds pair. Two attributes would each inject a
+/// marker, and the device importer would report the conflict only much later
+/// (or accept two identical copies), so a second attribute is an error at
+/// that attribute.
+pub(crate) fn single_launch_bounds_attr(
+    attrs: &[syn::Attribute],
+) -> syn::Result<Option<&syn::Attribute>> {
+    let mut matching = attrs
+        .iter()
+        .filter(|attr| attr_path_ends_with(attr, "launch_bounds"));
+    let first = matching.next();
+    if let Some(duplicate) = matching.next() {
+        return Err(duplicate_launch_bounds_error(duplicate));
+    }
+    Ok(first)
+}
+
+/// The error for a second `#[launch_bounds]` attribute on one kernel,
+/// spanned at that attribute. Shared by every place that checks for one, so
+/// they all report the same message.
+fn duplicate_launch_bounds_error(duplicate: &syn::Attribute) -> syn::Error {
+    syn::Error::new_spanned(
+        duplicate,
+        "a kernel may have only one launch_bounds attribute",
+    )
+}
+
+/// The launch-bounds config marker `#[launch_bounds]` injects at the start of
+/// the function body.
+///
+/// The bounds are ordinary arguments computed in inline `const` blocks. rustc
+/// evaluates them, and validates the maximum, for each monomorphized kernel,
+/// so the bounds may be expressions over the kernel's generic parameters.
+pub(crate) fn launch_bounds_marker(args: &LaunchBoundsArgs) -> Stmt {
+    let max_threads = &args.max_threads.expr;
+    let min_blocks = &args.min_blocks.expr;
+    parse_quote! {
+        ::cuda_device::thread::__launch_bounds_config(
+            const { ::cuda_device::thread::__launch_bounds_max_threads(#max_threads) },
+            const { #min_blocks },
+        );
+    }
 }
 
 pub(crate) fn launch_contract_entry(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -352,29 +400,6 @@ pub(crate) fn add_const_evaluatable_bound(generics: &mut syn::Generics, value: &
         [(); (#expr) as usize]:
     };
     generics.make_where_clause().predicates.push(predicate);
-}
-
-pub(crate) fn add_launch_bounds_evaluatability_from_attrs(input: &mut ItemFn) -> syn::Result<()> {
-    let matching: Vec<_> = input
-        .attrs
-        .iter()
-        .filter(|attr| attr_path_ends_with(attr, "launch_bounds"))
-        .collect();
-    if matching.len() > 1 {
-        return Err(syn::Error::new_spanned(
-            matching[1],
-            "a kernel may have only one launch_bounds attribute",
-        ));
-    }
-    let Some(attr) = matching.first() else {
-        return Ok(());
-    };
-    let bounds = attr.parse_args::<LaunchBoundsArgs>()?;
-    let max_threads = bounds.max_threads.clone();
-    let min_blocks = bounds.min_blocks.clone();
-    add_const_evaluatable_bound(&mut input.sig.generics, &max_threads);
-    add_const_evaluatable_bound(&mut input.sig.generics, &min_blocks);
-    Ok(())
 }
 
 /// Arguments for the `#[unroll]` / `#[unroll(N)]` attribute.

@@ -16,7 +16,7 @@ use crate::cuda_module::launchers::has_codegen_generics;
 use crate::kernel::codegen::{
     generate_generic_kernel, generate_generic_kernel_no_instantiation, generate_simple_kernel,
 };
-use crate::launch_attrs::{add_launch_bounds_evaluatability_from_attrs, rewrite_loop_unroll_attrs};
+use crate::launch_attrs::{rewrite_loop_unroll_attrs, single_launch_bounds_attr};
 use proc_macro::TokenStream;
 use syn::{
     FnArg, GenericParam, Ident, ItemFn, Token, Type,
@@ -214,7 +214,7 @@ pub(crate) fn kernel_entry(attr: TokenStream, item: TokenStream) -> TokenStream 
     if let Err(err) = rewrite_loop_unroll_attrs(&mut input) {
         return err.to_compile_error().into();
     }
-    if let Err(err) = add_launch_bounds_evaluatability_from_attrs(&mut input) {
+    if let Err(err) = single_launch_bounds_attr(&input.attrs) {
         return err.to_compile_error().into();
     }
 

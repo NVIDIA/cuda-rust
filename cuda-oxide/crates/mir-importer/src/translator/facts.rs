@@ -616,6 +616,38 @@ pub(crate) fn eval_usize_const(
     })
 }
 
+/// Read a `u32` call argument that rustc evaluated to a constant.
+///
+/// Compiler markers such as `__launch_bounds_config` take their
+/// configuration as arguments computed in inline `const` blocks. The
+/// instance body rustc hands the importer is monomorphized with its
+/// constants evaluated, so each such argument is a constant operand backed
+/// by bytes. Anything else (a local, an unevaluated or type-level constant)
+/// is a hard error naming `what`.
+pub(crate) fn u32_const_operand(operand: &mir::Operand, what: &str) -> Result<u32, String> {
+    use rustc_public::ty::{RigidTy, TyConstKind, TyKind, UintTy};
+
+    let mir::Operand::Constant(constant) = operand else {
+        return Err(format!("{what} is not a constant operand"));
+    };
+    if constant.const_.ty().kind() != TyKind::RigidTy(RigidTy::Uint(UintTy::U32)) {
+        return Err(format!(
+            "{what} has type {}; expected u32",
+            constant.const_.ty()
+        ));
+    }
+    let raw = match constant.const_.kind() {
+        ConstantKind::Allocated(alloc) => alloc.read_uint(),
+        ConstantKind::Ty(ty_const) => match ty_const.kind() {
+            TyConstKind::Value(_, alloc) => alloc.read_uint(),
+            other => return Err(format!("{what} is not an evaluated constant: {other:?}")),
+        },
+        other => return Err(format!("{what} is not an evaluated constant: {other:?}")),
+    }
+    .map_err(|error| format!("could not read {what}: {error:?}"))?;
+    u32::try_from(raw).map_err(|_| format!("{what} value {raw} does not fit in u32"))
+}
+
 /// Read an enum constant's tag and map it to `(variant index, variant name)`.
 ///
 /// Only valid for direct-tagged enums (e.g. `#[repr(u8)]` fieldless enums like
@@ -1166,6 +1198,130 @@ pub fn reference_validity(
             assert_eq!(fact.dereferenceable_bytes, 0);
             assert!(fact.pointee_alignment.is_power_of_two());
         }
+    }
+
+    /// Compiler markers read their configuration from call arguments computed
+    /// in inline `const` blocks. Those arrive as evaluated `u32` constants, also
+    /// when they depend on a generic parameter of a monomorphized instance.
+    /// A runtime value or an argument of another type is rejected, never read.
+    #[test]
+    fn u32_const_operand_reads_only_evaluated_u32_constants() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_u32_const_operand_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let fixture = root.join("fixture.rs");
+        std::fs::write(
+            &fixture,
+            r#"
+pub fn take_u32(_: u32) {}
+pub fn take_u64(_: u64) {}
+pub trait Policy { const FACTOR: u32; }
+pub enum Four {}
+impl Policy for Four { const FACTOR: u32 = 4; }
+pub fn generic<P: Policy>() { take_u32(const { P::FACTOR * 2 }); }
+pub fn calls(runtime: u32) {
+    take_u32(const { 7 });
+    take_u32(const { u32::MAX });
+    take_u64(const { 7 });
+    take_u32(runtime);
+    generic::<Four>();
+}
+"#,
+        )
+        .unwrap();
+
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let sysroot_output = std::process::Command::new(rustc)
+            .args(["--print", "sysroot"])
+            .output()
+            .expect("query rustc sysroot");
+        assert!(sysroot_output.status.success(), "rustc --print sysroot");
+        let sysroot = String::from_utf8(sysroot_output.stdout)
+            .expect("sysroot path is UTF-8")
+            .trim()
+            .to_string();
+        let args = vec![
+            "rustc".to_string(),
+            "--edition=2024".to_string(),
+            "--crate-type=rlib".to_string(),
+            "--crate-name=u32_const_operand_fixture".to_string(),
+            "--emit=metadata".to_string(),
+            "-Zmir-opt-level=0".to_string(),
+            format!("--out-dir={}", root.display()),
+            format!("--sysroot={sysroot}"),
+            fixture.display().to_string(),
+        ];
+
+        let results = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                rustc_public::run!(&args, || {
+                    use rustc_public::mir::mono::Instance;
+                    use rustc_public::ty::{RigidTy, TyKind};
+
+                    // The callee and first argument of each call, in block order.
+                    fn calls(body: &mir::Body) -> Vec<(TyKind, mir::Operand)> {
+                        body.blocks
+                            .iter()
+                            .filter_map(|block| match &block.terminator.kind {
+                                mir::TerminatorKind::Call { func, args, .. } => {
+                                    let mir::Operand::Constant(callee) = func else {
+                                        return None;
+                                    };
+                                    let argument = args
+                                        .first()
+                                        .cloned()
+                                        .unwrap_or(mir::Operand::Constant(callee.clone()));
+                                    Some((callee.const_.ty().kind(), argument))
+                                }
+                                _ => None,
+                            })
+                            .collect()
+                    }
+
+                    let item = rustc_public::all_local_items()
+                        .into_iter()
+                        .find(|item| item.name().ends_with("::calls"))
+                        .expect("fixture function");
+                    let instance = Instance::try_from(item).expect("fixture instance");
+                    let body = instance.body().expect("fixture function body");
+                    let mut results = Vec::new();
+                    for (callee, argument) in calls(&body) {
+                        let TyKind::RigidTy(RigidTy::FnDef(def, generic_args)) = callee else {
+                            panic!("fixture callees are fn items");
+                        };
+                        if def.name().ends_with("::generic") {
+                            let generic = Instance::resolve(def, &generic_args)
+                                .expect("generic::<Four> resolves");
+                            let body = generic.body().expect("generic::<Four> body");
+                            let [(_, argument)] = calls(&body).try_into().unwrap();
+                            results.push(u32_const_operand(&argument, "factor"));
+                        } else {
+                            results.push(u32_const_operand(&argument, "factor"));
+                        }
+                    }
+                    std::ops::ControlFlow::<(), _>::Continue(results)
+                })
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+            .expect("in-process fixture compilation succeeds");
+        std::fs::remove_dir_all(&root).ok();
+
+        let [seven, max, wide, runtime, generic] = results.try_into().unwrap();
+        assert_eq!(seven, Ok(7));
+        assert_eq!(max, Ok(u32::MAX));
+        assert!(wide.unwrap_err().contains("expected u32"));
+        assert_eq!(runtime, Err("factor is not a constant operand".to_string()));
+        assert_eq!(generic, Ok(8));
     }
 
     /// `set_emitted_functions` replaces the previous run's set instead of

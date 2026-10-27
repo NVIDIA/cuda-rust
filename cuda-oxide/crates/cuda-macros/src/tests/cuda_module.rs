@@ -1431,8 +1431,9 @@ fn cuda_module_host_methods_keep_policy_expression_bounds() {
     };
     let expanded = expand_to_compact_string(module);
 
-    assert!(expanded.contains("[();(P::MAX_THREADS)asusize]:"));
-    assert!(expanded.contains("[();(P::MIN_BLOCKS)asusize]:"));
+    // Launch bounds are evaluated in inline const blocks: no where-clause.
+    assert!(!expanded.contains("(P::MAX_THREADS)asusize"));
+    assert!(!expanded.contains("(P::MIN_BLOCKS)asusize"));
     assert!(expanded.contains("[();(P::UNROLL)asusize]:"));
     assert!(expanded.contains("pubfnconfigured<P:Policy>"));
 }
@@ -1458,8 +1459,9 @@ fn nested_cuda_module_host_methods_keep_policy_expression_bounds() {
 
     assert!(expanded.contains("pubmodstage"));
     assert!(expanded.contains("from_parent(parent:&super::LoadedModule"));
-    assert!(expanded.contains("[();(P::MAX_THREADS)asusize]:"));
-    assert!(expanded.contains("[();(P::MIN_BLOCKS)asusize]:"));
+    // Launch bounds are evaluated in inline const blocks: no where-clause.
+    assert!(!expanded.contains("(P::MAX_THREADS)asusize"));
+    assert!(!expanded.contains("(P::MIN_BLOCKS)asusize"));
     assert!(expanded.contains("[();(P::UNROLL)asusize]:"));
     assert!(expanded.contains("pubfnconfigured<P:Policy>"));
 }
@@ -1485,7 +1487,10 @@ fn launch_contract_carries_deferred_launch_bounds_into_host_spec() {
         "{expanded}"
     );
     assert!(expanded.contains("BlockRequirement::MaxThreads(__cuda_oxide_max_threads)"));
-    assert!(expanded.contains("[();(P::MAX_THREADS)asusize]:"));
+    assert!(
+        !expanded.contains("(P::MAX_THREADS)asusize"),
+        "the host contract keeps only the kernel's declared bounds: {expanded}"
+    );
 }
 
 #[test]

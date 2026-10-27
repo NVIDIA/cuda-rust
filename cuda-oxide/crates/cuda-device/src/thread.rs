@@ -1216,8 +1216,11 @@ pub unsafe fn __grid_constant_config<const PARAMETER: usize>() {
 ///
 /// # How It Works
 ///
-/// 1. The `#[launch_bounds]` macro injects `__launch_bounds_config::<MAX, MIN>()` at kernel start
-/// 2. MIR importer detects this call and extracts the const generic parameters
+/// 1. The `#[launch_bounds]` macro injects
+///    `__launch_bounds_config(const { __launch_bounds_max_threads(MAX) }, const { MIN })`
+///    at kernel start
+/// 2. MIR importer detects this call and reads its two constant arguments from
+///    each monomorphized kernel
 /// 3. The marker call is NOT compiled - it's removed during compilation
 /// 4. LLVM export emits `!nvvm.annotations` with `maxntid` and `minctasm` metadata
 /// 5. LLVM NVPTX backend emits `.maxntid` and `.minnctapersm` in PTX
@@ -1230,11 +1233,15 @@ pub unsafe fn __grid_constant_config<const PARAMETER: usize>() {
 ///
 /// # Parameters
 ///
-/// - `MAX_THREADS` - Maximum threads per block (required). Maps to `.maxntid`.
-/// - `MIN_BLOCKS` - Minimum blocks per SM for occupancy (optional, default 0 = unspecified).
+/// - `max_threads` - Maximum threads per block (required). Maps to `.maxntid`.
+/// - `min_blocks` - Minimum blocks per SM for occupancy (optional, default 0 = unspecified).
 ///   Maps to `.minnctapersm`.
 ///
-/// `MAX_THREADS` does not require an exact block size. For example, a maximum
+/// Both arguments must be constants. The macro computes them in inline `const`
+/// blocks, which rustc evaluates for each instance, so an expression such as
+/// `F::MAX_THREADS` in a generic kernel gives each instance its own bounds.
+///
+/// `max_threads` does not require an exact block size. For example, a maximum
 /// of 256 also permits a launch with 128 threads. Use an exact host
 /// `#[launch_contract(block = (...))]` when the kernel requires one shape.
 ///
@@ -1248,18 +1255,25 @@ pub unsafe fn __grid_constant_config<const PARAMETER: usize>() {
 /// Using appropriate launch bounds can significantly improve performance for
 /// register-heavy kernels or kernels with specific occupancy requirements.
 #[inline(never)]
-pub fn __launch_bounds_config<const MAX_THREADS: u32, const MIN_BLOCKS: u32>() {
-    const { validate_launch_bounds(MAX_THREADS) }
+pub fn __launch_bounds_config(max_threads: u32, min_blocks: u32) {
     // This function is detected at compile time and removed.
-    // The const generics are extracted to set launch bounds.
+    // Its constant arguments are extracted to set launch bounds.
     // No runtime code is generated.
+    let _ = (max_threads, min_blocks);
 }
 
-const fn validate_launch_bounds(max_threads: u32) {
+/// Validates a `#[launch_bounds]` maximum and returns it unchanged.
+///
+/// `#[launch_bounds]` evaluates this in the inline `const` block that computes
+/// [`__launch_bounds_config`]'s first argument, so a zero maximum is a
+/// compile-time error for each kernel instance that has one.
+#[doc(hidden)]
+pub const fn __launch_bounds_max_threads(max_threads: u32) -> u32 {
     assert!(
         max_threads > 0,
         "launch_bounds maximum threads must be greater than zero"
     );
+    max_threads
 }
 
 /// Compile-time marker carrying an exact block shape to the device compiler.

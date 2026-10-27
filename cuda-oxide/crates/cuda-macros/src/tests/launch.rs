@@ -4,13 +4,15 @@
  */
 
 use crate::cuda_module::contract::{LaunchContractArgs, validate_requires_relations};
+use crate::kernel::scope::is_kernel_configuration_marker;
 use crate::launch::{
     CudaLaunchAsyncInput, CudaLaunchInput, expand_cuda_launch, expand_cuda_launch_async,
     kernel_sibling_path,
 };
 use crate::launch_attrs::{
-    ClusterArgs, LaunchBoundsArgs, LoopUnrollAttrVisitor, UnrollArgs, add_const_evaluatable_bound,
-    inject_launch_contract_markers, rewrite_loop_unroll_attrs, standalone_requires_params,
+    ClusterArgs, LaunchBoundsArgs, LoopUnrollAttrVisitor, UnrollArgs,
+    inject_launch_contract_markers, launch_bounds_marker, rewrite_loop_unroll_attrs,
+    standalone_requires_params,
 };
 use quote::{format_ident, quote};
 use reserved_oxide_symbols::INSTANTIATE_PREFIX;
@@ -490,28 +492,35 @@ fn launch_bounds_keeps_policy_expressions_typed() {
         fn configured<P: Policy>() {}
     };
     let args: LaunchBoundsArgs = syn::parse_str("P::MAX_THREADS * 2, P::MIN_BLOCKS").unwrap();
-    add_const_evaluatable_bound(&mut function.sig.generics, &args.max_threads);
-    add_const_evaluatable_bound(&mut function.sig.generics, &args.min_blocks);
-
-    let max_threads = &args.max_threads.expr;
-    let min_blocks = &args.min_blocks.expr;
-    let marker: Stmt = parse_quote! {
-        ::cuda_device::thread::__launch_bounds_config::<
-            { #max_threads },
-            { #min_blocks },
-        >();
-    };
+    let marker = launch_bounds_marker(&args);
+    assert!(is_kernel_configuration_marker(&marker));
     function.block.stmts.insert(0, marker);
     let output = quote!(#function).to_string().replace(' ', "");
 
     assert!(
-        output.contains("__launch_bounds_config"),
-        "missing marker: {output}"
+        output.contains(
+            "::cuda_device::thread::__launch_bounds_config(const{\
+             ::cuda_device::thread::__launch_bounds_max_threads(P::MAX_THREADS*2)},\
+             const{P::MIN_BLOCKS},);"
+        ),
+        "{output}"
     );
-    assert!(output.contains("{P::MAX_THREADS*2}"), "{output}");
-    assert!(output.contains("{P::MIN_BLOCKS}"), "{output}");
-    assert!(output.contains("[();(P::MAX_THREADS*2)asusize]:"));
-    assert!(output.contains("[();(P::MIN_BLOCKS)asusize]:"));
+    assert!(
+        !output.contains("where"),
+        "launch bounds keep only the function's declared bounds: {output}"
+    );
+}
+
+#[test]
+fn literal_launch_bounds_default_min_blocks_to_zero() {
+    let args: LaunchBoundsArgs = syn::parse_str("256").unwrap();
+    let marker = launch_bounds_marker(&args);
+    let output = quote!(#marker).to_string().replace(' ', "");
+
+    assert!(
+        output.contains("__launch_bounds_max_threads(256)},const{0u32}"),
+        "{output}"
+    );
 }
 
 #[test]

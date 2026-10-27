@@ -1,9 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#![feature(generic_const_exprs)]
-#![allow(incomplete_features)]
-
 use cuda_core::KernelLaunchContract;
 use cuda_device::{cuda_module, kernel, launch_bounds, launch_contract};
 

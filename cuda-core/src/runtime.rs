@@ -9,7 +9,7 @@
 //! handles with RAII lifetimes and provide `borrow_raw` constructors
 //! for interop with external frameworks (cudarc, etc.).
 
-use std::ffi::{c_int, c_void, CString};
+use std::ffi::{c_int, c_void};
 use std::sync::Arc;
 
 use crate::cudarc_shim::{ctx, device, module, pool, primary_ctx, stream};
@@ -299,11 +299,9 @@ impl Device {
         self: &Arc<Self>,
         ptx_src: &str,
     ) -> Result<Arc<Module>, DriverError> {
+        let c_src = crate::error::c_string(ptx_src)?;
         self.bind_to_thread()?;
-        let cu_module = {
-            let c_src = CString::new(ptx_src).unwrap();
-            unsafe { module::load_data(c_src.as_ptr() as *const _) }
-        }?;
+        let cu_module = unsafe { module::load_data(c_src.as_ptr() as *const _) }?;
         Ok(Arc::new(Module {
             cu_module,
             device: self.clone(),
@@ -316,8 +314,9 @@ impl Device {
         self: &Arc<Self>,
         filename: &str,
     ) -> Result<Arc<Module>, DriverError> {
+        let c_filename = crate::error::c_string(filename)?;
         self.bind_to_thread()?;
-        let cu_module = { module::load(filename) }?;
+        let cu_module = module::load(&c_filename)?;
         Ok(Arc::new(Module {
             cu_module,
             device: self.clone(),

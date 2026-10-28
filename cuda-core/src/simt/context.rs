@@ -410,6 +410,7 @@ impl CudaContext {
         Arc::new(CudaStream {
             cu_stream: std::ptr::null_mut(),
             ctx: self.clone(),
+            owned: true,
         })
     }
 
@@ -480,6 +481,7 @@ impl CudaContext {
         Ok(Arc::new(CudaStream {
             cu_stream,
             ctx: self.clone(),
+            owned: true,
         }))
     }
 

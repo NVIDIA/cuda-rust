@@ -1404,7 +1404,14 @@ pub fn __unroll_config<const FACTOR: u32>() {
     // No runtime code is generated.
 }
 
+/// Internal sentinel factor for `#[unroll(never)]`.
+#[doc(hidden)]
+pub const UNROLL_NEVER: u32 = u32::MAX - 1;
+
 const fn validate_unroll_factor(factor: u32) {
+    if factor == UNROLL_NEVER {
+        return;
+    }
     assert!(
         factor == 0 || (factor >= 2 && factor <= 1024),
         "partial unroll factor must be in 2..=1024, or 0 for full unrolling"

@@ -113,7 +113,6 @@
 //! - **sm_120 (Blackwell)**: Latest TMA capabilities
 
 use crate::barrier::Barrier;
-use crate::shared::SharedPtr;
 
 // =============================================================================
 // TMA Descriptor Type

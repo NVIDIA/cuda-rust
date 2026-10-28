@@ -25,7 +25,6 @@ Run `cuda-oxide/scripts/check-error-example-status.sh` to verify both are in syn
 | `error_host_arch_intrinsic`            | diagnostics-fixture | `core::arch::<host>` intrinsic reached |
 | `error_host_target_feature`            | diagnostics-fixture | `#[target_feature]` fn reached       |
 | `error_kernel_shared_param`            | diagnostics-fixture | AS3/AS5 pointer as kernel parameter  |
-| `error_kernel_shared_ptr_param`        | diagnostics-fixture | AS3 pointer inside a kernel parameter struct |
 | `error_missing_device_attr`            | diagnostics-fixture | `thread::index_*` stub (#76)         |
 | `error_set_discriminant_uninhabited`   | diagnostics-fixture | Invalid enum variant selection       |
 | `error_union_shared_pointer_addr`      | diagnostics-fixture | `&mut`/in-place write to a shared-pointer union field |

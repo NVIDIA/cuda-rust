@@ -230,6 +230,15 @@ when inlined, including across modules. Core operations are attributed to
 the user's call site. Multiple generated instructions can still map to one
 Rust line; this is not a one-to-one mapping, especially with optimization.
 
+Known toolkit limitation: tileiras **13.4.59** (in the CUDA 13.4.1 CI image) and
+**13.4.92** can replace Rust helper locations
+with generated Tile IR locations and omit inline frames, even when the frontend
+bytecode contains the correct source information. This affects source correlation
+and helper backtraces. The same bytecode retains those locations with tileiras
+13.3.36. CI reports this exact backend limitation while continuing to
+check frontend origins and surviving kernel locations; it does not waive checks
+for other releases, including 13.5. See [#1385](https://github.com/NVIDIA/cuda-rust/pull/1385).
+
 Generated const-generic array bindings use the containing function or method's
 signature as their source origin. Generated reduction bodies use the reduction
 call's location, including its inline caller chain.

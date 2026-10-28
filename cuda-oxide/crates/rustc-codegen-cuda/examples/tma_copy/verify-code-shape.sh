@@ -4,8 +4,8 @@
 
 # cp_async_bulk_tensor_2d_g2s_cta must copy into the issuing CTA's shared
 # memory: its kernel emits the `.shared::cta` destination form and, since its
-# `SharedPtr` destination is shared by type, converts no address to the shared
-# or cluster window. The cluster API must keep its
+# `&raw mut TILE as *mut u8` destination stays in `addrspace(3)`, converts no
+# address to the shared or cluster window. The cluster API must keep its
 # `.shared::cluster` form, since its destination may belong to another CTA.
 
 set -euo pipefail

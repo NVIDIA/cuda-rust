@@ -7,7 +7,9 @@
     clippy::not_unsafe_ptr_arg_deref,
     clippy::needless_range_loop,
     clippy::unnecessary_cast,
-    clippy::too_many_arguments
+    clippy::too_many_arguments,
+    clippy::collapsible_if,
+    clippy::manual_div_ceil
 )]
 
 //! Canonical cuda-oxide Blackwell GEMM speed-of-light example.
@@ -26,7 +28,7 @@ use cuda_core::simt::LaunchConfig;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
 use cuda_device::barrier::{
     Barrier, fence_proxy_async_shared_cta, mbarrier_arrive, mbarrier_arrive_cluster,
-    mbarrier_arrive_expect_tx, mbarrier_init, mbarrier_inval, mbarrier_try_wait_parity,
+    mbarrier_arrive_expect_tx, mbarrier_init, mbarrier_try_wait_parity,
 };
 use cuda_device::clc::{
     clc_query_get_first_ctaid_x, clc_query_is_canceled, clc_try_cancel_multicast,
@@ -36,8 +38,8 @@ use cuda_device::convert::{bf16_to_f32, cvt_bf16x2_f32};
 use cuda_device::shared::{SharedArray, cvta_generic_to_shared_offset};
 use cuda_device::tcgen05::{
     Tcgen05AccumulatorType, Tcgen05ElementType, Tcgen05InstructionDescriptor, Tcgen05MmaShape,
-    stmatrix_m8n8_x2, tcgen05_alloc_cg2, tcgen05_commit_multicast_cg2, tcgen05_dealloc_cg2,
-    tcgen05_ld_16x256b_pure, tcgen05_load_wait, tcgen05_mma_f16_cg2,
+    tcgen05_alloc_cg2, tcgen05_commit_multicast_cg2, tcgen05_dealloc_cg2,
+    tcgen05_ld_16x256b_x8_pure, tcgen05_load_wait, tcgen05_mma_f16_cg2,
     tcgen05_relinquish_alloc_permit_cg2,
 };
 use cuda_device::tma::{TmaDescriptor, cp_async_bulk_tensor_2d_g2s_multicast_cg2};
@@ -764,13 +766,12 @@ fn run_correctness_test_clc_multicast_4_stage_pipeline(
 
     let a_tma =
         create_tma_descriptor_f16_swizzled(a_ptr as *mut std::ffi::c_void, k as u64, m as u64)?;
-    // B TMA: 64 rows per CTA (each CTA loads half the N tile, split by rank)
     let b_tma = create_tma_descriptor_f16_swizzled_box(
         b_ptr as *mut std::ffi::c_void,
         k as u64,
         n as u64,
         64,
-        64,
+        if m == 4096 { 32 } else { 128 },
     )?;
 
     let dev_a_tma = DeviceBuffer::from_host(stream, &a_tma.opaque)?;
@@ -778,7 +779,8 @@ fn run_correctness_test_clc_multicast_4_stage_pipeline(
 
     let tiles_m = (m / 256) as u32;
     let tiles_n = (n / 128) as u32;
-    let total_tiles = tiles_m * tiles_n;
+    let wide_total = tiles_m * (tiles_n / 2);
+    let total_tiles = wide_total.div_ceil(74) * 74;
 
     let cfg = LaunchConfig {
         grid_dim: (total_tiles * 2, 1, 1),
@@ -939,7 +941,7 @@ fn run_benchmark_clc_multicast_4_stage_pipeline(
         k as u64,
         n as u64,
         64,
-        64,
+        if m == 4096 { 32 } else { 128 },
     )?;
 
     let dev_a_tma = DeviceBuffer::from_host(stream, &a_tma.opaque)?;
@@ -953,7 +955,8 @@ fn run_benchmark_clc_multicast_4_stage_pipeline(
 
     let tiles_m = (m / 256) as u32;
     let tiles_n = (n / 128) as u32;
-    let total_tiles = tiles_m * tiles_n;
+    let wide_total = tiles_m * (tiles_n / 2);
+    let total_tiles = wide_total.div_ceil(74) * 74;
 
     let cfg = LaunchConfig {
         grid_dim: (total_tiles * 2, 1, 1),
@@ -1078,7 +1081,7 @@ fn create_tma_descriptor_f16_swizzled(
         CUtensorMapDataType_enum_CU_TENSOR_MAP_DATA_TYPE_FLOAT16,
         CUtensorMapFloatOOBfill_enum_CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE,
         CUtensorMapInterleave_enum_CU_TENSOR_MAP_INTERLEAVE_NONE,
-        CUtensorMapL2promotion_enum_CU_TENSOR_MAP_L2_PROMOTION_NONE,
+        CUtensorMapL2promotion_enum_CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
         CUtensorMapSwizzle_enum_CU_TENSOR_MAP_SWIZZLE_128B, cuTensorMapEncodeTiled,
         cudaError_enum_CUDA_SUCCESS,
     };
@@ -1101,7 +1104,7 @@ fn create_tma_descriptor_f16_swizzled(
             element_strides.as_ptr(),
             CUtensorMapInterleave_enum_CU_TENSOR_MAP_INTERLEAVE_NONE,
             CUtensorMapSwizzle_enum_CU_TENSOR_MAP_SWIZZLE_128B,
-            CUtensorMapL2promotion_enum_CU_TENSOR_MAP_L2_PROMOTION_NONE,
+            CUtensorMapL2promotion_enum_CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
             CUtensorMapFloatOOBfill_enum_CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE,
         )
     };
@@ -1124,7 +1127,7 @@ fn create_tma_descriptor_f16_swizzled_box(
         CUtensorMapDataType_enum_CU_TENSOR_MAP_DATA_TYPE_FLOAT16,
         CUtensorMapFloatOOBfill_enum_CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE,
         CUtensorMapInterleave_enum_CU_TENSOR_MAP_INTERLEAVE_NONE,
-        CUtensorMapL2promotion_enum_CU_TENSOR_MAP_L2_PROMOTION_NONE,
+        CUtensorMapL2promotion_enum_CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
         CUtensorMapSwizzle_enum_CU_TENSOR_MAP_SWIZZLE_128B, cuTensorMapEncodeTiled,
         cudaError_enum_CUDA_SUCCESS,
     };
@@ -1147,7 +1150,7 @@ fn create_tma_descriptor_f16_swizzled_box(
             element_strides.as_ptr(),
             CUtensorMapInterleave_enum_CU_TENSOR_MAP_INTERLEAVE_NONE,
             CUtensorMapSwizzle_enum_CU_TENSOR_MAP_SWIZZLE_128B,
-            CUtensorMapL2promotion_enum_CU_TENSOR_MAP_L2_PROMOTION_NONE,
+            CUtensorMapL2promotion_enum_CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
             CUtensorMapFloatOOBfill_enum_CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE,
         )
     };

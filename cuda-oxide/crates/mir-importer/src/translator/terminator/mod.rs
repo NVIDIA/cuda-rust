@@ -1095,7 +1095,7 @@ fn translate_call(
                 )
             );
         };
-        if factor == 1 || factor > 1024 {
+        if factor == 1 || (factor > 1024 && factor != u32::MAX - 1) {
             return input_err!(
                 loc,
                 TranslationErr::invalid_op(format!(

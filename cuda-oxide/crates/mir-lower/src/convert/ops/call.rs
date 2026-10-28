@@ -64,7 +64,7 @@
 use crate::convert::target_stable_storage::coerce_target_stable_value;
 use crate::convert::types::{
     StructLayoutInfo, TransparentScalarAbiInfo, build_struct_slot_map, convert_function_type,
-    convert_type, is_kernel_func, is_zero_sized_type, packed_shared_internal_abi_info,
+    convert_type, is_kernel_func, is_zero_sized_type, shared_return_abi_info,
     transparent_scalar_abi_info,
 };
 use crate::helpers;
@@ -680,9 +680,7 @@ pub fn convert(
             let scalar_ty = abi.scalar_ty;
             transparent_result_abi = Some(abi);
             scalar_ty
-        } else if let Some(abi) =
-            packed_shared_internal_abi_info(ctx, mir_ty).map_err(anyhow_to_pliron)?
-        {
+        } else if let Some(abi) = shared_return_abi_info(ctx, mir_ty).map_err(anyhow_to_pliron)? {
             let storage_ty = abi.storage_ty;
             packed_shared_result_abi = Some(abi);
             storage_ty

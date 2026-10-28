@@ -278,9 +278,13 @@ do
         gpu_test host cuda-async "$test_target"
 done
 
-run_step "shared Tile and SIMT host buffer interop" cargo test -p cutile --test shared_host_buffers -- --test-threads=1
+run_gpu_step \
+    "shared Tile and SIMT host buffer interop" \
+    gpu_test tile cutile shared_host_buffers --serial
 
-run_step "shared async Tile and SIMT graph replay" cargo test -p cutile --test shared_async_runtime -- --test-threads=1
+run_gpu_step \
+    "shared async Tile and SIMT graph replay" \
+    gpu_test tile cutile shared_async_runtime --serial
 
 print_summary_and_exit \
     "All GPU tests passed!" \

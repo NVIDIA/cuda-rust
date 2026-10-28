@@ -373,11 +373,32 @@ impl OperationTranslation for PointerOffsetTranslation {
     ) -> Result<Vec<MlirOperation>, String> {
         input.attributes.remove("mir_ptr_offset_inbounds");
         ensure_empty_attributes("mir.ptr_offset", &input)?;
-        let pointee = pointer_pointee(ctx, source.deref(ctx).get_operand(0).get_type(ctx))?;
+        let ptr_ty = source.deref(ctx).get_operand(0).get_type(ctx);
+        let pointee = pointer_pointee(ctx, ptr_ty)?;
+        let is_shared = ptr_ty
+            .deref(ctx)
+            .downcast_ref::<MirPtrType>()
+            .is_some_and(|ptr| ptr.address_space == dialect_mir::types::address_space::SHARED);
         let target_pointee = session
             .translate_type(pointee)
             .map_err(|error| error.to_string())?;
         let inbounds = MirPtrOffsetOp::new(source).is_inbounds(ctx);
+        let mut operations = Vec::new();
+        if is_shared && input.operands.len() == 2 && input.operands[1].ty == MlirType::Integer(64) {
+            let trunc_id = session.fresh_value();
+            let mut trunc = MlirOperation::new("arith.trunci")?;
+            trunc.operands = vec![input.operands[1].clone()];
+            trunc.results = vec![MlirResult {
+                id: trunc_id,
+                ty: MlirType::Integer(32),
+            }];
+            trunc.location = input.location.clone();
+            operations.push(trunc);
+            input.operands[1] = MlirValueUse {
+                id: trunc_id,
+                ty: MlirType::Integer(32),
+            };
+        }
         let mut target = renamed("llvm.getelementptr", input)?;
         gep_properties(
             &mut target,
@@ -385,7 +406,8 @@ impl OperationTranslation for PointerOffsetTranslation {
             vec![i32::MIN],
             if inbounds { 3 } else { 0 },
         );
-        Ok(vec![target])
+        operations.push(target);
+        Ok(operations)
     }
 }
 
@@ -1979,6 +2001,68 @@ mod tests {
         assert_eq!(
             crate::profile::normalize_mlir_identifiers(&text),
             crate::profile::normalize_mlir_identifiers(expected)
+        );
+    }
+
+    #[test]
+    fn shared_pointer_offset_truncates_i64_index_to_i32() {
+        let mut ctx = Context::new();
+        dialect_mir::register(&mut ctx);
+        let u32_ty = IntegerType::get(&ctx, 32, Signedness::Unsigned);
+        let u64_ty = IntegerType::get(&ctx, 64, Signedness::Unsigned);
+        let shared_ptr: TypeHandle = MirPtrType::get(
+            &mut ctx,
+            u32_ty.into(),
+            true,
+            dialect_mir::types::address_space::SHARED,
+        )
+        .into();
+
+        let module = ModuleOp::new(&mut ctx, Identifier::try_from("memory").unwrap());
+        let function_type =
+            FunctionType::get(&ctx, vec![shared_ptr, u64_ty.into()], vec![u32_ty.into()]);
+        let function_operation = Operation::new(
+            &mut ctx,
+            MirFuncOp::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            1,
+        );
+        let function = MirFuncOp::new(
+            &mut ctx,
+            function_operation,
+            TypeAttr::new(function_type.into()),
+        );
+        function.set_symbol_name(&mut ctx, Identifier::try_from("shared_offset").unwrap());
+        function_operation.deref_mut(&ctx).attributes.set(
+            Identifier::try_from("gpu_kernel").unwrap(),
+            StringAttr::new("true".into()),
+        );
+        module.append_operation(&mut ctx, function_operation, 0);
+        let region = function_operation.deref(&ctx).get_region(0);
+        let entry = BasicBlock::new(&mut ctx, None, vec![shared_ptr, u64_ty.into()]);
+        entry.insert_at_back(region, &ctx);
+        let ptr_arg = entry.deref(&ctx).get_argument(0);
+        let idx_arg = entry.deref(&ctx).get_argument(1);
+        let offset = operation::<super::MirPtrOffsetOp>(
+            &mut ctx,
+            entry,
+            vec![shared_ptr],
+            vec![ptr_arg, idx_arg],
+        );
+        let offset_res = offset.deref(&ctx).get_result(0);
+        let loaded = operation::<MirLoadOp>(&mut ctx, entry, vec![u32_ty.into()], vec![offset_res]);
+        let loaded_res = loaded.deref(&ctx).get_result(0);
+        operation::<MirReturnOp>(&mut ctx, entry, vec![], vec![loaded_res]);
+
+        let profile = CutlassFullCuteMlir22::new("sm_120a").unwrap();
+        let target = profile.translate_module(&ctx, &module).unwrap();
+        let text = render_mapping_module_without_cutlass_envelope(&target, "memory");
+        assert!(
+            text.contains("\"arith.trunci\"")
+                && text.contains(": (!llvm.ptr<3>, i32) -> (!llvm.ptr<3>)"),
+            "shared pointer offset must truncate i64 index to i32 before GEP:\n{text}"
         );
     }
 }

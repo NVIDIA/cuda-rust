@@ -368,7 +368,12 @@ impl CUDATileModules {
                     // Pass through; trusted external (e.g. `half::f16`).
                 }
                 UseClassification::Other => {
-                    check_cutile_registered(&resolved, &registry)?;
+                    check_cutile_registered(
+                        &resolved,
+                        &pending.owning_module,
+                        &kernel_path,
+                        &registry,
+                    )?;
                     // Glob imports (`name = None`) are skipped — we wouldn't
                     // know which name to key on.
                     if appears_in_kernel_module {
@@ -390,16 +395,22 @@ impl CUDATileModules {
 }
 
 /// Fail early when a `use` path into `cutile` can't be resolved because
-/// `cutile::core` is missing from the linker registry.
+/// `cutile::core` is missing from the module registry.
 ///
 /// The `cutile` crate always registers `cutile::core` (see its `lib.rs`), so
-/// a missing entry most likely means the linker dropped registrations. GNU
-/// ld does that on `x86_64-pc-windows-gnu`: its `--gc-sections` removes the
-/// linkme entries nothing references, which can be all of them or all but a
-/// few (dtolnay/linkme#25). Without this check the kernel fails later with an
-/// unrelated "unable to resolve generic type" error.
+/// a missing entry means the crate isn't linked or, more likely, the linker
+/// dropped registrations. GNU ld does that on `x86_64-pc-windows-gnu`: its
+/// `--gc-sections` removes the linkme entries nothing references, which can
+/// be all of them or all but a few (dtolnay/linkme#25). Without this check
+/// the kernel fails later with an unrelated "unable to resolve generic type"
+/// error.
+///
+/// The check runs per `use`, where such a path used to be skipped silently,
+/// so a kernel that imports nothing from `cutile` behaves as before.
 fn check_cutile_registered(
     use_path: &str,
+    owning_module: &str,
+    kernel_module: &str,
     registry: &HashMap<&str, fn() -> Module>,
 ) -> Result<(), JITError> {
     let in_cutile = use_path == "cutile" || use_path.starts_with("cutile::");
@@ -408,13 +419,21 @@ fn check_cutile_registered(
     }
     let mut registered: Vec<&&str> = registry.keys().collect();
     registered.sort();
+    // The `use` can sit in a registered dependency rather than the kernel
+    // module itself; name both so the kernel is always identifiable.
+    let location = if owning_module == kernel_module {
+        format!("kernel module `{kernel_module}`")
+    } else {
+        format!("`{owning_module}`, reached from kernel module `{kernel_module}`")
+    };
     Err(SourceLocation::unknown().jit_error(&format!(
-        "`cutile::core` is not in the linker registry (found while resolving \
-         `use {use_path}`), so the linker most likely dropped the module \
-         registrations. GNU ld does this on \
-         `x86_64-pc-windows-gnu`, where `--gc-sections` removes them (dtolnay/linkme#25). \
-         Build with the MSVC toolchain, or add `-C link-arg=-Wl,--no-gc-sections` to the \
-         rustflags for that target. Registered modules: {registered:?}",
+        "`cutile::core` is not in the module registry (found while resolving \
+         `use {use_path}` in {location}). Either the `cutile` crate is not \
+         linked into this binary, or the linker dropped its module registrations. \
+         On `x86_64-pc-windows-gnu`, GNU ld's `--gc-sections` drops them \
+         (dtolnay/linkme#25): build with the MSVC toolchain, or add \
+         `-C link-arg=-Wl,--no-gc-sections` to the rustflags for that target. \
+         Registered modules: {registered:?}",
     )))
 }
 
@@ -1089,39 +1108,68 @@ mod tests {
         fn dummy_build() -> Module {
             Module::new("dummy", syn::parse_quote! { pub mod dummy {} })
         }
+        // A `use` written in the kernel module itself.
+        let check = |path: &str, registry: &HashMap<&str, fn() -> Module>| {
+            check_cutile_registered(path, "my_kernels", "my_kernels", registry)
+        };
         let empty: HashMap<&str, fn() -> Module> = HashMap::new();
-        let err = check_cutile_registered("cutile::core", &empty)
+        let err = check("cutile::core", &empty)
             .expect_err("a cutile path without cutile::core registered should fail");
         let message = err.to_string();
         assert!(
-            message.contains("`cutile::core` is not in the linker registry"),
+            message.contains("`cutile::core` is not in the module registry"),
             "{message}"
         );
-        assert!(message.contains("`use cutile::core`"), "{message}");
+        assert!(
+            message.contains("`use cutile::core` in kernel module `my_kernels`"),
+            "{message}"
+        );
         assert!(message.contains("--no-gc-sections"), "{message}");
-        assert!(check_cutile_registered("cutile", &empty).is_err());
+        assert!(check("cutile", &empty).is_err());
 
         // A partial drop: another cutile module survived, `cutile::core` didn't.
         let mut partial: HashMap<&str, fn() -> Module> = HashMap::new();
         partial.insert("cutile::kernels::_creation::creation", dummy_build);
-        assert!(check_cutile_registered("cutile::core", &partial).is_err());
+        assert!(check("cutile::core", &partial).is_err());
+
+        // A `use` in a registered dependency names the kernel module too.
+        let err = check_cutile_registered(
+            "cutile::core",
+            "cutile::kernels::_creation::creation",
+            "my_kernels",
+            &partial,
+        )
+        .expect_err("a cutile path in a dependency should fail the same way");
+        let message = err.to_string();
+        assert!(
+            message.contains(
+                "in `cutile::kernels::_creation::creation`, reached from kernel module `my_kernels`"
+            ),
+            "{message}"
+        );
 
         // Paths outside `cutile` keep the existing pass-through behavior.
-        assert!(check_cutile_registered("my_crate::helpers", &empty).is_ok());
-        assert!(check_cutile_registered("cutile_extra::helpers", &empty).is_ok());
+        assert!(check("my_crate::helpers", &empty).is_ok());
+        assert!(check("cutile_extra::helpers", &empty).is_ok());
 
         // With `cutile::core` registered, an unregistered `cutile` path is
         // left to the existing flow.
         let mut registry: HashMap<&str, fn() -> Module> = HashMap::new();
         registry.insert("cutile::core", dummy_build);
-        assert!(check_cutile_registered("cutile::core", &registry).is_ok());
-        assert!(check_cutile_registered("cutile::not_a_module", &registry).is_ok());
+        assert!(check("cutile::core", &registry).is_ok());
+        assert!(check("cutile::not_a_module", &registry).is_ok());
     }
 
     #[test]
     fn from_kernel_reports_missing_cutile_core() {
         // This crate registers no modules, so its test binary sees the
         // registry a binary has after the linker dropped every entry.
+        assert!(
+            !crate::registry::CUTILE_MODULES
+                .iter()
+                .any(|entry| entry.absolute_path == "cutile::core"),
+            "this test needs a registry without `cutile::core`"
+        );
         let kernel = Module::new(
             "my_kernels",
             syn::parse_quote! {
@@ -1135,7 +1183,11 @@ mod tests {
             Err(err) => err.to_string(),
         };
         assert!(
-            message.contains("`cutile::core` is not in the linker registry"),
+            message.contains("`cutile::core` is not in the module registry"),
+            "{message}"
+        );
+        assert!(
+            message.contains("in kernel module `my_kernels`"),
             "{message}"
         );
     }

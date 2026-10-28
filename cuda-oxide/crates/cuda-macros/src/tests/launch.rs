@@ -372,6 +372,13 @@ fn partial_unroll_factor_must_be_at_least_two() {
     assert!(syn::parse_str::<UnrollArgs>("0").is_err());
     assert!(syn::parse_str::<UnrollArgs>("1").is_err());
     assert_eq!(
+        syn::parse_str::<UnrollArgs>("never")
+            .unwrap()
+            .factor
+            .literal_value,
+        Some(u32::MAX - 1)
+    );
+    assert_eq!(
         syn::parse_str::<UnrollArgs>("2")
             .unwrap()
             .factor

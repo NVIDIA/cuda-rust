@@ -123,17 +123,14 @@ These functions address cluster shared memory: the destination may belong to
 any CTA of the cluster, so the compiler converts it to the cluster window.
 When the destination is the issuing CTA's own shared memory,
 `cp_async_bulk_tensor_*_g2s_cta` emits the `.shared::cta` destination form
-(PTX 8.6, sm_90+) without that conversion. Its destination is a
-[`SharedPtr<u8>`](shared-memory-and-synchronization.md),
-a CTA-shared pointer by type, so the locality holds wherever the pointer came
-from, including through helper functions:
+(PTX 8.6, sm_90+):
 
 ```rust
 // SAFETY: TILE and BAR are `static mut` shared-memory objects of this kernel,
 // and the copy completes on BAR before any thread reads TILE.
 unsafe {
     cp_async_bulk_tensor_2d_g2s_cta(
-        SharedArray::shared_ptr(&raw mut TILE).cast::<u8>(),
+        &raw mut TILE as *mut u8,
         tensor_map, tile_x, tile_y,
         &raw mut BAR,
     );
@@ -141,19 +138,8 @@ unsafe {
 ```
 
 On SM12x this form matters for performance: ptxas implements a non-multicast
-`.shared::cluster` TMA load it cannot prove CTA-local with a runtime check and
-a system call, which also makes it ignore `setmaxnreg`.
-
-```{figure} images/tma-cta-local.svg
-:align: center
-:width: 100%
-
-The two G2S destination forms. Left, the cluster form converts a generic `*mut u8` to the cluster
-window, and on sm_120a ptxas adds a runtime CTA check whose call makes it ignore `setmaxnreg`.
-Middle, `SharedPtr<T>` keeps the shared address space in its type across helper parameters, struct
-fields and return values. Right, `cp_async_bulk_tensor_2d_g2s_cta` takes a `SharedPtr<u8>` and emits
-the `.shared::cta` form with no address conversion, so the kernel keeps `setmaxnreg` and its 168 registers.
-```
+`.shared::cluster` TMA load with a runtime CTA-id check and a system call
+fallback, which also makes it ignore `setmaxnreg`.
 
 ### Only one thread issues the copy
 

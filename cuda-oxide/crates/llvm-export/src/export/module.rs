@@ -729,6 +729,22 @@ pub(super) fn export_module_with_externs_impl(
         emit_nvvmir_version(&mut output, &mut state, config.nvvmir_version());
     }
 
+    if let Some(attr_id) = state.loop_unroll_disable_attr_id {
+        writeln!(&mut output).unwrap();
+        writeln!(
+            &mut output,
+            "!{attr_id} = !{{!\"llvm.loop.unroll.disable\"}}"
+        )
+        .unwrap();
+        for &loop_id in &state.loop_unroll_disable_loop_ids {
+            writeln!(
+                &mut output,
+                "!{loop_id} = distinct !{{!{loop_id}, !{attr_id}}}"
+            )
+            .unwrap();
+        }
+    }
+
     // 9. DWARF metadata (if requested and source locations exist)
     if state.has_debug_metadata() {
         writeln!(&mut output).unwrap();
@@ -874,6 +890,22 @@ pub(super) fn export_module_to_string_with_config(
     if config.emit_nvvmir_version() {
         writeln!(&mut output).unwrap();
         emit_nvvmir_version(&mut output, &mut state, config.nvvmir_version());
+    }
+
+    if let Some(attr_id) = state.loop_unroll_disable_attr_id {
+        writeln!(&mut output).unwrap();
+        writeln!(
+            &mut output,
+            "!{attr_id} = !{{!\"llvm.loop.unroll.disable\"}}"
+        )
+        .unwrap();
+        for &loop_id in &state.loop_unroll_disable_loop_ids {
+            writeln!(
+                &mut output,
+                "!{loop_id} = distinct !{{!{loop_id}, !{attr_id}}}"
+            )
+            .unwrap();
+        }
     }
 
     // Emit DWARF line-table metadata if debug export requested it and at least

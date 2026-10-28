@@ -84,6 +84,10 @@ do
 done
 
 run_step \
+    "cutile debug provenance through the assembler" \
+    cargo test -p cutile --test debug_info nested_helper_cubin_lines_stay_inside_their_functions -- --ignored --nocapture
+
+run_step \
     "cutile generated source locations through the assembler" \
     cargo test -p cutile --test generated_source_locations generated_locations_survive_assembly -- --ignored
 

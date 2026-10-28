@@ -141,9 +141,37 @@ impl Verify for MirReturnOp {
 pub struct MirGotoOp;
 
 impl MirGotoOp {
+    /// Operation attribute key marking a loop backedge whose unroll factor was
+    /// already applied by `mir-transforms`.
+    const LOOP_UNROLL_DISABLE_KEY: &str = "loop_unroll_disable";
+
     /// Create a new MirGotoOp wrapper.
     pub fn new(op: Ptr<Operation>) -> Self {
         MirGotoOp { op }
+    }
+
+    /// Mark this branch as a loop backedge that downstream LLVM passes must
+    /// not unroll again.
+    pub fn set_loop_unroll_disable(&self, ctx: &mut Context) {
+        let key =
+            pliron::identifier::Identifier::try_new(Self::LOOP_UNROLL_DISABLE_KEY.to_string())
+                .expect("valid loop_unroll_disable attribute key");
+        self.get_operation()
+            .deref_mut(ctx)
+            .attributes
+            .set(key, UnrollAttr(1));
+    }
+
+    /// Whether downstream LLVM unrolling should be disabled on this backedge.
+    pub fn is_loop_unroll_disable(&self, ctx: &Context) -> bool {
+        let key =
+            pliron::identifier::Identifier::try_new(Self::LOOP_UNROLL_DISABLE_KEY.to_string())
+                .expect("valid loop_unroll_disable attribute key");
+        self.get_operation()
+            .deref(ctx)
+            .attributes
+            .get::<UnrollAttr>(&key)
+            .is_some()
     }
 }
 

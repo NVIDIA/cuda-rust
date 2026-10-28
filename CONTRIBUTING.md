@@ -192,6 +192,17 @@ cutile-rs/scripts/run_all.sh         # both of the above, then the examples and 
 
 Run `cutile-rs/scripts/run_all.sh` before marking a Tile pull request ready
 for review.
+
+The GPU script also accepts `--archive-dir DIR` to run prebuilt tests without
+Cargo or a Rust toolchain. The directory must contain `cargo-nextest`,
+`tile-tests.tar.zst`, and `host-tests.tar.zst`, as bundled by CI. This mode runs
+tests serially and uses the checkout for source fixtures.
+See the archive, bundle, and extract steps in
+[the Tile CI workflow](.github/workflows/cutile-rs.yml) for how to produce this
+directory. Extract `cutile-gpu-tests.tar` first and use a checkout matching its
+`revision.txt`; `cargo-nextest` must be executable. The script's opening comments
+describe the directory layout and the contents of each test archive.
+
 CI runs the same suites in `.github/workflows/cutile-rs.yml`. Because the Tile
 lanes use NVIDIA self-hosted runners, that workflow triggers on the
 `pull-request/<n>` branches that copy-pr-bot mirrors rather than on the pull

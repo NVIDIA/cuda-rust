@@ -333,6 +333,7 @@ fn base_llc_args(target: &str) -> Vec<String> {
     vec![
         "-march=nvptx64".to_string(),
         format!("-mcpu={target}"),
+        "--nvptx-short-ptr".to_string(),
         DISABLE_BRANCH_FOLD.to_string(),
         DISABLE_BLOCK_PLACEMENT.to_string(),
     ]
@@ -1222,6 +1223,7 @@ mod tests {
             [
                 "-march=nvptx64",
                 "-mcpu=sm_90",
+                "--nvptx-short-ptr",
                 "-disable-branch-fold",
                 "-disable-block-placement",
             ]

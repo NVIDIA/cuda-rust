@@ -319,6 +319,28 @@ pub fn unroll_annotated_loops(
             };
             let kind = unroll_kind(factor);
 
+            if factor == u32::MAX - 1 {
+                let _ = take_loop_hints(ctx, &hints, &info, loop_id);
+                let lp = &info.loops()[loop_id];
+                let header = lp.header;
+                let mut backedges = Vec::new();
+                for &block in &lp.blocks {
+                    let tail = block.deref(ctx).get_tail();
+                    if let Some(term) = tail
+                        && Operation::get_op::<MirGotoOp>(term, ctx).is_some()
+                        && term.deref(ctx).successors().any(|succ| succ == header)
+                    {
+                        backedges.push(term);
+                    }
+                }
+                for term in backedges {
+                    MirGotoOp::new(term).set_loop_unroll_disable(ctx);
+                }
+                function_changed = true;
+                changed = true;
+                continue;
+            }
+
             let Some(ph) = info.preheader(ctx, region, loop_id) else {
                 // The author asked for unrolling; never silently do nothing.
                 let location = take_loop_hints(ctx, &hints, &info, loop_id);
@@ -1319,6 +1341,11 @@ fn partial_unroll(
     }
     let last_latch = copies[factor_usize - 1].latch_term;
     rewire_goto(ctx, last_latch, main_h, &running);
+    MirGotoOp::new(last_latch).set_loop_unroll_disable(ctx);
+    let rem_latch = s.latch.deref(ctx).get_tail();
+    if let Some(rem_latch) = rem_latch {
+        MirGotoOp::new(rem_latch).set_loop_unroll_disable(ctx);
+    }
 
     // The main-loop counter is mh_iv = init + (factor*step)*t, so it is always
     // init plus a multiple of factor*step. That lets us replace counter-derived

@@ -44,6 +44,9 @@ mod program_id;
 #[path = "gpu/launch_site.rs"]
 mod launch_site;
 
+#[path = "gpu/const_grid.rs"]
+mod const_grid;
+
 #[path = "gpu/add_refs.rs"]
 mod add_refs;
 

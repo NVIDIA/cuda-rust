@@ -11,7 +11,7 @@ mod common;
 mod debug_helpers_file;
 
 use cutile::compile_api::{CompileArtifacts, KernelCompiler};
-use cutile::tile_kernel::{CompileOptions, DebugInfoLevel};
+use cutile::tile_kernel::{CodegenMode, CompileOptions, DebugInfoLevel};
 use cutile_ir::ir::{DebugScope, Location, Module, OpId, Operation};
 use std::path::PathBuf;
 use std::process::Command;
@@ -244,10 +244,16 @@ fn explicit_debug_modes_override_build_default_and_change_cache_keys() {
     use std::collections::HashSet;
     let mut l1 = HashSet::new();
     let mut l2 = HashSet::new();
-    for (level, opt, debug, line) in [
-        (DebugInfoLevel::None, 3, false, false),
-        (DebugInfoLevel::Line, 3, false, true),
-        (DebugInfoLevel::Full, 0, true, false),
+    for (level, codegen) in [
+        (DebugInfoLevel::None, CodegenMode::RELEASE),
+        (
+            DebugInfoLevel::Line,
+            CodegenMode::Optimized {
+                level: 3,
+                lineinfo: true,
+            },
+        ),
+        (DebugInfoLevel::Full, CodegenMode::Debug),
     ] {
         let options = CompileOptions::new()
             .debug_info(DebugInfoLevel::Full)
@@ -256,10 +262,7 @@ fn explicit_debug_modes_override_build_default_and_change_cache_keys() {
             .sanitize_memcheck(true);
         assert_eq!(options.occupancy, Some(2));
         let flags = TileirasOptions::from_compile_options(&options);
-        assert_eq!(
-            (flags.opt_level, flags.device_debug, flags.lineinfo),
-            (opt, debug, line)
-        );
+        assert_eq!(flags.codegen, codegen);
         assert!(flags.sanitize_memcheck);
         assert!(l1.insert(
             cutile::tile_kernel::TileFunctionKey::builder("m", "k")
@@ -286,7 +289,6 @@ fn build_time_default() {
         .ok()
         .or_else(|| option_env!("CUDA_RUST_DEBUG").map(str::to_owned));
     let options = CompileOptions::new();
-    assert!(!(options.device_debug && options.lineinfo));
     if let Some(expected) = expected {
         let level = match expected.as_str() {
             "none" => DebugInfoLevel::None,
@@ -1056,5 +1058,117 @@ fn nested_helper_cubin_lines_stay_inside_their_functions() {
                 );
             }
         }
+    });
+}
+
+#[cutile::module]
+mod short_circuit_kernel {
+    use cutile::core::*;
+
+    fn inlined_logic(a: bool, b: bool) -> bool {
+        a && b
+    }
+
+    #[cutile::entry()]
+    fn logic_source(out: &mut Tensor<i32, { [32] }>, x: i32, y: i32) {
+        let a = x > 0;
+        let b = y > 0;
+        let c = a || b;
+        let d = inlined_logic(a, b);
+        let val = if c {
+            1i32
+        } else if d {
+            2i32
+        } else {
+            0i32
+        };
+        let tile: Tile<i32, { [32] }> = broadcast_scalar(val, shape![32]);
+        out.store(tile);
+    }
+}
+
+#[test]
+fn short_circuit_boolean_constants_keep_expression_locations_and_inline_chain() {
+    common::with_test_stack(|| {
+        use cutile_ir::ir::{ScalarType, TileElementType, Type};
+
+        let artifacts = KernelCompiler::new(
+            short_circuit_kernel::__module_ast_self,
+            "short_circuit_kernel",
+            "logic_source",
+        )
+        .target("sm_120")
+        .generics(vec![])
+        .strides(&[("out", &[1])])
+        .options(CompileOptions::new().debug_info(DebugInfoLevel::Full))
+        .compile()
+        .expect("compile short circuit kernel");
+
+        let source = include_str!("debug_info.rs");
+        let or_line = source_line(source, "let c = a || b;");
+        let inlined_and_line = source_line(source, "a && b");
+        let helper_call_line = source_line(source, "let d = inlined_logic(a, b);");
+        let module_line = source_line(source, "mod short_circuit_kernel {");
+
+        let mut direct_or_constant_found = false;
+        let mut inlined_and_constant_found = false;
+
+        visit_ops(
+            artifacts.module(),
+            &artifacts.module().functions,
+            &mut |op| {
+                if op.opcode != cutile_ir::bytecode::Opcode::Constant {
+                    return;
+                }
+                let is_bool = matches!(
+                    op.result_types.first(),
+                    Some(Type::Tile(t)) if matches!(t.element_type, TileElementType::Scalar(ScalarType::I1))
+                );
+                if !is_bool {
+                    return;
+                }
+                if let Location::CallSite { callee, caller } = &op.location {
+                    let callee_line = match &**callee {
+                        Location::DebugInfo(info) => info.line,
+                        Location::FileLineCol { line, .. } => *line,
+                        _ => 0,
+                    };
+                    assert_ne!(
+                        callee_line, module_line,
+                        "callee of boolean constant must not point to module header: {:?}",
+                        op.location
+                    );
+                    if callee_line == or_line {
+                        direct_or_constant_found = true;
+                    } else if callee_line == inlined_and_line {
+                        let helper_inlined = match &**caller {
+                            Location::CallSite {
+                                callee: inner_callee,
+                                ..
+                            } => match &**inner_callee {
+                                Location::DebugInfo(info) => info.line == helper_call_line,
+                                Location::FileLineCol { line, .. } => *line == helper_call_line,
+                                _ => false,
+                            },
+                            Location::DebugInfo(info) => info.line == helper_call_line,
+                            Location::FileLineCol { line, .. } => *line == helper_call_line,
+                            _ => false,
+                        };
+                        if helper_inlined {
+                            inlined_and_constant_found = true;
+                        }
+                    }
+                }
+            },
+        );
+
+        assert!(
+            direct_or_constant_found,
+            "missing direct short-circuit boolean constant at line {or_line}"
+        );
+        assert!(
+            inlined_and_constant_found,
+            "missing inlined short-circuit boolean constant at line {inlined_and_line} called from {helper_call_line}"
+        );
     });
 }

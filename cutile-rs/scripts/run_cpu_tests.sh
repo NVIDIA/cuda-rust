@@ -51,6 +51,7 @@ for test_target in \
     bitwise_and_bitcast_ops \
     compile_error_quality \
     compile_only \
+    constant_source_locations \
     debug_info \
     element_type_zero \
     element_type_zero_jit \
@@ -59,6 +60,7 @@ for test_target in \
     global_memory \
     generated_source_locations \
     integer_ops \
+    jit_env_overrides \
     kernel_compiler \
     load_tile_like_examples \
     macro_submodule \

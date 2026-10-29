@@ -148,8 +148,8 @@ debug = false
 Cargo provides only `DEBUG=true|false` to build
 scripts, not the exact debug level. Any enabled level currently selects
 device-debug mode, including `debug = "line-tables-only"` and `"limited"`.
-It also selects device optimization level 0 unless explicitly overridden,
-even in a release profile with `debug = true`. Automatic line-only mapping
+Device-debug mode compiles at optimization level 0, even in a release
+profile with `debug = true`. Automatic line-only mapping
 is not implemented. Use the explicit `line` override below for optimized
 profiling. See Cargo's [profile settings][cargo-profiles] and
 [build-script environment][cargo-build-env].
@@ -175,8 +175,8 @@ only for a kernel's crate does not. Setting the environment variable only
 when running an already-built binary does not change device compilation.
 
 `CompileOptions::new()` and `CompileOptions::default()` inherit this build
-default. Use `debug_info()` to replace it for one launch. It sets both debug
-flags, so it can also turn off a build-time `full` default:
+default. Use `debug_info()` to replace it for one launch. It replaces the
+inherited mode, so it can also turn off a build-time `full` default:
 
 ```rust
 use cutile::tile_kernel::{CompileOptions, DebugInfoLevel};
@@ -187,8 +187,7 @@ my_kernel(args)
 ```
 
 Each option is part of the JIT cache key, so the modes do not share a cached
-compiled kernel. The individual flags remain available, as does sanitizer
-instrumentation:
+compiled kernel. Sanitizer instrumentation is a separate option:
 
 ```rust
 use cutile::tile_kernel::{CompileOptions, DebugInfoLevel};
@@ -207,18 +206,37 @@ my_kernel(args)
 my_kernel(args).compile_options(CompileOptions::new().sanitize_memcheck(true)).sync()?;
 ```
 
-- `debug_info(level)` replaces both debug flags. The individual
-  `device_debug(bool)` and `lineinfo(bool)` setters change only their own
-  flag, leaving other inherited settings in place.
-- `device_debug(true)` passes `--device-debug` to the device compiler and
-  implies optimization level 0. An explicit `opt_level` takes precedence,
-  but `tileiras` currently rejects full debug information at optimized
-  levels. The frontend also stops hoisting bounds checks out of loops.
-  Checks it proved unnecessary or moved to launch time are unaffected;
-  they never reach device code in any mode.
-- `lineinfo(true)` passes `--lineinfo`: source-line correlation for Nsight Compute and Nsight Systems without changing code generation. This is the option for profiling optimized kernels.
+- `debug_info(DebugInfoLevel::Full)` selects device-debug mode, which passes
+  `--opt-level 0 --device-debug`. The frontend also stops hoisting bounds
+  checks out of loops. Checks it proved unnecessary or moved to launch time
+  are unaffected; they never reach device code in any mode.
+- `debug_info(DebugInfoLevel::Line)` passes `--lineinfo`: source-line correlation for Nsight Compute and Nsight Systems without changing code generation. This is the option for profiling optimized kernels.
+- `debug_info(DebugInfoLevel::None)` and `Line` keep the current
+  optimization level, or use level 3 when leaving device-debug mode.
+- `opt_level(n)` passes `--opt-level n` and keeps line information.
+  `tileiras` supports device debugging only at level 0, so this also leaves
+  device-debug mode. Whichever of `debug_info` and `opt_level` is called
+  last decides.
 - `sanitize_memcheck(true)` passes `--sanitize=memcheck` for `compute-sanitizer --tool memcheck`.
-- `opt_level(n)` selects `--opt-level` directly; the default is 3.
+
+To switch an already-built application without changing its code, set these
+variables when running it. Each applies after the code's options, as if the
+matching setter were called last. They are read once per process:
+
+| Variable | Values | Acts like |
+| --- | --- | --- |
+| `CUTILE_JIT_DEBUG` | `none`, `line`, `full` | `debug_info(...)` |
+| `CUTILE_JIT_OPT_LEVEL` | `0`, `1`, `2`, `3` | `opt_level(n)` |
+| `CUTILE_JIT_SANITIZE` | `memcheck`, `none` | `sanitize_memcheck(...)` |
+
+```bash
+CUTILE_JIT_DEBUG=full cuda-gdb --args ./target/release/my_program
+CUTILE_JIT_SANITIZE=memcheck compute-sanitizer --tool memcheck ./target/release/my_program
+```
+
+An unset variable leaves the code's choice in place. An invalid value, or
+`CUTILE_JIT_DEBUG=full` together with `CUTILE_JIT_OPT_LEVEL`, fails JIT
+compilation with an error that names the variable.
 
 Full debug mode describes source locations and inline frames, not Rust
 variables or values. Tile IR currently supports control-flow debugging of
@@ -293,6 +311,7 @@ without a GPU:
 
 ```bash
 cargo test -p cutile --test debug_info
+cargo test -p cutile --test jit_env_overrides
 bash scripts/test_debug_defaults.sh
 ```
 
@@ -332,3 +351,15 @@ cargo test -p cutile --test debug_info cuda_gdb_stops_in_cross_file_helper -- --
 ---
 
 Review [Performance](performance.md) for optimization strategies or [Interoperability](interoperability.md) for custom CUDA kernels.
+
+## Migrating compile options to v0.5.0
+
+Use `debug_info(DebugInfoLevel::Full)` instead of `device_debug(true)`, and
+`debug_info(DebugInfoLevel::Line)` instead of `lineinfo(true)`. Use
+`debug_info(DebugInfoLevel::None)` to disable both kinds of debug information.
+The old public `opt_level`, `device_debug`, and `lineinfo` fields are replaced
+by `codegen: CodegenMode`; prefer the builder setters when constructing options.
+
+Setter order is significant: `.debug_info(Full).opt_level(3)` selects optimized
+code, while `.opt_level(3).debug_info(Full)` selects full debugging at level zero.
+Runtime `CUTILE_JIT_*` overrides are applied after these programmatic options.

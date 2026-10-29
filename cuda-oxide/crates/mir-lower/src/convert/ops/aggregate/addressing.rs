@@ -332,6 +332,32 @@ pub(crate) fn convert_field_addr(
     Ok(())
 }
 
+/// Compute the provable byte alignment of a field at `offset` within an aggregate
+/// whose base pointer is aligned to `base_align`.
+pub(crate) fn field_alignment_from_base(base_align: u64, offset: u64) -> Option<u32> {
+    if base_align == 0 {
+        return None;
+    }
+    let provable = if offset == 0 {
+        base_align
+    } else {
+        gcd_alignment(base_align, offset)
+    };
+    if provable.is_power_of_two() {
+        u32::try_from(provable).ok()
+    } else {
+        None
+    }
+}
+
+/// Greatest common divisor of two byte alignments or offsets.
+fn gcd_alignment(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
 /// Record on a field address what its alignment provably is.
 ///
 /// A load reads its alignment from its own result type, and a scalar records
@@ -350,29 +376,6 @@ pub(crate) fn convert_field_addr(
 /// which also stands for "layout unknown") or the field has no recorded offset.
 /// A wrong alignment here is a miscompile, so every uncertain case declines and
 /// leaves the previous, weaker-but-sound behaviour.
-pub(crate) fn field_alignment_from_base(base_align: u64, offset: u64) -> Option<u32> {
-    if base_align == 0 {
-        return None;
-    }
-    let provable = if offset == 0 {
-        base_align
-    } else {
-        gcd_alignment(base_align, offset)
-    };
-    if provable.is_power_of_two() {
-        u32::try_from(provable).ok()
-    } else {
-        None
-    }
-}
-
-pub(super) fn gcd_alignment(mut a: u64, mut b: u64) -> u64 {
-    while b != 0 {
-        (a, b) = (b, a % b);
-    }
-    a
-}
-
 fn stamp_field_address_alignment(
     ctx: &mut Context,
     gep: Ptr<Operation>,
@@ -513,7 +516,7 @@ fn element_address_provable_alignment(
 /// Carrier callers must supply a base alignment derived from their MIR proof;
 /// the semantic element's natural ABI alignment is not a valid fallback when
 /// an array is embedded at an underaligned packed offset.
-pub(crate) fn element_alignment_from_base(
+fn element_alignment_from_base(
     ctx: &Context,
     base_align: u64,
     element_ty: TypeHandle,

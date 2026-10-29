@@ -15,7 +15,8 @@ use pliron::builtin::types::{FP32Type, FP64Type, IntegerType};
 use pliron::context::Context;
 use pliron::r#type::TypeHandle;
 
-pub(crate) fn mir_type_is_zero_sized(ctx: &Context, ty: TypeHandle) -> bool {
+/// Return `true` when `ty` is a zero-sized MIR array, struct, or tuple.
+fn mir_type_is_zero_sized(ctx: &Context, ty: TypeHandle) -> bool {
     let ty_ref = ty.deref(ctx);
     if let Some(array_ty) = ty_ref.downcast_ref::<MirArrayType>() {
         return array_ty.size() == 0 || mir_type_is_zero_sized(ctx, array_ty.element_type());

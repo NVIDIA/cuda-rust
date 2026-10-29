@@ -19,6 +19,7 @@ use pliron::r#type::{TypeHandle, type_cast};
 use super::{
     StructLayoutInfo, build_struct_slot_map, convert_type, is_zero_sized_type,
     llvm_packed_struct_contains_pointer_in_address_space, llvm_type_size_align,
+    packed_shared_mir_shape_is_supported,
 };
 use crate::convert::target_stable_storage::{StorageRewriteOptions, target_stable_storage_type};
 
@@ -237,7 +238,7 @@ pub(crate) fn packed_shared_internal_abi_info(
         StructLayoutInfo::of_struct(struct_ty)
     };
 
-    if !super::packed_shared_shape::packed_shared_mir_shape_is_supported(ctx, mir_ty) {
+    if !packed_shared_mir_shape_is_supported(ctx, mir_ty) {
         return Ok(None);
     }
 
@@ -606,7 +607,7 @@ mod tests {
     use super::super::llvm_type_contains_pointer_in_address_space;
     use super::super::test_support::{make_ctx, mir_uint, struct_fields, transparent_u32};
     use super::*;
-    use dialect_mir::types::{MirArrayType, MirPtrType, MirTupleType, StructAbiKind};
+    use dialect_mir::types::{MirArrayType, MirTupleType, StructAbiKind};
 
     #[test]
     fn transparent_scalar_return_type_uses_underlying_scalar() {

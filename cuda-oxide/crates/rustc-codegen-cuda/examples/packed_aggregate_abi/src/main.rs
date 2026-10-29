@@ -169,17 +169,13 @@ mod kernels {
     ) {
         // A runtime-indexed store must survive in the packed carrier. The
         // branch separates that store from the subsequent indexed load.
-        let mut matrix = value.ptrs;
-        let alternate = matrix[row][col ^ 1];
-        let original = matrix[row][col];
+        let alternate = value.ptrs[row][col ^ 1];
+        let original = value.ptrs[row][col];
         if replace {
-            matrix[row][col] = alternate;
+            value.ptrs[row][col] = alternate;
         } else {
-            matrix[row][col] = original;
+            value.ptrs[row][col] = original;
         }
-        // Replace the packed aggregate by value: never create an unaligned
-        // &mut reference to its nested matrix field.
-        value = PackedSharedMatrix { tag: value.tag, ptrs: matrix };
         let selected = value.ptrs[row][col];
         unsafe {
             out.write(u32::from(value.tag));
@@ -224,10 +220,19 @@ mod kernels {
 
     #[inline(never)]
     #[device]
-    unsafe fn consume_packed_nested_shared(value: PackedNestedShared, out: *mut u32) {
+    unsafe fn consume_packed_nested_shared(mut value: PackedNestedShared, out: *mut u32) {
+        // Mutate the nested carrier fields across a runtime branch so the
+        // 2-level MirFieldAddrOp + MirStoreOp path executes at runtime and
+        // single-block store forwarding cannot bypass the carrier local.
+        let orig_left = value.pair.left;
+        let orig_right = value.pair.right;
+        if value.tag != 0 {
+            value.pair.left = orig_right;
+            value.pair.right = orig_left;
+        }
         let tag = value.tag;
-        let left = value.pair.left;
-        let right = value.pair.right;
+        let left = value.pair.right;
+        let right = value.pair.left;
         unsafe {
             (&mut *left)[0] = (&*left)[0].wrapping_add(0x0304_0506);
             (&mut *right)[0] = (&*right)[0].wrapping_add(0x0405_0607);
@@ -239,10 +244,19 @@ mod kernels {
 
     #[inline(never)]
     #[device]
-    unsafe fn consume_packed_tuple_shared(value: PackedTupleShared, out: *mut u32) {
+    unsafe fn consume_packed_tuple_shared(mut value: PackedTupleShared, out: *mut u32) {
+        // Mutate the nested tuple carrier fields across a runtime branch so the
+        // 2-level MirFieldAddrOp + MirStoreOp path executes at runtime and
+        // single-block store forwarding cannot bypass the carrier local.
+        let orig_left = value.pair.0;
+        let orig_right = value.pair.1;
+        if value.tag != 0 {
+            value.pair.0 = orig_right;
+            value.pair.1 = orig_left;
+        }
         let tag = value.tag;
-        let left = value.pair.0;
-        let right = value.pair.1;
+        let left = value.pair.1;
+        let right = value.pair.0;
         unsafe {
             (&mut *left)[0] = (&*left)[0].wrapping_add(0x0506_0708);
             (&mut *right)[0] = (&*right)[0].wrapping_add(0x0607_0809);
@@ -595,8 +609,12 @@ fn assert_host_layout() {
     assert_eq!(core::mem::offset_of!(PackedSharedArray, tag), 0);
     assert_eq!(core::mem::offset_of!(PackedSharedArray, ptrs), 1);
 
-    assert_eq!(core::mem::size_of::<PackedSharedMatrix>(), 33);
+    assert_eq!(
+        core::mem::size_of::<PackedSharedMatrix>(),
+        1 + 4 * core::mem::size_of::<usize>()
+    );
     assert_eq!(core::mem::align_of::<PackedSharedMatrix>(), 1);
+    assert_eq!(core::mem::offset_of!(PackedSharedMatrix, tag), 0);
     assert_eq!(core::mem::offset_of!(PackedSharedMatrix, ptrs), 1);
 }
 
@@ -756,7 +774,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         packed_shared_array_out.to_host_vec(&stream)?,
         [0x62, 0x5768_798a, 0x6879_8a9b]
     );
-    assert_eq!(packed_shared_matrix_out.to_host_vec(&stream)?, [0x71, 0x4444_4444]);
+    assert_eq!(
+        packed_shared_matrix_out.to_host_vec(&stream)?,
+        [0x71, 0x4444_4444]
+    );
     assert_eq!(load1_out.to_host_vec(&stream)?, [0x41, 0x90a0_b0c0]);
     assert_eq!(load2_out.to_host_vec(&stream)?, [0x51, 0xd0e0_f001]);
 

@@ -19,9 +19,11 @@
 //! still fail before any MIR operation is lowered.
 
 use crate::convert::target_stable_storage::{StorageRewriteOptions, target_stable_storage_type};
+#[cfg(test)]
+use crate::convert::types::MAX_PACKED_SHARED_INTERNAL_ABI_ARRAY_REWRITE_LEAVES;
 use crate::convert::types::{
-    MAX_PACKED_SHARED_INTERNAL_ABI_ARRAY_REWRITE_LEAVES, StructLayoutInfo, build_struct_slot_map,
-    convert_type, llvm_type_size_align, mir_type_abi_align, packed_shared_mir_shape_is_supported,
+    StructLayoutInfo, build_struct_slot_map, convert_type, llvm_type_size_align,
+    mir_type_abi_align, packed_shared_internal_abi_info,
 };
 use dialect_mir::ops::{
     MirAllocaOp, MirArrayElementAddrOp, MirAssertOp, MirCallOp, MirCastOp, MirCondBranchOp,
@@ -42,41 +44,57 @@ use pliron::r#type::{TypeHandle, Typed};
 use pliron::value::Value;
 use rustc_hash::FxHashMap;
 
+/// Attribute key recording the physical LLVM storage type on carrier allocas, loads, and stores.
 const CARRIER_STORAGE_TYPE_KEY: &str = "cuda_oxide_packed_shared_carrier_storage_type";
+/// Attribute key recording the physical LLVM GEP source type on carrier projections.
 const CARRIER_GEP_SOURCE_TYPE_KEY: &str = "cuda_oxide_packed_shared_carrier_gep_source_type";
 
+/// Verified physical pointee type and alignment for a carrier-backed MIR address value.
 #[derive(Clone, Copy, Debug)]
 struct CarrierAddress {
+    /// Physical LLVM storage type at this carrier address.
     physical_pointee: TypeHandle,
+    /// Proven byte alignment at this carrier address.
     proven_align: u32,
 }
 
+/// Physical LLVM storage type and root ABI alignment for a packed-AS3 carrier local.
 #[derive(Clone, Copy, Debug)]
 struct PackedSharedLocalStorageInfo {
+    /// Target-stable packed LLVM struct type with generic pointer leaves.
     storage_ty: TypeHandle,
+    /// Root ABI alignment from rustc layout.
     root_align: u32,
 }
 
+/// Staged lowering facts collected during carrier validation and committed transactionally.
 #[derive(Default)]
 struct CarrierFactPlan {
+    /// Planned storage-type attributes for carrier allocas, loads, and stores.
     storage_types: Vec<(Ptr<Operation>, TypeHandle)>,
+    /// Planned GEP source-type attributes for carrier field and array projections.
     gep_source_types: Vec<(Ptr<Operation>, TypeHandle)>,
+    /// Planned proven alignments for carrier projection operations.
     projection_alignments: Vec<(Ptr<Operation>, u32)>,
 }
 
 impl CarrierFactPlan {
+    /// Stage a physical storage type attribute for `operation`.
     fn plan_storage_type(&mut self, operation: Ptr<Operation>, ty: TypeHandle) {
         self.storage_types.push((operation, ty));
     }
 
+    /// Stage a physical GEP source type attribute for `operation`.
     fn plan_gep_source_type(&mut self, operation: Ptr<Operation>, ty: TypeHandle) {
         self.gep_source_types.push((operation, ty));
     }
 
+    /// Stage a proven byte alignment attribute for `operation`.
     fn plan_projection_alignment(&mut self, operation: Ptr<Operation>, align: u32) {
         self.projection_alignments.push((operation, align));
     }
 
+    /// Attach all staged carrier attributes once whole-function validation succeeds.
     fn apply(self, ctx: &mut Context) {
         for (operation, ty) in self.storage_types {
             set_type_attr(ctx, operation, CARRIER_STORAGE_TYPE_KEY, ty);
@@ -90,10 +108,12 @@ impl CarrierFactPlan {
     }
 }
 
+/// Construct a pliron [`Identifier`] from a static carrier attribute key.
 fn attr_key(name: &str) -> Identifier {
     Identifier::try_new(name.to_string()).expect("static carrier attribute key must be valid")
 }
 
+/// Read a [`TypeAttr`] capability from `op` by key.
 fn get_type_attr(ctx: &Context, op: Ptr<Operation>, name: &str) -> Option<TypeHandle> {
     op.deref(ctx)
         .attributes
@@ -101,6 +121,7 @@ fn get_type_attr(ctx: &Context, op: Ptr<Operation>, name: &str) -> Option<TypeHa
         .map(|attr| attr.get_type(ctx))
 }
 
+/// Stamp a [`TypeAttr`] capability onto `op` under `name`.
 fn set_type_attr(ctx: &mut Context, op: Ptr<Operation>, name: &str, ty: TypeHandle) {
     op.deref_mut(ctx)
         .attributes
@@ -134,6 +155,7 @@ pub(crate) fn carrier_projection_alignment(ctx: &Context, op: Ptr<Operation>) ->
     llvm_export::ops::address_alignment(ctx, op)
 }
 
+/// Collect `root` and every nested operation in its regions in pre-order.
 fn collect_operations(ctx: &Context, root: Ptr<Operation>) -> Vec<Ptr<Operation>> {
     let mut result = Vec::new();
     let mut pending = vec![root];
@@ -151,6 +173,7 @@ fn collect_operations(ctx: &Context, root: Ptr<Operation>) -> Vec<Ptr<Operation>
     result
 }
 
+/// Reject input MIR that already carries lowering-private carrier attributes.
 fn reject_preexisting_carrier_facts(ctx: &Context, operations: &[Ptr<Operation>]) -> Result<()> {
     for &operation in operations {
         if carrier_storage_type(ctx, operation).is_some()
@@ -166,78 +189,33 @@ fn reject_preexisting_carrier_facts(ctx: &Context, operations: &[Ptr<Operation>]
 
 /// Recognize the recursive/multi-leaf local-storage shape tracked by #1094.
 ///
-/// The root remains a byte-faithful packed struct. Nested structs/tuples,
-/// multiple AS3 leaves, and fixed arrays are admitted recursively. Vectors and
-/// unrelated aggregate kinds remain fail-closed.
-///
-/// Array expansion reuses the existing 16-leaf rewrite budget because local
-/// stores/loads invoke the same element-wise target-stable coercion as the
-/// internal ABI. The check is nevertheless performed here, behind the separate
-/// local shape predicate above, so ABI shape changes cannot widen this lane by
-/// themselves.
+/// Reuses [`packed_shared_internal_abi_info`] for the structural, layout-faithfulness,
+/// array-rewrite budget, and byte-size checks, then pairs the resulting physical
+/// storage type with the root MIR aggregate's rustc ABI alignment.
 fn packed_shared_local_storage_info(
     ctx: &mut Context,
     mir_ty: TypeHandle,
 ) -> std::result::Result<Option<PackedSharedLocalStorageInfo>, anyhow::Error> {
-    let layout = {
-        let ty_ref = mir_ty.deref(ctx);
-        let Some(struct_ty) = ty_ref.downcast_ref::<MirStructType>() else {
-            return Ok(None);
-        };
-        StructLayoutInfo::of_struct(struct_ty)
-    };
-
-    if !packed_shared_mir_shape_is_supported(ctx, mir_ty) {
-        return Ok(None);
-    }
-
-    let map = build_struct_slot_map(ctx, &layout)?;
-    if !map.by_value_layout_faithful {
-        return Ok(None);
-    }
-    let is_packed = map
-        .llvm_struct_ty
-        .deref(ctx)
-        .downcast_ref::<llvm_types::StructType>()
-        .is_some_and(|struct_ty| struct_ty.layout() == llvm_types::StructLayout::Packed);
-    if !is_packed {
-        return Ok(None);
-    }
-
-    let rewrite = target_stable_storage_type(
-        ctx,
-        map.llvm_struct_ty,
-        StorageRewriteOptions {
-            canonicalize_bool: false,
-        },
-        "packed shared local storage",
-    )?;
-    if rewrite.shared_pointer_leaves == 0
-        || rewrite.array_shared_pointer_leaves > MAX_PACKED_SHARED_INTERNAL_ABI_ARRAY_REWRITE_LEAVES
-    {
-        return Ok(None);
-    }
-    let Some((storage_size, _)) = llvm_type_size_align(ctx, rewrite.ty) else {
+    let Some(abi) = packed_shared_internal_abi_info(ctx, mir_ty)? else {
         return Ok(None);
     };
-    if layout.total_size > 0 && storage_size != layout.total_size {
-        return Ok(None);
-    }
 
     // Root alignment is a rustc storage fact, not the carrier field's ABI.
     // Every nested projection must inherit this cap before offset narrowing.
     let Some(root_align) = mir_type_abi_align(ctx, mir_ty)
+        .map(|align| align.max(1))
         .filter(|align| align.is_power_of_two())
         .and_then(|align| u32::try_from(align).ok())
     else {
         return Ok(None);
     };
     Ok(Some(PackedSharedLocalStorageInfo {
-        storage_ty: rewrite.ty,
+        storage_ty: abi.storage_ty,
         root_align,
     }))
 }
 
+/// Convert `semantic_mir_ty` to LLVM and rewrite any AS3 leaves to target-stable generic pointers.
 fn target_stable_local_value_type(
     ctx: &mut Context,
     semantic_mir_ty: TypeHandle,
@@ -255,6 +233,7 @@ fn target_stable_local_value_type(
     .ty)
 }
 
+/// Identify `mir.alloca` ops whose pointee requires a packed-AS3 carrier and seed `addresses`.
 fn seed_carrier_allocas(
     ctx: &mut Context,
     operations: &[Ptr<Operation>],
@@ -292,6 +271,7 @@ fn seed_carrier_allocas(
     Ok(())
 }
 
+/// Extract the MIR pointee type from the pointer result of a projection operation.
 fn projection_result_pointee(
     ctx: &Context,
     operation: Ptr<Operation>,
@@ -308,6 +288,7 @@ fn projection_result_pointee(
     Ok(pointer.pointee)
 }
 
+/// Resolve the physical LLVM field type and rustc byte offset for a carrier `mir.field_addr`.
 fn carrier_field_physical_pointee(
     ctx: &mut Context,
     operation: Ptr<Operation>,
@@ -391,6 +372,7 @@ fn carrier_field_physical_pointee(
     Ok((physical, field_offset))
 }
 
+/// Resolve and verify the physical LLVM element type for a carrier `mir.array_element_addr`.
 fn carrier_array_element_physical_pointee(
     ctx: &mut Context,
     operation: Ptr<Operation>,
@@ -425,6 +407,7 @@ fn carrier_array_element_physical_pointee(
     Ok(physical)
 }
 
+/// Propagate carrier physical pointee types and alignments through field and array projections.
 fn derive_carrier_projections(
     ctx: &mut Context,
     operations: &[Ptr<Operation>],
@@ -527,6 +510,7 @@ fn derive_carrier_projections(
     Ok(())
 }
 
+/// Return a fail-closed diagnostic when a carrier address attempts to cross `kind`.
 fn reject_boundary_use(kind: &str) -> Result<()> {
     pliron::input_err_noloc!(
         "packed-AS3 carrier-local address cannot cross a {}; the physical storage contract must never be dropped and reconstructed later",
@@ -534,6 +518,7 @@ fn reject_boundary_use(kind: &str) -> Result<()> {
     )
 }
 
+/// Verify every operand use of a carrier address and stage load/store storage types.
 fn validate_and_plan_uses(
     ctx: &Context,
     operations: &[Ptr<Operation>],

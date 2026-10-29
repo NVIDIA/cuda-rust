@@ -1706,3 +1706,114 @@ fn test_scalar_arithmetic_libnvvm_uses_exact_inline_ptx() -> Result<(), anyhow::
     );
     Ok(())
 }
+
+/// Lower `max` and `min` calls on both f32 and f64 operands under `backend`.
+fn lower_float_minmax(
+    backend: mir_lower::IntrinsicBackend,
+) -> Result<(Context, pliron::context::Ptr<Operation>), anyhow::Error> {
+    use dialect_mir::rust_intrinsics;
+    use pliron::builtin::attributes::StringAttr;
+    use pliron::builtin::types::{FP32Type, FP64Type};
+    use pliron::r#type::TypeHandle;
+
+    let mut ctx = make_test_ctx();
+    let f32_ty: TypeHandle = FP32Type::get(&ctx).into();
+    let f64_ty: TypeHandle = FP64Type::get(&ctx).into();
+    let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![f32_ty, f32_ty, f64_ty, f64_ty]);
+    let f32_args = [
+        entry.deref(&ctx).get_argument(0),
+        entry.deref(&ctx).get_argument(1),
+    ];
+    let f64_args = [
+        entry.deref(&ctx).get_argument(2),
+        entry.deref(&ctx).get_argument(3),
+    ];
+
+    for (callee, args, result_ty) in [
+        (rust_intrinsics::CALLEE_MAXNUM_NSZ_F32, f32_args, f32_ty),
+        (rust_intrinsics::CALLEE_MINNUM_NSZ_F32, f32_args, f32_ty),
+        (rust_intrinsics::CALLEE_MAXNUM_NSZ_F64, f64_args, f64_ty),
+        (rust_intrinsics::CALLEE_MINNUM_NSZ_F64, f64_args, f64_ty),
+    ] {
+        let call_ptr = Operation::new(
+            &mut ctx,
+            mir::MirCallOp::get_concrete_op_info(),
+            vec![result_ty],
+            args.to_vec(),
+            vec![],
+            0,
+        );
+        let call = mir::MirCallOp::new(call_ptr);
+        call.set_attr_callee(&ctx, StringAttr::new(callee.to_string()));
+        call_ptr.insert_at_back(entry, &ctx);
+    }
+    append_return(&mut ctx, entry);
+
+    mir_lower::lower_mir_to_llvm_with_options(
+        &mut ctx,
+        module_ptr,
+        mir_lower::LoweringOptions {
+            intrinsic_backend: backend,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| anyhow::anyhow!("{error}"))?;
+    Ok((ctx, module_ptr))
+}
+
+/// Direct callee names, `fcmp` count and `select` count of a lowered body.
+fn minmax_lowering_shape(
+    ctx: &Context,
+    body: &[pliron::context::Ptr<Operation>],
+) -> (Vec<String>, usize, usize) {
+    let mut callees = Vec::new();
+    let (mut fcmps, mut selects) = (0, 0);
+    for &op in body {
+        assert!(
+            Operation::get_op::<mir::MirCallOp>(op, ctx).is_none(),
+            "max/min placeholder mir.call must not survive MIR lowering"
+        );
+        if let Some(call) = Operation::get_op::<llvm::CallOp>(op, ctx)
+            && let CallOpCallable::Direct(sym) = call.callee(ctx)
+        {
+            callees.push(sym.to_string());
+        }
+        fcmps += usize::from(Operation::get_op::<llvm::FCmpOp>(op, ctx).is_some());
+        selects += usize::from(Operation::get_op::<llvm::SelectOp>(op, ctx).is_some());
+    }
+    (callees, fcmps, selects)
+}
+
+#[test]
+fn test_float_minmax_llvm_nvptx_f32_uses_nvvm_intrinsics_f64_uses_compare_select()
+-> Result<(), anyhow::Error> {
+    let (ctx, module_ptr) = lower_float_minmax(mir_lower::IntrinsicBackend::LlvmNvptx)?;
+    let (callees, fcmps, selects) =
+        minmax_lowering_shape(&ctx, &lowered_kernel_body(&ctx, module_ptr));
+
+    // f32 max/min: one native NVVM call each, no compare/select.
+    assert_eq!(
+        callees,
+        ["llvm_nvvm_fmax_f", "llvm_nvvm_fmin_f"],
+        "f32 max/min must call the non-.NaN, non-.ftz NVVM intrinsics"
+    );
+    // f64 max/min: the NaN-ignoring expansion, two fcmp + two select each.
+    assert_eq!(fcmps, 4, "only the two f64 ops keep the compare/select");
+    assert_eq!(selects, 4, "only the two f64 ops keep the compare/select");
+    Ok(())
+}
+
+#[test]
+fn test_float_minmax_libnvvm_keeps_compare_select_for_both_widths() -> Result<(), anyhow::Error> {
+    let (ctx, module_ptr) = lower_float_minmax(mir_lower::IntrinsicBackend::LibNvvm)?;
+    let (callees, fcmps, selects) =
+        minmax_lowering_shape(&ctx, &lowered_kernel_body(&ctx, module_ptr));
+
+    assert!(
+        callees.is_empty(),
+        "libNVVM max/min must not call an intrinsic, found {callees:?}"
+    );
+    assert_eq!(fcmps, 8, "all four ops expand to two fcmp each");
+    assert_eq!(selects, 8, "all four ops expand to two select each");
+    Ok(())
+}

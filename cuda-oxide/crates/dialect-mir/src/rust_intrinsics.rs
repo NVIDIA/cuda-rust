@@ -288,9 +288,10 @@ pub fn is_known_placeholder(callee: &str) -> bool {
 /// [`is_backend_dependent_libdevice_placeholder`].
 ///
 /// The `max`/`min` placeholders (`maximum_number_nsz_*` /
-/// `minimum_number_nsz_*`) are in NEITHER list: they lower to an ordered
-/// compare/select expansion under every intrinsic backend, so they never
-/// produce a `__nv_*` call. (`llvm.maxnum`/`llvm.minnum` are unusable
+/// `minimum_number_nsz_*`) are in NEITHER list: they never produce a
+/// `__nv_*` call. Under the LLVM NVPTX backend f32 lowers to the native
+/// `llvm.nvvm.fmax.f` / `llvm.nvvm.fmin.f`; f64 and the libNVVM backend use an
+/// ordered compare/select expansion. (`llvm.maxnum`/`llvm.minnum` are unusable
 /// because under LLVM 21 they propagate signaling NaNs, contradicting
 /// Rust's ignore-any-NaN contract; see #390.)
 pub fn is_libdevice_backed_placeholder(callee: &str) -> bool {

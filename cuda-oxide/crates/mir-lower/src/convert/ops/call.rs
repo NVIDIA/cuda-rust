@@ -362,6 +362,19 @@ impl RustFloatMathIntrinsic {
         }
     }
 
+    /// Whether this min/max lowers to a native NVVM intrinsic under the
+    /// active intrinsic backend, instead of the compare/select expansion.
+    ///
+    /// Only f32 has one (`llvm.nvvm.fmax.f` / `llvm.nvvm.fmin.f`), and only the
+    /// LLVM NVPTX backend accepts it; libNVVM keeps the expansion.
+    fn has_native_minmax(self, ctx: &Context) -> bool {
+        matches!(self, Self::MaxNumNszF32 | Self::MinNumNszF32)
+            && matches!(
+                crate::context::lowering_options(ctx).intrinsic_backend,
+                crate::IntrinsicBackend::LlvmNvptx
+            )
+    }
+
     /// CUDA libdevice function name for this Rust math intrinsic.
     fn libdevice_name(
         self,
@@ -409,10 +422,11 @@ impl RustFloatMathIntrinsic {
             Self::CopysignF64 => Ok("__nv_copysign"),
             // `f32::max` / `f32::min` (and the f64 forms) call the `_nsz`
             // intrinsics, i.e. IEEE-754 maxNum/minNum with the "no signed
-            // zero" relaxation. They expand to an ordered compare/select
-            // sequence under every intrinsic backend (the caller routes them
-            // through `lower_float_minmax_nsz` before any symbol lookup), so
-            // they must never reach a libdevice name.
+            // zero" relaxation. f32 lowers to a native NVVM intrinsic under
+            // the LLVM NVPTX backend (see `llvm_intrinsic_name`); everything
+            // else expands to an ordered compare/select sequence (the caller
+            // routes it through `lower_float_minmax_nsz` before any symbol
+            // lookup). Neither path may reach a libdevice name.
             Self::MaxNumNszF32 | Self::MaxNumNszF64 | Self::MinNumNszF32 | Self::MinNumNszF64 => {
                 pliron::input_err!(
                     loc,
@@ -515,11 +529,13 @@ impl RustFloatMathIntrinsic {
     /// Using LLVM intrinsics avoids a libdevice function call and removes the
     /// libNVVM dependency for kernels that only use these operations.
     ///
-    /// Scope: `max`/`min` deliberately return `None` here. They cannot use
-    /// `llvm.maxnum`/`llvm.minnum` at all, because under LLVM 21 those
-    /// propagate signaling NaNs and so contradict Rust's contract; they lower
-    /// as an ordered compare/select instead (`lower_float_minmax_nsz`, see
-    /// #390) and never reach this table.
+    /// Scope: f32 `max`/`min` map to `llvm.nvvm.fmax.f` / `llvm.nvvm.fmin.f`,
+    /// the non-`.NaN`, non-`.ftz` forms that select `max.f32` / `min.f32`.
+    /// They cannot use `llvm.maxnum`/`llvm.minnum`, because under LLVM 21 those
+    /// propagate signaling NaNs and so contradict Rust's contract (#390). f64
+    /// has no NVVM equivalent, so f64 `max`/`min` return `None` here and lower
+    /// as an ordered compare/select instead (`lower_float_minmax_nsz`). The
+    /// libNVVM backend never uses this table and keeps that expansion for f32.
     ///
     /// Naming: pliron identifiers cannot contain dots, so intrinsic symbols
     /// use the underscore encoding (`llvm_floor_f32`) that the textual `.ll`
@@ -551,6 +567,11 @@ impl RustFloatMathIntrinsic {
             Self::Fabs => fabs_llvm_intrinsic_name(ctx, result_ty, loc).map(Some),
             Self::CopysignF32 => Ok(Some("llvm_copysign_f32")),
             Self::CopysignF64 => Ok(Some("llvm_copysign_f64")),
+            // f32 min/max: the non-`.NaN`, non-`.ftz` NVVM forms select
+            // `max.f32` / `min.f32`. f64 has no NVVM equivalent and returns
+            // `None`; see the scope note above.
+            Self::MaxNumNszF32 => Ok(Some("llvm_nvvm_fmax_f")),
+            Self::MinNumNszF32 => Ok(Some("llvm_nvvm_fmin_f")),
             _ => Ok(None),
         }
     }
@@ -1291,7 +1312,12 @@ fn convert_rust_float_math_intrinsic(
         return lower_fast_binop(ctx, rewriter, op, &args, binop, loc);
     }
 
-    if let Some(predicate) = intrinsic.minmax_nsz_predicate() {
+    // f32 `max`/`min` with a native NVVM intrinsic fall through to the common
+    // intrinsic-call path below; every other min/max keeps the compare/select
+    // expansion.
+    if let Some(predicate) = intrinsic.minmax_nsz_predicate()
+        && !intrinsic.has_native_minmax(ctx)
+    {
         return lower_float_minmax_nsz(ctx, rewriter, op, &args, predicate);
     }
 
@@ -2453,12 +2479,25 @@ mod tests {
             Some("llvm_roundeven_f64")
         );
 
-        // max/min return None: LLVM 21's maxnum/minnum propagate signaling
-        // NaNs, which contradicts Rust's contract. These use compare/select
-        // lowering instead and never reach the intrinsic tables (see #390).
+        // f32 max/min use the native NVVM intrinsics (`max.f32` / `min.f32`).
+        // LLVM 21's maxnum/minnum propagate signaling NaNs, which contradicts
+        // Rust's contract, so they are not used (see #390).
         assert_eq!(
             RustFloatMathIntrinsic::MaxNumNszF32
                 .llvm_intrinsic_name(&ctx, f32_ty, loc.clone())
+                .unwrap(),
+            Some("llvm_nvvm_fmax_f")
+        );
+        assert_eq!(
+            RustFloatMathIntrinsic::MinNumNszF32
+                .llvm_intrinsic_name(&ctx, f32_ty, loc.clone())
+                .unwrap(),
+            Some("llvm_nvvm_fmin_f")
+        );
+        // f64 has no NVVM equivalent and keeps the compare/select expansion.
+        assert_eq!(
+            RustFloatMathIntrinsic::MaxNumNszF64
+                .llvm_intrinsic_name(&ctx, f64_ty, loc.clone())
                 .unwrap(),
             None
         );

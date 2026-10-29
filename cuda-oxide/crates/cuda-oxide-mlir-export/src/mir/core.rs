@@ -1663,16 +1663,24 @@ mod tests {
     /// must use the `.sat` intrinsics; plain fptosi/fptoui are poison out of range.
     #[test]
     fn float_to_int_casts_saturate_like_rust() {
-        for (float, int, signedness, expected) in [
-            (32, 32, Signedness::Signed, "llvm.fptosi.sat.i32.f32"),
-            (32, 8, Signedness::Unsigned, "llvm.fptoui.sat.i8.f32"),
-            (64, 64, Signedness::Signed, "llvm.fptosi.sat.i64.f64"),
-            (16, 16, Signedness::Unsigned, "llvm.fptoui.sat.i16.f16"),
+        for (float, mir_fp16, int, signedness, expected) in [
+            (32, false, 32, Signedness::Signed, "llvm.fptosi.sat.i32.f32"),
+            (32, false, 8, Signedness::Unsigned, "llvm.fptoui.sat.i8.f32"),
+            (64, false, 64, Signedness::Signed, "llvm.fptosi.sat.i64.f64"),
+            (
+                16,
+                false,
+                16,
+                Signedness::Unsigned,
+                "llvm.fptoui.sat.i16.f16",
+            ),
+            (16, true, 16, Signedness::Signed, "llvm.fptosi.sat.i16.f16"),
         ] {
             let mut ctx = context();
-            let from: TypeHandle = match float {
-                16 => FP16Type::get(&ctx).into(),
-                32 => FP32Type::get(&ctx).into(),
+            let from: TypeHandle = match (float, mir_fp16) {
+                (16, true) => dialect_mir::types::MirFP16Type::get(&ctx).into(),
+                (16, false) => FP16Type::get(&ctx).into(),
+                (32, _) => FP32Type::get(&ctx).into(),
                 _ => FP64Type::get(&ctx).into(),
             };
             let to = integer(&mut ctx, int, signedness).into();
@@ -1690,13 +1698,15 @@ mod tests {
     /// Integer destinations wider than 64 bits have no device lowering, as in mir-lower.
     #[test]
     fn float_to_int_rejects_destinations_wider_than_64_bits() {
-        let mut ctx = context();
-        let from = FP64Type::get(&ctx).into();
-        let to = integer(&mut ctx, 128, Signedness::Signed).into();
-        let module = float_to_int_module(&mut ctx, from, to);
-        let profile = CutlassFullCuteMlir22::new("sm_120a").unwrap();
-        let error = format!("{:?}", profile.translate_module(&ctx, &module).unwrap_err());
-        assert!(error.contains("wider than 64 bits"), "{error}");
+        for signedness in [Signedness::Signed, Signedness::Unsigned] {
+            let mut ctx = context();
+            let from = FP64Type::get(&ctx).into();
+            let to = integer(&mut ctx, 128, signedness).into();
+            let module = float_to_int_module(&mut ctx, from, to);
+            let profile = CutlassFullCuteMlir22::new("sm_120a").unwrap();
+            let error = format!("{:?}", profile.translate_module(&ctx, &module).unwrap_err());
+            assert!(error.contains("wider than 64 bits"), "{error}");
+        }
     }
 
     /// Check FP16 bit extraction and reconstruction use exact bit-preserving scalar operations.

@@ -19,6 +19,17 @@
 //! freeing on a chosen stream; its caller takes over the obligation to
 //! order every other stream that uses the buffer before that stream.
 //!
+//! # Context binding
+//!
+//! Every method that reaches the driver first binds `stream.context()` to the
+//! calling thread ([`CudaContext::bind_to_thread`]). `cuMemAlloc` needs a
+//! current context, and the default stream (a null `CUstream`) is resolved
+//! against whichever context is current, so without the bind a thread that
+//! has never touched CUDA fails with `CUDA_ERROR_INVALID_CONTEXT` and a
+//! thread bound to another device works in the wrong context. The bind also
+//! drains the context's sticky error state, so a pending recorded error is
+//! returned before any transfer is enqueued.
+//!
 //! # Quick start
 //!
 //! ```ignore
@@ -59,6 +70,17 @@ use crate::simt::stream::CudaStream;
 /// `NonZeroU32` are `Copy`, but not every byte pattern is a valid value of
 /// those types. `DeviceCopy` is the stronger promise required when
 /// `DeviceBuffer` turns raw device bytes back into initialized Rust values.
+///
+/// Raw pointers implement `DeviceCopy` only for `Sized` pointees. A fat
+/// pointer such as `*const dyn Trait` carries a vtable address that only the
+/// host's own code image can supply, so one read back from device memory is
+/// not a valid pointer of its type; slice pointers are excluded on the same
+/// grounds until something needs them.
+///
+/// ```compile_fail,E0277
+/// fn assert_device_copy<T: cuda_core::DeviceCopy>() {}
+/// assert_device_copy::<*const dyn std::fmt::Debug>();
+/// ```
 pub unsafe trait DeviceCopy: Copy {}
 
 macro_rules! impl_device_copy {
@@ -88,8 +110,11 @@ impl_device_copy!(
 );
 
 unsafe impl<T: DeviceCopy, const N: usize> DeviceCopy for [T; N] {}
-unsafe impl<T: ?Sized> DeviceCopy for *const T {}
-unsafe impl<T: ?Sized> DeviceCopy for *mut T {}
+// Thin pointers only: every address is a valid `*const T` / `*mut T` value,
+// which is not true of the metadata half of a fat pointer (see the trait
+// docs). The pointee itself need not be `DeviceCopy`; nothing dereferences it.
+unsafe impl<T> DeviceCopy for *const T {}
+unsafe impl<T> DeviceCopy for *mut T {}
 
 // Wrapper types that don't change the byte representation: a value of the
 // wrapper has the same layout and validity invariants as the inner `T`.
@@ -153,28 +178,37 @@ pub struct DeviceBuffer<T> {
     _marker: PhantomData<T>,
 }
 
-// SAFETY: CUdeviceptr is a u64 handle valid across threads when the owning
-// context is bound. The PhantomData<T> is Send if T is Send.
+// SAFETY: the handle fields are plain values (`CUdeviceptr`, lengths) and
+// `Arc`s that are themselves `Send + Sync`; a buffer of `T` elements moves
+// between threads under the same rule as `Vec<T>`.
 unsafe impl<T: Send> Send for DeviceBuffer<T> {}
-// SAFETY: &DeviceBuffer only exposes cu_deviceptr() and len(), both of which
-// return Copy values. No interior mutability.
+// SAFETY: no interior mutability. Every `&self` method either reads the handle
+// fields or enqueues a device-side *read* of the buffer (`to_host_vec`,
+// `copy_to_host`, `copy_to_pinned_host[_async]`, and the source side of
+// `copy_from_device_async`); all writes go through `&mut self` or `self`.
+// Shared access hands out `T` values by bit copy, so the `T: Sync` bound
+// mirrors the one on `&[T]: Send`.
 unsafe impl<T: Send + Sync> Sync for DeviceBuffer<T> {}
 
 impl<T> Drop for DeviceBuffer<T> {
     fn drop(&mut self) {
         if self.ptr != 0 {
-            self.ctx.record_err(self.ctx.bind_to_thread());
-            // Safe buffer operations can enqueue work on any stream in this
-            // context. Synchronize all of them before implicitly freeing a
-            // stream-ordered allocation.
+            // Neither the bind nor the context-wide wait consults the sticky
+            // error state: a recorded error must not turn this drop into a
+            // leak, and it stays recorded for the next fallible call to
+            // report. Only a failed driver call skips the free, since memory
+            // the device may still be using cannot be released.
             let result = match &self.dealloc_stream {
-                Some(stream) => match self.ctx.synchronize() {
-                    Ok(()) => unsafe {
-                        crate::simt::memory::free_async(self.ptr, stream.cu_stream())
-                    },
-                    Err(error) => Err(error),
-                },
-                None => unsafe { crate::simt::memory::free_sync(self.ptr) },
+                // Safe buffer operations can enqueue work on any stream in
+                // this context. Synchronize all of them before implicitly
+                // freeing a stream-ordered allocation.
+                Some(stream) => self.ctx.synchronize_driver().and_then(|()| unsafe {
+                    crate::simt::memory::free_async(self.ptr, stream.cu_stream())
+                }),
+                None => self
+                    .ctx
+                    .make_current()
+                    .and_then(|()| unsafe { crate::simt::memory::free_sync(self.ptr) }),
             };
             self.ctx.record_err(result);
         }
@@ -407,6 +441,15 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
     /// An empty `data` slice yields an empty buffer without touching the
     /// driver allocator.
     ///
+    /// # Sticky errors
+    ///
+    /// A pending recorded error ([`CudaContext::record_err`]) is returned
+    /// before anything is allocated or enqueued. One recorded while the copy
+    /// is in flight is returned only after the stream has been synchronized,
+    /// because [`CudaStream::synchronize`] always issues the driver wait
+    /// first; an `Err` from this function never leaves `data` in use by the
+    /// device unless `cuStreamSynchronize` itself failed.
+    ///
     /// # Allocation safety on error
     ///
     /// The buffer takes ownership of the device allocation immediately after
@@ -416,6 +459,7 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
     /// device memory is leaked.
     pub fn from_host(stream: &CudaStream, data: &[T]) -> Result<Self, DriverError> {
         let ctx = stream.context().clone();
+        ctx.bind_to_thread()?;
         let len = data.len();
         let num_bytes = allocation_size::<T>(len)?;
 
@@ -432,17 +476,17 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         // stream's context; ownership transfers to `buf` here so any early
         // return below frees it through the buffer's own `Drop`.
         let buf = unsafe { Self::from_raw_parts(ptr, len, ctx) };
-        let enqueue_result = unsafe {
+        // A failed enqueue leaves nothing in flight, so there is nothing to
+        // wait for before `data`'s borrow ends.
+        unsafe {
             crate::simt::memory::memcpy_htod_async(
                 buf.ptr,
                 data.as_ptr(),
                 num_bytes,
                 stream.cu_stream(),
-            )
-        };
-        let sync_result = stream.synchronize();
-        enqueue_result?;
-        sync_result?;
+            )?;
+        }
+        stream.synchronize()?;
         Ok(buf)
     }
 
@@ -461,6 +505,7 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         data: &[T],
     ) -> Result<Self, DriverError> {
         let ctx = stream.context().clone();
+        ctx.bind_to_thread()?;
         let len = data.len();
         let num_bytes = std::mem::size_of_val(data);
 
@@ -544,6 +589,7 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
     /// no device memory is leaked.
     pub fn zeroed(stream: &CudaStream, len: usize) -> Result<Self, DriverError> {
         let ctx = stream.context().clone();
+        ctx.bind_to_thread()?;
         let num_bytes = allocation_size::<T>(len)?;
 
         // cuMemAlloc rejects zero-byte requests with CUDA_ERROR_INVALID_VALUE,
@@ -568,9 +614,17 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
     /// Copies the entire buffer back to the host, returning a `Vec<T>`.
     ///
     /// Synchronizes on `stream` before returning so the host vector is safe
-    /// to read immediately.
+    /// to read immediately. See [`Self::from_host`] for how a sticky error
+    /// is ordered against the wait. If `cuStreamSynchronize` itself fails,
+    /// the vector is leaked instead of freed, since the DMA may still be
+    /// writing it.
     pub fn to_host_vec(&self, stream: &CudaStream) -> Result<Vec<T>, DriverError> {
+        stream.context().bind_to_thread()?;
         let mut host = Vec::with_capacity(self.len);
+        if self.num_bytes() == 0 {
+            return Ok(host);
+        }
+        // A failed enqueue leaves nothing in flight; `host` drops normally.
         unsafe {
             crate::simt::memory::memcpy_dtoh_async(
                 host.as_mut_ptr(),
@@ -579,15 +633,22 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
                 stream.cu_stream(),
             )?;
         }
-        stream.synchronize()?;
+        if let Err(err) = stream.synchronize_driver() {
+            // The driver did not complete the wait, so the copy may still
+            // target `host`: leaking is the only sound way out.
+            std::mem::forget(host);
+            return Err(err);
+        }
         unsafe { host.set_len(self.len) };
+        stream.context().check_err()?;
         Ok(host)
     }
 
     /// Copies the buffer contents into an existing host slice.
     ///
     /// Synchronizes on `stream` before returning. Panics if
-    /// `dst.len() < self.len()`.
+    /// `dst.len() < self.len()`. See [`Self::from_host`] for how a sticky
+    /// error is ordered against the wait.
     pub fn copy_to_host(&self, stream: &CudaStream, dst: &mut [T]) -> Result<(), DriverError> {
         assert!(
             dst.len() >= self.len,
@@ -595,6 +656,7 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
             dst.len(),
             self.len
         );
+        stream.context().bind_to_thread()?;
         unsafe {
             crate::simt::memory::memcpy_dtoh_async(
                 dst.as_mut_ptr(),
@@ -611,7 +673,8 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
     ///
     /// Panics if `dst.len() < self.len()`. Use pinned destinations when you
     /// need the transfer to avoid pageable-memory staging; this helper still
-    /// waits for completion before returning, matching [`Self::copy_to_host`].
+    /// waits for completion before returning, matching [`Self::copy_to_host`],
+    /// and orders a sticky error after that wait the same way.
     ///
     /// For true DtoH overlap, use [`Self::copy_to_pinned_host_async`] and
     /// synchronize the stream later.
@@ -662,6 +725,7 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
             dst.len(),
             self.len
         );
+        stream.context().bind_to_thread()?;
         unsafe {
             crate::simt::memory::memcpy_dtoh_async(
                 dst.as_mut_ptr(),
@@ -714,6 +778,7 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
             src.len(),
             self.len
         );
+        stream.context().bind_to_thread()?;
         let num_bytes = src.num_bytes();
         unsafe {
             crate::simt::memory::memcpy_htod_async(
@@ -745,6 +810,7 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         len: usize,
     ) -> Result<Self, DriverError> {
         let ctx = stream.context().clone();
+        ctx.bind_to_thread()?;
         let num_bytes = allocation_size::<T>(len)?;
         if num_bytes == 0 {
             // SAFETY: a null pointer with zero bytes is never dereferenced
@@ -776,6 +842,7 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
             "device-to-device copy length mismatch: dst {} != src {}",
             self.len, other.len
         );
+        stream.context().bind_to_thread()?;
         if self.num_bytes() == 0 {
             return Ok(());
         }
@@ -794,18 +861,17 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
     ///
     /// The synchronization keeps this safe for borrowed host slices: `src`
     /// may be dropped, reused, or mutated immediately after this function
-    /// returns. Panics if `src.len() != self.len()`.
+    /// returns. Panics if `src.len() != self.len()`. See [`Self::from_host`]
+    /// for how a sticky error is ordered against the wait.
     pub fn copy_from_host(&mut self, stream: &CudaStream, src: &[T]) -> Result<(), DriverError> {
         // SAFETY: this safe wrapper synchronizes `stream` before returning,
         // so the borrowed host slice cannot be used by CUDA after this call.
-        let enqueue_result = unsafe { self.copy_from_host_async_unchecked(stream, src) };
-        let sync_result = if self.num_bytes() == 0 {
-            Ok(())
-        } else {
-            stream.synchronize()
-        };
-        enqueue_result?;
-        sync_result
+        // A failed enqueue leaves nothing in flight to wait for.
+        unsafe { self.copy_from_host_async_unchecked(stream, src)? };
+        if self.num_bytes() == 0 {
+            return Ok(());
+        }
+        stream.synchronize()
     }
 
     /// Copies `src` into `self` host-to-device, enqueued on `stream`, and
@@ -831,6 +897,7 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
             self.len,
             src.len()
         );
+        stream.context().bind_to_thread()?;
         if self.num_bytes() == 0 {
             return Ok(());
         }
@@ -891,6 +958,7 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
 
     /// Zeroes every byte in the buffer asynchronously on `stream`.
     pub fn zero_async(&mut self, stream: &CudaStream) -> Result<(), DriverError> {
+        stream.context().bind_to_thread()?;
         if self.num_bytes() == 0 {
             return Ok(());
         }

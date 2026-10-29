@@ -9,12 +9,15 @@
 //! granularity, create physical memory, reserve a virtual range, map the
 //! memory, grant access, roundtrip data through the mapping, and tear
 //! down in a leak-free order (mapping before reservation and physical
-//! allocation handle).
+//! allocation handle, which the mapping's borrows enforce).
 //!
 //! Skips when no GPU is present.
 
-use cuda_core::{vmm, Device, IntoResult};
+use cuda_core::{vmm, Device, DriverError, IntoResult};
 use std::mem::MaybeUninit;
+
+const INVALID_VALUE: DriverError =
+    DriverError(cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE);
 
 #[test]
 fn align_size_handles_general_granularities() {
@@ -73,7 +76,12 @@ fn vmm_single_gpu_roundtrip() {
     assert_eq!(va.size(), size);
 
     {
-        let _map = vmm::Mapping::new(va.base(), size, &phys, 0).expect("cuMemMap");
+        let map = vmm::Mapping::new(&va, 0, &phys, 0, size).expect("cuMemMap");
+        assert_eq!(map.va(), va.base());
+        assert_eq!(map.size(), size);
+        assert!(std::ptr::eq(map.reservation(), &va));
+        assert!(map.physical().is_some_and(|p| std::ptr::eq(p, &phys)));
+        assert!(map.multicast().is_none());
         vmm::set_access(va.base(), size, &[cu_device]).expect("cuMemSetAccess");
 
         // Roundtrip a pattern through the mapped range.
@@ -100,6 +108,54 @@ fn vmm_single_gpu_roundtrip() {
         }
         assert_eq!(readback, pattern, "data must roundtrip through the mapping");
         // The mapping drops here, before the reservation and the physical
-        // allocation handle, matching a leak-free teardown order.
+        // allocation handle it borrows; the borrows make any other order a
+        // compile error.
     }
+}
+
+/// The driver cannot tell where our reservation ends (VA ranges are
+/// process-wide), so `Mapping::new` bounds the range itself before calling
+/// `cuMemMap`, and reports a wrap or an overrun as `CUDA_ERROR_INVALID_VALUE`.
+#[test]
+fn mapping_rejects_ranges_outside_the_reservation_or_allocation() {
+    match gpu_count() {
+        Ok(count) if count > 0 => {}
+        Ok(_) => {
+            eprintln!("SKIPPED: mapping bounds test requires a GPU");
+            return;
+        }
+        Err(error) => {
+            eprintln!("SKIPPED: CUDA unavailable ({error:?})");
+            return;
+        }
+    }
+
+    let device = Device::new(0).expect("GPU 0 device");
+    let cu_device = device.cu_device();
+    let granularity = vmm::allocation_granularity(cu_device).expect("allocation granularity query");
+    let size = vmm::align_size(1 << 20, granularity);
+
+    let phys = vmm::PhysicalAllocation::new(cu_device, size).expect("cuMemCreate");
+    // Twice the allocation, so there is a valid second half to map into.
+    let va = vmm::VirtualReservation::new(2 * size, 0).expect("cuMemAddressReserve");
+
+    assert_eq!(
+        vmm::Mapping::new(&va, 2 * size, &phys, 0, size).err(),
+        Some(INVALID_VALUE),
+        "a range past the end of the reservation is refused"
+    );
+    assert_eq!(
+        vmm::Mapping::new(&va, 0, &phys, granularity, size).err(),
+        Some(INVALID_VALUE),
+        "a range past the end of the allocation is refused"
+    );
+    assert_eq!(
+        vmm::Mapping::new(&va, usize::MAX, &phys, 0, size).err(),
+        Some(INVALID_VALUE),
+        "offset arithmetic that would wrap is refused"
+    );
+
+    let map = vmm::Mapping::new(&va, size, &phys, 0, size).expect("the second half is in range");
+    assert_eq!(map.va(), va.base() + size as u64);
+    assert!(std::ptr::eq(map.reservation(), &va));
 }

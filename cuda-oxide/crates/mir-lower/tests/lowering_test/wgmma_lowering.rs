@@ -2379,6 +2379,18 @@ fn test_pointer_form_wgmma_counted_k_loop_stays_register_resident() -> Result<()
 
 #[test]
 fn test_f16_wgmma_counted_k_loop_stays_register_resident() -> Result<(), anyhow::Error> {
+    assert_f16_counted_k_loop_fuses(false)
+}
+
+/// `#[nounroll]` on the K loop plants a hint in its latch. Counted-loop fusion
+/// must still accept the loop, since F16 has no pointer fallback, and the fused
+/// loop must stay rolled.
+#[test]
+fn test_f16_wgmma_counted_k_loop_with_nounroll_hint_still_fuses() -> Result<(), anyhow::Error> {
+    assert_f16_counted_k_loop_fuses(true)
+}
+
+fn assert_f16_counted_k_loop_fuses(plant_nounroll: bool) -> Result<(), anyhow::Error> {
     use dialect_mir::types::{MirArrayType, MirPtrType};
     use pliron::basic_block::BasicBlock;
     use pliron::builtin::op_interfaces::OperandSegmentInterface;
@@ -2477,6 +2489,11 @@ fn test_f16_wgmma_counted_k_loop_stays_register_resident() -> Result<(), anyhow:
     branch.insert_at_back(header, &ctx);
 
     // latch: one WGMMA per K iteration and affine descriptor recurrences.
+    if plant_nounroll {
+        mir::MirNoUnrollHintOp::new(&mut ctx)
+            .get_operation()
+            .insert_at_back(latch, &ctx);
+    }
     append_pointer_wgmma_mma_f16(&mut ctx, latch, accumulator, desc_a, desc_b);
 
     let one = append_mir_unsigned_constant(&mut ctx, latch, u32_ty, 1);
@@ -2568,6 +2585,12 @@ fn test_f16_wgmma_counted_k_loop_stays_register_resident() -> Result<(), anyhow:
         "the F16 counted-loop template must contain exactly one F16 MMA"
     );
     assert!(!template.contains(".bf16.bf16"));
+    // `#[nounroll]` moves from the fused K loop onto the template's own loop
+    assert_eq!(
+        template.contains("L__wgmma_loop_${:uid}:\n    .pragma \"nounroll\";\n"),
+        plant_nounroll,
+        "the fused loop header must start with the nounroll pragma exactly when the K loop carried the hint:\n{template}"
+    );
     assert_eq!(
         template.matches("wgmma.commit_group.sync.aligned").count(),
         1

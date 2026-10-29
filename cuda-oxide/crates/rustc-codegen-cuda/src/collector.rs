@@ -819,17 +819,25 @@ fn is_ptx_asm_marker_path(fn_path: &str) -> bool {
         || has_arity_suffix(fn_path, "cuda_device::ptx::__ptx_asm_void_")
 }
 
-/// Returns true for the hidden `__unroll_config::<FACTOR>` marker function.
+/// Returns true for the hidden `__unroll_config::<FACTOR>` and
+/// `__nounroll_config` marker functions.
 ///
-/// `#[unroll]` / `#[unroll(N)]` on a loop makes the `#[kernel]` or `#[device]`
-/// macro plant a call to this marker at the top of the loop body. The MIR
-/// importer rewrites that call to a `mir.unroll_hint` op (consumed by the
-/// loop-unroll pass) and never emits a real call. So the marker's empty body must
-/// not be collected, or it would show up as a dead `.func` in the generated PTX.
-/// Matches both the re-exported path (`cuda_device::__unroll_config`) and the
-/// full path.
+/// `#[unroll]` / `#[unroll(N)]` / `#[nounroll]` on a loop makes the `#[kernel]`
+/// or `#[device]` macro plant a call to one of these markers at the top of the
+/// loop body. The MIR importer rewrites that call to a `mir.unroll_hint` or
+/// `mir.nounroll_hint` op and never emits a real call. So the marker's empty
+/// body must not be collected, or it would show up as a dead `.func` in the
+/// generated PTX. Matches both the re-exported path
+/// (`cuda_device::__unroll_config`) and the full path, with or without generic
+/// arguments, and nothing else: a user function whose name merely starts with
+/// a marker's name must still be collected.
 fn is_unroll_marker_path(fn_path: &str) -> bool {
-    fn_path.contains("::__unroll_config")
+    let Some(path) = fn_path.strip_prefix("cuda_device::") else {
+        return false;
+    };
+    let name = path.strip_prefix("thread::").unwrap_or(path);
+    let name = name.split_once("::<").map_or(name, |(name, _)| name);
+    matches!(name, "__unroll_config" | "__nounroll_config")
 }
 
 /// Returns true for zero-cost compile-time configuration markers planted by
@@ -3164,7 +3172,8 @@ mod tests {
     use super::{
         CuteImplOwner, device_runtime_checks_target, is_cute_recognition_stub_identity,
         is_host_cpu_arch_def_path, is_kernel_entry_def_path, is_spin_loop_expansion,
-        is_std_float_inherent_method, truncate_path_for_box, unsupported_codegen_protocol_root,
+        is_std_float_inherent_method, is_unroll_marker_path, truncate_path_for_box,
+        unsupported_codegen_protocol_root,
     };
     use reserved_oxide_symbols::{
         DEVICE_PREFIX, KERNEL_PREFIX, LEGACY_DEVICE_PREFIX, LEGACY_KERNEL_PREFIX,
@@ -3253,6 +3262,27 @@ mod tests {
         assert!(is_spin_loop_expansion("::core_arch::x86::sse2::_mm_pause"));
         assert!(!is_spin_loop_expansion("::core_arch::x86::rdtsc::rdtsc"));
         assert!(!is_spin_loop_expansion("::hint::spin_loop"));
+    }
+
+    #[test]
+    fn unroll_markers_match_only_cuda_device_marker_names() {
+        for path in [
+            "cuda_device::__unroll_config::<4>",
+            "cuda_device::thread::__unroll_config::<0>",
+            "cuda_device::__nounroll_config",
+            "cuda_device::thread::__nounroll_config",
+        ] {
+            assert!(is_unroll_marker_path(path), "{path}");
+        }
+        for path in [
+            "cuda_device::thread::__nounroll_config_helper",
+            "cuda_device::__unroll_configure::<4>",
+            "my_kernels::__nounroll_config",
+            "my_kernels::cuda_device::__unroll_config::<4>",
+            "cuda_device::thread::inner::__nounroll_config",
+        ] {
+            assert!(!is_unroll_marker_path(path), "{path}");
+        }
     }
 
     #[test]

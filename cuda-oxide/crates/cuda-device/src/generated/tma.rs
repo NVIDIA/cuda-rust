@@ -237,11 +237,11 @@ pub unsafe fn cp_async_bulk_tensor_1d_g2s(
 ///
 /// # Safety
 /// `dst`, `tensor_map`, and `barrier` must remain valid until the copy completes.
-/// `barrier` must point into the issuing CTA's shared memory, as for the other
-/// `mbarrier` operations. `dst` is a [`SharedPtr`], which points there by its type.
+/// `dst` and `barrier` must point into the issuing CTA's shared memory, as for the other
+/// `mbarrier` operations.
 #[inline(never)]
 pub unsafe fn cp_async_bulk_tensor_1d_g2s_cta(
-    dst: SharedPtr<u8>,
+    dst: *mut u8,
     tensor_map: *const TmaDescriptor,
     coord0: i32,
     barrier: *mut Barrier,
@@ -284,11 +284,11 @@ pub unsafe fn cp_async_bulk_tensor_2d_g2s(
 ///
 /// # Safety
 /// `dst`, `tensor_map`, and `barrier` must remain valid until the copy completes.
-/// `barrier` must point into the issuing CTA's shared memory, as for the other
-/// `mbarrier` operations. `dst` is a [`SharedPtr`], which points there by its type.
+/// `dst` and `barrier` must point into the issuing CTA's shared memory, as for the other
+/// `mbarrier` operations.
 #[inline(never)]
 pub unsafe fn cp_async_bulk_tensor_2d_g2s_cta(
-    dst: SharedPtr<u8>,
+    dst: *mut u8,
     tensor_map: *const TmaDescriptor,
     coord0: i32,
     coord1: i32,
@@ -368,11 +368,11 @@ pub unsafe fn cp_async_bulk_tensor_3d_g2s(
 ///
 /// # Safety
 /// `dst`, `tensor_map`, and `barrier` must remain valid until the copy completes.
-/// `barrier` must point into the issuing CTA's shared memory, as for the other
-/// `mbarrier` operations. `dst` is a [`SharedPtr`], which points there by its type.
+/// `dst` and `barrier` must point into the issuing CTA's shared memory, as for the other
+/// `mbarrier` operations.
 #[inline(never)]
 pub unsafe fn cp_async_bulk_tensor_3d_g2s_cta(
-    dst: SharedPtr<u8>,
+    dst: *mut u8,
     tensor_map: *const TmaDescriptor,
     coord0: i32,
     coord1: i32,
@@ -421,11 +421,11 @@ pub unsafe fn cp_async_bulk_tensor_4d_g2s(
 ///
 /// # Safety
 /// `dst`, `tensor_map`, and `barrier` must remain valid until the copy completes.
-/// `barrier` must point into the issuing CTA's shared memory, as for the other
-/// `mbarrier` operations. `dst` is a [`SharedPtr`], which points there by its type.
+/// `dst` and `barrier` must point into the issuing CTA's shared memory, as for the other
+/// `mbarrier` operations.
 #[inline(never)]
 pub unsafe fn cp_async_bulk_tensor_4d_g2s_cta(
-    dst: SharedPtr<u8>,
+    dst: *mut u8,
     tensor_map: *const TmaDescriptor,
     coord0: i32,
     coord1: i32,
@@ -480,12 +480,12 @@ pub unsafe fn cp_async_bulk_tensor_5d_g2s(
 ///
 /// # Safety
 /// `dst`, `tensor_map`, and `barrier` must remain valid until the copy completes.
-/// `barrier` must point into the issuing CTA's shared memory, as for the other
-/// `mbarrier` operations. `dst` is a [`SharedPtr`], which points there by its type.
+/// `dst` and `barrier` must point into the issuing CTA's shared memory, as for the other
+/// `mbarrier` operations.
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn cp_async_bulk_tensor_5d_g2s_cta(
-    dst: SharedPtr<u8>,
+    dst: *mut u8,
     tensor_map: *const TmaDescriptor,
     coord0: i32,
     coord1: i32,

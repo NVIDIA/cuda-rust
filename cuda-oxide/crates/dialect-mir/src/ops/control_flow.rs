@@ -141,9 +141,37 @@ impl Verify for MirReturnOp {
 pub struct MirGotoOp;
 
 impl MirGotoOp {
+    /// Operation attribute key marking a loop backedge whose unroll factor was
+    /// already applied by `mir-transforms`.
+    const LOOP_UNROLL_DISABLE_KEY: &str = "loop_unroll_disable";
+
     /// Create a new MirGotoOp wrapper.
     pub fn new(op: Ptr<Operation>) -> Self {
         MirGotoOp { op }
+    }
+
+    /// Mark this branch as a loop backedge that downstream LLVM passes must
+    /// not unroll again.
+    pub fn set_loop_unroll_disable(&self, ctx: &mut Context) {
+        let key =
+            pliron::identifier::Identifier::try_new(Self::LOOP_UNROLL_DISABLE_KEY.to_string())
+                .expect("valid loop_unroll_disable attribute key");
+        self.get_operation()
+            .deref_mut(ctx)
+            .attributes
+            .set(key, UnrollAttr(1));
+    }
+
+    /// Whether downstream LLVM unrolling should be disabled on this backedge.
+    pub fn is_loop_unroll_disable(&self, ctx: &Context) -> bool {
+        let key =
+            pliron::identifier::Identifier::try_new(Self::LOOP_UNROLL_DISABLE_KEY.to_string())
+                .expect("valid loop_unroll_disable attribute key");
+        self.get_operation()
+            .deref(ctx)
+            .attributes
+            .get::<UnrollAttr>(&key)
+            .is_some()
     }
 }
 
@@ -489,6 +517,41 @@ impl Verify for MirUnrollHintOp {
     }
 }
 
+/// A per-loop "keep this loop rolled" request, planted inside a loop body by
+/// the `#[nounroll]` frontend.
+///
+/// Like [`MirUnrollHintOp`], the op sits physically inside the loop it
+/// annotates, so a pass can map it back to that loop through `LoopInfo`. The
+/// loop-unroll pass ignores it: an unrolled outer loop copies it into every
+/// body copy along with the inner loop it marks. Just before lowering,
+/// `mir_transforms::nounroll` gives each marked loop a single latch, and the
+/// lowering attaches `llvm.loop.unroll.disable` to that latch's branch. The
+/// hint itself never reaches the LLVM dialect. It has no operands, results, or
+/// attributes.
+#[pliron_op(
+    name = "mir.nounroll_hint",
+    format,
+    interfaces = [
+        pliron::builtin::op_interfaces::NOpdsInterface<0>,
+        pliron::builtin::op_interfaces::NResultsInterface<0>,
+    ]
+)]
+pub struct MirNoUnrollHintOp;
+
+impl MirNoUnrollHintOp {
+    /// Create a "keep this loop rolled" hint.
+    pub fn new(ctx: &mut Context) -> Self {
+        let op = Operation::new(ctx, Self::get_concrete_op_info(), vec![], vec![], vec![], 0);
+        MirNoUnrollHintOp { op }
+    }
+}
+
+impl Verify for MirNoUnrollHintOp {
+    fn verify(&self, _ctx: &Context) -> pliron::result::Result<()> {
+        Ok(())
+    }
+}
+
 /// Register control flow operations into the given context.
 pub fn register(ctx: &mut Context) {
     MirReturnOp::register(ctx);
@@ -497,4 +560,5 @@ pub fn register(ctx: &mut Context) {
     MirAssertOp::register(ctx);
     MirUnreachableOp::register(ctx);
     MirUnrollHintOp::register(ctx);
+    MirNoUnrollHintOp::register(ctx);
 }

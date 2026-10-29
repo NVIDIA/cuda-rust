@@ -83,6 +83,9 @@ mod borrow_raw_parts;
 #[path = "gpu/device_debug.rs"]
 mod device_debug;
 
+#[path = "gpu/jit_env_overrides.rs"]
+mod jit_env_overrides;
+
 // ---------------------------------------------------------------------------
 // Soundness guards: shape/storage invariants, launcher-side validation, and
 // graph-capture input discipline.

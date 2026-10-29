@@ -340,15 +340,24 @@ impl OperationTranslation for MmaLoadScalesTranslation {
         }
 
         let mut operations = vec![];
-        let lane = cast_int(
+        let lane = input.operands[0].clone();
+        let wm = cast_int(
             session,
             &mut operations,
-            input.operands[0].clone(),
-            MlirType::Integer(64),
-            "arith.extui",
+            input.operands[5].clone(),
+            MlirType::Integer(32),
+            "arith.trunci",
             &input.location,
         )?;
-        let four = emit_i64_constant(session, &mut operations, 4, &input.location)?;
+        let wn = cast_int(
+            session,
+            &mut operations,
+            input.operands[6].clone(),
+            MlirType::Integer(32),
+            "arith.trunci",
+            &input.location,
+        )?;
+        let four = emit_i32_constant(session, &mut operations, 4, &input.location)?;
         let q = emit_binary(
             session,
             &mut operations,
@@ -357,7 +366,7 @@ impl OperationTranslation for MmaLoadScalesTranslation {
             four,
             &input.location,
         )?;
-        let three = emit_i64_constant(session, &mut operations, 3, &input.location)?;
+        let three = emit_i32_constant(session, &mut operations, 3, &input.location)?;
         let r = emit_binary(
             session,
             &mut operations,
@@ -366,7 +375,7 @@ impl OperationTranslation for MmaLoadScalesTranslation {
             three,
             &input.location,
         )?;
-        let one = emit_i64_constant(session, &mut operations, 1, &input.location)?;
+        let one = emit_i32_constant(session, &mut operations, 1, &input.location)?;
         let parity = emit_binary(
             session,
             &mut operations,
@@ -375,7 +384,7 @@ impl OperationTranslation for MmaLoadScalesTranslation {
             one,
             &input.location,
         )?;
-        let eight = emit_i64_constant(session, &mut operations, 8, &input.location)?;
+        let eight = emit_i32_constant(session, &mut operations, 8, &input.location)?;
         let parity_band = emit_binary(
             session,
             &mut operations,
@@ -392,12 +401,12 @@ impl OperationTranslation for MmaLoadScalesTranslation {
             parity_band,
             &input.location,
         )?;
-        let sixteen = emit_i64_constant(session, &mut operations, 16, &input.location)?;
+        let sixteen = emit_i32_constant(session, &mut operations, 16, &input.location)?;
         let a_band = emit_binary(
             session,
             &mut operations,
             "arith.muli",
-            input.operands[5].clone(),
+            wm,
             sixteen.clone(),
             &input.location,
         )?;
@@ -409,7 +418,7 @@ impl OperationTranslation for MmaLoadScalesTranslation {
             a_provider,
             &input.location,
         )?;
-        let sixty_four = emit_i64_constant(session, &mut operations, 64, &input.location)?;
+        let sixty_four = emit_i32_constant(session, &mut operations, 64, &input.location)?;
         let a_row1 = emit_binary(
             session,
             &mut operations,
@@ -422,7 +431,7 @@ impl OperationTranslation for MmaLoadScalesTranslation {
             session,
             &mut operations,
             "arith.muli",
-            input.operands[6].clone(),
+            wn,
             sixteen,
             &input.location,
         )?;
@@ -435,8 +444,8 @@ impl OperationTranslation for MmaLoadScalesTranslation {
             &input.location,
         )?;
         let mut rows = vec![a_row0, a_row1, b_row0.clone()];
-        for delta in [8_u64, 32, 40, 64, 72, 96, 104] {
-            let delta = emit_i64_constant(session, &mut operations, delta, &input.location)?;
+        for delta in [8_i128, 32, 40, 64, 72, 96, 104] {
+            let delta = emit_i32_constant(session, &mut operations, delta, &input.location)?;
             rows.push(emit_binary(
                 session,
                 &mut operations,
@@ -638,15 +647,23 @@ fn emit_ldmatrix_x4(
     lane: MlirValueUse,
     location: &MlirLocation,
 ) -> Result<[MlirValueUse; 4], String> {
-    let lane = cast_int(
+    let warp_tile_row = cast_int(
         session,
         operations,
-        lane,
-        MlirType::Integer(64),
-        "arith.extui",
+        warp_tile_row,
+        MlirType::Integer(32),
+        "arith.trunci",
         location,
     )?;
-    let eight = emit_i64_constant(session, operations, 8, location)?;
+    let warp_tile_column = cast_int(
+        session,
+        operations,
+        warp_tile_column,
+        MlirType::Integer(32),
+        "arith.trunci",
+        location,
+    )?;
+    let eight = emit_i32_constant(session, operations, 8, location)?;
     let submatrix = emit_binary(
         session,
         operations,
@@ -663,7 +680,7 @@ fn emit_ldmatrix_x4(
         eight.clone(),
         location,
     )?;
-    let two = emit_i64_constant(session, operations, 2, location)?;
+    let two = emit_i32_constant(session, operations, 2, location)?;
     let parity = emit_binary(
         session,
         operations,
@@ -680,7 +697,7 @@ fn emit_ldmatrix_x4(
         eight.clone(),
         location,
     )?;
-    let sixteen = emit_i64_constant(session, operations, 16, location)?;
+    let sixteen = emit_i32_constant(session, operations, 16, location)?;
     let row = emit_binary(
         session,
         operations,
@@ -720,7 +737,7 @@ fn emit_ldmatrix_x4(
 
     // The verified shared layout is f16 (128,32):(32,1), converted to byte
     // strides (64,2), followed by S<2,3,3>.
-    let sixty_four = emit_i64_constant(session, operations, 64, location)?;
+    let sixty_four = emit_i32_constant(session, operations, 64, location)?;
     let row_bytes = emit_binary(session, operations, "arith.muli", row, sixty_four, location)?;
     let column_bytes = emit_binary(session, operations, "arith.muli", column, two, location)?;
     let plain = emit_binary(
@@ -734,7 +751,12 @@ fn emit_ldmatrix_x4(
     // The source layout's element-unit S<2,3,3> becomes S<2,4,3>
     // after converting f16 elements to byte offsets.  Mask bits 8..7 and
     // shift them onto bits 5..4, preserving the 16-byte ldmatrix segment.
-    let mask = emit_i64_constant(session, operations, LDMATRIX_BYTE_SWIZZLE_MASK, location)?;
+    let mask = emit_i32_constant(
+        session,
+        operations,
+        LDMATRIX_BYTE_SWIZZLE_MASK as i128,
+        location,
+    )?;
     let source_bits = emit_binary(
         session,
         operations,
@@ -743,7 +765,12 @@ fn emit_ldmatrix_x4(
         mask,
         location,
     )?;
-    let three = emit_i64_constant(session, operations, LDMATRIX_BYTE_SWIZZLE_SHIFT, location)?;
+    let three = emit_i32_constant(
+        session,
+        operations,
+        LDMATRIX_BYTE_SWIZZLE_SHIFT as i128,
+        location,
+    )?;
     let moved = emit_binary(
         session,
         operations,
@@ -1056,7 +1083,7 @@ fn load_scale_word(
     row: MlirValueUse,
     location: &MlirLocation,
 ) -> Result<MlirValueUse, String> {
-    let mask31 = emit_i64_constant(session, operations, 31, location)?;
+    let mask31 = emit_i32_constant(session, operations, 31, location)?;
     let low = emit_binary(
         session,
         operations,
@@ -1065,11 +1092,11 @@ fn load_scale_word(
         mask31,
         location,
     )?;
-    let four = emit_i64_constant(session, operations, 4, location)?;
+    let four = emit_i32_constant(session, operations, 4, location)?;
     let low = emit_binary(session, operations, "arith.muli", low, four, location)?;
-    let five = emit_i64_constant(session, operations, 5, location)?;
+    let five = emit_i32_constant(session, operations, 5, location)?;
     let quadrant = emit_binary(session, operations, "arith.shrui", row, five, location)?;
-    let three = emit_i64_constant(session, operations, 3, location)?;
+    let three = emit_i32_constant(session, operations, 3, location)?;
     let quadrant = emit_binary(session, operations, "arith.andi", quadrant, three, location)?;
     let offset = emit_binary(session, operations, "arith.addi", low, quadrant, location)?;
     let pointer = gep_value(

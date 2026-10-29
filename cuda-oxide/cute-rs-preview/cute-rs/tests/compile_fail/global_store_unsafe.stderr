@@ -1,0 +1,7 @@
+error[E0133]: call to unsafe function `store_global_no_allocate` is unsafe and requires unsafe block
+ --> tests/compile_fail/global_store_unsafe.rs:8:5
+  |
+8 |     cute_rs::store_global_no_allocate(core::ptr::null_mut(), &values);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior

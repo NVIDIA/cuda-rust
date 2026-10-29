@@ -3,17 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Required for `type_id_u128`'s use of `core::intrinsics::reflection::type_id`. The
+// Required for `type_id_u128`'s use of `core::intrinsics::type_id`. The
 // intrinsic is the only way to obtain the same 128-bit hash the backend
 // uses while keeping the bound at `T: ?Sized` (stable `TypeId::of` would
 // force `T: 'static` on every kernel marker — see `type_id.rs` for why
 // that would silently reject non-`'static` borrowing closures).
 //
 // We accept the `internal_features` warning here: cuda-oxide already ships
-// `rustc_codegen_cuda` against `rustc_private` and pins a nightly
-// toolchain, so the broader project is firmly inside rustc's internal API
-// surface. Anyone trying to lift this helper to a stable crate will hit
-// the same gate and have to make the same trade-off there.
+// `rustc_codegen_cuda` against `rustc_private` and pins its Rust toolchain
+// with `RUSTC_BOOTSTRAP=1`, so the broader project is firmly inside rustc's
+// internal API surface. Anyone trying to lift this helper to a standalone
+// crate will hit the same gate and have to make the same trade-off there.
 #![feature(core_intrinsics)]
 #![allow(internal_features)]
 

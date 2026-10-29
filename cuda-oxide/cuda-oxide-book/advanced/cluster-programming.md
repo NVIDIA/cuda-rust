@@ -83,12 +83,15 @@ let ncls = cluster::num_clusters();     // total clusters in the grid
 block's shared memory to read. Think of it as a "block-local device ID"
 within the cluster.
 
-For the full 3D cluster position:
+For the full 3D position of the block in its cluster, and of the cluster in
+the grid:
 
 ```rust
 let cx = cluster::cluster_ctaidX();     // block's X position in the cluster
 let cy = cluster::cluster_ctaidY();     // block's Y position in the cluster
 let cz = cluster::cluster_ctaidZ();     // block's Z position in the cluster
+let gx = cluster::cluster_idx_x();      // cluster's X position in the grid
+let nx = cluster::cluster_grid_dim_x(); // clusters along X in the grid
 ```
 
 ---

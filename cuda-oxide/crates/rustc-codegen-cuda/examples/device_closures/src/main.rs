@@ -49,8 +49,9 @@
 //! fn scale_kernel(factor: u32, input: &[u32], mut out: DisjointSlice<u32>) {
 //!     // 'factor' is the closure capture, passed as scalar argument
 //!     let idx = thread::index_1d();
+//!     let i = idx.get();
 //!     if let Some(slot) = out.get_mut(idx) {
-//!         *slot = input[idx.get()] * factor;
+//!         *slot = input[i] * factor;
 //!     }
 //! }
 //! ```

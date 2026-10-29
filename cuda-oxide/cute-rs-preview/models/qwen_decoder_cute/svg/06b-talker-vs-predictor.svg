@@ -1,0 +1,31 @@
+<svg class="qtts" xmlns="http://www.w3.org/2000/svg" width="680" height="350" viewBox="0 0 680 350" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif">
+<title>Talker and Predictor follow the same pattern</title>
+<style>.qtts .th { font-size:14px; font-weight:600; fill:#1e1e1e } .qtts .t { font-size:13px; fill:#2b2b2b } .qtts .ts { font-size:12px; fill:#5c5c5c } .qtts .k-box { fill:#f7f6f3; stroke:#c8c5be } .qtts .tx-box { fill:#1e1e1e } .qtts .k-purple { fill:#ebe9fb; stroke:#7f77dd } .qtts .tx-purple { fill:#3a3490 } .qtts .k-teal { fill:#dff3ec; stroke:#3aa47f } .qtts .tx-teal { fill:#1f5c47 } .qtts .k-coral { fill:#fde7e2; stroke:#e0735c } .qtts .tx-coral { fill:#7d2f1f } .qtts .k-amber { fill:#fdeed3; stroke:#ef9f27 } .qtts .tx-amber { fill:#6b4100 } .qtts .k-gray { fill:#eeedea; stroke:#a9a69f } .qtts .tx-gray { fill:#333 } .qtts .dash { fill:none; stroke:#c8c5be; stroke-dasharray:4 3 } .qtts .hair { stroke:#9c9c9c } .qtts .arr { fill:none; stroke:#7b7b7b; stroke-width:1.5 } .qtts .arrhead { fill:none; stroke:#7b7b7b; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round } .qtts .cell-e { fill:none; stroke:#9c9c9c; stroke-width:.5; opacity:.4 } @media (prefers-color-scheme: dark) { .qtts .th { fill: #f2f2f2 } .qtts .t { fill: #e6e6e6 } .qtts .ts { fill: #b8b8b8 } .qtts .k-box { fill: #2a2a2e; stroke: #4a4a50 } .qtts .tx-box { fill: #f2f2f2 } .qtts .dash { stroke: #55555c } .qtts .hair { stroke: #7a7a7a } .qtts .arr, .qtts .arrhead { stroke: #a3a3a3 } .qtts .k-purple { fill: #3a3490; stroke: #9a93ea } .qtts .tx-purple { fill: #e9e7fb } .qtts .k-teal { fill: #1f5c47; stroke: #5fc6a0 } .qtts .tx-teal { fill: #dff3ec } .qtts .k-coral { fill: #7d2f1f; stroke: #f08b76 } .qtts .tx-coral { fill: #fde7e2 } .qtts .k-amber { fill: #6b4100; stroke: #f3b65a } .qtts .tx-amber { fill: #fdeed3 } .qtts .k-gray { fill: #3a3a3e; stroke: #77777d } .qtts .tx-gray { fill: #e6e6e6 } .qtts .cell-e { stroke: #8a8a8a } }</style>
+<defs><marker id="arrow-06b-talker-vs-predictor" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="arrhead" d="M2 1L8 5L2 9"/></marker></defs>
+<text class="th" x="320" y="50" text-anchor="middle" dominant-baseline="central">Talker</text>
+<text class="th" x="540" y="50" text-anchor="middle" dominant-baseline="central">Predictor</text>
+<text class="ts" x="200" y="96" text-anchor="end" dominant-baseline="central">first trip (prefill)</text>
+<rect class="k-amber" x="240" y="70" width="160" height="4" rx="1" stroke-width="0.5"/><rect class="k-amber" x="240" y="76" width="160" height="4" rx="1" stroke-width="0.5"/><rect class="k-teal" x="240" y="82" width="160" height="4" rx="1" stroke-width="0.5"/><rect class="k-teal" x="240" y="88" width="160" height="4" rx="1" stroke-width="0.5"/><rect class="k-teal" x="240" y="94" width="160" height="4" rx="1" stroke-width="0.5"/><rect class="k-teal" x="240" y="100" width="160" height="4" rx="1" stroke-width="0.5"/><rect class="k-teal" x="240" y="106" width="160" height="4" rx="1" stroke-width="0.5"/><rect class="k-teal" x="240" y="112" width="160" height="4" rx="1" stroke-width="0.5"/>
+<text class="ts" x="320" y="128" text-anchor="middle" dominant-baseline="central">the 8 prompt rows</text>
+<rect class="k-amber" x="460" y="70" width="160" height="4" rx="1" stroke-width="0.5"/><rect class="k-teal" x="460" y="76" width="160" height="4" rx="1" stroke-width="0.5"/>
+<text class="ts" x="540" y="128" text-anchor="middle" dominant-baseline="central">Talker's row + code₀'s row</text>
+<line class="hair" x1="40" y1="142" x2="640" y2="142" stroke-width="0.5"/>
+<text class="ts" x="200" y="166" text-anchor="end" dominant-baseline="central">every later trip</text>
+<rect class="k-amber" x="240" y="155" width="160" height="6" rx="1" stroke-width="0.5"/>
+<text class="ts" x="320" y="178" text-anchor="middle" dominant-baseline="central">1 row from the last 16 codes</text>
+<rect class="k-coral" x="460" y="155" width="160" height="6" rx="1" stroke-width="0.5"/>
+<text class="ts" x="540" y="178" text-anchor="middle" dominant-baseline="central">1 row from the latest code</text>
+<line class="hair" x1="40" y1="192" x2="640" y2="192" stroke-width="0.5"/>
+<text class="ts" x="200" y="212" text-anchor="end" dominant-baseline="central">earlier rows</text>
+<text class="ts" x="320" y="212" text-anchor="middle" dominant-baseline="central">wait in the cache as K and V</text>
+<text class="ts" x="540" y="212" text-anchor="middle" dominant-baseline="central">wait in the cache as K and V</text>
+<line class="hair" x1="40" y1="232" x2="640" y2="232" stroke-width="0.5"/>
+<text class="ts" x="200" y="252" text-anchor="end" dominant-baseline="central">how many trips</text>
+<text class="ts" x="320" y="252" text-anchor="middle" dominant-baseline="central">until code₀ = EOS</text>
+<text class="ts" x="540" y="252" text-anchor="middle" dominant-baseline="central">exactly 15, then wiped</text>
+<line class="hair" x1="40" y1="272" x2="640" y2="272" stroke-width="0.5"/>
+<text class="ts" x="200" y="292" text-anchor="end" dominant-baseline="central">integer out per trip</text>
+<text class="ts" x="320" y="292" text-anchor="middle" dominant-baseline="central">code₀, from dictionary #0</text>
+<text class="ts" x="540" y="292" text-anchor="middle" dominant-baseline="central">codeₖ, from dictionary #k</text>
+<text class="ts" x="340" y="326" text-anchor="middle" dominant-baseline="central">same engine, two sizes: 28 blocks × 2048 wide vs 5 blocks × 1024 wide</text>
+</svg>

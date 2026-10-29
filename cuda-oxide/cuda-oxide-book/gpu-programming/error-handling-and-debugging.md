@@ -45,8 +45,9 @@ pub fn debug_kernel(data: &[f32], mut out: DisjointSlice<f32>) {
     if idx.get() < 4 {
         gpu_printf!("Thread {} sees value {}\n", idx.get(), data[idx.get()]);
     }
+    let i = idx.get();
     if let Some(out_elem) = out.get_mut(idx) {
-        *out_elem = data[idx.get()] * 2.0;
+        *out_elem = data[i] * 2.0;
     }
 }
 ```
@@ -81,7 +82,7 @@ the GPU. `gpu_printf!` bypasses all of this by lowering directly to a CUDA
 For fatal error checking on the device, use `gpu_assert!` or `debug::trap()`:
 
 ```rust
-use cuda_device::{DisjointSlice, debug, gpu_assert, kernel, thread};
+use cuda_device::{DisjointSlice, gpu_assert, kernel, thread};
 
 #[kernel]
 pub fn checked_kernel(data: &[f32], len: u32, mut out: DisjointSlice<f32>) {
@@ -96,8 +97,9 @@ pub fn checked_kernel(data: &[f32], len: u32, mut out: DisjointSlice<f32>) {
         "expected non-negative input"
     );
 
+    let i = idx.get();
     if let Some(out_elem) = out.get_mut(idx) {
-        *out_elem = data[idx.get()];
+        *out_elem = data[i];
     }
 }
 ```
@@ -488,19 +490,19 @@ cargo oxide doctor
 
 Doctor checks:
 
-| Check           | What it verifies                               |
-|:----------------|:-----------------------------------------------|
-| Rust toolchain  | Nightly compiler with required components      |
-| Codegen backend | `librustc_codegen_cuda.so` built               |
-| CUDA headers    | `cuda.h` present under the toolkit root        |
-| CUDA toolkit    | `nvcc` found and version compatible            |
-| libNVVM         | `libnvvm.so` loadable (libdevice math kernels) |
-| nvJitLink       | `libnvJitLink.so` loadable (same)              |
-| libdevice       | `libdevice.10.bc` discoverable (same)          |
-| LLVM            | `llc` (21+) available for PTX generation       |
-| Driver / GPU    | `nvidia-smi` reports a GPU and its compute cap |
-| cuda-gdb        | Optional; only needed for `cargo oxide debug`  |
-| compute-sanitizer | Optional; only needed for `cargo oxide sanitize` |
+| Check           | What it verifies                                    |
+|:----------------|:----------------------------------------------------|
+| Rust toolchain  | Pinned compiler (`1.99.1`) with required components |
+| Codegen backend | `librustc_codegen_cuda.so` built                    |
+| CUDA headers    | `cuda.h` present under the toolkit root             |
+| CUDA toolkit    | `nvcc` found and version compatible                 |
+| libNVVM         | `libnvvm.so` loadable (libdevice math kernels)      |
+| nvJitLink       | `libnvJitLink.so` loadable (same)                   |
+| libdevice       | `libdevice.10.bc` discoverable (same)               |
+| LLVM            | `llc` (21+) available for PTX generation            |
+| Driver / GPU    | `nvidia-smi` reports a GPU and its compute cap      |
+| cuda-gdb        | Optional; only needed for `cargo oxide debug`       |
+| compute-sanitizer | Optional; only needed for `cargo oxide sanitize`  |
 
 The libNVVM / nvJitLink / libdevice checks fire only when a kernel calls
 CUDA libdevice math (`sin`, `cos`, `exp`, `pow`, `sqrt`, ...). If your

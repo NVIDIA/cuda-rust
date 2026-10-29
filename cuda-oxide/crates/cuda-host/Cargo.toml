@@ -9,6 +9,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+cuda-device = { workspace = true }
 half = { workspace = true }
 # `host` is a cuda-macros default, but name it: cuda-host is precisely the
 # crate that needs the generated host surface, and it must keep it even if
@@ -32,7 +33,6 @@ async = ["dep:cuda-async", "cuda-macros/async"]
 
 [dev-dependencies]
 libloading = { workspace = true }
-cuda-device = { workspace = true }
 # The crates.io release cuda-core re-exports bundle types from; tests
 # construct payloads with it so they use the same crate instance.
 oxide-artifacts = { workspace = true }

@@ -155,8 +155,11 @@ jobs:
           command -v tileiras
           tileiras --help | grep -q "sm_120"
 
+      - uses: $/cutile-rs/.github/actions/setup
       - uses: actions/checkout@v7
-      - uses: ./cutile-rs/.github/actions/setup
+
+      - name: Mark checkout as safe
+        run: git config --global --add safe.directory /__w/cuda-rust/cuda-rust
 
       # Cheapest checks first so a formatting or lint slip fails in seconds.
       - name: Format check
@@ -183,6 +186,71 @@ jobs:
 
       - name: CPU only tests
         run: ./scripts/run_cpu_tests.sh
+
+      # nextest archives carry test executables, Cargo metadata, and build
+      # outputs needed to run on another machine without rebuilding Rust.
+      # Keep both workspaces separate, then bundle them in one downloadable tar.
+      - uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
+        name: Install cargo-nextest
+        with:
+          tool: cargo-nextest
+
+      - name: Archive Tile runtime test packages
+        run: |
+          mkdir -p "$RUNNER_TEMP/cutile-gpu-tests"
+          cargo nextest archive --locked --features experimental-tune \
+            --archive-file "$RUNNER_TEMP/cutile-gpu-tests/tile-tests.tar.zst"
+
+      - name: Archive shared-host runtime test packages
+        working-directory: ${{ github.workspace }}
+        run: |
+          cargo nextest archive --locked \
+            -p cuda-bindings -p cuda-core -p cuda-async \
+            --archive-file "$RUNNER_TEMP/cutile-gpu-tests/host-tests.tar.zst"
+
+      - name: Bundle runtime test archives
+        run: |
+          cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cutile-gpu-tests/cargo-nextest"
+          git rev-parse HEAD > "$RUNNER_TEMP/cutile-gpu-tests/revision.txt"
+          cargo nextest --version > "$RUNNER_TEMP/cutile-gpu-tests/nextest-version.txt"
+          tar -cf "$RUNNER_TEMP/cutile-gpu-tests.tar" \
+            -C "$RUNNER_TEMP/cutile-gpu-tests" .
+
+      - name: Upload runtime test packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: cutile-gpu-tests
+          path: ${{ runner.temp }}/cutile-gpu-tests.tar
+          if-no-files-found: error
+          compression-level: 0 # The nested nextest archives are already compressed.
+          retention-days: 1
+
+  gpu-tests:
+    needs: build
+    runs-on: linux-amd64-gpu-rtxpro6000-latest-1
+    timeout-minutes: 30
+    container:
+      image: nvidia/cuda:13.3.0-devel-ubuntu24.04
+    env:
+      CUDA_TOOLKIT_PATH: /usr/local/cuda
+      CUTILE_TILEIRAS_PATH: /usr/local/cuda/bin/tileiras
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: cutile-gpu-tests
+          path: ${{ runner.temp }}/gpu-tests
+
+      - name: Extract runtime test packages
+        run: |
+          tar -xf "$RUNNER_TEMP/gpu-tests/cutile-gpu-tests.tar" -C "$RUNNER_TEMP/gpu-tests"
+          test "$(cat "$RUNNER_TEMP/gpu-tests/revision.txt")" = "$GITHUB_SHA"
+          nvidia-smi
+          "$CUTILE_TILEIRAS_PATH" --version
+
+      - name: GPU runtime tests
+        run: ./scripts/run_gpu_tests.sh --archive-dir "$RUNNER_TEMP/gpu-tests"
 
   # Breaking API changes must ship with the right version bump: compare each
   # publishable crate's API against its latest crates.io release and fail the

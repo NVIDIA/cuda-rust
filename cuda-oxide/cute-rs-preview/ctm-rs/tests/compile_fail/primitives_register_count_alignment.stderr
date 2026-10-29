@@ -1,0 +1,45 @@
+error[E0277]: the trait bound `(): ValidRegisterCount<25>` is not satisfied
+ --> tests/compile_fail/primitives_register_count_alignment.rs:9:31
+  |
+9 |     unsafe { setmaxnreg_dec::<25>() };
+  |                               ^^ the trait `ValidRegisterCount<25>` is not implemented for `()`
+  |
+  = help: `()` implements trait `ValidRegisterCount<N>`:
+            ValidRegisterCount<104>
+            ValidRegisterCount<112>
+            ValidRegisterCount<120>
+            ValidRegisterCount<128>
+            ValidRegisterCount<136>
+            ValidRegisterCount<144>
+            ValidRegisterCount<152>
+            ValidRegisterCount<160>
+            ValidRegisterCount<168>
+            ValidRegisterCount<176>
+            ValidRegisterCount<184>
+            ValidRegisterCount<192>
+            ValidRegisterCount<200>
+            ValidRegisterCount<208>
+            ValidRegisterCount<216>
+            ValidRegisterCount<224>
+            ValidRegisterCount<232>
+            ValidRegisterCount<240>
+            ValidRegisterCount<248>
+            ValidRegisterCount<24>
+            ValidRegisterCount<256>
+            ValidRegisterCount<32>
+            ValidRegisterCount<40>
+            ValidRegisterCount<48>
+            ValidRegisterCount<56>
+            ValidRegisterCount<64>
+            ValidRegisterCount<72>
+            ValidRegisterCount<80>
+            ValidRegisterCount<88>
+            ValidRegisterCount<96>
+note: required by a bound in `setmaxnreg_dec`
+ --> src/lib.rs
+  |
+  |     pub unsafe fn setmaxnreg_dec<const N: u32>()
+  |                   -------------- required by a bound in this function
+  |     where
+  |         (): ValidRegisterCount<N>,
+  |             ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `setmaxnreg_dec`

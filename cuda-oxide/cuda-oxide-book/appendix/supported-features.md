@@ -117,13 +117,6 @@ do not count toward that bound. Taking the in-place address of such a
 field (`u.ptr = p`, `&u.ptr`, `&mut u.ptr`) is refused with a diagnostic; build
 the union by value and read its fields by value.
 
-`SharedPtr<T>`, the typed shared pointer, follows the same limits: a union or a
-`MaybeUninit<SharedPtr<T>>` fails closed under these union storage rules, a
-`repr(packed)` struct that holds one follows the packed-carrier limits above, a
-kernel parameter that holds one bare or inside a struct or array is refused,
-and on the libNVVM route a struct that mixes one with a narrower field is not
-yet supported in arrays or in shared memory.
-
 Enum constants preserve payload relocations to device statics, including
 non-zero byte addends. This includes niche-encoded `Option<&T>` and
 direct-tagged enum layouts, both for direct thin-reference payloads and for

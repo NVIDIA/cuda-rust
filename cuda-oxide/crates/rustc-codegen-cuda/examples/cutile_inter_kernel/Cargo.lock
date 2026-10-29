@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-async"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "cuda-bindings",
@@ -184,7 +184,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-bindings"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bindgen",
  "libloading",
@@ -196,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "cuda-bindings",
@@ -207,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-core-derive"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -216,7 +216,7 @@ dependencies = [
 
 [[package]]
 name = "cutile"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "cuda-async",
@@ -238,7 +238,7 @@ dependencies = [
 
 [[package]]
 name = "cutile-compiler"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "cuda-async",
@@ -258,7 +258,7 @@ dependencies = [
 
 [[package]]
 name = "cutile-ir"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "half",
  "indexmap",
@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "cutile-macro"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "convert_case",
  "cutile-compiler",
@@ -1017,9 +1017,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.52.3"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "bytes",
  "libc",

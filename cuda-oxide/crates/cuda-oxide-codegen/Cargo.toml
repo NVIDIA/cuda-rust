@@ -18,6 +18,8 @@ thiserror = { workspace = true }
 dialect-mir = { workspace = true }
 dialect-iket = { workspace = true }
 dialect-nvvm = { workspace = true }
+dialect-cute = { workspace = true }
+cuda-oxide-mlir-export = { workspace = true }
 iket-lower = { workspace = true }
 mir-lower = { workspace = true }
 mir-transforms = { workspace = true }
@@ -26,3 +28,7 @@ libnvvm-sys = { workspace = true }
 nvvm-transforms = { workspace = true }
 tempfile = { workspace = true }
 rustc-demangle = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+libloading = { workspace = true }
+object = { workspace = true }

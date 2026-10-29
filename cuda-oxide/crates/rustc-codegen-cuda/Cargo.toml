@@ -12,7 +12,7 @@ readme = "README.md"
 [lib]
 crate-type = ["dylib"]
 
-# Keep out of workspace - requires special nightly build
+# Keep out of workspace - links against rustc_private (rustc-dev)
 [workspace]
 
 [dependencies]

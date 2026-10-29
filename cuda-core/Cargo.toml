@@ -1,7 +1,7 @@
 [package]
 name = "cuda-core"
 description = "Idiomatic CUDA API."
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.89"
 license = "Apache-2.0"
@@ -13,8 +13,8 @@ readme = "README.md"
 # Sibling paths, not the root workspace entries: those name the published
 # release that cuda-oxide consumes, and inheriting them here would make this
 # copy depend on a crates.io cuda-bindings instead of the one beside it.
-cuda-bindings = { version = "=0.4.0", path = "../cuda-bindings" }
-cuda-core-derive = { version = "=0.4.0", path = "../cuda-core-derive" }
+cuda-bindings = { version = "=0.5.0", path = "../cuda-bindings" }
+cuda-core-derive = { version = "=0.5.0", path = "../cuda-core-derive" }
 anyhow = "1"
 half = { version = "2" }
 oxide-artifacts = { version = "0.2.1", features = ["object-read"] }

@@ -6,10 +6,10 @@ This section walks through installing cuda-oxide, creating a project, writing a 
 
 ## Install cargo-oxide
 
-If you haven't already, install the build tool with the pinned nightly toolchain:
+If you haven't already, install the build tool with the pinned toolchain:
 
 ```bash
-cargo +nightly-2026-10-11 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
+cargo +1.99.1 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
 ```
 
 Verify that your environment is set up correctly:
@@ -35,10 +35,12 @@ This generates a ready-to-run project:
 
 ```text
 my_first_kernel/
+├── .cargo/
+│   └── config.toml     # sets RUSTC_BOOTSTRAP = "1" for cargo check / rust-analyzer
 ├── Cargo.toml          # dependencies on cuda-device, cuda-host, cuda-core
 ├── README.md           # doctor + run instructions
 ├── .gitignore          # target/ and generated device artifacts
-├── rust-toolchain.toml # pins the required nightly toolchain
+├── rust-toolchain.toml # pins the required Rust toolchain (1.99.1)
 └── src/
     └── main.rs          # kernel + host code in one file
 ```

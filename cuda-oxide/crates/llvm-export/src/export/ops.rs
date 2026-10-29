@@ -668,15 +668,21 @@ impl<'a> ModuleExportState<'a> {
     }
 
     fn emit_br(
-        &self,
+        &mut self,
         op: &ops::BrOp,
         block_labels: &FxHashMap<Ptr<BasicBlock>, String>,
         output: &mut String,
     ) -> Result<(), String> {
-        let op_ref = op.get_operation().deref(self.ctx);
+        let op_ptr = op.get_operation();
+        let op_ref = op_ptr.deref(self.ctx);
         let dest = op_ref.successors().next().unwrap();
         let label = block_labels.get(&dest).ok_or("Missing block label")?;
-        writeln!(output, "  br label %{label}").unwrap();
+        if !self.legacy_typed_pointers() && ops::is_loop_unroll_disable(self.ctx, op_ptr) {
+            let loop_id = self.alloc_loop_unroll_disable_id();
+            writeln!(output, "  br label %{label}, !llvm.loop !{loop_id}").unwrap();
+        } else {
+            writeln!(output, "  br label %{label}").unwrap();
+        }
         Ok(())
     }
 

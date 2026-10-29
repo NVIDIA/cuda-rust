@@ -1,0 +1,17 @@
+error[E0080]: evaluation panicked: assertion failed: TILES > 0
+ --> src/attention/sm100/shared.rs
+  |
+  |         assert!(TILES > 0);
+  |         ^^^^^^^^^^^^^^^^^^ evaluation of `cute_rs::attention::sm100::SharedTileArray::<cute_rs::attention::sm100::SharedLayout<8, 32>, cute_rs::OperandB, 0>::VALID` failed here
+
+note: erroneous constant encountered
+ --> src/attention/sm100/shared.rs
+  |
+  |         let () = Self::VALID;
+  |                  ^^^^^^^^^^^
+
+error[E0080]: evaluation panicked: assertion failed: TILES <= u32::MAX / Self::TILE_BYTES
+ --> src/attention/sm100/shared.rs
+  |
+  |         assert!(TILES <= u32::MAX / Self::TILE_BYTES);
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `cute_rs::attention::sm100::SharedTileArray::<cute_rs::attention::sm100::SharedLayout<8, 32>, cute_rs::OperandB, u32::MAX>::VALID` failed here

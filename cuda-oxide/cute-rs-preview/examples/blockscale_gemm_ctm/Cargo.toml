@@ -1,0 +1,13 @@
+[package]
+name = "blockscale_gemm_ctm"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "SM120 MXFP4 GEMM using typed Rust instruction primitives"
+[workspace]
+[dependencies]
+ctm-rs = { path = "../../ctm-rs", features = ["host"] }
+cuda-device = { path = "../../../crates/cuda-device" }
+cuda-host = { path = "../../../crates/cuda-host" }
+cuda-core = { path = "../../../../cuda-core", features = ["f16"] }
+serde_json = "1"

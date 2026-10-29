@@ -1,0 +1,4 @@
+# Locally generated timing reports and Python bytecode.
+/cutedsl-events.json
+/cutedsl-profiled-events.json
+/__pycache__/

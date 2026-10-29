@@ -1,0 +1,56 @@
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg class="cute-rs-preview" xmlns="http://www.w3.org/2000/svg" width="1040" height="450" viewBox="0 0 1040 450" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif">
+<title>1D tensor tiling with zipped_divide and per-thread slicing</title>
+<style>.cute-rs-preview text { dominant-baseline:central; text-anchor:middle } .cute-rs-preview .l { text-anchor:start } .cute-rs-preview .bg { fill:#faf9f5 } .cute-rs-preview .title { font-size:17px; font-weight:700; fill:#1e1e1e } .cute-rs-preview .sec { font-size:11px; font-weight:700; letter-spacing:0.05em; fill:#5c5c5c } .cute-rs-preview .th { font-size:14px; font-weight:600; fill:#1e1e1e } .cute-rs-preview .t { font-size:13px; fill:#2b2b2b } .cute-rs-preview .ts { font-size:12.5px; fill:#5c5c5c } .cute-rs-preview .tm { font-family:'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size:12px; font-weight:500 } .cute-rs-preview .k-box { fill:#f1efe9; stroke:#c8c5be } .cute-rs-preview .tx-box { fill:#1e1e1e } .cute-rs-preview .k-purple { fill:#ebe9fb; stroke:#7f77dd } .cute-rs-preview .tx-purple { fill:#3a3490 } .cute-rs-preview .k-teal { fill:#dff3ec; stroke:#3aa47f } .cute-rs-preview .tx-teal { fill:#1f5c47 } .cute-rs-preview .k-amber { fill:#fdeed3; stroke:#ef9f27 } .cute-rs-preview .tx-amber { fill:#6b4100 } .cute-rs-preview .dash { fill:none; stroke:#b8b4ac; stroke-dasharray:5 4 } .cute-rs-preview .arr { fill:none; stroke:#7b7b7b; stroke-width:1.5 } .cute-rs-preview .arrhead { fill:none; stroke:#7b7b7b; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round } @media (prefers-color-scheme: dark) { .cute-rs-preview .bg { fill:#1b1d23 } .cute-rs-preview .title, .cute-rs-preview .th { fill:#f5f6f8 } .cute-rs-preview .sec { fill:#b8beca } .cute-rs-preview .t { fill:#eceef2 } .cute-rs-preview .ts { fill:#cfd4de } .cute-rs-preview .k-box { fill:#2e323c; stroke:#5c6375 } .cute-rs-preview .tx-box { fill:#f5f6f8 } .cute-rs-preview .dash { stroke:#606675 } .cute-rs-preview .arr, .cute-rs-preview .arrhead { stroke:#b6bcc8 } .cute-rs-preview .k-purple { fill:#524e7d; stroke:#bab5f4 } .cute-rs-preview .tx-purple { fill:#f6f5ff } .cute-rs-preview .k-teal { fill:#346357; stroke:#7ed8bb } .cute-rs-preview .tx-teal { fill:#f0fdf8 } .cute-rs-preview .k-amber { fill:#735a3c; stroke:#f4c474 } .cute-rs-preview .tx-amber { fill:#fff8eb } }</style>
+<defs><marker id="arrow-zd" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="arrhead" d="M2 1L8 5L2 9"/></marker></defs>
+<rect class="bg" width="1040" height="450" rx="10"/>
+<text class="title l" x="36" y="34">How zipped_divide::&lt;4&gt;() and .slice(tid) partition a 1D tensor</text>
+<text class="ts l" x="36" y="56">A flat 1,003-element slice becomes a 2D logical view: (offset_in_tile, tile_index). Full tiles vectorize; the final ragged tile loops safely.</text>
+
+<!-- Step 1: Flat Tensor -->
+<rect class="k-box" x="36" y="82" width="968" height="58" rx="8" stroke-width="0.8"/>
+<text class="tm tx-box l" x="56" y="102">Tensor::from_slice(a)   // 1,003 x f32 in global memory</text>
+<text class="ts tx-box l" x="56" y="122">Flat index: [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ... , 996, 997, 998, 999, 1000, 1001, 1002 ]</text>
+
+<line class="arr" x1="520" y1="140" x2="520" y2="174" marker-end="url(#arrow-zd)"/>
+<text class="tm ts l" x="534" y="158">.zipped_divide::&lt;4&gt;() → .slice(tid)</text>
+
+<!-- Step 2: Divided tiles -->
+<rect class="k-teal" x="36" y="180" width="212" height="84" rx="8" stroke-width="0.9"/>
+<text class="th tx-teal" x="142" y="202">Thread 0: .slice(0)</text>
+<text class="tm tx-teal" x="142" y="224">[ 0, 1, 2, 3 ]</text>
+<text class="ts tx-teal" x="142" y="246">is_full() == true (16B)</text>
+
+<rect class="k-teal" x="266" y="180" width="212" height="84" rx="8" stroke-width="0.9"/>
+<text class="th tx-teal" x="372" y="202">Thread 1: .slice(1)</text>
+<text class="tm tx-teal" x="372" y="224">[ 4, 5, 6, 7 ]</text>
+<text class="ts tx-teal" x="372" y="246">is_full() == true (16B)</text>
+
+<rect class="k-teal" x="496" y="180" width="228" height="84" rx="8" stroke-width="0.9"/>
+<text class="th tx-teal" x="610" y="202">Threads 2 .. 249</text>
+<text class="tm tx-teal" x="610" y="224">[ 4*tid .. 4*tid + 3 ]</text>
+<text class="ts tx-teal" x="610" y="246">is_full() == true (16B)</text>
+
+<rect class="k-amber" x="742" y="180" width="262" height="84" rx="8" stroke-width="0.9"/>
+<text class="th tx-amber" x="873" y="202">Thread 250: .slice(250)</text>
+<text class="tm tx-amber" x="873" y="224">[ 1000, 1001, 1002, -- ]</text>
+<text class="ts tx-amber" x="873" y="246">is_full() == false (3 valid)</text>
+
+<!-- Arrows down to fast path vs tail path -->
+<line class="arr" x1="372" y1="264" x2="372" y2="306" marker-end="url(#arrow-zd)"/>
+<line class="arr" x1="873" y1="264" x2="873" y2="306" marker-end="url(#arrow-zd)"/>
+
+<!-- Step 3: Lowering paths -->
+<rect class="k-teal" x="36" y="312" width="688" height="112" rx="8" stroke-width="0.9"/>
+<text class="th tx-teal l" x="56" y="336">Full-tile fast path (if t_a.is_full())</text>
+<rect class="k-box" x="56" y="352" width="648" height="32" rx="5" stroke-width="0.7"/>
+<text class="tm tx-box l" x="72" y="368">let a_vals = unsafe { t_a.load() };   unsafe { t_c.store(a_vals + b_vals) };</text>
+<text class="ts tx-teal l" x="56" y="404">Emits dialect-cute vector tile load/store → lowers to 128-bit vectorized cute.copy</text>
+
+<rect class="k-amber" x="742" y="312" width="262" height="112" rx="8" stroke-width="0.9"/>
+<text class="th tx-amber l" x="760" y="336">Ragged tail (else)</text>
+<rect class="k-box" x="760" y="352" width="226" height="32" rx="5" stroke-width="0.7"/>
+<text class="tm tx-box l" x="772" y="368">t_c.store_at(k, ...)</text>
+<text class="ts tx-amber l" x="760" y="404">Plain scalar loop from t_a.base()</text>
+</svg>

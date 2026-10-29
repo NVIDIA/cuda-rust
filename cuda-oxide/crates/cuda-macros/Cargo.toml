@@ -45,6 +45,7 @@ reserved-oxide-symbols = { workspace = true }
 oxide-tile-export = { workspace = true }
 
 [dev-dependencies]
+ctm-rs = { workspace = true }
 trybuild = "1"
 # Dev-only cycle (cargo allows it): the launch_requires_unsafe compile-fail
 # test type-checks a real cuda_launch! expansion, which needs the host-side

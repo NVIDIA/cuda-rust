@@ -7,7 +7,7 @@ provenance = "Public rust-lang/llvm-project source revision used by Rust commit 
 public_output_allowed = true
 
 [rust_toolchain]
-commit_hash = "6f5da406b56c2db6607202b63daee73aa8c61297"
+commit_hash = "58cf8f9c35b355199727627d07ae34a4e2846d67"
 
 [llvm_tblgen]
 name = "llvm-tblgen"

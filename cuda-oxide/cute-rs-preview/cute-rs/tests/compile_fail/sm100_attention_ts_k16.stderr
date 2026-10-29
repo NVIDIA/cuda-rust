@@ -1,0 +1,11 @@
+error[E0080]: evaluation panicked: assertion failed: K == 32 || (K > 0 && K.is_multiple_of(64))
+ --> src/attention/sm100/mma.rs
+  |
+  |         assert!(K == 32 || (K > 0 && K.is_multiple_of(64)));
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `cute_rs::attention::sm100::MmaTs::<cute_rs::attention::sm100::SharedLayout<128, 16, true>, 128, 128, 16, 1>::VALID` failed here
+
+note: erroneous constant encountered
+ --> src/attention/sm100/mma.rs
+  |
+  |         let () = Self::VALID;
+  |                  ^^^^^^^^^^^

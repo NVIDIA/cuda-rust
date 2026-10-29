@@ -243,147 +243,875 @@ pub const CALLEE_Y1_F64: &str = placeholder!("y1f64");
 /// Shared math identity. Semantic expansions remain in the importer and lowerer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RustFloatMathIntrinsic {
+    /// Generated math identity for `AcosF32`.
     AcosF32,
+    /// Generated math identity for `AcosF64`.
     AcosF64,
+    /// Generated math identity for `AcoshF32`.
     AcoshF32,
+    /// Generated math identity for `AcoshF64`.
     AcoshF64,
+    /// Generated math identity for `AsinF32`.
     AsinF32,
+    /// Generated math identity for `AsinF64`.
     AsinF64,
+    /// Generated math identity for `AsinhF32`.
     AsinhF32,
+    /// Generated math identity for `AsinhF64`.
     AsinhF64,
+    /// Generated math identity for `Atan2F32`.
     Atan2F32,
+    /// Generated math identity for `Atan2F64`.
     Atan2F64,
+    /// Generated math identity for `AtanF32`.
     AtanF32,
+    /// Generated math identity for `AtanF64`.
     AtanF64,
+    /// Generated math identity for `AtanhF32`.
     AtanhF32,
+    /// Generated math identity for `AtanhF64`.
     AtanhF64,
+    /// Generated math identity for `CbrtF32`.
     CbrtF32,
+    /// Generated math identity for `CbrtF64`.
     CbrtF64,
+    /// Generated math identity for `CeilF32`.
     CeilF32,
+    /// Generated math identity for `CeilF64`.
     CeilF64,
+    /// Generated math identity for `CopysignF32`.
     CopysignF32,
+    /// Generated math identity for `CopysignF64`.
     CopysignF64,
+    /// Generated math identity for `CosF32`.
     CosF32,
+    /// Generated math identity for `CosF64`.
     CosF64,
+    /// Generated math identity for `CoshF32`.
     CoshF32,
+    /// Generated math identity for `CoshF64`.
     CoshF64,
+    /// Generated math identity for `ErfF32`.
     ErfF32,
+    /// Generated math identity for `ErfF64`.
     ErfF64,
+    /// Generated math identity for `ErfcF32`.
     ErfcF32,
+    /// Generated math identity for `ErfcF64`.
     ErfcF64,
+    /// Generated math identity for `Exp10F32`.
     Exp10F32,
+    /// Generated math identity for `Exp10F64`.
     Exp10F64,
+    /// Generated math identity for `Exp2F32`.
     Exp2F32,
+    /// Generated math identity for `Exp2F64`.
     Exp2F64,
+    /// Generated math identity for `ExpF32`.
     ExpF32,
+    /// Generated math identity for `ExpF64`.
     ExpF64,
+    /// Generated math identity for `Expm1F32`.
     Expm1F32,
+    /// Generated math identity for `Expm1F64`.
     Expm1F64,
+    /// Generated math identity for `Fabs`.
     Fabs,
+    /// Generated math identity for `FdimF32`.
     FdimF32,
+    /// Generated math identity for `FdimF64`.
     FdimF64,
+    /// Generated math identity for `FloorF32`.
     FloorF32,
+    /// Generated math identity for `FloorF64`.
     FloorF64,
+    /// Generated math identity for `FmaF32`.
     FmaF32,
+    /// Generated math identity for `FmaF64`.
     FmaF64,
+    /// Generated math identity for `FmodF32`.
     FmodF32,
+    /// Generated math identity for `FmodF64`.
     FmodF64,
+    /// Generated math identity for `FmuladdF32`.
     FmuladdF32,
+    /// Generated math identity for `FmuladdF64`.
     FmuladdF64,
+    /// Generated math identity for `FrexpF32`.
     FrexpF32,
+    /// Generated math identity for `FrexpF64`.
     FrexpF64,
+    /// Generated math identity for `HypotF32`.
     HypotF32,
+    /// Generated math identity for `HypotF64`.
     HypotF64,
+    /// Generated math identity for `IlogbF32`.
     IlogbF32,
+    /// Generated math identity for `IlogbF64`.
     IlogbF64,
+    /// Generated math identity for `J0F32`.
     J0F32,
+    /// Generated math identity for `J0F64`.
     J0F64,
+    /// Generated math identity for `J1F32`.
     J1F32,
+    /// Generated math identity for `J1F64`.
     J1F64,
+    /// Generated math identity for `LdexpF32`.
     LdexpF32,
+    /// Generated math identity for `LdexpF64`.
     LdexpF64,
+    /// Generated math identity for `LgammaF32`.
     LgammaF32,
+    /// Generated math identity for `LgammaF64`.
     LgammaF64,
+    /// Generated math identity for `LgammaRF32`.
     LgammaRF32,
+    /// Generated math identity for `LgammaRF64`.
     LgammaRF64,
+    /// Generated math identity for `Log10F32`.
     Log10F32,
+    /// Generated math identity for `Log10F64`.
     Log10F64,
+    /// Generated math identity for `Log1pF32`.
     Log1pF32,
+    /// Generated math identity for `Log1pF64`.
     Log1pF64,
+    /// Generated math identity for `Log2F32`.
     Log2F32,
+    /// Generated math identity for `Log2F64`.
     Log2F64,
+    /// Generated math identity for `LogF32`.
     LogF32,
+    /// Generated math identity for `LogF64`.
     LogF64,
+    /// Generated math identity for `MaxNumNszF32`.
     MaxNumNszF32,
+    /// Generated math identity for `MaxNumNszF64`.
     MaxNumNszF64,
+    /// Generated math identity for `MaximumF32`.
     MaximumF32,
+    /// Generated math identity for `MaximumF64`.
     MaximumF64,
+    /// Generated math identity for `MaximumNumberF32`.
     MaximumNumberF32,
+    /// Generated math identity for `MaximumNumberF64`.
     MaximumNumberF64,
+    /// Generated math identity for `MinNumNszF32`.
     MinNumNszF32,
+    /// Generated math identity for `MinNumNszF64`.
     MinNumNszF64,
+    /// Generated math identity for `MinimumF32`.
     MinimumF32,
+    /// Generated math identity for `MinimumF64`.
     MinimumF64,
+    /// Generated math identity for `MinimumNumberF32`.
     MinimumNumberF32,
+    /// Generated math identity for `MinimumNumberF64`.
     MinimumNumberF64,
+    /// Generated math identity for `ModfF32`.
     ModfF32,
+    /// Generated math identity for `ModfF64`.
     ModfF64,
+    /// Generated math identity for `NextafterF32`.
     NextafterF32,
+    /// Generated math identity for `NextafterF64`.
     NextafterF64,
+    /// Generated math identity for `PowfF32`.
     PowfF32,
+    /// Generated math identity for `PowfF64`.
     PowfF64,
+    /// Generated math identity for `PowiF32`.
     PowiF32,
+    /// Generated math identity for `PowiF64`.
     PowiF64,
+    /// Generated math identity for `RemainderF32`.
     RemainderF32,
+    /// Generated math identity for `RemainderF64`.
     RemainderF64,
+    /// Generated math identity for `RemquoF32`.
     RemquoF32,
+    /// Generated math identity for `RemquoF64`.
     RemquoF64,
+    /// Generated math identity for `RoundF32`.
     RoundF32,
+    /// Generated math identity for `RoundF64`.
     RoundF64,
+    /// Generated math identity for `RoundevenF32`.
     RoundevenF32,
+    /// Generated math identity for `RoundevenF64`.
     RoundevenF64,
+    /// Generated math identity for `SinF32`.
     SinF32,
+    /// Generated math identity for `SinF64`.
     SinF64,
+    /// Generated math identity for `SinhF32`.
     SinhF32,
+    /// Generated math identity for `SinhF64`.
     SinhF64,
+    /// Generated math identity for `SqrtF32`.
     SqrtF32,
+    /// Generated math identity for `SqrtF64`.
     SqrtF64,
+    /// Generated math identity for `TanF32`.
     TanF32,
+    /// Generated math identity for `TanF64`.
     TanF64,
+    /// Generated math identity for `TanhF32`.
     TanhF32,
+    /// Generated math identity for `TanhF64`.
     TanhF64,
+    /// Generated math identity for `TgammaF32`.
     TgammaF32,
+    /// Generated math identity for `TgammaF64`.
     TgammaF64,
+    /// Generated math identity for `TruncF32`.
     TruncF32,
+    /// Generated math identity for `TruncF64`.
     TruncF64,
+    /// Generated math identity for `Y0F32`.
     Y0F32,
+    /// Generated math identity for `Y0F64`.
     Y0F64,
+    /// Generated math identity for `Y1F32`.
     Y1F32,
+    /// Generated math identity for `Y1F64`.
     Y1F64,
+    /// Generated math identity for `FaddFast`.
     FaddFast,
+    /// Generated math identity for `FsubFast`.
     FsubFast,
+    /// Generated math identity for `FmulFast`.
     FmulFast,
+    /// Generated math identity for `FdivFast`.
     FdivFast,
+    /// Generated math identity for `FremFast`.
     FremFast,
 }
+
+/// Every generated floating-point math intrinsic identity.
+pub const ALL_FLOAT_MATH_INTRINSICS: &[RustFloatMathIntrinsic] = &[
+    RustFloatMathIntrinsic::AcosF32,
+    RustFloatMathIntrinsic::AcosF64,
+    RustFloatMathIntrinsic::AcoshF32,
+    RustFloatMathIntrinsic::AcoshF64,
+    RustFloatMathIntrinsic::AsinF32,
+    RustFloatMathIntrinsic::AsinF64,
+    RustFloatMathIntrinsic::AsinhF32,
+    RustFloatMathIntrinsic::AsinhF64,
+    RustFloatMathIntrinsic::Atan2F32,
+    RustFloatMathIntrinsic::Atan2F64,
+    RustFloatMathIntrinsic::AtanF32,
+    RustFloatMathIntrinsic::AtanF64,
+    RustFloatMathIntrinsic::AtanhF32,
+    RustFloatMathIntrinsic::AtanhF64,
+    RustFloatMathIntrinsic::CbrtF32,
+    RustFloatMathIntrinsic::CbrtF64,
+    RustFloatMathIntrinsic::CeilF32,
+    RustFloatMathIntrinsic::CeilF64,
+    RustFloatMathIntrinsic::CopysignF32,
+    RustFloatMathIntrinsic::CopysignF64,
+    RustFloatMathIntrinsic::CosF32,
+    RustFloatMathIntrinsic::CosF64,
+    RustFloatMathIntrinsic::CoshF32,
+    RustFloatMathIntrinsic::CoshF64,
+    RustFloatMathIntrinsic::ErfF32,
+    RustFloatMathIntrinsic::ErfF64,
+    RustFloatMathIntrinsic::ErfcF32,
+    RustFloatMathIntrinsic::ErfcF64,
+    RustFloatMathIntrinsic::Exp10F32,
+    RustFloatMathIntrinsic::Exp10F64,
+    RustFloatMathIntrinsic::Exp2F32,
+    RustFloatMathIntrinsic::Exp2F64,
+    RustFloatMathIntrinsic::ExpF32,
+    RustFloatMathIntrinsic::ExpF64,
+    RustFloatMathIntrinsic::Expm1F32,
+    RustFloatMathIntrinsic::Expm1F64,
+    RustFloatMathIntrinsic::Fabs,
+    RustFloatMathIntrinsic::FdimF32,
+    RustFloatMathIntrinsic::FdimF64,
+    RustFloatMathIntrinsic::FloorF32,
+    RustFloatMathIntrinsic::FloorF64,
+    RustFloatMathIntrinsic::FmaF32,
+    RustFloatMathIntrinsic::FmaF64,
+    RustFloatMathIntrinsic::FmodF32,
+    RustFloatMathIntrinsic::FmodF64,
+    RustFloatMathIntrinsic::FmuladdF32,
+    RustFloatMathIntrinsic::FmuladdF64,
+    RustFloatMathIntrinsic::FrexpF32,
+    RustFloatMathIntrinsic::FrexpF64,
+    RustFloatMathIntrinsic::HypotF32,
+    RustFloatMathIntrinsic::HypotF64,
+    RustFloatMathIntrinsic::IlogbF32,
+    RustFloatMathIntrinsic::IlogbF64,
+    RustFloatMathIntrinsic::J0F32,
+    RustFloatMathIntrinsic::J0F64,
+    RustFloatMathIntrinsic::J1F32,
+    RustFloatMathIntrinsic::J1F64,
+    RustFloatMathIntrinsic::LdexpF32,
+    RustFloatMathIntrinsic::LdexpF64,
+    RustFloatMathIntrinsic::LgammaF32,
+    RustFloatMathIntrinsic::LgammaF64,
+    RustFloatMathIntrinsic::LgammaRF32,
+    RustFloatMathIntrinsic::LgammaRF64,
+    RustFloatMathIntrinsic::Log10F32,
+    RustFloatMathIntrinsic::Log10F64,
+    RustFloatMathIntrinsic::Log1pF32,
+    RustFloatMathIntrinsic::Log1pF64,
+    RustFloatMathIntrinsic::Log2F32,
+    RustFloatMathIntrinsic::Log2F64,
+    RustFloatMathIntrinsic::LogF32,
+    RustFloatMathIntrinsic::LogF64,
+    RustFloatMathIntrinsic::MaxNumNszF32,
+    RustFloatMathIntrinsic::MaxNumNszF64,
+    RustFloatMathIntrinsic::MaximumF32,
+    RustFloatMathIntrinsic::MaximumF64,
+    RustFloatMathIntrinsic::MaximumNumberF32,
+    RustFloatMathIntrinsic::MaximumNumberF64,
+    RustFloatMathIntrinsic::MinNumNszF32,
+    RustFloatMathIntrinsic::MinNumNszF64,
+    RustFloatMathIntrinsic::MinimumF32,
+    RustFloatMathIntrinsic::MinimumF64,
+    RustFloatMathIntrinsic::MinimumNumberF32,
+    RustFloatMathIntrinsic::MinimumNumberF64,
+    RustFloatMathIntrinsic::ModfF32,
+    RustFloatMathIntrinsic::ModfF64,
+    RustFloatMathIntrinsic::NextafterF32,
+    RustFloatMathIntrinsic::NextafterF64,
+    RustFloatMathIntrinsic::PowfF32,
+    RustFloatMathIntrinsic::PowfF64,
+    RustFloatMathIntrinsic::PowiF32,
+    RustFloatMathIntrinsic::PowiF64,
+    RustFloatMathIntrinsic::RemainderF32,
+    RustFloatMathIntrinsic::RemainderF64,
+    RustFloatMathIntrinsic::RemquoF32,
+    RustFloatMathIntrinsic::RemquoF64,
+    RustFloatMathIntrinsic::RoundF32,
+    RustFloatMathIntrinsic::RoundF64,
+    RustFloatMathIntrinsic::RoundevenF32,
+    RustFloatMathIntrinsic::RoundevenF64,
+    RustFloatMathIntrinsic::SinF32,
+    RustFloatMathIntrinsic::SinF64,
+    RustFloatMathIntrinsic::SinhF32,
+    RustFloatMathIntrinsic::SinhF64,
+    RustFloatMathIntrinsic::SqrtF32,
+    RustFloatMathIntrinsic::SqrtF64,
+    RustFloatMathIntrinsic::TanF32,
+    RustFloatMathIntrinsic::TanF64,
+    RustFloatMathIntrinsic::TanhF32,
+    RustFloatMathIntrinsic::TanhF64,
+    RustFloatMathIntrinsic::TgammaF32,
+    RustFloatMathIntrinsic::TgammaF64,
+    RustFloatMathIntrinsic::TruncF32,
+    RustFloatMathIntrinsic::TruncF64,
+    RustFloatMathIntrinsic::Y0F32,
+    RustFloatMathIntrinsic::Y0F64,
+    RustFloatMathIntrinsic::Y1F32,
+    RustFloatMathIntrinsic::Y1F64,
+    RustFloatMathIntrinsic::FaddFast,
+    RustFloatMathIntrinsic::FsubFast,
+    RustFloatMathIntrinsic::FmulFast,
+    RustFloatMathIntrinsic::FdivFast,
+    RustFloatMathIntrinsic::FremFast,
+];
 
 /// Whether a math placeholder needs libdevice under the selected backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MathLink {
+    /// Requires libdevice on both the LLVM NVPTX and libNVVM backends.
     Always,
+    /// Uses a native LLVM intrinsic on NVPTX and libdevice only under libNVVM.
     Libnvvm,
+    /// Expands inline in LLVM IR and never links a libdevice symbol.
     Never,
 }
 
 /// Scalar types in a Rust math placeholder signature.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MathScalarType {
+    /// 32-bit IEEE-754 binary floating-point (`f32`).
     F32,
+    /// 64-bit IEEE-754 binary floating-point (`f64`).
     F64,
+    /// 32-bit signed integer (`i32`).
     I32,
 }
 
+/// Lowering strategy for a [`RustFloatMathIntrinsic`] placeholder call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RustFloatMathLowering {
+    /// Lower to a direct scalar libdevice or LLVM intrinsic call.
+    ScalarCall { symbol: &'static str, arity: usize },
+    /// Call the libdevice Bessel j1 entry and normalize +-inf to +0.0.
+    BesselJ1 { symbol: &'static str },
+    /// Adapt libdevice frexp's out-parameter ABI and non-finite exponent contract.
+    Frexp { symbol: &'static str },
+    /// Adapt libdevice modf's out-parameter ABI into a two-float tuple.
+    Modf { symbol: &'static str },
+    /// Adapt libdevice remquo's out-parameter ABI and zero invalid quotients.
+    Remquo { symbol: &'static str },
+    /// Compose `(log(abs(gamma(x))), signgam)` from scalar libdevice calls.
+    LgammaR,
+    /// Expand `sincos`/`sincosf` into paired scalar `sin` and `cos` calls.
+    Sincos { is_f64: bool },
+    /// Expand NaN-ignoring `fmin`/`fmax` (`*_nsz`) to ordered compare and select.
+    MinMaxNsz { is_max: bool },
+    /// Expand IEEE-754-2019 `fmaximum*`/`fminimum*` with signed-zero tie-breaking.
+    IeeeMinMax { is_max: bool, propagate_nan: bool },
+    /// Lower `f*_fast` intrinsics to LLVM float binary ops with fast-math flags.
+    FastBinop,
+}
+
 impl RustFloatMathIntrinsic {
+    /// Return the lowering strategy generated from the libdevice math shard.
+    pub const fn lowering(self) -> RustFloatMathLowering {
+        match self {
+            Self::AcosF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_acosf",
+                arity: 1,
+            },
+            Self::AcosF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_acos",
+                arity: 1,
+            },
+            Self::AcoshF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_acoshf",
+                arity: 1,
+            },
+            Self::AcoshF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_acosh",
+                arity: 1,
+            },
+            Self::AsinF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_asinf",
+                arity: 1,
+            },
+            Self::AsinF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_asin",
+                arity: 1,
+            },
+            Self::AsinhF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_asinhf",
+                arity: 1,
+            },
+            Self::AsinhF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_asinh",
+                arity: 1,
+            },
+            Self::Atan2F32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_atan2f",
+                arity: 2,
+            },
+            Self::Atan2F64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_atan2",
+                arity: 2,
+            },
+            Self::AtanF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_atanf",
+                arity: 1,
+            },
+            Self::AtanF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_atan",
+                arity: 1,
+            },
+            Self::AtanhF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_atanhf",
+                arity: 1,
+            },
+            Self::AtanhF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_atanh",
+                arity: 1,
+            },
+            Self::CbrtF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_cbrtf",
+                arity: 1,
+            },
+            Self::CbrtF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_cbrt",
+                arity: 1,
+            },
+            Self::CeilF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_ceilf",
+                arity: 1,
+            },
+            Self::CeilF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_ceil",
+                arity: 1,
+            },
+            Self::CopysignF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_copysignf",
+                arity: 2,
+            },
+            Self::CopysignF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_copysign",
+                arity: 2,
+            },
+            Self::CosF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_cosf",
+                arity: 1,
+            },
+            Self::CosF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_cos",
+                arity: 1,
+            },
+            Self::CoshF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_coshf",
+                arity: 1,
+            },
+            Self::CoshF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_cosh",
+                arity: 1,
+            },
+            Self::ErfF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_erff",
+                arity: 1,
+            },
+            Self::ErfF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_erf",
+                arity: 1,
+            },
+            Self::ErfcF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_erfcf",
+                arity: 1,
+            },
+            Self::ErfcF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_erfc",
+                arity: 1,
+            },
+            Self::Exp10F32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_exp10f",
+                arity: 1,
+            },
+            Self::Exp10F64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_exp10",
+                arity: 1,
+            },
+            Self::Exp2F32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_exp2f",
+                arity: 1,
+            },
+            Self::Exp2F64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_exp2",
+                arity: 1,
+            },
+            Self::ExpF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_expf",
+                arity: 1,
+            },
+            Self::ExpF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_exp",
+                arity: 1,
+            },
+            Self::Expm1F32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_expm1f",
+                arity: 1,
+            },
+            Self::Expm1F64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_expm1",
+                arity: 1,
+            },
+            Self::Fabs => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_fabsf",
+                arity: 1,
+            },
+            Self::FdimF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_fdimf",
+                arity: 2,
+            },
+            Self::FdimF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_fdim",
+                arity: 2,
+            },
+            Self::FloorF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_floorf",
+                arity: 1,
+            },
+            Self::FloorF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_floor",
+                arity: 1,
+            },
+            Self::FmaF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_fmaf",
+                arity: 3,
+            },
+            Self::FmaF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_fma",
+                arity: 3,
+            },
+            Self::FmodF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_fmodf",
+                arity: 2,
+            },
+            Self::FmodF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_fmod",
+                arity: 2,
+            },
+            Self::FmuladdF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_fmaf",
+                arity: 3,
+            },
+            Self::FmuladdF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_fma",
+                arity: 3,
+            },
+            Self::FrexpF32 => RustFloatMathLowering::Frexp {
+                symbol: "__nv_frexpf",
+            },
+            Self::FrexpF64 => RustFloatMathLowering::Frexp {
+                symbol: "__nv_frexp",
+            },
+            Self::HypotF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_hypotf",
+                arity: 2,
+            },
+            Self::HypotF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_hypot",
+                arity: 2,
+            },
+            Self::IlogbF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_ilogbf",
+                arity: 1,
+            },
+            Self::IlogbF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_ilogb",
+                arity: 1,
+            },
+            Self::J0F32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_j0f",
+                arity: 1,
+            },
+            Self::J0F64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_j0",
+                arity: 1,
+            },
+            Self::J1F32 => RustFloatMathLowering::BesselJ1 { symbol: "__nv_j1f" },
+            Self::J1F64 => RustFloatMathLowering::BesselJ1 { symbol: "__nv_j1" },
+            Self::LdexpF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_ldexpf",
+                arity: 2,
+            },
+            Self::LdexpF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_ldexp",
+                arity: 2,
+            },
+            Self::LgammaF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_lgammaf",
+                arity: 1,
+            },
+            Self::LgammaF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_lgamma",
+                arity: 1,
+            },
+            Self::LgammaRF32 => RustFloatMathLowering::LgammaR,
+            Self::LgammaRF64 => RustFloatMathLowering::LgammaR,
+            Self::Log10F32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_log10f",
+                arity: 1,
+            },
+            Self::Log10F64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_log10",
+                arity: 1,
+            },
+            Self::Log1pF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_log1pf",
+                arity: 1,
+            },
+            Self::Log1pF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_log1p",
+                arity: 1,
+            },
+            Self::Log2F32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_log2f",
+                arity: 1,
+            },
+            Self::Log2F64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_log2",
+                arity: 1,
+            },
+            Self::LogF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_logf",
+                arity: 1,
+            },
+            Self::LogF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_log",
+                arity: 1,
+            },
+            Self::MaxNumNszF32 => RustFloatMathLowering::MinMaxNsz { is_max: true },
+            Self::MaxNumNszF64 => RustFloatMathLowering::MinMaxNsz { is_max: true },
+            Self::MaximumF32 => RustFloatMathLowering::IeeeMinMax {
+                is_max: true,
+                propagate_nan: true,
+            },
+            Self::MaximumF64 => RustFloatMathLowering::IeeeMinMax {
+                is_max: true,
+                propagate_nan: true,
+            },
+            Self::MaximumNumberF32 => RustFloatMathLowering::IeeeMinMax {
+                is_max: true,
+                propagate_nan: false,
+            },
+            Self::MaximumNumberF64 => RustFloatMathLowering::IeeeMinMax {
+                is_max: true,
+                propagate_nan: false,
+            },
+            Self::MinNumNszF32 => RustFloatMathLowering::MinMaxNsz { is_max: false },
+            Self::MinNumNszF64 => RustFloatMathLowering::MinMaxNsz { is_max: false },
+            Self::MinimumF32 => RustFloatMathLowering::IeeeMinMax {
+                is_max: false,
+                propagate_nan: true,
+            },
+            Self::MinimumF64 => RustFloatMathLowering::IeeeMinMax {
+                is_max: false,
+                propagate_nan: true,
+            },
+            Self::MinimumNumberF32 => RustFloatMathLowering::IeeeMinMax {
+                is_max: false,
+                propagate_nan: false,
+            },
+            Self::MinimumNumberF64 => RustFloatMathLowering::IeeeMinMax {
+                is_max: false,
+                propagate_nan: false,
+            },
+            Self::ModfF32 => RustFloatMathLowering::Modf {
+                symbol: "__nv_modff",
+            },
+            Self::ModfF64 => RustFloatMathLowering::Modf {
+                symbol: "__nv_modf",
+            },
+            Self::NextafterF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_nextafterf",
+                arity: 2,
+            },
+            Self::NextafterF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_nextafter",
+                arity: 2,
+            },
+            Self::PowfF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_powf",
+                arity: 2,
+            },
+            Self::PowfF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_pow",
+                arity: 2,
+            },
+            Self::PowiF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_powif",
+                arity: 2,
+            },
+            Self::PowiF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_powi",
+                arity: 2,
+            },
+            Self::RemainderF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_remainderf",
+                arity: 2,
+            },
+            Self::RemainderF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_remainder",
+                arity: 2,
+            },
+            Self::RemquoF32 => RustFloatMathLowering::Remquo {
+                symbol: "__nv_remquof",
+            },
+            Self::RemquoF64 => RustFloatMathLowering::Remquo {
+                symbol: "__nv_remquo",
+            },
+            Self::RoundF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_roundf",
+                arity: 1,
+            },
+            Self::RoundF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_round",
+                arity: 1,
+            },
+            Self::RoundevenF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_rintf",
+                arity: 1,
+            },
+            Self::RoundevenF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_rint",
+                arity: 1,
+            },
+            Self::SinF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_sinf",
+                arity: 1,
+            },
+            Self::SinF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_sin",
+                arity: 1,
+            },
+            Self::SinhF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_sinhf",
+                arity: 1,
+            },
+            Self::SinhF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_sinh",
+                arity: 1,
+            },
+            Self::SqrtF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_sqrtf",
+                arity: 1,
+            },
+            Self::SqrtF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_sqrt",
+                arity: 1,
+            },
+            Self::TanF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_tanf",
+                arity: 1,
+            },
+            Self::TanF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_tan",
+                arity: 1,
+            },
+            Self::TanhF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_tanhf",
+                arity: 1,
+            },
+            Self::TanhF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_tanh",
+                arity: 1,
+            },
+            Self::TgammaF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_tgammaf",
+                arity: 1,
+            },
+            Self::TgammaF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_tgamma",
+                arity: 1,
+            },
+            Self::TruncF32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_truncf",
+                arity: 1,
+            },
+            Self::TruncF64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_trunc",
+                arity: 1,
+            },
+            Self::Y0F32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_y0f",
+                arity: 1,
+            },
+            Self::Y0F64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_y0",
+                arity: 1,
+            },
+            Self::Y1F32 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_y1f",
+                arity: 1,
+            },
+            Self::Y1F64 => RustFloatMathLowering::ScalarCall {
+                symbol: "__nv_y1",
+                arity: 1,
+            },
+            Self::FaddFast => RustFloatMathLowering::FastBinop,
+            Self::FsubFast => RustFloatMathLowering::FastBinop,
+            Self::FmulFast => RustFloatMathLowering::FastBinop,
+            Self::FdivFast => RustFloatMathLowering::FastBinop,
+            Self::FremFast => RustFloatMathLowering::FastBinop,
+        }
+    }
+
     /// Recognize exact core, cmath, or libm compiler paths.
     pub fn from_core_path(name: &str) -> Option<Self> {
         match name {
@@ -1740,13 +2468,21 @@ pub fn is_intrinsic_lowered_cmath_shim(name: &str) -> bool {
 }
 
 /// Sincos retains its importer tuple expansion into two scalar placeholders.
-pub fn libm_sincos_is_f64(name: &str) -> Option<bool> {
+pub fn libm_sincos_lowering(name: &str) -> Option<RustFloatMathLowering> {
     if !is_libm_path(name) {
         return None;
     }
     match name.rsplit("::").next().unwrap_or(name) {
-        "sincos" => Some(true),
-        "sincosf" => Some(false),
+        "sincos" => Some(RustFloatMathLowering::Sincos { is_f64: true }),
+        "sincosf" => Some(RustFloatMathLowering::Sincos { is_f64: false }),
+        _ => None,
+    }
+}
+
+/// Return whether `name` is the `f64` (`Some(true)`) or `f32` (`Some(false)`) `libm::sincos` entry.
+pub fn libm_sincos_is_f64(name: &str) -> Option<bool> {
+    match libm_sincos_lowering(name) {
+        Some(RustFloatMathLowering::Sincos { is_f64 }) => Some(is_f64),
         _ => None,
     }
 }

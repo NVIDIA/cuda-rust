@@ -230,6 +230,36 @@ mod tests {
         CALLEE_LDEXP_F64,
         CALLEE_FREXP_F32,
         CALLEE_FREXP_F64,
+        CALLEE_ERF_F32,
+        CALLEE_ERF_F64,
+        CALLEE_ERFC_F32,
+        CALLEE_ERFC_F64,
+        CALLEE_EXP10_F32,
+        CALLEE_EXP10_F64,
+        CALLEE_FDIM_F32,
+        CALLEE_FDIM_F64,
+        CALLEE_FMOD_F32,
+        CALLEE_FMOD_F64,
+        CALLEE_J0_F32,
+        CALLEE_J0_F64,
+        CALLEE_J1_F32,
+        CALLEE_J1_F64,
+        CALLEE_LGAMMA_F32,
+        CALLEE_LGAMMA_F64,
+        CALLEE_LGAMMA_R_F32,
+        CALLEE_LGAMMA_R_F64,
+        CALLEE_MODF_F32,
+        CALLEE_MODF_F64,
+        CALLEE_NEXTAFTER_F32,
+        CALLEE_NEXTAFTER_F64,
+        CALLEE_REMAINDER_F32,
+        CALLEE_REMAINDER_F64,
+        CALLEE_REMQUO_F32,
+        CALLEE_REMQUO_F64,
+        CALLEE_Y0_F32,
+        CALLEE_Y0_F64,
+        CALLEE_Y1_F32,
+        CALLEE_Y1_F64,
     ];
 
     /// Every placeholder that is libdevice-backed only under the libNVVM
@@ -258,6 +288,14 @@ mod tests {
         CALLEE_MAXNUM_NSZ_F64,
         CALLEE_MINNUM_NSZ_F32,
         CALLEE_MINNUM_NSZ_F64,
+        CALLEE_FMAXIMUM_F32,
+        CALLEE_FMAXIMUM_F64,
+        CALLEE_FMINIMUM_F32,
+        CALLEE_FMINIMUM_F64,
+        CALLEE_FMAXIMUM_NUM_F32,
+        CALLEE_FMAXIMUM_NUM_F64,
+        CALLEE_FMINIMUM_NUM_F32,
+        CALLEE_FMINIMUM_NUM_F64,
         CALLEE_ROTATE_LEFT,
         CALLEE_ROTATE_RIGHT,
         CALLEE_CTPOP,
@@ -287,6 +325,19 @@ mod tests {
     /// the test, and no callee can sit in both lists.
     #[test]
     fn libdevice_placeholder_classification_is_exact_and_disjoint() {
+        for &intrinsic in ALL_FLOAT_MATH_INTRINSICS {
+            let callee = intrinsic.placeholder_callee();
+            let expected_list = match intrinsic.link_requirement() {
+                MathLink::Always => ALWAYS_LIBDEVICE,
+                MathLink::Libnvvm => LIBNVVM_ONLY_LIBDEVICE,
+                MathLink::Never => NEVER_LIBDEVICE,
+            };
+            assert!(
+                expected_list.contains(&callee),
+                "`{callee}` ({intrinsic:?}) is missing from its expected link-classification list"
+            );
+        }
+
         for callee in ALWAYS_LIBDEVICE {
             assert!(is_known_placeholder(callee));
             assert!(

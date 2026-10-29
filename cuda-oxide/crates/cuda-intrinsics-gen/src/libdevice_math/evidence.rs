@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+//! Disassemble libdevice bitcode and extract verified C ABI signatures.
+
 use super::Evidence;
 use crate::util::sha256_bytes;
 use anyhow::{Context, Result, bail, ensure};
@@ -12,6 +14,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+/// Disassemble libdevice bitcode with `llvm-dis` and capture expected symbol signatures.
 pub(super) fn capture(
     bitcode: &Path,
     llvm_dis: &Path,
@@ -56,6 +59,7 @@ pub(super) fn capture(
     })
 }
 
+/// Normalize an LLVM IR parameter or return type token into its canonical C ABI spelling.
 fn llvm_type(text: &str) -> Result<String> {
     let mut words = text.split_whitespace();
     let first = words.next().context("missing LLVM parameter type")?;

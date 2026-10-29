@@ -38,6 +38,7 @@ pub fn from_core_path_with_substs(
     from_generic_core_path(name, float_ty)
 }
 
+/// Map a generic `core::intrinsics::{sin,cos,exp,exp2,log,log2,log10}` path and its concrete float type.
 fn from_generic_core_path(
     name: &str,
     float_ty: Option<rustc_public::ty::FloatTy>,
@@ -267,6 +268,7 @@ mod tests {
     use super::*;
     use dialect_mir::rust_intrinsics;
 
+    /// Ensure `frexp`/`frexpf` resolve only `libm` paths and reject other namespaces.
     #[test]
     fn frexp_paths_resolve_only_libm_entry_points() {
         use RustFloatMathIntrinsic as I;
@@ -299,6 +301,7 @@ mod tests {
         assert_eq!(I::from_core_path("libm::ldexp"), Some(I::LdexpF64));
     }
 
+    /// Ensure `modf`/`remquo` resolve only `libm` paths and reject other namespaces.
     #[test]
     fn out_parameter_pairs_resolve_only_libm_entry_points() {
         use RustFloatMathIntrinsic as I;
@@ -335,6 +338,7 @@ mod tests {
         }
     }
 
+    /// Check that special math, `lgamma_r`, C23 min/max, and `j1` paths resolve to their placeholders.
     #[test]
     fn special_math_paths_resolve_to_typed_placeholders() {
         use RustFloatMathIntrinsic as I;
@@ -472,6 +476,7 @@ mod tests {
         assert_eq!(I::from_core_path("libm::tgammaf128"), None);
     }
 
+    /// Verify that generic float intrinsics resolve `f32`/`f64` and reject unsupported widths.
     #[test]
     fn generic_float_intrinsics_resolve_only_the_declared_float_type() {
         use RustFloatMathIntrinsic as I;
@@ -701,6 +706,7 @@ mod tests {
         assert_eq!(libm_sincos_is_f64("libmath::sincos"), None);
     }
 
+    /// Verify that `MaxNumNsz*`/`MinNumNsz*` placeholders match `dialect-mir::rust_intrinsics`.
     #[test]
     fn maxnum_minnum_nsz_placeholders_round_trip_through_dialect_mir() {
         // The placeholder names must match between this importer crate and

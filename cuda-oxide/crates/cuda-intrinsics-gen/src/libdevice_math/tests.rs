@@ -3,23 +3,21 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+//! Unit tests for the libdevice math shard parser, evidence validator, and code generator.
+
 use super::*;
 
-mod generated {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../intrinsics/generated/libdevice_math.rs"
-    ));
-}
-
+/// Return the `cuda-oxide` workspace root directory.
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+/// Build an in-memory schema-2 `libdevice_math` shard fixture from function TOML blocks.
 fn fixture(functions: &str) -> Shard {
     parse(format!("schema = 2\nfamily = \"libdevice_math\"\n[libdevice_math]\nevidence = \"evidence/test.json\"\nlibdevice_sha256 = \"{}\"\nwidths = [\"f32\", \"f64\"]\n{functions}", "a".repeat(64)).as_bytes()).unwrap()
 }
 
+/// Verify that all 124 shard rows (120 libm exports plus core-only routes) match `dialect-mir`.
 #[test]
 fn generated_metadata_covers_120_exports_and_core_only_routes() {
     let shard = read(&root()).unwrap();
@@ -27,29 +25,7 @@ fn generated_metadata_covers_120_exports_and_core_only_routes() {
     assert_eq!(rows.len(), 124);
     assert_eq!(rows.iter().filter(|row| row.libm.is_some()).count(), 120);
     assert_eq!(expected_symbols(&rows).unwrap().len(), 102);
-    assert_eq!(generated::MAPPINGS.len(), rows.len());
-    for (actual, row) in generated::MAPPINGS.iter().zip(&rows) {
-        assert_eq!(actual.libm, row.libm.as_deref());
-        assert_eq!(actual.width, row.width);
-        assert_eq!(actual.variant, row.variant.as_deref());
-        assert_eq!(actual.constant, row.constant.as_deref());
-        assert_eq!(
-            actual.paths,
-            row.paths.iter().map(String::as_str).collect::<Vec<_>>()
-        );
-        assert_eq!(actual.signature, row.signature);
-        assert_eq!(
-            actual.placeholders,
-            row.placeholders
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(actual.cmath, row.cmath.as_deref());
-        assert_eq!(actual.libdevice, row.libdevice.as_deref());
-        assert_eq!(actual.llvm, row.llvm.as_deref());
-        assert_eq!(actual.lowering, row.lowering.as_deref());
-        assert_eq!(actual.link, row.link.as_str());
+    for row in &rows {
         if let Some(variant) = &row.variant {
             let callee = format!("{}{}", compiled::PLACEHOLDER_PREFIX, row.placeholders[0]);
             let intrinsic =
@@ -67,6 +43,51 @@ fn generated_metadata_covers_120_exports_and_core_only_routes() {
                 intrinsic.llvm_symbol(row.width == "f64"),
                 row.llvm.as_deref()
             );
+            match row.lowering.as_deref() {
+                None => assert!(matches!(
+                    intrinsic.lowering(),
+                    compiled::RustFloatMathLowering::ScalarCall { arity, .. }
+                        if arity == intrinsic.arg_count()
+                )),
+                Some("handwritten:lower_bessel_j1") => assert!(matches!(
+                    intrinsic.lowering(),
+                    compiled::RustFloatMathLowering::BesselJ1 { symbol }
+                        if Some(symbol) == row.libdevice.as_deref()
+                )),
+                Some("handwritten:emit_frexp") => assert!(matches!(
+                    intrinsic.lowering(),
+                    compiled::RustFloatMathLowering::Frexp { symbol }
+                        if Some(symbol) == row.libdevice.as_deref()
+                )),
+                Some("handwritten:emit_modf") => assert!(matches!(
+                    intrinsic.lowering(),
+                    compiled::RustFloatMathLowering::Modf { symbol }
+                        if Some(symbol) == row.libdevice.as_deref()
+                )),
+                Some("handwritten:emit_remquo") => assert!(matches!(
+                    intrinsic.lowering(),
+                    compiled::RustFloatMathLowering::Remquo { symbol }
+                        if Some(symbol) == row.libdevice.as_deref()
+                )),
+                Some("handwritten:emit_lgamma_r") => assert_eq!(
+                    intrinsic.lowering(),
+                    compiled::RustFloatMathLowering::LgammaR
+                ),
+                Some("handwritten:lower_float_minmax_nsz") => assert_eq!(
+                    intrinsic.lowering(),
+                    compiled::RustFloatMathLowering::MinMaxNsz {
+                        is_max: variant.starts_with("Max")
+                    }
+                ),
+                Some("handwritten:lower_float_ieee_minmax") => assert_eq!(
+                    intrinsic.lowering(),
+                    compiled::RustFloatMathLowering::IeeeMinMax {
+                        is_max: variant.starts_with("Maximum"),
+                        propagate_nan: !variant.contains("Number"),
+                    }
+                ),
+                Some(other) => panic!("unexpected handwritten lowering {other}"),
+            }
             for path in &row.paths {
                 assert_eq!(
                     compiled::RustFloatMathIntrinsic::from_core_path(path),
@@ -83,13 +104,11 @@ fn generated_metadata_covers_120_exports_and_core_only_routes() {
     }
 }
 
-// Compile the actual compiler consumer, including its generated dispatch. The
-// baseline records the handwritten routes from PRs #1638 and #1645, integrated
-// with #1646 before migration. It is independent of the new generator/shard and
-// remains unchanged when later PRs add aliases.
+/// Compiled `dialect-mir::rust_intrinsics` consumer used to verify generated dispatch.
 #[path = "../../../dialect-mir/src/rust_intrinsics.rs"]
 mod compiled;
 
+/// Pre-migration baseline route recorded from the handwritten math tables.
 #[derive(Deserialize)]
 struct LegacyRoute {
     path: String,
@@ -100,6 +119,7 @@ struct LegacyRoute {
     link: String,
 }
 
+/// Verify that every pre-migration compiler path, symbol, and link route is preserved.
 #[test]
 fn compiler_dispatch_preserves_every_pre_migration_path_symbol_and_link_route() {
     let expected: Vec<LegacyRoute> =
@@ -178,6 +198,7 @@ fn compiler_dispatch_preserves_every_pre_migration_path_symbol_and_link_route() 
     }
 }
 
+/// Ensure unknown paths, unsupported widths, and unmapped placeholders are rejected.
 #[test]
 fn unregistered_aliases_and_unknown_placeholders_remain_rejected() {
     for path in [
@@ -219,6 +240,7 @@ fn unregistered_aliases_and_unknown_placeholders_remain_rejected() {
     assert_eq!(compiled::RustFloatMathIntrinsic::FrexpF64.arg_count(), 1);
 }
 
+/// Check that shared aliases and handwritten adapters preserve their link and ABI rules.
 #[test]
 fn aliases_and_handwritten_controls_keep_their_semantics() {
     let rows = mappings(&read(&root()).unwrap()).unwrap();
@@ -297,6 +319,7 @@ fn aliases_and_handwritten_controls_keep_their_semantics() {
     }
 }
 
+/// Verify that invalid variant names, constants, and handwritten handlers fail closed.
 #[test]
 fn compiler_identities_and_handwritten_handlers_fail_closed() {
     let base = "[[libdevice_math.function]]\nname = \"demo\"\nsignature = \"(F) -> F\"\n";
@@ -368,6 +391,7 @@ fn compiler_identities_and_handwritten_handlers_fail_closed() {
     }
 }
 
+/// Confirm deterministic output ordering and drift detection on generated artifacts.
 #[test]
 fn render_is_independent_of_row_order_and_check_detects_drift() {
     let mut shard = read(&root()).unwrap();
@@ -394,6 +418,7 @@ fn render_is_independent_of_row_order_and_check_detects_drift() {
     }
 }
 
+/// Verify C ABI signature rendering for scalar, integer, and out-parameter classes.
 #[test]
 fn signature_classes_distinguish_integer_results_arguments_and_out_parameters() {
     for (signature, c32, c64) in [
@@ -462,6 +487,7 @@ fn signature_classes_distinguish_integer_results_arguments_and_out_parameters() 
     }
 }
 
+/// Ensure duplicate functions, malformed templates, and conflicting symbols fail closed.
 #[test]
 fn malformed_rows_fail_closed() {
     let base = "[[libdevice_math.function]]\nname = \"demo\"\nsignature = \"(F) -> F\"\n";
@@ -530,6 +556,7 @@ fn malformed_rows_fail_closed() {
     );
 }
 
+/// Reject schema mismatches, path traversal in evidence, and bitcode hash drift.
 #[test]
 fn schema_and_evidence_pins_are_strict() {
     let source = fs::read_to_string(root().join("intrinsics").join(SHARD)).unwrap();
@@ -574,6 +601,7 @@ fn schema_and_evidence_pins_are_strict() {
     );
 }
 
+/// Require exported LLVM definitions with matching return and parameter types.
 #[test]
 fn llvm_evidence_requires_exported_definitions_and_exact_signatures() {
     let expected = BTreeMap::from([
@@ -598,8 +626,10 @@ fn llvm_evidence_requires_exported_definitions_and_exact_signatures() {
     assert_eq!(evidence::signatures(&typed, &expected).unwrap(), expected);
 }
 
+/// Verify that the shard covers 120 of the 124 public f32/f64 `libm` 0.2.16 exports.
 #[test]
 fn libm_0_2_16_coverage_leaves_only_semantic_functions() {
+    /// Snapshot of public `f32`/`f64` exports from `libm` 0.2.16.
     #[derive(Deserialize)]
     struct PublicExports {
         #[serde(rename = "crate")]
@@ -635,6 +665,7 @@ fn libm_0_2_16_coverage_leaves_only_semantic_functions() {
     }
 }
 
+/// Check that the 22 plain `libm` aliases preserve width and namespace isolation.
 #[test]
 fn new_plain_aliases_preserve_width_and_namespace_controls() {
     use compiled::MathScalarType::{F32, F64};

@@ -5,7 +5,7 @@ Extractor and deterministic source generator for cuda-oxide's intrinsics.
 It reads `intrinsics/catalog.json` and the libdevice math shard, and writes every
 generated file in the intrinsic pipeline. `MANAGED_GENERATED_ROOTS` in
 `src/generate.rs` lists the
-eleven directories it owns, where `generate` writes outputs and removes stale
+ten directories it owns, where `generate` writes outputs and removes stale
 marker-bearing files:
 
 - `cuda-oxide/crates/cuda-intrinsics/src/generated/`: the raw intrinsic declarations;
@@ -17,8 +17,7 @@ marker-bearing files:
 - one generated file each in `cuda-oxide/crates/cuda-oxide-codegen/src` (target
   requirements), `cuda-oxide/crates/mir-lower/src/convert` (conversion interfaces), and
   `cuda-oxide/crates/rustc-codegen-cuda/src` (collector predicates);
-- `intrinsics/probes/`: the per-intrinsic PTX probe evidence.
-- `intrinsics/generated/`: libm-to-libdevice mapping metadata;
+- `intrinsics/probes/`: the per-intrinsic PTX probe evidence;
 - `crates/dialect-mir/src/generated/`: shared compiler math dispatch.
 
 Generated files carry a
@@ -49,27 +48,28 @@ Generation shells out to `rustfmt`, which the pinned toolchain provides.
 ## Libdevice math family
 
 `intrinsics/overlay/libdevice_math.toml` is the schema-2 source of compiler math
-dispatch. It preserves all 82 existing f32/f64 libm exports, including the
-hand-landed tgamma, ilogb, ldexp/scalbn, and frexp routes, plus the core-only
-powi and fmuladd intrinsics. This migration adds no new math exports.
+dispatch. It covers 120 of 124 libm exports (`f32`/`f64`), including tgamma,
+ilogb, ldexp/scalbn, frexp, modf, remquo, lgamma_r, C23 `fmaximum*`/`fminimum*`,
+j1, and the 22 plain libm aliases, plus the core-only powi and fmuladd
+intrinsics.
 
-The renderer writes three outputs:
+The renderer writes two outputs:
 
 - `crates/dialect-mir/src/generated/libdevice_math.rs`: the shared math enum,
-  placeholder constants, compiler-path and alias dispatch, operand counts,
-  libdevice/native LLVM symbols, exact cmath interception, and link requirements;
-- `intrinsics/generated/libdevice_math.rs`: mapping metadata used by generator
-  tests;
+  lowering dispatch (`RustFloatMathLowering`), placeholder constants,
+  compiler-path and alias dispatch, operand counts, libdevice/native LLVM
+  symbols, exact cmath interception, and link requirements;
 - `intrinsics/libdevice-math.md`: the mapping reference.
 
 The importer, MIR lowerer, and rustc collector consume the shared generated
 dispatch instead of maintaining their own copies. Type-aware generic core
-intrinsics and the semantic expansions for frexp, sincos, min/max, and fast
+intrinsics and the semantic expansions for frexp, modf, remquo, lgamma_r,
+sincos, legacy min/max, C23 min/max, j1 infinity correction, and fast
 arithmetic remain handwritten. For example, before and after regeneration,
 `libm::math::scalbn::scalbnf` resolves to `LdexpF32`, emits the same ldexp
 placeholder, and lowers to `__nv_ldexpf` with an i32 exponent.
 
-`generate` owns and reconciles all three outputs; `check` rejects drift in any
+`generate` owns and reconciles both outputs; `check` rejects drift in either
 of them, including the compiler dispatch. A regression fixture records the 214
 scalar compiler paths before migration and compares them against the compiled
 consumer's identities, placeholders, symbols, and link classification. Separate
@@ -93,7 +93,7 @@ ambiguous C ABIs, incompatible link classifications, and unsupported handwritten
 handlers fail before outputs are written. Tuple signatures require a supported
 handwritten adapter.
 
-Generation checks all 74 referenced C symbols and signatures against the pinned
+Generation checks all 102 verified libdevice signatures against the pinned
 capture in `intrinsics/evidence/libdevice_math/cuda-13.0.json`. Its provenance
 and reproduction instructions are recorded beside it. Ordinary `generate` and
 `check` do not need a CUDA installation.

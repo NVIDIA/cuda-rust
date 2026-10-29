@@ -1,70 +1,61 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Special math
+# Special math and `libm` adapters
 
-The scalar tests cover `tgamma`, standard-library `gamma()`, `ilogb`, and
-`ldexp`/`scalbn` for f32/f64. The frexp tests additionally exercise
-`libm::frexpf(f32) -> (f32, i32)` and `libm::frexp(f64) -> (f64, i32)`.
+This example exercises the `f32` and `f64` math routes generated from
+`intrinsics/overlay/libdevice_math.toml` and their handwritten semantic
+adapters in `mir-lower`:
 
-Libdevice returns a scalar fraction and writes an exponent through a pointer.
-The lowering adapts this ABI to Rust's tuple using a function-local slot,
-a libdevice call, a load and tuple construction. The slot lives in the function's
-entry block so loop iterations reuse static storage. Tuple fields use the
-existing layout map, including reordered fields and padding.
+| Suite             | Operations                                                                                   | Checks |
+|:------------------|:---------------------------------------------------------------------------------------------|:-------|
+| Special scalar    | `tgamma`, `f32/f64::gamma()`, `ilogb`, `ldexp`, `scalbn`                                     | 264    |
+| `frexp` tuple     | `libm::frexpf`, `libm::frexp` (helper boundary, projected tuple, loop)                       | 512    |
+| Plain aliases     | `erf`, `erfc`, `exp10`, `j0`, `lgamma`, `y0`, `y1`, `fdim`, `fmod`, `nextafter`, `remainder` | 416    |
+| Out-param pairs   | `libm::modff`, `libm::modf`, `libm::remquof`, `libm::remquo`                                 | 180    |
+| Composed gamma    | `libm::lgammaf_r`, `libm::lgamma_r`                                                          | 208    |
+| IEEE-754 min/max  | `fmaximum`, `fminimum`, `fmaximum_num`, `fminimum_num` (`f32`/`f64`)                         | 1,158  |
+| Bessel `j1`       | `libm::j1f`, `libm::j1` (with `+-inf -> +0.0` normalization)                                 | 84     |
 
-For infinities and NaNs, libm returns `(x, 0)`, whereas libdevice leaves the
-exponent unspecified. The adapter initializes the exponent slot and explicitly
-selects the original input and zero exponent for non-finite inputs. Integer
-bit tests preserve NaN payloads and do not introduce floating-point comparisons.
+Each suite includes unrelated user functions with `libm`-like names (`libm_lookalike::*`)
+to verify that interception is anchored to the `libm` crate root and never
+rewrites user functions.
 
-References:
+## Lowering notes
 
-- [libm frexp implementation](https://github.com/rust-lang/libm/blob/master/libm/src/math/frexp.rs)
-- [libm frexpf implementation](https://github.com/rust-lang/libm/blob/master/libm/src/math/frexpf.rs)
-- [NVIDIA libdevice frexp contract](https://docs.nvidia.com/cuda/libdevice-users-guide/libdevice_users_guide/function_device__functions__decls_8h_1addcff9bac6691e5d398a2f8e684ae441.html)
-
-## Coverage
-
-The example retains the 264 scalar checks and adds 512 frexp checks, for an
-expected total of 776. Each width has 32 frexp inputs: finite values, signed
-zeros, normal limits, subnormal limits, infinities and positive/negative quiet
-and signaling NaNs with payloads. Four routes check both tuple components:
-
-- A device-function boundary returning the tuple.
-- Assignment into a nested tuple field.
-- A call inside a loop.
-- An unrelated user function with a libm-like name, which must retain its body.
-
-The host compares both frexp components exactly, including fraction bits.
-Lowering tests cover both intrinsic backends, an out-of-entry-block call,
-reordered tuple layouts, and rejected arities and types. Importer tests cover
-public/internal libm spellings and unrelated names.
+- **Out-parameter tuple adapters (`frexp`, `modf`, `remquo`)**: Libdevice
+  returns the primary scalar and writes the second component through a pointer.
+  The lowering allocates a static entry-block stack slot (reused across loop
+  iterations), calls `__nv_frexp{f}` / `__nv_modf{f}` / `__nv_remquo{f}`, loads
+  the out value, and packs the Rust tuple using `build_struct_slot_map`. For
+  `frexp`, non-finite inputs select `(x, 0)` bitwise so NaN payloads are
+  preserved. For `remquo`, invalid inputs normalize the quotient to `0` when
+  the remainder is NaN.
+- **Composed `lgamma_r`**: Composes validated scalar `__nv_lgamma{f}`,
+  `__nv_floor{f}`, and `__nv_fmod{f}` calls to compute
+  `(log(abs(gamma(x))), signgam)` with negative-interval parity, `+1` at
+  integer poles, `-1` at `-0.0`, and `+inf` at `-inf`.
+- **IEEE-754-2019 min/max (`fmaximum*`, `fminimum*`)**: Expands inline to
+  ordered comparisons and selects without fast-math flags or libdevice calls,
+  breaking `-0.0` vs `+0.0` ties via the sign bit and either propagating NaNs
+  (`fmaximum`/`fminimum`) or preferring the numeric operand
+  (`fmaximum_num`/`fminimum_num`).
+- **Bessel `j1`**: Calls `__nv_j1{f}` and normalizes `+-inf` inputs to `+0.0`
+  to match `libm` 0.2.16 without altering NaN results.
 
 ## Validation
 
 Run from `cuda-oxide/` using the pinned toolchain:
 
 ```bash
-cargo oxide fmt
-cargo oxide fmt --check
-git diff --check
-cargo test -p dialect-mir -p mir-importer -p mir-lower --all-targets
-cargo clippy -p dialect-mir -p mir-importer -p mir-lower --all-targets -- -D warnings
-(cd crates/rustc-codegen-cuda && cargo test --lib)
-(cd crates/rustc-codegen-cuda/examples/math_special && cargo clippy --locked --all-targets -- -D warnings)
+cargo run -p cuda-intrinsics-gen --locked -- check
+cargo test -p cuda-intrinsics-gen -p dialect-mir -p mir-importer -p mir-lower --all-targets
+cargo clippy --locked --manifest-path crates/rustc-codegen-cuda/examples/math_special/Cargo.toml --all-targets -- -D warnings
 cargo oxide run math_special
-cargo oxide run libm_math
-cargo oxide run math_hyperbolic
-just check
 ```
 
-Expected output from the extended example:
+Expected output:
 
 ```text
-SUCCESS: math_special passed 776 checks across f32 and f64
+SUCCESS: math_special passed 2822 checks across f32 and f64
 ```
-
-The tuple-returning helpers are marked `#[inline(never)]` to exercise the
-device-function ABI in the optimized run, together with libdevice linking.
-`cargo oxide run` uses the release profile and does not accept `--profile`.

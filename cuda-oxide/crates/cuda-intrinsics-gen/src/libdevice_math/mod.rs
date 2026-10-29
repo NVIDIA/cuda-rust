@@ -22,6 +22,7 @@ use std::path::{Component, Path, PathBuf};
 /// ABI IDs remain unchanged. `generate` reconciles this input explicitly.
 pub const SHARD: &str = "overlay/libdevice_math.toml";
 
+/// Top-level schema-2 `libdevice_math` shard file (`intrinsics/overlay/libdevice_math.toml`).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Shard {
@@ -30,6 +31,7 @@ struct Shard {
     libdevice_math: Math,
 }
 
+/// Metadata and function entries inside the `[libdevice_math]` section.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Math {
@@ -40,6 +42,7 @@ struct Math {
     functions: Vec<Function>,
 }
 
+/// One width-parameterized math function entry in `overlay/libdevice_math.toml`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Function {
@@ -69,27 +72,37 @@ struct Function {
     link: Link,
 }
 
+/// Supported Rust signature classes for width-parameterized `f32`/`f64` math entries.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 enum Signature {
+    /// Unary floating-point signature `(F) -> F`.
     #[serde(rename = "(F) -> F")]
     Unary,
+    /// Binary floating-point signature `(F, F) -> F`.
     #[serde(rename = "(F, F) -> F")]
     Binary,
+    /// Ternary floating-point signature `(F, F, F) -> F`.
     #[serde(rename = "(F, F, F) -> F")]
     Ternary,
+    /// Unary float-to-integer signature `(F) -> i32` (`ilogb`).
     #[serde(rename = "(F) -> i32")]
     IntegerResult,
+    /// Float-and-integer binary signature `(F, i32) -> F` (`ldexp`, `scalbn`, `powi`).
     #[serde(rename = "(F, i32) -> F")]
     IntegerArgument,
+    /// Float-and-integer pair return `(F) -> (F, i32)` (`frexp`, `lgamma_r`).
     #[serde(rename = "(F) -> (F, i32)")]
     FloatIntegerPair,
+    /// Two-float pair return `(F) -> (F, F)` (`modf`, `sincos`).
     #[serde(rename = "(F) -> (F, F)")]
     FloatPair,
+    /// Remainder-and-quotient pair return `(F, F) -> (F, i32)` (`remquo`).
     #[serde(rename = "(F, F) -> (F, i32)")]
     RemainderPair,
 }
 
 impl Signature {
+    /// Expand generic `F` placeholders to the concrete Rust float type (`f32` or `f64`).
     fn rust(self, width: &str) -> String {
         let generic = match self {
             Self::Unary => "(F) -> F",
@@ -104,6 +117,7 @@ impl Signature {
         generic.replace('F', width)
     }
 
+    /// Render the C/LLVM bitcode signature expected in `libdevice.10.bc`.
     fn c_abi(self, width: &str) -> String {
         let float = if width == "f32" { "float" } else { "double" };
         match self {
@@ -118,16 +132,21 @@ impl Signature {
     }
 }
 
+/// Libdevice link requirement across the LLVM NVPTX and libNVVM backends.
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum Link {
+    /// Links `libdevice.10.bc` on both intrinsic backends.
     #[default]
     Always,
+    /// Links `libdevice.10.bc` only on the libNVVM backend (NVPTX uses an LLVM intrinsic).
     Libnvvm,
+    /// Expands inline in LLVM IR without linking any libdevice symbol.
     Never,
 }
 
 impl Link {
+    /// Return the snake_case string representation used in Markdown and JSON fixtures.
     fn as_str(self) -> &'static str {
         match self {
             Self::Always => "always",
@@ -137,6 +156,7 @@ impl Link {
     }
 }
 
+/// One concrete (`f32` or `f64`) expanded math mapping row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Mapping {
     libm: Option<String>,
@@ -154,6 +174,7 @@ struct Mapping {
     c_abi: String,
 }
 
+/// Captured `libdevice.10.bc` provenance and exported function signatures.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Evidence {
@@ -163,6 +184,7 @@ struct Evidence {
     symbols: BTreeMap<String, String>,
 }
 
+/// Check whether `value` is a valid non-empty ASCII Rust/C identifier.
 fn identifier(value: &str) -> bool {
     !value.is_empty()
         && (value.as_bytes()[0].is_ascii_alphabetic() || value.starts_with('_'))
@@ -171,6 +193,7 @@ fn identifier(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
+/// Expand `{width}`, `{Width}`, `{WIDTH}`, and `{suffix}` placeholders for `width`.
 fn expand(template: &str, width: &str) -> Result<String> {
     let value = template
         .replace("{width}", width)
@@ -184,6 +207,7 @@ fn expand(template: &str, width: &str) -> Result<String> {
     Ok(value)
 }
 
+/// Parse and validate the schema-2 `libdevice_math` TOML shard from raw bytes.
 fn parse(bytes: &[u8]) -> Result<Shard> {
     let shard: Shard = toml::from_slice(bytes).context("parse libdevice_math shard")?;
     ensure!(shard.schema == 2, "unsupported libdevice_math schema");
@@ -220,11 +244,13 @@ fn parse(bytes: &[u8]) -> Result<Shard> {
     Ok(shard)
 }
 
+/// Read and parse `intrinsics/overlay/libdevice_math.toml` from `root`.
 fn read(root: &Path) -> Result<Shard> {
     let path = root.join("intrinsics").join(SHARD);
     parse(&fs::read(&path).with_context(|| format!("read {}", path.display()))?)
 }
 
+/// Expand and validate all width-specific mapping rows from the parsed shard.
 fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
     let mut names = BTreeSet::new();
     let mut exports = BTreeSet::new();
@@ -662,6 +688,7 @@ fn mappings(shard: &Shard) -> Result<Vec<Mapping>> {
     Ok(result)
 }
 
+/// Collect all unique libdevice symbols and their expected C ABI signatures.
 fn expected_symbols(rows: &[Mapping]) -> Result<BTreeMap<String, String>> {
     let mut result = BTreeMap::new();
     for row in rows {
@@ -677,6 +704,7 @@ fn expected_symbols(rows: &[Mapping]) -> Result<BTreeMap<String, String>> {
     Ok(result)
 }
 
+/// Validate the captured bitcode evidence JSON against the shard pin and expected symbols.
 fn validate_evidence(shard: &Shard, rows: &[Mapping], evidence: &Evidence) -> Result<()> {
     ensure!(
         evidence.schema == 1,
@@ -699,6 +727,7 @@ fn validate_evidence(shard: &Shard, rows: &[Mapping], evidence: &Evidence) -> Re
     Ok(())
 }
 
+/// Validate the `libdevice_math` shard and render its generated repository outputs.
 pub fn outputs(root: &Path) -> Result<BTreeMap<PathBuf, String>> {
     let shard = read(root)?;
     let rows = mappings(&shard)?;

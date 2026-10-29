@@ -131,17 +131,25 @@ impl StreamPoolRoundRobin {
     /// Creates an un-initialized round-robin policy for `device_id` with
     /// `num_streams` streams.
     ///
+    /// Returns [`DeviceError::Scheduling`] when `num_streams` is zero, since a
+    /// pool with no streams can never pick one.
+    ///
     /// # Safety
     ///
     /// The caller must call [`SchedulingPolicy::init`] before scheduling any
     /// operations. Using the policy before initialization produces an error.
-    pub unsafe fn new(device_id: usize, num_streams: usize) -> Self {
-        Self {
+    pub unsafe fn new(device_id: usize, num_streams: usize) -> Result<Self, DeviceError> {
+        if num_streams == 0 {
+            return Err(DeviceError::Scheduling(
+                "StreamPoolRoundRobin requires at least one stream".to_string(),
+            ));
+        }
+        Ok(Self {
             device_id,
             num_streams,
             stream_pool: None,
             next_stream_idx: AtomicUsize::new(0),
-        }
+        })
     }
 }
 
@@ -247,5 +255,22 @@ impl SchedulingPolicy for SingleStream {
     fn sync<T: Send, O: DeviceOperation<Output = T>>(&self, op: O) -> Result<T, DeviceError> {
         let stream = self.stream.as_ref().unwrap();
         op.sync_on(stream)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn round_robin_rejects_zero_streams() {
+        let err = unsafe { StreamPoolRoundRobin::new(0, 0) }.expect_err("new(0, 0) must fail");
+        assert!(matches!(err, DeviceError::Scheduling(_)), "{err}");
+    }
+
+    #[test]
+    fn round_robin_accepts_one_stream() {
+        let policy = unsafe { StreamPoolRoundRobin::new(0, 1) }.unwrap();
+        assert_eq!(policy.num_streams, 1);
     }
 }

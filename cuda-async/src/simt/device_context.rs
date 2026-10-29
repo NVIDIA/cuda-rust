@@ -168,7 +168,7 @@ fn init_with_default_policy(
     device_id: usize,
 ) -> Result<(), DeviceError> {
     let policy =
-        unsafe { StreamPoolRoundRobin::new(device_id, DEFAULT_ROUND_ROBIN_STREAM_POOL_SIZE) };
+        unsafe { StreamPoolRoundRobin::new(device_id, DEFAULT_ROUND_ROBIN_STREAM_POOL_SIZE) }?;
     init_device(
         hashmap,
         device_id,

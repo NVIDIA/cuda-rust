@@ -105,6 +105,26 @@ impl ReferenceParamValidityAttr {
     }
 }
 
+/// The inline request a source function carries, recorded on `mir.func`.
+///
+/// `#[inline]` is `Hint`, `#[inline(always)]` is `Always` and
+/// `#[inline(never)]` is `Never`. A function without the attribute carries
+/// none, and a kernel entry never carries one: it is never called, so there
+/// is nothing to inline. The dialect records only the request; `mir-lower`
+/// chooses the LLVM function attribute that expresses it.
+#[pliron_attr(name = "mir.inline_intent", format, verifier = "succ")]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
+pub enum InlineIntentAttr {
+    Hint,
+    Always,
+    Never,
+}
+
+impl InlineIntentAttr {
+    /// Every request, for tests that cover each one.
+    pub const ALL: [Self; 3] = [Self::Hint, Self::Always, Self::Never];
+}
+
 /// Structural field index for aggregate access ops
 /// (`mir.extract_field`, `mir.insert_field`, `mir.field_addr`, `mir.enum_payload`).
 #[pliron_attr(name = "mir.field_index", format = "$0", verifier = "succ")]
@@ -212,6 +232,7 @@ pub fn register(ctx: &mut Context) {
     MirPointerKindAuthorityAttr::register(ctx);
     MutabilityAttr::register(ctx);
     ReferenceParamValidityAttr::register(ctx);
+    InlineIntentAttr::register(ctx);
     FieldIndexAttr::register(ctx);
     VariantIndexAttr::register(ctx);
     UnrollAttr::register(ctx);

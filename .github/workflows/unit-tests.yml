@@ -55,6 +55,18 @@ jobs:
           - package: dialect-mir
           - package: dialect-nvvm
           - package: mir-importer
+          # CuTe types, semantic IR, and MLIR export need no CUDA toolkit.
+          # Facade macro tests also compile host metadata via cuda-host.
+          - package: cute-layout
+          - package: cute-rs
+            needs_cuda: true
+          - package: ctm-rs
+            needs_cuda: true
+          - package: ctm-rs
+            test_args: --all-targets --features host
+            needs_cuda: true
+          - package: dialect-cute
+          - package: cuda-oxide-mlir-export
           # Includes a real llc -> ptxas spine-kernel validation.
           - package: cuda-oxide-codegen
             needs_cuda: true
@@ -68,6 +80,11 @@ jobs:
           # tests that cover the configuration actually built.
           - package: oxide-artifacts
             test_args: --all-targets --features object
+          # `#[tile_export]` descriptions and their validation rules, shared
+          # by cuda-macros, the backend and cargo-oxide. Pure Rust, no CUDA.
+          - package: oxide-tile-export
+          # The Tile IR bytecode writer for those descriptions. Pure Rust.
+          - package: oxide-tilebc
           - package: reserved-oxide-symbols
           # launch_requires_unsafe trybuild fixture dev-depends on
           # cuda-host/cuda-core, which transitively pull cuda-bindings
@@ -97,28 +114,13 @@ jobs:
 
       - name: Install CUDA toolkit
         if: matrix.needs_cuda
-        uses: Jimver/cuda-toolkit@v0.2.35
+        uses: Jimver/cuda-toolkit@0ca15bb027fc96f7f61ddbb9c5221d699da06bdb  # v0.2.36
         id: cuda-toolkit
         with:
-          cuda: "13.1.1"
+          cuda: "13.3.1"
           method: network
           sub-packages: '["nvcc", "cudart-dev"]'
           non-cuda-sub-packages: '["libcurand-dev"]'
-
-      - name: Install LLVM 21 (llc/opt for the NVPTX backend)
-        if: matrix.package == 'cuda-oxide-codegen'
-        run: |
-          set -euo pipefail
-          source /etc/os-release
-          sudo install -d -m 0755 /etc/apt/keyrings
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-            | sudo tee /etc/apt/keyrings/apt-llvm-org.asc >/dev/null
-          echo "deb [signed-by=/etc/apt/keyrings/apt-llvm-org.asc] https://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-21 main" \
-            | sudo tee /etc/apt/sources.list.d/llvm-21.list
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends llvm-21
-          llc-21 --version | head -2
-          opt-21 --version | head -2
 
       - name: Run crate unit tests
         env:

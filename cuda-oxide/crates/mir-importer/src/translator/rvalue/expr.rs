@@ -27,7 +27,7 @@ use dialect_mir::ops::{
 use pliron::basic_block::BasicBlock;
 use pliron::builtin::types::{FP32Type, FP64Type, IntegerType};
 use pliron::context::{Context, Ptr};
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::r#type::Typed;
@@ -368,6 +368,20 @@ pub fn translate_rvalue(
             )?;
 
             let result_type = types::translate_type(ctx, ty)?;
+            let result_type = if matches!(
+                kind,
+                mir::CastKind::PtrToPtr
+                    | mir::CastKind::PointerCoercion(mir::PointerCoercion::MutToConstPointer)
+            ) && let Some(src_as) =
+                super::super::values::pointer_addr_space(ctx, operand_val.get_type(ctx))
+                && src_as != dialect_mir::types::address_space::GENERIC
+                && super::super::values::pointer_addr_space(ctx, result_type)
+                    == Some(dialect_mir::types::address_space::GENERIC)
+            {
+                super::super::values::align_pointer_addr_space(ctx, result_type, src_as)
+            } else {
+                result_type
+            };
 
             // A cast whose source and target lower to the same dialect type
             // changes nothing. `isize` and `i64` are that pair on this target:

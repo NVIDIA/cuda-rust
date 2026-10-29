@@ -14,7 +14,7 @@ use crate::launch_attrs::{
 };
 use quote::{format_ident, quote};
 use reserved_oxide_symbols::INSTANTIATE_PREFIX;
-use syn::{ItemFn, Stmt, parse_quote, visit_mut::VisitMut};
+use syn::{Expr, ItemFn, Stmt, parse_quote, spanned::Spanned, visit_mut::VisitMut};
 
 #[test]
 fn generated_kernel_siblings_preserve_qualified_paths_and_generics() {
@@ -267,6 +267,32 @@ fn unroll_n_on_for_loop_injects_factor_n_marker() {
 }
 
 #[test]
+fn unroll_marker_takes_the_position_of_its_attribute() {
+    // `parse_str` keeps real lines; `parse_quote!` gives every span line 0.
+    let cases = [
+        ("fn k() {\n    #[unroll]\n    while true {}\n}", 2, 4),
+        (
+            "fn k() {\n\n    #[unroll(4)]\n    for _ in 0..8 {}\n}",
+            3,
+            4,
+        ),
+        ("fn k() {\n  #[unroll(2)]\n  loop { break; }\n}", 2, 2),
+    ];
+    for (source, line, column) in cases {
+        let mut func: ItemFn = syn::parse_str(source).expect("test source parses");
+        rewrite_loop_unroll_attrs(&mut func).expect("valid unroll attribute");
+        let marker = match &func.block.stmts[0] {
+            Stmt::Expr(Expr::While(l), _) => &l.body.stmts[0],
+            Stmt::Expr(Expr::ForLoop(l), _) => &l.body.stmts[0],
+            Stmt::Expr(Expr::Loop(l), _) => &l.body.stmts[0],
+            other => panic!("expected a loop, got {}", quote!(#other)),
+        };
+        let start = marker.span().start();
+        assert_eq!((start.line, start.column), (line, column), "{source}");
+    }
+}
+
+#[test]
 fn unroll_on_bare_loop_injects_marker() {
     let func: ItemFn = parse_quote! {
         fn k() {
@@ -342,9 +368,85 @@ fn malformed_unroll_attr_records_error() {
 }
 
 #[test]
+fn nounroll_injects_marker_first_in_each_loop_kind() {
+    let func: ItemFn = parse_quote! {
+        fn k(n: u32) {
+            let mut i = 0u32;
+            #[nounroll]
+            while i < 4 { i += 1; }
+            #[nounroll]
+            for j in 0..n { let _ = j; }
+            #[nounroll]
+            loop { break; }
+            #[unroll(never)]
+            for k in 0..n { let _ = k; }
+        }
+    };
+    let out = run_loop_unroll_visitor(func);
+    let marker = "cuda_device::thread::__nounroll_config();";
+    assert_eq!(
+        out.matches(marker).count(),
+        4,
+        "one marker per loop:\n{out}"
+    );
+    for body_start in ["whilei<4{", "forjin0..n{", "loop{", "forkin0..n{"] {
+        assert!(
+            out.contains(&format!("{body_start}{marker}")),
+            "marker must be the first statement after `{body_start}`:\n{out}"
+        );
+    }
+    assert!(
+        !out.contains("nounroll]"),
+        "attribute must be stripped:\n{out}"
+    );
+    assert!(!out.contains("__unroll_config"), "no unroll marker:\n{out}");
+}
+
+#[test]
+fn nounroll_rejects_arguments_and_unroll_on_the_same_loop() {
+    for func in [
+        parse_quote! {
+            fn k() {
+                #[nounroll(2)]
+                for i in 0..4 { let _ = i; }
+            }
+        },
+        parse_quote! {
+            fn k() {
+                #[unroll]
+                #[nounroll]
+                for i in 0..4 { let _ = i; }
+            }
+        },
+        parse_quote! {
+            fn k() {
+                #[nounroll]
+                #[unroll(4)]
+                for i in 0..4 { let _ = i; }
+            }
+        },
+    ] {
+        let mut func: ItemFn = func;
+        let err = rewrite_loop_unroll_attrs(&mut func).expect_err("must be rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains("no arguments") || message.contains("both #[unroll] and #[nounroll]"),
+            "unexpected error: {message}"
+        );
+    }
+}
+
+#[test]
 fn partial_unroll_factor_must_be_at_least_two() {
     assert!(syn::parse_str::<UnrollArgs>("0").is_err());
     assert!(syn::parse_str::<UnrollArgs>("1").is_err());
+    assert_eq!(
+        syn::parse_str::<UnrollArgs>("never")
+            .unwrap()
+            .factor
+            .literal_value,
+        Some(u32::MAX - 1)
+    );
     assert_eq!(
         syn::parse_str::<UnrollArgs>("2")
             .unwrap()

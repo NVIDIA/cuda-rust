@@ -119,6 +119,28 @@ The coordinates (`tile_x`, `tile_y`) specify which tile to copy, in units
 of the box dimensions encoded in the descriptor. The barrier pointer tells
 the TMA engine where to signal completion.
 
+These functions address cluster shared memory: the destination may belong to
+any CTA of the cluster, so the compiler converts it to the cluster window.
+When the destination is the issuing CTA's own shared memory,
+`cp_async_bulk_tensor_*_g2s_cta` emits the `.shared::cta` destination form
+(PTX 8.6, sm_90+):
+
+```rust
+// SAFETY: TILE and BAR are `static mut` shared-memory objects of this kernel,
+// and the copy completes on BAR before any thread reads TILE.
+unsafe {
+    cp_async_bulk_tensor_2d_g2s_cta(
+        &raw mut TILE as *mut u8,
+        tensor_map, tile_x, tile_y,
+        &raw mut BAR,
+    );
+}
+```
+
+On SM12x this form matters for performance: ptxas implements a non-multicast
+`.shared::cluster` TMA load with a runtime CTA-id check and a system call
+fallback, which also makes it ignore `setmaxnreg`.
+
 ### Only one thread issues the copy
 
 TMA copies are **not** collective operations across the block. Exactly
@@ -187,6 +209,18 @@ pub fn tma_load_kernel(desc: *const TmaDescriptor) {
 The lifecycle is: `Uninit` → `init()` → `Ready` → `arrive()` / `wait()` →
 `inval()` → `Invalidated`. The type system prevents calling `wait` on an
 uninitialized barrier or `arrive` on an invalidated one.
+
+```{figure} images/mbarrier-thread-election.svg
+:align: center
+:width: 100%
+
+Which thread runs `mbarrier.init`. Every thread calls `init_by(count, id)` and `inval_by(id)`,
+and the thread whose block-linear id (`x + blockDim.x * (y + blockDim.y * z)`, the numbering
+`thread_rank()` uses) equals `id` runs the instruction; `init()` and `inval()` pass 0, thread
+(0, 0, 0). Comparing `threadIdx.x` alone named one thread only in a 1D block: in a (32, 4, 1)
+block selector 0 ran the instruction on four threads and selector 127 on none, so the launch
+failed with error 719.
+```
 
 ### Key barrier rules
 

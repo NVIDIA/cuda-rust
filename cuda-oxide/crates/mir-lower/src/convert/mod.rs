@@ -28,7 +28,6 @@
 
 use pliron::{
     context::{Context, Ptr},
-    location::Located,
     operation::Operation,
 };
 
@@ -38,8 +37,25 @@ pub(crate) fn preserve_location(
     source: Ptr<Operation>,
     lowered: Ptr<Operation>,
 ) -> Ptr<Operation> {
-    lowered.deref_mut(ctx).set_loc(source.deref(ctx).loc());
     lowered
+        .deref_mut(ctx)
+        .set_loc(source.deref(ctx).loc().clone());
+    lowered
+}
+
+/// Carry a `#[nounroll]` or partial-unroll latch mark from a MIR branch to the
+/// LLVM branch that replaces it.
+pub(crate) fn preserve_loop_unroll_disable(
+    ctx: &mut Context,
+    source: Ptr<Operation>,
+    lowered: Ptr<Operation>,
+) {
+    if llvm_export::ops::loop_unroll_disable(ctx, source)
+        || Operation::get_op::<dialect_mir::ops::MirGotoOp>(source, ctx)
+            .is_some_and(|goto| goto.is_loop_unroll_disable(ctx))
+    {
+        llvm_export::ops::set_loop_unroll_disable(ctx, lowered);
+    }
 }
 
 pub(crate) mod enum_payload_storage;

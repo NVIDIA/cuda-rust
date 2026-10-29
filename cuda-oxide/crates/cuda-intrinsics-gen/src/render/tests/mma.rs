@@ -23,6 +23,36 @@ use crate::util::read_json;
 use std::path::Path;
 
 #[test]
+fn dense_mxf4_k64_rendering_preserves_registers_and_scale_selectors() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let catalog = crate::resolve::resolve_candidate(
+        &repo_root,
+        "mma_m16n8k64_mxf4_f32",
+        "test-llvm",
+        &"a".repeat(64),
+        "sm_120a",
+        "+ptx87",
+    )
+    .unwrap()
+    .catalog;
+    let record = &catalog.intrinsics[0];
+    assert_eq!(intrinsic_marker(&catalog, record), "v1:i1039");
+    assert_eq!(
+        register_mma_template(record),
+        "mma.sync.aligned.m16n8k64.row.col.kind::mxf4.block_scale.scale_vec::2X.f32.e2m1.e2m1.f32.ue8m0 {$0, $1, $2, $3}, {$8, $9, $10, $11}, {$12, $13}, {$4, $5, $6, $7}, $14, {$15, $16}, $17, {$18, $19};"
+    );
+    assert_eq!(
+        register_mma_constraints(record),
+        "=f,=f,=f,=f,f,f,f,f,r,r,r,r,r,r,r,h,h,r,h,h"
+    );
+    let compatibility = render_compat_register_mma(&catalog, "test-hash");
+    assert!(compatibility.contains("pub unsafe fn mma_m16n8k64_mxf4_f32("));
+    let importer = render_importer(&catalog, "test-hash");
+    assert!(importer.contains("set_attr_nvvm_register_mma_kind(ctx, RegisterMmaKindAttr::Mxf4)"));
+    assert!(generated_intrinsic_variant(record).contains("kind: GeneratedRegisterMmaKind::Mxf4"));
+}
+
+#[test]
 fn stmatrix_rendering_preserves_all_four_public_and_backend_contracts() {
     let catalog = catalog_with_stmatrix();
     validate_renderable(&catalog).unwrap();
@@ -345,9 +375,9 @@ fn register_mma_rendering_preserves_apis_order_convergence_and_variants() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = crate::resolve::resolve(&repo_root).unwrap();
     validate_renderable(&catalog).unwrap();
-    assert_eq!(catalog.intrinsics.len(), 1029);
+    assert_eq!(catalog.intrinsics.len(), 1042);
     let records: Vec<_> = register_mmas(&catalog).collect();
-    assert_eq!(records.len(), 154);
+    assert_eq!(records.len(), 155);
     let generated_records = records
         .iter()
         .copied()
@@ -364,7 +394,7 @@ fn register_mma_rendering_preserves_apis_order_convergence_and_variants() {
                 == RegisterMmaCompatibilitySource::ExistingStub
         })
         .collect::<Vec<_>>();
-    assert_eq!(generated_records.len(), 149);
+    assert_eq!(generated_records.len(), 150);
     assert_eq!(existing_records.len(), 5);
 
     let raw = render_raw_abi(&catalog, "test-hash").unwrap();
@@ -376,7 +406,7 @@ fn register_mma_rendering_preserves_apis_order_convergence_and_variants() {
     assert!(raw.contains("Signed accumulator overflow clamps"));
 
     let compatibility = render_compat_register_mma(&catalog, "test-hash");
-    assert_eq!(compatibility.matches("pub unsafe fn ").count(), 149);
+    assert_eq!(compatibility.matches("pub unsafe fn ").count(), 150);
     for record in generated_records {
         let argument_names: &[&str] = if record.register_mma.as_ref().unwrap().adapter
             == RegisterMmaAdapter::C4F32A4U32B2U32Scales2U32Selectors4U16ToD4F32
@@ -425,7 +455,7 @@ fn register_mma_rendering_preserves_apis_order_convergence_and_variants() {
     assert!(dialect.contains("RegisterMmaOperationAttr::Multiply"));
     assert!(dialect.contains("RegisterMmaOperationAttr::AndPopc"));
     assert!(dialect.contains("RegisterMmaOperationAttr::XorPopc"));
-    assert!(dialect.contains("pub enum RegisterMmaKindAttr { Standard, F8f6f4, Mxf8f6f4 }"));
+    assert!(dialect.contains("pub enum RegisterMmaKindAttr { Standard, F8f6f4, Mxf8f6f4, Mxf4 }"));
     assert!(dialect.contains("kind_or_inferred"));
     assert!(dialect.contains("RegisterMmaAccumulatorAttr::F16"));
     assert!(dialect.contains("operation_or_multiply"));
@@ -590,7 +620,9 @@ fn register_mma_rendering_preserves_apis_order_convergence_and_variants() {
     assert!(targets.contains("GeneratedRegisterMmaOperation::Multiply"));
     assert!(targets.contains("GeneratedRegisterMmaOperation::AndPopc"));
     assert!(targets.contains("GeneratedRegisterMmaOperation::XorPopc"));
-    assert!(targets.contains("pub enum GeneratedRegisterMmaKind { Standard, F8f6f4, Mxf8f6f4 }"));
+    assert!(
+        targets.contains("pub enum GeneratedRegisterMmaKind { Standard, F8f6f4, Mxf8f6f4, Mxf4 }")
+    );
     assert!(targets.contains("kind: GeneratedRegisterMmaKind::Standard"));
     assert!(targets.contains("kind: GeneratedRegisterMmaKind::F8f6f4"));
     assert!(targets.contains("kind: GeneratedRegisterMmaKind::Mxf8f6f4"));

@@ -342,8 +342,9 @@ pub fn apply_transform(input: &[f32], mut out: DisjointSlice<f32>) {
         clamped * clamped
     };
 
+    let i = idx.get();
     if let Some(out_elem) = out.get_mut(idx) {
-        *out_elem = transform(input[idx.get()]);
+        *out_elem = transform(input[i]);
     }
 }
 ```

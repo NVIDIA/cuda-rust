@@ -129,13 +129,18 @@ cuda-oxide is split into focused crates. Here is every one and its role:
 | `rustc-codegen-cuda` | Custom rustc codegen backend -- intercepts `codegen_crate()`, splits host/device code  |
 | `mir-importer`       | Translates Stable MIR into `dialect-mir`, orchestrates the full pipeline               |
 | `dialect-mir`        | pliron dialect modeling Rust MIR semantics (places, rvalues, terminators)              |
+| `dialect-cute`       | Backend-neutral semantic IR for CuTe tensor programs                                   |
 | `mir-transforms`     | Analyzes and optimizes `dialect-mir` before lowering; currently provides loop unrolling |
 | `nvvm-transforms`    | Converts lowered LLVM operations to the form accepted by the selected NVVM dialect     |
 | `llvm-export`        | Re-exports `pliron-llvm`'s LLVM dialect + cuda-oxide's textual `.ll` exporter          |
+| `cuda-oxide-mlir-export` | CUTLASS 4.7 mappings and profiles; upstream MLIR printing                                     |
 | `dialect-nvvm`       | pliron dialect for NVIDIA GPU intrinsics (`tid`, `ntid`, barriers, TMA)                |
 | `mir-lower`          | Lowers `dialect-mir` to the LLVM dialect -- the main transformation pass               |
 | `cargo-oxide`        | CLI tool: `cargo oxide build`, `cargo oxide run`, `cargo oxide pipeline`               |
 | `cuda-device`        | Device-side API: intrinsics, `DisjointSlice`, barriers, shared memory, warp ops        |
+| `cute-layout`       | CuTe-style layout algebra and coordinate mapping                                       |
+| `ctm-rs`            | Typed instruction-level CUDA primitives |
+| `cute-rs`           | Typed CuTe tensors, tiles, copies, pipelines, and MMA operations                        |
 | `cuda-macros`        | Proc macros: `#[kernel]`, `#[device]`                                                  |
 | `cuda-host`          | Host-side typed module loading and launch helpers                                      |
 | `cuda-core`          | Shared with cutile-rs: safe Driver API bindings; SIMT surface under `cuda_core::simt`   |
@@ -146,12 +151,14 @@ cuda-oxide is split into focused crates. Here is every one and its role:
 | `cuda-intrinsics-gen`| Extractor and deterministic source generator for the intrinsics                        |
 | `cuda-artifact-finalizer` | Driver-independent NVVM IR, LTOIR, and PTX finalization                           |
 | `oxide-artifacts`    | Architecture-neutral embedded device artifact metadata                                 |
+| `oxide-tile-export`  | Export descriptions shared by `cuda-macros`, the backend and `cargo-oxide`; part of the Tile IR interop work, not released yet |
+| `oxide-tilebc`       | Tile IR bytecode writer for those export descriptions |
 | `dialect-iket`       | pliron dialect modelling in-kernel event tracing                                       |
 | `iket-lower`         | `dialect-iket` profiles + instrumentation lowering                                     |
 | `dialect-ptx`        | pliron dialect modelling structured PTX                                                |
 | `ptx-parse`          | Lossless structural views over PTX source text                                         |
 | `ptx-schedule`       | PTX schedule-perturbation fuzzing (nanosleep injection campaigns)                      |
-| `cuda-oxide-codegen` | Rustc-independent PTX backend                                                          |
+| `cuda-oxide-codegen` | Rustc-independent PTX and CUTLASS cubin backend                                         |
 | `libnvvm-sys`        | `dlopen` bindings to libNVVM (used by `cuda-host::ltoir`)                              |
 | `cuda-target-spec`   | Shared CUDA target parsing and recorded LLVM PTX-floor policy                         |
 | `nvjitlink-sys`      | `dlopen` bindings to nvJitLink (used by `cuda-host::ltoir`)                             |

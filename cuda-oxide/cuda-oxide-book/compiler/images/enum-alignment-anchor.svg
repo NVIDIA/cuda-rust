@@ -1,0 +1,145 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 694" width="1240" height="694" role="img" aria-label="Enum alignment anchors: mir-lower raises an enum storage type's alignment with a zero-length integer array whose width was align times 8 with no bound; from align 2^21 the width exceeded LLVM's limit and at 2^29 it wrapped to i0. PR 1357 caps the anchor at i128, the Rust alignment stays on every memory operation, and one helper now serves unions and enums">
+<style>
+  :root, svg {
+  --bg: #f4f6f8; --fg: #1a232e; --muted: #5d6b7a; --line: #9aa7b4; --panel: #ffffff;
+  --meta: #0e7c72; --meta-fill: #d9f3ef; --code: #b4560a; --code-fill: #fdebd2;
+  --rust: #7a3fb3; --rust-fill: #efe4fb;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+ }
+  @media (prefers-color-scheme: dark) { :root, svg {
+  --bg: #1b1d23; --fg: #f2f4f7; --muted: #bcc4d0; --line: #5c6475; --panel: #282c36;
+  --meta: #7ed8bb; --meta-fill: #346357; --code: #f4c474; --code-fill: #735a3c;
+  --rust: #d8d4fb; --rust-fill: #524e7d;
+ } }
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--fg)"/></marker></defs>
+
+<rect x="0" y="0" width="1240" height="694" style="fill: var(--bg)"/>
+<text x="40" y="34" text-anchor="start" xml:space="preserve" style="font: 600 17px var(--sans); fill: var(--fg); white-space: pre">Enum alignment anchors: the zero-length anchor is capped at 16 bytes ([0 x i128])</text>
+<text x="40" y="56" text-anchor="start" xml:space="preserve" style="font: 400 12.5px var(--sans); fill: var(--muted); white-space: pre">mir-lower raises an enum storage type's natural alignment with a zero-length integer array. Its width was align * 8 with no bound; the cap is the one unions got in #610.</text>
+<text x="40" y="92" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">THE ENUM AND ITS ANCHOR  (what mir-lower mints)</text>
+<text x="398" y="92" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">BEFORE  (the width grows with the alignment, then breaks)</text>
+<text x="850" y="92" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">AFTER #1357  (one cap, stamped alignment, one helper)</text>
+<rect x="40" y="108" width="330" height="74" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="52" y="128" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--rust); white-space: pre">#[repr(align(536870912))]</text>
+<text x="52" y="148" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--mono); fill: var(--fg); white-space: pre">pub enum HugeAlign { A, B }</text>
+<text x="52" y="166" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">rustc: size 2^29, align 2^29, u8 tag at offset 0</text>
+<line x1="90" y1="182" x2="90" y2="216" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<text x="102" y="204" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--muted); white-space: pre">build_enum_slot_map mints the LLVM storage type</text>
+<rect x="40" y="218" width="330" height="150" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="52" y="238" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">{ [0 x iN], i8, [size - 1 x i8] }</text>
+<text x="52" y="260" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--meta); white-space: pre">[0 x iN]</text>
+<text x="116" y="260" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">0 bytes: only sets the struct's natural alignment</text>
+<rect x="52" y="265" width="3" height="40" rx="1" style="fill: var(--meta); stroke: none; stroke-width: 1.2"/>
+<rect x="55" y="270" width="28" height="30" rx="2" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<rect x="83" y="270" width="275" height="30" rx="2" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 4 3"/>
+<text x="69.0" y="289" text-anchor="middle" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">i8</text>
+<text x="220.5" y="289" text-anchor="middle" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">[size - 1 x i8]</text>
+<text x="69.0" y="314" text-anchor="middle" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">tag</text>
+<text x="220.5" y="314" text-anchor="middle" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">filler to rustc's size</text>
+<line x1="52" y1="328" x2="358" y2="328" style="stroke: var(--fg); stroke-width: 1"/>
+<line x1="52" y1="324" x2="52" y2="332" style="stroke: var(--fg); stroke-width: 1"/>
+<line x1="358" y1="324" x2="358" y2="332" style="stroke: var(--fg); stroke-width: 1"/>
+<text x="205.0" y="342" text-anchor="middle" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">size = align bytes; arrays stride by it; the anchor adds none</text>
+<text x="40" y="388" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">Here the tag and filler bytes give the struct natural</text>
+<text x="40" y="403" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">alignment 1. When rustc wants more, slot 0 gets an</text>
+<text x="40" y="418" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">anchor whose element width is align * 8. It adds no</text>
+<text x="40" y="433" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">bytes, so size and array stride stay rustc's; only</text>
+<text x="40" y="448" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">LLVM's idea of the type's alignment moves.</text>
+<text x="40" y="463" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre"></text>
+<text x="40" y="478" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">Unions always carry one (union_storage.rs); an enum</text>
+<text x="40" y="493" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">gets one when its byte claims under-align it</text>
+<text x="40" y="508" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">(enum_layout.rs). Both are minted once per type.</text>
+<rect x="398" y="108" width="424" height="122" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="410" y="128" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">enum_layout.rs on main: width = align * 8, no bound</text>
+<text x="410" y="148" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">let anchor_int = IntegerType::get(</text>
+<text x="410" y="164" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--code); white-space: pre">    ctx, (required_align * 8) as u32, Signedness::Signless);</text>
+<text x="410" y="180" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">let anchor = ArrayType::get(ctx, anchor_int.into(), 0);</text>
+<text x="410" y="196" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">llvm_fields.insert(0, anchor);</text>
+<text x="410" y="220" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">The same three lines, with align.min(16), had capped unions since #610.</text>
+<text x="398" y="248" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">What the anchor became</text>
+<text x="398" y="268" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--sans); fill: var(--muted); white-space: pre">align(N)</text>
+<text x="482" y="268" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--sans); fill: var(--muted); white-space: pre">anchor on main</text>
+<text x="630" y="268" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--sans); fill: var(--muted); white-space: pre">LLVM</text>
+<text x="724" y="268" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--sans); fill: var(--muted); white-space: pre">anchor now</text>
+<line x1="398" y1="274" x2="798" y2="274" style="stroke: var(--line); stroke-width: 1"/>
+<text x="398" y="290" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">8</text>
+<text x="482" y="290" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">[0 x i64]</text>
+<text x="630" y="290" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">ok</text>
+<text x="724" y="290" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">[0 x i64]</text>
+<text x="398" y="307" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">16</text>
+<text x="482" y="307" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">[0 x i128]</text>
+<text x="630" y="307" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">ok</text>
+<text x="724" y="307" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">[0 x i128]</text>
+<text x="398" y="324" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">32</text>
+<text x="482" y="324" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">[0 x i256]</text>
+<text x="630" y="324" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--muted); white-space: pre">16 vs 32</text>
+<text x="724" y="324" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--meta); white-space: pre">[0 x i128]</text>
+<text x="398" y="341" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">64</text>
+<text x="482" y="341" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">[0 x i512]</text>
+<text x="630" y="341" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--muted); white-space: pre">16 vs 32</text>
+<text x="724" y="341" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--meta); white-space: pre">[0 x i128]</text>
+<text x="398" y="358" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">128</text>
+<text x="482" y="358" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">[0 x i1024]</text>
+<text x="630" y="358" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--muted); white-space: pre">16 vs 32</text>
+<text x="724" y="358" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--meta); white-space: pre">[0 x i128]</text>
+<text x="398" y="375" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">2^20</text>
+<text x="482" y="375" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">[0 x i8388608]</text>
+<text x="630" y="375" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--muted); white-space: pre">16 vs 32</text>
+<text x="724" y="375" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--meta); white-space: pre">[0 x i128]</text>
+<text x="398" y="392" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">2^21</text>
+<text x="482" y="392" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--mono); fill: var(--code); white-space: pre">[0 x i16777216]</text>
+<text x="630" y="392" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--mono); fill: var(--code); white-space: pre">rejected</text>
+<text x="724" y="392" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--meta); white-space: pre">[0 x i128]</text>
+<text x="398" y="409" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">2^28</text>
+<text x="482" y="409" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--mono); fill: var(--code); white-space: pre">[0 x i2147483648]</text>
+<text x="630" y="409" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--mono); fill: var(--code); white-space: pre">rejected</text>
+<text x="724" y="409" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--meta); white-space: pre">[0 x i128]</text>
+<text x="398" y="426" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">2^29</text>
+<text x="482" y="426" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--mono); fill: var(--code); white-space: pre">[0 x i0]</text>
+<text x="630" y="426" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--mono); fill: var(--code); white-space: pre">rejected</text>
+<text x="724" y="426" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--meta); white-space: pre">[0 x i128]</text>
+<line x1="398" y1="432" x2="798" y2="432" style="stroke: var(--line); stroke-width: 1"/>
+<text x="398" y="447" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--fg); white-space: pre">ok</text>
+<text x="456" y="447" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">  valid; the same anchor after the fix. Align 8 and 16 are the controls.</text>
+<text x="398" y="462" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--muted); white-space: pre">16 vs 32</text>
+<text x="456" y="462" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">  valid IR but no alignment gained: our data layout strings stop at</text>
+<text x="456" y="477" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">  i128:128, so opt saw 16; llc's default NVPTX layout has i256:256: 32.</text>
+<text x="398" y="492" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--code); white-space: pre">rejected</text>
+<text x="456" y="492" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">  error: bitwidth for integer or byte type out of range (opt and llc),</text>
+<text x="456" y="507" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">  build exit 101. From 2^21 up the width passes LLVM's 2^23-bit limit</text>
+<text x="456" y="522" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">  (i8388608 is the last accepted); at 2^29, (2^29 * 8) as u32 == 0.</text>
+<rect x="850" y="108" width="350" height="106" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="862" y="128" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--meta); white-space: pre">the cap: anchor_align = min(align, 16)</text>
+<text x="862" y="148" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">main  { [0 x i0], i8, [536870911 x i8] }</text>
+<text x="862" y="164" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--meta); white-space: pre">PR    { [0 x i128], i8, [536870911 x i8] }</text>
+<text x="862" y="180" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">size 2^29, stride 2^29, tag at offset 0: unchanged.</text>
+<text x="862" y="196" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">Builds, runs and passes memcheck; main exits 101.</text>
+<rect x="850" y="228" width="350" height="186" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="862" y="248" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">the Rust alignment rides on the ops, not the anchor</text>
+<text x="862" y="268" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">alloca [3 x { [0 x i128], i8, [63 x i8] }], align 64</text>
+<text x="862" y="284" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">store { [0 x i128], i8, [63 x i8] } .., align 64</text>
+<text x="862" y="300" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">load i8, ptr %v13, align 536870912</text>
+<text x="862" y="316" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">.local .align 64 .b8 __local_depot1[192]</text>
+<text x="862" y="332" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">.param .align 64 .b8 by_value_tag64_param_0[64]</text>
+<text x="862" y="348" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">shl.b64 %rd18, %rd3, 29          stride 2^29</text>
+<text x="862" y="364" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">Stamped on every alloca, load, store, spill, kernel</text>
+<text x="862" y="380" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">parameter and return typed as the enum. PTX for align</text>
+<text x="862" y="396" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">32, 64 and 128 is instruction-identical to main.</text>
+<rect x="850" y="428" width="350" height="154" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="862" y="448" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--rust); white-space: pre">one helper for unions and enums</text>
+<text x="862" y="468" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">pub(crate) const MAX_NATURAL_ALIGN: u64 = 16;</text>
+<text x="862" y="484" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">pub(crate) fn alignment_anchor_type(</text>
+<text x="862" y="500" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">    ctx: &amp;mut Context, abi_align: u64) -&gt; TypeHandle</text>
+<text x="862" y="516" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">Called from union_storage.rs and enum_layout.rs.</text>
+<text x="862" y="532" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">16 is where the three data layout strings we emit,</text>
+<text x="862" y="548" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">llvm_type_size_align and the exporter's</text>
+<text x="862" y="564" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">natural_alignment all stop (i128).</text>
+<line x1="384" y1="100" x2="384" y2="582" style="stroke: var(--line); stroke-width: 1"/>
+<line x1="836" y1="100" x2="836" y2="582" style="stroke: var(--line); stroke-width: 1"/>
+<rect x="40" y="600" width="1160" height="70" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="54" y="622" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">What changes and what does not</text>
+<text x="54" y="642" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">Changes: only the anchor's element width for alignments of 32 and up (i256, i512, i1024, i8388608 and i0 all become i128). Unchanged: size, stride, and the alignment</text>
+<text x="54" y="660" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">stamped on the memory operations. Enums aligned 2^20, 2^21 and 2^29 go from exit 101 on main to building and running; align 32 to 128 keep the same PTX. A wider anchor never bought alignment.</text>
+</svg>

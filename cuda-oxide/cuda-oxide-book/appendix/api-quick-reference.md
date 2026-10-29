@@ -45,6 +45,7 @@ fn helper(x: f32) -> f32 { x * x }
 | `#[kernel]`                                 | Mark a function as a GPU kernel entry point (`.entry` in PTX)       |
 | `#[device]`                                 | Mark a helper function or `extern "C"` block for device compilation |
 | `#[unroll]` / `#[unroll(N)]`               | Request full unrolling, or unrolling by a factor `N >= 2`            |
+| `#[nounroll]`                               | Keep a loop rolled through LLVM, libNVVM, and ptxas                 |
 | `#[launch_bounds(max_threads, min_blocks)]` | Occupancy hints for register allocation                             |
 | `#[constant]`                               | Place a `ConstantMemory<T>` static in constant memory, with a host `set_<name>` |
 | `#[launch_contract(...)]`                   | Declare the launch shape a kernel requires, unlocking a safe (non-`unsafe`) launch |
@@ -73,7 +74,7 @@ and 65,536 cloned operations. Larger requests warn and are not unrolled.
 ```rust
 use cuda_device::{gpu_assert, gpu_printf, ptx_asm};
 
-gpu_printf!("thread %d: val = %f\n", idx as i32, val as f64);
+gpu_printf!("thread {}: val = {}\n", idx, val);
 gpu_assert!(val.is_finite());
 gpu_assert!(val >= 0.0, "expected non-negative value");
 
@@ -450,6 +451,7 @@ cp_async_bulk_commit_group();
 | Function                                      | Description                          |
 |:----------------------------------------------|:-------------------------------------|
 | `cp_async_bulk_tensor_{1..5}d_g2s(...)`       | Global → shared async bulk copy      |
+| `cp_async_bulk_tensor_{1..5}d_g2s_cta(...)`   | Global → this CTA's shared memory    |
 | `cp_async_bulk_tensor_{1..5}d_s2g(...)`       | Shared → global async bulk copy      |
 | `cp_async_bulk_tensor_2d_g2s_multicast(...)`  | Multicast to all CTAs in cluster     |
 | `cp_async_bulk_commit_group()`                | Commit outstanding copies            |

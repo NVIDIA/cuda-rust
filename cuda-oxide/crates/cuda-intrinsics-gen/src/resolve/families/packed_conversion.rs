@@ -6,7 +6,8 @@
 use crate::model::{
     BackendLoweringMechanism, ImportedIntrinsic, IntrinsicBackend, IntrinsicSource,
     OverlayBackendLowering, OverlayIntrinsic, PackedConversionAdapter,
-    PackedConversionDestinationFormat, PackedConversionFp8Admission, PackedConversionFp8Direction,
+    PackedConversionDestinationFormat, PackedConversionFp8Admission,
+    PackedConversionFp8Bf16x2Admission, PackedConversionFp8Direction,
     PackedConversionFp8F16x2Admission, PackedConversionFp8Format, PackedConversionRounding,
     PackedConversionSaturation, PackedConversionSourceFormat, RuntimeValidation,
 };
@@ -15,6 +16,17 @@ use anyhow::{Context, Result, ensure};
 use std::collections::BTreeSet;
 
 use crate::resolve::guards::*;
+
+// PTX ISA 9.1 lists `cvt.rn.satfinite{.relu}.{e4m3x2,e5m2x2}.bf16x2` for
+// sm_100f, sm_110f and sm_120f "or higher in the same family". The ISA's
+// `.target` section lets family-specific features run on f-targets and on
+// a-targets of the same family, nvcc defines `__CUDA_ARCH_FAMILY_SPECIFIC__`
+// for `compute_100a` as well, and ptxas 13.4 and the pinned llc accept every
+// member below while rejecting the unsuffixed targets. cuda-oxide-codegen
+// matches a family target only on the literal `f` suffix, so the a-targets
+// are enumerated here, as the other Blackwell family records do.
+pub(in crate::resolve) const PACKED_CONVERSION_BF16X2_TARGETS: &str =
+    "sm_100a|sm_100f|sm_103a|sm_103f|sm_110a|sm_110f|sm_120a|sm_120f|sm_121a|sm_121f";
 
 pub(in crate::resolve) struct PackedConversionRecipe {
     pub(in crate::resolve) id: &'static str,
@@ -35,9 +47,104 @@ pub(in crate::resolve) fn packed_conversion_recipe(
 ) -> Option<PackedConversionRecipe> {
     match conversion.source_format {
         PackedConversionSourceFormat::F32x2 => packed_conversion_recipe_f32x2(conversion),
+        PackedConversionSourceFormat::Bf16x2 => packed_conversion_recipe_fp8_bf16x2(conversion),
         PackedConversionSourceFormat::E4m3x2
         | PackedConversionSourceFormat::E5m2x2
         | PackedConversionSourceFormat::F16x2 => packed_conversion_recipe_fp8_f16x2(conversion),
+    }
+}
+
+/// Recipes for packing `bf16x2` into `e4m3x2` or `e5m2x2`.
+///
+/// Like the `f16x2` packs, these lower through inline PTX: the MIR side carries
+/// both halves in one integer register while the typed intrinsics are declared
+/// over `<2 x bfloat>` (see [`packed_conversion_uses_typed_nvvm`]). The
+/// recorded evidence assembles the typed and inline routes to the same cubin.
+/// PTX ISA 9.1 introduces the instruction on the Blackwell families named by
+/// [`PACKED_CONVERSION_BF16X2_TARGETS`], not on the Ada `sm_89` floor used by
+/// `f16x2`.
+pub(in crate::resolve) fn packed_conversion_recipe_fp8_bf16x2(
+    conversion: &crate::model::PackedConversion,
+) -> Option<PackedConversionRecipe> {
+    match (
+        conversion.source_format,
+        conversion.destination_format,
+        conversion.rounding,
+        conversion.saturation,
+    ) {
+        (
+            PackedConversionSourceFormat::Bf16x2,
+            PackedConversionDestinationFormat::E4m3x2,
+            PackedConversionRounding::NearestEven,
+            PackedConversionSaturation::Satfinite,
+        ) => Some(PackedConversionRecipe {
+            id: "cvt_rn_satfinite_e4m3x2_bf16x2",
+            abi_id: "i1030",
+            operation_key: "packed.convert.bf16x2.e4m3x2.nearest_even.satfinite",
+            rust_name: "cvt_rn_satfinite_e4m3x2_bf16x2",
+            compatibility_path: "cuda_device::convert::cvt_rn_satfinite_e4m3x2_bf16x2",
+            dialect_op_type: "CvtRnSatfiniteE4m3x2Bf16x2Op",
+            dialect_op_name: "nvvm.cvt_rn_satfinite_e4m3x2_bf16x2",
+            source_record: "int_nvvm_bf16x2_to_e4m3x2_rn_satfinite",
+            llvm_symbol: "llvm.nvvm.bf16x2.to.e4m3x2.rn.satfinite",
+            llvm_result: "i16",
+            summary: "Converts packed bf16x2 to packed e4m3x2 with nearest-even finite saturation, preserving half order.",
+        }),
+        (
+            PackedConversionSourceFormat::Bf16x2,
+            PackedConversionDestinationFormat::E4m3x2,
+            PackedConversionRounding::NearestEven,
+            PackedConversionSaturation::SatfiniteRelu,
+        ) => Some(PackedConversionRecipe {
+            id: "cvt_rn_satfinite_relu_e4m3x2_bf16x2",
+            abi_id: "i1031",
+            operation_key: "packed.convert.bf16x2.e4m3x2.nearest_even.satfinite.relu",
+            rust_name: "cvt_rn_satfinite_relu_e4m3x2_bf16x2",
+            compatibility_path: "cuda_device::convert::cvt_rn_satfinite_relu_e4m3x2_bf16x2",
+            dialect_op_type: "CvtRnSatfiniteReluE4m3x2Bf16x2Op",
+            dialect_op_name: "nvvm.cvt_rn_satfinite_relu_e4m3x2_bf16x2",
+            source_record: "int_nvvm_bf16x2_to_e4m3x2_rn_relu_satfinite",
+            llvm_symbol: "llvm.nvvm.bf16x2.to.e4m3x2.rn.relu.satfinite",
+            llvm_result: "i16",
+            summary: "Converts packed bf16x2 to packed e4m3x2 with nearest-even finite saturation and ReLU, preserving half order.",
+        }),
+        (
+            PackedConversionSourceFormat::Bf16x2,
+            PackedConversionDestinationFormat::E5m2x2,
+            PackedConversionRounding::NearestEven,
+            PackedConversionSaturation::Satfinite,
+        ) => Some(PackedConversionRecipe {
+            id: "cvt_rn_satfinite_e5m2x2_bf16x2",
+            abi_id: "i1032",
+            operation_key: "packed.convert.bf16x2.e5m2x2.nearest_even.satfinite",
+            rust_name: "cvt_rn_satfinite_e5m2x2_bf16x2",
+            compatibility_path: "cuda_device::convert::cvt_rn_satfinite_e5m2x2_bf16x2",
+            dialect_op_type: "CvtRnSatfiniteE5m2x2Bf16x2Op",
+            dialect_op_name: "nvvm.cvt_rn_satfinite_e5m2x2_bf16x2",
+            source_record: "int_nvvm_bf16x2_to_e5m2x2_rn_satfinite",
+            llvm_symbol: "llvm.nvvm.bf16x2.to.e5m2x2.rn.satfinite",
+            llvm_result: "i16",
+            summary: "Converts packed bf16x2 to packed e5m2x2 with nearest-even finite saturation, preserving half order.",
+        }),
+        (
+            PackedConversionSourceFormat::Bf16x2,
+            PackedConversionDestinationFormat::E5m2x2,
+            PackedConversionRounding::NearestEven,
+            PackedConversionSaturation::SatfiniteRelu,
+        ) => Some(PackedConversionRecipe {
+            id: "cvt_rn_satfinite_relu_e5m2x2_bf16x2",
+            abi_id: "i1033",
+            operation_key: "packed.convert.bf16x2.e5m2x2.nearest_even.satfinite.relu",
+            rust_name: "cvt_rn_satfinite_relu_e5m2x2_bf16x2",
+            compatibility_path: "cuda_device::convert::cvt_rn_satfinite_relu_e5m2x2_bf16x2",
+            dialect_op_type: "CvtRnSatfiniteReluE5m2x2Bf16x2Op",
+            dialect_op_name: "nvvm.cvt_rn_satfinite_relu_e5m2x2_bf16x2",
+            source_record: "int_nvvm_bf16x2_to_e5m2x2_rn_relu_satfinite",
+            llvm_symbol: "llvm.nvvm.bf16x2.to.e5m2x2.rn.relu.satfinite",
+            llvm_result: "i16",
+            summary: "Converts packed bf16x2 to packed e5m2x2 with nearest-even finite saturation and ReLU, preserving half order.",
+        }),
+        _ => None,
     }
 }
 
@@ -434,6 +541,11 @@ pub(in crate::resolve) fn packed_conversion_source_types(
             vec!["f32".into(), "f32".into()],
             vec!["f32".into(), "f32".into()],
         ),
+        PackedConversionSourceFormat::Bf16x2 => (
+            vec!["u32".into()],
+            vec!["i32".into()],
+            vec!["v2bf16".into()],
+        ),
         PackedConversionSourceFormat::F16x2 => {
             (vec!["u32".into()], vec!["i32".into()], vec!["v2f16".into()])
         }
@@ -454,18 +566,23 @@ pub(in crate::resolve) fn packed_conversion_result_width(
 
 pub(in crate::resolve) fn packed_conversion_floor(
     conversion: &crate::model::PackedConversion,
-) -> (&'static str, &'static str) {
+) -> (&'static str, Option<&'static str>, &'static str) {
+    // `bf16x2` to packed FP8 is a PTX ISA 9.1 family-specific conversion.
+    // It is not available on the Ada `sm_89` floor used by `f16x2`.
+    if conversion.source_format == PackedConversionSourceFormat::Bf16x2 {
+        return ("9.1", None, PACKED_CONVERSION_BF16X2_TARGETS);
+    }
     // FP8 on either side carries the Ada floor, including when FP8 is the
     // source and the destination is the older `f16x2`.
     if packed_conversion_uses_fp8(conversion) {
-        return ("8.1", "sm_89");
+        return ("8.1", Some("sm_89"), "all");
     }
     match conversion.destination_format {
         PackedConversionDestinationFormat::Bf16x2 | PackedConversionDestinationFormat::F16x2 => {
-            ("7.0", "sm_80")
+            ("7.0", Some("sm_80"), "all")
         }
         PackedConversionDestinationFormat::E4m3x2 | PackedConversionDestinationFormat::E5m2x2 => {
-            ("8.1", "sm_89")
+            ("8.1", Some("sm_89"), "all")
         }
     }
 }
@@ -482,12 +599,13 @@ pub(in crate::resolve) fn packed_conversion_backend_mechanism(
 
 /// Whether the conversion lowers through a typed NVVM intrinsic call.
 ///
-/// Only the scalar-`f32` pair does. The `f16x2` sources and destinations carry
-/// their halves in one integer register on the MIR side, while the typed
-/// intrinsics are declared over `<2 x half>`; routing them through inline PTX
-/// avoids a packed-half MIR type for no change in emitted code. The recorded
-/// evidence assembles both routes to a byte-identical cubin, so the typed route
-/// can be switched on later without changing the PTX contract.
+/// Only the scalar-`f32` pair does. The `f16x2` and `bf16x2` sources and the
+/// `f16x2` destinations carry their halves in one integer register on the MIR
+/// side, while the typed intrinsics are declared over `<2 x half>` or
+/// `<2 x bfloat>`; routing them through inline PTX avoids a packed-half MIR
+/// type for no change in emitted code. The recorded evidence assembles both
+/// routes to a byte-identical cubin, so the typed route can be switched on
+/// later without changing the PTX contract.
 pub(in crate::resolve) fn packed_conversion_uses_typed_nvvm(
     conversion: &crate::model::PackedConversion,
 ) -> bool {
@@ -551,6 +669,64 @@ pub(in crate::resolve) fn expand_packed_conversion_fp8_admission(
                 rounding: PackedConversionRounding::NearestEven,
                 saturation,
                 adapter: PackedConversionAdapter::ReverseHighLowOperands,
+            };
+            records.push(packed_conversion_overlay_record(
+                conversion,
+                &admission.llvm_evidence_profile,
+                &admission.libnvvm_evidence_profile,
+            )?);
+        }
+    }
+    ensure!(records.len() == admission.product_count);
+    Ok(records)
+}
+
+pub(in crate::resolve) fn expand_packed_conversion_fp8_bf16x2_admission(
+    admission: &PackedConversionFp8Bf16x2Admission,
+) -> Result<Vec<OverlayIntrinsic>> {
+    ensure!(
+        admission.runtime_validation == RuntimeValidation::Unexecuted,
+        "FP8 bf16x2 conversion runtime validation may be marked executed only with GPU evidence"
+    );
+    ensure!(
+        admission.fp8_formats
+            == [
+                PackedConversionFp8Format::E4m3x2,
+                PackedConversionFp8Format::E5m2x2,
+            ],
+        "compact FP8 bf16x2 conversion admission must list the canonical two formats"
+    );
+    ensure!(
+        admission.relu_variants,
+        "compact FP8 bf16x2 conversion admission must admit the ReLU variants"
+    );
+    ensure!(
+        admission.product_count
+            == admission
+                .fp8_formats
+                .len()
+                .checked_mul(2)
+                .context("compact FP8 bf16x2 conversion product count overflow")?
+            && admission.product_count == 4,
+        "compact FP8 bf16x2 conversion product_count must be exactly 4"
+    );
+
+    let mut records = Vec::with_capacity(admission.product_count);
+    for &fp8_format in &admission.fp8_formats {
+        for relu in [false, true] {
+            let conversion = crate::model::PackedConversion {
+                source_format: PackedConversionSourceFormat::Bf16x2,
+                destination_format: match fp8_format {
+                    PackedConversionFp8Format::E4m3x2 => PackedConversionDestinationFormat::E4m3x2,
+                    PackedConversionFp8Format::E5m2x2 => PackedConversionDestinationFormat::E5m2x2,
+                },
+                rounding: PackedConversionRounding::NearestEven,
+                saturation: if relu {
+                    PackedConversionSaturation::SatfiniteRelu
+                } else {
+                    PackedConversionSaturation::Satfinite
+                },
+                adapter: PackedConversionAdapter::Identity,
             };
             records.push(packed_conversion_overlay_record(
                 conversion,
@@ -669,7 +845,7 @@ pub(in crate::resolve) fn packed_conversion_overlay_record(
     let result_width = packed_conversion_result_width(&conversion);
     let rust_result = format!("u{result_width}");
     let dialect_result = format!("i{result_width}");
-    let (minimum_ptx, minimum_sm) = packed_conversion_floor(&conversion);
+    let (minimum_ptx, minimum_sm, targets) = packed_conversion_floor(&conversion);
     let (rust_arguments, dialect_operands, llvm_arguments) =
         packed_conversion_source_types(&conversion);
     // `cvt` writes one destination and reads every source operand.
@@ -707,9 +883,9 @@ pub(in crate::resolve) fn packed_conversion_overlay_record(
         convergent: false,
         execution_scope: "thread".into(),
         minimum_ptx: minimum_ptx.into(),
-        minimum_sm: Some(minimum_sm.into()),
+        minimum_sm: minimum_sm.map(str::to_owned),
         ptx_result: rust_result,
-        targets: "all".into(),
+        targets: targets.into(),
         ptx_isa_version: "9.3".into(),
         ptx_isa_section: "9.7.9.22 Data Movement and Conversion Instructions: cvt".into(),
         ptx_isa_url: "https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cvt".into(),
@@ -725,7 +901,7 @@ pub(in crate::resolve) fn packed_conversion_overlay_record(
             evidence_profile: evidence_profile.into(),
             targets: None,
             minimum_ptx: Some(minimum_ptx.into()),
-            minimum_sm: Some(minimum_sm.into()),
+            minimum_sm: minimum_sm.map(str::to_owned),
         })
         .collect(),
         packed_atomic: None,
@@ -790,7 +966,8 @@ pub(in crate::resolve) fn validate_packed_conversion_policy(
     // packed operand is forwarded unchanged.
     let expected_adapter = match conversion.source_format {
         PackedConversionSourceFormat::F32x2 => PackedConversionAdapter::ReverseHighLowOperands,
-        PackedConversionSourceFormat::E4m3x2
+        PackedConversionSourceFormat::Bf16x2
+        | PackedConversionSourceFormat::E4m3x2
         | PackedConversionSourceFormat::E5m2x2
         | PackedConversionSourceFormat::F16x2 => PackedConversionAdapter::Identity,
     };
@@ -808,7 +985,7 @@ pub(in crate::resolve) fn validate_packed_conversion_policy(
     let result_width = packed_conversion_result_width(conversion);
     let rust_result = format!("u{result_width}");
     let dialect_result = format!("i{result_width}");
-    let (minimum_ptx, minimum_sm) = packed_conversion_floor(conversion);
+    let (minimum_ptx, minimum_sm, targets) = packed_conversion_floor(conversion);
     let (expected_rust_arguments, expected_dialect_operands, expected_llvm_arguments) =
         packed_conversion_source_types(conversion);
     ensure!(
@@ -864,9 +1041,9 @@ pub(in crate::resolve) fn validate_packed_conversion_policy(
             && !policy.convergent
             && policy.execution_scope == "thread"
             && policy.minimum_ptx == minimum_ptx
-            && policy.minimum_sm.as_deref() == Some(minimum_sm)
+            && policy.minimum_sm.as_deref() == minimum_sm
             && policy.ptx_result == rust_result
-            && policy.targets == "all"
+            && policy.targets == targets
             && policy.ptx_isa_version == "9.3"
             && policy.ptx_isa_section == "9.7.9.22 Data Movement and Conversion Instructions: cvt"
             && policy.ptx_isa_url
@@ -916,7 +1093,7 @@ pub(in crate::resolve) fn validate_packed_conversion_policy(
     for lowering in &policy.backend_lowerings {
         ensure!(
             lowering.minimum_ptx.as_deref() == Some(minimum_ptx)
-                && lowering.minimum_sm.as_deref() == Some(minimum_sm)
+                && lowering.minimum_sm.as_deref() == minimum_sm
                 && !lowering.evidence_profile.trim().is_empty(),
             "{} backend {:?} does not carry its exact packed-conversion floor",
             policy.id,

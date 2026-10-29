@@ -23,8 +23,9 @@ use cuda_device::{DisjointSlice, kernel, thread};
 #[kernel]
 pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(c_elem) = c.get_mut(idx) {
-        *c_elem = a[idx.get()] + b[idx.get()];
+        *c_elem = a[i] + b[i];
     }
 }
 ```
@@ -152,8 +153,9 @@ fn clamp(x: f32, lo: f32, hi: f32) -> f32 {
 #[kernel]
 pub fn apply_clamp(input: &[f32], mut out: DisjointSlice<f32>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(out_elem) = out.get_mut(idx) {
-        *out_elem = clamp(input[idx.get()], 0.0, 1.0);
+        *out_elem = clamp(input[i], 0.0, 1.0);
     }
 }
 ```
@@ -190,6 +192,30 @@ pub fn magnitude(x: f32, y: f32) -> f32 {
 | Can return a value       | No (must be `()`)       | Yes                                 | Yes                    |
 | Callable from device code| Yes                     | Yes                                 | Yes                    |
 | Annotation required      | Always                  | Only for standalone/cross-crate/FFI | Never                  |
+
+### Inlining helpers
+
+A helper's `#[inline]` request reaches the GPU the same way it reaches the host
+backend. `#[inline]` becomes the LLVM `inlinehint`, `#[inline(always)]`
+becomes `alwaysinline`, and `#[inline(never)]` becomes `noinline`, so a helper
+marked `never` stays a separate `.func` in the PTX and is reached with a real
+`call.uni`. One exception: the `#[inline(never)]` that `#[device]` adds to a
+helper with its own type or const parameters is a host-side collector boundary,
+not a device intent, so it is not carried and const-generic arguments keep
+folding into the kernel.
+
+```{figure} images/inline-intent-mapping.svg
+:align: center
+:width: 100%
+
+How an inline request reaches the GPU. Left, one helper of each kind from the
+`inline_intent` example. Middle, the request recorded on `mir.func` as a typed
+`inline_intent` attribute and lowered to the LLVM function attribute in one
+place. Right, what opt and llc make of it: `call.uni` for the `noinline`
+helpers, no function left for the `alwaysinline` one, and the const-generic
+factor folded to an immediate. Before this mapping only `alwaysinline`
+survived, and LLVM inlined a `never` helper anyway.
+```
 
 ## What Rust works on the GPU
 
@@ -323,7 +349,9 @@ pub fn sum_four(mut out: DisjointSlice<u32>) {
 The pass currently recognizes explicit counted `while` loops and range `for`
 loops (`for i in a..b` and `(a..b).rev()`) over any integer counter, including
 `isize`. Other iterator loops, such as `a..=b` or `.step_by(k)`, are not yet
-recognized.
+recognized. The bound can be integer arithmetic on constants, such as `N / 8`
+with a const generic `N`. Casts and overflow-checked arithmetic in the bound
+are not yet folded.
 
 Use `#[unroll(N)]`, where `N >= 2`, when the trip count is only known at runtime.
 The loop then does `N` iterations' work per trip. A small remainder loop handles
@@ -352,6 +380,9 @@ unroll that loop.
 Partial unrolling also requires a counted-up loop: the counter must have a
 positive step, use `<` or `<=`, and compare against a limit that does not change
 inside the loop. The compiler warns and does not unroll unsupported requests.
+Every warning about a loop that was not unrolled names the `#[unroll]`
+attribute it refers to as `file:line:column` on a `-->` line, so a kernel with
+several annotated loops shows which one was left alone.
 
 To keep generated code bounded, one annotation may create at most 1,024 body
 copies, 8,192 cloned basic blocks, and 65,536 cloned operations. A larger
@@ -361,6 +392,37 @@ unrolling because they keep loop variables in memory instead of SSA form.
 Unrolling trades larger generated code for fewer branches and more
 optimization opportunities. Use it for small or performance-critical loops,
 and measure the result.
+
+### Keeping a loop rolled
+
+ptxas fully unrolls small loops with a constant trip count on its own, even
+when the PTX keeps them rolled, and then schedules every iteration's loads at
+once. That can raise register pressure enough to spill. Put `#[nounroll]` on a
+loop to keep it rolled:
+
+```rust
+let mut tap = 0;
+#[nounroll]
+while tap < 4 {
+    acc += weight(tap) * input(i + tap);
+    tap += 1;
+}
+```
+
+The compiler attaches `llvm.loop.unroll.disable` metadata to the loop, so LLVM
+and libNVVM leave it rolled, and the NVPTX backend emits `.pragma "nounroll";`
+at the loop header, which ptxas honors. This works on any loop the compiler
+sees as a loop, including `for` loops over iterators, and in full-debug
+builds.
+
+`#[nounroll]` applies only to the loop that carries it and takes no arguments.
+A loop cannot carry both `#[unroll]` and `#[nounroll]`. A `#[nounroll]` loop
+inside a loop that `#[unroll]` or `#[unroll(N)]` unrolls is copied into each
+unrolled body, and every copy stays rolled.
+
+Put the annotation on a loop that repeats. A loop whose body always leaves it,
+such as `loop { ...; break; }`, compiles to straight-line code. Inside another
+loop, the request then applies to the enclosing loop.
 
 :::{seealso}
 For how the compiler analyzes and rewrites annotated loops, including the
@@ -512,6 +574,25 @@ In practice this means:
   runtime to print it, and the statements that would have built it are dead
   once the call is dropped. Reach for `gpu_printf!` before the check when you
   need to see the values, or `gpu_assert!` for an explicit check.
+
+A device function declared `-> !` with a real body is different. It never
+returns to its caller, for example because it writes an error code and then
+runs `loop {}`. The compiler calls it like any other function and places
+`unreachable` after the call, so the work it does before diverging is kept.
+Three cases still lower to the device trap instead: the panic entry points in
+`core::panicking`, a `-> !` body that is nothing but a panic, and a call
+through a function pointer.
+
+```{figure} images/diverging-call-lowering.svg
+:align: center
+:width: 100%
+
+How a call to a `-> !` device function lowers. Left, the Rust source: `write_then_diverge` stores a
+value and then loops. Middle, what the importer used to emit: the call replaced by `trap;`, so the
+store never happened. Right, what it emits now: the call, then `unreachable`, so the PTX stores the
+value and spins. Panic entry points, panic-only `-> !` bodies and calls through function pointers
+still lower to the trap.
+```
 
 :::{seealso}
 The [Error Handling and Debugging](error-handling-and-debugging.md) chapter

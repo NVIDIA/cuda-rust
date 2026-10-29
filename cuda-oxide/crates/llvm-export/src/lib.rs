@@ -426,8 +426,14 @@ pub mod ops {
     const GLOBAL_SHARED_SOURCE_NAME_KEY: &str = "cuda_oxide_global_shared_source_name";
     /// Marks a `GlobalOp` as externally consumed even when device code does not
     /// reference it. The exporter adds marked globals to `@llvm.used`, keeping
-    /// profiler metadata alive through libNVVM and nvJitLink materialization.
+    /// profiler metadata and host-written constant memory alive through libNVVM
+    /// and nvJitLink materialization.
     const GLOBAL_RETAINED_KEY: &str = "cuda_oxide_global_retained";
+    /// Marks a `GlobalOp` whose contents the host writes after module load
+    /// (`cuModuleGetGlobal` + copy). The exporter renders it
+    /// `externally_initialized`, so no optimizer, including libNVVM/nvJitLink
+    /// LTO, may treat the initializer as the value device code reads.
+    const GLOBAL_HOST_WRITTEN_KEY: &str = "cuda_oxide_global_host_written";
 
     /// One pointer-width relocation inside an evaluated Rust static initializer.
     ///
@@ -1417,6 +1423,35 @@ pub mod ops {
             .attributes
             .get::<AlignmentAttr>(&key)
             .map(|a| a.0)
+    }
+
+    /// Op-attribute key on a loop's latch branch when that loop must stay
+    /// rolled. The exporter prints it as `!llvm.loop` metadata carrying
+    /// `llvm.loop.unroll.disable`.
+    const LOOP_UNROLL_DISABLE_KEY: &str = "cuda_oxide_loop_unroll_disable";
+
+    /// Mark a loop's latch branch so the loop stays rolled.
+    ///
+    /// The branch must be the loop's only back-edge. LLVM reads loop metadata
+    /// from the latch terminator and ignores it when several latches disagree.
+    /// A fused WGMMA K-loop operation carries the same mark, and its lowering
+    /// emits `.pragma "nounroll";` in the loop it generates.
+    pub fn set_loop_unroll_disable(ctx: &mut Context, op: Ptr<Operation>) {
+        let key =
+            Identifier::try_new(LOOP_UNROLL_DISABLE_KEY.to_string()).expect("valid identifier");
+        op.deref_mut(ctx)
+            .attributes
+            .set(key, pliron::builtin::attributes::UnitAttr);
+    }
+
+    /// Whether [`set_loop_unroll_disable`] marked this branch.
+    pub fn loop_unroll_disable(ctx: &Context, op: Ptr<Operation>) -> bool {
+        let key =
+            Identifier::try_new(LOOP_UNROLL_DISABLE_KEY.to_string()).expect("valid identifier");
+        op.deref(ctx)
+            .attributes
+            .get::<pliron::builtin::attributes::UnitAttr>(&key)
+            .is_some()
     }
 
     /// Attach the source-facing name of a function to a MIR/LLVM function op.
@@ -2564,6 +2599,10 @@ pub mod ops {
         fn mark_retained(&self, ctx: &mut Context);
         /// Whether this global was explicitly marked as externally consumed.
         fn is_retained(&self, ctx: &Context) -> bool;
+        /// Declare that the host writes this global after module load.
+        fn mark_host_written(&self, ctx: &mut Context);
+        /// Whether the host writes this global after module load.
+        fn is_host_written(&self, ctx: &Context) -> bool;
     }
 
     impl GlobalOpExt for GlobalOp {
@@ -2679,6 +2718,25 @@ pub mod ops {
         fn is_retained(&self, ctx: &Context) -> bool {
             let key =
                 Identifier::try_new(GLOBAL_RETAINED_KEY.to_string()).expect("valid identifier");
+            self.get_operation()
+                .deref(ctx)
+                .attributes
+                .get::<pliron::builtin::attributes::UnitAttr>(&key)
+                .is_some()
+        }
+
+        fn mark_host_written(&self, ctx: &mut Context) {
+            let key =
+                Identifier::try_new(GLOBAL_HOST_WRITTEN_KEY.to_string()).expect("valid identifier");
+            self.get_operation()
+                .deref_mut(ctx)
+                .attributes
+                .set(key, pliron::builtin::attributes::UnitAttr);
+        }
+
+        fn is_host_written(&self, ctx: &Context) -> bool {
+            let key =
+                Identifier::try_new(GLOBAL_HOST_WRITTEN_KEY.to_string()).expect("valid identifier");
             self.get_operation()
                 .deref(ctx)
                 .attributes

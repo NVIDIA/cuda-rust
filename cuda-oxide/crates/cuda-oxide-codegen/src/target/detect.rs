@@ -574,15 +574,17 @@ pub(super) fn contains_tma_cta_group_features(contents: &str) -> bool {
     })
 }
 
-/// Checks TMA copies whose destination is CTA-local shared memory.
+/// Checks TMA copies whose destination is CTA-local shared memory, as inline
+/// PTX or as the typed `llvm.nvvm.cp.async.bulk.tensor.g2s.cta.*` intrinsics.
 ///
 /// `.shared::cta` already existed as a source state space for shared-to-global
 /// copies, so the following `.global` source qualifier is part of the match.
 /// The destination form was introduced in PTX 8.6 but is valid on sm_90.
 pub(super) fn contains_tma_shared_cta_destination(contents: &str) -> bool {
-    contents.split(';').any(|statement| {
-        statement.contains("cp.async.bulk.") && statement.contains(".shared::cta.global")
-    })
+    contents.contains("cp.async.bulk.tensor.g2s.cta.")
+        || contents.split(';').any(|statement| {
+            statement.contains("cp.async.bulk.") && statement.contains(".shared::cta.global")
+        })
 }
 
 /// Checks PTX 8.6 TMA modifiers with a generic sm_100 architecture floor.

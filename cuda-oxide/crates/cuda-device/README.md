@@ -2,6 +2,10 @@
 
 `#![no_std]` device-side intrinsics and abstractions for writing CUDA kernels in Rust. This crate provides everything that runs on the GPU: thread identification, memory abstractions, synchronization, warp primitives, tensor cores, TMA, atomics, and debug facilities.
 
+The separate [`ctm-rs`](../../cute-rs-preview/ctm-rs) crate provides typed CUTLASS-style
+PTX-level programming over the existing NVVM dialect. Its initial validated
+subset targets two-CTA FP16/FP32 operations on SM100a and block-scaled MXFP4 operations on SM120a.
+
 ```text
   User kernel code
        │
@@ -184,16 +188,15 @@ pub fn debug_kernel(data: &[f32]) {
     let idx = thread::index_1d();
     let value = data[idx.get()];
 
-    gpu_printf!(
-        "thread %d: val = %f\n",
-        idx.get() as i32,
-        value as f64
-    );
+    gpu_printf!("thread {}: val = {}\n", idx.get(), value);
     gpu_assert!(value >= 0.0, "expected non-negative value");
 }
 ```
 
-`gpu_printf!` compiles to device-side `vprintf` with C vararg promotion.
+`gpu_printf!` compiles to device-side `vprintf` with C vararg promotion. A
+placeholder without a type character prints its argument by type (`%llu` for
+the `usize` index, `%f` for the `f32` value); `{:x}`, `{:.2f}` and the other C
+type characters cast the argument instead.
 
 `gpu_assert!(condition)` uses `trap()` when the condition is false. The
 string-literal message form, `gpu_assert!(condition, "message")`, calls CUDA's
@@ -223,6 +226,7 @@ convenience. The table is the whole `pub use cuda_macros::{...}` list in
 | `#[pure]`                | Mark as pure (no side effects)                                                         |
 | `#[readonly]`            | Mark as read-only                                                                      |
 | `#[constant]`            | Place a `ConstantMemory<T>` static in constant memory, plus a host `set_<name>` setter |
+| `#[tile_export]`         | Export a device function to cuTile through a tile library                             |
 | `gpu_printf!`            | Device-side printf                                                                     |
 | `ptx_asm!`               | Unsafe CUDA inline PTX                                                                 |
 

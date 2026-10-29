@@ -35,8 +35,10 @@
 //!
 //! The pre-mem2reg phase fails closed on pointer provenance and mutation. It
 //! rejects additional stores, volatile loads, calls, pointer casts, pointer
-//! PHIs/selects, unknown users, non-array fields, and projections in the entry
-//! block before the initializer can be proven to dominate them. Derived
+//! PHIs/selects and unknown users. Same-block argument snapshots additionally
+//! support nested projections and whole-aggregate copies, only after a unique
+//! initializing store. The older cross-block path retains its one-field array
+//! restriction. Derived
 //! pointers remain mutable `Erased` storage addresses because projections
 //! preserve the alloca's carrier; the complete use-graph proof, rather than a
 //! false immutable type, establishes that this particular access is read-only.
@@ -94,7 +96,6 @@ use pliron::{
         rewriter::{IRRewriter, Rewriter},
     },
     linked_list::{ContainsLinkedList, LinkedList},
-    location::Located,
     op::Op,
     operation::Operation,
     r#type::{TypeHandle, Typed},
@@ -140,6 +141,11 @@ pub fn canonicalize_read_only_aggregate_arguments(
 
     let mut rewritten_loads = 0usize;
     for alloca in allocas {
+        let snapshot_reads = rewrite_entry_snapshot(ctx, alloca);
+        rewritten_loads += snapshot_reads;
+        if snapshot_reads != 0 {
+            continue;
+        }
         let Some(plan) = analyze_alloca(ctx, alloca) else {
             continue;
         };
@@ -149,6 +155,169 @@ pub fn canonicalize_read_only_aggregate_arguments(
     if rewritten_loads > 0 && verbose {
         eprintln!("borrowed-aggregate scalarization: rewrote {rewritten_loads} dynamic load(s)");
     }
+}
+
+#[derive(Clone)]
+enum SnapshotProjection {
+    Field(u32, TypeHandle),
+    Element(Value, TypeHandle),
+}
+
+/// A bounded extension for nested, by-value argument snapshots. Every access
+/// must stay in the initializer block, after its unique store, and the entire
+/// pointer-use graph must consist of projections and nonvolatile reads. This
+/// cannot widen reads from shared/global memory or allow a pointer to escape.
+fn rewrite_entry_snapshot(ctx: &mut Context, alloca: Ptr<Operation>) -> usize {
+    fn argument_root(ctx: &Context, value: Value, args: &[Value]) -> bool {
+        if args.contains(&value) {
+            return true;
+        }
+        let Some(op) = value.defining_op() else {
+            return false;
+        };
+        if Operation::get_op::<MirExtractFieldOp>(op, ctx).is_some()
+            || Operation::get_op::<MirExtractArrayElementOp>(op, ctx).is_some()
+        {
+            return argument_root(ctx, op.deref(ctx).get_operand(0), args);
+        }
+        false
+    }
+    type Read = (Ptr<Operation>, Vec<SnapshotProjection>);
+    fn walk(
+        ctx: &Context,
+        pointer: Value,
+        initializer: Ptr<Operation>,
+        positions: &HashMap<Ptr<Operation>, usize>,
+        path: &[SnapshotProjection],
+        reads: &mut Vec<Read>,
+        projections: &mut Vec<Ptr<Operation>>,
+    ) -> Option<()> {
+        let ty = pointer.get_type(ctx);
+        if !is_mutable_erased_alloca_projection(ty.deref(ctx).downcast_ref::<MirPtrType>()?) {
+            return None;
+        }
+        for usage in pointer.uses(ctx) {
+            let user = usage.user_op();
+            if user == initializer && path.is_empty() {
+                continue;
+            }
+            if usage.find_index(ctx) != 0 || positions.get(&user)? <= positions.get(&initializer)? {
+                return None;
+            }
+            if let Some(load) = Operation::get_op::<MirLoadOp>(user, ctx) {
+                if load.is_volatile(ctx) {
+                    return None;
+                }
+                reads.push((user, path.to_vec()));
+                continue;
+            }
+            if Operation::get_op::<MirFieldAddrOp>(user, ctx).is_none()
+                && Operation::get_op::<MirArrayElementAddrOp>(user, ctx).is_none()
+            {
+                return None;
+            }
+            let result = user.deref(ctx).get_result(0);
+            let result_ty = result.get_type(ctx);
+            let pointee = result_ty.deref(ctx).downcast_ref::<MirPtrType>()?.pointee;
+            let projection = if let Some(field) = Operation::get_op::<MirFieldAddrOp>(user, ctx) {
+                SnapshotProjection::Field(field.get_attr_field_index(ctx)?.0, pointee)
+            } else if Operation::get_op::<MirArrayElementAddrOp>(user, ctx).is_some() {
+                SnapshotProjection::Element(user.deref(ctx).get_operand(1), pointee)
+            } else {
+                return None;
+            };
+            let mut path = path.to_vec();
+            path.push(projection);
+            projections.push(user);
+            walk(
+                ctx,
+                result,
+                initializer,
+                positions,
+                &path,
+                reads,
+                projections,
+            )?;
+        }
+        Some(())
+    }
+    let Some(block) = alloca.deref(ctx).get_parent_block() else {
+        return 0;
+    };
+    let positions: HashMap<_, _> = block
+        .deref(ctx)
+        .iter(ctx)
+        .enumerate()
+        .map(|(i, o)| (o, i))
+        .collect();
+    let args: Vec<_> = block.deref(ctx).arguments().collect();
+    let root = alloca.deref(ctx).get_result(0);
+    let stores: Vec<_> = root
+        .uses(ctx)
+        .into_iter()
+        .filter_map(|u| Operation::get_op::<MirStoreOp>(u.user_op(), ctx))
+        .collect();
+    if stores.len() != 1 || stores[0].is_volatile(ctx) {
+        return 0;
+    }
+    let initializer = stores[0].get_operation();
+    if !positions.contains_key(&initializer) || initializer.deref(ctx).get_operand(0) != root {
+        return 0;
+    }
+    let value = stores[0].value_opd(ctx);
+    if !argument_root(ctx, value, &args) {
+        return 0;
+    }
+    let mut reads = vec![];
+    let mut projections = vec![];
+    if walk(
+        ctx,
+        root,
+        initializer,
+        &positions,
+        &[],
+        &mut reads,
+        &mut projections,
+    )
+    .is_none()
+    {
+        return 0;
+    }
+    let count = reads.len();
+    let mut rewriter = IRRewriter::<Recorder>::default();
+    for (load, path) in reads {
+        let mut replacement = value;
+        for projection in path {
+            let (info, ty, operands) = match projection {
+                SnapshotProjection::Field(_, ty) => (
+                    MirExtractFieldOp::get_concrete_op_info(),
+                    ty,
+                    vec![replacement],
+                ),
+                SnapshotProjection::Element(index, ty) => (
+                    MirExtractArrayElementOp::get_concrete_op_info(),
+                    ty,
+                    vec![replacement, index],
+                ),
+            };
+            let extract = Operation::new(ctx, info, vec![ty], operands, vec![], 0);
+            if let SnapshotProjection::Field(index, _) = projection {
+                MirExtractFieldOp::new(extract).set_attr_index(ctx, FieldIndexAttr(index));
+            }
+            extract
+                .deref_mut(ctx)
+                .set_loc(load.deref(ctx).loc().clone());
+            extract.insert_before(ctx, load);
+            replacement = extract.deref(ctx).get_result(0);
+        }
+        let old = load.deref(ctx).get_result(0);
+        old.replace_all_uses_with(ctx, &replacement);
+        rewriter.erase_operation(ctx, load);
+    }
+    for projection in projections.into_iter().rev() {
+        rewriter.erase_operation(ctx, projection);
+    }
+    count
 }
 
 fn collect_ops(ctx: &Context, root: Ptr<Operation>, output: &mut Vec<Ptr<Operation>>) {
@@ -499,12 +668,10 @@ fn analyze_borrowed_pointer_read(
     }
 
     let function = entry_block.deref(ctx).get_parent_op(ctx)?;
-    Operation::get_op::<MirFuncOp>(function, ctx)?;
-    let alwaysinline_key: pliron::identifier::Identifier = "alwaysinline".try_into().ok()?;
-    function
-        .deref(ctx)
-        .attributes
-        .get::<pliron::builtin::attributes::StringAttr>(&alwaysinline_key)?;
+    let mir_function = Operation::get_op::<MirFuncOp>(function, ctx)?;
+    if mir_function.inline_intent(ctx) != Some(dialect_mir::attributes::InlineIntentAttr::Always) {
+        return None;
+    }
 
     let aggregate_pointer_type = aggregate_pointer.get_type(ctx);
     let aggregate_pointer_type_ref = aggregate_pointer_type.deref(ctx);
@@ -988,6 +1155,83 @@ mod tests {
     }
 
     #[test]
+    fn same_block_argument_snapshot_reads_are_forwarded_only_after_unique_initialization() {
+        for (extra, volatile, write, before, escape, expected) in [
+            (false, false, false, false, false, 0),
+            (true, false, false, false, false, 1),
+            (false, true, false, false, false, 1),
+            (false, false, true, false, false, 1),
+            (false, false, false, true, false, 1),
+            (false, false, false, false, true, 1),
+        ] {
+            let mut ctx = Context::new();
+            let fixture = build_fixture(&mut ctx, 32, None, extra, volatile, write);
+            let entry = fixture.alloca.deref(&ctx).get_parent_block().unwrap();
+            let mut ops = vec![];
+            collect_ops(&ctx, fixture.module, &mut ops);
+            let goto = *ops
+                .iter()
+                .find(|&&o| Operation::get_op::<MirGotoOp>(o, &ctx).is_some())
+                .unwrap();
+            let store = *ops
+                .iter()
+                .find(|&&o| Operation::get_op::<MirStoreOp>(o, &ctx).is_some())
+                .unwrap();
+            let body = *ops
+                .iter()
+                .find(|&&o| Operation::get_op::<MirFieldAddrOp>(o, &ctx).is_some())
+                .unwrap();
+            let body = body.deref(&ctx).get_parent_block().unwrap();
+            let moved: Vec<_> = body
+                .deref(&ctx)
+                .iter(&ctx)
+                .filter(|&o| Operation::get_op::<MirReturnOp>(o, &ctx).is_none())
+                .collect();
+            for op in moved {
+                op.unlink(&ctx);
+                op.insert_before(&ctx, if before { store } else { goto });
+            }
+            assert_eq!(store.deref(&ctx).get_parent_block(), Some(entry));
+            let load = *ops
+                .iter()
+                .find(|&&o| Operation::get_op::<MirLoadOp>(o, &ctx).is_some())
+                .unwrap();
+            let value = load.deref(&ctx).get_result(0);
+            let ty = value.get_type(&ctx);
+            let use_value = Operation::new(
+                &mut ctx,
+                dialect_mir::ops::MirAddOp::get_concrete_op_info(),
+                vec![ty],
+                vec![value, value],
+                vec![],
+                0,
+            );
+            use_value.insert_after(&ctx, load);
+            if escape {
+                let pointer = fixture.alloca.deref(&ctx).get_result(0);
+                let ty = pointer.get_type(&ctx);
+                let cast = Operation::new(
+                    &mut ctx,
+                    MirCastOp::get_concrete_op_info(),
+                    vec![ty],
+                    vec![pointer],
+                    vec![],
+                    0,
+                );
+                MirCastOp::new(cast).set_attr_cast_kind(&ctx, MirCastKindAttr::PtrToPtr);
+                cast.insert_before(&ctx, goto);
+            }
+            canonicalize_read_only_aggregate_arguments(fixture.module, &mut ctx, false);
+            assert_eq!(
+                count::<MirLoadOp>(&ctx, fixture.module),
+                expected,
+                "extra={extra} volatile={volatile} write={write} before={before}"
+            );
+            pliron::operation::verify_operation(fixture.module, &ctx).unwrap();
+        }
+    }
+
+    #[test]
     fn bounded_rem_rewrites_large_array_with_small_candidate_set() {
         let mut ctx = Context::new();
         let fixture = build_fixture(&mut ctx, 64, Some(3), false, false, false);
@@ -1286,10 +1530,7 @@ mod tests {
         let function_op = MirFuncOp::new(ctx, function, TypeAttr::new(function_type.into()));
         function_op.set_symbol_name(ctx, helper_symbol.try_into().unwrap());
         if alwaysinline {
-            function.deref_mut(ctx).attributes.set(
-                "alwaysinline".try_into().unwrap(),
-                pliron::builtin::attributes::StringAttr::new("true".to_string()),
-            );
+            function_op.set_inline_intent(ctx, dialect_mir::attributes::InlineIntentAttr::Always);
         }
         module.append_operation(ctx, function, 0);
 

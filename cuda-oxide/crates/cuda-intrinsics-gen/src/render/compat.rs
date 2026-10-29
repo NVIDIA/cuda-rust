@@ -8,10 +8,10 @@ use crate::model::{
     ClusterBarrierOrdering, ClusterMemoryOperation, CpAsyncCachePolicy, CpAsyncControlOperation,
     CpAsyncMbarrierOperation, CpAsyncSourceSize, DebugControlOperation, MbarrierBasicOperation,
     MbarrierExtendedOperation, PackedAluFormat, PackedAtomicFormat, PackedConversionSourceFormat,
-    RegisterMmaAdapter, RegisterMmaCompatibilitySource, RegisterMmaOverflow, ScalarMathFormat,
-    SparseMmaAdapter, SparseMmaCompatibilitySource, SparseMmaOverflow, Tcgen05LdShape,
-    Tcgen05MmaForm, Tcgen05MmaSelectorLayout, Tcgen05Operation, TmaAdapter, TmaOperation,
-    WgmmaControlMode,
+    RegisterMmaAdapter, RegisterMmaCompatibilitySource, RegisterMmaKind, RegisterMmaOverflow,
+    ScalarMathFormat, SparseMmaAdapter, SparseMmaCompatibilitySource, SparseMmaOverflow,
+    Tcgen05LdShape, Tcgen05MmaForm, Tcgen05MmaSelectorLayout, Tcgen05Operation, TmaAdapter,
+    TmaOperation, WgmmaControlMode,
 };
 use crate::render::common::{hardware_target_label, llvm, rust_header, source_label};
 use crate::render::families::{
@@ -102,10 +102,12 @@ pub(super) fn render_compat_register_mma(catalog: &CatalogFile, hash: &str) -> S
             "/// `c`, `a`, and `b` must contain this lane's fragments in the documented PTX layout.\n",
         );
         if mma.adapter == RegisterMmaAdapter::C4F32A4U32B2U32Scales2U32Selectors4U16ToD4F32 {
-            output.push_str(
-                "/// `scale_a` and `scale_b` contain this lane's packed scale data.\n\
-                 /// For `scale_vec::1X`, `byte_id_a` and `byte_id_b` must be in `0..=3`, `thread_id_a` in `0..=1`, and `thread_id_b` in `0..=3`; other values make the PTX operation undefined.\n",
-            );
+            output.push_str("/// `scale_a` and `scale_b` contain this lane's packed scale data.\n");
+            output.push_str(if mma.kind == Some(RegisterMmaKind::Mxf4) {
+                "/// For `scale_vec::2X`, `byte_id_a` and `byte_id_b` must each be `0` or `2`, `thread_id_a` in `0..=1`, and `thread_id_b` in `0..=3`; other values make the PTX operation undefined.\n"
+            } else {
+                "/// For `scale_vec::1X`, `byte_id_a` and `byte_id_b` must be in `0..=3`, `thread_id_a` in `0..=1`, and `thread_id_b` in `0..=3`; other values make the PTX operation undefined.\n"
+            });
         }
         writeln!(
             output,
@@ -913,12 +915,17 @@ pub(super) fn render_compat_tma(catalog: &CatalogFile, hash: &str) -> String {
         let is_g2s = matches!(
             operation,
             TmaOperation::G2sTile1d
+                | TmaOperation::G2sCtaTile1d
                 | TmaOperation::G2sTile2d
+                | TmaOperation::G2sCtaTile2d
                 | TmaOperation::G2sTile2dMulticast
                 | TmaOperation::G2sTile2dMulticastCg2
                 | TmaOperation::G2sTile3d
+                | TmaOperation::G2sCtaTile3d
                 | TmaOperation::G2sTile4d
+                | TmaOperation::G2sCtaTile4d
                 | TmaOperation::G2sTile5d
+                | TmaOperation::G2sCtaTile5d
         );
         let is_s2g = matches!(
             operation,
@@ -935,6 +942,11 @@ pub(super) fn render_compat_tma(catalog: &CatalogFile, hash: &str) -> String {
                 output.push_str(
                     "/// `dst`, `tensor_map`, and `barrier` must remain valid until the copy completes.\n",
                 );
+                if operation.is_cta_g2s() {
+                    output.push_str(
+                        "/// `dst` and `barrier` must point into the issuing CTA's shared memory, as for the other\n/// `mbarrier` operations.\n",
+                    );
+                }
             } else if is_s2g {
                 output.push_str(
                     "/// `src` and `tensor_map` must remain valid until the committed copy group completes.\n",
@@ -1857,6 +1869,16 @@ pub(super) fn render_compat_mbarrier_extended(catalog: &CatalogFile, hash: &str)
         output.push_str(
             "/// The caller must satisfy the barrier, scope, and memory-ordering contract.\n",
         );
+        if matches!(
+            contract.operation,
+            MbarrierExtendedOperation::ArriveRemoteClusterRelaxed
+                | MbarrierExtendedOperation::TryWaitParityClusterRelaxed
+        ) {
+            output.push_str("/// This orders barrier counts and execution only, not data accesses. The caller\n/// must provide the proxy/TMEM fences required by its synchronization protocol.\n");
+        }
+        if contract.operation == MbarrierExtendedOperation::FenceAcquireSharedClusterCluster {
+            output.push_str("/// The caller must pair this acquire with a compatible cluster-scoped synchronization\n/// protocol. This excludes global memory and does not substitute for a proxy fence.\n");
+        }
         output.push_str("#[inline(never)]\n");
         match contract.operation {
             MbarrierExtendedOperation::ArriveExpectTxCta
@@ -1869,7 +1891,8 @@ pub(super) fn render_compat_mbarrier_extended(catalog: &CatalogFile, hash: &str)
                 .unwrap();
                 output.push_str("    let _ = (bar, bytes);\n");
             }
-            MbarrierExtendedOperation::ArriveRemoteCluster => {
+            MbarrierExtendedOperation::ArriveRemoteCluster
+            | MbarrierExtendedOperation::ArriveRemoteClusterRelaxed => {
                 writeln!(
                     output,
                     "pub unsafe fn {}(remote_bar_addr: u64) {{",
@@ -1888,7 +1911,8 @@ pub(super) fn render_compat_mbarrier_extended(catalog: &CatalogFile, hash: &str)
                 output.push_str("    let _ = (bar, token);\n");
             }
             MbarrierExtendedOperation::TryWaitParityCta
-            | MbarrierExtendedOperation::TryWaitParityCluster => {
+            | MbarrierExtendedOperation::TryWaitParityCluster
+            | MbarrierExtendedOperation::TryWaitParityClusterRelaxed => {
                 writeln!(
                     output,
                     "pub unsafe fn {}(bar: *const Barrier, parity: u32) -> bool {{",
@@ -1899,6 +1923,7 @@ pub(super) fn render_compat_mbarrier_extended(catalog: &CatalogFile, hash: &str)
             }
             MbarrierExtendedOperation::FenceProxyAsyncSharedCta
             | MbarrierExtendedOperation::FenceMbarrierInitReleaseCluster
+            | MbarrierExtendedOperation::FenceAcquireSharedClusterCluster
             | MbarrierExtendedOperation::FenceProxyAsyncGenericReleaseSharedCtaCluster
             | MbarrierExtendedOperation::FenceProxyAsyncGenericAcquireSharedClusterCluster => {
                 writeln!(output, "pub unsafe fn {}() {{", record.rust.name).unwrap();
@@ -2092,7 +2117,8 @@ pub(super) fn render_compat_packed_conversion(
         // follows the record's own argument types rather than a fixed f32 pair.
         let parameter_names: Vec<&str> = match packed_conversion_source(record) {
             PackedConversionSourceFormat::F32x2 => vec![argument_names.0, argument_names.1],
-            PackedConversionSourceFormat::E4m3x2
+            PackedConversionSourceFormat::Bf16x2
+            | PackedConversionSourceFormat::E4m3x2
             | PackedConversionSourceFormat::E5m2x2
             | PackedConversionSourceFormat::F16x2 => vec!["packed"],
         };

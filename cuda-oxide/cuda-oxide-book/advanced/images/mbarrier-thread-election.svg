@@ -1,0 +1,750 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 697" width="1240" height="697" role="img" aria-label="ManagedBarrier thread election. Left, a (32, 4, 1) block drawn as 32 by 4 cells with thread (0, 0, 0), the x equals 0 column and thread (31, 3, 0) marked, the init_by call of the future_apis regression, and the all-threads contract. Middle, main compared threadIdx.x with the selector: selector 0 lights four cells, selector 127 lights none and the launch fails with error 719. Right, the fix compares the block-linear id x + 32 * (y + 4 * z): selector 0 lights one cell, 127 lights (31, 3), 128 of 128 threads correct with sanitizers clean, through the shared helper from #1351. Bottom, the PTX election on both trees: a predicate on %tid.x alone against one on the linear id.">
+<style>
+  :root, svg {
+  --bg: #f4f6f8; --fg: #1a232e; --muted: #5d6b7a; --line: #9aa7b4; --panel: #ffffff;
+  --meta: #0e7c72; --meta-fill: #d9f3ef; --code: #b4560a; --code-fill: #fdebd2;
+  --rust: #7a3fb3; --rust-fill: #efe4fb;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+ }
+  @media (prefers-color-scheme: dark) { :root, svg {
+  --bg: #1b1d23; --fg: #f2f4f7; --muted: #bcc4d0; --line: #5c6475; --panel: #282c36;
+  --meta: #7ed8bb; --meta-fill: #346357; --code: #f4c474; --code-fill: #735a3c;
+  --rust: #d8d4fb; --rust-fill: #524e7d;
+ } }
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--fg)"/></marker></defs>
+
+<rect x="0" y="0" width="1240" height="697" style="fill: var(--bg)"/>
+<text x="40" y="34" text-anchor="start" xml:space="preserve" style="font: 600 17px var(--sans); fill: var(--fg); white-space: pre">ManagedBarrier: one thread runs mbarrier.init, chosen by its block-linear id</text>
+<text x="40" y="56" text-anchor="start" xml:space="preserve" style="font: 400 12.5px var(--sans); fill: var(--muted); white-space: pre">All threads call init_by(count, id) and inval_by(id); one thread acts. Main chose it by threadIdx.x alone, which names one thread only in a 1D block; #1349 uses the block-linear id.</text>
+<text x="40" y="82" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">THE BLOCK  (future_apis, test_managed_barrier_2d)</text>
+<text x="500" y="82" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">MAIN  (threadIdx_x() == selector)</text>
+<text x="860" y="82" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">FIXED  (block_linear_thread_id_here() == selector)</text>
+<rect x="40" y="94" width="440" height="149.0" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="52" y="114" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">block_dim = (32, 4, 1): 128 threads, one warp per row</text>
+<text x="54" y="130" text-anchor="start" xml:space="preserve" style="font: 400 9.5px var(--sans); fill: var(--muted); white-space: pre">y</text>
+<text x="68" y="130" text-anchor="start" xml:space="preserve" style="font: 400 9.5px var(--sans); fill: var(--muted); white-space: pre">threadIdx.x = 0</text>
+<text x="451.0" y="130" text-anchor="end" xml:space="preserve" style="font: 400 9.5px var(--sans); fill: var(--muted); white-space: pre">31</text>
+<rect x="68.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--rust); stroke: none; stroke-width: 1.0"/>
+<rect x="80.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="92.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="104.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="116.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="128.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="140.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="152.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="164.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="176.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="188.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="200.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="212.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="224.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="236.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="248.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="260.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="272.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="284.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="296.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="308.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="320.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="332.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="344.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="356.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="368.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="380.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="392.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="404.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="416.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="428.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="440.0" y="138.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="68.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--code); stroke: none; stroke-width: 1.0"/>
+<rect x="80.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="92.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="104.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="116.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="128.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="140.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="152.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="164.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="176.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="188.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="200.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="212.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="224.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="236.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="248.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="260.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="272.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="284.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="296.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="308.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="320.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="332.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="344.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="356.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="368.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="380.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="392.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="404.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="416.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="428.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="440.0" y="150.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="68.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--code); stroke: none; stroke-width: 1.0"/>
+<rect x="80.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="92.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="104.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="116.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="128.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="140.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="152.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="164.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="176.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="188.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="200.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="212.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="224.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="236.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="248.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="260.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="272.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="284.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="296.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="308.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="320.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="332.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="344.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="356.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="368.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="380.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="392.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="404.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="416.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="428.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="440.0" y="162.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="68.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--code); stroke: none; stroke-width: 1.0"/>
+<rect x="80.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="92.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="104.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="116.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="128.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="140.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="152.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="164.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="176.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="188.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="200.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="212.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="224.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="236.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="248.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="260.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="272.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="284.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="296.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="308.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="320.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="332.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="344.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="356.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="368.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="380.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="392.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="404.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="416.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="428.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="440.0" y="174.0" width="11.0" height="11.0" rx="1.5" style="fill: var(--meta); stroke: none; stroke-width: 1.0"/>
+<text x="56" y="147.0" text-anchor="start" xml:space="preserve" style="font: 400 9.5px var(--sans); fill: var(--muted); white-space: pre">0</text>
+<text x="56" y="159.0" text-anchor="start" xml:space="preserve" style="font: 400 9.5px var(--sans); fill: var(--muted); white-space: pre">1</text>
+<text x="56" y="171.0" text-anchor="start" xml:space="preserve" style="font: 400 9.5px var(--sans); fill: var(--muted); white-space: pre">2</text>
+<text x="56" y="183.0" text-anchor="start" xml:space="preserve" style="font: 400 9.5px var(--sans); fill: var(--muted); white-space: pre">3</text>
+<rect x="52.0" y="194.0" width="10.0" height="10.0" rx="2" style="fill: var(--rust); stroke: none; stroke-width: 1.0"/>
+<text x="68" y="203.0" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">(0, 0, 0): linear id 0; the thread init() and inval() select</text>
+<rect x="52.0" y="208.0" width="10.0" height="10.0" rx="2" style="fill: var(--code); stroke: none; stroke-width: 1.0"/>
+<text x="68" y="217.0" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">x == 0 in rows 1 to 3: threadIdx.x == 0 as well, like (0, 0, 0)</text>
+<rect x="52.0" y="222.0" width="10.0" height="10.0" rx="2" style="fill: var(--meta); stroke: none; stroke-width: 1.0"/>
+<text x="68" y="231.0" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">(31, 3, 0): linear id 31 + 32 * 3 = 127; no thread has x == 127</text>
+<rect x="40" y="255.0" width="440" height="128" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="52" y="275.0" text-anchor="start" xml:space="preserve" style="font: 600 11.5px var(--mono); fill: var(--rust); white-space: pre">future_apis/src/main.rs: test_managed_barrier_2d</text>
+<text x="52" y="295.0" text-anchor="start" xml:space="preserve" style="font: 400 9.4px var(--mono); fill: var(--muted); white-space: pre">// ALL threads call init_by - only linear thread 127 runs mbarrier.init</text>
+<text x="52" y="309.0" text-anchor="start" xml:space="preserve" style="font: 400 9.4px var(--mono); fill: var(--fg); white-space: pre">let bar = unsafe { bar.init_by(BLOCK_2D_THREADS, BARRIER_2D_THREAD) };</text>
+<text x="52" y="323.0" text-anchor="start" xml:space="preserve" style="font: 400 9.4px var(--mono); fill: var(--fg); white-space: pre">let token = bar.arrive();</text>
+<text x="52" y="337.0" text-anchor="start" xml:space="preserve" style="font: 400 9.4px var(--mono); fill: var(--fg); white-space: pre">bar.wait(token);</text>
+<text x="52" y="351.0" text-anchor="start" xml:space="preserve" style="font: 400 9.4px var(--mono); fill: var(--fg); white-space: pre">let _dead = unsafe { bar.inval_by(BARRIER_2D_THREAD) };</text>
+<text x="52" y="373.0" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">BLOCK_2D_THREADS = 128; BARRIER_2D_THREAD = 127 = thread (31, 3, 0)</text>
+<text x="40" y="403.0" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--fg); white-space: pre">As landed, from_static(), init(), init_by, inval() and inval_by are</text>
+<text x="40" y="417.5" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--fg); white-space: pre">all-threads calls; one thread, named by the selector, acts. The</text>
+<text x="40" y="432.0" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--fg); white-space: pre">selector must be the same value in every thread and below the thread</text>
+<text x="40" y="446.5" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--fg); white-space: pre">count: an id at or past it names nobody; nothing is initialized.</text>
+<rect x="500" y="94" width="340" height="297.79999999999995" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="512" y="114" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--code); white-space: pre">main: barrier.rs, init_by and inval_by</text>
+<text x="512" y="132" text-anchor="start" xml:space="preserve" style="font: 400 9.6px var(--mono); fill: var(--fg); white-space: pre">if crate::thread::threadIdx_x() == init_thread {</text>
+<text x="512" y="146" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">the x coordinate alone: one thread only in a 1D block</text>
+<text x="512" y="166" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--sans); fill: var(--fg); white-space: pre">selector 0 (what init() and inval() pass)</text>
+<rect x="512.0" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--code); stroke: none; stroke-width: 1.0"/>
+<rect x="521.8" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="531.6" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="541.4" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="551.2" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="561.0" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="570.8" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="580.6" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="590.4" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="600.2" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="610.0" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="619.8" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="629.6" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="639.4" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="649.2" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="659.0" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="668.8" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="678.6" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="688.4" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="698.2" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="708.0" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="717.8" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="727.6" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="737.4" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="747.2" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="757.0" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="766.8" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="776.6" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="786.4" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="796.2" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="806.0" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="815.8" y="172.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="512.0" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--code); stroke: none; stroke-width: 1.0"/>
+<rect x="521.8" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="531.6" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="541.4" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="551.2" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="561.0" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="570.8" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="580.6" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="590.4" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="600.2" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="610.0" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="619.8" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="629.6" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="639.4" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="649.2" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="659.0" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="668.8" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="678.6" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="688.4" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="698.2" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="708.0" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="717.8" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="727.6" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="737.4" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="747.2" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="757.0" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="766.8" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="776.6" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="786.4" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="796.2" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="806.0" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="815.8" y="181.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="512.0" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--code); stroke: none; stroke-width: 1.0"/>
+<rect x="521.8" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="531.6" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="541.4" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="551.2" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="561.0" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="570.8" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="580.6" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="590.4" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="600.2" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="610.0" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="619.8" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="629.6" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="639.4" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="649.2" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="659.0" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="668.8" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="678.6" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="688.4" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="698.2" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="708.0" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="717.8" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="727.6" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="737.4" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="747.2" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="757.0" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="766.8" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="776.6" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="786.4" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="796.2" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="806.0" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="815.8" y="191.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="512.0" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--code); stroke: none; stroke-width: 1.0"/>
+<rect x="521.8" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="531.6" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="541.4" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="551.2" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="561.0" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="570.8" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="580.6" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="590.4" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="600.2" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="610.0" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="619.8" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="629.6" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="639.4" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="649.2" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="659.0" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="668.8" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="678.6" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="688.4" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="698.2" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="708.0" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="717.8" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="727.6" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="737.4" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="747.2" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="757.0" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="766.8" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="776.6" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="786.4" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="796.2" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="806.0" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="815.8" y="201.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<text x="512" y="224.4" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">four threads (x == 0 in each row) run mbarrier.init</text>
+<text x="512" y="237.9" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">on one word: undefined (PTX ISA), silent on sm_120</text>
+<text x="512" y="258.4" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--sans); fill: var(--fg); white-space: pre">selector 127</text>
+<rect x="512.0" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="521.8" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="531.6" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="541.4" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="551.2" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="561.0" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="570.8" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="580.6" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="590.4" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="600.2" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="610.0" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="619.8" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="629.6" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="639.4" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="649.2" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="659.0" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="668.8" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="678.6" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="688.4" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="698.2" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="708.0" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="717.8" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="727.6" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="737.4" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="747.2" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="757.0" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="766.8" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="776.6" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="786.4" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="796.2" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="806.0" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="815.8" y="264.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="512.0" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="521.8" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="531.6" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="541.4" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="551.2" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="561.0" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="570.8" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="580.6" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="590.4" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="600.2" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="610.0" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="619.8" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="629.6" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="639.4" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="649.2" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="659.0" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="668.8" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="678.6" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="688.4" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="698.2" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="708.0" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="717.8" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="727.6" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="737.4" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="747.2" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="757.0" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="766.8" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="776.6" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="786.4" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="796.2" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="806.0" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="815.8" y="274.2" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="512.0" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="521.8" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="531.6" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="541.4" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="551.2" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="561.0" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="570.8" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="580.6" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="590.4" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="600.2" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="610.0" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="619.8" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="629.6" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="639.4" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="649.2" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="659.0" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="668.8" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="678.6" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="688.4" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="698.2" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="708.0" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="717.8" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="727.6" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="737.4" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="747.2" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="757.0" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="766.8" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="776.6" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="786.4" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="796.2" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="806.0" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="815.8" y="284.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="512.0" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="521.8" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="531.6" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="541.4" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="551.2" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="561.0" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="570.8" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="580.6" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="590.4" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="600.2" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="610.0" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="619.8" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="629.6" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="639.4" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="649.2" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="659.0" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="668.8" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="678.6" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="688.4" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="698.2" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="708.0" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="717.8" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="727.6" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="737.4" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="747.2" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="757.0" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="766.8" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="776.6" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="786.4" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="796.2" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="806.0" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="815.8" y="293.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="814.3" y="292.3" width="12.0" height="12.0" rx="2.5" style="fill: none; stroke: var(--meta); stroke-width: 1.3; stroke-dasharray: 3 2"/>
+<text x="512" y="316.79999999999995" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">no thread has threadIdx.x == 127, so nothing runs</text>
+<text x="512" y="330.29999999999995" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">mbarrier.init; 128 arrive on an uninitialized word</text>
+<text x="512" y="351.79999999999995" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--code); white-space: pre">result: the launch fails</text>
+<text x="512" y="366.79999999999995" text-anchor="start" xml:space="preserve" style="font: 400 9.6px var(--mono); fill: var(--fg); white-space: pre">Error: DriverError(719, "unspecified launch failure")</text>
+<text x="512" y="380.79999999999995" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">the same example source against main's cuda-device</text>
+<rect x="860" y="94" width="340" height="283.79999999999995" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="872" y="114" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--meta); white-space: pre">fixed: barrier.rs, init_by and inval_by</text>
+<text x="872" y="132" text-anchor="start" xml:space="preserve" style="font: 400 9.6px var(--mono); fill: var(--fg); white-space: pre">if crate::thread::block_linear_thread_id_here()</text>
+<text x="872" y="145" text-anchor="start" xml:space="preserve" style="font: 400 9.6px var(--mono); fill: var(--fg); white-space: pre">    == init_thread {</text>
+<text x="872" y="159" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">id = x + 32 * (y + 4 * z): x fastest, then y, then z</text>
+<text x="872" y="179" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--sans); fill: var(--fg); white-space: pre">selector 0 (what init() and inval() pass)</text>
+<rect x="872.0" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--rust); stroke: none; stroke-width: 1.0"/>
+<rect x="881.8" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="891.6" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="901.4" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="911.2" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="921.0" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="930.8" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="940.6" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="950.4" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="960.2" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="970.0" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="979.8" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="989.6" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="999.4" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1009.2" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1019.0" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1028.8" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1038.6" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1048.4" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1058.2" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1068.0" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1077.8" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1087.6" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1097.4" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1107.2" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1117.0" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1126.8" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1136.6" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1146.4" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1156.2" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1166.0" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1175.8" y="185.0" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="872.0" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="881.8" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="891.6" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="901.4" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="911.2" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="921.0" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="930.8" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="940.6" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="950.4" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="960.2" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="970.0" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="979.8" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="989.6" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="999.4" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1009.2" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1019.0" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1028.8" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1038.6" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1048.4" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1058.2" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1068.0" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1077.8" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1087.6" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1097.4" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1107.2" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1117.0" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1126.8" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1136.6" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1146.4" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1156.2" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1166.0" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1175.8" y="194.8" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="872.0" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="881.8" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="891.6" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="901.4" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="911.2" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="921.0" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="930.8" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="940.6" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="950.4" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="960.2" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="970.0" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="979.8" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="989.6" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="999.4" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1009.2" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1019.0" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1028.8" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1038.6" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1048.4" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1058.2" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1068.0" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1077.8" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1087.6" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1097.4" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1107.2" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1117.0" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1126.8" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1136.6" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1146.4" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1156.2" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1166.0" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1175.8" y="204.6" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="872.0" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="881.8" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="891.6" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="901.4" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="911.2" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="921.0" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="930.8" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="940.6" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="950.4" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="960.2" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="970.0" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="979.8" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="989.6" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="999.4" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1009.2" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1019.0" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1028.8" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1038.6" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1048.4" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1058.2" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1068.0" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1077.8" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1087.6" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1097.4" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1107.2" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1117.0" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1126.8" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1136.6" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1146.4" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1156.2" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1166.0" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1175.8" y="214.4" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<text x="872" y="237.4" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">one thread, (0, 0, 0); 1D blocks keep the same thread</text>
+<text x="872" y="257.9" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--sans); fill: var(--fg); white-space: pre">selector 127</text>
+<rect x="872.0" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="881.8" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="891.6" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="901.4" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="911.2" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="921.0" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="930.8" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="940.6" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="950.4" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="960.2" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="970.0" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="979.8" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="989.6" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="999.4" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1009.2" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1019.0" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1028.8" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1038.6" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1048.4" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1058.2" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1068.0" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1077.8" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1087.6" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1097.4" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1107.2" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1117.0" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1126.8" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1136.6" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1146.4" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1156.2" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1166.0" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1175.8" y="263.9" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="872.0" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="881.8" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="891.6" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="901.4" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="911.2" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="921.0" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="930.8" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="940.6" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="950.4" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="960.2" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="970.0" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="979.8" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="989.6" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="999.4" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1009.2" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1019.0" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1028.8" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1038.6" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1048.4" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1058.2" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1068.0" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1077.8" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1087.6" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1097.4" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1107.2" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1117.0" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1126.8" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1136.6" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1146.4" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1156.2" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1166.0" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1175.8" y="273.7" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="872.0" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="881.8" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="891.6" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="901.4" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="911.2" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="921.0" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="930.8" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="940.6" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="950.4" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="960.2" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="970.0" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="979.8" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="989.6" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="999.4" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1009.2" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1019.0" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1028.8" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1038.6" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1048.4" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1058.2" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1068.0" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1077.8" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1087.6" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1097.4" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1107.2" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1117.0" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1126.8" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1136.6" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1146.4" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1156.2" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1166.0" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1175.8" y="283.5" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="872.0" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="881.8" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="891.6" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="901.4" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="911.2" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="921.0" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="930.8" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="940.6" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="950.4" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="960.2" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="970.0" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="979.8" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="989.6" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="999.4" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1009.2" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1019.0" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1028.8" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1038.6" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1048.4" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1058.2" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1068.0" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1077.8" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1087.6" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1097.4" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1107.2" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1117.0" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1126.8" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1136.6" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1146.4" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1156.2" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1166.0" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--panel); stroke: var(--line); stroke-width: 0.6"/>
+<rect x="1175.8" y="293.3" width="9.0" height="9.0" rx="1.5" style="fill: var(--meta); stroke: none; stroke-width: 1.0"/>
+<text x="872" y="316.29999999999995" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">one thread, (31, 3, 0): 31 + 32 * 3 = 127</text>
+<text x="872" y="337.79999999999995" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--meta); white-space: pre">result: 128 of 128 threads correct</text>
+<text x="872" y="352.79999999999995" text-anchor="start" xml:space="preserve" style="font: 400 9.6px var(--mono); fill: var(--fg); white-space: pre">All 128 threads wrote 42 in a (32, 4, 1) block</text>
+<text x="872" y="366.79999999999995" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">memcheck, synccheck, racecheck: 0 errors, 0 hazards</text>
+<rect x="860" y="389.79999999999995" width="340" height="68" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="872" y="409.79999999999995" text-anchor="start" xml:space="preserve" style="font: 600 11.5px var(--mono); fill: var(--rust); white-space: pre">thread::block_linear_thread_id_here()</text>
+<text x="872" y="429.79999999999995" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">the shared helper #1351 landed; thread_rank() uses it</text>
+<text x="872" y="442.79999999999995" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">too, so the PR's private copy of the formula is gone</text>
+<line x1="490" y1="90" x2="490" y2="467.79999999999995" style="stroke: var(--line); stroke-width: 1"/>
+<line x1="850" y1="90" x2="850" y2="467.79999999999995" style="stroke: var(--line); stroke-width: 1"/>
+<text x="40" y="485.79999999999995" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">THE PTX ELECTION  (the predicate before mbarrier.init; tabs shown as spaces; bra.uni lines, labels and the count mov.b32 left out)</text>
+<rect x="40" y="495.79999999999995" width="560" height="92.0" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="52" y="515.8" text-anchor="start" xml:space="preserve" style="font: 600 11.5px var(--mono); fill: var(--code); white-space: pre">main: test_managed_barrier (the 1D test; init(), so selector 0)</text>
+<text x="52" y="535.8" text-anchor="start" xml:space="preserve" style="font: 400 9.6px var(--mono); fill: var(--fg); white-space: pre">mov.u32      %r1, %tid.x;</text>
+<text x="52" y="548.3" text-anchor="start" xml:space="preserve" style="font: 600 9.6px var(--mono); fill: var(--code); white-space: pre">setp.ne.b32  %p1, %r1, 0;</text>
+<text x="52" y="560.8" text-anchor="start" xml:space="preserve" style="font: 400 9.6px var(--mono); fill: var(--fg); white-space: pre">@%p1 bra     $L__BB4_2;</text>
+<text x="52" y="573.3" text-anchor="start" xml:space="preserve" style="font: 600 9.6px var(--mono); fill: var(--code); white-space: pre">mbarrier.init.shared.b64 [__shared_mem_e69151d2fb141f63_4], %r2;</text>
+<rect x="620" y="495.79999999999995" width="580" height="179.5" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="632" y="515.8" text-anchor="start" xml:space="preserve" style="font: 600 11.5px var(--mono); fill: var(--meta); white-space: pre">fixed: test_managed_barrier_2d (selector 127)</text>
+<text x="632" y="535.8" text-anchor="start" xml:space="preserve" style="font: 400 9.6px var(--mono); fill: var(--fg); white-space: pre">mov.u32      %r2, %tid.x;</text>
+<text x="632" y="548.3" text-anchor="start" xml:space="preserve" style="font: 400 9.6px var(--mono); fill: var(--fg); white-space: pre">mov.u32      %r3, %tid.y;</text>
+<text x="632" y="560.8" text-anchor="start" xml:space="preserve" style="font: 400 9.6px var(--mono); fill: var(--fg); white-space: pre">mov.u32      %r4, %tid.z;</text>
+<text x="632" y="573.3" text-anchor="start" xml:space="preserve" style="font: 400 9.6px var(--mono); fill: var(--fg); white-space: pre">mov.u32      %r5, %ntid.x;</text>
+<text x="632" y="585.8" text-anchor="start" xml:space="preserve" style="font: 400 9.6px var(--mono); fill: var(--fg); white-space: pre">mov.u32      %r6, %ntid.y;</text>
+<text x="632" y="598.3" text-anchor="start" xml:space="preserve" style="font: 600 9.6px var(--mono); fill: var(--meta); white-space: pre">mad.lo.s32   %r7, %r6, %r4, %r3;</text>
+<text x="842" y="598.3" text-anchor="start" xml:space="preserve" style="font: 400 9.6px var(--mono); fill: var(--muted); white-space: pre">// y + ntid.y * z</text>
+<text x="632" y="610.8" text-anchor="start" xml:space="preserve" style="font: 600 9.6px var(--mono); fill: var(--meta); white-space: pre">mad.lo.s32   %r8, %r7, %r5, %r2;</text>
+<text x="842" y="610.8" text-anchor="start" xml:space="preserve" style="font: 400 9.6px var(--mono); fill: var(--muted); white-space: pre">// x + ntid.x * (y + ntid.y * z)</text>
+<text x="632" y="623.3" text-anchor="start" xml:space="preserve" style="font: 400 9.6px var(--mono); fill: var(--muted); white-space: pre">// 7 lines left out: thread 0 stores all-ones into the barrier word, bar.sync</text>
+<text x="632" y="635.8" text-anchor="start" xml:space="preserve" style="font: 600 9.6px var(--mono); fill: var(--meta); white-space: pre">setp.ne.b32  %p2, %r8, 127;</text>
+<text x="632" y="648.3" text-anchor="start" xml:space="preserve" style="font: 400 9.6px var(--mono); fill: var(--fg); white-space: pre">@%p2 bra     $L__BB2_4;</text>
+<text x="632" y="660.8" text-anchor="start" xml:space="preserve" style="font: 600 9.6px var(--mono); fill: var(--meta); white-space: pre">mbarrier.init.shared.b64 [__shared_mem_ddf9d77ea1d0101f_0], %r9;</text>
+<text x="40" y="607.8" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">What this proves: on main, %p1 reads one register, %tid.x. With the fix, %p2 reads five</text>
+<text x="40" y="622.3" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">registers through two mad and compares tid.x + ntid.x * (tid.y + ntid.y * tid.z) with the</text>
+<text x="40" y="636.8" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">selector, so mbarrier.init runs on at most one thread per block for any in-range selector</text>
+<text x="40" y="651.3" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">in any block shape. In both trees the same predicate guards mbarrier.inval later. On main</text>
+<text x="40" y="665.8" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">it admits four threads for selector 0 in a (32, 4, 1) block and no thread for selector 127.</text>
+</svg>

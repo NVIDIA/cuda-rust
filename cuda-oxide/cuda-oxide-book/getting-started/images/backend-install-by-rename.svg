@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 676" width="1240" height="676" role="img" aria-label="Installing the cached codegen backend by rename: every rustc that compiles a kernel maps the one shared .so; std::fs::copy truncated that inode under them and killed the running compiler; copying to a sibling temporary and renaming it over the name leaves the old inode to its mappers">
+<style>
+  :root, svg {
+  --bg: #f4f6f8; --fg: #1a232e; --muted: #5d6b7a; --line: #9aa7b4; --panel: #ffffff;
+  --meta: #0e7c72; --meta-fill: #d9f3ef; --code: #b4560a; --code-fill: #fdebd2;
+  --rust: #7a3fb3; --rust-fill: #efe4fb;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+ }
+  @media (prefers-color-scheme: dark) { :root, svg {
+  --bg: #1b1d23; --fg: #f2f4f7; --muted: #bcc4d0; --line: #5c6475; --panel: #282c36;
+  --meta: #7ed8bb; --meta-fill: #346357; --code: #f4c474; --code-fill: #735a3c;
+  --rust: #d8d4fb; --rust-fill: #524e7d;
+ } }
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--fg)"/></marker></defs>
+
+<rect x="0" y="0" width="1240" height="676" style="fill: var(--bg)"/>
+<text x="40" y="34" text-anchor="start" xml:space="preserve" style="font: 600 17px var(--sans); fill: var(--fg); white-space: pre">Installing the cached backend by rename, not in place</text>
+<text x="40" y="56" text-anchor="start" xml:space="preserve" style="font: 400 12.5px var(--sans); fill: var(--muted); white-space: pre">Every rustc that compiles a kernel maps the shared 428 MB librustc_codegen_cuda.so. std::fs::copy rewrote that inode under them; a sibling temporary plus rename leaves it alone.</text>
+<text x="40" y="92" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">THE SETUP  (one file, many readers, three writers)</text>
+<text x="450" y="92" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">BEFORE  (fs::copy rewrites the mapped inode)</text>
+<text x="830" y="92" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">AFTER  (copy beside it, rename over the name)</text>
+<line x1="430" y1="100" x2="430" y2="552" style="stroke: var(--line); stroke-width: 1"/>
+<line x1="810" y1="100" x2="810" y2="552" style="stroke: var(--line); stroke-width: 1"/>
+<rect x="40" y="108" width="370" height="110" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="52" y="128" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--meta); white-space: pre">Who installs the backend</text>
+<text x="52" y="148" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">cargo oxide setup              publish_to_cache</text>
+<text x="52" y="166" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">a standalone project's rebuild build_and_cache</text>
+<text x="52" y="184" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">clone of main, no dependency   auto_fetch_and_build</text>
+<text x="52" y="202" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">all three call install_backend_into, at any time</text>
+<line x1="90" y1="218" x2="90" y2="256" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<text x="102" y="242" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--muted); white-space: pre">install_backend_into(cache_dir, built_so, ..)</text>
+<rect x="40" y="258" width="370" height="92" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="52" y="278" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">~/.cargo/cuda-oxide/</text>
+<text x="52" y="298" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">librustc_codegen_cuda.so   428 MB, inode A</text>
+<text x="52" y="316" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">source-rev.txt             the commit it came from</text>
+<text x="52" y="334" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">toolchain-fingerprint.txt  the rustc that built it</text>
+<line x1="90" y1="350" x2="90" y2="388" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<text x="102" y="374" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--muted); white-space: pre">dlopen at start, mapped MAP_PRIVATE until exit</text>
+<rect x="40" y="390" width="370" height="92" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="52" y="410" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">every rustc that compiles a kernel</text>
+<text x="52" y="430" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">rustc -Zcodegen-backend=&lt;the cached .so&gt; ...</text>
+<text x="52" y="448" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">holds the mapping for the whole compile; ld.so's</text>
+<text x="52" y="466" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">relocations live in private pages of that inode</text>
+<text x="40" y="506" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--muted); white-space: pre">A reinstall can land while such a rustc runs:</text>
+<text x="40" y="522" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--muted); white-space: pre">setup in one shell, a kernel build in another.</text>
+<rect x="450" y="108" width="340" height="74" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="462" y="128" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--rust); white-space: pre">std::fs::copy(built_so, &amp;so_path)</text>
+<text x="462" y="148" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">opens the destination with truncate(true):</text>
+<text x="462" y="166" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">inode A is cut to 0 bytes, then rewritten</text>
+<line x1="500" y1="182" x2="500" y2="204" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<rect x="450" y="206" width="340" height="150" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="462" y="226" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">what rustc's mapping of inode A sees</text>
+<text x="462" y="244" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--sans); fill: var(--muted); white-space: pre">rustc's mapping: 428 MB, MAP_PRIVATE, until it exits</text>
+<line x1="462" y1="250" x2="778" y2="250" style="stroke: var(--muted); stroke-width: 1"/>
+<line x1="462" y1="250" x2="462" y2="255" style="stroke: var(--muted); stroke-width: 1"/>
+<line x1="778" y1="250" x2="778" y2="255" style="stroke: var(--muted); stroke-width: 1"/>
+<rect x="462" y="258" width="316" height="18" rx="3" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="468" y="271" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--sans); fill: var(--fg); white-space: pre">inode A before: all 428 MB present</text>
+<rect x="462" y="284" width="100" height="18" rx="3" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="468" y="297" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--sans); fill: var(--fg); white-space: pre">new bytes</text>
+<rect x="562" y="284" width="216" height="18" rx="3" style="fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 5 4"/>
+<text x="568" y="297" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--sans); fill: var(--muted); white-space: pre">gone: a touch here is SIGBUS</text>
+<text x="462" y="320" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--sans); fill: var(--muted); white-space: pre">inode A is cut to 0 bytes, then refilled by the copy;</text>
+<text x="462" y="334" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--sans); fill: var(--muted); white-space: pre">the mapping's private pages (relocations) go too:</text>
+<text x="462" y="348" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--sans); fill: var(--muted); white-space: pre">SIGSEGV even when the new bytes are identical</text>
+<line x1="500" y1="356" x2="500" y2="378" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<rect x="450" y="380" width="340" height="92" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="462" y="400" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">the running rustc dies</text>
+<text x="462" y="420" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">SIGBUS when it touches a page past the new end</text>
+<text x="462" y="438" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">SIGSEGV through relocations the truncate threw</text>
+<text x="462" y="456" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">away, even when the new bytes are identical</text>
+<text x="450" y="496" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--muted); white-space: pre">A rustc starting during the 0.1 to 3 s copy</text>
+<text x="450" y="512" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--muted); white-space: pre">opens a half-written file.</text>
+<rect x="830" y="108" width="370" height="154" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="842" y="128" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--rust); white-space: pre">install_backend_into, all three writers</text>
+<text x="842" y="148" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">let tmp = temporary_backend_path(cache_dir);</text>
+<text x="842" y="164" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--muted); white-space: pre">// = librustc_codegen_cuda.so.&lt;pid&gt;.&lt;nonce&gt;.tmp</text>
+<text x="842" y="180" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">fs::copy(built_so, &amp;tmp)?;  // old .so and record stay</text>
+<text x="842" y="196" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--meta); white-space: pre">record_source_rev(cache_dir, None);  // follow-up 1</text>
+<text x="842" y="212" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">fs::rename(&amp;tmp, &amp;so_path)?;  // atomic, same directory</text>
+<text x="842" y="228" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">write_toolchain_fingerprint(..); record_source_rev(..);</text>
+<text x="842" y="244" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--muted); white-space: pre">// any error: remove tmp, return it; the old .so stays</text>
+<line x1="880" y1="262" x2="880" y2="284" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<rect x="830" y="286" width="370" height="124" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="842" y="306" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">two inodes, one name</text>
+<text x="842" y="324" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--sans); fill: var(--muted); white-space: pre">rustc's mapping stays on inode A until it exits</text>
+<line x1="842" y1="330" x2="1188" y2="330" style="stroke: var(--muted); stroke-width: 1"/>
+<line x1="842" y1="330" x2="842" y2="335" style="stroke: var(--muted); stroke-width: 1"/>
+<line x1="1188" y1="330" x2="1188" y2="335" style="stroke: var(--muted); stroke-width: 1"/>
+<rect x="842" y="338" width="346" height="18" rx="3" style="fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 5 4"/>
+<text x="848" y="351" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--sans); fill: var(--muted); white-space: pre">inode A: unnamed now, alive until its last mapper exits</text>
+<rect x="842" y="364" width="346" height="18" rx="3" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="848" y="377" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--sans); fill: var(--fg); white-space: pre">inode B: named librustc_codegen_cuda.so, already complete</text>
+<text x="842" y="400" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--sans); fill: var(--muted); white-space: pre">a rustc starting now opens inode B, complete</text>
+<rect x="830" y="434" width="370" height="110" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="842" y="454" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--meta); white-space: pre">Two follow-ups</text>
+<text x="842" y="474" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">1  the record is cleared just before the rename, so</text>
+<text x="842" y="492" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">   a failed copy keeps the old backend and its record</text>
+<text x="842" y="510" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">2  cargo oxide update sweeps a .tmp left by an install</text>
+<text x="842" y="528" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">   killed between copy and rename; installs never do</text>
+<rect x="40" y="568" width="1160" height="92" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="54" y="590" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">Why the rename is safe and the copy was not</text>
+<text x="54" y="610" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">rename(2) swaps the directory entry. A mapped inode stays allocated until its last mapper exits, and a new open sees the complete new file.</text>
+<text x="54" y="628" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">std::fs::copy reopened that inode with O_TRUNC under every mapping: pages past the new end are gone (SIGBUS), and so are the mapping's private pages (SIGSEGV).</text>
+<text x="54" y="646" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--muted); white-space: pre">Measured: a rustc with the 428 MB backend mapped, killed 5/5 in place (identical bytes), finished 5/5 by rename; an mmap reader of a 64 MB install, SIGBUS 6/6 before, 0/6 after.</text>
+</svg>

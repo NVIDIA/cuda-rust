@@ -14,7 +14,6 @@ use pliron::context::{Context, Ptr};
 use pliron::irbuild::dialect_conversion::{DialectConversionRewriter, OperandsInfo};
 use pliron::irbuild::inserter::Inserter;
 use pliron::irbuild::rewriter::Rewriter;
-use pliron::location::Located;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::result::Result;
@@ -36,7 +35,7 @@ pub(crate) fn convert_array_element_addr(
         return addressing::convert_array_element_addr(ctx, rewriter, op, operands_info);
     };
 
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     let arr_ptr = op.deref(ctx).get_operand(0);
     let index = op.deref(ctx).get_operand(1);
     let result_ty = op.deref(ctx).get_result(0).get_type(ctx);

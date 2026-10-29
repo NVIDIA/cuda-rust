@@ -42,7 +42,7 @@ fn catalog_with_clc() -> CatalogFile {
 fn catalog_with_tma() -> CatalogFile {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = crate::resolve::test_catalog_with_tma(&repo_root).unwrap();
-    assert_eq!(tma_intrinsics(&catalog).count(), 111);
+    assert_eq!(tma_intrinsics(&catalog).count(), 116);
     catalog
 }
 

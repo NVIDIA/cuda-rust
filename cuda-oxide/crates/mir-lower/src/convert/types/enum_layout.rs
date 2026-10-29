@@ -15,7 +15,7 @@ use pliron::builtin::types::{IntegerType, Signedness};
 use pliron::context::Context;
 use pliron::r#type::TypeHandle;
 
-use super::layout::{make_enum_filler_type, mir_type_contains_i1};
+use super::layout::{alignment_anchor_type, make_enum_filler_type, mir_type_contains_i1};
 use super::pointer_storage::{
     PointerOverlapRejection, analyze_pointer_overlap, llvm_type_contains_pointer,
 };
@@ -509,11 +509,12 @@ pub(crate) fn build_enum_slot_map(
     if natural_align < required_align {
         // The byte claims alone can under-align the storage, e.g. when the
         // only claim is an i8 niche carrier inside a 4-aligned enum. Raise
-        // the struct's alignment with a zero-length anchor field, the same
-        // mechanism union storage uses; it occupies no bytes, so every slot
-        // index simply shifts by one.
-        let anchor_int = IntegerType::get(ctx, (required_align * 8) as u32, Signedness::Signless);
-        let anchor: TypeHandle = llvm_types::ArrayType::get(ctx, anchor_int.into(), 0).into();
+        // the struct's alignment with a zero-length anchor, the same helper
+        // union storage uses; it occupies no bytes, so every slot index
+        // simply shifts by one. The anchor is capped at 16 bytes (see
+        // `alignment_anchor_type`); Rust alignment above that is stamped on
+        // the memory operations typed as the enum.
+        let anchor = alignment_anchor_type(ctx, required_align);
         llvm_fields.insert(0, anchor);
         for slot in &mut slot_of_claim {
             *slot += 1;
@@ -2010,5 +2011,196 @@ mod tests {
             error.to_string().contains("shared-memory pointer"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn enum_slot_map_pointer_niche_with_u128_payload_preserves_align16() {
+        let mut ctx = make_ctx();
+
+        let logical = mir_uint(&mut ctx, 8);
+        let wide = mir_uint(&mut ctx, 128);
+        let u32_ty = mir_uint(&mut ctx, 32);
+        let pointer: TypeHandle = MirPtrType::get_generic(&mut ctx, u32_ty, false).into();
+
+        let payload: TypeHandle = MirTupleType::get_with_layout(
+            &mut ctx,
+            vec![wide, pointer],
+            vec![0, 1],
+            vec![0, 16],
+            32,
+            16,
+        )
+        .into();
+
+        let enum_ty: TypeHandle = MirEnumType::get_with_encoding(
+            &mut ctx,
+            "MaybeWideAndPointer".into(),
+            logical,
+            vec![0, 1],
+            vec![
+                EnumVariant::unit("None".into()),
+                EnumVariant::new_with_layout("Some".into(), vec![payload], vec![0], vec![32]),
+            ],
+            EnumEncoding {
+                tag_offset: 16,
+                total_size: 32,
+                abi_align: 16,
+                layout_kind: EnumLayoutKind::Niche,
+                carrier_kind: EnumCarrierKind::Pointer,
+                carrier_width: 64,
+                untagged_variant: 1,
+                variant_inhabited: vec![1, 1],
+                ..EnumEncoding::default()
+            },
+        )
+        .into();
+
+        let map = build_enum_slot_map(&mut ctx, enum_ty).unwrap();
+
+        let fields = struct_fields(&ctx, map.llvm_struct_ty);
+
+        // Required enum alignment is 16, while the 16-byte filler itself is
+        // deliberately represented as two i64 leaves with natural alignment 8.
+        // build_enum_slot_map supplies the zero-length alignment anchor separately.
+        assert_eq!(fields.len(), 4);
+
+        let filler_ref = fields[1].deref(&ctx);
+        let filler = filler_ref
+            .downcast_ref::<llvm_types::ArrayType>()
+            .expect("16-byte enum filler should lower to an LLVM array");
+
+        assert_eq!(
+            filler.size(),
+            2,
+            "16-byte enum filler should use two 64-bit leaves"
+        );
+
+        assert_eq!(
+            filler
+                .elem_type()
+                .deref(&ctx)
+                .downcast_ref::<IntegerType>()
+                .map(IntegerType::width),
+            Some(64),
+            "16-byte enum filler elements should be i64"
+        );
+
+        assert_eq!(
+            llvm_type_size_align(&ctx, map.llvm_struct_ty),
+            Some((32, 16)),
+            "typed 16-byte filler must preserve rustc's enum size and alignment"
+        );
+    }
+
+    /// `(element count, element width in bits)` of an array-typed filler.
+    fn filler_array(ctx: &Context, filler: TypeHandle) -> (u64, u32) {
+        let filler_ref = filler.deref(ctx);
+        let array = filler_ref
+            .downcast_ref::<llvm_types::ArrayType>()
+            .expect("enum filler should lower to an LLVM array");
+        let elem_width = array
+            .elem_type()
+            .deref(ctx)
+            .downcast_ref::<IntegerType>()
+            .map(IntegerType::width)
+            .expect("enum filler elements should be integers");
+        (array.size(), elem_width)
+    }
+
+    #[test]
+    fn enum_filler_16_bytes_at_align4_uses_four_i32s() {
+        let mut ctx = make_ctx();
+
+        let filler = make_enum_filler_type(&mut ctx, 0, 16, 4);
+
+        assert_eq!(
+            filler_array(&ctx, filler),
+            (4, 32),
+            "i64 would raise the enum alignment to 8; i32 is the widest word that fits"
+        );
+        assert_eq!(llvm_type_size_align(&ctx, filler), Some((16, 4)));
+    }
+
+    #[test]
+    fn enum_filler_16_bytes_uses_two_i64s_at_align8() {
+        let mut ctx = make_ctx();
+
+        let filler = make_enum_filler_type(&mut ctx, 0, 16, 8);
+
+        let filler_ref = filler.deref(&ctx);
+        let array = filler_ref
+            .downcast_ref::<llvm_types::ArrayType>()
+            .expect("16-byte filler should use an LLVM array");
+
+        assert_eq!(array.size(), 2);
+
+        assert_eq!(
+            array
+                .elem_type()
+                .deref(&ctx)
+                .downcast_ref::<IntegerType>()
+                .map(IntegerType::width),
+            Some(64)
+        );
+
+        assert_eq!(llvm_type_size_align(&ctx, filler), Some((16, 8)));
+    }
+
+    #[test]
+    fn enum_filler_keeps_bytes_at_an_odd_offset() {
+        let mut ctx = make_ctx();
+
+        let filler = make_enum_filler_type(&mut ctx, 1, 16, 8);
+
+        assert_eq!(
+            filler_array(&ctx, filler),
+            (16, 8),
+            "no integer width divides offset 1, so a wider word would move every later field"
+        );
+        assert_eq!(llvm_type_size_align(&ctx, filler), Some((16, 1)));
+    }
+
+    #[test]
+    fn enum_filler_keeps_bytes_in_a_byte_aligned_enum() {
+        let mut ctx = make_ctx();
+
+        let filler = make_enum_filler_type(&mut ctx, 0, 16, 1);
+
+        assert_eq!(
+            filler_array(&ctx, filler),
+            (16, 8),
+            "any wider word would raise the enum alignment above rustc's 1"
+        );
+        assert_eq!(llvm_type_size_align(&ctx, filler), Some((16, 1)));
+    }
+
+    #[test]
+    fn enum_filler_keeps_bytes_when_no_width_divides_the_size() {
+        let mut ctx = make_ctx();
+
+        let filler = make_enum_filler_type(&mut ctx, 0, 15, 8);
+
+        assert_eq!(filler_array(&ctx, filler), (15, 8));
+        assert_eq!(llvm_type_size_align(&ctx, filler), Some((15, 1)));
+    }
+
+    #[test]
+    fn enum_filler_24_bytes_uses_three_i64s_at_align8() {
+        let mut ctx = make_ctx();
+
+        let filler = make_enum_filler_type(&mut ctx, 8, 24, 8);
+
+        assert_eq!(filler_array(&ctx, filler), (3, 64));
+        assert_eq!(llvm_type_size_align(&ctx, filler), Some((24, 8)));
+    }
+
+    #[test]
+    fn enum_filler_12_bytes_uses_three_i32s_at_align4() {
+        let mut ctx = make_ctx();
+
+        let filler = make_enum_filler_type(&mut ctx, 4, 12, 4);
+
+        assert_eq!(filler_array(&ctx, filler), (3, 32));
+        assert_eq!(llvm_type_size_align(&ctx, filler), Some((12, 4)));
     }
 }

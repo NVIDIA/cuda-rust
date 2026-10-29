@@ -4,8 +4,10 @@
  */
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use crate::cutlass_toolchain;
 
 use super::*;
 
@@ -177,6 +179,79 @@ pub(super) fn inherited_process_env() -> BTreeMap<String, Vec<u8>> {
         .collect()
 }
 
+pub(super) const DEVICE_BACKEND_ENV: &str = "CUDA_OXIDE_DEVICE_BACKEND";
+pub(super) const CUTLASS_DIGEST_FINGERPRINT_ENV: &str =
+    "CUDA_OXIDE_INTERNAL_CUTLASS_COMPILER_SHA256";
+
+/// Include the selected CUTLASS compiler and its content identity in the
+/// semantic environment seen by Cargo.
+pub(super) fn inherited_process_env_with_cutlass_compiler_identity(
+    ctx: &Context,
+) -> BTreeMap<String, Vec<u8>> {
+    let mut inherited = inherited_process_env();
+    let inherited_compiler_path =
+        std::env::var_os(cutlass_toolchain::CUTLASS_COMPILER_ENV).map(PathBuf::from);
+    augment_env_with_cutlass_compiler_identity(
+        ctx,
+        &mut inherited,
+        inherited_compiler_path.as_deref(),
+    );
+    inherited
+}
+
+pub(super) fn augment_env_with_cutlass_compiler_identity(
+    ctx: &Context,
+    inherited: &mut BTreeMap<String, Vec<u8>>,
+    inherited_compiler_path: Option<&Path>,
+) {
+    let backend = inherited
+        .get(DEVICE_BACKEND_ENV)
+        .map(Vec::as_slice)
+        .or_else(|| project_config_env(ctx, DEVICE_BACKEND_ENV).map(str::as_bytes));
+    if !backend.is_some_and(selector_is_cutlass_mlir) {
+        return;
+    }
+
+    let explicit_compiler = if inherited.contains_key(cutlass_toolchain::CUTLASS_COMPILER_ENV) {
+        inherited_compiler_path.map(Path::to_path_buf)
+    } else {
+        project_config_env(ctx, cutlass_toolchain::CUTLASS_COMPILER_ENV).map(PathBuf::from)
+    };
+    if inherited.contains_key(cutlass_toolchain::CUTLASS_COMPILER_ENV)
+        || explicit_compiler.is_some()
+    {
+        let digest = match explicit_compiler.as_deref() {
+            Some(path) => cutlass_toolchain::sha256_file(path)
+                .unwrap_or_else(|error| format!("unavailable:{error}")),
+            None => "unavailable:non-unicode inherited compiler path".to_string(),
+        };
+        inherited.insert(
+            CUTLASS_DIGEST_FINGERPRINT_ENV.to_string(),
+            digest.into_bytes(),
+        );
+        return;
+    }
+
+    if let Ok(Some(paths)) = cutlass_toolchain::resolve_official() {
+        inherited.insert(
+            cutlass_toolchain::CUTLASS_COMPILER_ENV.to_string(),
+            paths
+                .compiler_library
+                .as_os_str()
+                .as_encoded_bytes()
+                .to_vec(),
+        );
+        inherited.insert(
+            CUTLASS_DIGEST_FINGERPRINT_ENV.to_string(),
+            paths.compiler_library_sha256.as_bytes().to_vec(),
+        );
+    }
+}
+
+pub(super) fn selector_is_cutlass_mlir(value: &[u8]) -> bool {
+    std::str::from_utf8(value).is_ok_and(|value| value.trim() == "cutlass-mlir")
+}
+
 fn cargo_passthrough_command(
     ctx: &Context,
     cargo_subcommand: CargoPassthroughSubcommand,
@@ -225,10 +300,18 @@ pub(super) fn cargo_passthrough_command_with_env(
         target_arch,
         &materialization,
     );
+    let policy = cargo_subcommand.codegen_profile(opts.debug_assertions);
     let mut cmd = Command::new("cargo");
     cmd.arg(cargo_subcommand.as_str());
     if let Some(features) = opts.features {
         cmd.args(["--features", features]);
+    }
+    // A profile other than `release` or `dev` may set a pinned key itself and
+    // cannot take the environment carrier, so it receives the pins as
+    // `--config` arguments. They go before the user's arguments: a later user
+    // `--config` for the same key still wins.
+    if let Some(profile) = selected_cargo_profile(cargo_args) {
+        cmd.args(profile_config_args(policy, profile));
     }
     cmd.args(cargo_args).current_dir(&ctx.workspace_root);
 
@@ -242,13 +325,7 @@ pub(super) fn cargo_passthrough_command_with_env(
         opts.unchecked_indexing,
         opts.device_debug,
     );
-    apply_codegen_configuration(
-        &mut cmd,
-        ctx,
-        cargo_subcommand.codegen_profile(opts.debug_assertions),
-        opts.device_cfgs,
-        &fingerprint,
-    )?;
+    apply_codegen_configuration(&mut cmd, ctx, policy, opts.device_cfgs, &fingerprint)?;
 
     if let Some(cargo_target_dir) = opts.cargo_target_dir {
         cmd.env("CARGO_TARGET_DIR", cargo_target_dir);

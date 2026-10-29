@@ -1255,7 +1255,7 @@ pub(in crate::resolve) fn expand_register_mma_ampere_float_admission(
                         .map(|length| OperandPattern::RegisterList { length })
                         .into(),
                 },
-                summary: format!("Executes the {} Ampere floating-point MMA form.", recipe.id),
+                summary: format!("Executes the {} dense floating-point MMA form.", recipe.id),
             })
         })
         .collect()

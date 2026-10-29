@@ -9,7 +9,7 @@ use super::common::{anyhow_to_pliron, counter_named_global};
 use crate::context::{
     SharedGlobalDeclaration, SharedGlobalKind, SharedGlobalRecord, SharedGlobalsMap,
 };
-use crate::convert::types::{convert_type, llvm_type_size_align};
+use crate::convert::types::{convert_type, llvm_type_size_align, required_storage_align};
 use crate::helpers;
 use llvm_export::ops as llvm;
 use llvm_export::ops::GlobalOpExt;
@@ -96,6 +96,22 @@ pub fn convert_shared_alloc_dc(
     // optional debug identity against the lowered element layout before it
     // can reach the declaration record or the emitted global.
     let llvm_elem_type = convert_type(ctx, mir_elem_type).map_err(anyhow_to_pliron)?;
+
+    // Storage is never declared below the element's ABI alignment: a smaller
+    // request is raised, a larger one is honored. The verifier has already
+    // rejected a request that is not a power of two.
+    let required_alignment = required_storage_align(ctx, mir_elem_type, llvm_elem_type)
+        .ok_or_else(|| {
+            let elem_display = mir_elem_type.deref(ctx).disp(ctx).to_string();
+            pliron::create_error!(
+                op.deref(ctx).loc(),
+                pliron::result::ErrorKind::VerificationFailed,
+                "mir.shared_alloc element type `{elem_display}` has no known ABI alignment; \
+                 refusing to guess the storage alignment"
+            )
+        })?;
+    let alignment = alignment.max(required_alignment);
+
     let debug_info = debug_info
         .filter(|info| shared_debug_type_matches_physical(ctx, info, llvm_elem_type, size));
     let debug_owner_function = debug_info.as_ref().and(debug_owner_function);

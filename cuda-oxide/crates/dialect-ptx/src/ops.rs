@@ -23,7 +23,6 @@ use pliron::{
     common_traits::Verify,
     context::{Context, Ptr},
     linked_list::ContainsLinkedList,
-    location::Located,
     op::Op,
     operation::Operation,
     region::Region,

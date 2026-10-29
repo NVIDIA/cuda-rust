@@ -23,7 +23,7 @@ use dialect_mir::ops::{MirExtractFieldOp, MirLoadOp, MirUndefOp};
 use pliron::basic_block::BasicBlock;
 use pliron::builtin::types::{IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::printable::Printable;
@@ -80,6 +80,11 @@ pub fn translate_place(
     prev_op: Option<Ptr<Operation>>,
     loc: Location,
 ) -> TranslationResult<(Value, Option<Ptr<Operation>>)> {
+    if place.projection.is_empty()
+        && let Some(value) = value_map.get_direct_value(place.local)
+    {
+        return Ok((value, prev_op));
+    }
     match classify_place_read_strategy(ctx, place, value_map)? {
         PlaceReadStrategy::Address => {
             if let Some((value, last_op)) = translate_place_load_from_address(
@@ -716,10 +721,16 @@ fn translate_place_value_fallback(
                     // back into SSA extracts for promotable arrays.
 
                     let index = if *from_end {
+                        // rustc emits `from_end: true` only for slice patterns
+                        // (`from_end: !is_array` in match_pair.rs), and its MIR
+                        // validator rejects an array indexed from the end. A
+                        // bare local is sized, so valid MIR never reaches this
+                        // arm; it only reports a malformed input.
                         return input_err!(
                             loc,
                             TranslationErr::unsupported(
-                                "ConstantIndex with from_end=true not yet supported"
+                                "from-end ConstantIndex on an array local is not valid MIR \
+                                 (rustc emits from_end only for slice patterns)"
                             )
                         );
                     } else {

@@ -16,6 +16,8 @@ llvm-export = { workspace = true }
 dialect-mir = { workspace = true }
 dialect-iket = { workspace = true }
 dialect-nvvm = { workspace = true }
+dialect-cute = { workspace = true }
+cute-layout = { workspace = true }
 mir-lower = { workspace = true }
 oxide-artifacts = { workspace = true }
 cuda-oxide-codegen = { workspace = true }

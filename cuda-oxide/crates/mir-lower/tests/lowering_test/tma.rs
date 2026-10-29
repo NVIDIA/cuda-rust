@@ -171,3 +171,147 @@ fn tma_modern_libnvvm_preserves_existing_cluster_pointer_semantics() -> Result<(
     assert!(!ir.contains("cvta.to.shared::cta"), "{ir}");
     Ok(())
 }
+
+/// Lowers the five CTA-local G2S forms with the given destination and
+/// barrier address spaces.
+fn lower_g2s_cta_forms(
+    destination_space: u32,
+    barrier_space: u32,
+    backend: mir_lower::IntrinsicBackend,
+) -> Result<(Context, Ptr<Operation>), anyhow::Error> {
+    let mut ctx = make_test_ctx();
+    let byte = IntegerType::get(&ctx, 8, Signedness::Signless).into();
+    let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signless).into();
+    let i64_ty = IntegerType::get(&ctx, 64, Signedness::Signless).into();
+    let destination = MirPtrType::get(&mut ctx, byte, true, destination_space).into();
+    let barrier = MirPtrType::get(&mut ctx, byte, true, barrier_space).into();
+    let pointer = MirPtrType::get_generic(&mut ctx, byte, true).into();
+    let (module, entry) = build_test_kernel(
+        &mut ctx,
+        vec![
+            destination,
+            barrier,
+            pointer,
+            i32_ty,
+            i32_ty,
+            i32_ty,
+            i32_ty,
+            i32_ty,
+            i64_ty,
+        ],
+    );
+    let args: Vec<_> = (0..9)
+        .map(|index| entry.deref(&ctx).get_argument(index))
+        .collect();
+    for (info, dimensions) in [
+        (
+            nvvm::CpAsyncBulkTensorG2sCtaTile1dOp::get_concrete_op_info(),
+            1,
+        ),
+        (
+            nvvm::CpAsyncBulkTensorG2sCtaTile2dOp::get_concrete_op_info(),
+            2,
+        ),
+        (
+            nvvm::CpAsyncBulkTensorG2sCtaTile3dOp::get_concrete_op_info(),
+            3,
+        ),
+        (
+            nvvm::CpAsyncBulkTensorG2sCtaTile4dOp::get_concrete_op_info(),
+            4,
+        ),
+        (
+            nvvm::CpAsyncBulkTensorG2sCtaTile5dOp::get_concrete_op_info(),
+            5,
+        ),
+    ] {
+        let mut operands = args[..3 + dimensions].to_vec();
+        operands.push(args[8]);
+        Operation::new(&mut ctx, info, vec![], operands, vec![], 0).insert_at_back(entry, &ctx);
+    }
+    append_return(&mut ctx, entry);
+    mir_lower::lower_mir_to_llvm_with_options(
+        &mut ctx,
+        module,
+        mir_lower::LoweringOptions {
+            intrinsic_backend: backend,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| anyhow::anyhow!("{error}"))?;
+    Ok((ctx, module))
+}
+
+#[test]
+fn tma_cta_llvm_nvptx_uses_typed_shared_cta_intrinsics() -> Result<(), anyhow::Error> {
+    for (destination_space, barrier_space) in [(0, 0), (3, 3), (0, 3), (3, 0)] {
+        let (ctx, module) = lower_g2s_cta_forms(
+            destination_space,
+            barrier_space,
+            mir_lower::IntrinsicBackend::LlvmNvptx,
+        )?;
+        let module = Operation::get_op::<ModuleOp>(module, &ctx).unwrap();
+        let ir = llvm_export::export::export_module_to_string(&ctx, &module).unwrap();
+        for dimensions in 1..=5 {
+            let call = format!(
+                "call void @llvm.nvvm.cp.async.bulk.tensor.g2s.cta.tile.{dimensions}d(ptr addrspace(3)"
+            );
+            assert_eq!(ir.matches(&call).count(), 1, "{ir}");
+        }
+        assert!(!ir.contains("addrspace(7)"), "{ir}");
+        assert!(!ir.contains("g2s.tile."), "{ir}");
+        assert!(!ir.contains("asm sideeffect"), "{ir}");
+    }
+    Ok(())
+}
+
+#[test]
+fn tma_cta_libnvvm_emits_exact_shared_cta_ptx() -> Result<(), anyhow::Error> {
+    for (destination_space, barrier_space) in [(0, 0), (3, 3)] {
+        let (ctx, module) = lower_g2s_cta_forms(
+            destination_space,
+            barrier_space,
+            mir_lower::IntrinsicBackend::LibNvvm,
+        )?;
+        let module = Operation::get_op::<ModuleOp>(module, &ctx).unwrap();
+        for dialect in [NvvmIrDialect::LegacyLlvm7, NvvmIrDialect::Modern] {
+            let ir =
+                export_module_to_string_with_config(&ctx, &module, &NvvmExportConfig::new(dialect))
+                    .unwrap();
+            for dimensions in 1..=5 {
+                let instruction = format!(
+                    "cp.async.bulk.tensor.{dimensions}d.shared::cta.global.tile.mbarrier::complete_tx::bytes [$0], [$2,"
+                );
+                assert_eq!(ir.matches(&instruction).count(), 1, "{ir}");
+            }
+            assert!(!ir.contains("addrspace(7)"), "{ir}");
+            assert!(!ir.contains("shared::cluster"), "{ir}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn tma_cta_rejects_cluster_shared_operands() {
+    for backend in [
+        mir_lower::IntrinsicBackend::LlvmNvptx,
+        mir_lower::IntrinsicBackend::LibNvvm,
+    ] {
+        for (destination_space, barrier_space, role) in [
+            (7, 3, "destination"),
+            (3, 7, "barrier"),
+            (7, 0, "destination"),
+        ] {
+            let error = lower_g2s_cta_forms(destination_space, barrier_space, backend)
+                .err()
+                .unwrap_or_else(|| panic!("an addrspace(7) {role} lowered with {backend:?}"))
+                .to_string();
+            assert!(
+                error.contains("g2s_cta requires a CTA-local shared")
+                    && error.contains(role)
+                    && error.contains("addrspace 7"),
+                "{error}"
+            );
+        }
+    }
+}

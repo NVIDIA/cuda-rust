@@ -11,11 +11,13 @@
 //! the rustc frontend.
 //!
 //! This crate intentionally has no rustc linkage. It does not require
-//! `rustc_private` or a nightly toolchain matched to `rustc_driver`.
+//! `rustc_private` or a toolchain pin matched to `rustc_driver`.
 
 #![warn(missing_docs)]
 
 mod api;
+mod cutlass_backend;
+mod cutlass_compiler;
 mod error;
 mod export;
 mod generated;
@@ -112,6 +114,8 @@ pub mod experimental {
 /// This is not part of the standalone frontend contract.
 #[doc(hidden)]
 pub mod __private {
+    #[doc(hidden)]
+    pub use crate::cutlass_backend::{CutlassBackendConfig, DeviceBackend};
     #[doc(hidden)]
     pub use crate::error::PipelineError;
     #[doc(hidden)]

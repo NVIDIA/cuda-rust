@@ -378,16 +378,18 @@ fn nounroll_injects_marker_first_in_each_loop_kind() {
             for j in 0..n { let _ = j; }
             #[nounroll]
             loop { break; }
+            #[unroll(never)]
+            for k in 0..n { let _ = k; }
         }
     };
     let out = run_loop_unroll_visitor(func);
     let marker = "cuda_device::thread::__nounroll_config();";
     assert_eq!(
         out.matches(marker).count(),
-        3,
+        4,
         "one marker per loop:\n{out}"
     );
-    for body_start in ["whilei<4{", "forjin0..n{", "loop{"] {
+    for body_start in ["whilei<4{", "forjin0..n{", "loop{", "forkin0..n{"] {
         assert!(
             out.contains(&format!("{body_start}{marker}")),
             "marker must be the first statement after `{body_start}`:\n{out}"
@@ -438,6 +440,13 @@ fn nounroll_rejects_arguments_and_unroll_on_the_same_loop() {
 fn partial_unroll_factor_must_be_at_least_two() {
     assert!(syn::parse_str::<UnrollArgs>("0").is_err());
     assert!(syn::parse_str::<UnrollArgs>("1").is_err());
+    assert_eq!(
+        syn::parse_str::<UnrollArgs>("never")
+            .unwrap()
+            .factor
+            .literal_value,
+        Some(u32::MAX - 1)
+    );
     assert_eq!(
         syn::parse_str::<UnrollArgs>("2")
             .unwrap()

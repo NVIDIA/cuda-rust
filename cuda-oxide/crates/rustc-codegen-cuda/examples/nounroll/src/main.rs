@@ -136,7 +136,9 @@ mod kernels {
     }
 
     /// Partial `#[unroll(4)]` leaves four inner copies in its main loop and one
-    /// in its remainder loop. `out[i] = i + sum(a[i_outer * 3 + j])` over
+    /// in its remainder loop, and marks the outer main and remainder latches
+    /// with `llvm.loop.unroll.disable` so LLVM does not unroll them again (7
+    /// marked latches total). `out[i] = i + sum(a[i_outer * 3 + j])` over
     /// `i_outer < trip` and `j < 3`.
     ///
     /// Partial unrolling needs the loop test to be the only exit, so the body

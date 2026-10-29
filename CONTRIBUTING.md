@@ -142,13 +142,16 @@ Each product has its own workspace and toolchain under `cuda-oxide/` or
 `cutile-rs/`. The setup commands below cover cuda-oxide; the Tile checks have
 their own section further down.
 
-cuda-oxide requires the Rust nightly toolchain with `rustc_private` support.
-See the [cuda-oxide README](cuda-oxide/README.md) for setup instructions.
+cuda-oxide pins its stable Rust toolchain (`1.99.1`) and required `rustc-dev`
+and `llvm-tools` components in `cuda-oxide/rust-toolchain.toml` (with
+`RUSTC_BOOTSTRAP=1` configured via `cuda-oxide/.cargo/config.toml` and
+`cargo-oxide`). See the [cuda-oxide README](cuda-oxide/README.md) for setup
+instructions.
 
-`cuda-oxide/flake.nix` provides the CUDA 13, LLVM 22, Clang, and pinned nightly
-development environment. From the repository root, run `cd cuda-oxide` and
-then `nix develop` with flakes enabled. Container setup is documented in
-[cuda-oxide/.devcontainer/README.md](cuda-oxide/.devcontainer/README.md).
+`cuda-oxide/flake.nix` provides the CUDA 13, Clang/libclang, and pinned Rust
+(with LLVM 23 `llvm-tools`) development environment. From the repository root,
+run `cd cuda-oxide` and then `nix develop` with flakes enabled. Container setup
+is documented in [cuda-oxide/.devcontainer/README.md](cuda-oxide/.devcontainer/README.md).
 
 ### Running the cuda-oxide checks
 
@@ -189,6 +192,17 @@ cutile-rs/scripts/run_all.sh         # both of the above, then the examples and 
 
 Run `cutile-rs/scripts/run_all.sh` before marking a Tile pull request ready
 for review.
+
+The GPU script also accepts `--archive-dir DIR` to run prebuilt tests without
+Cargo or a Rust toolchain. The directory must contain `cargo-nextest`,
+`tile-tests.tar.zst`, and `host-tests.tar.zst`, as bundled by CI. This mode runs
+tests serially and uses the checkout for source fixtures.
+See the archive, bundle, and extract steps in
+[the Tile CI workflow](.github/workflows/cutile-rs.yml) for how to produce this
+directory. Extract `cutile-gpu-tests.tar` first and use a checkout matching its
+`revision.txt`; `cargo-nextest` must be executable. The script's opening comments
+describe the directory layout and the contents of each test archive.
+
 CI runs the same suites in `.github/workflows/cutile-rs.yml`. Because the Tile
 lanes use NVIDIA self-hosted runners, that workflow triggers on the
 `pull-request/<n>` branches that copy-pr-bot mirrors rather than on the pull

@@ -968,6 +968,25 @@ fn translate_call(
     let (pattern_name, call_name, substs_args, type_substs) = extract_func_info(func, &loc)?;
     let loc = call_debug_location(pattern_name.as_deref(), loc);
 
+    // Keep CuTe calls as CuTe operations while their tensor and layout
+    // meaning is still visible. Ordinary source helpers continue through the
+    // normal Rust-body path.
+    if let Some(result) = crate::translator::cute::try_translate_cute_call(
+        ctx,
+        body,
+        func,
+        args,
+        destination,
+        &target.map(|block| block),
+        block_ptr,
+        prev_op,
+        value_map,
+        block_map,
+        &loc,
+    ) {
+        return result;
+    }
+
     // Is the trait-method Self type SharedArray? Shared with
     // `values::classify_call` so intrinsic dispatch and destination-slot
     // classification can't drift.
@@ -1076,7 +1095,7 @@ fn translate_call(
                 )
             );
         };
-        if factor == 1 || factor > 1024 {
+        if factor == 1 || (factor > 1024 && factor != u32::MAX - 1) {
             return input_err!(
                 loc,
                 TranslationErr::invalid_op(format!(
@@ -1090,7 +1109,11 @@ fn translate_call(
                 TranslationErr::invalid_op("an unroll marker call has no return target")
             );
         };
-        let hint = MirUnrollHintOp::new(ctx, factor).get_operation();
+        let hint = if factor == u32::MAX - 1 {
+            MirNoUnrollHintOp::new(ctx).get_operation()
+        } else {
+            MirUnrollHintOp::new(ctx, factor).get_operation()
+        };
         hint.deref_mut(ctx).set_loc(loc.clone());
         match prev_op {
             Some(prev) => hint.insert_after(ctx, prev),
@@ -2131,6 +2154,7 @@ fn extract_function_item_target(
             || instance.is_foreign_item()
             || !instance.has_body()
             || matches!(crate_name.as_str(), "cuda_device" | "cuda-device" | "libm")
+            || super::cute::function_item_requires_direct_dispatch(&fn_def)
             || generated_direct_call_only,
     }))
 }
@@ -3362,6 +3386,7 @@ fn try_dispatch_intrinsic(
                 block_map,
                 loc,
                 64,
+                false,
             )?,
         )),
         "cuda_device::shared::cvta_generic_to_shared_u32" => Ok(Some(
@@ -3377,9 +3402,26 @@ fn try_dispatch_intrinsic(
                 block_map,
                 loc,
                 32,
+                false,
             )?,
         )),
 
+        "cuda_device::shared::cvta_generic_to_cluster_shared_offset" => Ok(Some(
+            intrinsics::memory::emit_cvta_generic_to_shared_offset(
+                ctx,
+                body,
+                args,
+                destination,
+                target,
+                block_ptr,
+                prev_op,
+                value_map,
+                block_map,
+                loc,
+                64,
+                true,
+            )?,
+        )),
         // Public SharedArray pointer conversions all narrow the shared-memory
         // base to a generic pointer. Recognition is shared with destination
         // address-space classification in translator::values.

@@ -1319,6 +1319,11 @@ fn partial_unroll(
     }
     let last_latch = copies[factor_usize - 1].latch_term;
     rewire_goto(ctx, last_latch, main_h, &running);
+    MirGotoOp::new(last_latch).set_loop_unroll_disable(ctx);
+    let rem_latch = s.latch.deref(ctx).get_tail();
+    if let Some(rem_latch) = rem_latch {
+        MirGotoOp::new(rem_latch).set_loop_unroll_disable(ctx);
+    }
 
     // The main-loop counter is mh_iv = init + (factor*step)*t, so it is always
     // init plus a multiple of factor*step. That lets us replace counter-derived

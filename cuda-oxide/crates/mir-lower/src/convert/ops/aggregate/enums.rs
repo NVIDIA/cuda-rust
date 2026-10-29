@@ -1043,8 +1043,8 @@ mod tests {
         let body = kernel_blocks(&ctx, module);
         assert_eq!(
             count_ops::<llvm::AddrSpaceCastOp>(&ctx, &body),
-            2,
-            "construction must genericize the pointer and extraction must restore shared space"
+            3,
+            "construction must genericize the pointer, extraction must restore shared space, and return must genericize for .func ABI"
         );
         assert_eq!(
             count_ops::<llvm::PtrToIntOp>(&ctx, &body),

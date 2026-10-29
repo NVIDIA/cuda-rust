@@ -572,6 +572,7 @@ pub(super) fn validate_policy(
                             | MbarrierExtendedOperation::ArriveExpectTxCluster
                             | MbarrierExtendedOperation::TryWaitParityCta
                             | MbarrierExtendedOperation::TryWaitParityCluster
+                            | MbarrierExtendedOperation::TryWaitParityClusterRelaxed
                     )
                 }) =>
             {

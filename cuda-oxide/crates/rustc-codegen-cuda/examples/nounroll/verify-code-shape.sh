@@ -27,13 +27,14 @@ ll = re.sub(r";[^\n]*", "", ll)
 
 # Marked loops per function. The full unroll leaves four copies of its inner
 # loop; the partial unroll leaves four in its main loop and one in its
-# remainder loop. `taps_default` is the control.
+# remainder loop, plus the main and remainder latches of `#[unroll(4)]` itself.
+# `taps_default` is the control.
 expected = {
     "taps_rolled": 1,
     "taps_default": 0,
     "rolled_k_unrolled_inner": 1,
     "rolled_inside_full_unroll": 4,
-    "rolled_inside_partial_unroll": 5,
+    "rolled_inside_partial_unroll": 7,
     "rolled_sum": 1,
 }
 

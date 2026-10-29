@@ -1,0 +1,15 @@
+[package]
+name = "fp16_gemm_256x352_ctm"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "SM100 two-CTA FP16 GEMM using the typed Rust primitives API"
+
+[workspace]
+
+[dependencies]
+ctm-rs = { path = "../../ctm-rs", features = ["host"] }
+cuda-device = { path = "../../../crates/cuda-device" }
+cuda-host = { path = "../../../crates/cuda-host" }
+cuda-core = { path = "../../../../cuda-core" }
+serde_json = "1"

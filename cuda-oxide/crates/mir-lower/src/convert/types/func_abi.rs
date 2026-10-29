@@ -349,6 +349,37 @@ pub(crate) fn packed_shared_internal_abi_info(
     }))
 }
 
+/// Recognize an internal device-function return type that must cross the `.func`
+/// boundary as a target-stable 64-bit generic pointer (or generic-pointer carrier).
+///
+/// Under `--nvptx-short-ptr` (`p3:32:32:32`), LLVM 23's `NVPTXAsmPrinter` emits
+/// `.func (.param .b64 func_retval0)` in the function header for a bare
+/// `ptr addrspace(3)` return value while emitting `.param .b32 retval0` at the
+/// call site. Returning `ptr` (`addrspace(0)`) across the `.func` boundary and
+/// coercing back to `ptr addrspace(3)` at the call site matches `nvcc` and
+/// avoids the PTX return-slot width mismatch.
+pub(crate) fn shared_return_abi_info(
+    ctx: &mut Context,
+    mir_ty: TypeHandle,
+) -> Result<Option<PackedSharedInternalAbiInfo>, anyhow::Error> {
+    if let Some(abi) = packed_shared_internal_abi_info(ctx, mir_ty)? {
+        return Ok(Some(abi));
+    }
+    let is_shared_ptr = mir_ty
+        .deref(ctx)
+        .downcast_ref::<MirPtrType>()
+        .is_some_and(|ptr_ty| ptr_ty.address_space() == llvm_types::address_space::SHARED);
+    if !is_shared_ptr {
+        return Ok(None);
+    }
+    let semantic_ty = convert_type(ctx, mir_ty)?;
+    let storage_ty = llvm_types::PointerType::get_generic(ctx).into();
+    Ok(Some(PackedSharedInternalAbiInfo {
+        semantic_ty,
+        storage_ty,
+    }))
+}
+
 /// Convert a type that crosses a function boundary as one LLVM value.
 ///
 /// A struct with a natural-layout divergence is legal by value only when
@@ -621,7 +652,7 @@ pub fn convert_function_type(
         let ty = if is_transparent_scalar {
             transparent_scalar_llvm_type(ctx, mir_ret_ty)?
         } else if !is_kernel_entry {
-            match packed_shared_internal_abi_info(ctx, mir_ret_ty)? {
+            match shared_return_abi_info(ctx, mir_ret_ty)? {
                 Some(abi) => abi.storage_ty,
                 None => convert_by_value_abi_type(ctx, mir_ret_ty, "by-value function return")?,
             }

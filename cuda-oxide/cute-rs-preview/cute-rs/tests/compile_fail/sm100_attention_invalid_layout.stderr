@@ -1,0 +1,23 @@
+error[E0080]: evaluation panicked: assertion failed: contiguous >= 32 && contiguous.is_multiple_of(32)
+ --> src/attention/sm100/shared.rs
+  |
+  |         assert!(contiguous >= 32 && contiguous.is_multiple_of(32));
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `cute_rs::attention::sm100::SharedLayout::<128, 16>::VALID` failed here
+
+note: erroneous constant encountered
+ --> src/attention/sm100/shared.rs
+  |
+  |     const VALID: () = SharedLayout::<R, C, MN>::VALID;
+  |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: erroneous constant encountered
+ --> src/attention/sm100/mma.rs
+  |
+  |         let () = AL::VALID;
+  |                  ^^^^^^^^^
+
+note: erroneous constant encountered
+ --> src/attention/sm100/mma.rs
+  |
+  |         let () = Self::VALID;
+  |                  ^^^^^^^^^^^

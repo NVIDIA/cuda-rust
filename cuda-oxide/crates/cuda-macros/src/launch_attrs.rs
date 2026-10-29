@@ -381,6 +381,17 @@ impl Parse for UnrollArgs {
             });
         }
 
+        if input.peek(Ident) {
+            let fork = input.fork();
+            let ident: Ident = fork.parse()?;
+            if ident == "never" && fork.is_empty() {
+                let _: Ident = input.parse()?;
+                return Ok(UnrollArgs {
+                    factor: ConstU32Expr::literal(u32::MAX - 1),
+                });
+            }
+        }
+
         let args: Punctuated<Expr, Token![,]> = Punctuated::parse_terminated(input)?;
         let mut values = args
             .into_iter()
@@ -525,6 +536,11 @@ impl LoopUnrollAttrVisitor {
                     ));
                 }
                 None
+            }
+            (Some((factor, span)), None) if factor.literal_value == Some(u32::MAX - 1) => {
+                Some(syn::parse_quote_spanned! {span=>
+                    cuda_device::thread::__nounroll_config();
+                })
             }
             (Some((factor, span)), None) => Some(Self::marker_stmt(&factor, span)),
             (None, Some(span)) => Some(syn::parse_quote_spanned! {span=>

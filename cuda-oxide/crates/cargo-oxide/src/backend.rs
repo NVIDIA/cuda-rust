@@ -813,7 +813,7 @@ fn report_unhealable_toolchain_mismatch(current: &str, recorded: &str) {
         toolchain_identity_line(recorded)
     );
     eprintln!(
-        "Your project's rust-toolchain.toml pins a different nightly than the \
+        "Your project's rust-toolchain.toml pins a different toolchain than the \
          cuda-oxide backend source it depends on. Align the pins (and run \
          `cargo oxide update` after changing them), or point CUDA_OXIDE_BACKEND \
          at a backend built with your project's toolchain."
@@ -1056,6 +1056,7 @@ fn backend_build_command_in(
     cmd.env("CARGO_ENCODED_RUSTFLAGS", "");
     cmd.env_remove("RUSTFLAGS");
     cmd.env_remove("CARGO_BUILD_RUSTFLAGS");
+    cmd.env("RUSTC_BOOTSTRAP", "1");
 
     if let Some(path) = rustc_lib_path {
         cmd.env("LIBRARY_PATH", build_library_path(path));

@@ -117,13 +117,6 @@ do not count toward that bound. Taking the in-place address of such a
 field (`u.ptr = p`, `&u.ptr`, `&mut u.ptr`) is refused with a diagnostic; build
 the union by value and read its fields by value.
 
-`SharedPtr<T>`, the typed shared pointer, follows the same limits: a union or a
-`MaybeUninit<SharedPtr<T>>` fails closed under these union storage rules, a
-`repr(packed)` struct that holds one follows the packed-carrier limits above, a
-kernel parameter that holds one bare or inside a struct or array is refused,
-and on the libNVVM route a struct that mixes one with a narrower field is not
-yet supported in arrays or in shared memory.
-
 Enum constants preserve payload relocations to device statics, including
 non-zero byte addends. This includes niche-encoded `Option<&T>` and
 direct-tagged enum layouts, both for direct thin-reference payloads and for
@@ -167,7 +160,7 @@ Anonymous promoted allocations remain unsupported.
 | Bi-directional LTOIR Support | **Full** | Rust kernels call CUDA C++ device functions **and** C++ calls Rust device functions. Via NVVM IR → libNVVM → LTOIR → nvJitLink. |
 | Device FFI (`extern "C"`) | **Full** | `#[device] extern "C" { fn ... }` declarations for external LTOIR functions. CUB/CCCL integration demonstrated. |
 | MathDx FFI (cuFFTDx / cuBLASDx) | **Full** | cuFFTDx (8/16/32-point thread-level FFT), cuBLASDx (32x32x32 block-level GEMM) via LTOIR. |
-| Tile interop | **Partial** | Inter-kernel interop works today: a [cutile-rs Tile kernel](https://github.com/NVIDIA/cuda-rust/tree/main/cutile-rs) and a cuda-oxide SIMT PTX kernel can run in one host process on the same CUDA stream over shared device tensors. Intra-kernel interop is built as a [tile library](../advanced/tile-libraries.md): `#[tile_export]` and `cargo oxide tilelib` produce the LTOIR and the Tile IR descriptions today (at the installed assembler's current bytecode version, 13.5 or newer), packaging them into a `.tilelib` needs the CUDA 13.5 or newer `tileiras`, and the caller is cuTile Python's `foreign_call`. Tracked in [#96](https://github.com/NVlabs/cuda-oxide/issues/96). |
+| Tile interop | **Partial** | Inter-kernel interop works today: a [cutile-rs Tile kernel](https://github.com/NVIDIA/cuda-rust/tree/main/cutile-rs) and a cuda-oxide SIMT PTX kernel can run in one host process on the same CUDA stream over shared device tensors. Intra-kernel interop is tracked in [#96](https://github.com/NVlabs/cuda-oxide/issues/96). |
 | Cross-Crate Kernels | **Full** | Kernels and device functions defined in library crates with monomorphization at the binary crate use site. |
 
 ## Compiler: Functions

@@ -48,8 +48,8 @@ fn overlay_manifest_loads_sorted_family_shards() {
     let (overlay, hash) =
         read_overlay(&repo_root, &repo_root.join("intrinsics/overlay.toml")).unwrap();
     assert_eq!(overlay.schema, OVERLAY_SCHEMA);
-    assert_eq!(overlay.shards.len(), 67);
-    assert_eq!(overlay.intrinsics.len(), 1038);
+    assert_eq!(overlay.shards.len(), 68);
+    assert_eq!(overlay.intrinsics.len(), 1042);
     assert_eq!(
         overlay
             .intrinsics
@@ -136,7 +136,7 @@ fn overlay_manifest_loads_sorted_family_shards() {
             .iter()
             .filter(|record| record.family == "register_mma")
             .count(),
-        154
+        155
     );
     assert_eq!(
         overlay

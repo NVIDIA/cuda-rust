@@ -113,6 +113,10 @@ Compose GPU work as lazy `DeviceOperation` graphs.
 Schedule across stream pools. Await results with `.await`.
 :::
 
+:::{grid-item-card} 🧩  Typed CuTe Kernels (preview)
+Encode layouts, swizzles, TMA pipelines, and tensor-core MMA in Rust's type system with [cute-rs](cute/overview.md), compiled through CUTLASS 4.7 for `sm_100a` and `sm_120a`. See the [support matrix](cute/support-matrix.md).
+:::
+
 ::::
 
 ```{toctree}
@@ -163,9 +167,23 @@ async-programming/overlapping-transfers-and-compute
 ```{toctree}
 :hidden:
 :maxdepth: 2
-:caption: Building a Real Application
+:caption: Async Host Pipeline Walkthrough
 
 projects/async-mlp-pipeline
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 2
+:caption: CuTe in Rust (preview)
+
+cute/overview
+cute/support-matrix
+cute/build-with-cutlass
+cute/cutedsl-comparison
+cute/layouts-and-tiling
+cute/gemm-and-pipelines
+cute/contracts
 ```
 
 ```{toctree}

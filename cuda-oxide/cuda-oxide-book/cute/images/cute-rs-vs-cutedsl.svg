@@ -1,0 +1,53 @@
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg class="cute-rs-preview" xmlns="http://www.w3.org/2000/svg" width="1040" height="560" viewBox="0 0 1040 560" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif">
+<title>Python CuTeDSL versus Rust cute-rs: runtime tracing of MLIR wrappers versus ahead-of-time type translation</title>
+<style>.cute-rs-preview text { dominant-baseline:central; text-anchor:middle } .cute-rs-preview .l { text-anchor:start } .cute-rs-preview .r { text-anchor:end } .cute-rs-preview .bg { fill:#faf9f5 } .cute-rs-preview .title { font-size:17px; font-weight:700; fill:#1e1e1e } .cute-rs-preview .th { font-size:14px; font-weight:600; fill:#1e1e1e } .cute-rs-preview .t { font-size:13px; fill:#2b2b2b } .cute-rs-preview .ts { font-size:12.5px; fill:#5c5c5c } .cute-rs-preview .tm { font-family:'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size:12px; font-weight:500 } .cute-rs-preview .k-box { fill:#f1efe9; stroke:#c8c5be } .cute-rs-preview .tx-box { fill:#1e1e1e } .cute-rs-preview .k-purple { fill:#ebe9fb; stroke:#7f77dd } .cute-rs-preview .tx-purple { fill:#3a3490 } .cute-rs-preview .k-teal { fill:#dff3ec; stroke:#3aa47f } .cute-rs-preview .tx-teal { fill:#1f5c47 } .cute-rs-preview .k-amber { fill:#fdeed3; stroke:#ef9f27 } .cute-rs-preview .tx-amber { fill:#6b4100 } .cute-rs-preview .hair { stroke:#d4d1c9 } .cute-rs-preview .arr { fill:none; stroke:#7b7b7b; stroke-width:1.5 } .cute-rs-preview .arrhead { fill:none; stroke:#7b7b7b; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round } @media (prefers-color-scheme: dark) { .cute-rs-preview .bg { fill:#1b1d23 } .cute-rs-preview .title, .cute-rs-preview .th { fill:#f5f6f8 } .cute-rs-preview .t { fill:#eceef2 } .cute-rs-preview .ts { fill:#cfd4de } .cute-rs-preview .k-box { fill:#2e323c; stroke:#5c6375 } .cute-rs-preview .tx-box { fill:#f5f6f8 } .cute-rs-preview .hair { stroke:#5c6375 } .cute-rs-preview .arr, .cute-rs-preview .arrhead { stroke:#b6bcc8 } .cute-rs-preview .k-purple { fill:#524e7d; stroke:#bab5f4 } .cute-rs-preview .tx-purple { fill:#f6f5ff } .cute-rs-preview .k-teal { fill:#346357; stroke:#7ed8bb } .cute-rs-preview .tx-teal { fill:#f0fdf8 } .cute-rs-preview .k-amber { fill:#735a3c; stroke:#f4c474 } .cute-rs-preview .tx-amber { fill:#fff8eb } }</style>
+<defs><marker id="arrow-cmp" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="arrhead" d="M2 1L8 5L2 9"/></marker></defs>
+<rect class="bg" width="1040" height="560" rx="10"/>
+<text class="title l" x="36" y="34">Python CuTeDSL vs. Rust cute-rs: runtime tracing vs. type translation</text>
+<text class="ts l" x="36" y="56">Both target the same CUTLASS cute and cute_nvgpu MLIR operations, but encode static configuration differently.</text>
+<rect class="k-amber" x="208" y="82" width="384" height="40" rx="8" stroke-width="0.9"/>
+<text class="th tx-amber" x="400" y="102">Python CuTeDSL</text>
+<rect class="k-teal" x="620" y="82" width="384" height="40" rx="8" stroke-width="0.9"/>
+<text class="th tx-teal" x="812" y="102">Rust cute-rs (cuda-oxide)</text>
+<text class="th r" x="184" y="164">Execution model</text>
+<text class="ts r" x="184" y="184">when IR is built</text>
+<rect class="k-box" x="208" y="138" width="384" height="76" rx="8" stroke-width="0.8"/>
+<text class="th tx-box" x="400" y="159">Runtime JIT Tracing (@cute.jit)</text>
+<text class="ts tx-box" x="400" y="180">Python interpreter executes the function;</text>
+<text class="ts tx-box" x="400" y="198">each Python object directly wraps an MLIR value</text>
+<rect class="k-box" x="620" y="138" width="384" height="76" rx="8" stroke-width="0.8"/>
+<text class="th tx-box" x="812" y="159">Ahead-of-Time Rust Compilation</text>
+<text class="ts tx-box" x="812" y="180">No Python runtime or tracing; layouts, swizzles,</text>
+<text class="ts tx-box" x="812" y="198">and MMA plans are encoded in Rust types</text>
+<line class="hair" x1="36" y1="230" x2="1004" y2="230" stroke-width="0.8"/>
+<text class="th r" x="184" y="280">Kernel signature</text>
+<text class="ts r" x="184" y="300">what args carry</text>
+<rect class="k-amber" x="208" y="246" width="384" height="96" rx="8" stroke-width="0.8"/>
+<text class="th tx-amber" x="400" y="268">Passes MLIR wrapper objects</text>
+<text class="tm tx-amber" x="400" y="290">tma_atom_a: cute.CopyAtom</text>
+<text class="tm tx-amber" x="400" y="309">mA_mkl: cute.Tensor, mma: cute.TiledMma</text>
+<text class="tm tx-amber" x="400" y="328">a_smem: cute.ComposedLayout, ...</text>
+<rect class="k-teal" x="620" y="246" width="384" height="96" rx="8" stroke-width="0.8"/>
+<text class="th tx-teal" x="812" y="268">Passes explicit hardware ABI only</text>
+<text class="tm tx-teal" x="812" y="290">#[grid_constant] a: &amp;TensorMap&lt;f16, ASmem&gt;</text>
+<text class="ts tx-teal" x="812" y="309">128B descriptor by value; CopyAtom, TiledMma</text>
+<text class="ts tx-teal" x="812" y="328">&amp; layouts live in type ASmem / local types</text>
+<line class="hair" x1="36" y1="358" x2="1004" y2="358" stroke-width="0.8"/>
+<text class="th r" x="184" y="402">Lowering to IR</text>
+<text class="ts r" x="184" y="422">how ops appear</text>
+<rect class="k-box" x="208" y="374" width="384" height="76" rx="8" stroke-width="0.8"/>
+<text class="th tx-box" x="400" y="395">Trace-time emission</text>
+<text class="ts tx-box" x="400" y="416">Calling cute.copy(...) or cute.gemm(...) in</text>
+<text class="ts tx-box" x="400" y="434">Python emits MLIR ops into the active trace</text>
+<rect class="k-purple" x="620" y="374" width="384" height="76" rx="8" stroke-width="0.8"/>
+<text class="th tx-purple" x="812" y="395">Type-directed MIR translation</text>
+<text class="ts tx-purple" x="812" y="416">mir-importer decodes Rust generic types into</text>
+<text class="ts tx-purple" x="812" y="434">verified dialect-cute ops, then exports MLIR</text>
+<path class="arr" d="M400 450 V466 H510 V478" marker-end="url(#arrow-cmp)"/>
+<path class="arr" d="M812 450 V466 H702 V478" marker-end="url(#arrow-cmp)"/>
+<rect class="k-teal" x="208" y="482" width="796" height="58" rx="8" stroke-width="0.9"/>
+<text class="th tx-teal" x="606" y="502">Same Target Dialect: CUTLASS cute &amp; cute_nvgpu MLIR → Cubin</text>
+<text class="ts tx-teal" x="606" y="522">Identical layout algebra, TMA descriptors, shared swizzles, and tensor-core instructions</text>
+</svg>

@@ -23,8 +23,9 @@ use cuda_device::{DisjointSlice, kernel, thread};
 #[kernel]
 pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(c_elem) = c.get_mut(idx) {
-        *c_elem = a[idx.get()] + b[idx.get()];
+        *c_elem = a[i] + b[i];
     }
 }
 ```
@@ -152,8 +153,9 @@ fn clamp(x: f32, lo: f32, hi: f32) -> f32 {
 #[kernel]
 pub fn apply_clamp(input: &[f32], mut out: DisjointSlice<f32>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(out_elem) = out.get_mut(idx) {
-        *out_elem = clamp(input[idx.get()], 0.0, 1.0);
+        *out_elem = clamp(input[i], 0.0, 1.0);
     }
 }
 ```

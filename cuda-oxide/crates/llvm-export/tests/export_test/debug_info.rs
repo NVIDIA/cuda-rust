@@ -90,6 +90,20 @@ fn line_table_debug_metadata_emits_function_scope_and_instruction_locations() {
     let ir =
         export_module_to_string_with_config(&ctx, &module, &config).expect("debug export succeeds");
 
+    assert!(ir.contains("!{i32 2, !\"Debug Info Version\", i32 3}"));
+    for debug_kind in [DebugKind::LineTables, DebugKind::Full] {
+        let nvvm_config = DebugConfig {
+            inner: NvvmExportConfig::new(NvvmIrDialect::Modern),
+            debug_kind,
+        };
+        let nvvm_ir = export_module_to_string_with_config(&ctx, &module, &nvvm_config)
+            .expect("NVVM debug export succeeds");
+        assert!(
+            nvvm_ir.contains("!{i32 1, !\"Debug Info Version\", i32 3}"),
+            "NVVM requires Error merge behavior for native LTO linkage:\n{nvvm_ir}"
+        );
+    }
+
     let define_line = ir
         .lines()
         .find(|line| line.starts_with("define "))

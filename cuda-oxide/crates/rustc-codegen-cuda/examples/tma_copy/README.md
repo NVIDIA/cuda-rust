@@ -11,13 +11,13 @@ For TMA multicast (also sm_90+), see the [`tma_multicast`](../tma_multicast/) ex
 
 1. **tma_copy_2d_test**: Async 2D tile copy from global to shared memory
 2. **tma_copy_2d_cta_test**: The same copy with `cp_async_bulk_tensor_2d_g2s_cta`,
-   whose destination is a `SharedPtr`, the issuing CTA's own shared memory by type
+   targeting the issuing CTA's own shared memory (`.shared::cta`)
 3. **tma_pipeline_test**: TMA with mbarrier for completion tracking
 
 `cp_async_bulk_tensor_2d_g2s` addresses cluster shared memory, so its
 destination may belong to another CTA of the cluster. The `_cta` form takes a
-`SharedPtr<u8>` destination, here `SharedArray::shared_ptr(&raw mut TILE)`, and
-emits `cp.async.bulk.tensor.2d.shared::cta.global` without converting any
+`*mut u8` destination into this CTA's shared memory (`&raw mut TILE as *mut u8`)
+and emits `cp.async.bulk.tensor.2d.shared::cta.global` without converting any
 address; `verify-code-shape.sh` checks both forms in the generated PTX.
 
 All kernels use `#[grid_constant] tensor_map: &TmaDescriptor`. The generated

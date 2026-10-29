@@ -1,0 +1,39 @@
+<svg class="qtts" xmlns="http://www.w3.org/2000/svg" width="680" height="420" viewBox="0 0 680 420" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif">
+<title>From X to Q, K, V, then into 32 Q heads and 8 KV heads</title>
+<style>.qtts .th { font-size:14px; font-weight:600; fill:#1e1e1e } .qtts .ts { font-size:12px; fill:#5c5c5c } .qtts .k-box { fill:#f7f6f3; stroke:#c8c5be } .qtts .tx-box { fill:#1e1e1e } .qtts .k-purple { fill:#ebe9fb; stroke:#7f77dd } .qtts .tx-purple { fill:#3a3490 } .qtts .k-teal { fill:#dff3ec; stroke:#3aa47f } .qtts .tx-teal { fill:#1f5c47 } .qtts .k-amber { fill:#fdeed3; stroke:#ef9f27 } .qtts .tx-amber { fill:#6b4100 } .qtts .arr { fill:none; stroke:#7b7b7b; stroke-width:1.5 } .qtts .arrhead { fill:none; stroke:#7b7b7b; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round } @media (prefers-color-scheme: dark) { .qtts .th { fill: #f2f2f2 } .qtts .ts { fill: #b8b8b8 } .qtts .k-box { fill: #2a2a2e; stroke: #4a4a50 } .qtts .tx-box { fill: #f2f2f2 } .qtts .arr, .qtts .arrhead { stroke: #a3a3a3 } .qtts .k-purple { fill: #3a3490; stroke: #9a93ea } .qtts .tx-purple { fill: #e9e7fb } .qtts .k-teal { fill: #1f5c47; stroke: #5fc6a0 } .qtts .tx-teal { fill: #dff3ec } .qtts .k-amber { fill: #6b4100; stroke: #f3b65a } .qtts .tx-amber { fill: #fdeed3 } }</style>
+<defs><marker id="arrow-03" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="arrhead" d="M2 1L8 5L2 9"/></marker></defs>
+<rect class="k-box" x="190" y="28" width="300" height="54" rx="8"/>
+<text class="th tx-box" x="340" y="46" text-anchor="middle" dominant-baseline="central">Input X (after RMSNorm)</text>
+<text class="ts tx-box" x="340" y="64" text-anchor="middle" dominant-baseline="central">[T, 4096] — one row per token</text>
+<path class="arr" d="M340 82 V108 H570 V130" marker-end="url(#arrow-03)"/>
+<path class="arr" d="M340 108 H175 V130" marker-end="url(#arrow-03)"/>
+<path class="arr" d="M412 108 V130" marker-end="url(#arrow-03)"/>
+<rect class="k-purple" x="36" y="134" width="278" height="58" rx="8"/>
+<text class="th tx-purple" x="175" y="153" text-anchor="middle" dominant-baseline="central">Q = X · Wq</text>
+<text class="ts tx-purple" x="175" y="173" text-anchor="middle" dominant-baseline="central">[T, 4096]</text>
+<rect class="k-teal" x="344" y="134" width="136" height="58" rx="8"/>
+<text class="th tx-teal" x="412" y="153" text-anchor="middle" dominant-baseline="central">K = X · Wk</text>
+<text class="ts tx-teal" x="412" y="173" text-anchor="middle" dominant-baseline="central">[T, 1024]</text>
+<rect class="k-teal" x="502" y="134" width="136" height="58" rx="8"/>
+<text class="th tx-teal" x="570" y="153" text-anchor="middle" dominant-baseline="central">V = X · Wv</text>
+<text class="ts tx-teal" x="570" y="173" text-anchor="middle" dominant-baseline="central">[T, 1024]</text>
+<line class="arr" x1="175" y1="192" x2="175" y2="230" marker-end="url(#arrow-03)"/>
+<line class="arr" x1="412" y1="192" x2="412" y2="230" marker-end="url(#arrow-03)"/>
+<line class="arr" x1="570" y1="192" x2="570" y2="230" marker-end="url(#arrow-03)"/>
+<rect class="k-purple" x="40" y="236" width="26" height="28" rx="3"/><rect class="k-purple" x="74" y="236" width="26" height="28" rx="3"/><rect class="k-purple" x="108" y="236" width="26" height="28" rx="3"/><rect class="k-purple" x="142" y="236" width="26" height="28" rx="3"/><rect class="k-purple" x="176" y="236" width="26" height="28" rx="3"/><rect class="k-purple" x="210" y="236" width="26" height="28" rx="3"/><rect class="k-purple" x="244" y="236" width="26" height="28" rx="3"/><rect class="k-purple" x="278" y="236" width="26" height="28" rx="3"/>
+<rect class="k-teal" x="348" y="236" width="12" height="28" rx="2"/><rect class="k-teal" x="364" y="236" width="12" height="28" rx="2"/><rect class="k-teal" x="380" y="236" width="12" height="28" rx="2"/><rect class="k-teal" x="396" y="236" width="12" height="28" rx="2"/><rect class="k-teal" x="412" y="236" width="12" height="28" rx="2"/><rect class="k-teal" x="428" y="236" width="12" height="28" rx="2"/><rect class="k-teal" x="444" y="236" width="12" height="28" rx="2"/><rect class="k-teal" x="460" y="236" width="12" height="28" rx="2"/>
+<rect class="k-teal" x="506" y="236" width="12" height="28" rx="2"/><rect class="k-teal" x="522" y="236" width="12" height="28" rx="2"/><rect class="k-teal" x="538" y="236" width="12" height="28" rx="2"/><rect class="k-teal" x="554" y="236" width="12" height="28" rx="2"/><rect class="k-teal" x="570" y="236" width="12" height="28" rx="2"/><rect class="k-teal" x="586" y="236" width="12" height="28" rx="2"/><rect class="k-teal" x="602" y="236" width="12" height="28" rx="2"/><rect class="k-teal" x="618" y="236" width="12" height="28" rx="2"/>
+<text class="ts" x="175" y="282" text-anchor="middle" dominant-baseline="central">32 heads × 128 wide</text>
+<text class="ts" x="412" y="282" text-anchor="middle" dominant-baseline="central">8 heads × 128 wide</text>
+<text class="ts" x="570" y="282" text-anchor="middle" dominant-baseline="central">8 heads × 128 wide</text>
+<line class="arr" x1="175" y1="294" x2="175" y2="322" marker-end="url(#arrow-03)"/>
+<line class="arr" x1="412" y1="294" x2="412" y2="322" marker-end="url(#arrow-03)"/>
+<rect class="k-amber" x="36" y="326" width="278" height="48" rx="8"/>
+<text class="th tx-amber" x="175" y="342" text-anchor="middle" dominant-baseline="central">Q-Norm (128) + RoPE</text>
+<text class="ts tx-amber" x="175" y="360" text-anchor="middle" dominant-baseline="central">per 128-wide Q head</text>
+<rect class="k-amber" x="344" y="326" width="136" height="48" rx="8"/>
+<text class="th tx-amber" x="412" y="342" text-anchor="middle" dominant-baseline="central">K-Norm + RoPE</text>
+<text class="ts tx-amber" x="412" y="360" text-anchor="middle" dominant-baseline="central">per 128-wide head</text>
+<text class="ts" x="570" y="350" text-anchor="middle" dominant-baseline="central">unrotated</text>
+<text class="ts" x="340" y="398" text-anchor="middle" dominant-baseline="central">Every 4 Q heads share 1 K head and 1 V head (4:1 GQA)</text>
+</svg>

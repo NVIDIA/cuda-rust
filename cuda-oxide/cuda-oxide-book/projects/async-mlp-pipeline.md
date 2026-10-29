@@ -158,12 +158,13 @@ pub fn matvec_naive(
     mut vec_out: DisjointSlice<f32>,
 ) {
     let row = thread::index_1d();
+    let i = row.get();
     if let Some(out_elem) = vec_out.get_mut(row) {
         let n_sz = n as usize;
         let mut sum = 0.0f32;
         let mut j = 0usize;
         while j < n_sz {
-            sum = sum + mat[row.get() * n_sz + j] * vec_in[j];
+            sum = sum + mat[i * n_sz + j] * vec_in[j];
             j = j + 1;
         }
         *out_elem = sum;
@@ -181,8 +182,9 @@ interfaces.
 #[kernel]
 pub fn relu(input: &[f32], mut output: DisjointSlice<f32>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(out_elem) = output.get_mut(idx) {
-        let val = input[idx.get()];
+        let val = input[i];
         *out_elem = if val > 0.0f32 { val } else { 0.0f32 };
     }
 }

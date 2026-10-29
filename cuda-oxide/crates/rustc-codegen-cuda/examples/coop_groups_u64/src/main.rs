@@ -809,7 +809,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // the shuffle columns of the tile reference, which used the same calls
         let expected: Vec<u64> = tile_expected(&host_input, n)
             .chunks(TILE_OUTPUTS)
-            .flat_map(|row| row[COLLECTIVE_OUTPUTS..].to_vec())
+            .flat_map(|row| &row[COLLECTIVE_OUTPUTS..])
+            .copied()
             .collect();
         failures += compare(
             &format!("HalvesOnly<{n}>"),

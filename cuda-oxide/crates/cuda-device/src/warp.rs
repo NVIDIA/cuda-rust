@@ -209,11 +209,58 @@ pub fn active_mask() -> u32 {
 /// Computes: `threadIdx.x / 32`
 ///
 /// This is a derived value, not a hardware register.
-/// Only valid for 1D thread blocks; for multi-dimensional blocks,
-/// compute your own warp ID from the linearized thread index.
+/// Only valid for 1D thread blocks. In a 2D or 3D block hardware warps are
+/// formed from consecutive block-linear thread ids, so use
+/// `cooperative_groups::this_thread_block().thread_rank() / 32` there. That
+/// is the block-linear warp id [`TmemGuard`](crate::tcgen05::TmemGuard) uses.
 #[inline(always)]
 pub fn warp_id() -> u32 {
     crate::thread::threadIdx_x() / 32
+}
+
+/// Warp index of one thread inside its block, in linear thread order.
+///
+/// This is `linear_tid / 32`, with `linear_tid` from
+/// [`crate::thread::block_linear_thread_id`]: `x` fastest, then `y`, then `z`.
+///
+/// For a 1D block this equals `thread_idx_x / 32`, which is what [`warp_id`]
+/// returns. For a 2D or 3D block it names the single group of 32 consecutive
+/// linear thread ids, not every thread that shares the same `threadIdx.x`.
+///
+/// [`warp_id`] stays x-only. Callers that must pick one warp of the block
+/// (tensor-memory alloc and dealloc, the cooperative-groups block reductions)
+/// use this function instead.
+#[must_use]
+#[inline(always)]
+pub(crate) const fn block_linear_warp_id(
+    thread_idx_x: u32,
+    thread_idx_y: u32,
+    thread_idx_z: u32,
+    block_dim_x: u32,
+    block_dim_y: u32,
+) -> u32 {
+    crate::thread::block_linear_thread_id(
+        thread_idx_x,
+        thread_idx_y,
+        thread_idx_z,
+        block_dim_x,
+        block_dim_y,
+    ) / 32
+}
+
+/// Block-linear warp id of the calling thread.
+///
+/// Reads `threadIdx` and `blockDim`. Host tests exercise [`block_linear_warp_id`]
+/// directly because those special registers are not available on the host.
+#[inline(always)]
+pub(crate) fn block_linear_warp_id_here() -> u32 {
+    block_linear_warp_id(
+        crate::thread::threadIdx_x(),
+        crate::thread::threadIdx_y(),
+        crate::thread::threadIdx_z(),
+        crate::thread::blockDim_x(),
+        crate::thread::blockDim_y(),
+    )
 }
 
 // =============================================================================
@@ -1656,5 +1703,127 @@ mod tests {
                 "a fold over {live} live lanes sourced lane {highest_source}, which was never launched"
             );
         }
+    }
+
+    fn count_matching(
+        block_dim_x: u32,
+        block_dim_y: u32,
+        block_dim_z: u32,
+        warp: u32,
+        pred: impl Fn(u32, u32, u32) -> bool,
+    ) -> u32 {
+        let mut count = 0u32;
+        for tz in 0..block_dim_z {
+            for ty in 0..block_dim_y {
+                for tx in 0..block_dim_x {
+                    let id = block_linear_warp_id(tx, ty, tz, block_dim_x, block_dim_y);
+                    if id == warp {
+                        assert!(pred(tx, ty, tz), "thread ({tx}, {ty}, {tz}) in warp {warp}");
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
+    }
+
+    #[test]
+    fn block_linear_warp_id_is_thread_idx_x_div_32_for_a_1d_block() {
+        // 256 threads, one dimension: warp n is exactly threads 32n..32n+31.
+        let block_dim_x = 256;
+        for n in 0..8u32 {
+            let count = count_matching(block_dim_x, 1, 1, n, |tx, ty, tz| {
+                ty == 0 && tz == 0 && tx / 32 == n && (32 * n..32 * n + 32).contains(&tx)
+            });
+            assert_eq!(count, 32, "1D warp {n}");
+        }
+    }
+
+    #[test]
+    fn block_linear_warp_id_2d_32x4_names_one_row_per_warp() {
+        // 32x4: linear order is x-fastest, so each y row is its own warp.
+        // `threadIdx.x / 32` would mark every row as warp 0.
+        let block_dim_x = 32;
+        let block_dim_y = 4;
+        let warp0 = count_matching(block_dim_x, block_dim_y, 1, 0, |tx, ty, tz| {
+            (0..32).contains(&tx) && ty == 0 && tz == 0
+        });
+        assert_eq!(warp0, 32, "warp 0 must be only the y=0 row");
+
+        let warp1 = count_matching(block_dim_x, block_dim_y, 1, 1, |tx, ty, tz| {
+            (0..32).contains(&tx) && ty == 1 && tz == 0
+        });
+        assert_eq!(warp1, 32, "warp 1 must be only the y=1 row");
+
+        for warp in 0..4u32 {
+            let count = count_matching(block_dim_x, block_dim_y, 1, warp, |tx, ty, tz| {
+                (0..32).contains(&tx) && ty == warp && tz == 0
+            });
+            assert_eq!(count, 32, "warp {warp} must contain exactly 32 threads");
+        }
+    }
+
+    #[test]
+    fn block_linear_warp_id_3d_smoke_partitions_the_block() {
+        // 8x4x2 = 64 threads → two warps of 32, x fastest.
+        let (dx, dy, dz) = (8, 4, 2);
+        let warp0 = count_matching(dx, dy, dz, 0, |tx, ty, tz| {
+            let linear = tx + dx * (ty + dy * tz);
+            (0..32).contains(&linear)
+        });
+        let warp1 = count_matching(dx, dy, dz, 1, |tx, ty, tz| {
+            let linear = tx + dx * (ty + dy * tz);
+            (32..64).contains(&linear)
+        });
+        assert_eq!(warp0, 32);
+        assert_eq!(warp1, 32);
+        assert_eq!(warp0 + warp1, dx * dy * dz);
+    }
+
+    /// Threads of a block that the pre-fix rule `threadIdx.x / 32 == warp`
+    /// selects: their count, and how many of them fall into each block-linear
+    /// warp (index = block-linear warp id; 32 entries cover 1024 threads).
+    fn x_only_selection(dx: u32, dy: u32, dz: u32, warp: u32) -> (u32, [u32; 32]) {
+        let mut count = 0u32;
+        let mut per_warp = [0u32; 32];
+        for tz in 0..dz {
+            for ty in 0..dy {
+                for tx in 0..dx {
+                    if tx / 32 == warp {
+                        count += 1;
+                        per_warp[block_linear_warp_id(tx, ty, tz, dx, dy) as usize] += 1;
+                    }
+                }
+            }
+        }
+        (count, per_warp)
+    }
+
+    #[test]
+    fn the_x_only_rule_selects_all_four_warps_of_a_32x4_block() {
+        // Control: every thread of a (32, 4, 1) block has threadIdx.x / 32 == 0,
+        // so the old selection covers 128 threads in four full warps. The
+        // block-linear rule selects the 32 threads of warp 0.
+        let (old_count, per_warp) = x_only_selection(32, 4, 1, 0);
+        assert_eq!(old_count, 128);
+        assert_eq!(per_warp[..4], [32, 32, 32, 32]);
+        assert_eq!(count_matching(32, 4, 1, 0, |_, _, _| true), 32);
+    }
+
+    #[test]
+    fn the_x_only_rule_straddles_two_warps_when_block_dim_x_is_48() {
+        // Control: in a (48, 2, 1) block, target warp 1, the old rule selects
+        // threadIdx.x in 32..48 of both rows: linear ids 32..=47 and 80..=95,
+        // half of block-linear warp 1 and half of warp 2. No full warp is
+        // selected, so a .sync.aligned instruction there is undefined.
+        let (old_count, per_warp) = x_only_selection(48, 2, 1, 1);
+        assert_eq!(old_count, 32);
+        assert_eq!(per_warp[..3], [0, 16, 16]);
+        // The block-linear rule selects linear ids 32..=63: the end of row 0
+        // and the start of row 1, one full hardware warp.
+        let new_count = count_matching(48, 2, 1, 1, |tx, ty, _| {
+            (ty == 0 && tx >= 32) || (ty == 1 && tx < 16)
+        });
+        assert_eq!(new_count, 32);
     }
 }

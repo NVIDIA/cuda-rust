@@ -16,7 +16,6 @@ use pliron::{
     },
     context::Context,
     linked_list::ContainsLinkedList,
-    location::Located,
     op::Op,
     operation::Operation,
     r#type::{TypeHandle, Typed},
@@ -208,7 +207,7 @@ fn prepare_debug_shared_function_scopes(
         let raw_name = function.get_symbol_name(state.ctx);
         let owner = super::function::exported_function_name(raw_name.as_ref());
         if state.debug_shared_function_scopes.contains_key(&owner) {
-            let loc = function.get_operation().deref(state.ctx).loc();
+            let loc = function.get_operation().deref(state.ctx).loc().clone();
             let debug_name = ops::debug_function_name(state.ctx, function.get_operation())
                 .unwrap_or_else(|| owner.clone());
             state.debug_subprogram_for_function(&debug_name, &owner, &loc);
@@ -730,6 +729,22 @@ pub(super) fn export_module_with_externs_impl(
         emit_nvvmir_version(&mut output, &mut state, config.nvvmir_version());
     }
 
+    if let Some(attr_id) = state.loop_unroll_disable_attr_id {
+        writeln!(&mut output).unwrap();
+        writeln!(
+            &mut output,
+            "!{attr_id} = !{{!\"llvm.loop.unroll.disable\"}}"
+        )
+        .unwrap();
+        for &loop_id in &state.loop_unroll_disable_loop_ids {
+            writeln!(
+                &mut output,
+                "!{loop_id} = distinct !{{!{loop_id}, !{attr_id}}}"
+            )
+            .unwrap();
+        }
+    }
+
     // 9. DWARF metadata (if requested and source locations exist)
     if state.has_debug_metadata() {
         writeln!(&mut output).unwrap();
@@ -875,6 +890,22 @@ pub(super) fn export_module_to_string_with_config(
     if config.emit_nvvmir_version() {
         writeln!(&mut output).unwrap();
         emit_nvvmir_version(&mut output, &mut state, config.nvvmir_version());
+    }
+
+    if let Some(attr_id) = state.loop_unroll_disable_attr_id {
+        writeln!(&mut output).unwrap();
+        writeln!(
+            &mut output,
+            "!{attr_id} = !{{!\"llvm.loop.unroll.disable\"}}"
+        )
+        .unwrap();
+        for &loop_id in &state.loop_unroll_disable_loop_ids {
+            writeln!(
+                &mut output,
+                "!{loop_id} = distinct !{{!{loop_id}, !{attr_id}}}"
+            )
+            .unwrap();
+        }
     }
 
     // Emit DWARF line-table metadata if debug export requested it and at least

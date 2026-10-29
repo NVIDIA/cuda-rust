@@ -20,7 +20,7 @@ jobs:
 
       # rustfmt comes from cuda-oxide/rust-toolchain.toml's component list,
       # like clippy,
-      # so `cargo fmt` resolves against the same nightly as the rest of CI.
+      # so `cargo fmt` resolves against the same toolchain as the rest of CI.
 
       - name: Check stable host workspace formatting
         run: cargo fmt --all -- --check
@@ -43,19 +43,25 @@ jobs:
         run: cargo fmt --all -- --check
         working-directory: cuda-oxide/crates/cuda-macros/tests/device-only
 
-      - name: Check example crate formatting
+      - name: Check example and model crate formatting
+        env:
+          RUSTC_BOOTSTRAP: "1"
         run: |
           set -euo pipefail
           # `cargo fmt --all` also formats local path dependencies. Running it
           # per example repeatedly reformats the large shared workspaces.
           shopt -s globstar nullglob
-          manifests=(cuda-oxide/crates/rustc-codegen-cuda/examples/**/Cargo.toml)
+          manifests=(
+            cuda-oxide/crates/rustc-codegen-cuda/examples/**/Cargo.toml
+            cuda-oxide/cute-rs-preview/examples/**/Cargo.toml
+            cuda-oxide/cute-rs-preview/models/**/Cargo.toml
+          )
           ((${#manifests[@]} > 0))
           for manifest in "${manifests[@]}"; do
             example_dir="$(dirname "$manifest")"
             echo "::group::cargo fmt --check ($example_dir)"
             # Run inside the component so rustup discovers CUDA Oxide's
-            # directory-scoped nightly pin.
+            # directory-scoped toolchain pin.
             (cd "$example_dir" && cargo fmt -- --check)
             echo "::endgroup::"
           done

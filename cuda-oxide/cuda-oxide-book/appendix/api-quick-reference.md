@@ -54,10 +54,12 @@ fn helper(x: f32) -> f32 { x * x }
 | `#[pure]`                                   | Mark as side-effect free                                            |
 | `#[readonly]`                               | Mark as read-only                                                   |
 
-Use these annotations only on an explicit counted `while` loop inside a
-`#[kernel]` or `#[device]` function. Range-based `for` loops are not yet
-recognized by the unroll pass. Nested loops and multiple `continue` paths are
-supported. Full `#[unroll]` preserves `break` paths and multiple exit targets.
+Use these annotations only on an explicit counted `while` loop or a range
+`for` loop (`for i in a..b` or `(a..b).rev()`, over any integer counter
+including `isize`) inside a `#[kernel]` or `#[device]` function.
+Other iterator loops are not yet recognized by the unroll pass. Nested loops
+and multiple `continue` paths are supported. Full `#[unroll]` preserves `break`
+paths and multiple exit targets.
 
 Partial `#[unroll(N)]` requires a positive step, a `<` or `<=` test, an
 unchanging limit, and no exit besides the normal header test. Other requests
@@ -71,7 +73,7 @@ and 65,536 cloned operations. Larger requests warn and are not unrolled.
 ```rust
 use cuda_device::{gpu_assert, gpu_printf, ptx_asm};
 
-gpu_printf!("thread %d: val = %f\n", idx as i32, val as f64);
+gpu_printf!("thread {}: val = {}\n", idx, val);
 gpu_assert!(val.is_finite());
 gpu_assert!(val >= 0.0, "expected non-negative value");
 
@@ -192,7 +194,7 @@ Generic policy expressions require `#![feature(generic_const_exprs)]`.
 currently remain literal.
 
 See the
-[`policy_config`](https://github.com/NVlabs/cuda-oxide/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/policy_config)
+[`policy_config`](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/policy_config)
 example for two concrete policies that generate independent PTX
 specializations and policy-specific prepared launches.
 
@@ -448,6 +450,7 @@ cp_async_bulk_commit_group();
 | Function                                      | Description                          |
 |:----------------------------------------------|:-------------------------------------|
 | `cp_async_bulk_tensor_{1..5}d_g2s(...)`       | Global → shared async bulk copy      |
+| `cp_async_bulk_tensor_{1..5}d_g2s_cta(...)`   | Global → this CTA's shared memory    |
 | `cp_async_bulk_tensor_{1..5}d_s2g(...)`       | Shared → global async bulk copy      |
 | `cp_async_bulk_tensor_2d_g2s_multicast(...)`  | Multicast to all CTAs in cluster     |
 | `cp_async_bulk_commit_group()`                | Commit outstanding copies            |

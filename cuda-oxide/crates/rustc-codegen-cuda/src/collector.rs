@@ -126,7 +126,7 @@
 //! Kernel export names are separate — they use `compute_kernel_export_name`
 //! with human-readable base names derived from the `#[kernel]` macro.
 
-use mir_importer::is_panic_entry_path;
+use mir_importer::{is_cute_compiler_hook_path, is_panic_entry_path};
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_index::{Idx, bit_set::DenseBitSet};
 use rustc_middle::mir::visit::Visitor;
@@ -135,7 +135,8 @@ use rustc_middle::mir::{
 };
 use rustc_middle::mono::{CodegenUnit, MonoItem};
 use rustc_middle::ty::{
-    Instance, InstanceKind, ShimKind, Ty, TyCtxt, TyKind, TypeVisitableExt, TypingEnv,
+    GenericArgsRef, Instance, InstanceKind, ShimKind, Ty, TyCtxt, TyKind, TypeVisitableExt,
+    TypingEnv,
 };
 use rustc_span::Span;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -235,6 +236,144 @@ enum CollectDecision {
     Forbidden { crate_name: String, fn_path: String },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CuteImplOwner {
+    Tensor,
+    TensorMut,
+    /// `TensorMut<'_, T, Tile1D<TILE>, T>`: the impl whose `store` and
+    /// `store_at` the importer lowers to tile operations. The Contiguous1D
+    /// impl's `store_at` is ordinary Rust whose body must be collected.
+    TensorMutTile1D,
+    BlockScaledTensor,
+    BlockScaledThreadRow,
+    BlockScaledTile64,
+    LoadedBlockScaledTile64,
+    StaticPersistentTileScheduler,
+    WorkTileInfo,
+    PipelineTmaAsync,
+    PipelineState,
+    SharedTensor,
+    Mxf4TiledMma,
+    Mxf4AccumulatorTile2x8,
+    Mxf4ScaleTile128,
+    Sm120Epilogue128x128,
+    Sm120EpilogueWarp128x128,
+    PipelineTmaStore,
+}
+
+fn is_cute_recognition_stub_identity(
+    crate_name: &str,
+    definition_path: &str,
+    impl_owner: Option<CuteImplOwner>,
+) -> bool {
+    if !matches!(crate_name, "cute_rs" | "cute-rs") {
+        return false;
+    }
+    // Free functions and `__compiler` hooks: the importer's registry is the
+    // one list of recognized defining paths, so the collector asks it rather
+    // than keeping a copy that drifts when cute-rs moves a module.
+    if is_cute_compiler_hook_path(definition_path) {
+        return true;
+    }
+
+    let Some(impl_owner) = impl_owner else {
+        return false;
+    };
+    let module = match impl_owner {
+        CuteImplOwner::Tensor | CuteImplOwner::TensorMut | CuteImplOwner::TensorMutTile1D => {
+            "tensor"
+        }
+        CuteImplOwner::BlockScaledTensor => "block_scaled::tensor",
+        CuteImplOwner::BlockScaledThreadRow
+        | CuteImplOwner::BlockScaledTile64
+        | CuteImplOwner::LoadedBlockScaledTile64 => "block_scaled::gemv",
+        CuteImplOwner::StaticPersistentTileScheduler | CuteImplOwner::WorkTileInfo => "scheduler",
+        CuteImplOwner::PipelineTmaAsync
+        | CuteImplOwner::PipelineState
+        | CuteImplOwner::PipelineTmaStore => "pipeline",
+        CuteImplOwner::SharedTensor => "copy::tiled",
+        CuteImplOwner::Mxf4TiledMma => "mma::block_scaled::tiled",
+        CuteImplOwner::Mxf4AccumulatorTile2x8 | CuteImplOwner::Mxf4ScaleTile128 => {
+            "mma::block_scaled::fragments"
+        }
+        CuteImplOwner::Sm120Epilogue128x128 | CuteImplOwner::Sm120EpilogueWarp128x128 => {
+            "epilogue::sm120"
+        }
+    };
+    let Some(rest) = definition_path
+        .strip_prefix("::")
+        .and_then(|path| path.strip_prefix(module))
+        .and_then(|path| path.strip_prefix("::"))
+    else {
+        return false;
+    };
+    let mut segments = rest.split("::");
+    let Some(impl_segment) = segments.next() else {
+        return false;
+    };
+    let Some(method) = segments.next() else {
+        return false;
+    };
+    if segments.next().is_some() || !impl_segment.starts_with("{impl#") {
+        return false;
+    }
+
+    match impl_owner {
+        CuteImplOwner::Tensor => matches!(
+            method,
+            "from_slice" | "zipped_divide" | "local_tile" | "slice" | "is_full" | "base" | "load"
+        ),
+        CuteImplOwner::TensorMut => {
+            matches!(
+                method,
+                "from_disjoint_slice" | "zipped_divide" | "local_tile" | "slice"
+            )
+        }
+        CuteImplOwner::TensorMutTile1D => matches!(method, "store" | "store_at"),
+        CuteImplOwner::BlockScaledTensor => matches!(method, "from_slices" | "thread_row"),
+        CuteImplOwner::BlockScaledThreadRow => method == "k_tile",
+        CuteImplOwner::BlockScaledTile64 => method == "load",
+        CuteImplOwner::LoadedBlockScaledTile64 => method == "dot_accumulate",
+        CuteImplOwner::StaticPersistentTileScheduler => {
+            matches!(
+                method,
+                "new_1d" | "has_work" | "get_current_work" | "advance_to_next_work"
+            )
+        }
+        CuteImplOwner::WorkTileInfo => method == "tile_idx",
+        CuteImplOwner::PipelineTmaAsync => matches!(
+            method,
+            "from_raw_base"
+                | "from_raw_parts"
+                | "init"
+                | "producer_acquire"
+                | "producer_expect_tx"
+                | "consumer_wait"
+                | "consumer_release"
+                | "producer_tail"
+        ),
+        CuteImplOwner::PipelineState => matches!(method, "new" | "index" | "advance"),
+        CuteImplOwner::SharedTensor => method == "from_raw_parts",
+        CuteImplOwner::Mxf4TiledMma => matches!(
+            method,
+            "get_slice" | "load_scale_atom_128" | "load_a_128" | "get_b_tile_k64"
+        ),
+        CuteImplOwner::Mxf4AccumulatorTile2x8 => matches!(method, "zero" | "gemm"),
+        CuteImplOwner::Mxf4ScaleTile128 => method == "pairs_at_unchecked",
+        CuteImplOwner::Sm120Epilogue128x128 => matches!(
+            method,
+            "from_raw" | "get_slice" | "sync_reusable" | "sync_ready_for_tma" | "tma_half"
+        ),
+        CuteImplOwner::Sm120EpilogueWarp128x128 => method == "store_tile",
+        CuteImplOwner::PipelineTmaStore => {
+            matches!(
+                method,
+                "producer_acquire" | "producer_commit" | "producer_tail"
+            )
+        }
+    }
+}
+
 // The prefix constants and substring/extractor helpers used below
 // (`KERNEL_PREFIX`, `is_kernel_symbol`, `kernel_base_name`, etc.) live in
 // the workspace-internal `reserved-oxide-symbols` crate. That crate is the
@@ -246,10 +385,11 @@ enum CollectDecision {
 // match. The mutual-exclusion guarantee between `DEVICE_PREFIX` and
 // `DEVICE_EXTERN_PREFIX` means we no longer need the historical
 // "test extern first" ordering dance that lived here previously.
+use oxide_tile_export::TileExportDesc;
 use reserved_oxide_symbols::{
-    device_extern_base_name, is_current_device_symbol, is_current_kernel_symbol,
+    device_base_name, device_extern_base_name, is_current_device_symbol, is_current_kernel_symbol,
     is_device_extern_symbol, is_device_symbol, is_kernel_symbol, is_legacy_kernel_symbol,
-    is_ptx_merge_required_marker, kernel_base_name,
+    is_ptx_merge_required_marker, is_tile_export_meta_symbol, kernel_base_name,
 };
 
 /// Sanitize a symbol name for use as a PTX identifier.
@@ -396,6 +536,12 @@ pub struct CollectionResult<'tcx> {
     /// dependency. Cubin materialization must reject this case until it can
     /// reproduce the same cross-crate linking semantics.
     pub requires_ptx_bundle_merge: bool,
+
+    /// `#[tile_export]` descriptions read from this crate's metadata
+    /// functions, sorted by implementation symbol. Each one's implementation
+    /// is a root in `functions`; the backend writes them to
+    /// `<crate>.tileexports.json` beside the device artifact.
+    pub tile_exports: Vec<TileExportDesc>,
 }
 
 /// Counts kernel functions across all codegen units.
@@ -916,6 +1062,145 @@ impl DiscoveryCtx {
     }
 }
 
+/// Read every `#[tile_export]` description embedded in this crate.
+///
+/// The macro emits one host-only `#[no_mangle] fn
+/// cuda_oxide_tile_export_<hash>_<symbol>() -> &'static str` per export whose
+/// body returns the JSON description. That shape needs no file IO or side
+/// channel: `#[no_mangle]` items are always codegened, so the function is in
+/// the CGUs even though nothing calls it, and its description is a constant
+/// in MIR. The function is never compiled for the device; see the explicit
+/// skips in [`collect_device_functions`] and `process_call_operand`.
+///
+/// Malformed metadata is fatal rather than skipped: a description that does
+/// not parse or validate means the macro and this backend disagree, and a
+/// silently missing export would surface much later as a tile library
+/// without the symbol the caller asked for.
+fn collect_tile_exports<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    cgus: &[CodegenUnit<'tcx>],
+    verbose: bool,
+) -> Vec<TileExportDesc> {
+    let mut descs: Vec<TileExportDesc> = Vec::new();
+    let mut seen = HashSet::new();
+    for cgu in cgus {
+        for (item, _data) in cgu.items() {
+            let MonoItem::Fn(instance) = item else {
+                continue;
+            };
+            let def_id = instance.def_id();
+            let def_path = tcx.def_path_str(def_id);
+            if !is_tile_export_meta_symbol(&def_path) {
+                continue;
+            }
+            // Partitioning can place one item in several CGUs.
+            if !seen.insert(def_id) {
+                continue;
+            }
+            let Some(text) = tile_export_meta_text(tcx, *instance) else {
+                tcx.dcx().span_fatal(
+                    tcx.def_span(def_id),
+                    format!(
+                        "[rustc_codegen_cuda] `{def_path}` carries the reserved tile export \
+                         metadata prefix but does not return one constant string; only \
+                         `#[tile_export]` may define functions with this prefix"
+                    ),
+                );
+            };
+            let desc = TileExportDesc::from_json(&text).unwrap_or_else(|error| {
+                tcx.dcx().span_fatal(
+                    tcx.def_span(def_id),
+                    format!(
+                        "[rustc_codegen_cuda] tile export metadata in `{def_path}` is not a \
+                         description this backend understands ({error}); rebuild with \
+                         cuda-macros from the same cuda-oxide revision as the backend"
+                    ),
+                )
+            });
+            if let Err(error) = desc.validate() {
+                tcx.dcx().span_fatal(
+                    tcx.def_span(def_id),
+                    format!(
+                        "[rustc_codegen_cuda] tile export `{}` is invalid: {error}",
+                        desc.decl
+                    ),
+                );
+            }
+            if let Some(previous) = descs.iter().find(|other| other.symbol == desc.symbol) {
+                tcx.dcx().span_fatal(
+                    tcx.def_span(def_id),
+                    format!(
+                        "[rustc_codegen_cuda] tile exports `{}` and `{}` both use the \
+                         implementation symbol `{}`; give one of them a distinct `symbol`",
+                        previous.decl, desc.decl, desc.symbol
+                    ),
+                );
+            }
+            // The declaration name is what a cuTile caller resolves, so two
+            // exports sharing one would collide in the tile library; catch it
+            // here rather than when `cargo oxide tilelib` builds the modules.
+            if let Some(previous) = descs.iter().find(|other| other.decl == desc.decl) {
+                tcx.dcx().span_fatal(
+                    tcx.def_span(def_id),
+                    format!(
+                        "[rustc_codegen_cuda] tile exports `{}` and `{}` both declare the \
+                         name `{}` to cuTile; give one of them a distinct `name`",
+                        previous.symbol, desc.symbol, desc.decl
+                    ),
+                );
+            }
+            if verbose {
+                eprintln!(
+                    "[collector] Found tile export: {} -> {} (shape {:?}, {} params, sync {})",
+                    desc.decl,
+                    desc.symbol,
+                    desc.shape,
+                    desc.params.len(),
+                    desc.sync.tile_ir_name()
+                );
+            }
+            descs.push(desc);
+        }
+    }
+    // Stable output regardless of CGU partitioning.
+    descs.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+    descs
+}
+
+/// The constant `&str` a tile export metadata function returns.
+///
+/// The optimized body is `_0 = const "<json>"; return`, so the description is
+/// the constant operand assigned to `RETURN_PLACE`. The constant evaluates to
+/// a `ConstValue::Slice` (or `Indirect`) of UTF-8 bytes; `const_str_text`
+/// reads both representations. Anything else (no such assignment, a
+/// non-constant, or more than one) returns `None` and the caller reports it.
+fn tile_export_meta_text<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> Option<String> {
+    use rustc_middle::mir::{Operand, RETURN_PLACE, Rvalue, StatementKind};
+
+    let mir = tcx.instance_mir(instance.def);
+    let mut found = None;
+    for block in mir.basic_blocks.iter() {
+        for statement in &block.statements {
+            let StatementKind::Assign(assign) = &statement.kind else {
+                continue;
+            };
+            let (place, rvalue) = &**assign;
+            if place.as_local() != Some(RETURN_PLACE) {
+                continue;
+            }
+            // The second field is the retag marker, irrelevant to a constant.
+            let Rvalue::Use(Operand::Constant(constant), _) = rvalue else {
+                return None;
+            };
+            let text = const_str_text(tcx, constant)?;
+            if found.replace(text).is_some() {
+                return None;
+            }
+        }
+    }
+    found
+}
+
 /// Collects all device-reachable functions starting from kernel entry points.
 ///
 /// This is the main entry point for device function collection. It:
@@ -941,6 +1226,7 @@ pub fn collect_device_functions<'tcx>(
     verbose: bool,
 ) -> CollectionResult<'tcx> {
     let mut collector = DeviceCollector::new(tcx, verbose);
+    let tile_exports = collect_tile_exports(tcx, cgus, verbose);
     let mut requires_ptx_bundle_merge = cgus.iter().any(|cgu| {
         cgu.items().iter().any(|(item, _data)| match item {
             MonoItem::Static(def_id) => is_ptx_merge_required_marker(&tcx.def_path_str(*def_id)),
@@ -948,10 +1234,13 @@ pub fn collect_device_functions<'tcx>(
         })
     });
 
-    // Find all kernel entry points
+    // Find all kernel entry points. `#[tile_export]` metadata functions are
+    // host-only (their descriptions were read above) and never device code;
+    // the prefix cannot match a kernel, but say so here rather than rely on it.
     for cgu in cgus {
         for (item, _data) in cgu.items() {
             if let MonoItem::Fn(instance) = item
+                && !is_tile_export_meta_symbol(&tcx.def_path_str(instance.def_id()))
                 && is_kernel_function(tcx, instance.def_id())
             {
                 // Skip generic (non-monomorphized) instances.
@@ -1005,15 +1294,67 @@ pub fn collect_device_functions<'tcx>(
         }
     }
 
+    let has_kernels = !collector.worklist.is_empty();
+
+    // `#[tile_export]` implementations are roots whether or not the crate has
+    // kernels: no device code calls them, and the standalone scan below only
+    // runs for kernel-less crates. The description's `symbol` is the base
+    // name of the `#[device]` wrapper, which is also what the symbol becomes
+    // in the device artifact once llvm-export strips the device prefix.
+    for desc in &tile_exports {
+        let mut found = false;
+        for cgu in cgus {
+            for (item, _data) in cgu.items() {
+                let MonoItem::Fn(instance) = item else {
+                    continue;
+                };
+                let raw_name = tcx.def_path_str(instance.def_id());
+                if device_base_name(&raw_name) != Some(desc.symbol.as_str())
+                    || !is_device_function(tcx, instance.def_id())
+                    || !is_fully_monomorphized(tcx, *instance)
+                    // The macro rejects generics, so a generic device function
+                    // sharing the base name is not the implementation.
+                    || !instance.args.is_empty()
+                {
+                    continue;
+                }
+                let name = collector.fqdn(*instance);
+                let export_name = collector.compute_export_name(&name, *instance);
+                if verbose {
+                    eprintln!(
+                        "[collector] Found tile export implementation: {} -> {}",
+                        name, export_name
+                    );
+                }
+                collector.add_root(*instance, false, export_name);
+                found = true;
+            }
+        }
+        if !found {
+            tcx.dcx().fatal(format!(
+                "[rustc_codegen_cuda] tile export `{}` names the implementation symbol `{}`, \
+                 but this crate has no `#[device]` function with that name. `#[tile_export]` \
+                 generates the implementation next to the exported function; keep the two \
+                 together and do not rename the generated item",
+                desc.decl, desc.symbol
+            ));
+        }
+    }
+
     // Find standalone device function roots (Phase 2: device functions without kernels).
     // Only scan when there are NO kernels — when kernels exist, device functions are
-    // already collected transitively via the call graph walk.
-    if collector.worklist.is_empty() {
+    // already collected transitively via the call graph walk. Tile export
+    // implementations were rooted above and are skipped here so their export
+    // names are not computed twice.
+    if !has_kernels {
         for cgu in cgus {
             for (item, _data) in cgu.items() {
                 if let MonoItem::Fn(instance) = item
+                    // Host-only metadata, never device code (see the kernel scan).
+                    && !is_tile_export_meta_symbol(&tcx.def_path_str(instance.def_id()))
                     && is_device_function(tcx, instance.def_id())
                     && is_fully_monomorphized(tcx, *instance)
+                    && !collector.is_seen(*instance)
                 {
                     let raw_name = tcx.def_path_str(instance.def_id());
 
@@ -1045,6 +1386,7 @@ pub fn collect_device_functions<'tcx>(
     // Process the worklist to collect all reachable functions
     let mut result = collector.collect();
     result.requires_ptx_bundle_merge = requires_ptx_bundle_merge;
+    result.tile_exports = tile_exports;
     result
 }
 
@@ -1120,6 +1462,11 @@ impl<'tcx> DeviceCollector<'tcx> {
         )
     }
 
+    /// True once `instance` has been rooted or discovered.
+    fn is_seen(&self, instance: Instance<'tcx>) -> bool {
+        self.seen.contains(self.tcx.symbol_name(instance).name)
+    }
+
     /// Adds a root function (kernel) to start collection from.
     fn add_root(&mut self, instance: Instance<'tcx>, is_kernel: bool, export_name: String) {
         // Use mangled name as the unique key - this distinguishes different
@@ -1177,7 +1524,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             // kind (a reified `#[target_feature]` fn, say) must be checked.
             if !matches!(
                 func.instance.def,
-                InstanceKind::Shim(ShimKind::DropGlue(..) | ShimKind::FnPtrAsPtr(..))
+                InstanceKind::Shim(ShimKind::DropGlue(..) | ShimKind::FnPtrAddr(..))
             ) {
                 self.check_host_cpu_only(def_id, ctx.user_span, &ctx, None);
             }
@@ -1193,7 +1540,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                     // `instance_mir` body: drop glue, and (since
                     // nightly-2026-08-28) the `<fn(..) as FnPtr>::as_ptr`
                     // shim that backs `FnPtr::addr`.
-                    InstanceKind::Shim(ShimKind::DropGlue(..) | ShimKind::FnPtrAsPtr(..))
+                    InstanceKind::Shim(ShimKind::DropGlue(..) | ShimKind::FnPtrAddr(..))
                 );
             if has_mir {
                 // Use instance_mir for monomorphized MIR.
@@ -1254,6 +1601,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             functions: self.result,
             device_externs: self.device_externs,
             requires_ptx_bundle_merge: false,
+            tile_exports: Vec::new(),
         }
     }
 
@@ -1498,6 +1846,28 @@ impl<'tcx> DeviceCollector<'tcx> {
             return;
         };
         let fn_path = self.tcx.def_path_str(*def_id);
+
+        // `#[tile_export]` metadata functions are host-only: their body is
+        // the JSON description the collector already consumed. A device-side
+        // call means user code reached for the generated item. Refuse it
+        // here instead of skipping: a skipped call would leave a dangling
+        // symbol that fails later at module verification.
+        if is_tile_export_meta_symbol(&fn_path) {
+            self.tcx
+                .dcx()
+                .struct_span_fatal(
+                    call_span,
+                    format!(
+                        "device code in `{}` calls `{fn_path}`, a `#[tile_export]` metadata \
+                         function; it is host-only and holds the export's JSON description, \
+                         not device code",
+                        caller.export_name
+                    ),
+                )
+                .with_help("call the exported function itself, or its `<symbol>` wrapper")
+                .emit()
+        }
+
         if fn_path.contains("DynamicSharedArray")
             && (fn_path.contains("::get")
                 || fn_path.contains("::get_raw")
@@ -1684,7 +2054,7 @@ impl<'tcx> DeviceCollector<'tcx> {
         if !matches!(
             resolved.def,
             InstanceKind::Item(_)
-                | InstanceKind::Shim(ShimKind::DropGlue(..) | ShimKind::FnPtrAsPtr(..))
+                | InstanceKind::Shim(ShimKind::DropGlue(..) | ShimKind::FnPtrAddr(..))
         ) {
             return;
         }
@@ -1747,6 +2117,13 @@ impl<'tcx> DeviceCollector<'tcx> {
             return;
         }
 
+        if self.is_cute_recognition_stub(resolved.def_id()) {
+            if self.verbose {
+                eprintln!("[collector] Skipping CuTe recognition stub: {raw_name}");
+            }
+            return;
+        }
+
         // Check if this is a device extern declaration (FFI with external LTOIR).
         // These have no MIR body but should be emitted as LLVM `declare` statements.
         if is_device_extern_symbol(&raw_name) {
@@ -1801,7 +2178,7 @@ impl<'tcx> DeviceCollector<'tcx> {
         // `is_mir_available` is false for their def_id, but `instance_mir`
         // synthesises their body; do not skip those.
         if !self.tcx.is_mir_available(resolved.def_id())
-            && !matches!(resolved.def, InstanceKind::Shim(ShimKind::FnPtrAsPtr(..)))
+            && !matches!(resolved.def, InstanceKind::Shim(ShimKind::FnPtrAddr(..)))
         {
             if self.verbose {
                 eprintln!(
@@ -1909,6 +2286,19 @@ impl<'tcx> DeviceCollector<'tcx> {
                 .with_help(
                     "wrap the intrinsic call in a local `#[device]` function and pass that wrapper instead",
                 )
+                .emit()
+        }
+
+        if self.is_cute_recognition_stub(instance.def_id()) {
+            self.tcx
+                .dcx()
+                .struct_span_fatal(
+                    call_span,
+                    format!(
+                        "`{target}` cannot be used as a function item in device code because CuTe operations require direct call-site lowering"
+                    ),
+                )
+                .with_help("call the CuTe function directly from a local device function")
                 .emit()
         }
 
@@ -2219,6 +2609,70 @@ impl<'tcx> DeviceCollector<'tcx> {
         false
     }
 
+    fn is_cute_recognition_stub(&self, def_id: DefId) -> bool {
+        let crate_name = self.tcx.crate_name(def_id.krate);
+        if !matches!(crate_name.as_str(), "cute_rs" | "cute-rs") {
+            return false;
+        }
+        let definition_path = self.tcx.def_path(def_id).to_string_no_crate_verbose();
+        let impl_owner = self.tcx.impl_of_assoc(def_id).and_then(|impl_id| {
+            // `type_of(..).instantiate_identity()` returns `Unnormalized<Ty>`
+            // since the eager-normalization refactor (rust-lang/rust#155345).
+            // An impl block's self type here is the nominal cute-rs ADT as
+            // written, so unwrapping without normalizing is sufficient.
+            match self
+                .tcx
+                .type_of(impl_id)
+                .instantiate_identity()
+                .skip_normalization()
+                .kind()
+            {
+                TyKind::Adt(def, args) => {
+                    match self.tcx.item_name(def.did()).to_string().as_str() {
+                        "Tensor" => Some(CuteImplOwner::Tensor),
+                        "TensorMut" if self.tensor_impl_layout_is_tile_1d(args) => {
+                            Some(CuteImplOwner::TensorMutTile1D)
+                        }
+                        "TensorMut" => Some(CuteImplOwner::TensorMut),
+                        "BlockScaledTensor" => Some(CuteImplOwner::BlockScaledTensor),
+                        "BlockScaledThreadRow" => Some(CuteImplOwner::BlockScaledThreadRow),
+                        "BlockScaledTile64" => Some(CuteImplOwner::BlockScaledTile64),
+                        "LoadedBlockScaledTile64" => Some(CuteImplOwner::LoadedBlockScaledTile64),
+                        "StaticPersistentTileScheduler" => {
+                            Some(CuteImplOwner::StaticPersistentTileScheduler)
+                        }
+                        "WorkTileInfo" => Some(CuteImplOwner::WorkTileInfo),
+                        "PipelineTmaAsync" => Some(CuteImplOwner::PipelineTmaAsync),
+                        "PipelineState" => Some(CuteImplOwner::PipelineState),
+                        "SharedTensor" => Some(CuteImplOwner::SharedTensor),
+                        "Mxf4TiledMma" => Some(CuteImplOwner::Mxf4TiledMma),
+                        "Mxf4AccumulatorTile2x8" => Some(CuteImplOwner::Mxf4AccumulatorTile2x8),
+                        "Mxf4ScaleTile128" => Some(CuteImplOwner::Mxf4ScaleTile128),
+                        "Sm120Epilogue128x128" => Some(CuteImplOwner::Sm120Epilogue128x128),
+                        "Sm120EpilogueWarp128x128" => Some(CuteImplOwner::Sm120EpilogueWarp128x128),
+                        "PipelineTmaStore" => Some(CuteImplOwner::PipelineTmaStore),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            }
+        });
+        is_cute_recognition_stub_identity(crate_name.as_str(), &definition_path, impl_owner)
+    }
+
+    /// Whether a cute-rs tensor impl's `Layout` generic argument is `Tile1D`.
+    ///
+    /// `Tensor` and `TensorMut` are `<'a, Element, Layout, Storage>`, so the
+    /// layout is the second type argument of the impl's self type.
+    fn tensor_impl_layout_is_tile_1d(&self, args: GenericArgsRef<'tcx>) -> bool {
+        args.types()
+            .nth(1)
+            .is_some_and(|layout| match layout.kind() {
+                TyKind::Adt(def, _) => self.tcx.item_name(def.did()).as_str() == "Tile1D",
+                _ => false,
+            })
+    }
+
     /// Recognize a generated intrinsic placeholder or reject a mismatched raw
     /// intrinsic crate before its panic-only host body enters collection.
     fn is_generated_intrinsic_placeholder_or_report_mismatch(
@@ -2272,7 +2726,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             .with_help(
                 "use the cuda-intrinsics crate generated by this cuda-oxide revision, then rebuild the device crate",
             )
-            .emit_fatal()
+            .emit()
     }
 
     /// Emits the heap-allocation diagnostic (issue #108) and aborts.
@@ -2308,7 +2762,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 "store the data in a fixed-size array `[T; N]` instead, or in a \
                  `SharedArray` when the scratch space should be shared by the thread block",
             )
-            .emit_fatal()
+            .emit()
     }
 
     /// Refuses a device-reachable function that only makes sense on the host
@@ -2464,10 +2918,9 @@ impl<'tcx> DeviceCollector<'tcx> {
     ///    "Symbol ... not found" error.
     ///
     /// Functions that are declared diverging (return type `!`) are left
-    /// alone: their call sites have no target block, so the translator
-    /// already lowers them to LLVM `unreachable` (note: NOT a trap;
-    /// the optimizer may delete paths that provably reach it, a known
-    /// gap tracked separately).
+    /// alone. If their body is emitted, the importer preserves the call and
+    /// terminates its caller with `unreachable`; if collection deliberately
+    /// omits the body, the importer retains the existing device-trap fallback.
     fn check_unreachable_callee(
         &self,
         resolved: Instance<'tcx>,
@@ -2547,8 +3000,9 @@ impl<'tcx> DeviceCollector<'tcx> {
 
         // No stub marker: leave non-local functions to the existing silent
         // skip (this is what keeps the real `cuda_device` intrinsic
-        // placeholders and `core`'s cold panic wrappers working), and leave
-        // declared-diverging functions to the translator's `unreachable` lowering.
+        // placeholders and `core`'s cold panic wrappers working). Declared-
+        // diverging functions that are omitted here retain the translator's
+        // device-trap fallback rather than producing an undefined call.
         if !def_id.is_local() || mir.return_ty().is_never() {
             return;
         }
@@ -2577,7 +3031,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             .with_help(
                 "annotate device helpers with `#[device]`; if the panic is \
                  intentional, declare the function as diverging (`-> !`) so the \
-                 call lowers to LLVM `unreachable`",
+                 device pipeline can treat the path as non-returning",
             )
             .emit()
     }
@@ -2748,9 +3202,9 @@ pub fn dump_device_mir_info<'tcx>(tcx: TyCtxt<'tcx>, functions: &[CollectedFunct
 #[cfg(test)]
 mod tests {
     use super::{
-        device_runtime_checks_target, is_host_cpu_arch_def_path, is_kernel_entry_def_path,
-        is_spin_loop_expansion, is_std_float_inherent_method, truncate_path_for_box,
-        unsupported_codegen_protocol_root,
+        CuteImplOwner, device_runtime_checks_target, is_cute_recognition_stub_identity,
+        is_host_cpu_arch_def_path, is_kernel_entry_def_path, is_spin_loop_expansion,
+        is_std_float_inherent_method, truncate_path_for_box, unsupported_codegen_protocol_root,
     };
     use reserved_oxide_symbols::{
         DEVICE_PREFIX, KERNEL_PREFIX, LEGACY_DEVICE_PREFIX, LEGACY_KERNEL_PREFIX,
@@ -2869,6 +3323,302 @@ mod tests {
         let true_target = BasicBlock::from_usize(2);
         let targets = rustc_middle::mir::SwitchTargets::static_if(0, false_target, true_target);
         assert_eq!(device_runtime_checks_target(&targets), false_target);
+    }
+
+    #[test]
+    fn cute_tensor_recognition_is_closed_over_helpers_and_typed_methods() {
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::tensor::make_tensor_read",
+            None,
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::tensor::{impl#7}::load",
+            Some(CuteImplOwner::Tensor),
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::tensor::{impl#11}::store_at",
+            Some(CuteImplOwner::TensorMutTile1D),
+        ));
+        // `TensorMut<Contiguous1D>::store_at` shares the method name but is
+        // ordinary Rust; only the Tile1D impl's scalar store is a stub.
+        assert!(!is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::tensor::{impl#10}::store_at",
+            Some(CuteImplOwner::TensorMut),
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::tensor::{impl#11}::store",
+            Some(CuteImplOwner::TensorMutTile1D),
+        ));
+        // The Contiguous1D impl's view constructor and view changes, including
+        // the fused `local_tile`, stay stubs the importer intercepts.
+        for method in ["from_disjoint_slice", "zipped_divide", "local_tile"] {
+            assert!(
+                is_cute_recognition_stub_identity(
+                    "cute_rs",
+                    &format!("::tensor::{{impl#10}}::{method}"),
+                    Some(CuteImplOwner::TensorMut),
+                ),
+                "{method}"
+            );
+        }
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::tensor::{impl#6}::local_tile",
+            Some(CuteImplOwner::Tensor),
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::block_scaled::__compiler::block_scaled_load_k64",
+            None,
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::block_scaled::tensor::{impl#17}::from_slices",
+            Some(CuteImplOwner::BlockScaledTensor),
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::block_scaled::gemv::{impl#19}::k_tile",
+            Some(CuteImplOwner::BlockScaledThreadRow),
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::block_scaled::gemv::{impl#21}::dot_accumulate",
+            Some(CuteImplOwner::LoadedBlockScaledTile64),
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::scheduler::__compiler::scheduler_current_tile",
+            None,
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::scheduler::{impl#4}::has_work",
+            Some(CuteImplOwner::StaticPersistentTileScheduler),
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::scheduler::{impl#2}::tile_idx",
+            Some(CuteImplOwner::WorkTileInfo),
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::pipeline::__compiler::pipeline_producer_expect_tx",
+            None,
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::pipeline::{impl#9}::producer_expect_tx",
+            Some(CuteImplOwner::PipelineTmaAsync),
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::pipeline::{impl#3}::advance",
+            Some(CuteImplOwner::PipelineState),
+        ));
+        assert!(
+            is_cute_recognition_stub_identity(
+                "cute_rs",
+                "::pipeline::{impl#9}::from_raw_parts",
+                Some(CuteImplOwner::PipelineTmaAsync),
+            ),
+            "the rejected split-ring constructor must not be body-translated"
+        );
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::copy::tiled::__compiler::shared_tensor_overlay",
+            None,
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::copy::tiled::{impl#3}::from_raw_parts",
+            Some(CuteImplOwner::SharedTensor),
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::mma::block_scaled::__compiler::tiled_gemm",
+            None,
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::mma::block_scaled::tiled::{impl#7}::load_a_128",
+            Some(CuteImplOwner::Mxf4TiledMma),
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::mma::block_scaled::fragments::{impl#4}::zero",
+            Some(CuteImplOwner::Mxf4AccumulatorTile2x8),
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::mma::block_scaled::fragments::{impl#5}::pairs_at_unchecked",
+            Some(CuteImplOwner::Mxf4ScaleTile128),
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::epilogue::sm120::__compiler::epilogue_sync_ready_for_tma",
+            None,
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::epilogue::sm120::{impl#2}::tma_half",
+            Some(CuteImplOwner::Sm120Epilogue128x128),
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::epilogue::sm120::{impl#9}::store_tile",
+            Some(CuteImplOwner::Sm120EpilogueWarp128x128),
+        ));
+        // Free functions with host-panicking bodies are recognized through the
+        // importer registry at their defining paths.
+        for path in [
+            "::copy::vector::load_tile",
+            "::copy::vector::assume",
+            "::copy::cooperative::copy_g2s",
+            "::copy::tma::copy_tma_2d",
+            "::copy::tma::copy_tma_s2g_2d",
+            "::mma::load_matrix_a",
+            "::sm100::__compiler::sm100_tiled_mma",
+            "::attention::sm100::__compiler::tma_load",
+        ] {
+            assert!(
+                is_cute_recognition_stub_identity("cute_rs", path, None),
+                "{path}"
+            );
+        }
+        // Import paths are never defining paths, so none of these may be
+        // recognized: the root module aliases cute_rs once had (`tile`, `tma`,
+        // `cooperative`, `tiled_copy`, `block_scaled_mma`, retired) and the
+        // retired `epilogue::__compiler` re-export.
+        for path in [
+            "::tile::load_tile",
+            "::tma::copy_tma_2d",
+            "::cooperative::copy_g2s",
+            "::tiled_copy::__compiler::shared_tensor_overlay",
+            "::block_scaled_mma::__compiler::tiled_gemm",
+            "::epilogue::__compiler::epilogue_half",
+        ] {
+            assert!(
+                !is_cute_recognition_stub_identity("cute_rs", path, None),
+                "{path}"
+            );
+        }
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::pipeline::__compiler::tma_store_producer_commit",
+            None,
+        ));
+        assert!(is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::pipeline::{impl#4}::producer_tail",
+            Some(CuteImplOwner::PipelineTmaStore),
+        ));
+        // The SM100 store pipeline shares the item name but lives in
+        // cute_rs::sm100::pipeline; its methods are ordinary Rust over the
+        // sm100 hooks, so the owner table must not claim them.
+        assert!(!is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::sm100::pipeline::{impl#4}::producer_tail",
+            Some(CuteImplOwner::PipelineTmaStore),
+        ));
+
+        // Same-spelled methods on the layout ADT are ordinary Rust.
+        assert!(!is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::tensor::{impl#2}::is_full",
+            None,
+        ));
+        assert!(!is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::tensor::{impl#7}::store",
+            Some(CuteImplOwner::Tensor),
+        ));
+        assert!(!is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::block_scaled::gemv::{impl#21}::value_pair",
+            Some(CuteImplOwner::LoadedBlockScaledTile64),
+        ));
+        assert!(!is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::scheduler::{impl#4}::for_worker",
+            Some(CuteImplOwner::StaticPersistentTileScheduler),
+        ));
+        assert!(!is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::pipeline::{impl#3}::phase",
+            Some(CuteImplOwner::PipelineState),
+        ));
+        assert!(!is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::mma::block_scaled::tiled::{impl#7}::load_b_pair",
+            Some(CuteImplOwner::Mxf4TiledMma),
+        ));
+        assert!(!is_cute_recognition_stub_identity(
+            "cute_rs",
+            "::epilogue::sm120::{impl#3}::store_atom",
+            Some(CuteImplOwner::Sm120EpilogueWarp128x128),
+        ));
+        assert!(!is_cute_recognition_stub_identity(
+            "other",
+            "::tensor::make_tensor_read",
+            None,
+        ));
+    }
+
+    #[test]
+    fn cute_nested_impl_owners_reject_old_and_near_miss_paths() {
+        for (module, owner, method) in [
+            (
+                "block_scaled::tensor",
+                CuteImplOwner::BlockScaledTensor,
+                "from_slices",
+            ),
+            (
+                "block_scaled::gemv",
+                CuteImplOwner::BlockScaledThreadRow,
+                "k_tile",
+            ),
+            (
+                "mma::block_scaled::tiled",
+                CuteImplOwner::Mxf4TiledMma,
+                "load_a_128",
+            ),
+            (
+                "mma::block_scaled::fragments",
+                CuteImplOwner::Mxf4AccumulatorTile2x8,
+                "zero",
+            ),
+            (
+                "epilogue::sm120",
+                CuteImplOwner::Sm120EpilogueWarp128x128,
+                "store_tile",
+            ),
+            ("copy::tiled", CuteImplOwner::SharedTensor, "from_raw_parts"),
+        ] {
+            assert!(is_cute_recognition_stub_identity(
+                "cute_rs",
+                &format!("::{module}::{{impl#7}}::{method}"),
+                Some(owner)
+            ));
+            for path in [
+                format!(
+                    "::{}::{{impl#7}}::{method}",
+                    module.split("::").next().unwrap()
+                ),
+                format!("::{module}_extra::{{impl#7}}::{method}"),
+                format!("::{module}::nested::{{impl#7}}::{method}"),
+            ] {
+                assert!(
+                    !is_cute_recognition_stub_identity("cute_rs", &path, Some(owner)),
+                    "{path}"
+                );
+            }
+        }
     }
 
     #[test]

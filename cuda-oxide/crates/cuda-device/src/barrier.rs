@@ -254,29 +254,29 @@ impl BarrierToken {
 ///
 /// # Thread Requirements
 ///
-/// | Operation       | Thread Requirement        |
-/// |-----------------|---------------------------|
-/// | `from_static()` | Single thread (thread 0)  |
-/// | `init()`        | Single thread (thread 0)  |
-/// | `arrive()`      | All participating threads |
-/// | `wait()`        | All participating threads |
-/// | `inval()`       | Single thread (thread 0)  |
+/// | Operation       | Thread Requirement                     |
+/// |-----------------|----------------------------------------|
+/// | `from_static()` | All threads call                       |
+/// | `init()`        | All threads call; linear thread 0 acts |
+/// | `arrive()`      | All participating threads              |
+/// | `wait()`        | All participating threads              |
+/// | `inval()`       | All threads call; linear thread 0 acts |
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// // Thread 0: Create and initialize
+/// // All threads: create the handle and initialize. Linear thread 0, that is
+/// // thread (0, 0, 0), runs mbarrier.init; init() then fences and
+/// // synchronizes the block, so every thread holds a Ready handle.
 /// let bar = ManagedBarrier::<Uninit, TmaBarrier>::from_static(&raw mut BAR);
 /// let bar = unsafe { bar.init(128) };  // Now Ready
-/// fence_proxy_async_shared_cta();
-/// sync_threads();
 ///
 /// // All threads: arrive and wait
 /// let token = bar.arrive();
 /// bar.wait(token);
 ///
-/// // Thread 0: Cleanup
-/// sync_threads();
+/// // All threads: clean up. inval() synchronizes the block, then linear
+/// // thread 0 runs mbarrier.inval.
 /// unsafe { bar.inval(); }
 /// ```
 pub struct ManagedBarrier<State, Kind, const ID: usize = 0> {
@@ -293,6 +293,21 @@ unsafe impl<S, K, const ID: usize> Send for ManagedBarrier<S, K, ID> {}
 // =============================================================================
 
 impl<Kind, const ID: usize> ManagedBarrier<Uninit, Kind, ID> {
+    /// Issue initialization without thread election, fences or synchronization.
+    ///
+    /// # Safety
+    /// Exactly one thread must initialize live shared storage. `count` must be
+    /// a valid hardware arrival count. Publish initialization with the required
+    /// fence and synchronization before any participant uses the barrier.
+    #[inline(always)]
+    pub unsafe fn init_instruction(self, count: u32) -> ManagedBarrier<Ready, Kind, ID> {
+        unsafe { mbarrier_init(self.ptr.cast_mut(), count) };
+        ManagedBarrier {
+            ptr: self.ptr,
+            _state: PhantomData,
+            _kind: PhantomData,
+        }
+    }
     /// Create an Uninit barrier from an explicit static declaration.
     ///
     /// Wrap a `static mut Barrier` in the typestate wrapper. Each barrier
@@ -301,7 +316,11 @@ impl<Kind, const ID: usize> ManagedBarrier<Uninit, Kind, ID> {
     ///
     /// # Thread Requirements
     ///
-    /// **Single-thread**: Only call from the initialization thread (thread 0).
+    /// **All threads**: this is a plain constructor with no device effect. Every
+    /// thread wraps the same static, and `init()` then elects linear thread 0 to
+    /// run `mbarrier.init`. Do not wrap `init()` in a thread-0 branch: it
+    /// synchronizes the whole block, and a block-wide sync inside a branch that
+    /// only some threads take is undefined, in practice a hang.
     ///
     /// # Example
     ///
@@ -309,13 +328,12 @@ impl<Kind, const ID: usize> ManagedBarrier<Uninit, Kind, ID> {
     /// static mut BAR0: Barrier = Barrier::UNINIT;
     /// static mut BAR1: Barrier = Barrier::UNINIT;
     ///
-    /// if tid == 0 {
-    ///     let bar0 = ManagedBarrier::<Uninit, TmaBarrier>::from_static(&raw mut BAR0);
-    ///     let bar1 = ManagedBarrier::<Uninit, GeneralBarrier>::from_static(&raw mut BAR1);
+    /// // All threads: wrap and initialize; init() elects linear thread 0.
+    /// let bar0 = ManagedBarrier::<Uninit, TmaBarrier>::from_static(&raw mut BAR0);
+    /// let bar1 = ManagedBarrier::<Uninit, GeneralBarrier>::from_static(&raw mut BAR1);
     ///
-    ///     let bar0 = unsafe { bar0.init(32) };
-    ///     let bar1 = unsafe { bar1.init(32) };
-    /// }
+    /// let bar0 = unsafe { bar0.init(32) };
+    /// let bar1 = unsafe { bar1.init(32) };
     /// ```
     pub fn from_static(ptr: *mut Barrier) -> Self {
         ManagedBarrier {
@@ -327,8 +345,9 @@ impl<Kind, const ID: usize> ManagedBarrier<Uninit, Kind, ID> {
 
     /// Initialize the barrier with an expected arrival count.
     ///
-    /// **All threads in the block should call this.** Only thread 0 performs
-    /// the actual initialization; all threads synchronize and receive a `Ready` handle.
+    /// **All threads in the block should call this.** Only linear thread 0,
+    /// that is thread (0, 0, 0), performs the actual initialization; all threads
+    /// synchronize and receive a `Ready` handle.
     ///
     /// This is a convenience wrapper for `init_by(count, 0)`.
     ///
@@ -347,7 +366,7 @@ impl<Kind, const ID: usize> ManagedBarrier<Uninit, Kind, ID> {
     /// ```rust,ignore
     /// static mut BAR: Barrier = Barrier::UNINIT;
     ///
-    /// // ALL threads call init - only thread 0 actually initializes
+    /// // ALL threads call init - only linear thread 0 actually initializes
     /// let bar = ManagedBarrier::<Uninit, TmaBarrier>::from_static(&raw mut BAR);
     /// let bar = unsafe { bar.init(128) };  // All threads get Ready handle
     /// ```
@@ -358,8 +377,8 @@ impl<Kind, const ID: usize> ManagedBarrier<Uninit, Kind, ID> {
 
     /// Initialize the barrier with a specific thread performing initialization.
     ///
-    /// **All threads in the block should call this.** Only the thread with
-    /// `threadIdx.x == init_thread` performs the actual initialization;
+    /// **All threads in the block should call this.** Only the thread whose
+    /// linear id equals `init_thread` performs the actual initialization;
     /// all threads synchronize and receive a `Ready` handle.
     ///
     /// # Block-Scoped Barriers
@@ -371,13 +390,18 @@ impl<Kind, const ID: usize> ManagedBarrier<Uninit, Kind, ID> {
     /// # Parameters
     ///
     /// - `count`: Expected number of arrivals before barrier completes
-    /// - `init_thread`: Thread ID (threadIdx.x) that performs initialization
+    /// - `init_thread`: Linear thread id within the block that performs
+    ///   initialization. `0` is thread `(0, 0, 0)`. In a 1D block this is
+    ///   `threadIdx.x`.
     ///
     /// # Safety
     ///
     /// - Must be called before any arrive/wait operations
     /// - All participating threads in the block must call this together
-    /// - `init_thread` must be a valid thread ID within the block
+    /// - `init_thread` must be the same value in every thread and below
+    ///   `blockDim.x * blockDim.y * blockDim.z`. A selector that differs between
+    ///   threads elects zero or several threads; an out-of-range id selects no
+    ///   thread, so the barrier is never initialized.
     ///
     /// # Example
     ///
@@ -390,7 +414,8 @@ impl<Kind, const ID: usize> ManagedBarrier<Uninit, Kind, ID> {
     /// ```
     #[inline(always)]
     pub unsafe fn init_by(self, count: u32, init_thread: u32) -> ManagedBarrier<Ready, Kind, ID> {
-        if crate::thread::threadIdx_x() == init_thread {
+        // Block-linear id: x fastest, then y, then z; 0 is thread (0, 0, 0).
+        if crate::thread::block_linear_thread_id_here() == init_thread {
             unsafe {
                 mbarrier_init(self.ptr as *mut Barrier, count);
                 fence_proxy_async_shared_cta();
@@ -412,6 +437,33 @@ impl<Kind, const ID: usize> ManagedBarrier<Uninit, Kind, ID> {
 // =============================================================================
 
 impl<Kind, const ID: usize> ManagedBarrier<Ready, Kind, ID> {
+    /// Adopt a participant's initialized barrier after caller synchronization.
+    ///
+    /// # Safety
+    /// `ptr` must identify an initialized barrier in live shared memory. All
+    /// participants must coordinate accesses and invalidation for its lifetime.
+    #[inline(always)]
+    pub unsafe fn adopt_ready(ptr: *mut Barrier) -> Self {
+        Self {
+            ptr,
+            _state: PhantomData,
+            _kind: PhantomData,
+        }
+    }
+    /// Issue invalidation without election or synchronization.
+    ///
+    /// # Safety
+    /// Exactly one thread must invalidate after all users and pending
+    /// asynchronous operations are finished.
+    #[inline(always)]
+    pub unsafe fn invalidate_instruction(self) -> ManagedBarrier<Invalidated, Kind, ID> {
+        unsafe { mbarrier_inval(self.ptr.cast_mut()) };
+        ManagedBarrier {
+            ptr: self.ptr,
+            _state: PhantomData,
+            _kind: PhantomData,
+        }
+    }
     /// Get the raw pointer to the underlying barrier.
     ///
     /// Useful for interop with low-level APIs.
@@ -483,8 +535,9 @@ impl<Kind, const ID: usize> ManagedBarrier<Ready, Kind, ID> {
 
     /// Invalidate the barrier.
     ///
-    /// **All threads in the block should call this.** Only thread 0 performs
-    /// the actual invalidation; all threads synchronize before returning.
+    /// **All threads in the block should call this.** Only linear thread 0,
+    /// that is thread (0, 0, 0), performs the actual invalidation; all threads
+    /// synchronize before returning.
     ///
     /// This is a convenience wrapper for `inval_by(0)`.
     ///
@@ -499,7 +552,7 @@ impl<Kind, const ID: usize> ManagedBarrier<Ready, Kind, ID> {
     /// # Example
     ///
     /// ```rust,ignore
-    /// // ALL threads call inval - only thread 0 actually invalidates
+    /// // ALL threads call inval - only linear thread 0 actually invalidates
     /// let _dead = unsafe { bar.inval() };  // Consumes Ready, returns Invalidated
     /// ```
     #[inline(always)]
@@ -509,21 +562,26 @@ impl<Kind, const ID: usize> ManagedBarrier<Ready, Kind, ID> {
 
     /// Invalidate the barrier with a specific thread performing invalidation.
     ///
-    /// **All threads in the block should call this.** Only the thread with
-    /// `threadIdx.x == inval_thread` performs the actual invalidation;
+    /// **All threads in the block should call this.** Only the thread whose
+    /// linear id equals `inval_thread` performs the actual invalidation;
     /// all threads synchronize before returning.
     ///
     /// Consumes the `Ready` barrier and returns an `Invalidated` barrier.
     ///
     /// # Parameters
     ///
-    /// - `inval_thread`: Thread ID (threadIdx.x) that performs invalidation
+    /// - `inval_thread`: Linear thread id within the block that performs
+    ///   invalidation. `0` is thread `(0, 0, 0)`. In a 1D block this is
+    ///   `threadIdx.x`.
     ///
     /// # Safety
     ///
     /// - All threads must have completed their wait operations before calling
     /// - All participating threads in the block must call this together
-    /// - `inval_thread` must be a valid thread ID within the block
+    /// - `inval_thread` must be the same value in every thread and below
+    ///   `blockDim.x * blockDim.y * blockDim.z`. A selector that differs between
+    ///   threads elects zero or several threads; an out-of-range id selects no
+    ///   thread, so the barrier is never invalidated.
     ///
     /// # Example
     ///
@@ -536,7 +594,8 @@ impl<Kind, const ID: usize> ManagedBarrier<Ready, Kind, ID> {
         // Ensure all threads are done with the barrier before invalidating
         crate::thread::sync_threads();
 
-        if crate::thread::threadIdx_x() == inval_thread {
+        // Block-linear id: x fastest, then y, then z; 0 is thread (0, 0, 0).
+        if crate::thread::block_linear_thread_id_here() == inval_thread {
             unsafe { mbarrier_inval(self.ptr as *mut Barrier) };
         }
 

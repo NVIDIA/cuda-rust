@@ -1,0 +1,23 @@
+[package]
+name = "cute-rs"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CuTe-style device library: Tensor, Layout types, partitioning, copy/mma atoms"
+
+[dependencies]
+ctm-rs = { workspace = true }
+cute-layout = { workspace = true }
+cuda-device = { workspace = true }
+cuda-core = { workspace = true, optional = true }
+
+[features]
+# Host-side helpers (TMA descriptor encoding). Kernels never need this.
+host = ["dep:cuda-core"]
+
+[dev-dependencies]
+# The compile-only example also expands host metadata in mixed workspace checks.
+cuda-host = { workspace = true }
+trybuild = "1"

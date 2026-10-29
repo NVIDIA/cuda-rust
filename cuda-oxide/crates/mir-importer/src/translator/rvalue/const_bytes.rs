@@ -21,7 +21,7 @@ use dialect_mir::types::MirFP16Type;
 use pliron::basic_block::BasicBlock;
 use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::r#type::TypeHandle;
@@ -37,7 +37,7 @@ use std::num::NonZeroUsize;
 /// [..]` indexed by runtime value) to a `MirConstructArrayOp`. Element stride
 /// and aggregate field offsets come from rustc layout. Thin pointer fields
 /// inside elements that relocate to device statics are materialized via
-/// [`MirGlobalAllocOp`] per field.
+/// [`MirGlobalAllocOp`](dialect_mir::ops::MirGlobalAllocOp) per field.
 pub(super) fn translate_array_value_constant(
     ctx: &mut Context,
     constant: &mir::ConstOperand,
@@ -466,7 +466,7 @@ fn translate_array_value_constant_inner(
 ///    constant is a promoted `&Struct`)
 /// 2. Decode each field at its rustc layout offset from that allocation
 /// 3. Thin pointer fields that relocate to device statics become
-///    [`MirGlobalAllocOp`] results; other fields use the byte decoder
+///    [`MirGlobalAllocOp`](dialect_mir::ops::MirGlobalAllocOp) results; other fields use the byte decoder
 /// 4. Create MirConstructStructOp with those operands
 ///
 /// Each field is read at the byte offset rustc's layout records for it, so

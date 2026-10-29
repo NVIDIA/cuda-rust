@@ -1,0 +1,125 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 918" width="1240" height="918" role="img" aria-label="Three columns. Left: the Rust source, one helper of each inline kind plus a const-generic device helper. Middle: the request recorded on mir.func as a typed attribute and lowered to the LLVM function attribute, shown on the real define lines, and the one request that is not carried. Right: the PTX, with a real call for each noinline helper, the const-generic factor folded to an immediate, no function left for the alwaysinline helper, and what main did before. A bottom strip explains the libNVVM shared-pointer-return legalization.">
+<style>
+  :root, svg {
+  --bg: #f4f6f8; --fg: #1a232e; --muted: #5d6b7a; --line: #9aa7b4; --panel: #ffffff;
+  --meta: #0e7c72; --meta-fill: #d9f3ef; --code: #b4560a; --code-fill: #fdebd2;
+  --rust: #7a3fb3; --rust-fill: #efe4fb;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+ }
+  @media (prefers-color-scheme: dark) { :root, svg {
+  --bg: #1b1d23; --fg: #f2f4f7; --muted: #bcc4d0; --line: #5c6475; --panel: #282c36;
+  --meta: #7ed8bb; --meta-fill: #346357; --code: #f4c474; --code-fill: #735a3c;
+  --rust: #d8d4fb; --rust-fill: #524e7d;
+ } }
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--fg)"/></marker></defs>
+
+<rect x="0" y="0" width="1240" height="918" style="fill: var(--bg)"/>
+<text x="40" y="34" text-anchor="start" xml:space="preserve" style="font: 600 17px var(--sans); fill: var(--fg); white-space: pre">An inline request now reaches the GPU as the matching LLVM attribute</text>
+<text x="40" y="56" text-anchor="start" xml:space="preserve" style="font: 400 12.5px var(--sans); fill: var(--muted); white-space: pre">Only #[inline(always)] used to survive. Now #[inline] is inlinehint, #[inline(always)] is alwaysinline and #[inline(never)] is noinline, as in rustc's own backend, so a never helper stays a real PTX function.</text>
+<text x="40" y="84" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">RUST SOURCE  (the inline_intent example)</text>
+<text x="376" y="84" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">RECORDED, THEN LOWERED  (mir.func, then the define line)</text>
+<text x="805" y="84" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">WHAT OPT AND LLC MAKE OF IT  (PTX, sm_120a)</text>
+<rect x="40" y="98" width="312" height="266" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="52" y="118" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--rust); white-space: pre">one helper of each kind</text>
+<text x="52" y="138" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--rust); white-space: pre">#[inline(never)]</text>
+<text x="52" y="154" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">pub fn never_add(a: f32, b: f32) -&gt; f32 {</text>
+<text x="52" y="170" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">    a + b</text>
+<text x="52" y="186" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">}</text>
+<text x="52" y="202" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--rust); white-space: pre">#[inline]</text>
+<text x="52" y="218" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">pub fn hint_mul(a: f32, b: f32) -&gt; f32 {</text>
+<text x="52" y="234" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">    a * b</text>
+<text x="52" y="250" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">}</text>
+<text x="52" y="266" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--rust); white-space: pre">#[inline(always)]</text>
+<text x="52" y="282" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">pub fn always_sub(a: f32, b: f32) -&gt; f32 {</text>
+<text x="52" y="298" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">    a - b</text>
+<text x="52" y="314" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">}</text>
+<text x="52" y="332" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">src/main.rs: plain functions the collector</text>
+<text x="52" y="346" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">reaches from the kernel.</text>
+<rect x="40" y="378" width="312" height="232" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="52" y="398" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--rust); white-space: pre">inside the #[cuda_module]</text>
+<text x="52" y="418" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--rust); white-space: pre">#[inline(never)]</text>
+<text x="52" y="434" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">#[device]</text>
+<text x="52" y="450" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">pub fn never_dev(a: f32, b: f32) -&gt; f32 {</text>
+<text x="52" y="466" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">    a * 2.0 + b</text>
+<text x="52" y="482" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">}</text>
+<text x="52" y="498" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">#[device]</text>
+<text x="52" y="514" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">pub fn scale_by&lt;const N: u32&gt;(x: f32) -&gt; f32 {</text>
+<text x="52" y="530" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">    x * (N as f32)</text>
+<text x="52" y="546" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">}</text>
+<text x="52" y="564" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">scale_by has its own const parameter, so</text>
+<text x="52" y="578" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">#[device] adds an #[inline(never)] of its own</text>
+<text x="52" y="592" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">there, for the host-side collector.</text>
+<rect x="40" y="624" width="312" height="168" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="52" y="644" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--rust); white-space: pre">the kernel's arithmetic</text>
+<text x="52" y="664" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">let mut v = never_add(x, 1.0);</text>
+<text x="52" y="680" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">v = hint_mul(v, 2.0);</text>
+<text x="52" y="696" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">v = always_sub(v, 1.0);</text>
+<text x="52" y="712" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">v += kernels::never_dev(x, 1.0);</text>
+<text x="52" y="728" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">v + kernels::scale_by::&lt;4&gt;(x)</text>
+<text x="52" y="746" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">Reached through one #[inline(always)] helper.</text>
+<text x="52" y="760" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">MIR inlining is off for this package, so every</text>
+<text x="52" y="774" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">helper reaches LLVM as its own definition.</text>
+<rect x="376" y="98" width="405" height="168" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="388" y="118" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">the request, as the pipeline carries it</text>
+<text x="388" y="138" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">source             mir.func            LLVM</text>
+<text x="388" y="154" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">#[inline]          inline_intent=hint    inlinehint</text>
+<text x="388" y="170" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">#[inline(always)]  inline_intent=always  alwaysinline</text>
+<text x="388" y="186" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--meta); white-space: pre">#[inline(never)]   inline_intent=never   noinline</text>
+<text x="388" y="202" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">no attribute       none                  none</text>
+<text x="388" y="220" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">rustc-codegen-cuda reads codegen_fn_attrs and sets a typed</text>
+<text x="388" y="234" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">InlineIntentAttr on mir.func. mir-lower names the keyword in</text>
+<text x="388" y="248" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">one place. A kernel entry never carries one: verifier error.</text>
+<rect x="376" y="280" width="405" height="154" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="388" y="300" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">LLVM IR before opt   (inline_intent.ll)</text>
+<text x="388" y="320" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--meta); white-space: pre">define float @inline_intent__never_add(..) noinline #0</text>
+<text x="388" y="336" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">define float @inline_intent__hint_mul(..) inlinehint #0</text>
+<text x="388" y="352" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">define float @inline_intent__always_sub(..) alwaysinline #0</text>
+<text x="388" y="368" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--meta); white-space: pre">define float @never_dev(..) noinline #0</text>
+<text x="388" y="384" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">define float @scale_byKm4_EB4_(float %v0) #0</text>
+<text x="388" y="402" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">(..) stands for (float %v0, float %v1). The last line is</text>
+<text x="388" y="416" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">scale_by::&lt;4&gt;: no keyword, on purpose (next box).</text>
+<rect x="376" y="448" width="405" height="128" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="388" y="468" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">The one request that is not carried</text>
+<text x="388" y="488" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">#[device] puts #[inline(never)] on a helper with its own</text>
+<text x="388" y="503" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">type or const parameters so each monomorphization stays</text>
+<text x="388" y="518" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">visible to the host-side collector. That is a host need,</text>
+<text x="388" y="533" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">not a device intent, so the backend drops it and N keeps</text>
+<text x="388" y="548" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">folding into the kernel. A user's own attribute on such a</text>
+<text x="388" y="563" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">helper still does not reach device code: #1471 stays open.</text>
+<rect x="805" y="98" width="395" height="150" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="817" y="118" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">PTX, inside .entry intent   (opt -O2, then llc)</text>
+<text x="817" y="138" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--meta); white-space: pre">call.uni (retval0), inline_intent__never_add, (param0);</text>
+<text x="817" y="154" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--meta); white-space: pre">call.uni (retval0), never_dev, (param0, param1);</text>
+<text x="817" y="170" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">fma.rn.f32  %r13, %r8, 0f40800000, %r12;</text>
+<text x="817" y="188" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">Two real calls, one per noinline helper. 0f40800000 is</text>
+<text x="817" y="202" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">4.0: scale_by::&lt;4&gt; folded into the entry. always_sub</text>
+<text x="817" y="216" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">appears nowhere, alwaysinline left no function. hint_mul</text>
+<text x="817" y="230" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">was inlined by opt, as the hint allows.</text>
+<rect x="805" y="262" width="395" height="136" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="817" y="282" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">.func headers left in the module</text>
+<text x="817" y="302" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">.func (..) inline_intent__never_add(</text>
+<text x="817" y="318" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">.visible .func (..) never_dev(</text>
+<text x="817" y="334" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">.visible .func (..) scale_byKm4_EB4_(</text>
+<text x="817" y="352" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">(..) stands for (.param .b32 func_retval0). scale_by stays</text>
+<text x="817" y="366" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">only because every #[device] function is kept alive through</text>
+<text x="817" y="380" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">@llvm.used; the entry does not call it.</text>
+<rect x="805" y="412" width="395" height="52" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="817" y="434" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--fg); white-space: pre">RTX 5090: SUCCESS, 256 of 256 match the host reference.</text>
+<text x="817" y="450" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--fg); white-space: pre">verify-code-shape.sh checks these lines in compile-only CI.</text>
+<rect x="805" y="478" width="395" height="113" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="817" y="498" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">Before, on main</text>
+<text x="817" y="518" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">No keyword on any of these define lines. opt inlined</text>
+<text x="817" y="533" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">the never helpers like the rest, so a helper that asked</text>
+<text x="817" y="548" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">to stay a separate GPU function never did, and #[inline]</text>
+<text x="817" y="563" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">was dropped. Only alwaysinline came through, as a string</text>
+<text x="817" y="578" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">attribute the exporter matched by name.</text>
+<line x1="364" y1="92" x2="364" y2="792" style="stroke: var(--line); stroke-width: 1"/>
+<line x1="793" y1="92" x2="793" y2="792" style="stroke: var(--line); stroke-width: 1"/>
+<rect x="40" y="806" width="1160" height="94" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="54" y="828" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">The libNVVM route needed one more piece  (nvvm-transforms, legalize_pointer_returns)</text>
+<text x="54" y="850" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">A noinline helper that returns a shared-memory pointer is now a real function. libNVVM declares that 32-bit return slot as .param .b64 while the body stores 32 bits and the call site reads 32,</text>
+<text x="54" y="868" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">so ptxas rejected addressof_sharedarray on --emit-nvvm-ir. The pass gives such a definition a generic pointer return and an addrspacecast on both sides of each call; parameters, aggregates,</text>
+<text x="54" y="886" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">kernels and declarations are untouched, and a function whose address is taken is reported. The libNVVM defect is tracked with its team; the pass goes when the fix ships.</text>
+</svg>

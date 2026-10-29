@@ -19,6 +19,7 @@
 //! cargo oxide debug vecadd --tui      # build + cuda-gdb
 //! cargo oxide inspect vecadd          # build + print generated PTX
 //! cargo oxide fuzz-schedule barrier   # perturb generated PTX and watchdog it
+//! cargo oxide tilelib relu --arch sm_120  # #[tile_export] crate -> cuTile tile library
 //! cargo oxide new my_kernel           # scaffold a standalone project
 //! cargo oxide new my_kernel --async   # scaffold with async template
 //! cargo oxide list                    # list bundled examples
@@ -28,6 +29,7 @@
 //! cargo oxide clean                   # remove local build outputs
 //! cargo oxide setup                   # explicitly build/install backend
 //! cargo oxide update                  # refresh cached backend (external)
+//! cargo oxide toolchain install cutlass # install the pinned CUTLASS compiler
 //! ```
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum, error::ErrorKind};
@@ -37,6 +39,7 @@ mod artifact_identity;
 mod backend;
 mod backend_source;
 mod commands;
+mod cutlass_toolchain;
 
 /// Top-level CLI structure parsed by clap.
 ///
@@ -72,9 +75,9 @@ enum Commands {
     /// restating its alias, case and whitespace rules.
     #[command(name = "__debug-policy", hide = true)]
     DebugPolicy,
-    /// Build and run an example or project
+    /// Build and run an example, model, or project
     Run {
-        /// Example name (required in workspace, optional for standalone projects)
+        /// Example or model name (required in workspace, optional for standalone projects)
         example: Option<String>,
         /// Generate NVVM IR (use with libNVVM -gen-lto)
         #[arg(long)]
@@ -344,6 +347,63 @@ enum Commands {
         #[arg(long)]
         unchecked_indexing: bool,
     },
+    // Hidden until the CUDA 13.5 toolkit is announced: the feature needs that
+    // assembler and gets documented when it ships.
+    #[command(hide = true)]
+    /// Package a crate's `#[tile_export]` functions as a cuTile tile library.
+    ///
+    /// Runs `emit-ltoir`, checks that the LTOIR defines every implementation
+    /// symbol with the parameters the native SIMT ABI predicts, writes the
+    /// Tile IR 13.5 interface and implementation bytecode
+    /// (`<crate>.iface.tilebc`, `<crate>.impl.tilebc`) plus a readable
+    /// `<crate>.tilelib.mlir`, and asks `tileiras --preview-create-tile-lib`
+    /// for `<crate>.tilelib` when the installed assembler lists bytecode 13.5
+    /// (CUDA 13.5 or newer). An older assembler stops the command after the
+    /// descriptions with exit code 2 unless `--library-optional` is passed.
+    Tilelib {
+        /// Crate name (required in workspace, optional for standalone projects)
+        example: Option<String>,
+        /// Target architecture (e.g. sm_90, sm_100, sm_120). Required: the
+        /// LTOIR inside the library is architecture-specific.
+        #[arg(long)]
+        arch: String,
+        /// Comma-separated list of features to enable
+        #[arg(long)]
+        features: Option<String>,
+        /// Output path for the `.tilelib` file (default: `<crate-dir>/<crate>.tilelib`)
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+        /// Succeed when the installed tileiras cannot build the .tilelib;
+        /// the descriptions and LTOIR are still written (without this flag
+        /// that case exits 2)
+        #[arg(long)]
+        library_optional: bool,
+        /// Print the readable form of the interface and implementation modules
+        #[arg(long)]
+        print: bool,
+        /// Show verbose compilation output
+        #[arg(short, long)]
+        verbose: bool,
+        /// Disable implicit FMA contraction in both libNVVM and nvJitLink.
+        /// Also settable via CUDA_OXIDE_NO_FMA=1.
+        #[arg(long)]
+        no_fmad: bool,
+        /// Emit device line-number information for profilers and Compute
+        /// Sanitizer, leaving optimization intact (nvcc `-lineinfo`).
+        /// Also settable via CUDA_OXIDE_DEBUG=line.
+        #[arg(long)]
+        lineinfo: bool,
+        /// Emit full device debug information; libNVVM finalization runs
+        /// unoptimized (nvcc `-G`). Supersedes --lineinfo.
+        /// Also settable via CUDA_OXIDE_DEBUG=full.
+        #[arg(long)]
+        device_debug: bool,
+        /// Elide slice/array bounds checks in every device kernel
+        /// (out-of-bounds indexing becomes UB, like get_unchecked).
+        /// Also settable via CUDA_OXIDE_UNCHECKED_INDEXING=1.
+        #[arg(long)]
+        unchecked_indexing: bool,
+    },
     /// Show the full compilation pipeline (MIR -> PTX/NVVM IR) with verbose output
     Pipeline {
         /// Example name (required in workspace, optional for standalone projects)
@@ -397,7 +457,7 @@ enum Commands {
         #[arg(long)]
         tui: bool,
     },
-    /// List the examples bundled with the cuda-oxide workspace
+    /// List the examples and models bundled with the cuda-oxide workspace
     List {
         /// Emit stable machine-readable JSON
         #[arg(long)]
@@ -462,6 +522,26 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Install compiler toolchains managed by cargo-oxide
+    Toolchain {
+        #[command(subcommand)]
+        command: ToolchainCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ToolchainCommand {
+    /// Install a pinned official toolchain release
+    Install {
+        #[arg(value_enum)]
+        tool: ManagedToolchain,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum ManagedToolchain {
+    /// NVIDIA CUTLASS compiler 4.7.0 for Linux x86_64 and CUDA 13
+    Cutlass,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -585,6 +665,10 @@ fn validate_materialization_cli(cli: &Cli) -> Result<(), String> {
             "--materialize-cubin cannot be combined with emit-ltoir; one emits a final cubin and the other emits linkable LTOIR"
                 .to_string(),
         ),
+        Commands::Tilelib { .. } => Err(
+            "--materialize-cubin cannot be combined with tilelib; a tile library carries linkable LTOIR, not a final cubin"
+                .to_string(),
+        ),
         Commands::List { .. } => Err(
             "--materialize-cubin cannot be used with list because list does not compile device code"
                 .to_string(),
@@ -611,6 +695,10 @@ fn validate_materialization_cli(cli: &Cli) -> Result<(), String> {
         ),
         Commands::Update { .. } => Err(
             "--materialize-cubin cannot be used with update because update only refreshes the codegen backend"
+                .to_string(),
+        ),
+        Commands::Toolchain { .. } => Err(
+            "--materialize-cubin cannot be used with toolchain because toolchain manages compiler installations"
                 .to_string(),
         ),
         Commands::MaterializerHandshake => Err(
@@ -985,6 +1073,35 @@ fn main() {
                 commands::DeviceDebug::from_flags(lineinfo, device_debug),
             );
         }
+        Commands::Tilelib {
+            example,
+            arch,
+            features,
+            output,
+            library_optional,
+            print,
+            verbose,
+            no_fmad,
+            unchecked_indexing,
+            lineinfo,
+            device_debug,
+        } => {
+            let ctx = commands::resolve_context();
+            let example = resolve_example_name(example, &ctx, "tilelib");
+            commands::tilelib(
+                &ctx,
+                &example,
+                &arch,
+                features.as_deref(),
+                output.as_deref(),
+                library_optional,
+                print,
+                verbose,
+                no_fmad,
+                unchecked_indexing,
+                commands::DeviceDebug::from_flags(lineinfo, device_debug),
+            );
+        }
         Commands::Pipeline {
             example,
             emit_nvvm_ir,
@@ -1099,6 +1216,17 @@ fn main() {
             let ctx = commands::resolve_passive_context();
             commands::update(&ctx, force);
         }
+        Commands::Toolchain { command } => match command {
+            ToolchainCommand::Install {
+                tool: ManagedToolchain::Cutlass,
+            } => match cutlass_toolchain::install_official() {
+                Ok(outcome) => cutlass_toolchain::print_install_outcome(&outcome),
+                Err(error) => {
+                    eprintln!("Error: could not install the CUTLASS compiler: {error}");
+                    std::process::exit(1);
+                }
+            },
+        },
     }
 }
 
@@ -1124,7 +1252,9 @@ fn resolve_example_name(name: Option<String>, ctx: &commands::Context, subcomman
     eprintln!();
     eprintln!("Usage: cargo oxide {subcommand} <EXAMPLE>");
     eprintln!();
-    eprintln!("Available examples are in crates/rustc-codegen-cuda/examples/");
+    eprintln!(
+        "Run `cargo oxide list`, or browse crates/rustc-codegen-cuda/examples/, cute-rs-preview/examples/, and cute-rs-preview/models/"
+    );
     std::process::exit(1);
 }
 
@@ -1213,6 +1343,20 @@ mod tests {
             panic!("expected Update");
         };
         assert!(force);
+    }
+
+    #[test]
+    fn toolchain_parser_accepts_pinned_cutlass_install() {
+        let cli = Cli::try_parse_from(["cargo-oxide", "toolchain", "install", "cutlass"])
+            .expect("managed CUTLASS install command should parse");
+        assert!(matches!(
+            cli.command,
+            Commands::Toolchain {
+                command: ToolchainCommand::Install {
+                    tool: ManagedToolchain::Cutlass
+                }
+            }
+        ));
     }
 
     #[test]
@@ -1326,6 +1470,14 @@ mod tests {
                 "--materialize-cubin",
             ],
             &["cargo-oxide", "inspect", "demo", "--materialize-cubin"],
+            &[
+                "cargo-oxide",
+                "tilelib",
+                "demo",
+                "--arch",
+                "sm_120",
+                "--materialize-cubin",
+            ],
         ] {
             let cli = Cli::try_parse_from(args).expect("global flag should parse first");
             let error = validate_materialization_cli(&cli)
@@ -1677,6 +1829,65 @@ mod tests {
         assert!(unchecked_indexing);
         assert!(!lineinfo, "--lineinfo must default off");
         assert!(!device_debug, "--device-debug must default off");
+    }
+
+    #[test]
+    fn tilelib_parser_requires_arch_and_accepts_its_flags() {
+        assert!(
+            Cli::try_parse_from(["cargo-oxide", "tilelib", "relu"]).is_err(),
+            "the LTOIR inside a tile library is architecture-specific, so --arch is required"
+        );
+
+        let cli = Cli::try_parse_from([
+            "cargo-oxide",
+            "tilelib",
+            "relu",
+            "--arch",
+            "sm_120",
+            "--library-optional",
+            "--print",
+            "-o",
+            "out/relu.tilelib",
+        ])
+        .expect("tilelib command should parse");
+        let Commands::Tilelib {
+            example,
+            arch,
+            output,
+            library_optional,
+            print,
+            verbose,
+            no_fmad,
+            lineinfo,
+            device_debug,
+            ..
+        } = cli.command
+        else {
+            panic!("expected tilelib command");
+        };
+        assert_eq!(example.as_deref(), Some("relu"));
+        assert_eq!(arch, "sm_120");
+        assert_eq!(output, Some(PathBuf::from("out/relu.tilelib")));
+        assert!(library_optional);
+        assert!(print);
+        assert!(!verbose);
+        assert!(!no_fmad);
+        assert!(!lineinfo, "--lineinfo must default off");
+        assert!(!device_debug, "--device-debug must default off");
+
+        // Without the two flags the command insists on a library.
+        let cli = Cli::try_parse_from(["cargo-oxide", "tilelib", "relu", "--arch", "sm_120"])
+            .expect("tilelib command should parse");
+        let Commands::Tilelib {
+            library_optional,
+            print,
+            ..
+        } = cli.command
+        else {
+            panic!("expected tilelib command");
+        };
+        assert!(!library_optional);
+        assert!(!print);
     }
 
     #[test]

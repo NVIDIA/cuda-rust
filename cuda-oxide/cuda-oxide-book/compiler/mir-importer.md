@@ -376,6 +376,20 @@ slip through (array bounds checks, unwrap on `None`), a GPU trap is the
 correct behavior anyway -- there is nothing useful a GPU thread can do to
 "recover" from a logic error mid-kernel.
 
+Drop glue follows the same rule. The importer erases a destructor call only when
+its proof shows that the destructor does nothing visible and returns. A destructor
+that loops forever, or calls back into an instance already under proof, keeps its
+call, so the code after it never runs, as in the Rust source.
+
+```{figure} images/drop-proof-termination.svg
+:align: center
+:width: 100%
+
+The drop no-op proof requires that the destructor returns. Before, the call to a `loop {}`
+destructor was erased and the store after it ran. Now the call stays, so the PTX stores once and
+spins, while an `if`/`else` destructor that joins back is still erased.
+```
+
 ---
 
 ## Putting It All Together

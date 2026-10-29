@@ -1085,7 +1085,8 @@ fn packed_conversion_impls(catalog: &CatalogFile) -> String {
                 )
                 .unwrap();
             }
-            PackedConversionSourceFormat::E4m3x2
+            PackedConversionSourceFormat::Bf16x2
+            | PackedConversionSourceFormat::E4m3x2
             | PackedConversionSourceFormat::E5m2x2
             | PackedConversionSourceFormat::F16x2 => {
                 debug_assert_eq!(conversion.adapter, PackedConversionAdapter::Identity);
@@ -1515,6 +1516,18 @@ fn tma_impls(catalog: &CatalogFile) -> String {
                 writeln!(
                     output,
                     "        convert_g2s(ctx, rewriter, self.get_operation(), operands_info, {}, false)",
+                    operation.dimensions().unwrap()
+                )
+                .unwrap();
+            }
+            TmaOperation::G2sCtaTile1d
+            | TmaOperation::G2sCtaTile2d
+            | TmaOperation::G2sCtaTile3d
+            | TmaOperation::G2sCtaTile4d
+            | TmaOperation::G2sCtaTile5d => {
+                writeln!(
+                    output,
+                    "        convert_g2s_cta(ctx, rewriter, self.get_operation(), operands_info, {})",
                     operation.dimensions().unwrap()
                 )
                 .unwrap();
@@ -2099,6 +2112,7 @@ const LOWERING_INTRINSIC_HELPERS: &[(&str, &str)] = &[
     ("ReduceConfig", "tma::ReduceConfig"),
     ("convert_control", "tma::convert_control"),
     ("convert_g2s", "tma::convert_g2s"),
+    ("convert_g2s_cta", "tma::convert_g2s_cta"),
     (
         "convert_g2s_multicast_cg2",
         "tma::convert_g2s_multicast_cg2",
@@ -2236,9 +2250,6 @@ fn lowering_shard_imports(catalog: &CatalogFile, body: &str, shard_file: bool) -
         || body.contains(".erase_operation(")
     {
         output.push_str("use pliron::irbuild::rewriter::Rewriter;\n");
-    }
-    if body.contains(".loc()") || body.contains(".set_loc(") {
-        output.push_str("use pliron::location::Located;\n");
     }
     if body.contains("::get_concrete_op_info(") || body.contains(".get_operation()") {
         output.push_str("use pliron::op::Op;\n");

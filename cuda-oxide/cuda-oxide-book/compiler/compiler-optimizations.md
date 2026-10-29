@@ -272,18 +272,20 @@ unroll; the loop continues with the same behavior.
 
 ## Supported loops and safe fallback
 
-The current pass intentionally recognizes a conservative set of loop shapes:
-
-Both forms need a counter the pass can follow: a compile-time-constant starting
-value, the same fixed step on every path back to the header, and a simple,
-side-effect-free test that directly compares the counter with its bound. The
-loop must also have one ordinary entry before its header. For unusual or
-irreducible control flow, the compiler warns and does not unroll the loop.
+The current pass intentionally recognizes a conservative set of loop shapes.
+A counted `while` loop and a range `for` loop (`for i in a..b` and
+`(a..b).rev()`, over any integer counter including `isize`) need a counter the
+pass can follow: a compile-time-constant starting value, the same fixed step
+on every path back to the header, and a simple, side-effect-free test that
+directly compares the counter with its bound. The loop must also have one
+ordinary entry before its header. For unusual or irreducible control flow, the
+compiler warns and does not unroll the loop.
 
 | Shape | Current behavior |
 |:------|:-----------------|
-| Explicit counted `while` loop | Supported when the requirements above hold |
-| Range-based `for` loop | Not yet recognized |
+| Explicit counted `while` loop | Supported, over any integer counter including `isize`, when the requirements above hold |
+| Range `for` loop (`for i in a..b` and `(a..b).rev()`) | Supported, over any integer counter including `isize`, when the requirements above hold |
+| Other iterator `for` loops (`a..=b`, `.step_by(k)`, `.iter()`) | Not yet recognized; warns |
 | Constant trip count with `#[unroll]` | Fully unrolled |
 | Runtime, loop-invariant limit with `#[unroll(N)]` | Partially unrolled |
 | Several `continue` paths with the same counter step | Joined and unrolled |
@@ -301,7 +303,10 @@ first.
 
 To bound compile time and memory, one annotation may create at most 1,024 body
 copies, 8,192 cloned basic blocks, and 65,536 cloned operations. A request over
-one of those limits warns and is not unrolled.
+one of those limits warns and is not unrolled. Every warning about a loop that
+was not unrolled names the `#[unroll]` attribute it refers to as
+`file:line:column` on a `-->` line, so a kernel with several annotated loops
+shows which one was left alone.
 
 For the complete kernel-author reference, see {ref}`Loop unrolling <loop-unrolling>`.
 

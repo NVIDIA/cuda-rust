@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 458" width="1240" height="458" role="img"
+  aria-label="Targets: CuTeDSL 4.7 compiles for every listed architecture; the cute-rs preview compiles for sm_100a and sm_120a and rejects the rest">
+<style>
+  :root, svg {
+  --bg: #f4f6f8; --fg: #1a232e; --muted: #5d6b7a; --line: #9aa7b4; --panel: #ffffff;
+  --meta: #0e7c72; --meta-fill: #d9f3ef; --code: #b4560a; --code-fill: #fdebd2;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+ }
+  @media (prefers-color-scheme: dark) { :root, svg {
+  --bg: #1b1d23; --fg: #f2f4f7; --muted: #bcc4d0; --line: #5c6475; --panel: #282c36;
+  --meta: #7ed8bb; --meta-fill: #346357; --code: #f4c474; --code-fill: #735a3c;
+ } }
+</style>
+<rect x="0" y="0" width="1240" height="458" style="fill: var(--bg)"/>
+<text x="40" y="34" text-anchor="start" style="font: 600 17px var(--sans); fill: var(--fg)">Targets</text>
+<text x="40" y="56" text-anchor="start" style="font: 400 12.5px var(--sans); fill: var(--muted)">CuTeDSL 4.7 compiles for all of these. The preview compiles for two and rejects the rest before any MLIR is built.</text>
+<text x="40" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">TARGET</text>
+<text x="520" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">GPU</text>
+<text x="880" y="92" text-anchor="middle" style="font: 600 11px var(--sans); fill: var(--muted)">CuTeDSL 4.7</text>
+<text x="1000" y="92" text-anchor="middle" style="font: 600 11px var(--sans); fill: var(--muted)">cute-rs preview</text>
+<rect x="32" y="102" width="1176" height="40" rx="3" style="fill: var(--panel)"/>
+<rect x="40" y="113" width="50.0" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="47" y="127" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_80</text>
+<rect x="98.0" y="113" width="50.0" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="105.0" y="127" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_86</text>
+<rect x="156.0" y="113" width="50.0" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="163.0" y="127" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_87</text>
+<text x="520" y="127" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Ampere</text>
+<circle cx="880" cy="122" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="972" cy="122" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="986" y="126" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">rejected before compilation</text>
+<rect x="40" y="153" width="50.0" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="47" y="167" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_89</text>
+<text x="520" y="167" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Ada</text>
+<circle cx="880" cy="162" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="972" cy="162" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="986" y="166" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">rejected before compilation</text>
+<rect x="32" y="182" width="1176" height="40" rx="3" style="fill: var(--panel)"/>
+<rect x="40" y="193" width="57.2" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="47" y="207" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_90a</text>
+<text x="520" y="207" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Hopper</text>
+<circle cx="880" cy="202" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="972" cy="202" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="986" y="206" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">rejected before compilation</text>
+<rect x="40" y="233" width="64.4" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="47" y="247" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_100a</text>
+<text x="520" y="247" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Blackwell datacenter, B200 class</text>
+<circle cx="880" cy="242" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="972" cy="242" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="986" y="246" text-anchor="start" style="font: 600 11.5px var(--sans); fill: var(--fg)">yes</text>
+<rect x="32" y="262" width="1176" height="40" rx="3" style="fill: var(--panel)"/>
+<rect x="40" y="273" width="57.2" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="47" y="287" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_100</text>
+<rect x="105.2" y="273" width="64.4" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="112.2" y="287" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_100f</text>
+<rect x="177.60000000000002" y="273" width="64.4" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="184.60000000000002" y="287" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_103a</text>
+<rect x="250.00000000000003" y="273" width="64.4" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="257.0" y="287" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_110a</text>
+<text x="520" y="287" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Blackwell datacenter, other variants</text>
+<circle cx="880" cy="282" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="972" cy="282" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="986" y="286" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">rejected before compilation</text>
+<rect x="40" y="313" width="64.4" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="47" y="327" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_120a</text>
+<text x="520" y="327" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Blackwell GeForce, RTX 50 series</text>
+<circle cx="880" cy="322" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="972" cy="322" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="986" y="326" text-anchor="start" style="font: 600 11.5px var(--sans); fill: var(--fg)">yes</text>
+<rect x="32" y="342" width="1176" height="40" rx="3" style="fill: var(--panel)"/>
+<rect x="40" y="353" width="57.2" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="47" y="367" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_120</text>
+<rect x="105.2" y="353" width="64.4" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="112.2" y="367" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_120f</text>
+<rect x="177.60000000000002" y="353" width="64.4" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="184.60000000000002" y="367" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_121a</text>
+<text x="520" y="367" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Blackwell GeForce, other variants</text>
+<circle cx="880" cy="362" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="972" cy="362" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="986" y="366" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">rejected before compilation</text>
+<circle cx="47" cy="404" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="62" y="408" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">compiles</text>
+<circle cx="153" cy="404" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="168" y="408" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">rejected by the profile gate</text>
+<text x="40" y="434" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">Within the pair, tcgen05 operations need sm_100a and MXF4 register MMA needs sm_120a. cargo oxide run uses the detected GPU; cargo oxide build needs --arch.</text>
+</svg>

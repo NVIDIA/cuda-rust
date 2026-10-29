@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::*;
+use crate::cutlass_toolchain;
 use std::ffi::OsStr;
 
 /// The concatenated sources of every module under `commands/`, standing in
@@ -34,6 +35,7 @@ const COMMANDS_SOURCE: &str = concat!(
     include_str!("scaffold.rs"),
     include_str!("setup_update.rs"),
     include_str!("tests.rs"),
+    include_str!("tilelib.rs"),
     include_str!("toolkit.rs"),
 );
 
@@ -68,6 +70,50 @@ fn is_sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
+#[test]
+fn managed_cutlass_compiler_sets_only_the_library_env() {
+    let resolved = cutlass_toolchain::ResolvedCutlass {
+        install_dir: PathBuf::from("/managed/cutlass"),
+        compiler_library: PathBuf::from("/managed/cutlass/lib/libCutlassCompiler.so"),
+        compiler_library_sha256: "fixture-digest".into(),
+    };
+    let mut cmd = Command::new("cargo");
+    apply_resolved_cutlass_compiler(&mut cmd, Some(&resolved), false);
+    assert_eq!(
+        command_env(&cmd, cutlass_toolchain::CUTLASS_COMPILER_ENV).as_deref(),
+        Some("/managed/cutlass/lib/libCutlassCompiler.so")
+    );
+}
+
+#[test]
+fn explicit_cutlass_compiler_outranks_managed_resolution() {
+    let resolved = cutlass_toolchain::ResolvedCutlass {
+        install_dir: PathBuf::from("/managed/cutlass"),
+        compiler_library: PathBuf::from("/managed/cutlass/lib/libCutlassCompiler.so"),
+        compiler_library_sha256: "fixture-digest".into(),
+    };
+    let mut cmd = Command::new("cargo");
+    cmd.env(
+        cutlass_toolchain::CUTLASS_COMPILER_ENV,
+        "/explicit/libCutlassCompiler.so",
+    );
+    apply_resolved_cutlass_compiler(&mut cmd, Some(&resolved), true);
+    assert_eq!(
+        command_env(&cmd, cutlass_toolchain::CUTLASS_COMPILER_ENV).as_deref(),
+        Some("/explicit/libCutlassCompiler.so")
+    );
+}
+
+fn strings(args: &[&str]) -> Vec<String> {
+    args.iter().map(|arg| arg.to_string()).collect()
+}
+
+fn command_args(cmd: &Command) -> Vec<String> {
+    cmd.get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect()
+}
+
 /// `cargo_passthrough_command` with an empty ambient
 /// `CUDA_OXIDE_MATERIALIZE_CUBIN`.
 ///
@@ -85,18 +131,19 @@ fn passthrough_command_for_test(
     cargo_passthrough_command_with_env(ctx, cargo_subcommand, opts, cargo_args, None)
 }
 
+/// Run one passthrough command on a scratch workspace and report which units
+/// Cargo reused, by target name. A test harness carries a ` (test)` suffix so
+/// it never shadows the library it was built from.
 fn cargo_artifact_freshness(
     ctx: &Context,
+    cargo_subcommand: CargoPassthroughSubcommand,
     opts: &CargoPassthroughOptions<'_>,
+    cargo_args: &[&str],
     materializer_provenance: Option<&str>,
 ) -> BTreeMap<String, bool> {
-    let mut cmd = passthrough_command_for_test(
-        ctx,
-        CargoPassthroughSubcommand::Build,
-        opts,
-        &["--message-format=json-render-diagnostics".to_string()],
-    )
-    .unwrap();
+    let mut args = strings(&["--message-format=json-render-diagnostics"]);
+    args.extend(strings(cargo_args));
+    let mut cmd = passthrough_command_for_test(ctx, cargo_subcommand, opts, &args).unwrap();
     if let Some(provenance) = materializer_provenance {
         // Exercise a non-canonical spelling accepted by the backend. The
         // macro must still track exact provenance rather than keying that
@@ -117,10 +164,13 @@ fn cargo_artifact_freshness(
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .filter(|message| message["reason"] == "compiler-artifact")
         .filter_map(|message| {
-            Some((
-                message["target"]["name"].as_str()?.to_string(),
-                message["fresh"].as_bool()?,
-            ))
+            let name = message["target"]["name"].as_str()?;
+            let key = if message["profile"]["test"].as_bool()? {
+                format!("{name} (test)")
+            } else {
+                name.to_string()
+            };
+            Some((key, message["fresh"].as_bool()?))
         })
         .collect()
 }
@@ -501,48 +551,69 @@ edition = "2024"
 }
 
 #[test]
-fn workspace_clean_removes_root_backend_and_example_targets() {
-    let root = unique_temp_dir("cargo_oxide_clean_workspace");
-    let codegen_crate = root.join("crates/rustc-codegen-cuda");
-    let examples_dir = codegen_crate.join("examples");
-    let example_dir = examples_dir.join("demo");
-
-    std::fs::create_dir_all(root.join("target/debug")).unwrap();
-    std::fs::create_dir_all(codegen_crate.join("target/debug")).unwrap();
-    std::fs::create_dir_all(example_dir.join("target/debug")).unwrap();
-
-    std::fs::write(
-        example_dir.join("Cargo.toml"),
-        r#"
-[package]
-name = "demo"
-version = "0.1.0"
-edition = "2024"
-"#,
-    )
-    .unwrap();
-
-    std::fs::write(example_dir.join("demo.ptx"), b"generated").unwrap();
-
-    let ctx = Context {
-        workspace_root: root.clone(),
-        codegen_crate: codegen_crate.clone(),
-        examples_dir,
-        backend_so: root.join("unused-backend.so"),
-        is_workspace: true,
-        config: OxideConfig::default(),
-    };
-
-    let summary = clean_context(&ctx).unwrap();
-
-    assert_eq!(summary.removed_directories, 3);
-    assert_eq!(summary.removed_files, 1);
-    assert!(!root.join("target").exists());
-    assert!(!codegen_crate.join("target").exists());
-    assert!(!example_dir.join("target").exists());
-    assert!(!example_dir.join("demo.ptx").exists());
-
-    std::fs::remove_dir_all(root).unwrap();
+fn workspace_clean_covers_example_and_model_roots_in_flat_and_nested_layouts() {
+    for nested in [false, true] {
+        let root = unique_temp_dir("cargo_oxide_clean_workspace");
+        let component = if nested {
+            root.join("cuda-oxide")
+        } else {
+            root.clone()
+        };
+        let codegen_crate = component.join("crates/rustc-codegen-cuda");
+        let examples_dir = codegen_crate.join("examples");
+        let example_dir = examples_dir.join("demo");
+        let cute_root = component.join("cute-rs-preview/examples");
+        let cute_dir = cute_root.join("tiled");
+        let models_root = component.join("cute-rs-preview/models");
+        let model_dir = models_root.join("decoder");
+        for dir in [
+            &root,
+            &component,
+            &codegen_crate,
+            &example_dir,
+            &cute_dir,
+            &model_dir,
+        ] {
+            std::fs::create_dir_all(dir.join("target/debug")).unwrap();
+        }
+        write_list_example(&examples_dir, "demo", None, None);
+        write_list_example(&cute_root, "tiled", None, None);
+        write_list_example(&models_root, "decoder", None, None);
+        std::fs::write(example_dir.join("demo.ptx"), b"generated").unwrap();
+        std::fs::write(cute_dir.join("tiled.cubin"), b"generated").unwrap();
+        std::fs::write(model_dir.join("decoder.cubin"), b"generated").unwrap();
+        std::fs::write(cute_dir.join("other.cubin"), b"preserve").unwrap();
+        let ctx = Context {
+            workspace_root: root.clone(),
+            codegen_crate: codegen_crate.clone(),
+            examples_dir,
+            backend_so: root.join("unused-backend.so"),
+            is_workspace: true,
+            config: OxideConfig::default(),
+        };
+        let summary = clean_context(&ctx).unwrap();
+        assert_eq!(summary.removed_directories, if nested { 6 } else { 5 });
+        assert_eq!(summary.removed_files, 3);
+        for dir in [
+            &root,
+            &component,
+            &codegen_crate,
+            &example_dir,
+            &cute_dir,
+            &model_dir,
+        ] {
+            assert!(!dir.join("target").exists());
+        }
+        assert!(!example_dir.join("demo.ptx").exists());
+        assert!(!cute_dir.join("tiled.cubin").exists());
+        assert!(!model_dir.join("decoder.cubin").exists());
+        assert_eq!(
+            std::fs::read(cute_dir.join("other.cubin")).unwrap(),
+            b"preserve"
+        );
+        assert_eq!(clean_context(&ctx).unwrap(), CleanSummary::default());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg(unix)]
@@ -1215,15 +1286,23 @@ fn interop_build_keeps_debug_assertions_and_device_debug_independent() {
             append_full_debug_rustflags(&mut encoded, &cmd, None);
             let flags = decoded_rustflags(&encoded);
 
-            assert!(flags.contains(&"-Copt-level=3"));
-            assert!(flags.contains(&if assertions {
+            let pins: Vec<String> = options
+                .codegen_profile()
+                .pinned_options()
+                .iter()
+                .map(|pin| pin.rustc_flag())
+                .collect();
+            let assertions_flag = if assertions {
                 "-Cdebug-assertions=on"
             } else {
                 "-Cdebug-assertions=off"
-            }));
-            if assertions {
-                assert!(flags.contains(&"-Coverflow-checks=off"));
-            }
+            };
+            assert_eq!(
+                pins,
+                ["-Copt-level=3", assertions_flag, "-Coverflow-checks=off"]
+            );
+            // Without incoming overrides the pins stay in the Cargo profile.
+            assert!(!flags.iter().any(|flag| pins.iter().any(|pin| pin == flag)));
             assert_eq!(has_full_debug_cfg(&flags), debug == DeviceDebug::Full);
             for required in FULL_DEBUG_MIR_RUSTFLAGS {
                 assert_eq!(flags.contains(required), debug == DeviceDebug::Full);
@@ -2002,12 +2081,12 @@ fn build_passthrough_retains_release_profile_and_required_flags() {
     assert_eq!(flags[0], "-Lnative=/nix/store/cuda-cudart/lib");
     assert!(flags.contains(&"-Copt-level=0"));
     assert!(flags.contains(&"-Zcodegen-backend=llvm"));
+    // Only the overridden option is re-pinned; debug-assertions stays in the profile.
     assert_eq!(
-        &flags[flags.len() - 6..],
+        &flags[flags.len() - 5..],
         [
             "-Zcodegen-backend=/tmp/librustc_codegen_cuda.so",
             "-Copt-level=3",
-            "-Cdebug-assertions=off",
             "-Zmir-enable-passes=-JumpThreading",
             "-Zalways-encode-mir",
             "-Csymbol-mangling-version=v0",
@@ -2068,8 +2147,9 @@ fn encoded_rustflags_preserve_configured_flag_boundaries_and_spaces() {
             .any(|pair| pair == ["--cfg", "model=\"alpha beta\""])
     );
     assert_eq!(&flags[2..4], ["-L", "native=/nix/store/cuda-cudart/lib"]);
+    // Backend, then the three required -Z/-C invariants (no incoming pin overrides).
     assert_eq!(
-        flags[flags.len() - 6],
+        flags[flags.len() - 4],
         "-Zcodegen-backend=/tmp/backend path/librustc_codegen_cuda.so"
     );
 }
@@ -2148,9 +2228,20 @@ fn debug_profile_retains_release_defaults_and_adds_debuginfo() {
     );
     let flags = decoded_rustflags(&rustflags);
 
-    assert!(flags.contains(&"-Copt-level=3"));
-    assert!(flags.contains(&"-Cdebug-assertions=off"));
-    assert!(flags.contains(&"-Cdebuginfo=2"));
+    assert_eq!(
+        CodegenProfilePolicy::ReleaseLikeWithDebugInfo
+            .pinned_options()
+            .iter()
+            .map(|pin| pin.rustc_flag())
+            .collect::<Vec<_>>(),
+        [
+            "-Copt-level=3",
+            "-Cdebug-assertions=off",
+            "-Coverflow-checks=off",
+            "-Cdebuginfo=2"
+        ]
+    );
+    assert!(!flags.iter().any(|flag| flag.starts_with("-Cdebuginfo")));
     assert!(flags.contains(&"-Zmir-enable-passes=-JumpThreading"));
     assert!(flags.contains(&"-Zalways-encode-mir"));
     assert!(flags.contains(&"-Csymbol-mangling-version=v0"));
@@ -2569,16 +2660,325 @@ fn build_passthrough_debug_assertions_select_the_wrapper_profile() {
     let flags = decoded_rustflags(&encoded);
 
     assert_eq!(
-        &flags[flags.len() - 6..],
+        &flags[flags.len() - 3..],
         [
-            "-Copt-level=3",
-            "-Cdebug-assertions=on",
-            "-Coverflow-checks=off",
             "-Zmir-enable-passes=-JumpThreading",
             "-Zalways-encode-mir",
             "-Csymbol-mangling-version=v0",
         ]
     );
+    for base in ["RELEASE", "DEV"] {
+        for (key, value) in [
+            ("OPT_LEVEL", "3"),
+            ("DEBUG_ASSERTIONS", "true"),
+            ("OVERFLOW_CHECKS", "false"),
+        ] {
+            assert_eq!(
+                command_env(&cmd, &format!("CARGO_PROFILE_{base}_{key}")).as_deref(),
+                Some(value)
+            );
+        }
+    }
+}
+
+/// A release-like build and `test -- --release` must hand rustc the same
+/// rustflags, or Cargo rebuilds every crate between them.
+#[test]
+fn build_and_test_passthrough_share_rustflags() {
+    let ctx = test_context(OxideConfig::default());
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: None,
+        features: None,
+        cargo_target_dir: None,
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+    let rustflags = |subcommand| {
+        let cmd = passthrough_command_for_test(&ctx, subcommand, &opts, &[]).unwrap();
+        command_env(&cmd, "CARGO_ENCODED_RUSTFLAGS").unwrap()
+    };
+    assert_eq!(
+        rustflags(CargoPassthroughSubcommand::Build),
+        rustflags(CargoPassthroughSubcommand::Test)
+    );
+    let test =
+        passthrough_command_for_test(&ctx, CargoPassthroughSubcommand::Test, &opts, &[]).unwrap();
+    assert!(
+        !test
+            .get_envs()
+            .any(|(key, _)| key.to_string_lossy().starts_with("CARGO_PROFILE_"))
+    );
+}
+
+#[test]
+fn codegen_option_names_cover_every_rustc_spelling() {
+    let flags: Vec<String> = [
+        "-Copt-level=0",
+        "-C",
+        "debug-assertions=on",
+        "--codegen",
+        "overflow-checks=on",
+        "--codegen=debuginfo=1",
+        "-O",
+        "-g",
+        "-Copt_level=1",
+        "-Cdebug-assertions",
+        "-Ccodegen-units=1",
+        "-Lnative=/lib",
+        "--cfg",
+        "feature=\"x\"",
+        "-C",
+    ]
+    .map(String::from)
+    .into();
+    assert_eq!(
+        codegen_option_names(&flags),
+        [
+            "opt-level",
+            "debug-assertions",
+            "overflow-checks",
+            "debuginfo",
+            "opt-level",
+            "debuginfo",
+            "opt-level",
+            "debug-assertions",
+            "codegen-units"
+        ]
+    );
+}
+
+/// `--profile` is read in both forms from the Cargo arguments; the last one
+/// counts and arguments after `--` belong to the program.
+#[test]
+fn selected_cargo_profile_reads_both_forms_before_the_separator() {
+    assert_eq!(
+        selected_cargo_profile(&strings(&["--profile", "release-lto", "-p", "app"])),
+        Some("release-lto")
+    );
+    assert_eq!(
+        selected_cargo_profile(&strings(&["-p", "app", "--profile=ci"])),
+        Some("ci")
+    );
+    assert_eq!(
+        selected_cargo_profile(&strings(&["--profile", "first", "--profile=second"])),
+        Some("second")
+    );
+    assert_eq!(
+        selected_cargo_profile(&strings(&["--release", "--", "--profile", "ignored"])),
+        None
+    );
+    assert_eq!(selected_cargo_profile(&strings(&["--profile"])), None);
+}
+
+/// Pins reach the two base profiles through the environment and nothing
+/// else: a selected `release-lto` must not add `CARGO_PROFILE_RELEASE_LTO_*`,
+/// which Cargo reads as `profile.release.lto` and rejects.
+#[test]
+fn profile_pins_stay_on_the_base_profiles() {
+    let ctx = test_context(OxideConfig::default());
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: None,
+        features: None,
+        cargo_target_dir: None,
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+    let cmd = passthrough_command_for_test(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &opts,
+        &strings(&["--profile", "release-lto"]),
+    )
+    .unwrap();
+    let mut expected = BTreeMap::new();
+    for base in ["RELEASE", "DEV"] {
+        for (key, value) in [
+            ("OPT_LEVEL", "3"),
+            ("DEBUG_ASSERTIONS", "false"),
+            ("OVERFLOW_CHECKS", "false"),
+        ] {
+            expected.insert(format!("CARGO_PROFILE_{base}_{key}"), value.to_string());
+        }
+    }
+    let profile_env: BTreeMap<String, String> = cmd
+        .get_envs()
+        .filter_map(|(key, value)| {
+            let key = key.to_string_lossy();
+            key.starts_with("CARGO_PROFILE_").then(|| {
+                let value = value.map(|value| value.to_string_lossy().into_owned());
+                (key.into_owned(), value.unwrap_or_default())
+            })
+        })
+        .collect();
+    assert_eq!(profile_env, expected);
+
+    let mut debug = Command::new("cargo");
+    debug.args(["build", "--release"]);
+    apply_profile_pins(&mut debug, CodegenProfilePolicy::ReleaseLikeWithDebugInfo);
+    for base in ["RELEASE", "DEV"] {
+        assert_eq!(
+            command_env(&debug, &format!("CARGO_PROFILE_{base}_DEBUG")).as_deref(),
+            Some("2")
+        );
+    }
+
+    let mut test = Command::new("cargo");
+    test.args(["test", "--profile=bench"]);
+    apply_profile_pins(&mut test, CodegenProfilePolicy::CargoSelected);
+    assert_eq!(test.get_envs().count(), 0);
+}
+
+/// A profile other than `release` or `dev` takes the pins as `--config`
+/// arguments placed before the user's Cargo arguments, in both `--profile`
+/// forms. Base profiles and `cargo oxide test` add none.
+#[test]
+fn custom_profile_pins_travel_as_config_arguments() {
+    let ctx = test_context(OxideConfig::default());
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: None,
+        features: None,
+        cargo_target_dir: None,
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+    let pins = strings(&[
+        "--config",
+        "profile.release-lto.opt-level=3",
+        "--config",
+        "profile.release-lto.debug-assertions=false",
+        "--config",
+        "profile.release-lto.overflow-checks=false",
+    ]);
+    for cargo_args in [
+        strings(&["--profile", "release-lto", "-p", "app"]),
+        strings(&["-p", "app", "--profile=release-lto"]),
+    ] {
+        let cmd = passthrough_command_for_test(
+            &ctx,
+            CargoPassthroughSubcommand::Build,
+            &opts,
+            &cargo_args,
+        )
+        .unwrap();
+        let expected: Vec<String> = strings(&["build"])
+            .into_iter()
+            .chain(pins.iter().cloned())
+            .chain(cargo_args.iter().cloned())
+            .collect();
+        assert_eq!(command_args(&cmd), expected);
+    }
+    for cargo_args in [
+        strings(&[]),
+        strings(&["--release"]),
+        strings(&["--profile", "release"]),
+        strings(&["--profile=dev"]),
+    ] {
+        let cmd = passthrough_command_for_test(
+            &ctx,
+            CargoPassthroughSubcommand::Build,
+            &opts,
+            &cargo_args,
+        )
+        .unwrap();
+        let expected: Vec<String> = strings(&["build"])
+            .into_iter()
+            .chain(cargo_args.iter().cloned())
+            .collect();
+        assert_eq!(command_args(&cmd), expected);
+    }
+
+    let test = passthrough_command_for_test(
+        &ctx,
+        CargoPassthroughSubcommand::Test,
+        &opts,
+        &strings(&["--profile", "release-lto"]),
+    )
+    .unwrap();
+    assert_eq!(
+        command_args(&test),
+        strings(&["test", "--profile", "release-lto"])
+    );
+
+    let with_assertions = CargoPassthroughOptions {
+        debug_assertions: true,
+        ..opts
+    };
+    let cmd = passthrough_command_for_test(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &with_assertions,
+        &strings(&["--profile=ci"]),
+    )
+    .unwrap();
+    assert_eq!(
+        command_args(&cmd),
+        strings(&[
+            "build",
+            "--config",
+            "profile.ci.opt-level=3",
+            "--config",
+            "profile.ci.debug-assertions=true",
+            "--config",
+            "profile.ci.overflow-checks=false",
+            "--profile=ci",
+        ])
+    );
+}
+
+/// `profile_config_args` writes every pinned key as a manifest writes it,
+/// adds the debug-info pin for the debug route, and leaves base profiles,
+/// pin-free policies and names Cargo would reject alone.
+#[test]
+fn profile_config_args_use_manifest_keys() {
+    assert_eq!(
+        profile_config_args(
+            CodegenProfilePolicy::ReleaseLikeWithDebugInfo,
+            "release-lto"
+        ),
+        strings(&[
+            "--config",
+            "profile.release-lto.opt-level=3",
+            "--config",
+            "profile.release-lto.debug-assertions=false",
+            "--config",
+            "profile.release-lto.overflow-checks=false",
+            "--config",
+            "profile.release-lto.debug=2",
+        ])
+    );
+    for (policy, profile) in [
+        (CodegenProfilePolicy::ReleaseLike, "release"),
+        (CodegenProfilePolicy::ReleaseLike, "dev"),
+        (CodegenProfilePolicy::CargoSelected, "release-lto"),
+        (CodegenProfilePolicy::ReleaseLike, "my profile"),
+        (CodegenProfilePolicy::ReleaseLike, ""),
+    ] {
+        assert!(
+            profile_config_args(policy, profile).is_empty(),
+            "{policy:?} {profile:?}"
+        );
+    }
 }
 
 #[test]
@@ -2775,13 +3175,13 @@ device-owner = { path = "../device-owner" }
         debug_assertions: false,
     };
 
-    let cold = cargo_artifact_freshness(&ctx, &base, None);
+    let cold = cargo_artifact_freshness(&ctx, CargoPassthroughSubcommand::Build, &base, &[], None);
     assert_eq!(cold.get("shared_dep"), Some(&false));
     assert_eq!(cold.get("tracked_macro"), Some(&false));
     assert_eq!(cold.get("device_owner"), Some(&false));
     assert_eq!(cold.get("device-consumer"), Some(&false));
 
-    let warm = cargo_artifact_freshness(&ctx, &base, None);
+    let warm = cargo_artifact_freshness(&ctx, CargoPassthroughSubcommand::Build, &base, &[], None);
     assert_eq!(warm.get("shared_dep"), Some(&true));
     assert_eq!(warm.get("tracked_macro"), Some(&true));
     assert_eq!(warm.get("device_owner"), Some(&true));
@@ -2791,7 +3191,13 @@ device-owner = { path = "../device-owner" }
         arch: Some("sm_90"),
         ..base
     };
-    let arch_switch = cargo_artifact_freshness(&ctx, &different_arch, None);
+    let arch_switch = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &different_arch,
+        &[],
+        None,
+    );
     assert_eq!(arch_switch.get("shared_dep"), Some(&true));
     assert_eq!(arch_switch.get("tracked_macro"), Some(&true));
     assert_eq!(arch_switch.get("device_owner"), Some(&false));
@@ -2801,13 +3207,25 @@ device-owner = { path = "../device-owner" }
         emit_nvvm_ir: true,
         ..different_arch
     };
-    let output_switch = cargo_artifact_freshness(&ctx, &different_output, None);
+    let output_switch = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &different_output,
+        &[],
+        None,
+    );
     assert_eq!(output_switch.get("shared_dep"), Some(&true));
     assert_eq!(output_switch.get("tracked_macro"), Some(&true));
     assert_eq!(output_switch.get("device_owner"), Some(&false));
     assert_eq!(output_switch.get("device-consumer"), Some(&false));
 
-    let repeated_output = cargo_artifact_freshness(&ctx, &different_output, None);
+    let repeated_output = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &different_output,
+        &[],
+        None,
+    );
     assert_eq!(repeated_output.get("shared_dep"), Some(&true));
     assert_eq!(repeated_output.get("tracked_macro"), Some(&true));
     assert_eq!(repeated_output.get("device_owner"), Some(&true));
@@ -2815,7 +3233,9 @@ device-owner = { path = "../device-owner" }
 
     let provenance_switch = cargo_artifact_freshness(
         &ctx,
+        CargoPassthroughSubcommand::Build,
         &different_output,
+        &[],
         Some("11d91fbe164094f6242d44103d0fb01968b96c6d8f48f124eac8fa73a307a657"),
     );
     assert_eq!(provenance_switch.get("shared_dep"), Some(&true));
@@ -2825,7 +3245,9 @@ device-owner = { path = "../device-owner" }
 
     let changed_provenance = cargo_artifact_freshness(
         &ctx,
+        CargoPassthroughSubcommand::Build,
         &different_output,
+        &[],
         Some("5b11618c2e44027877d0cd4d0cfd10afed5ef262876791e483ec58f4c5569139"),
     );
     assert_eq!(changed_provenance.get("shared_dep"), Some(&true));
@@ -2834,6 +3256,203 @@ device-owner = { path = "../device-owner" }
     assert_eq!(changed_provenance.get("device-consumer"), Some(&false));
 
     std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A workspace of one library and one binary that depends on it, for probing
+/// real Cargo. `profiles` is appended to the workspace manifest. The binary
+/// computes `u8::MAX + 1`, which panics under overflow checks, so running it
+/// shows whether the `overflow-checks = false` pin reached the final crate.
+fn write_shared_dependency_workspace(root: &Path, profiles: &str) {
+    for path in [root.join("shared-dep/src"), root.join("app/src")] {
+        fs::create_dir_all(path).unwrap();
+    }
+    fs::write(
+        root.join("Cargo.toml"),
+        format!(
+            r#"[workspace]
+resolver = "3"
+members = ["shared-dep", "app"]
+{profiles}"#
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.join("shared-dep/Cargo.toml"),
+        r#"[package]
+name = "shared-dep"
+version = "0.0.0"
+edition = "2024"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("shared-dep/src/lib.rs"),
+        "pub fn shared_value() -> u32 { 42 }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("app/Cargo.toml"),
+        r#"[package]
+name = "app"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+shared-dep = { path = "../shared-dep" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("app/src/main.rs"),
+        r#"fn main() {
+    assert_eq!(shared_dep::shared_value(), 42);
+    let value: u8 = std::hint::black_box(u8::MAX);
+    assert_eq!(value + 1, 0, "overflow checks reached the binary");
+}
+"#,
+    )
+    .unwrap();
+}
+
+fn scratch_workspace_context(root: &Path) -> Context {
+    Context {
+        workspace_root: root.to_path_buf(),
+        codegen_crate: root.join("unused-codegen-source"),
+        examples_dir: root.join("unused-examples"),
+        backend_so: PathBuf::from("llvm"),
+        is_workspace: false,
+        config: OxideConfig::default(),
+    }
+}
+
+/// Pins equal to the release defaults keep `build -- --release` and
+/// `test -- --release` on one artifact set: the shared dependency is reused
+/// when the two alternate. Carried in rustflags, the same pins changed every
+/// unit's cache key, so the switch recompiled the whole graph and left a
+/// second copy of each artifact behind.
+#[test]
+fn release_build_and_test_reuse_each_others_dependencies() {
+    let root = unique_temp_dir("cargo_oxide_release_build_test_reuse");
+    let target = root.join("target");
+    write_shared_dependency_workspace(&root, "");
+    let ctx = scratch_workspace_context(&root);
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: Some("sm_80"),
+        features: None,
+        cargo_target_dir: Some(&target),
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+
+    let build = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &opts,
+        &["--release"],
+        None,
+    );
+    assert_eq!(build.get("shared_dep"), Some(&false));
+    assert_eq!(build.get("app"), Some(&false));
+
+    let test = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Test,
+        &opts,
+        &["--release", "--no-run"],
+        None,
+    );
+    assert_eq!(
+        test.get("shared_dep"),
+        Some(&true),
+        "test -- --release must reuse the release build's dependency"
+    );
+    assert_eq!(test.get("app (test)"), Some(&false));
+
+    let rebuild = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &opts,
+        &["--release"],
+        None,
+    );
+    assert_eq!(rebuild.get("shared_dep"), Some(&true));
+    assert_eq!(rebuild.get("app"), Some(&true));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// A custom profile with a dash in its name builds in both `--profile` forms,
+/// and the pins beat the keys the profile sets itself: `release-lto` asks for
+/// overflow checks and `opt-level = 1`, yet the binary wraps instead of
+/// panicking. Carried in the environment, the same pins became
+/// `CARGO_PROFILE_RELEASE_LTO_*`, which Cargo reads as `profile.release.lto`
+/// and rejects before compiling.
+#[test]
+fn dashed_custom_profile_builds_with_the_pins_in_force() {
+    let root = unique_temp_dir("cargo_oxide_custom_profile_pins");
+    let target = root.join("target");
+    write_shared_dependency_workspace(
+        &root,
+        r#"
+[profile.release-lto]
+inherits = "release"
+opt-level = 1
+overflow-checks = true
+"#,
+    );
+    let ctx = scratch_workspace_context(&root);
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: Some("sm_80"),
+        features: None,
+        cargo_target_dir: Some(&target),
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+
+    let built = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &opts,
+        &["--profile", "release-lto"],
+        None,
+    );
+    assert_eq!(built.get("app"), Some(&false));
+    let status = Command::new(target.join("release-lto").join("app"))
+        .status()
+        .expect("failed to run the custom-profile binary");
+    assert!(
+        status.success(),
+        "overflow checks reached the custom-profile binary: {status}"
+    );
+
+    let rebuilt = cargo_artifact_freshness(
+        &ctx,
+        CargoPassthroughSubcommand::Build,
+        &opts,
+        &["--profile=release-lto"],
+        None,
+    );
+    assert_eq!(
+        rebuilt.get("app"),
+        Some(&true),
+        "both --profile forms must resolve to one configuration"
+    );
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -2991,6 +3610,117 @@ fn passthrough_fingerprint_tracks_output_affecting_settings() {
         ),
         "exact CUDA-tool provenance must change Cargo's rustc fingerprint"
     );
+}
+
+#[test]
+fn passthrough_fingerprint_tracks_the_managed_cutlass_library_digest() {
+    let ctx = test_context(OxideConfig::default());
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: Some("sm_120a"),
+        features: None,
+        cargo_target_dir: None,
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+    let mut environment = BTreeMap::from([
+        (DEVICE_BACKEND_ENV.to_owned(), b"cutlass-mlir".to_vec()),
+        (
+            cutlass_toolchain::CUTLASS_COMPILER_ENV.to_owned(),
+            b"/managed/libCutlassCompiler.so".to_vec(),
+        ),
+        (
+            CUTLASS_DIGEST_FINGERPRINT_ENV.to_owned(),
+            b"digest-a".to_vec(),
+        ),
+    ]);
+    let fingerprint = |environment: &BTreeMap<String, Vec<u8>>| {
+        passthrough_codegen_fingerprint_with_env(
+            &ctx,
+            &opts,
+            None,
+            Some("sm_120a"),
+            &MaterializationMode::default(),
+            environment,
+        )
+    };
+    environment.insert(
+        "CUDA_OXIDE_MLIR_PROFILE".into(),
+        b"cutlass-full-cute-mlir22".to_vec(),
+    );
+    let full_profile = fingerprint(&environment);
+    environment.insert(
+        "CUDA_OXIDE_MLIR_PROFILE".into(),
+        b"cutlass-primitives-mlir22".to_vec(),
+    );
+    let primitives_profile = fingerprint(&environment);
+    assert_ne!(
+        full_profile, primitives_profile,
+        "changing only the profile must rebuild device code"
+    );
+    assert_eq!(primitives_profile, fingerprint(&environment));
+    let before = fingerprint(&environment);
+    environment.insert(
+        CUTLASS_DIGEST_FINGERPRINT_ENV.to_owned(),
+        b"digest-b".to_vec(),
+    );
+
+    assert_ne!(before, fingerprint(&environment));
+}
+
+#[test]
+fn passthrough_fingerprint_tracks_explicit_cutlass_library_content() {
+    let root = unique_temp_dir("cargo_oxide_explicit_cutlass_fingerprint");
+    fs::create_dir_all(&root).unwrap();
+    let compiler = root.join("libCutlassCompiler.so");
+    fs::write(&compiler, b"compiler-a").unwrap();
+
+    let ctx = test_context(OxideConfig::default());
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: Some("sm_120a"),
+        features: None,
+        cargo_target_dir: None,
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+    let base_environment = BTreeMap::from([
+        (DEVICE_BACKEND_ENV.to_owned(), b"cutlass-mlir".to_vec()),
+        (
+            cutlass_toolchain::CUTLASS_COMPILER_ENV.to_owned(),
+            compiler.as_os_str().as_encoded_bytes().to_vec(),
+        ),
+    ]);
+    let fingerprint = |environment: &mut BTreeMap<String, Vec<u8>>| {
+        augment_env_with_cutlass_compiler_identity(&ctx, environment, Some(compiler.as_path()));
+        passthrough_codegen_fingerprint_with_env(
+            &ctx,
+            &opts,
+            None,
+            Some("sm_120a"),
+            &MaterializationMode::default(),
+            environment,
+        )
+    };
+
+    let before = fingerprint(&mut base_environment.clone());
+    fs::write(&compiler, b"compiler-b").unwrap();
+    let after = fingerprint(&mut base_environment.clone());
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_ne!(before, after, "same-path compiler replacement must rebuild");
 }
 
 #[test]
@@ -4164,6 +4894,100 @@ fn example_discovery_is_sorted_and_uses_manifest_fallback() {
 }
 
 #[test]
+fn example_discovery_combines_roots_and_rejects_duplicate_names() {
+    let root = unique_temp_dir("cargo_oxide_list_multi_root");
+    let standard = root.join("standard");
+    let cute = root.join("cute");
+    std::fs::create_dir_all(&standard).unwrap();
+    std::fs::create_dir_all(&cute).unwrap();
+
+    write_list_example(&standard, "zeta", None, None);
+    write_list_example(&cute, "alpha", None, None);
+    let examples = discover_examples_from_roots(&[standard.clone(), cute.clone()]).unwrap();
+    assert_eq!(
+        examples
+            .iter()
+            .map(|example| example.name.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "zeta"]
+    );
+
+    write_list_example(&cute, "zeta", None, None);
+    let error = discover_examples_from_roots(&[standard, cute]).unwrap_err();
+    assert!(error.contains("example name `zeta` exists in more than one example root"));
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn workspace_example_roots_follow_the_selected_backend_in_each_layout() {
+    for (nested, from_component) in [(false, false), (true, false), (true, true)] {
+        let root = unique_temp_dir("cargo_oxide_cute_example_root");
+        let component = if nested {
+            root.join("cuda-oxide")
+        } else {
+            root.clone()
+        };
+        let codegen = component.join("crates/rustc-codegen-cuda");
+        let standard = codegen.join("examples");
+        let cute = component.join("cute-rs-preview/examples");
+        let models = component.join("cute-rs-preview/models");
+        std::fs::create_dir_all(&standard).unwrap();
+        std::fs::create_dir_all(&cute).unwrap();
+        write_list_example(&standard, "native", None, None);
+        write_list_example(&cute, "tiled", None, None);
+        write_list_example(&models, "qwen_decoder_cute", None, None);
+        if nested {
+            // A leftover root tree must never shadow the selected component.
+            for path in ["cute-rs-preview/examples", "cute-rs-preview/models"] {
+                write_list_example(&root.join(path), "stale", None, None);
+            }
+        }
+        let mut ctx = test_context(OxideConfig::default());
+        ctx.workspace_root = if from_component {
+            component
+        } else {
+            root.clone()
+        };
+        ctx.codegen_crate = codegen;
+        ctx.examples_dir = standard.clone();
+        ctx.is_workspace = true;
+        let examples = discover_examples_from_roots(&example_roots(&ctx)).unwrap();
+        assert_eq!(
+            examples.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+            ["native", "qwen_decoder_cute", "tiled"]
+        );
+        assert_eq!(resolve_example_dir(&ctx, "tiled"), cute.join("tiled"));
+        assert_eq!(
+            resolve_example_dir(&ctx, "qwen_decoder_cute"),
+            models.join("qwen_decoder_cute")
+        );
+        // Duplicate names still fail instead of choosing one source tree.
+        write_list_example(&models, "native", None, None);
+        assert!(
+            discover_examples_from_roots(&example_roots(&ctx))
+                .unwrap_err()
+                .contains("more than one example root")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn standalone_example_roots_do_not_discover_neighboring_cute_trees() {
+    let root = unique_temp_dir("cargo_oxide_standalone_cute_root");
+    for path in ["cute-rs-preview/examples", "cute-rs-preview/models"] {
+        std::fs::create_dir_all(root.join(path)).unwrap();
+    }
+    let mut ctx = test_context(OxideConfig::default());
+    ctx.workspace_root = root.clone();
+    ctx.codegen_crate = root.clone();
+    ctx.examples_dir = root.clone();
+    assert_eq!(example_roots(&ctx).as_slice(), std::slice::from_ref(&root));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn example_discovery_keeps_examples_without_readmes() {
     let root = unique_temp_dir("cargo_oxide_list_missing_readme");
     std::fs::create_dir_all(&root).unwrap();
@@ -4768,15 +5592,45 @@ fn scaffold_sync_template_uses_launch_contract_and_docs() {
     assert!(files.main_rs.contains("prepare_vecadd"));
     assert!(files.main_rs.contains("LaunchConfig1D"));
     assert!(!files.main_rs.contains("LaunchConfig::for_num_elems"));
-    // The host runtime is the crates.io release of the git-root crates.
-    // In-tree examples path-depend on those crates; a freshly scaffolded
-    // project is not inside this monorepo, so it cannot use those paths.
-    assert!(
-        files
+    // cuda-core comes from the same git source as cuda-host, which depends on
+    // it at tip of tree; a crates.io copy would be a second cuda_core.
+    assert!(files.cargo_toml.contains("cuda-core = { git = \""));
+    assert!(!files.cargo_toml.contains("cuda-core = \""));
+}
+
+/// Every CUDA crate in either template resolves from the git source
+/// `cuda-device` names. A host crate taken from crates.io next to a git
+/// `cuda-host` puts two `cuda_core` crates in the graph, and `#[cuda_module]`
+/// then fails to type-check.
+#[test]
+fn scaffold_takes_every_cuda_crate_from_one_git_source() {
+    for async_mode in [false, true] {
+        let files = scaffold_files("one_source", async_mode);
+        let git_source = |line: &str| {
+            line.split("git = \"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .map(str::to_owned)
+        };
+        let cuda_lines: Vec<&str> = files
             .cargo_toml
-            .contains(&format!("cuda-core = \"{SHARED_HOST_CRATES_VERSION}\""))
-    );
-    assert!(!files.cargo_toml.contains("cuda-core = {"));
+            .lines()
+            .filter(|line| line.starts_with("cuda-"))
+            .collect();
+        assert!(cuda_lines.len() >= 3, "{cuda_lines:?}");
+        let device = cuda_lines
+            .iter()
+            .find(|line| line.starts_with("cuda-device"))
+            .and_then(|line| git_source(line))
+            .expect("cuda-device comes from git");
+        for line in cuda_lines {
+            assert_eq!(
+                git_source(line).as_deref(),
+                Some(device.as_str()),
+                "async={async_mode}: {line}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -4794,13 +5648,10 @@ fn scaffold_async_template_keeps_async_deps_and_docs() {
     assert!(files.main_rs.contains("vecadd_async"));
     assert!(files.main_rs.contains("use cuda_host::cuda_module;"));
     assert!(!files.main_rs.contains("use cuda_device::{cuda_module"));
-    // Shared host runtime from crates.io; the SIMT surface lives under simt::.
-    assert!(
-        files
-            .cargo_toml
-            .contains(&format!("cuda-async = \"{SHARED_HOST_CRATES_VERSION}\""))
-    );
-    assert!(!files.cargo_toml.contains("cuda-async = {"));
+    // Shared host runtime from the same git source as cuda-host; the SIMT
+    // surface lives under simt::.
+    assert!(files.cargo_toml.contains("cuda-async = { git = \""));
+    assert!(!files.cargo_toml.contains("cuda-async = \""));
     assert!(!files.cargo_toml.contains("cuda-bindings"));
     assert!(files.main_rs.contains("use cuda_core::simt::LaunchConfig;"));
     assert!(
@@ -4875,6 +5726,23 @@ fn scaffold_gitignore_covers_every_clean_artifact_suffix() {
             gitignore.lines().any(|line| line == pattern),
             "scaffold .gitignore must ignore clean suffix `{suffix}`"
         );
+    }
+}
+
+#[test]
+fn scaffold_names_the_canonical_repository() {
+    // Both templates must name the repository the crates live in now; the
+    // pre-move URL resolves only through GitHub's redirect.
+    for async_mode in [false, true] {
+        let files = scaffold_files("demo_kernel", async_mode);
+        assert!(
+            files
+                .cargo_toml
+                .contains("git = \"https://github.com/NVIDIA/cuda-rust.git\"")
+        );
+        assert!(!files.cargo_toml.contains("NVlabs"));
+        assert!(files.cargo_config_toml.contains("[env]"));
+        assert!(files.cargo_config_toml.contains("RUSTC_BOOTSTRAP = \"1\""));
     }
 }
 
@@ -5146,4 +6014,665 @@ fn doctor_backend_source_check_covers_every_branch() {
             "the backend-source line is informational and must never fail doctor"
         );
     }
+}
+
+// =============================================================================
+// cargo oxide tilelib
+// =============================================================================
+
+/// The three exports of the `tilelib_relu` example, as the backend's
+/// descriptions file records them.
+fn tilelib_relu_descriptions() -> Vec<oxide_tile_export::TileExportDesc> {
+    use oxide_tile_export::{TileAccess, TileElem, TileExportDesc, TileParamDesc, TileSync};
+    let param = |name: &str, access: TileAccess, by_value: bool| TileParamDesc {
+        name: name.to_string(),
+        elem: TileElem::F32,
+        access,
+        footprint: 1,
+        by_value,
+    };
+    vec![
+        TileExportDesc {
+            version: oxide_tile_export::CURRENT_VERSION,
+            decl: "relu".into(),
+            symbol: "relu_impl".into(),
+            shape: vec![128],
+            params: vec![
+                param("x", TileAccess::In, true),
+                param("relu_out", TileAccess::Out, false),
+            ],
+            sync: TileSync::None,
+            arch: Vec::new(),
+        },
+        TileExportDesc {
+            version: oxide_tile_export::CURRENT_VERSION,
+            decl: "scale_in_place".into(),
+            symbol: "scale_in_place_impl".into(),
+            shape: vec![128],
+            params: vec![
+                param("x", TileAccess::InOut, false),
+                param("factor", TileAccess::In, true),
+            ],
+            sync: TileSync::None,
+            arch: Vec::new(),
+        },
+        TileExportDesc {
+            version: oxide_tile_export::CURRENT_VERSION,
+            decl: "warp_sum".into(),
+            symbol: "warp_sum_impl".into(),
+            shape: vec![128],
+            params: vec![
+                param("x", TileAccess::In, true),
+                param("warp_sum_out", TileAccess::Out, false),
+            ],
+            sync: TileSync::Warp,
+            arch: Vec::new(),
+        },
+    ]
+}
+
+/// Whitespace-insensitive form of a Tile IR text, the rule the upstream
+/// fixture tests apply: a whitespace run survives, as one space, only between
+/// two word characters, so the hand-written multi-line layout below compares
+/// equal to the printer's one-line form while a missing space between two
+/// words still differs.
+fn normalize_tile_ir(text: &str) -> String {
+    let is_word = |c: char| c.is_alphanumeric() || "_$.@%!#\"?".contains(c);
+    let mut out = String::new();
+    let mut pending_space = false;
+    for c in text.chars() {
+        if c.is_whitespace() {
+            pending_space = true;
+            continue;
+        }
+        if pending_space {
+            if let Some(prev) = out.chars().last()
+                && is_word(prev)
+                && is_word(c)
+            {
+                out.push(' ');
+            }
+            pending_space = false;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The interface of `tilelib_relu` in the upstream textual syntax: one
+/// extern declaration per export, every argument carrying its access, the
+/// results being the out/inout tiles.
+const TILELIB_RELU_INTERFACE: &str = r#"
+cuda_tile.module @tilelib_relu {
+  cuda_tile.preview$func extern @relu(
+      %x: !cuda_tile.tile<128xf32>
+        {cuda_tile.preview$access = #cuda_tile.preview$access<in>},
+      %relu_out: !cuda_tile.tile<128xf32>
+        {cuda_tile.preview$access = #cuda_tile.preview$access<out>})
+    -> !cuda_tile.tile<128xf32>
+  cuda_tile.preview$func extern @scale_in_place(
+      %x: !cuda_tile.tile<128xf32>
+        {cuda_tile.preview$access = #cuda_tile.preview$access<inout>},
+      %factor: !cuda_tile.tile<128xf32>
+        {cuda_tile.preview$access = #cuda_tile.preview$access<in>})
+    -> !cuda_tile.tile<128xf32>
+  cuda_tile.preview$func extern @warp_sum(
+      %x: !cuda_tile.tile<128xf32>
+        {cuda_tile.preview$access = #cuda_tile.preview$access<in>},
+      %warp_sum_out: !cuda_tile.tile<128xf32>
+        {cuda_tile.preview$access = #cuda_tile.preview$access<out>})
+    -> !cuda_tile.tile<128xf32>
+}
+"#;
+
+/// The implementation catalog of `tilelib_relu`: by-value scalars are the
+/// rank-0 `():()` buffer, pointers the contiguous `(1):(1)` one; the two
+/// elementwise exports map one invocation per element and `warp_sum` one
+/// element per lane with a whole warp per invocation, which is what its
+/// `synchronization = warp` clause requires.
+const TILELIB_RELU_IMPLEMENTATION: &str = r#"
+cuda_tile.module @tilelib_relu {
+  cuda_tile.preview$extern_impl @relu_impl implements @relu
+    (%x: !cuda_tile.preview$fragment<1xf32, local,
+       mem_layout = #cuda_tile.preview$layout<():()>,
+       fragmap = #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>>
+     {cuda_tile.preview$access = #cuda_tile.preview$access<in>},
+     %relu_out: !cuda_tile.preview$fragment<1xf32, local,
+       mem_layout = #cuda_tile.preview$layout<(1):(1)>,
+       fragmap = #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>>
+     {cuda_tile.preview$access = #cuda_tile.preview$access<out>})
+  cuda_tile.preview$extern_impl @scale_in_place_impl implements @scale_in_place
+    (%x: !cuda_tile.preview$fragment<1xf32, local,
+       mem_layout = #cuda_tile.preview$layout<(1):(1)>,
+       fragmap = #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>>
+     {cuda_tile.preview$access = #cuda_tile.preview$access<inout>},
+     %factor: !cuda_tile.preview$fragment<1xf32, local,
+       mem_layout = #cuda_tile.preview$layout<():()>,
+       fragmap = #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>>
+     {cuda_tile.preview$access = #cuda_tile.preview$access<in>})
+  cuda_tile.preview$extern_impl @warp_sum_impl implements @warp_sum
+    (%x: !cuda_tile.preview$fragment<1xf32, local,
+       mem_layout = #cuda_tile.preview$layout<():()>,
+       fragmap = #cuda_tile.preview$layout<(4, 32, 1):(32, 1, 0)>>
+     {cuda_tile.preview$access = #cuda_tile.preview$access<in>},
+     %warp_sum_out: !cuda_tile.preview$fragment<1xf32, local,
+       mem_layout = #cuda_tile.preview$layout<(1):(1)>,
+       fragmap = #cuda_tile.preview$layout<(4, 32, 1):(32, 1, 0)>>
+     {cuda_tile.preview$access = #cuda_tile.preview$access<out>})
+    synchronization = #cuda_tile.preview$synchronization<warp>
+}
+"#;
+
+#[test]
+fn tilelib_relu_descriptions_print_as_the_upstream_modules() {
+    let library = TileLibrary::from_descriptions(&tilelib_relu_descriptions())
+        .unwrap()
+        .library("tilelib_relu");
+    library.verify().unwrap();
+    let interface = library.interface_text();
+    assert_eq!(
+        normalize_tile_ir(&interface),
+        normalize_tile_ir(TILELIB_RELU_INTERFACE),
+        "printed interface:\n{interface}"
+    );
+    let implementation = library.implementation_text();
+    assert_eq!(
+        normalize_tile_ir(&implementation),
+        normalize_tile_ir(TILELIB_RELU_IMPLEMENTATION),
+        "printed implementation:\n{implementation}"
+    );
+    // Both halves are preview content, written at the version the
+    // assembler calls current with the header tag set.
+    let version = oxide_tilebc::BytecodeVersion::PREVIEW_FIRST;
+    for bytes in [
+        library.interface_bytecode(version).unwrap(),
+        library.implementation_bytecode(version).unwrap(),
+    ] {
+        assert_eq!(&bytes[8..12], &[13, 5, 1, 0]);
+    }
+    // The readable dump names the file each module ends up in.
+    let dump = library_dump(&library, "tilelib_relu");
+    assert!(dump.starts_with("// tilelib_relu.iface.tilebc"), "{dump}");
+    assert!(dump.contains("\n// tilelib_relu.impl.tilebc"), "{dump}");
+    assert_eq!(dump.matches("cuda_tile.module @tilelib_relu {").count(), 2);
+}
+
+#[test]
+fn fragmaps_follow_the_synchronization_and_the_footprint() {
+    use oxide_tile_export::TileSync;
+    use oxide_tilebc::Layout;
+    // One invocation per element; a footprint of F gives N/F invocations of
+    // F contiguous elements.
+    assert_eq!(
+        fragmap(TileSync::None, 128, 1).unwrap(),
+        Layout::flat(&[128, 1, 1], &[1, 0, 0])
+    );
+    assert_eq!(
+        fragmap(TileSync::None, 128, 4).unwrap(),
+        Layout::flat(&[32, 1, 4], &[4, 0, 1])
+    );
+    // A warp per invocation: 32 participants, one element each, or F
+    // contiguous elements each with adjacent lanes adjacent in the tile.
+    assert_eq!(
+        fragmap(TileSync::Warp, 128, 1).unwrap(),
+        Layout::flat(&[4, 32, 1], &[32, 1, 0])
+    );
+    assert_eq!(
+        fragmap(TileSync::Warp, 256, 4).unwrap(),
+        Layout::flat(&[2, 32, 4], &[128, 4, 1])
+    );
+    // The footprint must divide the tile size.
+    assert!(
+        fragmap(TileSync::None, 128, 3)
+            .unwrap_err()
+            .contains("does not divide")
+    );
+    assert!(
+        fragmap(TileSync::Warp, 64, 4)
+            .unwrap_err()
+            .contains("multiple of 128")
+    );
+    assert!(
+        fragmap(TileSync::None, 128, 0)
+            .unwrap_err()
+            .contains("positive")
+    );
+
+    // Footprints above one verify against the declaration's tile like the
+    // one-element case does, when every parameter shares them: `fn
+    // scale4(x: &mut [f32; 4], factor: &[f32; 4])`.
+    let mut descriptions = tilelib_relu_descriptions();
+    let scale = &mut descriptions[1];
+    for param in &mut scale.params {
+        param.footprint = 4;
+        param.by_value = false;
+    }
+    let library = TileLibrary::from_descriptions(&descriptions)
+        .unwrap()
+        .library("lib");
+    library.verify().unwrap();
+    let text = library.implementation_text();
+    assert!(
+        text.contains(
+            "%x: !cuda_tile.preview$fragment<4xf32, local, mem_layout = \
+             #cuda_tile.preview$layout<(4):(1)>, fragmap = \
+             #cuda_tile.preview$layout<(32, 1, 4):(4, 0, 1)>>"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "%factor: !cuda_tile.preview$fragment<4xf32, local, mem_layout = \
+             #cuda_tile.preview$layout<(4):(1)>, fragmap = \
+             #cuda_tile.preview$layout<(32, 1, 4):(4, 0, 1)>>"
+        ),
+        "{text}"
+    );
+    // A window beside a scalar cannot share one invocation count, so the
+    // description is refused before the verifier would reject the fragmaps.
+    descriptions[1].params[1].footprint = 1;
+    descriptions[1].params[1].by_value = true;
+    let error = TileLibrary::from_descriptions(&descriptions).unwrap_err();
+    assert!(
+        error.contains("`x` (footprint 4) and `factor` (footprint 1) differ"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_bf16_scalar_passed_by_value_adds_the_frontend_abi_entry() {
+    use oxide_tile_export::TileElem;
+    // cuda-device's bf16 is a u16 wrapper, so the LLVM parameter is i16
+    // while the tile element is bf16: the implementation has to say so.
+    let mut descriptions = tilelib_relu_descriptions();
+    let relu = &mut descriptions[0];
+    for param in &mut relu.params {
+        param.elem = TileElem::BF16;
+    }
+    let (_, implementation) = describe_export(relu).unwrap();
+    assert_eq!(
+        implementation.frontend_abi,
+        vec![("bf16".to_string(), "i16".to_string())]
+    );
+    // No `sync` means no clause at all, not an explicit `synchronization<none>`.
+    assert_eq!(implementation.synchronization, None);
+    let library = TileLibrary::from_descriptions(&descriptions[..1])
+        .unwrap()
+        .library("lib");
+    library.verify().unwrap();
+    let text = library.implementation_text();
+    assert!(
+        normalize_tile_ir(&text).contains("{frontendABI={bf16=\"i16\"}}"),
+        "{text}"
+    );
+    assert!(text.contains("preview$fragment<1xbf16, local"), "{text}");
+
+    // A bf16 behind a pointer travels as a pointer and needs no entry.
+    let scale = &mut descriptions[1];
+    scale.params[0].elem = TileElem::BF16;
+    let (_, implementation) = describe_export(scale).unwrap();
+    assert!(implementation.frontend_abi.is_empty());
+
+    // Unsigned Rust integers are the signless Tile IR integers.
+    let warp_sum = &mut descriptions[2];
+    for param in &mut warp_sum.params {
+        param.elem = TileElem::U32;
+    }
+    let (func, implementation) = describe_export(warp_sum).unwrap();
+    assert_eq!(func.args[0].ty.element, oxide_tilebc::ScalarType::I32);
+    assert_eq!(
+        implementation.args[1].fragment.element,
+        oxide_tilebc::ScalarType::I32
+    );
+    assert_eq!(
+        implementation.synchronization,
+        Some(oxide_tilebc::Synchronization::Warp)
+    );
+}
+
+/// The NVVM IR the backend emits for `tilelib_relu` on a modern target,
+/// reduced to its function definitions.
+const TILELIB_RELU_LL: &str = "\
+; ModuleID = 'builtin.module'
+source_filename = \"tilelib_relu\"
+target triple = \"nvptx64-nvidia-cuda\"
+
+define void @relu_impl(float %v0, ptr %v1) #0 {
+entry:
+  ret void
+}
+
+define void @scale_in_place_impl(ptr %v0, float %v1) #0 {
+entry:
+  ret void
+}
+
+define void @warp_sum_impl(float %v0, ptr %v1) #0 {
+entry:
+  ret void
+}
+
+declare float @llvm.nvvm.shfl.sync.bfly.f32(i32, float, i32, i32) #0
+
+define float @tilelib_relu__warp_sum(float %v0) #0 {
+entry:
+  ret float %v0
+}
+";
+
+#[test]
+fn ll_defines_are_read_with_their_return_and_parameter_types() {
+    let defines = ll_defines(TILELIB_RELU_LL);
+    assert_eq!(
+        defines.keys().collect::<Vec<_>>(),
+        [
+            "relu_impl",
+            "scale_in_place_impl",
+            "tilelib_relu__warp_sum",
+            "warp_sum_impl"
+        ]
+    );
+    assert_eq!(
+        defines["relu_impl"],
+        LlDefine {
+            ret: "void".into(),
+            params: vec!["float".into(), "ptr".into()],
+            local_linkage: None,
+        }
+    );
+    assert_eq!(defines["tilelib_relu__warp_sum"].ret, "float");
+    // `declare` lines are not definitions.
+    assert!(!defines.contains_key("llvm.nvvm.shfl.sync.bfly.f32"));
+
+    // Linkage, calling convention and parameter attributes do not change
+    // the types; address spaces and legacy typed pointers survive intact. A
+    // linkage that keeps the symbol out of the module's exports is kept
+    // aside for the symbol check to report.
+    let defines = ll_defines(
+        "define internal fastcc void @k(ptr noundef %a, i64 %n, ptr addrspace(3) %s, i8* %p, { ptr, i64 } %slice) #0 {\n\
+         define dso_local weak_odr void @w() {\n\
+         define private void @p() {\n\
+         define linkonce_odr void @l() {\n\
+         define ptx_kernel void @\"quoted name\"() {\n",
+    );
+    assert_eq!(
+        defines["k"],
+        LlDefine {
+            ret: "void".into(),
+            params: vec![
+                "ptr".into(),
+                "i64".into(),
+                "ptr addrspace(3)".into(),
+                "i8*".into(),
+                "{ ptr, i64 }".into(),
+            ],
+            local_linkage: Some("internal".into()),
+        }
+    );
+    assert_eq!(defines["w"].ret, "void");
+    assert_eq!(defines["w"].local_linkage, None);
+    assert_eq!(defines["p"].local_linkage.as_deref(), Some("private"));
+    assert_eq!(defines["l"].local_linkage.as_deref(), Some("linkonce_odr"));
+    assert_eq!(defines["quoted name"].params, Vec::<String>::new());
+    assert_eq!(defines["quoted name"].local_linkage, None);
+}
+
+#[test]
+fn implementation_symbols_are_checked_against_the_abi_table() {
+    let descriptions = tilelib_relu_descriptions();
+    check_implementation_symbols(TILELIB_RELU_LL, &descriptions).unwrap();
+
+    // The legacy LLVM 7 dialect spells every pointer `i8*`.
+    let legacy = TILELIB_RELU_LL.replace("ptr %v", "i8* %v");
+    check_implementation_symbols(&legacy, &descriptions).unwrap();
+
+    // A missing symbol names what the module does define.
+    let renamed = TILELIB_RELU_LL.replace("@relu_impl(", "@relu(");
+    let problems = check_implementation_symbols(&renamed, &descriptions).unwrap_err();
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0].contains("no `define ... @relu_impl(`"),
+        "{problems:?}"
+    );
+    assert!(problems[0].contains("@scale_in_place_impl"), "{problems:?}");
+
+    // Every mismatch is reported, symbol by symbol: a wrong scalar type, a
+    // by-value parameter where a pointer is predicted, a non-void return.
+    let wrong = TILELIB_RELU_LL
+        .replace(
+            "@relu_impl(float %v0, ptr %v1)",
+            "@relu_impl(double %v0, ptr %v1)",
+        )
+        .replace(
+            "void @scale_in_place_impl(ptr %v0, float %v1)",
+            "float @scale_in_place_impl(float %v0, float %v1)",
+        );
+    let problems = check_implementation_symbols(&wrong, &descriptions).unwrap_err();
+    assert_eq!(problems.len(), 3, "{problems:?}");
+    assert!(
+        problems[0].contains("`relu_impl`: parameter 0 (`x`) is `double`")
+            && problems[0].contains("predicts `float`"),
+        "{problems:?}"
+    );
+    assert!(
+        problems[1].contains("`scale_in_place_impl`: returns `float`"),
+        "{problems:?}"
+    );
+    assert!(
+        problems[2].contains("`scale_in_place_impl`: parameter 0 (`x`) is `float`")
+            && problems[2].contains("predicts `ptr"),
+        "{problems:?}"
+    );
+
+    // A parameter count mismatch is one problem with both lists.
+    let short = TILELIB_RELU_LL.replace(
+        "@warp_sum_impl(float %v0, ptr %v1)",
+        "@warp_sum_impl(float %v0)",
+    );
+    let problems = check_implementation_symbols(&short, &descriptions).unwrap_err();
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0].contains("`warp_sum_impl`: 1 parameter(s) in the module (float), 2 in the description (float, ptr"),
+        "{problems:?}"
+    );
+
+    // A definition the module does not export cannot be linked as
+    // `.extern .func`, however right its signature is.
+    let hidden = TILELIB_RELU_LL
+        .replace(
+            "define void @relu_impl(",
+            "define internal void @relu_impl(",
+        )
+        .replace(
+            "define void @warp_sum_impl(",
+            "define linkonce_odr void @warp_sum_impl(",
+        );
+    let problems = check_implementation_symbols(&hidden, &descriptions).unwrap_err();
+    assert_eq!(problems.len(), 2, "{problems:?}");
+    assert!(
+        problems[0].contains("`relu_impl`: defined with `internal` linkage")
+            && problems[0].contains("not externally visible")
+            && problems[0].contains(".extern .func"),
+        "{problems:?}"
+    );
+    assert!(
+        problems[1].contains("`warp_sum_impl`: defined with `linkonce_odr` linkage"),
+        "{problems:?}"
+    );
+}
+
+/// The capability decision reads `tileiras --list-versions` through
+/// the command's own lookup, so the stand-ins here are executables, not
+/// listings: that is the seam the command uses.
+#[cfg(unix)]
+#[test]
+fn tileiras_capability_follows_the_listed_bytecode_versions() {
+    use super::tilelib::list_bytecode_versions;
+    use oxide_tilebc::BytecodeVersion;
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = unique_temp_dir("cargo_oxide_tileiras");
+    fs::create_dir_all(&root).unwrap();
+    let stand_in = |name: &str, body: &str| -> PathBuf {
+        let path = root.join(name);
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    };
+
+    // CUDA 13.4's assembler.
+    let old = stand_in("tileiras-13.4", "printf '13.1\\n13.2\\n13.3\\n13.4\\n'");
+    let versions = list_bytecode_versions(&old).unwrap();
+    assert_eq!(
+        versions.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        ["13.1", "13.2", "13.3", "13.4"]
+    );
+    assert!(super::tilelib::description_version(&versions).is_none());
+    // The first assembler that reads the preview content; the header tag
+    // bits are not part of a release.
+    let new = stand_in(
+        "tileiras-13.5",
+        "printf '13.1\\n13.2\\n13.3\\n13.4\\n13.5\\n'",
+    );
+    assert_eq!(
+        super::tilelib::description_version(&list_bytecode_versions(&new).unwrap()),
+        Some(BytecodeVersion::PREVIEW_FIRST)
+    );
+    assert_eq!(BytecodeVersion::PREVIEW_FIRST.to_string(), "13.5");
+    // The descriptions are written at the assembler's current version, the
+    // newest numbered one it lists: a newer assembler gets its own version
+    // (a named build such as `internal` is not a version), a 13.5.1 listing
+    // names 13.5, and a 13.4 listing names nothing.
+    let dev = stand_in(
+        "tileiras-newer",
+        "printf '13.1\\n13.2\\n13.3\\n13.4\\n13.5\\n13.6\\ninternal\\n'",
+    );
+    assert_eq!(
+        super::tilelib::description_version(&list_bytecode_versions(&dev).unwrap())
+            .map(|version| version.to_string()),
+        Some("13.6".to_string())
+    );
+    assert_eq!(
+        super::tilelib::description_version(&[BytecodeVersion::new(13, 5)]),
+        Some(BytecodeVersion::PREVIEW_FIRST)
+    );
+    assert_eq!(
+        super::tilelib::description_version(&list_bytecode_versions(&old).unwrap()),
+        None
+    );
+    // An assembler without the flag prints a usage message and exits 1: it
+    // lists nothing, which is not an error.
+    let legacy = stand_in(
+        "tileiras-13.1",
+        "echo 'tileiras: unknown option --list-versions' >&2; exit 1",
+    );
+    assert_eq!(list_bytecode_versions(&legacy).unwrap(), Vec::new());
+    assert!(super::tilelib::description_version(&[]).is_none());
+    // A configured tileiras that cannot be run is an error naming the path
+    // and the OS error, not an old assembler.
+    let missing = root.join("no-such-tileiras");
+    let error = list_bytecode_versions(&missing).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    let message = error.to_string();
+    assert!(
+        message.contains(&missing.display().to_string())
+            && message.contains("--list-versions")
+            && message.contains("os error"),
+        "{message}"
+    );
+    // The exit policy when no library was created.
+    assert_eq!(no_library_exit_code(true), 0);
+    assert_eq!(no_library_exit_code(false), 2);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn tilelib_paths_and_the_tileiras_invocation_follow_the_crate_stem() {
+    let dir = Path::new("/tmp/cargo-oxide-tilelib");
+    let paths = TileLibraryPaths::new(dir, "my-lib", None);
+    assert_eq!(paths.ll, dir.join("my_lib.ll"));
+    assert_eq!(paths.descriptions, dir.join("my_lib.tileexports.json"));
+    assert_eq!(paths.ltoir, dir.join("my_lib.ltoir"));
+    assert_eq!(paths.interface, dir.join("my_lib.iface.tilebc"));
+    assert_eq!(paths.implementation, dir.join("my_lib.impl.tilebc"));
+    assert_eq!(paths.dump, dir.join("my_lib.tilelib.mlir"));
+    assert_eq!(paths.library, dir.join("my_lib.tilelib"));
+    let custom = TileLibraryPaths::new(dir, "my-lib", Some(Path::new("out/lib.tilelib")));
+    assert_eq!(custom.library, PathBuf::from("out/lib.tilelib"));
+
+    // The invocation the Tile IR repository documents for creating a
+    // library: interface, implementation catalog, code payload, output.
+    assert_eq!(
+        create_tile_lib_command(Path::new("/opt/cuda/bin/tileiras"), &custom),
+        [
+            "/opt/cuda/bin/tileiras",
+            "--preview-create-tile-lib",
+            "--preview-interface=/tmp/cargo-oxide-tilelib/my_lib.iface.tilebc",
+            "--preview-implementation=/tmp/cargo-oxide-tilelib/my_lib.impl.tilebc",
+            "--preview-implementation=/tmp/cargo-oxide-tilelib/my_lib.ltoir",
+            "-o",
+            "out/lib.tilelib",
+        ]
+    );
+    // tileiras resolves like every other toolkit tool.
+    for path in TILEIRAS_FALLBACK_PATHS {
+        assert_eq!(
+            Path::new(path).file_name().and_then(|n| n.to_str()),
+            Some("tileiras")
+        );
+    }
+}
+
+#[test]
+fn tilelib_artifacts_are_cleaned_between_builds() {
+    // A stale library or description must not outlive the build that
+    // produced it, so every suffix the command writes is a generated
+    // artifact.
+    for suffix in [
+        TILELIB_INTERFACE_SUFFIX,
+        TILELIB_IMPLEMENTATION_SUFFIX,
+        TILELIB_DUMP_SUFFIX,
+        TILELIB_LIBRARY_SUFFIX,
+    ] {
+        assert!(GENERATED_ARTIFACT_SUFFIXES.contains(&suffix), "{suffix}");
+    }
+    let root = unique_temp_dir("cargo_oxide_tilelib_clean");
+    std::fs::create_dir_all(&root).unwrap();
+    let files: Vec<_> = ["iface.tilebc", "impl.tilebc", "tilelib.mlir", "tilelib"]
+        .iter()
+        .map(|suffix| root.join(format!("my_lib.{suffix}")))
+        .collect();
+    for file in &files {
+        std::fs::write(file, b"stale").unwrap();
+    }
+    clean_generated_files(&root, "my-lib");
+    for file in &files {
+        assert!(!file.exists(), "{} survived the clean", file.display());
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// The smoketest's tilelib lane greps the summary lines: the descriptions
+/// marker for proof that the descriptions were written before the host
+/// program ran, and the two library markers to decide whether a `.tilelib`
+/// is required, instead of probing tileiras itself. The script and the
+/// command have to name the same text.
+#[test]
+fn the_smoketest_greps_the_summary_markers_this_command_prints() {
+    const SMOKETEST: &str = include_str!("../../../../scripts/smoketest.sh");
+    for marker in [
+        DESCRIPTIONS_WRITTEN_MARKER,
+        LIBRARY_WRITTEN_MARKER,
+        LIBRARY_SKIPPED_MARKER,
+    ] {
+        assert!(
+            SMOKETEST.contains(&format!("grep -qF '{marker}'")),
+            "scripts/smoketest.sh no longer greps {marker:?}"
+        );
+    }
+    // Each grep must hit only its own line: the library markers must not be
+    // substrings of the descriptions line, which every run prints.
+    assert!(!DESCRIPTIONS_WRITTEN_MARKER.contains(LIBRARY_WRITTEN_MARKER));
+    assert!(!DESCRIPTIONS_WRITTEN_MARKER.contains(LIBRARY_SKIPPED_MARKER));
+    assert!(!LIBRARY_WRITTEN_MARKER.contains(LIBRARY_SKIPPED_MARKER));
 }

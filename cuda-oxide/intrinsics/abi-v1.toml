@@ -7173,3 +7173,94 @@ status = "active"
 catalog_id = "mma_sp_m16n8k64_f32_e5m2_e5m2_f32"
 operation_key = "matrix.mma.sp.m16n8k64.row.col.f32.e5m2.e5m2.f32.not_applicable.standard_metadata"
 raw_rust_signature = { safe = false, arguments = ["[f32; 4]", "[u32; 4]", "[u32; 4]", "u32", "u32"], result = "[f32; 4]" }
+
+[[entry]]
+abi_id = "i1030"
+status = "active"
+catalog_id = "cvt_rn_satfinite_e4m3x2_bf16x2"
+operation_key = "packed.convert.bf16x2.e4m3x2.nearest_even.satfinite"
+raw_rust_signature = { safe = true, arguments = ["u32"], result = "u16" }
+
+[[entry]]
+abi_id = "i1031"
+status = "active"
+catalog_id = "cvt_rn_satfinite_relu_e4m3x2_bf16x2"
+operation_key = "packed.convert.bf16x2.e4m3x2.nearest_even.satfinite.relu"
+raw_rust_signature = { safe = true, arguments = ["u32"], result = "u16" }
+
+[[entry]]
+abi_id = "i1032"
+status = "active"
+catalog_id = "cvt_rn_satfinite_e5m2x2_bf16x2"
+operation_key = "packed.convert.bf16x2.e5m2x2.nearest_even.satfinite"
+raw_rust_signature = { safe = true, arguments = ["u32"], result = "u16" }
+
+[[entry]]
+abi_id = "i1033"
+status = "active"
+catalog_id = "cvt_rn_satfinite_relu_e5m2x2_bf16x2"
+operation_key = "packed.convert.bf16x2.e5m2x2.nearest_even.satfinite.relu"
+raw_rust_signature = { safe = true, arguments = ["u32"], result = "u16" }
+
+[[entry]]
+abi_id = "i1034"
+status = "active"
+catalog_id = "cp_async_bulk_tensor_1d_g2s_cta"
+operation_key = "memory.copy.async.bulk.tensor.g2s.cta.tile.1d"
+raw_rust_signature = { safe = false, arguments = ["*mut u8", "*const u8", "i32", "*mut u64"], result = "()" }
+
+[[entry]]
+abi_id = "i1035"
+status = "active"
+catalog_id = "cp_async_bulk_tensor_2d_g2s_cta"
+operation_key = "memory.copy.async.bulk.tensor.g2s.cta.tile.2d"
+raw_rust_signature = { safe = false, arguments = ["*mut u8", "*const u8", "i32", "i32", "*mut u64"], result = "()" }
+
+[[entry]]
+abi_id = "i1036"
+status = "active"
+catalog_id = "cp_async_bulk_tensor_3d_g2s_cta"
+operation_key = "memory.copy.async.bulk.tensor.g2s.cta.tile.3d"
+raw_rust_signature = { safe = false, arguments = ["*mut u8", "*const u8", "i32", "i32", "i32", "*mut u64"], result = "()" }
+
+[[entry]]
+abi_id = "i1037"
+status = "active"
+catalog_id = "cp_async_bulk_tensor_4d_g2s_cta"
+operation_key = "memory.copy.async.bulk.tensor.g2s.cta.tile.4d"
+raw_rust_signature = { safe = false, arguments = ["*mut u8", "*const u8", "i32", "i32", "i32", "i32", "*mut u64"], result = "()" }
+
+[[entry]]
+abi_id = "i1038"
+status = "active"
+catalog_id = "cp_async_bulk_tensor_5d_g2s_cta"
+operation_key = "memory.copy.async.bulk.tensor.g2s.cta.tile.5d"
+raw_rust_signature = { safe = false, arguments = ["*mut u8", "*const u8", "i32", "i32", "i32", "i32", "i32", "*mut u64"], result = "()" }
+
+[[entry]]
+abi_id = "i1039"
+status = "active"
+catalog_id = "mma_m16n8k64_mxf4_f32"
+operation_key = "matrix.mma.m16n8k64.row.col.kind_mxf4.scale_vec_2x.f32.e2m1.e2m1.f32.ue8m0"
+raw_rust_signature = { safe = false, arguments = ["[f32; 4]", "[u32; 4]", "[u32; 2]", "u32", "u16", "u16", "u32", "u16", "u16"], result = "[f32; 4]" }
+
+[[entry]]
+abi_id = "i1040"
+status = "active"
+catalog_id = "mbarrier_arrive_cluster_relaxed"
+operation_key = "barrier.mbarrier.arrive.shared.cluster.relaxed.cluster.raw_address"
+raw_rust_signature = { safe = false, arguments = ["u64"], result = "()" }
+
+[[entry]]
+abi_id = "i1041"
+status = "active"
+catalog_id = "mbarrier_try_wait_parity_cluster_relaxed"
+operation_key = "barrier.mbarrier.try_wait.parity.shared.cta.relaxed.cluster"
+raw_rust_signature = { safe = false, arguments = ["*const u64", "u32"], result = "bool" }
+
+[[entry]]
+abi_id = "i1042"
+status = "active"
+catalog_id = "fence_acquire_shared_cluster_cluster"
+operation_key = "fence.acquire.sync_restrict.shared_cluster.cluster"
+raw_rust_signature = { safe = false, arguments = [], result = "()" }

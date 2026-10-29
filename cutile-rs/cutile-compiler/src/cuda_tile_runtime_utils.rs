@@ -7,6 +7,7 @@
 //! Provides GPU detection and bytecode compilation helpers.
 
 use crate::error::JITError;
+use crate::hints::CodegenMode;
 use cuda_core::{get_device_sm_name, Device};
 use cutile_ir::bytecode::{write_bytecode_version, BytecodeVersion};
 use std::collections::HashMap;
@@ -519,7 +520,7 @@ fn negotiate_bytecode_version(
         .map_err(|error| JITError::Generic(error.to_string()))
 }
 
-/// `--opt-level` passed to `tileiras`. Not configurable yet.
+/// Default `--opt-level` for optimized code.
 /// Numeric, not a string: the disk-cache key and entry header store it as one
 /// byte.
 pub const DEFAULT_OPT_LEVEL: u8 = 3;
@@ -646,12 +647,8 @@ pub(crate) fn current_l2_key_for_module(
 /// field can never share a cubin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TileirasOptions {
-    /// `--opt-level <N>`.
-    pub opt_level: u8,
-    /// `--device-debug`: generate debug information.
-    pub device_debug: bool,
-    /// `--lineinfo`: generate line-number information only.
-    pub lineinfo: bool,
+    /// `--opt-level <N>`, plus `--device-debug` or `--lineinfo`.
+    pub codegen: CodegenMode,
     /// `--sanitize=memcheck`: instrument memory accesses for the sanitizer.
     pub sanitize_memcheck: bool,
 }
@@ -659,28 +656,17 @@ pub struct TileirasOptions {
 impl Default for TileirasOptions {
     fn default() -> Self {
         Self {
-            opt_level: DEFAULT_OPT_LEVEL,
-            device_debug: false,
-            lineinfo: false,
+            codegen: CodegenMode::RELEASE,
             sanitize_memcheck: false,
         }
     }
 }
 
 impl TileirasOptions {
-    /// Resolves the launch-facing [`crate::hints::CompileOptions`] into the
-    /// stage-2 flags. `device_debug` implies `--opt-level 0` unless an
-    /// explicit level was requested.
+    /// The stage-2 subset of the launch-facing [`crate::hints::CompileOptions`].
     pub fn from_compile_options(options: &crate::hints::CompileOptions) -> Self {
-        let opt_level = options.opt_level.unwrap_or(if options.device_debug {
-            0
-        } else {
-            DEFAULT_OPT_LEVEL
-        });
         Self {
-            opt_level,
-            device_debug: options.device_debug,
-            lineinfo: options.lineinfo,
+            codegen: options.codegen,
             sanitize_memcheck: options.sanitize_memcheck,
         }
     }
@@ -688,9 +674,11 @@ impl TileirasOptions {
     /// The boolean flags packed into one byte, for the cache-entry header
     /// and the L2 key material.
     pub fn flags_byte(&self) -> u8 {
-        (self.device_debug as u8)
-            | ((self.lineinfo as u8) << 1)
-            | ((self.sanitize_memcheck as u8) << 2)
+        let codegen = match self.codegen {
+            CodegenMode::Debug => 0b001,
+            CodegenMode::Optimized { lineinfo, .. } => (lineinfo as u8) << 1,
+        };
+        codegen | ((self.sanitize_memcheck as u8) << 2)
     }
 }
 
@@ -726,13 +714,14 @@ fn run_tileiras_at(
         JITError::Generic(format!("Failed to write bytecode for {bc_filename}: {e}"))
     })?;
 
-    let opt_level_arg = opts.opt_level.to_string();
+    let opt_level_arg = opts.codegen.opt_level().to_string();
     let mut args = vec!["--gpu-name", gpu_name, "--opt-level", &opt_level_arg];
-    if opts.device_debug {
-        args.push("--device-debug");
-    }
-    if opts.lineinfo {
-        args.push("--lineinfo");
+    match opts.codegen {
+        CodegenMode::Debug => args.push("--device-debug"),
+        CodegenMode::Optimized { lineinfo: true, .. } => args.push("--lineinfo"),
+        CodegenMode::Optimized {
+            lineinfo: false, ..
+        } => {}
     }
     if opts.sanitize_memcheck {
         args.push("--sanitize=memcheck");
@@ -858,7 +847,7 @@ fn compile_bytecode_cached_at(
     let params = EntryParams {
         bc_sha256: Sha256::digest(bytecode).into(),
         gpu_name,
-        opt_level: opts.opt_level,
+        opt_level: opts.codegen.opt_level(),
         flags: opts.flags_byte(),
         tileiras_fp,
     };

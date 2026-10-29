@@ -10,10 +10,15 @@
 //! back to the concrete function body instead of emitting a dangling trait-shim
 //! callee symbol. The regression also covers `Fn`/`FnMut`, references,
 //! multiple and nested-tuple arguments, tuple returns, and type/const-generic
-//! function items. Diverging function items and closures also verify that a
-//! direct Rust call returning `!` ends its MIR block with `unreachable`.
+//! function items. Diverging function items, closures, and an ordinary direct
+//! `-> !` device helper also verify that a non-returning Rust call is emitted
+//! before its MIR block ends with `unreachable`. `panic_only` is the control:
+//! its `-> !` body is nothing but a panic, so the collector never emits it and
+//! its call site must still lower to the device trap.
 //! `call_once_decoy` proves that an ordinary function whose name contains
 //! trait-like text is not mistaken for a callable-trait shim.
+
+#![feature(never_type)]
 
 use cuda_core::simt::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
@@ -55,6 +60,30 @@ fn nested_sum((a, (b, c)): (u32, (u32, u32))) -> u32 {
 #[inline(never)]
 fn spin_forever(_value: u32) -> ! {
     loop {}
+}
+
+// Unlike `spin_forever`, this is reached by an ordinary direct MIR `Call`.
+// The store makes replacing that call with an immediate trap observably wrong.
+#[allow(clippy::empty_loop)]
+#[inline(never)]
+#[device]
+unsafe fn write_then_diverge(ptr: *mut u32) -> ! {
+    unsafe {
+        ptr.write(0x1111_1111);
+    }
+    loop {}
+}
+
+// Control for the retained trap. A `-> !` body that is nothing but a panic is
+// a placeholder to the collector, so this function is never emitted and its
+// call site must keep the device trap. `#[inline(never)]` keeps the call in
+// the kernel's MIR, so the importer classifies this callee rather than the
+// panic entry point inside it. The name must not contain a `panicking` module
+// segment: that would trap the whole block before the call is classified.
+#[inline(never)]
+#[device]
+fn panic_only() -> ! {
+    panic!("not collected")
 }
 
 #[device]
@@ -133,9 +162,10 @@ mod kernels {
         }
     }
 
-    /// Compile both diverging callable paths without entering them on-device.
-    /// A Rust call returning `!` has no successor block, so the importer must
-    /// emit the direct call followed by `mir.unreachable`.
+    /// Compile the diverging call paths without entering them on-device.
+    /// A Rust call returning `!` has no successor block. When the callee's
+    /// body is emitted, the importer must keep the direct call followed by
+    /// `mir.unreachable`; when it is not, the call site keeps the device trap.
     #[kernel]
     pub fn diverging_callable(flag: u32, mut out: DisjointSlice<u32>) {
         let idx = thread::index_1d();
@@ -147,6 +177,19 @@ mod kernels {
             // panic or thread sleeping would exercise unrelated lowering.
             #[allow(clippy::empty_loop)]
             apply_never(|_| loop {}, flag);
+        }
+        if flag == 3 {
+            // The importer must preserve this ordinary direct call. The callee
+            // stores first and then diverges, so replacing it with a trap loses
+            // an observable side effect.
+            unsafe {
+                write_then_diverge(out.as_mut_ptr());
+            }
+        }
+        if flag == 4 {
+            // Retained-trap control: the callee's body is only a panic, so the
+            // collector does not emit it and this call site must still trap.
+            panic_only();
         }
         if let Some(slot) = out.get_mut(idx) {
             *slot = 0xd1ce;

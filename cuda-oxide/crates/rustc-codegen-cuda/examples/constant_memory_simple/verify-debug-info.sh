@@ -80,7 +80,7 @@ grep -Fq 'expr: !DIExpression())' <<<"${scale_expression}" \
 scale_expression_id="$(sed -nE 's/^!([0-9]+) = .*/\1/p' <<<"${scale_expression}")"
 
 physical="$(unique_line "@${scale_linkage} = ")"
-grep -Eq "^@${scale_linkage} = addrspace\\(4\\) global \\[4 x i8\\] .*align 4, !dbg !${scale_expression_id}$" \
+grep -Eq "^@${scale_linkage} = addrspace\\(4\\) externally_initialized global \\[4 x i8\\] .*align 4, !dbg !${scale_expression_id}$" \
     <<<"${physical}" || fail "SCALE physical AS4 storage is not attached to its expression"
 
 # Follow the exact semantic type graph. The physical [4 x i8] backing must be

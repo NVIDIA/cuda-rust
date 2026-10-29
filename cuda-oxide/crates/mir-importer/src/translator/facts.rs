@@ -85,6 +85,12 @@ thread_local! {
             index_mut_trait: None,
         })
     };
+    // Exact monomorphized Rust functions that this pipeline run will emit.
+    //
+    // Store rustc's linkage identity rather than the legalised module symbol:
+    // call classification must not depend on Legaliser ordering or spelling.
+    static EMITTED_FUNCTIONS: std::cell::RefCell<std::collections::BTreeSet<String>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 
 /// Installs the driver-resolved lang-item ids for this pipeline run,
@@ -97,6 +103,28 @@ pub(crate) fn set_known_defs(defs: KnownDefs) {
 /// never provided them).
 pub(crate) fn known_defs() -> KnownDefs {
     KNOWN_DEFS.with(|cell| cell.get())
+}
+
+/// Replace the emitted-function set for the current pipeline run.
+///
+/// Like [`set_known_defs`], this replaces rather than extends previous
+/// thread-local state so one rustc invocation cannot leak into the next.
+pub(crate) fn set_emitted_functions(names: std::collections::BTreeSet<String>) {
+    EMITTED_FUNCTIONS.with(|set| *set.borrow_mut() = names);
+}
+
+/// Whether this exact monomorphized Rust instance will have a `mir.func`
+/// definition in the module being translated.
+pub(crate) fn is_emitted_function(instance: &mir::mono::Instance) -> bool {
+    is_emitted_name(&instance.mangled_name())
+}
+
+/// Whether `mangled_name`, rustc's linkage identity of one monomorphized
+/// function, is in the current run's emitted-function set. The name-based
+/// form lets the set's replace-not-merge contract be tested without a rustc
+/// session.
+pub(crate) fn is_emitted_name(mangled_name: &str) -> bool {
+    EMITTED_FUNCTIONS.with(|set| set.borrow().contains(mangled_name))
 }
 
 /// Validate the source reference and the fully specialized read-only storage
@@ -468,6 +496,7 @@ pub(crate) struct ReferenceParamValidity {
 /// `DisjointSlice` produce no fact. Unsupported reference pass modes and source
 /// argument mismatches are errors rather than guesses about the ABI mapping.
 pub(crate) fn reference_param_validity(
+    instance: &rustc_public::mir::mono::Instance,
     ty: &rustc_public::ty::Ty,
     fn_abi: &rustc_public::abi::FnAbi,
     source_index: usize,
@@ -505,15 +534,45 @@ pub(crate) fn reference_param_validity(
         return Ok(None);
     }
 
-    let attrs = match (&argument.mode, is_slice) {
-        (PassMode::Direct(attrs), false) | (PassMode::Pair(attrs, _), true) => attrs,
+    match (&argument.mode, is_slice) {
+        (PassMode::Direct(_), false) | (PassMode::Pair(_, _), true) => {}
         _ => {
             return Err(format!(
                 "kernel reference argument {source_index} has an unsupported rustc FnAbi pass mode"
             ));
         }
-    };
-    let flags = attrs.regular();
+    }
+
+    let (no_alias, no_free, pointee_size_bytes) = rustc_middle::ty::tls::with(|tcx| {
+        use rustc_middle::ty::{List, TypingEnv};
+        use rustc_target::callconv::{ArgAttribute, PassMode as InternalPassMode};
+
+        let internal_instance = rustc_public::rustc_internal::internal(tcx, *instance);
+        let query_input =
+            TypingEnv::fully_monomorphized().as_query_input((internal_instance, List::empty()));
+        let internal_fn_abi = tcx
+            .fn_abi_of_instance(query_input)
+            .map_err(|err| format!("could not query internal FnAbi: {err:?}"))?;
+        let internal_arg = internal_fn_abi.args.get(source_index).ok_or_else(|| {
+            format!("kernel source argument index {source_index} is absent from internal FnAbi")
+        })?;
+        let attrs = match (&internal_arg.mode, is_slice) {
+            (InternalPassMode::Direct(attrs), false) | (InternalPassMode::Pair(attrs, _), true) => {
+                attrs
+            }
+            _ => {
+                return Err(format!(
+                    "kernel reference argument {source_index} has an unsupported rustc FnAbi pass mode"
+                ));
+            }
+        };
+        Ok((
+            attrs.regular.contains(ArgAttribute::NoAlias),
+            attrs.regular.contains(ArgAttribute::NoFree),
+            attrs.pointee_size.bytes(),
+        ))
+    })?;
+
     // Do not consume rustc's `read_only`: NVPTX (including libNVVM) can lower
     // volatile reads through a readonly + noalias kernel parameter to cached
     // non-volatile loads. Let the optimizer infer read-only access from the
@@ -523,14 +582,10 @@ pub(crate) fn reference_param_validity(
     // dereferenceability as lasting for the whole call. rustc's NoFree is the
     // proof needed by all supported consumers; producer LLVM version alone is
     // insufficient. Zero covers both ZST pointees and unknown slice lengths.
-    let dereferenceable_bytes = if flags.no_free {
-        attrs.pointee_size().bytes() as u64
-    } else {
-        0
-    };
+    let dereferenceable_bytes = if no_free { pointee_size_bytes } else { 0 };
     Ok(Some(ReferenceParamValidity {
         pointee_alignment: shape.abi_align,
-        no_alias: flags.no_alias,
+        no_alias,
         dereferenceable_bytes,
     }))
 }
@@ -1018,7 +1073,7 @@ pub fn reference_validity(
                         .iter()
                         .enumerate()
                         .map(|(index, ty)| {
-                            reference_param_validity(ty, &fn_abi, index)
+                            reference_param_validity(&instance, ty, &fn_abi, index)
                                 .expect("source parameter matches ABI")
                         })
                         .collect::<Vec<_>>();
@@ -1026,19 +1081,27 @@ pub fn reference_validity(
                     // Reusing a neighboring argument after dropping an ignored
                     // ZST or flattening a slice must not mint reference facts.
                     let mut errors = vec![
-                        reference_param_validity(&source_types[1], &fn_abi, 0).unwrap_err(),
-                        reference_param_validity(&source_types[1], &fn_abi, fn_abi.args.len())
+                        reference_param_validity(&instance, &source_types[1], &fn_abi, 0)
                             .unwrap_err(),
+                        reference_param_validity(
+                            &instance,
+                            &source_types[1],
+                            &fn_abi,
+                            fn_abi.args.len(),
+                        )
+                        .unwrap_err(),
                     ];
                     let mut wrong_mode = fn_abi.clone();
                     wrong_mode.args[1].mode = fn_abi.args[15].mode.clone();
                     assert!(matches!(wrong_mode.args[1].mode, PassMode::Indirect { .. }));
                     errors.push(
-                        reference_param_validity(&source_types[1], &wrong_mode, 1).unwrap_err(),
+                        reference_param_validity(&instance, &source_types[1], &wrong_mode, 1)
+                            .unwrap_err(),
                     );
                     wrong_mode.args[3].mode = fn_abi.args[1].mode.clone();
                     errors.push(
-                        reference_param_validity(&source_types[3], &wrong_mode, 3).unwrap_err(),
+                        reference_param_validity(&instance, &source_types[3], &wrong_mode, 3)
+                            .unwrap_err(),
                     );
                     std::ops::ControlFlow::<(), _>::Continue((facts, errors))
                 })
@@ -1103,5 +1166,28 @@ pub fn reference_validity(
             assert_eq!(fact.dereferenceable_bytes, 0);
             assert!(fact.pointee_alignment.is_power_of_two());
         }
+    }
+
+    /// `set_emitted_functions` replaces the previous run's set instead of
+    /// merging into it. A name left over from an earlier rustc invocation on
+    /// the same thread would keep a diverging call to a function this run
+    /// never emits, and the module would reference an undefined symbol.
+    #[test]
+    fn emitted_function_set_is_replaced_per_run() {
+        let first_run = std::collections::BTreeSet::from(["first_run_die".to_string()]);
+        set_emitted_functions(first_run);
+        assert!(is_emitted_name("first_run_die"));
+        assert!(!is_emitted_name("second_run_spin"));
+
+        let second_run = std::collections::BTreeSet::from(["second_run_spin".to_string()]);
+        set_emitted_functions(second_run);
+        assert!(is_emitted_name("second_run_spin"));
+        assert!(
+            !is_emitted_name("first_run_die"),
+            "an entry from the previous run must not survive the replacement"
+        );
+
+        set_emitted_functions(std::collections::BTreeSet::new());
+        assert!(!is_emitted_name("second_run_spin"));
     }
 }

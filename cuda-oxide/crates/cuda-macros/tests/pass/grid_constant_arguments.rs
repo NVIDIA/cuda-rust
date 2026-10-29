@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #![allow(dead_code)]
+#![feature(f16)]
 
+use ctm_rs::{memory::F16Tile128, tma::TensorMap};
 use cuda_device::{cuda_module, kernel};
 
 #[derive(Clone, Copy)]
@@ -12,6 +14,11 @@ pub struct Descriptor([u32; 32]);
 #[cuda_module]
 mod kernels {
     use super::*;
+
+    #[kernel]
+    pub fn typed(#[grid_constant] descriptor: &TensorMap<f16, F16Tile128>) {
+        let _ = descriptor.as_descriptor();
+    }
 
     #[kernel]
     pub fn plain(#[grid_constant] descriptor: &Descriptor) {
@@ -33,11 +40,13 @@ fn typed_launches(
     module: &kernels::LoadedModule,
     stream: &cuda_core::CudaStream,
     descriptor: Descriptor,
+    typed_descriptor: TensorMap<f16, F16Tile128>,
 ) {
     let config = cuda_core::simt::LaunchConfig::for_num_elems(1);
     // SAFETY: this function only type-checks the by-value host ABI; it is never run.
     unsafe {
         module.plain(stream, config, descriptor).unwrap();
+        module.typed(stream, config, typed_descriptor).unwrap();
         module.generic(stream, config, descriptor, 3u32).unwrap();
     }
 }

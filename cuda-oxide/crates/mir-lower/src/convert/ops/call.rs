@@ -64,7 +64,7 @@
 use crate::convert::target_stable_storage::coerce_target_stable_value;
 use crate::convert::types::{
     StructLayoutInfo, TransparentScalarAbiInfo, build_struct_slot_map, convert_function_type,
-    convert_type, is_kernel_func, is_zero_sized_type, packed_shared_internal_abi_info,
+    convert_type, is_kernel_func, is_zero_sized_type, shared_return_abi_info,
     transparent_scalar_abi_info,
 };
 use crate::helpers;
@@ -90,7 +90,6 @@ use pliron::irbuild::dialect_conversion::{DialectConversionRewriter, OperandsInf
 use pliron::irbuild::inserter::Inserter;
 use pliron::irbuild::rewriter::Rewriter;
 use pliron::linked_list::ContainsLinkedList;
-use pliron::location::Located;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::result::Result;
@@ -681,9 +680,7 @@ pub fn convert(
             let scalar_ty = abi.scalar_ty;
             transparent_result_abi = Some(abi);
             scalar_ty
-        } else if let Some(abi) =
-            packed_shared_internal_abi_info(ctx, mir_ty).map_err(anyhow_to_pliron)?
-        {
+        } else if let Some(abi) = shared_return_abi_info(ctx, mir_ty).map_err(anyhow_to_pliron)? {
             let storage_ty = abi.storage_ty;
             packed_shared_result_abi = Some(abi);
             storage_ty
@@ -738,7 +735,7 @@ pub fn convert(
         if resolved_name.starts_with("__nv_")
             && let Some(parent_block) = parent_block
         {
-            let loc = op.deref(ctx).loc();
+            let loc = op.deref(ctx).loc().clone();
             helpers::ensure_intrinsic_declared(ctx, parent_block, &resolved_name, func_type)
                 .map_err(|e| {
                     pliron::input_error!(
@@ -808,7 +805,7 @@ pub fn convert(
         // dropped a real value; report that instead of letting pliron's
         // erase-with-uses invariant panic and escape into rustc as an ICE.
         if op.deref(ctx).has_use() {
-            let loc = op.deref(ctx).loc();
+            let loc = op.deref(ctx).loc().clone();
             return pliron::input_err!(
                 loc,
                 "mir.call lowering produced a void LLVM call but the MIR op \
@@ -837,7 +834,7 @@ fn convert_rust_select_unpredictable(
     rewriter: &mut DialectConversionRewriter,
     op: Ptr<Operation>,
 ) -> Result<()> {
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     if op.deref(ctx).get_num_results() != 1 {
         return pliron::input_err!(loc, "select_unpredictable call must have one result");
     }
@@ -866,7 +863,7 @@ fn convert_rust_bit_intrinsic(
     op: Ptr<Operation>,
     intrinsic: RustBitIntrinsic,
 ) -> Result<()> {
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     if op.deref(ctx).get_num_results() != 1 {
         return pliron::input_err!(loc, "Rust bit intrinsic call must have one result");
     }
@@ -993,7 +990,7 @@ fn convert_rust_saturating_intrinsic(
     operands_info: &OperandsInfo,
     intrinsic: RustSaturatingIntrinsic,
 ) -> Result<()> {
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     if op.deref(ctx).get_num_results() != 1 {
         return pliron::input_err!(loc, "Rust saturating intrinsic call must have one result");
     }
@@ -1074,7 +1071,7 @@ fn convert_rust_exact_div(
     op: Ptr<Operation>,
     operands_info: &OperandsInfo,
 ) -> Result<()> {
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     if op.deref(ctx).get_num_results() != 1 {
         return pliron::input_err!(loc, "exact_div call must have one result");
     }
@@ -1150,7 +1147,7 @@ fn convert_rust_carrying_mul_add(
     op: Ptr<Operation>,
     operands_info: &OperandsInfo,
 ) -> Result<()> {
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     if op.deref(ctx).get_num_results() != 1 {
         return pliron::input_err!(loc, "Rust carrying_mul_add intrinsic must have one result");
     }
@@ -1272,7 +1269,7 @@ fn convert_rust_float_math_intrinsic(
     op: Ptr<Operation>,
     intrinsic: RustFloatMathIntrinsic,
 ) -> Result<()> {
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     if op.deref(ctx).get_num_results() != 1 {
         return pliron::input_err!(loc, "Rust float math intrinsic call must have one result");
     }

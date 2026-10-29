@@ -7,6 +7,10 @@ set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 # Use Bash on Unix
 set shell := ["bash", "-c"]
 
+# Unlock unstable Cargo (`cargo-features = ["profile-rustflags"]`) and rustc
+# (`-Z`, `#![feature(rustc_private)]`) gates on the pinned stable toolchain.
+export RUSTC_BOOTSTRAP := "1"
+
 # Format all Rust code (SIMT workspace, codegen, examples)
 fmt:
     cargo oxide fmt
@@ -61,10 +65,11 @@ test:
         -p cuda-intrinsics-gen -p cuda-target-spec -p cuda-intrinsics -p llvm-export \
         -p dialect-mir -p dialect-nvvm -p mir-importer -p mir-lower \
         -p mir-transforms -p nvvm-transforms -p reserved-oxide-symbols \
-        -p cuda-device -p libnvvm-sys -p nvjitlink-sys \
+        -p oxide-tile-export -p oxide-tilebc -p cuda-device -p libnvvm-sys -p nvjitlink-sys \
         -p cuda-artifact-finalizer -p cargo-oxide \
         -p dialect-iket -p iket-lower -p ptx-parse -p dialect-ptx \
-        -p ptx-schedule
+        -p ptx-schedule -p cute-layout -p dialect-cute \
+        -p cuda-oxide-mlir-export
     # `default = []`, but every consumer turns the object features on, and the
     # default set alone skips the eight ELF emit/extract tests.
     cargo test -p oxide-artifacts --all-targets --features object
@@ -87,7 +92,8 @@ test:
 # Run the CUDA-toolkit-dependent packages (no driver required)
 test-cuda:
     cargo test --all-targets \
-        -p cuda-oxide-codegen -p cuda-macros -p cuda-host
+        -p cuda-oxide-codegen -p cuda-macros -p cuda-host -p cute-rs -p ctm-rs
+    cargo test -p ctm-rs --all-targets --features host
 
 # Mirror unit-tests.yml's third job, `generated-intrinsics`: the three gates a
 # change under crates/cuda-intrinsics-gen has to pass. Nothing else here ran

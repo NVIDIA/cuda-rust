@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 752" width="1240" height="752" role="img" aria-label="Three columns. Left: the Rust source, a device function that stores a value and then loops forever, and the kernel line that calls it. Middle: what the compiler emitted before, the call replaced by a device trap, so the store was lost. Right: what it emits now, the call followed by unreachable, so the PTX stores the value and spins; a small box lists the three cases that still trap.">
+<style>
+  :root, svg {
+  --bg: #f4f6f8; --fg: #1a232e; --muted: #5d6b7a; --line: #9aa7b4; --panel: #ffffff;
+  --meta: #0e7c72; --meta-fill: #d9f3ef; --code: #b4560a; --code-fill: #fdebd2;
+  --rust: #7a3fb3; --rust-fill: #efe4fb;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+ }
+  @media (prefers-color-scheme: dark) { :root, svg {
+  --bg: #1b1d23; --fg: #f2f4f7; --muted: #bcc4d0; --line: #5c6475; --panel: #282c36;
+  --meta: #7ed8bb; --meta-fill: #346357; --code: #f4c474; --code-fill: #735a3c;
+  --rust: #d8d4fb; --rust-fill: #524e7d;
+ } }
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--fg)"/></marker></defs>
+
+<rect x="0" y="0" width="1240" height="752" style="fill: var(--bg)"/>
+<text x="40" y="34" text-anchor="start" xml:space="preserve" style="font: 600 17px var(--sans); fill: var(--fg); white-space: pre">A device function that never returns is now called, not replaced by a trap</text>
+<text x="40" y="56" text-anchor="start" xml:space="preserve" style="font: 400 12.5px var(--sans); fill: var(--muted); white-space: pre">Such a function may store an error code and then loop. The importer replaced the call with trap; and lost the store. Now it emits the call, then unreachable, as rustc's own backend does.</text>
+<text x="40" y="84" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">RUST SOURCE  (the function_item_call example)</text>
+<text x="440" y="84" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">BEFORE, ON MAIN  (the call became a trap)</text>
+<text x="835" y="84" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">AFTER, WITH #1364  (the call is kept)</text>
+<rect x="40" y="98" width="370" height="186" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="52" y="118" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--rust); white-space: pre">write_then_diverge   (src/main.rs)</text>
+<text x="52" y="138" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">#[device]</text>
+<text x="52" y="154" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">unsafe fn write_then_diverge(ptr: *mut u32) -&gt; ! {</text>
+<text x="52" y="170" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">    unsafe {</text>
+<text x="52" y="186" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--meta); white-space: pre">        ptr.write(0x1111_1111);</text>
+<text x="52" y="202" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">    }</text>
+<text x="52" y="218" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">    loop {}</text>
+<text x="52" y="234" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">}</text>
+<text x="52" y="252" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">Returns `!`: it never comes back. The store is the</text>
+<text x="52" y="266" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">work that has to survive.</text>
+<rect x="40" y="298" width="370" height="154" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="52" y="318" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--rust); white-space: pre">in the #[kernel] diverging_callable</text>
+<text x="52" y="338" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">if flag == 3 {</text>
+<text x="52" y="354" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">    unsafe {</text>
+<text x="52" y="370" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--meta); white-space: pre">        write_then_diverge(out.as_mut_ptr());</text>
+<text x="52" y="386" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">    }</text>
+<text x="52" y="402" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">}</text>
+<text x="52" y="420" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">An ordinary direct call. Nothing follows it: the</text>
+<text x="52" y="434" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">callee's type promises it does not return.</text>
+<text x="42" y="472" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--muted); white-space: pre">Both backends get the same MIR from rustc: a Call with</text>
+<text x="42" y="486" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--muted); white-space: pre">no return edge (target: None), because the callee</text>
+<text x="42" y="500" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--muted); white-space: pre">never returns. The middle and right columns differ</text>
+<text x="42" y="514" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--muted); white-space: pre">only in what the importer emits for that call.</text>
+<rect x="40" y="534" width="370" height="92" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="52" y="554" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">What the programmer expects</text>
+<text x="52" y="574" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">out[0] = 0x1111_1111, then the thread spins forever.</text>
+<text x="52" y="592" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">An ordinary call, as on the host, and as nvcc treats</text>
+<text x="52" y="610" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">a __noreturn__ device function.</text>
+<rect x="440" y="98" width="365" height="138" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="452" y="118" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">LLVM IR before opt   (@diverging_callable)</text>
+<text x="452" y="138" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">bb6:</text>
+<text x="452" y="154" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">  %v14 = extractvalue { ptr, i64 } %v6, 0</text>
+<text x="452" y="170" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--code); white-space: pre">  call void asm sideeffect "trap;", ""()</text>
+<text x="452" y="186" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">  unreachable</text>
+<text x="452" y="204" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">The call to write_then_diverge is gone. bb2 and bb4,</text>
+<text x="452" y="218" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">the other two diverging call sites, look the same.</text>
+<line x1="480" y1="236" x2="480" y2="264" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<text x="492" y="254" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--muted); white-space: pre">opt -O2, then llc -march=nvptx64</text>
+<rect x="440" y="266" width="365" height="152" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="452" y="286" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">PTX   (.entry diverging_callable)</text>
+<text x="452" y="306" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">$L__BB1_5:                              // %bb6</text>
+<text x="452" y="322" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--muted); white-space: pre">    // begin inline asm</text>
+<text x="452" y="338" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--code); white-space: pre">    trap;</text>
+<text x="452" y="354" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--muted); white-space: pre">    // end inline asm</text>
+<text x="452" y="372" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">trap; appears three times in this kernel, once per</text>
+<text x="452" y="386" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">diverging call site. .func write_then_diverge is in</text>
+<text x="452" y="400" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">the module, marked .noreturn, and nothing calls it.</text>
+<rect x="440" y="432" width="365" height="52" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="452" y="454" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--fg); white-space: pre">On the GPU, flag == 3: no store. The thread hits trap;</text>
+<text x="452" y="470" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--fg); white-space: pre">and the launch fails. The value never lands in memory.</text>
+<rect x="835" y="98" width="365" height="138" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="847" y="118" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">LLVM IR before opt   (same block)</text>
+<text x="847" y="138" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">bb6:</text>
+<text x="847" y="154" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">  %v14 = extractvalue { ptr, i64 } %v6, 0</text>
+<text x="847" y="170" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--meta); white-space: pre">  call void @write_then_diverge(ptr %v14) #0</text>
+<text x="847" y="186" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">  unreachable</text>
+<text x="847" y="204" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">The call stays. unreachable only records that control</text>
+<text x="847" y="218" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">never comes back to this block.</text>
+<line x1="875" y1="236" x2="875" y2="264" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<text x="887" y="254" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--muted); white-space: pre">opt -O2, then llc -march=nvptx64</text>
+<rect x="835" y="266" width="365" height="152" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="847" y="286" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">PTX   (.entry diverging_callable)</text>
+<text x="847" y="306" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">$L__BB0_7:                              // %bb6</text>
+<text x="847" y="322" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--meta); white-space: pre">    st.global.b32   [%rd1], 286331153;</text>
+<text x="847" y="338" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">$L__BB0_8:                              // %bb1.i</text>
+<text x="847" y="354" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">    bra.uni         $L__BB0_8;</text>
+<text x="847" y="372" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">opt inlined the callee: the store (286331153 is</text>
+<text x="847" y="386" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">0x1111_1111), then the self-loop. No trap; on this path.</text>
+<text x="847" y="400" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">.func write_then_diverge is kept too, marked .noreturn.</text>
+<rect x="835" y="432" width="365" height="52" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="847" y="454" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--fg); white-space: pre">On the GPU, flag == 3: out[0] = 0x1111_1111, then the</text>
+<text x="847" y="470" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--fg); white-space: pre">thread spins. Seen on an RTX 5090 with a scratch kernel.</text>
+<rect x="835" y="498" width="365" height="128" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="847" y="518" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">Still lowered to trap;  (by design)</text>
+<text x="847" y="538" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">1  panic entry points in core::panicking:</text>
+<text x="847" y="553" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">   panic!(..), x.unwrap() on None, a[i] out of range</text>
+<text x="847" y="568" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">2  a -&gt; ! body that is only a panic; not collected:</text>
+<text x="847" y="583" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">   fn panic_only() -&gt; ! { panic!("not collected") }</text>
+<text x="847" y="598" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">3  a call through a function pointer, not resolved:</text>
+<text x="847" y="613" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">   let f: unsafe fn(*mut u32) -&gt; ! = helper; f(p)</text>
+<line x1="425" y1="92" x2="425" y2="626" style="stroke: var(--line); stroke-width: 1"/>
+<line x1="820" y1="92" x2="820" y2="626" style="stroke: var(--line); stroke-width: 1"/>
+<rect x="40" y="640" width="1160" height="94" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="54" y="662" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">How the importer decides  (translate_call, for a MIR Call with no return edge)</text>
+<text x="54" y="684" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">run_pipeline records the mangled name of every function it emits for this build. translate_call resolves the callee and checks that set:</text>
+<text x="54" y="702" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">in the set: emit the call, then unreachable, which is what rustc's own LLVM backend emits for a call with no destination.</text>
+<text x="54" y="720" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">not in the set: trap; then unreachable, as before. That blanket trap was written for panic entry points, which have no body on the GPU; it swallowed user functions as well.</text>
+</svg>

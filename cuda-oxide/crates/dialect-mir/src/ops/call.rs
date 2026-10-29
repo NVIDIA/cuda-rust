@@ -25,7 +25,6 @@ use pliron::{
     common_traits::Verify,
     context::{Context, Ptr},
     linked_list::ContainsLinkedList,
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -91,6 +90,38 @@ impl MirCallOp {
     pub fn set_external_callee_signature(&self, ctx: &mut Context, signature: TypeHandle) {
         self.set_attr_external_callee_type(ctx, TypeAttr::new(signature));
         self.set_attr_call_pointer_kind_authority(ctx, MirPointerKindAuthorityAttr::AbiBoundary);
+    }
+
+    /// Whether the call carries Rust's logical `()` result for a void callee.
+    /// Explicitly declared aggregate results, including empty tuples, are not
+    /// this bridge and must retain their ABI result when exported.
+    pub fn has_logical_unit_result_bridge(&self, ctx: &Context) -> bool {
+        let op = self.get_operation().deref(ctx);
+        if op.get_num_results() != 1
+            || !op
+                .get_result(0)
+                .get_type(ctx)
+                .deref(ctx)
+                .downcast_ref::<MirTupleType>()
+                .is_some_and(|tuple| tuple.get_types().is_empty())
+        {
+            return false;
+        }
+        let Some(name) = self.get_attr_callee(ctx) else {
+            return false;
+        };
+        let signature = match resolve_call(ctx, self.get_operation(), name.as_str()) {
+            CallResolution::AttachedResolved(callee) => Some(callee.get_type(ctx).into()),
+            _ => self.get_attr_external_callee_type(ctx).map(|attr| {
+                attr_cast::<dyn TypedAttrInterface>(&*attr)
+                    .expect("TypeAttr must implement TypedAttrInterface")
+                    .get_type(ctx)
+            }),
+        };
+        signature.is_some_and(|ty| {
+            type_cast::<dyn FunctionTypeInterface>(&*ty.deref(ctx))
+                .is_some_and(|function| function.res_types().is_empty())
+        })
     }
 }
 

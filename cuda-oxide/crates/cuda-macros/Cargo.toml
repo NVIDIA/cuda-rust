@@ -40,8 +40,12 @@ quote = { workspace = true }
 syn = { workspace = true }
 proc-macro2 = { workspace = true }
 reserved-oxide-symbols = { workspace = true }
+# `#[tile_export]` builds its description with the shared vocabulary and embeds
+# it as JSON at expansion time; the serialization goes through that crate.
+oxide-tile-export = { workspace = true }
 
 [dev-dependencies]
+ctm-rs = { workspace = true }
 trybuild = "1"
 # Dev-only cycle (cargo allows it): the launch_requires_unsafe compile-fail
 # test type-checks a real cuda_launch! expansion, which needs the host-side

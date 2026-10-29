@@ -1,0 +1,5 @@
+error: #[tile_export] sync = "warp" needs a tile_shape that is a multiple of 32 so every invocation group fills whole warps, found 100
+ --> tests/compile_fail/tile_export_warp_shape.rs:6:28
+  |
+6 | #[tile_export(tile_shape = 100, sync = "warp")]
+  |                            ^^^

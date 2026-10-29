@@ -195,7 +195,7 @@ handles all of that flattening.
 
 ### Operations
 
-At the pinned `pliron` revision the dialect defines 69 operations:
+The pinned `pliron-llvm` 0.20.0 release defines 69 operations:
 
 | Category     | Examples                                                                                                                                | Count |
 | :----------- | :-------------------------------------------------------------------------------------------------------------------------------------- | ----: |
@@ -216,9 +216,9 @@ At the pinned `pliron` revision the dialect defines 69 operations:
 `llvm-export` adds one operation of its own on top of those, `llvm.dbg_value`,
 alongside the address-space and fp16 helpers mentioned above.
 
-Because the dialect is upstream, this table moves when the `pliron` pin moves
-rather than when this repository changes; `pliron-llvm`'s `src/ops.rs` is the
-list it is counting.
+The operation inventory follows the pinned upstream release. This table counts
+the operations in [`pliron-llvm`'s `src/ops.rs`](https://github.com/pliron-org/pliron/blob/435536c8611af34c48c8f73d78e77894a05d103d/pliron-llvm/src/ops.rs),
+the source revision recorded in the 0.20.0 crate.
 
 If you have read LLVM IR before, nothing here will surprise you. The operation
 names are intentionally the same as their LLVM counterparts, prefixed with
@@ -303,16 +303,16 @@ they become `call` instructions to `@llvm.nvvm.*` intrinsics.
 
 ### Architecture Coverage
 
-At catalog SHA-256 `c243e568` (the stamp in every `ops/generated/` file
-header), the dialect holds 576 operations across 42 modules, and they come
+At catalog SHA-256 `63f8d327` (the stamp in every `ops/generated/` file
+header), the dialect holds 589 operations across 42 modules, and they come
 from two different places. The split is the first thing to know about it,
 because it decides where -- and whether -- you would add one. If the header
-stamp no longer starts with `c243e568`, the counts on this page predate the
+stamp no longer starts with `63f8d327`, the counts on this page predate the
 catalog you are reading.
 
 **Hand-written**, directly under `cuda-oxide/crates/dialect-nvvm/src/ops/`. These are the
 ops with bespoke verification or lowering that the intrinsic catalog does not
-describe. There are seven modules and 26 operations:
+describe. There are seven modules and 27 operations:
 
 | Module    | Description                                                 | Ops |
 | :-------- | :---------------------------------------------------------- | --: |
@@ -321,22 +321,22 @@ describe. There are seven modules and 26 operations:
 | `cluster` | Cluster index and cluster-count registers                   |   2 |
 | `debug`   | `assertfail`, `vprintf`                                     |   2 |
 | `grid`    | Cooperative `grid_sync`                                     |   1 |
-| `memory`  | Generic-to-shared address conversion with a byte offset     |   1 |
+| `memory`  | Generic-to-shared address conversion and global stores     |   2 |
 | `wgmma`   | Warpgroup MMA descriptors; bf16/f16 at m64n64k16, bf16 at m64n128k16, tf32 at m64n64k8 |  14 |
 
 **Generated**, under `ops/generated/`, from `intrinsics/catalog.json` by
 `cuda-intrinsics-gen`. Every file there opens with `// @generated ... DO NOT
 EDIT.`, and editing one by hand is undone by the next generator run. This is
-the large majority -- 35 modules and 550 operations, resolved from 1029 catalog
+the large majority -- 35 modules and 562 operations, resolved from 1042 catalog
 entries, since several intrinsics can share one structural op:
 
 | Area                        | Modules                                                                       | Ops |
 | :-------------------------- | :---------------------------------------------------------------------------- | --: |
 | Tensor Core Gen 5 + TMEM    | `tcgen05`                                                                     | 210 |
-| Tensor Memory Accelerator   | `tma`                                                                         | 111 |
+| Tensor Memory Accelerator   | `tma`                                                                         | 116 |
 | Special registers           | `sreg`                                                                        |  44 |
-| Packed (SIMD-in-register)   | `packed_alu`, `packed_conversion`, `packed_atomic`                            |  51 |
-| Async copy and barriers     | `cp_async`, `mbarrier_extended`, `mbarrier_basic`, `sync`                     |  35 |
+| Packed (SIMD-in-register)   | `packed_alu`, `packed_conversion`, `packed_atomic`                            |  55 |
+| Async copy and barriers     | `cp_async`, `mbarrier_extended`, `mbarrier_basic`, `sync`                     |  38 |
 | Warp-level                  | `warp_shuffle`, `redux`, `vote`, `warp_match`, `warp_barrier`, `active_mask`, `elect` |  39 |
 | Matrix fragment movement    | `ldmatrix`, `register_mma`, `stmatrix`, `wgmma_control`, `movmatrix`, `sparse_mma` |  22 |
 | Execution and debug control | `execution_control`, `debug_control`                                          |  11 |

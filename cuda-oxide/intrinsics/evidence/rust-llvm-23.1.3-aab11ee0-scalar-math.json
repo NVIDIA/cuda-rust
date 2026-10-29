@@ -7,7 +7,7 @@
   "backend_sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
   "defaults": {
     "target_triple": "nvptx64-nvidia-cuda",
-    "gpu_target": "sm_80",
+    "gpu_target": "sm_75",
     "ptx_feature": "+ptx70",
     "status": "validated",
     "declaration_attributes_canonicalized": true,
@@ -15,7 +15,7 @@
   },
   "fixtures": [
     {
-      "id": "scalar_math_typed_sm80_ptx70",
+      "id": "scalar_math_typed_sm75_ptx70",
       "coverage_count": 28,
       "stages": [
         {
@@ -31,18 +31,18 @@
         },
         {
           "targets": [
-            "sm_80",
+            "sm_75",
             "ptx70"
           ],
           "representation": "separate probes for the recorded lowering mechanism",
           "stage": "backend_codegen",
           "mechanism": "typed_nvvm",
           "outcome": "succeeded",
-          "detail": "Revalidated 28 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 872fd820a42be92ef628a5cb1f79f46895142f0acb65cc5cd978d0bcee090536."
+          "detail": "The nightly-2026-10-11 sysroot llc (LLVM version 23.1.3-rust-1.101.0-nightly, SHA-256 7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449; rustc 6f5da406b56c2db6607202b63daee73aa8c61297, LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019) lowered the 28 committed probes in intrinsics/probes with -march=nvptx64 -mcpu=sm_75 -mattr=+ptx70 to PTX 7.0 / sm_75, and the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger of the PTX, built with the refresh-2026-10-11 recipe, has SHA-256 37ad4d210ff1e7cc66707d4f0a2881d242916a4e0dc884ae41f08ce614df02c3. These captures replace the sm_80 captures that refresh-2026-10-11/stages.jsonl records at this stage; the same probes and llc at sm_80 still reproduce its SHA-256 872fd820a42be92ef628a5cb1f79f46895142f0acb65cc5cd978d0bcee090536. The declaration-canonicalization stage does not depend on the target and is unchanged."
         },
         {
           "targets": [
-            "sm_80",
+            "sm_75",
             "ptx70"
           ],
           "representation": "separate PTX outputs assembled for the recorded target",
@@ -50,7 +50,7 @@
           "mechanism": "typed_nvvm",
           "outcome": "succeeded",
           "artifact_kind": "cubin",
-          "detail": "Revalidated 28 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 40510f96011426cd1c7d1ca35cbcd48ae2decebcd625310fd37db6fc047b8f7a.",
+          "detail": "CUDA 13.3 ptxas V13.3.73 (the CUDA 13.3.1 redistributable binary, whose SHA-256 matches tool_sha256) assembled each of the 28 sm_75 PTX outputs with -arch=sm_75. The sorted ID/artifact-kind/SHA-256 ledger of the cubins has SHA-256 0a7f1333017b64bb959e4573d61159711b8785f6ec6d6e5295d214aa47186eb8. These captures replace the sm_80 captures that refresh-2026-10-11/stages.jsonl records at this stage, whose SHA-256 40510f96011426cd1c7d1ca35cbcd48ae2decebcd625310fd37db6fc047b8f7a still reproduces at sm_80.",
           "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
           "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
           "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
@@ -58,7 +58,7 @@
       ]
     },
     {
-      "id": "scalar_math_inline_sm80_ptx70",
+      "id": "scalar_math_inline_sm75_ptx70",
       "coverage_count": 9,
       "stages": [
         {
@@ -74,18 +74,18 @@
         },
         {
           "targets": [
-            "sm_80",
+            "sm_75",
             "ptx70"
           ],
           "representation": "separate probes for the recorded lowering mechanism",
           "stage": "backend_codegen",
           "mechanism": "inline_ptx",
           "outcome": "succeeded",
-          "detail": "Revalidated 9 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 094fb972e1487a21ff367ca7549357317a976326625e1ebbe4ae71f490cbc03b."
+          "detail": "The nightly-2026-10-11 sysroot llc (LLVM version 23.1.3-rust-1.101.0-nightly, SHA-256 7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449; rustc 6f5da406b56c2db6607202b63daee73aa8c61297, LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019) lowered the 9 committed probes in intrinsics/probes with -march=nvptx64 -mcpu=sm_75 -mattr=+ptx70 to PTX 7.0 / sm_75, and the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger of the PTX, built with the refresh-2026-10-11 recipe, has SHA-256 f22bbfff918232af0553c728c97b3b17439d047d33a19d4ca8dff5fac98741a3. These captures replace the sm_80 captures that refresh-2026-10-11/stages.jsonl records at this stage; the same probes and llc at sm_80 still reproduce its SHA-256 094fb972e1487a21ff367ca7549357317a976326625e1ebbe4ae71f490cbc03b. The declaration-canonicalization stage does not depend on the target and is unchanged."
         },
         {
           "targets": [
-            "sm_80",
+            "sm_75",
             "ptx70"
           ],
           "representation": "separate PTX outputs assembled for the recorded target",
@@ -93,7 +93,7 @@
           "mechanism": "inline_ptx",
           "outcome": "succeeded",
           "artifact_kind": "cubin",
-          "detail": "Revalidated 9 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 832391a539356a083929e9c33a555ed3d0b71a4ddde88e08e8541fca97689540.",
+          "detail": "CUDA 13.3 ptxas V13.3.73 (the CUDA 13.3.1 redistributable binary, whose SHA-256 matches tool_sha256) assembled each of the 9 sm_75 PTX outputs with -arch=sm_75. The sorted ID/artifact-kind/SHA-256 ledger of the cubins has SHA-256 46790f1fc1367ac939565ad55db007ac0f86b7a75a833bfd4f3e06c4e1d6851a. These captures replace the sm_80 captures that refresh-2026-10-11/stages.jsonl records at this stage, whose SHA-256 832391a539356a083929e9c33a555ed3d0b71a4ddde88e08e8541fca97689540 still reproduces at sm_80.",
           "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
           "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
           "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
@@ -101,26 +101,23 @@
       ]
     },
     {
-      "id": "scalar_math_inline_sm80_ptx70_appended",
+      "id": "scalar_math_inline_sm75_ptx70_appended",
       "coverage_count": 3,
       "stages": [
         {
           "targets": [
-            "sm_80",
+            "sm_75",
             "ptx70"
           ],
           "representation": "separate probes for the recorded lowering mechanism",
           "stage": "backend_codegen",
           "mechanism": "inline_ptx",
           "outcome": "succeeded",
-          "detail": "Revalidated 3 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 7f7959d76a6bc77d5d1dbd1e909cfd96c0c0c99cc5a5053c4f664f6cd0eddcdb.",
-          "tool_path": "/home/nihalp/.rustup/toolchains/nightly-2026-10-11-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/llc",
-          "tool_version": "LLVM version 23.1.3-rust-1.101.0-nightly",
-          "tool_sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449"
+          "detail": "The nightly-2026-10-11 sysroot llc (LLVM version 23.1.3-rust-1.101.0-nightly, SHA-256 7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449; rustc 6f5da406b56c2db6607202b63daee73aa8c61297, LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019) lowered the 3 committed probes in intrinsics/probes with -march=nvptx64 -mcpu=sm_75 -mattr=+ptx70 to PTX 7.0 / sm_75, and the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger of the PTX, built with the refresh-2026-10-11 recipe, has SHA-256 d3d535da55cecd063ec54af4acdc54048be42c255087359668f1f4dc6f73b659. These captures replace the sm_80 captures that refresh-2026-10-11/stages.jsonl records at this stage; the same probes and llc at sm_80 still reproduce its SHA-256 7f7959d76a6bc77d5d1dbd1e909cfd96c0c0c99cc5a5053c4f664f6cd0eddcdb."
         },
         {
           "targets": [
-            "sm_80",
+            "sm_75",
             "ptx70"
           ],
           "representation": "separate PTX outputs assembled for the recorded target",
@@ -128,7 +125,7 @@
           "mechanism": "inline_ptx",
           "outcome": "succeeded",
           "artifact_kind": "cubin",
-          "detail": "Revalidated 3 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 d0e13be12bb5695c5107849e200384164007696566dcf5a51f890bee17ba356a.",
+          "detail": "CUDA 13.3 ptxas V13.3.73 (the CUDA 13.3.1 redistributable binary, whose SHA-256 matches tool_sha256) assembled each of the 3 sm_75 PTX outputs with -arch=sm_75. The sorted ID/artifact-kind/SHA-256 ledger of the cubins has SHA-256 718955ad43a869c25618532feec8cf8a9186cb09ebbfdfc8788adc268a607846. These captures replace the sm_80 captures that refresh-2026-10-11/stages.jsonl records at this stage, whose SHA-256 d0e13be12bb5695c5107849e200384164007696566dcf5a51f890bee17ba356a still reproduces at sm_80.",
           "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
           "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
           "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
@@ -174,7 +171,7 @@
       ],
       "product_count": 1,
       "fixtures": [
-        "scalar_math_inline_sm80_ptx70"
+        "scalar_math_inline_sm75_ptx70"
       ],
       "template": {
         "id": "${id}",
@@ -222,7 +219,7 @@
       ],
       "product_count": 1,
       "fixtures": [
-        "scalar_math_inline_sm80_ptx70"
+        "scalar_math_inline_sm75_ptx70"
       ],
       "template": {
         "id": "${id}",
@@ -271,7 +268,7 @@
       ],
       "product_count": 1,
       "fixtures": [
-        "scalar_math_inline_sm80_ptx70"
+        "scalar_math_inline_sm75_ptx70"
       ],
       "template": {
         "id": "${id}",
@@ -319,7 +316,7 @@
       ],
       "product_count": 1,
       "fixtures": [
-        "scalar_math_inline_sm80_ptx70"
+        "scalar_math_inline_sm75_ptx70"
       ],
       "template": {
         "id": "${id}",
@@ -368,7 +365,7 @@
       ],
       "product_count": 1,
       "fixtures": [
-        "scalar_math_inline_sm80_ptx70"
+        "scalar_math_inline_sm75_ptx70"
       ],
       "template": {
         "id": "${id}",
@@ -416,7 +413,7 @@
       ],
       "product_count": 1,
       "fixtures": [
-        "scalar_math_inline_sm80_ptx70"
+        "scalar_math_inline_sm75_ptx70"
       ],
       "template": {
         "id": "${id}",
@@ -465,7 +462,7 @@
       ],
       "product_count": 1,
       "fixtures": [
-        "scalar_math_inline_sm80_ptx70"
+        "scalar_math_inline_sm75_ptx70"
       ],
       "template": {
         "id": "${id}",
@@ -513,7 +510,7 @@
       ],
       "product_count": 1,
       "fixtures": [
-        "scalar_math_inline_sm80_ptx70"
+        "scalar_math_inline_sm75_ptx70"
       ],
       "template": {
         "id": "${id}",
@@ -562,7 +559,7 @@
       ],
       "product_count": 1,
       "fixtures": [
-        "scalar_math_inline_sm80_ptx70"
+        "scalar_math_inline_sm75_ptx70"
       ],
       "template": {
         "id": "${id}",
@@ -613,7 +610,7 @@
       ],
       "product_count": 4,
       "fixtures": [
-        "scalar_math_typed_sm80_ptx70"
+        "scalar_math_typed_sm75_ptx70"
       ],
       "template": {
         "id": "rcp_${rounding}_f32",
@@ -664,7 +661,7 @@
       ],
       "product_count": 4,
       "fixtures": [
-        "scalar_math_typed_sm80_ptx70"
+        "scalar_math_typed_sm75_ptx70"
       ],
       "template": {
         "id": "rcp_${rounding}_ftz_f32",
@@ -716,7 +713,7 @@
       ],
       "product_count": 4,
       "fixtures": [
-        "scalar_math_typed_sm80_ptx70"
+        "scalar_math_typed_sm75_ptx70"
       ],
       "template": {
         "id": "rcp_${rounding}_f64",
@@ -764,7 +761,7 @@
       ],
       "product_count": 1,
       "fixtures": [
-        "scalar_math_typed_sm80_ptx70"
+        "scalar_math_typed_sm75_ptx70"
       ],
       "template": {
         "id": "${id}",
@@ -813,7 +810,7 @@
       ],
       "product_count": 1,
       "fixtures": [
-        "scalar_math_typed_sm80_ptx70"
+        "scalar_math_typed_sm75_ptx70"
       ],
       "template": {
         "id": "${id}",
@@ -862,7 +859,7 @@
       ],
       "product_count": 1,
       "fixtures": [
-        "scalar_math_typed_sm80_ptx70"
+        "scalar_math_typed_sm75_ptx70"
       ],
       "template": {
         "id": "${id}",
@@ -910,7 +907,7 @@
       ],
       "product_count": 1,
       "fixtures": [
-        "scalar_math_typed_sm80_ptx70"
+        "scalar_math_typed_sm75_ptx70"
       ],
       "template": {
         "id": "${id}",
@@ -962,7 +959,7 @@
       ],
       "product_count": 4,
       "fixtures": [
-        "scalar_math_typed_sm80_ptx70"
+        "scalar_math_typed_sm75_ptx70"
       ],
       "template": {
         "id": "sqrt_${rounding}_f32",
@@ -1013,7 +1010,7 @@
       ],
       "product_count": 4,
       "fixtures": [
-        "scalar_math_typed_sm80_ptx70"
+        "scalar_math_typed_sm75_ptx70"
       ],
       "template": {
         "id": "sqrt_${rounding}_ftz_f32",
@@ -1065,7 +1062,7 @@
       ],
       "product_count": 4,
       "fixtures": [
-        "scalar_math_typed_sm80_ptx70"
+        "scalar_math_typed_sm75_ptx70"
       ],
       "template": {
         "id": "sqrt_${rounding}_f64",
@@ -1163,7 +1160,7 @@
       ],
       "product_count": 1,
       "fixtures": [
-        "scalar_math_inline_sm80_ptx70_appended"
+        "scalar_math_inline_sm75_ptx70_appended"
       ],
       "template": {
         "id": "${id}",
@@ -1211,7 +1208,7 @@
       ],
       "product_count": 1,
       "fixtures": [
-        "scalar_math_inline_sm80_ptx70_appended"
+        "scalar_math_inline_sm75_ptx70_appended"
       ],
       "template": {
         "id": "${id}",
@@ -1260,7 +1257,7 @@
       ],
       "product_count": 1,
       "fixtures": [
-        "scalar_math_inline_sm80_ptx70_appended"
+        "scalar_math_inline_sm75_ptx70_appended"
       ],
       "template": {
         "id": "${id}",

@@ -2189,6 +2189,11 @@ run_cargo() {
         # Build at the instruction floor; the host check skips before module loading.
         args+=("--arch=sm_75")
     fi
+    if [[ "${ex}" == "scalar_math_sm75" ]]; then
+        # always build at the sm_75 floor, so newer GPUs run JIT-compiled
+        # sm_75 PTX and the build keeps proving the Turing floor
+        args+=("--arch=sm_75")
+    fi
     if [[ "${ex}" == "debug" ]]; then
         # Its code-shape gate checks LLVM/PTX source locations, which only
         # exist when the example is compiled with full device debug metadata.

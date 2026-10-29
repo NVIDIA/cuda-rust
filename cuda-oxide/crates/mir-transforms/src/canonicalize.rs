@@ -739,6 +739,7 @@ fn match_checked_step(
             || Operation::get_op::<MirStorageLiveOp>(op, ctx).is_some()
             || Operation::get_op::<MirStorageDeadOp>(op, ctx).is_some()
             || Operation::get_op::<MirConstantOp>(op, ctx).is_some()
+            || Operation::get_op::<ConstantOp>(op, ctx).is_some()
         {
             continue;
         }
@@ -962,6 +963,12 @@ fn evaluate_match_block(
         let width = integer_width(ctx, result)?;
         let value = if let Some(constant) = Operation::get_op::<MirConstantOp>(op, ctx) {
             constant.get_attr_value(ctx)?.value().to_u128()
+        } else if let Some(constant) = Operation::get_op::<ConstantOp>(op, ctx) {
+            let attr = constant.get_value(ctx);
+            (&*attr as &dyn pliron::attribute::Attribute)
+                .downcast_ref::<pliron::builtin::attributes::IntegerAttr>()?
+                .value()
+                .to_u128()
         } else if Operation::get_op::<MirGetDiscriminantOp>(op, ctx).is_some() {
             if op.deref(ctx).get_operand(0) != tested {
                 return None;

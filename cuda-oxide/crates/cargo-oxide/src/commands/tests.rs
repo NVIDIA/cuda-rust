@@ -206,7 +206,7 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
 fn write_tool(path: &Path, script: &str) {
     use std::os::unix::fs::PermissionsExt;
 
-    let staging = path.with_extension("staging");
+    let staging = path.with_added_extension("staging");
     fs::write(&staging, script).unwrap();
     let status = Command::new("cp").arg(&staging).arg(path).status().unwrap();
     assert!(status.success(), "cp {} failed: {status}", path.display());

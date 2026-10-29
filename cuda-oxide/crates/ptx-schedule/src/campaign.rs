@@ -1122,7 +1122,7 @@ mod tests {
         // open for writing would hand its child that handle, and running the
         // script would then fail with ETXTBSY; `cp` makes the only writer a
         // process that has already exited
-        let staging = dir.join("spam.staging");
+        let staging = script.with_added_extension("staging");
         // 1 MiB of stdout, far beyond the pipe buffer the watchdog loop used
         // to deadlock against before the reader threads were added.
         fs::write(
@@ -1136,6 +1136,7 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success(), "cp {} failed: {status}", script.display());
+        fs::remove_file(staging).unwrap();
         // cp masks the mode with the umask; chmod opens no writable handle
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
         let result = run_binary(&script, &dir, Duration::from_secs(30));

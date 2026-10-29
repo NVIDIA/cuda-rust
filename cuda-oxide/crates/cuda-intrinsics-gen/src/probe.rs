@@ -1971,7 +1971,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let path = root.join(name);
-        let staging = path.with_extension("staging");
+        let staging = path.with_added_extension("staging");
         fs::write(&staging, script).unwrap();
         let status = std::process::Command::new("cp")
             .arg(&staging)

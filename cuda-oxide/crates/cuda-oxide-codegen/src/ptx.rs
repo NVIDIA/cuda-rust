@@ -1433,7 +1433,7 @@ mod tests {
     fn write_tool(path: &Path, script: &str) {
         use std::os::unix::fs::PermissionsExt;
 
-        let staging_path = path.with_extension("staging");
+        let staging_path = path.with_added_extension("staging");
         std::fs::write(&staging_path, script).unwrap();
         let status = std::process::Command::new("cp")
             .arg(&staging_path)

@@ -216,6 +216,10 @@ pub(super) struct ModuleExportState<'a> {
     pub(super) debug_declare_used: bool,
     /// Whether any function emitted `llvm.dbg.value`.
     pub(super) debug_value_used: bool,
+    /// Shared `!{!"llvm.loop.unroll.disable"}` metadata id, allocated on first use.
+    pub(super) loop_unroll_disable_attr_id: Option<usize>,
+    /// Per-backedge `distinct !{!id, !attr_id}` loop metadata ids, in allocation order.
+    pub(super) loop_unroll_disable_loop_ids: Vec<usize>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -284,6 +288,8 @@ impl<'a> ModuleExportState<'a> {
             debug_nodes: Vec::new(),
             debug_declare_used: false,
             debug_value_used: false,
+            loop_unroll_disable_attr_id: None,
+            loop_unroll_disable_loop_ids: Vec::new(),
         }
     }
 
@@ -307,6 +313,15 @@ impl<'a> ModuleExportState<'a> {
         let id = self.next_metadata_id;
         self.next_metadata_id += 1;
         id
+    }
+
+    pub(super) fn alloc_loop_unroll_disable_id(&mut self) -> usize {
+        if self.loop_unroll_disable_attr_id.is_none() {
+            self.loop_unroll_disable_attr_id = Some(self.alloc_metadata_id());
+        }
+        let loop_id = self.alloc_metadata_id();
+        self.loop_unroll_disable_loop_ids.push(loop_id);
+        loop_id
     }
 
     #[cfg(test)]

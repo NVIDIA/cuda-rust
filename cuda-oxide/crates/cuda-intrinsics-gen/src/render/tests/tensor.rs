@@ -420,11 +420,11 @@ fn tma_rendering_preserves_api_and_injects_backend_defaults() {
             "pub unsafe fn cp_async_bulk_tensor_reduce_xor_im2col_5d(src: *const u8, tensor_map: *const TmaDescriptor, coord0: i32, coord1: i32, coord2: i32, coord3: i32, coord4: i32)"
         ));
     assert!(compatibility.contains(
-            "pub unsafe fn cp_async_bulk_tensor_2d_g2s_cta(dst: SharedPtr<u8>, tensor_map: *const TmaDescriptor, coord0: i32, coord1: i32, barrier: *mut Barrier)"
+            "pub unsafe fn cp_async_bulk_tensor_2d_g2s_cta(dst: *mut u8, tensor_map: *const TmaDescriptor, coord0: i32, coord1: i32, barrier: *mut Barrier)"
         ));
     for dimensions in 1..=5 {
         assert!(compatibility.contains(&format!(
-            "pub unsafe fn cp_async_bulk_tensor_{dimensions}d_g2s_cta(dst: SharedPtr<u8>,"
+            "pub unsafe fn cp_async_bulk_tensor_{dimensions}d_g2s_cta(dst: *mut u8,"
         )));
         assert!(compatibility.contains(&format!(
             "pub unsafe fn cp_async_bulk_prefetch_tensor_{dimensions}d_l2("

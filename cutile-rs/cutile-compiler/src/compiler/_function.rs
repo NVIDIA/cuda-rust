@@ -655,7 +655,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         // in-kernel code motion (see CheckOptimizations::device_debug for
         // why discharge and launch relocation are untouched).
         let mut check_opts = crate::check_optimizations::CheckOptimizations::from_env();
-        if compile_options.device_debug {
+        if compile_options.codegen == crate::hints::CodegenMode::Debug {
             check_opts.hoist_to_preheaders = false;
         }
         Ok(CUDATileFunctionCompiler {
@@ -784,9 +784,25 @@ impl<'m> CUDATileFunctionCompiler<'m> {
     /// stack.
     pub(crate) fn ir_location(&self, span: &proc_macro2::Span) -> cutile_ir::ir::Location {
         let stack = self.call_site_stack.borrow();
+        // Runtime parsing gives each captured module its own source span.
+        // Generated types, arrays, and wrapper calls do not join that span.
+        let captured_location = || {
+            self.modules
+                .name_resolver
+                .all_modules()
+                .iter()
+                .find_map(|(name, module)| {
+                    module.ident.span().join(*span)?;
+                    let base = self.modules.get_span_base(name).filter(|b| b.is_known())?;
+                    Some(base.resolve_span(span))
+                })
+        };
         let (caller, callee_scope, span_base) = match stack.last() {
             None => {
-                let loc = self.resolve_span(span);
+                let loc = captured_location().unwrap_or_else(|| {
+                    self.span_base()
+                        .resolve_span(&self._function.sig.ident.span())
+                });
                 return if loc.is_known() {
                     cutile_ir::ir::Location::FileLineCol {
                         filename: loc.file,
@@ -809,7 +825,12 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         // callee's own module base; scope the op to the CALLEE's subprogram
         // (so inline debug frames name the inlined function, not the kernel
         // entry) and chain where it was inlined.
-        let loc = span_base.resolve_span(span);
+        let loc = captured_location().unwrap_or_else(|| match callee_scope {
+            Some(scope) if span_base.is_known() => {
+                SourceLocation::new(span_base.file.clone(), scope.line as usize, 0)
+            }
+            _ => SourceLocation::unknown(),
+        });
         if !loc.is_known() {
             return cutile_ir::ir::Location::Unknown;
         }
@@ -1179,7 +1200,13 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         }
 
         for (key, value) in generic_vars.ordered_inst_bool() {
-            let tr_val = self.compile_bool_constant(module, block_id, generic_vars, value)?;
+            let tr_val = self.compile_bool_constant(
+                module,
+                block_id,
+                generic_vars,
+                value,
+                &fn_item.sig.span(),
+            )?;
             ctx.vars.insert(key.to_string(), tr_val);
         }
 
@@ -1318,7 +1345,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         let tr_ty = self
             .compile_type(&rust_ty, generic_vars, &HashMap::new())?
             .ok_or(self.jit_error(&rust_ty.span(), "failed to compile constant"))?;
-        self.compile_constant_from_exact_bounds(module, block_id, bounds, tr_ty)
+        let span = tr_ty.rust_ty.span();
+        self.compile_constant_from_exact_bounds(module, block_id, bounds, tr_ty, &span)
     }
 
     pub(crate) fn compile_bool_constant(
@@ -1327,16 +1355,18 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         block_id: cutile_ir::ir::BlockId,
         generic_vars: &GenericVars,
         x: bool,
+        span: &proc_macro2::Span,
     ) -> Result<TileRustValue, JITError> {
         let rust_ty: syn::Type = syn::parse_quote!(bool);
         let tr_ty = self
             .compile_type(&rust_ty, generic_vars, &HashMap::new())?
-            .ok_or(self.jit_error(&rust_ty.span(), "failed to compile bool constant"))?;
+            .ok_or(self.jit_error(span, "failed to compile bool constant"))?;
         self.compile_constant_from_exact_bounds(
             module,
             block_id,
             Bounds::exact(if x { 1 } else { 0 }),
             tr_ty,
+            span,
         )
     }
 
@@ -1346,10 +1376,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         block_id: cutile_ir::ir::BlockId,
         bounds: Bounds<i64>,
         tr_ty: TileRustType,
+        span: &proc_macro2::Span,
     ) -> Result<TileRustValue, JITError> {
         if !bounds.is_exact() {
             return self.jit_error_result(
-                &tr_ty.rust_ty.span(),
+                span,
                 &format!(
                     "expected a compile-time constant, but got a value with bounds [{}, {}]",
                     bounds.start, bounds.end
@@ -1358,14 +1389,13 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         }
         let const_value = bounds.start;
         let TypeInstance::ElementType(type_inst) = &tr_ty.type_instance else {
-            return self.jit_error_result(&tr_ty.rust_ty.span(), "expected a scalar element type");
+            return self.jit_error_result(span, "expected a scalar element type");
         };
         let Some(const_ty_str) = get_cuda_tile_element_type_from_rust_primitive_str(
             &type_inst.rust_element_instance_ty,
             self.modules.primitives(),
         ) else {
-            return self
-                .jit_error_result(&tr_ty.rust_ty.span(), "failed to compile constant value");
+            return self.jit_error_result(span, "failed to compile constant value");
         };
 
         // Build tile-ir Constant op directly (replaces operation_parse).
@@ -1399,18 +1429,17 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             ScalarType::F4E2M1FN => vec![(const_value as u8) & 0x0F],
             _ => (const_value as i32).to_le_bytes().to_vec(),
         };
-        let (op_id, results) =
-            OpBuilder::new(Opcode::Constant, self.ir_location(&tr_ty.rust_ty.span()))
-                .result(result_ty.clone())
-                .attr(
-                    "value",
-                    Attribute::DenseElements(DenseElements {
-                        element_type: result_ty,
-                        shape: vec![],
-                        data,
-                    }),
-                )
-                .build(module);
+        let (op_id, results) = OpBuilder::new(Opcode::Constant, self.ir_location(span))
+            .result(result_ty.clone())
+            .attr(
+                "value",
+                Attribute::DenseElements(DenseElements {
+                    element_type: result_ty,
+                    shape: vec![],
+                    data,
+                }),
+            )
+            .build(module);
         append_op(module, block_id, op_id);
         let mut tr_val = TileRustValue::new_value_kind_like(results[0], tr_ty);
         tr_val.mutability = Mutability::Immutable;

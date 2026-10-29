@@ -1985,6 +1985,18 @@ pub mod ops {
     /// Op-attribute key for [`LocalMemoryProvenanceAttr`] on `mir.alloca` and
     /// `llvm.alloca`.
     const LOCAL_MEMORY_PROVENANCE_KEY: &str = "cuda_oxide_local_memory_provenance";
+    const LOOP_UNROLL_DISABLE_KEY: &str = "cuda_oxide_loop_unroll_disable";
+
+    /// Mark an `llvm.br` backedge so textual export attaches `!llvm.loop`
+    /// with `!"llvm.loop.unroll.disable"`.
+    pub fn set_loop_unroll_disable(ctx: &mut Context, op: Ptr<Operation>) {
+        set_string_attr(ctx, op, LOOP_UNROLL_DISABLE_KEY, "1".to_string());
+    }
+
+    /// Whether an `llvm.br` backedge carries `!"llvm.loop.unroll.disable"`.
+    pub fn is_loop_unroll_disable(ctx: &Context, op: Ptr<Operation>) -> bool {
+        get_string_attr(ctx, op, LOOP_UNROLL_DISABLE_KEY).is_some()
+    }
 
     /// Attach Rust-local provenance to a stack-slot op.
     pub fn set_local_memory_provenance(

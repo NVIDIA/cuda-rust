@@ -558,7 +558,10 @@ impl SlotAddrSpaceMap {
                 }
 
                 let mir::TerminatorKind::Call {
-                    func, destination, ..
+                    func,
+                    args,
+                    destination,
+                    ..
                 } = &block.terminator.kind
                 else {
                     continue;
@@ -566,7 +569,7 @@ impl SlotAddrSpaceMap {
                 if !destination.projection.is_empty() {
                     continue;
                 }
-                let class = classify_call(func);
+                let class = classify_call(func, args, &classes);
                 let local_idx: usize = destination.local;
                 let declared = declared_addr_spaces.get(local_idx).copied().flatten();
                 if let Some(observation) = resolve(class, declared)
@@ -636,6 +639,17 @@ fn merge_into(
     }
 }
 
+/// Classify a single MIR operand's address space.
+fn classify_operand(operand: &mir::Operand, classes: &[SlotAddrSpace]) -> WriteClass {
+    match operand {
+        mir::Operand::Copy(place) | mir::Operand::Move(place) if place.projection.is_empty() => {
+            propagate_from_local(place.local, classes)
+        }
+        mir::Operand::Constant(const_op) => classify_constant(const_op),
+        _ => WriteClass::Unclassified,
+    }
+}
+
 /// Classify the write produced by an `Assign(_, rvalue)` statement.
 ///
 /// The rule set is intentionally narrow: when in doubt, return
@@ -645,28 +659,22 @@ fn merge_into(
 /// incomplete classification therefore leaves ordinary pointers generic.
 fn classify_rvalue(rvalue: &mir::Rvalue, classes: &[SlotAddrSpace]) -> WriteClass {
     match rvalue {
-        // `_y = _x` — propagate `_x`'s current classification. `Move` and
-        // `Copy` are indistinguishable for addrspace purposes. `CopyForDeref`
-        // behaves the same at this layer.
-        mir::Rvalue::Use(mir::Operand::Copy(place), _)
-        | mir::Rvalue::Use(mir::Operand::Move(place), _)
-        | mir::Rvalue::CopyForDeref(place)
-            if place.projection.is_empty() =>
-        {
+        // `_y = _x` or `_y = CONSTANT` — propagate the operand's classification.
+        mir::Rvalue::Use(operand, _) => classify_operand(operand, classes),
+        mir::Rvalue::CopyForDeref(place) if place.projection.is_empty() => {
             propagate_from_local(place.local, classes)
         }
-        // `_y = CONSTANT` — a constant-operand pointer to a shared-memory
-        // static (e.g. `&mut TILE_A` where `TILE_A: SharedArray<...>`)
-        // lowers to a `mir.shared_alloc` in `translate_operand` whose
-        // result is `addrspace(3)`. The matching `WriteClass::Classified`
-        // here keeps the destination slot typed to match, avoiding the
-        // otherwise-inevitable `PtrToPtr` narrow-to-generic cast.
-        mir::Rvalue::Use(mir::Operand::Constant(const_op), _) => classify_constant(const_op),
-        // Every other rvalue shape (aggregates, arithmetic, casts, complex
-        // projections, `Ref`/`AddressOf`, …) we decline to reason about
-        // here. The matching `Call`-terminator classifier handles the
-        // pointer-producing intrinsics; the remaining cases can be
-        // tightened in a follow-up if a benchmark asks for it.
+        // `_y = Offset(_ptr, _count)` — pointer arithmetic stays in the base
+        // pointer's address space (`MirPtrOffsetOp` preserves `left_val`'s type).
+        mir::Rvalue::BinaryOp(mir::BinOp::Offset, base, _) => classify_operand(base, classes),
+        // `_y = _ptr as *const U` / `_ptr as *mut U` — pointer-to-pointer and
+        // mut-to-const casts change pointee type or mutability, not memory space.
+        mir::Rvalue::Cast(
+            mir::CastKind::PtrToPtr
+            | mir::CastKind::PointerCoercion(mir::PointerCoercion::MutToConstPointer),
+            operand,
+            _,
+        ) => classify_operand(operand, classes),
         _ => WriteClass::Unclassified,
     }
 }
@@ -733,7 +741,11 @@ pub(super) fn is_constant_wrapper_type(ty: &rustc_public::ty::Ty) -> bool {
 /// whose emitter unconditionally produces a pointer in a specific address
 /// space is listed here; new intrinsics should add an entry on the same
 /// commit that adds their emitter.
-fn classify_call(func: &mir::Operand) -> WriteClass {
+fn classify_call(
+    func: &mir::Operand,
+    args: &[mir::Operand],
+    classes: &[SlotAddrSpace],
+) -> WriteClass {
     let mir::Operand::Constant(const_op) = func else {
         return WriteClass::Unclassified;
     };
@@ -745,6 +757,14 @@ fn classify_call(func: &mir::Operand) -> WriteClass {
     };
     let path = fn_def.name();
     let on_shared_array = self_ty_is_shared_array(&substs);
+
+    // `arith_offset(ptr, count)` lowers to `MirPtrOffsetOp` with `ptr`'s
+    // `MirPtrType` (including its address space).
+    if path.ends_with("::arith_offset")
+        && let Some(base) = args.first()
+    {
+        return classify_operand(base, classes);
+    }
 
     // --- addrspace 3 (shared) producers -------------------------------------
     //

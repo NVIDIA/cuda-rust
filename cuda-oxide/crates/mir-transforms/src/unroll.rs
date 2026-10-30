@@ -22,7 +22,9 @@
 //! exit test that adds a constant to the counter (`while i + 2 <= n`), and range
 //! `for` loops (`for i in a..b` and `(a..b).rev()`) over any integer counter,
 //! including `isize`. Other iterator loops, such as `a..=b` or `.step_by(k)`,
-//! are not yet recognized.
+//! are not yet recognized. A full unroll's bound can be integer arithmetic on
+//! constants, such as `N / 8` with a const generic `N`. Casts and
+//! overflow-checked arithmetic in the bound are not yet folded.
 //!
 //! Several `continue` paths are supported: the pass joins their back-edges
 //! before unrolling. Full `#[unroll]` also preserves early `break` paths and
@@ -58,6 +60,7 @@ use pliron::context::{Context, Ptr};
 use pliron::graph::ControlFlowGraph;
 use pliron::graph::dominance::DomInfo;
 use pliron::irbuild::{
+    IRStatus,
     cloning::{IrMapping, clone_blocks_into},
     listener::DummyListener,
     rewriter::IRRewriter,
@@ -81,7 +84,8 @@ use std::num::NonZero;
 use crate::analyses::induction::{self, ArgKind, CmpPred};
 use crate::analyses::loop_info::LoopInfo;
 use crate::canonicalize::{
-    CanonicalizeOutcome, close_header_liveouts, merge_backedges, thread_iterator_exit_test,
+    CanonicalizeOutcome, close_header_liveouts, hoist_header_constants, merge_backedges,
+    thread_iterator_exit_test,
 };
 
 /// Hard safety limit on how many body copies one annotation may request.
@@ -116,7 +120,7 @@ fn unroll_kind(factor: u32) -> String {
 /// A hint op's source position as `file:line:column`, the form editors and
 /// terminals turn into a link. Returns `None` when the op does not carry a
 /// single position in a file.
-fn hint_location(ctx: &Context, op: Ptr<Operation>) -> Option<String> {
+pub(crate) fn hint_location(ctx: &Context, op: Ptr<Operation>) -> Option<String> {
     match op.deref(ctx).loc() {
         Location::SrcPos {
             src: Source::File(path),
@@ -214,9 +218,11 @@ fn check_clone_budget(
 /// frontend plants for `#[unroll]` and `#[unroll(N)]`. Other functions are left
 /// untouched.
 ///
-/// Within each annotated function, this finds loops with [`LoopInfo`], maps
-/// every hint to its loop, joins multiple back-edges through one latch, analyzes
-/// the loop counter, and performs full or partial unrolling. It recomputes loop
+/// Within each annotated function, this folds constant expressions with SCCP
+/// so a bound such as `N / 8` reads as a constant, finds loops with
+/// [`LoopInfo`], maps every hint to its loop, joins multiple back-edges through
+/// one latch, analyzes the loop counter, and performs full or partial
+/// unrolling. It recomputes loop
 /// and induction facts after normalization. Annotated nested loops are processed
 /// from the inside out. Afterward, SCCP, CFG simplification, and dead-code
 /// elimination clean only that function: constant index expressions fold, dead
@@ -252,6 +258,15 @@ pub fn unroll_annotated_loops(
         // own MIR block; `simplify_cfg` merges that block back into the loop body
         // without changing unrelated functions in the module.
         simplify_cfg(func_op, ctx)?;
+
+        // Fold constant expressions before reading any trip count. A bound
+        // written `N / 8` with a const generic `N` arrives as a `mir.div` of
+        // two constants, which the induction analysis cannot read until `sccp`
+        // folds it to one.
+        if sccp(func_op, ctx)? == IRStatus::Changed {
+            function_changed = true;
+            changed = true;
+        }
 
         // Unroll one annotated loop per round, innermost-first, recomputing the
         // loop analyses each round. Each unroll rewrites the CFG -- and for a loop
@@ -319,28 +334,6 @@ pub fn unroll_annotated_loops(
             };
             let kind = unroll_kind(factor);
 
-            if factor == u32::MAX - 1 {
-                let _ = take_loop_hints(ctx, &hints, &info, loop_id);
-                let lp = &info.loops()[loop_id];
-                let header = lp.header;
-                let mut backedges = Vec::new();
-                for &block in &lp.blocks {
-                    let tail = block.deref(ctx).get_tail();
-                    if let Some(term) = tail
-                        && Operation::get_op::<MirGotoOp>(term, ctx).is_some()
-                        && term.deref(ctx).successors().any(|succ| succ == header)
-                    {
-                        backedges.push(term);
-                    }
-                }
-                for term in backedges {
-                    MirGotoOp::new(term).set_loop_unroll_disable(ctx);
-                }
-                function_changed = true;
-                changed = true;
-                continue;
-            }
-
             let Some(ph) = info.preheader(ctx, region, loop_id) else {
                 // The author asked for unrolling; never silently do nothing.
                 let location = take_loop_hints(ctx, &hints, &info, loop_id);
@@ -354,6 +347,14 @@ pub fn unroll_annotated_loops(
                 );
                 continue;
             };
+
+            // `sccp` leaves a folded bound where it was computed, which can be
+            // the header of a loop whose body also reads it. In the preheader,
+            // it no longer counts as a value the header computes.
+            if hoist_header_constants(ctx, &info, loop_id, ph) {
+                function_changed = true;
+                changed = true;
+            }
 
             // A range `for` loop tests the `Option` from `Iterator::next`, not
             // its counter. Move that test into the header first, then recompute.
@@ -1680,7 +1681,7 @@ fn append_cmp(
 }
 
 /// All function ops in the module (each `mir.func`).
-fn collect_functions(module: Ptr<Operation>, ctx: &Context) -> Vec<Ptr<Operation>> {
+pub(crate) fn collect_functions(module: Ptr<Operation>, ctx: &Context) -> Vec<Ptr<Operation>> {
     let mut out = Vec::new();
     let module_region = module.deref(ctx).get_region(0);
     let blocks: Vec<Ptr<BasicBlock>> = module_region.deref(ctx).iter(ctx).collect();

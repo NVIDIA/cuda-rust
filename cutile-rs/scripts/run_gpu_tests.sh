@@ -278,12 +278,10 @@ do
         gpu_test host cuda-async "$test_target"
 done
 
-run_gpu_step \
-    "shared Tile and SIMT host buffer interop" \
+run_gpu_step "shared Tile and SIMT host buffer interop" \
     gpu_test tile cutile shared_host_buffers --serial
 
-run_gpu_step \
-    "shared async Tile and SIMT graph replay" \
+run_gpu_step "shared async Tile and SIMT graph replay" \
     gpu_test tile cutile shared_async_runtime --serial
 
 print_summary_and_exit \

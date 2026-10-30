@@ -18,8 +18,9 @@ Tests passing closures from host code to generic GPU kernels. This enables funct
 #[kernel]
 pub fn map<T: Copy, F: Fn(T) -> T + Copy>(f: F, input: &[T], mut out: DisjointSlice<T>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(out_elem) = out.get_mut(idx) {
-        *out_elem = f(input[idx.get()]);
+        *out_elem = f(input[i]);
     }
 }
 ```

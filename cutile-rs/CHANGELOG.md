@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Retiring tensor completion leases retain allocation access independently of
+  user-visible buffer views. Converting a uniquely owned tensor into a buffer
+  no longer reports a false alias while completion retirement is pending.
+- Safe `DeviceBuffer` element and chunk casts require `NoUninit` on the source,
+  preventing `MaybeUninit` elements or struct padding from becoming initialized
+  destination values. Boolean-to-byte casts remain supported.
 - Tensor uniqueness tracks user-visible aliases separately from completion
   leases. Concurrent lease creation or release can no longer permit an aliased
   mutable partition or spuriously reject unique storage.

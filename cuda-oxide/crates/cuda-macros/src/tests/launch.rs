@@ -368,6 +368,75 @@ fn malformed_unroll_attr_records_error() {
 }
 
 #[test]
+fn nounroll_injects_marker_first_in_each_loop_kind() {
+    let func: ItemFn = parse_quote! {
+        fn k(n: u32) {
+            let mut i = 0u32;
+            #[nounroll]
+            while i < 4 { i += 1; }
+            #[nounroll]
+            for j in 0..n { let _ = j; }
+            #[nounroll]
+            loop { break; }
+            #[unroll(never)]
+            for k in 0..n { let _ = k; }
+        }
+    };
+    let out = run_loop_unroll_visitor(func);
+    let marker = "cuda_device::thread::__nounroll_config();";
+    assert_eq!(
+        out.matches(marker).count(),
+        4,
+        "one marker per loop:\n{out}"
+    );
+    for body_start in ["whilei<4{", "forjin0..n{", "loop{", "forkin0..n{"] {
+        assert!(
+            out.contains(&format!("{body_start}{marker}")),
+            "marker must be the first statement after `{body_start}`:\n{out}"
+        );
+    }
+    assert!(
+        !out.contains("nounroll]"),
+        "attribute must be stripped:\n{out}"
+    );
+    assert!(!out.contains("__unroll_config"), "no unroll marker:\n{out}");
+}
+
+#[test]
+fn nounroll_rejects_arguments_and_unroll_on_the_same_loop() {
+    for func in [
+        parse_quote! {
+            fn k() {
+                #[nounroll(2)]
+                for i in 0..4 { let _ = i; }
+            }
+        },
+        parse_quote! {
+            fn k() {
+                #[unroll]
+                #[nounroll]
+                for i in 0..4 { let _ = i; }
+            }
+        },
+        parse_quote! {
+            fn k() {
+                #[nounroll]
+                #[unroll(4)]
+                for i in 0..4 { let _ = i; }
+            }
+        },
+    ] {
+        let mut func: ItemFn = func;
+        let err = rewrite_loop_unroll_attrs(&mut func).expect_err("must be rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains("no arguments") || message.contains("both #[unroll] and #[nounroll]"),
+            "unexpected error: {message}"
+        );
+    }
+}
+
+#[test]
 fn partial_unroll_factor_must_be_at_least_two() {
     assert!(syn::parse_str::<UnrollArgs>("0").is_err());
     assert!(syn::parse_str::<UnrollArgs>("1").is_err());

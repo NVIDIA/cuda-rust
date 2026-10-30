@@ -673,16 +673,11 @@ impl<'a> ModuleExportState<'a> {
         block_labels: &FxHashMap<Ptr<BasicBlock>, String>,
         output: &mut String,
     ) -> Result<(), String> {
-        let op_ptr = op.get_operation();
-        let op_ref = op_ptr.deref(self.ctx);
+        let op_ref = op.get_operation().deref(self.ctx);
         let dest = op_ref.successors().next().unwrap();
         let label = block_labels.get(&dest).ok_or("Missing block label")?;
-        if !self.legacy_typed_pointers() && ops::is_loop_unroll_disable(self.ctx, op_ptr) {
-            let loop_id = self.alloc_loop_unroll_disable_id();
-            writeln!(output, "  br label %{label}, !llvm.loop !{loop_id}").unwrap();
-        } else {
-            writeln!(output, "  br label %{label}").unwrap();
-        }
+        let loop_metadata = self.loop_metadata_suffix(op.get_operation());
+        writeln!(output, "  br label %{label}{loop_metadata}").unwrap();
         Ok(())
     }
 
@@ -703,7 +698,12 @@ impl<'a> ModuleExportState<'a> {
 
         write!(output, "  br i1 ").unwrap();
         self.export_value(cond, value_names, output)?;
-        writeln!(output, ", label %{true_label}, label %{false_label}").unwrap();
+        let loop_metadata = self.loop_metadata_suffix(op.get_operation());
+        writeln!(
+            output,
+            ", label %{true_label}, label %{false_label}{loop_metadata}"
+        )
+        .unwrap();
         Ok(())
     }
 

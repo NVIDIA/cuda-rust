@@ -1418,6 +1418,42 @@ const fn validate_unroll_factor(factor: u32) {
     );
 }
 
+/// Compile-time "keep this loop rolled" marker (internal, do not call directly).
+///
+/// The `#[kernel]` and `#[device]` macros insert this marker at the start of a
+/// loop body annotated with `#[nounroll]`. The MIR importer turns it into a
+/// `mir.nounroll_hint` operation. Just before lowering, the hint marks the
+/// loop's latch with `llvm.loop.unroll.disable` metadata. LLVM and libNVVM then
+/// leave the loop rolled, and the NVPTX backend emits `.pragma "nounroll";` at
+/// the loop header so ptxas keeps it rolled too. It generates no runtime code.
+///
+/// # Usage
+///
+/// Put the annotation directly on the loop:
+///
+/// ```rust,ignore
+/// #[kernel]
+/// pub fn my_kernel(mut output: DisjointSlice<f32>) {
+///     let mut acc = 0.0;
+///     let mut tap = 0;
+///     #[nounroll]
+///     while tap < 4 {
+///         acc += tap as f32;
+///         tap += 1;
+///     }
+///     // ...
+/// }
+/// ```
+///
+/// The marker applies to the loop that carries the annotation, not to loops
+/// nested in its body. A `#[nounroll]` loop inside a loop that `#[unroll]`
+/// unrolls is copied into each unrolled body, and every copy stays rolled.
+#[inline(never)]
+pub fn __nounroll_config() {
+    // This function is detected at compile time and removed.
+    // No runtime code is generated.
+}
+
 #[cfg(test)]
 mod tests {
     use super::block_linear_thread_id;

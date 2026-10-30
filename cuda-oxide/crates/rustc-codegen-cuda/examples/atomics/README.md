@@ -132,10 +132,12 @@ Pointer types survive compiler lowering; legacy NVVM uses scoped PTX for
 pointer exchange and compare-exchange. Private atomic storage uses ordinary
 accesses because no other thread can observe it.
 
-Contended counters use raw writable device pointers and the existing
-`from_ptr` atomic constructors. The host keeps their allocations alive and
-excludes non-atomic access until synchronization. Block barriers are reached
-by every thread, including the thread that performs the update.
+Contended counters arrive as slices of atomic wrapper types (`&[DeviceAtomic*]`,
+`&[BlockAtomicU32]`, and `&[core::sync::atomic::AtomicU32]`) backed by host
+buffers retyped with `DeviceBuffer::cast_elem`. The host keeps their
+allocations alive and excludes non-atomic access until synchronization. Block
+barriers are reached by every thread, including the thread that performs the
+update.
 
 The separate `core_atomic_ordering_probe` kernel provides compile-only
 standard-library atomic ordering coverage.

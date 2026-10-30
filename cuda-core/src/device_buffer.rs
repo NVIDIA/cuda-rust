@@ -30,7 +30,7 @@ use std::mem::MaybeUninit;
 use std::num::Wrapping;
 use std::sync::Arc;
 
-use bytemuck::AnyBitPattern;
+use bytemuck::{AnyBitPattern, NoUninit};
 use cuda_bindings::CUdeviceptr;
 use cuda_repr::DeviceRepr;
 
@@ -62,8 +62,10 @@ use crate::stream::Stream;
 /// are `unsafe`, so their caller vouches for the contents. The one place
 /// arbitrary bytes could become typed values is the safe reinterpreting casts,
 /// [`DeviceBuffer::cast_elem`] and [`DeviceBuffer::cast_chunks`]. They require
-/// the target to implement [`bytemuck::AnyBitPattern`], which `bool` does not,
-/// so a `DeviceBuffer<bool>` can only come from memory written as `bool`.
+/// the source to implement [`bytemuck::NoUninit`] and the target to implement
+/// [`bytemuck::AnyBitPattern`]. This excludes uninitialized source bytes and
+/// padding, and rejects `bool` as a target, so a `DeviceBuffer<bool>` can only
+/// come from memory written as `bool`.
 pub unsafe trait DeviceCopy: Copy {}
 
 macro_rules! impl_device_copy {
@@ -357,17 +359,21 @@ impl<T> DeviceBuffer<T> {
     /// and bytes are unchanged; only the element type changes. Element counts
     /// are preserved because `size_of::<A>() == size_of::<T>()`.
     ///
-    /// `A: AnyBitPattern` is what makes this safe: every bit pattern is a valid
-    /// `A`, so no byte written as a `T` can become an invalid `A`. Types with
-    /// invalid bit patterns, `bool` for one, are rejected at compile time, so a
+    /// `T: NoUninit` ensures that every source byte is initialized, including
+    /// bytes that would otherwise be padding. `A: AnyBitPattern` accepts every
+    /// initialized bit pattern, so those bytes are valid `A` values. Destination
+    /// types with invalid bit patterns, such as `bool`, are rejected, so a
     /// `DeviceBuffer<bool>` can only come from memory written as `bool`.
     ///
     /// Atomic types and other `#[repr(transparent)]` wrappers that are not
     /// `Copy` cannot be `AnyBitPattern`; use [`Self::wrap_elem`] and
     /// [`Self::peel_elem`] for those.
-    pub fn cast_elem<A: AnyBitPattern>(self) -> DeviceBuffer<A> {
-        // SAFETY: every bit pattern is a valid `A`, so the bytes of any `T`
-        // are valid `A` values; `relabel` checks the layout.
+    pub fn cast_elem<A: AnyBitPattern>(self) -> DeviceBuffer<A>
+    where
+        T: NoUninit,
+    {
+        // SAFETY: NoUninit guarantees initialized source bytes, and every
+        // initialized bit pattern is valid as A; relabel checks the layout.
         let mut buffer = unsafe { self.relabel() };
         buffer.shared_access_writes = false;
         buffer
@@ -482,11 +488,14 @@ impl<T> DeviceBuffer<T> {
     /// fallback path available, since a caller that cannot widen usually has a
     /// scalar version to fall back to.
     ///
-    /// As with [`Self::cast_elem`], `A: AnyBitPattern` is what makes the
-    /// reinterpretation safe: every bit pattern is a valid `A`. A host-defined
-    /// vector element gets there with `unsafe impl bytemuck::Pod` next to its
-    /// `DeviceCopy` impl.
-    pub fn cast_chunks<A: AnyBitPattern>(self) -> Result<DeviceBuffer<A>, Self> {
+    /// As with [`Self::cast_elem`], `T: NoUninit` guarantees initialized source
+    /// bytes and `A: AnyBitPattern` accepts every initialized bit pattern. A
+    /// host-defined vector element gets there with `unsafe impl bytemuck::Pod`
+    /// next to its `DeviceCopy` impl.
+    pub fn cast_chunks<A: AnyBitPattern>(self) -> Result<DeviceBuffer<A>, Self>
+    where
+        T: NoUninit,
+    {
         let bytes = self.len.saturating_mul(std::mem::size_of::<T>());
         let Some(new_len) = chunk_cast_len(
             bytes,
@@ -506,10 +515,11 @@ impl<T> DeviceBuffer<T> {
         })
     }
 
-    /// Whether [`Self::cast_chunks`] to `A` would succeed.
+    /// Whether the layout permits [`Self::cast_chunks`] to `A`.
     ///
     /// For choosing between a wide and a scalar path without consuming the
-    /// buffer to find out.
+    /// buffer to find out. This only checks layout; the actual cast also
+    /// requires `T: NoUninit`.
     #[must_use]
     pub fn can_cast_chunks<A: AnyBitPattern>(&self) -> bool {
         let bytes = self.len.saturating_mul(std::mem::size_of::<T>());

@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- CUDA bindings resolve forward-declared struct definitions correctly with
+  libclang 22 instead of emitting an empty placeholder with the wrong layout.
 - Retiring tensor completion leases retain allocation access independently of
   user-visible buffer views. Converting a uniquely owned tensor into a buffer
   no longer reports a false alias while completion retirement is pending.

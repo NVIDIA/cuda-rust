@@ -57,6 +57,10 @@ pub struct ColMajor<const ROWS: i64, const COLS: i64>;
 /// (CuTeDSL `cpasync.CopyG2SOp`).
 pub struct CopyG2S<const BYTES: u32>;
 
+/// One universal vector copy atom of `BYTES` bytes (`4`, `8`, or `16` bytes),
+/// corresponding to CuTeDSL's `cute.nvgpu.CopyUniversalOp`.
+pub struct CopyUniversal<const BYTES: u32>;
+
 /// The distance between rows, with a compile-time alignment promise.
 ///
 /// `elements` is known only while the kernel runs. The type promises that it

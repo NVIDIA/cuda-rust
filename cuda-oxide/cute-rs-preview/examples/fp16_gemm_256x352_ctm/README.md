@@ -26,21 +26,24 @@ expresses the same schedule with typed layouts, tensor operations and pipelines.
 
 ## Run it
 
-You need an SM100 GPU, a compatible CUDA driver and the cuda-oxide toolchain.
-The comparison uses the checked-in [Python CTM reference](../fp16_gemm_256x352_cute/public_reference/README.md):
+You need an SM100 GPU and a compatible CUDA driver. The comparison uses the
+checked-in [Python CTM reference](../fp16_gemm_256x352_cute/public_reference/README.md):
 CUTLASS instruction primitives with CuTe compilation and epilogue helpers.
-Setup needs `python3` with `venv`/`ensurepip`, or `uv` on `PATH`, and network
-access for installation. From `cuda-oxide/`:
+From `cuda-oxide/`, once per checkout:
 
 ```bash
 cargo oxide toolchain install cutlass
+python3 -m venv cute-rs-preview/.venv
+cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt
+```
+
+Then:
+
+```bash
 CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir CUDA_OXIDE_MLIR_PROFILE=cutlass-primitives-mlir22 \
   cargo oxide build fp16_gemm_256x352_ctm --arch sm_100a
 
-# Prepare the shared environment; subsequent runs reuse it.
-python3 cute-rs-preview/examples/fp16_gemm_256x352_cute/setup_reference.py
-
-cute-rs-preview/examples/fp16_gemm_256x352_cute/.venv/bin/python \
+cute-rs-preview/.venv/bin/python \
   cute-rs-preview/examples/fp16_gemm_256x352_cute/compare.py \
   --rust-bin cute-rs-preview/examples/fp16_gemm_256x352_ctm/target/release/fp16_gemm_256x352_ctm \
   --mnk 8192,8096,8192 --warmup 2000 --iters 301 --json /tmp/ctm-gemm.json

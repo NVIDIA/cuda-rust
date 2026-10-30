@@ -18,5 +18,5 @@ error[E0277]: the trait bound `bool: AnyBitPattern` is not satisfied
 note: required by a bound in `DeviceBuffer::<T>::cast_elem`
  --> src/device_buffer.rs
   |
-  |     pub fn cast_elem<A: AnyBitPattern>(self) -> DeviceBuffer<A> {
+  |     pub fn cast_elem<A: AnyBitPattern>(self) -> DeviceBuffer<A>
   |                         ^^^^^^^^^^^^^ required by this bound in `DeviceBuffer::<T>::cast_elem`

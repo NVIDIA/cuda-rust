@@ -61,13 +61,12 @@ jobs:
       - name: Verify README lists every workspace member
         run: bash cuda-oxide/scripts/check-crate-inventory.sh
 
-  # The pin is copied into places no build compares: the nested backend pin
-  # (rustup reads it for the backend's own [workspace], so a mismatch there
-  # is a load failure rather than a warning), the scaffold `cargo oxide new`
-  # writes into user projects, the devcontainer's preinstalled toolchain, the
-  # book's quoted [toolchain] blocks, and the dated rustup/cargo commands in
-  # the book and READMEs. #727 added rustfmt to both real files and left both
-  # book quotes behind.
+  # The pin is copied into places no build compares: the scaffold `cargo oxide
+  # new` writes into user projects, the devcontainer's preinstalled toolchain,
+  # the book's quoted [toolchain] blocks, the explicit rustup/cargo commands in
+  # the book and READMEs, and the `rust-overlay` input in `cuda-oxide/flake.lock`.
+  # #727 added rustfmt to both real files and left both book quotes behind;
+  # #1609 bumped the pin to 1.99.1 and left `flake.lock` behind.
   toolchain-pin-parity:
     name: toolchain pin parity
     runs-on: ubuntu-latest
@@ -131,9 +130,9 @@ jobs:
       - name: Clone repository
         uses: actions/checkout@v4
 
-# rustfmt comes from cuda-oxide/rust-toolchain.toml's component list through the
+      # rustfmt comes from cuda-oxide/rust-toolchain.toml's component list through the
       # rustup proxy, as in fmt.yml, so the order checked is the pinned
-      # nightly's. No cargo, no CUDA toolkit, no network beyond the toolchain.
+      # toolchain's. No cargo, no CUDA toolkit, no network beyond the toolchain.
       - name: Verify the book's Rust blocks use rustfmt's import order
         run: bash cuda-oxide/scripts/check-book-import-order.sh
 

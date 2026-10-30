@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Prepare this example's reusable Python environment before comparison timing.
+"""Prepare the shared cute-rs-preview/.venv before comparison timing.
 
-Only the example's ignored .venv is managed. Successful setup prints its Python
-path to stdout; progress and package-manager output go to stderr. The launcher
-bypasses this helper when the caller selects an explicit Python environment.
+Only that ignored virtualenv is managed, from cute-rs-preview/requirements.txt.
+Successful setup prints its Python path to stdout; progress and package-manager
+output go to stderr. The launcher bypasses this helper when the caller selects
+an explicit Python environment or a prepared virtualenv already exists.
 """
 
 import fcntl
@@ -41,16 +42,17 @@ def install(command):
 
 
 def ensure_environment(directory):
-    """Create or repair .venv, retry failed installs, and reuse healthy cached setup.
+    """Create or repair the shared .venv, retry failed installs, and reuse healthy cached setup.
 
 An OS file lock serializes concurrent setup attempts and is released on process
 exit. The requirements stamp is written only after installation and imports
 succeed. Existing environments and their other files are never deleted.
 """
     directory = Path(directory).resolve()
-    requirements = directory / "public_reference/requirements.txt"
+    preview = directory.parent.parent
+    requirements = preview / "requirements.txt"
     digest = hashlib.sha256(requirements.read_bytes()).hexdigest()
-    environment = directory / ".venv"
+    environment = preview / ".venv"
     python = environment / "bin/python"
     environment.mkdir(exist_ok=True)
     with (environment / ".setup.lock").open("a") as lock:
@@ -61,7 +63,7 @@ succeed. Existing environments and their other files are never deleted.
                 return python
         # Never trust an earlier success after a failed repair or changed pin.
         stamp.unlink(missing_ok=True)
-        print(f"Setting up FP16 comparison dependencies in {environment}", file=sys.stderr)
+        print(f"Setting up the shared cute-rs comparison environment in {environment}", file=sys.stderr)
         uv = shutil.which("uv")
         try:
             if not python.is_file() or not (environment / "pyvenv.cfg").is_file():

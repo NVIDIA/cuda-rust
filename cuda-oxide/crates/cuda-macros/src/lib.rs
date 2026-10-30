@@ -472,6 +472,27 @@ pub fn cuda_module(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// at most 1,024 body copies, 8,192 cloned basic blocks, and 65,536 cloned
 /// operations. Factors above 1,024 are rejected; unsupported loop shapes warn
 /// and are not unrolled.
+///
+/// # Keeping a loop rolled
+///
+/// Put `#[nounroll]` on a loop to keep it rolled. ptxas otherwise fully unrolls
+/// small constant-trip-count loops on its own, which can raise register
+/// pressure. The annotation becomes `llvm.loop.unroll.disable` metadata on the
+/// loop, so LLVM and libNVVM leave it rolled and ptxas sees
+/// `.pragma "nounroll";` at its header.
+///
+/// ```ignore
+/// #[kernel]
+/// pub fn example(out: *mut f32) {
+///     let mut acc = 0.0;
+///     let mut tap = 0;
+///     #[nounroll]
+///     while tap < 4 { acc += load(tap); tap += 1; }
+/// }
+/// ```
+///
+/// `#[nounroll]` applies to the annotated loop only and takes no arguments. A
+/// loop cannot carry both `#[unroll]` and `#[nounroll]`.
 #[proc_macro_attribute]
 pub fn kernel(attr: TokenStream, item: TokenStream) -> TokenStream {
     kernel::kernel_entry(attr, item)
@@ -849,7 +870,7 @@ pub fn cooperative_launch(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// - Return values (unlike kernels which must return `()`)
 /// - Be called from kernels and other device functions
 /// - Use generics (each monomorphization becomes a separate device function)
-/// - Use per-loop `#[unroll]` and `#[unroll(N)]` annotations
+/// - Use per-loop `#[unroll]`, `#[unroll(N)]`, and `#[nounroll]` annotations
 ///
 /// # Loop unrolling
 ///
@@ -865,6 +886,9 @@ pub fn cooperative_launch(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// One annotation may create at most 1,024 body copies, 8,192 cloned basic
 /// blocks, and 65,536 cloned operations. Factors above 1,024 are rejected;
 /// unsupported loop shapes warn and are not unrolled.
+///
+/// `#[nounroll]` keeps a loop rolled through LLVM, libNVVM, and ptxas, as in
+/// kernels.
 ///
 /// # Example: Device Function Definition
 ///

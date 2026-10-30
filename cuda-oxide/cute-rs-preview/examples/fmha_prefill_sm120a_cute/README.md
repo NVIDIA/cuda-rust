@@ -13,12 +13,12 @@ Q/K/V tensor views → typed shared-memory copies → warp MMA fragments
   equal query/KV lengths; `--noncausal` permits unequal lengths and `Sq=1`.
 - Runtime shapes are the default. `--shape-mode static` requires **Sq=Sk=1024, H=8**.
 
-From `cuda-oxide/`, install CUTLASS 4.7 (`cargo oxide toolchain install cutlass`)
-and prepare the shared Python environment once for prefill and decode:
+From `cuda-oxide/`, once per checkout:
 
 ```bash
+cargo oxide toolchain install cutlass
 python3 -m venv cute-rs-preview/.venv
-cute-rs-preview/.venv/bin/python -m pip install -r cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/requirements.txt
+cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt
 ```
 
 Compare all four cases on RTX 5090:
@@ -41,10 +41,8 @@ comparison, `--iters 0` to verify without timing, or `--rust-only` for a standal
 Rust report. `--all-cases` cannot be combined with `--rust-only`.
 Pass `--help` after `--` for all options.
 
-The comparison needs CUDA-enabled PyTorch and CUTLASS DSL 4.7; see
-[reference setup](reference/README.md). The shared virtualenv is found
-automatically. Use `--python PATH` to select another interpreter and
-`--device N` to select another visible GPU; device 0 is the default.
+Use `--python PATH` to select another interpreter and `--device N` to select
+another visible GPU; device 0 is the default.
 
 RTX 5090 results at `a0d5776b2` (2026-10-18), **B=1, Sq=Sk=1024, H=8, D=64**,
 CUTLASS 4.7 at optimization level 2 on both sides. Each value is the median of

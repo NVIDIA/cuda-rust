@@ -10,8 +10,7 @@
 //! Demonstrates TMA (Tensor Memory Accelerator) usage:
 //! - cp_async_bulk_tensor_2d_g2s: Async 2D tensor copy global → shared
 //! - cp_async_bulk_tensor_2d_g2s_cta: the same copy into the issuing CTA's
-//!   own shared memory, whose destination is a `SharedPtr`, a CTA-shared
-//!   pointer by type
+//!   own shared memory (`.shared::cta`)
 //! - mbarrier: Barrier-based completion tracking
 //! - `#[grid_constant]`: the descriptor is passed by value in the launch packet,
 //!   without allocating or uploading a separate descriptor buffer.
@@ -161,7 +160,7 @@ mod kernels {
             // before any thread reads TILE.
             unsafe {
                 cp_async_bulk_tensor_2d_g2s_cta(
-                    SharedArray::shared_ptr(&raw mut TILE).cast::<u8>(),
+                    &raw mut TILE as *mut u8,
                     tensor_map,
                     tile_x,
                     tile_y,

@@ -28,6 +28,16 @@ fn group(floats: DeviceBuffer<f32>) -> Result<DeviceBuffer<[f32; 4]>, DeviceBuff
     floats.cast_chunks()
 }
 
+// NoUninit does not require every bit pattern to be valid: bool is still a
+// supported source, even though the opposite byte-to-bool casts are forbidden.
+fn bool_bytes(flags: DeviceBuffer<bool>) -> DeviceBuffer<u8> {
+    flags.cast_elem()
+}
+
+fn bool_chunks(flags: DeviceBuffer<bool>) -> Result<DeviceBuffer<u8>, DeviceBuffer<bool>> {
+    flags.cast_chunks()
+}
+
 fn wrap(words: DeviceBuffer<u32>) -> DeviceBuffer<Counter> {
     words.wrap_elem()
 }
@@ -42,5 +52,14 @@ fn wrap_std(words: DeviceBuffer<u32>) -> DeviceBuffer<Wrapping<u32>> {
 
 fn main() {
     // Type-checking is the test; the functions are never called.
-    let _ = (reinterpret, reinterpret_wrapping, group, wrap, peel, wrap_std);
+    let _ = (
+        reinterpret,
+        reinterpret_wrapping,
+        group,
+        bool_bytes,
+        bool_chunks,
+        wrap,
+        peel,
+        wrap_std,
+    );
 }

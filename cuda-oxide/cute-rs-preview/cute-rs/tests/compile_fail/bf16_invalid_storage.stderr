@@ -15,6 +15,7 @@ note: required by a bound in `Tensor`
  --> src/tensor/mod.rs
   |
   | pub struct Tensor<'a, Element, Layout, Storage = Element>
+  |            ------ required by a bound in this struct
   | where
   |     Element: TensorElement<Storage>,
   |              ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Tensor`

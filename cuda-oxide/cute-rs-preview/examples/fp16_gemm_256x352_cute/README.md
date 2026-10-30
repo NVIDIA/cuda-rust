@@ -25,13 +25,17 @@ expresses the same schedule directly through instruction types and physical form
 
 ## Run it
 
-You need an SM100 GPU, a compatible CUDA driver and the cuda-oxide toolchain.
-Python comparison setup runs automatically on first use and reuses a local
-`.venv`. It needs `python3` with `venv`/`ensurepip`, or `uv` on `PATH`, plus
-network access for installation. From `cuda-oxide/`:
+You need an SM100 GPU and a compatible CUDA driver. From `cuda-oxide/`, once per checkout:
 
 ```bash
 cargo oxide toolchain install cutlass
+python3 -m venv cute-rs-preview/.venv
+cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt
+```
+
+Then:
+
+```bash
 export CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir
 
 # Small correctness comparison
@@ -51,7 +55,8 @@ cute-rs: <time> us, <rate> TFLOP/s
 ```
 
 The shared [Python CTM reference](public_reference/README.md) uses CUTLASS
-instruction primitives, with CuTe compilation and epilogue helpers.
+instruction primitives, with CuTe compilation and epilogue helpers. Without a
+prepared environment, the first comparison run creates `cute-rs-preview/.venv` itself.
 Add `--has-bias` for row bias, `--rust-only` for standalone Rust with CPU
 verification, or `--help` for options. Large standalone CPU checks are expensive.
 

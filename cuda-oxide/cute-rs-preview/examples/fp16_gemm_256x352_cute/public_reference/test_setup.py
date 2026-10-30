@@ -14,7 +14,7 @@ class SetupTests(unittest.TestCase):
     """Mock only package-manager processes; keep filesystem/cache behavior real."""
 
     def setUp(self):
-        """Give each test an isolated checkout, including spaces in its path."""
+        """Give each test an isolated cute-rs-preview tree, including spaces in its path."""
         helper = Path(__file__).resolve().parent.parent / "setup_reference.py"
         self.assertTrue(helper.is_file(), "the example needs automatic Python setup")
         spec = importlib.util.spec_from_file_location("setup_reference", helper)
@@ -23,9 +23,9 @@ class SetupTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="gemm setup ")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        public = self.root / "public_reference"
-        public.mkdir()
-        self.requirements = public / "requirements.txt"
+        self.example = self.root / "examples/gemm"
+        (self.example / "public_reference").mkdir(parents=True)
+        self.requirements = self.root / "requirements.txt"
         self.requirements.write_text("nvidia-cutlass-dsl[cu13]==4.7.0\ntorch\nnumpy\n")
         self.python = self.root / ".venv/bin/python"
         self.python.parent.mkdir(parents=True)
@@ -80,17 +80,17 @@ class SetupTests(unittest.TestCase):
         """The default path must provision a fresh checkout, not just repair one."""
         self.python.unlink()
         (self.root / ".venv/pyvenv.cfg").unlink()
-        self.assertEqual(self.setup.ensure_environment(self.root), self.python)
+        self.assertEqual(self.setup.ensure_environment(self.example), self.python)
         self.assertTrue(self.python.is_file())
         self.assertEqual(self.creations, 1)
         self.assertEqual(self.installs, 1)
 
     def test_uv_can_create_environment_without_ensurepip(self):
-        """The optional uv path must install into the example's isolated interpreter."""
+        """The optional uv path must install into the shared isolated interpreter."""
         self.python.unlink()
         (self.root / ".venv/pyvenv.cfg").unlink()
         with mock.patch.object(self.setup.shutil, "which", return_value="/tools/uv"):
-            self.assertEqual(self.setup.ensure_environment(self.root), self.python)
+            self.assertEqual(self.setup.ensure_environment(self.example), self.python)
         self.assertEqual(self.creations, 1)
         self.assertEqual(self.installs, 1)
 
@@ -98,25 +98,25 @@ class SetupTests(unittest.TestCase):
         """An existing Python left by a failed venv bootstrap must not prevent recovery."""
         self.pip_missing = self.fail_seed = True
         with self.assertRaisesRegex(RuntimeError, "venv/ensurepip"):
-            self.setup.ensure_environment(self.root)
+            self.setup.ensure_environment(self.example)
         self.fail_seed = False
-        self.assertEqual(self.setup.ensure_environment(self.root), self.python)
+        self.assertEqual(self.setup.ensure_environment(self.example), self.python)
         self.assertFalse(self.pip_missing)
         self.assertEqual(self.installs, 1)
 
     def test_first_setup_then_cached_run_needs_no_installer(self):
         """A completed install must be reusable without network or package-manager work."""
-        self.assertEqual(self.setup.ensure_environment(self.root), self.python)
+        self.assertEqual(self.setup.ensure_environment(self.example), self.python)
         self.assertEqual(self.installs, 1)
         self.fail_install = True
-        self.assertEqual(self.setup.ensure_environment(self.root), self.python)
+        self.assertEqual(self.setup.ensure_environment(self.example), self.python)
         self.assertEqual(self.installs, 1)
 
     def test_changed_requirements_are_installed_again(self):
         """An existing environment must not hide a newly required dependency."""
-        self.setup.ensure_environment(self.root)
+        self.setup.ensure_environment(self.example)
         self.requirements.write_text(self.requirements.read_text() + "new-dependency\n")
-        self.setup.ensure_environment(self.root)
+        self.setup.ensure_environment(self.example)
         self.assertEqual(self.installs, 2)
 
     def test_failed_install_is_retried_without_deleting_environment(self):
@@ -125,17 +125,17 @@ class SetupTests(unittest.TestCase):
         preserved.write_text("keep")
         self.fail_install = True
         with self.assertRaises(RuntimeError):
-            self.setup.ensure_environment(self.root)
+            self.setup.ensure_environment(self.example)
         self.fail_install = False
-        self.assertEqual(self.setup.ensure_environment(self.root), self.python)
+        self.assertEqual(self.setup.ensure_environment(self.example), self.python)
         self.assertEqual(self.installs, 2)
         self.assertEqual(preserved.read_text(), "keep")
 
     def test_broken_cached_dependencies_are_rechecked(self):
         """Removing an installed package must invalidate otherwise unchanged setup."""
-        self.setup.ensure_environment(self.root)
+        self.setup.ensure_environment(self.example)
         self.healthy = False
-        self.setup.ensure_environment(self.root)
+        self.setup.ensure_environment(self.example)
         self.assertEqual(self.installs, 2)
 
     def test_failed_cuda_build_check_never_marks_setup_complete(self):
@@ -152,8 +152,8 @@ class SetupTests(unittest.TestCase):
 
         with mock.patch.object(self.setup.subprocess, "run", side_effect=cpu_torch):
             with self.assertRaisesRegex(RuntimeError, "CUDA-enabled"):
-                self.setup.ensure_environment(self.root)
-        self.setup.ensure_environment(self.root)
+                self.setup.ensure_environment(self.example)
+        self.setup.ensure_environment(self.example)
         self.assertEqual(self.installs, 2)
 
 

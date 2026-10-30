@@ -45,8 +45,8 @@ The figure at the top of the page is the feature table, with the cute-rs column 
 - cp.async, bulk, DSMEM copies: fmha_prefill_sm120a_cute
 - ldmatrix, stmatrix, atomics: blockscale_gemm_cute, ffn_cute, sm100_mla_decode_fp16_cute
 - tcgen05 MMA kinds: fp16_gemm_256x352_cute, sm100_fmha_prefill_cute, sm100_mla_decode_fp16_cute
-- Warp MMA kinds (mma.sync): blockscale_gemm_cute, ffn_cute, fmha_prefill_sm120a_cute
-- NVFP4 tensor cores (E4M3 scales): qwen3_8b_cute uses the CUDA-core path; no tensor-core producer
+- Warp MMA kinds (mma.sync): blockscale_gemm_cute, ffn_cute, fmha_prefill_sm120a_cute, qwen3_8b_cute
+- NVFP4 tensor cores (E4M3 scales): qwen3_8b_cute (SM120 m16n8k64 E2M1 + E4M3 SF_VEC=16 prefill)
 - wgmma (Hopper): none
 - TMEM: fp16_gemm_256x352_cute, sm100_fmha_prefill_cute
 - Pipelines and barriers: blockscale_gemm_cute, fp16_gemm_256x352_cute, sm100_mla_decode_fp16_cute
@@ -70,13 +70,13 @@ The figure at the top of the page is the feature table, with the cute-rs column 
 | :--- | :--- | :--- | :--- |
 | Layout algebra, static | yes | partial | layouts are Rust types checked at compile time; no layout ops in kernels |
 | Dynamic layouts, runtime shapes | yes | partial | runtime lengths and one runtime row pitch; strides and tiles are types |
-| Tensors, partitions, tiled atoms | yes | partial | 1D tiles (zipped_divide, slice, 1D local_tile) and fixed 2D block-scaled views; TiledCopy, get_slice and ThrCopy exist but no kernel can reach them yet, so block-wide copies call copy_g2s |
+| Tensors, partitions, tiled atoms | yes | partial | 1D tiles (zipped_divide, slice, 1D local_tile), StridedTensor, and TiledCopy / ThrCopy (copy_g2s, copy_s2g, copy_r2s) |
 | TMA copies | yes | partial | 2D tile load and store, two-CTA load; no im2col, reduce-store, multicast |
 | cp.async, bulk, DSMEM copies | yes | partial | cooperative cp.async with a coverage proof; no bulk or DSMEM data copies |
-| ldmatrix, stmatrix, atomics | yes | partial | ldmatrix x4 and x2.trans, stmatrix x2, no-allocate stores; no atomics |
+| ldmatrix, stmatrix, atomics | yes | partial | ldmatrix x4 and x2.trans (f16 and BFloat16), stmatrix x2, no-allocate stores; no atomics |
 | tcgen05 MMA kinds | yes | partial, sm_100a only | 1 of 11 kinds: F16 in, F32 accumulate, one or two CTAs |
-| Warp MMA kinds (mma.sync) | yes | partial | 3 of 7 kinds: MXF4 with UE8M0 scales (sm_120a), F16, BF16 |
-| NVFP4 tensor cores (E4M3 scales) | yes | no | NVFP4 projections run on CUDA cores through scaled loads and dot |
+| Warp MMA kinds (mma.sync) | yes | partial | 4 of 7 kinds: MXF4 with UE8M0 scales, NVFP4 with E4M3 scales (sm_120a), F16, BF16 |
+| NVFP4 tensor cores (E4M3 scales) | yes | partial, sm_120a only | SM120 m16n8k64 E2M1 with E4M3 scales (SF_VEC=16) in Nvfp4TiledMma and qwen3_8b_cute |
 | wgmma (Hopper) | yes | n/a | no sm_90a target |
 | TMEM | yes | partial, sm_100a only | `Sm100Tmem`, `TmemAllocator`, 32x32b load and store (`TmemFragment`), FP32 to FP16 epilogues; no 16xNb, LdRed or S2T |
 | Pipelines and barriers | yes | partial | typed 1-CTA (`PipelineTmaAsync`, `PipelineTmaStore`, `PipelineTmaUmma`, `PipelineUmmaAsync`, `PipelineAsyncUmma`, `PipelineAsync`) and 2-CTA (`TwoCtaRing`) pipelines; no CLC |

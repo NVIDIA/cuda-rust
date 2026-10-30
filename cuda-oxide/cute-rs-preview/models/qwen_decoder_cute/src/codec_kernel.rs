@@ -50,7 +50,11 @@ pub mod kernels {
         if row < delay {
             0
         } else {
-            input[(row - delay) * inputs + group * in_group + channel].to_bits()
+            unsafe {
+                StridedTensor::from_slice(input)
+                    .get_unchecked((row - delay) * inputs + group * in_group + channel)
+            }
+            .to_bits()
         }
     }
     /// Read one BF16 weight for a logical im2col reduction coordinate.
@@ -87,7 +91,7 @@ pub mod kernels {
         } else {
             ((group * out_group + column) * in_group + channel) * kernel + tap
         };
-        weight[index].to_bits()
+        unsafe { StridedTensor::from_slice(weight).get_unchecked(index) }.to_bits()
     }
     /// Direct implicit-im2col MMA; no packed activation or weight temporary.
     /// Inputs are `[rows, inputs]`; output has `rows` time steps for convolution
@@ -145,7 +149,9 @@ pub mod kernels {
                 });
                 if has_bias {
                     // cuDNN stores its BF16 convolution before the separate bias add.
-                    sum = BFloat16::from_f32(sum).to_f32() + bias[channel].to_f32();
+                    let bias_val =
+                        unsafe { StridedTensor::from_slice(bias).get_unchecked(channel) }.to_f32();
+                    sum = BFloat16::from_f32(sum).to_f32() + bias_val;
                 }
                 let mut output = StridedTensorMut::from_disjoint_slice(&mut output)
                     .local_partition::<32>(index % 32);
@@ -217,12 +223,14 @@ pub mod kernels {
                 k += 16;
             }
             let mut output = StridedTensorMut::from_disjoint_slice(&mut output);
+            let bias_tensor = StridedTensor::from_slice(bias);
             mma.partition_c().store_with(accumulator, |r, c, value| {
                 if m + r < rows && n + c < out_group {
                     let channel = group * out_group + n + c;
                     let value = if has_bias {
                         // Preserve the observable convolution output before bias.
-                        BFloat16::from_f32(value).to_f32() + bias[channel].to_f32()
+                        BFloat16::from_f32(value).to_f32()
+                            + unsafe { bias_tensor.get_unchecked(channel) }.to_f32()
                     } else {
                         value
                     };

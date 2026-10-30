@@ -37,6 +37,20 @@ pub mod bf16;
 pub mod block_scaled;
 
 use crate::copy::cooperative::SmemTile;
+use crate::numeric::BFloat16;
+
+/// Seals [`LdmatrixElement`] to 16-bit floating-point storage types (`f16` and [`BFloat16`]).
+mod ldmatrix_element {
+    /// Implemented only by 2-byte matrix-load element types.
+    pub trait Sealed {}
+    impl Sealed for f16 {}
+    impl Sealed for crate::numeric::BFloat16 {}
+}
+
+/// A 16-bit element type supported by warp-cooperative `ldmatrix` shared-memory loads.
+pub trait LdmatrixElement: Copy + ldmatrix_element::Sealed {}
+impl LdmatrixElement for f16 {}
+impl LdmatrixElement for BFloat16 {}
 
 /// One thread's part of a 16x16 `f16` A tile.
 ///
@@ -136,8 +150,8 @@ impl FragmentC {
 /// keeps at least 16-byte chunks together. The compiler checks the parts
 /// known from the types.
 #[inline(never)]
-pub unsafe fn load_matrix_a<SmemL>(
-    src: &SmemTile<f16, SmemL>,
+pub unsafe fn load_matrix_a<SmemL, T: LdmatrixElement>(
+    src: &SmemTile<T, SmemL>,
     warp_tile: (usize, usize),
     lane: u32,
 ) -> FragmentA {
@@ -145,7 +159,7 @@ pub unsafe fn load_matrix_a<SmemL>(
     unreachable!("cute-rs `load_matrix_a` executed outside device compilation")
 }
 
-/// Load one 16x8 `f16` B tile into the 32 threads of a warp.
+/// Load one 16x8 `f16` or `BFloat16` B tile into the 32 threads of a warp.
 ///
 /// Each thread receives its [`FragmentB`]. `SmemL` describes the shared-memory
 /// layout and any address swizzle.
@@ -161,8 +175,8 @@ pub unsafe fn load_matrix_a<SmemL>(
 /// shared tile must contain the selected window, with row addresses aligned
 /// as required by [`load_matrix_a`].
 #[inline(never)]
-pub unsafe fn load_matrix_b<SmemL>(
-    src: &SmemTile<f16, SmemL>,
+pub unsafe fn load_matrix_b<SmemL, T: LdmatrixElement>(
+    src: &SmemTile<T, SmemL>,
     warp_tile: (usize, usize),
     lane: u32,
 ) -> FragmentB {
@@ -179,8 +193,8 @@ pub unsafe fn load_matrix_b<SmemL>(
 /// The lane participation, alignment, and storage requirements of
 /// [`load_matrix_a`] apply to the entire 16x16 window.
 #[inline(never)]
-pub unsafe fn load_matrix_b_pair<SmemL>(
-    src: &SmemTile<f16, SmemL>,
+pub unsafe fn load_matrix_b_pair<SmemL, T: LdmatrixElement>(
+    src: &SmemTile<T, SmemL>,
     warp_tile: (usize, usize),
     lane: u32,
 ) -> FragmentBPair {
@@ -202,8 +216,8 @@ pub unsafe fn load_matrix_b_pair<SmemL>(
 /// [`load_matrix_a`] apply to the entire 16x16 window. `lane` must be the calling
 /// thread's hardware lane number; the compiler assigns the submatrix addresses.
 #[inline(never)]
-pub unsafe fn load_matrix_b_pair_k_major<SmemL>(
-    src: &SmemTile<f16, SmemL>,
+pub unsafe fn load_matrix_b_pair_k_major<SmemL, T: LdmatrixElement>(
+    src: &SmemTile<T, SmemL>,
     warp_tile: (usize, usize),
     lane: u32,
 ) -> FragmentBPair {

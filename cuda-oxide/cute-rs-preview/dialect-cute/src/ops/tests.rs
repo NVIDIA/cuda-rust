@@ -100,7 +100,7 @@ fn k_major_b_pair_keeps_matrix_load_operand_checks() {
     dialect_mir::register(&mut ctx);
     crate::register(&mut ctx);
     for (malformed, message) in [
-        ("element", "supports f16 elements only"),
+        ("element", "supports 2-byte (f16/bf16/u16) elements only"),
         ("row", "warp tile row must be an unsigned 64-bit integer"),
         (
             "column",

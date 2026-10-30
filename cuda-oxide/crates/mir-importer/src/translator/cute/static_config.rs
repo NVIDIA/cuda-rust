@@ -47,6 +47,8 @@ const LEADING_DIM: &str = "cute_rs::markers::LeadingDim";
 const SWIZZLE: &str = "cute_rs::markers::Swizzle";
 /// Exact defining path of `cute_rs::markers::ComposedLayout`; public reexports do not change it.
 const COMPOSED: &str = "cute_rs::markers::ComposedLayout";
+/// Exact defining path of `cute_rs::numeric::BFloat16`; public reexports do not change it.
+const BFLOAT16: &str = "cute_rs::numeric::BFloat16";
 
 /// Validated cooperative-copy instruction width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +114,10 @@ fn cooperative_element(ty: &Ty) -> Result<(i64, &'static str), String> {
         },
         // Rust `char` already lowers exactly to an unsigned 32-bit dialect integer.
         TyKind::RigidTy(RigidTy::Char) => (4, "char"),
+        TyKind::RigidTy(RigidTy::Adt(def, args)) if canonical_adt_path(&def) == BFLOAT16 => {
+            expect_schema(&args, &[], BFLOAT16)?;
+            (2, "BFloat16")
+        }
         _ => {
             return Err(format!(
                 "copy_g2s element must be a supported scalar, found {ty:?}"
@@ -464,7 +470,12 @@ pub(crate) fn decode_load_matrix_callee(func: &mir::Operand) -> Result<MatrixLoa
     let TyKind::RigidTy(RigidTy::FnDef(_, args)) = constant.const_.ty().kind() else {
         return Err("load_matrix callee is not a FnDef".to_string());
     };
-    expect_schema(&args, &["Type"], "cute_rs::mma::load_matrix")?;
+    expect_schema(&args, &["Type", "Type"], "cute_rs::mma::load_matrix")?;
+    let element_type = type_arg(&args, 1, "load_matrix")?;
+    let (element_bytes, _) = cooperative_element(&element_type)?;
+    if element_bytes != 2 {
+        return Err("load_matrix requires a 2-byte (f16 or BFloat16) element type".to_string());
+    }
     let smem_layout = decode_smem_layout(&type_arg(&args, 0, "load_matrix")?)?;
 
     let modes = smem_layout.outer().modes();

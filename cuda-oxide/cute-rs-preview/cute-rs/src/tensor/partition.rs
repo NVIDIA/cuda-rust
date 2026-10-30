@@ -150,6 +150,9 @@ impl<'a, T: Copy + TensorElement<T>> StridedTensor<'a, T> {
     /// Borrow an ordinary slice with its unchanged scalar element identity.
     #[inline(always)]
     pub fn from_slice(storage: &'a [T]) -> Self {
+        let _ = crate::tensor::Tensor::from_slice(storage)
+            .local_tile::<1>(0)
+            .base();
         unsafe { Self::from_raw_parts(storage.as_ptr(), storage.len(), 1) }
     }
     /// Borrow the logical elements of a strided storage range.
@@ -184,6 +187,65 @@ impl<'a, Element: TensorElement<Storage>, Storage: Copy>
         }
     }
 }
+impl<'a, T: Copy + TensorElement<T>> StridedTensor<'a, T, Strided1D, T> {
+    /// Advance the base pointer by `start * stride` elements and bound the view to `len` elements.
+    ///
+    /// Preserves the flat `Strided1D` layout so loop-invariant or induction-step
+    /// slices become pointer induction variables in LLVM/MLIR.
+    ///
+    /// # Safety
+    /// `start <= self.len()` and `len <= self.len() - start` must hold.
+    #[must_use]
+    #[inline(always)]
+    pub const unsafe fn offset_unchecked(self, start: usize, len: usize) -> Self {
+        Self {
+            base: unsafe { self.base.add(start * self.layout.stride) },
+            layout: Strided1D {
+                len,
+                stride: self.layout.stride,
+            },
+            borrow: PhantomData,
+        }
+    }
+
+    /// Read a logical coordinate from a 1D strided view without a nested trait call.
+    ///
+    /// # Safety
+    /// `index < self.len()` must hold.
+    #[inline(always)]
+    pub unsafe fn at_unchecked(self, index: usize) -> T {
+        unsafe { self.base.add(index * self.layout.stride).read() }
+    }
+}
+
+impl<'a, T: Copy + TensorElement<T>> StridedTensorMut<'a, T, Strided1D, T> {
+    /// Advance the mutable base pointer by `start * stride` elements and bound the view to `len` elements.
+    ///
+    /// # Safety
+    /// `start <= self.len()` and `len <= self.len() - start` must hold.
+    #[must_use]
+    #[inline(always)]
+    pub const unsafe fn offset_unchecked(self, start: usize, len: usize) -> Self {
+        Self {
+            base: unsafe { self.base.add(start * self.layout.stride) },
+            layout: Strided1D {
+                len,
+                stride: self.layout.stride,
+            },
+            borrow: PhantomData,
+        }
+    }
+
+    /// Store one logical coordinate into a 1D strided view without a nested trait call.
+    ///
+    /// # Safety
+    /// `index < self.len()` and no conflicting access may occur.
+    #[inline(always)]
+    pub unsafe fn write_at(&self, index: usize, value: T) {
+        unsafe { self.base.add(index * self.layout.stride).write(value) }
+    }
+}
+
 impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
     StridedTensor<'a, Element, Layout, Storage>
 {
@@ -370,7 +432,13 @@ impl<'a, T: Copy + TensorElement<T>> StridedTensorMut<'a, T> {
     /// Borrow writable device storage while retaining its original alias rules.
     #[inline(always)]
     pub fn from_disjoint_slice(storage: &'a mut DisjointSlice<'_, T>) -> Self {
-        unsafe { Self::from_raw_parts(storage.as_mut_ptr(), storage.len(), 1) }
+        let ptr = storage.as_mut_ptr();
+        let len = storage.len();
+        let view = unsafe { core::slice::from_raw_parts(ptr.cast_const(), len) };
+        let _ = crate::tensor::Tensor::from_slice(view)
+            .local_tile::<1>(0)
+            .base();
+        unsafe { Self::from_raw_parts(ptr, len, 1) }
     }
     /// Borrow writable strided storage with an externally established extent.
     /// # Safety
@@ -489,6 +557,16 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
     #[inline(always)]
     pub unsafe fn store<const N: usize>(&mut self, values: RegisterTile<Storage, N>) {
         assert!(N <= self.len());
+        unsafe { self.store_unchecked(values) };
+    }
+
+    /// Scatter an ordered register tile after an enclosing extent check.
+    ///
+    /// # Safety
+    /// `N <= self.len()` must hold, and no other active access may conflict
+    /// with the selected destinations.
+    #[inline(always)]
+    pub unsafe fn store_unchecked<const N: usize>(&mut self, values: RegisterTile<Storage, N>) {
         let values = values.into_array();
         let mut i = 0;
         while i < N {

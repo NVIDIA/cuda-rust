@@ -30,11 +30,11 @@ pub(super) fn anyhow_to_pliron(e: anyhow::Error) -> pliron::result::Error {
 /// type alone can look under-aligned: `{ i8, [7 x i8] }` says "align 1"
 /// to LLVM, while Rust may require 8.
 ///
-/// The alloca lands at the use site, same as
-/// [`convert_extract_array_element`](super::array_extract::convert_extract_array_element);
-/// the standard `opt -O2` run (SROA)
-/// removes it again. Hoisting these into the function's entry block is a
-/// known follow-up for the unoptimized (`CUDA_OXIDE_NO_OPT=1`) path.
+/// The alloca and store initially land at the use site, same as
+/// [`convert_extract_array_element`](super::array_extract::convert_extract_array_element).
+/// NVVM normalization hoists eligible fixed slots into the true entry block,
+/// leaving initialization here. This exposes static storage to NVVM even
+/// when the optional `opt -O2` / SROA pass is disabled.
 pub(super) fn spill_enum_value(
     ctx: &mut Context,
     rewriter: &mut DialectConversionRewriter,

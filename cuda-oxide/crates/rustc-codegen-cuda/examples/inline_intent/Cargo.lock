@@ -163,6 +163,7 @@ name = "cuda-device"
 version = "0.2.1"
 dependencies = [
  "cuda-macros",
+ "cuda-target-spec",
 ]
 
 [[package]]
@@ -171,6 +172,7 @@ version = "0.2.1"
 dependencies = [
  "cuda-artifact-finalizer",
  "cuda-core",
+ "cuda-device",
  "cuda-macros",
  "half",
  "libc",

@@ -264,7 +264,10 @@ target-derived `cfg`, so a kernel has no way to ask which architecture it is
 being compiled for. Arch requirements live in doc comments and are enforced by
 the caller, which is why an example that needs `redux.sync` checks
 `ctx.compute_capability()` on the host and skips rather than specializing the
-kernel.
+kernel. `cuda-device` does derive a `cuda_oxide_sm_at_least` cfg for its own
+`warp_reduce`, but a build script's `cfg` reaches only its own crate: in a
+kernel crate the name is undeclared, so `#[cfg(cuda_oxide_sm_at_least = "80")]`
+is always false and warns as `unexpected_cfgs`.
 
 `--device-cfg NAME` is how you supply one yourself. It is repeatable, and each
 occurrence becomes a `--cfg NAME` in the build's rustflags:

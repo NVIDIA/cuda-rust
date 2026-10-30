@@ -2,9 +2,15 @@
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+use cutile_compiler::compile_api::KernelCompiler;
 use cutile_compiler::compiler::utils::CompileOptions;
+use cutile_ir::bytecode::{BytecodeVersion, Opcode};
+use cutile_ir::ir::Type;
 
 mod common;
+mod ir_inspection;
+
+use crate::ir_inspection::ModuleInspectionExt;
 
 #[cutile::module]
 mod memory_and_atomic_ops_module {
@@ -550,6 +556,347 @@ mod atomic_red_view_module {
             )
         };
     }
+}
+
+/// Both spellings of the atomic reduction, each threading the token it
+/// returns into a following store's ordering slot.
+///
+/// `atomic_red_view_tko` and `atomic_red_view_raw` lower to the same
+/// `cuda_tile.atomic_red_view_tko` op through different compiler handlers, and
+/// both declare `-> Token`. The only way to see which value a call actually
+/// evaluates to is to consume it where a token is required and look at the
+/// operand.
+#[cutile::module]
+mod atomic_red_view_token_module {
+    use cutile::core::*;
+    use cutile::tileir::*;
+
+    #[cutile::entry()]
+    unsafe fn convenience_form(output: &mut Tensor<f32, { [-1, -1] }>) {
+        let mut part: PartitionMut<f32, { [16, 16] }> = output.partition_mut(shape![16, 16]);
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let tile: Tile<f32, { [16, 16] }> = constant(1.0f32, shape![16, 16]);
+        let reduced: Token = unsafe {
+            atomic_red_view_tko(
+                &mut part,
+                tile,
+                [pid.0, 0i32],
+                atomic::AddF,
+                ordering::Relaxed,
+                scope::Device,
+            )
+        };
+        let _stored: Token = unsafe {
+            store_view_raw(
+                &part,
+                tile,
+                [pid.0, 0i32],
+                Some(reduced),
+                ordering::Weak,
+                scope::Device,
+                tma::Disabled,
+                None,
+                [false, false],
+            )
+        };
+    }
+
+    #[cutile::entry()]
+    unsafe fn raw_form(output: &mut Tensor<f32, { [-1, -1] }>) {
+        let mut part: PartitionMut<f32, { [16, 16] }> = output.partition_mut(shape![16, 16]);
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let tile: Tile<f32, { [16, 16] }> = constant(1.0f32, shape![16, 16]);
+        let reduced: Token = unsafe {
+            atomic_red_view_raw(
+                &mut part,
+                tile,
+                [pid.0, 0i32],
+                atomic::AddF,
+                ordering::Relaxed,
+                scope::Device,
+                None,
+            )
+        };
+        let _stored: Token = unsafe {
+            store_view_raw(
+                &part,
+                tile,
+                [pid.0, 0i32],
+                Some(reduced),
+                ordering::Weak,
+                scope::Device,
+                tma::Disabled,
+                None,
+                [false, false],
+            )
+        };
+    }
+}
+
+/// The ordering token of the module's single store, as `(producer opcode,
+/// operand type)`.
+///
+/// Read off `cutile_ir::Module`, not the IR text: the printer renders
+/// `atomic_red_view_tko` as `<structural-op>`, so text matching cannot see
+/// this. The token is the store's last operand: `operandSegmentSizes` is
+/// `[view, index.., value, token]`.
+fn store_ordering_token(function_name: &str) -> (Opcode, Type) {
+    let module = KernelCompiler::new(
+        atomic_red_view_token_module::__module_ast_self,
+        "atomic_red_view_token_module",
+        function_name,
+    )
+    .target("sm_120")
+    .strides(&[("output", &[-1, 1])])
+    .compile()
+    .expect("compilation failed")
+    .into_module();
+
+    let stores = module.inspect().ops_with_opcode(Opcode::StoreViewTko);
+    assert_eq!(stores.len(), 1, "{function_name}: expected one store");
+    let token = *module
+        .op(stores[0])
+        .operands
+        .last()
+        .expect("a store has operands");
+    let (producer, ty) = module.inspect().producer_and_type(token);
+    let producer = producer
+        .unwrap_or_else(|| panic!("{function_name}: the ordering token is a block argument"));
+    (producer, ty)
+}
+
+/// `atomic_red_view_tko` evaluates to its completion token, like the raw op.
+#[test]
+fn atomic_red_view_tko_evaluates_to_its_completion_token() {
+    common::with_test_stack(|| {
+        let raw = store_ordering_token("raw_form");
+        assert_eq!(
+            raw,
+            (Opcode::AtomicRedViewTko, Type::Token),
+            "`atomic_red_view_raw`'s token must order the following store"
+        );
+        assert_eq!(
+            store_ordering_token("convenience_form"),
+            raw,
+            "`atomic_red_view_tko` must evaluate to the same thing the raw op does"
+        );
+    });
+}
+
+/// Every DSL store that routes to the `store_view_tko` compiler handler,
+/// each threading the token it returns into a `gdc_launch_dependents_tko`
+/// and then making a second store through the same view.
+///
+/// Three declarations share that handler, `store_view_tko_mut`,
+/// `store_view_tko_bounded` and `store_view_tko_mapped_mut`, and all three
+/// are declared `-> Token`. The signal's operand is the value the call
+/// evaluated to; the second store's token operand is the token the handler
+/// threaded onto the view. Both must be the first store's completion token.
+#[cutile::module]
+mod store_view_token_module {
+    use cutile::core::*;
+
+    /// `PartitionMut::store`, the safe, bounds-checked store.
+    #[cutile::entry()]
+    fn partition_mut_store(output: &mut Tensor<f32, { [-1, -1] }>) {
+        let mut part: PartitionMut<f32, { [16, 16] }> = output.partition_mut(shape![16, 16]);
+        let tile: Tile<f32, { [16, 16] }> = constant(1.0f32, shape![16, 16]);
+        let stored: Token = part.store(tile, [0i32, 0i32]);
+        let _signal: Token = unsafe { gdc_launch_dependents_tko(Some(stored)) };
+        let _second: Token = part.store(tile, [0i32, 0i32]);
+    }
+
+    /// `PartitionMut::store_unchecked`, the same op without the bounds proof.
+    #[cutile::entry()]
+    fn partition_mut_store_unchecked(output: &mut Tensor<f32, { [-1, -1] }>) {
+        let mut part: PartitionMut<f32, { [16, 16] }> = output.partition_mut(shape![16, 16]);
+        let tile: Tile<f32, { [16, 16] }> = constant(1.0f32, shape![16, 16]);
+        let stored: Token = unsafe { part.store_unchecked(tile, [0i32, 0i32]) };
+        let _signal: Token = unsafe { gdc_launch_dependents_tko(Some(stored)) };
+        let _second: Token = unsafe { part.store_unchecked(tile, [0i32, 0i32]) };
+    }
+
+    /// `BoundedPartitionMut::store`, the branded-coordinate store, reached
+    /// through the non-deprecated spelling of `PartitionMut::with_bounds`.
+    #[cutile::entry()]
+    fn bounded_partition_mut_store(output: &mut Tensor<f32, { [-1, -1] }>) {
+        let part: PartitionMut<f32, { [16, 16] }> = output.partition_mut(shape![16, 16]);
+        let rows: Dim = num_tiles(&part, 0).into_dim();
+        let cols: Dim = num_tiles(&part, 1).into_dim();
+        let mut bounded: BoundedPartitionMut<f32, { [16, 16] }> =
+            partition_with_bounds_mut(part, (rows, cols));
+        let tile: Tile<f32, { [16, 16] }> = constant(1.0f32, shape![16, 16]);
+        for i in rows {
+            for j in cols {
+                let stored: Token = bounded.store(tile, coord((i, j)));
+                let _signal: Token = unsafe { gdc_launch_dependents_tko(Some(stored)) };
+                let _second: Token = bounded.store(tile, coord((i, j)));
+            }
+        }
+    }
+
+    /// `MappedPartitionMut::store`, the schedule-minted store.
+    #[cutile::entry()]
+    fn mapped_partition_mut_store<const MAP_SHAPE: [i32; 2]>(
+        mut output: MappedPartitionMut<f32, { [16, 16] }, MAP_SHAPE>,
+    ) {
+        let tile: Tile<f32, { [16, 16] }> = constant(1.0f32, shape![16, 16]);
+        for index in output.iter_indices() {
+            let stored: Token = output.store(tile, index);
+            let _signal: Token = unsafe { gdc_launch_dependents_tko(Some(stored)) };
+            let _second: Token = output.store(tile, index);
+        }
+    }
+}
+
+/// For one kernel of `store_view_token_module`: the facts about the token the
+/// store *evaluated to* (the `gdc_launch_dependents_tko` operand) and about
+/// the token the handler threaded onto the view (the second store's ordering
+/// operand).
+///
+/// Read off `cutile_ir::Module`, not `ir_text()`: the text printer renders
+/// some of these ops as `<structural-op>`, and it never names the producing
+/// operation at all.
+fn store_token_facts(
+    function_name: &str,
+    generics: &[&str],
+    strides: &[(&str, &[i32])],
+) -> ((Option<Opcode>, Type), (Option<Opcode>, Type)) {
+    let module = KernelCompiler::new(
+        store_view_token_module::__module_ast_self,
+        "store_view_token_module",
+        function_name,
+    )
+    .target("sm_120")
+    .bytecode_version(BytecodeVersion::V13_4)
+    .generics(generics.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    .strides(strides)
+    .options(CompileOptions::default())
+    .compile()
+    .unwrap_or_else(|e| panic!("compile {function_name}: {e}"))
+    .into_module();
+
+    let stores = module.inspect().ops_with_opcode(Opcode::StoreViewTko);
+    assert_eq!(
+        stores.len(),
+        2,
+        "{function_name}: expected exactly two stores through the view"
+    );
+    let signals = module
+        .inspect()
+        .ops_with_opcode(Opcode::GdcLaunchDependentsTko);
+    assert_eq!(
+        signals.len(),
+        1,
+        "{function_name}: expected exactly one launch-dependents signal"
+    );
+
+    // `gdc_launch_dependents_tko`'s only operand is the token it signals
+    // after: the value the first store evaluated to.
+    let returned = *module
+        .op(signals[0])
+        .operands
+        .first()
+        .expect("the signal has a token operand");
+    // The second store's last operand is its ordering token, read from the
+    // view's `token` metadata field, what `update_token` put there.
+    let threaded = *module
+        .op(stores[1])
+        .operands
+        .last()
+        .expect("a store has operands");
+    (
+        module.inspect().producer_and_type(returned),
+        module.inspect().producer_and_type(threaded),
+    )
+}
+
+/// `(Opcode::StoreViewTko, Type::Token)`, what both tokens must be.
+fn store_completion_token() -> (Option<Opcode>, Type) {
+    (Some(Opcode::StoreViewTko), Type::Token)
+}
+
+/// `PartitionMut::store`, the safe store path, evaluates to its completion
+/// token and threads the same token onto the view.
+#[test]
+fn partition_mut_store_evaluates_to_its_completion_token() {
+    common::with_test_stack(|| {
+        let (returned, threaded) =
+            store_token_facts("partition_mut_store", &[], &[("output", &[-1, 1])]);
+        assert_eq!(
+            returned,
+            store_completion_token(),
+            "`PartitionMut::store` must evaluate to its completion token"
+        );
+        assert_eq!(
+            threaded,
+            store_completion_token(),
+            "`PartitionMut::store` must also thread that token onto the view"
+        );
+    });
+}
+
+/// The same for `PartitionMut::store_unchecked`, which shares the op.
+#[test]
+fn partition_mut_store_unchecked_evaluates_to_its_completion_token() {
+    common::with_test_stack(|| {
+        let (returned, threaded) = store_token_facts(
+            "partition_mut_store_unchecked",
+            &[],
+            &[("output", &[-1, 1])],
+        );
+        assert_eq!(
+            returned,
+            store_completion_token(),
+            "`PartitionMut::store_unchecked` must evaluate to its completion token"
+        );
+        assert_eq!(
+            threaded,
+            store_completion_token(),
+            "`PartitionMut::store_unchecked` must also thread that token onto the view"
+        );
+    });
+}
+
+/// The same for `BoundedPartitionMut::store`, via `store_view_tko_bounded`.
+#[test]
+fn bounded_partition_mut_store_evaluates_to_its_completion_token() {
+    common::with_test_stack(|| {
+        let (returned, threaded) =
+            store_token_facts("bounded_partition_mut_store", &[], &[("output", &[-1, 1])]);
+        assert_eq!(
+            returned,
+            store_completion_token(),
+            "`BoundedPartitionMut::store` must evaluate to its completion token"
+        );
+        assert_eq!(
+            threaded,
+            store_completion_token(),
+            "`BoundedPartitionMut::store` must also thread that token onto the view"
+        );
+    });
+}
+
+/// The same for `MappedPartitionMut::store`, via `store_view_tko_mapped_mut`.
+#[test]
+fn mapped_partition_mut_store_evaluates_to_its_completion_token() {
+    common::with_test_stack(|| {
+        let (returned, threaded) = store_token_facts(
+            "mapped_partition_mut_store",
+            &["4", "4"],
+            &[("output", &[-1, 1])],
+        );
+        assert_eq!(
+            returned,
+            store_completion_token(),
+            "`MappedPartitionMut::store` must evaluate to its completion token"
+        );
+        assert_eq!(
+            threaded,
+            store_completion_token(),
+            "`MappedPartitionMut::store` must also thread that token onto the view"
+        );
+    });
 }
 
 fn compile_ir(function_name: &str, generics: &[String], strides: &[(&str, &[i32])]) -> String {

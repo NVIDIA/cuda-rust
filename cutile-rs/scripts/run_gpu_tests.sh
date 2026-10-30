@@ -278,9 +278,9 @@ do
         gpu_test host cuda-async "$test_target"
 done
 
+run_gpu_step "shared Tile and SIMT host buffer interop" \
+    gpu_test tile cutile shared_host_buffers --serial
+
 print_summary_and_exit \
     "All GPU tests passed!" \
     "Some GPU tests failed. See output above for details."
-
-run_gpu_step "shared Tile and SIMT host buffer interop" \
-    gpu_test tile cutile shared_host_buffers --serial

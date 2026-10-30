@@ -55,8 +55,9 @@ cores, atomics, and debug facilities.
 Safe RAII wrappers around the CUDA Driver API: `CudaContext`, `CudaStream`,
 `DeviceBuffer<T>`, and module loading. Handles GPU context and memory management
 on the host side. Shared with cutile-rs and maintained at the repository root
-(`cuda-core/`); the cuda-oxide surface is re-exported at the crate root except
-`LaunchConfig`, `vmm`, `peer`, and `memory`.
+(`cuda-core/`). Both programming models use its shared `Context`, `Stream`,
+`LaunchConfig` and typed allocation storage. A `Device` identifies the physical GPU;
+a `Context` identifies an execution context on that GPU.
 
 ## `DeviceOperation`
 

@@ -12,6 +12,7 @@
 use cuda_core::{f8e4m3fn, f8e5m2};
 use cutile::tensor::PartitionMut;
 use cutile::tile_kernel::{DeviceOp, ToHostVecOp};
+use cutile_ir::requirements::Feature;
 use half::{bf16, f16};
 use std::sync::Arc;
 
@@ -193,6 +194,9 @@ fn add_ones_f64_and_convert_to_f32() {
 #[test]
 fn create_ones_f8e4m3fn_and_convert_to_f32() {
     common::with_test_stack(|| {
+        if !common::supports_tile_ir(&[Feature::Fp8]) {
+            return;
+        }
         let ones = cutile::api::ones::<f8e4m3fn>(&[128]).sync().expect("alloc");
 
         let result_f32: Vec<f32> = cutile::api::convert::<f8e4m3fn, f32>(Arc::new(ones))
@@ -216,6 +220,9 @@ fn create_ones_f8e4m3fn_and_convert_to_f32() {
 #[test]
 fn create_ones_f8e5m2_and_convert_to_f32() {
     common::with_test_stack(|| {
+        if !common::supports_tile_ir(&[Feature::Fp8]) {
+            return;
+        }
         let ones = cutile::api::ones::<f8e5m2>(&[128]).sync().expect("alloc");
 
         let result_f32: Vec<f32> = cutile::api::convert::<f8e5m2, f32>(Arc::new(ones))

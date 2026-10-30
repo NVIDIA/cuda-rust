@@ -90,6 +90,8 @@ compiler components (`rustc-dev`, `llvm-tools`), including for its nested backen
 workspace. Do not float a pin to work around a failure.
 `cuda-oxide/scripts/check-toolchain-parity.sh` checks the SIMT pin against its
 scaffold, development container, and documentation.
+`cuda-oxide/scripts/check-ci-image-pins.sh` checks that the `rust:<version>`
+container images in the workflows match the root pin.
 
 rustup normally resolves the toolchain from the working directory; an explicit
 override can change that. `--manifest-path` does not change the working directory,
@@ -228,18 +230,29 @@ the source pull request. The comment on the source pull request links back.
 
 ## CI
 
-Workflows such as `ci.yml`, `examples-compile.yml`, `docs.yml`, and `book.yml`
-carry path filters. The SIMT lanes include shared-host paths as well as
-`cuda-oxide/`; book filters follow documentation sources and build scripts.
-The reusable `clippy.yml`, `fmt.yml`, `unit-tests.yml`, and `cargo-deny.yml`
-workflows inherit the caller's trigger. Check current filters and job conditions
-before interpreting a missing run as either a failure or successful validation.
+Workflows run on NVIDIA self-hosted runners, which reject `pull_request`. They
+trigger on `push` to `main` and to `pull-request/<n>`, the branches copy-pr-bot
+mirrors trusted pull requests to. Do not add `pull_request` triggers or
+`runs-on: ubuntu-latest`; use `linux-amd64-cpu4` (`linux-amd64-cpu16` for the
+Tile test jobs). The one exception is the `deploy` job in `book.yml`, which stays
+on `ubuntu-latest` for GitHub Pages and runs only for `refs/heads/main`.
 
-`cutile-rs.yml` deliberately has no workflow-level path filter. Copy-pr-bot
-mirrors trusted pull requests to `pull-request/<n>` at an existing SHA, which
-GitHub can treat as having no path changes. Its `changes` job gates Tile and
-shared-host jobs; an undetectable diff runs them conservatively. SIMT-only
-changes can skip them when the diff is available.
+Copy-pr-bot creates `pull-request/<n>` at an existing SHA, which GitHub can treat
+as having no path changes, so no workflow uses a workflow-level `paths:` filter.
+`ci.yml`, `examples-compile.yml`, `docs.yml`, `codeql.yml`, `book.yml`,
+`naming-guard.yml`, and `cutile-rs.yml` gate their jobs on a `changes` job
+(`dorny/paths-filter` against `main`); an undetectable diff runs the jobs
+conservatively. The SIMT lanes include shared-host paths as well as `cuda-oxide/`;
+book filters follow documentation sources and build scripts. SIMT-only changes can
+skip the Tile and shared-host jobs when the diff is available. The reusable
+`clippy.yml`, `fmt.yml`, `unit-tests.yml`, and `cargo-deny.yml` workflows inherit
+the caller's trigger. Check the `changes` job and job conditions before
+interpreting a missing run as either a failure or successful validation.
+
+Pull requests need cryptographically signed commits (SSH or GPG, Verified on
+GitHub) as well as the `Signed-off-by` line; copy-pr-bot holds a pull request with
+unsigned commits for validation. A history rewrite drops signatures, so re-sign
+with `git rebase --signoff -S` or `git commit --amend -s -S`.
 
 ## Historical references and fixtures
 

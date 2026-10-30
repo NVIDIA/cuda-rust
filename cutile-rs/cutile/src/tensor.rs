@@ -1658,7 +1658,7 @@ impl<'a, T: DType> TensorView<'a, T> {
         let new_shape: Vec<i32> = shape.iter().map(|&x| x as i32).collect();
         let new_strides = contiguous_strides(&new_shape);
         let spec = compute_spec(
-            self.base.storage.spec_ptr(),
+            self.base.storage.spec_ptr() + self.offset_bytes as u64,
             &new_shape,
             &new_strides,
             size_of::<T>() as i32,

@@ -98,6 +98,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and release tags are namespaced `cutile-rs/vX.Y.Z`. Crate names and versions
   are unchanged.
 
+### Fixed
+
+- `TensorView::view` keeps the slice offset when it recomputes the
+  specialization, so a view over a slice that starts off a 16-byte boundary
+  no longer advertises the allocation's alignment. Before, the JIT emitted
+  vectorized loads for such views and launches failed with CUDA error 716
+  (misaligned address).
+
 ## [0.4.0] - 2026-09-25
 
 Debug builds support cuda-gdb and Nsight. DGX Spark is now supported.

@@ -1,28 +1,15 @@
 name: Deploy CUDA Rust Docs
 
 # Path-filtered lane: only documentation sources can change what this builds.
+# Self-hosted runners reject pull_request. copy-pr-bot mirrors trusted PRs to
+# pull-request/<n>, and the build job triggers on that push. `deploy` stays on
+# main: a mirror push is a push event, so an event-name check would publish it.
 on:
   push:
-    branches: [main]
-    paths:
-      - 'cuda-oxide/cuda-oxide-book/**'
-      - 'cutile-rs/cutile-book/**'
-      - 'cutile-rs/scripts/build_versioned_book.sh'
-      - 'docs/**'
-      - '.github/workflows/book.yml'
-  # Validate the book on PRs too. The build job alone runs there; `deploy` is
-  # gated below, so a pull request never publishes. Without this the book was
-  # only ever built after merge, so a PR that broke it could not be caught by
-  # review or by CI.
-  pull_request:
-    # Include release PRs and stacks targeting prerequisite copy-pr-bot mirrors.
-    branches: [main, "release/v*", "pull-request/[0-9]+"]
-    paths:
-      - 'cuda-oxide/cuda-oxide-book/**'
-      - 'cutile-rs/cutile-book/**'
-      - 'cutile-rs/scripts/build_versioned_book.sh'
-      - 'docs/**'
-      - '.github/workflows/book.yml'
+    # No workflow-level paths: filter; the changes job below gates the jobs.
+    branches:
+      - main
+      - "pull-request/[0-9]+"
   workflow_dispatch:
 
 # Only checkout rights by default. The Pages deployment permissions live on
@@ -40,11 +27,47 @@ permissions:
 # a slower older commit deploy after a newer one and replace the published site.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # Path gate. copy-pr-bot creates pull-request/<n> at an existing SHA, and
+  # GitHub often treats that push as having no path changes, so a workflow-level
+  # `paths:` filter would skip the whole run. This job diffs against main
+  # instead, as cutile-rs.yml does, and every job below runs when no file diff
+  # is detected. Other events (schedule, workflow_dispatch) skip the gate.
+  changes:
+    if: github.event_name == 'push'
+    runs-on: linux-amd64-cpu4
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      relevant: ${{ steps.changes.outputs.relevant }}
+      any_changed: ${{ steps.changes.outputs.any_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad  # v3.0.4
+        id: changes
+        with:
+          filters: |
+            relevant:
+              - 'cuda-oxide/cuda-oxide-book/**'
+              - 'cutile-rs/cutile-book/**'
+              - 'cutile-rs/scripts/build_versioned_book.sh'
+              - 'docs/**'
+              - '.github/workflows/book.yml'
+            # `*` covers a root file, `**` every nested path. Both false means
+            # no file diff was detected.
+            any_changed:
+              - '*'
+              - '**'
+
   build:
-    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'push' || needs.changes.outputs.relevant == 'true' || needs.changes.outputs.any_changed != 'true') }}
+    runs-on: linux-amd64-cpu4
     # An umbrella page plus two Sphinx books. Bound the job so a
     # wedged install or a sphinx that never returns fails instead of burning to
     # the 6-hour default.
@@ -77,9 +100,9 @@ jobs:
         run: |
           # Unset CUTILE_DOCS_TAGS → build every tag matching the pattern.
           # Empty CUTILE_DOCS_TAGS → current tree only (fast PR check).
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            export CUTILE_DOCS_TAGS=""
-          fi
+          case "${GITHUB_REF}" in
+            refs/heads/pull-request/*) export CUTILE_DOCS_TAGS="" ;;
+          esac
           bash docs/build_all_docs.sh
 
       # Only `deploy` consumes this, and `deploy` is skipped on pull requests,
@@ -87,7 +110,7 @@ jobs:
       # job is to prove both Sphinx builds succeed, which the steps above already
       # did; gate the upload on the same condition `deploy` uses so the two
       # cannot drift apart.
-      - if: github.event_name != 'pull_request'
+      - if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs/build/html
@@ -97,7 +120,7 @@ jobs:
     # Publishing is for main only. A pull request builds the book to prove it
     # is sound and stops there; it never touches the Pages environment or
     # holds the deployment permissions below.
-    if: github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main'
     permissions:
       pages: write
       id-token: write

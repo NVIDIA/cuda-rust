@@ -47,7 +47,7 @@ jobs:
   # succeed. When copy-pr-bot yields no detectable file diff, both outputs are
   # false and the jobs run anyway so the mirror push is never silently skipped.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     outputs:
       tile: ${{ steps.changes.outputs.tile }}
       any_changed: ${{ steps.changes.outputs.any_changed }}

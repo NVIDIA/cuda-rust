@@ -1,39 +1,47 @@
 ---
 name: clippy
 
-# Runs as a job of the top-level CI workflow (.github/workflows/ci.yml),
-# which is the single push/pull_request entry point. Concurrency is governed
-# by CI's own group, so this workflow declares none of its own.
+# Runs as a job of the top-level CI workflow (.github/workflows/ci.yml).
+# Concurrency is governed by CI's own group, so this workflow declares none
+# of its own.
 on:
   workflow_call:
 
 permissions:
   contents: read
 
+# A container job's default shell is dash. The example loop uses bash
+# process substitution.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   clippy:
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    # CUDA 13.3.1, the toolkit pin these jobs already used. The devel image
+    # carries nvcc, cudart, and libcurand. rustup is installed in the
+    # container; the image itself has no Rust.
+    container:
+      image: nvidia/cuda:13.3.1-devel-ubuntu24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    env:
+      CUDA_TOOLKIT_PATH: /usr/local/cuda
     timeout-minutes: 30
     steps:
+      # $/ installs git before checkout. The CUDA image has no git; without
+      # it checkout stores a tarball.
+      - uses: $/.github/actions/setup-cuda-container
+
       - name: Clone repository
         uses: actions/checkout@v4
-
-      - name: Install CUDA toolkit
-        uses: Jimver/cuda-toolkit@0ca15bb027fc96f7f61ddbb9c5221d699da06bdb  # v0.2.36
-        id: cuda-toolkit
-        with:
-          cuda: "13.3.1"
-          method: network
-          sub-packages: '["nvcc", "cudart-dev"]'
-          non-cuda-sub-packages: '["libcurand-dev"]'
 
       # `--all-targets` covers tests, benches and examples, matching the two
       # steps below and the `just clippy` recipe. Without it a lint that fires
       # only in a test target passes here and fails for anyone running the
       # recipe locally.
       - name: Run clippy (workspace crates)
-        env:
-          CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
         working-directory: cuda-oxide
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -55,14 +63,12 @@ jobs:
       # well-defined `target/` under cuda-oxide.
       - name: Run clippy (rustc-codegen-cuda)
         env:
-          CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           CARGO_TARGET_DIR: ${{ runner.temp }}/clippy-shared-target
         working-directory: cuda-oxide/crates/rustc-codegen-cuda
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Run clippy (standard and CuTe examples and models)
         env:
-          CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           CARGO_TARGET_DIR: ${{ runner.temp }}/clippy-shared-target
           RUSTC_BOOTSTRAP: "1"
         run: |

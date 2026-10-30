@@ -1,8 +1,8 @@
 ---
 name: cargo-deny
 
-# Runs as a job of the top-level CI workflow (.github/workflows/ci.yml) on
-# push/pull_request, plus a standalone weekly security scan via schedule.
+# Runs as a job of the top-level CI workflow (.github/workflows/ci.yml),
+# plus a standalone weekly security scan via schedule.
 # Concurrency for the CI path is governed by CI's own group.
 #
 # Four parts of the same concern. `check` enforces the license *policy* over
@@ -30,13 +30,23 @@ on:
 permissions:
   contents: read
 
+# A container job's default shell is dash; use bash, as on ubuntu-latest.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 10
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
+
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
@@ -94,11 +104,16 @@ jobs:
 
   license-manifest:
     name: dependency-licenses.csv covers every declared crate
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 10
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
+
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # Only reads manifests: `cargo metadata` resolves the graph without
       # running build scripts, so this needs no CUDA toolkit and no LLVM.
@@ -107,11 +122,16 @@ jobs:
 
   example-policy:
     name: deny.toml governs the example workspaces
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 15
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
+
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
@@ -125,11 +145,16 @@ jobs:
 
   source-headers:
     name: every source file carries the SPDX header
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 5
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
+
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # Pure text check over tracked files: no toolchain, no network. The OSRB
       # review fixed 32 missing headers in #812 and the next two scripts to

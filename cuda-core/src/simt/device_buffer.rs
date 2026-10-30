@@ -33,7 +33,9 @@ use std::mem::MaybeUninit;
 use std::num::Wrapping;
 use std::sync::Arc;
 
+use bytemuck::{AnyBitPattern, NoUninit};
 use cuda_bindings::CUdeviceptr;
+use cuda_repr::DeviceRepr;
 
 use crate::error::DriverError;
 use crate::simt::context::CudaContext;
@@ -50,15 +52,23 @@ use crate::simt::stream::CudaStream;
 ///
 /// # Safety
 ///
-/// Implementors must be safe to duplicate with a byte-for-byte copy. Values
-/// copied back from device memory must have a bit pattern that is valid for
-/// `Self`, and the all-zero bit pattern must also be valid because
-/// [`DeviceBuffer::zeroed`] initializes memory with zero bytes.
+/// Implementors must be safe to duplicate with a byte-for-byte copy, and the
+/// all-zero bit pattern must be a valid value because [`DeviceBuffer::zeroed`]
+/// initializes memory with zero bytes. Types whose zero pattern is invalid,
+/// such as `NonZeroU32`, cannot implement `DeviceCopy`.
 ///
-/// `Copy` alone is not enough: types such as `bool`, `char`, and
-/// `NonZeroU32` are `Copy`, but not every byte pattern is a valid value of
-/// those types. `DeviceCopy` is the stronger promise required when
-/// `DeviceBuffer` turns raw device bytes back into initialized Rust values.
+/// `DeviceCopy` does not promise that every bit pattern is valid. `bool`
+/// implements it although only `0` and `1` are `bool` values. That is sound
+/// because a typed `DeviceBuffer<T>` holds valid `T` values by construction:
+/// the safe constructors copy `T` values from the host or write zero bytes, a
+/// kernel that writes through `&mut T` writes a `T`, and the raw constructors
+/// are `unsafe`, so their caller vouches for the contents. The one place
+/// arbitrary bytes could become typed values is the safe reinterpreting casts,
+/// [`DeviceBuffer::cast_elem`] and [`DeviceBuffer::cast_chunks`]. They require
+/// the source to implement [`bytemuck::NoUninit`] and the target to implement
+/// [`bytemuck::AnyBitPattern`]. This excludes uninitialized source bytes and
+/// padding, and rejects `bool` as a target, so a `DeviceBuffer<bool>` can only
+/// come from memory written as `bool`.
 pub unsafe trait DeviceCopy: Copy {}
 
 macro_rules! impl_device_copy {
@@ -86,6 +96,11 @@ impl_device_copy!(
     f32,
     f64
 );
+
+// Zero is `false`, and the trait documentation explains why the `0`/`1`
+// validity requirement does not stop `bool` from being `DeviceCopy`. It is not
+// `bytemuck::AnyBitPattern`, so the reinterpreting casts cannot produce it.
+unsafe impl DeviceCopy for bool {}
 
 unsafe impl<T: DeviceCopy, const N: usize> DeviceCopy for [T; N] {}
 unsafe impl<T: ?Sized> DeviceCopy for *const T {}
@@ -285,33 +300,92 @@ impl<T> DeviceBuffer<T> {
 
     /// Reinterpret the element type of this buffer as `A`.
     ///
-    /// `A` must have the same size and alignment as `T` (e.g. `A` is
-    /// `#[repr(transparent)]` over `T`). This is the "atomic-slice launch
-    /// mapping" for issue #151: allocate and initialize a plain
-    /// `DeviceBuffer<u64>`, then hand it to a kernel that takes
-    /// `&[DeviceAtomicU64]`. The pointer, length, and bytes are unchanged;
-    /// only the element type the kernel sees changes to one whose pointee
-    /// permits shared mutation (so rustc does not mark it `readonly`/`noalias`).
+    /// `A` must have the same size and alignment as `T`. The pointer, length,
+    /// and bytes are unchanged; only the element type changes. Element counts
+    /// are preserved because `size_of::<A>() == size_of::<T>()`.
     ///
-    /// Element counts are preserved because `size_of::<A>() == size_of::<T>()`.
-    pub fn cast_elem<A>(self) -> DeviceBuffer<A> {
+    /// `T: NoUninit` ensures that every source byte is initialized, including
+    /// bytes that would otherwise be padding. `A: AnyBitPattern` accepts every
+    /// initialized bit pattern, so those bytes are valid `A` values. Destination
+    /// types with invalid bit patterns, such as `bool`, are rejected, so a
+    /// `DeviceBuffer<bool>` can only come from memory written as `bool`.
+    ///
+    /// Atomic types and other `#[repr(transparent)]` wrappers that are not
+    /// `Copy` cannot be `AnyBitPattern`; use [`Self::wrap_elem`] and
+    /// [`Self::peel_elem`] for those.
+    pub fn cast_elem<A: AnyBitPattern>(self) -> DeviceBuffer<A>
+    where
+        T: NoUninit,
+    {
+        // SAFETY: NoUninit guarantees initialized source bytes, and every
+        // initialized bit pattern is valid as A; relabel checks the layout.
+        unsafe { self.relabel() }
+    }
+
+    /// View this buffer through a `#[repr(transparent)]` wrapper of `T`.
+    ///
+    /// This is the atomic-slice launch mapping for issue #151: allocate and
+    /// initialize a plain `DeviceBuffer<u64>`, then hand it to a kernel that
+    /// takes `&[DeviceAtomicU64]`. The pointer, length, and bytes are
+    /// unchanged; only the element type the kernel sees changes to one whose
+    /// pointee permits shared mutation, so rustc does not mark the slice
+    /// `readonly`/`noalias`.
+    ///
+    /// `W: DeviceRepr<T>` guarantees the same layout and valid initialized
+    /// representations in both directions, without element destruction or
+    /// additional ownership obligations. It permits no shared-reference conversions.
+    /// The wrapper need not be `Copy` or `DeviceCopy`; the
+    /// atomic types are neither. [`Self::peel_elem`] goes back to `T`, for
+    /// example before [`Self::to_host_vec`].
+    ///
+    /// This consumes the buffer and retains its allocation, context, and
+    /// deallocation stream. It does not synchronize pending kernel accesses;
+    /// those must obey the launch API's borrowing and ordering requirements.
+    pub fn wrap_elem<W: DeviceRepr<T>>(self) -> DeviceBuffer<W> {
+        // SAFETY: DeviceRepr guarantees every initialized T representation
+        // is valid as W; relabel preserves ownership and checks the layout.
+        unsafe { self.relabel() }
+    }
+
+    /// Remove a `#[repr(transparent)]` wrapper from the element type.
+    ///
+    /// The inverse of [`Self::wrap_elem`]: `T` must implement `DeviceRepr<I>`,
+    /// so a `DeviceBuffer<DeviceAtomicU64>` peels back to the
+    /// `DeviceBuffer<u64>` it was made from, which can be read on the host.
+    pub fn peel_elem<I>(self) -> DeviceBuffer<I>
+    where
+        T: DeviceRepr<I>,
+    {
+        // SAFETY: DeviceRepr guarantees every initialized T representation
+        // is valid as I; relabel preserves ownership and checks the layout.
+        unsafe { self.relabel() }
+    }
+
+    /// Hand this allocation to a `DeviceBuffer<A>` of the same length.
+    ///
+    /// # Safety
+    ///
+    /// Every value of `T` in the allocation must also be a valid `A`. The
+    /// three public casts above each establish that through a trait bound.
+    unsafe fn relabel<A>(self) -> DeviceBuffer<A> {
         assert_eq!(
             std::mem::size_of::<A>(),
             std::mem::size_of::<T>(),
-            "cast_elem requires the same element size"
+            "element casts require the same element size"
         );
         assert_eq!(
             std::mem::align_of::<A>(),
             std::mem::align_of::<T>(),
-            "cast_elem requires the same element alignment"
+            "element casts require the same element alignment"
         );
         let (ptr, len, ctx, dealloc_stream) = self.into_all_raw_parts();
         // SAFETY: `ptr` came from a valid `DeviceBuffer<T>` allocation of `len`
         // elements; `A` has identical size and alignment, so the same allocation
         // is a valid `DeviceBuffer<A>` of the same length and the same byte
-        // extent. Ownership transfers; the original buffer's `Drop` is
-        // suppressed by `into_all_raw_parts`, and the allocation metadata is
-        // preserved for the new element type.
+        // extent, and the caller guarantees the values are valid `A`s.
+        // Ownership transfers; the original buffer's `Drop` is suppressed by
+        // `into_all_raw_parts`, and the allocation metadata is preserved for
+        // the new element type.
         unsafe {
             DeviceBuffer::<A>::from_raw_parts_with_dealloc_stream(ptr, len, ctx, dealloc_stream)
         }
@@ -357,7 +431,15 @@ impl<T> DeviceBuffer<T> {
     /// Returning the original on failure rather than panicking keeps the
     /// fallback path available, since a caller that cannot widen usually has a
     /// scalar version to fall back to.
-    pub fn cast_chunks<A>(self) -> Result<DeviceBuffer<A>, Self> {
+    ///
+    /// As with [`Self::cast_elem`], `T: NoUninit` guarantees initialized source
+    /// bytes and `A: AnyBitPattern` accepts every initialized bit pattern. A
+    /// host-defined vector element gets there with `unsafe impl bytemuck::Pod`
+    /// next to its `DeviceCopy` impl.
+    pub fn cast_chunks<A: AnyBitPattern>(self) -> Result<DeviceBuffer<A>, Self>
+    where
+        T: NoUninit,
+    {
         let bytes = self.len.saturating_mul(std::mem::size_of::<T>());
         let Some(new_len) = chunk_cast_len(
             bytes,
@@ -372,18 +454,20 @@ impl<T> DeviceBuffer<T> {
         // above to be exactly `new_len` elements of `A` and to be aligned for
         // `A`. The allocation and its ownership are unchanged; only the element
         // type and the count describing the same bytes change. `Drop` on the
-        // original is suppressed by `into_all_raw_parts`.
+        // original is suppressed by `into_all_raw_parts`. NoUninit guarantees
+        // all source bytes are initialized; AnyBitPattern makes them valid A.
         Ok(unsafe {
             DeviceBuffer::<A>::from_raw_parts_with_dealloc_stream(ptr, new_len, ctx, dealloc_stream)
         })
     }
 
-    /// Whether [`Self::cast_chunks`] to `A` would succeed.
+    /// Whether the layout permits [`Self::cast_chunks`] to `A`.
     ///
     /// For choosing between a wide and a scalar path without consuming the
-    /// buffer to find out.
+    /// buffer to find out. This only checks layout; the actual cast also
+    /// requires `T: NoUninit`.
     #[must_use]
-    pub fn can_cast_chunks<A>(&self) -> bool {
+    pub fn can_cast_chunks<A: AnyBitPattern>(&self) -> bool {
         let bytes = self.len.saturating_mul(std::mem::size_of::<T>());
         chunk_cast_len(
             bytes,
@@ -529,8 +613,12 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         unsafe { Self::from_host_async_unchecked(stream, data.as_slice()) }
     }
 
-    /// Allocates zero-initialized device memory of `len` elements, enqueued
-    /// on `stream`.
+    /// Allocates zero-initialized device memory of `len` elements.
+    ///
+    /// The zero-fill is enqueued on `stream`, then this method synchronizes
+    /// that stream before returning. The initialized buffer is therefore safe
+    /// to use on another stream, including for types such as `bool` whose
+    /// validity depends on initialization having completed.
     ///
     /// A `len` of zero (or a zero-sized `T`) yields an empty buffer without
     /// touching the driver allocator.
@@ -539,9 +627,9 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
     ///
     /// The returned buffer takes ownership of the device allocation
     /// immediately after `malloc_sync`, before the fallible
-    /// `memset_d8_async` enqueue runs. If the enqueue fails, the early
-    /// return drops the buffer and its `Drop` impl frees the allocation, so
-    /// no device memory is leaked.
+    /// `memset_d8_async` enqueue and stream synchronization run. If either
+    /// fails, the early return drops the buffer and its `Drop` impl frees the
+    /// allocation, so no device memory is leaked.
     pub fn zeroed(stream: &CudaStream, len: usize) -> Result<Self, DriverError> {
         let ctx = stream.context().clone();
         let num_bytes = allocation_size::<T>(len)?;
@@ -562,6 +650,7 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         unsafe {
             crate::simt::memory::memset_d8_async(buf.ptr, 0, num_bytes, stream.cu_stream())?;
         }
+        stream.synchronize()?;
         Ok(buf)
     }
 

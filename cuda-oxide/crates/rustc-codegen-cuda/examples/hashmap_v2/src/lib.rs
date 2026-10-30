@@ -1162,8 +1162,8 @@ impl GpuSwissMap {
         // `&[u32]` / `&[u64]` would be readonly+noalias and writing
         // through it is UB (issue #151). The memset above is byte-level so
         // it stays valid across the cast.
-        let ctrl = ctrl.cast_elem::<DeviceAtomicU32>();
-        let slots = slots.cast_elem::<DeviceAtomicU64>();
+        let ctrl = ctrl.wrap_elem::<DeviceAtomicU32>();
+        let slots = slots.wrap_elem::<DeviceAtomicU64>();
 
         Ok(Self {
             ctrl,

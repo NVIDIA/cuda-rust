@@ -1,0 +1,113 @@
+error[E0277]: the trait bound `MaybeUninit<u32>: NoUninit` is not satisfied
+  --> tests/device_buffer_casts/fail_cast_uninitialized_sources.rs:20:12
+   |
+20 |     buffer.cast_elem()
+   |            ^^^^^^^^^ the trait `Pod` is not implemented for `MaybeUninit<u32>`
+   |
+   = help: the following other types implement trait `Pod`:
+             ()
+             ManuallyDrop<T>
+             Option<T>
+             PhantomData<T>
+             PhantomPinned
+             Wrapping<T>
+             [T; N]
+             __m128
+           and $N others
+   = note: required for `MaybeUninit<u32>` to implement `NoUninit`
+note: required by a bound in `DeviceBuffer::<T>::cast_elem`
+  --> src/simt/device_buffer.rs
+   |
+   |     pub fn cast_elem<A: AnyBitPattern>(self) -> DeviceBuffer<A>
+   |            --------- required by a bound in this associated function
+   |     where
+   |         T: NoUninit,
+   |            ^^^^^^^^ required by this bound in `DeviceBuffer::<T>::cast_elem`
+
+error[E0277]: the trait bound `MaybeUninit<u32>: NoUninit` is not satisfied
+  --> tests/device_buffer_casts/fail_cast_uninitialized_sources.rs:26:12
+   |
+26 |     buffer.cast_chunks()
+   |            ^^^^^^^^^^^ the trait `Pod` is not implemented for `MaybeUninit<u32>`
+   |
+   = help: the following other types implement trait `Pod`:
+             ()
+             ManuallyDrop<T>
+             Option<T>
+             PhantomData<T>
+             PhantomPinned
+             Wrapping<T>
+             [T; N]
+             __m128
+           and $N others
+   = note: required for `MaybeUninit<u32>` to implement `NoUninit`
+note: required by a bound in `DeviceBuffer::<T>::cast_chunks`
+  --> src/simt/device_buffer.rs
+   |
+   |     pub fn cast_chunks<A: AnyBitPattern>(self) -> Result<DeviceBuffer<A>, Self>
+   |            ----------- required by a bound in this associated function
+   |     where
+   |         T: NoUninit,
+   |            ^^^^^^^^ required by this bound in `DeviceBuffer::<T>::cast_chunks`
+
+error[E0277]: the trait bound `Padded: NoUninit` is not satisfied
+  --> tests/device_buffer_casts/fail_cast_uninitialized_sources.rs:30:12
+   |
+30 |     buffer.cast_elem()
+   |            ^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `Pod` is not implemented for `Padded`
+  --> tests/device_buffer_casts/fail_cast_uninitialized_sources.rs:10:1
+   |
+10 | struct Padded {
+   | ^^^^^^^^^^^^^
+   = help: the following other types implement trait `Pod`:
+             ()
+             ManuallyDrop<T>
+             Option<T>
+             PhantomData<T>
+             PhantomPinned
+             Wrapping<T>
+             [T; N]
+             __m128
+           and $N others
+   = note: required for `Padded` to implement `NoUninit`
+note: required by a bound in `DeviceBuffer::<T>::cast_elem`
+  --> src/simt/device_buffer.rs
+   |
+   |     pub fn cast_elem<A: AnyBitPattern>(self) -> DeviceBuffer<A>
+   |            --------- required by a bound in this associated function
+   |     where
+   |         T: NoUninit,
+   |            ^^^^^^^^ required by this bound in `DeviceBuffer::<T>::cast_elem`
+
+error[E0277]: the trait bound `Padded: NoUninit` is not satisfied
+  --> tests/device_buffer_casts/fail_cast_uninitialized_sources.rs:34:12
+   |
+34 |     buffer.cast_chunks()
+   |            ^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `Pod` is not implemented for `Padded`
+  --> tests/device_buffer_casts/fail_cast_uninitialized_sources.rs:10:1
+   |
+10 | struct Padded {
+   | ^^^^^^^^^^^^^
+   = help: the following other types implement trait `Pod`:
+             ()
+             ManuallyDrop<T>
+             Option<T>
+             PhantomData<T>
+             PhantomPinned
+             Wrapping<T>
+             [T; N]
+             __m128
+           and $N others
+   = note: required for `Padded` to implement `NoUninit`
+note: required by a bound in `DeviceBuffer::<T>::cast_chunks`
+  --> src/simt/device_buffer.rs
+   |
+   |     pub fn cast_chunks<A: AnyBitPattern>(self) -> Result<DeviceBuffer<A>, Self>
+   |            ----------- required by a bound in this associated function
+   |     where
+   |         T: NoUninit,
+   |            ^^^^^^^^ required by this bound in `DeviceBuffer::<T>::cast_chunks`

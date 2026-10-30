@@ -139,7 +139,7 @@
 
 use crate::kernels::conversion::convert_apply;
 use crate::kernels::creation::{arange_apply, eye_apply, full_apply, linspace as linspace_kernel};
-use crate::tensor::{IntoPartition, Reshape, Storage, Tensor, Unpartition};
+use crate::tensor::{IntoPartition, Reshape, StorageHandle, Tensor, Unpartition};
 use cuda_async::device_context::with_default_device_policy;
 use cuda_async::device_future::DeviceFuture;
 use cuda_async::device_operation::{
@@ -159,7 +159,7 @@ use std::sync::Arc;
 /// This internal type implements the async copy operation that allocates new
 /// GPU memory and copies tensor data device-to-device.
 pub struct CopyDeviceToDevice<T: DType> {
-    _storage: Arc<Storage>, // keeps source GPU memory alive
+    _storage: StorageHandle, // keeps source GPU memory alive
     src_ptr: CUdeviceptr,
     shape: Vec<i32>,
     strides: Vec<i32>,
@@ -280,8 +280,8 @@ pub fn memcpy<'a, T: DType>(dst: &'a mut Tensor<T>, src: &'a Tensor<T>) -> Memcp
 ///
 /// Records as a single graph node ([`GraphNode`]) — it allocates nothing.
 pub struct Memcpy<'a> {
-    src_storage: Arc<Storage>,
-    dst_storage: Arc<Storage>,
+    src_storage: StorageHandle,
+    dst_storage: StorageHandle,
     src_ptr: cuda_core::sys::CUdeviceptr,
     dst_ptr: cuda_core::sys::CUdeviceptr,
     len: usize,

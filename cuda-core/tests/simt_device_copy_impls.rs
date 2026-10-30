@@ -25,11 +25,17 @@ fn device_copy_supports_native_f16() {
 
 #[test]
 fn device_copy_covers_core_parity_types() {
-    // `bool` and `char` are intentionally NOT `DeviceCopy`: they have validity
-    // holes (only 0/1 for `bool`, only valid Unicode scalars for `char`), so a
-    // device-written byte outside that set would be UB on readback. Only the
-    // representation-preserving wrappers below are sound parity additions.
+    // The representation-preserving wrappers are sound parity additions.
     assert_device_copy::<PhantomData<String>>();
     assert_device_copy::<MaybeUninit<u32>>();
     assert_device_copy::<Wrapping<u64>>();
+}
+
+#[test]
+fn device_copy_supports_bool() {
+    // `bool` is `DeviceCopy` although only 0 and 1 are valid: a typed buffer
+    // holds valid values by construction, and the reinterpreting casts that
+    // could forge a `bool` from arbitrary bytes require `AnyBitPattern`, which
+    // `bool` does not implement (see tests/device_buffer_casts, #1506).
+    assert_device_copy::<bool>();
 }

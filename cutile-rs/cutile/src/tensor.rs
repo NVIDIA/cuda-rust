@@ -212,6 +212,7 @@ use cuda_async::device_operation::{
     Value,
 };
 use cuda_async::error::DeviceError;
+use cuda_core::bytemuck::AnyBitPattern;
 use cuda_core::sys::CUdeviceptr;
 use cuda_core::{DType, DTypeId};
 use std::fmt::Debug;
@@ -537,6 +538,23 @@ pub(crate) struct Storage {
     accesses: Mutex<Vec<StorageAccess>>,
 }
 
+/// A user-visible storage owner, including aliases and lazy copy operations.
+/// Completion leases retain only `Storage`; their Arc bookkeeping must never
+/// make a real alias look unique or a unique tensor look shared.
+#[derive(Clone, Debug)]
+pub(crate) struct StorageHandle {
+    storage: Arc<Storage>,
+    owners: Arc<()>,
+}
+
+impl std::ops::Deref for StorageHandle {
+    type Target = Arc<Storage>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.storage
+    }
+}
+
 #[derive(Debug)]
 enum Allocation {
     /// A real, owned GPU allocation.
@@ -545,14 +563,23 @@ enum Allocation {
     Meta { len_bytes: usize, device_id: usize },
 }
 
-impl Storage {
+impl StorageHandle {
     fn new(allocation: Allocation) -> Self {
         Self {
-            allocation,
-            accesses: Mutex::new(Vec::new()),
+            storage: Arc::new(Storage {
+                allocation,
+                accesses: Mutex::new(Vec::new()),
+            }),
+            owners: Arc::new(()),
         }
     }
 
+    fn is_unique(&self) -> bool {
+        Arc::strong_count(&self.owners) == 1
+    }
+}
+
+impl Storage {
     pub(crate) fn retain(
         self: &Arc<Self>,
         ctx: &ExecutionContext,
@@ -627,13 +654,6 @@ impl Storage {
         Ok(id)
     }
 
-    fn is_unique(self: &Arc<Self>) -> bool {
-        let accesses = self.accesses.lock().unwrap_or_else(|e| e.into_inner());
-        // Each lease has exactly one internal Arc. Only user-visible aliases
-        // prevent partitioning; same-stream leases are ordered on submission.
-        Arc::strong_count(self) == 1 + accesses.len()
-    }
-
     /// 16-aligned sentinel address fed to [`compute_spec`] for meta tensors.
     ///
     /// `DivHint::from_ptr` clamps pointer alignment to 16, and every
@@ -698,9 +718,8 @@ struct StorageAccess {
 
 impl AccessTracked for Storage {
     fn release_access(&self, id: u64) {
-        // Remove the entry before the lease drops its Arc, so uniqueness
-        // checks can be conservative during release but can never overlook
-        // a real alias.
+        // Releasing access and dropping its retaining Arc may happen separately:
+        // neither changes the user-owner token used by uniqueness checks.
         let mut accesses = self.accesses.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(pos) = accesses.iter().position(|access| access.id == id) {
             accesses.swap_remove(pos);
@@ -781,7 +800,7 @@ impl Drop for StorageLease {
 /// ```
 #[derive(Debug)]
 pub struct Tensor<T: DType> {
-    pub(crate) storage: Arc<Storage>,
+    pub(crate) storage: StorageHandle,
     pub(crate) shape: Vec<i32>,
     pub(crate) strides: Vec<i32>,
     pub(crate) spec: SpecializationBits,
@@ -966,7 +985,7 @@ impl<T: DType> Tensor<T> {
         strides: Vec<i32>,
     ) -> Self {
         Self::assert_valid_metadata(&shape, &strides, device_buffer.len_bytes());
-        let storage = Arc::new(Storage::new(Allocation::Device(device_buffer)));
+        let storage = StorageHandle::new(Allocation::Device(device_buffer));
         let spec = compute_spec(
             storage.cu_deviceptr(),
             &shape,
@@ -1141,10 +1160,10 @@ impl<T: DType> Tensor<T> {
             size_of::<T>() as i32,
         );
         Self {
-            storage: Arc::new(Storage::new(Allocation::Meta {
+            storage: StorageHandle::new(Allocation::Meta {
                 len_bytes,
                 device_id,
-            })),
+            }),
             shape,
             strides,
             spec,
@@ -1349,7 +1368,13 @@ impl<T: DType> Tensor<T> {
     ///
     /// Zero-copy. Returns `Err` if the tensor is not contiguous, the total
     /// byte size doesn't match, or the pointer alignment is incompatible.
-    pub fn reinterpret<U: DType>(
+    ///
+    /// `U: AnyBitPattern` is what makes the reinterpretation safe: every bit
+    /// pattern is a valid `U`, so no byte written as a `T` can become an
+    /// invalid `U`. All numeric element types qualify. `bool` does not, since
+    /// only `0` and `1` are `bool` values, so a `Tensor<bool>` can only come
+    /// from memory written as `bool`.
+    pub fn reinterpret<U: DType + AnyBitPattern>(
         self: &Arc<Self>,
         shape: &[usize],
     ) -> Result<Arc<Tensor<U>>, Error> {
@@ -1863,7 +1888,26 @@ pub enum GridBound {
     AtMost((u32, u32, u32)),
 }
 
-pub trait KernelOutputStored<T: DType>: Send {
+/// A host-side output binding trusted by generated Tile kernel launchers.
+///
+/// # Safety
+///
+/// Implementations must report the actual element type (`T::DTYPE`), shape,
+/// strides, partition mapping, grid constraints, and specialization facts of
+/// their storage. These facts must agree with the arguments emitted by
+/// `push_kernel_args`, in the tensor/partition ABI expected by the launcher.
+/// Pointers must be correctly aligned and cover every element reachable by a
+/// launch accepted by those constraints; initialized elements must be valid `T`
+/// values. Metadata must remain consistent throughout validation and submission.
+///
+/// Before returning success, `retain` must validate context compatibility and
+/// register storage ownership and exclusive device access with `ctx`, including
+/// graph replay retention when capturing. These protections must last until GPU
+/// completion even if this binding or its future is dropped or forgotten. A
+/// Rust borrow or ownership of the binding alone is insufficient. In particular,
+/// relabelling a `Tensor<bool>` as byte output is unsound: a byte kernel could
+/// write an invalid boolean representation.
+pub unsafe trait KernelOutputStored<T: DType>: Send {
     /// Retain storage and acquire exclusive device access before enqueueing.
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError>;
     fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch);
@@ -1893,6 +1937,9 @@ pub trait KernelOutputStored<T: DType>: Send {
 /// | `Partition<Tensor<T>>` | `Partition<Tensor<T>>` | `Partition<Tensor<T>>` |
 /// | `Partition<&'a mut Tensor<T>>` | `Partition<&'a mut Tensor<T>>` | `Partition<&'a mut Tensor<T>>` |
 /// | `MappedLaunchPartition<Partition<..>>` | `MappedLaunchPartition<Partition<..>>` | `Partition<..>` |
+///
+/// This conversion trait is safe to implement; its stored form must satisfy
+/// the unsafe host-side [`KernelOutputStored`] contract.
 pub trait KernelOutput<T: DType>: Send + Sized {
     type Stored: KernelOutputStored<T>;
     type Returned: Send;
@@ -1900,7 +1947,10 @@ pub trait KernelOutput<T: DType>: Send + Sized {
     fn recover(stored: Self::Stored) -> Self::Returned;
 }
 
-impl<T: DType> KernelOutputStored<T> for Partition<Tensor<T>> {
+// SAFETY: metadata and arguments come from the same typed tensor and partition.
+// Storage::retain registers its owner and exclusive access for the submission
+// (or graph replay), independently of this binding's lifetime.
+unsafe impl<T: DType> KernelOutputStored<T> for Partition<Tensor<T>> {
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.object.storage.retain(ctx, true)
     }
@@ -1958,7 +2008,10 @@ impl<T: DType> KernelOutputStored<T> for Partition<Tensor<T>> {
     }
 }
 
-impl<T: DType> KernelOutputStored<T> for Partition<&mut Tensor<T>> {
+// SAFETY: the typed tensor/partition supplies the metadata and ABI arguments.
+// Storage::retain keeps the owner and exclusive access alive independently of
+// the mutable borrow, including when a pending submission is abandoned.
+unsafe impl<T: DType> KernelOutputStored<T> for Partition<&mut Tensor<T>> {
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.object.storage.retain(ctx, true)
     }
@@ -2016,7 +2069,9 @@ impl<T: DType> KernelOutputStored<T> for Partition<&mut Tensor<T>> {
     }
 }
 
-impl<T: DType> KernelOutputStored<T> for MappedLaunchPartition<Partition<Tensor<T>>> {
+// SAFETY: storage, metadata and arguments delegate to the trusted partition;
+// validate checks the map against its logical grid and physical block count.
+unsafe impl<T: DType> KernelOutputStored<T> for MappedLaunchPartition<Partition<Tensor<T>>> {
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.partition.retain(ctx)
     }
@@ -2056,7 +2111,9 @@ impl<T: DType> KernelOutputStored<T> for MappedLaunchPartition<Partition<Tensor<
     }
 }
 
-impl<T: DType> KernelOutputStored<T> for MappedLaunchPartition<Partition<&mut Tensor<T>>> {
+// SAFETY: delegates retention and ABI facts to the trusted borrowed partition;
+// validate checks the mapping without weakening storage lifetime or access.
+unsafe impl<T: DType> KernelOutputStored<T> for MappedLaunchPartition<Partition<&mut Tensor<T>>> {
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.partition.retain(ctx)
     }
@@ -2149,11 +2206,27 @@ impl<'a, T: DType> KernelOutput<T> for MappedLaunchPartition<Partition<&'a mut T
 // Defined here (not in cuda-async) so that impls on Arc<Tensor<T>> satisfy
 // the orphan rule — both trait and Tensor<T> are in the same crate.
 
-/// How a stored kernel input pushes its arguments to the launcher.
+/// How a host-side stored kernel input pushes its arguments to the launcher.
 ///
-/// Implemented for `Arc<Tensor<T>>` and `&Tensor<T>`. Both push the same
+/// Implemented for `Arc<Tensor<T>>`, `&Tensor<T>`, and tensor views. They push
 /// data: device pointer, shape, and strides.
-pub trait KernelInputStored: Send {
+///
+/// # Safety
+///
+/// `dtype_str`, shape, strides, and specialization facts must describe the
+/// actual initialized element representations and agree with the tensor ABI
+/// arguments emitted by `push_kernel_args`. Pointers, including view offsets,
+/// must be correctly aligned and all elements reachable through the reported
+/// shape/strides must be in bounds. Metadata must remain consistent throughout
+/// validation and submission. The launcher checks the reported dtype against
+/// the kernel type; it cannot verify that an implementation reported it honestly.
+///
+/// Before returning success, `retain` must validate context compatibility and
+/// register storage ownership and shared device access with `ctx`, including
+/// graph replay retention when capturing. Storage and access protection must
+/// survive until GPU completion even if the binding or future is dropped or
+/// forgotten; borrowing the input or holding it in the binding is insufficient.
+pub unsafe trait KernelInputStored: Send {
     /// Retain storage and acquire shared device access before enqueueing.
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError>;
     fn push_kernel_args(&self, launcher: &mut AsyncKernelLaunch);
@@ -2171,6 +2244,9 @@ pub trait KernelInputStored: Send {
 /// | `Tensor<T>` | `Arc<Tensor<T>>` | `Tensor<T>` | Yes |
 /// | `Arc<Tensor<T>>` | `Arc<Tensor<T>>` | `Arc<Tensor<T>>` | Yes |
 /// | `&'a Tensor<T>` | `&'a Tensor<T>` | `&'a Tensor<T>` | No |
+///
+/// This conversion trait is safe to implement; its stored form must satisfy
+/// the unsafe host-side [`KernelInputStored`] contract.
 pub trait KernelInput<T: DType>: Send + Sized {
     type Stored: KernelInputStored;
     type Returned: Send;
@@ -2180,7 +2256,9 @@ pub trait KernelInput<T: DType>: Send + Sized {
 
 // ── KernelInputStored impls ─────────────────────────────────────────────────
 
-impl<T: DType> KernelInputStored for Arc<Tensor<T>> {
+// SAFETY: the typed tensor supplies all ABI and specialization facts, and
+// Storage::retain independently holds its owner and shared access until completion.
+unsafe impl<T: DType> KernelInputStored for Arc<Tensor<T>> {
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.storage.retain(ctx, false)
     }
@@ -2209,7 +2287,9 @@ impl<T: DType> KernelInputStored for Arc<Tensor<T>> {
     }
 }
 
-impl<T: DType + Sync> KernelInputStored for &Tensor<T> {
+// SAFETY: arguments describe the borrowed typed tensor, and Storage::retain
+// registers its owner and shared access independently of this Rust borrow.
+unsafe impl<T: DType + Sync> KernelInputStored for &Tensor<T> {
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.storage.retain(ctx, false)
     }
@@ -2275,7 +2355,10 @@ impl<'a, T: DType + Sync> KernelInput<T> for &'a Tensor<T> {
 
 // ── TensorView KernelInput impls ────────────────────────────────────────────
 
-impl<'a, T: DType + Sync> KernelInputStored for &'a TensorView<'a, T> {
+// SAFETY: view construction validates the offset/extent and preserves element
+// alignment. Arguments use that offset and the view's shape/strides/spec;
+// retention protects the base allocation and shared access until completion.
+unsafe impl<'a, T: DType + Sync> KernelInputStored for &'a TensorView<'a, T> {
     fn retain(&self, ctx: &ExecutionContext) -> Result<(), DeviceError> {
         self.base.storage.retain(ctx, false)
     }
@@ -2430,6 +2513,44 @@ mod tests {
         drop(lease);
         assert!(!tensor.has_unique_storage());
         drop(alias);
+        assert!(tensor.has_unique_storage());
+    }
+
+    #[test]
+    fn registering_access_cannot_hide_a_tensor_alias() {
+        let tensor = Arc::new(meta_f32(&[8]));
+        let alias = (&tensor).reshape(&[2, 4]).unwrap();
+        // Pause at the real acquisition boundary: the access is registered,
+        // but the completion lease has not cloned its retaining Arc yet.
+        let id = tensor.storage.register_access(1, false, false).unwrap();
+        assert!(!alias.has_unique_storage());
+        assert!(alias.try_partition([2, 4]).is_err());
+        tensor.storage.release_access(id);
+        assert!(tensor.has_unique_storage());
+    }
+
+    #[test]
+    fn releasing_access_does_not_wait_for_the_internal_arc_to_drop() {
+        let mut tensor = meta_f32(&[8]);
+        let lease = tensor.storage.acquire(1, false, false).unwrap();
+        // Pause at the real destruction boundary: the access was released,
+        // but the lease still owns its Arc until field destruction runs.
+        lease.storage.release_access(lease.id);
+        assert!(tensor.has_unique_storage());
+        drop((&mut tensor).partition([4]));
+        drop(lease);
+        assert!(tensor.has_unique_storage());
+    }
+
+    #[test]
+    fn lazy_copy_keeps_a_user_visible_storage_alias() {
+        let owner: Arc<dyn DeviceAllocation> = Arc::new(FakeAlloc { len_bytes: 32 });
+        // SAFETY: metadata-only; the copy is never submitted and the pointer
+        // is never dereferenced.
+        let tensor = unsafe { Tensor::<f32>::from_foreign(owner, vec![8], vec![1]) };
+        let copy = tensor.dup();
+        assert!(!tensor.has_unique_storage());
+        drop(copy);
         assert!(tensor.has_unique_storage());
     }
 

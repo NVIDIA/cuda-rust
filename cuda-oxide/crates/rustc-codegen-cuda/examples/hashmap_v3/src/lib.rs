@@ -1085,8 +1085,8 @@ impl GpuSwissMap {
         // Reinterpret the allocations as slices of the atomic wrapper
         // (`#[repr(transparent)]`, identical layout). The memset above
         // is byte-level so it is unaffected by the element type.
-        let ctrl = ctrl.cast_elem::<DeviceAtomicU32>();
-        let slots = slots.cast_elem::<DeviceAtomicU64>();
+        let ctrl = ctrl.wrap_elem::<DeviceAtomicU32>();
+        let slots = slots.wrap_elem::<DeviceAtomicU64>();
 
         Ok(Self {
             ctrl,
@@ -1392,8 +1392,8 @@ impl GpuSwissMap {
                 stream.cu_stream(),
             )?;
         }
-        let new_ctrl = new_ctrl.cast_elem::<DeviceAtomicU32>();
-        let new_slots = new_slots.cast_elem::<DeviceAtomicU64>();
+        let new_ctrl = new_ctrl.wrap_elem::<DeviceAtomicU32>();
+        let new_slots = new_slots.wrap_elem::<DeviceAtomicU64>();
 
         let rehash_threads = self.capacity.min(REHASH_MAX_THREADS) as u32;
         let cfg = LaunchConfig::for_num_elems(rehash_threads);

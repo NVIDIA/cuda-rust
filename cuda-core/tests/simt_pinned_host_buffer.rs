@@ -125,3 +125,66 @@ fn device_buffer_can_be_refilled_from_pinned_host_async() {
         assert_eq!(output.as_slice(), &payload);
     }
 }
+
+// CUDA's page alignment alone does not satisfy every valid Rust element layout.
+#[repr(C, align(1048576))]
+#[derive(Clone, Copy, cuda_core::DeviceCopy)]
+struct Overaligned([u8; 1048576]);
+
+#[test]
+fn pinned_host_buffer_aligns_elements() {
+    let ctx = CudaContext::new(0).expect("failed to create CUDA context");
+    // Keep a small allocation alive to exercise non-MiB-aligned CUDA allocations.
+    let _prefix = PinnedHostBuffer::<u8>::zeroed(&ctx, 4096).unwrap();
+    let mut buffers = Vec::new();
+    for _ in 0..8 {
+        let mut host = PinnedHostBuffer::<Overaligned>::zeroed(&ctx, 1).unwrap();
+        // Check before forming any references, so the regression fails without UB.
+        assert!(host.as_ptr().is_aligned());
+        assert_eq!(host.num_bytes(), std::mem::size_of::<Overaligned>());
+        for element in host.as_slice() {
+            assert!(element.0.iter().all(|&byte| byte == 0));
+        }
+        host.as_mut_slice()[0].0.fill(42);
+        assert!(host.as_slice()[0].0.iter().all(|&byte| byte == 42));
+        buffers.push(host);
+    }
+    drop(buffers);
+    ctx.check_err().expect("failed to free pinned allocations");
+}
+
+#[test]
+fn pinned_host_buffer_copies_overaligned_elements() {
+    let ctx = CudaContext::new(0).expect("failed to create CUDA context");
+    // Initialize on the heap to avoid putting MiB-sized values on the stack.
+    let mut source = PinnedHostBuffer::<Overaligned>::zeroed(&ctx, 2).unwrap();
+    source.as_mut_slice()[0].0.fill(17);
+    source.as_mut_slice()[1].0.fill(42);
+    let copied = PinnedHostBuffer::from_slice(&ctx, source.as_slice()).unwrap();
+    assert!(copied.as_ptr().is_aligned());
+    assert_eq!(copied.len(), 2);
+    assert_eq!(copied.num_bytes(), 2 * std::mem::size_of::<Overaligned>());
+    assert!(copied.as_slice()[0].0.iter().all(|&byte| byte == 17));
+    assert!(copied.as_slice()[1].0.iter().all(|&byte| byte == 42));
+    drop((copied, source));
+    ctx.check_err().expect("failed to free pinned allocations");
+}
+
+#[repr(align(1048576))]
+#[derive(Clone, Copy, cuda_core::DeviceCopy)]
+struct AlignedZst;
+
+#[test]
+fn empty_and_zero_sized_pinned_buffers_preserve_alignment() {
+    let ctx = CudaContext::new(0).expect("failed to create CUDA context");
+    let empty = PinnedHostBuffer::<Overaligned>::zeroed(&ctx, 0).unwrap();
+    assert!(empty.as_ptr().is_aligned());
+    assert!(empty.as_slice().is_empty());
+    let mut zst = PinnedHostBuffer::<AlignedZst>::zeroed(&ctx, 8).unwrap();
+    assert!(zst.as_ptr().is_aligned());
+    assert_eq!(zst.num_bytes(), 0);
+    assert_eq!(zst.as_mut_slice().len(), 8);
+    let copied = PinnedHostBuffer::from_slice(&ctx, zst.as_slice()).unwrap();
+    assert!(copied.as_ptr().is_aligned());
+    assert_eq!(copied.as_slice().len(), 8);
+}

@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Safe `DeviceBuffer` element and chunk casts require `NoUninit` on the source,
+  preventing `MaybeUninit` elements or struct padding from becoming initialized
+  destination values. Boolean-to-byte casts remain supported.
+- Tensor uniqueness tracks user-visible aliases separately from completion
+  leases. Concurrent lease creation or release can no longer permit an aliased
+  mutable partition or spuriously reject unique storage.
+- Host-side `KernelInputStored` and `KernelOutputStored` require `unsafe impl`
+  with explicit type, ABI, extent, retention, and access obligations. Safe custom
+  bindings can no longer mislabel boolean storage as byte kernel arguments.
+- `PinnedHostBuffer` aligns its usable pointer for the element type and frees
+  the original CUDA allocation. Highly aligned host elements no longer produce
+  misaligned Rust slices; sizes exceeding Rust's slice limits are rejected.
+- `DeviceBuffer::zeroed` waits for initialization to finish before returning,
+  so another stream cannot read uninitialized element representations.
+- Atomic buffer conversions use `DeviceRepr` instead of `TransparentWrapper`,
+  preserving owned-buffer conversions without permitting invalid shared-reference
+  conversions between atomics and their scalar representations.
+- `Tensor::reinterpret` requires the target element type to implement
+  `bytemuck::AnyBitPattern`. Reinterpreting byte storage as `Tensor<bool>`
+  could expose values other than `0` and `1`, which is undefined behavior
+  when the tensor is read back, and is now a compile error. Numeric element
+  types, including `f16`, `bf16`, and the FP8 and packed FP4 storage types,
+  are unaffected (NVIDIA/cuda-rust#1506).
+- Generated kernel entry setup and assumptions now use the user function's
+  signature as their source location, preserving the inlined body's own
+  statement locations and helper scopes.
 - Generated constants without captured source spans use their containing
   function definition, retaining exact user-expression locations and nested
   cross-file inline caller chains.
@@ -22,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Advance the lockstep Tile and shared host crates to v0.5.0 for the breaking
+  safety-contract and host-runtime changes.
 - `CompileOptions` uses one `CodegenMode` for device debugging and optimization.
   The last `debug_info(...)` or `opt_level(...)` setter wins; full debugging
   always uses optimization level zero. Replace `device_debug(true)` with

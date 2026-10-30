@@ -269,8 +269,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream = context.default_stream();
     let module = kernels::load(&context)?;
 
-    let rmw_u32 = DeviceBuffer::<u32>::zeroed(&stream, 1)?.cast_elem::<DeviceAtomicU32>();
-    let rmw_u64 = DeviceBuffer::<u64>::zeroed(&stream, 1)?.cast_elem::<DeviceAtomicU64>();
+    let rmw_u32 = DeviceBuffer::<u32>::zeroed(&stream, 1)?.wrap_elem::<DeviceAtomicU32>();
+    let rmw_u64 = DeviceBuffer::<u64>::zeroed(&stream, 1)?.wrap_elem::<DeviceAtomicU64>();
     let mut old_values = DeviceBuffer::<(u32, u64)>::zeroed(&stream, N)?;
 
     // SAFETY: the launch covers exactly N unique one-dimensional indices.
@@ -287,8 +287,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     stream.synchronize()?;
 
-    let got_u32 = rmw_u32.cast_elem::<u32>().to_host_vec(&stream)?[0];
-    let got_u64 = rmw_u64.cast_elem::<u64>().to_host_vec(&stream)?[0];
+    let got_u32 = rmw_u32.peel_elem::<u32>().to_host_vec(&stream)?[0];
+    let got_u64 = rmw_u64.peel_elem::<u64>().to_host_vec(&stream)?[0];
     let old_values = old_values.to_host_vec(&stream)?;
     if got_u32 != N as u32 || got_u64 != N as u64 || !old_values_are_permutations(&old_values) {
         return Err(format!(
@@ -298,8 +298,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
-    let cas_u32 = DeviceBuffer::from_host(&stream, &[7_u32])?.cast_elem::<DeviceAtomicU32>();
-    let cas_u64 = DeviceBuffer::from_host(&stream, &[7_u64])?.cast_elem::<DeviceAtomicU64>();
+    let cas_u32 = DeviceBuffer::from_host(&stream, &[7_u32])?.wrap_elem::<DeviceAtomicU32>();
+    let cas_u64 = DeviceBuffer::from_host(&stream, &[7_u64])?.wrap_elem::<DeviceAtomicU64>();
     let mut observed_u32 = DeviceBuffer::<(u32, u32)>::zeroed(&stream, 1)?;
     let mut observed_u64 = DeviceBuffer::<(u64, u64)>::zeroed(&stream, 1)?;
 
@@ -319,8 +319,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let observed_u32 = observed_u32.to_host_vec(&stream)?[0];
     let observed_u64 = observed_u64.to_host_vec(&stream)?[0];
-    let final_u32 = cas_u32.cast_elem::<u32>().to_host_vec(&stream)?[0];
-    let final_u64 = cas_u64.cast_elem::<u64>().to_host_vec(&stream)?[0];
+    let final_u32 = cas_u32.peel_elem::<u32>().to_host_vec(&stream)?[0];
+    let final_u64 = cas_u64.peel_elem::<u64>().to_host_vec(&stream)?[0];
     if observed_u32 != (7, 11) || observed_u64 != (7, 11) || final_u32 != 11 || final_u64 != 11 {
         return Err(format!(
             "legacy integer CAS mismatch: observed_u32={observed_u32:?}, observed_u64={observed_u64:?}, final_u32={final_u32}, final_u64={final_u64}"
@@ -328,10 +328,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
-    let block_rmw_u32 = DeviceBuffer::<u32>::zeroed(&stream, 1)?.cast_elem::<BlockAtomicU32>();
-    let block_rmw_u64 = DeviceBuffer::<u64>::zeroed(&stream, 1)?.cast_elem::<BlockAtomicU64>();
-    let system_rmw_u32 = DeviceBuffer::<u32>::zeroed(&stream, 1)?.cast_elem::<SystemAtomicU32>();
-    let system_rmw_u64 = DeviceBuffer::<u64>::zeroed(&stream, 1)?.cast_elem::<SystemAtomicU64>();
+    let block_rmw_u32 = DeviceBuffer::<u32>::zeroed(&stream, 1)?.wrap_elem::<BlockAtomicU32>();
+    let block_rmw_u64 = DeviceBuffer::<u64>::zeroed(&stream, 1)?.wrap_elem::<BlockAtomicU64>();
+    let system_rmw_u32 = DeviceBuffer::<u32>::zeroed(&stream, 1)?.wrap_elem::<SystemAtomicU32>();
+    let system_rmw_u64 = DeviceBuffer::<u64>::zeroed(&stream, 1)?.wrap_elem::<SystemAtomicU64>();
     let mut block_old_values = DeviceBuffer::<(u32, u64)>::zeroed(&stream, N)?;
     let mut system_old_values = DeviceBuffer::<(u32, u64)>::zeroed(&stream, N)?;
     let scoped_cfg = LaunchConfig {
@@ -358,10 +358,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     stream.synchronize()?;
 
-    let block_final_u32 = block_rmw_u32.cast_elem::<u32>().to_host_vec(&stream)?[0];
-    let block_final_u64 = block_rmw_u64.cast_elem::<u64>().to_host_vec(&stream)?[0];
-    let system_final_u32 = system_rmw_u32.cast_elem::<u32>().to_host_vec(&stream)?[0];
-    let system_final_u64 = system_rmw_u64.cast_elem::<u64>().to_host_vec(&stream)?[0];
+    let block_final_u32 = block_rmw_u32.peel_elem::<u32>().to_host_vec(&stream)?[0];
+    let block_final_u64 = block_rmw_u64.peel_elem::<u64>().to_host_vec(&stream)?[0];
+    let system_final_u32 = system_rmw_u32.peel_elem::<u32>().to_host_vec(&stream)?[0];
+    let system_final_u64 = system_rmw_u64.peel_elem::<u64>().to_host_vec(&stream)?[0];
     let block_old_values = block_old_values.to_host_vec(&stream)?;
     let system_old_values = system_old_values.to_host_vec(&stream)?;
     if block_final_u32 != N as u32
@@ -379,12 +379,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
-    let block_cas = DeviceBuffer::from_host(&stream, &[7_u32])?.cast_elem::<BlockAtomicU32>();
-    let system_cas = DeviceBuffer::from_host(&stream, &[7_u32])?.cast_elem::<SystemAtomicU32>();
+    let block_cas = DeviceBuffer::from_host(&stream, &[7_u32])?.wrap_elem::<BlockAtomicU32>();
+    let system_cas = DeviceBuffer::from_host(&stream, &[7_u32])?.wrap_elem::<SystemAtomicU32>();
     let device_strong_cas =
-        DeviceBuffer::from_host(&stream, &[7_u32])?.cast_elem::<DeviceAtomicU32>();
+        DeviceBuffer::from_host(&stream, &[7_u32])?.wrap_elem::<DeviceAtomicU32>();
     let device_ordered_cas =
-        DeviceBuffer::from_host(&stream, &[7_u32])?.cast_elem::<DeviceAtomicU32>();
+        DeviceBuffer::from_host(&stream, &[7_u32])?.wrap_elem::<DeviceAtomicU32>();
     let mut block_observed = DeviceBuffer::<(u32, u32)>::zeroed(&stream, 1)?;
     let mut system_observed = DeviceBuffer::<(u32, u32)>::zeroed(&stream, 1)?;
     let mut device_observed = DeviceBuffer::<(u32, u32)>::zeroed(&stream, 1)?;
@@ -413,10 +413,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let system_observed = system_observed.to_host_vec(&stream)?[0];
     let device_observed = device_observed.to_host_vec(&stream)?[0];
     let device_ordered_observed = device_ordered_observed.to_host_vec(&stream)?[0];
-    let block_cas_final = block_cas.cast_elem::<u32>().to_host_vec(&stream)?[0];
-    let system_cas_final = system_cas.cast_elem::<u32>().to_host_vec(&stream)?[0];
-    let device_cas_final = device_strong_cas.cast_elem::<u32>().to_host_vec(&stream)?[0];
-    let device_ordered_final = device_ordered_cas.cast_elem::<u32>().to_host_vec(&stream)?[0];
+    let block_cas_final = block_cas.peel_elem::<u32>().to_host_vec(&stream)?[0];
+    let system_cas_final = system_cas.peel_elem::<u32>().to_host_vec(&stream)?[0];
+    let device_cas_final = device_strong_cas.peel_elem::<u32>().to_host_vec(&stream)?[0];
+    let device_ordered_final = device_ordered_cas.peel_elem::<u32>().to_host_vec(&stream)?[0];
     if block_observed != (7, 11)
         || system_observed != (7, 11)
         || device_observed != (7, 11)

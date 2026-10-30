@@ -8,6 +8,8 @@ members = [
     "cuda-core",
     "cuda-core-derive",
     "cuda-async",
+    # no_std representation contracts shared by host and device crates.
+    "cuda-repr",
 ]
 # Nested workspaces. Without these, Cargo treats crates under them as part of
 # this workspace and `edition.workspace = true` in cuda-device (etc.) looks at

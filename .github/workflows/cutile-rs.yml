@@ -64,6 +64,7 @@ jobs:
               - 'cuda-bindings/**'
               - 'cuda-core/**'
               - 'cuda-core-derive/**'
+              - 'cuda-repr/**'
               - 'cuda-async/**'
               - 'Cargo.toml'
               - 'Cargo.lock'

@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-use cuda_core::{CudaContext, CudaStream, DeviceBuffer, DriverError, PinnedHostBuffer};
-use std::sync::{mpsc, Mutex, MutexGuard};
+use cuda_core::{CudaContext, CudaStream, DeviceBuffer, DeviceRepr, DriverError, PinnedHostBuffer};
+use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -112,6 +112,82 @@ fn device_buffer_zeroed_initializes_with_zeros() {
         .to_host_vec(&stream)
         .expect("failed to copy back to host");
     assert_eq!(host_vec, &[0.0, 0.0, 0.0, 0.0]);
+}
+
+#[test]
+fn zeroed_waits_for_initialization_before_cross_stream_readback() {
+    let _gated_test_guard = lock_gated_test();
+    let ctx = CudaContext::new(0).expect("failed to create CUDA context");
+    let writer = ctx.new_stream().expect("failed to create writer stream");
+    let reader = ctx.new_stream().expect("failed to create reader stream");
+    let release_gate = gate_stream(&writer);
+    let (started_tx, started_rx) = mpsc::channel();
+    let (completion_tx, completion_rx) = mpsc::channel();
+    let worker_writer = writer.clone();
+    let worker = std::thread::spawn(move || {
+        worker_writer.context().bind_to_thread().unwrap();
+        started_tx.send(()).unwrap();
+        // Inspect byte storage, never potentially invalid Rust bool values,
+        // so a regression in initialization ordering cannot make this test UB.
+        let buffer = DeviceBuffer::<u8>::zeroed(&worker_writer, 1 << 20);
+        completion_tx.send(buffer).unwrap();
+    });
+    let buffer = finish_gated_worker(
+        "zeroed initialization",
+        release_gate,
+        started_rx,
+        completion_rx,
+        worker,
+    )
+    .expect("zeroed allocation failed");
+    assert!(writer.query().expect("writer query failed"));
+    assert_eq!(buffer.to_host_vec(&reader).unwrap(), vec![0; 1 << 20]);
+
+    // Exercise bool's safe constructor too, reading its representation as
+    // bytes so the test remains safe even if the ordering regresses.
+    let flags = DeviceBuffer::<bool>::zeroed(&writer, 1024).unwrap();
+    assert!(writer.query().unwrap());
+    assert_eq!(
+        flags.cast_elem::<u8>().to_host_vec(&reader).unwrap(),
+        vec![0; 1024]
+    );
+}
+
+#[test]
+fn owned_wrapper_roundtrip_preserves_allocation_and_stream() {
+    #[repr(transparent)]
+    struct Counter(std::cell::UnsafeCell<u32>);
+    // SAFETY: UnsafeCell has u32's layout and valid initialized representations;
+    // neither representation needs Drop or introduces ownership obligations.
+    unsafe impl DeviceRepr<u32> for Counter {}
+
+    let ctx = CudaContext::new(0).unwrap();
+    let stream = ctx.new_stream().unwrap();
+    let values = [1_u32, 7, 42];
+    // SAFETY: the following blocking copy initializes the allocation before
+    // any read. All accesses use the allocation stream and finish before drop.
+    let mut words =
+        unsafe { DeviceBuffer::<u32>::uninitialized_async(&stream, values.len()) }.unwrap();
+    words.copy_from_host(&stream, &values).unwrap();
+    let ptr = words.cu_deviceptr();
+    let stream_refs = Arc::strong_count(&stream);
+    let context_refs = Arc::strong_count(&ctx);
+
+    let counters = words.wrap_elem::<Counter>();
+    assert_eq!(counters.cu_deviceptr(), ptr);
+    assert_eq!(counters.len(), values.len());
+    assert!(Arc::ptr_eq(counters.context(), &ctx));
+    assert_eq!(Arc::strong_count(&stream), stream_refs);
+    assert_eq!(Arc::strong_count(&ctx), context_refs);
+
+    let words = counters.peel_elem::<u32>();
+    assert_eq!(words.cu_deviceptr(), ptr);
+    assert_eq!(Arc::strong_count(&stream), stream_refs);
+    assert_eq!(Arc::strong_count(&ctx), context_refs);
+    assert_eq!(words.to_host_vec(&stream).unwrap(), values);
+    drop(words);
+    stream.synchronize().unwrap();
+    assert_eq!(Arc::strong_count(&stream), stream_refs - 1);
 }
 
 #[test]

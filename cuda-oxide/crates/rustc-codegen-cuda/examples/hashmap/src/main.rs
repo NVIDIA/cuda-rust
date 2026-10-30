@@ -285,7 +285,7 @@ impl GpuHashMap {
         // through a shared `&[DeviceAtomicU64]` (issue #151). `DeviceAtomicU64`
         // is `#[repr(transparent)]` over `u64`, so the pointer, length, and the
         // `0xFF`-filled bytes are all unchanged.
-        let slots = slots.cast_elem::<DeviceAtomicU64>();
+        let slots = slots.wrap_elem::<DeviceAtomicU64>();
 
         Ok(Self { slots, capacity })
     }

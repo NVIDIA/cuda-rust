@@ -50,6 +50,49 @@ numerical correctness and competitive measured performance.
 - Existing legacy violations are migration work, not a precedent for new code.
   Report any remaining violations explicitly when delivering a migration.
 
+## Encoding CuTe in Rust's type system (mandatory pattern)
+
+CUTLASS CuTe’s layout algebra, partitions, TMA transfers, pipelines, and
+tensor-core MMA operations **must be encoded into Rust’s type system**. No agent
+may write a regular `cuda-oxide` SIMT kernel (raw pointer offsets, manual bit
+shifts, untyped `u64` descriptors) and pass it off as a `cute-rs` kernel.
+
+Every `cute-rs` GEMM / MoE / attention kernel must encode its compile-time plan
+through types so that mismatched layouts, swapped `OperandA` / `OperandB` tiles,
+swapped `Mkl` / `Nkl` scale tiles, or mismatched TMA transaction byte counts fail
+at compile time:
+
+```text
+MANDATORY TYPE-ENCODED `cute-rs` ARCHITECTURE
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  1. Compile-Time Layouts & Typed TMA Descriptors (`#[grid_constant]`)        │
+│     type WeightTileSmem = RowMajor<128, 256>;   // 32,768 B (K=512 FP4)      │
+│     type ActTileSmem    = RowMajor<64, 256>;    // 16,384 B (K=512 FP4)      │
+│     type ScaleTmaSmem   = RowMajor<8, 256>;     //  4,096 B (8 scale atoms)  │
+│     type EpilogueSmem   = RowMajor<64, 128>;    // 64x128 FP32 epilogue      │
+│     #[grid_constant] w_tma:   &TensorMap<u8,  WeightTileSmem>                │
+│     #[grid_constant] sfa_tma: &TensorMap<u16, ScaleTmaSmem>                  │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  2. Warp-Specialized Producer/Consumer Pipeline (`PipelineTmaAsync`)         │
+│     const TMA_BURST_TX_BYTES: u32 =                                          │
+│         size_in_bytes::<u8, WeightTileSmem>()                                │
+│         + size_in_bytes::<u16, ScaleTmaSmem>(); // Verified by dialect-cute! │
+│     type MainloopPipeline = PipelineTmaAsync<1, 16, TMA_BURST_TX_BYTES>;     │
+│     • Producer Warp (`PipelineState<Producer, 1>`):                          │
+│         acquire ──► expect_tx ──► copy_tma_2d(w_tma, sfa_tma) ──► tail       │
+│     • Compute Warps (`PipelineState<Consumer, 1>`):                          │
+│         consumer_wait ──► TiledMma ──► consumer_release ──► advance          │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  3. Role-Checked Shared Tiles, Block-Scaled MMA & Staged TMEM Epilogue       │
+│     type SharedWeightTile   = Sm100SharedTile<WeightTileSmem, OperandA>;     │
+│     type SharedActTile      = Sm100SharedTile<ActTileSmem, OperandB>;        │
+│     type SharedWeightScales = Sm100ScaleTile<Mkl>;                           │
+│     type SharedActScales    = Sm100ScaleTile<Nkl>;                           │
+│     type TiledMma = Sm100BlockScaledTiledMma<WeightTileSmem, ActTileSmem>;   │
+│     type StagedEpilogue = Sm100TmemStagedEpilogue<EpilogueSmem, 128>;        │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Names follow CuTeDSL
 
 A CuTe concept carries the name CuTeDSL 4.7 gives it, so that a CuTeDSL author
@@ -109,13 +152,35 @@ parity with CuTeDSL, and every addition is measured against it.
 
 ## Example and model documentation
 
-- Keep each entry README approachable, following `examples/elementwise_cute`:
-  explain the computation, show the CuTe data flow, give a runnable command,
-  and describe the expected result.
-- Document public and private APIs, including helpers, types, fields and
-  constants. Explain shapes, units, ownership, readiness, rounding and error
-  behavior where relevant. Unsafe APIs must state caller obligations; comments
-  must not claim that types prove thread convergence or asynchronous completion.
+- **Keep documentation simple, short, jargon-free, and visual.** Avoid dense
+  walls of text. Use visual ASCII diagrams to show the kernel pipeline, memory
+  hierarchy (`Global ──► Shared ──► TMEM / Registers`), warp roles, and what is
+  captured inside a CUDA Graph:
+
+  ```text
+  THE 4 KERNELS OF THE MOE LAYER:
+  [K1: Quantize BF16->FP4] ──► [K2: Route] ──► [K3: FC1 + ReLU²] ──► [K4: FC2 + Finalize]
+
+  CUDA GRAPH CAPTURE & 1,000× REPLAY TIMER
+  ────────────────────────────────────────
+     BeginCapture                                                      EndCapture
+     ┌─────────────────────────────────────────────────────────────────────────┐
+     │  [K1: Quantize] ──► [K2: Route] ──► [K3: FC1+ReLU²] ──► [K4: FC2+Final] │
+     └─────────────────────────────────────────────────────────────────────────┘
+     Start Event ──► Replay Graph #1 .. #1000 ──► Stop Event (mean = total / 1000)
+  ```
+
+- Keep each entry README approachable, following `examples/elementwise_cute` and
+  `examples/blockscale_gemm_cute`: explain the computation, show the CuTe data
+  flow visually, give a runnable command, and describe the expected result.
+- **Document every single public AND private item with at least 2–3 lines of
+  documentation.** This includes every private helper, `#[kernel]`, `struct`,
+  struct field, `enum`, enum variant, `type` alias, `const`, `static` shared
+  array, and `mod`. Explain shapes, units, ownership, readiness, rounding and
+  error behavior in plain, jargon-free language. Never suppress `missing_docs`
+  or `clippy::missing_docs_in_private_items` with `#[allow(...)]`. Unsafe APIs
+  must state caller obligations; comments must not claim that types prove thread
+  convergence or asynchronous completion.
 - Put numerical contracts, comparison harnesses and reproduction commands in
   the workload's `reference/` folder, linked from its README. Do not commit
   measurement records: result JSON, traces, profiles, logs and SASS dumps

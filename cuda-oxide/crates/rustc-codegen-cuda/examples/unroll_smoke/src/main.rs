@@ -17,12 +17,15 @@
 //! on loops over `i32` counters. `nested_lane_range` is a 16×16 nest over a
 //! 16-lane accumulator. A runtime-bounded mix in the inner range is what keeps
 //! LLVM from unrolling that nest itself.
+//! `const_generic_bound` is the same nest with every bound written `LANES / 16`
+//! for a const generic `LANES`.
 //! `isize_range_for` covers `a..b`, `(a..b).rev()`, and `#[unroll(4)]` on an
 //! `isize` counter.
 //! All are semantics-preserving; the host checks the sums.
 //!
-//! `verify-code-shape.sh` asserts that `nested_lane_range` and `isize_range_for`
-//! have no local memory in the generated PTX. GPU-less CI runs it through
+//! `verify-code-shape.sh` asserts that `nested_lane_range`,
+//! `const_generic_bound`, and `isize_range_for` have no local memory in the
+//! generated PTX. GPU-less CI runs it through
 //! `scripts/smoketest.sh --compile-only`.
 //!
 //! Run: cargo oxide run unroll_smoke
@@ -597,6 +600,50 @@ mod kernels {
         *out_elem = sum.wrapping_add(base);
     }
 
+    /// `nested_lane_range` with every bound written `LANES / 16`. Each
+    /// instance's bound is a constant, but it arrives as a division of two
+    /// constants rather than one literal, so the unroller has to evaluate it.
+    /// The host launches `LANES = 256`, giving the same 16×16 nest and result.
+    #[kernel]
+    pub fn const_generic_bound<const LANES: u32>(
+        input: &[u32],
+        mut out: DisjointSlice<u32>,
+        steps: u32,
+    ) {
+        let base = thread::index_1d().get() as u32;
+        let Some(out_elem) = out.get_mut(thread::index_1d()) else {
+            return;
+        };
+        let mut acc = [0u32; 16];
+        let mut i = 0u32;
+        #[unroll]
+        while i < LANES / 16 {
+            let mut j = 0u32;
+            #[unroll]
+            while j < LANES / 16 {
+                // SAFETY: the host passes `LANES` elements, and both loops
+                // cover `0..LANES / 16`.
+                let mut x = unsafe { *input.get_unchecked((i * 16 + j) as usize) };
+                let mut k = 0u32;
+                while k < steps {
+                    x = x.wrapping_mul(3).wrapping_add(1);
+                    k += 1;
+                }
+                acc[j as usize] = acc[j as usize].wrapping_add(x);
+                j += 1;
+            }
+            i += 1;
+        }
+        let mut sum = 0u32;
+        let mut lane = 0u32;
+        #[unroll]
+        while lane < LANES / 16 {
+            sum = sum.wrapping_add(acc[lane as usize]);
+            lane += 1;
+        }
+        *out_elem = sum.wrapping_add(base);
+    }
+
     /// Range `for` loops over `isize`. core steps `isize` by casting to `i64`
     /// and back; those are the same dialect type, so the loops unroll like
     /// `i64`. `#[unroll]` on `0isize..8` (`a..b`) fills `acc`, `#[unroll]` on
@@ -912,6 +959,24 @@ fn main() {
             d_nested.to_host_vec(&stream).unwrap(),
             want_nested,
             "16x16 nested range over a 16-lane accumulator"
+        );
+
+        let mut d_const_bound = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
+        // SAFETY: each thread writes its own element; the kernel reads 256 inputs.
+        unsafe {
+            module.const_generic_bound::<256>(
+                stream.as_ref(),
+                cfg,
+                &d_nested_input,
+                &mut d_const_bound,
+                steps,
+            )
+        }
+        .expect("launch const_generic_bound");
+        assert_eq!(
+            d_const_bound.to_host_vec(&stream).unwrap(),
+            want_nested,
+            "16x16 nest bounded by `LANES / 16`"
         );
 
         let mut d_isize = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();

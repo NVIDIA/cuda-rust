@@ -25,9 +25,10 @@ This is a **negative test** - it verifies that:
 #[kernel]
 pub fn valid_f64_to_f32_kernel(a: &[f64], b: &[f64], mut c: DisjointSlice<f32>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(c_elem) = c.get_mut(idx) {
         // Valid: explicit f64 to f32 cast
-        *c_elem = (a[idx.get()] + b[idx.get()]) as f32;
+        *c_elem = (a[i] + b[i]) as f32;
     }
 }
 ```
@@ -38,13 +39,14 @@ pub fn valid_f64_to_f32_kernel(a: &[f64], b: &[f64], mut c: DisjointSlice<f32>) 
 #[kernel]
 pub fn unsupported_format_kernel(a: &[f32], mut c: DisjointSlice<f32>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(c_elem) = c.get_mut(idx) {
         // INVALID: format_args! uses core::fmt which requires:
         // - Dynamic dispatch (dyn Trait)
         // - Heap allocation
         // - Complex runtime machinery
-        let _formatted = core::format_args!("{}", a[idx.get()]);
-        *c_elem = a[idx.get()];
+        let _formatted = core::format_args!("{}", a[i]);
+        *c_elem = a[i];
     }
 }
 ```

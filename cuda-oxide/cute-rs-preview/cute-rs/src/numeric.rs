@@ -192,6 +192,13 @@ impl Float4E2M1FNx2 {
         Self(bits)
     }
 
+    /// Quantize two signed `f32` values into one packed `Float4E2M1FNx2` byte (`low` in bits 3..0, `high` in bits 7..4).
+    #[must_use]
+    #[inline(always)]
+    pub fn from_f32x2(low: f32, high: f32) -> Self {
+        Self(f32_to_e2m1(low) | (f32_to_e2m1(high) << 4))
+    }
+
     /// Return the original packed byte.
     #[must_use]
     #[inline(always)]
@@ -329,6 +336,67 @@ pub const fn e4m3_to_f32(byte: u8) -> f32 {
     } else {
         f32::from_bits((sign << 31) | ((exp + 120) << 23) | (mantissa << 20))
     }
+}
+
+/// Encode a non-negative `f32` scale into the nearest finite `Float8E4M3FN` byte (`[0.0, 448.0]`).
+///
+/// Negative or NaN inputs return `0`; values above `448.0` clamp to the maximum
+/// finite `Float8E4M3FN` code (`0x7e`).
+#[must_use]
+#[inline(always)]
+pub fn f32_to_e4m3(value: f32) -> u8 {
+    if value.is_nan() || value <= 0.0 {
+        return 0;
+    }
+    let clamped = if value > 448.0 { 448.0 } else { value };
+    if clamped < (1.0 / 64.0) {
+        let mant = ((clamped * 512.0) + 0.5) as u32;
+        return mant.clamp(1, 7) as u8;
+    }
+    let bits = clamped.to_bits();
+    let f32_exp = ((bits >> 23) & 0xff) as i32;
+    let e4m3_exp = f32_exp - 120;
+    if e4m3_exp <= 0 {
+        let mant = ((clamped * 512.0) + 0.5) as u32;
+        return (if mant > 7 { 7 } else { mant }) as u8;
+    }
+    let rounded_mant = (((bits >> 19) & 0x0f) + 1) >> 1;
+    let (mut exp, mut mant) = if rounded_mant >= 8 {
+        (e4m3_exp + 1, 0u32)
+    } else {
+        (e4m3_exp, rounded_mant)
+    };
+    if exp > 15 || (exp == 15 && mant == 7) {
+        exp = 15;
+        mant = 6;
+    }
+    (((exp as u8) & 0x0f) << 3) | ((mant as u8) & 0x07)
+}
+
+/// Encode one signed `f32` value into its nearest 4-bit `Float4E2M1FN` nibble (`bits 3..0`).
+#[must_use]
+#[inline(always)]
+pub fn f32_to_e2m1(value: f32) -> u8 {
+    let sign = if value < 0.0 { 0x08u8 } else { 0x00u8 };
+    let abs = if value < 0.0 { -value } else { value };
+    let mag = if abs < 0.25 {
+        0
+    } else if abs < 0.75 {
+        1
+    } else if abs < 1.25 {
+        2
+    } else if abs < 1.75 {
+        3
+    } else if abs < 2.5 {
+        4
+    } else if abs < 3.5 {
+        5
+    } else if abs < 5.0 {
+        6
+    } else {
+        7
+    };
+    sign | mag
 }
 
 #[inline(always)]

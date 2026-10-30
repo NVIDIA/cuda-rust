@@ -1352,15 +1352,10 @@ mod tests {
         let ptx_path = root.join("module.ptx");
         let llc_path = root.join("llc-999");
         std::fs::write(&ll_path, "define void @kernel() { ret void }\n").unwrap();
-        std::fs::write(
+        write_tool(
             &llc_path,
             "#!/bin/sh\nif [ \"${1:-}\" = \"--version\" ]; then echo 'LLVM version 999.0.0'; exit 0; fi\necho 'deliberate llc failure' >&2\nexit 1\n",
-        )
-        .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = std::fs::metadata(&llc_path).unwrap().permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&llc_path, permissions).unwrap();
+        );
 
         LEGACY_DIAGNOSTICS
             .lock()
@@ -1411,13 +1406,9 @@ mod tests {
     /// on stderr that it discarded the module's debug metadata.
     #[cfg(unix)]
     fn write_debug_dropping_tool(path: &Path, artifact: &str) {
-        // Publish the executable only after its writable handle is closed.
-        // GitHub's Linux runners can otherwise race exec with the filesystem
-        // releasing that handle and return ETXTBSY ("Text file busy").
-        let staging_path = path.with_extension("staging");
-        std::fs::write(
-            &staging_path,
-            format!(
+        write_tool(
+            path,
+            &format!(
                 "#!/bin/sh\n\
                  if [ \"${{1:-}}\" = \"--version\" ]; then echo 'LLVM version 23.1.0'; exit 0; fi\n\
                  out=''\n\
@@ -1426,13 +1417,33 @@ mod tests {
                  echo 'warning: ignoring invalid debug info in module.ll' >&2\n\
                  exit 0\n"
             ),
-        )
-        .unwrap();
+        );
+    }
+
+    /// Writes `script` to `path` as an executable that tests can run at once.
+    ///
+    /// A test that writes the tool itself holds a writable handle to it for a
+    /// moment. Another test that spawns a process in that moment hands its
+    /// child a copy of the handle, and the kernel refuses to execute a file
+    /// with a writer (ETXTBSY, "Text file busy") until that child execs or
+    /// exits. Renaming a staging file does not help, because the copied handle
+    /// refers to the same file. Here `cp` creates the tool, so the only process
+    /// that ever opens it for writing has exited before this returns
+    #[cfg(unix)]
+    fn write_tool(path: &Path, script: &str) {
         use std::os::unix::fs::PermissionsExt;
-        let mut permissions = std::fs::metadata(&staging_path).unwrap().permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&staging_path, permissions).unwrap();
-        std::fs::rename(staging_path, path).unwrap();
+
+        let staging_path = path.with_added_extension("staging");
+        std::fs::write(&staging_path, script).unwrap();
+        let status = std::process::Command::new("cp")
+            .arg(&staging_path)
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "cp {} failed: {status}", path.display());
+        std::fs::remove_file(staging_path).unwrap();
+        // cp masks the mode with the umask; chmod opens no writable handle
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     /// llc exits 0 after LLVM's verifier strips a malformed debug graph, so

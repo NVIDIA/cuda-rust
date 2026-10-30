@@ -7,12 +7,29 @@
 
 use super::tiled::a_atom_128;
 use super::*;
-use crate::block_scaled::{Mkl, Nkl, ScalePack4, SharedScaleAtom, Sm120ScaleAtom};
+use crate::block_scaled::{Mkl, MmaScaleQuad, Nkl, ScalePack4, SharedScaleAtom, Sm120ScaleAtom};
 use crate::copy::tiled::SharedTensor;
 use crate::epilogue::sm120::Sm120EpilogueWarp128x128;
-use crate::mma::{FragmentA, FragmentC};
+use crate::mma::{FragmentA, FragmentB, FragmentC};
 use crate::numeric::Mxf4E2M1;
 use core::marker::PhantomData;
+
+/// Compiler boundary issuing one 16x8x64 NVFP4 (E2M1 + E4M3, SF_VEC = 16) Tensor-Core MMA.
+///
+/// # Safety
+/// All 32 lanes of the warp must execute this call convergently on SM120a with
+/// matching `m16n8k64` fragments and per-lane `E4M3x4` scale quads.
+#[inline(never)]
+pub unsafe fn nvfp4_mma_atom_call(
+    c: FragmentC,
+    a: FragmentA,
+    b: FragmentB,
+    scale_a: MmaScaleQuad<Mkl>,
+    scale_b: MmaScaleQuad<Nkl>,
+) -> FragmentC {
+    let _ = (c, a, b, scale_a, scale_b);
+    unreachable!("cute-rs `nvfp4_mma_atom_call` executed outside device compilation")
+}
 
 /// Compiler boundary assigning a lane to its typed shared-layout MMA view.
 #[inline(never)]

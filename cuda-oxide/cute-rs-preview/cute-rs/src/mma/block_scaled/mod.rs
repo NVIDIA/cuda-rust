@@ -49,7 +49,7 @@ pub use fragments::{
     Mxf4AccumulatorTile2x8, Mxf4BTileK64, Mxf4ScalePairs, Mxf4ScalePairs128, Mxf4ScaleStage,
     Mxf4ScaleTile128,
 };
-pub use tiled::Mxf4TiledMma;
+pub use tiled::{Mxf4Nvf4TiledMma, Mxf4TiledMma, Nvfp4TiledMma};
 
 /// Stable compiler boundaries for the SM120 shared-memory MMA path.
 #[doc(hidden)]

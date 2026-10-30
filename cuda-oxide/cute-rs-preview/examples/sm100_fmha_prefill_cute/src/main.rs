@@ -204,8 +204,13 @@ fn load_half(path: &std::path::Path, count: usize) -> Result<Vec<u16>> {
 }
 
 /// Pack one 128-byte TMA descriptor per batch/head for a BSHD allocation with D=128.
-fn descriptors<L: SmemLayout>(base: u64, batch: u32, sequence: u32, heads: u32) -> Result<Vec<u8>> {
-    let mut result = Vec::with_capacity(batch as usize * heads as usize * 128);
+fn descriptors<L: SmemLayout>(
+    base: u64,
+    batch: u32,
+    sequence: u32,
+    heads: u32,
+) -> Result<Vec<cute_rs::TensorMap<f16, L>>> {
+    let mut result = Vec::with_capacity(batch as usize * heads as usize);
     for b in 0..batch {
         for h in 0..heads {
             let offset =
@@ -216,7 +221,7 @@ fn descriptors<L: SmemLayout>(base: u64, batch: u32, sequence: u32, heads: u32) 
                 128,
                 u64::from(heads) * 128,
             )?;
-            result.extend_from_slice(&desc.bytes);
+            result.push(desc);
         }
     }
     Ok(result)
@@ -322,10 +327,10 @@ fn main() -> Result<()> {
             module.sm100_fmha_prefill_cute_rs(
                 &stream,
                 &prepared,
-                qmaps.cu_deviceptr() as *const _,
-                kmaps.cu_deviceptr() as *const _,
-                vmaps.cu_deviceptr() as *const _,
-                omaps.cu_deviceptr() as *const _,
+                &qmaps,
+                &kmaps,
+                &vmaps,
+                &omaps,
                 u64::from(b),
                 u64::from(q),
                 u64::from(k),

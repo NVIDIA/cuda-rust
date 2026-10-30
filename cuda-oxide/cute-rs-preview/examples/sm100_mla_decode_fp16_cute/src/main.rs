@@ -244,14 +244,18 @@ fn main() -> Result<()> {
     let dk = DeviceBuffer::from_host(&stream, &k)?;
     let dkr = DeviceBuffer::from_host(&stream, &kr)?;
     let dpt = DeviceBuffer::from_host(&stream, &pt)?;
-    let dout = DeviceBuffer::from_host(&stream, &vec![f16::NAN.to_bits(); batch * 128 * 512])?;
-    let dlse = DeviceBuffer::from_host(&stream, &vec![f32::NAN; batch * 128])?;
-    let workspace_values = if cfg.splits > 1 {
-        batch * 128 * cfg.splits as usize * 513
+    let mut dout = DeviceBuffer::from_host(&stream, &vec![f16::NAN; batch * 128 * 512])?;
+    let mut dlse = DeviceBuffer::from_host(&stream, &vec![f32::NAN; batch * 128])?;
+    let (partial_out_len, partial_lse_len) = if cfg.splits > 1 {
+        (
+            batch * 128 * cfg.splits as usize * 512,
+            batch * 128 * cfg.splits as usize,
+        )
     } else {
-        1
+        (1, 1)
     };
-    let workspace = DeviceBuffer::from_host(&stream, &vec![f32::NAN; workspace_values])?;
+    let mut dpartial_out = DeviceBuffer::from_host(&stream, &vec![f32::NAN; partial_out_len])?;
+    let mut dpartial_lse = DeviceBuffer::from_host(&stream, &vec![f32::NAN; partial_lse_len])?;
     let q_desc = create_tensor_map_tiled::<kernel::QLayout>(
         dq.cu_deviceptr() as *mut _,
         cfg.batch as u64 * 128,
@@ -315,14 +319,12 @@ fn main() -> Result<()> {
         128,
         1024,
     ))?;
-    let partial = workspace.cu_deviceptr() as *mut f32;
-    let partial_lse = if cfg.splits > 1 {
-        unsafe { partial.add(batch * 128 * cfg.splits as usize * 512) }
-    } else {
-        partial
-    };
     let active_splits = cfg.active_splits();
-    let run = || -> Result<()> {
+    let run = |dout: &mut DeviceBuffer<f16>,
+               dlse: &mut DeviceBuffer<f32>,
+               dpartial_out: &mut DeviceBuffer<f32>,
+               dpartial_lse: &mut DeviceBuffer<f32>|
+     -> Result<()> {
         unsafe {
             module.sm100_mla_decode_fp16_cute_rs(
                 &stream,
@@ -332,11 +334,11 @@ fn main() -> Result<()> {
                 k_desc,
                 kr_desc,
                 v_desc,
-                dpt.cu_deviceptr() as *const i32,
-                dout.cu_deviceptr() as *mut f16,
-                dlse.cu_deviceptr() as *mut f32,
-                partial,
-                partial_lse,
+                &dpt,
+                dout,
+                dlse,
+                dpartial_out,
+                dpartial_lse,
                 cfg.batch as u64,
                 cfg.kv_length as u64,
                 cfg.splits as u64,
@@ -347,10 +349,10 @@ fn main() -> Result<()> {
                 module.sm100_mla_decode_fp16_reduce_cute_rs(
                     &stream,
                     &reduction,
-                    partial,
-                    partial_lse,
-                    dout.cu_deviceptr() as *mut f16,
-                    dlse.cu_deviceptr() as *mut f32,
+                    dpartial_out,
+                    dpartial_lse,
+                    dout,
+                    dlse,
                     active_splits as u64,
                     cfg.splits as u64,
                 )?;
@@ -358,8 +360,12 @@ fn main() -> Result<()> {
         }
         Ok(())
     };
-    run()?;
-    let checked_out = dout.to_host_vec(&stream)?;
+    run(&mut dout, &mut dlse, &mut dpartial_out, &mut dpartial_lse)?;
+    let checked_out: Vec<u16> = dout
+        .to_host_vec(&stream)?
+        .into_iter()
+        .map(f16::to_bits)
+        .collect();
     let checked_lse = dlse.to_host_vec(&stream)?;
     if checked_out.iter().any(|x| !f16::from_bits(*x).is_finite())
         || checked_lse.iter().any(|x| !x.is_finite())
@@ -370,21 +376,25 @@ fn main() -> Result<()> {
     if !args.validation_only {
         for _ in 0..args.rounds {
             for _ in 0..args.warmup {
-                run()?;
+                run(&mut dout, &mut dlse, &mut dpartial_out, &mut dpartial_lse)?;
             }
             stream.synchronize()?;
             let start = context.new_event(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
             let end = context.new_event(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
             start.record(&stream)?;
             for _ in 0..args.iterations {
-                run()?;
+                run(&mut dout, &mut dlse, &mut dpartial_out, &mut dpartial_lse)?;
             }
             end.record(&stream)?;
             end.synchronize()?;
             samples.push(f64::from(start.elapsed_ms(&end)?) * 1000.0 / args.iterations as f64);
         }
     }
-    let result_out = dout.to_host_vec(&stream)?;
+    let result_out: Vec<u16> = dout
+        .to_host_vec(&stream)?
+        .into_iter()
+        .map(f16::to_bits)
+        .collect();
     let result_lse = dlse.to_host_vec(&stream)?;
     if result_out != checked_out || result_lse != checked_lse {
         return Err("output changed across identical launches".into());

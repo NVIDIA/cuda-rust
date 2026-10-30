@@ -31,7 +31,9 @@ use super::{
     ExportedModule,
     config::{DebugKind, ExportBackendConfig, NvvmIrDialect},
     externs::{DeviceExternDecl, DeviceExternType},
-    metadata::{emit_nvvm_annotations, emit_nvvmir_version, needs_nvvm_annotations},
+    metadata::{
+        emit_loop_metadata, emit_nvvm_annotations, emit_nvvmir_version, needs_nvvm_annotations,
+    },
     state::{DebugSharedFunctionScope, GlobalSourceInfo, GlobalSymbolInfo, ModuleExportState},
 };
 
@@ -729,23 +731,13 @@ pub(super) fn export_module_with_externs_impl(
         emit_nvvmir_version(&mut output, &mut state, config.nvvmir_version());
     }
 
-    if let Some(attr_id) = state.loop_unroll_disable_attr_id {
+    // 9. Loop metadata for loops that must stay rolled (`#[nounroll]`)
+    if !state.unroll_disabled_loops.is_empty() {
         writeln!(&mut output).unwrap();
-        writeln!(
-            &mut output,
-            "!{attr_id} = !{{!\"llvm.loop.unroll.disable\"}}"
-        )
-        .unwrap();
-        for &loop_id in &state.loop_unroll_disable_loop_ids {
-            writeln!(
-                &mut output,
-                "!{loop_id} = distinct !{{!{loop_id}, !{attr_id}}}"
-            )
-            .unwrap();
-        }
+        emit_loop_metadata(&mut output, &state);
     }
 
-    // 9. DWARF metadata (if requested and source locations exist)
+    // 10. DWARF metadata (if requested and source locations exist)
     if state.has_debug_metadata() {
         writeln!(&mut output).unwrap();
         state.emit_debug_metadata(&mut output);
@@ -892,20 +884,10 @@ pub(super) fn export_module_to_string_with_config(
         emit_nvvmir_version(&mut output, &mut state, config.nvvmir_version());
     }
 
-    if let Some(attr_id) = state.loop_unroll_disable_attr_id {
+    // Emit loop metadata for loops that must stay rolled (`#[nounroll]`)
+    if !state.unroll_disabled_loops.is_empty() {
         writeln!(&mut output).unwrap();
-        writeln!(
-            &mut output,
-            "!{attr_id} = !{{!\"llvm.loop.unroll.disable\"}}"
-        )
-        .unwrap();
-        for &loop_id in &state.loop_unroll_disable_loop_ids {
-            writeln!(
-                &mut output,
-                "!{loop_id} = distinct !{{!{loop_id}, !{attr_id}}}"
-            )
-            .unwrap();
-        }
+        emit_loop_metadata(&mut output, &state);
     }
 
     // Emit DWARF line-table metadata if debug export requested it and at least

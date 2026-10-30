@@ -1082,7 +1082,9 @@ fn translate_call(
     // body. The loop-unroll pass later maps the hint back to its enclosing loop
     // (via LoopInfo) and consumes it, so it never reaches lowering. The factor
     // is the call's const generic (`0` = full unroll). Then branch to the
-    // target as usual.
+    // target. The hint keeps the attribute's location for the warnings that
+    // cite it; the branch is generated and, like the edges that replace the
+    // kernel metadata markers, stays off the attribute line.
     // Match both the full path (`cuda_device::thread::__unroll_config`) and the
     // re-exported short path (`cuda_device::__unroll_config`), mirroring the
     // robust suffix match in `body::detect_unroll_config`.
@@ -1114,18 +1116,25 @@ fn translate_call(
         } else {
             MirUnrollHintOp::new(ctx, factor).get_operation()
         };
-        hint.deref_mut(ctx).set_loc(loc.clone());
+        hint.deref_mut(ctx).set_loc(loc);
         match prev_op {
             Some(prev) => hint.insert_after(ctx, prev),
             None => hint.insert_at_front(block_ptr, ctx),
         }
-        return Ok(helpers::emit_goto(ctx, target, hint, block_map, loc));
+        return Ok(helpers::emit_goto(
+            ctx,
+            target,
+            hint,
+            block_map,
+            llvm_export::artificial_debug_location(),
+        ));
     }
 
     // Per-loop `#[nounroll]` marker. Like the unroll marker above, plant the
     // hint where the call sits, inside the annotated loop's body, so a later
     // pass can map it back to that loop. It survives MIR preparation and is
-    // turned into latch metadata just before lowering.
+    // turned into latch metadata just before lowering. Its branch stays off
+    // the attribute line too.
     if is_cuda_device_const_marker(func, "__nounroll_config") {
         let Some(target) = target_usize else {
             return input_err!(
@@ -1134,12 +1143,18 @@ fn translate_call(
             );
         };
         let hint = MirNoUnrollHintOp::new(ctx).get_operation();
-        hint.deref_mut(ctx).set_loc(loc.clone());
+        hint.deref_mut(ctx).set_loc(loc);
         match prev_op {
             Some(prev) => hint.insert_after(ctx, prev),
             None => hint.insert_at_front(block_ptr, ctx),
         }
-        return Ok(helpers::emit_goto(ctx, target, hint, block_map, loc));
+        return Ok(helpers::emit_goto(
+            ctx,
+            target,
+            hint,
+            block_map,
+            llvm_export::artificial_debug_location(),
+        ));
     }
 
     // Handle DynamicSharedArray specially to extract the ALIGN const generic.

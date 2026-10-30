@@ -74,7 +74,7 @@ pub fn prepare_mir_module(
     ctx: &mut Context,
     module: Ptr<Operation>,
     preparation: MirPreparation<'_>,
-) -> Result<(), PipelineError> {
+) -> Result<Vec<mir_transforms::unroll::HintWarning>, PipelineError> {
     verify_operation(ctx, module, "module")?;
     // Capture this before any optional preparation pass mutates the module.
     // The extra promotion pass belongs only to the high-level tensor slice;
@@ -95,7 +95,7 @@ pub fn prepare_mir_module(
                     .to_string(),
             ));
         }
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     // Validate every requested pass before any transformation runs. This keeps
@@ -218,13 +218,12 @@ pub fn prepare_mir_module(
         verify_operation(ctx, module, "module post-second-mem2reg")?;
     }
 
-    mir_transforms::unroll::unroll_annotated_loops(module, ctx, &mut analyses).map_err(
-        |error| PipelineError::Verification {
+    let warnings = mir_transforms::unroll::unroll_annotated_loops(module, ctx, &mut analyses)
+        .map_err(|error| PipelineError::Verification {
             name: "loop-unroll".to_string(),
             message: error.disp(ctx).to_string(),
             operation: None,
-        },
-    )?;
+        })?;
     verify_operation(ctx, module, "module post-unroll")?;
 
     run_optional_mir_passes(
@@ -233,7 +232,8 @@ pub fn prepare_mir_module(
         &selected_passes,
         MirPassStage::PostPreparation,
         &mut analyses,
-    )
+    )?;
+    Ok(warnings)
 }
 
 fn has_high_level_cute_operations(ctx: &Context, root: Ptr<Operation>) -> bool {

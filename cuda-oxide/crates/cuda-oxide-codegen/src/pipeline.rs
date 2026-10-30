@@ -228,6 +228,9 @@ pub struct ModulePipelineOutput {
     pub target: String,
     /// Messages retained for the legacy CLI to print.
     pub diagnostics: Vec<String>,
+    /// Loop annotations that could not be honoured, for the frontend to report
+    /// through its own diagnostics.
+    pub warnings: Vec<mir_transforms::unroll::HintWarning>,
 }
 
 /// Compile a `dialect-mir` module to PTX, NVVM IR, or a CUTLASS cubin.
@@ -306,7 +309,7 @@ pub fn compile_translated_module(
                 .emit("\n=== Skipping mem2reg (full debug keeps locals in memory) ===");
         }
     }
-    prepare_mir_module(
+    let mut warnings = prepare_mir_module(
         ctx,
         module,
         MirPreparation {
@@ -403,6 +406,7 @@ pub fn compile_translated_module(
             artifact_kind: ModuleArtifactKind::Cubin,
             target: rendered.target.clone(),
             diagnostics: generated.diagnostics,
+            warnings,
         });
     }
     if let (Some(path), Some(rendered)) = (request.files.mlir, cutlass_rendered.as_ref()) {
@@ -473,13 +477,13 @@ pub fn compile_translated_module(
             .trace
             .emit("\n=== Lowering dialect-mir → LLVM dialect ===");
     }
-    lower_to_llvm(
+    warnings.extend(lower_to_llvm(
         ctx,
         module,
         !backend.no_fma,
         backend_selection.intrinsic_backend,
         backend.module_disambiguator,
-    )?;
+    )?);
 
     let lowered_module_uses_libdevice = module_uses_libdevice(ctx, module);
     if lowered_module_uses_libdevice != backend_selection.needs_libdevice {
@@ -667,6 +671,7 @@ pub fn compile_translated_module(
                 .expect("NVVM target was resolved before export")
                 .sm(),
             diagnostics: Vec::new(),
+            warnings,
         });
     }
 
@@ -743,6 +748,7 @@ pub fn compile_translated_module(
         artifact_kind: ModuleArtifactKind::Ptx,
         target: generated.target,
         diagnostics: generated.diagnostics,
+        warnings,
     })
 }
 

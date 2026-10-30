@@ -17,6 +17,7 @@
 ## Checklist
 
 - [ ] All commits signed off (`git commit -s`)
+- [ ] All commits cryptographically signed and shown as Verified on GitHub (`git commit -S`)
 - [ ] SPDX headers on new source files
 
 ---

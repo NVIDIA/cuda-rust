@@ -18,5 +18,5 @@ error[E0277]: the trait bound `bool: AnyBitPattern` is not satisfied
 note: required by a bound in `DeviceBuffer::<T>::cast_chunks`
  --> src/simt/device_buffer.rs
   |
-  |     pub fn cast_chunks<A: AnyBitPattern>(self) -> Result<DeviceBuffer<A>, Self> {
+  |     pub fn cast_chunks<A: AnyBitPattern>(self) -> Result<DeviceBuffer<A>, Self>
   |                           ^^^^^^^^^^^^^ required by this bound in `DeviceBuffer::<T>::cast_chunks`

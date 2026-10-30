@@ -17,7 +17,7 @@ cuda-bindings = { version = "=0.5.0", path = "../cuda-bindings" }
 cuda-core-derive = { version = "=0.5.0", path = "../cuda-core-derive" }
 cuda-repr = { version = "=0.5.0", path = "../cuda-repr" }
 anyhow = "1"
-# `AnyBitPattern` bounds safe reinterpreting casts on `DeviceBuffer`.
+# `NoUninit`/`AnyBitPattern` bound safe source/destination buffer casts.
 # Re-exported at the crate root for downstream element types.
 # `min_const_generics` gives `Pod` for arrays of every length.
 bytemuck = { version = "1", features = ["min_const_generics"] }

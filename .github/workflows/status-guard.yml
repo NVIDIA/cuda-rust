@@ -79,6 +79,23 @@ jobs:
       - name: Verify every copy of the toolchain pin agrees
         run: bash cuda-oxide/scripts/check-toolchain-parity.sh
 
+  # cuda-bindings decides which CUDA toolkit the host crates build against, and
+  # cuda-core's multicast probe and `cargo oxide doctor` repeat that decision
+  # from hand-kept copies of its rules. A stale copy builds fine and fails
+  # quietly: doctor's once ignored the candidate list (#1265), and both missed
+  # /opt/cuda, which left cuda_has_multicast unset on Arch-based installs.
+  toolkit-discovery-parity:
+    name: toolkit discovery parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+
+      # Reads sources only: no rustup, no cargo, no CUDA toolkit.
+      - name: Verify every copy of the toolkit discovery rules agrees
+        run: bash cuda-oxide/scripts/check-toolkit-discovery-parity.sh
+
   # The book's Command reference is the only complete list of the CLI surface in
   # the docs, and adding a subcommand to the clap enum is a one-line change that
   # leaves it silently short -- `test`, `fmt`, `update` and `emit-ltoir` were all

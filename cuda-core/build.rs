@@ -47,6 +47,7 @@ const DEFAULT_TOOLKIT_DIRS: &[&str] = &[
     "/usr/local/cuda-13.2",
     "/usr/local/cuda-13",
     "/usr/local/cuda",
+    "/opt/cuda",
 ];
 const MIN_CUDA_VERSION: u32 = 13000;
 

@@ -10,7 +10,7 @@ Use `cuda-core` for wrappers around these raw bindings.
 - The toolkit root is the first set variable among `CUDA_TOOLKIT_PATH` and
   `CUDA_HOME`; when neither is set, the build searches the standard install
   locations (on Linux `/usr/local/cuda-13.3`, `/usr/local/cuda-13.2`,
-  `/usr/local/cuda-13`, `/usr/local/cuda`; on Windows
+  `/usr/local/cuda-13`, `/usr/local/cuda`, `/opt/cuda`; on Windows
   `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3` and `v13.2`).
 - Within the toolkit, both the standard `include/` layout and the
   redistributable `targets/<dir>/include/` layouts (Jetson/Tegra, sbsa,

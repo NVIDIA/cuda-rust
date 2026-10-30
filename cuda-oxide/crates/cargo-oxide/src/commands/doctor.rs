@@ -809,14 +809,16 @@ const TOOLKIT_ENV_VARS: [&str; 2] = ["CUDA_TOOLKIT_PATH", "CUDA_HOME"];
 
 /// The roots `cuda-bindings` probes when neither variable is set, in its
 /// order (`build.rs`, `default_cuda_toolkit_candidates`). This is a fixed
-/// preference list, not a version sort, and `/usr/local/cuda` is its *last*
-/// entry rather than the default.
+/// preference list, not a version sort: `/usr/local/cuda` comes after every
+/// versioned root rather than first, and `/opt/cuda`, where Arch-based
+/// distributions install the toolkit, comes last.
 #[cfg(not(windows))]
-pub(super) const DEFAULT_TOOLKIT_CANDIDATES: [&str; 4] = [
+pub(super) const DEFAULT_TOOLKIT_CANDIDATES: [&str; 5] = [
     "/usr/local/cuda-13.3",
     "/usr/local/cuda-13.2",
     "/usr/local/cuda-13",
     "/usr/local/cuda",
+    "/opt/cuda",
 ];
 #[cfg(windows)]
 pub(super) const DEFAULT_TOOLKIT_CANDIDATES: [&str; 2] = [

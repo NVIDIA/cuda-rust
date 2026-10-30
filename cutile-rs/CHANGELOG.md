@@ -45,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   when the tensor is read back, and is now a compile error. Numeric element
   types, including `f16`, `bf16`, and the FP8 and packed FP4 storage types,
   are unaffected (NVIDIA/cuda-rust#1506).
+- Generated kernel entry setup and assumptions now use the user function's
+  signature as their source location, preserving the inlined body's own
+  statement locations and helper scopes.
 - Generated constants without captured source spans use their containing
   function definition, retaining exact user-expression locations and nested
   cross-file inline caller chains.

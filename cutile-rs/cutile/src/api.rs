@@ -139,7 +139,7 @@
 
 use crate::kernels::conversion::convert_apply;
 use crate::kernels::creation::{arange_apply, eye_apply, full_apply, linspace as linspace_kernel};
-use crate::tensor::{IntoPartition, Reshape, Storage, Tensor, Unpartition};
+use crate::tensor::{IntoPartition, Reshape, StorageHandle, Tensor, Unpartition};
 use cuda_async::device_context::with_default_device_policy;
 use cuda_async::device_future::DeviceFuture;
 use cuda_async::device_operation::{
@@ -159,7 +159,7 @@ use std::sync::Arc;
 /// This internal type implements the async copy operation that allocates new
 /// GPU memory and copies tensor data device-to-device.
 pub struct CopyDeviceToDevice<T: DType> {
-    _storage: Arc<Storage>, // keeps source GPU memory alive
+    _storage: StorageHandle, // keeps source GPU memory alive
     src_ptr: CUdeviceptr,
     shape: Vec<i32>,
     strides: Vec<i32>,
@@ -180,7 +180,7 @@ impl<T: DType> DeviceOp for CopyDeviceToDevice<T> {
         let tensor = Tensor::from_raw_parts(
             dst,
             num_bytes,
-            ctx.get_device_id(),
+            ctx.get_cuda_stream().clone(),
             self.shape,
             self.strides,
         );
@@ -280,8 +280,8 @@ pub fn memcpy<'a, T: DType>(dst: &'a mut Tensor<T>, src: &'a Tensor<T>) -> Memcp
 ///
 /// Records as a single graph node ([`GraphNode`]) — it allocates nothing.
 pub struct Memcpy<'a> {
-    src_storage: Arc<Storage>,
-    dst_storage: Arc<Storage>,
+    src_storage: StorageHandle,
+    dst_storage: StorageHandle,
     src_ptr: cuda_core::sys::CUdeviceptr,
     dst_ptr: cuda_core::sys::CUdeviceptr,
     len: usize,
@@ -349,7 +349,7 @@ impl<T: DType> DeviceOp for CopyDeviceToHostVec<T> {
             };
             // `execute` exposes a Vec to host-side combinators immediately.
             // Prove initialization here, independent of pageable-copy behavior.
-            if let Err(error) = unsafe { ctx.get_cuda_stream().synchronize() } {
+            if let Err(error) = ctx.get_cuda_stream().synchronize() {
                 std::mem::forget(host);
                 return Err(error.into());
             }
@@ -417,7 +417,7 @@ impl<T: DType> DeviceOp for CopyHostVecToDevice<T> {
         let tensor = Tensor::from_raw_parts(
             dptr,
             element_size * num_elements,
-            ctx.get_device_id(),
+            ctx.get_cuda_stream().clone(),
             shape.clone(),
             strides.clone(),
         );
@@ -504,7 +504,9 @@ pub fn meta<T: DType>(shape: &[usize]) -> impl DeviceOp<Output = Tensor<T>> {
 /// // 3D tensor
 /// let volume = api::zeros::<i32>(&[64, 64, 64]).await;
 /// ```
-pub fn zeros<T: DType>(shape: &[usize]) -> impl DeviceOp<Output = Tensor<T>> {
+pub fn zeros<T: DType + cuda_core::DeviceCopy>(
+    shape: &[usize],
+) -> impl DeviceOp<Output = Tensor<T>> {
     full(T::zero(), shape)
 }
 
@@ -521,7 +523,9 @@ pub fn zeros<T: DType>(shape: &[usize]) -> impl DeviceOp<Output = Tensor<T>> {
 /// let x = api::ones::<f32>(&[1024]).await;
 /// let matrix = api::ones::<f16>(&[256, 256]).await;
 /// ```
-pub fn ones<T: DType>(shape: &[usize]) -> impl DeviceOp<Output = Tensor<T>> {
+pub fn ones<T: DType + cuda_core::DeviceCopy>(
+    shape: &[usize],
+) -> impl DeviceOp<Output = Tensor<T>> {
     full(T::one(), shape)
 }
 
@@ -545,7 +549,10 @@ pub fn ones<T: DType>(shape: &[usize]) -> impl DeviceOp<Output = Tensor<T>> {
 /// let x = api::full(3.14f32, &[1024]).await;
 /// let matrix = api::full(-1, &[128, 128]).await;
 /// ```
-pub fn full<T: DType>(val: T, shape: &[usize]) -> impl DeviceOp<Output = Tensor<T>> {
+pub fn full<T: DType + cuda_core::DeviceCopy>(
+    val: T,
+    shape: &[usize],
+) -> impl DeviceOp<Output = Tensor<T>> {
     let len = match checked_full_len(shape) {
         Ok(len) => len,
         Err(message) => return fail::<Tensor<T>>(message).boxed(),
@@ -582,7 +589,10 @@ fn checked_full_len(shape: &[usize]) -> Result<usize, String> {
     Ok(len)
 }
 
-pub fn fill<T: DType>(tensor: Tensor<T>, val: T) -> impl DeviceOp<Output = Tensor<T>> {
+pub fn fill<T: DType + cuda_core::DeviceCopy>(
+    tensor: Tensor<T>,
+    val: T,
+) -> impl DeviceOp<Output = Tensor<T>> {
     value(tensor).then(move |t| {
         let partition_size = 128;
         let result = t.partition([partition_size]);
@@ -771,7 +781,7 @@ impl<T: DType> DeviceOp for AllocUninitialized<T> {
             Tensor::from_raw_parts(
                 ptr,
                 num_bytes,
-                ctx.get_device_id(),
+                ctx.get_cuda_stream().clone(),
                 vec![self.len as i32],
                 vec![1],
             )

@@ -60,7 +60,7 @@ BM times. This reduces global-memory traffic.
 
 ```rust
 use cuda_async::device_operation::DeviceOp;
-use cuda_core::Device;
+use cuda_core::Context;
 use std::sync::Arc;
 use cutile;
 use cutile::api;
@@ -98,7 +98,7 @@ mod my_module {
 use my_module::gemm;
 
 fn main() -> Result<(), Error> {
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
 
     let (bm, bn, bk) = (16usize, 16usize, 8usize);

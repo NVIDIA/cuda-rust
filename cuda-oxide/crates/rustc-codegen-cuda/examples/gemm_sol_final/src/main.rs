@@ -24,7 +24,7 @@
 //! - B: N×K f16, row-major (transposed storage, K contiguous)
 //! - C: M×N bf16 output, row-major (packed as u32 pairs)
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
 use cuda_device::barrier::{
     Barrier, fence_proxy_async_shared_cta, mbarrier_arrive, mbarrier_arrive_cluster,

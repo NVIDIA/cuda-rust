@@ -32,7 +32,7 @@
 // style lints that do not improve a numeric smoke test.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::{cuda_module, ltoir};

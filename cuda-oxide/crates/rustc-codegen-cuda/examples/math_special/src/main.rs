@@ -11,7 +11,7 @@
 // The width-generic host macros cast both f32 and f64 results to f64.
 #![allow(clippy::too_many_arguments, clippy::unnecessary_cast)]
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, cuda_module, kernel, thread};
 

@@ -1,0 +1,11 @@
+error[E0200]: the trait `KernelOutputStored<u8>` requires an `unsafe impl` declaration
+  --> tests/ui/kernel_output_stored_requires_unsafe.rs:19:1
+   |
+19 | impl KernelOutputStored<u8> for Mislabelled {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: the trait `KernelOutputStored<u8>` enforces invariants that the compiler can't check. Review the trait documentation and make sure this implementation upholds those invariants before adding the `unsafe` keyword
+help: add `unsafe` to this trait implementation
+   |
+19 | unsafe impl KernelOutputStored<u8> for Mislabelled {
+   | ++++++

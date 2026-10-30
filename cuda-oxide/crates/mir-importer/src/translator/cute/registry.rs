@@ -101,6 +101,8 @@ pub(crate) enum CuteFn {
     MmaPartitionB,
     /// Accumulate a tiled MXF4 product using paired data and scale operands.
     TiledGemm,
+    /// Issue one 16x8x64 NVFP4 (E2M1 + E4M3, SF_VEC = 16) Tensor-Core MMA atom.
+    Nvfp4MmaAtom,
     /// Overlay the fixed output layout on shared storage.
     EpilogueOverlay,
     /// Select the warp/lane-owned portion of the epilogue.
@@ -547,6 +549,11 @@ pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
         schema: &[SubstKind::Type],
     },
     CuteFnSpec {
+        canonical: "cute_rs::mma::block_scaled::__compiler::nvfp4_mma_atom_call",
+        func: CuteFn::Nvfp4MmaAtom,
+        schema: &[],
+    },
+    CuteFnSpec {
         canonical: "cute_rs::epilogue::sm120::__compiler::epilogue_smem_overlay",
         func: CuteFn::EpilogueOverlay,
         schema: &[],
@@ -614,22 +621,22 @@ pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
     CuteFnSpec {
         canonical: "cute_rs::mma::load_matrix_a",
         func: CuteFn::LoadMatrixA,
-        schema: &[SubstKind::Type],
+        schema: &[SubstKind::Type, SubstKind::Type],
     },
     CuteFnSpec {
         canonical: "cute_rs::mma::load_matrix_b",
         func: CuteFn::LoadMatrixB,
-        schema: &[SubstKind::Type],
+        schema: &[SubstKind::Type, SubstKind::Type],
     },
     CuteFnSpec {
         canonical: "cute_rs::mma::load_matrix_b_pair",
         func: CuteFn::LoadMatrixBPair,
-        schema: &[SubstKind::Type],
+        schema: &[SubstKind::Type, SubstKind::Type],
     },
     CuteFnSpec {
         canonical: "cute_rs::mma::load_matrix_b_pair_k_major",
         func: CuteFn::LoadMatrixBPairKMajor,
-        schema: &[SubstKind::Type],
+        schema: &[SubstKind::Type, SubstKind::Type],
     },
     CuteFnSpec {
         canonical: "cute_rs::copy::tma::copy_tma_2d",
@@ -677,7 +684,7 @@ mod tests {
             let spec = CUTE_FNS.iter().find(|spec| spec.canonical == path);
             let spec = spec.unwrap_or_else(|| panic!("matrix load is not recognized: {path}"));
             assert_eq!(spec.func, expected, "{path}");
-            assert_eq!(spec.schema, &[SubstKind::Type], "{path}");
+            assert_eq!(spec.schema, &[SubstKind::Type, SubstKind::Type], "{path}");
         }
     }
 

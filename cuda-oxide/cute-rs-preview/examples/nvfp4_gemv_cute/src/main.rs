@@ -21,7 +21,7 @@
 
 use ctm_rs::memory::DisjointSlice;
 use ctm_rs::{cuda_module, kernel, thread};
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cute_rs::{
     BlockScaledTensor, Float4E2M1FN, Float8E8M0FNU, KMajor, Mkl, Nkl, Sm1xxBlockScaleKMajor,
@@ -101,8 +101,10 @@ mod kernels {
 
         // SAFETY: (batch, row) is unique for every live thread and the host
         // allocated L*M output elements.
+        let mut c_tile =
+            cute_rs::TensorMut::from_disjoint_slice(&mut c).local_tile::<1>(batch * m + row);
         unsafe {
-            c.as_mut_ptr().add(batch * m + row).write(acc as f16);
+            c_tile.store_at(batch * m + row, acc as f16);
         }
     }
 }

@@ -98,6 +98,14 @@ pub struct SmemTile<T, Layout> {
     pub layout: PhantomData<Layout>,
 }
 
+impl<T, Layout> Copy for SmemTile<T, Layout> {}
+impl<T, Layout> Clone for SmemTile<T, Layout> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
 /// A borrowed fixed-size logical row in a typed shared-memory tile.
 ///
 /// This view contains coordinates and a borrow, not loaded values. Reductions
@@ -120,7 +128,7 @@ impl<T: Copy, Layout: crate::markers::ReifySmem2D, const N: usize> SharedRow<'_,
         self,
         other: crate::tensor::partition::StridedTensor<'_, Element, OtherLayout, Storage>,
         initial: Accumulator,
-        mut f: impl FnMut(Accumulator, T, Storage) -> Accumulator,
+        f: impl FnMut(Accumulator, T, Storage) -> Accumulator,
     ) -> Accumulator
     where
         Element: crate::tensor::TensorElement<Storage>,
@@ -128,12 +136,30 @@ impl<T: Copy, Layout: crate::markers::ReifySmem2D, const N: usize> SharedRow<'_,
         Storage: Copy,
     {
         assert!(N <= other.len());
+        unsafe { self.zip_fold_unchecked(other, initial, f) }
+    }
+
+    /// Reduce corresponding shared/global logical coordinates after an enclosing extent check.
+    ///
+    /// # Safety
+    /// `other` must contain at least `N` logical elements, and this shared row
+    /// must satisfy `row_view`'s bounds, initialization, and synchronization contract.
+    #[inline(always)]
+    pub unsafe fn zip_fold_unchecked<Element, OtherLayout, Storage, Accumulator>(
+        self,
+        other: crate::tensor::partition::StridedTensor<'_, Element, OtherLayout, Storage>,
+        initial: Accumulator,
+        mut f: impl FnMut(Accumulator, T, Storage) -> Accumulator,
+    ) -> Accumulator
+    where
+        Element: crate::tensor::TensorElement<Storage>,
+        OtherLayout: crate::tensor::partition::IndexLayout,
+        Storage: Copy,
+    {
         let mut accumulator = initial;
         let mut i = 0;
         while i < N {
             ctm_rs::thread::__unroll_config::<0>();
-            // SAFETY: the other extent was checked above; row_view's unsafe
-            // constructor established the shared row's full-lifetime contract.
             let (global, shared) = unsafe {
                 (
                     other.get_unchecked(i),
@@ -147,7 +173,121 @@ impl<T: Copy, Layout: crate::markers::ReifySmem2D, const N: usize> SharedRow<'_,
     }
 }
 
+impl<T: Copy, Layout> SmemTile<T, Layout> {
+    /// Wrap a shared-memory allocation as a typed tile with `capacity` elements.
+    ///
+    /// # Safety
+    /// `base` must point to live, suitably aligned shared-memory storage for
+    /// at least `capacity` elements of `T`.
+    #[must_use]
+    #[inline(always)]
+    pub const unsafe fn from_raw_parts(base: *mut T, capacity: usize) -> Self {
+        Self {
+            base,
+            capacity,
+            layout: PhantomData,
+        }
+    }
+
+    /// Return the adjacent shared-memory tile of the same type and capacity immediately after `self`.
+    ///
+    /// # Safety
+    /// The underlying shared allocation must contain at least `self.capacity` additional
+    /// suitably aligned `T` elements immediately following `self`.
+    #[must_use]
+    #[inline(always)]
+    pub const unsafe fn next_tile(self) -> Self {
+        Self {
+            base: unsafe { self.base.add(self.capacity) },
+            capacity: self.capacity,
+            layout: PhantomData,
+        }
+    }
+
+    /// View `len` contiguous elements of `U` starting `offset_elements` of `U` after `self`.
+    ///
+    /// Returns both a read-only [`crate::tensor::partition::StridedTensor`] and a
+    /// writable [`crate::tensor::partition::StridedTensorMut`] over the shared region;
+    /// callers must synchronize between reads and writes with a CTA barrier.
+    ///
+    /// # Safety
+    /// The region starting at `(self.base.add(self.capacity) as *mut U).add(offset_elements)`
+    /// must be aligned for `U` and contain at least `len` live shared elements.
+    #[must_use]
+    #[inline(always)]
+    pub const unsafe fn trailing_views<'a, U: Copy + crate::tensor::TensorElement<U>>(
+        self,
+        offset_elements: usize,
+        len: usize,
+    ) -> (
+        crate::tensor::partition::StridedTensor<'a, U>,
+        crate::tensor::partition::StridedTensorMut<'a, U>,
+    ) {
+        let ptr = unsafe {
+            self.base
+                .add(self.capacity)
+                .cast::<U>()
+                .add(offset_elements)
+        };
+        unsafe {
+            (
+                crate::tensor::partition::StridedTensor::from_raw_parts(ptr, len, 1),
+                crate::tensor::partition::StridedTensorMut::from_raw_parts(ptr, len, 1),
+            )
+        }
+    }
+}
+
 impl<T: Copy, Layout: crate::markers::ReifySmem2D> SmemTile<T, Layout> {
+    /// Partition this shared tile along the row mode and select subtile `tile_row`.
+    ///
+    /// `SubLayout` must have the same column count, row/column strides, and
+    /// swizzle parameters as `Layout`, with a positive row extent that divides
+    /// the parent tile into contiguous row groups.
+    ///
+    /// # Safety
+    /// `tile_row` must select a complete subtile within `self.capacity`, and
+    /// the underlying shared allocation must remain live while the view is used.
+    #[must_use]
+    #[inline(always)]
+    pub const unsafe fn row_tile<SubLayout: crate::markers::ReifySmem2D>(
+        &self,
+        tile_row: usize,
+    ) -> SmemTile<T, SubLayout> {
+        const {
+            assert!(SubLayout::SHAPE.0 > 0 && SubLayout::SHAPE.1 == Layout::SHAPE.1);
+            assert!(
+                SubLayout::STRIDE.0 == Layout::STRIDE.0 && SubLayout::STRIDE.1 == Layout::STRIDE.1
+            );
+            assert!(SubLayout::OFFSET == 0 && Layout::OFFSET == 0);
+            assert!(
+                SubLayout::NUM_BITS == Layout::NUM_BITS
+                    && SubLayout::NUM_BASE == Layout::NUM_BASE
+                    && SubLayout::NUM_SHIFT == Layout::NUM_SHIFT
+            );
+        }
+        let sub_elements = (SubLayout::SHAPE.0 as usize) * (Layout::STRIDE.0 as usize);
+        SmemTile {
+            base: unsafe { self.base.add(tile_row * sub_elements) },
+            capacity: sub_elements,
+            layout: PhantomData,
+        }
+    }
+
+    /// Partition this shared tile along the row mode and select subtile `tile_row`
+    /// (CuTeDSL `cute.local_tile` along the row mode).
+    ///
+    /// # Safety
+    /// Same bounds and lifetime requirements as [`Self::row_tile`].
+    #[must_use]
+    #[inline(always)]
+    pub const unsafe fn local_tile<SubLayout: crate::markers::ReifySmem2D>(
+        &self,
+        tile_row: usize,
+    ) -> SmemTile<T, SubLayout> {
+        unsafe { self.row_tile::<SubLayout>(tile_row) }
+    }
+
     /// Borrow `N` consecutive logical row coordinates without loading them.
     ///
     /// # Safety
@@ -181,9 +321,38 @@ impl<T: Copy, Layout: crate::markers::ReifySmem2D> SmemTile<T, Layout> {
     /// Pending asynchronous writes must be completed and appropriate thread
     /// synchronization performed; no active write may conflict with this read.
     #[inline(always)]
-    pub unsafe fn get(&self, row: usize, column: usize) -> T {
-        let offset = crate::static_layout::crd2idx_2d::<Layout>(row, column);
-        unsafe { self.base.add(offset).read() }
+    pub unsafe fn get(self, row: usize, column: usize) -> T {
+        let (stride_r, stride_c, offset, y_mask, right_shift, left_shift) = const {
+            let _ = crate::static_layout::max_offset_2d::<Layout>();
+            let mask = ((1usize << Layout::NUM_BITS) - 1)
+                << (Layout::NUM_BASE as i32
+                    + if Layout::NUM_SHIFT > 0 {
+                        Layout::NUM_SHIFT
+                    } else {
+                        0
+                    }) as u32;
+            let r_shift = if Layout::NUM_SHIFT >= 0 {
+                Layout::NUM_SHIFT as u32
+            } else {
+                0
+            };
+            let l_shift = if Layout::NUM_SHIFT < 0 {
+                (-Layout::NUM_SHIFT) as u32
+            } else {
+                0
+            };
+            (
+                Layout::STRIDE.0 as usize,
+                Layout::STRIDE.1 as usize,
+                Layout::OFFSET as usize,
+                mask,
+                r_shift,
+                l_shift,
+            )
+        };
+        let plain = row * stride_r + column * stride_c + offset;
+        let idx = plain ^ (((plain & y_mask) >> right_shift) << left_shift);
+        unsafe { self.base.add(idx).read() }
     }
 
     /// Gather N consecutive logical row coordinates into a register tile.
@@ -202,6 +371,70 @@ impl<T: Copy, Layout: crate::markers::ReifySmem2D> SmemTile<T, Layout> {
         column: usize,
     ) -> crate::tensor::RegisterTile<T, N> {
         crate::tensor::RegisterTile::from_fn(|i| unsafe { self.get(row, column + i) })
+    }
+
+    /// Write one logical shared-memory coordinate through its declared layout.
+    ///
+    /// This is the single-coordinate store `tensor[(row, column)] = value` of
+    /// CuTe's `Tensor.__setitem__`.
+    ///
+    /// # Safety
+    /// The coordinate must lie within the layout, its mapped offset must be
+    /// below `capacity`, and no conflicting read or write may race this store.
+    #[inline(always)]
+    pub unsafe fn store_at(&self, row: usize, column: usize, value: T) {
+        let offset = crate::static_layout::crd2idx_2d::<Layout>(row, column);
+        unsafe { self.base.add(offset).write(value) };
+    }
+
+    /// Scatter `N` consecutive logical row coordinates from a register tile.
+    ///
+    /// Consecutive logical coordinates are mapped through `Layout`, including
+    /// any shared-memory swizzle. This is CuTe's `Tensor.store` over one row.
+    ///
+    /// # Safety
+    /// Every `(row, column + i)` for `i < N` must satisfy `store_at`'s bounds
+    /// and non-conflict requirements.
+    #[inline(always)]
+    pub unsafe fn store<const N: usize>(
+        &self,
+        row: usize,
+        column: usize,
+        values: crate::tensor::RegisterTile<T, N>,
+    ) {
+        let arr = values.into_array();
+        let mut i = 0;
+        while i < N {
+            ctm_rs::thread::__unroll_config::<0>();
+            unsafe { self.store_at(row, column + i, arr[i]) };
+            i += 1;
+        }
+    }
+}
+
+impl<Layout: crate::markers::ReifySmem2D> SmemTile<f16, Layout> {
+    /// Convert two FP32 values to `f16x2` and store them at an aligned pair `(row, column)`.
+    ///
+    /// Requires unit column stride and a swizzle base of at least two elements so
+    /// even-aligned column pairs map to contiguous 4-byte shared words.
+    ///
+    /// # Safety
+    /// `column` must be even, `(row, column)` and `(row, column + 1)` must lie
+    /// within the layout and `capacity`, `self.base` must be 4-byte aligned,
+    /// and no conflicting access may race this store.
+    #[inline(always)]
+    pub unsafe fn store_packed_f16x2(&self, row: usize, column: usize, low: f32, high: f32) {
+        const {
+            assert!(Layout::STRIDE.1 == 1);
+            assert!(Layout::NUM_BITS == 0 || Layout::NUM_BASE >= 1);
+        }
+        let offset = crate::static_layout::crd2idx_2d::<Layout>(row, column);
+        unsafe {
+            self.base
+                .add(offset)
+                .cast::<u32>()
+                .write(crate::arch::cvt_f16x2_f32(low, high));
+        }
     }
 }
 

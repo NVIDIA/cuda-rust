@@ -11,7 +11,7 @@
 //!
 //! Shows:
 //!   - Loading a kernel from inline PTX via `load_module_from_ptx`
-//!   - Launching with `AsyncKernelLaunch` (`push_arg` / `push_device_ptr`)
+//!   - Launching with `AsyncKernelLaunchBuilder` (`push_arg` / `push_device_ptr`)
 //!   - Wrapping a custom kernel in a `DeviceOp` struct for a safe call-site
 //!   - Chaining tile and custom kernels on the same stream with `and_then`
 
@@ -20,7 +20,7 @@ use cuda_async::device_future::DeviceFuture;
 use cuda_async::device_operation::DeviceOp;
 use cuda_async::device_operation::ExecutionContext;
 use cuda_async::error::DeviceError;
-use cuda_async::launch::AsyncKernelLaunch;
+use cuda_async::launch::AsyncKernelLaunchBuilder;
 use cuda_core::{Function, LaunchConfig};
 use cutile::api::{arange, zeros};
 use cutile::tensor::{IntoPartition, Tensor, ToHostVec};
@@ -126,7 +126,23 @@ impl DeviceOp for ScaleKernel {
         self,
         ctx: &ExecutionContext,
     ) -> Result<<Self as DeviceOp>::Output, DeviceError> {
-        let mut launcher = AsyncKernelLaunch::new(self.function);
+        let mut launcher = AsyncKernelLaunchBuilder::new(self.function);
+        launcher.retain_buffer(
+            self.input
+                .as_buffer()
+                .expect("contiguous input")
+                .storage()
+                .clone(),
+            false,
+        );
+        launcher.retain_buffer(
+            self.output
+                .as_buffer()
+                .expect("contiguous output")
+                .storage()
+                .clone(),
+            true,
+        );
         launcher.push_arg(self.n);
         launcher.push_arg(self.scale);
         // Safety:

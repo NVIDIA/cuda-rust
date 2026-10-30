@@ -63,7 +63,7 @@ forces the concrete instantiation and lets the loader look up the matching PTX
 entry point:
 
 ```rust
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 
 // SAFETY: config is 1D and both buffers cover every launched index.
 unsafe {

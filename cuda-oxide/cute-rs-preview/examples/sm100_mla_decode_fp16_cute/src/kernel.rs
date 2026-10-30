@@ -4,32 +4,46 @@
  */
 
 //! Paged latent attention, retaining the public CUTLASS v4.7 two-CTA schedule.
-//! QK0, QK-next/PV-current, PV-last overlap with softmax and output correction.
-//! All ring tickets continue across persistent work; resetting phases is invalid.
-//! CuTe supplies typed MMA/TMA operations and pipeline policies, while CTM
-//! supplies their explicit instructions, shared storage, and launch macros.
+//!
+//! QK0, QK-next/PV-current, and PV-last overlap with softmax and output correction.
+//! All ring tickets continue across persistent work; resetting phases is invalid:
+//!
+//! ```text
+//! Page Table ──► `PageRing::stage_page_index` (Warp 10)
+//!                       │
+//!                       ▼
+//! Global Q/K/V ──► `TmaCopy::<_, 2>::load` (Warp 9) ──► Shared Q/QR & KV[15]
+//!                                                             │
+//!                                                             ▼
+//!                                   `QkMma` & `PvMma` (Warp 8, CTA 0) ──► TMEM S[2] & O[1]
+//!                                                             │
+//!                                                             ▼
+//!                 Softmax (Warps 0..3) ──► Shared P[2] ──► Correction & Epilogue (Warps 4..7)
+//! ```
 
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use ctm_rs::f32x2::{
-    add_f32x2, fma_f32x2, mul_f32x2, pack_f32x2, unpack_f32x2_hi, unpack_f32x2_lo,
+use ctm_rs::mbarrier::Barrier;
+use ctm_rs::memory::{DisjointSlice, DynamicSharedArray};
+use ctm_rs::{cluster_launch, cuda_module, kernel, launch_bounds, launch_contract, thread};
+use cute_rs::arch::{
+    NamedBarrier, add_packed_f32x2, block_idx_in_cluster, cluster_arrive, cluster_arrive_relaxed,
+    cluster_wait, cvt_f16x2_f32, elect_one_sync, exp2_ftz_f32, fence_view_async_tmem_load,
+    fence_view_async_tmem_store, fma_packed_f32x2, log2_f32, make_warp_uniform,
+    mbarrier_init_fence, mul_packed_f32x2, pack_f32x2, reciprocal_ftz_f32, setmaxregister_decrease,
+    setmaxregister_increase, unpack_f32x2_hi, unpack_f32x2_lo, vote_all_sync,
+    warp_reduction_max_f32, warp_reduction_sum_f32,
 };
-use ctm_rs::mbarrier::{Barrier, GeneralBarrier, ManagedBarrier, Ready};
-use ctm_rs::memory::{DynamicSharedArray, SharedAddress, U32x4};
-use ctm_rs::tcgen05::tmem::{self, TmemGuard, TmemReady, TmemUninit};
-use ctm_rs::{
-    async_copy, barrier, cluster, cluster_launch, convert, cuda_module, fence, float,
-    groups::CtaGroup2, kernel, launch_bounds, launch_contract, mbarrier, tcgen05, thread, warp,
-};
-use cute_rs::arch::make_warp_uniform;
 use cute_rs::attention::sm100::pipeline::{
     AsyncCompletion, AsyncCopyReuse, Consumer, LocalMemory, LocalShared, Producer, RingCursor,
     SharedReuse, SharedToAsync, TensorMemory, TwoCtaRing,
 };
 use cute_rs::attention::sm100::{
-    MmaSs, SharedLayout, SharedTile, SharedTileArray, TmaCopy, TmemFragment,
+    MmaSs, SharedLayout, SharedTile, SharedTileArray, TmaCopy, TmemAllocator, TmemFragment,
+    tmem_row_address,
 };
-use cute_rs::{OperandA, OperandB, TensorMap};
+use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
+use cute_rs::{GlobalStoreTile, OperandA, OperandB, RegisterTile, TensorMap};
 
 /// Per-CTA 64-by-64 FP16 query tile, stored K-major for QK MMA.
 pub type QLayout = SharedLayout<64, 64>;
@@ -130,7 +144,7 @@ pub(crate) fn partial_offset(row: u32, split: u32, splits: u32, column: u32) -> 
 /// Pack a warp’s 32-row group and a column displacement into a live TMEM base address.
 #[inline(always)]
 fn row_address(tmem: u32, warp: u32, columns: u32) -> u32 {
-    tmem + ((warp * 32) << 16) + columns
+    tmem_row_address(tmem, warp, columns)
 }
 
 /// Consume nine key chunks and publish one QK score tile, advancing persistent tickets.
@@ -155,14 +169,14 @@ unsafe fn issue_qk(
         kv.wait_cursor(*kv_state);
         let a = queries.tile_unchecked(chunk as u32);
         let b = keys.tile_unchecked(kv_state.index());
-        if warp::is_elected_sync(u32::MAX) {
+        if elect_one_sync() {
             mma.gemm(tmem + (*score_ticket % 2) * 64, &a, &b, chunk != 0);
             kv.mma_empty_cursor(*kv_state);
         }
         kv_state.advance();
         chunk += 1;
     }
-    if warp::is_elected_sync(u32::MAX) {
+    if elect_one_sync() {
         score.mma_full(*score_ticket);
     }
     *score_ticket += 1;
@@ -197,7 +211,7 @@ unsafe fn issue_pv(
             kv.wait_cursor(*kv_state);
             let a = probabilities.tile_unchecked((*p_ticket % 2) * 4 + kpart as u32);
             let b = values.tile_unchecked(kv_state.index());
-            if warp::is_elected_sync(u32::MAX) {
+            if elect_one_sync() {
                 mma.gemm(
                     tmem + 128 + npart as u32 * 128,
                     &a,
@@ -211,7 +225,7 @@ unsafe fn issue_pv(
         }
         kpart += 1;
     }
-    if warp::is_elected_sync(u32::MAX) {
+    if elect_one_sync() {
         probability.mma_empty(*p_ticket);
         output.mma_full(*o_ticket);
     }
@@ -241,13 +255,10 @@ unsafe fn load_qk(
     rank: u32,
     first: bool,
 ) {
-    pages.wait(page_ticket);
-    let page = *smem
-        .add(PT + (page_ticket % 4) as usize * 256)
-        .cast::<i32>();
+    let page = pages.wait_and_read_page_index(page_ticket, smem.add(PT));
     if first {
         query.acquire(q_ticket);
-        if rank == 0 && warp::is_elected_sync(u32::MAX) {
+        if rank == 0 && elect_one_sync() {
             query.producer_expect_tx(q_ticket, 147456);
         }
     }
@@ -273,7 +284,7 @@ unsafe fn load_qk(
     let mut chunk = 0usize;
     while chunk < 9 {
         kv.acquire_cursor(*kv_state);
-        if rank == 0 && warp::is_elected_sync(u32::MAX) {
+        if rank == 0 && elect_one_sync() {
             kv.producer_expect_tx_cursor(*kv_state, 16384);
         }
         let mut destination = SharedTile::<KLayout, OperandB>::from_raw(
@@ -306,20 +317,15 @@ unsafe fn load_v(
     page_ticket: u32,
     rank: u32,
 ) {
-    let page = *smem
-        .add(PT + (page_ticket % 4) as usize * 256)
-        .cast::<i32>();
     // Every lane now owns its page index in a register; release the slot
     // before issuing V copies so the page producer can advance.
-    mbarrier::arrive(&ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(
-        pages.empty_at(page_ticket),
-    ));
+    let page = pages.read_page_index_and_release(page_ticket, smem.add(PT));
     let mut kpart = 0;
     while kpart < 4 {
         let mut npart = 0;
         while npart < 2 {
             kv.acquire_cursor(*kv_state);
-            if rank == 0 && warp::is_elected_sync(u32::MAX) {
+            if rank == 0 && elect_one_sync() {
                 kv.producer_expect_tx_cursor(*kv_state, 16384);
             }
             let mut destination = SharedTile::<VLayout, OperandB>::from_raw(
@@ -392,13 +398,18 @@ unsafe fn softmax_tile<const LAST: bool>(
     // Two exchange banks follow the P ring. Reacquiring P(i+2)
     // observes PV(i) completion, after every P(i) writer
     // has consumed max(i), including across persistent work.
-    let exchange = smem
+    let exchange_ptr = smem
         .add(MAX_EXCHANGE + (state.probability_ticket % 2) as usize * 512)
         .cast::<f32>();
-    *exchange.add(tid as usize) = new_maximum;
-    barrier::barrier_cta_sync(2, 128);
-    new_maximum = maxf(new_maximum, *exchange.add(((tid + 64) % 128) as usize));
-    let alpha = float::ex2_approx_ftz_f32((state.maximum - new_maximum) * scale);
+    let mut exchange_out = StridedTensorMut::from_raw_parts(exchange_ptr, 128, 1);
+    exchange_out.store_at(tid as usize, new_maximum);
+    NamedBarrier::<2, 128>::sync();
+    let exchange_in = StridedTensor::from_raw_parts(exchange_ptr, 128, 1);
+    new_maximum = maxf(
+        new_maximum,
+        exchange_in.get_unchecked(((tid + 64) % 128) as usize),
+    );
+    let alpha = exp2_ftz_f32((state.maximum - new_maximum) * scale);
     let mut metadata = TmemFragment::<4> {
         values: [
             state.sum,
@@ -417,15 +428,11 @@ unsafe fn softmax_tile<const LAST: bool>(
             wid,
             384 + (state.correction_ticket % 2) * 4,
         ));
-        tcgen05::fence_before_thread_sync();
-        mbarrier::arrive(&ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(
-            correction.full_at(state.correction_ticket),
-        ));
+        correction.commit_local_tmem(state.correction_ticket);
     }
     let row = lane + (wid % 2) * 32;
-    let destination = smem
-        .add(P + (state.probability_ticket % 2) as usize * 16384)
-        .cast::<f16>();
+    let probabilities = SharedTileArray::<PLayout, OperandA, 8>::from_raw(smem.add(P).cast());
+    let p_base = (state.probability_ticket % 2) * 4;
     i = 0;
     while i < 64 {
         thread::__unroll_config::<0>();
@@ -435,22 +442,21 @@ unsafe fn softmax_tile<const LAST: bool>(
         let mut pair = 0;
         while pair < 4 {
             thread::__unroll_config::<0>();
-            let scores = fma_f32x2(
+            let scores = fma_packed_f32x2(
                 pack_f32x2(values.values[i + pair * 2], values.values[i + pair * 2 + 1]),
                 pack_f32x2(scale, scale),
                 pack_f32x2(-new_maximum * scale, -new_maximum * scale),
             );
-            let x = float::ex2_approx_ftz_f32(unpack_f32x2_lo(scores));
-            let y = float::ex2_approx_ftz_f32(unpack_f32x2_hi(scores));
+            let x = exp2_ftz_f32(unpack_f32x2_lo(scores));
+            let y = exp2_ftz_f32(unpack_f32x2_hi(scores));
             values.values[i + pair * 2] = x;
             values.values[i + pair * 2 + 1] = y;
-            packed[pair] = convert::cvt_f16x2_f32(x, y);
+            packed[pair] = cvt_f16x2_f32(x, y);
             pair += 1;
         }
         let key = (wid / 2) * 64 + i as u32;
-        *destination
-            .add((key / 32) as usize * 2048 + PLayout::crd2idx(row, key % 32))
-            .cast::<U32x4>() = U32x4(packed);
+        let mut p_tile = probabilities.tile_unchecked(p_base + key / 32);
+        p_tile.store_packed_8(row, key % 32, packed);
         i += 8;
     }
     probability.thread_full(state.probability_ticket);
@@ -459,7 +465,7 @@ unsafe fn softmax_tile<const LAST: bool>(
     i = 0;
     while i < 64 {
         thread::__unroll_config::<0>();
-        pair_sum = add_f32x2(pair_sum, pack_f32x2(values.values[i], values.values[i + 1]));
+        pair_sum = add_packed_f32x2(pair_sum, pack_f32x2(values.values[i], values.values[i + 1]));
         i += 2;
     }
     state.sum = unpack_f32x2_lo(pair_sum) + unpack_f32x2_hi(pair_sum) + state.sum * alpha;
@@ -471,12 +477,9 @@ unsafe fn softmax_tile<const LAST: bool>(
             wid,
             384 + (state.correction_ticket % 2) * 4,
         ));
-        tcgen05::fence_before_thread_sync();
-        mbarrier::arrive(&ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(
-            correction.full_at(state.correction_ticket),
-        ));
+        correction.commit_local_tmem(state.correction_ticket);
     }
-    tmem::load_wait();
+    fence_view_async_tmem_load();
     score.thread_empty(state.score_ticket);
     state.score_ticket += 1;
     state.probability_ticket += 1;
@@ -501,11 +504,11 @@ pub mod kernels {
         #[grid_constant] k: &TensorMap<f16, KLayout>,
         #[grid_constant] kr: &TensorMap<f16, KLayout>,
         #[grid_constant] v: &TensorMap<f16, VLayout>,
-        page_table: *const i32,
-        out: *mut f16,
-        lse: *mut f32,
-        partial_out: *mut f32,
-        partial_lse: *mut f32,
+        page_table: &[i32],
+        mut out: DisjointSlice<f16>,
+        mut lse: DisjointSlice<f32>,
+        mut partial_out: DisjointSlice<f32>,
+        mut partial_lse: DisjointSlice<f32>,
         batch: u64,
         kv_length: u64,
         splits: u64,
@@ -521,7 +524,7 @@ pub mod kernels {
             let tid = thread::threadIdx_x();
             let wid = make_warp_uniform(tid / 32);
             let lane = tid % 32;
-            let rank = make_warp_uniform(cluster::cluster_ctarank());
+            let rank = make_warp_uniform(block_idx_in_cluster());
             let smem = DynamicSharedArray::<u8, 1024>::get_raw();
             let bars = smem.add(BARS).cast::<Barrier>();
             let query = QueryRing::from_raw(bars, 0);
@@ -545,16 +548,16 @@ pub mod kernels {
                 output.init(1, 256);
                 pages.init(32, 32);
             }
-            fence::fence_mbarrier_init();
-            cluster::barrier_cluster_arrive_relaxed();
-            cluster::barrier_cluster_wait();
+            mbarrier_init_fence();
+            cluster_arrive_relaxed();
+            cluster_wait();
             let token = smem.add(TOKEN).cast::<u32>();
             if wid == 8 {
-                TmemGuard::<TmemUninit, 512, CtaGroup2>::from_raw_slot(token).alloc_collective();
-                tcgen05::relinquish_alloc_permit_cg2();
+                TmemAllocator::<512, 2>::allocate(token);
+                TmemAllocator::<512, 2>::relinquish_alloc_permit();
             }
             if wid < 9 {
-                barrier::barrier_cta_sync(1, 288);
+                NamedBarrier::<1, 288>::sync();
             }
             let mut work = make_warp_uniform(thread::blockIdx_x() / 2);
             let stride = make_warp_uniform(thread::gridDim_x() / 2);
@@ -569,7 +572,7 @@ pub mod kernels {
             // Keep each register budget live through its complete role, as in
             // the reference. Reconverging before role dispatch forces spills.
             if wid == 10 {
-                thread::setmaxnreg_dec::<96>();
+                setmaxregister_decrease::<96>();
                 while work < batch * splits {
                     let b = work % batch;
                     let split = work / batch;
@@ -579,22 +582,13 @@ pub mod kernels {
                     if count > 0 {
                         let mut tile = first_tile;
                         while tile < end_tile {
-                            pages.acquire(page_ticket);
-                            let dst = smem
-                                .add(PT + (page_ticket % 4) as usize * 256)
-                                .cast::<u32>();
-                            if lane == 0 {
-                                async_copy::cp_async_ca_4(
-                                    SharedAddress::from_raw(dst),
-                                    &*page_table.add((b * total_tiles + tile) as usize).cast(),
-                                );
-                            }
-                            async_copy::cp_async_mbarrier_arrive_noinc(&ManagedBarrier::<
-                                Ready,
-                                GeneralBarrier,
-                            >::adopt_ready(
-                                pages.full_at(page_ticket),
-                            ));
+                            pages.stage_page_index(
+                                page_ticket,
+                                smem.add(PT),
+                                page_table,
+                                (b * total_tiles + tile) as usize,
+                                lane,
+                            );
                             page_ticket += 1;
                             tile += 1;
                         }
@@ -602,7 +596,7 @@ pub mod kernels {
                     work += stride;
                 }
             } else if wid == 9 {
-                thread::setmaxnreg_dec::<96>();
+                setmaxregister_decrease::<96>();
                 let mut kv_producer = RingCursor::<15, Producer>::new();
                 while work < batch * splits {
                     let b = work % batch;
@@ -656,7 +650,7 @@ pub mod kernels {
                     work += stride;
                 }
             } else if wid == 8 && rank == 0 {
-                thread::setmaxnreg_dec::<96>();
+                setmaxregister_decrease::<96>();
                 let mut kv_consumer = RingCursor::<15, Consumer>::new();
                 while work < batch * splits {
                     let _b = work % batch;
@@ -665,7 +659,7 @@ pub mod kernels {
                     let end_tile = (first_tile + per_split).min(total_tiles);
                     let count = end_tile.saturating_sub(first_tile);
                     if count > 0 {
-                        let tmem = *token;
+                        let tmem = TmemAllocator::<512, 2>::retrieve_ptr(token);
                         query.wait(q_ticket);
                         issue_qk(smem, tmem, kv, score, &mut kv_consumer, &mut s_ticket);
                         let mut tile = 1;
@@ -684,7 +678,7 @@ pub mod kernels {
                             );
                             tile += 1;
                         }
-                        if warp::is_elected_sync(u32::MAX) {
+                        if elect_one_sync() {
                             query.mma_empty(q_ticket);
                         }
                         q_ticket += 1;
@@ -703,7 +697,7 @@ pub mod kernels {
                     work += stride;
                 }
             } else if wid < 4 {
-                thread::setmaxnreg_inc::<192>();
+                setmaxregister_increase::<192>();
                 let mut state = SoftmaxState {
                     score_ticket: s_ticket,
                     probability_ticket: p_ticket,
@@ -718,7 +712,7 @@ pub mod kernels {
                     let end_tile = (first_tile + per_split).min(total_tiles);
                     let count = end_tile.saturating_sub(first_tile);
                     if count > 0 {
-                        let tmem = *token;
+                        let tmem = TmemAllocator::<512, 2>::retrieve_ptr(token);
                         state.maximum = f32::NEG_INFINITY;
                         state.sum = 0.0;
                         let mut tile = first_tile;
@@ -757,7 +751,7 @@ pub mod kernels {
                     work += stride;
                 }
             } else if wid < 8 {
-                thread::setmaxnreg_inc::<208>();
+                setmaxregister_increase::<208>();
                 while work < batch * splits {
                     let b = work % batch;
                     let split = work / batch;
@@ -765,7 +759,7 @@ pub mod kernels {
                     let end_tile = (first_tile + per_split).min(total_tiles);
                     let count = end_tile.saturating_sub(first_tile);
                     if count > 0 {
-                        let tmem = *token;
+                        let tmem = TmemAllocator::<512, 2>::retrieve_ptr(token);
                         let cw = wid - 4;
                         let ct = tid - 128;
                         let row = lane + (cw % 2) * 32;
@@ -778,16 +772,11 @@ pub mod kernels {
                                 cw,
                                 384 + (c_ticket % 2) * 4,
                             ));
-                            tcgen05::fence_before_thread_sync();
-                            mbarrier::arrive(
-                                &ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(
-                                    correction.empty_at(c_ticket),
-                                ),
-                            );
+                            correction.release_local_tmem(c_ticket);
                             c_ticket += 1;
                             if tile > 0 {
                                 output.wait(o_ticket);
-                                if !warp::all(metadata.values[3] == 1.0) {
+                                if !vote_all_sync(metadata.values[3] == 1.0, u32::MAX) {
                                     let mut part = 0;
                                     #[unroll]
                                     while part < 8 {
@@ -796,7 +785,7 @@ pub mod kernels {
                                         let mut i = 0;
                                         #[unroll]
                                         while i < 32 {
-                                            let pair = mul_f32x2(
+                                            let pair = mul_packed_f32x2(
                                                 pack_f32x2(values.values[i], values.values[i + 1]),
                                                 pack_f32x2(metadata.values[2], metadata.values[2]),
                                             );
@@ -808,19 +797,21 @@ pub mod kernels {
                                         part += 1;
                                     }
                                 }
-                                tmem::store_wait();
+                                fence_view_async_tmem_store();
                                 output.thread_empty(o_ticket);
                                 o_ticket += 1;
                             }
                             if tile + 1 == count {
-                                let exchange = smem.add(SUM_EXCHANGE).cast::<f32>();
-                                *exchange.add(ct as usize) = metadata.values[0];
-                                barrier::barrier_cta_sync(3, 128);
-                                let denominator =
-                                    metadata.values[0] + *exchange.add(((ct + 64) % 128) as usize);
-                                barrier::barrier_cta_sync(3, 128);
+                                let exchange_ptr = smem.add(SUM_EXCHANGE).cast::<f32>();
+                                StridedTensorMut::from_raw_parts(exchange_ptr, 128, 1)
+                                    .store_at(ct as usize, metadata.values[0]);
+                                NamedBarrier::<3, 128>::sync();
+                                let denominator = metadata.values[0]
+                                    + StridedTensor::from_raw_parts(exchange_ptr, 128, 1)
+                                        .get_unchecked(((ct + 64) % 128) as usize);
+                                NamedBarrier::<3, 128>::sync();
                                 output.wait(o_ticket);
-                                let normalization = float::rcp_approx_ftz_f32(denominator);
+                                let normalization = reciprocal_ftz_f32(denominator);
                                 let mut part = 0;
                                 #[unroll]
                                 while part < 8 {
@@ -831,11 +822,11 @@ pub mod kernels {
                                     #[unroll]
                                     while i < 32 {
                                         // The source rounds scale and normalization separately.
-                                        let scaled = mul_f32x2(
+                                        let scaled = mul_packed_f32x2(
                                             pack_f32x2(values.values[i], values.values[i + 1]),
                                             pack_f32x2(output_scale, output_scale),
                                         );
-                                        let normalized = mul_f32x2(
+                                        let normalized = mul_packed_f32x2(
                                             scaled,
                                             pack_f32x2(normalization, normalization),
                                         );
@@ -855,17 +846,17 @@ pub mod kernels {
                                             let mut pair = 0;
                                             #[unroll]
                                             while pair < 8 {
-                                                packed[pair] = convert::cvt_f16x2_f32(
+                                                packed[pair] = cvt_f16x2_f32(
                                                     values.values[i + pair * 2],
                                                     values.values[i + pair * 2 + 1],
                                                 );
                                                 pair += 1;
                                             }
-                                            cute_rs::store_global_no_allocate(
-                                                out.add(((b * 128 + head) * 512 + column) as usize)
-                                                    .cast::<u32>(),
-                                                &cute_rs::GlobalStoreTile(packed),
-                                            );
+                                            StridedTensorMut::from_disjoint_slice(&mut out)
+                                                .store_global_no_allocate_words_at(
+                                                    ((b * 128 + head) * 512 + column) as usize,
+                                                    &GlobalStoreTile(packed),
+                                                );
                                             i += 16;
                                         }
                                     } else {
@@ -883,32 +874,35 @@ pub mod kernels {
                                                 packed[element] = values.values[i + element];
                                                 element += 1;
                                             }
-                                            cute_rs::store_global_no_allocate(
-                                                partial_out.add(partial_offset(
-                                                    b * 128 + head,
-                                                    split,
-                                                    splits,
-                                                    column,
-                                                )),
-                                                &cute_rs::GlobalStoreTile(packed),
-                                            );
+                                            StridedTensorMut::from_disjoint_slice(&mut partial_out)
+                                                .store_global_no_allocate_at(
+                                                    partial_offset(
+                                                        b * 128 + head,
+                                                        split,
+                                                        splits,
+                                                        column,
+                                                    ),
+                                                    &GlobalStoreTile(packed),
+                                                );
                                             i += 8;
                                         }
                                     }
                                     part += 1;
                                 }
                                 if cw < 2 {
-                                    let value = float::lg2_approx_f32(denominator)
-                                        + scale * metadata.values[1];
+                                    let value = log2_f32(denominator) + scale * metadata.values[1];
                                     if splits == 1 {
-                                        *lse.add((b * 128 + head) as usize) = value;
+                                        StridedTensorMut::from_disjoint_slice(&mut lse)
+                                            .store_at((b * 128 + head) as usize, value);
                                     } else {
-                                        *partial_lse
-                                            .add(((b * 128 + head) * splits + split) as usize) =
-                                            value;
+                                        StridedTensorMut::from_disjoint_slice(&mut partial_lse)
+                                            .store_at(
+                                                ((b * 128 + head) * splits + split) as usize,
+                                                value,
+                                            );
                                     }
                                 }
-                                tmem::load_wait();
+                                fence_view_async_tmem_load();
                                 output.thread_empty(o_ticket);
                                 o_ticket += 1;
                             }
@@ -918,14 +912,14 @@ pub mod kernels {
                     work += stride;
                 }
             } else {
-                thread::setmaxnreg_dec::<96>();
+                setmaxregister_decrease::<96>();
             }
             // No shared or TMEM storage can be reclaimed before every pipeline
             // participant in both CTAs completes its final work item.
-            cluster::barrier_cluster_arrive();
-            cluster::barrier_cluster_wait();
+            cluster_arrive();
+            cluster_wait();
             if wid == 8 {
-                TmemGuard::<TmemReady, 512, CtaGroup2>::adopt_ready(token).dealloc_collective();
+                TmemAllocator::<512, 2>::free(token);
             }
         }
     }
@@ -936,10 +930,10 @@ pub mod kernels {
     #[launch_contract(domain=1,block=(128,1,1),dynamic_shared=1024,
                       dynamic_shared_alignment=16,min_compute_capability=(10,0))]
     pub fn sm100_mla_decode_fp16_reduce_cute_rs(
-        partial_out: *const f32,
-        partial_lse: *const f32,
-        out: *mut f16,
-        lse: *mut f32,
+        partial_out: &[f32],
+        partial_lse: &[f32],
+        mut out: DisjointSlice<f16>,
+        mut lse: DisjointSlice<f32>,
         active_splits: u64,
         splits: u64,
     ) {
@@ -949,8 +943,12 @@ pub mod kernels {
             let splits = splits as u32;
             // The fixed-length host contract supplies the nonempty split count.
             let active = active_splits as u32;
-            let weights = DynamicSharedArray::<f32, 16>::get_raw().cast::<f32>();
+            let weights_ptr = DynamicSharedArray::<f32, 16>::get_raw().cast::<f32>();
+            let lse_in = StridedTensor::from_slice(partial_lse);
+            let partial_in = StridedTensor::from_slice(partial_out);
+            let mut lse_out = StridedTensorMut::from_disjoint_slice(&mut lse);
             if tid < 32 {
+                let mut weights_out = StridedTensorMut::from_raw_parts(weights_ptr, 256, 1);
                 // The source retains all eight LSE candidates per lane in registers.
                 let mut local_lse = [f32::NEG_INFINITY; 8];
                 let mut maximum = f32::NEG_INFINITY;
@@ -959,70 +957,52 @@ pub mod kernels {
                 while i < 8 {
                     let split = tid + i as u32 * 32;
                     if split < active {
-                        local_lse[i] = *partial_lse.add((row * splits + split) as usize);
+                        local_lse[i] = lse_in.get_unchecked((row * splits + split) as usize);
                     }
                     maximum = maxf(maximum, local_lse[i]);
                     i += 1;
                 }
-                let mut mask = 16;
-                while mask > 0 {
-                    maximum = maxf(
-                        maximum,
-                        f32::from_bits(warp::shuffle_xor(maximum.to_bits(), mask)),
-                    );
-                    mask /= 2;
-                }
+                maximum = warp_reduction_max_f32(maximum);
                 let mut sum = 0.0;
                 i = 0;
                 #[unroll]
                 while i < 8 {
-                    sum += float::ex2_approx_ftz_f32(local_lse[i] - maximum);
+                    sum += exp2_ftz_f32(local_lse[i] - maximum);
                     i += 1;
                 }
-                mask = 16;
-                while mask > 0 {
-                    sum += f32::from_bits(warp::shuffle_xor(sum.to_bits(), mask));
-                    mask /= 2;
-                }
-                let global_lse = maximum + float::lg2_approx_f32(sum);
+                sum = warp_reduction_sum_f32(sum);
+                let global_lse = maximum + log2_f32(sum);
                 if tid == 0 {
-                    *lse.add(row as usize) = global_lse;
+                    lse_out.store_at(row as usize, global_lse);
                 }
                 i = 0;
                 #[unroll]
                 while i < 8 {
                     let split = tid + i as u32 * 32;
                     if split < active {
-                        *weights.add(split as usize) =
-                            float::ex2_approx_ftz_f32(local_lse[i] - global_lse);
+                        weights_out
+                            .store_at(split as usize, exp2_ftz_f32(local_lse[i] - global_lse));
                     }
                     i += 1;
                 }
             }
-            barrier::barrier_cta_sync(4, 128);
+            NamedBarrier::<4, 128>::sync();
+            let weights_in = StridedTensor::from_raw_parts(weights_ptr, 256, 1);
             // Share each split weight across four independent output accumulators.
             // Each accumulator retains the reference's increasing-split sum order.
-            let mut values = [0.0f32; 4];
+            let mut values = RegisterTile::from_array([0.0f32; 4]);
             let mut split = 0;
             while split < active {
-                let weight = *weights.add(split as usize);
-                let mut element = 0;
-                #[unroll]
-                while element < 4 {
-                    let c = tid + element as u32 * 128;
-                    values[element] +=
-                        *partial_out.add(partial_offset(row, split, splits, c)) * weight;
-                    element += 1;
-                }
+                let weight = weights_in.get_unchecked(split as usize);
+                let slice = partial_in
+                    .subview_unchecked(partial_offset(row, split, splits, 0), 512)
+                    .load_strided_unchecked::<128, 4>(tid as usize);
+                values = values.zip_map(slice, |acc, val| acc + val * weight);
                 split += 1;
             }
-            let mut element = 0;
-            #[unroll]
-            while element < 4 {
-                let c = tid + element as u32 * 128;
-                *out.add((row * 512 + c) as usize) = values[element] as f16;
-                element += 1;
-            }
+            StridedTensorMut::from_disjoint_slice(&mut out)
+                .subview_unchecked(row as usize * 512, 512)
+                .store_strided_unchecked::<128, 4>(tid as usize, values.map(|v| v as f16));
         }
     }
 }

@@ -1430,8 +1430,12 @@ where
 /// Pushes the device pointer, shape, and stride information to the kernel launcher
 /// in the order expected by compiled tile functions.
 impl<T: DType> ArcKernelArgument for Tensor<T> {
-    fn push_arg_arc(self: &Arc<Self>, launcher: &mut AsyncKernelLaunch) {
-        // TODO (hme): document safety
+    fn push_arg_arc(self: &Arc<Self>, launcher: &mut AsyncKernelLaunchBuilder) {
+        if let Some(buffer) = self.storage.device_buffer() {
+            launcher.retain_buffer(buffer.clone(), false);
+        }
+        // SAFETY: the tensor supplies the pointer and ABI metadata. The raw
+        // launch finalizer checks the kernel signature and access permissions.
         unsafe {
             launcher.push_device_ptr(self.cu_deviceptr());
         }
@@ -1450,8 +1454,12 @@ impl<T: DType> ArcKernelArgument for Tensor<T> {
 /// and strides. This allows kernels to access both the full tensor and the partition
 /// information for block-level indexing.
 impl<T: DType> KernelArgument for &Partition<Tensor<T>> {
-    fn push_arg(self, launcher: &mut AsyncKernelLaunch) {
-        // TODO (hme): document safety
+    fn push_arg(self, launcher: &mut AsyncKernelLaunchBuilder) {
+        if let Some(buffer) = self.object.storage.device_buffer() {
+            launcher.retain_buffer(buffer.clone(), true);
+        }
+        // SAFETY: the partition describes this allocation. The raw finalizer
+        // must establish the kernel signature and disjoint writes.
         unsafe {
             launcher.push_device_ptr(self.object.cu_deviceptr());
         }
@@ -1472,7 +1480,10 @@ impl<T: DType> KernelArgument for &Partition<Tensor<T>> {
 
 /// Same as above but for borrowed mutable tensor partitions.
 impl<T: DType> KernelArgument for &Partition<&mut Tensor<T>> {
-    fn push_arg(self, launcher: &mut AsyncKernelLaunch) {
+    fn push_arg(self, launcher: &mut AsyncKernelLaunchBuilder) {
+        if let Some(buffer) = self.object.storage.device_buffer() {
+            launcher.retain_buffer(buffer.clone(), true);
+        }
         unsafe {
             launcher.push_device_ptr(self.object.cu_deviceptr());
         }

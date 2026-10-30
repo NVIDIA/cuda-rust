@@ -56,7 +56,8 @@ use my_kernels::{apply_relu, apply_relu_square};
 #[test]
 fn smoke_inter_module() {
     common::with_test_stack(|| {
-        let device: std::sync::Arc<cuda_core::Device> = cuda_core::Device::new(0).expect("device");
+        let device: std::sync::Arc<cuda_core::Context> =
+            cuda_core::Context::new(0).expect("device");
         let stream = device.new_stream().expect("stream");
         let block: usize = 64;
         let n: usize = 128;

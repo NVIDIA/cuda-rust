@@ -4,11 +4,11 @@
  */
 
 //! Smoke test: raw async compile-and-launch path via `compile_from_context`
-//! and `AsyncKernelLaunch`. Exercises the low-level async API that higher-
+//! and `AsyncKernelLaunchBuilder`. Exercises the low-level async API that higher-
 //! level kernel launchers wrap.
 
 use cuda_async::device_operation::{value, with_context, DeviceOp};
-use cuda_async::launch::AsyncKernelLaunch;
+use cuda_async::launch::AsyncKernelLaunchBuilder;
 use cuda_core::LaunchConfig;
 use cutile::api::{arange, DeviceOpReshape};
 use cutile::tensor::{IntoPartition, ToHostVec};
@@ -98,18 +98,21 @@ fn smoke_async_saxpy_unsafe() {
 
             let cuda_async_op = async move {
                 let y_part = y.partition(y_partition_shape);
-                let mut launcher = AsyncKernelLaunch::new(function.clone());
                 let x_arc: Arc<_> = x.into();
-                launcher
-                    .push_arg(&y_part)
-                    .push_arg(a)
-                    .push_arg_arc(&x_arc)
-                    .set_launch_config(LaunchConfig {
-                        grid_dim: y_part.grid().expect("Invalid grid."),
-                        block_dim: (1, 1, 1),
-                        shared_mem_bytes: 0,
-                    });
-                launcher.await.expect("Kernel launch failed.");
+                let launch = {
+                    let mut launcher = AsyncKernelLaunchBuilder::new(function.clone());
+                    launcher.push_arg(&y_part).push_arg(a).push_arg_arc(&x_arc);
+                    // SAFETY: the compiled SAXPY signature and partition grid
+                    // match these arguments. Storage is retained independently.
+                    unsafe {
+                        launcher.finalize_unchecked(LaunchConfig {
+                            grid_dim: y_part.grid().expect("grid"),
+                            block_dim: (1, 1, 1),
+                            shared_mem_bytes: 0,
+                        })
+                    }
+                };
+                launch.await.expect("Kernel launch failed.");
                 y_part.unpartition()
             };
             let y = tokio::spawn(cuda_async_op).await.expect("task");

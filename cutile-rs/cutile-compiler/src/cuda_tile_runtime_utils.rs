@@ -8,7 +8,7 @@
 
 use crate::error::JITError;
 use crate::hints::CodegenMode;
-use cuda_core::{get_device_sm_name, Device};
+use cuda_core::{get_device_sm_name, Context};
 use cutile_ir::bytecode::{write_bytecode_version, BytecodeVersion};
 use std::collections::HashMap;
 use std::env;
@@ -57,7 +57,7 @@ impl ToolkitCapabilities {
         type Key = (String, Option<OsString>, String);
         static CACHE: OnceLock<Mutex<HashMap<Key, Arc<ToolkitCapabilities>>>> = OnceLock::new();
         let tileiras = tileiras_binary();
-        let device = Device::raw_device(device_id)
+        let device = Context::raw_device(device_id)
             .map_err(|e| JITError::Generic(format!("cannot query CUDA device {device_id}: {e}")))?;
         // SAFETY: the driver returned this device handle.
         let architecture = unsafe { get_device_sm_name(device) }
@@ -121,7 +121,7 @@ pub fn get_gpu_name(device_id: usize) -> String {
         [const { OnceLock::new() }; MAX_CACHED_DEVICES];
 
     let query = || -> String {
-        let dev = Device::raw_device(device_id).unwrap_or_else(|e| {
+        let dev = Context::raw_device(device_id).unwrap_or_else(|e| {
             panic!(
                 "failed to get CUDA device {device_id}: {e}\n\
                  Ensure an NVIDIA GPU is visible to the process and the CUDA driver is installed."

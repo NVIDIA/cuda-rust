@@ -231,21 +231,22 @@ run_gpu_step \
     "cuda-core GPU integration test vmm_multicast" \
     gpu_test host cuda-core vmm_multicast
 
-# The SIMT integration tests carried over from cuda-oxide. simt_vmm_p2p
+# The SIMT integration tests carried over from cuda-oxide. vmm_p2p
 # exercises the real two-GPU P2P path (it self-skips on single-device
-# machines or when peer access is unavailable); simt_vmm_multicast
+# machines or when peer access is unavailable); vmm_multicast
 # self-skips without NVLink switch multicast support.
 for test_target in \
     borrow_raw \
-    simt_context_limits \
-    simt_context_sync_policy \
-    simt_device_buffer \
-    simt_device_buffer_leaks \
-    simt_pinned_host_buffer \
-    simt_stream_priority \
-    simt_stream_query \
-    simt_vmm_multicast \
-    simt_vmm_p2p
+    context_limits \
+    context_sync_policy \
+    device_buffer \
+    device_buffer_leaks \
+    pinned_host_buffer \
+    stream_priority \
+    stream_query \
+    nvlink_multicast \
+    shared_allocation \
+    vmm_p2p
 do
     run_gpu_step \
         "cuda-core GPU integration test ${test_target}" \
@@ -276,6 +277,12 @@ do
         "cuda-async GPU integration test ${test_target}" \
         gpu_test host cuda-async "$test_target"
 done
+
+run_gpu_step "shared Tile and SIMT host buffer interop" \
+    gpu_test tile cutile shared_host_buffers --serial
+
+run_gpu_step "shared async Tile and SIMT graph replay" \
+    gpu_test tile cutile shared_async_runtime --serial
 
 print_summary_and_exit \
     "All GPU tests passed!" \

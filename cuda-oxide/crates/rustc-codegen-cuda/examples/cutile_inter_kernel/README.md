@@ -32,9 +32,9 @@ input tensor
 softmax_out tensor
     |
     | cuda-oxide SIMT kernel loaded from generated PTX
-    | threshold_scale_f32(softmax_out -> gated_out)
+    | threshold_scale_f32(softmax_out -> same allocation)
     v
-gated_out tensor
+processed tensor (same allocation)
 ```
 
 The Tile stage is intentionally tile-shaped: it uses row reductions and
@@ -84,35 +84,14 @@ PASS: cutile-rs Tile softmax -> cuda-oxide SIMT threshold/scale passed
 
 ## Same stream, shared arrays
 
-The important cutile-rs mechanism is `DeviceOp::then`.
+Both stages use `cuda_async::device_operation::DeviceOp` and its shared execution context.
+`then` submits them to the same stream in order. The example transfers the Tile
+result with `Tensor::into_buffer`, passes it through the shared
+`AsyncKernelLaunchBuilder` / `OwnedAsyncKernelLaunch` API, and returns it with
+`Tensor::from_buffer`. It needs no custom `DeviceOp` implementation.
 
-```text
-tile_softmax::row_softmax(...)
-    .then(|softmax_out| ThresholdScaleKernel { ... })
-```
-
-`then` executes both operations with the same cutile-rs `ExecutionContext`.
-That context owns the CUDA stream, so the Tile launch and cuda-oxide PTX
-launch are submitted to the same stream in order.
-
-The shared arrays are just cutile-rs `Tensor` allocations. The custom SIMT
-`DeviceOp` takes the Tile-produced tensor and passes its raw `CUdeviceptr` to
-the cuda-oxide kernel:
-
-```text
-softmax_out: Tensor<f32>
-    |
-    | device_pointer().cu_deviceptr()
-    v
-threshold_scale_f32(..., input_ptr, output_ptr)
-```
-
-So the interop contract is deliberately small:
-
-```text
-same process
-same CUDA context
-same CUDA stream
-same device allocations
-PTX-loaded cuda-oxide kernel launched as a cutile-rs DeviceOp
-```
+The SIMT kernel reads and overwrites each element in place. Assertions check
+both allocation identity and device address before and after the transition,
+then check every result against the CPU calculation. The only device-to-host
+copy is the final verification readback. Launch descriptors retain the shared
+owner and write access until GPU completion, including early future drop.

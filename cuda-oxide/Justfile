@@ -219,6 +219,7 @@ check-guards:
     bash scripts/check-example-smoketest-contract.sh
     bash scripts/check-crate-inventory.sh
     bash scripts/check-toolchain-parity.sh
+    bash scripts/check-ci-image-pins.sh
     bash scripts/check-cli-doc-coverage.sh
     bash scripts/check-book-api-names.sh
     bash scripts/check-book-catalog-stamp.sh

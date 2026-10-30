@@ -21,7 +21,9 @@ pub mod sm100;
 pub mod sm100_attention;
 pub mod tensor;
 
-pub use copy::{CuteCopyG2SOp, CuteCopyOp, CuteTmaLoad2dOp, CuteTmaStore2dOp};
+pub use copy::{
+    CuteCopyG2SOp, CuteCopyOp, CuteTmaLoad2dOp, CuteTmaStore2dOp, cooperative_elem_bytes,
+};
 pub use divisibility::CuteAssumeDivOp;
 pub use mma::CuteLdmatrixOp;
 

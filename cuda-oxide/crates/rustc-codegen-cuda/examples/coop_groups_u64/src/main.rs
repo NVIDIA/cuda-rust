@@ -38,7 +38,7 @@
 //! Build and run with:
 //!   cargo oxide run coop_groups_u64
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::cooperative_groups::{
     ThreadGroup, WarpCollective, WarpTile, block_reduce, block_scan, coalesced_threads,

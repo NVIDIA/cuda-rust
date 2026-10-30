@@ -4,7 +4,7 @@
  */
 //! Checked composition using existing buffer ownership and typed weight roles.
 use crate::kernel::kernels;
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
 use cute_rs::{
     BFloat16,

@@ -5,7 +5,7 @@
 //! Checked time-major waveform decoder operations.
 
 use crate::{codec_kernel, model::Batch, operator::Result};
-use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig1D, simt::LaunchConfig};
+use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig, LaunchConfig1D};
 use cute_rs::BFloat16;
 use std::sync::Arc;
 

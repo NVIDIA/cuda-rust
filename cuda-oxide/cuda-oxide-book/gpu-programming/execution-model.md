@@ -161,7 +161,7 @@ for architecture-specific SM resource limits and occupancy calculations.
 On the host side, `LaunchConfig` tells the runtime how to shape the grid:
 
 ```rust
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 
 // Quick 1D launch: 256 threads per block, enough blocks to cover N elements
 let cfg = LaunchConfig::for_num_elems(N as u32);

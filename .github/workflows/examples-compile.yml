@@ -3,28 +3,13 @@ name: examples-compile
 
 # Path-filtered SIMT lane (same roots as ci.yml).
 on:
+  # Self-hosted runners reject pull_request. copy-pr-bot mirrors trusted PRs
+  # to pull-request/<n>, and this workflow triggers on that push.
   push:
-    branches: [main]
-    paths:
-      - 'cuda-oxide/**'
-      - 'cuda-bindings/**'
-      - 'cuda-core/**'
-      - 'cuda-core-derive/**'
-      - 'cuda-async/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/**'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'cuda-oxide/**'
-      - 'cuda-bindings/**'
-      - 'cuda-core/**'
-      - 'cuda-core-derive/**'
-      - 'cuda-async/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/**'
+    # No workflow-level paths: filter; the changes job below gates the jobs.
+    branches:
+      - main
+      - "pull-request/[0-9]+"
 
 # Each commit on main gets its own group, so it starts at once. Any other ref
 # still shares one group and cancels the older run.
@@ -35,10 +20,66 @@ concurrency:
 permissions:
   contents: read
 
+# A container job's default shell is dash. The LLVM install and the
+# smoketest steps use `set -o pipefail`.
+defaults:
+  run:
+    shell: bash
+
 jobs:
+  # Path gate. copy-pr-bot creates pull-request/<n> at an existing SHA, and
+  # GitHub often treats that push as having no path changes, so a workflow-level
+  # `paths:` filter would skip the whole run. This job diffs against main
+  # instead, as cutile-rs.yml does, and every job below runs when no file diff
+  # is detected. Other events (schedule, workflow_dispatch) skip the gate.
+  changes:
+    if: github.event_name == 'push'
+    runs-on: linux-amd64-cpu4
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      relevant: ${{ steps.changes.outputs.relevant }}
+      any_changed: ${{ steps.changes.outputs.any_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad  # v3.0.4
+        id: changes
+        with:
+          filters: |
+            relevant:
+              - 'cuda-oxide/**'
+              - 'cuda-bindings/**'
+              - 'cuda-core/**'
+              - 'cuda-core-derive/**'
+              - 'cuda-repr/**'
+              - 'cuda-async/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/**'
+              - '.github/actions/setup-cuda-container/**'
+            # `*` covers a root file, `**` every nested path. Both false means
+            # no file diff was detected.
+            any_changed:
+              - '*'
+              - '**'
+
   examples-compile:
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'push' || needs.changes.outputs.relevant == 'true' || needs.changes.outputs.any_changed != 'true') }}
     name: compile all examples (device pipeline, GPU-less)
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    # CUDA 13.3.1 devel image: nvcc, cudart, libcurand, and libnvJitLink.
+    # The materialization gate below needs nvJitLink, which the devel image
+    # ships. rustup is installed in the container.
+    container:
+      image: nvidia/cuda:13.3.1-devel-ubuntu24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    env:
+      CUDA_TOOLKIT_PATH: /usr/local/cuda
     # Every example crate: backend build + shared dep tree + per-example
     # device codegen. Typically well under an hour with the shared
     # CARGO_TARGET_DIR; the timeout leaves headroom for cold runners.
@@ -46,6 +87,11 @@ jobs:
     # focused 10-minute materialization gate, plus toolkit/LLVM setup.
     timeout-minutes: 75
     steps:
+      # $/ installs git before checkout. The CUDA image has no git; without
+      # it checkout stores a tarball. The same step installs python3 for
+      # sync-example-locks.sh.
+      - uses: $/.github/actions/setup-cuda-container
+
       - name: Clone repository
         uses: actions/checkout@v4
 
@@ -54,24 +100,9 @@ jobs:
       # dependency subtree, so one drifted Cargo.lock silently costs a full
       # dependency-tree rebuild (bindgen over cuda.h included) for that one
       # example -- a 15-70s spike in an otherwise ~2s-per-example run.
-      # Fails fast, before any toolkit install.
+      # Fails fast, before LLVM and the compile.
       - name: Example lockfiles resolve identical dependency versions
         run: bash cuda-oxide/scripts/sync-example-locks.sh --check
-
-      # Needed for cuda.h and curand.h: bindgen runs in the shared
-      # cuda-bindings build script. Same setup as unit-tests.yml / clippy.yml.
-      - name: Install CUDA toolkit
-        uses: Jimver/cuda-toolkit@0ca15bb027fc96f7f61ddbb9c5221d699da06bdb  # v0.2.36
-        id: cuda-toolkit
-        with:
-          cuda: "13.3.1"
-          method: network
-          sub-packages: '["nvcc", "cudart-dev"]'
-          # nvJitLink is packaged separately from cuda-nvcc on Linux. Keep it
-          # in this already-toolkit-backed job so the materialization gate
-          # below exercises the real public command without adding work to
-          # the latency-sensitive fmt job.
-          non-cuda-sub-packages: '["libcurand-dev", "libnvjitlink-dev"]'
 
       # The device pipeline shells out to LLVM's llc/opt for PTX
       # generation. This pin is the FLOOR GATE: if someone lands IR that
@@ -85,20 +116,20 @@ jobs:
       # under-floor llc fails loudly here. The previous floor, LLVM 22 for
       # the ldmatrix/stmatrix family (llc-21 leaked unknown intrinsics
       # into the PTX as `.extern .func`), is covered by the same gate.
-      # If a future ubuntu-latest codename has no llvm-toolchain-*-23
-      # suite, apt-get update fails loudly; recover by pinning runs-on to
-      # the previous image or bumping the LLVM major here.
+      # The container is Ubuntu 24.04, so VERSION_CODENAME is noble.
+      # If apt.llvm.org drops llvm-toolchain-noble-23, this update fails
+      # loudly; recover by bumping the LLVM major here.
       - name: Install LLVM 23 (llc/opt for the NVPTX backend)
         run: |
           set -euo pipefail
           source /etc/os-release
-          sudo install -d -m 0755 /etc/apt/keyrings
+          install -d -m 0755 /etc/apt/keyrings
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-            | sudo tee /etc/apt/keyrings/apt-llvm-org.asc >/dev/null
+            | tee /etc/apt/keyrings/apt-llvm-org.asc >/dev/null
           echo "deb [signed-by=/etc/apt/keyrings/apt-llvm-org.asc] https://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-23 main" \
-            | sudo tee /etc/apt/sources.list.d/llvm-23.list
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends llvm-23
+            | tee /etc/apt/sources.list.d/llvm-23.list
+          apt-get update
+          apt-get install -y --no-install-recommends llvm-23
           llc-23 --version | head -2
           opt-23 --version | head -2
 
@@ -108,7 +139,6 @@ jobs:
         # logs. A step timeout fails the step, so the upload still runs.
         timeout-minutes: 50
         env:
-          CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           CUDA_OXIDE_LLC: /usr/bin/llc-23
           # Each example is its own cargo workspace; without a shared
           # target dir the dep tree rebuilds ~85 times and blows the
@@ -136,7 +166,6 @@ jobs:
         timeout-minutes: 10
         working-directory: cuda-oxide
         env:
-          CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           CUDA_OXIDE_LLC: /usr/bin/llc-23
           CARGO_TARGET_DIR: ${{ runner.temp }}/examples-shared-target
           CARGO_INCREMENTAL: "0"

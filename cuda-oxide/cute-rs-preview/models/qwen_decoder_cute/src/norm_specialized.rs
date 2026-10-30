@@ -7,7 +7,7 @@ use crate::{
     norm_kernel::{ROWS_PER_BLOCK, kernels},
     operator::Result,
 };
-use cuda_core::{CudaStream, DeviceBuffer, simt::LaunchConfig, sys};
+use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig, sys};
 use cute_rs::BFloat16;
 use std::sync::Arc;
 
@@ -330,10 +330,10 @@ pub fn benchmark(stream: Arc<CudaStream>) -> Result<()> {
             };
             let start = stream
                 .context()
-                .new_event(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+                .new_event_with_flags(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
             let end = stream
                 .context()
-                .new_event(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+                .new_event_with_flags(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
             stream.context().synchronize()?;
             let mut submit = |new: bool| -> Result<()> {
                 // SAFETY: ready independent buffers, full warp ownership and

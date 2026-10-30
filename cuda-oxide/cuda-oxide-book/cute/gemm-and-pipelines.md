@@ -44,24 +44,24 @@ consumer = consumer.advance();
 
 ---
 
-## 2. Combining cute-rs and ctm-rs on SM100a (2-CTA GEMM)
+## 2. Two-CTA GEMM and TMEM Epilogues on SM100a
 
 On datacenter Blackwell (`sm_100a`), two CTAs cooperate on a `256×352` output tile (`256×192` + `256×160` N-partitions sharing the A collector) and accumulate into Tensor Memory (TMEM).
 
-`fp16_gemm_256x352_cute` uses **cute-rs** for layout-checked cluster TMA, pipelines, paired MMA, and TMEM epilogue slices (dialect-cute), while using **ctm-rs** for cluster rank, barriers, and collective `TmemGuard` allocation (dialect-nvvm):
+`fp16_gemm_256x352_cute` expresses its cluster TMA, 5-stage `PipelineTmaUmma`, accumulator `PipelineUmmaAsync`, paired `Sm100TiledMma`, collective `Sm100Tmem::<512>`, and `Sm100TmemEpilogue` slices directly through **cute-rs** (`dialect-cute`):
 
 ```{figure} images/sm100-two-cta-gemm.svg
 :align: center
 :width: 100%
 
-In `fp16_gemm_256x352_cute`, cute-rs (teal) owns the 5-stage cluster TMA pipeline, paired 2-CTA MMA, and TMEM epilogue, while ctm-rs (purple) supplies cluster rank, barriers, and `TmemGuard` lifecycle in the same Pliron module.
+In `fp16_gemm_256x352_cute`, cute-rs owns the 5-stage cluster TMA pipeline, paired 2-CTA MMA, collective `Sm100Tmem` lifecycle, and TMEM epilogue, while `cute_rs::arch` supplies cluster rank, barriers, and warp elections.
 ```
 
 ```rust
 // Producer warp (warp 5): acquire the stage, let one elected lane post the
 // expected bytes, then all 32 lanes issue the cluster TMA copies via cute-rs
 pipeline.producer_acquire(stage as u32, phase);
-if rank == 0 && warp::is_elected_sync(u32::MAX) {
+if rank == 0 && elect_one_sync() {
     pipeline.producer_expect_tx(stage as u32);
 }
 let barrier = pipeline.producer_get_barrier(stage as u32);
@@ -71,15 +71,14 @@ Sm100ClusterTmaCopy::copy(b1, &mut b1_tile, col + 192, kt * 64, barrier, rank);
 
 // MMA warp (warp 4, CTA rank 0): paired 2-CTA MMA into TMEM
 pipeline.consumer_wait(stage as u32, phase);
-if warp::is_elected_sync(u32::MAX) {
+if elect_one_sync() {
     mma.gemm(tmem, &a_tile, &b0_tile, &b1_tile, accumulate);
     pipeline.consumer_release(stage as u32);
 }
 
-// Epilogue warps (warps 0..3): allocate TMEM via ctm-rs, drain 11 slices via cute-rs
+// Epilogue warps (warps 0..3): allocate 512 TMEM columns and drain 11 slices via cute-rs
 if warp_id == 0 {
-    TmemGuard::<TmemUninit, 512, CtaGroup2>::from_raw_slot(tmem_token).alloc_collective();
-    tcgen05::relinquish_alloc_permit_cg2();
+    Sm100Tmem::<512>::alloc(tmem_token);
 }
 ```
 

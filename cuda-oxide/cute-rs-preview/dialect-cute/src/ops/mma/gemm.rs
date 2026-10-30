@@ -154,3 +154,93 @@ impl Verify for CuteTiledGemmOp {
         Ok(())
     }
 }
+
+/// Issue one 16x8x64 NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) warp MMA atom.
+///
+/// Operands are `c` (4 `f32`), `a` (4 `u32`), `b` (2 `u32`), `scale_a` (1 `u32`),
+/// and `scale_b` (1 `u32`). Returns the updated 4-`f32` `FragmentC` carrier.
+#[pliron_op(
+    name = "cute.nvfp4_mma_atom",
+    format,
+    interfaces = [NOpdsInterface<5>, NResultsInterface<1>, OneResultInterface],
+    attributes = (nvfp4_mma_atom: crate::attributes::CuteMmaAtomAttr)
+)]
+pub struct CuteNvfp4MmaAtomOp;
+
+impl CuteNvfp4MmaAtomOp {
+    /// Build a detached 16x8x64 NVFP4 warp MMA operation from register carriers.
+    pub fn new(
+        ctx: &mut Context,
+        c: Value,
+        a: Value,
+        b: Value,
+        scale_a: Value,
+        scale_b: Value,
+    ) -> Self {
+        let operation = Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![c.get_type(ctx)],
+                vec![c, a, b, scale_a, scale_b],
+                vec![],
+                0,
+            ),
+        };
+        operation.set_attr_nvfp4_mma_atom(ctx, crate::attributes::CuteMmaAtomAttr::nvf4_m16n8k64());
+        operation
+    }
+
+    /// View an existing operation through this wrapper without allocating or verifying it.
+    pub fn wrap(op: Ptr<Operation>) -> Self {
+        Self { op }
+    }
+
+    /// Return the updated FP32 accumulator carrier.
+    #[must_use]
+    pub fn accumulator(&self, ctx: &Context) -> Value {
+        self.get_operation().deref(ctx).get_result(0)
+    }
+}
+
+impl Verify for CuteNvfp4MmaAtomOp {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        if op.get_num_operands() != 5 || op.get_num_results() != 1 {
+            return verify_err!(
+                op.loc(),
+                "cute.nvfp4_mma_atom needs 5 operands and 1 result"
+            );
+        }
+        if self.get_attr_nvfp4_mma_atom(ctx).as_deref()
+            != Some(&crate::attributes::CuteMmaAtomAttr::nvf4_m16n8k64())
+        {
+            return verify_err!(
+                op.loc(),
+                "cute.nvfp4_mma_atom must carry the nvf4_m16n8k64 atom"
+            );
+        }
+        if let Err(m) = check_carrier(ctx, op.get_operand(0), MmaCarrierShape::f32(4)) {
+            return verify_err!(op.loc(), "cute.nvfp4_mma_atom C input {m}");
+        }
+        if let Err(m) = check_carrier(ctx, op.get_operand(1), MmaCarrierShape::u32(4)) {
+            return verify_err!(op.loc(), "cute.nvfp4_mma_atom A input {m}");
+        }
+        if let Err(m) = check_carrier(ctx, op.get_operand(2), MmaCarrierShape::u32(2)) {
+            return verify_err!(op.loc(), "cute.nvfp4_mma_atom B input {m}");
+        }
+        if let Err(m) = check_carrier(ctx, op.get_operand(3), MmaCarrierShape::u32(1)) {
+            return verify_err!(op.loc(), "cute.nvfp4_mma_atom scale_a input {m}");
+        }
+        if let Err(m) = check_carrier(ctx, op.get_operand(4), MmaCarrierShape::u32(1)) {
+            return verify_err!(op.loc(), "cute.nvfp4_mma_atom scale_b input {m}");
+        }
+        if self.accumulator(ctx).get_type(ctx) != op.get_operand(0).get_type(ctx) {
+            return verify_err!(
+                op.loc(),
+                "cute.nvfp4_mma_atom result must preserve the C carrier type"
+            );
+        }
+        Ok(())
+    }
+}

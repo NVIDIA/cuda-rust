@@ -20,28 +20,22 @@ pub fn impl_device_copy(input: &DeriveInput, import: TokenStream) -> TokenStream
     // type-bound on DeviceCopy and call it with every type that's in the struct/union.
     // This will fail to compile if any of the nested types doesn't implement DeviceCopy.
     //
-    // Enums are deliberately rejected: `DeviceCopy`'s safety contract requires
-    // every bit pattern, including the all-zero pattern written by
-    // `DeviceBuffer::zeroed`, to be a valid value of the type. That holds for
-    // product types (structs/unions) when every field is `DeviceCopy`, but NOT
-    // for enums, whose discriminant leaves most byte patterns invalid. A zeroed
-    // or device-written buffer could then materialize an out-of-range
-    // discriminant (undefined behavior). This is the same reason `bool`, `char`,
-    // and `NonZeroU32` are not `DeviceCopy`. Per-field checking is necessary but
-    // not sufficient for enums, so we refuse rather than emit an unsound impl.
+    // Enums need more than field checks: the all-zero representation must also
+    // select a valid discriminant and payload. This derive does not analyze
+    // enum layouts, so it conservatively rejects them. DeviceCopy does not
+    // require every bit pattern to be valid (bool implements it); an enum with
+    // a valid zero representation can have a manually justified unsafe impl.
     let check_types_code = match input.data {
         Data::Struct(ref data_struct) => type_check_struct(data_struct),
         Data::Union(ref data_union) => type_check_union(data_union),
         Data::Enum(_) => {
             return syn::Error::new_spanned(
                 input_type,
-                "`#[derive(DeviceCopy)]` cannot be applied to enums: `DeviceCopy` requires \
-                 every bit pattern (including the all-zero pattern written by \
-                 `DeviceBuffer::zeroed`) to be a valid value, but an enum's discriminant \
-                 leaves most byte patterns invalid, so a zeroed or device-written buffer \
-                 could materialize an out-of-range discriminant (undefined behavior). If you \
-                 can guarantee every device-produced byte pattern is a valid variant, write \
-                 `unsafe impl DeviceCopy for ... {}` by hand.",
+                "`#[derive(DeviceCopy)]` cannot be applied to enums: this derive cannot \
+                 prove that the all-zero representation selects a valid discriminant and \
+                 payload. `DeviceCopy` requires byte-copyable values and a valid all-zero \
+                 representation, but not validity of every bit pattern. If the enum meets \
+                 the full safety contract, write `unsafe impl DeviceCopy for ... {}` by hand.",
             )
             .to_compile_error();
         }

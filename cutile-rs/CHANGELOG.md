@@ -7,8 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Tile and SIMT share `cuda_async` operations, scheduling, futures and launch
+  marshalling; the separate `cuda_async::simt` namespace is removed. Raw launch
+  packets require unsafe finalization before scheduling. Generic scalar Tile
+  parameters require `DeviceCopy` alongside `DType`.
+- Dropping a host future returns without waiting for GPU work. Submissions
+  retain allocations and access leases independently through completion,
+  including graph replay and partial-error paths.
+
 ### Fixed
 
+- Retiring tensor completion leases retain allocation access independently of
+  user-visible buffer views. Converting a uniquely owned tensor into a buffer
+  no longer reports a false alias while completion retirement is pending.
+- Safe `DeviceBuffer` element and chunk casts require `NoUninit` on the source,
+  preventing `MaybeUninit` elements or struct padding from becoming initialized
+  destination values. Boolean-to-byte casts remain supported.
+- Tensor uniqueness tracks user-visible aliases separately from completion
+  leases. Concurrent lease creation or release can no longer permit an aliased
+  mutable partition or spuriously reject unique storage.
+- Host-side `KernelInputStored` and `KernelOutputStored` require `unsafe impl`
+  with explicit type, ABI, extent, retention, and access obligations. Safe custom
+  bindings can no longer mislabel boolean storage as byte kernel arguments.
+- `PinnedHostBuffer` aligns its usable pointer for the element type and frees
+  the original CUDA allocation. Highly aligned host elements no longer produce
+  misaligned Rust slices; sizes exceeding Rust's slice limits are rejected.
+- `DeviceBuffer::zeroed` waits for initialization to finish before returning,
+  so another stream cannot read uninitialized element representations.
+- Atomic buffer conversions use `DeviceRepr` instead of `TransparentWrapper`,
+  preserving owned-buffer conversions without permitting invalid shared-reference
+  conversions between atomics and their scalar representations.
+- `Tensor::reinterpret` requires the target element type to implement
+  `bytemuck::AnyBitPattern`. Reinterpreting byte storage as `Tensor<bool>`
+  could expose values other than `0` and `1`, which is undefined behavior
+  when the tensor is read back, and is now a compile error. Numeric element
+  types, including `f16`, `bf16`, and the FP8 and packed FP4 storage types,
+  are unaffected (NVIDIA/cuda-rust#1506).
+- Generated kernel entry setup and assumptions now use the user function's
+  signature as their source location, preserving the inlined body's own
+  statement locations and helper scopes.
 - Generated constants without captured source spans use their containing
   function definition, retaining exact user-expression locations and nested
   cross-file inline caller chains.
@@ -22,6 +61,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Advance the lockstep Tile and shared host crates to v0.5.0 for the breaking
+  safety-contract and host-runtime changes.
+- Tile and SIMT now share the `cuda-core` context, stream, event, module, launch
+  configuration, and allocation types. Replace `cuda_core::simt` imports with
+  crate-root imports; use `Context` for context ownership and `Device` for a
+  physical GPU identity. Foreign allocations must provide their actual context.
+- Typed buffers and tensors can share allocations without copying through
+  `Tensor::from_buffer`, `Tensor::into_buffer`, and contiguous borrowed buffer
+  views. Views share context identity, byte offsets, and access exclusion.
+  Completion leases retain allocations after early drops and forgotten launches;
+  buffer and stream cleanup no longer waits for GPU work on the dropping thread.
+- Tile numeric storage wrappers implement `DeviceCopy` alongside `DType`; the
+  traits remain independent and packed FP4 keeps its byte storage representation.
 - `CompileOptions` uses one `CodegenMode` for device debugging and optimization.
   The last `debug_info(...)` or `opt_level(...)` setter wins; full debugging
   always uses optimization level zero. Replace `device_debug(true)` with
@@ -88,7 +140,7 @@ paths have lower overhead.
   globals, and module producer metadata. Existing signatures are preserved
   (#298).
 - Unsafe per-launch `programmatic_dependent_launch()` on generated builders
-  and `AsyncKernelLaunch`, with runtime driver entry-point lookup
+  and `AsyncKernelLaunchBuilder`, with runtime driver entry-point lookup
   (Tile IR 13.4, `sm_90+`) (#298).
 - Tile IR 13.4 bytecode with assembler version negotiation. Version and
   architecture checks run before JIT assembly. The writer preserves
@@ -212,7 +264,7 @@ on 0.3.0.
   returns `Result<(), DeviceError>`.
 - Generated kernel launchers return a nameable `Launcher<…, KernelArgs<…>>`
   instead of `impl DeviceOp` and implement `GraphNode` only when every input
-  does; `AsyncKernelLaunch::args` is no longer public.
+  does; `AsyncKernelLaunchBuilder::args` is no longer public.
 - `TrialLog::open` takes a `LogProvenance` (`experimental-tune`).
 - `BytecodeVersion::V13_1` is removed; the bytecode floor is CUDA 13.2.
 - Kernel programs: a `return` below the function body and a `break` inside

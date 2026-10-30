@@ -45,6 +45,74 @@ impl<const COLUMNS: u32> Sm100Tmem<COLUMNS> {
     }
 }
 
+/// Two-CTA cluster rendezvous barrier ordering collective TMEM deallocation.
+///
+/// In a two-CTA SM100 GEMM, neither CTA may free its TMEM columns until both
+/// CTAs' epilogue warps have completed all TMEM reads. Each CTA initializes one
+/// shared barrier with arrival count 32; warp zero's 32 lanes synchronize
+/// locally, signal the peer CTA's barrier via DSMEM, and wait for parity 0
+/// before calling [`Sm100Tmem::dealloc`].
+#[derive(Clone, Copy)]
+pub struct Sm100DeallocBarrier {
+    /// Local shared 64-bit mbarrier at identical byte offsets in both CTAs.
+    bar: *mut ctm_rs::mbarrier::Barrier,
+}
+
+impl Sm100DeallocBarrier {
+    /// Wrap a shared-memory barrier slot reserved for two-CTA TMEM deallocation.
+    ///
+    /// # Safety
+    ///
+    /// `bar` must point to a live, 8-byte-aligned shared barrier at the same
+    /// dynamic shared-memory offset in both CTAs of the cluster.
+    #[must_use]
+    #[inline(always)]
+    pub const unsafe fn from_raw(bar: *mut ctm_rs::mbarrier::Barrier) -> Self {
+        Self { bar }
+    }
+
+    /// Initialize the deallocation barrier for 32 remote warp-zero arrivals.
+    ///
+    /// # Safety
+    ///
+    /// Call once from one elected lane in each CTA before publishing barrier
+    /// initialization across the cluster.
+    #[inline(always)]
+    pub unsafe fn init(&self) {
+        unsafe {
+            ctm_rs::mbarrier::ManagedBarrier::<
+                ctm_rs::mbarrier::Uninit,
+                ctm_rs::mbarrier::GeneralBarrier,
+            >::from_static(self.bar)
+            .init_instruction(32);
+        }
+    }
+
+    /// Synchronize warp zero, arrive on the peer CTA's barrier, and wait until both CTAs finish.
+    ///
+    /// # Safety
+    ///
+    /// All 32 lanes of warp zero in both CTAs must call this operation after
+    /// completing all TMEM loads and TMA store tails, with `rank` set to
+    /// `cute_rs::arch::block_idx_in_cluster()`.
+    #[inline(always)]
+    pub unsafe fn sync_cluster(&self, rank: u32) {
+        unsafe {
+            crate::arch::NamedBarrier::<3, 32>::sync();
+            let peer = crate::arch::map_dsmem_ptr(
+                ctm_rs::memory::SharedAddress::from_raw(self.bar),
+                rank ^ 1,
+            );
+            ctm_rs::cluster::arrive_remote(peer);
+            let ready = ctm_rs::mbarrier::ManagedBarrier::<
+                ctm_rs::mbarrier::Ready,
+                ctm_rs::mbarrier::GeneralBarrier,
+            >::adopt_ready(self.bar);
+            while !ctm_rs::mbarrier::try_wait_parity_cluster(&ready, 0) {}
+        }
+    }
+}
+
 /// Convert one 128x32 FP32 accumulator slice to an FP16 tile in shared memory.
 pub struct Sm100TmemEpilogue<Layout>(
     #[doc = "Carries the shared output layout required by readback and TMA."] PhantomData<Layout>,

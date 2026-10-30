@@ -3,7 +3,7 @@ resolver = "3"
 members = [
     # Stable host-side crates shared by the Tile and SIMT components.
     # Package metadata and dependencies stay in each crate so this workspace
-    # does not impose CUDA Oxide's nightly toolchain or edition.
+    # does not impose CUDA Oxide's workspace toolchain pin or edition.
     "cuda-bindings",
     "cuda-core",
     "cuda-core-derive",

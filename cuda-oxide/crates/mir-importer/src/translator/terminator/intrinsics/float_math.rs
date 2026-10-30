@@ -16,543 +16,75 @@ use pliron::location::Location;
 use pliron::operation::Operation;
 use rustc_public::mir;
 
-/// Floating-point math intrinsic from libcore.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RustFloatMathIntrinsic {
-    /// `core::intrinsics::sqrtf32`.
-    SqrtF32,
-    /// `core::intrinsics::sqrtf64`.
-    SqrtF64,
-    /// `core::intrinsics::powif32`.
-    PowiF32,
-    /// `core::intrinsics::powif64`.
-    PowiF64,
-    /// `core::intrinsics::sinf32`.
-    SinF32,
-    /// `core::intrinsics::sinf64`.
-    SinF64,
-    /// `core::intrinsics::cosf32`.
-    CosF32,
-    /// `core::intrinsics::cosf64`.
-    CosF64,
-    /// `core::intrinsics::tanf32`.
-    TanF32,
-    /// `core::intrinsics::tanf64`.
-    TanF64,
-    /// `core::intrinsics::powf32`.
-    PowfF32,
-    /// `core::intrinsics::powf64`.
-    PowfF64,
-    /// `core::intrinsics::expf32`.
-    ExpF32,
-    /// `core::intrinsics::expf64`.
-    ExpF64,
-    /// `core::intrinsics::exp2f32`.
-    Exp2F32,
-    /// `core::intrinsics::exp2f64`.
-    Exp2F64,
-    /// `core::intrinsics::logf32`.
-    LogF32,
-    /// `core::intrinsics::logf64`.
-    LogF64,
-    /// `core::intrinsics::log2f32`.
-    Log2F32,
-    /// `core::intrinsics::log2f64`.
-    Log2F64,
-    /// `core::intrinsics::log10f32`.
-    Log10F32,
-    /// `core::intrinsics::log10f64`.
-    Log10F64,
-    /// `core::intrinsics::fmaf32`.
-    FmaF32,
-    /// `core::intrinsics::fmaf64`.
-    FmaF64,
-    /// `core::intrinsics::fmuladdf32`.
-    FmuladdF32,
-    /// `core::intrinsics::fmuladdf64`.
-    FmuladdF64,
-    /// `core::intrinsics::floorf32`.
-    FloorF32,
-    /// `core::intrinsics::floorf64`.
-    FloorF64,
-    /// `core::intrinsics::ceilf32`.
-    CeilF32,
-    /// `core::intrinsics::ceilf64`.
-    CeilF64,
-    /// `core::intrinsics::truncf32`.
-    TruncF32,
-    /// `core::intrinsics::truncf64`.
-    TruncF64,
-    /// `core::intrinsics::roundf32`.
-    RoundF32,
-    /// `core::intrinsics::roundf64`.
-    RoundF64,
-    /// `core::intrinsics::round_ties_even_f32`.
-    RoundevenF32,
-    /// `core::intrinsics::round_ties_even_f64`.
-    RoundevenF64,
-    /// Generic `core::intrinsics::fabs`.
-    Fabs,
-    /// `core::intrinsics::copysignf32`.
-    CopysignF32,
-    /// `core::intrinsics::copysignf64`.
-    CopysignF64,
-    /// `core::intrinsics::maximum_number_nsz_f32` (backs `f32::max`).
-    MaxNumNszF32,
-    /// `core::intrinsics::maximum_number_nsz_f64` (backs `f64::max`).
-    MaxNumNszF64,
-    /// `core::intrinsics::minimum_number_nsz_f32` (backs `f32::min`).
-    MinNumNszF32,
-    /// `core::intrinsics::minimum_number_nsz_f64` (backs `f64::min`).
-    MinNumNszF64,
-    /// `f32::asin` / `std::sys::cmath::asinf`.
-    AsinF32,
-    /// `f64::asin` / `std::sys::cmath::asin`.
-    AsinF64,
-    /// `f32::acos` / `std::sys::cmath::acosf`.
-    AcosF32,
-    /// `f64::acos` / `std::sys::cmath::acos`.
-    AcosF64,
-    /// `f32::atan2` / `std::sys::cmath::atan2f`.
-    Atan2F32,
-    /// `f64::atan2` / `std::sys::cmath::atan2`.
-    Atan2F64,
-    /// `f32::atan` / `std::sys::cmath::atanf`.
-    AtanF32,
-    /// `f64::atan` / `std::sys::cmath::atan`.
-    AtanF64,
-    /// `f32::cbrt` / `std::sys::cmath::cbrtf`.
-    CbrtF32,
-    /// `f64::cbrt` / `std::sys::cmath::cbrt`.
-    CbrtF64,
-    /// `f32::sinh` / `std::sys::cmath::sinhf`.
-    SinhF32,
-    /// `f64::sinh` / `std::sys::cmath::sinh`.
-    SinhF64,
-    /// `f32::cosh` / `std::sys::cmath::coshf`.
-    CoshF32,
-    /// `f64::cosh` / `std::sys::cmath::cosh`.
-    CoshF64,
-    /// `f32::tanh` / `std::sys::cmath::tanhf`.
-    TanhF32,
-    /// `f64::tanh` / `std::sys::cmath::tanh`.
-    TanhF64,
-    /// `f32::asinh` / `std::sys::cmath::asinhf`.
-    AsinhF32,
-    /// `f64::asinh` / `std::sys::cmath::asinh`.
-    AsinhF64,
-    /// `f32::acosh` / `std::sys::cmath::acoshf`.
-    AcoshF32,
-    /// `f64::acosh` / `std::sys::cmath::acosh`.
-    AcoshF64,
-    /// `f32::atanh` / `std::sys::cmath::atanhf`.
-    AtanhF32,
-    /// `f64::atanh` / `std::sys::cmath::atanh`.
-    AtanhF64,
-    /// `f32::exp_m1` / `std::sys::cmath::expm1f`.
-    Expm1F32,
-    /// `f64::exp_m1` / `std::sys::cmath::expm1`.
-    Expm1F64,
-    /// `f32::ln_1p` / `std::sys::cmath::log1pf`.
-    Log1pF32,
-    /// `f64::ln_1p` / `std::sys::cmath::log1p`.
-    Log1pF64,
-    /// `f32::hypot` / `std::sys::cmath::hypotf` (binary).
-    HypotF32,
-    /// `f64::hypot` / `std::sys::cmath::hypot` (binary).
-    HypotF64,
-    /// Generic `core::intrinsics::fadd_fast` (lowered to `llvm.fadd` + fast-math).
-    FaddFast,
-    /// Generic `core::intrinsics::fsub_fast` (lowered to `llvm.fsub` + fast-math).
-    FsubFast,
-    /// Generic `core::intrinsics::fmul_fast` (lowered to `llvm.fmul` + fast-math).
-    FmulFast,
-    /// Generic `core::intrinsics::fdiv_fast` (lowered to `llvm.fdiv` + fast-math).
-    FdivFast,
-    /// Generic `core::intrinsics::frem_fast` (lowered to `llvm.frem` + fast-math).
-    FremFast,
-}
+pub use dialect_mir::rust_intrinsics::{RustFloatMathIntrinsic, is_libm_path, libm_sincos_is_f64};
 
-impl RustFloatMathIntrinsic {
-    /// Resolve both the historical width-specific paths and the generic unary
-    /// intrinsics introduced by the pinned nightly. Generic calls carry their
-    /// width in rustc's monomorphized type arguments, never in a display name.
-    pub fn from_core_path_with_substs(
-        name: &str,
-        type_substs: &[rustc_public::ty::Ty],
-    ) -> Result<Option<Self>, String> {
-        use rustc_public::ty::{RigidTy, TyKind};
+/// Resolve generic math intrinsics using rustc's monomorphized float type.
+pub fn from_core_path_with_substs(
+    name: &str,
+    type_substs: &[rustc_public::ty::Ty],
+) -> Result<Option<RustFloatMathIntrinsic>, String> {
+    use rustc_public::ty::{RigidTy, TyKind};
 
-        if let Some(intrinsic) = Self::from_core_path(name) {
-            return Ok(Some(intrinsic));
-        }
-        let float_ty = match type_substs {
-            [ty] => match ty.kind() {
-                TyKind::RigidTy(RigidTy::Float(float_ty)) => Some(float_ty),
-                _ => None,
-            },
+    if let Some(intrinsic) = RustFloatMathIntrinsic::from_core_path(name) {
+        return Ok(Some(intrinsic));
+    }
+    let float_ty = match type_substs {
+        [ty] => match ty.kind() {
+            TyKind::RigidTy(RigidTy::Float(float_ty)) => Some(float_ty),
             _ => None,
-        };
-        Self::from_generic_core_path(name, float_ty)
-    }
-
-    fn from_generic_core_path(
-        name: &str,
-        float_ty: Option<rustc_public::ty::FloatTy>,
-    ) -> Result<Option<Self>, String> {
-        use rustc_public::ty::FloatTy;
-
-        // These exact declarations are `fn<T: FloatPrimitive>(T) -> T`.
-        // Reuse the existing f32/f64 placeholders and libdevice lowerings;
-        // unsupported widths must not be silently narrowed.
-        let (f32_intrinsic, f64_intrinsic) = match name {
-            "core::intrinsics::sin" | "std::intrinsics::sin" => (Self::SinF32, Self::SinF64),
-            "core::intrinsics::cos" | "std::intrinsics::cos" => (Self::CosF32, Self::CosF64),
-            "core::intrinsics::exp" | "std::intrinsics::exp" => (Self::ExpF32, Self::ExpF64),
-            "core::intrinsics::exp2" | "std::intrinsics::exp2" => (Self::Exp2F32, Self::Exp2F64),
-            "core::intrinsics::log" | "std::intrinsics::log" => (Self::LogF32, Self::LogF64),
-            "core::intrinsics::log2" | "std::intrinsics::log2" => (Self::Log2F32, Self::Log2F64),
-            "core::intrinsics::log10" | "std::intrinsics::log10" => {
-                (Self::Log10F32, Self::Log10F64)
-            }
-            _ => return Ok(None),
-        };
-        match float_ty {
-            Some(FloatTy::F32) => Ok(Some(f32_intrinsic)),
-            Some(FloatTy::F64) => Ok(Some(f64_intrinsic)),
-            _ => Err(format!(
-                "generic float intrinsic `{name}` requires one f32 or f64 type argument; found {float_ty:?}"
-            )),
-        }
-    }
-
-    /// Recognize the libcore intrinsic path that survived into MIR.
-    pub fn from_core_path(name: &str) -> Option<Self> {
-        match name {
-            "core::intrinsics::sqrtf32" | "std::intrinsics::sqrtf32" => Some(Self::SqrtF32),
-            "core::intrinsics::sqrtf64" | "std::intrinsics::sqrtf64" => Some(Self::SqrtF64),
-            "core::intrinsics::powif32" | "std::intrinsics::powif32" => Some(Self::PowiF32),
-            "core::intrinsics::powif64" | "std::intrinsics::powif64" => Some(Self::PowiF64),
-            "core::intrinsics::sinf32" | "std::intrinsics::sinf32" => Some(Self::SinF32),
-            "core::intrinsics::sinf64" | "std::intrinsics::sinf64" => Some(Self::SinF64),
-            "core::intrinsics::cosf32" | "std::intrinsics::cosf32" => Some(Self::CosF32),
-            "core::intrinsics::cosf64" | "std::intrinsics::cosf64" => Some(Self::CosF64),
-            "core::intrinsics::tanf32" | "std::intrinsics::tanf32" => Some(Self::TanF32),
-            "core::intrinsics::tanf64" | "std::intrinsics::tanf64" => Some(Self::TanF64),
-            "core::intrinsics::powf32" | "std::intrinsics::powf32" => Some(Self::PowfF32),
-            "core::intrinsics::powf64" | "std::intrinsics::powf64" => Some(Self::PowfF64),
-            "core::intrinsics::expf32" | "std::intrinsics::expf32" => Some(Self::ExpF32),
-            "core::intrinsics::expf64" | "std::intrinsics::expf64" => Some(Self::ExpF64),
-            "core::intrinsics::exp2f32" | "std::intrinsics::exp2f32" => Some(Self::Exp2F32),
-            "core::intrinsics::exp2f64" | "std::intrinsics::exp2f64" => Some(Self::Exp2F64),
-            "core::intrinsics::logf32" | "std::intrinsics::logf32" => Some(Self::LogF32),
-            "core::intrinsics::logf64" | "std::intrinsics::logf64" => Some(Self::LogF64),
-            "core::intrinsics::log2f32" | "std::intrinsics::log2f32" => Some(Self::Log2F32),
-            "core::intrinsics::log2f64" | "std::intrinsics::log2f64" => Some(Self::Log2F64),
-            "core::intrinsics::log10f32" | "std::intrinsics::log10f32" => Some(Self::Log10F32),
-            "core::intrinsics::log10f64" | "std::intrinsics::log10f64" => Some(Self::Log10F64),
-            "core::intrinsics::fmaf32" | "std::intrinsics::fmaf32" => Some(Self::FmaF32),
-            "core::intrinsics::fmaf64" | "std::intrinsics::fmaf64" => Some(Self::FmaF64),
-            "core::intrinsics::fmuladdf32" | "std::intrinsics::fmuladdf32" => {
-                Some(Self::FmuladdF32)
-            }
-            "core::intrinsics::fmuladdf64" | "std::intrinsics::fmuladdf64" => {
-                Some(Self::FmuladdF64)
-            }
-            "core::intrinsics::floorf32" | "std::intrinsics::floorf32" => Some(Self::FloorF32),
-            "core::intrinsics::floorf64" | "std::intrinsics::floorf64" => Some(Self::FloorF64),
-            "core::intrinsics::ceilf32" | "std::intrinsics::ceilf32" => Some(Self::CeilF32),
-            "core::intrinsics::ceilf64" | "std::intrinsics::ceilf64" => Some(Self::CeilF64),
-            "core::intrinsics::truncf32" | "std::intrinsics::truncf32" => Some(Self::TruncF32),
-            "core::intrinsics::truncf64" | "std::intrinsics::truncf64" => Some(Self::TruncF64),
-            "core::intrinsics::roundf32" | "std::intrinsics::roundf32" => Some(Self::RoundF32),
-            "core::intrinsics::roundf64" | "std::intrinsics::roundf64" => Some(Self::RoundF64),
-            "core::intrinsics::round_ties_even_f32" | "std::intrinsics::round_ties_even_f32" => {
-                Some(Self::RoundevenF32)
-            }
-            "core::intrinsics::round_ties_even_f64" | "std::intrinsics::round_ties_even_f64" => {
-                Some(Self::RoundevenF64)
-            }
-            "core::intrinsics::fabs" | "std::intrinsics::fabs" => Some(Self::Fabs),
-            "core::intrinsics::copysignf32" | "std::intrinsics::copysignf32" => {
-                Some(Self::CopysignF32)
-            }
-            "core::intrinsics::copysignf64" | "std::intrinsics::copysignf64" => {
-                Some(Self::CopysignF64)
-            }
-            "core::intrinsics::maximum_number_nsz_f32"
-            | "std::intrinsics::maximum_number_nsz_f32" => Some(Self::MaxNumNszF32),
-            "core::intrinsics::maximum_number_nsz_f64"
-            | "std::intrinsics::maximum_number_nsz_f64" => Some(Self::MaxNumNszF64),
-            "core::intrinsics::minimum_number_nsz_f32"
-            | "std::intrinsics::minimum_number_nsz_f32" => Some(Self::MinNumNszF32),
-            "core::intrinsics::minimum_number_nsz_f64"
-            | "std::intrinsics::minimum_number_nsz_f64" => Some(Self::MinNumNszF64),
-            // Trig that still routes through `std`'s libm shim. On current
-            // nightlies `core_float_math` moves `sin`/`cos` into core
-            // intrinsics (caught above), but `tan` is *not* in that feature,
-            // so `f{32,64}::tan()` lowers to `std::sys::cmath::tan{,f}` and
-            // would otherwise trip the forbidden-`std`-crate guard. Intercept
-            // it (and sin/cos defensively, for toolchains/builds that take the
-            // std path) and lower to `__nv_tan{,f}` like every other libdevice
-            // math call.
-            "std::sys::cmath::sinf" => Some(Self::SinF32),
-            "std::sys::cmath::sin" => Some(Self::SinF64),
-            "std::sys::cmath::cosf" => Some(Self::CosF32),
-            "std::sys::cmath::cos" => Some(Self::CosF64),
-            "std::sys::cmath::tanf" => Some(Self::TanF32),
-            "std::sys::cmath::tan" => Some(Self::TanF64),
-            "std::sys::cmath::asinf" => Some(Self::AsinF32),
-            "std::sys::cmath::asin" => Some(Self::AsinF64),
-            "std::sys::cmath::acosf" => Some(Self::AcosF32),
-            "std::sys::cmath::acos" => Some(Self::AcosF64),
-            "std::sys::cmath::atan2f" => Some(Self::Atan2F32),
-            "std::sys::cmath::atan2" => Some(Self::Atan2F64),
-            "std::sys::cmath::atanf" => Some(Self::AtanF32),
-            "std::sys::cmath::atan" => Some(Self::AtanF64),
-            "std::sys::cmath::cbrtf" => Some(Self::CbrtF32),
-            "std::sys::cmath::cbrt" => Some(Self::CbrtF64),
-            "core::num::imp::libm::cbrtf" => Some(Self::CbrtF32),
-            "core::num::imp::libm::cbrt" => Some(Self::CbrtF64),
-            // Hyperbolic + extended transcendentals. Like `tan`, none of
-            // these are in `core_float_math`, so `f{32,64}::{sinh,..,hypot}()`
-            // lower to their `std::sys::cmath::*` shims and would hit the
-            // std-crate guard without interception.
-            "std::sys::cmath::sinhf" => Some(Self::SinhF32),
-            "std::sys::cmath::sinh" => Some(Self::SinhF64),
-            "std::sys::cmath::coshf" => Some(Self::CoshF32),
-            "std::sys::cmath::cosh" => Some(Self::CoshF64),
-            "std::sys::cmath::tanhf" => Some(Self::TanhF32),
-            "std::sys::cmath::tanh" => Some(Self::TanhF64),
-            // Inverse hyperbolics: pure-Rust formulas in `std` before
-            // nightly-2026-08-28. On this nightly (rustc e457a7b0d) only
-            // asinh/acosh became `std::sys::cmath` shims; atanh keeps its
-            // pure-Rust `ln_1p` formula and cmath declares no atanh, so the
-            // atanh arms are defensive, for when std makes the same move.
-            "std::sys::cmath::asinhf" => Some(Self::AsinhF32),
-            "std::sys::cmath::asinh" => Some(Self::AsinhF64),
-            "std::sys::cmath::acoshf" => Some(Self::AcoshF32),
-            "std::sys::cmath::acosh" => Some(Self::AcoshF64),
-            "std::sys::cmath::atanhf" => Some(Self::AtanhF32),
-            "std::sys::cmath::atanh" => Some(Self::AtanhF64),
-            "std::sys::cmath::expm1f" => Some(Self::Expm1F32),
-            "std::sys::cmath::expm1" => Some(Self::Expm1F64),
-            "std::sys::cmath::log1pf" => Some(Self::Log1pF32),
-            "std::sys::cmath::log1p" => Some(Self::Log1pF64),
-            "std::sys::cmath::hypotf" => Some(Self::HypotF32),
-            "std::sys::cmath::hypot" => Some(Self::HypotF64),
-            other => Self::from_libm_path(other).or_else(|| Self::from_fast_intrinsic_path(other)),
-        }
-    }
-
-    /// Recognize `libm` crate float functions (the `nostd-libm` lowering used
-    /// by glam on nvptx, e.g. `libm::math::sqrt::sqrtf`). These dependency-rlib
-    /// functions frequently lack exportable MIR downstream, so we intercept them
-    /// and lower to the same libdevice intrinsics as the core-intrinsic forms,
-    /// giving hardware math instead of software libm. Match on the final path
-    /// segment so both the canonical (`libm::math::sqrt::sqrtf`) and re-exported
-    /// (`libm::sqrtf`) spellings are caught.
-    fn from_libm_path(name: &str) -> Option<Self> {
-        if !is_libm_path(name) {
-            return None;
-        }
-        let seg = name.rsplit("::").next().unwrap_or(name);
-        match seg {
-            "sqrtf" => Some(Self::SqrtF32),
-            "sqrt" => Some(Self::SqrtF64),
-            "sinf" => Some(Self::SinF32),
-            "sin" => Some(Self::SinF64),
-            "cosf" => Some(Self::CosF32),
-            "cos" => Some(Self::CosF64),
-            "tanf" => Some(Self::TanF32),
-            "tan" => Some(Self::TanF64),
-            "expf" => Some(Self::ExpF32),
-            "exp" => Some(Self::ExpF64),
-            "exp2f" => Some(Self::Exp2F32),
-            "exp2" => Some(Self::Exp2F64),
-            "logf" => Some(Self::LogF32),
-            "log" => Some(Self::LogF64),
-            "log2f" => Some(Self::Log2F32),
-            "log2" => Some(Self::Log2F64),
-            "log10f" => Some(Self::Log10F32),
-            "log10" => Some(Self::Log10F64),
-            // libm: `powf` is the f32 power, `pow` is the f64 power.
-            "powf" => Some(Self::PowfF32),
-            "pow" => Some(Self::PowfF64),
-            "floorf" => Some(Self::FloorF32),
-            "floor" => Some(Self::FloorF64),
-            "ceilf" => Some(Self::CeilF32),
-            "ceil" => Some(Self::CeilF64),
-            "truncf" => Some(Self::TruncF32),
-            "trunc" => Some(Self::TruncF64),
-            "roundf" => Some(Self::RoundF32),
-            "round" => Some(Self::RoundF64),
-            // libm's `rint` documents round-half-to-even; the device has no
-            // dynamic rounding mode, so it shares the roundeven lowering.
-            "rintf" | "roundevenf" => Some(Self::RoundevenF32),
-            "rint" | "roundeven" => Some(Self::RoundevenF64),
-            "fmaf" => Some(Self::FmaF32),
-            "fma" => Some(Self::FmaF64),
-            "fabsf" | "fabs" => Some(Self::Fabs),
-            "copysignf" => Some(Self::CopysignF32),
-            "copysign" => Some(Self::CopysignF64),
-            "fmaxf" => Some(Self::MaxNumNszF32),
-            "fmax" => Some(Self::MaxNumNszF64),
-            "fminf" => Some(Self::MinNumNszF32),
-            "fmin" => Some(Self::MinNumNszF64),
-            "asinf" => Some(Self::AsinF32),
-            "asin" => Some(Self::AsinF64),
-            "acosf" => Some(Self::AcosF32),
-            "acos" => Some(Self::AcosF64),
-            "atan2f" => Some(Self::Atan2F32),
-            "atan2" => Some(Self::Atan2F64),
-            "atanf" => Some(Self::AtanF32),
-            "atan" => Some(Self::AtanF64),
-            "cbrtf" => Some(Self::CbrtF32),
-            "cbrt" => Some(Self::CbrtF64),
-            "sinhf" => Some(Self::SinhF32),
-            "sinh" => Some(Self::SinhF64),
-            "coshf" => Some(Self::CoshF32),
-            "cosh" => Some(Self::CoshF64),
-            "tanhf" => Some(Self::TanhF32),
-            "tanh" => Some(Self::TanhF64),
-            "asinhf" => Some(Self::AsinhF32),
-            "asinh" => Some(Self::AsinhF64),
-            "acoshf" => Some(Self::AcoshF32),
-            "acosh" => Some(Self::AcoshF64),
-            "atanhf" => Some(Self::AtanhF32),
-            "atanh" => Some(Self::AtanhF64),
-            "expm1f" => Some(Self::Expm1F32),
-            "expm1" => Some(Self::Expm1F64),
-            "log1pf" => Some(Self::Log1pF32),
-            "log1p" => Some(Self::Log1pF64),
-            "hypotf" => Some(Self::HypotF32),
-            "hypot" => Some(Self::HypotF64),
-            _ => None,
-        }
-    }
-
-    /// Recognize `core::intrinsics` / `std::intrinsics` generic fast-float ops.
-    fn from_fast_intrinsic_path(name: &str) -> Option<Self> {
-        match name {
-            // Generic finite-input arithmetic intrinsics. The FQDN carries no
-            // float-type suffix because they're polymorphic over `T:
-            // FloatPrimitive`; the float type is in the call's substs and
-            // recovered from the destination's `body.locals()[…].ty` at
-            // lowering time.
-            "core::intrinsics::fadd_fast" | "std::intrinsics::fadd_fast" => Some(Self::FaddFast),
-            "core::intrinsics::fsub_fast" | "std::intrinsics::fsub_fast" => Some(Self::FsubFast),
-            "core::intrinsics::fmul_fast" | "std::intrinsics::fmul_fast" => Some(Self::FmulFast),
-            "core::intrinsics::fdiv_fast" | "std::intrinsics::fdiv_fast" => Some(Self::FdivFast),
-            "core::intrinsics::frem_fast" | "std::intrinsics::frem_fast" => Some(Self::FremFast),
-            _ => None,
-        }
-    }
-
-    /// Return the internal placeholder name used until MIR-to-LLVM lowering.
-    pub fn placeholder_callee(self) -> &'static str {
-        match self {
-            Self::SqrtF32 => rust_intrinsics::CALLEE_SQRT_F32,
-            Self::SqrtF64 => rust_intrinsics::CALLEE_SQRT_F64,
-            Self::PowiF32 => rust_intrinsics::CALLEE_POWI_F32,
-            Self::PowiF64 => rust_intrinsics::CALLEE_POWI_F64,
-            Self::SinF32 => rust_intrinsics::CALLEE_SIN_F32,
-            Self::SinF64 => rust_intrinsics::CALLEE_SIN_F64,
-            Self::CosF32 => rust_intrinsics::CALLEE_COS_F32,
-            Self::CosF64 => rust_intrinsics::CALLEE_COS_F64,
-            Self::TanF32 => rust_intrinsics::CALLEE_TAN_F32,
-            Self::TanF64 => rust_intrinsics::CALLEE_TAN_F64,
-            Self::PowfF32 => rust_intrinsics::CALLEE_POWF_F32,
-            Self::PowfF64 => rust_intrinsics::CALLEE_POWF_F64,
-            Self::ExpF32 => rust_intrinsics::CALLEE_EXP_F32,
-            Self::ExpF64 => rust_intrinsics::CALLEE_EXP_F64,
-            Self::Exp2F32 => rust_intrinsics::CALLEE_EXP2_F32,
-            Self::Exp2F64 => rust_intrinsics::CALLEE_EXP2_F64,
-            Self::LogF32 => rust_intrinsics::CALLEE_LOG_F32,
-            Self::LogF64 => rust_intrinsics::CALLEE_LOG_F64,
-            Self::Log2F32 => rust_intrinsics::CALLEE_LOG2_F32,
-            Self::Log2F64 => rust_intrinsics::CALLEE_LOG2_F64,
-            Self::Log10F32 => rust_intrinsics::CALLEE_LOG10_F32,
-            Self::Log10F64 => rust_intrinsics::CALLEE_LOG10_F64,
-            Self::FmaF32 => rust_intrinsics::CALLEE_FMA_F32,
-            Self::FmaF64 => rust_intrinsics::CALLEE_FMA_F64,
-            Self::FmuladdF32 => rust_intrinsics::CALLEE_FMULADD_F32,
-            Self::FmuladdF64 => rust_intrinsics::CALLEE_FMULADD_F64,
-            Self::FloorF32 => rust_intrinsics::CALLEE_FLOOR_F32,
-            Self::FloorF64 => rust_intrinsics::CALLEE_FLOOR_F64,
-            Self::CeilF32 => rust_intrinsics::CALLEE_CEIL_F32,
-            Self::CeilF64 => rust_intrinsics::CALLEE_CEIL_F64,
-            Self::TruncF32 => rust_intrinsics::CALLEE_TRUNC_F32,
-            Self::TruncF64 => rust_intrinsics::CALLEE_TRUNC_F64,
-            Self::RoundF32 => rust_intrinsics::CALLEE_ROUND_F32,
-            Self::RoundF64 => rust_intrinsics::CALLEE_ROUND_F64,
-            Self::RoundevenF32 => rust_intrinsics::CALLEE_ROUNDEVEN_F32,
-            Self::RoundevenF64 => rust_intrinsics::CALLEE_ROUNDEVEN_F64,
-            Self::Fabs => rust_intrinsics::CALLEE_FABS,
-            Self::CopysignF32 => rust_intrinsics::CALLEE_COPYSIGN_F32,
-            Self::CopysignF64 => rust_intrinsics::CALLEE_COPYSIGN_F64,
-            Self::MaxNumNszF32 => rust_intrinsics::CALLEE_MAXNUM_NSZ_F32,
-            Self::MaxNumNszF64 => rust_intrinsics::CALLEE_MAXNUM_NSZ_F64,
-            Self::MinNumNszF32 => rust_intrinsics::CALLEE_MINNUM_NSZ_F32,
-            Self::MinNumNszF64 => rust_intrinsics::CALLEE_MINNUM_NSZ_F64,
-            Self::AsinF32 => rust_intrinsics::CALLEE_ASIN_F32,
-            Self::AsinF64 => rust_intrinsics::CALLEE_ASIN_F64,
-            Self::AcosF32 => rust_intrinsics::CALLEE_ACOS_F32,
-            Self::AcosF64 => rust_intrinsics::CALLEE_ACOS_F64,
-            Self::Atan2F32 => rust_intrinsics::CALLEE_ATAN2_F32,
-            Self::Atan2F64 => rust_intrinsics::CALLEE_ATAN2_F64,
-            Self::AtanF32 => rust_intrinsics::CALLEE_ATAN_F32,
-            Self::AtanF64 => rust_intrinsics::CALLEE_ATAN_F64,
-            Self::CbrtF32 => rust_intrinsics::CALLEE_CBRT_F32,
-            Self::CbrtF64 => rust_intrinsics::CALLEE_CBRT_F64,
-            Self::SinhF32 => rust_intrinsics::CALLEE_SINH_F32,
-            Self::SinhF64 => rust_intrinsics::CALLEE_SINH_F64,
-            Self::CoshF32 => rust_intrinsics::CALLEE_COSH_F32,
-            Self::CoshF64 => rust_intrinsics::CALLEE_COSH_F64,
-            Self::TanhF32 => rust_intrinsics::CALLEE_TANH_F32,
-            Self::TanhF64 => rust_intrinsics::CALLEE_TANH_F64,
-            Self::AsinhF32 => rust_intrinsics::CALLEE_ASINH_F32,
-            Self::AsinhF64 => rust_intrinsics::CALLEE_ASINH_F64,
-            Self::AcoshF32 => rust_intrinsics::CALLEE_ACOSH_F32,
-            Self::AcoshF64 => rust_intrinsics::CALLEE_ACOSH_F64,
-            Self::AtanhF32 => rust_intrinsics::CALLEE_ATANH_F32,
-            Self::AtanhF64 => rust_intrinsics::CALLEE_ATANH_F64,
-            Self::Expm1F32 => rust_intrinsics::CALLEE_EXPM1_F32,
-            Self::Expm1F64 => rust_intrinsics::CALLEE_EXPM1_F64,
-            Self::Log1pF32 => rust_intrinsics::CALLEE_LOG1P_F32,
-            Self::Log1pF64 => rust_intrinsics::CALLEE_LOG1P_F64,
-            Self::HypotF32 => rust_intrinsics::CALLEE_HYPOT_F32,
-            Self::HypotF64 => rust_intrinsics::CALLEE_HYPOT_F64,
-            Self::FaddFast => rust_intrinsics::CALLEE_FADD_FAST,
-            Self::FsubFast => rust_intrinsics::CALLEE_FSUB_FAST,
-            Self::FmulFast => rust_intrinsics::CALLEE_FMUL_FAST,
-            Self::FdivFast => rust_intrinsics::CALLEE_FDIV_FAST,
-            Self::FremFast => rust_intrinsics::CALLEE_FREM_FAST,
-        }
-    }
-}
-
-/// Whether `name` is a path rooted in the `libm` crate: the first path
-/// segment must be exactly `libm`. A bare substring test would also match
-/// user functions whose path merely mentions libm (e.g.
-/// `my_app::libm_compat::expf`), silently replacing the user's body with a
-/// libdevice call.
-pub fn is_libm_path(name: &str) -> bool {
-    name.split("::").next() == Some("libm")
-}
-
-/// Recognize `libm::sincosf` / `libm::sincos` (glam's `nostd-libm` lowering of
-/// `f32::sin_cos`). These return a `(sin, cos)` tuple, so they do not fit the
-/// scalar `RustFloatMathIntrinsic` dispatch; [`emit_sincos`] handles them.
-/// Returns `Some(is_f64)` when `name` is a libm sincos function.
-pub fn libm_sincos_is_f64(name: &str) -> Option<bool> {
-    if !is_libm_path(name) {
-        return None;
-    }
-    match name.rsplit("::").next().unwrap_or(name) {
-        "sincosf" => Some(false),
-        "sincos" => Some(true),
+        },
         _ => None,
+    };
+    from_generic_core_path(name, float_ty)
+}
+
+/// Map a generic `core::intrinsics::{sin,cos,exp,exp2,log,log2,log10}` path and its concrete float type.
+fn from_generic_core_path(
+    name: &str,
+    float_ty: Option<rustc_public::ty::FloatTy>,
+) -> Result<Option<RustFloatMathIntrinsic>, String> {
+    use rustc_public::ty::FloatTy;
+
+    // These exact declarations are `fn<T: FloatPrimitive>(T) -> T`.
+    // Reuse the existing f32/f64 placeholders and libdevice lowerings;
+    // unsupported widths must not be silently narrowed.
+    let (f32_intrinsic, f64_intrinsic) = match name {
+        "core::intrinsics::sin" | "std::intrinsics::sin" => (
+            RustFloatMathIntrinsic::SinF32,
+            RustFloatMathIntrinsic::SinF64,
+        ),
+        "core::intrinsics::cos" | "std::intrinsics::cos" => (
+            RustFloatMathIntrinsic::CosF32,
+            RustFloatMathIntrinsic::CosF64,
+        ),
+        "core::intrinsics::exp" | "std::intrinsics::exp" => (
+            RustFloatMathIntrinsic::ExpF32,
+            RustFloatMathIntrinsic::ExpF64,
+        ),
+        "core::intrinsics::exp2" | "std::intrinsics::exp2" => (
+            RustFloatMathIntrinsic::Exp2F32,
+            RustFloatMathIntrinsic::Exp2F64,
+        ),
+        "core::intrinsics::log" | "std::intrinsics::log" => (
+            RustFloatMathIntrinsic::LogF32,
+            RustFloatMathIntrinsic::LogF64,
+        ),
+        "core::intrinsics::log2" | "std::intrinsics::log2" => (
+            RustFloatMathIntrinsic::Log2F32,
+            RustFloatMathIntrinsic::Log2F64,
+        ),
+        "core::intrinsics::log10" | "std::intrinsics::log10" => (
+            RustFloatMathIntrinsic::Log10F32,
+            RustFloatMathIntrinsic::Log10F64,
+        ),
+        _ => return Ok(None),
+    };
+    match float_ty {
+        Some(FloatTy::F32) => Ok(Some(f32_intrinsic)),
+        Some(FloatTy::F64) => Ok(Some(f64_intrinsic)),
+        _ => Err(format!(
+            "generic float intrinsic `{name}` requires one f32 or f64 type argument; found {float_ty:?}"
+        )),
     }
 }
 
@@ -736,6 +268,215 @@ mod tests {
     use super::*;
     use dialect_mir::rust_intrinsics;
 
+    /// Ensure `frexp`/`frexpf` resolve only `libm` paths and reject other namespaces.
+    #[test]
+    fn frexp_paths_resolve_only_libm_entry_points() {
+        use RustFloatMathIntrinsic as I;
+        for (name, variant, placeholder) in [
+            ("frexpf", I::FrexpF32, rust_intrinsics::CALLEE_FREXP_F32),
+            ("frexp", I::FrexpF64, rust_intrinsics::CALLEE_FREXP_F64),
+        ] {
+            for path in [
+                format!("libm::{name}"),
+                format!("libm::math::{name}::{name}"),
+            ] {
+                assert_eq!(I::from_core_path(&path), Some(variant), "{path}");
+                assert_eq!(variant.placeholder_callee(), placeholder);
+                assert!(rust_intrinsics::is_libdevice_backed_placeholder(
+                    placeholder
+                ));
+            }
+            for root in [
+                "user::libm",
+                "libm_lookalike",
+                "std::sys::cmath",
+                "core::intrinsics",
+            ] {
+                let path = format!("{root}::{name}");
+                assert_eq!(I::from_core_path(&path), None, "{path}");
+            }
+        }
+        assert_eq!(I::from_core_path("libm::sincos"), None);
+        assert_eq!(libm_sincos_is_f64("libm::sincos"), Some(true));
+        assert_eq!(I::from_core_path("libm::ldexp"), Some(I::LdexpF64));
+    }
+
+    /// Ensure `modf`/`remquo` resolve only `libm` paths and reject other namespaces.
+    #[test]
+    fn out_parameter_pairs_resolve_only_libm_entry_points() {
+        use RustFloatMathIntrinsic as I;
+        for (name, variant, placeholder, argc) in [
+            ("modff", I::ModfF32, rust_intrinsics::CALLEE_MODF_F32, 1),
+            ("modf", I::ModfF64, rust_intrinsics::CALLEE_MODF_F64, 1),
+            (
+                "remquof",
+                I::RemquoF32,
+                rust_intrinsics::CALLEE_REMQUO_F32,
+                2,
+            ),
+            (
+                "remquo",
+                I::RemquoF64,
+                rust_intrinsics::CALLEE_REMQUO_F64,
+                2,
+            ),
+        ] {
+            assert_eq!(I::from_core_path(&format!("libm::{name}")), Some(variant));
+            assert_eq!(
+                I::from_core_path(&format!("libm::math::{name}::{name}")),
+                Some(variant)
+            );
+            assert_eq!(variant.placeholder_callee(), placeholder);
+            assert_eq!(variant.arg_count(), argc);
+            assert_eq!(variant.scalar_signature(false), None);
+            assert!(rust_intrinsics::is_libdevice_backed_placeholder(
+                placeholder
+            ));
+            for root in ["user::libm", "libm_lookalike", "core::intrinsics"] {
+                assert_eq!(I::from_core_path(&format!("{root}::{name}")), None);
+            }
+        }
+    }
+
+    /// Check that special math, `lgamma_r`, C23 min/max, and `j1` paths resolve to their placeholders.
+    #[test]
+    fn special_math_paths_resolve_to_typed_placeholders() {
+        use RustFloatMathIntrinsic as I;
+        for (name, intrinsic, callee) in [
+            ("tgammaf", I::TgammaF32, rust_intrinsics::CALLEE_TGAMMA_F32),
+            ("tgamma", I::TgammaF64, rust_intrinsics::CALLEE_TGAMMA_F64),
+            ("ilogbf", I::IlogbF32, rust_intrinsics::CALLEE_ILOGB_F32),
+            ("ilogb", I::IlogbF64, rust_intrinsics::CALLEE_ILOGB_F64),
+            ("ldexpf", I::LdexpF32, rust_intrinsics::CALLEE_LDEXP_F32),
+            ("ldexp", I::LdexpF64, rust_intrinsics::CALLEE_LDEXP_F64),
+            ("scalbnf", I::LdexpF32, rust_intrinsics::CALLEE_LDEXP_F32),
+            ("scalbn", I::LdexpF64, rust_intrinsics::CALLEE_LDEXP_F64),
+        ] {
+            for path in [
+                format!("libm::{name}"),
+                format!("libm::math::{name}::{name}"),
+            ] {
+                assert_eq!(I::from_core_path(&path), Some(intrinsic), "{path}");
+                assert_eq!(intrinsic.placeholder_callee(), callee);
+            }
+            for path in [
+                format!("my_app::libm_compat::{name}"),
+                format!("my_app::libm::{name}"),
+                format!("libm_lookalike::{name}"),
+                format!("std::sys::cmath::{name}_unsupported"),
+            ] {
+                assert_eq!(I::from_core_path(&path), None, "{path}");
+            }
+        }
+        assert_eq!(
+            I::from_core_path("std::sys::cmath::tgammaf"),
+            Some(I::TgammaF32)
+        );
+        assert_eq!(
+            I::from_core_path("std::sys::cmath::tgamma"),
+            Some(I::TgammaF64)
+        );
+        // Existing scalar and tuple dispatch must keep their identities.
+        assert_eq!(I::from_core_path("libm::hypot"), Some(I::HypotF64));
+        assert_eq!(
+            I::from_core_path("core::intrinsics::powif32"),
+            Some(I::PowiF32)
+        );
+        assert_eq!(libm_sincos_is_f64("libm::sincosf"), Some(false));
+        for (name, intrinsic, callee) in [
+            (
+                "lgammaf_r",
+                I::LgammaRF32,
+                rust_intrinsics::CALLEE_LGAMMA_R_F32,
+            ),
+            (
+                "lgamma_r",
+                I::LgammaRF64,
+                rust_intrinsics::CALLEE_LGAMMA_R_F64,
+            ),
+        ] {
+            assert_eq!(I::from_core_path(&format!("libm::{name}")), Some(intrinsic));
+            assert_eq!(
+                I::from_core_path(&format!("libm::math::{name}::{name}")),
+                Some(intrinsic)
+            );
+            assert_eq!(intrinsic.placeholder_callee(), callee);
+            assert_eq!(intrinsic.arg_count(), 1);
+            assert_eq!(intrinsic.scalar_signature(false), None);
+            assert_eq!(I::from_core_path(&format!("user::libm::{name}")), None);
+        }
+        for (name, intrinsic, callee) in [
+            (
+                "fmaximumf",
+                I::MaximumF32,
+                rust_intrinsics::CALLEE_FMAXIMUM_F32,
+            ),
+            (
+                "fmaximum",
+                I::MaximumF64,
+                rust_intrinsics::CALLEE_FMAXIMUM_F64,
+            ),
+            (
+                "fminimumf",
+                I::MinimumF32,
+                rust_intrinsics::CALLEE_FMINIMUM_F32,
+            ),
+            (
+                "fminimum",
+                I::MinimumF64,
+                rust_intrinsics::CALLEE_FMINIMUM_F64,
+            ),
+            (
+                "fmaximum_numf",
+                I::MaximumNumberF32,
+                rust_intrinsics::CALLEE_FMAXIMUM_NUM_F32,
+            ),
+            (
+                "fmaximum_num",
+                I::MaximumNumberF64,
+                rust_intrinsics::CALLEE_FMAXIMUM_NUM_F64,
+            ),
+            (
+                "fminimum_numf",
+                I::MinimumNumberF32,
+                rust_intrinsics::CALLEE_FMINIMUM_NUM_F32,
+            ),
+            (
+                "fminimum_num",
+                I::MinimumNumberF64,
+                rust_intrinsics::CALLEE_FMINIMUM_NUM_F64,
+            ),
+        ] {
+            assert_eq!(I::from_core_path(&format!("libm::{name}")), Some(intrinsic));
+            assert_eq!(
+                I::from_core_path(&format!("libm::math::{name}::{name}")),
+                Some(intrinsic)
+            );
+            assert_eq!(intrinsic.placeholder_callee(), callee);
+            assert_eq!(intrinsic.arg_count(), 2);
+            assert!(rust_intrinsics::is_known_placeholder(callee));
+            assert!(!rust_intrinsics::is_libdevice_backed_placeholder(callee));
+            assert_eq!(I::from_core_path(&format!("user::libm::{name}")), None);
+        }
+        for (name, intrinsic, callee, symbol) in [
+            ("j1f", I::J1F32, rust_intrinsics::CALLEE_J1_F32, "__nv_j1f"),
+            ("j1", I::J1F64, rust_intrinsics::CALLEE_J1_F64, "__nv_j1"),
+        ] {
+            assert_eq!(I::from_core_path(&format!("libm::{name}")), Some(intrinsic));
+            assert_eq!(
+                I::from_core_path(&format!("libm::math::{name}::{name}")),
+                Some(intrinsic)
+            );
+            assert_eq!(intrinsic.placeholder_callee(), callee);
+            assert_eq!(intrinsic.libdevice_symbol(false), Some(symbol));
+            assert_eq!(intrinsic.arg_count(), 1);
+            assert!(rust_intrinsics::is_libdevice_backed_placeholder(callee));
+            assert_eq!(I::from_core_path(&format!("user::libm::{name}")), None);
+        }
+        assert_eq!(I::from_core_path("libm::tgammaf128"), None);
+    }
+
+    /// Verify that generic float intrinsics resolve `f32`/`f64` and reject unsupported widths.
     #[test]
     fn generic_float_intrinsics_resolve_only_the_declared_float_type() {
         use RustFloatMathIntrinsic as I;
@@ -752,15 +493,15 @@ mod tests {
             for root in ["core", "std"] {
                 let path = format!("{root}::intrinsics::{name}");
                 assert_eq!(
-                    I::from_generic_core_path(&path, Some(FloatTy::F32)).unwrap(),
+                    from_generic_core_path(&path, Some(FloatTy::F32)).unwrap(),
                     Some(f32_variant)
                 );
                 assert_eq!(
-                    I::from_generic_core_path(&path, Some(FloatTy::F64)).unwrap(),
+                    from_generic_core_path(&path, Some(FloatTy::F64)).unwrap(),
                     Some(f64_variant)
                 );
                 for unsupported in [None, Some(FloatTy::F16), Some(FloatTy::F128)] {
-                    let error = I::from_generic_core_path(&path, unsupported).unwrap_err();
+                    let error = from_generic_core_path(&path, unsupported).unwrap_err();
                     assert!(
                         error.contains("requires one f32 or f64 type argument"),
                         "{error}"
@@ -776,7 +517,7 @@ mod tests {
             "core::intrinsics::expf32",
         ] {
             assert_eq!(
-                I::from_generic_core_path(path, Some(FloatTy::F32)).unwrap(),
+                from_generic_core_path(path, Some(FloatTy::F32)).unwrap(),
                 None,
                 "{path}"
             );
@@ -965,6 +706,7 @@ mod tests {
         assert_eq!(libm_sincos_is_f64("libmath::sincos"), None);
     }
 
+    /// Verify that `MaxNumNsz*`/`MinNumNsz*` placeholders match `dialect-mir::rust_intrinsics`.
     #[test]
     fn maxnum_minnum_nsz_placeholders_round_trip_through_dialect_mir() {
         // The placeholder names must match between this importer crate and

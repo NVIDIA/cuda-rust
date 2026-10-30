@@ -31,8 +31,8 @@ causal or noncausal windows, including grouped-query attention.
 
 ## Run it
 
-From `cuda-oxide/`, with the pinned toolchain, CUDA toolkit, CUTLASS compiler,
-and an RTX 5090:
+From `cuda-oxide/`, with the pinned toolchain, CUDA toolkit, the CUTLASS compiler
+(`cargo oxide toolchain install cutlass`) and an RTX 5090:
 
 ```bash
 CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir \

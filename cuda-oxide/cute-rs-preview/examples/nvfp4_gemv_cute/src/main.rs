@@ -101,8 +101,10 @@ mod kernels {
 
         // SAFETY: (batch, row) is unique for every live thread and the host
         // allocated L*M output elements.
+        let mut c_tile =
+            cute_rs::TensorMut::from_disjoint_slice(&mut c).local_tile::<1>(batch * m + row);
         unsafe {
-            c.as_mut_ptr().add(batch * m + row).write(acc as f16);
+            c_tile.store_at(batch * m + row, acc as f16);
         }
     }
 }

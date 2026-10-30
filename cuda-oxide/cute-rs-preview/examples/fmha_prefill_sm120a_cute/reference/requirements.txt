@@ -1,6 +1,4 @@
-# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-
-# Matches the vendored CUTLASS 4.7 reference; use an SM120-capable CUDA PyTorch build.
-nvidia-cutlass-dsl[cu13]==4.7.0
-torch
+# This comparison uses the shared environment pinned in cute-rs-preview/requirements.txt.
+-r ../../../requirements.txt

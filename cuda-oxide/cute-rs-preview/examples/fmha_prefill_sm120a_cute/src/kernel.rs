@@ -5,14 +5,19 @@
 
 //! Ampere-style FA2: typed CuTe copies, register MMA, and online softmax.
 //! One CTA owns 64 queries; four warps each own 16 rows of a 64-column tile.
-use core::marker::PhantomData;
 use ctm_rs::{
-    async_copy, barrier, convert, cuda_module, float, kernel, launch_bounds, launch_contract,
+    cuda_module, kernel, launch_bounds, launch_contract,
     memory::{DisjointSlice, DynamicSharedArray},
-    thread, warp,
+    thread,
 };
-use cute_rs::markers::{C, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
-use cute_rs::{FragmentA, FragmentBPair, FragmentC, GmemMatrix, SmemTile, copy_g2s};
+use cute_rs::arch::{
+    NamedBarrier, cp_async_commit_group, cp_async_wait_group, exp2_ftz_f32, fmax_f32,
+    reciprocal_ftz_f32, threadquad_reduce_max_f32, threadquad_reduce_sum_f32,
+};
+use cute_rs::markers::{
+    C, ComposedLayout, CopyG2S, CopyUniversal, Layout, LeadingDim, RowMajor, Swizzle,
+};
+use cute_rs::{FragmentA, FragmentBPair, FragmentC, GmemMatrix, SmemTile, TiledCopy};
 
 /// Swizzled 64-by-64 FP16 layout shared by Q, K, V, and the output staging tile.
 type SharedLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<64, 64>>;
@@ -22,8 +27,26 @@ type CopyLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<16, 64>>;
 type CopyThreads = Layout<(C<16>, C<8>), (C<8>, C<1>)>;
 /// Eight adjacent FP16 values copied by each thread.
 type CopyValues = Layout<(C<1>, C<8>), (C<8>, C<1>)>;
+/// Block-wide cooperative global-to-shared copy plan for one 16-by-64 group.
+type GmemTiledCopyQKV = TiledCopy<CopyG2S<16>, CopyThreads, CopyValues, RowMajor<16, 64>>;
+/// Block-wide universal shared-to-global copy plan for one 16-by-64 output group.
+type GmemTiledCopyO = TiledCopy<CopyUniversal<16>, CopyThreads, CopyValues, RowMajor<16, 64>>;
 /// Typed view of one 64-by-64 FP16 shared tile.
 type SharedTile = SmemTile<f16, SharedLayout>;
+
+/// Typed shared-memory layout for one 64-query prefill CTA (24,576 bytes).
+#[repr(C)]
+struct PrefillSharedStorage {
+    /// Staged 64-by-64 FP16 query tile, reused for output staging (8,192 bytes).
+    q: [f16; 4096],
+    /// Staged 64-by-64 FP16 key tile (8,192 bytes).
+    k: [f16; 4096],
+    /// Staged 64-by-64 FP16 value tile (8,192 bytes).
+    v: [f16; 4096],
+}
+
+/// Compile-time check that the typed shared storage matches the launch contract.
+const _: () = assert!(core::mem::size_of::<PrefillSharedStorage>() == 24_576);
 
 // Constant indices keep fragments in registers and allow the compiler to
 // specialize each MMA, without repeating the algorithm for each fragment.
@@ -62,14 +85,7 @@ impl WarpTile {
     #[inline(always)]
     fn probability<const K: usize>(&self) -> FragmentA {
         const { assert!(K < 4) };
-        let left = self.0[2 * K].0;
-        let right = self.0[2 * K + 1].0;
-        FragmentA([
-            pack(left[0], left[1]),
-            pack(left[2], left[3]),
-            pack(right[0], right[1]),
-            pack(right[2], right[3]),
-        ])
+        FragmentA::from_f32_pair(self.0[2 * K], self.0[2 * K + 1])
     }
 
     /// Narrow the whole probability tile before loading the value fragments.
@@ -86,8 +102,7 @@ impl WarpTile {
     #[inline(always)]
     fn rescale<const ROW: usize>(&mut self, scale: f32) {
         static_for!(N in [0, 1, 2, 3, 4, 5, 6, 7] {
-            self.0[N].0[ROW * 2] *= scale;
-            self.0[N].0[ROW * 2 + 1] *= scale;
+            self.0[N].scale_row::<ROW>(scale);
         });
     }
 
@@ -96,15 +111,15 @@ impl WarpTile {
     fn maximum<const ROW: usize>(&self) -> f32 {
         let mut pairs = [0.0; 8];
         static_for!(N in [0, 1, 2, 3, 4, 5, 6, 7] {
-            pairs[N] = self.0[N].0[ROW * 2].max(self.0[N].0[ROW * 2 + 1]);
+            pairs[N] = self.0[N].row_max::<ROW>();
         });
         static_for!(N in [0, 1, 2, 3] {
-            pairs[N] = pairs[2 * N].max(pairs[2 * N + 1]);
+            pairs[N] = fmax_f32(pairs[2 * N], pairs[2 * N + 1]);
         });
         static_for!(N in [0, 1] {
-            pairs[N] = pairs[2 * N].max(pairs[2 * N + 1]);
+            pairs[N] = fmax_f32(pairs[2 * N], pairs[2 * N + 1]);
         });
-        pairs[0].max(pairs[1])
+        fmax_f32(pairs[0], pairs[1])
     }
 
     /// Mask and exponentiate scores, updating the running normalization and output scale.
@@ -113,23 +128,21 @@ impl WarpTile {
         &mut self,
         output: &mut Self,
         state: &mut Softmax,
-        query_row: u32,
+        warp_row_base: u32,
         lane: u32,
     ) {
         static_for!(ROW in [0, 1] {
-            let row = query_row + ROW as u32 * 8;
+            let row = warp_row_base + FragmentC::row_coord::<ROW>(lane);
             static_for!(N in [0, 1, 2, 3, 4, 5, 6, 7] {
                 static_for!(COL in [0, 1] {
-                    let column = N as u32 * 8 + (lane % 4) * 2 + COL as u32;
+                    let column = FragmentC::col_coord::<COL>(lane, N);
                     let value = if CAUSAL && FIRST && column > row { f32::NEG_INFINITY }
-                                else { self.0[N].0[ROW * 2 + COL] };
-                    self.0[N].0[ROW * 2 + COL] = value;
+                                else { self.0[N].get::<ROW, COL>() };
+                    self.0[N].set::<ROW, COL>(value);
                 });
             });
-            let mut maximum = self.maximum::<ROW>();
-            maximum = max(maximum, warp::shuffle_xor_f32(maximum, 2));
-            maximum = max(maximum, warp::shuffle_xor_f32(maximum, 1));
-            if !FIRST { maximum = max(maximum, state.maximum[ROW]); }
+            let mut maximum = unsafe { threadquad_reduce_max_f32(self.maximum::<ROW>()) };
+            if !FIRST { maximum = fmax_f32(maximum, state.maximum[ROW]); }
             // Causal traversal may begin with a fully masked row in this tile.
             if CAUSAL && maximum == f32::NEG_INFINITY { maximum = 0.0; }
             /// Attention scale converted to base two for the exponential instruction.
@@ -137,17 +150,17 @@ impl WarpTile {
             let mut sum = 0.0;
             static_for!(N in [0, 1, 2, 3, 4, 5, 6, 7] {
                 static_for!(COL in [0, 1] {
-                    let value = float::ex2_approx_ftz_f32(
-                        self.0[N].0[ROW * 2 + COL] * SCALE_LOG2 - maximum * SCALE_LOG2,
+                    let value = exp2_ftz_f32(
+                        self.0[N].get::<ROW, COL>() * SCALE_LOG2 - maximum * SCALE_LOG2,
                     );
-                    self.0[N].0[ROW * 2 + COL] = value;
+                    self.0[N].set::<ROW, COL>(value);
                     sum += value;
                 });
             });
             if FIRST {
                 state.sum[ROW] = sum;
             } else {
-                let old_scale = float::ex2_approx_ftz_f32(
+                let old_scale = exp2_ftz_f32(
                     state.maximum[ROW] * SCALE_LOG2 - maximum * SCALE_LOG2,
                 );
                 state.sum[ROW] = sum + state.sum[ROW] * old_scale;
@@ -163,19 +176,15 @@ impl WarpTile {
     /// All warp lanes must participate; `dst` must provide disjoint slots for each warp.
     #[inline(always)]
     unsafe fn store(&mut self, state: &Softmax, dst: &SharedTile, warp_id: usize, lane: usize) {
+        let thr_copy = GmemTiledCopyO::new().get_slice(lane as u32);
         static_for!(ROW in [0, 1] {
-            let mut sum = state.sum[ROW];
-            sum += warp::shuffle_xor_f32(sum, 2);
-            sum += warp::shuffle_xor_f32(sum, 1);
+            let sum = unsafe { threadquad_reduce_sum_f32(state.sum[ROW]) };
             let scale = if sum == 0.0 || sum.is_nan() { 1.0 }
-                        else { float::rcp_approx_ftz_f32(sum) };
+                        else { reciprocal_ftz_f32(sum) };
             self.rescale::<ROW>(scale);
             static_for!(N in [0, 1, 2, 3, 4, 5, 6, 7] {
-                let row = warp_id * 16 + lane / 4 + ROW * 8;
-                let col = N * 8 + lane % 4 * 2;
                 unsafe {
-                    *dst.base.add(shared_offset(row as u32, col as u32)).cast::<u32>() =
-                        pack(self.0[N].0[ROW * 2], self.0[N].0[ROW * 2 + 1]);
+                    thr_copy.copy_r2s::<ROW, SharedLayout>(&self.0[N], dst, warp_id, N);
                 }
             });
         });
@@ -190,53 +199,17 @@ struct Softmax {
     sum: [f32; 2],
 }
 
-/// Return the floating-point maximum used by row reductions.
-#[inline(always)]
-fn max(a: f32, b: f32) -> f32 {
-    a.max(b)
-}
-
-/// Round two FP32 values to the packed FP16 representation used by MMA and stores.
-#[inline(always)]
-fn pack(a: f32, b: f32) -> u32 {
-    convert::cvt_f16x2_f32(a, b)
-}
-
-/// Physical coordinate of the typed `Swizzle<3,3,3>` shared layout.
-#[inline(always)]
-fn shared_offset(row: u32, column: u32) -> usize {
-    // Within this 64-column tile, the row and column occupy disjoint bits.
-    // Keep the row stride separate so adjacent fragment rows share an offset.
-    (row * 64 + (column ^ ((row & 7) << 3))) as usize
-}
-
-/// Wrap storage for 4096 FP16 values as a typed shared tile.
-///
-/// # Safety
-/// `base` must point to live shared storage with the tile's required alignment.
-#[inline(always)]
-unsafe fn tile(base: *mut f16) -> SharedTile {
-    SmemTile {
-        base,
-        capacity: 4096,
-        layout: PhantomData,
-    }
-}
-
 /// Issue four cooperative copies to stage one 64-row tile.
 ///
 /// # Safety
 /// All 128 threads must participate with valid views; wait before reading the destination.
 #[inline(always)]
 unsafe fn stage(src: &GmemMatrix<f16, LeadingDim<8>>, block: usize, dst: &SharedTile, tid: u32) {
+    let thr_copy = GmemTiledCopyQKV::new().get_slice(tid);
     static_for!(GROUP in [0, 1, 2, 3] {
-        let mut part = SmemTile::<f16, CopyLayout> {
-            base: unsafe { dst.base.add(GROUP * 1024) }, capacity: 1024, layout: PhantomData,
-        };
         unsafe {
-            copy_g2s::<CopyG2S<16>, CopyThreads, CopyValues, RowMajor<16, 64>, CopyLayout, f16>(
-                src, (block * 4 + GROUP, 0), &mut part, tid,
-            );
+            let mut part = dst.local_tile::<CopyLayout>(GROUP);
+            thr_copy.copy_g2s(src, (block * 4 + GROUP, 0), &mut part);
         }
     });
 }
@@ -322,10 +295,10 @@ impl TilePipeline {
         // SAFETY: the caller supplies full KV tiles and the shared allocations
         // remain live across all steps; waits and CTA barriers order reuse.
         unsafe {
-            async_copy::cp_async_wait_group::<0>();
-            barrier::barrier_cta_sync(1, 128);
+            cp_async_wait_group::<0>();
+            NamedBarrier::<1, 128>::sync();
             stage_full(&self.values, key_block, &self.v, tid);
-            async_copy::cp_async_commit_group();
+            cp_async_commit_group();
             let mut scores = WarpTile::zero();
             let mut a = cute_rs::load_matrix_a(&self.q, (warp_id, 0), lane);
             let mut b = load_k::<0>(&self.k, lane);
@@ -337,13 +310,13 @@ impl TilePipeline {
                 b = next_b;
             });
             scores.gemm(a, b);
-            async_copy::cp_async_wait_group::<0>();
-            barrier::barrier_cta_sync(1, 128);
+            cp_async_wait_group::<0>();
+            NamedBarrier::<1, 128>::sync();
             if key_block > 0 {
                 stage_full(&self.keys, key_block - 1, &self.k, tid);
-                async_copy::cp_async_commit_group();
+                cp_async_commit_group();
             }
-            scores.softmax::<CAUSAL, FIRST>(output, state, warp_id as u32 * 16 + lane / 4, lane);
+            scores.softmax::<CAUSAL, FIRST>(output, state, warp_id as u32 * 16, lane);
             let probabilities = scores.probabilities();
             let mut values = load_v::<0>(&self.v, lane);
             static_for!(K in [0, 1, 2] {
@@ -389,10 +362,10 @@ pub mod kernels {
         let head = (thread::blockIdx_x() / query_blocks) as usize;
         let stride = heads as usize * 64;
         unsafe {
-            let shared = DynamicSharedArray::<f16, 1024>::get_raw().cast::<f16>();
-            let sq = tile(shared);
-            let sk = tile(shared.add(4096));
-            let sv = tile(shared.add(8192));
+            let storage = DynamicSharedArray::<u8, 1024>::get_raw().cast::<PrefillSharedStorage>();
+            let sq = SharedTile::from_raw_parts((&raw mut (*storage).q).cast::<f16>(), 4096);
+            let sk = SharedTile::from_raw_parts((&raw mut (*storage).k).cast::<f16>(), 4096);
+            let sv = SharedTile::from_raw_parts((&raw mut (*storage).v).cast::<f16>(), 4096);
             let q_global = GmemMatrix {
                 base: q.as_ptr().add(head * 64),
                 rows: seq_q as usize,
@@ -420,7 +393,7 @@ pub mod kernels {
             };
             stage(&q_global, query_block, &sq, tid);
             stage_full(&k_global, remaining - 1, &sk, tid);
-            async_copy::cp_async_commit_group();
+            cp_async_commit_group();
             let mut output = WarpTile::zero();
             let mut state = Softmax {
                 maximum: [f32::NEG_INFINITY; 2],
@@ -443,15 +416,18 @@ pub mod kernels {
                 pipeline.step::<CAUSAL, false>(remaining, &mut output, &mut state);
             }
             output.store(&state, &pipeline.q, warp_id, lane as usize);
-            barrier::barrier_cta_sync(1, 128);
+            NamedBarrier::<1, 128>::sync();
+            let thr_copy_o = GmemTiledCopyO::new().get_slice(tid);
             static_for!(GROUP in [0, 1, 2, 3] {
-                let row = tid as usize / 8 + GROUP * 16;
-                let col = tid as usize % 8 * 8;
-                if query_block * 64 + row < seq_q as usize {
-                    let packed = *pipeline.q.base.add(shared_offset(row as u32, col as u32)).cast::<u128>();
-                    *out.as_mut_ptr().add((query_block * 64 + row) * stride + head * 64 + col)
-                        .cast::<u128>() = packed;
-                }
+                let part = pipeline.q.local_tile::<CopyLayout>(GROUP);
+                thr_copy_o.copy_s2g(
+                    &part,
+                    &mut out,
+                    query_block * 4 + GROUP,
+                    seq_q as usize,
+                    stride,
+                    head * 64,
+                );
             });
         }
     }

@@ -36,7 +36,7 @@ documented arithmetic and shape preconditions.
 
 ## Validation
 
-Run from `cuda-oxide/` with its pinned nightly:
+Run from `cuda-oxide/` with its pinned toolchain:
 
 ```sh
 cargo test -p cute-layout

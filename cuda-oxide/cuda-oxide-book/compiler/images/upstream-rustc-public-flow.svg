@@ -1,0 +1,104 @@
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg class="cute-rs-preview" xmlns="http://www.w3.org/2000/svg" width="1040" height="450" viewBox="0 0 1040 450" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif">
+<title>Upstreaming rustc_public PRs on a stable release cycle without waiting or emergency nightly bumps</title>
+<style>
+  .cute-rs-preview text { dominant-baseline:central; text-anchor:middle }
+  .cute-rs-preview .l { text-anchor:start }
+  .cute-rs-preview .bg { fill:#faf9f5 }
+  .cute-rs-preview .title { font-size:17px; font-weight:700; fill:#1e1e1e }
+  .cute-rs-preview .sec { font-size:11px; font-weight:700; letter-spacing:0.06em; fill:#5c5c5c }
+  .cute-rs-preview .th { font-size:13.5px; font-weight:600; fill:#1e1e1e }
+  .cute-rs-preview .ts { font-size:12px; fill:#5c5c5c }
+  .cute-rs-preview .tm { font-family:'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size:11.5px; font-weight:500 }
+  .cute-rs-preview .k-box { fill:#f1efe9; stroke:#c8c5be }
+  .cute-rs-preview .tx-box { fill:#1e1e1e }
+  .cute-rs-preview .k-purple { fill:#ebe9fb; stroke:#7f77dd }
+  .cute-rs-preview .tx-purple { fill:#3a3490 }
+  .cute-rs-preview .k-teal { fill:#dff3ec; stroke:#3aa47f }
+  .cute-rs-preview .tx-teal { fill:#1f5c47 }
+  .cute-rs-preview .k-amber { fill:#fdeed3; stroke:#ef9f27 }
+  .cute-rs-preview .tx-amber { fill:#6b4100 }
+  .cute-rs-preview .k-coral { fill:#fde7e2; stroke:#e0735c }
+  .cute-rs-preview .tx-coral { fill:#7d2f1f }
+  .cute-rs-preview .hair { stroke:#d4d1c9 }
+  .cute-rs-preview .arr { fill:none; stroke:#7b7b7b; stroke-width:1.5 }
+  .cute-rs-preview .arrhead { fill:none; stroke:#7b7b7b; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round }
+  @media (prefers-color-scheme: dark) {
+    .cute-rs-preview .bg { fill:#1b1d23 }
+    .cute-rs-preview .title, .cute-rs-preview .th { fill:#f5f6f8 }
+    .cute-rs-preview .sec { fill:#b8beca }
+    .cute-rs-preview .ts { fill:#cfd4de }
+    .cute-rs-preview .k-box { fill:#2e323c; stroke:#5c6375 }
+    .cute-rs-preview .tx-box { fill:#f5f6f8 }
+    .cute-rs-preview .hair { stroke:#5c6375 }
+    .cute-rs-preview .arr, .cute-rs-preview .arrhead { stroke:#b6bcc8 }
+    .cute-rs-preview .k-purple { fill:#524e7d; stroke:#bab5f4 }
+    .cute-rs-preview .tx-purple { fill:#f6f5ff }
+    .cute-rs-preview .k-teal { fill:#346357; stroke:#7ed8bb }
+    .cute-rs-preview .tx-teal { fill:#f0fdf8 }
+    .cute-rs-preview .k-amber { fill:#735a3c; stroke:#f4c474 }
+    .cute-rs-preview .tx-amber { fill:#fff8eb }
+    .cute-rs-preview .k-coral { fill:#6b443e; stroke:#f29b8a }
+    .cute-rs-preview .tx-coral { fill:#fff0ed }
+  }
+</style>
+<defs>
+  <marker id="arr-up" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path class="arrhead" d="M2 1L8 5L2 9"/>
+  </marker>
+</defs>
+
+<rect class="bg" width="1040" height="450" rx="10"/>
+<text class="title l" x="36" y="32">Upstreaming to rustc_public Without Waiting for the 6-Week Stable Train</text>
+<text class="ts l" x="36" y="54">Because rustc_public wraps existing rustc_middle data, facts.rs lets us ship on Day 1 and switch to rustc_public on schedule.</text>
+
+<!-- Row 1: Old Nightly Workflow -->
+<text class="sec l" x="36" y="88">1 · OLD NIGHTLY WORKFLOW (EXAMPLE: PR #1482 + PR #1483)</text>
+
+<rect class="k-box" x="36" y="102" width="260" height="96" rx="8" stroke-width="0.9"/>
+<text class="th tx-box l" x="54" y="126">1. Upstream PR to Rust</text>
+<line class="hair" x1="54" y1="142" x2="278" y2="142" stroke-width="0.8"/>
+<text class="tm tx-box l" x="54" y="164">rust-lang/rust#163242</text>
+<text class="ts tx-box l" x="54" y="182">Exposes ArgAttributes getters</text>
+
+<line class="arr" x1="296" y1="150" x2="334" y2="150" marker-end="url(#arr-up)"/>
+
+<rect class="k-coral" x="338" y="102" width="360" height="96" rx="8" stroke-width="0.9"/>
+<text class="th tx-coral l" x="356" y="126">2. Forced Nightly Bump (PR #1482)</text>
+<line class="hair" x1="356" y1="142" x2="680" y2="142" stroke-width="0.8"/>
+<text class="tm tx-coral l" x="356" y="164">nightly-08-28 -&gt; nightly-10-11</text>
+<text class="ts tx-coral l" x="356" y="182">1,506 files changed due to unrelated churn!</text>
+
+<line class="arr" x1="698" y1="150" x2="736" y2="150" marker-end="url(#arr-up)"/>
+
+<rect class="k-amber" x="740" y="102" width="264" height="96" rx="8" stroke-width="0.9"/>
+<text class="th tx-amber l" x="758" y="126">3. Land Feature (PR #1483)</text>
+<line class="hair" x1="758" y1="142" x2="986" y2="142" stroke-width="0.8"/>
+<text class="tm tx-amber l" x="758" y="164">facts.rs calls attrs.regular()</text>
+<text class="ts tx-amber l" x="758" y="182">Blocked until step 2 finished</text>
+
+<!-- Row 2: New Stable Workflow -->
+<text class="sec l" x="36" y="236">2 · NEW STABLE WORKFLOW (ZERO WAIT, ZERO EMERGENCY BUMPS)</text>
+
+<rect class="k-teal" x="36" y="250" width="460" height="168" rx="8" stroke-width="1.1"/>
+<text class="th tx-teal l" x="56" y="274">Day 1: Ship Feature Immediately on Current Stable</text>
+<line class="hair" x1="56" y1="290" x2="476" y2="290" stroke-width="0.8"/>
+<rect class="k-box" x="56" y="302" width="420" height="54" rx="5" stroke-width="0.7"/>
+<text class="tm tx-box l" x="70" y="320">// Inside facts.rs (quarantine boundary):</text>
+<text class="tm tx-box l" x="70" y="340">let internal = rustc_internal::internal(tcx, arg);</text>
+<text class="ts tx-teal l" x="56" y="378">• Underlying rustc_abi data ALREADY exists in current stable!</text>
+<text class="ts tx-teal l" x="56" y="398">• Upstream rust#163242 in parallel; 0 toolchain churn.</text>
+
+<line class="arr" x1="496" y1="334" x2="540" y2="334" marker-end="url(#arr-up)"/>
+<text class="ts" x="518" y="314">6 wks</text>
+
+<rect class="k-purple" x="544" y="250" width="460" height="168" rx="8" stroke-width="0.9"/>
+<text class="th tx-purple l" x="564" y="274">Week 6: Scheduled Stable Release Upgrade</text>
+<line class="hair" x1="564" y1="290" x2="984" y2="290" stroke-width="0.8"/>
+<rect class="k-box" x="564" y="302" width="420" height="54" rx="5" stroke-width="0.7"/>
+<text class="tm tx-box l" x="578" y="320">// Swap 5 lines in facts.rs to rustc_public:</text>
+<text class="tm tx-box l" x="578" y="340">let flags = attrs.regular();</text>
+<text class="ts tx-purple l" x="564" y="378">• rust#163242 arrives automatically in the next stable tag.</text>
+<text class="ts tx-purple l" x="564" y="398">• Delete the 5-line shim in facts.rs; rest is unchanged.</text>
+</svg>

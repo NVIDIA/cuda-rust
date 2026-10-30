@@ -76,7 +76,7 @@ expansions name it.
 
 ## Check
 
-From `cuda-oxide/` with its pinned nightly:
+From `cuda-oxide/` with its pinned toolchain:
 
 ```sh
 cargo test -p ctm-rs --all-targets

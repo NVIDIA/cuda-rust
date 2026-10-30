@@ -1,13 +1,15 @@
 [package]
-name = "error_kernel_shared_ptr_param"
+name = "nounroll"
 version = "0.1.0"
 edition = "2024"
-authors = ["NVIDIA Corporation"]
 license = "Apache-2.0"
 
 [workspace]
 
+# Keeps `#[nounroll]` loops rolled through LLVM, libNVVM, and ptxas.
+#   cargo oxide run nounroll
+
 [dependencies]
-cuda-core = { path = "../../../../../cuda-core" }
 cuda-device = { path = "../../../cuda-device" }
 cuda-host = { path = "../../../cuda-host" }
+cuda-core = { path = "../../../../../cuda-core" }

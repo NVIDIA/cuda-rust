@@ -40,7 +40,7 @@ this storage and where the CPU waits.
 
 ## Run the checks
 
-From `cuda-oxide/`, with the cuda-oxide toolchain and CUTLASS backend installed:
+From `cuda-oxide/`, with the CUTLASS compiler installed (`cargo oxide toolchain install cutlass`):
 
 ```bash
 CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir \

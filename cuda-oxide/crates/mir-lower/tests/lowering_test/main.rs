@@ -14,6 +14,7 @@ mod calls_and_values;
 mod common;
 mod cp_async;
 mod inline_ptx;
+mod loops;
 mod math_conversions;
 mod matrix_memory;
 mod mma;

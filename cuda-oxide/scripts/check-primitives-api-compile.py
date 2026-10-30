@@ -345,7 +345,7 @@ def main():
     run_dir = Path(tempfile.mkdtemp(prefix="run-", dir=evidence))
     env = os.environ.copy()
     channel = tomllib.loads((ROOT / "rust-toolchain.toml").read_text())["toolchain"]["channel"]
-    env.update(RUSTUP_TOOLCHAIN=channel, CARGO_ENCODED_RUSTFLAGS="", RUSTFLAGS="")
+    env.update(RUSTUP_TOOLCHAIN=channel, RUSTC_BOOTSTRAP="1", CARGO_ENCODED_RUSTFLAGS="", RUSTFLAGS="")
     sysroot = subprocess.check_output(["rustc", "--print", "sysroot"], cwd=ROOT, env=env, text=True).strip()
     rustc_version = subprocess.check_output(["rustc", "-vV"], cwd=ROOT, env=env, text=True)
     host = re.search(r"^host: (.+)$", rustc_version, re.M).group(1)

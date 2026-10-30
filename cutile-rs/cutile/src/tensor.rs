@@ -535,12 +535,13 @@ pub use cutile_compiler::specialization::{compute_spec, SpecializationBits};
 #[derive(Debug)]
 pub(crate) struct Storage {
     allocation: Allocation,
-    accesses: Mutex<Vec<StorageAccess>>,
+    accesses: Arc<StorageAccessTracker>,
 }
 
 /// A user-visible storage owner, including aliases and lazy copy operations.
-/// Completion leases retain only `Storage`; their Arc bookkeeping must never
-/// make a real alias look unique or a unique tensor look shared.
+/// Completion leases retain only access bookkeeping and allocation leases;
+/// their Arc bookkeeping must never make a real alias look unique or a unique
+/// tensor look shared.
 #[derive(Clone, Debug)]
 pub(crate) struct StorageHandle {
     storage: Arc<Storage>,
@@ -568,7 +569,7 @@ impl StorageHandle {
         Self {
             storage: Arc::new(Storage {
                 allocation,
-                accesses: Mutex::new(Vec::new()),
+                accesses: Arc::new(StorageAccessTracker::default()),
             }),
             owners: Arc::new(()),
         }
@@ -623,8 +624,15 @@ impl Storage {
             Ok(())
         } else {
             // Hot path: a refcount and an inline push, no allocation.
-            ctx.retain_lease(AccessLease::new(self.clone(), id))
+            ctx.retain_lease(self.completion_lease(id))
         }
+    }
+
+    fn completion_lease(self: &Arc<Self>, id: u64) -> AccessLease {
+        // AllocationLease entries keep memory alive without retaining the
+        // RawDeviceBuffer user-view token stored in Storage. A tensor can thus
+        // transfer its sole view into a buffer while a completion is retiring.
+        AccessLease::new(self.accesses.clone(), id)
     }
 
     /// Test spelling of [`register_access`](Self::register_access) that hands
@@ -652,7 +660,11 @@ impl Storage {
         write: bool,
         recording: bool,
     ) -> Result<u64, DeviceError> {
-        let mut accesses = self.accesses.lock().unwrap_or_else(|e| e.into_inner());
+        let mut accesses = self
+            .accesses
+            .active
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if !recording
             && accesses.iter().any(|access| {
                 !access.recording && access.stream != stream && (write || access.write)
@@ -748,11 +760,24 @@ struct StorageAccess {
     recording: bool,
 }
 
+/// Completion ownership is separate from user-visible tensor/buffer views.
+/// Each active entry independently retains the allocation and its exclusion.
+#[derive(Debug, Default)]
+struct StorageAccessTracker {
+    active: Mutex<Vec<StorageAccess>>,
+}
+
 impl AccessTracked for Storage {
+    fn release_access(&self, id: u64) {
+        self.accesses.release_access(id);
+    }
+}
+
+impl AccessTracked for StorageAccessTracker {
     fn release_access(&self, id: u64) {
         // Releasing access and dropping its retaining Arc may happen separately:
         // neither changes the user-owner token used by uniqueness checks.
-        let mut accesses = self.accesses.lock().unwrap_or_else(|e| e.into_inner());
+        let mut accesses = self.active.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(pos) = accesses.iter().position(|access| access.id == id) {
             accesses.swap_remove(pos);
         }
@@ -2684,6 +2709,55 @@ mod tests {
         assert!(!tensor.has_unique_storage());
         drop(copy);
         assert!(tensor.has_unique_storage());
+    }
+
+    #[test]
+    fn into_buffer_ignores_completion_owners_but_preserves_access_exclusion() {
+        let owner: Arc<dyn DeviceAllocation> = Arc::new(FakeAlloc { len_bytes: 32 });
+        let weak_owner = Arc::downgrade(&owner);
+        // SAFETY: only metadata and access bookkeeping are inspected; the
+        // synthetic device pointer is never dereferenced or submitted.
+        let tensor = unsafe { Tensor::<f32>::from_foreign(owner, vec![8], vec![1]) };
+        let id = tensor.storage.register_access(1, true, false).unwrap();
+        let lease = tensor.storage.completion_lease(id);
+
+        let buffer = tensor.into_buffer();
+        assert!(
+            buffer.storage().is_unique(),
+            "completion is not a user view"
+        );
+        assert!(buffer.storage().acquire_on_stream(2, false, false).is_err());
+
+        let alias = buffer.storage().clone();
+        assert!(
+            !buffer.storage().is_unique(),
+            "real aliases must still count"
+        );
+        drop(alias);
+        assert!(buffer.storage().is_unique());
+
+        drop(buffer);
+        assert!(
+            weak_owner.upgrade().is_some(),
+            "in-flight work retains memory"
+        );
+        drop(lease);
+        assert!(weak_owner.upgrade().is_none(), "retirement releases memory");
+    }
+
+    #[test]
+    fn into_buffer_keeps_recorded_graph_storage_as_an_alias() {
+        let owner: Arc<dyn DeviceAllocation> = Arc::new(FakeAlloc { len_bytes: 32 });
+        // SAFETY: metadata-only; no work is submitted with the fake pointer.
+        let tensor = unsafe { Tensor::<f32>::from_foreign(owner, vec![8], vec![1]) };
+        let recorded = tensor.storage.acquire(1, true, true).unwrap();
+        let buffer = tensor.into_buffer();
+        assert!(
+            !buffer.storage().is_unique(),
+            "a graph can access storage again"
+        );
+        drop(recorded);
+        assert!(buffer.storage().is_unique());
     }
 
     #[test]

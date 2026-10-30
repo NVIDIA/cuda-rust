@@ -17,12 +17,12 @@ Q/K/V tensor views → typed copies → FP32 dot products and local softmax
 - The cache contains only visible tokens. Cache management, paging and grouped-query
   attention are outside this example.
 
-From `cuda-oxide/`, install CUTLASS 4.7 (`cargo oxide toolchain install cutlass`)
-and prepare the shared Python environment once for prefill and decode:
+From `cuda-oxide/`, once per checkout:
 
 ```bash
+cargo oxide toolchain install cutlass
 python3 -m venv cute-rs-preview/.venv
-cute-rs-preview/.venv/bin/python -m pip install -r cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/requirements.txt
+cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt
 ```
 
 Compare runtime and static specialization on RTX 5090:
@@ -45,10 +45,8 @@ Add `--json PATH` to save the comparison, `--iters 0` to verify without timing,
 or `--rust-only` for a standalone Rust report. `--all-cases` cannot be combined
 with `--rust-only`. Pass `--help` after `--` for all options.
 
-The comparison needs CUDA-enabled PyTorch and CUTLASS DSL 4.7; see
-[reference setup](reference/README.md). The shared virtualenv is found
-automatically. Use `--python PATH` to select another interpreter and
-`--device N` to select another visible GPU; device 0 is the default.
+Use `--python PATH` to select another interpreter and `--device N` to select
+another visible GPU; device 0 is the default.
 The CuTeDSL reference is independently authored here using the same split-KV
 algorithm; it is **not an upstream CUTLASS decode kernel**.
 

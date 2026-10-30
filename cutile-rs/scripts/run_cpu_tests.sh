@@ -55,6 +55,7 @@ for test_target in \
     bitwise_and_bitcast_ops \
     compile_error_quality \
     compile_only \
+    constant_source_locations \
     debug_info \
     element_type_zero \
     element_type_zero_jit \
@@ -63,6 +64,7 @@ for test_target in \
     global_memory \
     generated_source_locations \
     integer_ops \
+    jit_env_overrides \
     kernel_compiler \
     load_tile_like_examples \
     macro_submodule \
@@ -85,6 +87,10 @@ do
         "cutile CPU integration test ${test_target}" \
         cargo test -p cutile --test "$test_target"
 done
+
+run_step \
+    "cutile debug provenance through the assembler" \
+    cargo test -p cutile --test debug_info nested_helper_cubin_lines_stay_inside_their_functions -- --ignored --nocapture
 
 run_step \
     "cutile generated source locations through the assembler" \

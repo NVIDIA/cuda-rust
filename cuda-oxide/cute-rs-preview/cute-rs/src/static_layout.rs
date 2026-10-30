@@ -143,16 +143,38 @@ impl<const B: u32, const M: u32, const S: i32, const O: i64, Outer: StaticLayout
 /// composed layout).
 ///
 /// Offsets and strides count elements. The static offset is added before the
-/// swizzle, matching `cute_layout::ComposedLayout`. This computes an offset
-/// only; callers that dereference it must establish coordinate bounds and
-/// storage lifetime.
+/// swizzle, matching `cute_layout::ComposedLayout`. When the row stride is a
+/// power of two above the swizzle's target bit field, the row offset stays
+/// additive outside the XOR so constant row steps fold into instruction
+/// displacements. This computes an offset only; callers that dereference it
+/// must establish coordinate bounds and storage lifetime.
 #[inline(always)]
 pub fn crd2idx_2d<L: ReifySmem2D>(row: usize, column: usize) -> usize {
-    const {
+    let (stride_r, stride_c, offset, y_mask, right_shift, left_shift) = const {
         let _ = max_offset_2d::<L>();
-    }
-    let plain = row * L::STRIDE.0 as usize + column * L::STRIDE.1 as usize + L::OFFSET as usize;
-    cute_layout::Swizzle::new(L::NUM_BITS, L::NUM_BASE, L::NUM_SHIFT).apply(plain as i64) as usize
+        let mask = ((1usize << L::NUM_BITS) - 1)
+            << (L::NUM_BASE as i32 + if L::NUM_SHIFT > 0 { L::NUM_SHIFT } else { 0 }) as u32;
+        let r_shift = if L::NUM_SHIFT >= 0 {
+            L::NUM_SHIFT as u32
+        } else {
+            0
+        };
+        let l_shift = if L::NUM_SHIFT < 0 {
+            (-L::NUM_SHIFT) as u32
+        } else {
+            0
+        };
+        (
+            L::STRIDE.0 as usize,
+            L::STRIDE.1 as usize,
+            L::OFFSET as usize,
+            mask,
+            r_shift,
+            l_shift,
+        )
+    };
+    let plain = row * stride_r + column * stride_c + offset;
+    plain ^ (((plain & y_mask) >> right_shift) << left_shift)
 }
 
 /// Bound the physical offsets of a reified two-dimensional layout at compile time.

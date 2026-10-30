@@ -18,8 +18,8 @@ Demonstrates the `#[device]` attribute for helper functions that are called from
 #[device]
 pub fn vecadd_device(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(c_elem) = c.get_mut(idx) {
-        let i = idx.get();
         *c_elem = a[i] + b[i];
     }
 }
@@ -90,11 +90,12 @@ fn clamp(x: f32, lo: f32, hi: f32) -> f32 {
 #[kernel]
 pub fn apply_clamp(input: &[f32], mut out: DisjointSlice<f32>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(out_elem) = out.get_mut(idx) {
         // Call the device function by its original name. The macro
         // expands this to the reserved internal symbol behind the
         // scenes; users never type the mangled name themselves.
-        *out_elem = clamp(input[idx.get()], 0.0, 1.0);
+        *out_elem = clamp(input[i], 0.0, 1.0);
     }
 }
 ```

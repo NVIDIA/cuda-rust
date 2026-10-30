@@ -114,6 +114,26 @@ impl<L: SmemLayout, Role> SharedTile<L, Role> {
         // live. Dereferencing it retains the caller's lifetime obligations.
         self.base.wrapping_add((self.byte_offset / 2) as usize)
     }
+
+    /// Store eight contiguous FP16 values (carried as four packed `u32` words) at `(row, col)`.
+    ///
+    /// Both `B64` and `B128` shared swizzles keep aligned 8-element (`16`-byte)
+    /// chunks contiguous, so one 128-bit store writes the complete 8-element vector
+    /// at the swizzled address `L::crd2idx(row, col)`.
+    ///
+    /// # Safety
+    /// `(row, col)` must lie within `L`, `col` must be a multiple of 8, the
+    /// tile's shared storage must be live and exclusively writable for those
+    /// eight elements, and callers must issue the required proxy fence or
+    /// barrier before asynchronous or cross-thread readers access the tile.
+    #[inline(always)]
+    pub unsafe fn store_packed_8(&mut self, row: u32, col: u32, words: [u32; 4]) {
+        let offset = L::crd2idx(row, col);
+        unsafe {
+            *self.as_ptr().add(offset).cast::<ctm_rs::memory::U32x4>() =
+                ctm_rs::memory::U32x4(words);
+        }
+    }
 }
 
 /// Contiguous array of complete shared tiles with one layout and operand role.

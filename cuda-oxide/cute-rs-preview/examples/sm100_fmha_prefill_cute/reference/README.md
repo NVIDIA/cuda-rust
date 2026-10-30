@@ -16,24 +16,22 @@ structured CuTe operations with explicit CTM instructions; see the
 
 ## Setup and matched comparison
 
-Use Python 3.12, a CUDA-enabled PyTorch build supporting B200, and the pinned
-[requirements](requirements.txt). The tested PyTorch wheel is
-`2.13.0+cu130`; select that CUDA 13 build when installing PyTorch. From the
-example directory:
+Use Python 3.12 and the shared environment pinned in
+[`cute-rs-preview/requirements.txt`](../../../requirements.txt); the recorded B200
+results used torch `2.13.0+cu130`. From `cuda-oxide/`:
 
 ```bash
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -r reference/requirements.txt
-export CUDA_OXIDE_CUTE_PYTHON="$PWD/.venv/bin/python"
+python3 -m venv cute-rs-preview/.venv
+cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt
 ```
 
 The Rust runner selects `CUDA_OXIDE_CUTE_PYTHON`, then this example's `.venv`,
-then the existing sibling `fp16_gemm_256x352_cute/.venv`, then `python3`. Build the Rust example as shown
+then the shared `cute-rs-preview/.venv`, then `python3`. Build the Rust example as shown
 in the [example README](../README.md). To invoke the comparison directly from
 the example directory:
 
 ```bash
-"$CUDA_OXIDE_CUTE_PYTHON" compare.py \
+../../.venv/bin/python compare.py \
   --rust-bin target/release/sm100_fmha_prefill_cute \
   --shape 1,257,385,4,2 --causal --check-only
 ```
@@ -53,14 +51,14 @@ flags and shapes are rejected before allocation.
 
 ## Validation
 
-From `cuda-oxide/`, with the same Python runtime:
+From `cuda-oxide/`:
 
 ```bash
-python -m unittest discover -s cute-rs-preview/examples/sm100_fmha_prefill_cute -p test_compare.py
-python cute-rs-preview/examples/sm100_fmha_prefill_cute/validate.py --rust-bin /path/to/binary
-python cute-rs-preview/examples/sm100_fmha_prefill_cute/validate.py --rust-bin /path/to/binary \
+cute-rs-preview/.venv/bin/python -m unittest discover -s cute-rs-preview/examples/sm100_fmha_prefill_cute -p test_compare.py
+cute-rs-preview/.venv/bin/python cute-rs-preview/examples/sm100_fmha_prefill_cute/validate.py --rust-bin /path/to/binary
+cute-rs-preview/.venv/bin/python cute-rs-preview/examples/sm100_fmha_prefill_cute/validate.py --rust-bin /path/to/binary \
   --case both-tails-gqa --sanitizer memcheck
-python cute-rs-preview/examples/sm100_fmha_prefill_cute/validate.py --rust-bin /path/to/binary \
+cute-rs-preview/.venv/bin/python cute-rs-preview/examples/sm100_fmha_prefill_cute/validate.py --rust-bin /path/to/binary \
   --case kv-ring-wrap --sanitizer synccheck
 ```
 

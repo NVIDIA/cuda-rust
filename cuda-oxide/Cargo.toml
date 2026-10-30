@@ -47,8 +47,9 @@ authors = ["Nihal Pasham <nihalp@nvidia.com>"]
 license = "Apache-2.0"
 repository = "https://github.com/NVIDIA/cuda-rust"
 
-# Note: crates/rustc-codegen-cuda is NOT a workspace member because it requires
-# special rustc nightly features and a different build process.
+# Note: crates/rustc-codegen-cuda is NOT a workspace member because it links
+# against rustc_private (via rustc-dev and RUSTC_BOOTSTRAP=1) and uses a
+# separate build process.
 # Build and run examples with: cargo oxide run <example>
 # Examples are in: crates/rustc-codegen-cuda/examples/ and cute-rs-preview/examples/
 # Complete model workloads are in: cute-rs-preview/models/

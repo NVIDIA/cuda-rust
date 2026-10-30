@@ -220,12 +220,12 @@ Pointers carry an NVPTX address space independently of their source kind:
 
 ## Operations
 
-62 operations across 12 modules, one row per file in `src/ops/`:
+63 operations across 12 modules, one row per file in `src/ops/`:
 
 | Module         | Ops | Description                                                                                              |
 |----------------|-----|----------------------------------------------------------------------------------------------------------|
 | `function`     | 1   | `MirFuncOp` -- function definition                                                                       |
-| `control_flow` | 6   | return, goto, cond_branch, assert, unreachable, unroll_hint                                              |
+| `control_flow` | 7   | return, goto, cond_branch, assert, unreachable, unroll_hint, nounroll_hint                               |
 | `memory`       | 11  | alloca, load, store, ref, assign, ptr_offset, memcpy, memmove, shared_alloc, global_alloc, extern_shared |
 | `constants`    | 3   | integer, float, and undef constants                                                                      |
 | `arithmetic`   | 15  | add/sub/mul/div/rem, checked variants, bitwise, shifts                                                   |
@@ -300,7 +300,7 @@ src/
 ├── ops/
 │   ├── mod.rs                   # Op module registry + re-exports
 │   ├── function.rs              # MirFuncOp
-│   ├── control_flow.rs          # Terminators, branches, unroll hints
+│   ├── control_flow.rs          # Terminators, branches, loop hints
 │   ├── memory.rs                # Load, store, alloc, memcpy, shared memory
 │   ├── constants.rs             # Integer and float literals
 │   ├── arithmetic.rs            # Math, bitwise, shifts, checked ops

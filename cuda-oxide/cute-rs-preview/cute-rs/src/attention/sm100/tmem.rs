@@ -6,7 +6,118 @@
 //! Warp-collective register fragments for CTM tensor-memory loads and stores.
 //! Conversion and chunking preserve the explicit completion choices of each API.
 
-use ctm_rs::{memory::CuSimd, tcgen05::tmem, thread};
+use ctm_rs::{
+    groups::CtaGroup2,
+    memory::CuSimd,
+    tcgen05::{
+        self,
+        tmem::{self, TmemGuard, TmemReady, TmemUninit},
+    },
+    thread,
+};
+
+/// Pack a warp's 32-row group offset and a column displacement into a live TMEM address.
+///
+/// Tensor memory encodes the row offset in the upper 16 bits (`(warp_in_group * 32) << 16`)
+/// and the column offset in the lower 16 bits. `warp_in_group` is in `0..4` within a
+/// 128-thread warpgroup.
+#[must_use]
+#[inline(always)]
+pub const fn tmem_row_address(base: u32, warp_in_group: u32, column_offset: u32) -> u32 {
+    base + ((warp_in_group * 32) << 16) + column_offset
+}
+
+/// Collective tensor-memory allocator for SM100 attention kernels (`utils.TmemAllocator`).
+///
+/// Mirrors CuTeDSL's `cutlass.utils.TmemAllocator`: `COLUMNS` is a power of two in
+/// `32..=512` and `GROUP` is `1` (single-CTA FMHA) or `2` (two-CTA MLA decode).
+pub struct TmemAllocator<const COLUMNS: u32, const GROUP: u32 = 1>;
+
+impl<const COLUMNS: u32, const GROUP: u32> TmemAllocator<COLUMNS, GROUP>
+where
+    (): tmem::ValidColumns<COLUMNS>,
+{
+    /// Validate supported column counts and CTA group sizes at compile time.
+    const VALID: () = {
+        assert!(COLUMNS >= 32 && COLUMNS <= 512 && COLUMNS.is_power_of_two());
+        assert!(GROUP == 1 || GROUP == 2);
+    };
+
+    /// Collectively allocate `COLUMNS` TMEM columns into the shared `token` slot (`TmemAllocator.allocate`).
+    ///
+    /// Does not relinquish the allocation permit; pair with [`Self::relinquish_alloc_permit`]
+    /// and [`Self::free`].
+    ///
+    /// # Safety
+    /// All 32 lanes of the allocating warp (in one CTA for `GROUP = 1`, or both
+    /// CTAs for `GROUP = 2`) must participate with a live aligned shared `u32` slot.
+    #[inline(always)]
+    pub unsafe fn allocate(token: *mut u32) {
+        let () = Self::VALID;
+        unsafe {
+            if GROUP == 1 {
+                TmemGuard::<TmemUninit, COLUMNS>::from_raw_slot(token).alloc_collective();
+            } else {
+                TmemGuard::<TmemUninit, COLUMNS, CtaGroup2>::from_raw_slot(token)
+                    .alloc_collective();
+            }
+        }
+    }
+
+    /// Relinquish the warp's TMEM allocation permit (`TmemAllocator.relinquish_alloc_permit`).
+    ///
+    /// # Safety
+    /// All 32 lanes of the allocating warp must call this after [`Self::allocate`]
+    /// and before kernel exit.
+    #[inline(always)]
+    pub unsafe fn relinquish_alloc_permit() {
+        let () = Self::VALID;
+        unsafe {
+            if GROUP == 1 {
+                tcgen05::relinquish_alloc_permit();
+            } else {
+                tcgen05::relinquish_alloc_permit_cg2();
+            }
+        }
+    }
+
+    /// Read the encoded TMEM base address from an initialized shared `token` slot (`TmemAllocator.retrieve_ptr`).
+    ///
+    /// # Safety
+    /// Allocation into `token` must have completed and been synchronized across
+    /// all reader warps.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn retrieve_ptr(token: *const u32) -> u32 {
+        let () = Self::VALID;
+        unsafe {
+            if GROUP == 1 {
+                TmemGuard::<TmemReady, COLUMNS>::adopt_ready(token.cast_mut()).raw_address()
+            } else {
+                TmemGuard::<TmemReady, COLUMNS, CtaGroup2>::adopt_ready(token.cast_mut())
+                    .raw_address()
+            }
+        }
+    }
+
+    /// Collectively deallocate `COLUMNS` TMEM columns (`TmemAllocator.free`).
+    ///
+    /// # Safety
+    /// All asynchronous MMA and TMEM loads/stores must be complete and synchronized
+    /// across all participating warps/CTAs before the allocating warp calls this.
+    #[inline(always)]
+    pub unsafe fn free(token: *const u32) {
+        let () = Self::VALID;
+        unsafe {
+            if GROUP == 1 {
+                TmemGuard::<TmemReady, COLUMNS>::adopt_ready(token.cast_mut()).dealloc_collective();
+            } else {
+                TmemGuard::<TmemReady, COLUMNS, CtaGroup2>::adopt_ready(token.cast_mut())
+                    .dealloc_collective();
+            }
+        }
+    }
+}
 
 /// Warp-collective 32-data-path TMEM register fragment, one row per lane.
 pub struct TmemFragment<const REGS: usize> {

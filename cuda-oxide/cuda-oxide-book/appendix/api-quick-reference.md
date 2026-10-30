@@ -45,6 +45,7 @@ fn helper(x: f32) -> f32 { x * x }
 | `#[kernel]`                                 | Mark a function as a GPU kernel entry point (`.entry` in PTX)       |
 | `#[device]`                                 | Mark a helper function or `extern "C"` block for device compilation |
 | `#[unroll]` / `#[unroll(N)]`               | Request full unrolling, or unrolling by a factor `N >= 2`            |
+| `#[nounroll]`                               | Keep a loop rolled through LLVM, libNVVM, and ptxas                 |
 | `#[launch_bounds(max_threads, min_blocks)]` | Occupancy hints for register allocation                             |
 | `#[constant]`                               | Place a `ConstantMemory<T>` static in constant memory, with a host `set_<name>` |
 | `#[launch_contract(...)]`                   | Declare the launch shape a kernel requires, unlocking a safe (non-`unsafe`) launch |
@@ -312,7 +313,6 @@ pub fn dynamic(data: &[f32]) {
 | `SharedArray<T, N>`       | Compile-time sized, block-scoped shared memory            |
 | `SharedArray<T, N, 128>`  | With 128-byte alignment (required for TMA destinations)   |
 | `DynamicSharedArray<T>`   | Runtime-sized shared memory (set via `LaunchConfig`)      |
-| `SharedPtr<T>`            | Pointer into this block's shared memory, `addrspace(3)` by type |
 
 Both are `!Sync` — concurrent access requires explicit barriers.
 
@@ -451,7 +451,7 @@ cp_async_bulk_commit_group();
 | Function                                      | Description                          |
 |:----------------------------------------------|:-------------------------------------|
 | `cp_async_bulk_tensor_{1..5}d_g2s(...)`       | Global → shared async bulk copy      |
-| `cp_async_bulk_tensor_{1..5}d_g2s_cta(...)`   | Global → this CTA's `SharedPtr`      |
+| `cp_async_bulk_tensor_{1..5}d_g2s_cta(...)`   | Global → this CTA's shared memory    |
 | `cp_async_bulk_tensor_{1..5}d_s2g(...)`       | Shared → global async bulk copy      |
 | `cp_async_bulk_tensor_2d_g2s_multicast(...)`  | Multicast to all CTAs in cluster     |
 | `cp_async_bulk_commit_group()`                | Commit outstanding copies            |
@@ -651,7 +651,7 @@ debug::prof_trigger::<7>();     // Nsight profiler trigger
 | `thread`             | Thread/block IDs, `index_1d`, `sync_threads`                     | All      |
 | `config`             | Compile-time policies, shapes, tiles, atoms, layouts, memory spaces, and scopes | All |
 | `disjoint`           | `DisjointSlice<T>` — typed writes completed by a launch proof    | All      |
-| `shared`             | `SharedArray<T, N>`, `DynamicSharedArray<T>`, `SharedPtr<T>`     | All      |
+| `shared`             | `SharedArray<T, N>`, `DynamicSharedArray<T>`                     | All      |
 | `warp`               | Shuffle, vote, match, lane/warp ID                               | All      |
 | `atomic`             | Scoped atomics (device/block/system)                             | sm_70+   |
 | `debug`              | `clock64`, `trap`, `breakpoint`, `gpu_printf!`                   | All      |

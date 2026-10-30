@@ -16,6 +16,11 @@ import sys
 import tempfile
 
 
+SETUP_HINT = ("from cuda-oxide/ run `python3 -m venv cute-rs-preview/.venv && "
+              "cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt`, "
+              "then rerun; or set CUDA_OXIDE_CUTE_PYTHON to an environment that has them")
+
+
 def shape(value):
     """Parse M,N,K and enforce the device launch's dimension and index bounds."""
     try:
@@ -92,10 +97,7 @@ def main():
         import numpy as np
         from public_reference import oracle, gemm
     except ImportError as exc:
-        raise RuntimeError(
-            f"comparison dependencies could not be imported by {sys.executable}: {exc}; "
-            "select the configured comparison environment with --python or CUDA_OXIDE_CUTE_PYTHON"
-        ) from exc
+        sys.exit(f"comparison dependencies could not be imported by {sys.executable}: {exc}; {SETUP_HINT}")
     if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (10, 0):
         raise RuntimeError("this comparison requires an SM100 GPU")
     # Both processes select device ordinal zero. CUDA_VISIBLE_DEVICES is the

@@ -20,6 +20,97 @@ pub type BLayout = Layout<(Threads, (C<2>, C<2>)), ((C<2>, C<16>), (C<1>, C<8>))
 /// C's `(lane, register)` map into a row-major 16-by-8 logical tile.
 pub type CLayout = Layout<(Threads, (C<2>, C<2>)), ((C<2>, C<8>), (C<1>, C<64>))>;
 
+impl super::FragmentA {
+    /// Retile two adjacent `16x8` FP32 [`super::FragmentC`] accumulators into one `16x16` `f16` A fragment.
+    ///
+    /// In `mma.sync.aligned.m16n8k16`, two horizontally adjacent `16x8` C fragments
+    /// (`left` for columns `0..8`, `right` for columns `8..16`) share the exact lane
+    /// and row-band assignment of one `16x16` A fragment. Converting each register
+    /// pair with [`crate::arch::cvt_f16x2_f32`] produces the `FragmentA` operand for
+    /// a subsequent `P * V` matrix multiply without shared-memory staging.
+    #[must_use]
+    #[inline(always)]
+    pub fn from_f32_pair(left: super::FragmentC, right: super::FragmentC) -> Self {
+        use crate::arch::cvt_f16x2_f32;
+        Self([
+            cvt_f16x2_f32(left.0[0], left.0[1]),
+            cvt_f16x2_f32(left.0[2], left.0[3]),
+            cvt_f16x2_f32(right.0[0], right.0[1]),
+            cvt_f16x2_f32(right.0[2], right.0[3]),
+        ])
+    }
+}
+
+impl super::FragmentC {
+    /// Return the tile-local row (`0..16`) owned by `lane` for row band `ROW` (`0` or `1`).
+    ///
+    /// Derived from the static [`CLayout`] (`lane / 4 + ROW * 8`).
+    #[must_use]
+    #[inline(always)]
+    pub fn row_coord<const ROW: usize>(lane: u32) -> u32 {
+        const { assert!(ROW < 2) };
+        let offset = <CLayout as crate::static_layout::StaticLayout>::crd2idx(
+            (lane as usize) + 32 * (ROW * 2),
+        );
+        (offset / 8) as u32
+    }
+
+    /// Return the column (`tile_n * 8 + 0..8`) owned by `lane` for column slot `COL` (`0` or `1`).
+    ///
+    /// Derived from the static [`CLayout`] (`tile_n * 8 + (lane % 4) * 2 + COL`).
+    #[must_use]
+    #[inline(always)]
+    pub fn col_coord<const COL: usize>(lane: u32, tile_n: usize) -> u32 {
+        const { assert!(COL < 2) };
+        let offset =
+            <CLayout as crate::static_layout::StaticLayout>::crd2idx((lane as usize) + 32 * COL);
+        (tile_n * 8 + (offset % 8)) as u32
+    }
+
+    /// Read the accumulator value for row band `ROW` (`0` or `1`) and column `COL` (`0` or `1`).
+    #[must_use]
+    #[inline(always)]
+    pub const fn get<const ROW: usize, const COL: usize>(&self) -> f32 {
+        const { assert!(ROW < 2 && COL < 2) };
+        self.0[ROW * 2 + COL]
+    }
+
+    /// Write the accumulator value for row band `ROW` (`0` or `1`) and column `COL` (`0` or `1`).
+    #[inline(always)]
+    pub fn set<const ROW: usize, const COL: usize>(&mut self, value: f32) {
+        const { assert!(ROW < 2 && COL < 2) };
+        self.0[ROW * 2 + COL] = value;
+    }
+
+    /// Multiply both columns of row band `ROW` (`0` or `1`) by `scale`.
+    #[inline(always)]
+    pub fn scale_row<const ROW: usize>(&mut self, scale: f32) {
+        const { assert!(ROW < 2) };
+        self.0[ROW * 2] *= scale;
+        self.0[ROW * 2 + 1] *= scale;
+    }
+
+    /// Return the maximum of the two columns in row band `ROW` (`0` or `1`).
+    #[must_use]
+    #[inline(always)]
+    pub fn row_max<const ROW: usize>(&self) -> f32 {
+        const { assert!(ROW < 2) };
+        self.0[ROW * 2].max(self.0[ROW * 2 + 1])
+    }
+
+    /// Visit this lane's four `(row, col)` output coordinates (`0..16`, `0..8`) in register order.
+    #[inline(always)]
+    pub fn store_with(self, lane: u32, mut write: impl FnMut(usize, usize, f32)) {
+        let mut i = 0;
+        while i < 4 {
+            ctm_rs::thread::__unroll_config::<0>();
+            let (r, c) = coordinate::<CLayout, 8>(lane as usize, i);
+            write(r, c, self.0[i]);
+            i += 1;
+        }
+    }
+}
+
 /// This lane's BF16 A registers, whose layout is established by its partition.
 #[derive(Clone, Copy)]
 pub struct FragmentA(ctm_rs::mma::Bf16A);
@@ -212,6 +303,24 @@ fn coordinate<L: StaticLayout, const COLS: usize>(lane: usize, value: usize) -> 
     (offset / COLS, offset % COLS)
 }
 impl APartition {
+    /// Load this lane's eight BF16 elements from a shared-memory tile using `ldmatrix.x4`.
+    ///
+    /// # Safety
+    /// All 32 lanes of the warp must call this convergently with their hardware
+    /// lane handle, and `warp_tile` must select a valid, 16-byte-aligned 16x16
+    /// window inside `src`.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn load_smem<SmemL>(
+        self,
+        src: &crate::copy::cooperative::SmemTile<BFloat16, SmemL>,
+        warp_tile: (usize, usize),
+    ) -> FragmentA {
+        let loaded =
+            unsafe { super::load_matrix_a::<SmemL, BFloat16>(src, warp_tile, self.lane as u32) };
+        FragmentA(ctm_rs::mma::Bf16A::from_registers(loaded.0))
+    }
+
     /// Load this lane's eight BF16 elements, preserving low/high pair order.
     /// The callback receives local `(M,K)` coordinates in register order.
     #[inline(always)]
@@ -243,19 +352,16 @@ impl APartition {
         let (_, high_k) = coordinate::<ALayout, 16>(self.lane, 4);
         let physical_row = row & (source.rows - 1);
         let mask = 0u32.wrapping_sub((row < source.rows) as u32);
-        let base = source.input;
-        let low = unsafe {
-            ctm_rs::memory::load_aligned_u32(
-                base.add(physical_row * source.input_stride + k + low_k)
-                    .cast(),
-            )
-        };
-        let high = unsafe {
-            ctm_rs::memory::load_aligned_u32(
-                base.add(physical_row * source.input_stride + k + high_k)
-                    .cast(),
-            )
-        };
+        let row_offset = physical_row * source.input_stride + k;
+        let slice =
+            unsafe { core::slice::from_raw_parts(source.input, source.rows * source.input_stride) };
+        let tensor = crate::tensor::Tensor::from_slice(slice);
+        let [lo0, hi0] =
+            unsafe { tensor.local_tile::<2>((row_offset + low_k) / 2).load() }.into_array();
+        let [lo1, hi1] =
+            unsafe { tensor.local_tile::<2>((row_offset + high_k) / 2).load() }.into_array();
+        let low = u32::from(lo0.to_bits()) | (u32::from(hi0.to_bits()) << 16);
+        let high = u32::from(lo1.to_bits()) | (u32::from(hi1.to_bits()) << 16);
         FragmentA(ctm_rs::mma::Bf16A::from_registers([
             low & mask,
             0,
@@ -263,8 +369,86 @@ impl APartition {
             0,
         ]))
     }
+
+    /// Load a complete 16x16 A fragment at `(m, k)` using 32-bit `cute.copy` vector loads,
+    /// clamping and zero-masking rows past `rows`.
+    ///
+    /// # Safety
+    /// `rows > 0`, `input` must be 4-byte aligned and contain at least `rows * input_stride`
+    /// elements, `input_stride` must be even and at least `k + 16`, and `k` must be a multiple of 16.
+    #[inline(always)]
+    pub unsafe fn load_tiled_packed(
+        self,
+        input: &[BFloat16],
+        m: usize,
+        k: usize,
+        rows: usize,
+        input_stride: usize,
+    ) -> FragmentA {
+        let (r0, low_k) = coordinate::<ALayout, 16>(self.lane, 0);
+        let (r1, _) = coordinate::<ALayout, 16>(self.lane, 2);
+        let (_, high_k) = coordinate::<ALayout, 16>(self.lane, 4);
+        let row0 = m + r0;
+        let row1 = m + r1;
+        let clamped0 = if row0 < rows { row0 } else { rows - 1 };
+        let clamped1 = if row1 < rows { row1 } else { rows - 1 };
+        let mask0 = 0u32.wrapping_sub((row0 < rows) as u32);
+        let mask1 = 0u32.wrapping_sub((row1 < rows) as u32);
+        let base0 = clamped0 * input_stride + k;
+        let base1 = clamped1 * input_stride + k;
+        let tensor = crate::tensor::Tensor::from_slice(input);
+        let [a0, a1] = unsafe { tensor.local_tile::<2>((base0 + low_k) / 2).load() }.into_array();
+        let [a2, a3] = unsafe { tensor.local_tile::<2>((base1 + low_k) / 2).load() }.into_array();
+        let [a4, a5] = unsafe { tensor.local_tile::<2>((base0 + high_k) / 2).load() }.into_array();
+        let [a6, a7] = unsafe { tensor.local_tile::<2>((base1 + high_k) / 2).load() }.into_array();
+        let p0 = (u32::from(a0.to_bits()) | (u32::from(a1.to_bits()) << 16)) & mask0;
+        let p1 = (u32::from(a2.to_bits()) | (u32::from(a3.to_bits()) << 16)) & mask1;
+        let p2 = (u32::from(a4.to_bits()) | (u32::from(a5.to_bits()) << 16)) & mask0;
+        let p3 = (u32::from(a6.to_bits()) | (u32::from(a7.to_bits()) << 16)) & mask1;
+        FragmentA(ctm_rs::mma::Bf16A::from_registers([p0, p1, p2, p3]))
+    }
 }
 impl BPartition {
+    /// Load this lane's four BF16 elements from a shared-memory tile using `ldmatrix.x2.trans`.
+    ///
+    /// # Safety
+    /// All 32 lanes of the warp must call this convergently with their hardware
+    /// lane handle, and `warp_tile` must select a valid, 16-byte-aligned 16x8
+    /// window inside `src`.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn load_smem<SmemL>(
+        self,
+        src: &crate::copy::cooperative::SmemTile<BFloat16, SmemL>,
+        warp_tile: (usize, usize),
+    ) -> FragmentB {
+        let loaded =
+            unsafe { super::load_matrix_b::<SmemL, BFloat16>(src, warp_tile, self.lane as u32) };
+        FragmentB(ctm_rs::mma::Bf16B::from_registers(loaded.0))
+    }
+
+    /// Load two adjacent 16x8 BF16 B fragments from a K-major 16x16 shared-memory window.
+    ///
+    /// # Safety
+    /// All 32 lanes of the warp must call this convergently with their hardware
+    /// lane handle, and `warp_tile` must select a valid, 16-byte-aligned 16x16
+    /// K-major window inside `src`.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn load_smem_pair_k_major<SmemL>(
+        self,
+        src: &crate::copy::cooperative::SmemTile<BFloat16, SmemL>,
+        warp_tile: (usize, usize),
+    ) -> (FragmentB, FragmentB) {
+        let loaded = unsafe {
+            super::load_matrix_b_pair_k_major::<SmemL, BFloat16>(src, warp_tile, self.lane as u32)
+        };
+        (
+            FragmentB(ctm_rs::mma::Bf16B::from_registers(loaded.get::<0>().0)),
+            FragmentB(ctm_rs::mma::Bf16B::from_registers(loaded.get::<1>().0)),
+        )
+    }
+
     /// Load this lane's four BF16 elements from local stored `(N,K)` coordinates.
     #[inline(always)]
     pub fn load_with(self, mut read: impl FnMut(usize, usize) -> BFloat16) -> FragmentB {
@@ -293,19 +477,41 @@ impl BPartition {
     ) -> FragmentB {
         let (row, low_k) = coordinate::<BLayout, 16>(self.lane, 0);
         let (_, high_k) = coordinate::<BLayout, 16>(self.lane, 2);
-        let base = source.weight;
-        let low = unsafe {
-            ctm_rs::memory::load_aligned_u32(
-                base.add((n + row) * source.weight_stride + k + low_k)
-                    .cast(),
-            )
-        };
-        let high = unsafe {
-            ctm_rs::memory::load_aligned_u32(
-                base.add((n + row) * source.weight_stride + k + high_k)
-                    .cast(),
-            )
-        };
+        let row_offset = (n + row) * source.weight_stride + k;
+        let slice = unsafe { core::slice::from_raw_parts(source.weight, row_offset + 16) };
+        let tensor = crate::tensor::Tensor::from_slice(slice);
+        let [lo0, hi0] =
+            unsafe { tensor.local_tile::<2>((row_offset + low_k) / 2).load() }.into_array();
+        let [lo1, hi1] =
+            unsafe { tensor.local_tile::<2>((row_offset + high_k) / 2).load() }.into_array();
+        let low = u32::from(lo0.to_bits()) | (u32::from(hi0.to_bits()) << 16);
+        let high = u32::from(lo1.to_bits()) | (u32::from(hi1.to_bits()) << 16);
+        FragmentB(ctm_rs::mma::Bf16B::from_registers([low, high]))
+    }
+
+    /// Load one complete eight-output weight tile at `(n, k)` using 32-bit `cute.copy` vector loads.
+    ///
+    /// # Safety
+    /// `weight` must be 4-byte aligned and contain at least `(n + 7) * weight_stride + k + 16`
+    /// elements, `weight_stride` must be even and at least `k + 16`, and `k` must be a multiple of 16.
+    #[inline(always)]
+    pub unsafe fn load_tiled_packed(
+        self,
+        weight: &[BFloat16],
+        n: usize,
+        k: usize,
+        weight_stride: usize,
+    ) -> FragmentB {
+        let (row, low_k) = coordinate::<BLayout, 16>(self.lane, 0);
+        let (_, high_k) = coordinate::<BLayout, 16>(self.lane, 2);
+        let row_offset = (n + row) * weight_stride + k;
+        let tensor = crate::tensor::Tensor::from_slice(weight);
+        let [lo0, hi0] =
+            unsafe { tensor.local_tile::<2>((row_offset + low_k) / 2).load() }.into_array();
+        let [lo1, hi1] =
+            unsafe { tensor.local_tile::<2>((row_offset + high_k) / 2).load() }.into_array();
+        let low = u32::from(lo0.to_bits()) | (u32::from(hi0.to_bits()) << 16);
+        let high = u32::from(lo1.to_bits()) | (u32::from(hi1.to_bits()) << 16);
         FragmentB(ctm_rs::mma::Bf16B::from_registers([low, high]))
     }
 }

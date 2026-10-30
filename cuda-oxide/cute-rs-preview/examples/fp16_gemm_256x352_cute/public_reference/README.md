@@ -11,24 +11,20 @@ and licenses. These experimental APIs are pinned in [requirements.txt](requireme
 
 ## Python setup
 
-The Rust CuTe example automatically creates and reuses its ignored `.venv`
-when run in comparison mode. Setup finishes before benchmarking. It requires
-`python3` plus either `venv`/`ensurepip` (`python3-venv` on Debian/Ubuntu) or
-`uv` on `PATH`, and network access for the first installation or changed
-requirements. Successful later runs check imports without invoking an installer.
-The environment must contain a CUDA-enabled PyTorch build suitable for B200.
-
-To prepare the same environment for the CTM comparison, from `cuda-oxide/`:
+The comparison uses the shared environment pinned in
+[`cute-rs-preview/requirements.txt`](../../../requirements.txt). From `cuda-oxide/`:
 
 ```bash
-python3 cute-rs-preview/examples/fp16_gemm_256x352_cute/setup_reference.py
+python3 -m venv cute-rs-preview/.venv
+cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt
 ```
 
-The CuTe executable honors `--python PATH` before `CUDA_OXIDE_CUTE_PYTHON`.
-These overrides select an existing environment without installing packages
-into it. Without an override, it manages the local `.venv`. `--rust-only` and
-`--help` bypass Python setup. Invoking `compare.py` directly uses the interpreter
-that starts it; it does not run setup or interpret the Rust launcher's overrides.
+The CuTe executable honors `--python PATH`, then `CUDA_OXIDE_CUTE_PYTHON`, then
+this example's `.venv`, then the shared `cute-rs-preview/.venv`. Without any of
+them, it creates the shared environment itself through `setup_reference.py`,
+which needs `python3` with `venv`/`ensurepip` (`python3-venv` on Debian/Ubuntu)
+or `uv` on `PATH`, plus network access. `--rust-only` and `--help` bypass Python
+setup. Invoking `compare.py` directly uses the interpreter that starts it.
 
 The CTM executable is a standalone Rust runner. Its comparison command invokes
 this shared Python harness with `--rust-bin` pointing at the CTM executable.
@@ -90,12 +86,12 @@ Correctness passes do not resolve it.
 From the CuTe example directory, after setup:
 
 ```bash
-.venv/bin/python -m unittest discover -v
-.venv/bin/python -m public_reference.validate --output /tmp/fp16-reference-checks.json
+../../.venv/bin/python -m unittest discover -v
+../../.venv/bin/python -m public_reference.validate --output /tmp/fp16-reference-checks.json
 compute-sanitizer --tool memcheck --check-tensor-ops yes --error-exitcode 1 \
-  .venv/bin/python -m public_reference.validate
+  ../../.venv/bin/python -m public_reference.validate
 compute-sanitizer --tool synccheck --error-exitcode 1 \
-  .venv/bin/python -m public_reference.validate
+  ../../.venv/bin/python -m public_reference.validate
 ```
 
 For Rust CuTe, from `cuda-oxide/`, after building:

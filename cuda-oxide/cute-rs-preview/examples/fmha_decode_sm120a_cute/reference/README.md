@@ -18,16 +18,16 @@ stride and merge bounds dynamic. The comparison requires the same effective
 mode on both sides, so neither compiler receives an extra shape advantage.
 
 Use `nvidia-cutlass-dsl[cu13]==4.7.0` with a compatible CUDA-enabled PyTorch
-build and driver. `requirements.txt` pins the DSL; dependencies retain their
-own licenses. All code in this directory has the indicated first-party
-Apache-2.0 license.
+build and driver. The shared [`requirements.txt`](../../../requirements.txt)
+pins the DSL; dependencies retain their own licenses. All code in this
+directory has the indicated first-party Apache-2.0 license.
 
 Prepare the shared Python environment once for both prefill and decode,
 from `cuda-oxide/`:
 
 ```bash
 python3 -m venv cute-rs-preview/.venv
-cute-rs-preview/.venv/bin/python -m pip install -r cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/requirements.txt
+cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt
 ```
 
 Select a CUDA-enabled PyTorch build that supports SM120 and matches your CUDA

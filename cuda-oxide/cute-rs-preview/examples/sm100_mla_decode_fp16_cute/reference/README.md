@@ -17,13 +17,15 @@ lengths must be positive, lengths are uniform across the batch, and split
 counts range from 1 to 256. Unsupported profiles fail before allocation or
 launch. Softmax scale defaults to 0.0416 and output scale to 1.0.
 
-Use Python 3.12 and a CUDA-enabled PyTorch build for B200. From the example
-directory, create an environment and install the pinned dependencies:
+Use Python 3.12 and the shared environment pinned in
+[`cute-rs-preview/requirements.txt`](../../../requirements.txt). From `cuda-oxide/`,
+create it once, then run from the example directory:
 
 ```bash
-python3.12 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r reference/requirements.txt
+python3 -m venv cute-rs-preview/.venv
+cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt
+cd cute-rs-preview/examples/sm100_mla_decode_fp16_cute
+. ../../.venv/bin/activate
 python compare.py --rust-bin target/release/sm100_mla_decode_fp16_cute \
   --batch 1 --kv-length 1024 --splits 1 --clusters 1 \
   --warmup 10 --iterations 100 --rounds 5 --json comparison-results.json
@@ -35,7 +37,7 @@ cargo test
 
 The default `cargo oxide run` command calls `compare.py` with the executable
 it just built. Python is selected from `CUDA_OXIDE_CUTE_PYTHON`, this example's
-`.venv/bin/python`, the FP16 GEMM example's `.venv/bin/python`, then `python3`.
+`.venv/bin/python`, the shared `cute-rs-preview/.venv/bin/python`, then `python3`.
 The terminal ends with the CuTeDSL and CuTe-RS median times; reference diagnostics
 go to stderr. `--json FILE` preserves the full report. `--iters`, `--windows`
 and `--check-only` alias `--iterations`, `--rounds` and `--validation-only`.

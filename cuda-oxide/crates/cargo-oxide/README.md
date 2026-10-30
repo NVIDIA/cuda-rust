@@ -10,10 +10,10 @@ Replaces the previous `xtask` pattern with a proper cargo subcommand that works 
 
 **External users**:
 
-Install with the project's pinned nightly toolchain:
+Install with the project's pinned toolchain:
 
 ```bash
-cargo +nightly-2026-10-11 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
+cargo +1.99.1 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
 ```
 
 On first run, `cargo-oxide` will automatically fetch and build the codegen backend if it's not already available.
@@ -452,7 +452,7 @@ merged repository it also formats the parent shared-host workspace. With
 
 ### `cargo oxide doctor`
 
-Validates that your environment is correctly set up: Rust nightly toolchain,
+Validates that your environment is correctly set up: pinned Rust toolchain,
 CUDA headers (`cuda.h`), CUDA toolkit (`nvcc`, libNVVM, nvJitLink,
 libdevice), LLVM (`llc`), clang/libclang, the NVIDIA driver / GPU, and the
 codegen backend `.so`. Optional probes cover `cuda-gdb` (for `debug`) and
@@ -510,11 +510,11 @@ Cargo.lock   cuda-device = git+https://github.com/NVIDIA/cuda-rust.git#<sha>
 The kernels compile against the crates at that commit and the backend that
 lowers them is built from the same commit, so the two cannot drift. Changing
 the dependency (`cargo update`, a new `rev = ...`) rebuilds the cache on the
-next build. The checkout's `rust-toolchain.toml` names the nightly that commit
-needs; if the project pins a different one, the build stops before compiling
-and tells you which channel to set. A path dependency on a local checkout
-builds in place, like step 3. Projects with no cuda-oxide dependency fall back
-to a one-time clone of `main`. The backend's build tree lives at
+next build. The checkout's `rust-toolchain.toml` names the toolchain channel
+that commit needs; if the project pins a different one, the build stops before
+compiling and tells you which channel to set. A path dependency on a local
+checkout builds in place, like step 3. Projects with no cuda-oxide dependency
+fall back to a one-time clone of `main`. The backend's build tree lives at
 `~/.cargo/cuda-oxide/target` (shared by every commit's builds; delete it to
 reclaim the space).
 

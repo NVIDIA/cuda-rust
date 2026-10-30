@@ -114,7 +114,7 @@ Schedule across stream pools. Await results with `.await`.
 :::
 
 :::{grid-item-card} 🧩  Typed CuTe Kernels (preview)
-Encode layouts, swizzles, TMA pipelines, and tensor-core MMA in Rust's type system with [`cute-rs`](cute/overview.md), compiled through CUTLASS 4.7 for `sm_100a` and `sm_120a`. See the [support matrix](cute/support-matrix.md).
+Encode layouts, swizzles, TMA pipelines, and tensor-core MMA in Rust's type system with [cute-rs](cute/overview.md), compiled through CUTLASS 4.7 for `sm_100a` and `sm_120a`. See the [support matrix](cute/support-matrix.md).
 :::
 
 ::::

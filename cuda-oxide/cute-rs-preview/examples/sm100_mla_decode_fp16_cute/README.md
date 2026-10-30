@@ -4,18 +4,16 @@ This cuda-oxide example ports the public CUTLASS FP16 MLA decode kernel to
 CuTe-RS for data center Blackwell. Two-CTA clusters process a paged latent KV
 cache; a second kernel combines partial results when multiple splits are used.
 
-The kernel uses `cute-rs` for typed layouts, structured MMA and TMA operations,
-and `ctm-rs` for instruction primitives, kernel macros and storage types.
-Packed FP32 registers have a distinct type; asynchronous page copies carry
-a shared destination and a ready barrier.
+The kernel uses `cute-rs` for typed layouts, structured MMA and TMA operations
+(`MmaSs`, `TmaCopy`, `SharedTileArray`, `SharedTile::store_packed_8`), two-CTA
+`TwoCtaRing` pipelines (including asynchronous page staging and TMEM metadata
+handoffs), `TmemAllocator<512, 2>`, `TmemFragment`, `StridedTensor` /
+`StridedTensorMut`, `RegisterTile`, and `cute_rs::arch` forwarders, while
+`ctm-rs` supplies kernel macros and shared-storage declarations.
 The manifest retains `cuda-device` because macro expansions still refer to
 that crate internally. CuTe operations retain their CuTe dialect lowering
 through `cutlass-mlir`; the primitives-only compiler profile does not cover
 this example.
-
-Direct instruction calls and workload-local fragment handling remain legacy
-migration work under the [CuTe kernel architecture](../../AGENTS.md). Tensor
-computation belongs in reusable `cute-rs` operations.
 
 The linked CTM migration reports record B200 validation. The measurements below
 also validate both implementations on the current branch. This kernel requires
@@ -28,7 +26,15 @@ SM100 hardware; the RTX 5090 / SM120 cannot execute it.
   partial final pages. Attention is noncausal with explicit length masking.
 - Softmax scale defaults to **0.0416** and output scale to **1.0**.
 
-From `cuda-oxide/`, with CUTLASS 4.7 installed (`cargo oxide toolchain install cutlass`):
+From `cuda-oxide/`, once per checkout:
+
+```bash
+cargo oxide toolchain install cutlass
+python3 -m venv cute-rs-preview/.venv
+cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt
+```
+
+Then:
 
 ```bash
 # Compile without launching a GPU kernel
@@ -44,7 +50,6 @@ CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir CUDA_OXIDE_CUTLASS_OPT_LEVEL=2 cargo oxid
 CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir CUDA_OXIDE_CUTLASS_OPT_LEVEL=2 cargo oxide run sm100_mla_decode_fp16_cute --arch sm_100a -- --batch 16 --kv-length 8192 --splits 8 --clusters 74 --warmup 300 --iters 100 --windows 5
 ```
 
-Install the [Python reference dependencies](reference/README.md) before running.
 The default runner compares Rust and pinned CuTeDSL on identical inputs and
 checks both against an independent FP64 oracle before timing. It finishes with:
 

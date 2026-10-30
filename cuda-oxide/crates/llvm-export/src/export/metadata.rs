@@ -3,10 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! NVVM annotations and version metadata.
+//! NVVM annotations, version, and loop metadata.
 
 use std::collections::HashSet;
 use std::fmt::Write;
+
+use pliron::context::Ptr;
+use pliron::operation::Operation;
 
 use super::state::{KernelBlockGeometry, ModuleExportState};
 
@@ -194,6 +197,46 @@ pub(super) fn emit_nvvmir_version(
         md_id, version[0], version[1], version[2], version[3]
     )
     .unwrap();
+}
+
+impl ModuleExportState<'_> {
+    /// The `, !llvm.loop !N` suffix for a latch branch marked by
+    /// [`set_loop_unroll_disable`](crate::ops::set_loop_unroll_disable), or an
+    /// empty string for any other branch.
+    ///
+    /// Each marked branch gets its own `distinct` node, because LLVM identifies
+    /// a loop by its node. Lowering marks only a loop's single latch, so one
+    /// branch is one loop.
+    pub(super) fn loop_metadata_suffix(&mut self, branch: Ptr<Operation>) -> String {
+        if !crate::ops::loop_unroll_disable(self.ctx, branch) {
+            return String::new();
+        }
+        if self.loop_unroll_disable_property.is_none() {
+            self.loop_unroll_disable_property = Some(self.alloc_metadata_id());
+        }
+        let node = self.alloc_metadata_id();
+        self.unroll_disabled_loops.push(node);
+        format!(", !llvm.loop !{node}")
+    }
+}
+
+/// Emit the loop nodes referenced by [`ModuleExportState::loop_metadata_suffix`].
+///
+/// ```text
+/// !7 = distinct !{!7, !6}
+/// !6 = !{!"llvm.loop.unroll.disable"}
+/// ```
+///
+/// A loop node's first operand must be the node itself. The syntax is valid in
+/// both modern LLVM and the LLVM 7 dialect that legacy libNVVM reads.
+pub(super) fn emit_loop_metadata(output: &mut String, state: &ModuleExportState) {
+    let Some(property) = state.loop_unroll_disable_property else {
+        return;
+    };
+    for node in &state.unroll_disabled_loops {
+        writeln!(output, "!{node} = distinct !{{!{node}, !{property}}}").unwrap();
+    }
+    writeln!(output, "!{property} = !{{!\"llvm.loop.unroll.disable\"}}").unwrap();
 }
 
 #[cfg(test)]

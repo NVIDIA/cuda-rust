@@ -107,7 +107,10 @@ impl CuteCopyG2SOp {
 }
 
 /// Return the supported scalar element width used by cooperative-copy validation.
-pub(super) fn cooperative_elem_bytes(ctx: &Context, elem: TypeHandle) -> Option<i64> {
+pub fn cooperative_elem_bytes(ctx: &Context, elem: TypeHandle) -> Option<i64> {
+    if let Some((_, bytes)) = crate::types::scalar_transport_layout(ctx, elem, 0) {
+        return i64::try_from(bytes).ok();
+    }
     let ty = elem.deref(ctx);
     if let Some(integer) = ty.downcast_ref::<IntegerType>() {
         let width = i64::from(integer.width());

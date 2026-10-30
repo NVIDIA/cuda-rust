@@ -22,6 +22,19 @@ import time
 HERE = Path(__file__).resolve().parent
 
 
+SETUP_HINT = ("from cuda-oxide/ run `python3 -m venv cute-rs-preview/.venv && "
+              "cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt`, "
+              "then rerun; or set CUDA_OXIDE_CUTE_PYTHON to an environment that has them")
+
+
+def require_reference_environment():
+    """Stop before any GPU work when the shared comparison environment is missing."""
+    missing = [name for name in ("numpy", "torch", "cutlass", "cuda")
+               if importlib.util.find_spec(name) is None]
+    if missing:
+        sys.exit(f"missing Python packages: {', '.join(missing)}; {SETUP_HINT}")
+
+
 def load_module(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -199,6 +212,7 @@ def main(argv=None):
     options, runner_cli = parser.parse_known_args(argv)
     if not math.isfinite(options.timeout) or options.timeout <= 0:
         parser.error("timeout must be positive and finite")
+    require_reference_environment()
     try:
         report = compare_all_cases(options, runner_cli) if options.all_cases else compare(options, runner_cli)
         if options.json:

@@ -15,16 +15,17 @@ runtime source is not vendored here.
 
 Use Python 3.10 or later supported by CUTLASS DSL 4.7, a CUDA-enabled PyTorch
 build supporting the selected GPU, CUDA bindings, and `nvidia-cutlass-dsl==4.7.0`.
-`requirements.txt` selects the CUDA 13 package extra. The upstream CUDA 12.9
-alternative is `nvidia-cutlass-dsl==4.7.0` without that extra. Match the CUDA
-runtime, toolkit, and driver to the package variant.
+The shared [`requirements.txt`](../../../requirements.txt) selects the CUDA 13
+package extra. The upstream CUDA 12.9 alternative is `nvidia-cutlass-dsl==4.7.0`
+without that extra. Match the CUDA runtime, toolkit, and driver to the package
+variant.
 
 Prepare the shared Python environment once for both prefill and decode,
 from `cuda-oxide/`:
 
 ```bash
 python3 -m venv cute-rs-preview/.venv
-cute-rs-preview/.venv/bin/python -m pip install -r cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/requirements.txt
+cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt
 ```
 
 Select a CUDA-enabled PyTorch build that supports SM120 and matches your CUDA

@@ -11,7 +11,7 @@
 //! the rustc frontend.
 //!
 //! This crate intentionally has no rustc linkage. It does not require
-//! `rustc_private` or a nightly toolchain matched to `rustc_driver`.
+//! `rustc_private` or a toolchain pin matched to `rustc_driver`.
 
 #![warn(missing_docs)]
 

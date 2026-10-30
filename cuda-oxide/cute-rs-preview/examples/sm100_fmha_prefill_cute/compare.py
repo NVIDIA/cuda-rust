@@ -27,6 +27,19 @@ SOURCE_DIGESTS = {
 }
 
 
+SETUP_HINT = ('from cuda-oxide/ run `python3 -m venv cute-rs-preview/.venv && '
+              'cute-rs-preview/.venv/bin/pip install -r cute-rs-preview/requirements.txt`, '
+              'then rerun; or set CUDA_OXIDE_CUTE_PYTHON to an environment that has them')
+
+
+def require_reference_environment():
+    """Stop before any GPU work when the shared comparison environment is missing."""
+    missing = [name for name in ('numpy', 'torch', 'cutlass', 'cuda')
+               if importlib.util.find_spec(name) is None]
+    if missing:
+        sys.exit(f'missing Python packages: {", ".join(missing)}; {SETUP_HINT}')
+
+
 def verify_sources(reference=ROOT / 'reference'):
     for name, expected in SOURCE_DIGESTS.items():
         if hashlib.sha256((reference / name).read_bytes()).hexdigest() != expected:
@@ -255,6 +268,7 @@ def main():
     parser.add_argument('--timeout', type=int, default=120)
     parser.add_argument('--sanitizer', choices=['memcheck', 'synccheck'])
     args = parser.parse_args()
+    require_reference_environment()
     if args.sanitizer:
         args.check_only = True
     shape = [int(v) for v in args.shape.split(',')]

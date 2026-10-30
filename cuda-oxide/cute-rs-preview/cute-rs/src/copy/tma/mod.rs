@@ -79,7 +79,24 @@ impl<T, SmemL> TensorMap<T, SmemL> {
             )
         };
     }
+
+    /// Borrow the descriptor at `index` from a slice of descriptors without a bounds check.
+    ///
+    /// # Safety
+    ///
+    /// `index < descriptors.len()` must hold, and the selected descriptor must
+    /// encode `T` and `SmemL` over live device storage.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn get_unchecked(descriptors: &[Self], index: usize) -> &Self {
+        unsafe { &*descriptors.as_ptr().add(index) }
+    }
 }
+
+#[cfg(feature = "host")]
+// SAFETY: `TensorMap` is a `#[repr(C, align(64))]` 128-byte POD value (`[u8; 128]`
+// plus zero-sized `PhantomData`) suitable for direct host-to-device copy.
+unsafe impl<T: 'static, SmemL: 'static> cuda_core::DeviceCopy for TensorMap<T, SmemL> {}
 
 // The type parameters describe the encoded bytes; they are not stored values.
 impl<T, SmemL> Copy for TensorMap<T, SmemL> {}

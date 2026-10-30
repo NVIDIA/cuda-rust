@@ -1,4 +1,4 @@
-# MXFP4 GEMM with Rust CTM (`ctm-rs`)
+# MXFP4 GEMM with Rust CTM (ctm-rs)
 
 This cuda-oxide example multiplies packed E2M1 matrices with UE8M0 scales per
 32 K values, FP32 accumulation and FP16 output. The fixed problem is

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Retiring tensor completion leases retain allocation access independently of
+  user-visible buffer views. Converting a uniquely owned tensor into a buffer
+  no longer reports a false alias while completion retirement is pending.
 - Tensor uniqueness tracks user-visible aliases separately from completion
   leases. Concurrent lease creation or release can no longer permit an aliased
   mutable partition or spuriously reject unique storage.

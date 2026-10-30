@@ -126,7 +126,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     if let Expr::Path(path) = index.expr.as_ref() {
                         let name = get_ident_from_path_expr(path).to_string();
                         if let Some(cga) = generic_vars.inst_array.get(&name) {
-                            let i = parse_signed_literal_as_i32(&index.index);
+                            let i = parse_signed_literal_as_i32(&index.index).map_err(|err| {
+                                self.jit_error(&index.index.span(), &err.to_string())
+                            })?;
                             let Some(dim) = cga.get(i as usize) else {
                                 return self.jit_error_result(
                                     &index.index.span(),
@@ -322,13 +324,17 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 "MappedPartitionMut is missing its map-shape generic argument",
             );
         };
-        let Some(tile_shape) = get_cga_from_generic_argument(tile_shape_arg, generic_vars) else {
+        let Some(tile_shape) = get_cga_from_generic_argument(tile_shape_arg, generic_vars)
+            .map_err(|err| self.jit_error(span, &err.to_string()))?
+        else {
             return self.jit_error_result(
                 span,
                 "failed to resolve MappedPartitionMut tile-shape const generic array",
             );
         };
-        let Some(map_shape) = get_cga_from_generic_argument(map_shape_arg, generic_vars) else {
+        let Some(map_shape) = get_cga_from_generic_argument(map_shape_arg, generic_vars)
+            .map_err(|err| self.jit_error(span, &err.to_string()))?
+        else {
             return self.jit_error_result(
                 span,
                 "failed to resolve MappedPartitionMut map-shape const generic array",

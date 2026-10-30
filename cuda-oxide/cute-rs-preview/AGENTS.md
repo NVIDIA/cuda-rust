@@ -52,8 +52,8 @@ numerical correctness and competitive measured performance.
 
 ## Encoding CuTe in Rust's type system (mandatory pattern)
 
-CUTLASS CuTe's layout algebra, partitions, TMA transfers, pipelines, and
-tensor-core MMA operations **must be encoded into Rust's type system**. No agent
+CUTLASS CuTe’s layout algebra, partitions, TMA transfers, pipelines, and
+tensor-core MMA operations **must be encoded into Rust’s type system**. No agent
 may write a regular `cuda-oxide` SIMT kernel (raw pointer offsets, manual bit
 shifts, untyped `u64` descriptors) and pass it off as a `cute-rs` kernel.
 

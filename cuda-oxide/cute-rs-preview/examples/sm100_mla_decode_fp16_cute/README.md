@@ -4,18 +4,16 @@ This cuda-oxide example ports the public CUTLASS FP16 MLA decode kernel to
 CuTe-RS for data center Blackwell. Two-CTA clusters process a paged latent KV
 cache; a second kernel combines partial results when multiple splits are used.
 
-The kernel uses `cute-rs` for typed layouts, structured MMA and TMA operations,
-and `ctm-rs` for instruction primitives, kernel macros and storage types.
-Packed FP32 registers have a distinct type; asynchronous page copies carry
-a shared destination and a ready barrier.
+The kernel uses `cute-rs` for typed layouts, structured MMA and TMA operations
+(`MmaSs`, `TmaCopy`, `SharedTileArray`, `SharedTile::store_packed_8`), two-CTA
+`TwoCtaRing` pipelines (including asynchronous page staging and TMEM metadata
+handoffs), `TmemAllocator<512, 2>`, `TmemFragment`, `StridedTensor` /
+`StridedTensorMut`, `RegisterTile`, and `cute_rs::arch` forwarders, while
+`ctm-rs` supplies kernel macros and shared-storage declarations.
 The manifest retains `cuda-device` because macro expansions still refer to
 that crate internally. CuTe operations retain their CuTe dialect lowering
 through `cutlass-mlir`; the primitives-only compiler profile does not cover
 this example.
-
-Direct instruction calls and workload-local fragment handling remain legacy
-migration work under the [CuTe kernel architecture](../../AGENTS.md). Tensor
-computation belongs in reusable `cute-rs` operations.
 
 The linked CTM migration reports record B200 validation. The measurements below
 also validate both implementations on the current branch. This kernel requires

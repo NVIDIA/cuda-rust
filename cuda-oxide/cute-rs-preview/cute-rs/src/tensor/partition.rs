@@ -287,6 +287,17 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
     pub unsafe fn load_unchecked<const N: usize>(self) -> RegisterTile<Storage, N> {
         RegisterTile::from_fn(|i| unsafe { self.get_unchecked(i) })
     }
+    /// Gather `N` values spaced by `STRIDE` starting at `lane` (`lane + i * STRIDE`) without bounds checks.
+    ///
+    /// # Safety
+    /// Every `lane + i * STRIDE` for `i < N` must be `< self.len()`.
+    #[inline(always)]
+    pub unsafe fn load_strided_unchecked<const STRIDE: usize, const N: usize>(
+        self,
+        lane: usize,
+    ) -> RegisterTile<Storage, N> {
+        RegisterTile::from_fn(|i| unsafe { self.get_unchecked(lane + i * STRIDE) })
+    }
     /// Transform equally sized logical views, even when their layouts differ.
     /// # Safety
     /// Destination coordinates must have one writer and no conflicting access.
@@ -486,6 +497,70 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
                 self.store_at(i, values[i]);
             }
             i += 1;
+        }
+    }
+
+    /// Scatter `N` values spaced by `STRIDE` starting at `lane` (`lane + i * STRIDE`) without bounds checks.
+    ///
+    /// # Safety
+    /// Every `lane + i * STRIDE` for `i < N` must be `< self.len()` with no conflicting access.
+    #[inline(always)]
+    pub unsafe fn store_strided_unchecked<const STRIDE: usize, const N: usize>(
+        &mut self,
+        lane: usize,
+        values: RegisterTile<Storage, N>,
+    ) {
+        let values = values.into_array();
+        let mut i = 0;
+        while i < N {
+            ctm_rs::thread::__unroll_config::<0>();
+            unsafe {
+                self.store_at(lane + i * STRIDE, values[i]);
+            }
+            i += 1;
+        }
+    }
+
+    /// Store an aligned `N`-element [`GlobalStoreTile`](crate::copy::vector::GlobalStoreTile) at
+    /// logical coordinate `index` without allocating in L1 cache.
+    ///
+    /// # Safety
+    /// `self.layout.crd2idx(index)` must start a contiguous, aligned `N`-element
+    /// range within the underlying global allocation with no conflicting access.
+    #[inline(always)]
+    pub unsafe fn store_global_no_allocate_at<const N: usize>(
+        &mut self,
+        index: usize,
+        values: &crate::copy::vector::GlobalStoreTile<Storage, N>,
+    ) where
+        Storage: crate::copy::vector::GlobalStoreElement,
+    {
+        unsafe {
+            crate::copy::vector::store_global_no_allocate(
+                self.base.add(self.layout.crd2idx(index)),
+                values,
+            );
+        }
+    }
+
+    /// Store packed `u32` words (such as `f16x2` pairs) at logical coordinate `index`
+    /// without allocating in L1 cache.
+    ///
+    /// # Safety
+    /// `self.layout.crd2idx(index)` must be `32`-byte aligned and cover `N`
+    /// `u32` words (`2 * N` `f16` elements) within the underlying global allocation
+    /// with no conflicting access.
+    #[inline(always)]
+    pub unsafe fn store_global_no_allocate_words_at<const N: usize>(
+        &mut self,
+        index: usize,
+        values: &crate::copy::vector::GlobalStoreTile<u32, N>,
+    ) {
+        unsafe {
+            crate::copy::vector::store_global_no_allocate(
+                self.base.add(self.layout.crd2idx(index)).cast::<u32>(),
+                values,
+            );
         }
     }
 }

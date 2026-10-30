@@ -28,7 +28,7 @@ pub use mma::Sm100TiledMma;
 pub use pipeline::{PipelineTmaStore, PipelineTmaUmma, PipelineUmmaAsync};
 pub use shared::Sm100SharedTile;
 pub use tma::Sm100ClusterTmaCopy;
-pub use tmem::{Sm100Tmem, Sm100TmemEpilogue};
+pub use tmem::{Sm100DeallocBarrier, Sm100Tmem, Sm100TmemEpilogue};
 
 /// Calls recognized by the compiler; never execute these on the host.
 #[doc(hidden)]

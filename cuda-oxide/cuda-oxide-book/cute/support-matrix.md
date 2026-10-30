@@ -78,8 +78,8 @@ The figure at the top of the page is the feature table, with the cute-rs column 
 | Warp MMA kinds (mma.sync) | yes | partial | 3 of 7 kinds: MXF4 with UE8M0 scales (sm_120a), F16, BF16 |
 | NVFP4 tensor cores (E4M3 scales) | yes | no | NVFP4 projections run on CUDA cores through scaled loads and dot |
 | wgmma (Hopper) | yes | n/a | no sm_90a target |
-| TMEM | yes | partial, sm_100a only | allocate, 32x32b load and store, FP32 to FP16; no 16xNb, LdRed or S2T |
-| Pipelines and barriers | yes | partial | 5 typed pipelines and a two-CTA ring; no CLC, no compiler pipelining |
+| TMEM | yes | partial, sm_100a only | `Sm100Tmem`, `TmemAllocator`, 32x32b load and store (`TmemFragment`), FP32 to FP16 epilogues; no 16xNb, LdRed or S2T |
+| Pipelines and barriers | yes | partial | typed 1-CTA (`PipelineTmaAsync`, `PipelineTmaStore`, `PipelineTmaUmma`, `PipelineUmmaAsync`, `PipelineAsyncUmma`, `PipelineAsync`) and 2-CTA (`TwoCtaRing`) pipelines; no CLC |
 | Schedulers, persistence, PDL | yes | partial | one static 1D persistent scheduler; no grouped, CLC or stream-K |
 | Clusters and multicast | yes | partial, sm_100a only | two-CTA clusters validated; no N-CTA multicast plan |
 | Epilogue fusion (EFC) | yes | partial | two fixed FP16 epilogues, bias on sm_100a; activations fused by hand |

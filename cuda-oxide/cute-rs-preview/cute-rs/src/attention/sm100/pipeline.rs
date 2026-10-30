@@ -25,8 +25,9 @@
 
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of};
-use ctm_rs::mbarrier::{self, Barrier};
-use ctm_rs::{cluster, fence, groups::CtaGroup2, memory::SharedAddress, tcgen05};
+use ctm_rs::mbarrier::{self, Barrier, ManagedBarrier, Ready, Uninit};
+pub use ctm_rs::mbarrier::{GeneralBarrier, TmaBarrier};
+use ctm_rs::{async_copy, cluster, fence, groups::CtaGroup2, memory::SharedAddress, tcgen05, warp};
 
 /// Restricts edge policies and cursor roles to the implementations in this module.
 mod sealed {
@@ -606,6 +607,311 @@ impl<const STAGES: u32, Full: WaitPolicy, Empty: WaitPolicy> TwoCtaRing<STAGES, 
     {
         unsafe { Empty::arrive(self.empty_at_cursor(cursor)) };
     }
+}
+
+impl<const STAGES: u32> TwoCtaRing<STAGES, LocalMemory> {
+    /// Order preceding TMEM stores and contribute one thread arrival to the local full barrier.
+    ///
+    /// # Safety
+    /// The caller must have completed its TMEM metadata stores for `ticket` and
+    /// be an expected producer participant for the local full barrier.
+    #[inline(always)]
+    pub unsafe fn commit_local_tmem(self, ticket: u32) {
+        tcgen05::fence_before_thread_sync();
+        unsafe {
+            mbarrier::arrive(&ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(
+                self.full_at(ticket),
+            ));
+        }
+    }
+
+    /// Order preceding TMEM loads and contribute one thread arrival to the local empty barrier.
+    ///
+    /// # Safety
+    /// The caller must have completed its TMEM metadata reads for `ticket` and
+    /// be an expected consumer participant for the local empty barrier.
+    #[inline(always)]
+    pub unsafe fn release_local_tmem(self, ticket: u32) {
+        tcgen05::fence_before_thread_sync();
+        unsafe {
+            mbarrier::arrive(&ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(
+                self.empty_at(ticket),
+            ));
+        }
+    }
+}
+
+impl<const STAGES: u32> TwoCtaRing<STAGES, LocalShared> {
+    /// Acquire a page-index slot, issue one 4-byte `cp.async.ca` on `lane == 0`, and attach
+    /// completion to the local full barrier across all 32 warp lanes.
+    ///
+    /// Slots in `smem_base` are spaced 256 bytes apart (`(ticket % STAGES) * 256`).
+    ///
+    /// # Safety
+    /// All 32 lanes of the page-loader warp must participate with matching `ticket`,
+    /// `smem_base` covering `STAGES * 256` bytes, and `page_offset < page_table.len()`.
+    #[inline(always)]
+    pub unsafe fn stage_page_index(
+        self,
+        ticket: u32,
+        smem_base: *mut u8,
+        page_table: &[i32],
+        page_offset: usize,
+        lane: u32,
+    ) {
+        unsafe {
+            self.acquire(ticket);
+            let dst = smem_base
+                .add((ticket % STAGES) as usize * 256)
+                .cast::<u32>();
+            if lane == 0 {
+                async_copy::cp_async_ca_4(
+                    SharedAddress::from_raw(dst),
+                    &*page_table.as_ptr().add(page_offset).cast::<u32>(),
+                );
+            }
+            async_copy::cp_async_mbarrier_arrive_noinc(
+                &ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(self.full_at(ticket)),
+            );
+        }
+    }
+
+    /// Wait for the page-index copy at `ticket` to complete and read the staged `i32` page index.
+    ///
+    /// # Safety
+    /// `smem_base` must point to the 256-byte-strided page-index staging array
+    /// paired with this ring, and a matching `stage_page_index` must have been issued.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn wait_and_read_page_index(self, ticket: u32, smem_base: *const u8) -> i32 {
+        unsafe {
+            self.wait(ticket);
+            *smem_base
+                .add((ticket % STAGES) as usize * 256)
+                .cast::<i32>()
+        }
+    }
+
+    /// Read the already-waited `i32` page index at `ticket` and arrive on the local empty barrier.
+    ///
+    /// # Safety
+    /// The caller must have already waited on `ticket` (for example via
+    /// [`Self::wait_and_read_page_index`]) and all 32 consumer-warp lanes must
+    /// call this before the slot can be reused.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn read_page_index_and_release(self, ticket: u32, smem_base: *const u8) -> i32 {
+        unsafe {
+            let page = *smem_base
+                .add((ticket % STAGES) as usize * 256)
+                .cast::<i32>();
+            mbarrier::arrive(&ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(
+                self.empty_at(ticket),
+            ));
+            page
+        }
+    }
+}
+
+/// Single-CTA SM100 full/empty stage ring for warp-specialized attention pipelines.
+///
+/// Mirrors CuTeDSL's single-CTA `PipelineTmaUmma`, `PipelineUmmaAsync`,
+/// `PipelineAsyncUmma` and `PipelineAsync` in `fmha.py`. Producer counts start
+/// at phase 1 (initially empty) and consumer counts at phase 0 (initially
+/// waiting for production); counts persist across persistent work tiles.
+pub struct SingleCtaRing<const STAGES: u32, FullKind = GeneralBarrier> {
+    /// Contiguous stage barriers completed when producers publish their work.
+    full: *mut Barrier,
+    /// Contiguous stage barriers completed when consumers release their slots.
+    empty: *mut Barrier,
+    /// Distinguishes transaction-counted TMA producers (`TmaBarrier`) from ordinary arrivals.
+    _full_kind: PhantomData<FullKind>,
+}
+
+impl<const STAGES: u32, K> Copy for SingleCtaRing<STAGES, K> {}
+impl<const STAGES: u32, K> Clone for SingleCtaRing<STAGES, K> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<const STAGES: u32, K> SingleCtaRing<STAGES, K> {
+    /// Bind a ring at `offset` measured in eight-byte barrier slots from `storage`.
+    ///
+    /// # Safety
+    /// The shared allocation must contain `2 * STAGES` aligned, nonoverlapping
+    /// 8-byte barrier slots starting at `storage.add(offset * 8)`.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn from_raw(storage: *mut u8, offset: usize) -> Self {
+        const { assert!(STAGES > 0) };
+        let full = unsafe { storage.add(offset * 8).cast::<Barrier>() };
+        Self {
+            full,
+            empty: unsafe { full.add(STAGES as usize) },
+            _full_kind: PhantomData,
+        }
+    }
+
+    /// Initialize full and empty barriers with per-stage producer and consumer arrival counts.
+    ///
+    /// # Safety
+    /// Call once from a single thread before publishing barrier initialization
+    /// to the CTA (`cute_rs::arch::mbarrier_init_fence()`).
+    #[inline(always)]
+    pub unsafe fn init(self, producers: u32, consumers: u32) {
+        let mut i = 0;
+        while i < STAGES {
+            unsafe {
+                ManagedBarrier::<Uninit, K>::from_static(self.full.add(i as usize))
+                    .init_instruction(producers);
+                ManagedBarrier::<Uninit, GeneralBarrier>::from_static(self.empty.add(i as usize))
+                    .init_instruction(consumers);
+            }
+            i += 1;
+        }
+    }
+
+    /// Wait for consumers to release `count % STAGES`, using the producer's inverted parity.
+    ///
+    /// # Safety
+    /// The barrier must be initialized and `count` must track the producer's
+    /// monotonically increasing stage ticket.
+    #[inline(always)]
+    pub unsafe fn acquire(self, count: u32) {
+        let ptr = unsafe { self.empty.add((count % STAGES) as usize) };
+        unsafe { wait_local::<GeneralBarrier>(ptr, ((count / STAGES) & 1) ^ 1) };
+    }
+
+    /// Wait for producers to fill `count % STAGES`, then order subsequent TMEM accesses.
+    ///
+    /// # Safety
+    /// The barrier must be initialized and `count` must track the consumer's
+    /// monotonically increasing stage ticket.
+    #[inline(always)]
+    pub unsafe fn wait(self, count: u32) {
+        unsafe { wait_local::<K>(self.full_ptr(count), (count / STAGES) & 1) };
+        tcgen05::fence_after_thread_sync();
+    }
+
+    /// Select the full barrier pointer for the monotonically increasing stage count.
+    ///
+    /// # Safety
+    /// The ring's barrier array must remain live in CTA shared memory.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn full_ptr(self, count: u32) -> *mut Barrier {
+        unsafe { self.full.add((count % STAGES) as usize) }
+    }
+
+    /// Order prior TMEM accesses and contribute one thread arrival to the full barrier.
+    ///
+    /// # Safety
+    /// Each expected producer thread must call this once after completing its
+    /// stage writes for `count`.
+    #[inline(always)]
+    pub unsafe fn commit_threads(self, count: u32) {
+        tcgen05::fence_before_thread_sync();
+        unsafe {
+            mbarrier::arrive(&ManagedBarrier::<Ready, K>::adopt_ready(
+                self.full_ptr(count),
+            ));
+        }
+    }
+
+    /// Order prior TMEM accesses and contribute one thread arrival to the empty barrier.
+    ///
+    /// # Safety
+    /// Each expected consumer thread must call this once after completing its
+    /// stage reads for `count`.
+    #[inline(always)]
+    pub unsafe fn release_threads(self, count: u32) {
+        tcgen05::fence_before_thread_sync();
+        unsafe {
+            mbarrier::arrive(&ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(
+                self.empty.add((count % STAGES) as usize),
+            ));
+        }
+    }
+
+    /// Have one elected lane signal the full barrier after outstanding MMA work completes.
+    ///
+    /// # Safety
+    /// All 32 lanes of the MMA warp must participate convergently in the election.
+    #[inline(always)]
+    pub unsafe fn commit_mma(self, count: u32) {
+        if warp::is_elected_sync(u32::MAX) {
+            unsafe {
+                tcgen05::commit(&ManagedBarrier::<Ready, K>::adopt_ready(
+                    self.full_ptr(count),
+                ));
+            }
+        }
+    }
+
+    /// Have one elected lane release the slot after outstanding MMA work completes.
+    ///
+    /// # Safety
+    /// All 32 lanes of the MMA warp must participate convergently in the election.
+    #[inline(always)]
+    pub unsafe fn release_mma(self, count: u32) {
+        if warp::is_elected_sync(u32::MAX) {
+            unsafe {
+                tcgen05::commit(&ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(
+                    self.empty.add((count % STAGES) as usize),
+                ));
+            }
+        }
+    }
+}
+
+impl<const STAGES: u32> SingleCtaRing<STAGES, TmaBarrier> {
+    /// Have one elected lane arrive and expect `TX_BYTES` TMA transaction bytes on `count`.
+    ///
+    /// # Safety
+    /// All 32 lanes of the producer warp must participate convergently in the election.
+    #[inline(always)]
+    pub unsafe fn producer_expect_tx<const TX_BYTES: u32>(self, count: u32) {
+        if warp::is_elected_sync(u32::MAX) {
+            unsafe {
+                mbarrier::arrive_expect_tx(
+                    &ManagedBarrier::<Ready, TmaBarrier>::adopt_ready(self.full_ptr(count)),
+                    TX_BYTES,
+                );
+            }
+        }
+    }
+}
+
+/// Single-CTA TMA-to-UMMA pipeline (`pipeline.PipelineTmaUmma` in CuTeDSL `fmha.py`).
+///
+/// TMA producer warps arrive with expected transaction bytes on the full barrier,
+/// and the UMMA warp releases the empty barrier upon MMA completion.
+pub type PipelineTmaUmma<const STAGES: u32> = SingleCtaRing<STAGES, TmaBarrier>;
+
+/// Single-CTA UMMA-to-thread pipeline (`pipeline.PipelineUmmaAsync` in CuTeDSL `fmha.py`).
+///
+/// The UMMA warp commits completion to the full barrier and consumer threads
+/// release the empty barrier after TMEM reads.
+pub type PipelineUmmaAsync<const STAGES: u32> = SingleCtaRing<STAGES, GeneralBarrier>;
+
+/// Single-CTA thread-to-UMMA pipeline (`pipeline.PipelineAsyncUmma` in CuTeDSL `fmha.py`).
+///
+/// Producer threads commit TMEM/shared writes to the full barrier and the UMMA
+/// warp releases the empty barrier upon MMA completion.
+pub type PipelineAsyncUmma<const STAGES: u32> = SingleCtaRing<STAGES, GeneralBarrier>;
+
+/// Single-CTA thread-to-thread pipeline (`pipeline.PipelineAsync` in CuTeDSL `fmha.py`).
+///
+/// Producer threads commit to the full barrier and consumer threads release the
+/// empty barrier.
+pub type PipelineAsync<const STAGES: u32> = SingleCtaRing<STAGES, GeneralBarrier>;
+
+/// Spin until an initialized local shared barrier completes the requested parity phase.
+#[inline(always)]
+unsafe fn wait_local<K>(ptr: *const Barrier, phase: u32) {
+    let barrier = unsafe { ManagedBarrier::<Ready, K>::adopt_ready(ptr.cast_mut()) };
+    while !unsafe { mbarrier::try_wait_parity(&barrier, phase) } {}
 }
 
 #[inline(always)]

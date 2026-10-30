@@ -64,7 +64,7 @@ mod kernels {
 
     // Shared atomic storage arrives as slices of atomic wrapper types: the
     // host allocates plain buffers and retypes them with
-    // `cast_elem::<DeviceAtomicU32>()`, so every shared update goes through
+    // `wrap_elem::<DeviceAtomicU32>()`, so every shared update goes through
     // interior mutability and the kernels need no raw pointers.
 
     /// Test 1: Atomic fetch_add -- every thread atomically increments a counter.
@@ -740,7 +740,7 @@ fn main() {
         // Allocate a single u32 counter initialized to 0
         let counter_dev = DeviceBuffer::<u32>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicU32>();
+            .wrap_elem::<DeviceAtomicU32>();
         let mut out_dev = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -750,7 +750,7 @@ fn main() {
         stream.synchronize().unwrap();
 
         // The counter should equal N after all threads increment it
-        let counter_val = counter_dev.cast_elem::<u32>().to_host_vec(&stream).unwrap();
+        let counter_val = counter_dev.peel_elem::<u32>().to_host_vec(&stream).unwrap();
         let out_vals = out_dev.to_host_vec(&stream).unwrap();
 
         if counter_val[0] == N as u32 {
@@ -783,7 +783,7 @@ fn main() {
     {
         let flag_dev = DeviceBuffer::<u32>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicU32>();
+            .wrap_elem::<DeviceAtomicU32>();
         let mut out_dev = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -815,7 +815,7 @@ fn main() {
     {
         let winner_dev = DeviceBuffer::<u32>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicU32>();
+            .wrap_elem::<DeviceAtomicU32>();
         let mut out_dev = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -824,7 +824,7 @@ fn main() {
 
         stream.synchronize().unwrap();
 
-        let winner_val = winner_dev.cast_elem::<u32>().to_host_vec(&stream).unwrap();
+        let winner_val = winner_dev.peel_elem::<u32>().to_host_vec(&stream).unwrap();
         let result = out_dev.to_host_vec(&stream).unwrap();
 
         let num_winners: usize = result.iter().filter(|&&x| x == 1).count();
@@ -849,7 +849,7 @@ fn main() {
     {
         let counter_dev = DeviceBuffer::<u32>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicU32>();
+            .wrap_elem::<DeviceAtomicU32>();
         let mut out_dev = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -859,7 +859,7 @@ fn main() {
         .expect("Kernel launch failed");
 
         stream.synchronize().unwrap();
-        let counter_val = counter_dev.cast_elem::<u32>().to_host_vec(&stream).unwrap();
+        let counter_val = counter_dev.peel_elem::<u32>().to_host_vec(&stream).unwrap();
         let out_vals = out_dev.to_host_vec(&stream).unwrap();
 
         if counter_val[0] == N as u32 {
@@ -892,7 +892,7 @@ fn main() {
     {
         let counter_dev = DeviceBuffer::<u32>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicU32>();
+            .wrap_elem::<DeviceAtomicU32>();
         let mut out_dev = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -902,7 +902,7 @@ fn main() {
         .expect("Kernel launch failed");
 
         stream.synchronize().unwrap();
-        let counter_val = counter_dev.cast_elem::<u32>().to_host_vec(&stream).unwrap();
+        let counter_val = counter_dev.peel_elem::<u32>().to_host_vec(&stream).unwrap();
         let out_vals = out_dev.to_host_vec(&stream).unwrap();
 
         if counter_val[0] == N as u32 {
@@ -935,10 +935,10 @@ fn main() {
     {
         let counter_dev = DeviceBuffer::<i32>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicI32>();
+            .wrap_elem::<DeviceAtomicI32>();
         let cas_target_dev = DeviceBuffer::<i32>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicI32>();
+            .wrap_elem::<DeviceAtomicI32>();
         let mut out_dev = DeviceBuffer::<i32>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -954,9 +954,9 @@ fn main() {
         .expect("Kernel launch failed");
 
         stream.synchronize().unwrap();
-        let counter_val = counter_dev.cast_elem::<i32>().to_host_vec(&stream).unwrap();
+        let counter_val = counter_dev.peel_elem::<i32>().to_host_vec(&stream).unwrap();
         let cas_val = cas_target_dev
-            .cast_elem::<i32>()
+            .peel_elem::<i32>()
             .to_host_vec(&stream)
             .unwrap();
         let result = out_dev.to_host_vec(&stream).unwrap();
@@ -994,7 +994,7 @@ fn main() {
 
         let counter_dev = DeviceBuffer::<u32>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicU32>();
+            .wrap_elem::<DeviceAtomicU32>();
         let mut out_dev = DeviceBuffer::<u32>::zeroed(&stream, total_threads).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -1009,7 +1009,7 @@ fn main() {
         .expect("Kernel launch failed");
 
         stream.synchronize().unwrap();
-        let counter_val = counter_dev.cast_elem::<u32>().to_host_vec(&stream).unwrap();
+        let counter_val = counter_dev.peel_elem::<u32>().to_host_vec(&stream).unwrap();
         let out_vals = out_dev.to_host_vec(&stream).unwrap();
 
         if counter_val[0] == total_threads as u32 {
@@ -1045,7 +1045,7 @@ fn main() {
     {
         let counter_dev = DeviceBuffer::<u64>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicU64>();
+            .wrap_elem::<DeviceAtomicU64>();
         let mut out_dev = DeviceBuffer::<u64>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -1055,7 +1055,7 @@ fn main() {
         .expect("Kernel launch failed");
 
         stream.synchronize().unwrap();
-        let counter_val = counter_dev.cast_elem::<u64>().to_host_vec(&stream).unwrap();
+        let counter_val = counter_dev.peel_elem::<u64>().to_host_vec(&stream).unwrap();
         let out_vals = out_dev.to_host_vec(&stream).unwrap();
 
         if counter_val[0] == N as u64 {
@@ -1085,10 +1085,10 @@ fn main() {
     {
         let counter_dev = DeviceBuffer::<i64>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicI64>();
+            .wrap_elem::<DeviceAtomicI64>();
         let cas_target_dev = DeviceBuffer::<i64>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicI64>();
+            .wrap_elem::<DeviceAtomicI64>();
         let mut out_dev = DeviceBuffer::<i64>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -1104,9 +1104,9 @@ fn main() {
         .expect("Kernel launch failed");
 
         stream.synchronize().unwrap();
-        let counter_val = counter_dev.cast_elem::<i64>().to_host_vec(&stream).unwrap();
+        let counter_val = counter_dev.peel_elem::<i64>().to_host_vec(&stream).unwrap();
         let cas_val = cas_target_dev
-            .cast_elem::<i64>()
+            .peel_elem::<i64>()
             .to_host_vec(&stream)
             .unwrap();
         let result = out_dev.to_host_vec(&stream).unwrap();
@@ -1138,7 +1138,7 @@ fn main() {
         let counter_host: Vec<u32> = vec![N as u32];
         let counter_dev = DeviceBuffer::from_host(&stream, &counter_host)
             .unwrap()
-            .cast_elem::<DeviceAtomicU32>();
+            .wrap_elem::<DeviceAtomicU32>();
         let mut out_dev = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -1146,7 +1146,7 @@ fn main() {
             .expect("Kernel launch failed");
 
         stream.synchronize().unwrap();
-        let counter_val = counter_dev.cast_elem::<u32>().to_host_vec(&stream).unwrap();
+        let counter_val = counter_dev.peel_elem::<u32>().to_host_vec(&stream).unwrap();
         let out_vals = out_dev.to_host_vec(&stream).unwrap();
 
         if counter_val[0] == 0 {
@@ -1177,16 +1177,16 @@ fn main() {
         // OR accumulator: starts at 0
         let or_dev = DeviceBuffer::<u32>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicU32>();
+            .wrap_elem::<DeviceAtomicU32>();
         // AND accumulator: starts at 0xFFFFFFFF
         let and_host: Vec<u32> = vec![0xFFFFFFFF];
         let and_dev = DeviceBuffer::from_host(&stream, &and_host)
             .unwrap()
-            .cast_elem::<DeviceAtomicU32>();
+            .wrap_elem::<DeviceAtomicU32>();
         // XOR accumulator: starts at 0
         let xor_dev = DeviceBuffer::<u32>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicU32>();
+            .wrap_elem::<DeviceAtomicU32>();
 
         let mut out_dev = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
 
@@ -1204,9 +1204,9 @@ fn main() {
         .expect("Kernel launch failed");
 
         stream.synchronize().unwrap();
-        let or_val = or_dev.cast_elem::<u32>().to_host_vec(&stream).unwrap()[0];
-        let and_val = and_dev.cast_elem::<u32>().to_host_vec(&stream).unwrap()[0];
-        let xor_val = xor_dev.cast_elem::<u32>().to_host_vec(&stream).unwrap()[0];
+        let or_val = or_dev.peel_elem::<u32>().to_host_vec(&stream).unwrap()[0];
+        let and_val = and_dev.peel_elem::<u32>().to_host_vec(&stream).unwrap()[0];
+        let xor_val = xor_dev.peel_elem::<u32>().to_host_vec(&stream).unwrap()[0];
 
         // With N=256 threads and tid % 32, all 32 bits should be set
         let or_ok = or_val == 0xFFFFFFFF;
@@ -1235,7 +1235,7 @@ fn main() {
     {
         let target_dev = DeviceBuffer::<u32>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicU32>();
+            .wrap_elem::<DeviceAtomicU32>();
         let mut out_dev = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -1243,7 +1243,7 @@ fn main() {
             .expect("Kernel launch failed");
 
         stream.synchronize().unwrap();
-        let target_val = target_dev.cast_elem::<u32>().to_host_vec(&stream).unwrap()[0];
+        let target_val = target_dev.peel_elem::<u32>().to_host_vec(&stream).unwrap()[0];
         let result = out_dev.to_host_vec(&stream).unwrap();
 
         // Thread 0 swapped 0 -> 0xDEADBEEF, got back 0
@@ -1276,10 +1276,10 @@ fn main() {
         let max_host: Vec<i32> = vec![i32::MIN];
         let min_dev = DeviceBuffer::from_host(&stream, &min_host)
             .unwrap()
-            .cast_elem::<DeviceAtomicI32>();
+            .wrap_elem::<DeviceAtomicI32>();
         let max_dev = DeviceBuffer::from_host(&stream, &max_host)
             .unwrap()
-            .cast_elem::<DeviceAtomicI32>();
+            .wrap_elem::<DeviceAtomicI32>();
         let mut out_dev = DeviceBuffer::<i32>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -1289,8 +1289,8 @@ fn main() {
         .expect("Kernel launch failed");
 
         stream.synchronize().unwrap();
-        let min_val = min_dev.cast_elem::<i32>().to_host_vec(&stream).unwrap()[0];
-        let max_val = max_dev.cast_elem::<i32>().to_host_vec(&stream).unwrap()[0];
+        let min_val = min_dev.peel_elem::<i32>().to_host_vec(&stream).unwrap()[0];
+        let max_val = max_dev.peel_elem::<i32>().to_host_vec(&stream).unwrap()[0];
 
         // With 256 threads, values range from -128 to +127
         let min_ok = min_val == -128;
@@ -1312,7 +1312,7 @@ fn main() {
     {
         let counter_dev = DeviceBuffer::<f32>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicF32>();
+            .wrap_elem::<DeviceAtomicF32>();
         let mut out_dev = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -1322,7 +1322,7 @@ fn main() {
         .expect("Kernel launch failed");
 
         stream.synchronize().unwrap();
-        let counter_val = counter_dev.cast_elem::<f32>().to_host_vec(&stream).unwrap();
+        let counter_val = counter_dev.peel_elem::<f32>().to_host_vec(&stream).unwrap();
         let result = out_dev.to_host_vec(&stream).unwrap();
 
         let expected = N as f32;
@@ -1349,7 +1349,7 @@ fn main() {
     {
         let counter_dev = DeviceBuffer::<f64>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicF64>();
+            .wrap_elem::<DeviceAtomicF64>();
         let mut out_dev = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -1359,7 +1359,7 @@ fn main() {
         .expect("Kernel launch failed");
 
         stream.synchronize().unwrap();
-        let counter_val = counter_dev.cast_elem::<f64>().to_host_vec(&stream).unwrap();
+        let counter_val = counter_dev.peel_elem::<f64>().to_host_vec(&stream).unwrap();
         let result = out_dev.to_host_vec(&stream).unwrap();
 
         let expected = N as f64;
@@ -1385,7 +1385,7 @@ fn main() {
     {
         let target_dev = DeviceBuffer::<f32>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicF32>();
+            .wrap_elem::<DeviceAtomicF32>();
         let mut out_dev = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -1393,7 +1393,7 @@ fn main() {
             .expect("Kernel launch failed");
 
         stream.synchronize().unwrap();
-        let target_val = target_dev.cast_elem::<f32>().to_host_vec(&stream).unwrap();
+        let target_val = target_dev.peel_elem::<f32>().to_host_vec(&stream).unwrap();
         let result = out_dev.to_host_vec(&stream).unwrap();
 
         // target should now hold 3.14 (swapped by thread 0)
@@ -1422,11 +1422,11 @@ fn main() {
         let min_host = vec![u32::MAX; 1];
         let min_dev = DeviceBuffer::from_host(&stream, &min_host)
             .unwrap()
-            .cast_elem::<DeviceAtomicU32>();
+            .wrap_elem::<DeviceAtomicU32>();
         // Initialize max accumulator to 0 so any tid beats it
         let max_dev = DeviceBuffer::<u32>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<DeviceAtomicU32>();
+            .wrap_elem::<DeviceAtomicU32>();
         let mut out_dev = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -1442,8 +1442,8 @@ fn main() {
         .expect("Kernel launch failed");
 
         stream.synchronize().unwrap();
-        let min_val = min_dev.cast_elem::<u32>().to_host_vec(&stream).unwrap();
-        let max_val = max_dev.cast_elem::<u32>().to_host_vec(&stream).unwrap();
+        let min_val = min_dev.peel_elem::<u32>().to_host_vec(&stream).unwrap();
+        let max_val = max_dev.peel_elem::<u32>().to_host_vec(&stream).unwrap();
 
         let min_ok = min_val[0] == 0; // thread 0's tid
         let max_ok = max_val[0] == (N as u32 - 1); // thread 255's tid
@@ -1473,7 +1473,7 @@ fn main() {
     {
         let counter_dev = DeviceBuffer::<u32>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<BlockAtomicU32>();
+            .wrap_elem::<BlockAtomicU32>();
         let mut out_dev = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -1483,7 +1483,7 @@ fn main() {
         .expect("Kernel launch failed");
 
         stream.synchronize().unwrap();
-        let counter_val = counter_dev.cast_elem::<u32>().to_host_vec(&stream).unwrap();
+        let counter_val = counter_dev.peel_elem::<u32>().to_host_vec(&stream).unwrap();
         let result = out_dev.to_host_vec(&stream).unwrap();
 
         let counter_ok = counter_val[0] == N as u32;
@@ -1520,7 +1520,7 @@ fn main() {
     {
         let counter_dev = DeviceBuffer::<u32>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<BlockAtomicU32>();
+            .wrap_elem::<BlockAtomicU32>();
         let mut out_dev = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -1535,7 +1535,7 @@ fn main() {
         .expect("Kernel launch failed");
 
         stream.synchronize().unwrap();
-        let counter_val = counter_dev.cast_elem::<u32>().to_host_vec(&stream).unwrap();
+        let counter_val = counter_dev.peel_elem::<u32>().to_host_vec(&stream).unwrap();
         let result = out_dev.to_host_vec(&stream).unwrap();
 
         let counter_ok = counter_val[0] == N as u32;
@@ -1569,9 +1569,22 @@ fn main() {
     // =========================================================================
     println!("\n--- Test 20: core_atomic_fetch_add_test (core::sync::atomic) ---");
     {
-        let counter_dev = DeviceBuffer::<u32>::zeroed(&stream, 1)
+        // Standard-library atomics have no DeviceRepr impl. Transfer the owned
+        // allocation explicitly without creating shared integer references.
+        assert_eq!(size_of::<core::sync::atomic::AtomicU32>(), size_of::<u32>());
+        assert_eq!(
+            align_of::<core::sync::atomic::AtomicU32>(),
+            align_of::<u32>()
+        );
+        let (ptr, len, context) = DeviceBuffer::<u32>::zeroed(&stream, 1)
             .unwrap()
-            .cast_elem::<core::sync::atomic::AtomicU32>();
+            .into_raw_parts();
+        // SAFETY: zeroed completed initialization; the checked layout covers
+        // one AtomicU32 with valid zero bits. Ownership and context transfer
+        // exactly once, and no kernel can access the allocation yet.
+        let counter_dev = unsafe {
+            DeviceBuffer::<core::sync::atomic::AtomicU32>::from_raw_parts(ptr, len, context)
+        };
         let mut out_dev = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
 
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
@@ -1581,7 +1594,12 @@ fn main() {
         .expect("Kernel launch failed");
 
         stream.synchronize().unwrap();
-        let counter_val = counter_dev.cast_elem::<u32>().to_host_vec(&stream).unwrap();
+        let (ptr, len, context) = counter_dev.into_raw_parts();
+        // SAFETY: synchronization above finished every atomic access. The same
+        // allocation now contains initialized u32 values with the checked
+        // layout, and its ownership/context transfer exactly once for readback.
+        let counter_dev = unsafe { DeviceBuffer::<u32>::from_raw_parts(ptr, len, context) };
+        let counter_val = counter_dev.to_host_vec(&stream).unwrap();
         let result = out_dev.to_host_vec(&stream).unwrap();
 
         let counter_ok = counter_val[0] == N as u32;

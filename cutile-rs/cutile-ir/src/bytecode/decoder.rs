@@ -731,7 +731,7 @@ fn parse_constant_section(payload: Option<&[u8]>) -> Result<Vec<Vec<u8>>> {
         // Offsets are u64 LE (raw array), not varints.
         let bytes = r.read_bytes(8)?;
         let v = u64::from_le_bytes(bytes.try_into().unwrap());
-        offsets.push(v as usize);
+        offsets.push(usize::try_from(v).map_err(|_| err("constant offset out of range"))?);
     }
 
     let const_data = r.read_bytes(r.remaining())?;
@@ -743,6 +743,9 @@ fn parse_constant_section(payload: Option<&[u8]>) -> Result<Vec<Vec<u8>>> {
         } else {
             const_data.len()
         };
+        if start > end || end > const_data.len() {
+            return Err(err("constant offsets out of range"));
+        }
         constants.push(const_data[start..end].to_vec());
     }
     Ok(constants)
@@ -926,5 +929,19 @@ mod tests {
         let out = decode_bytecode(&buf).unwrap();
         assert!(out.contains("\"hello\""));
         assert!(out.contains("\"world\""));
+    }
+
+    #[test]
+    fn reject_constant_offset_out_of_range() {
+        let mut section = EncodingWriter::new();
+        section.write_varint(1);
+        section.align_to(8);
+        section.write_le_u64(2);
+        section.write_byte(0xaa);
+
+        let error = parse_constant_section(Some(section.as_bytes()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("constant offsets out of range"));
     }
 }

@@ -163,6 +163,43 @@ mod kernels {
             *output_elem = val * 3 + 1;
         }
     }
+
+    /// Compile-time coverage for loop hints: one loop per marker spelling.
+    #[kernel]
+    pub fn loop_hint_test(mut output: DisjointSlice<u32>, n: u32) {
+        let idx = thread::index_1d();
+        let Some(output_elem) = output.get_mut(idx) else {
+            return;
+        };
+
+        let mut acc = 0u32;
+        let mut i = 0u32;
+        #[unroll] // CUDA_OXIDE_DEBUG_LOOP_HINT_ATTRIBUTE_LINE
+        while i < 4 {
+            acc = acc.wrapping_add(i); // CUDA_OXIDE_DEBUG_LOOP_HINT_BODY_LINE
+            i += 1;
+        }
+        let mut j = 0u32;
+        #[unroll(4)] // CUDA_OXIDE_DEBUG_LOOP_HINT_ATTRIBUTE_LINE
+        while j < n {
+            acc = acc.wrapping_add(j); // CUDA_OXIDE_DEBUG_LOOP_HINT_BODY_LINE
+            j += 1;
+        }
+        let mut k = 0u32;
+        #[unroll(never)] // CUDA_OXIDE_DEBUG_LOOP_HINT_ATTRIBUTE_LINE
+        while k < n {
+            acc = acc.rotate_left(k); // CUDA_OXIDE_DEBUG_LOOP_HINT_BODY_LINE
+            k += 1;
+        }
+        let mut m = 0u32;
+        #[nounroll] // CUDA_OXIDE_DEBUG_LOOP_HINT_ATTRIBUTE_LINE
+        while m < n {
+            acc ^= m; // CUDA_OXIDE_DEBUG_LOOP_HINT_BODY_LINE
+            m += 1;
+        }
+
+        *output_elem = acc;
+    }
 }
 
 // =============================================================================

@@ -1,0 +1,18 @@
+Kani mutant m1: index_2d_runtime flattens row * width + col into the witness at mint time
+(the historical bug), so a witness minted from one slice's grid aliases
+another thread's cell when resolved through a slice of a different width.
+
+Must be killed by: kani_proofs::p3_cross_slice_no_alias_b1x1, kani_proofs::p3_cross_slice_no_alias_b32x8
+
+diff --git a/cuda-oxide/crates/cuda-device/src/thread.rs b/cuda-oxide/crates/cuda-device/src/thread.rs
+--- a/cuda-oxide/crates/cuda-device/src/thread.rs
++++ b/cuda-oxide/crates/cuda-device/src/thread.rs
+@@ -764,7 +764,7 @@
+         if row > u32::MAX as usize {
+             return None;
+         }
+-        let raw = super::pack_runtime_2d_coords(row, col);
++        let raw = row * row_stride + col;
+         Some(unsafe { ThreadIndex::new(raw, true, scope) })
+     }
+ 

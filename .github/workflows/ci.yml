@@ -22,7 +22,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 # Every other workflow in the repo pins this rather than inheriting whatever the
-# repository default happens to be. This one is a pure caller today, so the four
+# repository default happens to be. This one is a pure caller today, so the five
 # called workflows' own `contents: read` already bounds the token and this
 # changes nothing. It matters for the next job added here directly: a `uses:`
 # job carries the callee's permissions, an inline `steps:` job would carry the
@@ -89,3 +89,6 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && (github.event_name != 'push' || needs.changes.outputs.relevant == 'true' || needs.changes.outputs.any_changed != 'true') }}
     uses: ./.github/workflows/cargo-deny.yml
+
+  kani:
+    uses: ./.github/workflows/kani.yml

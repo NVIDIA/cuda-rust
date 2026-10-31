@@ -92,7 +92,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             let init_expr = self.global_static_initializer(item)?;
             let init_value = self.global_scalar_initializer_value(&init_expr, module_name)?;
             let data =
-                super::compile_expression::encode_literal_bytes(&init_value, &info.element_name);
+                super::compile_expression::encode_literal_bytes(&init_value, &info.element_name)
+                    .map_err(|e| self.jit_error(&item.span(), &e))?;
 
             module.globals.push(IrGlobal {
                 sym_name: info.symbol,

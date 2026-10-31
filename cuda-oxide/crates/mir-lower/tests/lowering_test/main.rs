@@ -18,6 +18,7 @@ mod loops;
 mod math_conversions;
 mod matrix_memory;
 mod mma;
+mod shift_representation;
 mod sregs_and_warp;
 mod tma;
 mod wgmma_lowering;

@@ -60,6 +60,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   call's location and inline chain.
 - Failed host launch checks report their original accesses and inline callers,
   retaining distinct origins when equivalent predicates share one comparison.
+- A kernel that imports from `cutile` while `cutile::core` is missing from the
+  module registry fails with an error that names the cause, instead of a later
+  "unable to resolve generic type" error. On `x86_64-pc-windows-gnu`, GNU ld's
+  `--gc-sections` drops the registry entries (#1605).
 
 ### Changed
 

@@ -131,7 +131,7 @@ Anonymous promoted allocations remain unsupported.
 | Move Closures (`FnOnce`) | **Full** | Closures that capture by value. The whole closure struct is pushed as one byval kernel argument. `move \|x\| x * factor` pattern. |
 | Reference Closures (`Fn`/`FnMut`) | **Full** | Non-move closures that capture by reference. The closure struct (containing host pointers) still travels as one byval argument; the GPU reads through those pointers via HMM. |
 | Host-to-Device Closures | **Full** | Closures defined on host passed to generic kernels. Polynomial evaluation with captured coefficients tested. |
-| Device-Internal Closures | **Full** | Closures created and used entirely on device, including closures passed to device functions. |
+| Device-Internal Closures | **Full** | Closures created and used entirely on device, including closures passed to device functions. A non-`move` closure can capture a shared-memory pointer by reference: the captured local holds the generic form of the pointer, and optimized builds recover `st.shared` / `cp.async...shared` after inlining. |
 
 ## Compiler: Control Flow
 

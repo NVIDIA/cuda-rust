@@ -17,6 +17,11 @@
 //! Unsigned `u8` and signed `i8` cases cover both overflow and non-overflow
 //! paths, including `Some(0)` so it cannot be confused with `None`.
 //!
+//! The `pow_family` kernel covers integer `pow`, `checked_pow`,
+//! `overflowing_pow`, `saturating_pow`, `wrapping_pow`, `ilog` and
+//! `checked_ilog`, which failed to compile while `is_val_statically_known`
+//! was unsupported.
+//!
 //! Run:
 //!   cargo oxide run checked_arith
 //!   CUDA_OXIDE_NO_OPT=1 cargo oxide run checked_arith
@@ -136,6 +141,75 @@ mod kernels {
             };
         }
     }
+
+    /// Exercise the integer `pow` family and `ilog`. libcore implements them
+    /// with `is_val_statically_known`, so they must compile for the device.
+    ///
+    /// Encodings:
+    /// - `checked_pow`: `None` -> 0, `Some(v)` -> bit 32 set, `v` in bits 0..31
+    /// - `overflowing_pow`: result in bits 0..31, overflow flag in bit 32
+    /// - `pow` on `u64`: the plain result; every input here is in range
+    #[kernel]
+    pub fn pow_family(
+        base: &[i32],
+        exp: &[u32],
+        mut checked_out: DisjointSlice<u64>,
+        mut overflowing_out: DisjointSlice<u64>,
+        mut misc_out: DisjointSlice<u64>,
+        mut pow_out: DisjointSlice<u64>,
+    ) {
+        let i = thread::index_1d().get();
+        if i >= base.len() {
+            return;
+        }
+        let (b, e) = (base[i], exp[i]);
+
+        if let Some(o) = checked_out.get_mut(thread::index_1d()) {
+            *o = match b.checked_pow(e) {
+                Some(value) => (1 << 32) | value as u32 as u64,
+                None => 0,
+            };
+        }
+
+        if let Some(o) = overflowing_out.get_mut(thread::index_1d()) {
+            let (value, overflow) = (b as u32).overflowing_pow(e);
+            *o = value as u64 | ((overflow as u64) << 32);
+        }
+
+        if let Some(o) = misc_out.get_mut(thread::index_1d()) {
+            let saturating = (b as u8).saturating_pow(e) as u64;
+            let wrapping = (b as i16).wrapping_pow(e) as u16 as u64;
+            let ilog = match (b as u32).checked_ilog(10) {
+                Some(value) => 0x80 | value as u64,
+                None => 0,
+            };
+            let ilog10 = (b.unsigned_abs() | 1).ilog(10) as u64;
+            *o = saturating | (wrapping << 8) | (ilog << 24) | (ilog10 << 32);
+        }
+
+        if let Some(o) = pow_out.get_mut(thread::index_1d()) {
+            *o = (b.unsigned_abs() as u64).pow(e);
+        }
+    }
+}
+
+fn expected_pow_family(b: i32, e: u32) -> (u64, u64, u64, u64) {
+    let checked = match b.checked_pow(e) {
+        Some(value) => (1 << 32) | value as u32 as u64,
+        None => 0,
+    };
+    let (value, overflow) = (b as u32).overflowing_pow(e);
+    let overflowing = value as u64 | ((overflow as u64) << 32);
+    let saturating = (b as u8).saturating_pow(e) as u64;
+    let wrapping = (b as i16).wrapping_pow(e) as u16 as u64;
+    let ilog = match (b as u32).checked_ilog(10) {
+        Some(value) => 0x80 | value as u64,
+        None => 0,
+    };
+    let ilog10 = (b.unsigned_abs() | 1).ilog(10) as u64;
+    let misc = saturating | (wrapping << 8) | (ilog << 24) | (ilog10 << 32);
+    let pow = (b.unsigned_abs() as u64).pow(e);
+    (checked, overflowing, misc, pow)
 }
 
 fn check(label: &str, got: u32, expected_result: u8, expected_overflow: bool) -> bool {
@@ -300,6 +374,40 @@ fn main() {
     let checked_i8_sub = checked_i8_sub_dev.to_host_vec(&stream).unwrap();
     let checked_i8_mul = checked_i8_mul_dev.to_host_vec(&stream).unwrap();
 
+    // --- integer pow family and ilog ---
+    //
+    // Includes a zero exponent, negative bases with odd exponents, and both
+    // in-range and overflowing results (7^12 and 46341^2 overflow i32).
+    let pow_base: Vec<i32> = vec![2, -3, 10, 0, 1, -1, 7, 46341];
+    let pow_exp: Vec<u32> = vec![10, 5, 9, 0, 100, 3, 12, 2];
+    let pow_n = pow_base.len();
+    let pow_base_dev = DeviceBuffer::from_host(&stream, &pow_base).unwrap();
+    let pow_exp_dev = DeviceBuffer::from_host(&stream, &pow_exp).unwrap();
+    let mut pow_checked_dev = DeviceBuffer::<u64>::zeroed(&stream, pow_n).unwrap();
+    let mut pow_overflowing_dev = DeviceBuffer::<u64>::zeroed(&stream, pow_n).unwrap();
+    let mut pow_misc_dev = DeviceBuffer::<u64>::zeroed(&stream, pow_n).unwrap();
+    let mut pow_plain_dev = DeviceBuffer::<u64>::zeroed(&stream, pow_n).unwrap();
+
+    // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
+    unsafe {
+        module.pow_family(
+            &stream,
+            LaunchConfig::for_num_elems(pow_n as u32),
+            &pow_base_dev,
+            &pow_exp_dev,
+            &mut pow_checked_dev,
+            &mut pow_overflowing_dev,
+            &mut pow_misc_dev,
+            &mut pow_plain_dev,
+        )
+    }
+    .expect("pow_family launch");
+
+    let pow_checked = pow_checked_dev.to_host_vec(&stream).unwrap();
+    let pow_overflowing = pow_overflowing_dev.to_host_vec(&stream).unwrap();
+    let pow_misc = pow_misc_dev.to_host_vec(&stream).unwrap();
+    let pow_plain = pow_plain_dev.to_host_vec(&stream).unwrap();
+
     let mut ok = true;
 
     // Historical overflowing arithmetic regression.
@@ -364,10 +472,27 @@ fn main() {
         );
     }
 
+    // Integer pow family and ilog, against the host.
+    for i in 0..pow_n {
+        let (b, e) = (pow_base[i], pow_exp[i]);
+        let got = (
+            pow_checked[i],
+            pow_overflowing[i],
+            pow_misc[i],
+            pow_plain[i],
+        );
+        let want = expected_pow_family(b, e);
+        if got != want {
+            eprintln!("  FAIL pow_family[{i}] {b}^{e}: got {got:#x?}, want {want:#x?}");
+            ok = false;
+        }
+    }
+
     if ok {
         println!("SUCCESS: all overflowing_{{add,sub,mul}} results correct");
         println!("PASS: checked_add/sub/mul (unsigned u8)");
         println!("PASS: checked_add/sub/mul (signed i8)");
+        println!("PASS: integer pow family and ilog");
         println!("PASS: checked_arith");
     } else {
         std::process::exit(1);

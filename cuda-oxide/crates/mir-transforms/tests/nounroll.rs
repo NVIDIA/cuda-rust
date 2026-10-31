@@ -28,6 +28,7 @@ use rustc_hash::FxHashSet;
 
 use mir_transforms::analyses::loop_info::LoopInfo;
 use mir_transforms::nounroll::resolve_nounroll_hints;
+use mir_transforms::unroll::HintWarning;
 use mir_transforms::unroll::unroll_annotated_loops;
 
 fn loop_info(ctx: &Context, region: Ptr<Region>) -> LoopInfo {
@@ -53,13 +54,15 @@ fn nounroll_hint_count(ctx: &Context, region: Ptr<Region>) -> usize {
 
 /// Run the resolver and check the shared contract: hints are gone, the module
 /// verifies, and every returned branch is a `mir.goto` to a loop header that is
-/// that loop's only back-edge. Returns the headers of the marked loops.
+/// that loop's only back-edge. Returns the headers of the marked loops and the
+/// warnings for hints that could not be applied.
 fn resolve(
     ctx: &mut Context,
     module: Ptr<Operation>,
     region: Ptr<Region>,
-) -> FxHashSet<Ptr<BasicBlock>> {
-    let latches = resolve_nounroll_hints(module, ctx).expect("resolve nounroll hints");
+) -> (FxHashSet<Ptr<BasicBlock>>, Vec<HintWarning>) {
+    let resolved = resolve_nounroll_hints(module, ctx).expect("resolve nounroll hints");
+    let latches = resolved.latches;
     pliron::operation::verify_operation(module, ctx).expect("valid IR after latch placement");
     assert_eq!(nounroll_hint_count(ctx, region), 0, "every hint is erased");
 
@@ -90,7 +93,7 @@ fn resolve(
         );
         assert!(headers.insert(header), "one marked latch per loop");
     }
-    headers
+    (headers, resolved.warnings)
 }
 
 /// A hint marks the loop whose body holds it, not the loop around it, and the
@@ -107,7 +110,12 @@ fn nounroll_marks_only_the_annotated_loop_of_a_nest() {
         };
         plant_nounroll(&mut ctx, body);
 
-        let headers = resolve(&mut ctx, lp.module, lp.region);
+        let (headers, warnings) = resolve(&mut ctx, lp.module, lp.region);
+
+        assert!(
+            warnings.is_empty(),
+            "an applied hint warns about nothing: {warnings:?}"
+        );
 
         assert_eq!(headers.into_iter().collect::<Vec<_>>(), [expected]);
         assert_eq!(
@@ -128,7 +136,12 @@ fn nounroll_merges_several_back_edges_into_one_latch() {
     assert_eq!(loop_info(&ctx, lp.region).loops()[0].latches.len(), 2);
     plant_nounroll(&mut ctx, lp.normal_latch);
 
-    let headers = resolve(&mut ctx, lp.module, lp.region);
+    let (headers, warnings) = resolve(&mut ctx, lp.module, lp.region);
+
+    assert!(
+        warnings.is_empty(),
+        "an applied hint warns about nothing: {warnings:?}"
+    );
 
     assert_eq!(headers.into_iter().collect::<Vec<_>>(), [lp.header]);
 }
@@ -148,7 +161,12 @@ fn nounroll_inside_a_fully_unrolled_loop_marks_every_copy() {
         .expect("unroll the outer loop");
     assert_eq!(nounroll_hint_count(&ctx, lp.region), 3, "one hint per copy");
 
-    let headers = resolve(&mut ctx, lp.module, lp.region);
+    let (headers, warnings) = resolve(&mut ctx, lp.module, lp.region);
+
+    assert!(
+        warnings.is_empty(),
+        "an applied hint warns about nothing: {warnings:?}"
+    );
 
     let info = loop_info(&ctx, lp.region);
     assert_eq!(info.loops().len(), 3, "three inner copies, no outer loop");
@@ -174,7 +192,12 @@ fn nounroll_inside_a_partially_unrolled_loop_marks_main_and_remainder_copies() {
     unroll_annotated_loops(lp.module, &mut ctx, &mut AnalysisManager::default())
         .expect("partially unroll the outer loop");
 
-    let headers = resolve(&mut ctx, lp.module, lp.region);
+    let (headers, warnings) = resolve(&mut ctx, lp.module, lp.region);
+
+    assert!(
+        warnings.is_empty(),
+        "an applied hint warns about nothing: {warnings:?}"
+    );
 
     let info = loop_info(&ctx, lp.region);
     let outer: FxHashSet<_> = info
@@ -201,9 +224,15 @@ fn nounroll_outside_a_loop_marks_nothing() {
     let lp = nested_counted_loop(&mut ctx, 3, 2);
     plant_nounroll(&mut ctx, lp.preheader);
 
-    let headers = resolve(&mut ctx, lp.module, lp.region);
+    let (headers, warnings) = resolve(&mut ctx, lp.module, lp.region);
 
     assert!(headers.is_empty());
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!(
+        warnings[0].message,
+        "#[nounroll] requested but the loop may still be unrolled: \
+         the annotation is not inside a recognizable loop"
+    );
 }
 
 /// Dead code that branches into a loop puts that loop's blocks in its reach
@@ -217,7 +246,11 @@ fn nounroll_in_unreachable_code_marks_nothing() {
     goto(&mut ctx, dead, lp.outer_latch, vec![]);
     plant_nounroll(&mut ctx, dead);
 
-    let headers = resolve(&mut ctx, lp.module, lp.region);
+    let (headers, warnings) = resolve(&mut ctx, lp.module, lp.region);
 
     assert!(headers.is_empty());
+    assert!(
+        warnings.is_empty(),
+        "unreachable hints are dropped silently: {warnings:?}"
+    );
 }

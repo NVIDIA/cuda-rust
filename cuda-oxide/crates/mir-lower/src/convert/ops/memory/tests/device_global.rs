@@ -187,7 +187,7 @@ fn convert_global_alloc_places_in_global_or_constant_addrspace() {
 
     // Constant-memory globals reuse the Rust mangled name so host code can
     // resolve them by name via `cuModuleGetGlobal`; ordinary globals get
-    // a counter-suffixed `__device_global_N`.
+    // `__device_global_<hash>`, hashed from their key.
     assert_eq!(
         global_addr_const.get_symbol_name(&ctx).to_string(),
         "_ZN7my_mod3KEYE",

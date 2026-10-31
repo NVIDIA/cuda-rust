@@ -189,18 +189,19 @@ pub struct LoweringOptions {
     /// generated module-scope symbols (`__shared_mem_*`, `__device_global_*`,
     /// `__dynamic_smem_*`).
     ///
-    /// The per-module counters below make the counter-named families unique
-    /// within one module, but every module starts its counters at zero, so
-    /// two modules lowered from different crates both define
-    /// `__shared_mem_0`; a dynamic-pool owner shared across crates likewise
-    /// repeats its `__dynamic_smem_<owner>` extern in both. Their PTX is
-    /// textually concatenated by `load_all_ptx_bundles_merged`, where a
-    /// duplicate definition fails driver JIT compilation and duplicate
-    /// extern declarations silently keep the first alignment (#1277). A
-    /// caller whose output can be merged with other compilations passes a
-    /// value that is stable for one compilation and distinct across crates —
-    /// `rustc-codegen-cuda` passes the crate's `StableCrateId` hash. `None`
-    /// preserves the undecorated historical names.
+    /// Hashing each global's key makes those families unique within one
+    /// module, but a static from a dependency both crates use hashes to the
+    /// same `__shared_mem_<hash>` in each, and a keyless shared allocation's
+    /// counter restarts at zero in every module; a dynamic-pool owner shared
+    /// across crates likewise repeats its `__dynamic_smem_<owner>` extern in
+    /// both. Their PTX is textually concatenated by
+    /// `load_all_ptx_bundles_merged`, where a duplicate definition fails
+    /// driver JIT compilation and duplicate extern declarations silently keep
+    /// the first alignment (#1277). A caller whose output can be merged with
+    /// other compilations passes a value that is stable for one compilation
+    /// and distinct across crates — `rustc-codegen-cuda` passes the crate's
+    /// `StableCrateId` hash. `None` leaves the family directly followed by
+    /// its suffix (`__shared_mem_<hash>`), for output that is never merged.
     pub module_disambiguator: Option<u64>,
 }
 
@@ -229,18 +230,14 @@ pub struct MirToLlvmConversionDriver {
     pub device_globals: DeviceGlobalsMap,
     /// Per-owning-function dynamic shared memory alignment tracking.
     pub dynamic_smem_alignments: DynamicSmemAlignmentMap,
-    /// Next `__shared_mem_N` index. Scoped to one driver instance (one
+    /// Next `__shared_mem_N` index for a shared allocation without an
+    /// `alloc_key`; keyed allocations and device globals are named after a
+    /// hash of their key instead (#1477). Scoped to one driver instance (one
     /// `lower_mir_to_llvm` call, i.e. one module), not a process-global
     /// counter, so the assigned index is a function of this module's own
     /// MIR walk order rather than of how many OTHER modules have lowered a
     /// shared allocation earlier in the process. See #706.
     pub next_shared_mem_index: usize,
-    /// Next `__device_global_N` index. Scoped to one driver instance for the
-    /// same reason as `next_shared_mem_index`: the assigned index is a
-    /// function of this module's own MIR walk order rather than of how many
-    /// OTHER modules have lowered a device global earlier in the process.
-    /// See #706.
-    pub next_device_global_index: usize,
 }
 
 fn is_mir_or_nvvm_op(ctx: &Context, op: Ptr<Operation>) -> bool {
@@ -334,7 +331,6 @@ impl DialectConversion for MirToLlvmConversionDriver {
                 op,
                 operands_info,
                 &mut self.device_globals,
-                &mut self.next_device_global_index,
             );
         }
         if opid == dialect_mir::ops::MirExternSharedOp::get_opid_static() {
@@ -433,7 +429,6 @@ pub fn lower_mir_to_llvm_with_options(
         device_globals: FxHashMap::default(),
         dynamic_smem_alignments: FxHashMap::default(),
         next_shared_mem_index: 0,
-        next_device_global_index: 0,
     };
     // pliron's DialectConversion now reports an IRStatus (Changed/Unchanged);
     // lowering only cares about success, so discard it.

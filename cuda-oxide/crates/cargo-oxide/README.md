@@ -137,7 +137,8 @@ final-output mode, so it cannot be combined with `--emit-nvvm-ir`,
 Lists every example and model bundled with the cuda-oxide workspace, including
 its short description and any hardware or toolkit requirements documented in
 its README. Discovery includes `crates/rustc-codegen-cuda/examples/`,
-`cute-rs-preview/examples/`, and `cute-rs-preview/models/` within the cuda-oxide component.
+`examples/`, `models/`, `cute-rs-preview/examples/`, and
+`cute-rs-preview/models/` within the cuda-oxide component.
 Names must be unique across these directories; `run` and `build` accept model
 names in the same way as example names.
 

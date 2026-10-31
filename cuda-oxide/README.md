@@ -264,28 +264,33 @@ compiles a Rust kernel to PTX, launches it on the GPU, and prints
 
 `CUDA_OXIDE_DEVICE_ARCH` accepts only `sm_<capability>` with an optional `a` suffix; `compute_`, `f` family targets, and malformed hints are errors.
 
-## Examples
+## Examples & Models
 
-**190+ examples** in `crates/rustc-codegen-cuda/examples/`. Highlights:
+**240+ examples and models** across `examples/`, `models/`, `cute-rs-preview/examples/`, `cute-rs-preview/models/`, and `crates/rustc-codegen-cuda/examples/`. Highlights:
 
-| Example              | Description                                                              |
-|----------------------|--------------------------------------------------------------------------|
-| `vecadd`             | Vector addition -- canonical first example                               |
-| `host_closure`       | Generic kernels with closures passed from host                           |
-| `generic`            | Generic kernels with monomorphization (`scale<T>`)                       |
-| `ord_cmp`            | Device-side `Ord::cmp` lowering for signed and unsigned integers         |
-| `gemm_sol_final`     | Canonical Blackwell GEMM SoL: size-specialized CLC + cg2 + vector stores |
-| `gemm_sol`           | Historical GEMM kernel progression and comparison kernels                |
-| `tcgen05`            | Blackwell tensor cores (sm_100a): TMEM, MMA, cta_group::2                |
-| `atomics`            | GPU atomics: 6 types x 3 scopes x 5 orderings (20 tests)                 |
-| `atomic_f16`         | Scalar f16 atomics: per-scope correctness checks + f32 vs f16 bench      |
-| `cluster`            | Thread Block Clusters + DSMEM ring exchange (Hopper+)                    |
-| `async_mlp`          | Async MLP pipeline: GEMM → MatVec → ReLU across concurrent streams       |
-| `mathdx_ffi_test`    | cuFFTDx thread-level FFT + cuBLASDx block-level GEMM                     |
-| `device_ffi_test`    | Device FFI: Rust kernels calling C++ CCCL warp-level reductions via LTOIR|
-| `async_vecadd`       | Async GPU execution with `cuda-async` and `DeviceOperation`              |
-| `cross_crate_kernel` | Library crates defining kernels, bundled into binaries                   |
-| `cuda_module_in_lib` | `#[cuda_module]` in a library crate, loaded by embedded bundle name      |
+| Example / Model           | Description                                                              |
+|---------------------------|--------------------------------------------------------------------------|
+| `vecadd`                  | Vector addition -- canonical first example                               |
+| `gemm_sol_final`          | Blackwell GEMM SoL (`examples/`): 2-CTA, 7-stage TMA, 2-stage TMEM       |
+| `nemotron3_moe`           | Nemotron-3 NVFP4 ReLU² MoE (`models/`): native SIMT + 5th-gen `tcgen05`  |
+| `nemotron3_moe_cute`      | Nemotron-3 NVFP4 ReLU² MoE (`cute-rs-preview/models/`): typed `cute-rs`  |
+| `sm100_qkv_epilogue_cute` | Fused QKV + RMSNorm + FP8 quant + paged KV scatter (`cute-rs-preview/`)  |
+| `qwen3_8b_cute`           | End-to-end 36-layer `Qwen/Qwen3-8B` in BF16 and NVFP4 (`cute-rs-preview`)|
+| `qwen_decoder_cute`       | End-to-end `Qwen3-TTS 1.7B` neural audio codec & speech decoder          |
+| `host_closure`            | Generic kernels with closures passed from host                           |
+| `generic`                 | Generic kernels with monomorphization (`scale<T>`)                       |
+| `ord_cmp`                 | Device-side `Ord::cmp` lowering for signed and unsigned integers         |
+| `gemm_sol`                | Historical GEMM kernel progression and comparison kernels                |
+| `tcgen05`                 | Blackwell tensor cores (sm_100a): TMEM, MMA, cta_group::2                |
+| `atomics`                 | GPU atomics: 6 types x 3 scopes x 5 orderings (20 tests)                 |
+| `atomic_f16`              | Scalar f16 atomics: per-scope correctness checks + f32 vs f16 bench      |
+| `cluster`                 | Thread Block Clusters + DSMEM ring exchange (Hopper+)                    |
+| `async_mlp`               | Async MLP pipeline: GEMM -> MatVec -> ReLU across concurrent streams     |
+| `mathdx_ffi_test`         | cuFFTDx thread-level FFT + cuBLASDx block-level GEMM                     |
+| `device_ffi_test`         | Device FFI: Rust kernels calling C++ CCCL warp-level reductions via LTOIR|
+| `async_vecadd`            | Async GPU execution with `cuda-async` and `DeviceOperation`              |
+| `cross_crate_kernel`      | Library crates defining kernels, bundled into binaries                   |
+| `cuda_module_in_lib`      | `#[cuda_module]` in a library crate, loaded by embedded bundle name      |
 
 ```bash
 cargo oxide run vecadd

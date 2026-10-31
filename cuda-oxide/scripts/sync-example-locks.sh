@@ -5,9 +5,9 @@
 # Keep every example and model workspace's Cargo.lock resolving the same dependency
 # versions.
 #
-# Why this matters: examples under crates/rustc-codegen-cuda/examples/ and
-# cute-rs-preview/examples/, plus models under cute-rs-preview/models/, have their own cargo
-# workspaces and committed Cargo.lock.
+# Why this matters: examples under crates/rustc-codegen-cuda/examples/,
+# examples/, and cute-rs-preview/examples/, plus models under models/ and
+# cute-rs-preview/models/, have their own cargo workspaces and committed Cargo.lock.
 # CI builds them all into one shared CARGO_TARGET_DIR, and cargo keys its build cache
 # on the resolved versions of a unit's whole dependency subtree. When two
 # examples pin different versions of, say, syn or memchr, the first example

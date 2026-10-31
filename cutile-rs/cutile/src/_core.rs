@@ -4120,9 +4120,7 @@ pub mod core {
     /// `y` — the full tensor the host partitioned, not `y`'s declared
     /// per-program slab — and `y` must be a mutable output tensor the host
     /// passed as a partition (`tensor.partition([..])` at the call site).
-    /// The launch validator relates `self`'s tile count to the grid derived
-    /// from `y`'s partition, so an input too small for the grid is rejected
-    /// at launch.
+    /// Out-of-bounds regions of `self` are zero-padded.
     pub trait LoadTileLike<Y> {
         type Out;
 
@@ -4245,6 +4243,7 @@ pub mod core {
     /// tile-block id. `x` must have the same shape as the whole tensor
     /// behind `y` (not `y`'s per-program slab), and `y` must be a mutable
     /// output tensor the host passed as a partition — see [`LoadTileLike`].
+    /// Out-of-bounds regions of `x` are zero-padded.
     pub fn load_tile_like<X, Y>(x: &X, y: &Y) -> <X as LoadTileLike<Y>>::Out
     where
         X: LoadTileLike<Y>,

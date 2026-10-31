@@ -27,6 +27,7 @@ use dialect_mir::{
     types::{MirArrayType, MirPtrType, MirStructType, MirTupleType, address_space},
 };
 use pliron::{
+    basic_block::BasicBlock,
     builtin::{op_interfaces::BranchOpInterface, types::IntegerType},
     context::{Context, Ptr},
     op::{Op, op_cast},
@@ -35,21 +36,28 @@ use pliron::{
     value::Value,
 };
 
-/// Identity of a whole SSA carrier or one nested aggregate field.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(super) struct CarrierKey {
-    /// The whole SSA carrier before following any aggregate field path.
-    pub(super) value: Value,
-    /// Empty means the value itself.  Non-empty paths describe a field inside
-    /// an ordinary aggregate before a matching `mir.extract_field` exposes it.
-    pub(super) path: Vec<u32>,
+/// One possible origin of an ordinary carrier.
+pub(super) trait CarrierFact: Clone + Eq + std::hash::Hash {
+    /// True for a fact that names an ordinary SSA value instead of a semantic
+    /// origin: an input without provenance, or an ordinary scalar.
+    fn is_opaque(&self) -> bool;
 }
+
+/// Consumers read an origin set only through its size, its sole origin, and
+/// whether it holds a given semantic origin. Two opaque origins therefore show
+/// a merge exactly as any larger number does, and keeping more would let the
+/// sets grow with every merge they flow through.
+const OPAQUE_FACTS_KEPT: usize = 2;
 
 /// Monotone sets of possible semantic origins, indexed by carrier and field path.
 #[derive(Clone)]
 pub(super) struct OrdinaryFacts<F> {
-    /// Accumulated origins; multiple entries at one key represent a merge that consumers must resolve.
-    pub(super) facts: HashMap<CarrierKey, HashSet<F>>,
+    /// Accumulated origins by SSA carrier, then by field path inside it. An
+    /// empty path means the value itself; a non-empty path describes a field
+    /// inside an ordinary aggregate before a matching `mir.extract_field`
+    /// exposes it. Multiple origins at one path represent a merge that
+    /// consumers must resolve.
+    pub(super) facts: HashMap<Value, HashMap<Vec<u32>, HashSet<F>>>,
 }
 
 impl<F> Default for OrdinaryFacts<F> {
@@ -60,16 +68,21 @@ impl<F> Default for OrdinaryFacts<F> {
     }
 }
 
-impl<F> OrdinaryFacts<F>
-where
-    F: Clone + Eq + std::hash::Hash,
-{
+impl<F: CarrierFact> OrdinaryFacts<F> {
     /// Add one origin to a field path and report whether the fixed-point state changed.
     pub(super) fn insert_path(&mut self, value: Value, path: Vec<u32>, fact: F) -> bool {
-        self.facts
-            .entry(CarrierKey { value, path })
+        let found = self
+            .facts
+            .entry(value)
             .or_default()
-            .insert(fact)
+            .entry(path)
+            .or_default();
+        if fact.is_opaque()
+            && found.iter().filter(|kept| kept.is_opaque()).count() >= OPAQUE_FACTS_KEPT
+        {
+            return false;
+        }
+        found.insert(fact)
     }
 
     /// Add an origin for the whole SSA carrier, with an empty field path.
@@ -79,10 +92,7 @@ where
 
     /// Borrow the possible origins at an exact carrier field path.
     pub(super) fn at_path(&self, value: Value, path: &[u32]) -> Option<&HashSet<F>> {
-        self.facts.get(&CarrierKey {
-            value,
-            path: path.to_vec(),
-        })
+        self.facts.get(&value)?.get(path)
     }
 
     /// Borrow origins attached directly to a whole SSA carrier.
@@ -93,9 +103,10 @@ where
     /// Collect all nested field origins carried by one SSA value.
     pub(super) fn entries(&self, value: Value) -> Vec<(Vec<u32>, F)> {
         self.facts
-            .iter()
-            .filter(|(key, _)| key.value == value)
-            .flat_map(|(key, facts)| facts.iter().cloned().map(|fact| (key.path.clone(), fact)))
+            .get(&value)
+            .into_iter()
+            .flatten()
+            .flat_map(|(path, facts)| facts.iter().cloned().map(|fact| (path.clone(), fact)))
             .collect()
     }
 
@@ -268,6 +279,51 @@ pub(super) fn local_cell_is_closed(ctx: &Context, root: Value) -> bool {
     true
 }
 
+/// Closedness of every local cell allocated in one scope. The verifier never
+/// mutates the IR it reads, so each cell's alias graph is walked once and
+/// shared by all accesses and fixed-point iterations.
+pub(super) struct LocalCells {
+    closed: HashMap<Value, bool>,
+}
+
+impl LocalCells {
+    /// Check the alias graph of each `mir.alloca` result in the scope.
+    pub(super) fn new(ctx: &Context, operations: &[Ptr<Operation>]) -> Self {
+        let closed = operations
+            .iter()
+            .filter(|operation| {
+                Operation::get_opid(**operation, ctx) == MirAllocaOp::get_opid_static()
+                    && operation.deref(ctx).get_num_results() == 1
+            })
+            .map(|operation| {
+                let root = operation.deref(ctx).get_result(0);
+                (root, local_cell_is_closed(ctx, root))
+            })
+            .collect();
+        Self { closed }
+    }
+
+    /// Resolve a pointer to a closed local cell and the field path inside it.
+    pub(super) fn closed_cell(&self, ctx: &Context, pointer: Value) -> Option<(Value, Vec<u32>)> {
+        let (root, path) = local_cell(ctx, pointer)?;
+        let closed = self
+            .closed
+            .get(&root)
+            .copied()
+            .unwrap_or_else(|| local_cell_is_closed(ctx, root));
+        closed.then_some((root, path))
+    }
+}
+
+/// Read the operands each incoming edge passes to a block, once per edge.
+fn incoming_edge_operands(ctx: &Context, block: Ptr<BasicBlock>) -> Vec<Vec<Value>> {
+    block
+        .uses(ctx)
+        .into_iter()
+        .filter_map(|edge| branch_successor_operands(ctx, edge.user_op(), edge.find_index(ctx)))
+        .collect()
+}
+
 /// Propagate semantic facts through the exact ordinary SSA adapters that can
 /// remain after common CuTe preparation.  This is deliberately a monotone
 /// fixed-point transfer: loop block arguments become known once their entry
@@ -276,10 +332,11 @@ pub(super) fn local_cell_is_closed(ctx: &Context, root: Value) -> bool {
 pub(super) fn propagate_ordinary_plumbing<F>(
     ctx: &Context,
     operations: &[Ptr<Operation>],
+    cells: &LocalCells,
     facts: &mut OrdinaryFacts<F>,
 ) -> bool
 where
-    F: Clone + Eq + std::hash::Hash,
+    F: CarrierFact,
 {
     let mut changed = false;
     let mut blocks = HashSet::new();
@@ -340,8 +397,7 @@ where
         } else if opid == MirStoreOp::get_opid_static() && operation_ref.get_num_operands() == 2 {
             let store = MirStoreOp::new(*operation);
             if !store.is_volatile(ctx)
-                && let Some((root, path)) = local_cell(ctx, store.address_opd(ctx))
-                && local_cell_is_closed(ctx, root)
+                && let Some((root, path)) = cells.closed_cell(ctx, store.address_opd(ctx))
             {
                 changed |= facts.copy_entries(store.value_opd(ctx), root, &[], &path);
             }
@@ -351,8 +407,7 @@ where
         {
             let load = MirLoadOp::new(*operation);
             if !load.is_volatile(ctx)
-                && let Some((root, path)) = local_cell(ctx, load.address_opd(ctx))
-                && local_cell_is_closed(ctx, root)
+                && let Some((root, path)) = cells.closed_cell(ctx, load.address_opd(ctx))
             {
                 changed |= facts.copy_entries(root, operation_ref.get_result(0), &path, &[]);
             }
@@ -360,16 +415,11 @@ where
     }
 
     for block in blocks {
+        let edges = incoming_edge_operands(ctx, block);
         let block_ref = block.deref(ctx);
         for argument_index in 0..block_ref.get_num_arguments() {
             let argument = block_ref.get_argument(argument_index);
-            for edge in block.uses(ctx) {
-                let terminator = edge.user_op();
-                let Some(operands) =
-                    branch_successor_operands(ctx, terminator, edge.find_index(ctx))
-                else {
-                    continue;
-                };
+            for operands in &edges {
                 if let Some(incoming) = operands.get(argument_index).copied() {
                     changed |= facts.copy_entries(incoming, argument, &[], &[]);
                 }
@@ -433,7 +483,7 @@ pub(super) fn seed_unknown_integer_carriers<F>(
     width: u32,
     unknown: impl Fn(Value) -> F,
 ) where
-    F: Clone + Eq + std::hash::Hash,
+    F: CarrierFact,
 {
     let mut values = Vec::new();
     let mut blocks = HashSet::new();
@@ -467,11 +517,12 @@ pub(super) fn seed_unknown_integer_carriers<F>(
 pub(super) fn poison_missing_forwarding_sources<F>(
     ctx: &Context,
     operations: &[Ptr<Operation>],
+    cells: &LocalCells,
     facts: &mut OrdinaryFacts<F>,
     unknown: impl Fn(Value) -> F + Copy,
 ) -> bool
 where
-    F: Clone + Eq + std::hash::Hash,
+    F: CarrierFact,
 {
     let mut changed = false;
     let mut blocks = HashSet::new();
@@ -483,12 +534,9 @@ where
             continue;
         }
         let store = MirStoreOp::new(*operation);
-        let Some((root, cell_path)) = local_cell(ctx, store.address_opd(ctx)) else {
+        let Some((root, cell_path)) = cells.closed_cell(ctx, store.address_opd(ctx)) else {
             continue;
         };
-        if !local_cell_is_closed(ctx, root) {
-            continue;
-        }
         for (path, _) in facts.entries(root) {
             let Some(source_path) = path.strip_prefix(cell_path.as_slice()) else {
                 continue;
@@ -504,6 +552,7 @@ where
     }
 
     for block in blocks {
+        let edges = incoming_edge_operands(ctx, block);
         let block_ref = block.deref(ctx);
         for argument_index in 0..block_ref.get_num_arguments() {
             let argument = block_ref.get_argument(argument_index);
@@ -511,13 +560,7 @@ where
             if argument_entries.is_empty() {
                 continue;
             }
-            for edge in block.uses(ctx) {
-                let terminator = edge.user_op();
-                let Some(operands) =
-                    branch_successor_operands(ctx, terminator, edge.find_index(ctx))
-                else {
-                    continue;
-                };
+            for operands in &edges {
                 let Some(incoming) = operands.get(argument_index).copied() else {
                     continue;
                 };

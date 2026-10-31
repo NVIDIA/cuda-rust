@@ -50,12 +50,12 @@ numerical correctness and competitive measured performance.
 - Existing legacy violations are migration work, not a precedent for new code.
   Report any remaining violations explicitly when delivering a migration.
 
-## Encoding CuTe in Rust's type system (mandatory pattern)
+## Encoding CuTe in Rust's type system (mandatory hard rule)
 
-CUTLASS CuTe’s layout algebra, partitions, TMA transfers, pipelines, and
-tensor-core MMA operations **must be encoded into Rust’s type system**. No agent
-may write a regular `cuda-oxide` SIMT kernel (raw pointer offsets, manual bit
-shifts, untyped `u64` descriptors) and pass it off as a `cute-rs` kernel.
+**Hard rule — Add missing CuTeDSL operations and Rust type encodings to `cute-rs` and the compiler first:**
+Because `cute-rs` and the compiler (`mir-importer`, `dialect-cute`, `cuda-oxide-mlir-export`) are actively developed alongside new workloads, whenever a kernel needs a CuTe operation, copy atom, pipeline, TMEM epilogue, or compile-time type-encoded concept that exists in **CuTeDSL 4.7** (or can be encoded in Rust's type system), **agents must mandatorily add it to `cute-rs` and the compiler first and then use it in the kernel**.
+- **A kernel qualifies as a `cute-rs` kernel ONLY if it actually uses `cute-rs` abstractions.**
+- Never bypass a missing `cute-rs` operation or compiler lowering by writing raw `cuda-oxide` SIMT pointer offsets, manual bit shifts, untyped `u64` descriptors, or workload-local instruction wrappers and calling the result a `cute-rs` kernel.
 
 Every `cute-rs` GEMM / MoE / attention kernel must encode its compile-time plan
 through types so that mismatched layouts, swapped `OperandA` / `OperandB` tiles,

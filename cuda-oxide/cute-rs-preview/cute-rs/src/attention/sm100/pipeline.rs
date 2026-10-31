@@ -607,6 +607,27 @@ impl<const STAGES: u32, Full: WaitPolicy, Empty: WaitPolicy> TwoCtaRing<STAGES, 
     {
         unsafe { Empty::arrive(self.empty_at_cursor(cursor)) };
     }
+    /// Fence prior TMEM loads across `THREADS` epilogue threads at named barrier `BARRIER_ID`,
+    /// then have `tid == 0` signal this CTA's completion to the leader's empty barrier.
+    /// # Safety
+    /// All `THREADS` epilogue threads must have completed their TMEM loads for `cursor`
+    /// and must execute this call convergently.
+    #[inline(always)]
+    pub unsafe fn release_epilogue_cursor<const BARRIER_ID: u32, const THREADS: u32>(
+        self,
+        cursor: RingCursor<STAGES, Consumer>,
+        tid: u32,
+    ) where
+        Empty: SignalPolicy,
+    {
+        tcgen05::fence_before_thread_sync();
+        unsafe {
+            crate::arch::NamedBarrier::<BARRIER_ID, THREADS>::sync();
+            if tid == 0 {
+                self.thread_empty_cursor(cursor);
+            }
+        }
+    }
 }
 
 impl<const STAGES: u32> TwoCtaRing<STAGES, LocalMemory> {

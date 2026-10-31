@@ -305,3 +305,80 @@ macro_rules! chunked_fragment {
 }
 chunked_fragment!(64; 0 => a, 32 => b);
 chunked_fragment!(128; 0 => a, 32 => b, 64 => c, 96 => d);
+
+impl TmemFragment<128> {
+    /// Compute the per-head reciprocal root-mean-square scale `1 / sqrt(mean(x^2) + eps)`
+    /// across all 128 FP32 columns of this thread's row fragment using `cute.arch.rsqrt`.
+    #[must_use]
+    #[inline(always)]
+    pub fn rms_inv_std(&self, eps: f32) -> f32 {
+        let mut sum_sq = 0.0f32;
+        let mut j = 0usize;
+        while j < 32 {
+            thread::__unroll_config::<0>();
+            let v0 = self.values[j];
+            let v1 = self.values[32 + j];
+            let v2 = self.values[64 + j];
+            let v3 = self.values[96 + j];
+            sum_sq += v0 * v0 + v1 * v1 + v2 * v2 + v3 * v3;
+            j += 1;
+        }
+        crate::arch::rsqrt_f32(sum_sq * (1.0f32 / 128.0f32) + eps)
+    }
+
+    /// Scale all 128 FP32 columns by `scale` (and optional per-column `gamma` weights),
+    /// quantize pairs to `Float8E4M3FN` (`cvt.rn.satfinite.e4m3x2.f32`), and issue four
+    /// 256-bit (`32`-byte) `L1::no_allocate` global stores (`cute.copy`).
+    ///
+    /// # Safety
+    /// `dst` must be 32-byte aligned and point to 128 writable bytes in global memory.
+    /// When `gamma` is `Some(ptr)`, `ptr` must point to 128 readable `f32` values.
+    #[inline(always)]
+    pub unsafe fn quantize_and_store_e4m3_no_allocate(
+        &self,
+        scale: f32,
+        gamma: Option<*const f32>,
+        dst: *mut u8,
+    ) {
+        let dst_u32 = dst.cast::<u32>();
+        let mut chunk = 0usize;
+        while chunk < 4 {
+            thread::__unroll_config::<0>();
+            let base = chunk * 32;
+            let mut packed = [0u32; 8];
+            let mut w = 0usize;
+            while w < 8 {
+                thread::__unroll_config::<0>();
+                let idx = base + w * 4;
+                let (v0, v1, v2, v3) = if let Some(g_ptr) = gamma {
+                    unsafe {
+                        (
+                            self.values[idx] * scale * (*g_ptr.add(idx)),
+                            self.values[idx + 1] * scale * (*g_ptr.add(idx + 1)),
+                            self.values[idx + 2] * scale * (*g_ptr.add(idx + 2)),
+                            self.values[idx + 3] * scale * (*g_ptr.add(idx + 3)),
+                        )
+                    }
+                } else {
+                    (
+                        self.values[idx] * scale,
+                        self.values[idx + 1] * scale,
+                        self.values[idx + 2] * scale,
+                        self.values[idx + 3] * scale,
+                    )
+                };
+                let lo16 = ctm_rs::convert::cvt_rn_satfinite_e4m3x2_f32(v0, v1) as u32;
+                let hi16 = ctm_rs::convert::cvt_rn_satfinite_e4m3x2_f32(v2, v3) as u32;
+                packed[w] = lo16 | (hi16 << 16);
+                w += 1;
+            }
+            unsafe {
+                crate::store_global_no_allocate(
+                    dst_u32.add(chunk * 8),
+                    &crate::GlobalStoreTile(packed),
+                );
+            }
+            chunk += 1;
+        }
+    }
+}

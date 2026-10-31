@@ -34,9 +34,14 @@ up or pass one off as the other:
   `Sm100BlockScaledTiledMma`, `Mxf4TiledMma`) **must be encoded in Rust's type
   system**, and **all `cute-rs` names must match CuTeDSL 4.7** (`NamedBarrier`,
   `PipelineTmaAsync`, `PipelineTmaUmma`, `PipelineUmmaAsync`, `PipelineTmaStore`,
-  `Producer`, `Consumer`, `PipelineState`, `prefetch_descriptor`, etc.). Do not
-  write a regular SIMT kernel with raw pointer arithmetic or custom names and
-  call it a `cute-rs` kernel. See [`cute-rs-preview/AGENTS.md`](cute-rs-preview/AGENTS.md).
+  `Producer`, `Consumer`, `PipelineState`, `prefetch_descriptor`, etc.).
+  **If a CuTe operation or type-encoded abstraction available in CuTeDSL is
+  missing from `cute-rs` or the compiler (`mir-importer`, `dialect-cute`,
+  `cuda-oxide-mlir-export`), agents must mandatorily add it to `cute-rs` and
+  the compiler first and then use it.** A kernel qualifies as a `cute-rs`
+  kernel **only** if it uses `cute-rs` abstractions—never write raw SIMT
+  pointer arithmetic or custom names and call it a `cute-rs` kernel. See
+  [`cute-rs-preview/AGENTS.md`](cute-rs-preview/AGENTS.md).
 
 ---
 

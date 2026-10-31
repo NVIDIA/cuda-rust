@@ -62,6 +62,7 @@ fn register_nvvm_numeric_common_pack(
     registry: &mut TranslationRegistry,
 ) -> Result<(), TranslationError> {
     registry.register_operation::<CvtF16x2F32Op>(PackTranslation)?;
+    registry.register_operation::<CvtRnSatfiniteE4m3x2F32Op>(PackE4m3x2Translation)?;
     registry.register_attribute::<ScalarArithmeticFormatAttr>(DropAttribute)?;
     registry.register_attribute::<ScalarArithmeticOperationAttr>(DropAttribute)?;
     registry.register_attribute::<ScalarArithmeticRoundingAttr>(DropAttribute)?;
@@ -565,6 +566,26 @@ impl OperationTranslation for PackTranslation {
             call,
             operation("llvm.bitcast", vec![packed], input.results, &input.location)?,
         ])
+    }
+}
+
+/// Convert low-first FP32 operands into packed FP8 E4M3 (`e4m3x2`) with nearest-even finite saturation.
+struct PackE4m3x2Translation;
+impl OperationTranslation for PackE4m3x2Translation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        mut input: OperationInput,
+        _session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        CvtRnSatfiniteE4m3x2F32Op::new(source)
+            .verify(ctx)
+            .map_err(|e| e.to_string())?;
+        require_input(&mut input, "v1:i0259", 2, 1)?;
+        // Canonical Rust API is (low, high); LLVM's intrinsic is (high, low).
+        input.operands.reverse();
+        Ok(vec![intrinsic(input, "llvm.nvvm.ff.to.e4m3x2.rn")?])
     }
 }
 

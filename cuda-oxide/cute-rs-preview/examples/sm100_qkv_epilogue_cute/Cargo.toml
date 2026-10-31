@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "sm100_qkv_epilogue_cute"
+version = "0.3.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "SM100 two-CTA persistent fused QKV GEMM + per-head RMSNorm + FP8 E4M3 quantization + Q store + Paged KV Scatter"
+
+[workspace]
+
+[dependencies]
+ctm-rs = { path = "../../ctm-rs" }
+cute-rs = { path = "../../cute-rs", features = ["host"] }
+cuda-device = { path = "../../../crates/cuda-device" }
+cuda-host = { path = "../../../crates/cuda-host" }
+cuda-core = { path = "../../../../cuda-core" }
+serde_json = "1"

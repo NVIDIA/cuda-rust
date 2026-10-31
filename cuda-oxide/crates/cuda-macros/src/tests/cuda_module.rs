@@ -753,6 +753,104 @@ fn unsafe_source_kernel_keeps_prepared_launch_unsafe() {
 }
 
 #[test]
+fn kernels_load_into_a_vector_instead_of_the_struct_literal() {
+    // #1501: as field initializers, the i-th `?` dropped the i live fields
+    // before it, so cleanup grew with the square of the kernel count.
+    let module: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            pub fn first(mut out: DisjointSlice<u32>) {}
+            #[kernel]
+            pub fn second(mut out: DisjointSlice<u32>) {}
+
+            pub mod nested {
+                #[kernel]
+                pub fn third(mut out: DisjointSlice<u32>) {}
+            }
+        }
+    };
+    let expanded = expand_to_compact_string(module);
+
+    assert!(
+        expanded.contains("__cuda_oxide_functions.push(module.load_function("),
+        "{expanded}"
+    );
+
+    // The regression: this is what the replaced shape emitted.
+    assert!(
+        !expanded.contains(":module.load_function("),
+        "a kernel still loads directly into a struct field: {expanded}"
+    );
+
+    // `from_module` and the nested namespace's `from_parent`.
+    assert_eq!(
+        expanded
+            .matches("letmut__cuda_oxide_functions:::std::vec::Vec")
+            .count(),
+        2,
+        "every loader must load through a vector: {expanded}"
+    );
+
+    // Nothing here is `cfg`'d, so both loaders take the array path.
+    assert_eq!(
+        expanded
+            .matches("__cuda_oxide_functions.try_into()")
+            .count(),
+        2,
+        "an unconditional module converts to a fixed-size array: {expanded}"
+    );
+    assert!(
+        expanded.contains(
+            "let[__cuda_oxide_loaded__first_function,__cuda_oxide_loaded__second_function]\
+             =__cuda_oxide_loaded;"
+        ),
+        "{expanded}"
+    );
+    assert!(
+        !expanded.contains("__cuda_oxide_functions.next()"),
+        "the array path must not fall back to the iterator: {expanded}"
+    );
+}
+
+#[test]
+fn a_cfgd_kernel_falls_back_to_iterator_loading() {
+    // An unknown count rules out the array pattern, which cannot carry
+    // `#[cfg]` per element. Statements can, so the iterator form stays.
+    let module: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            pub fn always(mut out: DisjointSlice<u32>) {}
+            #[kernel]
+            #[cfg(feature = "extra")]
+            pub fn sometimes(mut out: DisjointSlice<u32>) {}
+        }
+    };
+    let expanded = expand_to_compact_string(module);
+
+    assert!(
+        expanded.contains("__cuda_oxide_functions.push(module.load_function("),
+        "{expanded}"
+    );
+    assert_eq!(
+        expanded.matches("__cuda_oxide_functions.next()").count(),
+        2,
+        "both kernels take their function out of the iterator: {expanded}"
+    );
+    assert!(
+        !expanded.contains("try_into()"),
+        "a cfg'd count cannot use the array path: {expanded}"
+    );
+
+    // Take and push share a `cfg`, so the two halves cannot disagree.
+    assert!(
+        expanded.contains("#[cfg(feature=\"extra\")]__second_function:__cuda_oxide_functions")
+            || expanded
+                .contains("#[cfg(feature=\"extra\")]__sometimes_function:__cuda_oxide_functions"),
+        "{expanded}"
+    );
+}
+
+#[test]
 fn contracted_module_requires_provenance_for_every_loader() {
     let module: ItemMod = parse_quote! {
         mod kernels {

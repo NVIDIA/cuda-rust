@@ -127,8 +127,8 @@ run_step \
 # (trybuild derive suite, DeviceCopy impl coverage, launch type contracts).
 # The GPU-dependent integration tests live in run_gpu_tests.sh.
 # `cuda_tests` is the one GPU-requiring module in the cuda-bindings suite
-# (its `init()` asserts a live `cuInit`); it runs unfiltered in
-# run_gpu_tests.sh.
+# (its `init()` asserts a live `cuInit`); it runs in run_gpu_tests.sh.
+# Binding-generation regressions run here with the build runner's libclang.
 run_step \
     "cuda-bindings unit and toolkit-discovery tests" \
     host_cargo test -p cuda-bindings -- --skip cuda_tests::

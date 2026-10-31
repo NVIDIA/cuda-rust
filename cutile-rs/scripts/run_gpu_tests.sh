@@ -257,11 +257,13 @@ run_gpu_step \
     "cuda-async unit tests (with live driver)" \
     gpu_test host cuda-async lib
 
-# Unfiltered: includes the GPU-requiring `cuda_tests` module that the CPU
-# path skips.
+# Include the GPU-requiring `cuda_tests` module that the CPU path skips.
+# The bindgen regression runs in run_cpu_tests.sh: it invokes libclang, which
+# is installed on the build runner but not on the archive-only GPU runner.
 run_gpu_step \
     "cuda-bindings tests (with live driver)" \
-    gpu_test host cuda-bindings all
+    gpu_test host cuda-bindings all \
+        --skip typedef_chain_preserves_forward_declared_struct_fields
 
 for test_target in \
     concurrent_capture \

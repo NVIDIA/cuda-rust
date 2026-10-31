@@ -803,6 +803,7 @@ version = "0.2.1"
 dependencies = [
  "combine",
  "cuda-artifact-finalizer",
+ "cuda-target-spec",
  "dialect-mir",
  "dialect-nvvm",
  "linkme",

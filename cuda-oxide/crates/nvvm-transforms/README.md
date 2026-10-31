@@ -11,5 +11,10 @@ selected libNVVM will take:
 - Blackwell and newer keep modern operations, apart from the NVVM-wide
   compatibility rewrites that apply everywhere.
 
+After those rewrites, fixed scratch allocations move into each function's entry
+block so NVVM can use static storage. Initialization stays in its original block.
+Dynamic counts and loop slots whose addresses may escape remain in place. The
+normalization updates the LLVM-dialect IR before verification and text export.
+
 Ordinary PTX builds skip this stage: it exists for the NVVM path, where
 libNVVM rather than `llc` produces the final code.

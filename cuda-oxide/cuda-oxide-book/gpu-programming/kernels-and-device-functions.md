@@ -375,7 +375,9 @@ preserves `break` paths and loops with more than one exit target.
 
 Partial `#[unroll(N)]` currently requires the loop condition to be the only
 exit. If the loop has a `break` or another exit, the compiler warns and does not
-unroll that loop.
+unroll that loop. A `match` in the body, such as `row.get(i).unwrap_or(0.0)`,
+is not an exit: rustc gives it an arm that cannot be taken, and the compiler
+drops that arm before it looks at the loop's exits.
 
 Partial unrolling also requires a counted-up loop: the counter must have a
 positive step, use `<` or `<=`, and compare against a limit that does not change

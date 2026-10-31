@@ -267,7 +267,11 @@ mod kernels {
                     let mut raw_tile_idx = cluster_base_id / 2;
                     let wide_tiles_n = _tiles_n / 2;
                     let wide_total = tiles_m * wide_tiles_n;
-                    let num_waves = wide_total.div_ceil(B200_CLUSTER_PAIRS);
+                    #[expect(
+                        clippy::manual_div_ceil,
+                        reason = "keep branchless (wide_total + 73) / 74 division to avoid extra remainder/select predicate in Warp 4"
+                    )]
+                    let num_waves = (wide_total + (B200_CLUSTER_PAIRS - 1)) / B200_CLUSTER_PAIRS;
                     let work_total = num_waves * B200_CLUSTER_PAIRS;
                     let num_convert = work_total - wide_total;
                     let use_n224 = tiles_m >= 32;
@@ -285,8 +289,9 @@ mod kernels {
                     };
                     let head_tiles = tiles_m * head_cols;
                     let resp_ptr = &raw mut CLC_RESPONSE[0];
-                    let aliased_tma_bar0 =
-                        (&raw mut TMA_BAR[0]).map_addr(|addr| addr & (PEER_BIT_MASK as usize));
+                    let aliased_tma_bar0 = core::ptr::with_exposed_provenance_mut::<Barrier>(
+                        (&raw mut TMA_BAR[0]).expose_provenance() & (PEER_BIT_MASK as usize),
+                    );
 
                     loop {
                         let clc_parity = clc_iter & 1;
@@ -899,7 +904,11 @@ mod kernels {
                     let mut raw_tile_idx = cluster_base_id / 2;
                     let wide_tiles_n = _tiles_n / 2;
                     let wide_total = tiles_m * wide_tiles_n;
-                    let num_waves = wide_total.div_ceil(B200_CLUSTER_PAIRS);
+                    #[expect(
+                        clippy::manual_div_ceil,
+                        reason = "keep branchless (wide_total + 73) / 74 division to avoid extra remainder/select predicate in Warp 4"
+                    )]
+                    let num_waves = (wide_total + (B200_CLUSTER_PAIRS - 1)) / B200_CLUSTER_PAIRS;
                     let work_total = num_waves * B200_CLUSTER_PAIRS;
                     let num_convert = work_total - wide_total;
                     let use_n224 = tiles_m >= 32;
@@ -917,8 +926,9 @@ mod kernels {
                     };
                     let head_tiles = tiles_m * head_cols;
                     let resp_ptr = &raw mut CLC_RESPONSE[0];
-                    let aliased_tma_bar0 =
-                        (&raw mut TMA_BAR[0]).map_addr(|addr| addr & (PEER_BIT_MASK as usize));
+                    let aliased_tma_bar0 = core::ptr::with_exposed_provenance_mut::<Barrier>(
+                        (&raw mut TMA_BAR[0]).expose_provenance() & (PEER_BIT_MASK as usize),
+                    );
 
                     loop {
                         let clc_parity = clc_iter & 1;

@@ -1,0 +1,19 @@
+[package]
+name = "iterator_local_array_regression"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+# Mark as standalone crate (not part of parent workspace)
+[workspace]
+
+# Regression for #399: a small fixed-size local array consumed through iterator
+# adapters must not fall back to local memory. Build and run with:
+#   cargo oxide run iterator_local_array_regression --arch sm_80
+# and check the code shape with:
+#   bash verify-code-shape.sh iterator_local_array_regression.ptx
+
+[dependencies]
+cuda-device = { path = "../../../cuda-device" }
+cuda-host = { path = "../../../cuda-host" }
+cuda-core = "0.3.1"

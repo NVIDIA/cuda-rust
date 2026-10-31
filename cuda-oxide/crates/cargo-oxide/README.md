@@ -130,6 +130,17 @@ request one independently finalized cubin per declared device crate with
 final-output mode, so it cannot be combined with `--emit-nvvm-ir`,
 `emit-ltoir` or `tilelib`.
 
+`CUDA_OXIDE_LINKER=wild` links host binaries with the
+[wild](https://github.com/wild-linker/wild) linker instead of rustc's
+default. cargo-oxide passes `-Clinker=clang -Clink-arg=--ld-path=<wild>`, so
+`clang` and `wild` must both be on `PATH`; install wild with
+`cargo install wild-linker`. These flags come after any user `RUSTFLAGS`, so
+they take precedence over an existing `-Clinker`. Unset, empty, or `default`
+keeps rustc's default linker, and any other value is an error. Device code is
+unaffected: device payloads are still finalized by libNVVM and nvJitLink, and
+only the final host link changes. `cargo oxide doctor` reports whether `wild`
+is installed and fails if `CUDA_OXIDE_LINKER=wild` is set without it.
+
 ## Commands
 
 ### `cargo oxide list [--json]`

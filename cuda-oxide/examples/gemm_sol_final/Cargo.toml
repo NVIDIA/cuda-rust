@@ -12,8 +12,8 @@ license = "Apache-2.0"
 [workspace]
 
 [dependencies]
-cuda-device = { path = "../../../cuda-device" }
-cuda-host = { path = "../../../cuda-host" }
-cuda-core = { path = "../../../../../cuda-core" }
+cuda-device = { path = "../../crates/cuda-device" }
+cuda-host = { path = "../../crates/cuda-host" }
+cuda-core = { path = "../../../cuda-core" }
 half = "2.4"
-ptx-parse = { path = "../../../ptx-parse" }
+ptx-parse = { path = "../../crates/ptx-parse" }

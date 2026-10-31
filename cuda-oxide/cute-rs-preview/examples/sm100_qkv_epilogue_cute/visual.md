@@ -1,6 +1,6 @@
 # Fused QKV + Epilogue on B200 (`sm_100a`), end to end
 
-> Every attention layer starts with the same chore: take `M` incoming token rows, multiply them by `W_Q`, `W_K`, and `W_V`, normalize `Q` and `K` per head, quantize everything to `FP8`, write `Q` out for FlashAttention, and scatter `K` and `V` into the Paged KV Cache. Doing all of that in **one kernel**—without stalling the Tensor Cores—is what this example is all about.
+> Every attention layer starts with the same chore: take `M` incoming token rows, multiply them by `W_Q`, `W_K`, and `W_V`, normalize `Q` and `K` per head, quantize everything to `FP8`, write `Q` out for FlashAttention, and scatter `K` and `V` into the Paged KV Cache. Doing all of that in **one kernel** without stalling the Tensor Cores is what this example is all about.
 
 ---
 
@@ -24,7 +24,7 @@ The 5th-Gen Tensor Cores (`tcgen05.mma`) multiply `X [M, 4096] × W_qkv [4096, 6
 
 ![Where Attention Heads Come From: Slicing One Output Row into 128-Wide Chunks](svg/02-why-columns-are-heads.svg)
 
-During the matrix multiply itself, there are **no heads**—just a `[M, 6144]` output grid.
+During the matrix multiply itself, there are **no heads**: just a `[M, 6144]` output grid.
 
 "Heads" appear in the epilogue because **QK-Norm (`RMSNorm`) is defined per 128-column attention head**, not across the whole `4,096`-wide row:
 - Slicing a `6,144`-wide row into `48` chunks of `128` (`32` Q heads + `8` K heads + `8` V heads) moves **zero data**.
@@ -37,9 +37,9 @@ During the matrix multiply itself, there are **no heads**—just a `[M, 6144]` o
 
 ![Exposed Epilogue vs. Overlapped 2-Stage TMEM Ping-Pong on B200](svg/03-exposed-vs-overlapped-timeline.svg)
 
-When an auto-pipelined compiler sees reductions, branches, and indirect page-table scatters in the epilogue, it falls back to running the epilogue sequentially after each tile's GEMM (**top diagram**). At `M = 8,192`, that costs **`1,226.7 µs`**.
+With a single accumulator buffer, each tile's epilogue (`RMSNorm`, `FP8` quantization, and indirect page-table scatters) runs sequentially after its GEMM (**top diagram**). At `M = 8,192`, that exposed schedule takes **`1,226.7 µs`**.
 
-In both **Python `CuTeDSL`** and **`cute-rs`** (**bottom diagram**), we allocate **two accumulator stages (`TMEM_0` at columns `0..128`, `TMEM_1` at columns `128..256`)** and release `TMEM_i` **the instant `tcgen05.ld` finishes**—before `RMSNorm`, `FP8` quantization, and HBM scatters even begin. That drops `M = 8,192` latency to **`295.5 µs` (`4.15×` faster, `1,395.3 TFLOP/s`)**.
+In both **Python `CuTeDSL`** and **`cute-rs`** (**bottom diagram**), we allocate **two accumulator stages (`TMEM_0` at columns `0..128`, `TMEM_1` at columns `128..256`)** and release `TMEM_i` **the instant `tcgen05.ld` finishes**, before `RMSNorm`, `FP8` quantization, and HBM scatters even begin. That drops `M = 8,192` latency to **`295.5 µs` (`4.15×` faster, `1,395.3 TFLOP/s`)**.
 
 ---
 

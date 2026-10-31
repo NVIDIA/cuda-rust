@@ -2,7 +2,7 @@
 
 Before an LLM's attention layer can run, every incoming token row has to be projected into **Query (`Q`)**, **Key (`K`)**, and **Value (`V`)** vectors, normalized, quantized to **FP8 (`e4m3fn`)**, and filed into the **Paged KV Cache**.
 
-Instead of launching 4 or 5 separate kernels (and round-tripping intermediate tensors through GPU HBM memory), this kernel fuses the entire pre-attention pipeline into **one persistent GPU kernel** on **NVIDIA B200 (`sm_100a`)**—matching **Python `CuTeDSL` 4.7.0** at **1:1 performance (`~1,400 TFLOP/s`)** and running **`2.5× to 4.8×` faster** than an exposed-epilogue schedule.
+Instead of launching 4 or 5 separate kernels (and round-tripping intermediate tensors through GPU HBM memory), this kernel fuses the entire pre-attention pipeline into **one persistent GPU kernel** on **NVIDIA B200 (`sm_100a`)**, matching **Python `CuTeDSL` 4.7.0** at **1:1 performance (`~1,400 TFLOP/s`)** and running **`2.5× to 4.8×` faster** than an exposed-epilogue schedule.
 
 For a deeper step-by-step walkthrough, see [`visual.md`](visual.md).
 
@@ -17,7 +17,7 @@ Suppose **`M = 1,024` tokens** arrive at the attention block, and each token is 
 1. **Stack the three weight matrices into one**:
    We glue `W_Q` (`4,096` columns), `W_K` (`1,024` columns), and `W_V` (`1,024` columns) side by side into a single matrix `W_qkv` of shape `[4096, 6144]`.
 2. **Run one big matrix multiply (`X × W_qkv`)**:
-   5th-Gen Tensor Cores (`tcgen05.mma`) multiply `[M, 4096] × [4096, 6144]` and leave the `[M, 6144]` FP32 result sitting inside on-chip **Tensor Memory (`TMEM`)**—nothing touches HBM yet.
+   5th-Gen Tensor Cores (`tcgen05.mma`) multiply `[M, 4096] × [4096, 6144]` and leave the `[M, 6144]` FP32 result sitting inside on-chip **Tensor Memory (`TMEM`)** with zero intermediate HBM writes.
 3. **Branch by column in the epilogue**:
    - **Columns `0 .. 4,096` (`Q`)**: Run `RMSNorm` + `FP8` quantize + write contiguously to `Q_out`.
    - **Columns `4,096 .. 5,120` (`K`)**: Run `RMSNorm` + `FP8` quantize + scatter into the **Paged KV Cache** (`k_cache[slot_mapping[m]]`).
@@ -25,11 +25,11 @@ Suppose **`M = 1,024` tokens** arrive at the attention block, and each token is 
 
 ---
 
-## 2. Wait—Where Do "Q Heads" and "KV Heads" Come From?
+## 2. Where Do "Q Heads" and "KV Heads" Come From?
 
 ![Where Attention Heads Come From: Slicing One Output Row into 128-Wide Chunks](svg/02-why-columns-are-heads.svg)
 
-If you picture the GEMM as *"just concatenate `W_Q | W_K | W_V`, multiply by `X`, and slice the output into `Q`, `K`, and `V`"*, **you are 100% right about the matrix multiply**. During the GEMM, Tensor Cores have no idea what an attention head is—they just compute `6,144` output columns per token.
+If you picture the GEMM as *"just concatenate `W_Q | W_K | W_V`, multiply by `X`, and slice the output into `Q`, `K`, and `V`"*, **you are 100% right about the matrix multiply**. During the GEMM, Tensor Cores have no idea what an attention head is: they just compute `6,144` output columns per token.
 
 So why do **heads** (`32` Q heads and `8` KV heads, each `128` numbers wide) show up in the epilogue? Because of **how `RMSNorm` and the KV cache work** right after the GEMM:
 
@@ -45,12 +45,12 @@ So why do **heads** (`32` Q heads and `8` KV heads, each `128` numbers wide) sho
 
 ---
 
-## 3. Why `cutile` Is Slow vs. How `cute-rs` & `CuTeDSL` Overlap the Epilogue
+## 3. How `cute-rs` & `CuTeDSL` Overlap the Epilogue (2-Stage `TMEM` Ping-Pong)
 
 ![Exposed Epilogue vs. Overlapped 2-Stage TMEM Ping-Pong on B200](svg/03-exposed-vs-overlapped-timeline.svg)
 
-- **The Exposed-Epilogue Problem**: Because the epilogue has per-head `RMSNorm` reductions, `Q`/`K`/`V` branching, and indirect paged cache scatters (`slot_mapping[m]`), auto-pipeliners fail to overlap it. Each tile runs `[GEMM] → [Wait] → [Full Epilogue] → [Next Tile]`, leaving Tensor Cores idle while CUDA cores normalize and scatter.
-- **The `cute-rs` & `CuTeDSL` Solution (2-Stage `TMEM` Ping-Pong)**:
+- **Why Epilogue Overlap Matters**: When a single accumulator buffer is reused sequentially (`[GEMM] -> [Wait] -> [Full Epilogue] -> [Next Tile]`), Tensor Cores sit idle while CUDA cores compute per-head `RMSNorm` reductions, `Q`/`K`/`V` branching, and indirect paged cache scatters (`slot_mapping[m]`).
+- **2-Stage `TMEM` Ping-Pong in `cute-rs` & `CuTeDSL`**:
   We split each CTA's 512-column Tensor Memory into **two accumulator buffers (`TMEM_0` and `TMEM_1`)** and specialize the 6 warps (`192` threads) into three roles:
 
 ![Inside One 2-CTA Cluster: 6-Warp (192-Thread) Persistent Pipeline on SM100](svg/04-six-warp-cta-pipeline.svg)

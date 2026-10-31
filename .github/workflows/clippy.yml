@@ -75,6 +75,7 @@ jobs:
           set -e
           example_roots=(
             cuda-oxide/crates/rustc-codegen-cuda/examples
+            cuda-oxide/examples
             cuda-oxide/models
             cuda-oxide/cute-rs-preview/examples
             cuda-oxide/cute-rs-preview/models

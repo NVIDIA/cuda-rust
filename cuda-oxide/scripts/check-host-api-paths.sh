@@ -16,6 +16,10 @@ mapfile -t files < <(git -C "${GIT_ROOT}" ls-files \
     'cuda-oxide/crates/*/README.md' \
     'cuda-oxide/crates/rustc-codegen-cuda/examples/*/README.md' \
     'cuda-oxide/crates/rustc-codegen-cuda/examples/*/*/README.md' \
+    'cuda-oxide/examples/*/README.md' \
+    'cuda-oxide/examples/*/*/README.md' \
+    'cuda-oxide/models/*/README.md' \
+    'cuda-oxide/models/*/*/README.md' \
     'cuda-oxide/crates/cargo-oxide/src/**/*.rs' 'cuda-oxide/crates/cargo-oxide/src/*.rs' \
     'cuda-oxide/crates/cuda-host/src/**/*.rs' 'cuda-oxide/crates/cuda-host/src/*.rs' \
     'cuda-oxide/crates/cuda-macros/src/**/*.rs' 'cuda-oxide/crates/cuda-macros/src/*.rs' \

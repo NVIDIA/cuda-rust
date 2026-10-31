@@ -39,6 +39,7 @@ cd "$(dirname "$0")/.."
 
 EXAMPLE_ROOTS=(
     crates/rustc-codegen-cuda/examples
+    examples
     models
     cute-rs-preview/examples
     cute-rs-preview/models

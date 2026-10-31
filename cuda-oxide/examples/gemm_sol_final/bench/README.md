@@ -27,12 +27,11 @@ inputs. `--output bf16` probes exact output-type support; cuBLASLt 13.8.0 on the
 B200 returned `CUBLAS_STATUS_NOT_SUPPORTED` for FP16 inputs and BF16 output.
 
 Historical throughput from another GPU, driver, or toolkit is not a valid
-baseline. Build and run the benchmark on the same host as every kernel trial;
-the originating B300 checkpoint is recorded in `../README.md`.
+baseline. Build and run the benchmark on the same host as every kernel trial.
 
 ## Requirements
 
-- **GPU**: Datacenter Blackwell. Measured on B200 (sm_100a); originating results used B300 (sm_103a).
+- **GPU**: Datacenter Blackwell (`sm_100a`, B200).
 - **CUDA Toolkit**: 13.0+ at build time, plus a compatible NVIDIA driver at runtime
 - **Python**: 3.12+ (for Python benchmarks only)
 
@@ -49,7 +48,7 @@ a system CTK also needs a compatible driver library on its runtime path:
 ```bash
 cd cuda-oxide
 nix develop
-cd crates/rustc-codegen-cuda/examples/gemm_sol_final/bench
+cd examples/gemm_sol_final/bench
 bash build.sh
 ./cublaslt_bench
 ```
@@ -144,8 +143,6 @@ software-pipelined K-loop and TMA loads.
   batches of 301 launches, reported as median batch mean. Timing uses zero data.
 - GPU clocks remain under the driver's control; record GPU model, SM count,
   driver/toolkit/library versions, power limit, and other active GPU workloads.
-- Historical B300 results and legacy Python scripts retain their original
-  10-warmup/100-iteration protocol; do not mix them with current measurements.
 - The `venv/` directory is gitignored — each machine creates its own.
 - The compiled `cublaslt_bench` binary is gitignored — rebuild from
   `cublaslt_bench.c` on each machine.

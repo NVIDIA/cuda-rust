@@ -280,7 +280,7 @@ back to the selector and are repaired. The core API does not query CUDA, time
 kernels, start threads, or touch the filesystem; callers put the relevant facts
 in their problem type.
 
-The [gemm_sol_final example](../rustc-codegen-cuda/examples/gemm_sol_final/)
+The [gemm_sol_final example](../../examples/gemm_sol_final/)
 uses a two-entry family for its M256xN256 and M512xN256 output tiles. Its
 automatic policy preserves the measured 4K/8K/16K choices, while
 `GEMM_SOL_VARIANT` exposes either resource envelope as a checked override.

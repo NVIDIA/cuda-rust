@@ -1,0 +1,33 @@
+<svg class="qtts" xmlns="http://www.w3.org/2000/svg" width="680" height="380" viewBox="0 0 680 380" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif">
+<title>Size-Specialized KernelFamily: M256xN256 vs. M512xN256 Macro Tiles</title>
+<style>.qtts .bg { fill:#faf9f5 } .qtts .th { font-size:14px; font-weight:600; fill:#1e1e1e } .qtts .t { font-size:13px; fill:#2b2b2b } .qtts .ts { font-size:12px; fill:#5c5c5c } .qtts .k-box { fill:#f1efe9; stroke:#c8c5be } .qtts .tx-box { fill:#1e1e1e } .qtts .k-purple { fill:#ebe9fb; stroke:#7f77dd } .qtts .tx-purple { fill:#3a3490 } .qtts .k-teal { fill:#dff3ec; stroke:#3aa47f } .qtts .tx-teal { fill:#1f5c47 } .qtts .k-coral { fill:#fde7e2; stroke:#e0735c } .qtts .tx-coral { fill:#7d2f1f } .qtts .k-amber { fill:#fdeed3; stroke:#ef9f27 } .qtts .tx-amber { fill:#6b4100 } .qtts .k-gray { fill:#e8e6e0; stroke:#a9a69f } .qtts .tx-gray { fill:#2b2b2b } .qtts .dash { fill:none; stroke:#b8b4ac; stroke-dasharray:4 3 } .qtts .arr { fill:none; stroke:#7b7b7b; stroke-width:1.5 } .qtts .arrhead { fill:none; stroke:#7b7b7b; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round } @media (prefers-color-scheme: dark) { .qtts .bg { fill: #1b1d23 } .qtts .th { fill: #f5f6f8 } .qtts .t { fill: #eceef2 } .qtts .ts { fill: #cfd4de } .qtts .k-box { fill: #2e323c; stroke: #5c6375 } .qtts .tx-box { fill: #f5f6f8 } .qtts .dash { stroke: #606675 } .qtts .arr, .qtts .arrhead { stroke: #b6bcc8 } .qtts .k-purple { fill: #524e7d; stroke: #bab5f4 } .qtts .tx-purple { fill: #f6f5ff } .qtts .k-teal { fill: #346357; stroke: #7ed8bb } .qtts .tx-teal { fill: #f0fdf8 } .qtts .k-coral { fill: #6b443e; stroke: #f29b8a } .qtts .tx-coral { fill: #fff0ed } .qtts .k-amber { fill: #735a3c; stroke: #f4c474 } .qtts .tx-amber { fill: #fff8eb } .qtts .k-gray { fill: #414654; stroke: #7c8496 } .qtts .tx-gray { fill: #f2f4f7 } }</style>
+<defs><marker id="arrow-g2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="arrhead" d="M2 1L8 5L2 9"/></marker></defs>
+<rect class="bg" width="680" height="380" rx="10"/>
+
+<text class="th" x="340" y="26" text-anchor="middle" dominant-baseline="central">KernelFamily: gemm_sol_final/output_tile@1 (Size-Specialized Dispatch)</text>
+
+<rect class="k-box" x="180" y="48" width="320" height="52" rx="8" stroke-width="0.75"/>
+<text class="th tx-box" x="340" y="67" text-anchor="middle" dominant-baseline="central">Problem Shape (M × N × K)</text>
+<text class="ts tx-box" x="340" y="86" text-anchor="middle" dominant-baseline="central">Checked eligibility + automatic size selector</text>
+
+<path class="arr" d="M340 100 V120 H190 V138" marker-end="url(#arrow-g2)"/>
+<path class="arr" d="M340 120 H490 V138" marker-end="url(#arrow-g2)"/>
+
+<rect class="k-teal" x="48" y="142" width="284" height="146" rx="8" stroke-width="0.75"/>
+<text class="th tx-teal" x="190" y="166" text-anchor="middle" dominant-baseline="central">Variant 1: M256×N256</text>
+<text class="ts tx-teal" x="190" y="188" text-anchor="middle" dominant-baseline="central">Selected for 4096³ &amp; 8192³</text>
+<text class="ts tx-teal" x="190" y="212" text-anchor="middle" dominant-baseline="central">• 256×256 per 2-CTA cluster</text>
+<text class="ts tx-teal" x="190" y="232" text-anchor="middle" dominant-baseline="central">• Wave-tail N192 / N224 balancing</text>
+<text class="ts tx-teal" x="190" y="252" text-anchor="middle" dominant-baseline="central">• 1.857 PFLOP/s (4K) · 2.085 PFLOP/s (8K)</text>
+
+<rect class="k-purple" x="348" y="142" width="284" height="146" rx="8" stroke-width="0.75"/>
+<text class="th tx-purple" x="490" y="166" text-anchor="middle" dominant-baseline="central">Variant 2: M512×N256</text>
+<text class="ts tx-purple" x="490" y="188" text-anchor="middle" dominant-baseline="central">Selected for 16384³</text>
+<text class="ts tx-purple" x="490" y="212" text-anchor="middle" dominant-baseline="central">• Two stacked 256×256 M-halves</text>
+<text class="ts tx-purple" x="490" y="232" text-anchor="middle" dominant-baseline="central">• Reuses B tile across both M-halves</text>
+<text class="ts tx-purple" x="490" y="252" text-anchor="middle" dominant-baseline="central">• 2.121 PFLOP/s at 16384³</text>
+
+<rect class="k-amber" x="48" y="308" width="584" height="48" rx="8" stroke-width="0.75"/>
+<text class="th tx-amber" x="340" y="325" text-anchor="middle" dominant-baseline="central">L2-Aware N-Band Ordering</text>
+<text class="ts tx-amber" x="340" y="343" text-anchor="middle" dominant-baseline="central">Group width G = 2 at 4096³ (512-col band) and G = 8 at 8192³ / 16384³ (2048-col band)</text>
+</svg>

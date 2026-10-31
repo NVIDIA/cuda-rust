@@ -46,6 +46,7 @@ use crate::thread::{
 use crate::view::{LinearTiles, RowMajorTiles, RuntimeRowMajorTiles};
 use core::marker::PhantomData;
 use core::mem::size_of;
+use core::ptr::NonNull;
 
 mod space_layout_sealed {
     pub trait Sealed {}
@@ -73,26 +74,40 @@ mod space_layout_sealed {
 /// one value into the launch packet, every thread reads that word, and device
 /// code has no step at which it could substitute another.
 ///
+/// # Every accessor checks the length
+///
+/// Each safe accessor of a slice over any index space resolves an element only
+/// after checking it against the slice's length. [`DisjointSlice::empty`]
+/// relies on that to be safe, so an index space added here has to keep it.
+///
 /// [`Uniform<u32>`]: crate::uniform::Uniform
 pub trait SpaceLayout: space_layout_sealed::Sealed {
     /// Runtime layout data marshalled with the slice, or `()` when the index
     /// space is fully described by its type.
     type Data: Copy;
+
+    /// The layout an [empty](DisjointSlice::empty) slice carries: `()`, or a
+    /// row width of zero, which every runtime-width accessor rejects on its
+    /// own.
+    const EMPTY: Self::Data;
 }
 
 impl space_layout_sealed::Sealed for Index1D {}
 impl SpaceLayout for Index1D {
     type Data = ();
+    const EMPTY: () = ();
 }
 
 impl<const ROW_STRIDE: usize> space_layout_sealed::Sealed for Index2D<ROW_STRIDE> {}
 impl<const ROW_STRIDE: usize> SpaceLayout for Index2D<ROW_STRIDE> {
     type Data = ();
+    const EMPTY: () = ();
 }
 
 impl<const N: usize> space_layout_sealed::Sealed for LinearTiles<N> {}
 impl<const N: usize> SpaceLayout for LinearTiles<N> {
     type Data = ();
+    const EMPTY: () = ();
 }
 
 impl<const ROWS: usize, const COLS: usize, const ROW_STRIDE: usize> space_layout_sealed::Sealed
@@ -103,16 +118,19 @@ impl<const ROWS: usize, const COLS: usize, const ROW_STRIDE: usize> SpaceLayout
     for RowMajorTiles<ROWS, COLS, ROW_STRIDE>
 {
     type Data = ();
+    const EMPTY: () = ();
 }
 
 impl space_layout_sealed::Sealed for Runtime2DIndex {}
 impl SpaceLayout for Runtime2DIndex {
     type Data = u32;
+    const EMPTY: u32 = 0;
 }
 
 impl space_layout_sealed::Sealed for WarpIndex {}
 impl SpaceLayout for WarpIndex {
     type Data = ();
+    const EMPTY: () = ();
 }
 
 impl<const ROWS: usize, const COLS: usize> space_layout_sealed::Sealed
@@ -122,6 +140,7 @@ impl<const ROWS: usize, const COLS: usize> space_layout_sealed::Sealed
 impl<const ROWS: usize, const COLS: usize> SpaceLayout for RuntimeRowMajorTiles<ROWS, COLS> {
     /// The matrix row width, in elements.
     type Data = u32;
+    const EMPTY: u32 = 0;
 }
 
 /// A slice-like type that can only be accessed with thread-local indices.
@@ -332,6 +351,78 @@ impl<'a, T, IndexSpace: SpaceLayout> DisjointSlice<'a, T, IndexSpace> {
             _marker: PhantomData,
             _space: PhantomData,
         }
+    }
+
+    /// An empty slice, on which every index-space accessor returns `None`.
+    ///
+    /// For a helper with an optional output: callers that do not want the
+    /// output pass an empty slice, and the helper's writes through it do
+    /// nothing. No `unsafe` block is needed at the call site.
+    ///
+    /// ```rust,ignore
+    /// #[device]
+    /// fn attend(out: &mut DisjointSlice<f32>, partial: &mut DisjointSlice<f32>) {
+    ///     // ...
+    ///     if let Some(slot) = partial.get_mut(thread::index_1d()) {
+    ///         *slot = running_max;
+    ///     }
+    /// }
+    ///
+    /// attend(&mut out, &mut DisjointSlice::empty());
+    /// ```
+    ///
+    /// # Why this is safe
+    ///
+    /// The constructors are `unsafe` because of what a slice of `len`
+    /// elements claims about memory. At length zero each claim covers no
+    /// bytes:
+    ///
+    /// - **Validity and lifetime**: `ptr` must be valid for `len` elements
+    ///   for `'a`, which zero elements satisfy for any `'a`. The pointer is
+    ///   [`NonNull::dangling`], non-null and aligned for `T`, so
+    ///   [`as_mut_ptr`](Self::as_mut_ptr) still returns a pointer that is
+    ///   valid for zero-sized accesses such as
+    ///   `core::slice::from_raw_parts_mut(ptr, 0)`.
+    /// - **Exclusive access**: the range `ptr..ptr + 0` overlaps nothing, so
+    ///   any number of empty slices, and any other slice, coexist with it.
+    /// - **Disjoint threads and a uniform layout**: these exist to stop two
+    ///   threads resolving the same element, and there is no element.
+    ///
+    /// What makes the safe API agree is that every accessor checks the length
+    /// before it resolves an element (see [`SpaceLayout`]), and no index is
+    /// below zero:
+    ///
+    /// - [`get_mut`](Self::get_mut) and `get_mut_indexed` on `Index1D`,
+    ///   `Index2D<S>` and `WarpIndex` require `index < len`.
+    /// - `get_mut` on `Runtime2DIndex` requires `row * width + col < len`,
+    ///   after `col < width`.
+    /// - `element_thread32` requires `index < len`; `tile_thread32` and
+    ///   `tile_2d32` require the tile's last element below `len`;
+    ///   `thread_run32` and `grid_stride_runs32` require the run to start
+    ///   below `len`.
+    /// - `tile_2d32_rt` requires a non-zero row width and the tile's last
+    ///   element below `len`.
+    ///
+    /// For a space with a runtime row width the slice carries a width of zero
+    /// ([`SpaceLayout::EMPTY`]), which those accessors and
+    /// `thread::index_2d_runtime` also reject on their own.
+    #[inline(always)]
+    pub const fn empty() -> Self {
+        DisjointSlice {
+            ptr: NonNull::dangling().as_ptr(),
+            len: 0,
+            space: IndexSpace::EMPTY,
+            _marker: PhantomData,
+            _space: PhantomData,
+        }
+    }
+}
+
+/// The [empty](DisjointSlice::empty) slice.
+impl<T, IndexSpace: SpaceLayout> Default for DisjointSlice<'_, T, IndexSpace> {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::empty()
     }
 }
 
@@ -684,7 +775,9 @@ mod tests {
     //! those resolutions distinct for every slice they could be handed to.
 
     use super::DisjointSlice;
-    use crate::thread::{Runtime2DIndex, ThreadIndex, pack_runtime_2d_coords};
+    use crate::thread::{
+        Index1D, Index2D, Runtime2DIndex, ThreadIndex, WarpIndex, pack_runtime_2d_coords,
+    };
 
     /// Resolve a witness against a freshly built slice and return the flat
     /// element index it lands on, via pointer arithmetic on a real buffer.
@@ -747,6 +840,34 @@ mod tests {
     fn zero_row_width_resolves_nothing() {
         let mut buffer = [0.0f32; 16];
         assert_eq!(resolved_flat_index(&mut buffer, 0, 0, 0), None);
+    }
+
+    #[test]
+    fn empty_slice_rejects_flat_and_runtime_witnesses() {
+        let mut buffer = [0.0f32; 16];
+        let base = buffer.as_mut_ptr();
+        // SAFETY: `buffer` is exclusively borrowed for the slice's lifetime.
+        let mut flat: DisjointSlice<'_, f32, Index1D> =
+            unsafe { DisjointSlice::from_raw_parts(base, buffer.len()) };
+        assert!(flat.get_mut(ThreadIndex::for_test(0)).is_some());
+
+        let mut empty = DisjointSlice::<f32, Index1D>::empty();
+        assert!(empty.is_empty());
+        assert!(empty.get_mut(ThreadIndex::for_test(0)).is_none());
+        let mut warps = DisjointSlice::<f32, WarpIndex>::default();
+        assert!(warps.get_mut(ThreadIndex::for_test(0)).is_none());
+        let mut fixed = DisjointSlice::<f32, Index2D<4>>::empty();
+        assert!(fixed.get_mut(ThreadIndex::for_test(0)).is_none());
+
+        // the dangling pointer stays non-null and aligned for zero-length uses
+        let ptr = DisjointSlice::<u64, Index1D>::empty().as_mut_ptr();
+        assert!(!ptr.is_null() && ptr.is_aligned());
+
+        assert_eq!(resolved_flat_index(&mut buffer, 4, 0, 0), Some(0));
+        let mut runtime = DisjointSlice::<f32, Runtime2DIndex>::empty();
+        assert_eq!(runtime.row_width(), 0);
+        let witness = ThreadIndex::<Runtime2DIndex>::for_test(pack_runtime_2d_coords(0, 0));
+        assert!(runtime.get_mut(witness).is_none());
     }
 
     #[test]

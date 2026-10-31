@@ -390,6 +390,35 @@ That covers writing the output. The *input* side of GEMM -- and the cost
 of the bounds checks on every `a[...]` read -- has its own chapter:
 [Bounds Checks: Pay Once or Opt Out](bounds-checks.md).
 
+### An output you do not want: `DisjointSlice::empty()`
+
+A device helper with an optional output takes a `DisjointSlice<T>` and lets
+its writes fall through when the slice is empty. A caller that does not want
+that output passes `DisjointSlice::empty()` (or `DisjointSlice::default()`):
+
+```rust
+#[device]
+fn attend(out: &mut DisjointSlice<f32>, mut partial: DisjointSlice<f32>) {
+    // ...
+    if let Some(slot) = partial.get_mut(thread::index_1d()) {
+        *slot = running_max;
+    }
+}
+
+attend(&mut out, DisjointSlice::empty());
+```
+
+Every other constructor is `unsafe` because a slice claims exclusive access
+to `len` elements. At length zero that claim covers no memory, and every
+accessor, in every index space, checks the length before it resolves an
+element, so the empty slice is safe to build anywhere. Its pointer is
+dangling but non-null and aligned, and a runtime-width index space gets a row
+width of zero.
+
+Pass it by value or as `&mut DisjointSlice::empty()`. The compiler rejects a
+shared reference to a constant that holds a slice, such as
+`const NONE: &DisjointSlice<f32> = &DisjointSlice::empty()`.
+
 ### What makes a kernel Tier 1
 
 A kernel and its launch are fully safe -- Tier 1 -- when:

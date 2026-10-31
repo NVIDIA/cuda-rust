@@ -1454,6 +1454,42 @@ pub fn __nounroll_config() {
     // No runtime code is generated.
 }
 
+/// Host-test-only minting for the 32-bit witnesses, like
+/// [`ThreadIndex::for_test`]. Host tests have no launch to read indices
+/// from, so they build witnesses with chosen values instead.
+#[cfg(test)]
+mod test_support {
+    use core::marker::PhantomData;
+
+    use super::{ThreadCoord2D32, ThreadIndex32};
+
+    impl ThreadIndex32<'_> {
+        /// Mint a witness for flat index `raw` without a launch.
+        /// Only host tests can call this; device code gets witnesses from
+        /// the launch context.
+        pub(crate) fn for_test(raw: u32) -> Self {
+            Self {
+                raw,
+                _kernel: PhantomData,
+                _not_send_sync: PhantomData,
+            }
+        }
+    }
+
+    impl ThreadCoord2D32<'_> {
+        /// Mint a witness for the cell at (`row`, `col`) without a launch.
+        /// The pair is packed the same way the device accessor packs it,
+        /// row in the high 32 bits.
+        pub(crate) fn for_test(row: u32, col: u32) -> Self {
+            Self {
+                packed: ((row as u64) << 32) | col as u64,
+                _kernel: PhantomData,
+                _not_send_sync: PhantomData,
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::block_linear_thread_id;

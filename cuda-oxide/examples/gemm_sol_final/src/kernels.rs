@@ -23,13 +23,13 @@ mod kernels {
             static mut TILE_INFO: SharedArray<u32, 16, 4> = SharedArray::UNINIT;
 
             // Up to 8-stage TMA <-> MMA pipeline
-            static mut TMA_BAR: SharedArray<u64, 8, 8> = SharedArray::UNINIT;
-            static mut MMA_BAR: SharedArray<u64, 8, 8> = SharedArray::UNINIT;
+            static mut TMA_BAR: SharedArray<Barrier, 8, 8> = SharedArray::UNINIT;
+            static mut MMA_BAR: SharedArray<Barrier, 8, 8> = SharedArray::UNINIT;
             static mut ACCUM_FULL0: Barrier = Barrier::UNINIT;
             static mut ACCUM_FULL1: Barrier = Barrier::UNINIT;
             static mut ACCUM_EMPTY0: Barrier = Barrier::UNINIT;
             static mut ACCUM_EMPTY1: Barrier = Barrier::UNINIT;
-            static mut TILE_READY: SharedArray<u64, 4, 8> = SharedArray::UNINIT;
+            static mut TILE_READY: SharedArray<Barrier, 4, 8> = SharedArray::UNINIT;
 
             static mut CLC_RESPONSE: SharedArray<u64, 2, 16> = SharedArray::UNINIT;
             static mut CLC_BAR: Barrier = Barrier::UNINIT;
@@ -64,8 +64,8 @@ mod kernels {
             if tid == 0 {
                 let mut s = 0usize;
                 while s < 7 {
-                    mbarrier_init((&raw mut TMA_BAR as *mut Barrier).add(s), 1);
-                    mbarrier_init((&raw mut MMA_BAR as *mut Barrier).add(s), 1);
+                    mbarrier_init(&raw mut TMA_BAR[s], 1);
+                    mbarrier_init(&raw mut MMA_BAR[s], 1);
                     s += 1;
                 }
                 mbarrier_init(&raw mut ACCUM_FULL0, 1);
@@ -74,17 +74,17 @@ mod kernels {
                 mbarrier_init(&raw mut ACCUM_EMPTY1, 8);
                 let mut ts = 0usize;
                 while ts < 4 {
-                    mbarrier_init((&raw mut TILE_READY as *mut Barrier).add(ts), 1);
+                    mbarrier_init(&raw mut TILE_READY[ts], 1);
                     ts += 1;
                 }
                 mbarrier_init(&raw mut CLC_BAR, 1);
                 fence_proxy_async_shared_cta();
             }
             if warp_id == 0 {
-                tcgen05_alloc_cg2(&raw mut TMEM_ADDR as *mut u32, 512);
+                tcgen05_alloc_cg2(&raw mut TMEM_ADDR[0], 512);
             }
             cluster::cluster_sync();
-            let tmem_addr = *(&raw const TMEM_ADDR as *const u32);
+            let tmem_addr = TMEM_ADDR[0];
             let elect_one_cta = my_rank == 0;
 
             let idesc_256 = Tcgen05InstructionDescriptor::builder()
@@ -136,10 +136,9 @@ mod kernels {
                         wide_tiles_n - 3
                     };
                     let head_tiles = tiles_m * head_cols;
-                    let resp_ptr = &raw mut CLC_RESPONSE as *mut u64;
-                    let aliased_tma_bar0 = (((&raw mut TMA_BAR as *mut Barrier) as usize)
-                        & (PEER_BIT_MASK as usize))
-                        as *mut Barrier;
+                    let resp_ptr = &raw mut CLC_RESPONSE[0];
+                    let aliased_tma_bar0 =
+                        (&raw mut TMA_BAR[0]).map_addr(|addr| addr & (PEER_BIT_MASK as usize));
 
                     loop {
                         let clc_parity = clc_iter & 1;
@@ -195,12 +194,11 @@ mod kernels {
                             let packed_col = (col_bf16_base >> 5) | (tile_kind << 30);
 
                             let t_slot = tile_seq & 3;
-                            let info_base = (&raw mut TILE_INFO as *mut u32).add(t_slot * 4);
-                            *info_base.add(0) = tile_m;
-                            *info_base.add(1) = packed_col;
-                            *info_base.add(2) = 1;
+                            TILE_INFO[t_slot * 4] = tile_m;
+                            TILE_INFO[t_slot * 4 + 1] = packed_col;
+                            TILE_INFO[t_slot * 4 + 2] = 1;
                             mbarrier_arrive(
-                                (&raw const TILE_READY as *const Barrier).add(t_slot),
+                                &raw const TILE_READY[t_slot],
                             );
                             tile_seq += 1;
 
@@ -222,14 +220,13 @@ mod kernels {
                             #[unroll(4)]
                             while k_idx < k_iters {
                                 let smem_a_ptr =
-                                    (&raw mut SMEM_BUF as *mut u8).add(stage * 16384);
-                                let smem_b_ptr = (&raw mut SMEM_BUF as *mut u8)
-                                    .add(b_smem_offset + stage * 16384);
+                                    &raw mut SMEM_BUF[stage * 16384];
+                                let smem_b_ptr = &raw mut SMEM_BUF[b_smem_offset + stage * 16384];
                                 let tma_bar_const =
-                                    (&raw const TMA_BAR as *const Barrier).add(stage);
+                                    &raw const TMA_BAR[stage];
                                 let aliased_bar = aliased_tma_bar0.add(stage);
                                 let mma_bar_const =
-                                    (&raw const MMA_BAR as *const Barrier).add(stage);
+                                    &raw const MMA_BAR[stage];
 
                                 while !mbarrier_try_wait_parity(mma_bar_const, mma_parity) {}
 
@@ -300,7 +297,7 @@ mod kernels {
                                     mbarrier_arrive_expect_tx(&raw const CLC_BAR, 1, 16);
                                     if elect_one_cta {
                                         clc_try_cancel_multicast(
-                                            resp_ptr as *mut u8,
+                                            resp_ptr.cast::<u8>(),
                                             &raw mut CLC_BAR,
                                         );
                                     }
@@ -317,7 +314,7 @@ mod kernels {
                             mbarrier_arrive_expect_tx(&raw const CLC_BAR, 1, 16);
                             if elect_one_cta {
                                 clc_try_cancel_multicast(
-                                    resp_ptr as *mut u8,
+                                    resp_ptr.cast::<u8>(),
                                     &raw mut CLC_BAR,
                                 );
                             }
@@ -326,15 +323,14 @@ mod kernels {
                         while !mbarrier_try_wait_parity(&raw const CLC_BAR, clc_parity) {}
                         clc_iter += 1;
 
-                        let resp_lo = *resp_ptr;
-                        let resp_hi = *resp_ptr.add(1);
+                        let resp_lo = CLC_RESPONSE[0];
+                        let resp_hi = CLC_RESPONSE[1];
                         let is_canceled = clc_query_is_canceled(resp_lo, resp_hi);
                         if is_canceled == 0 {
                             let t_slot = tile_seq & 3;
-                            let info_base = (&raw mut TILE_INFO as *mut u32).add(t_slot * 4);
-                            *info_base.add(2) = 0;
+                            TILE_INFO[t_slot * 4 + 2] = 0;
                             mbarrier_arrive(
-                                (&raw const TILE_READY as *const Barrier).add(t_slot),
+                                &raw const TILE_READY[t_slot],
                             );
                             break;
                         }
@@ -351,7 +347,7 @@ mod kernels {
                     let mut stage: usize = 0;
                     let mut tma_parity: u32 = 0;
                     let smem_a_base0 =
-                        cvta_generic_to_shared_offset(&raw const SMEM_BUF as *const u8);
+                        cvta_generic_to_shared_offset(&raw const SMEM_BUF[0]);
                     let smem_b_base0 = smem_a_base0 + b_smem_offset as u64;
                     let a_desc0 =
                         build_smem_descriptor(smem_a_base0, LBO_BYTES, SBO_BYTES, SWIZZLE_128B);
@@ -362,16 +358,15 @@ mod kernels {
                         let t_slot = (tile_iter & 3) as usize;
                         let t_parity = (tile_iter >> 2) & 1;
                         while !mbarrier_try_wait_parity(
-                            (&raw const TILE_READY as *const Barrier).add(t_slot),
+                            &raw const TILE_READY[t_slot],
                             t_parity,
                         ) {}
 
-                        let info_base = (&raw const TILE_INFO as *const u32).add(t_slot * 4);
-                        let has_work = *info_base.add(2);
+                        let has_work = TILE_INFO[t_slot * 4 + 2];
                         if has_work == 0 {
                             break;
                         }
-                        let packed_col = *info_base.add(1);
+                        let packed_col = TILE_INFO[t_slot * 4 + 1];
                         let tile_kind = packed_col >> 30;
                         let idesc = if tile_kind == 1 {
                             idesc_192
@@ -407,9 +402,9 @@ mod kernels {
                             let a_desc_s = a_desc0 + stage_desc_offset;
                             let b_desc_s = b_desc0 + stage_desc_offset;
                             let tma_bar_const =
-                                (&raw const TMA_BAR as *const Barrier).add(stage);
+                                &raw const TMA_BAR[stage];
                             let mma_bar_mut =
-                                (&raw mut MMA_BAR as *mut Barrier).add(stage);
+                                &raw mut MMA_BAR[stage];
 
                             while !mbarrier_try_wait_parity(tma_bar_const, tma_parity) {}
 
@@ -444,7 +439,7 @@ mod kernels {
                             );
 
                             tcgen05_commit_multicast_cg2(
-                                mma_bar_mut as *mut u64,
+                                mma_bar_mut.cast::<u64>(),
                                 CTA_MASK_PAIR,
                             );
 
@@ -458,12 +453,12 @@ mod kernels {
 
                         if accum_stage == 0 {
                             tcgen05_commit_multicast_cg2(
-                                &raw mut ACCUM_FULL0 as *mut u64,
+                                (&raw mut ACCUM_FULL0).cast::<u64>(),
                                 CTA_MASK_PAIR,
                             );
                         } else {
                             tcgen05_commit_multicast_cg2(
-                                &raw mut ACCUM_FULL1 as *mut u64,
+                                (&raw mut ACCUM_FULL1).cast::<u64>(),
                                 CTA_MASK_PAIR,
                             );
                         }
@@ -479,9 +474,9 @@ mod kernels {
                 let mut epi_tile_iter: u32 = 0;
 
                 let leader_accum_empty0_addr =
-                    cvta_generic_to_shared_offset(cluster::map_shared_rank(&raw const ACCUM_EMPTY0, 0) as *const u8);
+                    cvta_generic_to_shared_offset(cluster::map_shared_rank(&raw const ACCUM_EMPTY0, 0).cast::<u8>());
                 let leader_accum_empty1_addr =
-                    cvta_generic_to_shared_offset(cluster::map_shared_rank(&raw const ACCUM_EMPTY1, 0) as *const u8);
+                    cvta_generic_to_shared_offset(cluster::map_shared_rank(&raw const ACCUM_EMPTY1, 0).cast::<u8>());
 
                 let is_odd_lane = (lane_id & 1) != 0;
                 let is_bit1_lane = (lane_id & 2) != 0;
@@ -492,18 +487,17 @@ mod kernels {
                     let t_slot = (epi_tile_iter & 3) as usize;
                     let t_parity = (epi_tile_iter >> 2) & 1;
                     while !mbarrier_try_wait_parity(
-                        (&raw const TILE_READY as *const Barrier).add(t_slot),
+                        &raw const TILE_READY[t_slot],
                         t_parity,
                     ) {}
 
-                    let info_base = (&raw const TILE_INFO as *const u32).add(t_slot * 4);
-                    let has_work = *info_base.add(2);
+                    let has_work = TILE_INFO[t_slot * 4 + 2];
                     if has_work == 0 {
                         break;
                     }
 
-                    let tile_m = *info_base.add(0);
-                    let packed_col = *info_base.add(1);
+                    let tile_m = TILE_INFO[t_slot * 4];
+                    let packed_col = TILE_INFO[t_slot * 4 + 1];
                     let tile_kind = packed_col >> 30;
                     let col_u32_start = ((packed_col & 0x3FFF_FFFF) * 16) as usize;
 
@@ -587,11 +581,9 @@ mod kernels {
 
                                     #[repr(C, align(16))]
                                     struct U32x4(u32, u32, u32, u32);
-                                    let ptr = out.get_unchecked_mut(
-                                        row_out_base + col_u32_base + pair * 8,
-                                    ) as *mut u32
-                                        as *mut U32x4;
-                                    *ptr = U32x4(w0, w1, w2, w3);
+                                    *out.as_mut_ptr()
+                                        .add(row_out_base + col_u32_base + pair * 8)
+                                        .cast::<U32x4>() = U32x4(w0, w1, w2, w3);
                                 }
                                 pair += 1;
                             }
@@ -631,13 +623,13 @@ mod kernels {
             static mut TILE_INFO: SharedArray<u32, 16, 4> = SharedArray::UNINIT;
 
             // Up to 8-stage TMA <-> MMA pipeline
-            static mut TMA_BAR: SharedArray<u64, 8, 8> = SharedArray::UNINIT;
-            static mut MMA_BAR: SharedArray<u64, 8, 8> = SharedArray::UNINIT;
+            static mut TMA_BAR: SharedArray<Barrier, 8, 8> = SharedArray::UNINIT;
+            static mut MMA_BAR: SharedArray<Barrier, 8, 8> = SharedArray::UNINIT;
             static mut ACCUM_FULL0: Barrier = Barrier::UNINIT;
             static mut ACCUM_FULL1: Barrier = Barrier::UNINIT;
             static mut ACCUM_EMPTY0: Barrier = Barrier::UNINIT;
             static mut ACCUM_EMPTY1: Barrier = Barrier::UNINIT;
-            static mut TILE_READY: SharedArray<u64, 4, 8> = SharedArray::UNINIT;
+            static mut TILE_READY: SharedArray<Barrier, 4, 8> = SharedArray::UNINIT;
 
             static mut CLC_RESPONSE: SharedArray<u64, 2, 16> = SharedArray::UNINIT;
             static mut CLC_BAR: Barrier = Barrier::UNINIT;
@@ -672,8 +664,8 @@ mod kernels {
             if tid == 0 {
                 let mut s = 0usize;
                 while s < 7 {
-                    mbarrier_init((&raw mut TMA_BAR as *mut Barrier).add(s), 1);
-                    mbarrier_init((&raw mut MMA_BAR as *mut Barrier).add(s), 1);
+                    mbarrier_init(&raw mut TMA_BAR[s], 1);
+                    mbarrier_init(&raw mut MMA_BAR[s], 1);
                     s += 1;
                 }
                 mbarrier_init(&raw mut ACCUM_FULL0, 1);
@@ -682,17 +674,17 @@ mod kernels {
                 mbarrier_init(&raw mut ACCUM_EMPTY1, 8);
                 let mut ts = 0usize;
                 while ts < 4 {
-                    mbarrier_init((&raw mut TILE_READY as *mut Barrier).add(ts), 1);
+                    mbarrier_init(&raw mut TILE_READY[ts], 1);
                     ts += 1;
                 }
                 mbarrier_init(&raw mut CLC_BAR, 1);
                 fence_proxy_async_shared_cta();
             }
             if warp_id == 0 {
-                tcgen05_alloc_cg2(&raw mut TMEM_ADDR as *mut u32, 512);
+                tcgen05_alloc_cg2(&raw mut TMEM_ADDR[0], 512);
             }
             cluster::cluster_sync();
-            let tmem_addr = *(&raw const TMEM_ADDR as *const u32);
+            let tmem_addr = TMEM_ADDR[0];
             let elect_one_cta = my_rank == 0;
 
             let idesc_256 = Tcgen05InstructionDescriptor::builder()
@@ -744,10 +736,9 @@ mod kernels {
                         wide_tiles_n - 3
                     };
                     let head_tiles = tiles_m * head_cols;
-                    let resp_ptr = &raw mut CLC_RESPONSE as *mut u64;
-                    let aliased_tma_bar0 = (((&raw mut TMA_BAR as *mut Barrier) as usize)
-                        & (PEER_BIT_MASK as usize))
-                        as *mut Barrier;
+                    let resp_ptr = &raw mut CLC_RESPONSE[0];
+                    let aliased_tma_bar0 =
+                        (&raw mut TMA_BAR[0]).map_addr(|addr| addr & (PEER_BIT_MASK as usize));
 
                     loop {
                         let clc_parity = clc_iter & 1;
@@ -803,12 +794,11 @@ mod kernels {
                             let packed_col = (col_bf16_base >> 5) | (tile_kind << 30);
 
                             let t_slot = tile_seq & 3;
-                            let info_base = (&raw mut TILE_INFO as *mut u32).add(t_slot * 4);
-                            *info_base.add(0) = tile_m;
-                            *info_base.add(1) = packed_col;
-                            *info_base.add(2) = 1;
+                            TILE_INFO[t_slot * 4] = tile_m;
+                            TILE_INFO[t_slot * 4 + 1] = packed_col;
+                            TILE_INFO[t_slot * 4 + 2] = 1;
                             mbarrier_arrive(
-                                (&raw const TILE_READY as *const Barrier).add(t_slot),
+                                &raw const TILE_READY[t_slot],
                             );
                             tile_seq += 1;
 
@@ -830,14 +820,13 @@ mod kernels {
                             #[unroll(4)]
                             while k_idx < k_iters {
                                 let smem_a_ptr =
-                                    (&raw mut SMEM_BUF as *mut u8).add(stage * 16384);
-                                let smem_b_ptr = (&raw mut SMEM_BUF as *mut u8)
-                                    .add(b_smem_offset + stage * 16384);
+                                    &raw mut SMEM_BUF[stage * 16384];
+                                let smem_b_ptr = &raw mut SMEM_BUF[b_smem_offset + stage * 16384];
                                 let tma_bar_const =
-                                    (&raw const TMA_BAR as *const Barrier).add(stage);
+                                    &raw const TMA_BAR[stage];
                                 let aliased_bar = aliased_tma_bar0.add(stage);
                                 let mma_bar_const =
-                                    (&raw const MMA_BAR as *const Barrier).add(stage);
+                                    &raw const MMA_BAR[stage];
 
                                 while !mbarrier_try_wait_parity(mma_bar_const, mma_parity) {}
 
@@ -908,7 +897,7 @@ mod kernels {
                                     mbarrier_arrive_expect_tx(&raw const CLC_BAR, 1, 16);
                                     if elect_one_cta {
                                         clc_try_cancel_multicast(
-                                            resp_ptr as *mut u8,
+                                            resp_ptr.cast::<u8>(),
                                             &raw mut CLC_BAR,
                                         );
                                     }
@@ -925,7 +914,7 @@ mod kernels {
                             mbarrier_arrive_expect_tx(&raw const CLC_BAR, 1, 16);
                             if elect_one_cta {
                                 clc_try_cancel_multicast(
-                                    resp_ptr as *mut u8,
+                                    resp_ptr.cast::<u8>(),
                                     &raw mut CLC_BAR,
                                 );
                             }
@@ -934,15 +923,14 @@ mod kernels {
                         while !mbarrier_try_wait_parity(&raw const CLC_BAR, clc_parity) {}
                         clc_iter += 1;
 
-                        let resp_lo = *resp_ptr;
-                        let resp_hi = *resp_ptr.add(1);
+                        let resp_lo = CLC_RESPONSE[0];
+                        let resp_hi = CLC_RESPONSE[1];
                         let is_canceled = clc_query_is_canceled(resp_lo, resp_hi);
                         if is_canceled == 0 {
                             let t_slot = tile_seq & 3;
-                            let info_base = (&raw mut TILE_INFO as *mut u32).add(t_slot * 4);
-                            *info_base.add(2) = 0;
+                            TILE_INFO[t_slot * 4 + 2] = 0;
                             mbarrier_arrive(
-                                (&raw const TILE_READY as *const Barrier).add(t_slot),
+                                &raw const TILE_READY[t_slot],
                             );
                             break;
                         }
@@ -959,7 +947,7 @@ mod kernels {
                     let mut stage: usize = 0;
                     let mut tma_parity: u32 = 0;
                     let smem_a_base0 =
-                        cvta_generic_to_shared_offset(&raw const SMEM_BUF as *const u8);
+                        cvta_generic_to_shared_offset(&raw const SMEM_BUF[0]);
                     let smem_b_base0 = smem_a_base0 + b_smem_offset as u64;
                     let a_desc0 =
                         build_smem_descriptor(smem_a_base0, LBO_BYTES, SBO_BYTES, SWIZZLE_128B);
@@ -970,16 +958,15 @@ mod kernels {
                         let t_slot = (tile_iter & 3) as usize;
                         let t_parity = (tile_iter >> 2) & 1;
                         while !mbarrier_try_wait_parity(
-                            (&raw const TILE_READY as *const Barrier).add(t_slot),
+                            &raw const TILE_READY[t_slot],
                             t_parity,
                         ) {}
 
-                        let info_base = (&raw const TILE_INFO as *const u32).add(t_slot * 4);
-                        let has_work = *info_base.add(2);
+                        let has_work = TILE_INFO[t_slot * 4 + 2];
                         if has_work == 0 {
                             break;
                         }
-                        let packed_col = *info_base.add(1);
+                        let packed_col = TILE_INFO[t_slot * 4 + 1];
                         let tile_kind = packed_col >> 30;
                         let idesc = if tile_kind == 1 {
                             idesc_192
@@ -1015,9 +1002,9 @@ mod kernels {
                             let a_desc_s = a_desc0 + stage_desc_offset;
                             let b_desc_s = b_desc0 + stage_desc_offset;
                             let tma_bar_const =
-                                (&raw const TMA_BAR as *const Barrier).add(stage);
+                                &raw const TMA_BAR[stage];
                             let mma_bar_mut =
-                                (&raw mut MMA_BAR as *mut Barrier).add(stage);
+                                &raw mut MMA_BAR[stage];
 
                             while !mbarrier_try_wait_parity(tma_bar_const, tma_parity) {}
 
@@ -1052,7 +1039,7 @@ mod kernels {
                             );
 
                             tcgen05_commit_multicast_cg2(
-                                mma_bar_mut as *mut u64,
+                                mma_bar_mut.cast::<u64>(),
                                 CTA_MASK_PAIR,
                             );
 
@@ -1066,12 +1053,12 @@ mod kernels {
 
                         if accum_stage == 0 {
                             tcgen05_commit_multicast_cg2(
-                                &raw mut ACCUM_FULL0 as *mut u64,
+                                (&raw mut ACCUM_FULL0).cast::<u64>(),
                                 CTA_MASK_PAIR,
                             );
                         } else {
                             tcgen05_commit_multicast_cg2(
-                                &raw mut ACCUM_FULL1 as *mut u64,
+                                (&raw mut ACCUM_FULL1).cast::<u64>(),
                                 CTA_MASK_PAIR,
                             );
                         }
@@ -1087,9 +1074,9 @@ mod kernels {
                 let mut epi_tile_iter: u32 = 0;
 
                 let leader_accum_empty0_addr =
-                    cvta_generic_to_shared_offset(cluster::map_shared_rank(&raw const ACCUM_EMPTY0, 0) as *const u8);
+                    cvta_generic_to_shared_offset(cluster::map_shared_rank(&raw const ACCUM_EMPTY0, 0).cast::<u8>());
                 let leader_accum_empty1_addr =
-                    cvta_generic_to_shared_offset(cluster::map_shared_rank(&raw const ACCUM_EMPTY1, 0) as *const u8);
+                    cvta_generic_to_shared_offset(cluster::map_shared_rank(&raw const ACCUM_EMPTY1, 0).cast::<u8>());
 
                 let is_odd_lane = (lane_id & 1) != 0;
                 let is_bit1_lane = (lane_id & 2) != 0;
@@ -1100,18 +1087,17 @@ mod kernels {
                     let t_slot = (epi_tile_iter & 3) as usize;
                     let t_parity = (epi_tile_iter >> 2) & 1;
                     while !mbarrier_try_wait_parity(
-                        (&raw const TILE_READY as *const Barrier).add(t_slot),
+                        &raw const TILE_READY[t_slot],
                         t_parity,
                     ) {}
 
-                    let info_base = (&raw const TILE_INFO as *const u32).add(t_slot * 4);
-                    let has_work = *info_base.add(2);
+                    let has_work = TILE_INFO[t_slot * 4 + 2];
                     if has_work == 0 {
                         break;
                     }
 
-                    let tile_m = *info_base.add(0);
-                    let packed_col = *info_base.add(1);
+                    let tile_m = TILE_INFO[t_slot * 4];
+                    let packed_col = TILE_INFO[t_slot * 4 + 1];
                     let tile_kind = packed_col >> 30;
                     let col_u32_start = ((packed_col & 0x3FFF_FFFF) * 16) as usize;
 
@@ -1195,11 +1181,9 @@ mod kernels {
 
                                     #[repr(C, align(16))]
                                     struct U32x4(u32, u32, u32, u32);
-                                    let ptr = out.get_unchecked_mut(
-                                        row_out_base + col_u32_base + pair * 8,
-                                    ) as *mut u32
-                                        as *mut U32x4;
-                                    *ptr = U32x4(w0, w1, w2, w3);
+                                    *out.as_mut_ptr()
+                                        .add(row_out_base + col_u32_base + pair * 8)
+                                        .cast::<U32x4>() = U32x4(w0, w1, w2, w3);
                                 }
                                 pair += 1;
                             }

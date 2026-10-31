@@ -11,4 +11,5 @@ fn thread_index_safety_compile_failures() {
     t.compile_fail("tests/compile_fail/runtime_tile_*.rs");
     t.compile_fail("tests/compile_fail/swizzle_*.rs");
     t.compile_fail("tests/compile_fail/uniform_*.rs");
+    t.compile_fail("tests/compile_fail/block_rows_*.rs");
 }

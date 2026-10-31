@@ -38,7 +38,7 @@
 //! copy has written it, exactly as that constructor's safety contract says.
 
 use crate::DisjointSlice;
-use crate::thread::{Index1D, ThreadCoord2D32, ThreadIndex32};
+use crate::thread::{__internal, Index1D, LaunchContextRef, ThreadCoord2D32, ThreadIndex32};
 use core::marker::PhantomData;
 use core::mem::size_of;
 
@@ -80,6 +80,43 @@ pub enum RowMajorTiles<const ROWS: usize, const COLS: usize, const ROW_STRIDE: u
 ///
 /// [`DisjointSlice::row_width`]: crate::disjoint::DisjointSlice::row_width
 pub enum RuntimeRowMajorTiles<const ROWS: usize, const COLS: usize> {}
+
+/// Index-space marker for block-owned rows of a matrix whose row width is a
+/// runtime value.
+///
+/// Under a 1D launch, block `b` owns row `b`, and thread `t` of that block
+/// owns columns `t`, `t + blockDim.x`, `t + 2 * blockDim.x`, and so on below
+/// the row width:
+///
+/// ```text
+/// row width 8, blockDim.x = 3
+///
+///          col:  0   1   2   3   4   5   6   7
+/// block 0 row 0: t0  t1  t2  t0  t1  t2  t0  t1
+/// block 1 row 1: t0  t1  t2  t0  t1  t2  t0  t1
+/// ```
+///
+/// This is the output of a block-per-row kernel such as LayerNorm or softmax:
+/// the block reduces its row, then every thread writes its own columns.
+/// [`DisjointSlice::block_row32`] hands the block its row and
+/// [`BlockRowMut32::thread_columns`] walks this thread's columns.
+///
+/// Like [`RuntimeRowMajorTiles`], the row width travels as data. The host
+/// binds it once beside the slice's pointer and length (`cuda_host::RowWidth`),
+/// and [`DisjointSlice::row_width`] reads it back. A width chosen per call
+/// could describe two grids over one buffer: with two threads per block,
+/// block 0 at width 4 reaches element 2 through thread 0's second column, and
+/// block 1 at width 2 reaches it through thread 0's first.
+///
+/// The space accepts no flat thread index. A thread's columns are
+/// block-strided rather than contiguous, so at width 512 with 256 threads per
+/// block, thread 1 of block 0 owns element 257, which is the flat index thread
+/// 1 of block 1 holds under [`Index1D`]. A slice over this space has no
+/// `get_mut` or `element_thread32`, so the two schemes never meet on one
+/// buffer.
+///
+/// [`DisjointSlice::row_width`]: crate::disjoint::DisjointSlice::row_width
+pub enum BlockRows {}
 
 /// A checked local index into a static `N`-element view.
 ///
@@ -585,6 +622,184 @@ impl<'a, T, const N: usize> ThreadRunMut32<'a, T, N> {
             ThreadRunMut32::Full(view) => LocalIndex32::<N>::new(index).map(|local| view.at(local)),
             ThreadRunMut32::Clipped(view) => view.at(index),
         }
+    }
+}
+
+/// One block's row of a [`BlockRows`] slice, checked once against the parent.
+///
+/// [`DisjointSlice::block_row32`] proved the whole row,
+/// `row * width .. (row + 1) * width`, inside the slice before building this,
+/// so walking it needs no further check against the parent length. The view
+/// holds the slice's mutable borrow, so a thread has at most one at a time.
+#[must_use]
+pub struct BlockRowMut32<'a, T> {
+    /// The row's first element, `row * width` elements into the parent.
+    ptr: *mut T,
+    /// The row index, which is the block's `blockIdx.x`.
+    row: u32,
+    /// The host-bound row width, in elements; nonzero.
+    width: u32,
+    /// This thread's first column, its `threadIdx.x`.
+    thread: u32,
+    /// The distance between this thread's columns, `blockDim.x`; above
+    /// `thread`, so the walk advances and residues stay distinct.
+    stride: u32,
+    /// Holds the parent slice's mutable borrow for the view's lifetime.
+    _borrow: PhantomData<&'a mut [T]>,
+    /// Keeps the view on the thread that minted it.
+    _not_send_sync: PhantomData<*mut ()>,
+}
+
+impl<'a, T> BlockRowMut32<'a, T> {
+    /// Wrap a row that [`DisjointSlice::block_row32`] already checked.
+    ///
+    /// # Safety
+    ///
+    /// `ptr .. ptr + width` must lie inside the parent slice, no other thread
+    /// may reach this thread's columns of it, and `thread < stride`.
+    #[inline(always)]
+    unsafe fn from_checked_ptr(
+        ptr: *mut T,
+        row: u32,
+        width: u32,
+        thread: u32,
+        stride: u32,
+    ) -> Self {
+        Self {
+            ptr,
+            row,
+            width,
+            thread,
+            stride,
+            _borrow: PhantomData,
+            _not_send_sync: PhantomData,
+        }
+    }
+
+    /// The row this block owns, `blockIdx.x`.
+    #[inline(always)]
+    pub const fn row(&self) -> u32 {
+        self.row
+    }
+
+    /// The row width the host bound to the slice, in elements.
+    #[inline(always)]
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// This thread's columns of the row: `threadIdx.x`,
+    /// `threadIdx.x + blockDim.x`, and so on below the row width, in
+    /// increasing order.
+    ///
+    /// Each item reads and writes its own element, so an in-place update
+    /// needs no second view of the buffer:
+    ///
+    /// ```rust,ignore
+    /// for mut y in row.thread_columns() {
+    ///     let v = y.read();
+    ///     y.write((v - mean) * rstd);
+    /// }
+    /// ```
+    ///
+    /// The items are distinct elements, so they may all be held at once, as
+    /// with `slice::IterMut`. Calling this again after the walk ends restarts
+    /// it at the same columns.
+    #[inline(always)]
+    pub fn thread_columns(&mut self) -> ThreadColumns32<'_, T> {
+        ThreadColumns32 {
+            ptr: self.ptr,
+            next: self.thread,
+            width: self.width,
+            stride: self.stride,
+            _borrow: PhantomData,
+            _not_send_sync: PhantomData,
+        }
+    }
+}
+
+/// The columns one thread owns in its block's row, produced by
+/// [`BlockRowMut32::thread_columns`].
+#[must_use = "iterators are lazy and do nothing unless consumed"]
+pub struct ThreadColumns32<'a, T> {
+    /// The row's first element, copied from the row view.
+    ptr: *mut T,
+    /// The next column to yield; at or past `width` once the walk ends.
+    next: u32,
+    /// The row width, in elements.
+    width: u32,
+    /// The step between this thread's columns, `blockDim.x`.
+    stride: u32,
+    /// Holds the row view's mutable borrow while items are alive.
+    _borrow: PhantomData<&'a mut [T]>,
+    /// Keeps the walk on the thread that minted the row.
+    _not_send_sync: PhantomData<*mut ()>,
+}
+
+impl<'a, T> Iterator for ThreadColumns32<'a, T> {
+    type Item = ColumnMut32<'a, T>;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<ColumnMut32<'a, T>> {
+        let column = self.next;
+        if column >= self.width {
+            return None;
+        }
+        // saturating keeps a step past `u32::MAX` at or above any width, so
+        // the walk ends instead of wrapping back onto earlier columns
+        self.next = column.saturating_add(self.stride);
+        // SAFETY: `column < width`, and the whole row was checked against the
+        // parent before the row view was built. Columns strictly increase
+        // (the stride is nonzero), so every item is a distinct element.
+        let slot = unsafe { InBoundsMut32::from_ptr(self.ptr.add(column as usize)) };
+        Some(ColumnMut32 { slot, column })
+    }
+}
+
+/// One element of a thread's block-strided columns, with its column index.
+#[must_use]
+pub struct ColumnMut32<'a, T> {
+    /// The checked element this thread owns.
+    slot: InBoundsMut32<'a, T>,
+    /// Its column within the row.
+    column: u32,
+}
+
+impl<'a, T> ColumnMut32<'a, T> {
+    /// The element's column within the row.
+    #[inline(always)]
+    pub const fn column(&self) -> u32 {
+        self.column
+    }
+
+    /// Borrow the element for reading.
+    #[inline(always)]
+    pub fn get(&self) -> &T {
+        self.slot.get()
+    }
+
+    /// Borrow the element for writing.
+    #[inline(always)]
+    pub fn get_mut(&mut self) -> &mut T {
+        self.slot.get_mut()
+    }
+
+    /// Load a `Copy` value from the element.
+    ///
+    /// The element must already be initialized; see
+    /// [Initialization](self#initialization) in the module docs.
+    #[inline(always)]
+    pub fn read(&self) -> T
+    where
+        T: Copy,
+    {
+        self.slot.read()
+    }
+
+    /// Store a value into the element.
+    #[inline(always)]
+    pub fn write(&mut self, value: T) {
+        self.slot.write(value);
     }
 }
 
@@ -1459,6 +1674,137 @@ impl<'a, T, const ROWS: usize, const COLS: usize>
     }
 }
 
+impl<'a, T> DisjointSlice<'a, T, BlockRows> {
+    /// This block's row, or `None` when the row is not wholly inside the slice.
+    ///
+    /// Block `blockIdx.x` owns row `blockIdx.x`, and the returned view's
+    /// [`thread_columns`](BlockRowMut32::thread_columns) yields this thread's
+    /// block-strided columns of it. Before creating a pointer this checks,
+    /// in u64:
+    ///
+    /// ```text
+    /// width != 0
+    /// (row + 1) * width <= len        the whole row is inside the slice
+    /// ```
+    ///
+    /// Zero-sized element types are rejected, as for every mutable view.
+    ///
+    /// # Uniform within a block
+    ///
+    /// The result depends only on `blockIdx.x` and the receiver's row width
+    /// and length. Every thread of the block gets the row, or none does, when
+    /// every thread of the block calls this on the same slice the host bound,
+    /// unchanged: a kernel parameter, not one a thread has reassigned or
+    /// rebuilt. Under those conditions returning early on `None` never
+    /// strands part of the block at a later `sync_threads` or block
+    /// reduction. A partial final row is then `None` for that whole block
+    /// rather than a clipped row for some threads.
+    ///
+    /// Safe code can break the first condition without breaking soundness.
+    /// After `if threadIdx_x() == 0 { out = DisjointSlice::empty(); }`,
+    /// thread 0 gets `None` and the rest of the block gets the row. No two
+    /// threads share an element, but a kernel that returns on `None` and
+    /// then waits at a barrier would hang. So check the receiver, not only
+    /// the call, before relying on a uniform result.
+    ///
+    /// # Why this is safe
+    ///
+    /// The launch context proves a 1D launch, which the host checked before
+    /// launching: `blockDim.y`, `blockDim.z`, `gridDim.y` and `gridDim.z` are
+    /// all one. Distinct threads therefore differ in `blockIdx.x` or in
+    /// `threadIdx.x`, and:
+    ///
+    /// 1. **Rows are disjoint.** Every thread reads the one row width the
+    ///    host wrote into the launch packet, columns stay below it, and the
+    ///    whole row is inside the slice, so blocks own disjoint ranges.
+    /// 2. **Columns are disjoint within a row.** Thread `t` takes columns
+    ///    congruent to `t` modulo `blockDim.x`, and `t < blockDim.x`, so two
+    ///    threads of one block never take the same column.
+    ///
+    /// The `&mut self` borrow keeps at most one row view per thread, and
+    /// minting again after dropping it yields the same row.
+    ///
+    /// The width still has to be the buffer's real row width for the kernel
+    /// to compute the intended result. That is a correctness requirement, not
+    /// a safety one: a width that misdescribes the layout gives wrong answers
+    /// inside the slice, never aliasing or an out-of-bounds access.
+    ///
+    /// ```rust,ignore
+    /// #[kernel(launch_context = lc)]
+    /// #[launch_contract(domain = 1, coordinates = u32, block = (256, 1, 1))]
+    /// pub fn scale_rows(mut out: DisjointSlice<f32, BlockRows>, x: &[f32], s: f32) {
+    ///     let Some(mut row) = out.block_row32(lc) else { return };
+    ///     let base = row.row() as usize * row.width() as usize;
+    ///     for mut y in row.thread_columns() {
+    ///         let c = y.column() as usize;
+    ///         y.write(x[base + c] * s);
+    ///     }
+    /// }
+    /// ```
+    #[inline(always)]
+    pub fn block_row32<'kernel>(
+        &mut self,
+        launch_context: LaunchContextRef<'kernel, __internal::Domain1, __internal::U32Coordinates>,
+    ) -> Option<BlockRowMut32<'_, T>> {
+        let _ = launch_context;
+        self.block_row_at(
+            crate::thread::blockIdx_x(),
+            crate::thread::threadIdx_x(),
+            crate::thread::blockDim_x(),
+        )
+    }
+
+    /// The row view for block `row`, thread `thread` of a block of `stride`
+    /// threads; `block_row32` passes the hardware registers.
+    #[inline(always)]
+    fn block_row_at(&mut self, row: u32, thread: u32, stride: u32) -> Option<BlockRowMut32<'_, T>> {
+        // a launch always has `threadIdx.x < blockDim.x`, so the thread and
+        // stride guards never split a block; they keep the column walk finite
+        // and its residue classes distinct without relying on that
+        if size_of::<T>() == 0 || thread >= stride {
+            return None;
+        }
+        let width = self.row_width();
+        let start = checked_block_row_start(row, width, self.len());
+        if start == INVALID_LINEAR_2D {
+            return None;
+        }
+        // SAFETY: the scalar-only helper checked the whole row against the
+        // parent. Rows of distinct blocks are disjoint under the host-bound
+        // width, and columns of distinct threads are distinct residues modulo
+        // the block width (see the doc comment).
+        Some(unsafe {
+            BlockRowMut32::from_checked_ptr(
+                self.as_mut_ptr().add(start as usize),
+                row,
+                width,
+                thread,
+                stride,
+            )
+        })
+    }
+}
+
+/// Prove row `row` of a `width`-wide matrix wholly inside `len` elements,
+/// entirely in u64, returning its first element's offset.
+///
+/// `(row + 1) * width` is at most `2^32 * (2^32 - 1) < 2^64`, so nothing here
+/// can wrap. Like the other scalar proofs, this keeps the pointer wrapper
+/// above it small enough to inline with the kernel parameter's provenance.
+#[inline(always)]
+fn checked_block_row_start(row: u32, width: u32, len: usize) -> u64 {
+    if width == 0 {
+        return INVALID_LINEAR_2D;
+    }
+    let start = u64::from(row) * u64::from(width);
+    if start + u64::from(width) <= len as u64 {
+        // start < start + width <= len, so the start never equals the sentinel
+        start
+    } else {
+        INVALID_LINEAR_2D
+    }
+}
+
 /// Check a complete row-major tile without accepting or returning a pointer.
 ///
 /// Keeping this proof scalar-only lets `tile_2d32` MIR-inline as a tiny pointer
@@ -1650,6 +1996,103 @@ mod tests {
         unsafe {
             DisjointSlice::from_raw_parts_with_space(buffer.as_mut_ptr(), buffer.len(), space)
         }
+    }
+
+    const MAX_ROWS_LEN: usize = 2048;
+
+    /// Every (block, thread) of a 1D launch walks its columns of the block's
+    /// row, recording which thread reached each element.
+    fn block_row_owners(
+        buffer: &mut [f32],
+        width: u32,
+        blocks: u32,
+        block_dim: u32,
+    ) -> [Option<(u32, u32)>; MAX_ROWS_LEN] {
+        let base = buffer.as_ptr() as usize;
+        let mut owners = [None; MAX_ROWS_LEN];
+        let mut rows = slice_over::<BlockRows>(buffer, width);
+        for block in 0..blocks {
+            let mut rows_granted = 0;
+            for thread in 0..block_dim {
+                let Some(mut row) = rows.block_row_at(block, thread, block_dim) else {
+                    continue;
+                };
+                rows_granted += 1;
+                assert_eq!((row.row(), row.width()), (block, width));
+                for mut column in row.thread_columns() {
+                    let flat =
+                        (core::ptr::from_mut(column.get_mut()) as usize - base) / size_of::<f32>();
+                    assert_eq!(flat, (block * width + column.column()) as usize);
+                    assert_eq!(column.column() % block_dim, thread);
+                    assert!(
+                        owners[flat].replace((block, thread)).is_none(),
+                        "element {flat} reached twice at width {width}, blockDim.x {block_dim}"
+                    );
+                }
+            }
+            // on one unchanged slice, the bounds result is the same for every
+            // thread of a block
+            assert!(rows_granted == 0 || rows_granted == block_dim);
+        }
+        owners
+    }
+
+    #[test]
+    fn block_rows_give_each_full_row_element_to_exactly_one_thread() {
+        for width in [1u32, 3, 8, 257, 512] {
+            for block_dim in [1u32, 2, 3, 32, 256] {
+                // three whole rows and a partial fourth
+                let full_rows = 3;
+                let len = (full_rows * width + width / 2) as usize;
+                let mut buffer = [0.0f32; MAX_ROWS_LEN];
+                // launch more blocks than rows, as a rounded-up grid would
+                let owners = block_row_owners(&mut buffer[..len], width, full_rows + 2, block_dim);
+                let covered = (full_rows * width) as usize;
+                assert!(owners[..covered].iter().all(Option::is_some));
+                assert!(owners[covered..].iter().all(Option::is_none));
+            }
+        }
+    }
+
+    #[test]
+    fn block_rows_update_in_place_through_the_column_witness() {
+        let width = 10u32;
+        let block_dim = 4u32;
+        let mut buffer: [f32; 25] = core::array::from_fn(|i| i as f32);
+        let mut rows = slice_over::<BlockRows>(&mut buffer, width);
+        for block in 0..3 {
+            for thread in 0..block_dim {
+                if let Some(mut row) = rows.block_row_at(block, thread, block_dim) {
+                    for mut y in row.thread_columns() {
+                        let v = y.read();
+                        y.write(v * 2.0);
+                    }
+                }
+            }
+        }
+        // rows 0 and 1 are whole and doubled; row 2 holds five of ten elements
+        // and is left alone
+        for (i, value) in buffer.iter().enumerate() {
+            let expected = if i < 20 { i as f32 * 2.0 } else { i as f32 };
+            assert_eq!(*value, expected, "element {i}");
+        }
+    }
+
+    #[test]
+    fn block_rows_reject_zero_width_zero_sized_elements_and_empty_slices() {
+        let mut buffer = [0.0f32; 8];
+        let mut rows = slice_over::<BlockRows>(&mut buffer, 4);
+        assert!(rows.block_row_at(1, 0, 32).is_some());
+        let mut zero_width = slice_over::<BlockRows>(&mut buffer, 0);
+        assert!(zero_width.block_row_at(0, 0, 32).is_none());
+        let mut empty = DisjointSlice::<f32, BlockRows>::empty();
+        assert!(empty.block_row_at(0, 0, 32).is_none());
+
+        let mut units = [(); 8];
+        // SAFETY: `units` is exclusively borrowed for the slice's lifetime.
+        let mut zst: DisjointSlice<'_, (), BlockRows> =
+            unsafe { DisjointSlice::from_raw_parts_with_space(units.as_mut_ptr(), 8, 4) };
+        assert!(zst.block_row_at(0, 0, 32).is_none());
     }
 
     /// Every 32-bit accessor that resolves an element on a non-empty slice

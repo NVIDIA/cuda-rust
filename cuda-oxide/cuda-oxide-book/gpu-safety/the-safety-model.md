@@ -340,6 +340,83 @@ between two uniform values on a thread-varying condition gives a value that
 differs between threads, which is why a witness of this kind cannot carry a
 proof that has to hold across a whole slice.
 
+(block-owned-rows)=
+### Block-owned rows: `BlockRows`
+
+LayerNorm, softmax and other row reductions run one block per row: the block
+reduces its row, then thread `t` writes columns `t`, `t + blockDim.x`, and so
+on. `DisjointSlice<T, BlockRows>` is the output for that shape. Under a 1D
+launch, block `b` owns row `b`, and the row width is bound on the host with
+`RowWidth`, as above:
+
+```rust
+#[kernel(launch_context = lc)]
+#[launch_contract(domain = 1, coordinates = u32, block = (256, 1, 1))]
+pub fn layernorm(mut out: DisjointSlice<f32, BlockRows>, x: &[f32], eps: f32) {
+    // None for the whole block when row blockIdx.x is not wholly inside `out`
+    let Some(mut row) = out.block_row32(lc) else { return };
+    let base = row.row() as usize * row.width() as usize;
+    // ... reduce the row with block_reduce to get mean and rstd ...
+    for mut y in row.thread_columns() {
+        let v = x[base + y.column() as usize];
+        y.write((v - mean) * rstd);
+    }
+}
+```
+
+```rust
+module.layernorm(&stream, &prepared, cuda_host::RowWidth::new(&mut out, cols), &x, eps)?;
+```
+
+Each item `thread_columns()` yields reads and writes its own element, so an
+in-place kernel normalizes a buffer over itself without also taking it as a
+`&[T]`, which would alias the output:
+
+```rust
+for mut y in row.thread_columns() {
+    let v = y.read();
+    y.write((v - mean) * rstd);
+}
+```
+
+Three rules make the space sound:
+
+- **The width is bound once.** Two blocks at different widths describe two
+  grids over one buffer. With two threads per block, block 0 at width 4
+  reaches element 2 through thread 0's second column, and block 1 at width 2
+  reaches it through thread 0's first. So `block_row32` takes no width.
+- **No flat witnesses.** A thread's columns are block-strided, not
+  contiguous: at width 512 with 256 threads, thread 1 of block 0 owns element
+  257, which is the flat index thread 1 of block 1 holds under `Index1D`. A
+  `BlockRows` slice has no `get_mut` or `element_thread32`.
+- **A 1D launch.** `block_row32` takes the `domain = 1` launch context, so
+  `blockIdx.x` and `threadIdx.x` identify every thread.
+
+`block_row32` returns the whole row or `None`, never a clipped row, and the
+answer depends only on `blockIdx.x` and the receiver's row width and length.
+When every thread of a block calls it on the same host-bound slice, such as
+an unchanged kernel parameter, all of them get the row or none does, so an
+early return on `None` never leaves part of the block waiting at a later
+barrier or block reduction. A partial final row is then `None` for its
+block.
+
+Both conditions matter. Safe code can give one thread a different receiver:
+
+```rust
+if thread::threadIdx_x() == 0 {
+    out = DisjointSlice::empty();
+}
+// thread 0 gets None, the rest of the block gets the row
+let Some(mut row) = out.block_row32(lc) else { return };
+```
+
+That stays sound, since no two threads share an element, but thread 0
+returns while the rest of the block goes on to its next barrier, which then
+never completes. Before relying on the result being uniform, make sure no thread
+reassigns or rebuilds the slice ahead of the call. The
+[`block_rows`](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/block_rows)
+example runs both kernels.
+
 ### The GEMM pattern
 
 For const-stride 2D kernels (the common case -- tiled GEMM, stencil
@@ -714,6 +791,8 @@ The rules:
   `Runtime2DIndex`-tagged slice. The row width travels inside the slice,
   bound once by the host, so no `unsafe` and no per-call stride to disagree
   about.
+- For one block per row (LayerNorm, softmax), use a `BlockRows`-tagged slice
+  with `slice.block_row32(lc)` and `row.thread_columns()`.
 - Always bounds-check via `get_mut()` / `get_mut_indexed()` (both return
   `Option`).
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use cuda_device::thread::{Index2D, Runtime2DIndex};
-use cuda_device::{DisjointSlice, cuda_module, kernel, launch_bounds, launch_contract};
+use cuda_device::{BlockRows, DisjointSlice, cuda_module, kernel, launch_bounds, launch_contract};
 
 type Tiled = Index2D<64>;
 use cuda_device::thread::Index2D as ImportedIndex2D;
@@ -54,6 +54,20 @@ mod kernels {
         }
     }
 
+    // the host binds the row width with `RowWidth`, and the witness takes the
+    // domain-1 launch context
+    #[kernel(launch_context = launch_context)]
+    #[launch_contract(domain = 1, coordinates = u32, block = (64, 1, 1))]
+    pub fn block_rows(mut out: DisjointSlice<f32, BlockRows>) {
+        let Some(mut row) = out.block_row32(launch_context) else {
+            return;
+        };
+        for mut y in row.thread_columns() {
+            let v = y.read();
+            y.write(v + 1.0);
+        }
+    }
+
     fn index_1d_u32() -> u32 {
         7
     }
@@ -81,4 +95,16 @@ fn prepared_methods_exist(module: &kernels::LoadedModule) {
     let _ = module.prepare_same_named_local_is_ordinary(cuda_core::LaunchConfig1D::new(1, 64, 0));
 }
 
-fn main() {}
+fn block_rows_takes_a_row_width(
+    module: &kernels::LoadedModule,
+    stream: &cuda_core::CudaStream,
+    out: &mut cuda_core::DeviceBuffer<f32>,
+) -> Result<(), cuda_core::LaunchContractError> {
+    let prepared = module.prepare_block_rows(cuda_core::LaunchConfig1D::new(4, 64, 0))?;
+    module.block_rows(stream, &prepared, cuda_host::RowWidth::new(out, 128))
+}
+
+fn main() {
+    let _ = prepared_methods_exist;
+    let _ = block_rows_takes_a_row_width;
+}

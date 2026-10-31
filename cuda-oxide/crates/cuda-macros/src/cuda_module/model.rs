@@ -287,6 +287,7 @@ pub(crate) fn cuda_module_uniform_scalar(ty: &Type) -> Option<&Type> {
 
 /// True when a `DisjointSlice`'s index space carries a runtime row width.
 ///
+/// Those spaces are `RuntimeRowMajorTiles`, `Runtime2DIndex`, and `BlockRows`.
 /// Matched on the spelling of the index-space argument, exactly as the element
 /// type is. The spelling only selects the host ABI; `SpaceLayout` is what
 /// decides whether the device type really carries the width, and a mismatch
@@ -314,7 +315,9 @@ fn cuda_module_disjoint_slice_has_row_width(ty: &Type) -> bool {
             return false;
         };
         space_path.path.segments.last().is_some_and(|segment| {
-            segment.ident == "RuntimeRowMajorTiles" || segment.ident == "Runtime2DIndex"
+            segment.ident == "RuntimeRowMajorTiles"
+                || segment.ident == "Runtime2DIndex"
+                || segment.ident == "BlockRows"
         })
     })
 }

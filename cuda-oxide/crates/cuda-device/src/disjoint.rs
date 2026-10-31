@@ -43,7 +43,7 @@ use crate::thread::{
     FlatIndexSpace, Index1D, Index2D, IndexFormula, LaunchContext, Runtime2DIndex, ThreadIndex,
     WarpIndex,
 };
-use crate::view::{LinearTiles, RowMajorTiles, RuntimeRowMajorTiles};
+use crate::view::{BlockRows, LinearTiles, RowMajorTiles, RuntimeRowMajorTiles};
 use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ptr::NonNull;
@@ -143,6 +143,13 @@ impl<const ROWS: usize, const COLS: usize> SpaceLayout for RuntimeRowMajorTiles<
     const EMPTY: u32 = 0;
 }
 
+impl space_layout_sealed::Sealed for BlockRows {}
+impl SpaceLayout for BlockRows {
+    /// The matrix row width, in elements.
+    type Data = u32;
+    const EMPTY: u32 = 0;
+}
+
 /// A slice-like type that can only be accessed with thread-local indices.
 ///
 /// # Safety Invariants
@@ -223,6 +230,10 @@ const _: () = {
         size_of::<DisjointSlice<'static, f32, RuntimeRowMajorTiles<1, 1>>>()
             == size_of::<*mut f32>() + size_of::<usize>() + size_of::<u64>()
     );
+    assert!(
+        size_of::<DisjointSlice<'static, f32, BlockRows>>()
+            == size_of::<*mut f32>() + size_of::<usize>() + size_of::<u64>()
+    );
 };
 
 mod launch_contract_sealed {
@@ -278,6 +289,10 @@ impl<'a, T, const ROW_STRIDE: usize> __LaunchContractDisjointSlice<T, 2>
 }
 
 impl<'a, T> __LaunchContractDisjointSlice<T, 1> for DisjointSlice<'a, T, crate::thread::WarpIndex> {}
+
+// a 1D launch only: the row is `blockIdx.x` and the columns are residues of
+// `threadIdx.x`, so active Y or Z axes would give two threads the same element
+impl<'a, T> __LaunchContractDisjointSlice<T, 1> for DisjointSlice<'a, T, BlockRows> {}
 
 impl<'a, T> __LaunchContractDisjointSlice<T, 1>
     for DisjointSlice<'a, T, crate::thread::Runtime2DIndex>
@@ -401,7 +416,8 @@ impl<'a, T, IndexSpace: SpaceLayout> DisjointSlice<'a, T, IndexSpace> {
     ///   `thread_run32` and `grid_stride_runs32` require the run to start
     ///   below `len`.
     /// - `tile_2d32_rt` requires a non-zero row width and the tile's last
-    ///   element below `len`.
+    ///   element below `len`; `block_row32` requires a non-zero row width
+    ///   and the whole row within `len`.
     ///
     /// For a space with a runtime row width the slice carries a width of zero
     /// ([`SpaceLayout::EMPTY`]), which those accessors and
@@ -599,6 +615,18 @@ impl<'a, T, const ROWS: usize, const COLS: usize>
     /// Written once by the host into the launch packet, so every thread of the
     /// launch reads the same value. That is what lets
     /// [`tile_2d32_rt`](Self::tile_2d32_rt) be safe.
+    #[inline(always)]
+    pub fn row_width(&self) -> u32 {
+        self.space
+    }
+}
+
+impl<'a, T> DisjointSlice<'a, T, BlockRows> {
+    /// The row width this slice was built with, in elements.
+    ///
+    /// Written once by the host into the launch packet, so every thread of the
+    /// launch reads the same value. That is what lets
+    /// [`block_row32`](Self::block_row32) be safe.
     #[inline(always)]
     pub fn row_width(&self) -> u32 {
         self.space

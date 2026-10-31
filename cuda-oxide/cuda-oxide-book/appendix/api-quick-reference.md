@@ -290,6 +290,14 @@ complete tile once, then `at_const` accesses known positions without another
 runtime bounds check. `S` is the caller-declared logical row width and must
 match the buffer layout. See {ref}`Check a tile once <check-a-tile-once>`.
 
+For one block per row, use `DisjointSlice<T, BlockRows>::block_row32(lc)`
+under a `domain = 1` launch contract. Block `b` gets row `b`, or `None` when
+that row is not wholly inside the slice. The result is the same across the
+block when every thread calls it on the same, unchanged, host-bound slice.
+`row.thread_columns()` yields thread `t`'s columns `t, t + blockDim.x, ...`,
+each with `read`, `write` and `column`. The host binds the row width with
+`cuda_host::RowWidth`. See {ref}`Block-owned rows <block-owned-rows>`.
+
 ---
 
 ## Shared Memory

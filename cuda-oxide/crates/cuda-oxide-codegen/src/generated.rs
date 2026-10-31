@@ -375,6 +375,12 @@ fn generated_target_selector(
         Some(Tcgen05MmaKindAttr::Tf32) => "tf32",
         Some(Tcgen05MmaKindAttr::F8f6f4) => "f8f6f4",
         Some(Tcgen05MmaKindAttr::I8) => "i8",
+        Some(Tcgen05MmaKindAttr::Mxf4BlockScale) => "mxf4_block_scale",
+        Some(Tcgen05MmaKindAttr::Mxf4BlockScaleBlock32) => "mxf4_block_scale_block32",
+        Some(Tcgen05MmaKindAttr::Mxf4nvf4BlockScaleBlock16) => "mxf4nvf4_block_scale_block16",
+        Some(Tcgen05MmaKindAttr::Mxf4nvf4BlockScaleBlock32) => "mxf4nvf4_block_scale_block32",
+        Some(Tcgen05MmaKindAttr::Mxf8f6f4BlockScale) => "mxf8f6f4_block_scale",
+        Some(Tcgen05MmaKindAttr::Mxf8f6f4BlockScaleBlock32) => "mxf8f6f4_block_scale_block32",
         None => {
             return Err(generated_requirement_error(
                 ctx,

@@ -32,7 +32,10 @@ up or pass one off as the other:
   `PipelineTmaStore`), shared-memory operand tiles (`Sm100SharedTile<Layout, Role>`,
   `Sm100ScaleTile<Role>`), and Tensor Core MMAs (`Sm100TiledMma`,
   `Sm100BlockScaledTiledMma`, `Mxf4TiledMma`) **must be encoded in Rust's type
-  system**. Do not write a regular SIMT kernel with raw pointer arithmetic and
+  system**, and **all `cute-rs` names must match CuTeDSL 4.7** (`NamedBarrier`,
+  `PipelineTmaAsync`, `PipelineTmaUmma`, `PipelineUmmaAsync`, `PipelineTmaStore`,
+  `Producer`, `Consumer`, `PipelineState`, `prefetch_descriptor`, etc.). Do not
+  write a regular SIMT kernel with raw pointer arithmetic or custom names and
   call it a `cute-rs` kernel. See [`cute-rs-preview/AGENTS.md`](cute-rs-preview/AGENTS.md).
 
 ---

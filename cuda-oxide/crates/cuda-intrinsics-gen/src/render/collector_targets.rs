@@ -637,7 +637,7 @@ impl GeneratedIntrinsicTarget {
         replace_exact_render_fragment(
             &mut output,
             "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum GeneratedIntrinsicVariant {",
-            "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum GeneratedTcgen05MmaForm { Shared, Tensor, TensorAshift, SpShared, SpTensor, SpTensorAshift, WsShared, WsSharedZeroColMask, WsSpShared, WsSpSharedZeroColMask, WsSpTensor, WsSpTensorZeroColMask, WsTensor, WsTensorZeroColMask }\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum GeneratedTcgen05MmaTargetSelector { Kind }\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum GeneratedIntrinsicVariant {",
+            "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum GeneratedTcgen05MmaForm { Shared, Tensor, TensorAshift, SpShared, SpTensor, SpTensorAshift, WsShared, WsSharedZeroColMask, WsSpShared, WsSpSharedZeroColMask, WsSpTensor, WsSpTensorZeroColMask, WsTensor, WsTensorZeroColMask, SharedMxf4BlockScale, SharedMxf4BlockScaleBlock32, SharedMxf4nvf4BlockScaleBlock16, SharedMxf4nvf4BlockScaleBlock32, SharedMxf8f6f4BlockScale, SharedMxf8f6f4BlockScaleBlock32, TensorMxf4BlockScale, TensorMxf4BlockScaleBlock32, TensorMxf4nvf4BlockScaleBlock16, TensorMxf4nvf4BlockScaleBlock32, TensorMxf8f6f4BlockScale, TensorMxf8f6f4BlockScaleBlock32, SpSharedMxf8f6f4BlockScale, SpSharedMxf8f6f4BlockScaleBlock32, SpTensorMxf8f6f4BlockScale, SpTensorMxf8f6f4BlockScaleBlock32 }\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum GeneratedTcgen05MmaTargetSelector { Kind }\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum GeneratedIntrinsicVariant {",
         );
         replace_exact_render_fragment(
             &mut output,
@@ -684,6 +684,22 @@ impl GeneratedIntrinsicTarget {
                 GeneratedTcgen05MmaForm::WsSpTensorZeroColMask => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::WsSpTensorZeroColMask),
                 GeneratedTcgen05MmaForm::WsTensor => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::WsTensor),
                 GeneratedTcgen05MmaForm::WsTensorZeroColMask => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::WsTensorZeroColMask),
+                GeneratedTcgen05MmaForm::SharedMxf4BlockScale => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::SharedMxf4BlockScale),
+                GeneratedTcgen05MmaForm::SharedMxf4BlockScaleBlock32 => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::SharedMxf4BlockScaleBlock32),
+                GeneratedTcgen05MmaForm::SharedMxf4nvf4BlockScaleBlock16 => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::SharedMxf4nvf4BlockScaleBlock16),
+                GeneratedTcgen05MmaForm::SharedMxf4nvf4BlockScaleBlock32 => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::SharedMxf4nvf4BlockScaleBlock32),
+                GeneratedTcgen05MmaForm::SharedMxf8f6f4BlockScale => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::SharedMxf8f6f4BlockScale),
+                GeneratedTcgen05MmaForm::SharedMxf8f6f4BlockScaleBlock32 => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::SharedMxf8f6f4BlockScaleBlock32),
+                GeneratedTcgen05MmaForm::TensorMxf4BlockScale => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::TensorMxf4BlockScale),
+                GeneratedTcgen05MmaForm::TensorMxf4BlockScaleBlock32 => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::TensorMxf4BlockScaleBlock32),
+                GeneratedTcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock16 => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::TensorMxf4nvf4BlockScaleBlock16),
+                GeneratedTcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock32 => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::TensorMxf4nvf4BlockScaleBlock32),
+                GeneratedTcgen05MmaForm::TensorMxf8f6f4BlockScale => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::TensorMxf8f6f4BlockScale),
+                GeneratedTcgen05MmaForm::TensorMxf8f6f4BlockScaleBlock32 => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::TensorMxf8f6f4BlockScaleBlock32),
+                GeneratedTcgen05MmaForm::SpSharedMxf8f6f4BlockScale => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::SpSharedMxf8f6f4BlockScale),
+                GeneratedTcgen05MmaForm::SpSharedMxf8f6f4BlockScaleBlock32 => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::SpSharedMxf8f6f4BlockScaleBlock32),
+                GeneratedTcgen05MmaForm::SpTensorMxf8f6f4BlockScale => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::SpTensorMxf8f6f4BlockScale),
+                GeneratedTcgen05MmaForm::SpTensorMxf8f6f4BlockScaleBlock32 => op.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() == Some(&Tcgen05MmaFormAttr::SpTensorMxf8f6f4BlockScaleBlock32),
             };
             let selector_matches = matches!(target_selector, GeneratedTcgen05MmaTargetSelector::Kind)
                 && op.get_attr_nvvm_tcgen05_mma_kind(ctx).is_some();

@@ -611,7 +611,7 @@ pub(in crate::render) fn render_dialect_tma(catalog: &CatalogFile, hash: &str) -
 }
 
 pub(in crate::render) fn render_dialect_tcgen05(catalog: &CatalogFile, hash: &str) -> String {
-    assert_eq!(tcgen05_intrinsics(catalog).count(), 233);
+    assert!(matches!(tcgen05_intrinsics(catalog).count(), 233 | 249));
     let mut output = rust_header(catalog, hash);
     output.push_str(
         r#"//! Generated Tensor Core Generation 5 operations.
@@ -751,11 +751,24 @@ pub enum Tcgen05MmaFormAttr {
     Shared, Tensor, TensorAshift, SpShared, SpTensor, SpTensorAshift,
     WsShared, WsSharedZeroColMask, WsSpShared, WsSpSharedZeroColMask,
     WsSpTensor, WsSpTensorZeroColMask, WsTensor, WsTensorZeroColMask,
+    SharedMxf4BlockScale, SharedMxf4BlockScaleBlock32,
+    SharedMxf4nvf4BlockScaleBlock16, SharedMxf4nvf4BlockScaleBlock32,
+    SharedMxf8f6f4BlockScale, SharedMxf8f6f4BlockScaleBlock32,
+    TensorMxf4BlockScale, TensorMxf4BlockScaleBlock32,
+    TensorMxf4nvf4BlockScaleBlock16, TensorMxf4nvf4BlockScaleBlock32,
+    TensorMxf8f6f4BlockScale, TensorMxf8f6f4BlockScaleBlock32,
+    SpSharedMxf8f6f4BlockScale, SpSharedMxf8f6f4BlockScaleBlock32,
+    SpTensorMxf8f6f4BlockScale, SpTensorMxf8f6f4BlockScaleBlock32,
 }
 
 #[pliron_attr(name = "nvvm.tcgen05_mma_kind", format, verifier = "succ")]
 #[derive(PartialEq, Eq, Clone, Debug, Hash)]
-pub enum Tcgen05MmaKindAttr { F16, Tf32, F8f6f4, I8 }
+pub enum Tcgen05MmaKindAttr {
+    F16, Tf32, F8f6f4, I8,
+    Mxf4BlockScale, Mxf4BlockScaleBlock32,
+    Mxf4nvf4BlockScaleBlock16, Mxf4nvf4BlockScaleBlock32,
+    Mxf8f6f4BlockScale, Mxf8f6f4BlockScaleBlock32,
+}
 
 #[pliron_attr(name = "nvvm.tcgen05_mma_cta_group", format, verifier = "succ")]
 #[derive(PartialEq, Eq, Clone, Debug, Hash)]
@@ -819,6 +832,26 @@ impl Verify for Tcgen05MmaOp {
                 (&[(I32, 2), (I64, 1), (I32, 1), (I1, 1), (I32, 1), (I64, 1)], false),
             Tcgen05MmaFormAttr::WsTensorZeroColMask =>
                 (&[(I32, 2), (I64, 1), (I32, 1), (I1, 1), (I64, 1)], false),
+            Tcgen05MmaFormAttr::SharedMxf4BlockScale
+            | Tcgen05MmaFormAttr::SharedMxf4BlockScaleBlock32
+            | Tcgen05MmaFormAttr::SharedMxf4nvf4BlockScaleBlock16
+            | Tcgen05MmaFormAttr::SharedMxf4nvf4BlockScaleBlock32
+            | Tcgen05MmaFormAttr::SharedMxf8f6f4BlockScale
+            | Tcgen05MmaFormAttr::SharedMxf8f6f4BlockScaleBlock32 =>
+                (&[(I32, 1), (I64, 2), (I32, 1), (I1, 1), (I32, 2)], true),
+            Tcgen05MmaFormAttr::TensorMxf4BlockScale
+            | Tcgen05MmaFormAttr::TensorMxf4BlockScaleBlock32
+            | Tcgen05MmaFormAttr::TensorMxf4nvf4BlockScaleBlock16
+            | Tcgen05MmaFormAttr::TensorMxf4nvf4BlockScaleBlock32
+            | Tcgen05MmaFormAttr::TensorMxf8f6f4BlockScale
+            | Tcgen05MmaFormAttr::TensorMxf8f6f4BlockScaleBlock32 =>
+                (&[(I32, 2), (I64, 1), (I32, 1), (I1, 1), (I32, 2)], true),
+            Tcgen05MmaFormAttr::SpSharedMxf8f6f4BlockScale
+            | Tcgen05MmaFormAttr::SpSharedMxf8f6f4BlockScaleBlock32 =>
+                (&[(I32, 1), (I64, 2), (I32, 1), (I1, 1), (I32, 3)], true),
+            Tcgen05MmaFormAttr::SpTensorMxf8f6f4BlockScale
+            | Tcgen05MmaFormAttr::SpTensorMxf8f6f4BlockScaleBlock32 =>
+                (&[(I32, 2), (I64, 1), (I32, 1), (I1, 1), (I32, 3)], true),
         };
         verify_tcgen05_signature(ctx, op, "nvvm.tcgen05_mma", operands, &[], None)?;
 

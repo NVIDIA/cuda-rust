@@ -1,0 +1,27 @@
+<svg class="qtts" xmlns="http://www.w3.org/2000/svg" width="680" height="470" viewBox="0 0 680 470" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif">
+<title>Inside One Expert: Non-Gated ReLU² + NVFP4 Block Scaling</title>
+<style>.qtts .th { font-size:14px; font-weight:600; fill:#1e1e1e } .qtts .t { font-size:13px; fill:#2b2b2b } .qtts .ts { font-size:12px; fill:#5c5c5c } .qtts .k-box { fill:#f7f6f3; stroke:#c8c5be } .qtts .tx-box { fill:#1e1e1e } .qtts .k-purple { fill:#ebe9fb; stroke:#7f77dd } .qtts .tx-purple { fill:#3a3490 } .qtts .k-teal { fill:#dff3ec; stroke:#3aa47f } .qtts .tx-teal { fill:#1f5c47 } .qtts .k-coral { fill:#fde7e2; stroke:#e0735c } .qtts .tx-coral { fill:#7d2f1f } .qtts .k-amber { fill:#fdeed3; stroke:#ef9f27 } .qtts .tx-amber { fill:#6b4100 } .qtts .k-gray { fill:#eeedea; stroke:#a9a69f } .qtts .tx-gray { fill:#333 } .qtts .dash { fill:none; stroke:#c8c5be; stroke-dasharray:4 3 } .qtts .arr { fill:none; stroke:#7b7b7b; stroke-width:1.5 } .qtts .arrhead { fill:none; stroke:#7b7b7b; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round } @media (prefers-color-scheme: dark) { .qtts .th { fill: #f2f2f2 } .qtts .t { fill: #e6e6e6 } .qtts .ts { fill: #b8b8b8 } .qtts .k-box { fill: #2a2a2e; stroke: #4a4a50 } .qtts .tx-box { fill: #f2f2f2 } .qtts .dash { stroke: #55555c } .qtts .arr, .qtts .arrhead { stroke: #a3a3a3 } .qtts .k-purple { fill: #3a3490; stroke: #9a93ea } .qtts .tx-purple { fill: #e9e7fb } .qtts .k-teal { fill: #1f5c47; stroke: #5fc6a0 } .qtts .tx-teal { fill: #dff3ec } .qtts .k-coral { fill: #7d2f1f; stroke: #f08b76 } .qtts .tx-coral { fill: #fde7e2 } .qtts .k-amber { fill: #6b4100; stroke: #f3b65a } .qtts .tx-amber { fill: #fdeed3 } .qtts .k-gray { fill: #3a3a3e; stroke: #77777d } .qtts .tx-gray { fill: #e6e6e6 } }</style>
+<defs><marker id="arrow-04" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="arrhead" d="M2 1L8 5L2 9"/></marker></defs>
+<rect class="k-box" x="150" y="22" width="380" height="48" rx="8" stroke-width="0.5"/>
+<text class="th tx-box" x="340" y="38" text-anchor="middle" dominant-baseline="central">Quantized Group Activations X_fp4 [16, K]</text>
+<text class="ts tx-box" x="340" y="56" text-anchor="middle" dominant-baseline="central">packed 4-bit E2M1 (2 per byte) + 1 FP8 E4M3 scale per 16 values</text>
+<line class="arr" x1="340" y1="70" x2="340" y2="98" marker-end="url(#arrow-04)"/>
+<rect class="k-teal" x="120" y="102" width="440" height="62" rx="8" stroke-width="0.5"/>
+<text class="th tx-teal" x="340" y="122" text-anchor="middle" dominant-baseline="central">FC1 (`W_up` NVFP4 Grouped GEMM: 2688 → 1856)</text>
+<text class="ts tx-teal" x="340" y="142" text-anchor="middle" dominant-baseline="central">Blackwell `tcgen05.mma.kind::mxf4nvf4` · accumulates in FP32 TMEM</text>
+<line class="arr" x1="340" y1="164" x2="340" y2="192" marker-end="url(#arrow-04)"/>
+<rect class="k-amber" x="120" y="196" width="440" height="68" rx="8" stroke-width="1"/>
+<text class="th tx-amber" x="340" y="216" text-anchor="middle" dominant-baseline="central">Fused Epilogue: ReLU²(u) = max(0, u)² + NVFP4 Requant</text>
+<text class="ts tx-amber" x="340" y="236" text-anchor="middle" dominant-baseline="central">No separate Gate matrix! (2 matrices per expert instead of 3 in SwiGLU)</text>
+<text class="ts tx-amber" x="340" y="252" text-anchor="middle" dominant-baseline="central">Requantizes intermediate [16, 1856] back to E2M1 + E4M3 in-register</text>
+<line class="arr" x1="340" y1="264" x2="340" y2="292" marker-end="url(#arrow-04)"/>
+<rect class="k-purple" x="120" y="296" width="440" height="62" rx="8" stroke-width="0.5"/>
+<text class="th tx-purple" x="340" y="316" text-anchor="middle" dominant-baseline="central">FC2 (`W_down` NVFP4 Grouped GEMM: 1856 → 2688)</text>
+<text class="ts tx-purple" x="340" y="336" text-anchor="middle" dominant-baseline="central">`tcgen05.mma.kind::mxf4nvf4` × global scale → BF16 [16, 2688]</text>
+<rect class="dash" x="40" y="378" width="600" height="72" rx="8" stroke-width="1"/>
+<text class="th" x="340" y="400" text-anchor="middle" dominant-baseline="central">NVFP4 Memory Footprint: 9 Bytes per 16 Weights (vs. 32 Bytes in BF16 = 3.56× smaller)</text>
+<rect class="k-coral" x="90" y="416" width="340" height="22" rx="4" stroke-width="0.5"/>
+<text class="ts tx-coral" x="260" y="427" text-anchor="middle" dominant-baseline="central">16 × 4-bit E2M1 values = 8 packed bytes (`f4e2m1fnx2`)</text>
+<rect class="k-amber" x="440" y="416" width="150" height="22" rx="4" stroke-width="0.5"/>
+<text class="ts tx-amber" x="515" y="427" text-anchor="middle" dominant-baseline="central">1 × FP8 E4M3 scale (1 B)</text>
+</svg>

@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemotron3_moe"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Nemotron-3 NVFP4 ReLU² Mixture-of-Experts (MoE) in native cuda-oxide SIMT on Blackwell (sm_100a)."
+
+[workspace]
+
+[dependencies]
+cuda-device = { path = "../../crates/cuda-device" }
+cuda-host = { path = "../../crates/cuda-host" }
+cuda-core = { path = "../../../cuda-core" }
+half = "2.4"

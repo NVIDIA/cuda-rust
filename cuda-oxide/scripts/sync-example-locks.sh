@@ -53,7 +53,7 @@
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-EXAMPLES_ROOTS=("crates/rustc-codegen-cuda/examples" "cute-rs-preview/examples" "cute-rs-preview/models")
+EXAMPLES_ROOTS=("crates/rustc-codegen-cuda/examples" "models" "cute-rs-preview/examples" "cute-rs-preview/models")
 
 usage() {
     # The doc block above: everything after the shebang + SPDX lines, up to

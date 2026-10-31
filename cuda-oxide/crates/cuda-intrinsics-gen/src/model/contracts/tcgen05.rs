@@ -39,7 +39,7 @@ pub struct Tcgen05Mma {
     pub libnvvm_target: CatalogTargetRequirement,
 }
 
-/// The 14 LLVM source forms covered by the first tcgen05 MMA batch.
+/// The LLVM source forms covered by the tcgen05 MMA batches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tcgen05MmaForm {
@@ -57,6 +57,22 @@ pub enum Tcgen05MmaForm {
     WsSpTensorZeroColMask,
     WsTensor,
     WsTensorZeroColMask,
+    SharedMxf4BlockScale,
+    SharedMxf4BlockScaleBlock32,
+    SharedMxf4nvf4BlockScaleBlock16,
+    SharedMxf4nvf4BlockScaleBlock32,
+    SharedMxf8f6f4BlockScale,
+    SharedMxf8f6f4BlockScaleBlock32,
+    TensorMxf4BlockScale,
+    TensorMxf4BlockScaleBlock32,
+    TensorMxf4nvf4BlockScaleBlock16,
+    TensorMxf4nvf4BlockScaleBlock32,
+    TensorMxf8f6f4BlockScale,
+    TensorMxf8f6f4BlockScaleBlock32,
+    SpSharedMxf8f6f4BlockScale,
+    SpSharedMxf8f6f4BlockScaleBlock32,
+    SpTensorMxf8f6f4BlockScale,
+    SpTensorMxf8f6f4BlockScaleBlock32,
 }
 
 /// Immediate arguments that select one imported tcgen05 MMA spelling.
@@ -74,9 +90,13 @@ pub enum Tcgen05MmaSelectorLayout {
         b_buffer_argument: u8,
         b_usage_argument: u8,
     },
+    BlockScaled {
+        cta_group_argument: u8,
+        collector_a_argument: u8,
+    },
 }
 
-/// A fixed warp-specialized selector tuple used by compatibility aliases.
+/// A fixed warp-specialized or block-scaled selector tuple.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Tcgen05MmaFixedSelectors {
@@ -92,6 +112,12 @@ pub enum Tcgen05MmaKind {
     Tf32,
     F8f6f4,
     I8,
+    Mxf4BlockScale,
+    Mxf4BlockScaleBlock32,
+    Mxf4nvf4BlockScaleBlock16,
+    Mxf4nvf4BlockScaleBlock32,
+    Mxf8f6f4BlockScale,
+    Mxf8f6f4BlockScaleBlock32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

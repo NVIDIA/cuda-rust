@@ -64,6 +64,9 @@ done < <(git -C "${GIT_ROOT}" ls-files \
     'cuda-oxide/crates/rustc-codegen-cuda/examples/*/Cargo.toml' \
     'cuda-oxide/crates/rustc-codegen-cuda/examples/*/*/Cargo.toml' \
     'cuda-oxide/crates/rustc-codegen-cuda/examples/*/*/*/Cargo.toml' \
+    'cuda-oxide/models/*/Cargo.toml' \
+    'cuda-oxide/models/*/*/Cargo.toml' \
+    'cuda-oxide/models/*/*/*/Cargo.toml' \
     'cuda-oxide/cute-rs-preview/examples/*/Cargo.toml' \
     'cuda-oxide/cute-rs-preview/examples/*/*/Cargo.toml' \
     'cuda-oxide/cute-rs-preview/examples/*/*/*/Cargo.toml' \

@@ -93,10 +93,9 @@ MANDATORY TYPE-ENCODED `cute-rs` ARCHITECTURE
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Names follow CuTeDSL
+## Names follow CuTeDSL (hard rule)
 
-A CuTe concept carries the name CuTeDSL 4.7 gives it, so that a CuTeDSL author
-reads a cute-rs kernel without a glossary.
+**Hard rule:** Every `cute-rs` type, trait, pipeline, barrier, and method must carry the exact name **CuTeDSL 4.7** gives it, so that a CuTeDSL author reads a `cute-rs` kernel without a glossary. Never invent a custom name when CuTeDSL already defines one.
 
 - Look the name up before writing it: the CuTeDSL sources
   (`python/CuTeDSL/cutlass/cute`, `cutlass/pipeline`, `cutlass/utils` and

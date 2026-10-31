@@ -375,7 +375,7 @@ fn register_mma_rendering_preserves_apis_order_convergence_and_variants() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = crate::resolve::resolve(&repo_root).unwrap();
     validate_renderable(&catalog).unwrap();
-    assert_eq!(catalog.intrinsics.len(), 1042);
+    assert_eq!(catalog.intrinsics.len(), 1058);
     let records: Vec<_> = register_mmas(&catalog).collect();
     assert_eq!(records.len(), 155);
     let generated_records = records

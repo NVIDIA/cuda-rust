@@ -1,0 +1,44 @@
+<svg class="qtts" xmlns="http://www.w3.org/2000/svg" width="680" height="540" viewBox="0 0 680 540" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif">
+<title>6-Warp (192-Thread) Persistent Weight-Stationary Pipeline (B = 2,048 .. 16,384)</title>
+<style>.qtts .th { font-size:14px; font-weight:600; fill:#1e1e1e } .qtts .t { font-size:13px; fill:#2b2b2b } .qtts .ts { font-size:12px; fill:#5c5c5c } .qtts .k-box { fill:#f7f6f3; stroke:#c8c5be } .qtts .tx-box { fill:#1e1e1e } .qtts .k-purple { fill:#ebe9fb; stroke:#7f77dd } .qtts .tx-purple { fill:#3a3490 } .qtts .k-teal { fill:#dff3ec; stroke:#3aa47f } .qtts .tx-teal { fill:#1f5c47 } .qtts .k-coral { fill:#fde7e2; stroke:#e0735c } .qtts .tx-coral { fill:#7d2f1f } .qtts .k-amber { fill:#fdeed3; stroke:#ef9f27 } .qtts .tx-amber { fill:#6b4100 } .qtts .k-gray { fill:#eeedea; stroke:#a9a69f } .qtts .tx-gray { fill:#333 } .qtts .dash { fill:none; stroke:#c8c5be; stroke-dasharray:4 3 } .qtts .arr { fill:none; stroke:#7b7b7b; stroke-width:1.5 } .qtts .arrhead { fill:none; stroke:#7b7b7b; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round } @media (prefers-color-scheme: dark) { .qtts .th { fill: #f2f2f2 } .qtts .t { fill: #e6e6e6 } .qtts .ts { fill: #b8b8b8 } .qtts .k-box { fill: #2a2a2e; stroke: #4a4a50 } .qtts .tx-box { fill: #f2f2f2 } .qtts .dash { stroke: #55555c } .qtts .arr, .qtts .arrhead { stroke: #a3a3a3 } .qtts .k-purple { fill: #3a3490; stroke: #9a93ea } .qtts .tx-purple { fill: #e9e7fb } .qtts .k-teal { fill: #1f5c47; stroke: #5fc6a0 } .qtts .tx-teal { fill: #dff3ec } .qtts .k-coral { fill: #7d2f1f; stroke: #f08b76 } .qtts .tx-coral { fill: #fde7e2 } .qtts .k-amber { fill: #6b4100; stroke: #f3b65a } .qtts .tx-amber { fill: #fdeed3 } .qtts .k-gray { fill: #3a3a3e; stroke: #77777d } .qtts .tx-gray { fill: #e6e6e6 } }</style>
+<defs><marker id="arrow-07" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="arrhead" d="M2 1L8 5L2 9"/></marker></defs>
+<text class="th" x="340" y="26" text-anchor="middle" dominant-baseline="central">Regime 2: 6-Warp (192-Thread) Persistent Pipeline (B = 2,048 .. 16,384)</text>
+
+<rect class="dash" x="36" y="46" width="608" height="390" rx="10" stroke-width="1"/>
+<text class="ts" x="340" y="68" text-anchor="middle" dominant-baseline="central">128 persistent CTAs · tile_n = 128 · 0 spills · 100% TMA / MMA / Epilogue overlap</text>
+
+<rect class="k-amber" x="60" y="88" width="560" height="78" rx="8" stroke-width="0.75"/>
+<text class="th tx-amber" x="340" y="110" text-anchor="middle" dominant-baseline="central">Warp 5 — TMA Producer (Weight-Stationary)</text>
+<text class="ts tx-amber" x="340" y="131" text-anchor="middle" dominant-baseline="central">Startup: loads stationary W (64 KB) + SFA (8 KB) once per CTA</text>
+<text class="ts tx-amber" x="340" y="150" text-anchor="middle" dominant-baseline="central">Mainloop: 4-stage TMA ring (32 KB Tokens + 4 KB SFB per stage)</text>
+
+<line class="arr" x1="340" y1="166" x2="340" y2="188" marker-end="url(#arrow-07)"/>
+
+<rect class="k-coral" x="60" y="192" width="560" height="78" rx="8" stroke-width="0.75"/>
+<text class="th tx-coral" x="340" y="214" text-anchor="middle" dominant-baseline="central">Warp 4 — tcgen05 MMA (2-Stage TMEM Ping-Pong)</text>
+<text class="ts tx-coral" x="340" y="235" text-anchor="middle" dominant-baseline="central">Startup: stages all 16 SFA scale atoms into TMEM[256..319] once</text>
+<text class="ts tx-coral" x="340" y="254" text-anchor="middle" dominant-baseline="central">Mainloop: Op A = Tokens, Op B = Weights → 2-stage TMEM[0..1]</text>
+
+<path class="arr" d="M340 270 V282 H194 V294" marker-end="url(#arrow-07)"/>
+<path class="arr" d="M340 282 H486 V294" marker-end="url(#arrow-07)"/>
+
+<rect class="k-teal" x="60" y="298" width="268" height="118" rx="8" stroke-width="0.75"/>
+<text class="th tx-teal" x="194" y="320" text-anchor="middle" dominant-baseline="central">Warps 0..3 — FC1 Epilogue</text>
+<text class="ts tx-teal" x="194" y="342" text-anchor="middle" dominant-baseline="central">2 × ld.32x32b.x64 (128 threads)</text>
+<text class="ts tx-teal" x="194" y="361" text-anchor="middle" dominant-baseline="central">releases tmem_free_bar[slot]</text>
+<text class="ts tx-teal" x="194" y="380" text-anchor="middle" dominant-baseline="central">in-register ReLU² + NVFP4 (0 SMEM)</text>
+<text class="ts tx-teal" x="194" y="399" text-anchor="middle" dominant-baseline="central">coalesced u128 + u32 global stores</text>
+
+<rect class="k-purple" x="352" y="298" width="268" height="118" rx="8" stroke-width="0.75"/>
+<text class="th tx-purple" x="486" y="320" text-anchor="middle" dominant-baseline="central">Warps 0..3 — FC2 Epilogue</text>
+<text class="ts tx-purple" x="486" y="342" text-anchor="middle" dominant-baseline="central">2 × ld.32x32b.x64 (128 threads)</text>
+<text class="ts tx-purple" x="486" y="361" text-anchor="middle" dominant-baseline="central">releases tmem_free_bar[slot]</text>
+<text class="ts tx-purple" x="486" y="380" text-anchor="middle" dominant-baseline="central">BF16 pack → 2 × 8 KB SWIZZLE_64B</text>
+<text class="ts tx-purple" x="486" y="399" text-anchor="middle" dominant-baseline="central">hardware 2D TMA Store (S2G)</text>
+
+<path class="arr" d="M486 416 V446 H340 V458" marker-end="url(#arrow-07)"/>
+
+<rect class="k-box" x="60" y="462" width="560" height="58" rx="8" stroke-width="0.75"/>
+<text class="th tx-box" x="340" y="482" text-anchor="middle" dominant-baseline="central">Kernel 4 — Top-4 Weighted Combine (1 Warp / Token)</text>
+<text class="ts tx-box" x="340" y="502" text-anchor="middle" dominant-baseline="central">Coalesced u128 loads across 4 expert rows → Output [B, 1024]</text>
+</svg>

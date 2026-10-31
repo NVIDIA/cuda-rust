@@ -137,7 +137,123 @@ fn register_nvvm_numeric_common_pack(
     );
     registry.register_operation::<SetMaxNRegIncOp>(RegisterTranslation(true))?;
     registry.register_operation::<SetMaxNRegDecOp>(RegisterTranslation(false))?;
+    registry.register_attribute::<PackedAtomicFormatAttr>(DropAttribute)?;
+    registry.register_attribute::<PackedAtomicStateSpaceAttr>(DropAttribute)?;
+    registry.register_attribute::<PackedAtomicOrderingAttr>(DropAttribute)?;
+    registry.register_attribute::<PackedAtomicScopeAttr>(DropAttribute)?;
+    registry.register_attribute::<PackedAtomicRoundingAttr>(DropAttribute)?;
+    registry.register_attribute::<PackedAtomicSubnormalAttr>(DropAttribute)?;
+    registry.register_attribute::<PackedAtomicAtomicityAttr>(DropAttribute)?;
+    registry.register_operation::<PackedAtomicAddOp>(PackedAtomicAddTranslation)?;
+    registry.register_operation::<NvvmAtomAddF16x2Op>(CompatPackedAtomicAddTranslation(false))?;
+    registry.register_operation::<NvvmAtomAddBf16x2Op>(CompatPackedAtomicAddTranslation(true))?;
     Ok(())
+}
+
+/// Lower `nvvm.packed_atomic_add` (`v1:i0014` / `v1:i0015`) to side-effecting inline PTX
+/// `atom.global.add.noftz.{f16x2,bf16x2}`, matching `mir-lower`'s `convert_packed_atom_add`.
+struct PackedAtomicAddTranslation;
+impl OperationTranslation for PackedAtomicAddTranslation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        mut input: OperationInput,
+        _session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        let op = PackedAtomicAddOp::new(source);
+        op.verify(ctx).map_err(|e| e.to_string())?;
+        let format = op.get_attr_nvvm_packed_atomic_format(ctx);
+        let state_space = op.get_attr_nvvm_packed_atomic_state_space(ctx);
+        let ordering = op.get_attr_nvvm_packed_atomic_ordering(ctx);
+        let scope = op.get_attr_nvvm_packed_atomic_scope(ctx);
+        let rounding = op.get_attr_nvvm_packed_atomic_rounding(ctx);
+        let subnormal = op.get_attr_nvvm_packed_atomic_subnormal(ctx);
+        let atomicity = op.get_attr_nvvm_packed_atomic_atomicity(ctx);
+        let (marker, instruction) = match (
+            format.as_deref(),
+            state_space.as_deref(),
+            ordering.as_deref(),
+            scope.as_deref(),
+            rounding.as_deref(),
+            subnormal.as_deref(),
+            atomicity.as_deref(),
+        ) {
+            (
+                Some(&PackedAtomicFormatAttr::F16x2),
+                Some(&PackedAtomicStateSpaceAttr::Global),
+                Some(&PackedAtomicOrderingAttr::Relaxed),
+                Some(&PackedAtomicScopeAttr::Gpu),
+                Some(&PackedAtomicRoundingAttr::Rn),
+                Some(&PackedAtomicSubnormalAttr::NoFtz),
+                Some(&PackedAtomicAtomicityAttr::PerElement),
+            ) => ("v1:i0014", "atom.global.add.noftz.f16x2 $0, [$1], $2;"),
+            (
+                Some(&PackedAtomicFormatAttr::Bf16x2),
+                Some(&PackedAtomicStateSpaceAttr::Global),
+                Some(&PackedAtomicOrderingAttr::Relaxed),
+                Some(&PackedAtomicScopeAttr::Gpu),
+                Some(&PackedAtomicRoundingAttr::Rn),
+                Some(&PackedAtomicSubnormalAttr::NoFtz),
+                Some(&PackedAtomicAtomicityAttr::PerElement),
+            ) => ("v1:i0015", "atom.global.add.noftz.bf16x2 $0, [$1], $2;"),
+            _ => return Err("unsupported nvvm.packed_atomic_add selector combination".into()),
+        };
+        require_input(&mut input, marker, 2, 1)?;
+        emit_packed_atomic_asm(input, instruction)
+    }
+}
+
+/// Lower compatibility `nvvm.atom_add_{f16x2,bf16x2}` (`v1:i0014` / `v1:i0015`) operations.
+struct CompatPackedAtomicAddTranslation(
+    #[doc = "True selects `bf16x2` (`v1:i0015`); false selects `f16x2` (`v1:i0014`)."] bool,
+);
+impl OperationTranslation for CompatPackedAtomicAddTranslation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        mut input: OperationInput,
+        _session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        let (marker, instruction) = if self.0 {
+            NvvmAtomAddBf16x2Op::new(source)
+                .verify(ctx)
+                .map_err(|e| e.to_string())?;
+            ("v1:i0015", "atom.global.add.noftz.bf16x2 $0, [$1], $2;")
+        } else {
+            NvvmAtomAddF16x2Op::new(source)
+                .verify(ctx)
+                .map_err(|e| e.to_string())?;
+            ("v1:i0014", "atom.global.add.noftz.f16x2 $0, [$1], $2;")
+        };
+        require_input(&mut input, marker, 2, 1)?;
+        emit_packed_atomic_asm(input, instruction)
+    }
+}
+
+/// Build the side-effecting `llvm.inline_asm` operation for `atom.global.add.noftz.{f16x2,bf16x2}`.
+fn emit_packed_atomic_asm(
+    input: OperationInput,
+    instruction: &'static str,
+) -> Result<Vec<MlirOperation>, String> {
+    let mut op = operation(
+        "llvm.inline_asm",
+        input.operands,
+        input.results,
+        &input.location,
+    )?;
+    op.properties.insert(
+        "asm_string".into(),
+        MlirAttribute::String(instruction.into()),
+    );
+    op.properties.insert(
+        "constraints".into(),
+        MlirAttribute::String("=r,l,r,~{memory}".into()),
+    );
+    op.properties
+        .insert("has_side_effects".into(), MlirAttribute::Unit);
+    Ok(vec![op])
 }
 
 /// Build an LLVM intrinsic call retaining translated operands/results and an empty bundle list.

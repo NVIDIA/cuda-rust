@@ -3038,3 +3038,73 @@ fn test_scalar_arithmetic_libnvvm_uses_exact_inline_ptx() -> Result<(), anyhow::
     );
     Ok(())
 }
+
+/// Rust float `%` is C `fmod`, exact for every finite pair. NVPTX expands
+/// `llvm.frem` inexactly (`a - trunc(a / b) * b`), so float `mir.rem` must
+/// lower to a libdevice `fmod` call on both widths, while integer `mir.rem`
+/// keeps lowering to `srem` / `urem`.
+#[test]
+fn test_float_rem_lowers_to_libdevice_fmod() -> Result<(), anyhow::Error> {
+    use mir_lower::convert::ops::arithmetic::{LIBDEVICE_FMOD_F32, LIBDEVICE_FMOD_F64};
+    use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
+    use pliron::r#type::TypeHandle;
+
+    let mut ctx = make_test_ctx();
+    let f32_ty: TypeHandle = FP32Type::get(&ctx).into();
+    let f64_ty: TypeHandle = FP64Type::get(&ctx).into();
+    let i32_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Signed).into();
+    let u32_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+    let (module_ptr, entry) = build_test_kernel(
+        &mut ctx,
+        vec![f32_ty, f32_ty, f64_ty, f64_ty, i32_ty, u32_ty],
+    );
+    let arg = |ctx: &Context, i: usize| entry.deref(ctx).get_argument(i);
+    let operands = [
+        (arg(&ctx, 0), arg(&ctx, 1), f32_ty),
+        (arg(&ctx, 2), arg(&ctx, 3), f64_ty),
+        (arg(&ctx, 4), arg(&ctx, 4), i32_ty),
+        (arg(&ctx, 5), arg(&ctx, 5), u32_ty),
+    ];
+    for (lhs, rhs, result_ty) in operands {
+        let rem = Operation::new(
+            &mut ctx,
+            mir::MirRemOp::get_concrete_op_info(),
+            vec![result_ty],
+            vec![lhs, rhs],
+            vec![],
+            0,
+        );
+        rem.insert_at_back(entry, &ctx);
+    }
+    append_return(&mut ctx, entry);
+
+    mir_lower::lower_mir_to_llvm(&mut ctx, module_ptr).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let mut callees = Vec::new();
+    let mut frem = 0usize;
+    let mut srem = 0usize;
+    let mut urem = 0usize;
+    for body_op in lowered_kernel_body(&ctx, module_ptr) {
+        if let Some(call) = Operation::get_op::<llvm::CallOp>(body_op, &ctx)
+            && let CallOpCallable::Direct(sym) = call.callee(&ctx)
+        {
+            callees.push(sym.to_string());
+        }
+        frem += usize::from(Operation::get_op::<llvm::FRemOp>(body_op, &ctx).is_some());
+        srem += usize::from(Operation::get_op::<llvm::SRemOp>(body_op, &ctx).is_some());
+        urem += usize::from(Operation::get_op::<llvm::URemOp>(body_op, &ctx).is_some());
+    }
+
+    assert_eq!(
+        callees,
+        vec![
+            LIBDEVICE_FMOD_F32.to_string(),
+            LIBDEVICE_FMOD_F64.to_string()
+        ],
+        "float mir.rem must lower to libdevice fmod on each width"
+    );
+    assert_eq!(frem, 0, "float mir.rem must not lower to llvm.frem");
+    assert_eq!(srem, 1, "signed mir.rem must lower to llvm.srem");
+    assert_eq!(urem, 1, "unsigned mir.rem must lower to llvm.urem");
+    Ok(())
+}

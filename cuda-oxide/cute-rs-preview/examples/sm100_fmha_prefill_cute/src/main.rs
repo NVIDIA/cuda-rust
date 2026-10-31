@@ -286,8 +286,9 @@ fn main() -> Result<()> {
         .map(|x| f32::from_le_bytes(*x))
         .collect();
     let ctx = CudaContext::new(0)?;
-    if ctx.compute_capability()? != (10, 0) {
-        return Err("this matched FP16 example requires SM100".into());
+    let capability = ctx.compute_capability()?;
+    if !matches!(capability, (10, 0) | (10, 3)) {
+        return Err("this matched FP16 example requires SM100 or SM103".into());
     }
     let stream = ctx.new_stream()?;
     let qdev = DeviceBuffer::from_host(&stream, &qhost)?;
@@ -387,7 +388,7 @@ fn main() -> Result<()> {
         "shared_memory_bytes":kernel::DYNAMIC_SMEM_BYTES,"registers_per_thread":registers,
         "compiler_optimization_level":option_env!("CUDA_OXIDE_CUTLASS_OPT_LEVEL")
             .and_then(|value| value.parse::<u32>().ok()).unwrap_or(3),
-        "compiler":"CUTLASS 4.7.0", "target":"sm_100a",
+        "compiler":"CUTLASS 4.7.0", "target":format!("sm_{}{}a", capability.0, capability.1),
         "source_commit":"dcf215af68a2d08d305076c152a06f201728cd53"});
     let rendered = serde_json::to_string_pretty(&report)?;
     if let Some(path) = args.json {

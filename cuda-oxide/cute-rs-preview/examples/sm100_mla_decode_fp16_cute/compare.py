@@ -84,7 +84,7 @@ def run_case(rust_bin, cfg, *, seed=1111, pattern="random", warmup=10, iteration
                                   "cpu_affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
                                   "torch": reference.torch.__version__,
                                   "cutlass": importlib.metadata.version("nvidia-cutlass-dsl"),
-                                  "compiler": "CUTLASS 4.7.0", "architecture": "sm_100a",
+                                  "compiler": "CUTLASS 4.7.0", "architecture": "sm_{}{}a".format(*reference.torch.cuda.get_device_capability()),
                                   "reference_optimization_level": 2,
                                   "rust_optimization_level": rust_report.get("cutlass_optimization_level")},
                   "rust_binary_sha256": hashlib.sha256(Path(rust_bin).read_bytes()).hexdigest()}

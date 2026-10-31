@@ -37,10 +37,10 @@ impl CutlassPrimitivesMlir22 {
     /// Stable profile identity included in manifests and build cache keys.
     pub const NAME: &'static str = "cutlass-primitives-mlir22";
 
-    /// Accept only the reviewed sm_100a and sm_120a primitive targets.
+    /// Accept only the reviewed sm_100a, sm_103a and sm_120a primitive targets.
     pub fn new(gpu_arch: impl Into<String>) -> Result<Self, ProfileError> {
         let gpu_arch = gpu_arch.into();
-        if !matches!(gpu_arch.as_str(), "sm_100a" | "sm_120a") {
+        if !matches!(gpu_arch.as_str(), "sm_100a" | "sm_103a" | "sm_120a") {
             return Err(ProfileError::UnsupportedArchitecture(gpu_arch));
         }
         Ok(Self { gpu_arch })

@@ -56,15 +56,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def require_sm100(torch) -> dict:
-    """Reject missing CUDA and every capability except 10.0 before JIT imports."""
+    """Reject missing CUDA and every capability except 10.0 and 10.3 before JIT imports."""
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is unavailable; this validation requires SM100 (10.0)")
+        raise RuntimeError("CUDA is unavailable; this validation requires SM100 (10.0) or SM103 (10.3)")
     device = torch.cuda.current_device()
     capability = torch.cuda.get_device_capability(device)
     name = torch.cuda.get_device_name(device)
-    if capability != (10, 0):
+    if capability not in ((10, 0), (10, 3)):
         raise RuntimeError(
-            f"SM100 (10.0) is required; device {device} is {name} "
+            f"SM100 (10.0) or SM103 (10.3) is required; device {device} is {name} "
             f"with capability {capability[0]}.{capability[1]}"
         )
     return {"index": device, "name": name, "capability": list(capability)}

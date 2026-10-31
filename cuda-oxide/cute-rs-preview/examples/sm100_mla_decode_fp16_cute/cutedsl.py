@@ -30,8 +30,8 @@ class sm100_mla_decode_fp16_cutedsl:
         import cuda.bindings.driver as cuda
         from cute.blackwell.kernel.attention.mla.mla_decode_fp16 import BlackwellMultiHeadLatentAttentionForwardFP16
 
-        if torch.cuda.get_device_capability() != (10, 0):
-            raise RuntimeError("the matched reference profile requires SM100")
+        if torch.cuda.get_device_capability() not in ((10, 0), (10, 3)):
+            raise RuntimeError("the matched reference profile requires SM100 or SM103")
         self.torch, self.cfg = torch, cfg
         self.stream = torch.cuda.Stream()
         self.buffers = {name: torch.from_numpy(value.copy()).cuda() for name, value in data.items()}

@@ -70,14 +70,16 @@ fn primitives_profile_pins_consumer_and_target() {
         manifest.interop_revision,
         cuda_oxide_mlir_export::INTEROP_REVISION
     );
-    assert_eq!(
-        CutlassPrimitivesMlir22::new("sm_120a")
-            .unwrap()
-            .manifest()
-            .gpu_arch,
-        "sm_120a"
-    );
-    for arch in ["sm_90a", "sm_120", "sm_100", "garbage"] {
+    for arch in ["sm_103a", "sm_120a"] {
+        assert_eq!(
+            CutlassPrimitivesMlir22::new(arch)
+                .unwrap()
+                .manifest()
+                .gpu_arch,
+            arch
+        );
+    }
+    for arch in ["sm_90a", "sm_120", "sm_100", "sm_103", "garbage"] {
         assert!(CutlassPrimitivesMlir22::new(arch).is_err());
     }
 }

@@ -47,8 +47,8 @@
 //! On top of the typed handles this module also ships the four
 //! collective primitives `warp_reduce`, `warp_scan`, `block_reduce`,
 //! and `block_scan`, generic over a [`ReduceOp`](ops::ReduceOp) trait
-//! with concrete impls for `Sum`/`Min`/`Max` (`u32`/`i32`/`f32`) and
-//! `BitAnd`/`BitOr`/`BitXor` (`u32` only). Block-scoped variants
+//! with concrete impls for `Sum`/`Min`/`Max` (`u32`/`i32`/`f32`/`u64`/`i64`)
+//! and `BitAnd`/`BitOr`/`BitXor` (`u32`/`u64`). Block-scoped variants
 //! take a `*mut SharedArray<T, NUM_WARPS>` for scratch and obey the
 //! standard "block-sync between back-to-back uses of the same scratch"
 //! contract documented on each function.
@@ -165,6 +165,51 @@ pub trait WarpCollective: ThreadGroup {
     /// `f32` variant of [`shfl_up`](Self::shfl_up).
     fn shfl_up_f32(&self, var: f32, delta: u32) -> f32;
 
+    /// `u64` variant of [`shfl`](Self::shfl).
+    ///
+    /// PTX has no 64-bit shuffle, so this moves the two 32-bit halves with
+    /// two `shfl.sync.idx.b32` under the same mask and source. Convert `i64`
+    /// with `as u64` / `as i64`, and `f64` with `to_bits` / `from_bits`.
+    ///
+    /// The default exchanges the halves through [`shfl`](Self::shfl). The
+    /// groups in this module override all four `u64` methods with
+    /// [`crate::warp::shuffle_u64_sync`] and its siblings, which emit both
+    /// halves from one inline-PTX block.
+    #[inline(always)]
+    fn shfl_u64(&self, var: u64, src_rank: u32) -> u64 {
+        join_halves(
+            self.shfl(var as u32, src_rank),
+            self.shfl((var >> 32) as u32, src_rank),
+        )
+    }
+
+    /// `u64` variant of [`shfl_xor`](Self::shfl_xor).
+    #[inline(always)]
+    fn shfl_xor_u64(&self, var: u64, lane_mask: u32) -> u64 {
+        join_halves(
+            self.shfl_xor(var as u32, lane_mask),
+            self.shfl_xor((var >> 32) as u32, lane_mask),
+        )
+    }
+
+    /// `u64` variant of [`shfl_down`](Self::shfl_down).
+    #[inline(always)]
+    fn shfl_down_u64(&self, var: u64, delta: u32) -> u64 {
+        join_halves(
+            self.shfl_down(var as u32, delta),
+            self.shfl_down((var >> 32) as u32, delta),
+        )
+    }
+
+    /// `u64` variant of [`shfl_up`](Self::shfl_up).
+    #[inline(always)]
+    fn shfl_up_u64(&self, var: u64, delta: u32) -> u64 {
+        join_halves(
+            self.shfl_up(var as u32, delta),
+            self.shfl_up((var >> 32) as u32, delta),
+        )
+    }
+
     /// Group-relative bitmask of lanes whose `value` equals mine.
     ///
     /// PTX `match.any.sync.b32` (sm_70+). Raw hardware lane bits are
@@ -192,6 +237,12 @@ pub trait WarpCollective: ThreadGroup {
 // =============================================================================
 // Helpers (not part of the public surface)
 // =============================================================================
+
+/// Reassembles a `u64` from the low and high 32-bit halves.
+#[inline(always)]
+fn join_halves(lo: u32, hi: u32) -> u64 {
+    ((hi as u64) << 32) | lo as u64
+}
 
 /// Total threads per block.
 #[inline(always)]
@@ -538,6 +589,27 @@ impl<const N: u32> WarpCollective for WarpTile<N> {
     }
 
     #[inline(always)]
+    fn shfl_u64(&self, var: u64, src_rank: u32) -> u64 {
+        let abs_src = self.tile_base_lane() | (src_rank & (N - 1));
+        warp::shuffle_u64_sync(self.mask(), var, abs_src)
+    }
+
+    #[inline(always)]
+    fn shfl_xor_u64(&self, var: u64, lane_mask: u32) -> u64 {
+        warp::shuffle_xor_u64_sync(self.mask(), var, self.xor_operand_or_self(lane_mask))
+    }
+
+    #[inline(always)]
+    fn shfl_down_u64(&self, var: u64, delta: u32) -> u64 {
+        warp::shuffle_down_u64_sync(self.mask(), var, self.down_operand_or_self(delta))
+    }
+
+    #[inline(always)]
+    fn shfl_up_u64(&self, var: u64, delta: u32) -> u64 {
+        warp::shuffle_up_u64_sync(self.mask(), var, self.up_operand_or_self(delta))
+    }
+
+    #[inline(always)]
     fn match_any(&self, value: u32) -> u32 {
         let raw = warp::match_any_sync(self.mask(), value);
         if N == 32 {
@@ -634,6 +706,23 @@ impl CoalescedThreads {
         packed
     }
 
+    /// Absolute warp lane of the member whose group rank is `src_rank`, or
+    /// the calling lane when `src_rank` is out of range.
+    #[inline(always)]
+    fn rank_to_lane(&self, src_rank: u32) -> u32 {
+        let mut m = self.mask;
+        let mut k = src_rank;
+        while k > 0 && m != 0 {
+            m &= m - 1;
+            k -= 1;
+        }
+        if m == 0 {
+            warp::lane_id()
+        } else {
+            m.trailing_zeros()
+        }
+    }
+
     #[inline(always)]
     fn xor_operand_or_self(&self, lane_mask: u32) -> u32 {
         let source = warp::lane_id() ^ (lane_mask & 31);
@@ -702,9 +791,9 @@ impl WarpCollective for CoalescedThreads {
         warp::any_sync(self.mask, predicate)
     }
 
-    // `shfl` translates the group-relative `src_rank` to an absolute
-    // warp lane (the lane whose own `thread_rank` inside the coalesced
-    // group equals `src_rank`) by popping the `src_rank` lowest set
+    // The index shuffles translate the group-relative `src_rank` to an
+    // absolute warp lane (the lane whose own `thread_rank` inside the
+    // coalesced group equals `src_rank`) by popping the `src_rank` lowest set
     // bits of the participation mask. When `src_rank` is a runtime
     // value the loop survives as a small `popc`/branch sequence; when
     // it folds to a constant the loop unrolls.
@@ -715,18 +804,7 @@ impl WarpCollective for CoalescedThreads {
 
     #[inline(always)]
     fn shfl(&self, var: u32, src_rank: u32) -> u32 {
-        let mut m = self.mask;
-        let mut k = src_rank;
-        while k > 0 && m != 0 {
-            m &= m - 1;
-            k -= 1;
-        }
-        let abs_lane = if m == 0 {
-            warp::lane_id()
-        } else {
-            m.trailing_zeros()
-        };
-        warp::shuffle_sync(self.mask, var, abs_lane)
+        warp::shuffle_sync(self.mask, var, self.rank_to_lane(src_rank))
     }
 
     #[inline(always)]
@@ -746,18 +824,7 @@ impl WarpCollective for CoalescedThreads {
 
     #[inline(always)]
     fn shfl_f32(&self, var: f32, src_rank: u32) -> f32 {
-        let mut m = self.mask;
-        let mut k = src_rank;
-        while k > 0 && m != 0 {
-            m &= m - 1;
-            k -= 1;
-        }
-        let abs_lane = if m == 0 {
-            warp::lane_id()
-        } else {
-            m.trailing_zeros()
-        };
-        warp::shuffle_f32_sync(self.mask, var, abs_lane)
+        warp::shuffle_f32_sync(self.mask, var, self.rank_to_lane(src_rank))
     }
 
     #[inline(always)]
@@ -773,6 +840,26 @@ impl WarpCollective for CoalescedThreads {
     #[inline(always)]
     fn shfl_up_f32(&self, var: f32, delta: u32) -> f32 {
         warp::shuffle_up_f32_sync(self.mask, var, self.up_operand_or_self(delta))
+    }
+
+    #[inline(always)]
+    fn shfl_u64(&self, var: u64, src_rank: u32) -> u64 {
+        warp::shuffle_u64_sync(self.mask, var, self.rank_to_lane(src_rank))
+    }
+
+    #[inline(always)]
+    fn shfl_xor_u64(&self, var: u64, lane_mask: u32) -> u64 {
+        warp::shuffle_xor_u64_sync(self.mask, var, self.xor_operand_or_self(lane_mask))
+    }
+
+    #[inline(always)]
+    fn shfl_down_u64(&self, var: u64, delta: u32) -> u64 {
+        warp::shuffle_down_u64_sync(self.mask, var, self.down_operand_or_self(delta))
+    }
+
+    #[inline(always)]
+    fn shfl_up_u64(&self, var: u64, delta: u32) -> u64 {
+        warp::shuffle_up_u64_sync(self.mask, var, self.up_operand_or_self(delta))
     }
 
     #[inline(always)]
@@ -836,15 +923,15 @@ pub mod ops {
     #[derive(Copy, Clone, Debug)]
     pub struct Max;
 
-    /// Bitwise AND (`u32` only — meaningless for signed/float).
+    /// Bitwise AND (`u32` and `u64` only — meaningless for signed/float).
     #[derive(Copy, Clone, Debug)]
     pub struct BitAnd;
 
-    /// Bitwise OR (`u32` only).
+    /// Bitwise OR (`u32` and `u64` only).
     #[derive(Copy, Clone, Debug)]
     pub struct BitOr;
 
-    /// Bitwise XOR (`u32` only).
+    /// Bitwise XOR (`u32` and `u64` only).
     #[derive(Copy, Clone, Debug)]
     pub struct BitXor;
 
@@ -976,14 +1063,111 @@ pub mod ops {
             if a > b { a } else { b }
         }
     }
+
+    // --- u64 ---
+    impl ReduceOp<u64> for Sum {
+        #[inline(always)]
+        fn identity() -> u64 {
+            0
+        }
+        #[inline(always)]
+        fn combine(a: u64, b: u64) -> u64 {
+            a.wrapping_add(b)
+        }
+    }
+    impl ReduceOp<u64> for Min {
+        #[inline(always)]
+        fn identity() -> u64 {
+            u64::MAX
+        }
+        #[inline(always)]
+        fn combine(a: u64, b: u64) -> u64 {
+            if a < b { a } else { b }
+        }
+    }
+    impl ReduceOp<u64> for Max {
+        #[inline(always)]
+        fn identity() -> u64 {
+            0
+        }
+        #[inline(always)]
+        fn combine(a: u64, b: u64) -> u64 {
+            if a > b { a } else { b }
+        }
+    }
+    impl ReduceOp<u64> for BitAnd {
+        #[inline(always)]
+        fn identity() -> u64 {
+            u64::MAX
+        }
+        #[inline(always)]
+        fn combine(a: u64, b: u64) -> u64 {
+            a & b
+        }
+    }
+    impl ReduceOp<u64> for BitOr {
+        #[inline(always)]
+        fn identity() -> u64 {
+            0
+        }
+        #[inline(always)]
+        fn combine(a: u64, b: u64) -> u64 {
+            a | b
+        }
+    }
+    impl ReduceOp<u64> for BitXor {
+        #[inline(always)]
+        fn identity() -> u64 {
+            0
+        }
+        #[inline(always)]
+        fn combine(a: u64, b: u64) -> u64 {
+            a ^ b
+        }
+    }
+
+    // --- i64 ---
+    impl ReduceOp<i64> for Sum {
+        #[inline(always)]
+        fn identity() -> i64 {
+            0
+        }
+        #[inline(always)]
+        fn combine(a: i64, b: i64) -> i64 {
+            a.wrapping_add(b)
+        }
+    }
+    impl ReduceOp<i64> for Min {
+        #[inline(always)]
+        fn identity() -> i64 {
+            i64::MAX
+        }
+        #[inline(always)]
+        fn combine(a: i64, b: i64) -> i64 {
+            if a < b { a } else { b }
+        }
+    }
+    impl ReduceOp<i64> for Max {
+        #[inline(always)]
+        fn identity() -> i64 {
+            i64::MIN
+        }
+        #[inline(always)]
+        fn combine(a: i64, b: i64) -> i64 {
+            if a > b { a } else { b }
+        }
+    }
 }
 
 /// Scalars that ride a `WarpCollective` shuffle.
 ///
 /// Reductions and scans need to shuffle the value being combined, but the
-/// underlying PTX `shfl.sync.{bfly,up,down,idx}` only ships in `b32` and
-/// `f32` flavors. This trait routes each supported `T` (`u32`, `i32`,
-/// `f32`) to the right one and bitcasts where required (`i32`).
+/// underlying PTX `shfl.sync.{bfly,up,down,idx}` only moves 32-bit
+/// registers. This trait routes each supported `T` (`u32`, `i32`, `f32`,
+/// `u64`, `i64`) to the matching [`WarpCollective`] shuffle and bitcasts
+/// where required (`i32` through `u32`, `i64` through `u64`). The 64-bit
+/// types cost two `b32` shuffles per exchange, and `redux.sync` has no
+/// 64-bit form, so they always take the shuffle path.
 pub trait WarpShuffle: Copy + Sized {
     /// Butterfly exchange under the group's mask. See
     /// [`WarpCollective::shfl_xor`].
@@ -1029,6 +1213,29 @@ impl WarpShuffle for f32 {
     }
 }
 
+impl WarpShuffle for u64 {
+    #[inline(always)]
+    fn shfl_xor_via<G: WarpCollective>(group: &G, value: Self, lane_mask: u32) -> Self {
+        group.shfl_xor_u64(value, lane_mask)
+    }
+    #[inline(always)]
+    fn shfl_up_via<G: WarpCollective>(group: &G, value: Self, delta: u32) -> Self {
+        group.shfl_up_u64(value, delta)
+    }
+}
+
+impl WarpShuffle for i64 {
+    // same two's-complement round-trip as `i32`, through the `u64` shuffle
+    #[inline(always)]
+    fn shfl_xor_via<G: WarpCollective>(group: &G, value: Self, lane_mask: u32) -> Self {
+        group.shfl_xor_u64(value as u64, lane_mask) as i64
+    }
+    #[inline(always)]
+    fn shfl_up_via<G: WarpCollective>(group: &G, value: Self, delta: u32) -> Self {
+        group.shfl_up_u64(value as u64, delta) as i64
+    }
+}
+
 /// Reduce one value per lane down to a single value across a `WarpTile<N>`.
 ///
 /// Implements the standard butterfly reduction via `shfl.sync.bfly` —
@@ -1039,8 +1246,9 @@ impl WarpShuffle for f32 {
 ///
 /// # Performance: integers on `sm_80`+ have a one-instruction form
 ///
-/// This is generic over `T`, so a full warp always costs five shuffles plus
-/// five combines. For **integer** reductions on Ampere and newer,
+/// This is generic over `T`, so a full warp always costs five exchanges plus
+/// five combines; each exchange is one `shfl.sync` for 32-bit types and two
+/// for `u64`/`i64`. For **32-bit integer** reductions on Ampere and newer,
 /// [`crate::warp::redux_sync_add`] and its `min`/`max`/`and`/`or`/`xor`
 /// siblings do the whole reduction in a single `redux.sync` instruction.
 /// Measured on an A10G (`sm_86`) over 1M threads reducing 64 times each:
@@ -1211,6 +1419,26 @@ impl WarpCollective for ContiguousWarpPrefix {
     #[inline(always)]
     fn shfl_up_f32(&self, var: f32, delta: u32) -> f32 {
         warp::shuffle_up_f32_sync(self.0.mask, var, delta)
+    }
+
+    #[inline(always)]
+    fn shfl_u64(&self, var: u64, src_rank: u32) -> u64 {
+        self.0.shfl_u64(var, src_rank)
+    }
+
+    #[inline(always)]
+    fn shfl_xor_u64(&self, var: u64, lane_mask: u32) -> u64 {
+        self.0.shfl_xor_u64(var, lane_mask)
+    }
+
+    #[inline(always)]
+    fn shfl_down_u64(&self, var: u64, delta: u32) -> u64 {
+        self.0.shfl_down_u64(var, delta)
+    }
+
+    #[inline(always)]
+    fn shfl_up_u64(&self, var: u64, delta: u32) -> u64 {
+        warp::shuffle_up_u64_sync(self.0.mask, var, delta)
     }
 
     #[inline(always)]

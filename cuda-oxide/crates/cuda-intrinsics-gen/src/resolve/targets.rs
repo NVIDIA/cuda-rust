@@ -7,7 +7,8 @@ use crate::model::{
     CatalogHardwareAlternative, CatalogHardwareTarget, CatalogTargetAlternative,
     CatalogTargetContract, CatalogTargetRequirement, ClcOperation, ExecutionControlOperation,
     IntrinsicBackend, LdmatrixElement, LdmatrixShape, OverlayIntrinsic, PtxVersion,
-    SparseMmaAccumulator, TargetContract, TargetSelectorBinding, Tcgen05Operation, TmaOperation,
+    RegisterMmaKind, SparseMmaAccumulator, TargetContract, TargetSelectorBinding, Tcgen05Operation,
+    TmaOperation,
 };
 use anyhow::{Context, Result, bail, ensure};
 
@@ -352,7 +353,17 @@ pub(super) fn validate_selected_target_predicates(
         let (minimum_ptx_matches, target_matches) = match policy.family.as_str() {
             "register_mma" => (
                 overlay_ptx == 87,
-                policy.targets == "sm_120a|sm_120f|sm_121a|sm_121f" && policy.minimum_sm.is_none(),
+                policy.targets
+                    == if policy
+                        .register_mma
+                        .as_ref()
+                        .is_some_and(|mma| mma.kind == Some(RegisterMmaKind::Mxf4))
+                    {
+                        "sm_120a"
+                    } else {
+                        "sm_120a|sm_120f|sm_121a|sm_121f"
+                    }
+                    && policy.minimum_sm.is_none(),
             ),
             "sparse_mma" => (
                 overlay_ptx == 87,

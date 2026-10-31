@@ -1743,6 +1743,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     };
                 // Build the reduce body region.
                 let region_id = {
+                    // The synthetic closure implements this reduction call;
+                    // its parsed tokens have no independent source location.
+                    let _source = self.push_opaque_call_site(&call_expr.span());
                     let local_var_types = &[
                         ir_operand_type.clone(), // operand_i_current_iter
                         ir_operand_type.clone(), // operand_i_prev_iter

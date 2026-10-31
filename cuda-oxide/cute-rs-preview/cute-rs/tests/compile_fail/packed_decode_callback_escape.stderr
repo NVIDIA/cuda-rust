@@ -1,0 +1,9 @@
+error[E0521]: borrowed data escapes outside of closure
+  --> tests/compile_fail/packed_decode_callback_escape.rs:10:9
+   |
+ 8 |     let mut escaped = None;
+   |         ----------- `escaped` declared here, outside of the closure body
+ 9 |     PackedDecode::with_validated(&storage, &storage, 1, 16, 8, 16, 16, |proof| {
+   |                                                                         ----- `proof` is a reference that is only valid in the closure body
+10 |         escaped = Some(proof);
+   |         ^^^^^^^^^^^^^^^^^^^^^ `proof` escapes the closure body here

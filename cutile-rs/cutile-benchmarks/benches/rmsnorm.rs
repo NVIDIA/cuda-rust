@@ -4,7 +4,7 @@
  */
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use cuda_async::device_operation::DeviceOp;
-use cuda_core::Device;
+use cuda_core::Context;
 use cutile::api::{randn_f16, zeros};
 use cutile::core::f16;
 use cutile::tensor::{IntoPartition, Partition, Tensor};
@@ -80,7 +80,7 @@ fn ocean_rmsnorm(c: &mut Criterion) {
             .measurement_time(Duration::from_millis(2000));
     }
 
-    let device = Device::new(0).expect("Failed to get device.");
+    let device = Context::new(0).expect("Failed to get device.");
     let stream = device.new_stream().expect("Failed to get stream.");
 
     let shapes = (0..6)
@@ -111,7 +111,7 @@ fn ocean_rmsnorm(c: &mut Criterion) {
                     .sync_on(&stream)
                     .expect("Failed.")
                     .partition([1, n]);
-                unsafe { stream.synchronize() }.expect("Failed to synchronize.");
+                stream.synchronize().expect("Failed to synchronize.");
                 let start = Instant::now();
                 for _i in 0..iters {
                     unsafe {
@@ -122,7 +122,7 @@ fn ocean_rmsnorm(c: &mut Criterion) {
                         out = local_out;
                     }
                 }
-                unsafe { stream.synchronize() }.expect("Failed to synchronize.");
+                stream.synchronize().expect("Failed to synchronize.");
                 start.elapsed()
             });
         });

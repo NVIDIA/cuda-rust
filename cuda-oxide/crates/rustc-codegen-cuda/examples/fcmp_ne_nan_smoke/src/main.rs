@@ -6,7 +6,7 @@
 // Minimal repro: float `!=` should be UNORDERED (x != x is TRUE for NaN).
 // Rust PartialEq::ne on floats is unordered. cuda-oxide lowered it to fcmp ONE
 // (ordered, FALSE for NaN), so x != x folded to false -> NaN handling broken.
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, cuda_module, kernel, thread};
 

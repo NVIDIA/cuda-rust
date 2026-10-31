@@ -16,7 +16,7 @@
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use cuda_async::cuda_graph::CudaGraph;
-use cuda_core::Device;
+use cuda_core::Context;
 use cutile::prelude::*;
 use std::future::IntoFuture;
 use std::time::{Duration, Instant};
@@ -76,7 +76,7 @@ fn host_overhead(c: &mut Criterion) {
             .measurement_time(Duration::from_millis(2000));
     }
 
-    let device = Device::new(0).expect("device");
+    let device = Context::new(0).expect("device");
     let stream = device.new_stream().expect("stream");
 
     let a: Arc<Tensor<f32>> = api::ones::<f32>(&[N]).sync_on(&stream).expect("a").into();
@@ -117,7 +117,7 @@ fn host_overhead(c: &mut Criterion) {
                     z = local_z;
                 }
                 elapsed += start.elapsed();
-                unsafe { stream.synchronize() }.expect("drain");
+                stream.synchronize().expect("drain");
                 done += batch;
             }
             elapsed
@@ -150,7 +150,7 @@ fn host_overhead(c: &mut Criterion) {
                     z = local_z;
                 }
                 elapsed += start.elapsed();
-                unsafe { stream.synchronize() }.expect("drain");
+                stream.synchronize().expect("drain");
                 done += batch;
             }
             elapsed
@@ -203,7 +203,7 @@ fn host_overhead(c: &mut Criterion) {
                     unsafe { graph.launch().async_on(&stream) }.expect("replay");
                 }
                 elapsed += start.elapsed();
-                unsafe { stream.synchronize() }.expect("drain");
+                stream.synchronize().expect("drain");
                 done += batch;
             }
             elapsed

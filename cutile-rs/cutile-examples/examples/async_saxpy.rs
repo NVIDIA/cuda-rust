@@ -32,7 +32,9 @@ mod my_module {
 
 use my_module::saxpy;
 
-async fn execute<T: DType + Display + PartialEq + Mul<Output = T> + Add<Output = T>>(
+async fn execute<
+    T: DType + cuda_core::DeviceCopy + Display + PartialEq + Mul<Output = T> + Add<Output = T>,
+>(
     size: usize,
 ) -> Result<(), Error> {
     let a = <T as DType>::one() + <T as DType>::one();

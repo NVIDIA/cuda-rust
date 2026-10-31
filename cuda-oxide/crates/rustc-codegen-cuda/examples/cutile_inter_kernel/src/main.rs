@@ -10,16 +10,13 @@
 //!   2. cuda-oxide SIMT kernel thresholds and scales the softmax result.
 //!   3. Both kernels run on the same CUDA stream and share device tensors.
 
-use cuda_async::device_context::{load_module_from_ptx, with_default_device_policy};
-use cuda_async::device_future::DeviceFuture;
-use cuda_async::device_operation::{DeviceOp, ExecutionContext};
-use cuda_async::error::DeviceError;
-use cuda_async::launch::AsyncKernelLaunch;
-use cuda_core::{Function, LaunchConfig};
+use cuda_async::device_context::load_module_from_ptx;
+use cuda_async::device_operation::DeviceOp;
+use cuda_async::launch::{AsyncKernelLaunchBuilder, OwnedAsyncKernelLaunch};
+use cuda_core::LaunchConfig;
 use cutile::api::{copy_host_vec_to_device, zeros};
 use cutile::error::Error;
 use cutile::tensor::{IntoPartition, Reshape, Tensor, ToHostVec};
-use std::future::IntoFuture;
 use std::sync::Arc;
 
 const CUDA_OXIDE_SIMT_PTX_PATH: &str = concat!(
@@ -47,56 +44,6 @@ mod tile_softmax {
         let denom = denom.reshape(const_shape![BM, 1]).broadcast(output.shape());
 
         output.store(numerator / denom);
-    }
-}
-
-struct ThresholdScaleKernel {
-    function: Arc<Function>,
-    n: u32,
-    threshold: f32,
-    scale: f32,
-    input: Arc<Tensor<f32>>,
-    output: Tensor<f32>,
-}
-
-impl DeviceOp for ThresholdScaleKernel {
-    type Output = (Arc<Tensor<f32>>, Tensor<f32>);
-
-    unsafe fn execute(
-        self,
-        ctx: &ExecutionContext,
-    ) -> Result<<Self as DeviceOp>::Output, DeviceError> {
-        let mut launcher = AsyncKernelLaunch::new(self.function);
-        launcher.push_arg(self.n);
-        launcher.push_arg(self.threshold);
-        launcher.push_arg(self.scale);
-        unsafe {
-            launcher
-                .push_device_ptr(self.input.device_pointer().cu_deviceptr())
-                .push_device_ptr(self.output.device_pointer().cu_deviceptr());
-        }
-        launcher.set_launch_config(LaunchConfig {
-            grid_dim: (self.n.div_ceil(256), 1, 1),
-            block_dim: (256, 1, 1),
-            shared_mem_bytes: 0,
-        });
-        unsafe { launcher.execute(ctx)? };
-        Ok((self.input, self.output))
-    }
-}
-
-impl IntoFuture for ThresholdScaleKernel {
-    type Output = Result<(Arc<Tensor<f32>>, Tensor<f32>), DeviceError>;
-    type IntoFuture = DeviceFuture<(Arc<Tensor<f32>>, Tensor<f32>), ThresholdScaleKernel>;
-
-    fn into_future(self) -> Self::IntoFuture {
-        match with_default_device_policy(|policy| {
-            let stream = policy.next_stream()?;
-            Ok(DeviceFuture::scheduled(self, ExecutionContext::new(stream)))
-        }) {
-            Ok(Ok(future)) => future,
-            Ok(Err(e)) | Err(e) => DeviceFuture::failed(e),
-        }
     }
 }
 
@@ -158,26 +105,37 @@ async fn run() -> Result<(), Error> {
         .expect("input reshape")
         .into();
     let softmax_out = zeros::<f32>(&[ROWS, COLS]).await?;
-    let gated_out: Tensor<f32> = zeros::<f32>(&[ROWS, COLS]).await?;
+    let allocation = softmax_out.as_buffer()?.storage().allocation_id();
+    let address = softmax_out.device_pointer().cu_deviceptr();
 
     // `then` is the key inter-kernel interop piece here: cutile-rs executes
     // both DeviceOps with the same ExecutionContext, so the Tile launch and
     // the cuda-oxide PTX launch are submitted to the same CUDA stream.
     let pipeline = tile_softmax::row_softmax(softmax_out.partition([BM, BN]), input.clone()).then(
         move |(softmax_part, _input)| {
-            let softmax_out: Arc<Tensor<f32>> = softmax_part.unpartition().into();
-            ThresholdScaleKernel {
-                function: threshold_scale,
-                n: N as u32,
-                threshold,
-                scale,
-                input: softmax_out,
-                output: gated_out,
-            }
+            // Transfer the Tile result to the shared typed buffer. No allocation
+            // or device copy is needed for the SIMT stage.
+            let buffer = softmax_part.unpartition().into_buffer();
+            assert_eq!(buffer.storage().allocation_id(), allocation);
+            assert_eq!(buffer.cu_deviceptr(), address);
+            let mut builder = AsyncKernelLaunchBuilder::new(threshold_scale);
+            builder.retain_buffer(buffer.storage().clone(), true);
+            builder.push_args((N as u32, threshold, scale, address, address));
+            // SAFETY: the SIMT function's five parameters match this packet;
+            // each thread reads then overwrites its own f32 within 0..N. Raw
+            // pointers permit this in-place operation. Storage and exclusion
+            // are retained independently of the returned typed buffer.
+            let launch =
+                unsafe { builder.finalize_unchecked(LaunchConfig::for_num_elems(N as u32)) };
+            OwnedAsyncKernelLaunch::new(launch, buffer)
         },
     );
 
-    let (_softmax_out, gated_out) = pipeline.await?;
+    let buffer = pipeline.await?;
+    assert_eq!(buffer.storage().allocation_id(), allocation);
+    assert_eq!(buffer.cu_deviceptr(), address);
+    let gated_out = Tensor::from_buffer(buffer, vec![ROWS as i32, COLS as i32]);
+    assert_eq!(gated_out.device_pointer().cu_deviceptr(), address);
 
     let got = gated_out.to_host_vec().await?;
     let softmax_expected = softmax_rows(&input_host, ROWS, COLS);

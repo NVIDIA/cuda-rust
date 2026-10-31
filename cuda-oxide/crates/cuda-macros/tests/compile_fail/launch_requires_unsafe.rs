@@ -28,7 +28,7 @@ fn launch_without_unsafe(
         kernel: dummy,
         stream: stream,
         module: module,
-        config: cuda_core::simt::LaunchConfig::for_num_elems(1),
+        config: cuda_core::LaunchConfig::for_num_elems(1),
         args: [x]
     }
     .unwrap();

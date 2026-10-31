@@ -29,6 +29,7 @@
 //! cargo oxide clean                   # remove local build outputs
 //! cargo oxide setup                   # explicitly build/install backend
 //! cargo oxide update                  # refresh cached backend (external)
+//! cargo oxide toolchain install cutlass # install the pinned CUTLASS compiler
 //! ```
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum, error::ErrorKind};
@@ -38,6 +39,7 @@ mod artifact_identity;
 mod backend;
 mod backend_source;
 mod commands;
+mod cutlass_toolchain;
 
 /// Top-level CLI structure parsed by clap.
 ///
@@ -73,9 +75,9 @@ enum Commands {
     /// restating its alias, case and whitespace rules.
     #[command(name = "__debug-policy", hide = true)]
     DebugPolicy,
-    /// Build and run an example or project
+    /// Build and run an example, model, or project
     Run {
-        /// Example name (required in workspace, optional for standalone projects)
+        /// Example or model name (required in workspace, optional for standalone projects)
         example: Option<String>,
         /// Generate NVVM IR (use with libNVVM -gen-lto)
         #[arg(long)]
@@ -455,7 +457,7 @@ enum Commands {
         #[arg(long)]
         tui: bool,
     },
-    /// List the examples bundled with the cuda-oxide workspace
+    /// List the examples and models bundled with the cuda-oxide workspace
     List {
         /// Emit stable machine-readable JSON
         #[arg(long)]
@@ -520,6 +522,26 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Install compiler toolchains managed by cargo-oxide
+    Toolchain {
+        #[command(subcommand)]
+        command: ToolchainCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ToolchainCommand {
+    /// Install a pinned official toolchain release
+    Install {
+        #[arg(value_enum)]
+        tool: ManagedToolchain,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum ManagedToolchain {
+    /// NVIDIA CUTLASS compiler 4.7.0 for Linux x86_64 and CUDA 13
+    Cutlass,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -673,6 +695,10 @@ fn validate_materialization_cli(cli: &Cli) -> Result<(), String> {
         ),
         Commands::Update { .. } => Err(
             "--materialize-cubin cannot be used with update because update only refreshes the codegen backend"
+                .to_string(),
+        ),
+        Commands::Toolchain { .. } => Err(
+            "--materialize-cubin cannot be used with toolchain because toolchain manages compiler installations"
                 .to_string(),
         ),
         Commands::MaterializerHandshake => Err(
@@ -1190,6 +1216,17 @@ fn main() {
             let ctx = commands::resolve_passive_context();
             commands::update(&ctx, force);
         }
+        Commands::Toolchain { command } => match command {
+            ToolchainCommand::Install {
+                tool: ManagedToolchain::Cutlass,
+            } => match cutlass_toolchain::install_official() {
+                Ok(outcome) => cutlass_toolchain::print_install_outcome(&outcome),
+                Err(error) => {
+                    eprintln!("Error: could not install the CUTLASS compiler: {error}");
+                    std::process::exit(1);
+                }
+            },
+        },
     }
 }
 
@@ -1215,7 +1252,9 @@ fn resolve_example_name(name: Option<String>, ctx: &commands::Context, subcomman
     eprintln!();
     eprintln!("Usage: cargo oxide {subcommand} <EXAMPLE>");
     eprintln!();
-    eprintln!("Available examples are in crates/rustc-codegen-cuda/examples/");
+    eprintln!(
+        "Run `cargo oxide list`, or browse crates/rustc-codegen-cuda/examples/, cute-rs-preview/examples/, and cute-rs-preview/models/"
+    );
     std::process::exit(1);
 }
 
@@ -1304,6 +1343,20 @@ mod tests {
             panic!("expected Update");
         };
         assert!(force);
+    }
+
+    #[test]
+    fn toolchain_parser_accepts_pinned_cutlass_install() {
+        let cli = Cli::try_parse_from(["cargo-oxide", "toolchain", "install", "cutlass"])
+            .expect("managed CUTLASS install command should parse");
+        assert!(matches!(
+            cli.command,
+            Commands::Toolchain {
+                command: ToolchainCommand::Install {
+                    tool: ManagedToolchain::Cutlass
+                }
+            }
+        ));
     }
 
     #[test]

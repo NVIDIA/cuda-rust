@@ -42,8 +42,9 @@ pub fn clock_test(mut output: DisjointSlice<u64>) {
 #[kernel]
 pub fn trap_test(input: &[i32], mut output: DisjointSlice<i32>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(output_elem) = output.get_mut(idx) {
-        let val = input[idx.get()];
+        let val = input[i];
 
         if val < 0 {
             debug::trap();  // Kernel aborts here
@@ -60,8 +61,9 @@ pub fn trap_test(input: &[i32], mut output: DisjointSlice<i32>) {
 #[kernel]
 pub fn assert_test(input: &[i32], mut output: DisjointSlice<i32>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(output_elem) = output.get_mut(idx) {
-        let val = input[idx.get()];
+        let val = input[i];
 
         // With message
         gpu_assert!(val >= 0, "Expected non-negative value");
@@ -86,11 +88,12 @@ The two forms intentionally use different failure mechanisms:
 #[kernel]
 pub fn breakpoint_test(mut output: DisjointSlice<i32>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(output_elem) = output.get_mut(idx) {
-        if idx.get() == 0 {
+        if i == 0 {
             debug::breakpoint();  // cuda-gdb stops here
         }
-        *output_elem = idx.get() as i32;
+        *output_elem = i as i32;
     }
 }
 ```
@@ -101,10 +104,11 @@ pub fn breakpoint_test(mut output: DisjointSlice<i32>) {
 #[kernel]
 pub fn profiler_test(input: &[f32], mut output: DisjointSlice<f32>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(output_elem) = output.get_mut(idx) {
         debug::prof_trigger::<0>();  // Region start marker
 
-        let val = input[idx.get()];
+        let val = input[i];
         let result = val * val;
 
         debug::prof_trigger::<1>();  // Region end marker

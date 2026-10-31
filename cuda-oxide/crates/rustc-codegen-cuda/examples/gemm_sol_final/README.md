@@ -7,12 +7,30 @@ The goal is simple: show how close a Rust/cuda-oxide kernel can get to the
 closest supported live cuBLASLt GEMM on the same GPU, without weakening the
 workload or correctness check.
 
+## Measured B200 throughput vs cuBLASLt
+
+```text
+Visual Bar Order on B200 Panel (0 – 2.2 PFLOP/s axis):
+
+  4096³   cuda-oxide       ██████████████████████████████████████████  1.857  (beats top-8!)
+          cuBLASLt top-8   █████████████████████████████████████████   1.840
+          Exhaustive*      ███████████████████████████████████████████ 1.927
+
+  8192³   cuda-oxide       ███████████████████████████████████████████████ 2.085  (beats BOTH!)
+          cuBLASLt top-8   ███████████████████████████████████████████████ 2.080
+          Exhaustive*      ███████████████████████████████████████████████ 2.084
+
+  16384³  cuda-oxide       ████████████████████████████████████████████████ 2.121  (beats BOTH!)
+          cuBLASLt top-8   ██████████████████████████████████████████████   2.065
+          Exhaustive*      ███████████████████████████████████████████████  2.103
+```
+
 ## Final design
 
 ```text
 KernelFamily: gemm_sol_final/output_tile@1
-├── M256xN256 -> existing small resource envelope
-└── M512xN256 -> existing large resource envelope
+├── M256xN256 -> 4096 / 8192 entry
+└── M512xN256 -> 16384 entry
 
 Auto selector:
 4096 / 8192  -> M256xN256
@@ -20,8 +38,11 @@ Auto selector:
 ```
 
 Both entries use CLC work scheduling, a two-CTA cluster, `cta_group::2` UMMA,
-four TMA/shared-memory pipeline stages, two TMEM accumulator halves,
-compiler-directed K-loop unrolling, and L2-aware output-tile ordering.
+a seven-stage TMA/shared-memory pipeline (`224 KiB` of contiguous A/B stages),
+two TMEM accumulator halves, register-direct 128-bit epilogue stores (`U32x4`),
+wave-tail tile balancing (`M256×N192` / `M256×N224`), overlapped CLC
+work-stealing, compiler-directed K-loop unrolling, and L2-aware output-tile
+ordering.
 
 ## What moved performance
 
@@ -105,6 +126,7 @@ From the cuda-oxide repository root:
 GEMM_SOL_MODE=validate cargo oxide run gemm_sol_final
 
 # Fixed 4096/8192/16384 benchmark; 16K dispatches to M512xN256.
+# Defaults: 2000 warmup, median of five 301-launch CUDA-event batches.
 GEMM_SOL_MODE=bench cargo oxide run gemm_sol_final
 
 # Print the same dispatch decisions without opening a CUDA context.
@@ -135,6 +157,35 @@ bash build.sh
 
 The target writes BF16 while the closest supported reference uses FP16 input,
 FP32 compute, and FP16 output. The output conversion differs, but both paths
-write two bytes per element. The helper requests cuBLASLt's first heuristic
-candidate, so its result is a reproducible live comparison rather than an
-exhaustive autotune of every cuBLASLt algorithm.
+write two bytes per element. The helper defaults to timing and selecting among cuBLASLt's top eight
+heuristic candidates. Run both that mode and the wider configuration search:
+
+```bash
+./cublaslt_bench --mode both
+```
+
+The exhaustive-grid mode tests every returned algorithm ID and its exposed
+tile, stage, cluster, custom-option, swizzle, and supported reduction settings,
+with the finite split-K grid `0,1,2,3,4,5,6,8,12,16,32`. Unlike NVIDIA's
+illustrative custom-find sample, it does not stop after 16 IDs or 100 successful
+configurations. This is an exhaustive search of the stated grid, not a claim
+that every possible cuBLASLt implementation or split-K integer was explored.
+It retains the heuristic candidates in final selection.
+
+Both the Rust kernel and the helper default to 2,000 warmup launches, then five
+independent CUDA-event batches of 301 launches. Reported throughput uses the
+median batch mean, with tuning and validation excluded. Timing inputs are
+zeroed in both paths. Each selected cuBLASLt algorithm additionally passes 64
+nonzero CPU dot-product checks at each measured size; the Rust full-output
+validator checks both kernel variants at 4096³. Those 4K checks do not establish
+full-output correctness at 8K or 16K.
+
+Rust timing overrides are `GEMM_SOL_WARMUP`, `GEMM_SOL_ITERS`, and
+`GEMM_SOL_REPEATS` (positive odd repeat count); they are forwarded to the live
+helper. `GEMM_CUBLAS_MODE=top8|exhaustive|both` selects its search mode.
+`GEMM_CUBLAS_SKIP=1` omits the helper for a separately collected comparison.
+The helper accepts corresponding `--warmup`, `--iters`, and `--repeats`
+options, `--n` for one square size, and emits `RESULT` JSON lines including raw
+batch timings, selected configuration, workspace, and validation scope. Results
+are reported per shape without aggregating the three shapes into a geomean.
+See [bench/README.md](bench/README.md) for search and output-layout details.

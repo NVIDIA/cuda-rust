@@ -7,7 +7,9 @@
     clippy::not_unsafe_ptr_arg_deref,
     clippy::needless_range_loop,
     clippy::unnecessary_cast,
-    clippy::too_many_arguments
+    clippy::too_many_arguments,
+    clippy::collapsible_if,
+    clippy::manual_div_ceil
 )]
 
 //! Canonical cuda-oxide Blackwell GEMM speed-of-light example.
@@ -22,11 +24,11 @@
 //! - B: N×K f16, row-major (transposed storage, K contiguous)
 //! - C: M×N bf16 output, row-major (packed as u32 pairs)
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
 use cuda_device::barrier::{
     Barrier, fence_proxy_async_shared_cta, mbarrier_arrive, mbarrier_arrive_cluster,
-    mbarrier_arrive_expect_tx, mbarrier_init, mbarrier_inval, mbarrier_try_wait_parity,
+    mbarrier_arrive_expect_tx, mbarrier_init, mbarrier_try_wait_parity,
 };
 use cuda_device::clc::{
     clc_query_get_first_ctaid_x, clc_query_is_canceled, clc_try_cancel_multicast,
@@ -36,8 +38,8 @@ use cuda_device::convert::{bf16_to_f32, cvt_bf16x2_f32};
 use cuda_device::shared::{SharedArray, cvta_generic_to_shared_offset};
 use cuda_device::tcgen05::{
     Tcgen05AccumulatorType, Tcgen05ElementType, Tcgen05InstructionDescriptor, Tcgen05MmaShape,
-    stmatrix_m8n8_x2, tcgen05_alloc_cg2, tcgen05_commit_multicast_cg2, tcgen05_dealloc_cg2,
-    tcgen05_ld_16x256b_pure, tcgen05_load_wait, tcgen05_mma_f16_cg2,
+    tcgen05_alloc_cg2, tcgen05_commit_multicast_cg2, tcgen05_dealloc_cg2,
+    tcgen05_ld_16x256b_x8_pure, tcgen05_load_wait, tcgen05_mma_f16_cg2,
     tcgen05_relinquish_alloc_permit_cg2,
 };
 use cuda_device::tma::{TmaDescriptor, cp_async_bulk_tensor_2d_g2s_multicast_cg2};
@@ -88,6 +90,9 @@ mod cublas_baseline {
     }
 
     fn load() -> Option<HashMap<usize, f64>> {
+        if std::env::var("GEMM_CUBLAS_SKIP").as_deref() == Ok("1") {
+            return None;
+        }
         let bin = bench_binary();
         if !bin.exists() {
             eprintln!(
@@ -101,8 +106,20 @@ mod cublas_baseline {
             return None;
         }
 
-        eprintln!("ℹ️  Measuring live cuBLASLt FP16 reference on host GPU...");
-        let out = match std::process::Command::new(&bin).output() {
+        eprintln!("ℹ️  Measuring live cuBLASLt tuned FP16 reference on host GPU...");
+        let mut command = std::process::Command::new(&bin);
+        // Forward any timing overrides so the live baseline and Rust batches
+        // use the same protocol. Defaults are identical in the two programs.
+        for (name, flag) in [
+            ("GEMM_SOL_WARMUP", "--warmup"),
+            ("GEMM_SOL_ITERS", "--iters"),
+            ("GEMM_SOL_REPEATS", "--repeats"),
+        ] {
+            if let Ok(value) = std::env::var(name) {
+                command.args([flag, value.as_str()]);
+            }
+        }
+        let out = match command.output() {
             Ok(o) => o,
             Err(e) => {
                 eprintln!("⚠️  Failed to run {}: {e}", bin.display());
@@ -182,7 +199,7 @@ fn print_cublas_comparison(tflops: f64, m: usize) {
         Some(sol) => {
             let pct = (tflops / sol) * 100.0;
             println!(
-                "  vs cuBLAS:   {:.2}% of live cublasLt FP16 reference ({:.0} TFLOPS)",
+                "  vs cuBLAS:   {:.2}% of live cublasLt tuned FP16 reference ({:.0} TFLOPS)",
                 pct, sol
             );
         }
@@ -193,33 +210,25 @@ fn print_cublas_comparison(tflops: f64, m: usize) {
 }
 
 fn print_benchmark_summary(measurements: &[(usize, f64)]) {
-    let count = measurements.len() as f64;
-    let kernel_geomean = (measurements
-        .iter()
-        .map(|(_, value)| value.ln())
-        .sum::<f64>()
-        / count)
-        .exp();
-
-    println!("── Fixed-size geomean summary ───────────────────────");
-    println!("  Kernel:      {:.3} TFLOPS", kernel_geomean);
-
-    let reference_values: Option<Vec<f64>> = measurements
-        .iter()
-        .map(|(m, _)| cublas_baseline::reference_tflops(*m))
-        .collect();
-    if let Some(reference_values) = reference_values {
-        let reference_geomean =
-            (reference_values.iter().map(|value| value.ln()).sum::<f64>() / count).exp();
-        println!("  cuBLAS ref:  {:.3} TFLOPS", reference_geomean);
-        println!(
-            "  Ratio:       {:.2}% of live FP16 reference",
-            kernel_geomean / reference_geomean * 100.0
-        );
-    } else {
-        println!("  cuBLAS ref:  unavailable");
+    println!("── Individual fixed-size results ────────────────────");
+    for (m, tflops) in measurements {
+        println!("  {m}³: {tflops:.3} TFLOPS");
     }
     println!("─────────────────────────────────────────────────────");
+}
+
+fn benchmark_count(name: &str, default: usize) -> Result<usize, Box<dyn std::error::Error>> {
+    match std::env::var(name) {
+        Ok(value) => {
+            let count = value.parse::<usize>()?;
+            if count == 0 || count > 10_000_000 {
+                return Err(format!("{name} must be between 1 and 10000000").into());
+            }
+            Ok(count)
+        }
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(error.into()),
+    }
 }
 
 // =============================================================================
@@ -757,13 +766,12 @@ fn run_correctness_test_clc_multicast_4_stage_pipeline(
 
     let a_tma =
         create_tma_descriptor_f16_swizzled(a_ptr as *mut std::ffi::c_void, k as u64, m as u64)?;
-    // B TMA: 64 rows per CTA (each CTA loads half the N tile, split by rank)
     let b_tma = create_tma_descriptor_f16_swizzled_box(
         b_ptr as *mut std::ffi::c_void,
         k as u64,
         n as u64,
         64,
-        64,
+        if m == 4096 { 32 } else { 128 },
     )?;
 
     let dev_a_tma = DeviceBuffer::from_host(stream, &a_tma.opaque)?;
@@ -771,7 +779,8 @@ fn run_correctness_test_clc_multicast_4_stage_pipeline(
 
     let tiles_m = (m / 256) as u32;
     let tiles_n = (n / 128) as u32;
-    let total_tiles = tiles_m * tiles_n;
+    let wide_total = tiles_m * (tiles_n / 2);
+    let total_tiles = wide_total.div_ceil(74) * 74;
 
     let cfg = LaunchConfig {
         grid_dim: (total_tiles * 2, 1, 1),
@@ -905,8 +914,12 @@ fn run_benchmark_clc_multicast_4_stage_pipeline(
     n: usize,
     k: usize,
 ) -> Result<f64, Box<dyn std::error::Error>> {
-    const WARMUP: usize = 10;
-    const ITERS: usize = 100;
+    let warmup = benchmark_count("GEMM_SOL_WARMUP", 2000)?;
+    let iters = benchmark_count("GEMM_SOL_ITERS", 301)?;
+    let repeats = benchmark_count("GEMM_SOL_REPEATS", 5)?;
+    if repeats % 2 == 0 {
+        return Err("GEMM_SOL_REPEATS must be odd for the median".into());
+    }
 
     let problem = GemmProblem::new(m, n, k);
     let selected = select_gemm_variant(family, &problem, selection_mode)?;
@@ -928,7 +941,7 @@ fn run_benchmark_clc_multicast_4_stage_pipeline(
         k as u64,
         n as u64,
         64,
-        64,
+        if m == 4096 { 32 } else { 128 },
     )?;
 
     let dev_a_tma = DeviceBuffer::from_host(stream, &a_tma.opaque)?;
@@ -942,7 +955,8 @@ fn run_benchmark_clc_multicast_4_stage_pipeline(
 
     let tiles_m = (m / 256) as u32;
     let tiles_n = (n / 128) as u32;
-    let total_tiles = tiles_m * tiles_n;
+    let wide_total = tiles_m * (tiles_n / 2);
+    let total_tiles = wide_total.div_ceil(74) * 74;
 
     let cfg = LaunchConfig {
         grid_dim: (total_tiles * 2, 1, 1),
@@ -953,7 +967,7 @@ fn run_benchmark_clc_multicast_4_stage_pipeline(
     let output_u32_count = m * n / 2;
     let mut dev_output = DeviceBuffer::<u32>::zeroed(stream, output_u32_count)?;
 
-    for _ in 0..WARMUP {
+    for _ in 0..warmup {
         unsafe {
             launch_kernel(
                 module,
@@ -971,31 +985,34 @@ fn run_benchmark_clc_multicast_4_stage_pipeline(
     }
     stream.synchronize()?;
 
-    let start_event =
-        stream.record_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
-
-    for _ in 0..ITERS {
-        unsafe {
-            launch_kernel(
-                module,
-                stream.as_ref(),
-                cfg,
-                a_tma_ptr,
-                b_tma_ptr,
-                &mut dev_output,
-                n_arg,
-                k_arg,
-                tiles_m,
-                tiles_n,
-            )
-        }?;
+    let mut samples_us = Vec::with_capacity(repeats);
+    for _ in 0..repeats {
+        let start_event =
+            stream.record_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+        for _ in 0..iters {
+            unsafe {
+                launch_kernel(
+                    module,
+                    stream.as_ref(),
+                    cfg,
+                    a_tma_ptr,
+                    b_tma_ptr,
+                    &mut dev_output,
+                    n_arg,
+                    k_arg,
+                    tiles_m,
+                    tiles_n,
+                )
+            }?;
+        }
+        let end_event =
+            stream.record_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+        let elapsed_ms = start_event.elapsed_ms(&end_event)?;
+        samples_us.push(elapsed_ms as f64 * 1000.0 / iters as f64);
     }
-
-    let end_event =
-        stream.record_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
-    let elapsed_ms = start_event.elapsed_ms(&end_event)?;
-
-    let avg_ms = elapsed_ms as f64 / ITERS as f64;
+    let mut ordered = samples_us.clone();
+    ordered.sort_by(f64::total_cmp);
+    let avg_ms = ordered[repeats / 2] / 1000.0;
     let avg_us = avg_ms * 1000.0;
     let flops = 2.0 * m as f64 * n as f64 * k as f64;
     let tflops = (flops / (avg_ms / 1000.0)) / 1e12;
@@ -1014,11 +1031,18 @@ fn run_benchmark_clc_multicast_4_stage_pipeline(
     );
     println!("  K-loop:      {} outer iters (BK=64, 4 MMAs each)", k / 64);
     println!("  Pipeline:    CLC + cta_group::2 + 4-stage SMEM + unroll(4)");
-    println!("  Iterations:  {} (after {} warmup)", ITERS, WARMUP);
-    println!("  Total time:  {:.3} ms", elapsed_ms);
+    println!(
+        "  Iterations:  {} × {} batches (after {} warmup)",
+        iters, repeats, warmup
+    );
+    println!("  Statistic:   median batch mean");
+    println!("  Samples us:  {:?}", samples_us);
     println!("  Average:     {:.3} us / kernel", avg_us);
     println!("  FLOPS/kern:  {:.3e}", flops);
     println!("  Throughput:  {:.3} TFLOPS", tflops);
+    println!(
+        "RESULT {{\"implementation\":\"cuda-oxide\",\"n\":{m},\"warmup\":{warmup},\"iters\":{iters},\"repeats\":{repeats},\"samples_us\":{samples_us:?},\"median_us\":{avg_us:.9},\"tflops\":{tflops:.9},\"variant\":\"{output_tile}\",\"input\":\"fp16\",\"output\":\"bf16\",\"compute\":\"fp32\"}}"
+    );
     print_cublas_comparison(tflops, m);
     println!("═══════════════════════════════════════════════════════\n");
 
@@ -1057,7 +1081,7 @@ fn create_tma_descriptor_f16_swizzled(
         CUtensorMapDataType_enum_CU_TENSOR_MAP_DATA_TYPE_FLOAT16,
         CUtensorMapFloatOOBfill_enum_CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE,
         CUtensorMapInterleave_enum_CU_TENSOR_MAP_INTERLEAVE_NONE,
-        CUtensorMapL2promotion_enum_CU_TENSOR_MAP_L2_PROMOTION_NONE,
+        CUtensorMapL2promotion_enum_CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
         CUtensorMapSwizzle_enum_CU_TENSOR_MAP_SWIZZLE_128B, cuTensorMapEncodeTiled,
         cudaError_enum_CUDA_SUCCESS,
     };
@@ -1080,7 +1104,7 @@ fn create_tma_descriptor_f16_swizzled(
             element_strides.as_ptr(),
             CUtensorMapInterleave_enum_CU_TENSOR_MAP_INTERLEAVE_NONE,
             CUtensorMapSwizzle_enum_CU_TENSOR_MAP_SWIZZLE_128B,
-            CUtensorMapL2promotion_enum_CU_TENSOR_MAP_L2_PROMOTION_NONE,
+            CUtensorMapL2promotion_enum_CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
             CUtensorMapFloatOOBfill_enum_CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE,
         )
     };
@@ -1103,7 +1127,7 @@ fn create_tma_descriptor_f16_swizzled_box(
         CUtensorMapDataType_enum_CU_TENSOR_MAP_DATA_TYPE_FLOAT16,
         CUtensorMapFloatOOBfill_enum_CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE,
         CUtensorMapInterleave_enum_CU_TENSOR_MAP_INTERLEAVE_NONE,
-        CUtensorMapL2promotion_enum_CU_TENSOR_MAP_L2_PROMOTION_NONE,
+        CUtensorMapL2promotion_enum_CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
         CUtensorMapSwizzle_enum_CU_TENSOR_MAP_SWIZZLE_128B, cuTensorMapEncodeTiled,
         cudaError_enum_CUDA_SUCCESS,
     };
@@ -1126,7 +1150,7 @@ fn create_tma_descriptor_f16_swizzled_box(
             element_strides.as_ptr(),
             CUtensorMapInterleave_enum_CU_TENSOR_MAP_INTERLEAVE_NONE,
             CUtensorMapSwizzle_enum_CU_TENSOR_MAP_SWIZZLE_128B,
-            CUtensorMapL2promotion_enum_CU_TENSOR_MAP_L2_PROMOTION_NONE,
+            CUtensorMapL2promotion_enum_CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
             CUtensorMapFloatOOBfill_enum_CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE,
         )
     };

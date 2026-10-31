@@ -5,6 +5,9 @@ oxide = "run --package cargo-oxide --"
 
 # Environment variables for all builds
 [env]
+# Unlock `-Z` flags and `#![feature(rustc_private)]` on the pinned stable
+# release (`rust-toolchain.toml`).
+RUSTC_BOOTSTRAP = "1"
 # libmathdx installation path (for libmathdx-sys crate)
 # Required only when using --features libmathdx with mathdx_ffi_test.
 # IMPORTANT: Replace the placeholder below with your libmathdx install dir,

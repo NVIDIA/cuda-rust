@@ -18,7 +18,7 @@ use core::num::NonZero;
 use dialect_mir::attributes::{FieldIndexAttr, MirCastKindAttr, VariantIndexAttr};
 use dialect_mir::ops::{
     MirAddOp, MirAllocaOp, MirCastOp, MirCheckedAddOp, MirCheckedSubOp, MirCondBranchOp,
-    MirConstantOp, MirConstructEnumOp, MirConstructTupleOp, MirEnumPayloadOp, MirEqOp,
+    MirConstantOp, MirConstructEnumOp, MirConstructTupleOp, MirDivOp, MirEnumPayloadOp, MirEqOp,
     MirFieldAddrOp, MirFuncOp, MirGeOp, MirGetDiscriminantOp, MirGotoOp, MirGtOp, MirLeOp,
     MirLoadOp, MirLtOp, MirNotOp, MirReturnOp, MirStoreOp, MirSubOp, MirUnreachableOp,
 };
@@ -628,6 +628,161 @@ pub fn nested_counted_loop(ctx: &mut Context, n: i64, m: i64) -> NestedLoop {
 
     // exit: return
     ret(ctx, exit);
+
+    NestedLoop {
+        module,
+        region,
+        preheader,
+        outer_header,
+        outer_body,
+        inner_header,
+        inner_body,
+        outer_latch,
+        exit,
+    }
+}
+
+/// Build the nest rustc's GVN leaves for a bound written `N / D` with a const
+/// generic `N`: the division is computed once, in the outer header, and both
+/// exit tests and the exit block read it. The nest sums `j` over both loops:
+///
+/// ```text
+///   preheader:          acc0=0; i0=0;            goto outer_header(acc0, i0)
+///   outer_header(acc,i): b = dividend / divisor; t = not(i < b)
+///                        cond_br t [exit(acc), outer_body]
+///   outer_body:          j0=0;                   goto inner_header(acc, j0)
+///   inner_header(a,j):   u = not(j < b);         cond_br u [outer_latch(a), inner_body]
+///   inner_body:          a1=a+j; j1=j+1;         goto inner_header(a1, j1)
+///   outer_latch(a2):     i1=i+1;                 goto outer_header(a2, i1)
+///   exit(r):             s = r + b; return s
+/// ```
+///
+/// The function returns `b * (b * (b - 1) / 2) + b`.
+pub fn shared_bound_nested_loop(ctx: &mut Context, dividend: i64, divisor: i64) -> NestedLoop {
+    let u32 = u32t(ctx);
+    let i1 = i1(ctx);
+    let (module, region) = func(ctx, vec![], vec![u32.into()]);
+
+    let preheader = block(ctx, region, vec![]);
+    let outer_header = block(ctx, region, vec![u32.into(), u32.into()]); // (acc, i)
+    let outer_body = block(ctx, region, vec![]);
+    let inner_header = block(ctx, region, vec![u32.into(), u32.into()]); // (a, j)
+    let inner_body = block(ctx, region, vec![]);
+    let outer_latch = block(ctx, region, vec![u32.into()]); // (a2)
+    let exit = block(ctx, region, vec![u32.into()]); // (r)
+
+    let not = |ctx: &mut Context, b: Ptr<BasicBlock>, v: Value| -> Value {
+        let op = Operation::new(
+            ctx,
+            MirNotOp::get_concrete_op_info(),
+            vec![i1.into()],
+            vec![v],
+            vec![],
+            0,
+        );
+        op.insert_at_back(b, ctx);
+        op.deref(ctx).get_result(0)
+    };
+
+    // preheader: acc0 = 0; i0 = 0; goto outer_header(acc0, i0)
+    let acc0 = iconst(ctx, preheader, u32, 0);
+    let i0 = iconst(ctx, preheader, u32, 0);
+    goto(ctx, preheader, outer_header, vec![acc0, i0]);
+
+    // outer_header(acc, i): b = dividend / divisor; cond_br not(i < b) [exit(acc), outer_body]
+    let acc = outer_header.deref(ctx).get_argument(0);
+    let i = outer_header.deref(ctx).get_argument(1);
+    let lhs = iconst(ctx, outer_header, u32, dividend);
+    let rhs = iconst(ctx, outer_header, u32, divisor);
+    let bound = op2!(
+        ctx,
+        outer_header,
+        MirDivOp::get_concrete_op_info(),
+        u32.into(),
+        lhs,
+        rhs
+    );
+    let lt = op2!(
+        ctx,
+        outer_header,
+        MirLtOp::get_concrete_op_info(),
+        i1.into(),
+        i,
+        bound
+    );
+    let nlt = not(ctx, outer_header, lt);
+    cond_br_args(ctx, outer_header, nlt, exit, vec![acc], outer_body, vec![]);
+
+    // outer_body: j0 = 0; goto inner_header(acc, j0)
+    let j0 = iconst(ctx, outer_body, u32, 0);
+    goto(ctx, outer_body, inner_header, vec![acc, j0]);
+
+    // inner_header(a, j): cond_br not(j < b) [outer_latch(a), inner_body]
+    let a = inner_header.deref(ctx).get_argument(0);
+    let j = inner_header.deref(ctx).get_argument(1);
+    let jlt = op2!(
+        ctx,
+        inner_header,
+        MirLtOp::get_concrete_op_info(),
+        i1.into(),
+        j,
+        bound
+    );
+    let jnlt = not(ctx, inner_header, jlt);
+    cond_br_args(
+        ctx,
+        inner_header,
+        jnlt,
+        outer_latch,
+        vec![a],
+        inner_body,
+        vec![],
+    );
+
+    // inner_body: a1 = a + j; j1 = j + 1; goto inner_header(a1, j1)
+    let a1 = op2!(
+        ctx,
+        inner_body,
+        MirAddOp::get_concrete_op_info(),
+        u32.into(),
+        a,
+        j
+    );
+    let one_j = iconst(ctx, inner_body, u32, 1);
+    let j1 = op2!(
+        ctx,
+        inner_body,
+        MirAddOp::get_concrete_op_info(),
+        u32.into(),
+        j,
+        one_j
+    );
+    goto(ctx, inner_body, inner_header, vec![a1, j1]);
+
+    // outer_latch(a2): i1 = i + 1; goto outer_header(a2, i1)
+    let a2 = outer_latch.deref(ctx).get_argument(0);
+    let one_i = iconst(ctx, outer_latch, u32, 1);
+    let inext = op2!(
+        ctx,
+        outer_latch,
+        MirAddOp::get_concrete_op_info(),
+        u32.into(),
+        i,
+        one_i
+    );
+    goto(ctx, outer_latch, outer_header, vec![a2, inext]);
+
+    // exit(r): s = r + b; return s
+    let r = exit.deref(ctx).get_argument(0);
+    let s = op2!(
+        ctx,
+        exit,
+        MirAddOp::get_concrete_op_info(),
+        u32.into(),
+        r,
+        bound
+    );
+    ret_values(ctx, exit, vec![s]);
 
     NestedLoop {
         module,

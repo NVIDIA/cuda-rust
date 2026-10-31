@@ -9,7 +9,7 @@
 //! static subobject, direct-tagged enums, and relocation-carrying enums nested
 //! inside struct, tuple, and array constants.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::kernel;
 use cuda_host::cuda_module;

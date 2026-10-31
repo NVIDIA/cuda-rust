@@ -21,7 +21,7 @@
 //!   lane's metadata register also changes the result;
 //! - values stay small (A<=7, B<=8, C<=31, sums < 1024) so f16, bf16, and
 //!   tf32 all accumulate exactly and the host reference is integer math.
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, cuda_module, kernel, thread, wmma};
 

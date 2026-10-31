@@ -14,8 +14,12 @@ use super::*;
 const GIT_REPO: &str = "https://github.com/NVIDIA/cuda-rust.git";
 
 const RUST_TOOLCHAIN_TOML: &str = r#"[toolchain]
-channel = "nightly-2026-10-11"
+channel = "1.99.1"
 components = ["rust-src", "rustc-dev", "rust-analyzer", "clippy", "rustfmt", "llvm-tools"]
+"#;
+
+const CARGO_CONFIG_TOML: &str = r#"[env]
+RUSTC_BOOTSTRAP = "1"
 "#;
 
 const SCAFFOLD_GITIGNORE_EXTRA: &[&str] = &[
@@ -52,6 +56,7 @@ pub(super) fn scaffold_gitignore() -> String {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ScaffoldFiles {
     pub(super) cargo_toml: String,
+    pub(super) cargo_config_toml: String,
     rust_toolchain_toml: String,
     pub(super) gitignore: String,
     pub(super) readme: String,
@@ -146,9 +151,9 @@ cuda-core = {{ git = "{GIT_REPO}" }}
 
 fn scaffold_main_rs(async_mode: bool) -> String {
     if async_mode {
-        r#"use cuda_async::simt::device_context::{init_device_contexts, with_cuda_context};
-use cuda_async::simt::device_operation::DeviceOperation;
-use cuda_core::simt::LaunchConfig;
+        r#"use cuda_async::device_context::{init_device_contexts, with_cuda_context};
+use cuda_async::device_operation::DeviceOperation;
+use cuda_core::LaunchConfig;
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;
 
@@ -168,8 +173,8 @@ mod kernels {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use cuda_async::simt::device_box::DeviceBox;
-    use cuda_core::simt::memory::{malloc_async, memcpy_dtoh_async, memcpy_htod_async};
+    use cuda_async::device_box::DeviceBox;
+    use cuda_core::memory::{malloc_async, memcpy_dtoh_async, memcpy_htod_async};
     use std::mem;
 
     init_device_contexts(0, 1)?;
@@ -190,9 +195,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             memcpy_htod_async(b, b_host.as_ptr(), num_bytes, stream.cu_stream()).unwrap();
             stream.synchronize().unwrap();
             (
-                DeviceBox::<[f32]>::from_raw_parts(a, N, 0),
-                DeviceBox::<[f32]>::from_raw_parts(b, N, 0),
-                DeviceBox::<[f32]>::from_raw_parts(c, N, 0),
+                DeviceBox::<[f32]>::from_raw_parts(a, N, stream.clone()),
+                DeviceBox::<[f32]>::from_raw_parts(b, N, stream.clone()),
+                DeviceBox::<[f32]>::from_raw_parts(c, N, stream.clone()),
             )
         }
     })?;
@@ -299,6 +304,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 pub(super) fn scaffold_files(name: &str, async_mode: bool) -> ScaffoldFiles {
     ScaffoldFiles {
         cargo_toml: scaffold_cargo_toml(name, async_mode),
+        cargo_config_toml: CARGO_CONFIG_TOML.to_string(),
         rust_toolchain_toml: RUST_TOOLCHAIN_TOML.to_string(),
         gitignore: scaffold_gitignore(),
         readme: scaffold_readme(name, async_mode),
@@ -319,10 +325,17 @@ pub fn scaffold_new(name: &str, async_mode: bool) {
         eprintln!("Error creating directory: {}", e);
         std::process::exit(1);
     });
+    let cargo_dir = project_dir.join(".cargo");
+    std::fs::create_dir_all(&cargo_dir).unwrap_or_else(|e| {
+        eprintln!("Error creating directory: {}", e);
+        std::process::exit(1);
+    });
 
     let files = scaffold_files(name, async_mode);
     std::fs::write(project_dir.join("Cargo.toml"), files.cargo_toml)
         .expect("Failed to write Cargo.toml");
+    std::fs::write(cargo_dir.join("config.toml"), files.cargo_config_toml)
+        .expect("Failed to write .cargo/config.toml");
     std::fs::write(
         project_dir.join("rust-toolchain.toml"),
         files.rust_toolchain_toml,

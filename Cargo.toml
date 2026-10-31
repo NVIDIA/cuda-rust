@@ -3,11 +3,13 @@ resolver = "3"
 members = [
     # Stable host-side crates shared by the Tile and SIMT components.
     # Package metadata and dependencies stay in each crate so this workspace
-    # does not impose CUDA Oxide's nightly toolchain or edition.
+    # does not impose CUDA Oxide's workspace toolchain pin or edition.
     "cuda-bindings",
     "cuda-core",
     "cuda-core-derive",
     "cuda-async",
+    # no_std representation contracts shared by host and device crates.
+    "cuda-repr",
 ]
 # Nested workspaces. Without these, Cargo treats crates under them as part of
 # this workspace and `edition.workspace = true` in cuda-device (etc.) looks at

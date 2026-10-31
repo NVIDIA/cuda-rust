@@ -40,7 +40,7 @@ use my_module::{add, scale};
 #[test]
 fn smoke_tensor_slicing() {
     common::with_test_stack(|| {
-        let device = cuda_core::Device::new(0).expect("device");
+        let device = cuda_core::Context::new(0).expect("device");
         let stream = device.new_stream().expect("stream");
         let block = 128;
 

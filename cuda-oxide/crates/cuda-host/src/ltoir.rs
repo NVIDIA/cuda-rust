@@ -1164,10 +1164,26 @@ pub(crate) fn execution_route(
         reason,
     };
 
-    if emitted.suffix().is_some() {
-        return Err(incompatible(
-            "targets with an architecture suffix, such as sm_90a, cannot be forwarded to a different GPU",
-        ));
+    match emitted.suffix() {
+        None => {}
+        // PTX for an `f` target is compatible with every later target of the
+        // same family (PTX ISA, "Architecture Families"), so sm_100f runs on
+        // sm_103. The checks below keep it on its own major and minor or later.
+        // sm_101f is the pre-rename spelling of sm_110f, which belongs to the
+        // sm_11x family, so it is not forwarded within major 10.
+        Some('f')
+            if emitted.capability() != 101
+                && emitted.capability() / 10 == execution.capability() / 10 => {}
+        Some('f') => {
+            return Err(incompatible(
+                "family targets, such as sm_100f, run only on GPUs of the same family",
+            ));
+        }
+        Some(_) => {
+            return Err(incompatible(
+                "architecture-specific targets, such as sm_90a, cannot be forwarded to a different GPU",
+            ));
+        }
     }
     if emitted.capability() > execution.capability() {
         return Err(incompatible(
@@ -1469,6 +1485,29 @@ mod tests {
                 execution_route(&emitted.parse().unwrap(), &execution.parse().unwrap()).unwrap(),
                 ExecutionRoute::Cubin,
                 "{emitted} on {execution}"
+            );
+        }
+    }
+
+    #[test]
+    fn family_target_runs_on_later_gpus_of_its_family() {
+        for (emitted, execution) in [("sm_100f", "sm_103"), ("sm_120f", "sm_121")] {
+            assert_eq!(
+                execution_route(&emitted.parse().unwrap(), &execution.parse().unwrap()).unwrap(),
+                ExecutionRoute::Cubin,
+                "{emitted} on {execution}"
+            );
+        }
+        for (emitted, execution) in [
+            ("sm_103f", "sm_100"),
+            ("sm_100f", "sm_120"),
+            ("sm_101f", "sm_103"),
+        ] {
+            let error = execution_route(&emitted.parse().unwrap(), &execution.parse().unwrap())
+                .expect_err("a family target cannot leave its family or run on an earlier GPU");
+            assert!(
+                matches!(error, LtoirError::IncompatibleExecutionTarget { .. }),
+                "{emitted} on {execution}: {error}"
             );
         }
     }

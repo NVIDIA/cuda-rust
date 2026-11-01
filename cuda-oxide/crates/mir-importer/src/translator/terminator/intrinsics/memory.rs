@@ -806,6 +806,21 @@ pub fn emit_shared_array_index(
         last_op,
         loc.clone(),
     )?;
+    // Trap if `index >= N`, same as normal array indexing.
+    // `#[kernel(unchecked_indexing)]` skips it, same as for slices.
+    let last_op_after_index = if value_map.unchecked_indexing() {
+        last_op_after_index
+    } else {
+        let len = shared_array_len(body, &args[0], loc.clone())?;
+        Some(emit_index_bounds_check(
+            ctx,
+            index_val,
+            len,
+            block_ptr,
+            last_op_after_index,
+            loc.clone(),
+        )?)
+    };
     let (prepared_destination, last_op) = helpers::prepare_destination_write(
         ctx,
         body,
@@ -851,6 +866,106 @@ pub fn emit_shared_array_index(
         loc,
         "SharedArray::index call without target block",
     )
+}
+
+/// Element count `N` of the `SharedArray<T, N, ALIGN>` that `operand` points to.
+fn shared_array_len(
+    body: &mir::Body,
+    operand: &mir::Operand,
+    loc: Location,
+) -> TranslationResult<u64> {
+    use rustc_public::ty::{GenericArgKind, RigidTy, TyConstKind, TyKind};
+
+    let operand_ty = match operand {
+        mir::Operand::Copy(place) | mir::Operand::Move(place) => place.ty(body.locals()).ok(),
+        mir::Operand::Constant(constant) => Some(constant.const_.ty()),
+        mir::Operand::RuntimeChecks(_) => None,
+    };
+    let array_ty = match operand_ty.map(|ty| ty.kind()) {
+        Some(TyKind::RigidTy(RigidTy::RawPtr(pointee, _)))
+        | Some(TyKind::RigidTy(RigidTy::Ref(_, pointee, _))) => pointee,
+        other => {
+            return input_err!(
+                loc,
+                TranslationErr::unsupported(format!(
+                    "SharedArray::index: expected a reference to the array, got {other:?}"
+                ))
+            );
+        }
+    };
+    let len = match array_ty.kind() {
+        TyKind::RigidTy(RigidTy::Adt(_, args)) => match args.0.get(1) {
+            Some(GenericArgKind::Const(len)) => match len.kind() {
+                TyConstKind::Value(_, alloc) => alloc.read_uint().ok().map(|v| v as u64),
+                _ => len.eval_target_usize().ok(),
+            },
+            _ => None,
+        },
+        _ => None,
+    };
+    match len {
+        Some(len) => Ok(len),
+        None => input_err!(
+            loc,
+            TranslationErr::unsupported(format!(
+                "SharedArray::index: cannot determine the array length of {array_ty:?}"
+            ))
+        ),
+    }
+}
+
+/// Emits `assert(index < len)` after `prev_op` and returns the assert op.
+fn emit_index_bounds_check(
+    ctx: &mut Context,
+    index: Value,
+    len: u64,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    use dialect_mir::ops::{MirAssertOp, MirLtOp};
+
+    let usize_ty = types::get_usize_type(ctx);
+    if index.get_type(ctx) != usize_ty.into() {
+        return input_err!(
+            loc,
+            TranslationErr::type_error("SharedArray::index expects a usize index")
+        );
+    }
+    let len_op = Operation::new(
+        ctx,
+        MirConstantOp::get_concrete_op_info(),
+        vec![usize_ty.into()],
+        vec![],
+        vec![],
+        0,
+    );
+    len_op.deref_mut(ctx).set_loc(loc.clone());
+    let len_attr = IntegerAttr::new(
+        usize_ty,
+        APInt::from_u64(len, NonZeroUsize::new(64).unwrap()),
+    );
+    MirConstantOp::new(len_op).set_attr_value(ctx, len_attr);
+    helpers::insert_op(ctx, len_op, block_ptr, prev_op);
+
+    let len_val = len_op.deref(ctx).get_result(0);
+    let bool_ty = types::get_bool_type(ctx).into();
+    let in_bounds = Operation::new(
+        ctx,
+        MirLtOp::get_concrete_op_info(),
+        vec![bool_ty],
+        vec![index, len_val],
+        vec![],
+        0,
+    );
+    in_bounds.deref_mut(ctx).set_loc(loc.clone());
+    in_bounds.insert_after(ctx, len_op);
+
+    let cond = in_bounds.deref(ctx).get_result(0);
+    let assert_op = MirAssertOp::new(ctx, cond).get_operation();
+    assert_op.deref_mut(ctx).set_loc(loc);
+    assert_op.insert_after(ctx, in_bounds);
+    Ok(assert_op)
 }
 
 /// Emits a public `SharedArray` pointer conversion.

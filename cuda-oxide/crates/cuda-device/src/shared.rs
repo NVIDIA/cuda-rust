@@ -245,12 +245,16 @@ impl<T, const N: usize, const ALIGN: usize> Index<usize> for SharedArray<T, N, A
     /// This function should never be called on the host. If called outside
     /// a CUDA kernel context, it will panic.
     ///
+    /// # Panics (in device code)
+    ///
+    /// Traps if `idx >= N`, like indexing a Rust array.
+    /// `#[kernel(unchecked_indexing)]` removes this check.
+    ///
     /// # Safety (in device code)
     ///
     /// While the `Index` trait method is not marked unsafe, accessing shared
     /// memory through a `static mut` requires an `unsafe` block. The caller
     /// must ensure:
-    /// - Index is within bounds (`idx < N`)
     /// - The element has been initialized by some thread
     /// - Appropriate synchronization (`sync_threads`) if reading data written
     ///   by another thread
@@ -270,13 +274,17 @@ impl<T, const N: usize, const ALIGN: usize> IndexMut<usize> for SharedArray<T, N
     /// This function should never be called on the host. If called outside
     /// a CUDA kernel context, it will panic.
     ///
+    /// # Panics (in device code)
+    ///
+    /// Traps if `idx >= N`, like indexing a Rust array.
+    /// `#[kernel(unchecked_indexing)]` removes this check.
+    ///
     /// # Safety (in device code)
     ///
     /// While the `IndexMut` trait method is not marked unsafe, accessing shared
     /// memory through a `static mut` requires an `unsafe` block. The caller
-    /// must ensure:
-    /// - Index is within bounds (`idx < N`)
-    /// - No other thread is concurrently accessing the same index (data race)
+    /// must ensure no other thread is concurrently accessing the same index
+    /// (data race).
     #[inline(never)]
     fn index_mut(&mut self, _idx: usize) -> &mut Self::Output {
         // This body never executes on GPU - the compiler replaces it with

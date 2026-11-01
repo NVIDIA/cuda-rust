@@ -6,7 +6,7 @@
 //!
 //! Raw register transfers require PTX 8.6 and a tcgen05-capable architecture
 //! profile (`sm_100a`, `sm_101a`, `sm_103a` or `sm_110a` in the intrinsic catalog).
-//! The current CTM consumer validates `sm_100a`; these are unavailable on SM120a.
+//! The current CTM consumer validates `sm_100a` and `sm_103a`; these are unavailable on SM120a.
 use crate::groups::{CtaGroup, CtaGroup1};
 use core::marker::PhantomData;
 pub use cuda_device::tcgen05::{TmemAddress as TmemAddr, TmemDeallocated, TmemReady, TmemUninit};

@@ -334,14 +334,25 @@ def compile_kernel(m, n, k, has_bias=False, clusters=1):
         make_fake_tensor(cutlass.Float16, (m,), (1,), assumed_align=16),
         make_fake_stream(),
     )
-    return cute.compile(_Gemm(bool(has_bias), clusters), *args, options='--gpu-arch sm_100a')
+    return cute.compile(_Gemm(bool(has_bias), clusters), *args, options=f'--gpu-arch {_gpu_arch()}')
+
+
+def _gpu_arch():
+    """Compile for an attached SM103 device; offline compilation keeps sm_100a."""
+    try:
+        import torch
+        if torch.cuda.is_available() and torch.cuda.get_device_capability() == (10, 3):
+            return 'sm_103a'
+    except ImportError:
+        pass
+    return 'sm_100a'
 
 
 def _sm100(device):
     """Check the actual launch target; offline compilation intentionally skips this check."""
     import torch
-    if torch.device(device).type != 'cuda' or torch.cuda.get_device_capability(device) != (10, 0):
-        raise RuntimeError('this reference requires an SM100 GPU')
+    if torch.device(device).type != 'cuda' or torch.cuda.get_device_capability(device) not in ((10, 0), (10, 3)):
+        raise RuntimeError('this reference requires an SM100 or SM103 GPU')
 
 
 def cluster_capacity():

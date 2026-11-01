@@ -131,10 +131,10 @@ impl CutlassFullCuteMlir22 {
     /// Exact Pliron revision defining this profile's source IR contract.
     pub const PLIRON_REVISION: &'static str = "435536c8611af34c48c8f73d78e77894a05d103d";
 
-    /// Accept only sm_100a or sm_120a, whose mappings have been validated for this consumer.
+    /// Accept only sm_100a, sm_103a or sm_120a, whose mappings have been validated for this consumer.
     pub fn new(gpu_arch: impl Into<String>) -> Result<Self, ProfileError> {
         let gpu_arch = gpu_arch.into();
-        if !matches!(gpu_arch.as_str(), "sm_100a" | "sm_120a") {
+        if !matches!(gpu_arch.as_str(), "sm_100a" | "sm_103a" | "sm_120a") {
             return Err(ProfileError::UnsupportedArchitecture(gpu_arch));
         }
         Ok(Self { gpu_arch })
@@ -414,6 +414,20 @@ mod tests {
         assert!(json.contains(crate::INTEROP_REVISION));
         assert!(json.contains("\"llvm_major\": 22"));
         assert!(profile.build_registry().unwrap().is_sealed());
+    }
+
+    /// Accept each reviewed target, including the B300-class sm_103a.
+    #[test]
+    fn profile_accepts_the_reviewed_architectures() {
+        for arch in ["sm_100a", "sm_103a", "sm_120a"] {
+            assert_eq!(
+                CutlassFullCuteMlir22::new(arch)
+                    .unwrap()
+                    .manifest()
+                    .gpu_arch,
+                arch
+            );
+        }
     }
 
     /// Reject a target without a reviewed CUTLASS mapping profile.

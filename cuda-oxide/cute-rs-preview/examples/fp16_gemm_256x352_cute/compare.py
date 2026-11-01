@@ -98,8 +98,8 @@ def main():
         from public_reference import oracle, gemm
     except ImportError as exc:
         sys.exit(f"comparison dependencies could not be imported by {sys.executable}: {exc}; {SETUP_HINT}")
-    if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (10, 0):
-        raise RuntimeError("this comparison requires an SM100 GPU")
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)):
+        raise RuntimeError("this comparison requires an SM100 or SM103 GPU")
     # Both processes select device ordinal zero. CUDA_VISIBLE_DEVICES is the
     # common way to choose a physical GPU without mixing devices in one run.
     torch.cuda.set_device(0)

@@ -1,12 +1,12 @@
 # Support Matrix (preview)
 
-cute-rs is a **preview**. It compiles Rust CuTe kernels ahead of time through the pinned CUTLASS 4.7 compiler for two targets, `sm_100a` and `sm_120a`, and covers a validated subset of what CuTeDSL 4.7 offers on them. This page lists what the subset holds, what it does not, and what cute-rs adds. Status at commit `5eaa6cbda`, 2026-10-22.
+cute-rs is a **preview**. It compiles Rust CuTe kernels ahead of time through the pinned CUTLASS 4.7 compiler for three targets, `sm_100a`, `sm_103a` and `sm_120a`, and covers a validated subset of what CuTeDSL 4.7 offers on them. This page lists what the subset holds, what it does not, and what cute-rs adds. Status at commit `5eaa6cbda`, 2026-10-22.
 
 ```{figure} images/support-matrix.svg
 :align: center
 :width: 100%
 
-One glance: CuTeDSL 4.7 across its architectures against the cute-rs preview on its two targets.
+One glance: CuTeDSL 4.7 across its architectures against the cute-rs preview on its targets (the image predates `sm_103a`).
 ```
 
 ## Targets
@@ -15,7 +15,7 @@ One glance: CuTeDSL 4.7 across its architectures against the cute-rs preview on 
 :align: center
 :width: 100%
 
-The two targets the preview compiles for, and the ones it rejects.
+The targets the preview compiles for, and the ones it rejects (the image predates `sm_103a`, which now compiles like `sm_100a`).
 ```
 
 :::{dropdown} Text version
@@ -26,13 +26,14 @@ The two targets the preview compiles for, and the ones it rejects.
 | `sm_89` | Ada | yes | **rejected** |
 | `sm_90a` | Hopper | yes | **rejected** |
 | `sm_100a` | Blackwell datacenter, B200 class | yes | **yes** |
-| `sm_100`, `sm_100f`, `sm_103a`, `sm_110a` | Blackwell datacenter, other variants | yes | **rejected** |
+| `sm_103a` | Blackwell Ultra datacenter, B300 class | yes | **yes** |
+| `sm_100`, `sm_100f`, `sm_110a` | Blackwell datacenter, other variants | yes | **rejected** |
 | `sm_120a` | Blackwell GeForce, RTX 50 series | yes | **yes** |
 | `sm_120`, `sm_120f`, `sm_121a` | Blackwell GeForce, other variants | yes | **rejected** |
 
 :::
 
-The target check runs before any MLIR is built, and the error names the target. Within the pair, `tcgen05` operations need `sm_100a` and MXF4 register MMA needs `sm_120a`. `cargo oxide run` uses the detected GPU, so an RTX 5090 gets `sm_120a`; `cargo oxide build` needs `--arch`. Every CuTe kernel needs `CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir`; the native backend has no CuTe lowering.
+The target check runs before any MLIR is built, and the error names the target. Within the validated set, `tcgen05` operations need `sm_100a` or `sm_103a` and MXF4 register MMA needs `sm_120a`. `cargo oxide run` uses the detected GPU, so an RTX 5090 gets `sm_120a`; `cargo oxide build` needs `--arch`. Every CuTe kernel needs `CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir`; the native backend has no CuTe lowering.
 
 ## Feature areas
 

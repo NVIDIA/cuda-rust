@@ -235,8 +235,8 @@ fn main() -> Result<()> {
         batch * pages,
     )?;
     let context = CudaContext::new(0)?;
-    if context.compute_capability()? != (10, 0) {
-        return Err("this example requires B200/SM100".into());
+    if !matches!(context.compute_capability()?, (10, 0) | (10, 3)) {
+        return Err("this example requires SM100 or SM103".into());
     }
     let stream = context.new_stream()?;
     let dq = DeviceBuffer::from_host(&stream, &q)?;

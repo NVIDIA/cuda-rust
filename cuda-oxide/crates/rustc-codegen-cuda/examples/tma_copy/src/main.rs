@@ -21,7 +21,7 @@
 //! Build and run with:
 //!   cargo oxide run tma_copy
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{
     CudaContext, CudaStream, DeviceBuffer,
     sys::{

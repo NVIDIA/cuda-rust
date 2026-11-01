@@ -318,9 +318,9 @@ pub(crate) fn test_catalog_with_tcgen05(repo_root: &Path) -> Result<CatalogFile>
         .filter(|record| record.family == "tcgen05")
         .count();
     match active_count {
-        233 => return Ok(catalog),
+        233 | 249 => return Ok(catalog),
         0 => {}
-        count => bail!("active tcgen05 catalog has {count} of 233 records"),
+        count => bail!("active tcgen05 catalog has {count} of 249 records"),
     }
     let imported: ImportedFile = read_json(&repo_root.join("intrinsics/imported.json"))?;
     let imported_by_record = index_imported_intrinsics(&imported)?;

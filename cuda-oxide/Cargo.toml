@@ -124,6 +124,9 @@ ptx-parse = { path = "crates/ptx-parse" }
 ptx-schedule = { path = "crates/ptx-schedule" }
 
 # Common dependencies
+# No default features: cuda-device is `no_std` and is compiled for the device,
+# and only the marker traits are wanted there, not `std` or the derive macros.
+bytemuck = { version = "1", default-features = false }
 thiserror = "2"
 linkme = "0.3"
 anyhow = "1.0"

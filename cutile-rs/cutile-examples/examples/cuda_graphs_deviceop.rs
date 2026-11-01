@@ -14,7 +14,7 @@
  *   cargo run -p cutile-examples --example cuda_graphs_deviceop
  */
 
-use cuda_core::{Device, Stream};
+use cuda_core::{Context, Stream};
 use cutile::error::Error;
 use cutile::prelude::*;
 use std::time::Instant;
@@ -167,7 +167,7 @@ impl GraphModel {
         let buffers: Vec<_> = (0..cfg.n_layers)
             .map(|_| LayerBuffers::allocate(cfg.d, stream))
             .collect::<Result<_, _>>()?;
-        unsafe { stream.synchronize() }?;
+        stream.synchronize()?;
 
         // Create an Arc that shares input's device memory for build_forward.
         // This requires aliased storage (input + input_arc point to same
@@ -351,7 +351,7 @@ fn main() -> Result<(), Error> {
         return Ok(());
     }
 
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
 
     let cfg = Config {

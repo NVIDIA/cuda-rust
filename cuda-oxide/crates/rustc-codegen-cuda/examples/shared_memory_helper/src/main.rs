@@ -7,7 +7,7 @@
 //! `inline(never)` requests a MIR call boundary; inspect generated code to
 //! determine whether the backend also keeps the calls.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DynamicSharedArray, cuda_module, kernel, launch_bounds, thread};
 

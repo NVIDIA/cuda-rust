@@ -3,7 +3,7 @@
 
 //! End-to-end example exercising all eight packed bf16x2 arithmetic intrinsics.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::bf16x2::{
     abs_bf16x2, add_bf16x2, fma_relu_bf16x2, max_bf16x2, min_bf16x2, mul_bf16x2, neg_bf16x2,

@@ -1,6 +1,6 @@
 [package]
 name = "reserved-oxide-symbols"
-version = "0.2.1"
+version = "0.3.0"
 description = "INTERNAL: cuda-oxide workspace symbol-name contract. Not a public API."
 readme = "README.md"
 edition.workspace = true

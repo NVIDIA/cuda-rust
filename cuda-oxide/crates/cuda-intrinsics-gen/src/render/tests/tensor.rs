@@ -709,7 +709,7 @@ fn tcgen05_rendering_preserves_api_and_inline_ptx_routes() {
                     "/// All tcgen05 operations in the kernel must use the same CTA-group mode.\n",
                 )
                 .count(),
-            233
+            249
         );
     assert!(compatibility.contains("/// `KIND` is 0=f16, 1=tf32, 2=f8f6f4, or 3=i8."));
     assert!(compatibility.contains(
@@ -782,7 +782,7 @@ fn tcgen05_rendering_preserves_api_and_inline_ptx_routes() {
                 "/// All tcgen05 operations in the kernel must use the same CTA-group mode.\n",
             )
             .count(),
-            233
+            249
         );
     assert!(raw.contains("pub fn i0345() -> ()"));
     assert!(raw.contains("pub fn i0357() -> ()"));

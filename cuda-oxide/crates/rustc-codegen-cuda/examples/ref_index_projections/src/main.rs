@@ -32,7 +32,7 @@
  * projections, returning the field's base address).
  */
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
 use cuda_device::{DisjointSlice, kernel, thread, warp};
 use cuda_host::cuda_module;

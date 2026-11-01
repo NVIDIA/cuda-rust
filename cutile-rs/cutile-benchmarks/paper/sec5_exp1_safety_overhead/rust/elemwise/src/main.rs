@@ -43,7 +43,7 @@
 // Lock clocks for paper-final runs: `sudo nvidia-smi -lgc 2400,2400`.
 
 use cuda_async::device_operation::DeviceOp;
-use cuda_core::{sys, Device, IntoResult, Stream};
+use cuda_core::{sys, Context, IntoResult, Stream};
 use cutile::api;
 use cutile::core::f16;
 use cutile::tile_kernel::{CompileOptions, PartitionOp, TileKernel};
@@ -352,10 +352,10 @@ fn output_path(file_name: &str) -> std::path::PathBuf {
 
 fn sync_stream(stream: &Arc<Stream>, context: &str) {
     stream
-        .device()
+        .context()
         .bind_to_thread()
         .expect("bind stream device");
-    unsafe { stream.synchronize() }.expect(context);
+    stream.synchronize().expect(context);
 }
 
 struct TimingEvent(sys::CUevent);
@@ -363,7 +363,7 @@ struct TimingEvent(sys::CUevent);
 impl TimingEvent {
     fn new(stream: &Arc<Stream>) -> Self {
         stream
-            .device()
+            .context()
             .bind_to_thread()
             .expect("bind stream device");
         let mut event = std::mem::MaybeUninit::uninit();
@@ -380,7 +380,7 @@ impl TimingEvent {
 
     fn record(&self, stream: &Arc<Stream>) {
         stream
-            .device()
+            .context()
             .bind_to_thread()
             .expect("bind stream device");
         unsafe { sys::cuEventRecord(self.0, stream.cu_stream()) }
@@ -390,7 +390,7 @@ impl TimingEvent {
 
     fn synchronize(&self, stream: &Arc<Stream>) {
         stream
-            .device()
+            .context()
             .bind_to_thread()
             .expect("bind stream device");
         unsafe { sys::cuEventSynchronize(self.0) }
@@ -400,7 +400,7 @@ impl TimingEvent {
 
     fn elapsed_us(&self, end: &Self, stream: &Arc<Stream>) -> f64 {
         stream
-            .device()
+            .context()
             .bind_to_thread()
             .expect("bind stream device");
         let mut ms: f32 = 0.0;
@@ -785,7 +785,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(2);
     }
 
-    let device = Device::new(0).expect("device");
+    let device = Context::new(0).expect("device");
     let stream = device.new_stream().expect("stream");
 
     // Sweep N from 2^20 (1M, ~2 MB per f16 tensor) to 2^28 (256M,

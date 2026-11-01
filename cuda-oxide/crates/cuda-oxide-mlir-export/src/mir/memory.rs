@@ -19,8 +19,8 @@ use dialect_mir::{
     ops::{
         MirAllocaOp, MirArrayElementAddrOp, MirAssertOp, MirCallOp, MirCastOp, MirConstructArrayOp,
         MirConstructSliceOp, MirConstructStructOp, MirConstructTupleOp, MirExtractArrayElementOp,
-        MirExtractFieldOp, MirFieldAddrOp, MirLoadOp, MirPtrOffsetOp, MirRefOp, MirStorageDeadOp,
-        MirStorageLiveOp, MirStoreOp,
+        MirExtractFieldOp, MirFieldAddrOp, MirLoadOp, MirNoUnrollHintOp, MirPtrOffsetOp, MirRefOp,
+        MirStorageDeadOp, MirStorageLiveOp, MirStoreOp,
     },
     types::{
         MirArrayType, MirDisjointSliceType, MirEnumType, MirFP16Type, MirPtrType, MirSliceType,
@@ -72,6 +72,7 @@ pub(crate) fn register_mir_memory_pack(
     registry.register_operation::<MirAssertOp>(AssertTranslation)?;
     registry.register_operation::<MirStorageLiveOp>(DropOperation)?;
     registry.register_operation::<MirStorageDeadOp>(DropOperation)?;
+    registry.register_operation::<MirNoUnrollHintOp>(DropOperation)?;
     Ok(())
 }
 

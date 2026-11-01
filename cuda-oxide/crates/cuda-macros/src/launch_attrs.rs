@@ -402,7 +402,11 @@ impl Parse for UnrollArgs {
             1 => {
                 let factor = values.pop().unwrap();
                 match factor.literal_value {
-                    Some(0 | 1) => Err(syn::Error::new_spanned(
+                    Some(1) => Err(syn::Error::new_spanned(
+                        &factor.expr,
+                        "an unroll factor of 1 does not unroll; use #[nounroll] to keep the loop rolled",
+                    )),
+                    Some(0) => Err(syn::Error::new_spanned(
                         &factor.expr,
                         "partial unroll factor must be at least 2; use #[unroll] for full unrolling",
                     )),
@@ -421,8 +425,9 @@ impl Parse for UnrollArgs {
     }
 }
 
-/// `VisitMut` pass that consumes `#[unroll]` / `#[unroll(N)]` attributes written
-/// directly on loops inside a `#[kernel]` (or `#[device]`) function body.
+/// `VisitMut` pass that consumes `#[unroll]` / `#[unroll(N)]` and `#[nounroll]`
+/// attributes written directly on loops inside a `#[kernel]` (or `#[device]`)
+/// function body.
 ///
 /// This mirrors how CubeCL's `#[cube]` macro handles per-loop `#[unroll]`: the
 /// enclosing function macro owns the whole body AST, so it can strip the inner
@@ -438,12 +443,14 @@ impl Parse for UnrollArgs {
 ///    statement of that loop's body block.
 ///
 /// `FACTOR` follows [`UnrollArgs`]: bare `#[unroll]` => `0` (full unroll),
-/// `#[unroll(N)]` => `N`. The importer reads the marker from the block it lands
-/// in, so the request applies to that loop only.
+/// `#[unroll(N)]` => `N`. `#[nounroll]` inserts
+/// `cuda_device::thread::__nounroll_config();` instead. The importer reads the
+/// marker from the block it lands in, so the request applies to that loop only.
+/// A loop may carry one of the two requests, not both.
 ///
 /// The visitor recurses through nested blocks/loops/ifs via the default
 /// `visit_mut` traversal, so an annotated loop anywhere in the function is
-/// handled. Loops without an `#[unroll]` attribute are left untouched, so a
+/// handled. Loops without either attribute are left untouched, so a
 /// kernel with no per-loop annotations expands byte-identically to before.
 #[derive(Default)]
 pub(crate) struct LoopUnrollAttrVisitor {
@@ -495,6 +502,54 @@ impl LoopUnrollAttrVisitor {
         Some((factor, attr.span()))
     }
 
+    /// If `attrs` contains an outer `#[nounroll]`, remove it and return its
+    /// span. Records an error and returns `None` if it carries arguments.
+    fn take_nounroll(&mut self, attrs: &mut Vec<syn::Attribute>) -> Option<proc_macro2::Span> {
+        let idx = attrs
+            .iter()
+            .position(|attr| attr.path().is_ident("nounroll"))?;
+        let attr = attrs.remove(idx);
+        if !matches!(attr.meta, syn::Meta::Path(_)) {
+            if self.error.is_none() {
+                self.error = Some(syn::Error::new_spanned(
+                    &attr,
+                    "nounroll takes no arguments: #[nounroll]",
+                ));
+            }
+            return None;
+        }
+        Some(attr.span())
+    }
+
+    /// Take this loop's `#[unroll]` / `#[nounroll]` request and build the
+    /// marker statement for it. Both on one loop contradict each other, so
+    /// that records an error instead of picking one.
+    fn take_loop_marker(&mut self, attrs: &mut Vec<syn::Attribute>) -> Option<Stmt> {
+        let unroll = self.take_unroll_factor(attrs);
+        let nounroll = self.take_nounroll(attrs);
+        match (unroll, nounroll) {
+            (Some(_), Some(span)) => {
+                if self.error.is_none() {
+                    self.error = Some(syn::Error::new(
+                        span,
+                        "a loop cannot carry both #[unroll] and #[nounroll]",
+                    ));
+                }
+                None
+            }
+            (Some((factor, span)), None) if factor.literal_value == Some(u32::MAX - 1) => {
+                Some(syn::parse_quote_spanned! {span=>
+                    cuda_device::thread::__nounroll_config();
+                })
+            }
+            (Some((factor, span)), None) => Some(Self::marker_stmt(&factor, span)),
+            (None, Some(span)) => Some(syn::parse_quote_spanned! {span=>
+                cuda_device::thread::__nounroll_config();
+            }),
+            (None, None) => None,
+        }
+    }
+
     /// Build the `__unroll_config::<FACTOR>()` marker statement. The call
     /// carries `span`, the `#[unroll]` attribute's, so diagnostics about the
     /// loop point at the attribute. The braces around the factor keep the
@@ -512,32 +567,23 @@ impl LoopUnrollAttrVisitor {
 
 impl VisitMut for LoopUnrollAttrVisitor {
     fn visit_expr_mut(&mut self, expr: &mut Expr) {
-        // Pull the unroll factor (if any) off this loop expr and inject the
+        // Pull the unroll request (if any) off this loop expr and inject the
         // marker into its body. We act only on loop expressions; everything
         // else falls through to the default recursion below.
         match expr {
             Expr::ForLoop(for_loop) => {
-                if let Some((factor, span)) = self.take_unroll_factor(&mut for_loop.attrs) {
-                    for_loop
-                        .body
-                        .stmts
-                        .insert(0, Self::marker_stmt(&factor, span));
+                if let Some(marker) = self.take_loop_marker(&mut for_loop.attrs) {
+                    for_loop.body.stmts.insert(0, marker);
                 }
             }
             Expr::While(while_loop) => {
-                if let Some((factor, span)) = self.take_unroll_factor(&mut while_loop.attrs) {
-                    while_loop
-                        .body
-                        .stmts
-                        .insert(0, Self::marker_stmt(&factor, span));
+                if let Some(marker) = self.take_loop_marker(&mut while_loop.attrs) {
+                    while_loop.body.stmts.insert(0, marker);
                 }
             }
             Expr::Loop(loop_expr) => {
-                if let Some((factor, span)) = self.take_unroll_factor(&mut loop_expr.attrs) {
-                    loop_expr
-                        .body
-                        .stmts
-                        .insert(0, Self::marker_stmt(&factor, span));
+                if let Some(marker) = self.take_loop_marker(&mut loop_expr.attrs) {
+                    loop_expr.body.stmts.insert(0, marker);
                 }
             }
             _ => {}
@@ -549,8 +595,9 @@ impl VisitMut for LoopUnrollAttrVisitor {
     }
 }
 
-/// Consume per-loop unroll annotations in a kernel or device function and
-/// replace them with the marker calls understood by the MIR importer.
+/// Consume per-loop `#[unroll]` / `#[nounroll]` annotations in a kernel or
+/// device function and replace them with the marker calls understood by the
+/// MIR importer.
 pub(crate) fn rewrite_loop_unroll_attrs(input: &mut ItemFn) -> syn::Result<()> {
     let mut visitor = LoopUnrollAttrVisitor::default();
     visitor.visit_block_mut(&mut input.block);

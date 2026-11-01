@@ -37,5 +37,6 @@ crates/dialect-mir/src/passes/
 
 # Benchmark environments and locally built helpers.
 crates/rustc-codegen-cuda/examples/*/bench/venv/
+examples/*/bench/venv/
 crates/rustc-codegen-cuda/examples/gemm_sol/bench/cublaslt_bench
-crates/rustc-codegen-cuda/examples/gemm_sol_final/bench/cublaslt_bench
+examples/gemm_sol_final/bench/cublaslt_bench

@@ -7,8 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Tile and SIMT share `cuda_async` operations, scheduling, futures and launch
+  marshalling; the separate `cuda_async::simt` namespace is removed. Raw launch
+  packets require unsafe finalization before scheduling. Generic scalar Tile
+  parameters require `DeviceCopy` alongside `DType`.
+- Dropping a host future returns without waiting for GPU work. Submissions
+  retain allocations and access leases independently through completion,
+  including graph replay and partial-error paths.
+
 ### Fixed
 
+- CUDA bindings resolve forward-declared struct definitions correctly with
+  libclang 22 instead of emitting an empty placeholder with the wrong layout.
+- Retiring tensor completion leases retain allocation access independently of
+  user-visible buffer views. Converting a uniquely owned tensor into a buffer
+  no longer reports a false alias while completion retirement is pending.
+- Safe `DeviceBuffer` element and chunk casts require `NoUninit` on the source,
+  preventing `MaybeUninit` elements or struct padding from becoming initialized
+  destination values. Boolean-to-byte casts remain supported.
+- Tensor uniqueness tracks user-visible aliases separately from completion
+  leases. Concurrent lease creation or release can no longer permit an aliased
+  mutable partition or spuriously reject unique storage.
+- Host-side `KernelInputStored` and `KernelOutputStored` require `unsafe impl`
+  with explicit type, ABI, extent, retention, and access obligations. Safe custom
+  bindings can no longer mislabel boolean storage as byte kernel arguments.
+- `PinnedHostBuffer` aligns its usable pointer for the element type and frees
+  the original CUDA allocation. Highly aligned host elements no longer produce
+  misaligned Rust slices; sizes exceeding Rust's slice limits are rejected.
+- `DeviceBuffer::zeroed` waits for initialization to finish before returning,
+  so another stream cannot read uninitialized element representations.
+- Atomic buffer conversions use `DeviceRepr` instead of `TransparentWrapper`,
+  preserving owned-buffer conversions without permitting invalid shared-reference
+  conversions between atomics and their scalar representations.
+- `Tensor::reinterpret` requires the target element type to implement
+  `bytemuck::AnyBitPattern`. Reinterpreting byte storage as `Tensor<bool>`
+  could expose values other than `0` and `1`, which is undefined behavior
+  when the tensor is read back, and is now a compile error. Numeric element
+  types, including `f16`, `bf16`, and the FP8 and packed FP4 storage types,
+  are unaffected (NVIDIA/cuda-rust#1506).
+- Generated kernel entry setup and assumptions now use the user function's
+  signature as their source location, preserving the inlined body's own
+  statement locations and helper scopes.
+- Generated constants without captured source spans use their containing
+  function definition, retaining exact user-expression locations and nested
+  cross-file inline caller chains.
+- Generated short-circuit and folded constants now use the original expression's
+  source location, preserving inlined helper scopes and call chains.
 - Const-generic array bindings retain their function or method signature as
   their source origin, and generated reduction bodies retain the reduction
   call's location and inline chain.
@@ -17,6 +63,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Advance the lockstep Tile and shared host crates to v0.5.0 for the breaking
+  safety-contract and host-runtime changes.
+- Tile and SIMT now share the `cuda-core` context, stream, event, module, launch
+  configuration, and allocation types. Replace `cuda_core::simt` imports with
+  crate-root imports; use `Context` for context ownership and `Device` for a
+  physical GPU identity. Foreign allocations must provide their actual context.
+- Typed buffers and tensors can share allocations without copying through
+  `Tensor::from_buffer`, `Tensor::into_buffer`, and contiguous borrowed buffer
+  views. Views share context identity, byte offsets, and access exclusion.
+  Completion leases retain allocations after early drops and forgotten launches;
+  buffer and stream cleanup no longer waits for GPU work on the dropping thread.
+- Tile numeric storage wrappers implement `DeviceCopy` alongside `DType`; the
+  traits remain independent and packed FP4 keeps its byte storage representation.
+- `CompileOptions` uses one `CodegenMode` for device debugging and optimization.
+  The last `debug_info(...)` or `opt_level(...)` setter wins; full debugging
+  always uses optimization level zero. Replace `device_debug(true)` with
+  `debug_info(DebugInfoLevel::Full)` and `lineinfo(true)` with
+  `debug_info(DebugInfoLevel::Line)`. The old public `opt_level`, `device_debug`,
+  and `lineinfo` fields are replaced by `codegen` (v0.5.0 API change).
+- `CUTILE_JIT_DEBUG=none|line|full`, `CUTILE_JIT_OPT_LEVEL=0|1|2|3`, and
+  `CUTILE_JIT_SANITIZE=none|memcheck` override kernel options at runtime, before
+  frontend compilation and assembler/cache selection. Overrides are read once
+  per process; invalid values or full debug combined with an explicit runtime
+  optimization level fail with a named JIT error.
+
 - cuTile Rust now lives in the [NVIDIA/cuda-rust](https://github.com/NVIDIA/cuda-rust)
   repository under `cutile-rs/`, next to cuda-oxide (SIMT) and the shared host
   crates (`cuda-bindings`, `cuda-core`, `cuda-core-derive`, `cuda-async`) at the
@@ -24,6 +95,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   [nvidia.github.io/cuda-rust/cutile](https://nvidia.github.io/cuda-rust/cutile/)
   and release tags are namespaced `cutile-rs/vX.Y.Z`. Crate names and versions
   are unchanged.
+
+### Fixed
+
+- `TensorView::view` keeps the slice offset when it recomputes the
+  specialization, so a view over a slice that starts off a 16-byte boundary
+  no longer advertises the allocation's alignment. Before, the JIT emitted
+  vectorized loads for such views and launches failed with CUDA error 716
+  (misaligned address).
 
 ## [0.4.0] - 2026-09-25
 
@@ -71,7 +150,7 @@ paths have lower overhead.
   globals, and module producer metadata. Existing signatures are preserved
   (#298).
 - Unsafe per-launch `programmatic_dependent_launch()` on generated builders
-  and `AsyncKernelLaunch`, with runtime driver entry-point lookup
+  and `AsyncKernelLaunchBuilder`, with runtime driver entry-point lookup
   (Tile IR 13.4, `sm_90+`) (#298).
 - Tile IR 13.4 bytecode with assembler version negotiation. Version and
   architecture checks run before JIT assembly. The writer preserves
@@ -195,7 +274,7 @@ on 0.3.0.
   returns `Result<(), DeviceError>`.
 - Generated kernel launchers return a nameable `Launcher<…, KernelArgs<…>>`
   instead of `impl DeviceOp` and implement `GraphNode` only when every input
-  does; `AsyncKernelLaunch::args` is no longer public.
+  does; `AsyncKernelLaunchBuilder::args` is no longer public.
 - `TrialLog::open` takes a `LogProvenance` (`experimental-tune`).
 - `BytecodeVersion::V13_1` is removed; the bytecode floor is CUDA 13.2.
 - Kernel programs: a `return` below the function body and a `break` inside

@@ -14,7 +14,7 @@
 //!
 //! Run: `cargo oxide run vectorization`
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{access, cuda_module};
 

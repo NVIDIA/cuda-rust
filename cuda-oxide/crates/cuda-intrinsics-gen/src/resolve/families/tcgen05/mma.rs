@@ -35,6 +35,24 @@ pub(in crate::resolve) const TCGEN05_MMA_FORMS: [Tcgen05MmaForm; 14] = [
     Tcgen05MmaForm::WsTensor,
     Tcgen05MmaForm::WsTensorZeroColMask,
 ];
+pub(in crate::resolve) const TCGEN05_MMA_BLOCK_SCALE_FORMS: [Tcgen05MmaForm; 16] = [
+    Tcgen05MmaForm::SharedMxf4BlockScale,
+    Tcgen05MmaForm::SharedMxf4BlockScaleBlock32,
+    Tcgen05MmaForm::SharedMxf4nvf4BlockScaleBlock16,
+    Tcgen05MmaForm::SharedMxf4nvf4BlockScaleBlock32,
+    Tcgen05MmaForm::SharedMxf8f6f4BlockScale,
+    Tcgen05MmaForm::SharedMxf8f6f4BlockScaleBlock32,
+    Tcgen05MmaForm::TensorMxf4BlockScale,
+    Tcgen05MmaForm::TensorMxf4BlockScaleBlock32,
+    Tcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock16,
+    Tcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock32,
+    Tcgen05MmaForm::TensorMxf8f6f4BlockScale,
+    Tcgen05MmaForm::TensorMxf8f6f4BlockScaleBlock32,
+    Tcgen05MmaForm::SpSharedMxf8f6f4BlockScale,
+    Tcgen05MmaForm::SpSharedMxf8f6f4BlockScaleBlock32,
+    Tcgen05MmaForm::SpTensorMxf8f6f4BlockScale,
+    Tcgen05MmaForm::SpTensorMxf8f6f4BlockScaleBlock32,
+];
 pub(in crate::resolve) const TCGEN05_MMA_ALIASES: [Tcgen05MmaAlias; 5] = [
     Tcgen05MmaAlias::E4m3,
     Tcgen05MmaAlias::E5m2,
@@ -47,6 +65,14 @@ pub(in crate::resolve) const TCGEN05_MMA_KINDS: [Tcgen05MmaKind; 4] = [
     Tcgen05MmaKind::F8f6f4,
     Tcgen05MmaKind::I8,
     Tcgen05MmaKind::Tf32,
+];
+pub(in crate::resolve) const TCGEN05_MMA_BLOCK_SCALE_KINDS: [Tcgen05MmaKind; 6] = [
+    Tcgen05MmaKind::Mxf4BlockScale,
+    Tcgen05MmaKind::Mxf4BlockScaleBlock32,
+    Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock16,
+    Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock32,
+    Tcgen05MmaKind::Mxf8f6f4BlockScale,
+    Tcgen05MmaKind::Mxf8f6f4BlockScaleBlock32,
 ];
 pub(in crate::resolve) const TCGEN05_MMA_DIALECT_OP_TYPE: &str = "Tcgen05MmaOp";
 pub(in crate::resolve) const TCGEN05_MMA_DIALECT_OP_NAME: &str = "nvvm.tcgen05_mma";
@@ -66,7 +92,76 @@ pub(in crate::resolve) fn tcgen05_mma_form_name(form: Tcgen05MmaForm) -> &'stati
         Tcgen05MmaForm::WsSpTensorZeroColMask => "ws_sp_tensor_zero_col_mask",
         Tcgen05MmaForm::WsTensor => "ws_tensor",
         Tcgen05MmaForm::WsTensorZeroColMask => "ws_tensor_zero_col_mask",
+        Tcgen05MmaForm::SharedMxf4BlockScale => "shared_mxf4_block_scale",
+        Tcgen05MmaForm::SharedMxf4BlockScaleBlock32 => "shared_mxf4_block_scale_block32",
+        Tcgen05MmaForm::SharedMxf4nvf4BlockScaleBlock16 => "shared_mxf4nvf4_block_scale_block16",
+        Tcgen05MmaForm::SharedMxf4nvf4BlockScaleBlock32 => "shared_mxf4nvf4_block_scale_block32",
+        Tcgen05MmaForm::SharedMxf8f6f4BlockScale => "shared_mxf8f6f4_block_scale",
+        Tcgen05MmaForm::SharedMxf8f6f4BlockScaleBlock32 => "shared_mxf8f6f4_block_scale_block32",
+        Tcgen05MmaForm::TensorMxf4BlockScale => "tensor_mxf4_block_scale",
+        Tcgen05MmaForm::TensorMxf4BlockScaleBlock32 => "tensor_mxf4_block_scale_block32",
+        Tcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock16 => "tensor_mxf4nvf4_block_scale_block16",
+        Tcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock32 => "tensor_mxf4nvf4_block_scale_block32",
+        Tcgen05MmaForm::TensorMxf8f6f4BlockScale => "tensor_mxf8f6f4_block_scale",
+        Tcgen05MmaForm::TensorMxf8f6f4BlockScaleBlock32 => "tensor_mxf8f6f4_block_scale_block32",
+        Tcgen05MmaForm::SpSharedMxf8f6f4BlockScale => "sp_shared_mxf8f6f4_block_scale",
+        Tcgen05MmaForm::SpSharedMxf8f6f4BlockScaleBlock32 => {
+            "sp_shared_mxf8f6f4_block_scale_block32"
+        }
+        Tcgen05MmaForm::SpTensorMxf8f6f4BlockScale => "sp_tensor_mxf8f6f4_block_scale",
+        Tcgen05MmaForm::SpTensorMxf8f6f4BlockScaleBlock32 => {
+            "sp_tensor_mxf8f6f4_block_scale_block32"
+        }
     }
+}
+
+pub(in crate::resolve) fn tcgen05_mma_block_scale_kind(
+    form: Tcgen05MmaForm,
+) -> Option<Tcgen05MmaKind> {
+    match form {
+        Tcgen05MmaForm::SharedMxf4BlockScale | Tcgen05MmaForm::TensorMxf4BlockScale => {
+            Some(Tcgen05MmaKind::Mxf4BlockScale)
+        }
+        Tcgen05MmaForm::SharedMxf4BlockScaleBlock32
+        | Tcgen05MmaForm::TensorMxf4BlockScaleBlock32 => {
+            Some(Tcgen05MmaKind::Mxf4BlockScaleBlock32)
+        }
+        Tcgen05MmaForm::SharedMxf4nvf4BlockScaleBlock16
+        | Tcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock16 => {
+            Some(Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock16)
+        }
+        Tcgen05MmaForm::SharedMxf4nvf4BlockScaleBlock32
+        | Tcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock32 => {
+            Some(Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock32)
+        }
+        Tcgen05MmaForm::SharedMxf8f6f4BlockScale
+        | Tcgen05MmaForm::TensorMxf8f6f4BlockScale
+        | Tcgen05MmaForm::SpSharedMxf8f6f4BlockScale
+        | Tcgen05MmaForm::SpTensorMxf8f6f4BlockScale => Some(Tcgen05MmaKind::Mxf8f6f4BlockScale),
+        Tcgen05MmaForm::SharedMxf8f6f4BlockScaleBlock32
+        | Tcgen05MmaForm::TensorMxf8f6f4BlockScaleBlock32
+        | Tcgen05MmaForm::SpSharedMxf8f6f4BlockScaleBlock32
+        | Tcgen05MmaForm::SpTensorMxf8f6f4BlockScaleBlock32 => {
+            Some(Tcgen05MmaKind::Mxf8f6f4BlockScaleBlock32)
+        }
+        _ => None,
+    }
+}
+
+pub(in crate::resolve) fn tcgen05_mma_is_block_scale(form: Tcgen05MmaForm) -> bool {
+    tcgen05_mma_block_scale_kind(form).is_some()
+}
+
+pub(in crate::resolve) fn tcgen05_mma_has_ptx88_predicate(form: Tcgen05MmaForm) -> bool {
+    matches!(
+        tcgen05_mma_block_scale_kind(form),
+        Some(
+            Tcgen05MmaKind::Mxf4BlockScaleBlock32
+                | Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock16
+                | Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock32
+                | Tcgen05MmaKind::Mxf8f6f4BlockScaleBlock32
+        )
+    )
 }
 
 pub(in crate::resolve) fn tcgen05_mma_alias_name(alias: Tcgen05MmaAlias) -> &'static str {
@@ -85,6 +180,27 @@ pub(in crate::resolve) fn tcgen05_mma_kind_name(kind: Tcgen05MmaKind) -> &'stati
         Tcgen05MmaKind::Tf32 => "tf32",
         Tcgen05MmaKind::F8f6f4 => "f8f6f4",
         Tcgen05MmaKind::I8 => "i8",
+        Tcgen05MmaKind::Mxf4BlockScale => "mxf4_block_scale",
+        Tcgen05MmaKind::Mxf4BlockScaleBlock32 => "mxf4_block_scale_block32",
+        Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock16 => "mxf4nvf4_block_scale_block16",
+        Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock32 => "mxf4nvf4_block_scale_block32",
+        Tcgen05MmaKind::Mxf8f6f4BlockScale => "mxf8f6f4_block_scale",
+        Tcgen05MmaKind::Mxf8f6f4BlockScaleBlock32 => "mxf8f6f4_block_scale_block32",
+    }
+}
+
+pub(in crate::resolve) fn tcgen05_mma_kind_ptx(kind: Tcgen05MmaKind) -> &'static str {
+    match kind {
+        Tcgen05MmaKind::F16 => "f16",
+        Tcgen05MmaKind::Tf32 => "tf32",
+        Tcgen05MmaKind::F8f6f4 => "f8f6f4",
+        Tcgen05MmaKind::I8 => "i8",
+        Tcgen05MmaKind::Mxf4BlockScale => "mxf4.block_scale",
+        Tcgen05MmaKind::Mxf4BlockScaleBlock32 => "mxf4.block_scale.block32",
+        Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock16 => "mxf4nvf4.block_scale.block16",
+        Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock32 => "mxf4nvf4.block_scale.block32",
+        Tcgen05MmaKind::Mxf8f6f4BlockScale => "mxf8f6f4.block_scale",
+        Tcgen05MmaKind::Mxf8f6f4BlockScaleBlock32 => "mxf8f6f4.block_scale.block32",
     }
 }
 
@@ -121,6 +237,10 @@ pub(in crate::resolve) fn tcgen05_mma_is_sparse(form: Tcgen05MmaForm) -> bool {
             | Tcgen05MmaForm::WsSpSharedZeroColMask
             | Tcgen05MmaForm::WsSpTensor
             | Tcgen05MmaForm::WsSpTensorZeroColMask
+            | Tcgen05MmaForm::SpSharedMxf8f6f4BlockScale
+            | Tcgen05MmaForm::SpSharedMxf8f6f4BlockScaleBlock32
+            | Tcgen05MmaForm::SpTensorMxf8f6f4BlockScale
+            | Tcgen05MmaForm::SpTensorMxf8f6f4BlockScaleBlock32
     )
 }
 
@@ -135,6 +255,14 @@ pub(in crate::resolve) fn tcgen05_mma_is_tensor_a(form: Tcgen05MmaForm) -> bool 
             | Tcgen05MmaForm::WsSpTensorZeroColMask
             | Tcgen05MmaForm::WsTensor
             | Tcgen05MmaForm::WsTensorZeroColMask
+            | Tcgen05MmaForm::TensorMxf4BlockScale
+            | Tcgen05MmaForm::TensorMxf4BlockScaleBlock32
+            | Tcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock16
+            | Tcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock32
+            | Tcgen05MmaForm::TensorMxf8f6f4BlockScale
+            | Tcgen05MmaForm::TensorMxf8f6f4BlockScaleBlock32
+            | Tcgen05MmaForm::SpTensorMxf8f6f4BlockScale
+            | Tcgen05MmaForm::SpTensorMxf8f6f4BlockScaleBlock32
     )
 }
 
@@ -175,6 +303,26 @@ pub(in crate::resolve) fn tcgen05_mma_llvm_symbol(form: Tcgen05MmaForm) -> Strin
         Tcgen05MmaForm::WsSpTensorZeroColMask => "ws.sp.tensor.zero_col_mask",
         Tcgen05MmaForm::WsTensor => "ws.tensor",
         Tcgen05MmaForm::WsTensorZeroColMask => "ws.tensor.zero_col_mask",
+        Tcgen05MmaForm::SharedMxf4BlockScale => "shared.mxf4.block_scale",
+        Tcgen05MmaForm::SharedMxf4BlockScaleBlock32 => "shared.mxf4.block_scale.block32",
+        Tcgen05MmaForm::SharedMxf4nvf4BlockScaleBlock16 => "shared.mxf4nvf4.block_scale.block16",
+        Tcgen05MmaForm::SharedMxf4nvf4BlockScaleBlock32 => "shared.mxf4nvf4.block_scale.block32",
+        Tcgen05MmaForm::SharedMxf8f6f4BlockScale => "shared.mxf8f6f4.block_scale",
+        Tcgen05MmaForm::SharedMxf8f6f4BlockScaleBlock32 => "shared.mxf8f6f4.block_scale.block32",
+        Tcgen05MmaForm::TensorMxf4BlockScale => "tensor.mxf4.block_scale",
+        Tcgen05MmaForm::TensorMxf4BlockScaleBlock32 => "tensor.mxf4.block_scale.block32",
+        Tcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock16 => "tensor.mxf4nvf4.block_scale.block16",
+        Tcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock32 => "tensor.mxf4nvf4.block_scale.block32",
+        Tcgen05MmaForm::TensorMxf8f6f4BlockScale => "tensor.mxf8f6f4.block_scale",
+        Tcgen05MmaForm::TensorMxf8f6f4BlockScaleBlock32 => "tensor.mxf8f6f4.block_scale.block32",
+        Tcgen05MmaForm::SpSharedMxf8f6f4BlockScale => "sp.shared.mxf8f6f4.block_scale",
+        Tcgen05MmaForm::SpSharedMxf8f6f4BlockScaleBlock32 => {
+            "sp.shared.mxf8f6f4.block_scale.block32"
+        }
+        Tcgen05MmaForm::SpTensorMxf8f6f4BlockScale => "sp.tensor.mxf8f6f4.block_scale",
+        Tcgen05MmaForm::SpTensorMxf8f6f4BlockScaleBlock32 => {
+            "sp.tensor.mxf8f6f4.block_scale.block32"
+        }
     };
     format!("llvm.nvvm.tcgen05.mma.{suffix}")
 }
@@ -197,13 +345,29 @@ pub(in crate::resolve) fn tcgen05_mma_llvm_arguments(form: Tcgen05MmaForm) -> Ve
     if tcgen05_mma_has_zero_col_mask(form) {
         arguments.push("i64".into());
     }
-    arguments.extend(["i32".into(), "i32".into(), "i32".into()]);
+    if tcgen05_mma_is_block_scale(form) {
+        arguments.extend([
+            "tmem_ptr".into(),
+            "tmem_ptr".into(),
+            "i32".into(),
+            "i32".into(),
+        ]);
+    } else {
+        arguments.extend(["i32".into(), "i32".into(), "i32".into()]);
+    }
     arguments
 }
 
 pub(in crate::resolve) fn tcgen05_mma_selector_layout(
     form: Tcgen05MmaForm,
 ) -> Tcgen05MmaSelectorLayout {
+    if tcgen05_mma_is_block_scale(form) {
+        let first = 7 + u8::from(tcgen05_mma_is_sparse(form));
+        return Tcgen05MmaSelectorLayout::BlockScaled {
+            cta_group_argument: first,
+            collector_a_argument: first + 1,
+        };
+    }
     let first =
         5 + u8::from(tcgen05_mma_is_sparse(form)) + u8::from(tcgen05_mma_has_zero_col_mask(form));
     if tcgen05_mma_is_ws(form) {
@@ -224,6 +388,25 @@ pub(in crate::resolve) fn tcgen05_mma_selector_layout(
 
 pub(in crate::resolve) fn tcgen05_mma_imported_properties(form: Tcgen05MmaForm) -> Vec<String> {
     let layout = tcgen05_mma_selector_layout(form);
+    if let Tcgen05MmaSelectorLayout::BlockScaled {
+        cta_group_argument,
+        collector_a_argument,
+    } = layout
+    {
+        let mut properties = vec![
+            format!("ImmArg<arg{cta_group_argument}>"),
+            format!("ImmArg<arg{collector_a_argument}>"),
+            "IntrArgMemOnly".into(),
+            format!("Range<arg{cta_group_argument},1,3>"),
+            format!("Range<arg{collector_a_argument},0,4>"),
+            "WriteOnly<arg0>".into(),
+        ];
+        if tcgen05_mma_is_tensor_a(form) {
+            properties.push("ReadOnly<arg1>".into());
+        }
+        properties.sort();
+        return properties;
+    }
     let (kind, second, third, second_lower, second_upper, third_upper) = match layout {
         Tcgen05MmaSelectorLayout::Base {
             kind_argument,
@@ -243,6 +426,7 @@ pub(in crate::resolve) fn tcgen05_mma_imported_properties(form: Tcgen05MmaForm) 
             b_buffer_argument,
             b_usage_argument,
         } => (kind_argument, b_buffer_argument, b_usage_argument, 0, 4, 4),
+        Tcgen05MmaSelectorLayout::BlockScaled { .. } => unreachable!(),
     };
     let mut properties = vec![
         format!("ImmArg<arg{kind}>"),
@@ -285,7 +469,7 @@ pub(in crate::resolve) fn tcgen05_mma_selection_asm(
     }
     head.push_str(&format!(
         ".cta_group::{cta_group}.kind::{}",
-        tcgen05_mma_kind_name(kind)
+        tcgen05_mma_kind_ptx(kind)
     ));
     if tcgen05_mma_is_ws(form) {
         head.push_str(&format!(
@@ -312,7 +496,11 @@ pub(in crate::resolve) fn tcgen05_mma_selection_asm(
     if tcgen05_mma_is_sparse(form) {
         operands.push_str(", [$spmetadata]");
     }
-    operands.push_str(", $idesc, $enable_inp_d");
+    if tcgen05_mma_is_block_scale(form) {
+        operands.push_str(", $idesc, [$scale_a], [$scale_b], $enable_inp_d");
+    } else {
+        operands.push_str(", $idesc, $enable_inp_d");
+    }
     if tcgen05_mma_has_zero_col_mask(form) {
         operands.push_str(", $zero_col_mask");
     }
@@ -344,6 +532,15 @@ pub(in crate::resolve) fn tcgen05_mma_declaration_asm(
 }
 
 pub(in crate::resolve) fn tcgen05_mma_all_selection_asms(form: Tcgen05MmaForm) -> BTreeSet<String> {
+    if let Some(kind) = tcgen05_mma_block_scale_kind(form) {
+        return (1..=2)
+            .flat_map(move |group| {
+                ["discard", "lastuse", "fill", "use"].map(move |usage| {
+                    tcgen05_mma_declaration_asm(form, kind, group, Some(usage), None, None)
+                })
+            })
+            .collect();
+    }
     if tcgen05_mma_is_ws(form) {
         return [
             Tcgen05MmaBUsage::Discard,
@@ -449,11 +646,46 @@ pub(in crate::resolve) fn expected_tcgen05_mma_target_contracts(
         .collect()
 }
 
+pub(in crate::resolve) fn expected_tcgen05_mma_block_scale_target_contracts(
+    backend: IntrinsicBackend,
+) -> Vec<TargetContract> {
+    const LLVM_BLOCK_SCALE: &[(&str, &str)] = &[
+        ("sm_100a", "8.8"),
+        ("sm_100f", "8.8"),
+        ("sm_101a", "8.8"),
+        ("sm_101f", "8.8"),
+        ("sm_103a", "8.8"),
+        ("sm_103f", "8.8"),
+        ("sm_110a", "9.0"),
+        ("sm_110f", "9.0"),
+    ];
+    const LIBNVVM_BLOCK_SCALE: &[(&str, &str)] = &[
+        ("sm_100a", "8.8"),
+        ("sm_100f", "8.8"),
+        ("sm_103a", "8.8"),
+        ("sm_103f", "8.8"),
+        ("sm_110a", "9.0"),
+        ("sm_110f", "9.0"),
+    ];
+    TCGEN05_MMA_BLOCK_SCALE_KINDS
+        .into_iter()
+        .map(|kind| {
+            let alternatives = match backend {
+                IntrinsicBackend::LlvmNvptx => LLVM_BLOCK_SCALE,
+                IntrinsicBackend::LibNvvm => LIBNVVM_BLOCK_SCALE,
+            };
+            tcgen05_mma_target_contract(kind, alternatives)
+        })
+        .collect()
+}
+
 pub(in crate::resolve) fn tcgen05_mma_expected_ptx(
     form: Tcgen05MmaForm,
     alias: Option<Tcgen05MmaAlias>,
 ) -> InstructionPattern {
-    let kind = if alias.is_some() {
+    let kind = if let Some(kind) = tcgen05_mma_block_scale_kind(form) {
+        kind
+    } else if alias.is_some() {
         Tcgen05MmaKind::F8f6f4
     } else {
         Tcgen05MmaKind::F16
@@ -484,12 +716,13 @@ pub(in crate::resolve) fn tcgen05_mma_expected_ptx(
     if tcgen05_mma_is_sparse(form) {
         operands.push(OperandPattern::Address);
     }
-    operands.extend([
-        OperandPattern::Register,
-        OperandPattern::Exact {
-            value: "%enable_pred".into(),
-        },
-    ]);
+    operands.push(OperandPattern::Register);
+    if tcgen05_mma_is_block_scale(form) {
+        operands.extend([OperandPattern::Address, OperandPattern::Address]);
+    }
+    operands.push(OperandPattern::Exact {
+        value: "%enable_pred".into(),
+    });
     if tcgen05_mma_has_zero_col_mask(form) {
         operands.push(OperandPattern::Register);
     }
@@ -531,7 +764,12 @@ pub(in crate::resolve) fn tcgen05_mma_dialect_operands(
     _alias: Option<Tcgen05MmaAlias>,
 ) -> Vec<String> {
     let mut arguments = tcgen05_mma_llvm_arguments(form);
-    arguments.truncate(arguments.len() - 3);
+    let selector_count = if tcgen05_mma_is_block_scale(form) {
+        2
+    } else {
+        3
+    };
+    arguments.truncate(arguments.len() - selector_count);
     arguments
         .iter()
         .map(|argument| match argument.as_str() {
@@ -597,11 +835,24 @@ pub(in crate::resolve) fn materialize_tcgen05_mma_variant(
     let llvm_arguments = tcgen05_mma_llvm_arguments(form);
     let rust_arguments = tcgen05_mma_rust_arguments(form, alias);
     let dialect_operands = tcgen05_mma_dialect_operands(form, alias);
-    let fixed_selectors = alias.map(|_| Tcgen05MmaFixedSelectors {
-        kind: Tcgen05MmaKind::F8f6f4,
-        b_buffer: 0,
-        b_usage: Tcgen05MmaBUsage::Discard,
-    });
+    let fixed_selectors = if let Some(kind) = tcgen05_mma_block_scale_kind(form) {
+        Some(Tcgen05MmaFixedSelectors {
+            kind,
+            b_buffer: 0,
+            b_usage: Tcgen05MmaBUsage::Discard,
+        })
+    } else {
+        alias.map(|_| Tcgen05MmaFixedSelectors {
+            kind: Tcgen05MmaKind::F8f6f4,
+            b_buffer: 0,
+            b_usage: Tcgen05MmaBUsage::Discard,
+        })
+    };
+    let minimum_ptx = if tcgen05_mma_is_block_scale(form) {
+        "8.8"
+    } else {
+        "8.6"
+    };
 
     OverlayIntrinsic {
         id: id.clone(),
@@ -636,11 +887,11 @@ pub(in crate::resolve) fn materialize_tcgen05_mma_variant(
         // TableGen omits IntrConvergent, but collective MMA must not move across control flow.
         convergent: true,
         execution_scope: "thread".into(),
-        minimum_ptx: "8.6".into(),
+        minimum_ptx: minimum_ptx.into(),
         minimum_sm: None,
         ptx_result: "()".into(),
         targets: TCGEN05_LLVM_TARGETS.into(),
-        ptx_isa_version: "8.6".into(),
+        ptx_isa_version: minimum_ptx.into(),
         ptx_isa_section: "Tensor Memory tcgen05 instructions".into(),
         ptx_isa_url: "https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-memory".into(),
         lowering: "generated_tcgen05_mma".into(),
@@ -730,6 +981,9 @@ pub(in crate::resolve) fn materialize_tcgen05_mma_variant(
             (Tcgen05MmaForm::Shared, Some(_)) => {
                 "Issues one f8f6f4 standard tensor-memory MMA.".into()
             }
+            (form, None) if tcgen05_mma_is_block_scale(form) => {
+                "Issues one block-scaled tensor-memory MMA.".into()
+            }
             _ => "Issues one selector-controlled tensor-memory MMA.".into(),
         },
     }
@@ -749,7 +1003,9 @@ pub(in crate::resolve) fn validate_tcgen05_mma_policy(
                 matches!(form, Tcgen05MmaForm::Shared | Tcgen05MmaForm::WsTensor)
                     && TCGEN05_MMA_ALIASES.contains(&alias)
             }
-            None => TCGEN05_MMA_FORMS.contains(&form),
+            None => {
+                TCGEN05_MMA_FORMS.contains(&form) || TCGEN05_MMA_BLOCK_SCALE_FORMS.contains(&form)
+            }
         },
         "{} has an unsupported tcgen05 MMA identity",
         policy.id
@@ -757,11 +1013,19 @@ pub(in crate::resolve) fn validate_tcgen05_mma_policy(
     let id = tcgen05_mma_public_id(form, alias);
     let operation_key = tcgen05_mma_operation_key(form, alias);
     let llvm_arguments = tcgen05_mma_llvm_arguments(form);
-    let expected_fixed = alias.map(|_| Tcgen05MmaFixedSelectors {
-        kind: Tcgen05MmaKind::F8f6f4,
-        b_buffer: 0,
-        b_usage: Tcgen05MmaBUsage::Discard,
-    });
+    let expected_fixed = if let Some(kind) = tcgen05_mma_block_scale_kind(form) {
+        Some(Tcgen05MmaFixedSelectors {
+            kind,
+            b_buffer: 0,
+            b_usage: Tcgen05MmaBUsage::Discard,
+        })
+    } else {
+        alias.map(|_| Tcgen05MmaFixedSelectors {
+            kind: Tcgen05MmaKind::F8f6f4,
+            b_buffer: 0,
+            b_usage: Tcgen05MmaBUsage::Discard,
+        })
+    };
     ensure!(
         policy.id == id
             && policy.operation_key == operation_key
@@ -831,40 +1095,65 @@ pub(in crate::resolve) fn validate_tcgen05_mma_policy(
         policy.id
     );
 
-    let expected_llvm_contracts =
-        expected_tcgen05_mma_target_contracts(IntrinsicBackend::LlvmNvptx);
-    let expected_libnvvm_contracts =
-        expected_tcgen05_mma_target_contracts(IntrinsicBackend::LibNvvm);
-    let selected = [TargetSelectorBinding {
-        name: "kind".into(),
-        value: "f8f6f4".into(),
-    }];
-    let expected_llvm = if alias.is_some() {
-        resolve_target_contract(
-            "tcgen05 MMA LLVM alias",
-            &selected,
-            &expected_llvm_contracts,
-        )?
+    let (expected_llvm, expected_libnvvm) = if let Some(kind) = tcgen05_mma_block_scale_kind(form) {
+        let llvm_contracts =
+            expected_tcgen05_mma_block_scale_target_contracts(IntrinsicBackend::LlvmNvptx);
+        let libnvvm_contracts =
+            expected_tcgen05_mma_block_scale_target_contracts(IntrinsicBackend::LibNvvm);
+        let selected = [TargetSelectorBinding {
+            name: "kind".into(),
+            value: tcgen05_mma_kind_name(kind).into(),
+        }];
+        (
+            resolve_target_contract("tcgen05 MMA LLVM block scale", &selected, &llvm_contracts)?,
+            resolve_target_contract(
+                "tcgen05 MMA libNVVM block scale",
+                &selected,
+                &libnvvm_contracts,
+            )?,
+        )
     } else {
-        resolve_target_contracts("tcgen05 MMA LLVM", &expected_llvm_contracts)?
+        let expected_llvm_contracts =
+            expected_tcgen05_mma_target_contracts(IntrinsicBackend::LlvmNvptx);
+        let expected_libnvvm_contracts =
+            expected_tcgen05_mma_target_contracts(IntrinsicBackend::LibNvvm);
+        let selected = [TargetSelectorBinding {
+            name: "kind".into(),
+            value: "f8f6f4".into(),
+        }];
+        let expected_llvm = if alias.is_some() {
+            resolve_target_contract(
+                "tcgen05 MMA LLVM alias",
+                &selected,
+                &expected_llvm_contracts,
+            )?
+        } else {
+            resolve_target_contracts("tcgen05 MMA LLVM", &expected_llvm_contracts)?
+        };
+        let expected_libnvvm = if alias.is_some() {
+            resolve_target_contract(
+                "tcgen05 MMA libNVVM alias",
+                &selected,
+                &expected_libnvvm_contracts,
+            )?
+        } else {
+            resolve_target_contracts("tcgen05 MMA libNVVM", &expected_libnvvm_contracts)?
+        };
+        (expected_llvm, expected_libnvvm)
     };
-    let expected_libnvvm = if alias.is_some() {
-        resolve_target_contract(
-            "tcgen05 MMA libNVVM alias",
-            &selected,
-            &expected_libnvvm_contracts,
-        )?
+    let expected_min_ptx = if tcgen05_mma_is_block_scale(form) {
+        "8.8"
     } else {
-        resolve_target_contracts("tcgen05 MMA libNVVM", &expected_libnvvm_contracts)?
+        "8.6"
     };
     ensure!(
         mma.llvm_target == expected_llvm
             && mma.libnvvm_target == expected_libnvvm
-            && policy.minimum_ptx == "8.6"
+            && policy.minimum_ptx == expected_min_ptx
             && policy.minimum_sm.is_none()
             && policy.targets == TCGEN05_LLVM_TARGETS
             && policy.ptx_result == "()"
-            && policy.ptx_isa_version == "8.6"
+            && policy.ptx_isa_version == expected_min_ptx
             && policy.expected_ptx == tcgen05_mma_expected_ptx(form, alias),
         "{} tcgen05 MMA target or PTX contract changed",
         policy.id
@@ -933,13 +1222,18 @@ pub(in crate::resolve) fn validate_tcgen05_mma_policy(
                 "{} tcgen05 MMA selection provenance changed",
                 policy.id
             );
-            let predicate = if selection.asm.contains(".kind::i8.") {
-                "Subtarget->hasTcgen05MMAI8Kind()"
+            let expected_predicates: &[&str] = if selection.asm.contains(".kind::i8.") {
+                &["Subtarget->hasTcgen05MMAI8Kind()"]
+            } else if tcgen05_mma_has_ptx88_predicate(form) {
+                &[
+                    "Subtarget->getPTXVersion() >= 88",
+                    "Subtarget->hasTcgen05InstSupport()",
+                ]
             } else {
-                "Subtarget->hasTcgen05InstSupport()"
+                &["Subtarget->hasTcgen05InstSupport()"]
             };
             ensure!(
-                selection.predicates == [predicate],
+                selection.predicates == expected_predicates,
                 "{} tcgen05 MMA selection predicate changed",
                 policy.id
             );
@@ -953,6 +1247,8 @@ pub(in crate::resolve) fn validate_tcgen05_mma_policy(
             && expected_valid.len()
                 == if alias.is_some() {
                     1
+                } else if tcgen05_mma_is_block_scale(form) {
+                    8
                 } else if tcgen05_mma_is_ws(form) {
                     64
                 } else if tcgen05_mma_is_ashift(form) {

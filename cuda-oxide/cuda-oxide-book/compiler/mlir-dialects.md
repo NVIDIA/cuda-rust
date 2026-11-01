@@ -83,13 +83,13 @@ the GPU memory hierarchy:
 
 ### Operations
 
-`dialect-mir` defines 62 operations across 12 categories, one per module under
+`dialect-mir` defines 63 operations across 12 categories, one per module under
 `cuda-oxide/crates/dialect-mir/src/ops/`:
 
 | Category     | Examples                                                                                                                                                                                            | Count |
 | :----------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----: |
 | Function     | `mir.func`                                                                                                                                                                                          |     1 |
-| Control flow | `mir.goto`, `mir.cond_br`, `mir.return`, `mir.assert`, `mir.unreachable`, `mir.unroll_hint`                                                                                                         |     6 |
+| Control flow | `mir.goto`, `mir.cond_br`, `mir.return`, `mir.assert`, `mir.unreachable`, `mir.unroll_hint`, `mir.nounroll_hint`                                                                                    |     7 |
 | Constants    | `mir.constant`, `mir.float_constant`, `mir.undef`                                                                                                                                                   |     3 |
 | Memory       | `mir.alloca`, `mir.load`, `mir.store`, `mir.assign`, `mir.ref`, `mir.ptr_offset`, `mir.memcpy`, `mir.memmove`, `mir.shared_alloc`, `mir.global_alloc`, `mir.extern_shared`                          |    11 |
 | Arithmetic   | `mir.add`, `mir.sub`, `mir.mul`, `mir.div`, `mir.rem`, `mir.checked_add`, `mir.checked_sub`, `mir.checked_mul`, `mir.neg`, `mir.not`, `mir.shr`, `mir.shl`, `mir.bitand`, `mir.bitor`, `mir.bitxor` |    15 |
@@ -303,11 +303,11 @@ they become `call` instructions to `@llvm.nvvm.*` intrinsics.
 
 ### Architecture Coverage
 
-At catalog SHA-256 `63f8d327` (the stamp in every `ops/generated/` file
+At catalog SHA-256 `93be46b9` (the stamp in every `ops/generated/` file
 header), the dialect holds 589 operations across 42 modules, and they come
 from two different places. The split is the first thing to know about it,
 because it decides where -- and whether -- you would add one. If the header
-stamp no longer starts with `63f8d327`, the counts on this page predate the
+stamp no longer starts with `93be46b9`, the counts on this page predate the
 catalog you are reading.
 
 **Hand-written**, directly under `cuda-oxide/crates/dialect-nvvm/src/ops/`. These are the
@@ -327,7 +327,7 @@ describe. There are seven modules and 27 operations:
 **Generated**, under `ops/generated/`, from `intrinsics/catalog.json` by
 `cuda-intrinsics-gen`. Every file there opens with `// @generated ... DO NOT
 EDIT.`, and editing one by hand is undone by the next generator run. This is
-the large majority -- 35 modules and 562 operations, resolved from 1042 catalog
+the large majority -- 35 modules and 562 operations, resolved from 1058 catalog
 entries, since several intrinsics can share one structural op:
 
 | Area                        | Modules                                                                       | Ops |

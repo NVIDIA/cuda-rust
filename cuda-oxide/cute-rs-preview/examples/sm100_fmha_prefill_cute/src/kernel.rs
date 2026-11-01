@@ -3,25 +3,40 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Single-CTA FMHA schedule corresponding to CUTLASS v4.7.0 fmha.py.
+//! Single-CTA FMHA schedule corresponding to CUTLASS v4.7.0 `fmha.py`.
+//!
 //! Two independent softmax groups exchange the aliased S/P tensor-memory
 //! regions. A separate correction group rescales the running output before
-//! the MMA warp accumulates the next FP16 probability tile.
-//! CuTe supplies typed MMA/TMA operations; CTM supplies explicit instructions,
-//! shared storage, and the kernel launch macros.
+//! the MMA warp accumulates the next FP16 probability tile:
+//!
+//! ```text
+//! Global Q/K/V ──► `TmaCopy::<_, 1>::load` (Warp 13) ──► Shared Q[2] / KV[3]
+//!                                                               │
+//!                                                               ▼
+//!                         `MmaSs` (QK) & `MmaTs` (PV) (Warp 12) ──► TMEM S0/S1 & O0/O1
+//!                                                               │
+//!                                                               ▼
+//!                 Softmax (Warps 0..7) ──► Correction (Warps 8..11) ──► Shared O[2]
+//!                                                               │
+//!                                                               ▼
+//!                                        `TmaCopy::<OLayout, 1>::store` (Warp 14)
+//! ```
 
-use core::marker::PhantomData;
-use ctm_rs::f32x2::{
-    PackedF32x2, add_f32x2, fma_f32x2, mul_f32x2, pack_f32x2, unpack_f32x2_hi, unpack_f32x2_lo,
+use ctm_rs::memory::DynamicSharedArray;
+use ctm_rs::{cuda_module, kernel, launch_bounds, launch_contract, thread};
+use cute_rs::arch::{
+    NamedBarrier, PackedF32x2, add_packed_f32x2, cp_async_bulk_commit_group,
+    cp_async_bulk_wait_group_read, cvt_f16x2_f32, elect_one_sync, exp2_ftz_f32,
+    fence_view_async_shared, fence_view_async_tmem_store, fma_packed_f32x2, mbarrier_init_fence,
+    mul_packed_f32x2, pack_f32x2, reciprocal_ftz_f32, setmaxregister_decrease,
+    setmaxregister_increase, sync_warp, unpack_f32x2_hi, unpack_f32x2_lo, vote_all_sync,
 };
-use ctm_rs::mbarrier::{Barrier, GeneralBarrier, ManagedBarrier, Ready, TmaBarrier, Uninit};
-use ctm_rs::memory::{DynamicSharedArray, U32x4};
-use ctm_rs::tcgen05::tmem::{self, TmemGuard, TmemReady, TmemUninit};
-use ctm_rs::{
-    barrier, convert, cuda_module, fence, float, kernel, launch_bounds, launch_contract, mbarrier,
-    tcgen05, thread, warp,
+use cute_rs::attention::sm100::pipeline::{
+    PipelineAsync, PipelineAsyncUmma, PipelineTmaUmma, PipelineUmmaAsync,
 };
-use cute_rs::attention::sm100::{MmaSs, MmaTs, SharedLayout, SharedTile, TmaCopy, TmemFragment};
+use cute_rs::attention::sm100::{
+    MmaSs, MmaTs, SharedLayout, SharedTile, TmaCopy, TmemAllocator, TmemFragment, tmem_row_address,
+};
 use cute_rs::{OperandA, OperandB, TensorMap};
 
 /// K-major shared layout for a 128 × 128 FP16 query tile.
@@ -41,6 +56,8 @@ type Pv = MmaTs<VLayout, 128, 128, 128, 1>;
 pub const THREADS: u32 = 512;
 /// Bytes in one 128 × 128 FP16 shared-memory tile.
 const TILE_BYTES: usize = 128 * 128 * 2;
+/// Expected TMA transaction bytes for one 128 × 128 FP16 tile.
+const TILE_TX_BYTES: u32 = TILE_BYTES as u32;
 /// Byte offset of the two output tiles, after the barrier/token prefix.
 const O_OFFSET: usize = 1024;
 /// Byte offset of the two query tiles in dynamic shared memory.
@@ -54,166 +71,33 @@ const TMEM_TOKEN_OFFSET: usize = 34 * 8;
 /// Attention scale log2(e) / sqrt(128), allowing softmax to use base-two exponentials.
 const SCALE_LOG2: f32 = 0.127_517_43; // log2(e) / sqrt(128)
 
-/// One independent full/empty stage ring. A producer count starts at phase1
-/// (initially empty), a consumer at phase0. Counts persist across work tiles.
-/// The explicit arrival counts below are the source's participant contracts.
-struct Ring<const STAGES: u32, FullKind = GeneralBarrier> {
-    /// Contiguous stage barriers completed when producers publish their work.
-    full: *mut Barrier,
-    /// Contiguous stage barriers completed when consumers release their slots.
-    empty: *mut Barrier,
-    /// Distinguishes transaction-counted producers from ordinary arrivals.
-    _full_kind: PhantomData<FullKind>,
-}
-
-impl<const STAGES: u32, K> Copy for Ring<STAGES, K> {}
-impl<const STAGES: u32, K> Clone for Ring<STAGES, K> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<const STAGES: u32, K> Ring<STAGES, K> {
-    /// Bind a ring at `offset` measured in eight-byte barrier slots.
-    /// The shared allocation must contain `2 * STAGES` aligned, nonoverlapping slots there.
-    #[inline(always)]
-    unsafe fn new(storage: *mut u8, offset: usize) -> Self {
-        const { assert!(STAGES > 0) };
-        let full = unsafe { storage.add(offset * 8).cast::<Barrier>() };
-        Self {
-            full,
-            empty: unsafe { full.add(STAGES as usize) },
-            _full_kind: PhantomData,
-        }
-    }
-    /// Initialize full/empty barriers with per-stage producer/consumer arrival counts.
-    /// Call once before publishing initialization to the CTA.
-    #[inline(always)]
-    unsafe fn init(self, producers: u32, consumers: u32) {
-        let mut i = 0;
-        while i < STAGES {
-            unsafe {
-                ManagedBarrier::<Uninit, K>::from_static(self.full.add(i as usize))
-                    .init_instruction(producers);
-                ManagedBarrier::<Uninit, GeneralBarrier>::from_static(self.empty.add(i as usize))
-                    .init_instruction(consumers);
-            }
-            i += 1;
-        }
-    }
-    /// Wait for consumers to release `count % STAGES`, using the producer’s inverted parity.
-    #[inline(always)]
-    unsafe fn acquire(self, count: u32) {
-        let ptr = unsafe { self.empty.add((count % STAGES) as usize) };
-        unsafe { wait::<GeneralBarrier>(ptr, ((count / STAGES) & 1) ^ 1) };
-    }
-    /// Wait for producers to fill `count % STAGES`, then order subsequent TMEM accesses.
-    #[inline(always)]
-    unsafe fn wait(self, count: u32) {
-        unsafe { wait::<K>(self.full_ptr(count), (count / STAGES) & 1) };
-        tcgen05::fence_after_thread_sync();
-    }
-    /// Select the full barrier for the monotonically increasing stage count.
-    #[inline(always)]
-    unsafe fn full_ptr(self, count: u32) -> *mut Barrier {
-        unsafe { self.full.add((count % STAGES) as usize) }
-    }
-    /// Order prior TMEM accesses and contribute one thread arrival to the full barrier.
-    #[inline(always)]
-    unsafe fn commit_threads(self, count: u32) {
-        tcgen05::fence_before_thread_sync();
-        unsafe {
-            mbarrier::arrive(&ManagedBarrier::<Ready, K>::adopt_ready(
-                self.full_ptr(count),
-            ));
-        }
-    }
-    /// Order prior TMEM accesses and contribute one thread arrival to the empty barrier.
-    #[inline(always)]
-    unsafe fn release_threads(self, count: u32) {
-        tcgen05::fence_before_thread_sync();
-        unsafe {
-            mbarrier::arrive(&ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(
-                self.empty.add((count % STAGES) as usize),
-            ));
-        }
-    }
-    /// Have one elected lane signal the full barrier after outstanding MMA work completes.
-    /// All lanes of the MMA warp must participate in the election.
-    #[inline(always)]
-    unsafe fn commit_mma(self, count: u32) {
-        if warp::is_elected_sync(u32::MAX) {
-            unsafe {
-                tcgen05::commit(&ManagedBarrier::<Ready, K>::adopt_ready(
-                    self.full_ptr(count),
-                ));
-            }
-        }
-    }
-    /// Have one elected lane release the slot after outstanding MMA work completes.
-    /// All lanes of the MMA warp must participate in the election.
-    #[inline(always)]
-    unsafe fn release_mma(self, count: u32) {
-        if warp::is_elected_sync(u32::MAX) {
-            unsafe {
-                tcgen05::commit(&ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(
-                    self.empty.add((count % STAGES) as usize),
-                ));
-            }
-        }
-    }
-}
-
-impl<const STAGES: u32> Ring<STAGES, TmaBarrier> {
-    /// Have one elected lane arrive and expect one FP16 tile’s TMA byte count.
-    /// All lanes of the producer warp must participate in the election.
-    #[inline(always)]
-    unsafe fn producer_expect_tx(self, count: u32) {
-        if warp::is_elected_sync(u32::MAX) {
-            unsafe {
-                mbarrier::arrive_expect_tx(
-                    &ManagedBarrier::<Ready, TmaBarrier>::adopt_ready(self.full_ptr(count)),
-                    TILE_BYTES as u32,
-                );
-            }
-        }
-    }
-}
-
-/// Spin until an initialized shared barrier completes the requested parity phase.
-#[inline(always)]
-unsafe fn wait<K>(ptr: *const Barrier, phase: u32) {
-    let barrier = unsafe { ManagedBarrier::<Ready, K>::adopt_ready(ptr.cast_mut()) };
-    while !unsafe { mbarrier::try_wait_parity(&barrier, phase) } {}
-}
-
 /// A copy of the same twelve pipeline identities exists in every participant.
 #[derive(Clone, Copy)]
 struct Pipelines {
     /// Two query stages transferred by TMA and released by the MMA warp.
-    q: Ring<2, TmaBarrier>,
+    q: PipelineTmaUmma<2>,
     /// Three alternating key/value stages transferred by TMA and released by MMA.
-    kv: Ring<3, TmaBarrier>,
+    kv: PipelineTmaUmma<3>,
     /// QK scores from MMA to the first 128-thread softmax group.
-    s0: Ring<1>,
+    s0: PipelineUmmaAsync<1>,
     /// QK scores from MMA to the second 128-thread softmax group.
-    s1: Ring<1>,
+    s1: PipelineUmmaAsync<1>,
     /// FP16 probabilities from the first softmax group to PV MMA.
-    p0: Ring<1>,
+    p0: PipelineAsyncUmma<1>,
     /// FP16 probabilities from the second softmax group to PV MMA.
-    p1: Ring<1>,
+    p1: PipelineAsyncUmma<1>,
     /// First-group statistics rendezvous: 32 MMA plus 128 softmax arrivals, then correction.
-    stats0: Ring<1>,
+    stats0: PipelineAsync<1>,
     /// Second-group statistics rendezvous: 32 MMA plus 128 softmax arrivals, then correction.
-    stats1: Ring<1>,
+    stats1: PipelineAsync<1>,
     /// Two corrected output stages handed from 128 correction threads to 32 TMA-store threads.
-    epi: Ring<2>,
+    epi: PipelineAsync<2>,
     /// Two PV accumulator stages handed from MMA completion to 128 correction threads.
-    output: Ring<2>,
+    output: PipelineUmmaAsync<2>,
     /// First softmax group’s handoff protecting aliased score/probability TMEM from the second.
-    alias0: Ring<1>,
+    alias0: PipelineAsync<1>,
     /// Second softmax group’s handoff protecting aliased score/probability TMEM from the first.
-    alias1: Ring<1>,
+    alias1: PipelineAsync<1>,
 }
 
 impl Pipelines {
@@ -222,18 +106,18 @@ impl Pipelines {
     unsafe fn new(smem: *mut u8) -> Self {
         unsafe {
             Self {
-                q: Ring::new(smem, 0),
-                kv: Ring::new(smem, 4),
-                s0: Ring::new(smem, 10),
-                s1: Ring::new(smem, 12),
-                p0: Ring::new(smem, 14),
-                p1: Ring::new(smem, 16),
-                stats0: Ring::new(smem, 18),
-                stats1: Ring::new(smem, 20),
-                epi: Ring::new(smem, 22),
-                output: Ring::new(smem, 26),
-                alias0: Ring::new(smem, 30),
-                alias1: Ring::new(smem, 32),
+                q: PipelineTmaUmma::from_raw(smem, 0),
+                kv: PipelineTmaUmma::from_raw(smem, 4),
+                s0: PipelineUmmaAsync::from_raw(smem, 10),
+                s1: PipelineUmmaAsync::from_raw(smem, 12),
+                p0: PipelineAsyncUmma::from_raw(smem, 14),
+                p1: PipelineAsyncUmma::from_raw(smem, 16),
+                stats0: PipelineAsync::from_raw(smem, 18),
+                stats1: PipelineAsync::from_raw(smem, 20),
+                epi: PipelineAsync::from_raw(smem, 22),
+                output: PipelineUmmaAsync::from_raw(smem, 26),
+                alias0: PipelineAsync::from_raw(smem, 30),
+                alias1: PipelineAsync::from_raw(smem, 32),
             }
         }
     }
@@ -272,13 +156,13 @@ fn trip_count(row: u32, keys: u32, causal: bool) -> u32 {
 /// Add the calling warp’s 32-row offset within a 128-thread group to a TMEM address.
 #[inline(always)]
 fn tmem_rows(base: u32, tid: u32) -> u32 {
-    base + ((((tid % 128) / 32) * 32) << 16)
+    tmem_row_address(base, (tid % 128) / 32, 0)
 }
 
 /// Evaluate the device approximate base-two exponential with subnormal flushing.
 #[inline(always)]
 fn exp2(x: f32) -> f32 {
-    float::ex2_approx_ftz_f32(x)
+    exp2_ftz_f32(x)
 }
 
 /// Source SM100 max reduction has two independent chains per 32-score chunk.
@@ -329,8 +213,8 @@ fn reduce_max_level<const WIDTH: usize>(maxima: &mut [f32; 64]) {
 /// Multiply two FP32 values by packed FP32 factors and return their packed FP16 bits.
 #[inline(always)]
 fn scaled_half_pair(lo: f32, hi: f32, factor: PackedF32x2) -> u32 {
-    let scaled = mul_f32x2(pack_f32x2(lo, hi), factor);
-    convert::cvt_f16x2_f32(unpack_f32x2_lo(scaled), unpack_f32x2_hi(scaled))
+    let scaled = mul_packed_f32x2(pack_f32x2(lo, hi), factor);
+    cvt_f16x2_f32(unpack_f32x2_lo(scaled), unpack_f32x2_hi(scaled))
 }
 
 /// Acquire score/statistics slots and issue QK without accumulation, then publish score completion.
@@ -340,8 +224,8 @@ unsafe fn mma_qk(
     destination: u32,
     a: &SharedTile<QLayout, OperandA>,
     b: &SharedTile<KLayout, OperandB>,
-    scores: Ring<1>,
-    stats: Ring<1>,
+    scores: PipelineUmmaAsync<1>,
+    stats: PipelineAsync<1>,
     score_count: u32,
     stats_count: u32,
 ) {
@@ -349,7 +233,7 @@ unsafe fn mma_qk(
         scores.acquire(score_count);
         stats.acquire(stats_count);
         stats.commit_threads(stats_count);
-        if warp::is_elected_sync(u32::MAX) {
+        if elect_one_sync() {
             Qk::new().gemm(destination, a, b, false);
         }
         scores.commit_mma(score_count);
@@ -364,8 +248,8 @@ unsafe fn mma_pv(
     destination: u32,
     probabilities: u32,
     v: &SharedTile<VLayout, OperandB>,
-    p: Ring<1>,
-    output: Ring<2>,
+    p: PipelineAsyncUmma<1>,
+    output: PipelineUmmaAsync<2>,
     p_count: u32,
     output_count: u32,
     accumulate: bool,
@@ -373,7 +257,7 @@ unsafe fn mma_pv(
     unsafe {
         output.acquire(output_count);
         p.wait(p_count);
-        if warp::is_elected_sync(u32::MAX) {
+        if elect_one_sync() {
             Pv::new().gemm(destination, probabilities, v, accumulate);
         }
         p.release_mma(p_count);
@@ -387,7 +271,7 @@ pub mod kernels {
     use super::*;
 
     /// Dense BSHD FP16 attention, with top-left causal masking and GQA.
-    /// Descriptor arrays are indexed by batch/head and retained by the host
+    /// Descriptor slices are indexed by batch/head and retained by the host
     /// until the stream completes; all data matrices use D=128.
     #[launch_bounds(512, 1)]
     #[launch_contract(domain = 1, block = (512, 1, 1), dynamic_shared = 230400,
@@ -395,10 +279,10 @@ pub mod kernels {
     #[kernel]
     #[allow(clippy::too_many_arguments)]
     pub fn sm100_fmha_prefill_cute_rs(
-        qmaps: *const TensorMap<f16, QLayout>,
-        kmaps: *const TensorMap<f16, KLayout>,
-        vmaps: *const TensorMap<f16, VLayout>,
-        omaps: *const TensorMap<f16, OLayout>,
+        qmaps: &[TensorMap<f16, QLayout>],
+        kmaps: &[TensorMap<f16, KLayout>],
+        vmaps: &[TensorMap<f16, VLayout>],
+        omaps: &[TensorMap<f16, OLayout>],
         batch: u64,
         query: u64,
         keys: u64,
@@ -427,19 +311,19 @@ pub mod kernels {
             if tid == 0 {
                 pipes.init();
             }
-            fence::fence_mbarrier_init();
-            barrier::barrier_cta_sync(0, 512);
+            mbarrier_init_fence();
+            NamedBarrier::<0, 512>::sync();
             if warp_id == 8 {
-                TmemGuard::<TmemUninit, 512>::from_raw_slot(token).alloc_collective();
+                TmemAllocator::<512, 1>::allocate(token);
             }
             let mut tmem = 0;
             if warp_id <= 12 {
-                barrier::barrier_cta_sync(2, 416);
-                tmem = TmemGuard::<TmemReady, 512>::adopt_ready(token).raw_address();
+                NamedBarrier::<2, 416>::sync();
+                tmem = TmemAllocator::<512, 1>::retrieve_ptr(token);
             }
 
             if warp_id == 13 {
-                thread::setmaxnreg_dec::<32>();
+                setmaxregister_decrease::<32>();
                 let mut qcount = 0u32;
                 let mut kvcount = 0u32;
                 while tile < total {
@@ -447,12 +331,12 @@ pub mod kernels {
                     let bh = tile / qtiles;
                     let b = bh / heads;
                     let kh = (bh % heads) / (heads / kv_heads);
-                    let qdesc = &*qmaps.add(bh as usize);
-                    let kdesc = &*kmaps.add((b * kv_heads + kh) as usize);
-                    let vdesc = &*vmaps.add((b * kv_heads + kh) as usize);
+                    let qdesc = TensorMap::get_unchecked(qmaps, bh as usize);
+                    let kdesc = TensorMap::get_unchecked(kmaps, (b * kv_heads + kh) as usize);
+                    let vdesc = TensorMap::get_unchecked(vmaps, (b * kv_heads + kh) as usize);
                     let steps = trip_count(row, keys, causal);
                     pipes.q.acquire(qcount);
-                    pipes.q.producer_expect_tx(qcount);
+                    pipes.q.producer_expect_tx::<TILE_TX_BYTES>(qcount);
                     let mut qt = SharedTile::<QLayout, OperandA>::from_raw(
                         smem.add(Q_OFFSET + (qcount % 2) as usize * TILE_BYTES)
                             .cast(),
@@ -467,7 +351,7 @@ pub mod kernels {
                     );
                     qcount += 1;
                     pipes.kv.acquire(kvcount);
-                    pipes.kv.producer_expect_tx(kvcount);
+                    pipes.kv.producer_expect_tx::<TILE_TX_BYTES>(kvcount);
                     let mut kt = SharedTile::<KLayout, OperandB>::from_raw(
                         smem.add(KV_OFFSET + (kvcount % 3) as usize * TILE_BYTES)
                             .cast(),
@@ -482,7 +366,7 @@ pub mod kernels {
                     );
                     kvcount += 1;
                     pipes.q.acquire(qcount);
-                    pipes.q.producer_expect_tx(qcount);
+                    pipes.q.producer_expect_tx::<TILE_TX_BYTES>(qcount);
                     let mut qt = SharedTile::<QLayout, OperandA>::from_raw(
                         smem.add(Q_OFFSET + (qcount % 2) as usize * TILE_BYTES)
                             .cast(),
@@ -499,7 +383,7 @@ pub mod kernels {
                     let mut i = 1;
                     while i < steps {
                         pipes.kv.acquire(kvcount);
-                        pipes.kv.producer_expect_tx(kvcount);
+                        pipes.kv.producer_expect_tx::<TILE_TX_BYTES>(kvcount);
                         let mut kt = SharedTile::<KLayout, OperandB>::from_raw(
                             smem.add(KV_OFFSET + (kvcount % 3) as usize * TILE_BYTES)
                                 .cast(),
@@ -514,7 +398,7 @@ pub mod kernels {
                         );
                         kvcount += 1;
                         pipes.kv.acquire(kvcount);
-                        pipes.kv.producer_expect_tx(kvcount);
+                        pipes.kv.producer_expect_tx::<TILE_TX_BYTES>(kvcount);
                         let mut vt = SharedTile::<VLayout, OperandB>::from_raw(
                             smem.add(KV_OFFSET + (kvcount % 3) as usize * TILE_BYTES)
                                 .cast(),
@@ -531,7 +415,7 @@ pub mod kernels {
                         i += 1;
                     }
                     pipes.kv.acquire(kvcount);
-                    pipes.kv.producer_expect_tx(kvcount);
+                    pipes.kv.producer_expect_tx::<TILE_TX_BYTES>(kvcount);
                     let mut vt = SharedTile::<VLayout, OperandB>::from_raw(
                         smem.add(KV_OFFSET + (kvcount % 3) as usize * TILE_BYTES)
                             .cast(),
@@ -548,7 +432,7 @@ pub mod kernels {
                     tile += stride;
                 }
             } else if warp_id == 12 {
-                thread::setmaxnreg_dec::<32>();
+                setmaxregister_decrease::<32>();
                 let (mut qcount, mut kvcount, mut scount, mut pcount, mut stats_count, mut ocount) =
                     (0u32, 0u32, 0u32, 0u32, 0u32, 0u32);
                 while tile < total {
@@ -676,7 +560,7 @@ pub mod kernels {
                     tile += stride;
                 }
             } else if warp_id < 8 {
-                thread::setmaxnreg_inc::<192>();
+                setmaxregister_increase::<192>();
                 let stage = warp_id / 4;
                 let (scores, probabilities, stats, alias_producer, alias_consumer) = if stage == 0 {
                     (pipes.s0, pipes.p0, pipes.stats0, pipes.alias0, pipes.alias1)
@@ -736,7 +620,7 @@ pub mod kernels {
                             let (left, right) = reduce_score_chunk(&third, left, right);
                             // Match the source's handoff before the last max
                             // chunk, permitting the aliased P writer to advance.
-                            tmem::store_wait();
+                            fence_view_async_tmem_store();
                             scores.release_threads(count);
                             alias_producer.commit_threads(alias_send);
                             let (left, right) = reduce_score_chunk(&fourth, left, right);
@@ -766,7 +650,7 @@ pub mod kernels {
                         let mut col = 0usize;
                         #[unroll]
                         while col < 4 {
-                            let scaled = fma_f32x2(
+                            let scaled = fma_packed_f32x2(
                                 pack_f32x2(values.values[col * 2], values.values[col * 2 + 1]),
                                 scale,
                                 shift,
@@ -792,13 +676,13 @@ pub mod kernels {
                             if col >= 2 {
                                 let x = values.values[(col - 2) * 2];
                                 let y = values.values[(col - 2) * 2 + 1];
-                                packed[col - 2] = convert::cvt_f16x2_f32(x, y);
-                                sums = add_f32x2(sums, pack_f32x2(x, y));
+                                packed[col - 2] = cvt_f16x2_f32(x, y);
+                                sums = add_packed_f32x2(sums, pack_f32x2(x, y));
                             }
                             values.values[col * 2] = exp2(values.values[col * 2]);
                             if col + 4 < 64 {
                                 let next = (col + 4) * 2;
-                                let scaled = fma_f32x2(
+                                let scaled = fma_packed_f32x2(
                                     pack_f32x2(values.values[next], values.values[next + 1]),
                                     scale,
                                     shift,
@@ -814,8 +698,8 @@ pub mod kernels {
                         while col < 64 {
                             let x = values.values[col * 2];
                             let y = values.values[col * 2 + 1];
-                            packed[col] = convert::cvt_f16x2_f32(x, y);
-                            sums = add_f32x2(sums, pack_f32x2(x, y));
+                            packed[col] = cvt_f16x2_f32(x, y);
+                            sums = add_packed_f32x2(sums, pack_f32x2(x, y));
                             col += 1;
                         }
                         row_sum = unpack_f32x2_lo(sums) + unpack_f32x2_hi(sums);
@@ -842,7 +726,7 @@ pub mod kernels {
                     tile += stride;
                 }
             } else if warp_id < 12 {
-                thread::setmaxnreg_dec::<96>();
+                setmaxregister_decrease::<96>();
                 let (mut stat_count, mut ocount, mut epicount) = (0u32, 0u32, 0u32);
                 while tile < total {
                     let row = (tile % qtiles) * 256;
@@ -866,7 +750,7 @@ pub mod kernels {
                                 TmemFragment::<2>::load(tmem_rows(tmem + stage * 128, tid));
                             stats.release_threads(stat_count);
                             pipes.output.wait(ocount);
-                            if !warp::all(maxima.values[0] == maxima.values[1]) {
+                            if !vote_all_sync(maxima.values[0] == maxima.values[1], u32::MAX) {
                                 let factor =
                                     exp2((maxima.values[0] - maxima.values[1]) * SCALE_LOG2);
                                 let factor = pack_f32x2(factor, factor);
@@ -881,7 +765,7 @@ pub mod kernels {
                                     let mut j = 0;
                                     #[unroll]
                                     while j < 16 {
-                                        let scaled = mul_f32x2(
+                                        let scaled = mul_packed_f32x2(
                                             pack_f32x2(out.values[j], out.values[j + 1]),
                                             factor,
                                         );
@@ -892,7 +776,7 @@ pub mod kernels {
                                     out.store_deferred(addr);
                                     col += 16;
                                 }
-                                tmem::store_wait();
+                                fence_view_async_tmem_store();
                             }
                             pipes.output.release_threads(ocount);
                             ocount += 1;
@@ -913,11 +797,12 @@ pub mod kernels {
                         stats.release_threads(stat_count);
                         pipes.output.wait(ocount);
                         pipes.epi.acquire(epicount);
-                        let factor = float::rcp_approx_ftz_f32(sums.values[0]);
+                        let factor = reciprocal_ftz_f32(sums.values[0]);
                         let factor = pack_f32x2(factor, factor);
-                        let dst = smem
-                            .add(O_OFFSET + (epicount % 2) as usize * TILE_BYTES)
-                            .cast::<f16>();
+                        let mut out_tile = SharedTile::<OLayout, OperandA>::from_raw(
+                            smem.add(O_OFFSET + (epicount % 2) as usize * TILE_BYTES)
+                                .cast(),
+                        );
                         let mut col = 0;
                         while col < 128 {
                             // Match the reference's runtime epilogue loop; the
@@ -931,19 +816,33 @@ pub mod kernels {
                             let mut j = 0usize;
                             #[unroll]
                             while j < 16 {
-                                let words = U32x4([
-                                    scaled_half_pair(out.values[j], out.values[j + 1], factor),
-                                    scaled_half_pair(out.values[j + 2], out.values[j + 3], factor),
-                                    scaled_half_pair(out.values[j + 4], out.values[j + 5], factor),
-                                    scaled_half_pair(out.values[j + 6], out.values[j + 7], factor),
-                                ]);
-                                *dst.add(OLayout::crd2idx(tid % 128, col + j as u32))
-                                    .cast::<U32x4>() = words;
+                                out_tile.store_packed_8(
+                                    tid % 128,
+                                    col + j as u32,
+                                    [
+                                        scaled_half_pair(out.values[j], out.values[j + 1], factor),
+                                        scaled_half_pair(
+                                            out.values[j + 2],
+                                            out.values[j + 3],
+                                            factor,
+                                        ),
+                                        scaled_half_pair(
+                                            out.values[j + 4],
+                                            out.values[j + 5],
+                                            factor,
+                                        ),
+                                        scaled_half_pair(
+                                            out.values[j + 6],
+                                            out.values[j + 7],
+                                            factor,
+                                        ),
+                                    ],
+                                );
                                 j += 8;
                             }
                             col += 16;
                         }
-                        fence::fence_proxy_async_shared_cta();
+                        fence_view_async_shared();
                         pipes.output.release_threads(ocount);
                         pipes.epi.commit_threads(epicount);
                         ocount += 1;
@@ -953,45 +852,45 @@ pub mod kernels {
                     stat_count += 1;
                     tile += stride;
                 }
-                barrier::barrier_cta_sync(7, 128);
+                NamedBarrier::<7, 128>::sync();
                 if warp_id == 8 {
-                    tcgen05::relinquish_alloc_permit();
-                    TmemGuard::<TmemReady, 512>::adopt_ready(token).dealloc_collective();
+                    TmemAllocator::<512, 1>::relinquish_alloc_permit();
+                    TmemAllocator::<512, 1>::free(token);
                 }
             } else if warp_id == 14 {
-                thread::setmaxnreg_dec::<32>();
+                setmaxregister_decrease::<32>();
                 let mut count = 0u32;
                 while tile < total {
                     let row = (tile % qtiles) * 256;
                     let bh = tile / qtiles;
-                    let desc = &*omaps.add(bh as usize);
+                    let desc = TensorMap::get_unchecked(omaps, bh as usize);
                     pipes.epi.wait(count);
                     let out0 = SharedTile::<OLayout, OperandA>::from_raw(smem.add(O_OFFSET).cast());
-                    if warp::is_elected_sync(u32::MAX) {
+                    if elect_one_sync() {
                         TmaCopy::<OLayout, 1>::store(desc, &out0, row as i32, 0);
-                        ctm_rs::tma::cp_async_bulk_commit_group();
+                        cp_async_bulk_commit_group();
                     }
                     pipes.epi.wait(count + 1);
                     let out1 = SharedTile::<OLayout, OperandA>::from_raw(
                         smem.add(O_OFFSET + TILE_BYTES).cast(),
                     );
-                    if warp::is_elected_sync(u32::MAX) {
+                    if elect_one_sync() {
                         TmaCopy::<OLayout, 1>::store(desc, &out1, (row + 128) as i32, 0);
-                        ctm_rs::tma::cp_async_bulk_commit_group();
-                        ctm_rs::tma::cp_async_bulk_wait_group_read::<1>();
+                        cp_async_bulk_commit_group();
+                        cp_async_bulk_wait_group_read::<1>();
                     }
-                    warp::bar_warp_sync(u32::MAX);
+                    sync_warp(u32::MAX);
                     pipes.epi.release_threads(count);
-                    if warp::is_elected_sync(u32::MAX) {
-                        ctm_rs::tma::cp_async_bulk_wait_group_read::<0>();
+                    if elect_one_sync() {
+                        cp_async_bulk_wait_group_read::<0>();
                     }
-                    warp::bar_warp_sync(u32::MAX);
+                    sync_warp(u32::MAX);
                     pipes.epi.release_threads(count + 1);
                     count += 2;
                     tile += stride;
                 }
             } else {
-                thread::setmaxnreg_dec::<32>();
+                setmaxregister_decrease::<32>();
             }
         }
     }

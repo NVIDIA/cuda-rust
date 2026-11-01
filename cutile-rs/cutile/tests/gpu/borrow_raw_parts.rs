@@ -22,9 +22,8 @@ use crate::common;
 fn borrow_raw_parts_does_not_free_foreign_memory() {
     common::with_test_stack(|| {
         let _policy = global_policy(0);
-        let device = cuda_core::Device::new(0).expect("device");
+        let device = cuda_core::Context::new(0).expect("device");
         let stream = device.new_stream().expect("stream");
-        let ordinal = device.ordinal();
 
         const N: usize = 256;
         let bytes = N * std::mem::size_of::<f32>();
@@ -42,8 +41,14 @@ fn borrow_raw_parts_does_not_free_foreign_memory() {
         // tensor would free `mem` on the first drop, making borrows 2 and 3
         // use-after-free; a borrowed tensor leaves `mem` untouched.
         for _ in 0..3 {
-            let t =
-                unsafe { Tensor::<f32>::borrow_raw_parts(mem, ordinal, vec![N as i32], vec![1]) };
+            let t = unsafe {
+                Tensor::<f32>::borrow_raw_parts(
+                    mem,
+                    stream.context().clone(),
+                    vec![N as i32],
+                    vec![1],
+                )
+            };
             let out = t
                 .to_host_vec()
                 .sync_on(&stream)
@@ -88,6 +93,9 @@ impl Drop for Owner {
 
 // SAFETY: `dptr` is a live `len_bytes` allocation on `device_id` until `Owner` drops.
 unsafe impl DeviceAllocation for Owner {
+    fn context(&self) -> std::sync::Arc<cuda_core::Context> {
+        self.stream.context().clone()
+    }
     fn device_ptr(&self) -> CUdeviceptr {
         self.dptr
     }
@@ -103,7 +111,7 @@ unsafe impl DeviceAllocation for Owner {
 fn from_foreign_keep_alive_holds_owner() {
     common::with_test_stack(|| {
         let _policy = global_policy(0);
-        let device = cuda_core::Device::new(0).expect("device");
+        let device = cuda_core::Context::new(0).expect("device");
         let stream = device.new_stream().expect("stream");
 
         const N: usize = 256;
@@ -150,6 +158,6 @@ fn from_foreign_keep_alive_holds_owner() {
             dropped.load(Ordering::SeqCst),
             "owner not dropped after the last borrowing tensor was dropped"
         );
-        unsafe { stream.synchronize().expect("drain free") };
+        stream.synchronize().expect("drain free");
     });
 }

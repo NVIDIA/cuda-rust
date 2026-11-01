@@ -23,7 +23,7 @@
 
 use cuda_async::cuda_graph::CudaGraph;
 use cuda_async::device_operation::{DeviceOp, GraphNode};
-use cuda_core::{Device, Stream};
+use cuda_core::{Context, Stream};
 use cutile::api;
 use cutile::cuda_core::{f4e2m1fnx2, f8e4m3fn};
 use cutile::half::{bf16, f16};
@@ -1816,8 +1816,8 @@ fn time_graph(
     graph: &CudaGraph<()>,
     stream: &Arc<Stream>,
 ) -> Result<f64, Box<dyn std::error::Error>> {
-    let start = stream.device().new_event()?;
-    let stop = stream.device().new_event()?;
+    let start = stream.context().new_event()?;
+    let stop = stream.context().new_event()?;
     let timing = (|| -> Result<f64, Box<dyn std::error::Error>> {
         // SAFETY: the graph retains its buffers and remains alive throughout
         // these same-stream launches. The stream is drained below on success
@@ -1848,7 +1848,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
     println!("NVFP4 MoE batch-size benchmark");
     println!("H={HIDDEN}, I={INTERMEDIATE}, experts={NUM_EXPERTS}, top-k={TOP_K}, tile_n={TILE_N}");

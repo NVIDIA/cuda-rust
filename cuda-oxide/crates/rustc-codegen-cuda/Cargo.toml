@@ -1,6 +1,6 @@
 [package]
 name = "rustc_codegen_cuda"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 authors = ["Nihal Pasham <nihalp@nvidia.com>"]
 license = "Apache-2.0"

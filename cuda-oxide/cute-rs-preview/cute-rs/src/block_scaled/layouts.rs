@@ -6,7 +6,7 @@
 //! Value and scale coordinate layouts for block-scaled tensors.
 
 use crate::copy::tiled::SharedTensor;
-use crate::numeric::UE8M0x4;
+use crate::numeric::{E4M3x4, UE8M0x4};
 use core::marker::PhantomData;
 
 /// Rows whose K values are adjacent in memory.
@@ -166,6 +166,13 @@ impl Sm120ScaleAtom {
 /// TMA wrote the same bytes using `u16` storage boxes. `Role` keeps A and B
 /// scale blocks distinct.
 pub type SharedScaleAtom<Role> = SharedTensor<UE8M0x4, u32, Sm120ScaleAtom, Role>;
+
+/// A typed view of one Blackwell `Float8E4M3FN` (`SF_VEC = 16`) scale block in shared memory.
+///
+/// Each 512-byte atom holds 128 rows of four E4M3 scale bytes (`u32` per row),
+/// covering `K = 64` at `SF_VEC = 16`. `Role` keeps A (`Mkl`) and B (`Nkl`)
+/// scale blocks distinct.
+pub type SharedNvfp4ScaleAtom<Role> = SharedTensor<E4M3x4, u32, Sm120ScaleAtom, Role>;
 
 /// Blackwell's required memory layout for block scales.
 ///

@@ -49,8 +49,9 @@
 //! fn scale_kernel(factor: u32, input: &[u32], mut out: DisjointSlice<u32>) {
 //!     // 'factor' is the closure capture, passed as scalar argument
 //!     let idx = thread::index_1d();
+//!     let i = idx.get();
 //!     if let Some(slot) = out.get_mut(idx) {
-//!         *slot = input[idx.get()] * factor;
+//!         *slot = input[i] * factor;
 //!     }
 //! }
 //! ```
@@ -322,7 +323,7 @@ mod kernels {
 fn main() {
     println!("=== Unified Compilation: Closures ===\n");
 
-    use cuda_core::simt::LaunchConfig;
+    use cuda_core::LaunchConfig;
     use cuda_core::{CudaContext, DeviceBuffer};
 
     let ctx = CudaContext::new(0).expect("Failed to create CUDA context");

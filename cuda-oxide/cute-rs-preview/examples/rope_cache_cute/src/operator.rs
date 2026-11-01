@@ -4,7 +4,7 @@
  */
 //! Synchronous BF16 rotary composition with privately owned key/value caches.
 use crate::{kernel::kernels, rotary::HostTables};
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
 use cute_rs::{
     BFloat16,

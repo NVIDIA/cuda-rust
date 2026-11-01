@@ -71,7 +71,7 @@ pub use gemv::{
 };
 pub use layouts::{
     CANONICAL_SCALE_ATOM_BYTES, CANONICAL_SCALE_K_GROUPS, CANONICAL_SCALE_M, DenseBlockScaleKMajor,
-    KMajor, SharedScaleAtom, Sm1xxBlockScaleKMajor, Sm120ScaleAtom,
+    KMajor, SharedNvfp4ScaleAtom, SharedScaleAtom, Sm1xxBlockScaleKMajor, Sm120ScaleAtom,
 };
 pub use scales::{MmaScalePair, MmaScaleQuad, ScalePack4};
 pub use tensor::{BlockScaledTensor, Mxf4BlockScaledTensor, Nvfp4BlockScaledTensor};

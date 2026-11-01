@@ -3,7 +3,7 @@
 
 [package]
 name = "cuda-target-spec"
-version = "0.1.0"
+version = "0.3.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true

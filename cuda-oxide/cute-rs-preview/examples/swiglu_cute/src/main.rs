@@ -9,7 +9,7 @@
 
 use ctm_rs::memory::DisjointSlice;
 use ctm_rs::{cuda_module, kernel, thread};
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
 
 /// Empty inputs, sub-tile inputs, aligned FFN widths, and a partial final tile.
@@ -32,11 +32,11 @@ mod kernels {
     #[inline(always)]
     fn swiglu(gate: f32, up: f32) -> f32 {
         let sigmoid = if gate >= 0.0 {
-            let exponential = ctm_rs::float::ex2_approx_f32(-gate * core::f32::consts::LOG2_E);
-            ctm_rs::float::rcp_approx_ftz_f32(1.0 + exponential)
+            let exponential = cute_rs::arch::exp2_f32(-gate * core::f32::consts::LOG2_E);
+            cute_rs::arch::reciprocal_ftz_f32(1.0 + exponential)
         } else {
-            let exponential = ctm_rs::float::ex2_approx_f32(gate * core::f32::consts::LOG2_E);
-            exponential * ctm_rs::float::rcp_approx_ftz_f32(1.0 + exponential)
+            let exponential = cute_rs::arch::exp2_f32(gate * core::f32::consts::LOG2_E);
+            exponential * cute_rs::arch::reciprocal_ftz_f32(1.0 + exponential)
         };
         (gate * sigmoid) * up
     }

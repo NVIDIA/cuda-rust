@@ -37,7 +37,7 @@
 use cuda_async::cuda_graph::CudaGraph;
 use cuda_async::device_future::DeviceFuture;
 use cuda_async::device_operation::{BoxedDeviceOp, DeviceOp, ExecutionContext};
-use cuda_core::{Device, Stream};
+use cuda_core::{Context, Stream};
 use cutile::api;
 use cutile::core::f16;
 use cutile::tensor::{IntoPartition, Partition, Tensor};
@@ -200,11 +200,11 @@ fn bench_sync(
         graph.launch().sync_on(stream).expect("graph replay");
         spin_us(w_us);
     }
-    unsafe { stream.synchronize() }.expect("sync");
+    stream.synchronize().expect("sync");
 
     let mut throughput = Vec::with_capacity(n_samples);
     for _ in 0..n_samples {
-        unsafe { stream.synchronize() }.expect("sync");
+        stream.synchronize().expect("sync");
         let t0 = Instant::now();
         for _ in 0..iters {
             graph.launch().sync_on(stream).expect("graph replay");
@@ -252,11 +252,11 @@ fn bench_async(
         for _ in 0..n_warmup {
             one_iter!();
         }
-        unsafe { stream_clone.synchronize() }.expect("sync");
+        stream_clone.synchronize().expect("sync");
 
         let mut throughput = Vec::with_capacity(n_samples);
         for _ in 0..n_samples {
-            unsafe { stream_clone.synchronize() }.expect("sync");
+            stream_clone.synchronize().expect("sync");
             let t0 = Instant::now();
             for _ in 0..iters {
                 one_iter!();
@@ -308,7 +308,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or("results_part_b.csv")
         .to_string();
 
-    let device = Device::new(0).expect("device");
+    let device = Context::new(0).expect("device");
     let stream = device.new_stream().expect("stream");
 
     let d = D as usize;

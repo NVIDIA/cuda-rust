@@ -26,7 +26,7 @@
 //! Build and run with:
 //!   cargo oxide run dynamic_smem
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, DynamicSharedArray, gpu_printf, kernel, thread};
 use cuda_host::cuda_module;

@@ -361,10 +361,10 @@ fn main() {
     let mut times_ms = Vec::with_capacity(samples);
     for _ in 0..samples {
         let start = ctx
-            .new_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
+            .new_event_with_flags(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
             .expect("create start event");
         let end = ctx
-            .new_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
+            .new_event_with_flags(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
             .expect("create end event");
 
         start.record(&stream).expect("record start event");

@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+---
+name: Set up the CUDA devel container
+description: >-
+  Installs the host packages the nvidia/cuda devel image lacks, marks the
+  workspace safe for git, and installs rustup. Callers use the $/ form so
+  this runs before checkout and git is already installed. The image already
+  contains the CUDA toolkit. Later steps pick up rust-toolchain.toml from
+  their working directory.
+
+runs:
+  using: composite
+  steps:
+    - name: Install host packages
+      shell: bash
+      run: |
+        apt-get update -qq
+        # python3 is for sync-example-locks.sh. The image has neither git nor
+        # python3; git has to be present before actions/checkout.
+        apt-get install -y -qq --no-install-recommends \
+          build-essential ca-certificates curl git pkg-config libclang-dev \
+          python3 wget
+
+    - name: Mark the workspace as a safe git directory
+      shell: bash
+      run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+    - name: Install Rust
+      shell: bash
+      env:
+        RUSTUP_VERSION: "1.29.2"
+        # SHA-256 of rustup-init for x86_64-unknown-linux-gnu, published next to
+        # the binary as .../rustup/archive/1.29.2/x86_64-unknown-linux-gnu/rustup-init.sha256.
+        # Bump both values together.
+        RUSTUP_INIT_SHA256: "5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4"
+      run: |
+        set -euo pipefail
+        [ "$(uname -m)" = "x86_64" ] || { echo "the rustup-init pin is for x86_64"; exit 1; }
+        init="${RUNNER_TEMP}/rustup-init"
+        curl --proto '=https' --tlsv1.2 -sSfo "${init}" \
+          "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/x86_64-unknown-linux-gnu/rustup-init"
+        echo "${RUSTUP_INIT_SHA256}  ${init}" | sha256sum -c -
+        chmod +x "${init}"
+        "${init}" -y --no-modify-path --profile minimal --default-toolchain none
+        rm -f "${init}"
+        echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
+        # $/ runs this before the workspace checkout. The action download is
+        # the same commit, and rustup finds rust-toolchain.toml by walking up
+        # from the working directory. The root file is the stable pin;
+        # cuda-oxide/ selects the nightly.
+        repo="${GITHUB_ACTION_PATH}/../../.."
+        (cd "${repo}" && "${HOME}/.cargo/bin/rustup" show)
+        (cd "${repo}/cuda-oxide" && "${HOME}/.cargo/bin/rustup" show)

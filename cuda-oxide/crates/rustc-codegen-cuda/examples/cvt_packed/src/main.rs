@@ -31,7 +31,7 @@
 //!
 //! Run: cargo oxide run cvt_packed
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::convert::{
     cvt_f16x2_f32, cvt_f32_bf16x2_hi, cvt_f32_bf16x2_lo, cvt_f32_f16x2_hi, cvt_f32_f16x2_lo,

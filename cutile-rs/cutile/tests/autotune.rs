@@ -7,7 +7,7 @@
 
 #![cfg(feature = "experimental-tune")]
 
-use cuda_core::Device;
+use cuda_core::Context;
 use cutile::bench::BenchOptions;
 use cutile::prelude::*;
 use cutile::tune::{Autotuner, Config, ParamValue, TrialState};
@@ -29,7 +29,7 @@ fn quick_bench() -> BenchOptions {
 /// a winner produced, JSONL log written and resumable.
 #[test]
 fn end_to_end_grid_tune_on_gpu() {
-    let device = Device::new(0).expect("device 0");
+    let device = Context::new(0).expect("device 0");
     let stream = device.new_stream().expect("stream");
 
     let configs: Vec<Config> = [1usize << 16, 1 << 20, 0]
@@ -129,7 +129,7 @@ mod tune_test_module {
 fn record_end_to_end_with_real_l2_verification() {
     use cutile::tune::{Record, RecordEntry, Workspace};
 
-    let device = Device::new(0).expect("device 0");
+    let device = Context::new(0).expect("device 0");
     let stream = device.new_stream().expect("stream");
     let n: usize = 1 << 18;
 

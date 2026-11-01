@@ -22,7 +22,7 @@
 
 use ctm_rs::memory::DisjointSlice;
 use ctm_rs::{cuda_module, kernel, thread};
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 
 /// Deliberately not divisible by the tiles: f32 tail of 3, f16 tail of 5.

@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! BF16 grouped-query attention using parallel, stable 64-key reductions.
-use core::marker::PhantomData;
 use ctm_rs::{
     cuda_module, kernel, launch_bounds, launch_contract,
     memory::{DisjointSlice, DynamicSharedArray},
@@ -13,7 +12,7 @@ use cute_rs::arch::NamedBarrier;
 use cute_rs::markers::{C, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
 use cute_rs::static_layout::StaticLayout;
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
-use cute_rs::{BFloat16, GmemMatrix, RegisterTile, SmemTile, copy_g2s};
+use cute_rs::{BFloat16, GmemMatrix, RegisterTile, SmemTile, TiledCopy};
 
 /// Shared bytes for two 64-by-128 BF16 tiles and FP32 reduction state.
 pub const PARTIAL_SHARED_BYTES: u32 = 35_104;
@@ -28,17 +27,17 @@ type CopyLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<8, 128>>;
 type CopyThreads = Layout<(C<8>, C<16>), (C<16>, C<1>)>;
 /// Map each copy thread's eight contiguous BF16 carriers to a 16-byte transaction.
 type CopyValues = Layout<(C<1>, C<8>), (C<8>, C<1>)>;
+/// Cooperative global-to-shared copy plan for one 8-by-128 BF16 KV group.
+type KvTiledCopy = TiledCopy<CopyG2S<16>, CopyThreads, CopyValues, RowMajor<8, 128>>;
 /// Four neighboring threads own consecutive 32-coordinate pieces of a key row.
 type DotThreads = Layout<(C<4>, C<32>), (C<32>, C<128>)>;
 /// Each lane owns four adjacent numerator coordinates; warps own separate rows.
 type NumeratorThreads = Layout<(C<32>, C<4>), (C<4>, C<128>)>;
 
-/// BF16 storage carried unchanged by the existing typed integer copy primitive.
-///
-/// The private wrapper keeps the physical `u16` copy carrier separate from
-/// numeric BF16 values. No FP16 reinterpretation or numeric cast occurs.
+/// Typed shared-memory BF16 key or value tile in the 64x128 swizzled layout.
+#[derive(Clone, Copy)]
 struct Bf16KvTile(
-    #[doc = "Shared BF16 bit carriers in the typed 64×128 layout."] SmemTile<u16, KvLayout>,
+    #[doc = "Shared BF16 tile in the typed 64x128 swizzled layout."] SmemTile<BFloat16, KvLayout>,
 );
 
 /// Attention scale `1 / sqrt(128)` in base two for the exponential instruction.
@@ -58,17 +57,22 @@ fn maximum(a: f32, b: f32) -> f32 {
 }
 
 impl Bf16KvTile {
-    /// Wrap shared storage as a typed 64×128 BF16 tile without initializing it.
+    /// Wrap shared storage as a typed 64x128 BF16 tile without initializing it.
     ///
     /// # Safety
-    /// `base` supplies 8192 live, suitably aligned shared-memory `u16` elements.
+    /// `base` supplies 8192 live, suitably aligned shared-memory `BFloat16` elements.
     #[inline(always)]
-    unsafe fn new(base: *mut u16) -> Self {
-        Self(SmemTile {
-            base,
-            capacity: 8192,
-            layout: PhantomData,
-        })
+    unsafe fn new(base: *mut BFloat16) -> Self {
+        Self(unsafe { SmemTile::from_raw_parts(base, 8192) })
+    }
+
+    /// Return the adjacent 64x128 BF16 shared-memory tile immediately following `self`.
+    ///
+    /// # Safety
+    /// Shared memory must contain an additional 8192 `BFloat16` elements after `self`.
+    #[inline(always)]
+    unsafe fn next_tile(self) -> Self {
+        Self(unsafe { self.0.next_tile() })
     }
 
     /// Load `N` neighboring BF16 coordinates and widen them to FP32 registers.
@@ -78,7 +82,7 @@ impl Bf16KvTile {
     /// complete `column..column + N` interval must lie within 128 columns.
     #[inline(always)]
     unsafe fn row<const N: usize>(&self, row: usize, column: usize) -> RegisterTile<f32, N> {
-        unsafe { self.0.load::<N>(row, column) }.map(|bits| BFloat16::from_bits(bits).to_f32())
+        unsafe { self.0.load::<N>(row, column) }.map(BFloat16::to_f32)
     }
 }
 
@@ -96,29 +100,22 @@ unsafe fn stage(
     kv_heads: usize,
     visible: usize,
     split: usize,
-    destination: &Bf16KvTile,
+    destination: Bf16KvTile,
     tid: u32,
 ) {
-    // BFloat16 is repr(transparent) over u16. This cast changes only the copy
-    // carrier; loads later restore the BF16 type before numerical conversion.
     let source = GmemMatrix {
-        base: unsafe { source.as_ptr().add(head * 128) }.cast::<u16>(),
+        base: unsafe { source.as_ptr().add(head * 128) },
         rows: visible,
         cols: 128,
         leading_dim: LeadingDim::<8> {
             elements: kv_heads * 128,
         },
     };
+    let thr_copy = KvTiledCopy::new().get_slice(tid);
     static_for!(GROUP in [0, 1, 2, 3, 4, 5, 6, 7] {
-        let mut part = SmemTile::<u16, CopyLayout> {
-            base: unsafe { destination.0.base.add(GROUP * 1024) },
-            capacity: 1024,
-            layout: PhantomData,
-        };
         unsafe {
-            copy_g2s::<CopyG2S<16>, CopyThreads, CopyValues, RowMajor<8, 128>, CopyLayout, u16>(
-                &source, (split * 8 + GROUP, 0), &mut part, tid,
-            );
+            let mut part = destination.0.local_tile::<CopyLayout>(GROUP);
+            thr_copy.copy_g2s(&source, (split * 8 + GROUP, 0), &mut part);
         }
     });
 }
@@ -203,24 +200,20 @@ pub mod kernels {
                 return;
             }
 
-            let shared = DynamicSharedArray::<u16, 1024>::get_raw().cast::<u16>();
+            let shared = DynamicSharedArray::<u16, 1024>::get_raw().cast::<BFloat16>();
             let keys = Bf16KvTile::new(shared);
-            let values = Bf16KvTile::new(shared.add(8192));
-            let score_base = shared.add(16384).cast::<f32>();
-            let maximum_base = score_base.add(64);
-            let sum_base = maximum_base.add(4);
-            let warp_base = sum_base.add(4);
-            let mut score_output = StridedTensorMut::from_raw_parts(score_base, 64, 1);
-            let mut maximum_output = StridedTensorMut::from_raw_parts(maximum_base, 4, 1);
-            let mut sum_output = StridedTensorMut::from_raw_parts(sum_base, 4, 1);
-            let mut warp_output = StridedTensorMut::from_raw_parts(warp_base, 512, 1);
+            let values = keys.next_tile();
+            let (scores, mut score_output) = values.0.trailing_views::<f32>(0, 64);
+            let (maxima, mut maximum_output) = values.0.trailing_views::<f32>(64, 4);
+            let (sums, mut sum_output) = values.0.trailing_views::<f32>(68, 4);
+            let (warp_outputs, mut warp_output) = values.0.trailing_views::<f32>(72, 512);
             stage(
                 k,
                 kv_head,
                 kv_heads as usize,
                 visible,
                 split,
-                &keys,
+                keys,
                 tid as u32,
             );
             stage(
@@ -229,7 +222,7 @@ pub mod kernels {
                 kv_heads as usize,
                 visible,
                 split,
-                &values,
+                values,
                 tid as u32,
             );
             cute_rs::copy::cooperative::finish_async_copies::<1, 128>();
@@ -245,7 +238,7 @@ pub mod kernels {
                     .subview_unchecked(query_base + column, 32);
                 let dot = keys.0.row_view::<32>(row, column)
                     .zip_fold(query, 0.0_f32, |dot, key, query| {
-                        dot + query.to_f32() * BFloat16::from_bits(key).to_f32()
+                        dot + query.to_f32() * key.to_f32()
                     });
                 let dot = cute_rs::arch::quad_sum_f32(dot);
                 if tid.is_multiple_of(4) {
@@ -258,7 +251,6 @@ pub mod kernels {
             });
             NamedBarrier::<1, 128>::sync();
 
-            let scores = StridedTensor::from_raw_parts(score_base, 64, 1);
             let score = if tid < 64 {
                 scores.get_unchecked(tid)
             } else {
@@ -269,7 +261,6 @@ pub mod kernels {
                 maximum_output.store_at(warp_id, local_maximum);
             }
             NamedBarrier::<1, 128>::sync();
-            let maxima = StridedTensor::from_raw_parts(maximum_base, 4, 1);
             let maximum = maximum(
                 maximum(maxima.get_unchecked(0), maxima.get_unchecked(1)),
                 maximum(maxima.get_unchecked(2), maxima.get_unchecked(3)),
@@ -289,7 +280,6 @@ pub mod kernels {
                 sum_output.store_at(warp_id, local_sum);
             }
             NamedBarrier::<1, 128>::sync();
-            let sums = StridedTensor::from_raw_parts(sum_base, 4, 1);
 
             // A warp integrates 16 keys into four dimensions per lane.
             let mut numerator = RegisterTile::from_array([0.0f32; 4]);
@@ -304,7 +294,6 @@ pub mod kernels {
                 .subview_unchecked(warp_numerator_offset, 4)
                 .store(numerator);
             NamedBarrier::<1, 128>::sync();
-            let warp_outputs = StridedTensor::from_raw_parts(warp_base, 512, 1);
             if warp_id == 0 {
                 let mut total = RegisterTile::from_array([0.0_f32; 4]);
                 static_for!(WARP in [0, 1, 2, 3] {

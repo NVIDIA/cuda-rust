@@ -230,6 +230,36 @@ fn toolkit_root_of(tileiras: &Path) -> Option<PathBuf> {
     tileiras.parent()?.parent().map(PathBuf::from)
 }
 
+/// The toolkit root that the current environment resolves `tileiras` through,
+/// when `tileiras` is that resolved binary. `None` for a
+/// [`TILEIRAS_PATH_ENV`] override, a bare `PATH` lookup, or a binary from an
+/// earlier environment.
+fn toolkit_root_for(tileiras: &Path) -> Option<PathBuf> {
+    let (binary, toolkit) = tileiras_and_toolkit();
+    if binary == tileiras {
+        toolkit
+    } else {
+        None
+    }
+}
+
+/// A `tileiras` command that compiles against the toolkit it came from.
+///
+/// `tileiras` loads libNVVM and `ptxas` through `CUDA_HOME` / `CUDA_PATH`, not
+/// `CUDA_TOOLKIT_PATH`. With `CUDA_TOOLKIT_PATH` naming one release and an
+/// inherited `CUDA_HOME` another, it would run against a mismatched libNVVM,
+/// which can abort in LLVM's verifier. So a binary found through a toolkit
+/// root runs with `CUDA_HOME` set to that root and `CUDA_PATH` removed. Other
+/// binaries keep the inherited environment: which toolkit they belong to is
+/// not known here.
+fn tileiras_command(tileiras: &Path, toolkit: Option<&Path>) -> Command {
+    let mut command = Command::new(tileiras);
+    if let Some(root) = toolkit {
+        command.env(CUDA_HOME_ENV, root).env_remove("CUDA_PATH");
+    }
+    command
+}
+
 /// Test-only helper that returns just the resolved `tileiras` path.
 #[cfg(test)]
 fn resolve_tileiras_binary_with_candidates(
@@ -727,7 +757,11 @@ fn run_tileiras_at(
         args.push("--sanitize=memcheck");
     }
     args.extend(["-o", &cubin_filename, &bc_filename]);
-    let output = match Command::new(tileiras).args(&args).output() {
+    let toolkit = toolkit_root_for(tileiras);
+    let output = match tileiras_command(tileiras, toolkit.as_deref())
+        .args(&args)
+        .output()
+    {
         Ok(output) => output,
         Err(e) => {
             // The message names the bytecode, so it has to outlive this call.
@@ -1508,6 +1542,68 @@ mod tests {
         let _ = fs::remove_file(args_path);
         let _ = fs::remove_file(fake_tileiras);
         let _ = fs::remove_dir(temp_dir);
+    }
+
+    #[test]
+    fn tileiras_command_sets_cuda_home_only_for_a_toolkit_binary() {
+        let root = Path::new("/opt/cuda-toolkit");
+        let command = tileiras_command(&root.join("bin/tileiras"), Some(root));
+        let envs: HashMap<_, _> = command.get_envs().collect();
+        assert_eq!(envs.len(), 2);
+        assert_eq!(
+            envs[std::ffi::OsStr::new(CUDA_HOME_ENV)],
+            Some(root.as_os_str())
+        );
+        assert_eq!(envs[std::ffi::OsStr::new("CUDA_PATH")], None);
+
+        let command = tileiras_command(Path::new("/elsewhere/tileiras"), None);
+        assert_eq!(command.get_envs().count(), 0);
+    }
+
+    /// A `tileiras` resolved through `CUDA_TOOLKIT_PATH` compiles with
+    /// `CUDA_HOME` naming that toolkit even when the caller's `CUDA_HOME` and
+    /// `CUDA_PATH` name another; an explicit override keeps the caller's.
+    #[test]
+    #[cfg(unix)]
+    fn toolkit_tileiras_compiles_against_its_own_toolkit() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        let temp_dir = env::temp_dir().join(format!("cutile_tileiras_home_{}", Uuid::new_v4()));
+        let toolkit = temp_dir.join("toolkit");
+        let other = temp_dir.join("other");
+        fs::create_dir_all(&other).unwrap();
+        let tileiras = create_fake_cuda_toolkit(&toolkit, 13040, true);
+        write_fake_tileiras_script(
+            &tileiras,
+            r#"case "$1" in --list-versions) printf '13.2\n13.3\n13.4\n'; exit 0;; --version) echo fake; exit 0;; esac
+out=""
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-o" ]; then shift; out="$1"; fi
+    shift || break
+done
+printf '%s|%s\n' "${CUDA_HOME-unset}" "${CUDA_PATH-unset}" > "$out"
+"#,
+        );
+        let _bytecode = EnvVarGuard::unset(BYTECODE_VERSION_ENV);
+        let _override = EnvVarGuard::unset(TILEIRAS_PATH_ENV);
+        let _toolkit_path = EnvVarGuard::set(CUDA_TOOLKIT_PATH_ENV, &toolkit);
+        let _home = EnvVarGuard::set(CUDA_HOME_ENV, &other);
+        let _cuda_path = EnvVarGuard::set("CUDA_PATH", &other);
+
+        let module = empty_kernel_module();
+        let cubin = compile_tile_ir_module(&module, "sm_120").unwrap();
+        assert_eq!(
+            String::from_utf8(cubin).unwrap(),
+            format!("{}|unset\n", toolkit.display())
+        );
+
+        let _override = EnvVarGuard::set(TILEIRAS_PATH_ENV, &tileiras);
+        let cubin = compile_tile_ir_module(&module, "sm_120").unwrap();
+        assert_eq!(
+            String::from_utf8(cubin).unwrap(),
+            format!("{}|{}\n", other.display(), other.display())
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     /// End-to-end cache path with a fake `tileiras`: the first compile spawns

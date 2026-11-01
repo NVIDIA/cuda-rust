@@ -80,6 +80,7 @@ grid `(8, 1, 1)`: 1024÷128 = 8 tiles.
 
 - **Rust:** stable 1.89+ (no nightly required).
 - **Linux:** tested on Ubuntu 24.04.
+- **Windows:** Windows is not currently covered by CI. Use the MSVC Rust toolchain; (see [Windows setup](#windows-setup)).
 
 GPU and emitted Tile IR requirements for cuTile Rust:
 
@@ -157,6 +158,32 @@ Example `.cargo/config.toml`:
 ```toml
 [env]
 CUDA_TOOLKIT_PATH = { value = "/usr/local/cuda-13", relative = false }
+```
+
+#### Windows setup
+
+Install Visual Studio Build Tools with the **Desktop development with C++**
+workload (including the MSVC toolchain). Install Rust using
+[rustup's Windows installer](https://rustup.rs/) and select the MSVC toolchain
+(`x86_64-pc-windows-msvc`).
+
+Install LLVM for Windows with `winget install LLVM.LLVM` so bindgen can find
+its `libclang` shared library. Set `LIBCLANG_PATH` if the library is not on
+`PATH`.
+
+```powershell
+rustup toolchain install stable-x86_64-pc-windows-msvc
+rustup default stable-x86_64-pc-windows-msvc
+```
+
+The Windows GNU toolchain is not recommended. GNU ld's `--gc-sections` can
+discard the `linkme` entries that cuTile uses to register modules. If you need
+to try GNU, add this target-specific workaround to
+`cutile-rs/.cargo/config.toml`:
+
+```toml
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "link-arg=-Wl,--no-gc-sections"]
 ```
 
 ### Verifying Installation

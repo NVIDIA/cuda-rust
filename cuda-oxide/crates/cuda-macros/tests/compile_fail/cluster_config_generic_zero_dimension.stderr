@@ -1,0 +1,24 @@
+error[E0080]: evaluation panicked: cluster dimensions must be greater than zero
+ --> $RUST/core/src/panic.rs
+  |
+  |           $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `cuda_device::cluster::__cluster_config::<0, 1, 1>::{constant#0}` failed here
+  |
+ ::: $WORKSPACE/cuda-oxide/crates/cuda-device/src/cluster.rs
+  |
+  | /         assert!(
+  | |             X > 0 && Y > 0 && Z > 0,
+  | |             "cluster dimensions must be greater than zero",
+  | |         );
+  | |_________- in this macro invocation
+
+note: erroneous constant encountered
+ --> $WORKSPACE/cuda-oxide/crates/cuda-device/src/cluster.rs
+  |
+  | /     const {
+  | |         assert!(
+  | |             X > 0 && Y > 0 && Z > 0,
+  | |             "cluster dimensions must be greater than zero",
+  | |         );
+  | |     }
+  | |____^

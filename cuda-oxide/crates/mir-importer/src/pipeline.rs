@@ -42,7 +42,7 @@ use cuda_oxide_codegen::__private::{
     PipelineTrace, append_to_module, compile_translated_module, verify_operation,
 };
 pub use cuda_oxide_codegen::__private::{
-    DeviceArchHint, DeviceExternAttrs, DeviceExternDecl, PipelineError,
+    DeviceArchHint, DeviceExternAttrs, DeviceExternDecl, HintLocation, HintWarning, PipelineError,
 };
 use llvm_export::export::DebugKind;
 pub use llvm_export::export::DeviceExternType;
@@ -181,6 +181,9 @@ pub struct CompilationResult {
     pub allow_fma_contraction: bool,
     /// Per-kernel source launch bounds preserved for post-link diagnostics.
     pub kernel_launch_bounds: BTreeMap<String, KernelLaunchBounds>,
+    /// Loop annotations that could not be honoured, for the frontend to report
+    /// as compiler warnings.
+    pub warnings: Vec<HintWarning>,
 }
 
 /// Configuration for the compilation pipeline.
@@ -657,6 +660,7 @@ pub fn run_pipeline(
                 target: generated.target,
                 allow_fma_contraction: config.allow_fma_contraction,
                 kernel_launch_bounds,
+                warnings: generated.warnings,
             })
         }
         ModuleArtifactKind::Ptx => Ok(CompilationResult {
@@ -667,6 +671,7 @@ pub fn run_pipeline(
             target: generated.target,
             allow_fma_contraction: config.allow_fma_contraction,
             kernel_launch_bounds,
+            warnings: generated.warnings,
         }),
         ModuleArtifactKind::Cubin => Ok(CompilationResult {
             artifact_path: cubin_path,
@@ -676,6 +681,7 @@ pub fn run_pipeline(
             target: generated.target,
             allow_fma_contraction: config.allow_fma_contraction,
             kernel_launch_bounds,
+            warnings: generated.warnings,
         }),
     }
 }

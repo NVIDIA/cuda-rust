@@ -2272,6 +2272,22 @@ run_cargo() {
             CARGO_EC=1
         fi
     fi
+    # Loop-hint warnings are rustc diagnostics, so cargo counts every one of
+    # them. A warning printed around rustc leaves no summary to count it.
+    # unroll_smoke exists to produce them, so it may not come back empty.
+    if [[ ${CARGO_EC} -eq 0 ]]; then
+        local hint_warnings counted_warnings
+        hint_warnings=$(grep -cE '^warning: .* requested but the loop (was not unrolled|may still be unrolled)' "${log}" || true)
+        counted_warnings=$(grep -oE 'generated [0-9]+ warnings?' "${log}" | awk '{ sum += $2 } END { print sum + 0 }')
+        if [[ "${ex}" == "unroll_smoke" && ${hint_warnings} -eq 0 ]]; then
+            printf '%s produced no loop-hint warnings\n' "${ex}" >>"${log}"
+            CARGO_EC=1
+        elif [[ ${counted_warnings} -lt ${hint_warnings} ]]; then
+            printf '%s printed %d loop-hint warnings but cargo counted %d warnings\n' \
+                "${ex}" "${hint_warnings}" "${counted_warnings}" >>"${log}"
+            CARGO_EC=1
+        fi
+    fi
     if [[ ${CARGO_EC} -eq 0 && ${COMPILE_ONLY} -eq 1 && "${ex}" == "helper_fn" ]]; then
         local ptx="crates/rustc-codegen-cuda/examples/${ex}/${ex}.ptx"
         local llvm="crates/rustc-codegen-cuda/examples/${ex}/${ex}.ll"

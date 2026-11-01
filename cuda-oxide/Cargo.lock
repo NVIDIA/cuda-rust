@@ -222,7 +222,7 @@ dependencies = [
  "cuda-artifact-finalizer",
  "libnvvm-sys",
  "nvjitlink-sys",
- "oxide-artifacts 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oxide-artifacts 0.2.1",
  "oxide-tile-export",
  "oxide-tilebc",
  "ptx-parse",
@@ -430,7 +430,7 @@ dependencies = [
  "cuda-core-derive",
  "cuda-repr",
  "half",
- "oxide-artifacts 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oxide-artifacts 0.2.1",
 ]
 
 [[package]]
@@ -464,7 +464,7 @@ dependencies = [
  "half",
  "libc",
  "libloading",
- "oxide-artifacts 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oxide-artifacts 0.2.1",
  "ptx-parse",
  "sha2",
  "thiserror 2.0.21",
@@ -1058,7 +1058,7 @@ dependencies = [
  "llvm-export",
  "mir-lower",
  "once_cell",
- "oxide-artifacts 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oxide-artifacts 0.2.1",
  "pliron",
  "pliron-derive",
  "reserved-oxide-symbols",
@@ -1153,15 +1153,15 @@ checksum = "0b61fbf7ec37342ce171d9f5e3b82be74bda6c4e84e3b28338a03d553913e6aa"
 [[package]]
 name = "oxide-artifacts"
 version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74d9a941c0c43d2dceaf25f5c9ca4c9f9cceb28dfa5e4e3cfd14e476f003e7c9"
 dependencies = [
  "object",
 ]
 
 [[package]]
 name = "oxide-artifacts"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74d9a941c0c43d2dceaf25f5c9ca4c9f9cceb28dfa5e4e3cfd14e476f003e7c9"
+version = "0.2.2"
 dependencies = [
  "object",
 ]
@@ -1296,7 +1296,7 @@ version = "0.3.0"
 dependencies = [
  "clap",
  "dialect-ptx",
- "oxide-artifacts 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oxide-artifacts 0.2.1",
  "ptx-parse",
  "serde",
  "serde_json",

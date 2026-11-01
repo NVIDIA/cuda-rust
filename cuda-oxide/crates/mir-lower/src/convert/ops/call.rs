@@ -81,7 +81,7 @@ use llvm_export::types::PointerTypeExt;
 use pliron::builtin::attributes::IntegerAttr;
 use pliron::builtin::op_interfaces::{CallOpCallable, SymbolOpInterface};
 use pliron::builtin::type_interfaces::FunctionTypeInterface;
-use pliron::builtin::types::{IntegerType, Signedness};
+use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
 use pliron::irbuild::dialect_conversion::{DialectConversionRewriter, OperandsInfo};
 use pliron::irbuild::inserter::Inserter;
@@ -167,6 +167,21 @@ impl RustExactDivIntrinsic {
     }
 }
 
+/// Internal placeholder for `core::intrinsics::float_to_int_unchecked`.
+///
+/// The caller has promised the value is finite and fits the destination type
+/// once truncated, so this lowers to a plain `fptosi`/`fptoui` with none of
+/// the clamping of the saturating `as` cast.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RustFloatToIntUncheckedIntrinsic;
+
+impl RustFloatToIntUncheckedIntrinsic {
+    /// Convert an importer placeholder name back into the intrinsic it represents.
+    fn from_placeholder_callee(callee: &str) -> Option<Self> {
+        (callee == rust_intrinsics::CALLEE_FLOAT_TO_INT_UNCHECKED).then_some(Self)
+    }
+}
+
 /// Internal placeholder for rustc bigint helper intrinsics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RustBigIntIntrinsic {
@@ -231,6 +246,10 @@ pub fn convert(
 
     if RustExactDivIntrinsic::from_placeholder_callee(&callee_name).is_some() {
         return convert_rust_exact_div(ctx, rewriter, op, operands_info);
+    }
+
+    if RustFloatToIntUncheckedIntrinsic::from_placeholder_callee(&callee_name).is_some() {
+        return convert_rust_float_to_int_unchecked(ctx, rewriter, op);
     }
 
     if let Some(RustBigIntIntrinsic::CarryingMulAdd) =
@@ -711,6 +730,73 @@ fn convert_rust_exact_div(
         llvm::SDivOp::new(ctx, dividend, divisor).get_operation()
     } else {
         llvm::UDivOp::new(ctx, dividend, divisor).get_operation()
+    };
+    rewriter.insert_operation(ctx, llvm_op);
+    rewriter.replace_operation(ctx, op, llvm_op);
+    Ok(())
+}
+
+/// Convert `core::intrinsics::float_to_int_unchecked` to `llvm.fptosi` or
+/// `llvm.fptoui`.
+///
+/// The intrinsic's contract is that the value is not NaN or infinite and fits
+/// the destination type once truncated toward zero; violating it is undefined
+/// behaviour. That is exactly the contract of a bare LLVM `fptosi`/`fptoui`,
+/// so none of the clamping or NaN handling of the saturating `as` cast
+/// (`llvm.fptosi.sat`/`llvm.fptoui.sat`, see `cast.rs`) is emitted.
+///
+/// Signedness comes from the MIR result type, the same source the saturating
+/// cast uses, because the LLVM integer type is signless. Sources and
+/// destinations are limited to what that cast supports on every backend:
+/// `f32`/`f64` into integers of at most 64 bits.
+fn convert_rust_float_to_int_unchecked(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+) -> Result<()> {
+    let loc = op.deref(ctx).loc().clone();
+    if op.deref(ctx).get_num_results() != 1 {
+        return pliron::input_err!(loc, "float_to_int_unchecked call must have one result");
+    }
+
+    let args: Vec<Value> = op.deref(ctx).operands().collect();
+    let [value] = args[..] else {
+        return pliron::input_err!(loc, "float_to_int_unchecked requires one operand");
+    };
+
+    let is_supported_source = {
+        let source_ty = value.get_type(ctx);
+        let source_ref = source_ty.deref(ctx);
+        source_ref.is::<FP32Type>() || source_ref.is::<FP64Type>()
+    };
+    if !is_supported_source {
+        return pliron::input_err!(
+            loc,
+            "float_to_int_unchecked: only f32 and f64 sources are supported on the device"
+        );
+    }
+
+    let result_mir_ty = op.deref(ctx).get_result(0).get_type(ctx);
+    let (is_signed, width) = {
+        let result_ref = result_mir_ty.deref(ctx);
+        let Some(int_ty) = result_ref.downcast_ref::<IntegerType>() else {
+            return pliron::input_err!(loc, "float_to_int_unchecked requires an integer result");
+        };
+        // Signless lowers as unsigned, matching the saturating cast.
+        (int_ty.signedness() == Signedness::Signed, int_ty.width())
+    };
+    if width > 64 {
+        return pliron::input_err!(
+            loc,
+            "float_to_int_unchecked: integer destinations wider than 64 bits are not yet supported on the device"
+        );
+    }
+
+    let result_ty = convert_type(ctx, result_mir_ty).map_err(anyhow_to_pliron)?;
+    let llvm_op = if is_signed {
+        llvm::FPToSIOp::new(ctx, value, result_ty).get_operation()
+    } else {
+        llvm::FPToUIOp::new(ctx, value, result_ty).get_operation()
     };
     rewriter.insert_operation(ctx, llvm_op);
     rewriter.replace_operation(ctx, op, llvm_op);
@@ -1474,6 +1560,30 @@ mod tests {
             assert!(
                 RustExactDivIntrinsic::from_placeholder_callee(other).is_none(),
                 "`{other}` must not be treated as exact_div"
+            );
+        }
+    }
+
+    /// The `float_to_int_unchecked` placeholder is recognized, and nothing
+    /// else is.
+    #[test]
+    fn test_float_to_int_unchecked_placeholder_round_trip() {
+        assert!(
+            RustFloatToIntUncheckedIntrinsic::from_placeholder_callee(
+                rust_intrinsics::CALLEE_FLOAT_TO_INT_UNCHECKED
+            )
+            .is_some()
+        );
+
+        for other in [
+            rust_intrinsics::CALLEE_EXACT_DIV,
+            rust_intrinsics::CALLEE_SATURATING_ADD,
+            rust_intrinsics::CALLEE_TRUNC_F32,
+            "core::intrinsics::float_to_int_unchecked",
+        ] {
+            assert!(
+                RustFloatToIntUncheckedIntrinsic::from_placeholder_callee(other).is_none(),
+                "`{other}` must not be treated as float_to_int_unchecked"
             );
         }
     }

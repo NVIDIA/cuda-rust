@@ -3038,3 +3038,119 @@ fn test_scalar_arithmetic_libnvvm_uses_exact_inline_ptx() -> Result<(), anyhow::
     );
     Ok(())
 }
+
+/// Append a `float_to_int_unchecked` placeholder call to `block`.
+fn append_float_to_int_unchecked_call(
+    ctx: &mut Context,
+    block: pliron::context::Ptr<pliron::basic_block::BasicBlock>,
+    value: pliron::value::Value,
+    result_ty: pliron::r#type::TypeHandle,
+) {
+    use pliron::builtin::attributes::StringAttr;
+
+    let call_ptr = Operation::new(
+        ctx,
+        mir::MirCallOp::get_concrete_op_info(),
+        vec![result_ty],
+        vec![value],
+        vec![],
+        0,
+    );
+    mir::MirCallOp::new(call_ptr).set_attr_callee(
+        ctx,
+        StringAttr::new(dialect_mir::rust_intrinsics::CALLEE_FLOAT_TO_INT_UNCHECKED.to_string()),
+    );
+    call_ptr.insert_at_back(block, ctx);
+}
+
+/// `float_to_int_unchecked` lowers to a bare `fptosi`/`fptoui`, picked from
+/// the destination's signedness, on both intrinsic backends. No saturating
+/// `llvm.fpto*i.sat` call (the `as` cast lowering) and no placeholder call
+/// may survive.
+#[test]
+fn test_float_to_int_unchecked_lowers_to_plain_fptosi_fptoui() -> Result<(), anyhow::Error> {
+    use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
+    use pliron::r#type::{TypeHandle, Typed};
+
+    for backend in [
+        mir_lower::IntrinsicBackend::LlvmNvptx,
+        mir_lower::IntrinsicBackend::LibNvvm,
+    ] {
+        let mut ctx = make_test_ctx();
+        let f32_ty: TypeHandle = FP32Type::get(&ctx).into();
+        let f64_ty: TypeHandle = FP64Type::get(&ctx).into();
+        let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![f32_ty, f64_ty]);
+        let f32_value = entry.deref(&ctx).get_argument(0);
+        let f64_value = entry.deref(&ctx).get_argument(1);
+
+        for (value, width, signedness) in [
+            (f32_value, 32, Signedness::Signed),
+            (f32_value, 32, Signedness::Unsigned),
+            (f64_value, 64, Signedness::Signed),
+            (f64_value, 64, Signedness::Unsigned),
+        ] {
+            let result_ty: TypeHandle = IntegerType::get(&ctx, width, signedness).into();
+            append_float_to_int_unchecked_call(&mut ctx, entry, value, result_ty);
+        }
+        append_return(&mut ctx, entry);
+
+        mir_lower::lower_mir_to_llvm_with_options(
+            &mut ctx,
+            module_ptr,
+            mir_lower::LoweringOptions {
+                intrinsic_backend: backend,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+        let result_width = |op: pliron::context::Ptr<Operation>| {
+            let ty = op.deref(&ctx).get_result(0).get_type(&ctx);
+            ty.deref(&ctx)
+                .downcast_ref::<IntegerType>()
+                .map(|int_ty| int_ty.width())
+        };
+        let mut signed_widths = Vec::new();
+        let mut unsigned_widths = Vec::new();
+        for op in lowered_kernel_body(&ctx, module_ptr) {
+            assert!(
+                Operation::get_op::<mir::MirCallOp>(op, &ctx).is_none(),
+                "float_to_int_unchecked placeholder mir.call must not survive MIR lowering"
+            );
+            assert!(
+                Operation::get_op::<llvm::CallOp>(op, &ctx).is_none(),
+                "float_to_int_unchecked must not lower to a call (saturating or placeholder)"
+            );
+            if Operation::get_op::<llvm::FPToSIOp>(op, &ctx).is_some() {
+                signed_widths.push(result_width(op));
+            }
+            if Operation::get_op::<llvm::FPToUIOp>(op, &ctx).is_some() {
+                unsigned_widths.push(result_width(op));
+            }
+        }
+        assert_eq!(signed_widths, [Some(32), Some(64)], "{backend:?}");
+        assert_eq!(unsigned_widths, [Some(32), Some(64)], "{backend:?}");
+    }
+    Ok(())
+}
+
+/// Destinations wider than 64 bits fail with a clear error, as the
+/// saturating `as` cast does, rather than reaching the backend.
+#[test]
+fn test_float_to_int_unchecked_rejects_wide_destination() {
+    use pliron::builtin::types::{FP32Type, IntegerType, Signedness};
+    use pliron::r#type::TypeHandle;
+
+    let mut ctx = make_test_ctx();
+    let f32_ty: TypeHandle = FP32Type::get(&ctx).into();
+    let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![f32_ty]);
+    let value = entry.deref(&ctx).get_argument(0);
+    let i128_ty: TypeHandle = IntegerType::get(&ctx, 128, Signedness::Signed).into();
+    append_float_to_int_unchecked_call(&mut ctx, entry, value, i128_ty);
+    append_return(&mut ctx, entry);
+
+    let error = mir_lower::lower_mir_to_llvm(&mut ctx, module_ptr)
+        .expect_err("a 128-bit float_to_int_unchecked destination must not lower")
+        .to_string();
+    assert!(error.contains("wider than 64 bits"), "{error}");
+}

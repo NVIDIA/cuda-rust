@@ -12,8 +12,14 @@
 /// when they require a valid in-bounds index.
 #[derive(Clone, Copy, Debug)]
 pub struct ArgMax {
+    /// Best finite candidate value observed so far (`-inf` before any observation).
+    /// Compared against incoming candidates to pick the maximum.
     value: f32,
+    /// Zero-based coordinate of [`Self::value`] (`u32::MAX` when empty).
+    /// On a tie between equal values, the smaller index wins.
     index: u32,
+    /// `true` while every observed input was finite (not `NaN` or infinite).
+    /// Sticky `false` once any non-finite input is observed or merged.
     valid: bool,
 }
 

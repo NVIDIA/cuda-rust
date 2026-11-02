@@ -113,13 +113,11 @@ pub const fn sm120_epilogue_atom_origin(
 /// Expected inputs are `row` in `0..128` and `col` in `0..128`.
 #[must_use]
 pub const fn sm120_epilogue_physical_offset(row: usize, col: usize) -> usize {
-    let half = col / SM120_EPILOGUE_HALF_COLS;
-    let local_col = col % SM120_EPILOGUE_HALF_COLS;
-    let logical = row * SM120_EPILOGUE_HALF_COLS + local_col;
-    // S<3,3,3> changes address bits 3..5 using bits 6..8. It leaves bits
-    // 0..2 unchanged, so each 8-f16 (16-byte) stmatrix chunk stays together.
-    let swizzled = logical ^ ((logical & (0b111 << 6)) >> 3);
-    half * SM120_EPILOGUE_HALF_ELEMENTS + swizzled
+    let (local_col, half) =
+        cute_layout::idx2crd_col_major_2d(col as u32, SM120_EPILOGUE_HALF_COLS as u32);
+    let swizzled =
+        crate::static_layout::crd2idx_2d::<Sm120EpilogueHalfLayout>(row, local_col as usize);
+    (half as usize) * SM120_EPILOGUE_HALF_ELEMENTS + swizzled
 }
 
 /// A typed view of the 32 KiB shared result buffer.

@@ -37,8 +37,9 @@ pub mod kernels {
         if row >= rows || k >= in_group * k_steps {
             return 0;
         }
-        let channel = k / k_steps;
-        let tap = k % k_steps;
+        let (ch_u32, tap_u32) = cute_rs::idx2crd_row_major_2d(k as u32, k_steps as u32);
+        let channel = ch_u32 as usize;
+        let tap = tap_u32 as usize;
         if transpose && phase + tap * step >= kernel {
             return 0;
         }
@@ -50,11 +51,9 @@ pub mod kernels {
         if row < delay {
             0
         } else {
-            unsafe {
-                StridedTensor::from_slice(input)
-                    .get_unchecked((row - delay) * inputs + group * in_group + channel)
-            }
-            .to_bits()
+            let group_ch = cute_rs::crd2idx_row_major_2d(group, channel, in_group);
+            let idx = cute_rs::crd2idx_row_major_2d(row - delay, group_ch, inputs);
+            unsafe { StridedTensor::from_slice(input).get_unchecked(idx) }.to_bits()
         }
     }
     /// Read one BF16 weight for a logical im2col reduction coordinate.
@@ -80,16 +79,19 @@ pub mod kernels {
         if column >= out_group || k >= in_group * k_steps {
             return 0;
         }
-        let channel = k / k_steps;
-        let tap = k % k_steps;
+        let (ch_u32, tap_u32) = cute_rs::idx2crd_row_major_2d(k as u32, k_steps as u32);
+        let channel = ch_u32 as usize;
+        let tap = tap_u32 as usize;
         let index = if transpose {
             let physical_tap = phase + tap * step;
             if physical_tap >= kernel {
                 return 0;
             }
-            ((group * in_group + channel) * out_group + column) * kernel + physical_tap
+            let group_ch = cute_rs::crd2idx_row_major_2d(group, channel, in_group);
+            cute_rs::crd2idx_row_major_3d(group_ch, column, physical_tap, out_group, kernel)
         } else {
-            ((group * out_group + column) * in_group + channel) * kernel + tap
+            let group_col = cute_rs::crd2idx_row_major_2d(group, column, out_group);
+            cute_rs::crd2idx_row_major_3d(group_col, channel, tap, in_group, kernel)
         };
         unsafe { StridedTensor::from_slice(weight).get_unchecked(index) }.to_bits()
     }
@@ -123,15 +125,19 @@ pub mod kernels {
             // single channel into a tensor-core tile would add needless work.
             let index = thread::index_1d().get();
             if index < rows * outputs {
-                let row = index / outputs;
-                let channel = index % outputs;
+                let (row_u32, ch_u32) = cute_rs::idx2crd_row_major_2d(index as u32, outputs as u32);
+                let row = row_u32 as usize;
+                let channel = ch_u32 as usize;
                 // One row view contains the ordered tap reduction. Tensor
                 // indexing describes convolution coordinates; no temporary
                 // im2col buffer or reassociated sum is introduced.
                 let input = StridedTensor::from_slice(input);
                 // SAFETY: the depthwise channel selects a complete tap row.
                 let weight = unsafe {
-                    StridedTensor::from_slice(weight).subview_unchecked(channel * kernel, kernel)
+                    StridedTensor::from_slice(weight).subview_unchecked(
+                        cute_rs::crd2idx_row_major_2d(channel, 0, kernel),
+                        kernel,
+                    )
                 };
                 let mut tap = 0;
                 let mut sum = weight.fold(0.0_f32, |sum, weight| {
@@ -140,9 +146,8 @@ pub mod kernels {
                     if row >= delay {
                         // SAFETY: the delay predicate bounds the input row;
                         // channel is inside the depthwise input width.
-                        sum + unsafe { input.get_unchecked((row - delay) * inputs + channel) }
-                            .to_f32()
-                            * weight.to_f32()
+                        let idx = cute_rs::crd2idx_row_major_2d(row - delay, channel, inputs);
+                        sum + unsafe { input.get_unchecked(idx) }.to_f32() * weight.to_f32()
                     } else {
                         sum
                     }

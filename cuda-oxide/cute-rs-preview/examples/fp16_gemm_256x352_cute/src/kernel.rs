@@ -32,7 +32,8 @@ use cute_rs::tensor::partition::StridedTensor;
 use cute_rs::{
     ComposedLayout, OperandA, OperandB, PipelineTmaUmma, PipelineUmmaAsync, RowMajor,
     Sm100ClusterTmaCopy, Sm100DeallocBarrier, Sm100SharedTile, Sm100TiledMma, Sm100Tmem,
-    Sm100TmemEpilogue, Swizzle, TensorMap,
+    Sm100TmemEpilogue, Swizzle, TensorMap, crd2idx_col_major_2d, crd2idx_col_major_3d,
+    idx2crd_col_major_2d, size_in_bytes,
 };
 
 // These element layouts also encode the host TMA descriptors. FP16 shifts
@@ -50,25 +51,34 @@ pub type CSmem = ComposedLayout<Swizzle<2, 3, 3>, 0, RowMajor<128, 32>>;
 pub const THREADS: u32 = 192;
 /// Number of A/B shared-memory stages overlapped by TMA and MMA.
 const STAGES: usize = 5;
-/// Shared bytes occupied by one CTA's A stage.
-const A_BYTES: usize = 128 * 64 * 2;
+/// Shared bytes occupied by one CTA's A stage, derived from [`ASmem`] via [`size_in_bytes`].
+const A_BYTES: usize = size_in_bytes::<f16, ASmem>() as usize;
+/// Shared bytes occupied by one CTA's B0 partition, derived from [`B0Smem`] via [`size_in_bytes`].
+const B0_BYTES: usize = size_in_bytes::<f16, B0Smem>() as usize;
+/// Shared bytes occupied by one CTA's B1 partition, derived from [`B1Smem`] via [`size_in_bytes`].
+const B1_BYTES: usize = size_in_bytes::<f16, B1Smem>() as usize;
 /// Shared bytes occupied by both B partitions in one CTA stage.
-const B_BYTES: usize = 176 * 64 * 2;
+const B_BYTES: usize = B0_BYTES + B1_BYTES;
 /// Byte offset of the staged B ring after all staged A tiles.
 const B_OFFSET: usize = A_BYTES * STAGES;
 /// Byte offset of the two shared output stages after the A/B rings.
 const C_OFFSET: usize = B_OFFSET + B_BYTES * STAGES;
-/// Shared bytes occupied by one FP16 output stage.
-const C_STAGE_BYTES: usize = 128 * 32 * 2;
+/// Shared bytes occupied by one FP16 output stage, derived from [`CSmem`] via [`size_in_bytes`].
+const C_STAGE_BYTES: usize = size_in_bytes::<f16, CSmem>() as usize;
 /// Byte offset of load, accumulator, and deallocation barriers after output storage.
 const BARRIER_OFFSET: usize = C_OFFSET + 2 * C_STAGE_BYTES;
 /// Total dynamic shared-memory allocation in bytes required per CTA.
 pub const DYNAMIC_SMEM_BYTES: usize = BARRIER_OFFSET + 128;
+/// Total two-CTA TMA transaction bytes per stage (`77,824` bytes), derived from [`ASmem`], [`B0Smem`], and [`B1Smem`].
+const CLUSTER_STAGE_TX_BYTES: u32 = (2 * (A_BYTES + B_BYTES)) as u32;
 /// Compile-time consistency check for the schedule's dynamic shared-memory reservation.
-const _: () = assert!(DYNAMIC_SMEM_BYTES == 211_072);
+const _: () = {
+    assert!(DYNAMIC_SMEM_BYTES == 211_072);
+    assert!(CLUSTER_STAGE_TX_BYTES == 77_824);
+};
 
 /// Five-stage two-CTA TMA/MMA pipeline expecting 77,824 transaction bytes per stage.
-type MainloopPipeline = PipelineTmaUmma<5, 77_824>;
+type MainloopPipeline = PipelineTmaUmma<5, CLUSTER_STAGE_TX_BYTES>;
 /// Accumulator handoff between the MMA producer and four epilogue warps per CTA.
 type AccumulatorPipeline = PipelineUmmaAsync<4>;
 /// Paired 256x192 and 256x160 MMA instructions sharing the A collector.
@@ -157,8 +167,9 @@ pub mod kernels {
                 let mut stage = 0usize;
                 let mut phase = 1u32;
                 while tile < total_tiles {
-                    let row = (tile % mtiles) * 256 + rank * 128;
-                    let col = (tile / mtiles) * 352;
+                    let (m_tile, n_tile) = idx2crd_col_major_2d(tile, mtiles);
+                    let row = crd2idx_col_major_3d(0, rank, m_tile, 128, 2);
+                    let col = crd2idx_col_major_2d(0, n_tile, 352);
                     let mut kt = 0;
                     while kt < ktiles {
                         pipeline.producer_acquire(stage as u32, phase);
@@ -175,7 +186,7 @@ pub mod kernels {
                             smem.add(B_OFFSET + stage * B_BYTES).cast(),
                         );
                         let mut b1_tile = Sm100SharedTile::<B1Smem, OperandB>::from_raw(
-                            smem.add(B_OFFSET + stage * B_BYTES + 96 * 64 * 2).cast(),
+                            smem.add(B_OFFSET + stage * B_BYTES + B0_BYTES).cast(),
                         );
                         Sm100ClusterTmaCopy::copy(a, &mut a_tile, row, kt * 64, barrier, rank);
                         Sm100ClusterTmaCopy::copy(
@@ -237,7 +248,7 @@ pub mod kernels {
                                 smem.add(B_OFFSET + stage * B_BYTES).cast(),
                             );
                             let b1_tile = Sm100SharedTile::<B1Smem, OperandB>::from_raw(
-                                smem.add(B_OFFSET + stage * B_BYTES + 96 * 64 * 2).cast(),
+                                smem.add(B_OFFSET + stage * B_BYTES + B0_BYTES).cast(),
                             );
                             if elect_one_sync() {
                                 // Each of the four K16 steps reuses A across
@@ -272,8 +283,9 @@ pub mod kernels {
                 let mut phase = 0u32;
                 let mut epi_stage = 0usize;
                 while tile < total_tiles {
-                    let row = (tile % mtiles) * 256 + rank * 128;
-                    let col = (tile / mtiles) * 352;
+                    let (m_tile, n_tile) = idx2crd_col_major_2d(tile, mtiles);
+                    let row = crd2idx_col_major_3d(0, rank, m_tile, 128, 2);
+                    let col = crd2idx_col_major_2d(0, n_tile, 352);
                     let row_bias = if has_bias {
                         bias_tensor.get_unchecked((row + tid) as usize) as f32
                     } else {

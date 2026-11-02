@@ -34,10 +34,12 @@ pub mod kernels {
         let pair = thread::index_1d().get();
         let half = dim / 2;
         if pair < tokens * heads * half {
-            let row = pair / half;
-            let frequency = pair % half;
-            let table = (row / heads) * half + frequency;
-            let left = row * dim + frequency;
+            let (row_u32, freq_u32) = cute_rs::idx2crd_row_major_2d(pair as u32, half as u32);
+            let row = row_u32 as usize;
+            let frequency = freq_u32 as usize;
+            let (token_u32, _) = cute_rs::idx2crd_row_major_2d(row_u32, heads as u32);
+            let table = cute_rs::crd2idx_row_major_2d(token_u32 as usize, frequency, half);
+            let left = cute_rs::crd2idx_row_major_2d(row, frequency, dim);
             // SAFETY: the host checks even head width and dense extents;
             // each pair contains coordinates separated by one half-head.
             let values = unsafe {

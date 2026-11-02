@@ -48,31 +48,42 @@ use ctm_rs::mbarrier::Barrier;
 use ctm_rs::memory::DynamicSharedArray;
 use ctm_rs::{cluster_launch, cuda_module, kernel, launch_bounds, launch_contract};
 use cute_rs::arch::{
-    NamedBarrier, block_idx, block_idx_in_cluster, cluster_arrive_relaxed, cluster_wait,
-    elect_one_sync, grid_dim, make_warp_uniform, mbarrier_init_fence, setmaxregister_decrease,
-    setmaxregister_increase, thread_idx, warp_idx,
+    NamedBarrier, block_idx_in_cluster, cluster_arrive_relaxed, cluster_wait, elect_one_sync,
+    make_warp_uniform, mbarrier_init_fence, setmaxregister_decrease, setmaxregister_increase,
+    thread_idx, warp_idx,
 };
 use cute_rs::attention::sm100::pipeline::{
     AsyncCompletion, AsyncCopyReuse, Consumer, Producer, RingCursor, TensorMemory, TwoCtaRing,
 };
 use cute_rs::attention::sm100::{
-    MmaSs, SharedLayout, SharedTile, SharedTileArray, TmaCopy, TmemFragment,
+    MmaSs, SharedTile, SharedTileArray, TmaCopy, TmemFragment, tmem_row_address,
 };
 use cute_rs::sm100::{Sm100DeallocBarrier, Sm100Tmem};
-use cute_rs::tensor::partition::StridedTensor;
-use cute_rs::{OperandA, OperandB, TensorMap};
+use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
+use cute_rs::{
+    ColMajor, ComposedLayout, OperandA, OperandB, PersistentTileSchedulerParams, RowMajor, Swizzle,
+    TensorMap, size_in_bytes,
+};
 
 /// Per-CTA `64 × 64` FP16 K-major `X` activation tile with 128-byte swizzle (`8,192` bytes per stage).
 /// Across the two-CTA cluster, the pair covers `M = 128` tokens (`64` rows per CTA) × `K = 64`.
-pub type XLayout = SharedLayout<64, 64>;
+pub type XLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<64, 64>>;
 
 /// Per-CTA `128 × 64` FP16 K-major `W_qkv` weight tile with 128-byte swizzle (`16,384` bytes per stage).
 /// Across the two-CTA cluster, the pair covers `N = 256` columns (`2` heads of `D = 128`) × `K = 64`.
-pub type WLayout = SharedLayout<128, 64>;
+pub type WLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>;
 
 /// Group-two `128 × 256 × 64` Tensor Core (`tcgen05.mma.cta_group::2.kind::f16`) tiled MMA.
 /// Verifies at compile time that `XLayout` (`64×64`) and `WLayout` (`128×64`) match `(128, 256, 64)`.
 pub type QkvMma = MmaSs<XLayout, WLayout, 128, 256, 64, 2>;
+
+/// Persistent two-CTA `128 × 256` tile scheduler with `G = 8` M-tile (`1,024`-token) L2 swizzling.
+/// Keeps `1,024 × K` of `X` (`8 MB` at `K = 4,096`) hot in B200's L2 cache across all `W_qkv` heads.
+pub type TileScheduler = PersistentTileSchedulerParams<128, 256, 8, 2>;
+
+/// Column-major `(64, 2) : (1, 64)` thread layout partitioning the `128` epilogue threads (`Warps 0..3`).
+/// Maps flat thread index `tid` (`0..128`) to `(lane_row 0..64, lane_head 0..2)`.
+pub type EpilogueThreadLayout = ColMajor<64, 2>;
 
 /// Eight-stage two-CTA TMA-to-MMA input ring (`full[0..8]` and `empty[0..8]` mbarriers).
 /// Overlaps 2-CTA cluster TMA loads of `X` and `W_qkv` with Tensor Core MMA consumption.
@@ -98,13 +109,13 @@ pub const THREADS: u32 = 192;
 /// Each stage holds `8 KB` of `X` and `16 KB` of `W_qkv` per CTA (`24 KB` × `8` = `192 KB`).
 const STAGES: u32 = 8;
 
-/// Bytes occupied by one CTA's `X` tile stage (`64 × 64 × 2 = 8,192` bytes).
+/// Bytes occupied by one CTA's `X` tile stage (`8,192` bytes), derived from [`XLayout`] via [`size_in_bytes`].
 /// Transferred by [`TmaCopy::<XLayout, 2>::load`] into the `X` shared-memory ring.
-const A_BYTES: usize = 64 * 64 * 2;
+const A_BYTES: usize = size_in_bytes::<f16, XLayout>() as usize;
 
-/// Bytes occupied by one CTA's `W_qkv` tile stage (`128 × 64 × 2 = 16,384` bytes).
+/// Bytes occupied by one CTA's `W_qkv` tile stage (`16,384` bytes), derived from [`WLayout`] via [`size_in_bytes`].
 /// Transferred by [`TmaCopy::<WLayout, 2>::load`] into the `W_qkv` shared-memory ring.
-const B_BYTES: usize = 128 * 64 * 2;
+const B_BYTES: usize = size_in_bytes::<f16, WLayout>() as usize;
 
 /// Total cluster-wide TMA transaction bytes expected per stage across both CTAs (`49,152` bytes).
 /// Announced to CTA 0's `full` barrier via `producer_expect_tx_cursor`.
@@ -131,22 +142,6 @@ const CONTROL_OFFSET: usize = GAMMA_K_OFFSET + 512;
 pub const DYNAMIC_SMEM_BYTES: u32 = (CONTROL_OFFSET + 256) as u32;
 
 const _: () = assert!(DYNAMIC_SMEM_BYTES == 197_888);
-
-/// Map a linear persistent tile index to `(m_tile, n_tile)` in groups of `8` M-tiles (`1,024` tokens).
-/// Keeps `1,024 × K` of `X` (`8 MB` at `K = 4,096`) hot in B200's L2 cache across all `W_qkv` heads.
-#[inline(always)]
-fn swizzle_tile(tile: u32, mtiles: u32, ntiles: u32) -> (u32, u32) {
-    let group_m = if mtiles >= 8 { 8 } else { mtiles };
-    let group_tiles = group_m * ntiles;
-    let group_id = tile / group_tiles;
-    let first_m = group_id * group_m;
-    let rem_m = mtiles - first_m;
-    let actual_m = if rem_m >= group_m { group_m } else { rem_m };
-    let in_group = tile % group_tiles;
-    let m_tile = first_m + (in_group % actual_m);
-    let n_tile = in_group / actual_m;
-    (m_tile, n_tile)
-}
 
 /// Shared implementation of the persistent two-CTA fused QKV + Epilogue schedule, parameterized by
 /// `OVERLAP_EPILOGUE` (`true` = 8-stage TMA + 2-stage TMEM ping-pong; `false` = 1-stage exposed epilogue).
@@ -193,8 +188,16 @@ unsafe fn run_qkv_epilogue_schedule<const OVERLAP_EPILOGUE: bool>(
     if tid < 128 {
         let gq_view = StridedTensor::<f32>::from_raw_parts(gamma_q, 128, 1);
         let gk_view = StridedTensor::<f32>::from_raw_parts(gamma_k, 128, 1);
-        *smem_gq.add(tid as usize) = gq_view.get_unchecked(tid as usize) * inv_scale_q;
-        *smem_gk.add(tid as usize) = gk_view.get_unchecked(tid as usize) * inv_scale_k;
+        let smem_gq_mut = StridedTensorMut::<f32>::from_raw_parts(smem_gq, 128, 1);
+        let smem_gk_mut = StridedTensorMut::<f32>::from_raw_parts(smem_gk, 128, 1);
+        smem_gq_mut.write_at(
+            tid as usize,
+            gq_view.get_unchecked(tid as usize) * inv_scale_q,
+        );
+        smem_gk_mut.write_at(
+            tid as usize,
+            gk_view.get_unchecked(tid as usize) * inv_scale_k,
+        );
     }
     if tid == 0 {
         x_tma.prefetch_descriptor();
@@ -212,13 +215,10 @@ unsafe fn run_qkv_epilogue_schedule<const OVERLAP_EPILOGUE: bool>(
     cluster_arrive_relaxed();
     cluster_wait();
 
-    let (block_x, _, _) = block_idx();
-    let (grid_x, _, _) = grid_dim();
-    let first = make_warp_uniform(block_x / 2);
-    let stride = make_warp_uniform(grid_x / 2);
-    let mtiles = m / 128;
-    let ntiles = n_total / 256;
-    let tile_count = mtiles * ntiles;
+    let sched = TileScheduler::new_2d(m, n_total);
+    let first = sched.first_tile();
+    let stride = sched.stride();
+    let tile_count = sched.tile_count();
     let ktiles = k / 64;
 
     if warp_id == 5 {
@@ -230,9 +230,8 @@ unsafe fn run_qkv_epilogue_schedule<const OVERLAP_EPILOGUE: bool>(
             let mut cursor = RingCursor::<STAGES, Producer>::new();
             let mut tile = first;
             while tile < tile_count {
-                let (m_tile, n_tile) = swizzle_tile(tile, mtiles, ntiles);
-                let row = (m_tile * 128 + rank * 64) as i32;
-                let col = (n_tile * 256 + rank * 128) as i32;
+                let (m_tile, n_tile) = sched.tile_idx(tile);
+                let (row, col) = sched.cta_tile_coord(m_tile, n_tile, rank);
                 let mut kt = 0u32;
                 while kt < ktiles {
                     mainloop.acquire_cursor(cursor);
@@ -259,9 +258,8 @@ unsafe fn run_qkv_epilogue_schedule<const OVERLAP_EPILOGUE: bool>(
             let mut cursor = RingCursor::<1, Producer>::new();
             let mut tile = first;
             while tile < tile_count {
-                let (m_tile, n_tile) = swizzle_tile(tile, mtiles, ntiles);
-                let row = (m_tile * 128 + rank * 64) as i32;
-                let col = (n_tile * 256 + rank * 128) as i32;
+                let (m_tile, n_tile) = sched.tile_idx(tile);
+                let (row, col) = sched.cta_tile_coord(m_tile, n_tile, rank);
                 let mut kt = 0u32;
                 while kt < ktiles {
                     mainloop_1.acquire_cursor(cursor);
@@ -354,14 +352,19 @@ unsafe fn run_qkv_epilogue_schedule<const OVERLAP_EPILOGUE: bool>(
         let tmem = *token;
         let qk_heads = num_q_heads + num_kv_heads;
         let slots_view = StridedTensor::<i32>::from_raw_parts(slot_mapping, m as usize, 1);
+        let smem_gq_view = StridedTensor::<f32>::from_raw_parts(smem_gq.cast_const(), 128, 1);
+        let smem_gk_view = StridedTensor::<f32>::from_raw_parts(smem_gk.cast_const(), 128, 1);
+        let q_view = StridedTensorMut::<u8>::from_raw_parts(q_out, (m * num_q_heads) as usize, 128);
+        let k_view = StridedTensorMut::<u8>::from_raw_parts(k_cache, usize::MAX / 256, 128);
+        let v_view = StridedTensorMut::<u8>::from_raw_parts(v_cache, usize::MAX / 256, 128);
 
         let mut acc_cursor = RingCursor::<2, Consumer>::new();
         let mut acc_cursor_1 = RingCursor::<1, Consumer>::new();
         let mut tile = first;
         while tile < tile_count {
-            let (m_tile, n_tile) = swizzle_tile(tile, mtiles, ntiles);
-            let row = m_tile * 128 + rank * 64 + (tid & 63);
-            let head_idx = n_tile * 2 + (tid >> 6);
+            let (m_tile, n_tile) = sched.tile_idx(tile);
+            let (row, head_idx) =
+                sched.epilogue_thread_coord::<EpilogueThreadLayout>(m_tile, n_tile, rank, tid);
             let acc_idx = if OVERLAP_EPILOGUE {
                 acc_ring.wait_cursor(acc_cursor);
                 acc_cursor.index()
@@ -369,7 +372,7 @@ unsafe fn run_qkv_epilogue_schedule<const OVERLAP_EPILOGUE: bool>(
                 acc_ring_1.wait_cursor(acc_cursor_1);
                 0
             };
-            let tmem_row = tmem + acc_idx * 128 + ((warp_id * 32) << 16);
+            let tmem_row = tmem_row_address(tmem, warp_id, acc_idx * 128);
             let fragment = TmemFragment::<128>::load(tmem_row);
             if OVERLAP_EPILOGUE {
                 acc_ring.release_epilogue_cursor::<1, 128>(acc_cursor, tid);
@@ -378,9 +381,9 @@ unsafe fn run_qkv_epilogue_schedule<const OVERLAP_EPILOGUE: bool>(
             let (scale, gamma_ptr) = if head_idx < qk_heads {
                 let inv_rms = fragment.rms_inv_std(rms_eps);
                 let g_ptr = if head_idx < num_q_heads {
-                    smem_gq.cast_const()
+                    smem_gq_view.ptr_at_unchecked(0)
                 } else {
-                    smem_gk.cast_const()
+                    smem_gk_view.ptr_at_unchecked(0)
                 };
                 (inv_rms, Some(g_ptr))
             } else {
@@ -388,15 +391,15 @@ unsafe fn run_qkv_epilogue_schedule<const OVERLAP_EPILOGUE: bool>(
             };
 
             let dst_ptr = if head_idx < num_q_heads {
-                q_out.add(((row as usize) * (num_q_heads as usize) + (head_idx as usize)) * 128)
+                q_view.ptr_at_2d_unchecked(row as usize, head_idx as usize, num_q_heads as usize)
             } else if head_idx < qk_heads {
                 let slot_idx = slots_view.get_unchecked(row as usize) as usize;
                 let kv_head = (head_idx - num_q_heads) as usize;
-                k_cache.add((slot_idx * (num_kv_heads as usize) + kv_head) * 128)
+                k_view.ptr_at_2d_unchecked(slot_idx, kv_head, num_kv_heads as usize)
             } else {
                 let slot_idx = slots_view.get_unchecked(row as usize) as usize;
                 let kv_head = (head_idx - qk_heads) as usize;
-                v_cache.add((slot_idx * (num_kv_heads as usize) + kv_head) * 128)
+                v_view.ptr_at_2d_unchecked(slot_idx, kv_head, num_kv_heads as usize)
             };
 
             fragment.quantize_and_store_e4m3_no_allocate(scale, gamma_ptr, dst_ptr);

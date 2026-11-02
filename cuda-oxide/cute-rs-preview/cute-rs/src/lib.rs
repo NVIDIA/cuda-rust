@@ -65,7 +65,7 @@
 
 #![no_std]
 #![feature(f16)]
-#![deny(missing_docs)]
+#![deny(missing_docs, clippy::missing_docs_in_private_items)]
 
 #[cfg(feature = "host")]
 extern crate alloc;
@@ -86,8 +86,9 @@ pub mod pipeline;
 pub mod reduction;
 pub mod scheduler;
 pub mod sm100;
-pub mod static_layout;
 pub mod tensor;
+
+pub use cute_layout::static_layout;
 
 pub use block_scaled::{
     BlockScaledTensor, BlockScaledThreadRow, BlockScaledTile64, DenseBlockScaleKMajor, KMajor,
@@ -102,6 +103,10 @@ pub use copy::vector::{
     GlobalStoreElement, GlobalStoreTile, assume, load_tile, store_global_no_allocate, store_tile,
 };
 pub use cute_layout as layout;
+pub use cute_layout::{
+    crd2idx_col_major_2d, crd2idx_col_major_3d, crd2idx_row_major_2d, crd2idx_row_major_3d,
+    idx2crd_col_major_2d, idx2crd_grouped_2d, idx2crd_row_major_2d,
+};
 pub use epilogue::{
     SM120_EPILOGUE_BYTES, SM120_EPILOGUE_COLS, SM120_EPILOGUE_ELEMENTS, SM120_EPILOGUE_HALF_BYTES,
     SM120_EPILOGUE_HALF_COLS, SM120_EPILOGUE_HALF_ELEMENTS, SM120_EPILOGUE_ROWS,
@@ -124,10 +129,11 @@ pub use numeric::{
     UE8M0x2, UE8M0x4, e4m3_to_f32, f32_to_e2m1, f32_to_e4m3,
 };
 pub use pipeline::{Consumer, PipelineState, PipelineTmaAsync, PipelineTmaStore, Producer};
-pub use scheduler::{StaticPersistentTileScheduler, WorkTileInfo};
+pub use scheduler::{PersistentTileSchedulerParams, StaticPersistentTileScheduler, WorkTileInfo};
 pub use sm100::{
     OperandA, OperandB, PipelineTmaUmma, PipelineUmmaAsync, Sm100BlockScaledTiledMma,
     Sm100ClusterTmaCopy, Sm100DeallocBarrier, Sm100ScaleTile, Sm100SharedTile, Sm100TiledMma,
     Sm100Tmem, Sm100TmemEpilogue, Sm100TmemStagedEpilogue,
 };
+pub use static_layout::{crd2idx_2d, idx2crd_2d};
 pub use tensor::{Contiguous1D, RegisterTile, Tensor, TensorElement, TensorMut, Tile1D, Zipped1D};

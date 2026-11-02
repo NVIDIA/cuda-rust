@@ -12,6 +12,8 @@ use crate::numeric::BFloat16;
 use crate::static_layout::StaticLayout;
 use core::marker::PhantomData;
 
+/// Warp thread shape `(4 lanes per quad, 8 quads per warp)` used by `mma.sync.aligned.m16n8k16`.
+/// Groups the 32 lanes of a warp into eight 4-lane quads along the row and K axes.
 type Threads = (C<4>, C<8>);
 /// A's `(lane, scalar value)` map into a row-major 16-by-16 logical tile.
 pub type ALayout = Layout<(Threads, ((C<2>, C<2>), C<2>)), ((C<2>, C<16>), ((C<1>, C<128>), C<8>))>;
@@ -128,6 +130,8 @@ impl FragmentC {
 /// One lane's handle to the BF16 16-by-8-by-16 matrix operation.
 #[derive(Clone, Copy)]
 pub struct Bf16Mma16x8x16 {
+    /// Hardware lane index (`0..32`) within the calling warp.
+    /// Determines which A, B, and C matrix elements this thread owns.
     lane: usize,
 }
 impl Bf16Mma16x8x16 {
@@ -166,16 +170,22 @@ impl Bf16Mma16x8x16 {
 /// A lane's immutable partition of the A operand.
 #[derive(Clone, Copy)]
 pub struct APartition {
+    /// Hardware lane index (`0..32`) selecting this thread's eight A elements.
+    /// Used by `ALayout` to map `(lane, value)` to `(row, k)` coordinates.
     lane: usize,
 }
 /// A lane's immutable partition of the B operand.
 #[derive(Clone, Copy)]
 pub struct BPartition {
+    /// Hardware lane index (`0..32`) selecting this thread's four B elements.
+    /// Used by `BLayout` to map `(lane, value)` to `(col, k)` coordinates.
     lane: usize,
 }
 /// A lane's partition of the accumulator coordinates.
 #[derive(Clone, Copy)]
 pub struct CPartition {
+    /// Hardware lane index (`0..32`) selecting this thread's four C accumulator outputs.
+    /// Used by `CLayout` to map `(lane, register)` to `(row, col)` coordinates.
     lane: usize,
 }
 
@@ -187,11 +197,23 @@ pub struct PackedDecode<'a> {
     // Raw carriers admit null as a bit pattern, so Option<Self> has an ordinary
     // discriminant supported by the device enum ABI. Only the checked borrowed
     // constructor creates this private payload; the phantom retains both loans.
+    /// Non-owning 4-byte-aligned base pointer to the `[rows, width]` BF16 input batch.
+    /// Proven valid for `rows` rows at pitch `input_stride`.
     input: *const BFloat16,
+    /// Non-owning 4-byte-aligned base pointer to the `[outputs, width]` BF16 weight matrix.
+    /// Proven valid for `outputs` rows at pitch `weight_stride`.
     weight: *const BFloat16,
+    /// Active decode batch size (`1` or `2` rows).
+    /// Controls whether row `1` loads real data or zeros.
     rows: usize,
+    /// Element pitch between consecutive rows of `input` (even, `>= width`).
+    /// Used to address the second input row when `rows == 2`.
     input_stride: usize,
+    /// Element pitch between consecutive output rows of `weight` (even, `>= width`).
+    /// Scales each lane's `N`-row offset during packed `u32` weight loads.
     weight_stride: usize,
+    /// Zero-sized lifetime marker tying both raw pointers to `'a`.
+    /// Prevents the borrowed input and weight slices from expiring while live.
     borrow: PhantomData<&'a [BFloat16]>,
 }
 impl<'a> PackedDecode<'a> {
@@ -271,6 +293,8 @@ impl<'a> PackedDecode<'a> {
         }
     }
 
+    /// Check whether `input` and `weight` satisfy the 1-or-2-row, 16-aligned K,
+    /// 8-aligned N, even-stride, and 4-byte-pointer-alignment requirements of `PackedDecode`.
     #[inline(always)]
     fn supported(
         input: &[BFloat16],
@@ -297,10 +321,14 @@ impl<'a> PackedDecode<'a> {
     }
 }
 
+/// Map `(lane, value)` through a static TV layout `L` into its 2D `(row, col)` tile coordinate
+/// using [`StaticLayout::crd2idx`] and [`cute_layout::idx2crd_row_major_2d`].
 #[inline(always)]
 fn coordinate<L: StaticLayout, const COLS: usize>(lane: usize, value: usize) -> (usize, usize) {
-    let offset = L::crd2idx(lane + 32 * value);
-    (offset / COLS, offset % COLS)
+    let flat = cute_layout::crd2idx_col_major_2d(lane as u32, value as u32, 32) as usize;
+    let offset = L::crd2idx(flat);
+    let (r, c) = cute_layout::idx2crd_row_major_2d(offset as u32, COLS as u32);
+    (r as usize, c as usize)
 }
 impl APartition {
     /// Load this lane's eight BF16 elements from a shared-memory tile using `ldmatrix.x4`.

@@ -39,20 +39,22 @@ use cute_rs::attention::sm100::pipeline::{
     SharedReuse, SharedToAsync, TensorMemory, TwoCtaRing,
 };
 use cute_rs::attention::sm100::{
-    MmaSs, SharedLayout, SharedTile, SharedTileArray, TmaCopy, TmemAllocator, TmemFragment,
-    tmem_row_address,
+    MmaSs, SharedTile, SharedTileArray, TmaCopy, TmemAllocator, TmemFragment, tmem_row_address,
 };
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
-use cute_rs::{GlobalStoreTile, OperandA, OperandB, RegisterTile, TensorMap};
+use cute_rs::{
+    ColMajor, ComposedLayout, GlobalStoreTile, OperandA, OperandB, RegisterTile, RowMajor, Swizzle,
+    TensorMap, size_in_bytes,
+};
 
 /// Per-CTA 64-by-64 FP16 query tile, stored K-major for QK MMA.
-pub type QLayout = SharedLayout<64, 64>;
+pub type QLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<64, 64>>;
 /// Per-CTA 64-by-64 FP16 cache-key tile, stored K-major for QK MMA.
-pub type KLayout = SharedLayout<64, 64>;
+pub type KLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<64, 64>>;
 /// Per-CTA 64-by-32 FP16 probability chunk consumed by PV MMA.
-pub type PLayout = SharedLayout<64, 32>;
+pub type PLayout = ComposedLayout<Swizzle<2, 3, 3>, 0, RowMajor<64, 32>>;
 /// Per-CTA 128-by-32 MN-major FP16 value chunk consumed by PV MMA.
-pub type VLayout = SharedLayout<128, 32, true>;
+pub type VLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, ColMajor<128, 32>>;
 /// Group-two M128/N128/K64 QK instruction using shared query and key tiles.
 type QkMma = MmaSs<QLayout, KLayout, 128, 128, 64, 2>;
 /// Group-two M128/N256/K32 PV instruction using shared probability and value tiles.
@@ -60,18 +62,22 @@ type PvMma = MmaSs<PLayout, VLayout, 128, 256, 32, 2>;
 
 /// Threads in each persistent CTA, including dedicated load, MMA and reduction warps.
 pub const THREADS: u32 = 384;
+/// Bytes occupied by one CTA's 64×64 FP16 Q/K/V tile (`8,192` bytes), derived from [`QLayout`].
+const QKV_TILE_BYTES: usize = size_in_bytes::<f16, QLayout>() as usize;
+/// Bytes occupied by one CTA's 64×32 FP16 probability tile (`4,096` bytes), derived from [`PLayout`].
+const P_TILE_BYTES: usize = size_in_bytes::<f16, PLayout>() as usize;
 /// Required dynamic shared-memory bytes per CTA, with a 1024-byte-aligned base.
 pub const DYNAMIC_SMEM_BYTES: u32 = 232_448;
 /// Shared byte offset of eight latent-query chunks.
 const Q: usize = 0;
 /// Shared byte offset of the rotary-query chunk following the latent query.
-const QR: usize = 65_536;
+const QR: usize = Q + 8 * QKV_TILE_BYTES;
 /// Shared byte offset of fifteen reusable key/value stages, each 8192 bytes.
-const KV: usize = 73_728;
+const KV: usize = QR + QKV_TILE_BYTES;
 /// Shared byte offset of two probability buffers, each containing four K32 chunks.
-const P: usize = 196_608;
+const P: usize = KV + 15 * QKV_TILE_BYTES;
 /// Shared byte offset of four page-index slots, spaced 256 bytes apart.
-const PT: usize = 229_376;
+const PT: usize = P + 8 * P_TILE_BYTES;
 /// Shared byte offset of two 128-element FP32 softmax-maximum exchange buffers.
 const MAX_EXCHANGE: usize = 230_400;
 /// Shared byte offset of 128 FP32 partial sums used during final normalization.
@@ -266,8 +272,12 @@ unsafe fn load_qk(
         let mut chunk = 0usize;
         while chunk < 9 {
             let mut destination = SharedTile::<QLayout, OperandA>::from_raw(
-                smem.add(if chunk < 8 { Q + chunk * 8192 } else { QR })
-                    .cast(),
+                smem.add(if chunk < 8 {
+                    Q + chunk * QKV_TILE_BYTES
+                } else {
+                    QR
+                })
+                .cast(),
             );
             let descriptor = if chunk < 8 { q } else { qr };
             TmaCopy::<QLayout, 2>::load(
@@ -285,10 +295,11 @@ unsafe fn load_qk(
     while chunk < 9 {
         kv.acquire_cursor(*kv_state);
         if rank == 0 && elect_one_sync() {
-            kv.producer_expect_tx_cursor(*kv_state, 16384);
+            kv.producer_expect_tx_cursor(*kv_state, (2 * QKV_TILE_BYTES) as u32);
         }
         let mut destination = SharedTile::<KLayout, OperandB>::from_raw(
-            smem.add(KV + kv_state.index() as usize * 8192).cast(),
+            smem.add(KV + kv_state.index() as usize * QKV_TILE_BYTES)
+                .cast(),
         );
         TmaCopy::<KLayout, 2>::load(
             if chunk < 8 { k } else { kr },
@@ -326,10 +337,11 @@ unsafe fn load_v(
         while npart < 2 {
             kv.acquire_cursor(*kv_state);
             if rank == 0 && elect_one_sync() {
-                kv.producer_expect_tx_cursor(*kv_state, 16384);
+                kv.producer_expect_tx_cursor(*kv_state, (2 * QKV_TILE_BYTES) as u32);
             }
             let mut destination = SharedTile::<VLayout, OperandB>::from_raw(
-                smem.add(KV + kv_state.index() as usize * 8192).cast(),
+                smem.add(KV + kv_state.index() as usize * QKV_TILE_BYTES)
+                    .cast(),
             );
             TmaCopy::<VLayout, 2>::load(
                 v,

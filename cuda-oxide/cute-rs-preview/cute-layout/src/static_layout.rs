@@ -2,11 +2,13 @@
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+
 //! Allocation-free evaluation of static CuTe shape/stride markers.
 //!
-//! The leftmost shape mode changes fastest, as in `cute_layout::Layout`.
-//! This bounded, nonnegative-stride subset is suitable for device address maps;
-//! the complete algebra and validation remain in `cute-layout`.
+//! The leftmost shape mode changes fastest, as in [`crate::Layout`].
+//! This bounded, nonnegative-stride subset is suitable for device address maps
+//! and `const` contexts.
+
 use crate::markers::{C, ColMajor, ComposedLayout, Layout, ReifySmem2D, RowMajor, Swizzle};
 
 /// A static layout mapping a flat logical coordinate to an element offset.
@@ -43,6 +45,7 @@ const fn checked_offset_add(a: usize, b: usize) -> usize {
     result
 }
 
+/// Multiply two positive layout offset terms and verify the product fits in `i64`.
 const fn checked_offset_mul(a: usize, b: usize) -> usize {
     let result = match a.checked_mul(b) {
         Some(value) => value,
@@ -58,7 +61,7 @@ const fn checked_offset_mul(a: usize, b: usize) -> usize {
 /// Swizzling changes only the target bit field. Fill all bits up through that
 /// field to bound every offset below `maximum`, including holes in the layout.
 const fn swizzled_bound(maximum: usize, bits: u32, base: u32, shift: i32) -> usize {
-    let _ = cute_layout::Swizzle::new(bits, base, shift);
+    let _ = crate::Swizzle::new(bits, base, shift);
     if bits == 0 {
         return maximum;
     }
@@ -84,6 +87,7 @@ impl<const N: i64, const S: i64> StaticLayout for Layout<C<N>, C<S>> {
         flat * S as usize
     }
 }
+
 impl<A, B, SA, SB> StaticLayout for Layout<(A, B), (SA, SB)>
 where
     Layout<A, SA>: StaticLayout,
@@ -105,6 +109,7 @@ where
             + Layout::<B, SB>::crd2idx(flat / Layout::<A, SA>::SIZE)
     }
 }
+
 impl<const R: i64, const K: i64> StaticLayout for RowMajor<R, K> {
     const SIZE: usize = <Layout<(C<R>, C<K>), (C<K>, C<1>)>>::SIZE;
     const MAX_OFFSET: usize = <Layout<(C<R>, C<K>), (C<K>, C<1>)>>::MAX_OFFSET;
@@ -113,6 +118,7 @@ impl<const R: i64, const K: i64> StaticLayout for RowMajor<R, K> {
         <Layout<(C<R>, C<K>), (C<K>, C<1>)>>::crd2idx(flat)
     }
 }
+
 impl<const R: i64, const K: i64> StaticLayout for ColMajor<R, K> {
     const SIZE: usize = <Layout<(C<R>, C<K>), (C<1>, C<R>)>>::SIZE;
     const MAX_OFFSET: usize = <Layout<(C<R>, C<K>), (C<1>, C<R>)>>::MAX_OFFSET;
@@ -121,6 +127,7 @@ impl<const R: i64, const K: i64> StaticLayout for ColMajor<R, K> {
         <Layout<(C<R>, C<K>), (C<1>, C<R>)>>::crd2idx(flat)
     }
 }
+
 impl<const B: u32, const M: u32, const S: i32, const O: i64, Outer: StaticLayout> StaticLayout
     for ComposedLayout<Swizzle<B, M, S>, O, Outer>
 {
@@ -133,8 +140,7 @@ impl<const B: u32, const M: u32, const S: i32, const O: i64, Outer: StaticLayout
     #[inline(always)]
     fn crd2idx(flat: usize) -> usize {
         let _ = Self::SIZE;
-        cute_layout::Swizzle::new(B, M, S).apply((Outer::crd2idx(flat) + O as usize) as i64)
-            as usize
+        crate::Swizzle::new(B, M, S).apply((Outer::crd2idx(flat) + O as usize) as i64) as usize
     }
 }
 
@@ -143,38 +149,49 @@ impl<const B: u32, const M: u32, const S: i32, const O: i64, Outer: StaticLayout
 /// composed layout).
 ///
 /// Offsets and strides count elements. The static offset is added before the
-/// swizzle, matching `cute_layout::ComposedLayout`. When the row stride is a
-/// power of two above the swizzle's target bit field, the row offset stays
-/// additive outside the XOR so constant row steps fold into instruction
-/// displacements. This computes an offset only; callers that dereference it
-/// must establish coordinate bounds and storage lifetime.
+/// swizzle, matching [`crate::ComposedLayout`]. This computes an offset
+/// only; callers that dereference it must establish coordinate bounds and
+/// storage lifetime.
+#[must_use]
 #[inline(always)]
-pub fn crd2idx_2d<L: ReifySmem2D>(row: usize, column: usize) -> usize {
-    let (stride_r, stride_c, offset, y_mask, right_shift, left_shift) = const {
+pub const fn crd2idx_2d<L: ReifySmem2D>(row: usize, column: usize) -> usize {
+    let (stride_r, stride_c, offset, swizzle) = const {
         let _ = max_offset_2d::<L>();
-        let mask = ((1usize << L::NUM_BITS) - 1)
-            << (L::NUM_BASE as i32 + if L::NUM_SHIFT > 0 { L::NUM_SHIFT } else { 0 }) as u32;
-        let r_shift = if L::NUM_SHIFT >= 0 {
-            L::NUM_SHIFT as u32
-        } else {
-            0
-        };
-        let l_shift = if L::NUM_SHIFT < 0 {
-            (-L::NUM_SHIFT) as u32
-        } else {
-            0
-        };
         (
             L::STRIDE.0 as usize,
             L::STRIDE.1 as usize,
             L::OFFSET as usize,
-            mask,
-            r_shift,
-            l_shift,
+            crate::Swizzle::new(L::NUM_BITS, L::NUM_BASE, L::NUM_SHIFT),
         )
     };
     let plain = row * stride_r + column * stride_c + offset;
-    plain ^ (((plain & y_mask) >> right_shift) << left_shift)
+    swizzle.apply(plain as i64) as usize
+}
+
+/// Unpack a flat 1D coordinate into `(row, column)` through a typed 2D layout
+/// marker `L` (CuTeDSL `cute.idx2crd`).
+///
+/// Supports compact column-major (`ColMajor<R, C>` / `Layout<(C<R>, C<C>), (C<1>, C<R>)>`)
+/// and compact row-major (`RowMajor<R, C>` / `Layout<(C<R>, C<C>), (C<C>, C<1>)>`)
+/// 2D layouts, delegating the coordinate decomposition to `cute-layout`.
+#[must_use]
+#[inline(always)]
+pub const fn idx2crd_2d<L: ReifySmem2D>(flat: usize) -> (usize, usize) {
+    const {
+        assert!(L::SHAPE.0 > 0 && L::SHAPE.1 > 0);
+        assert!(
+            (L::STRIDE.0 == 1 && L::STRIDE.1 == L::SHAPE.0)
+                || (L::STRIDE.0 == L::SHAPE.1 && L::STRIDE.1 == 1),
+            "idx2crd_2d requires a compact ColMajor or RowMajor 2D layout"
+        );
+    }
+    if L::STRIDE.0 == 1 {
+        let (r, c) = crate::idx2crd_col_major_2d(flat as u32, L::SHAPE.0 as u32);
+        (r as usize, c as usize)
+    } else {
+        let (r, c) = crate::idx2crd_row_major_2d(flat as u32, L::SHAPE.1 as u32);
+        (r as usize, c as usize)
+    }
 }
 
 /// Bound the physical offsets of a reified two-dimensional layout at compile time.

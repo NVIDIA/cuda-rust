@@ -20,16 +20,15 @@
 //! cargo run --release
 //! ```
 
-use cuda_device::{device, gpu_printf, kernel, shared::DynamicSharedArray};
+use cuda_device::{convergent, device, gpu_printf, kernel, shared::DynamicSharedArray};
 use cuda_host::cuda_module;
+use device_ffi_collectives::scaled_warp_sum;
 
 // =============================================================================
 // External device functions from external_device_funcs.cu
 //
-// NOTE: No NVVM attributes (#[convergent], #[pure], #[readonly]) are needed here.
-// The external LTOIR already contains proper attributes on the function definitions.
-// When nvJitLink performs LTO linking, it uses the definition's attributes.
-// See README.md "Why No NVVM Attributes?" for details.
+// Collective declarations carry convergence before libNVVM optimization.
+// See README.md "Convergence on Extern Declarations" for details.
 // =============================================================================
 
 #[device]
@@ -37,7 +36,7 @@ unsafe extern "C" {
     fn magnitude_squared(x: f32, y: f32) -> f32;
     fn fast_rsqrt(x: f32) -> f32;
     fn dot_product(a: *const f32, b: *const f32, n: i32) -> f32;
-    fn warp_reduce_sum(val: f32) -> f32;
+    #[convergent]
     fn warp_ballot(predicate: i32) -> u32;
     fn simple_add(a: f32, b: f32) -> f32;
     // `char` is a plain 32-bit device-extern slot. Rust still warns because C
@@ -56,13 +55,16 @@ unsafe extern "C" {
 // CCCL (CUB) wrapper functions from cccl_wrappers.cu
 //
 // These wrap CUB template functions as extern "C" for FFI.
-// The CCCL LTOIR already has proper convergent/nounwind attributes.
+// Mark collectives so their participation requirements survive prelink optimization.
 // =============================================================================
 
 #[device]
 unsafe extern "C" {
+    #[convergent]
     fn cub_block_reduce_sum_f32_256(input: f32, temp: *mut u8) -> f32;
+    #[convergent]
     fn cub_block_reduce_max_f32_256(input: f32, temp: *mut u8) -> f32;
+    #[convergent]
     fn cub_warp_reduce_sum_f32(input: f32) -> f32;
     fn cub_get_block_reduce_temp_size_256() -> i32;
 }
@@ -88,7 +90,7 @@ mod kernels {
         let added = unsafe { simple_add(mag, 1.0) };
 
         // Test convergent function (all threads participate)
-        let sum = unsafe { warp_reduce_sum(added) };
+        let sum = unsafe { scaled_warp_sum::<1>(added) };
 
         // Lane 0 writes result
         if tid.is_multiple_of(32) {

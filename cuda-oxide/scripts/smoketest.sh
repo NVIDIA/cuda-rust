@@ -227,7 +227,7 @@ nvvm_verify_arch() {
             ;;
         cp_async_small) floor=80 ;;
         ex2_approx_f16) floor=75 ;;
-        generated_intrinsics) floor=80 ;;
+        generated_intrinsics) floor=86 ;;
         generated_ldmatrix) floor=75 ;;
         packed_atomic_add) floor=90 ;;
         shuffle_64) floor=75 ;;
@@ -474,6 +474,12 @@ IKET_EXEC=0
 IKET_ARCH="sm_90"
 if [[ "${host_cc}" =~ ^([0-9]+)\.[0-9]+$ ]] && [[ $((10#${BASH_REMATCH[1]})) -ge 9 ]]; then
     IKET_ARCH="${LTOIR_ARCH}"
+    # The pinned LLVM 23 `llc` used by the direct PTX path does not yet have an
+    # `-mcpu=sm_107` processor entry; use the sm_100 family baseline, which has
+    # the identical SM10x IKET placeholder ABI and JIT-loads on sm_107.
+    if [[ "${IKET_ARCH}" == "sm_107" ]]; then
+        IKET_ARCH="sm_100"
+    fi
     IKET_EXEC=1
 fi
 

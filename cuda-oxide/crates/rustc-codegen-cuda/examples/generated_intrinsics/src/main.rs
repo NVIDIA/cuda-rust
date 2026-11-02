@@ -1255,11 +1255,13 @@ fn main() {
 
     let context = CudaContext::new(0).expect("failed to create CUDA context");
 
-    // The generated intrinsics exercised here include bf16 operations, which
-    // require sm_80 (Ampere) or later.
+    // The generated intrinsics exercised here include bf16 xorsign.abs min/max
+    // operations, which require sm_86 or later.
     let (major, minor) = context.compute_capability().expect("compute capability");
-    if major < 8 {
-        println!("skipping: bf16 intrinsics require sm_80+ (device is sm_{major}{minor})");
+    if (major, minor) < (8, 6) {
+        println!(
+            "skipping: generated bf16 xorsign.abs intrinsics require sm_86+ (device is sm_{major}{minor})"
+        );
         return;
     }
 

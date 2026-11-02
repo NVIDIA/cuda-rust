@@ -4,6 +4,11 @@ A kernel needs both a supported Tile IR version and a compatible target GPU.
 The tables below come from the same requirements registry used by the compiler,
 bytecode writer, launch guard, and example/test prerequisites.
 
+GPUs below `sm_80` (such as `sm_70` and `sm_75`) are unsupported, and support
+for them is currently not planned.
+Since the Tile compiler is new, our current focus is to maintain peak performance on
+current and future architectures.
+
 The version is the **emitted Tile IR version**, not the version reported by
 `cuDriverGetVersion`. We ask the selected `tileiras` which formats it accepts
 and choose the newest one our writer also supports. Older assemblers without

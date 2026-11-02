@@ -397,7 +397,7 @@ mod tests {
             ("13.1\\n13.2\\n13.3\\n", BytecodeVersion::V13_3),
             (
                 "13.1\\n13.2\\n13.3\\n13.4\\n13.5\\n",
-                BytecodeVersion::V13_4,
+                BytecodeVersion::V13_5,
             ),
         ] {
             // Answer only `--list-versions`; reject compile probes, so a

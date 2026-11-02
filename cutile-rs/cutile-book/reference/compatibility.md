@@ -14,43 +14,49 @@ An explicit `CUTILE_BYTECODE_VERSION` must be supported; we do not downgrade it.
 driver does not make an older assembler understand newer bytecode.
 
 <!-- BEGIN TILE IR REQUIREMENTS -->
-| Feature | 13.2 | 13.3 | 13.4 | Target requirement |
-|---|---|---|---|---|
-| baseline Tile IR | Yes | Yes | Yes | `sm_80+` |
-| alloca | — | Yes | Yes | Any supported target |
-| pack/unpack | — | Yes | Yes | Any supported target |
-| block-scaled MMA | — | Yes | Yes | `sm_100+` |
-| gather_scatter_view | — | Yes | Yes | Any supported target |
-| strided_view | — | Yes | Yes | Any supported target |
-| atomic_red_view_tko | — | Yes | Yes | Any supported target |
-| insert | — | — | Yes | Any supported target |
-| fpowi | — | — | Yes | Any supported target |
-| GDC tokens | — | — | Yes | Any supported target |
-| memory_fence_alias_tko | — | — | Yes | Any supported target |
-| i4 | — | Yes | Yes | Any supported target |
-| f8E4M3FN/f8E5M2 | Yes | Yes | Yes | `sm_90+` |
-| f8E8M0FNU | Yes | Yes | Yes | `sm_100+` |
-| f4E2M1FN | — | Yes | Yes | `sm_100+` |
-| f8E5M3FNU | — | — | Yes | `sm_107+` |
-| cuda_tile.mmaf_scaled with f8E5M3FNU scales | — | — | Yes | `sm_107` only |
-| ptr_attr | — | — | Yes | Any supported target |
-| rounding_mode=nearest_away | — | — | Yes | Any supported target |
-| ftof additional rounding modes (type-dependent) | — | — | Yes | Any supported target |
-| ftoi.saturating | — | — | Yes | Any supported target |
-| inbounds=true | — | — | Yes | Any supported target |
-| mmaf.fast_acc | — | Yes | Yes | Any supported target |
-| exp.rounding_mode (non-approximate) | — | Yes | Yes | Any supported target |
-| module.producer | — | Yes | Yes | Any supported target |
-| global.constant | — | Yes | Yes | Any supported target |
-| global.symbol_visibility | — | Yes | Yes | Any supported target |
-| num_worker_warps_per_cta | — | Yes | Yes | Any supported target |
-| num_cta_in_cga greater than 1 | Yes | Yes | Yes | `sm_90+` |
-| num_worker_warps_per_cta restricted to 4 or 8 | — | — | Yes | Any supported target |
-| bf16 atomic add | — | Yes | Yes | `sm_90+` |
-| return inside loop | — | — | Yes | Any supported target |
-| target sm_90 | — | Yes | Yes | `sm_90` only |
-| target sm_107 | — | — | Yes | `sm_107` only |
-| programmatic dependent launch | — | — | Yes | `sm_90+` |
+| Feature | 13.2 | 13.3 | 13.4 | 13.5 | Target requirement |
+|---|---|---|---|---|---|
+| baseline Tile IR | Yes | Yes | Yes | Yes | `sm_80+` |
+| alloca | — | Yes | Yes | Yes | Any supported target |
+| pack/unpack | — | Yes | Yes | Yes | Any supported target |
+| block-scaled MMA | — | Yes | Yes | Yes | `sm_100+` |
+| gather_scatter_view | — | Yes | Yes | Yes | Any supported target |
+| strided_view | — | Yes | Yes | Yes | Any supported target |
+| atomic_red_view_tko | — | Yes | Yes | Yes | Any supported target |
+| insert | — | — | Yes | Yes | Any supported target |
+| fpowi | — | — | Yes | Yes | Any supported target |
+| GDC tokens | — | — | Yes | Yes | Any supported target |
+| memory_fence_alias_tko | — | — | Yes | Yes | Any supported target |
+| i4 | — | Yes | Yes | Yes | Any supported target |
+| f8E4M3FN/f8E5M2 | Yes | Yes | Yes | Yes | `sm_90+` |
+| f8E8M0FNU | Yes | Yes | Yes | Yes | `sm_100+` |
+| f4E2M1FN | — | Yes | Yes | Yes | `sm_100+` |
+| f8E5M3FNU | — | — | Yes | Yes | `sm_107+` |
+| cuda_tile.mmaf_scaled with f8E5M3FNU scales | — | — | Yes | Yes | `sm_107` only |
+| ptr_attr | — | — | Yes | Yes | Any supported target |
+| unicast/multicast pointer | — | — | — | Yes | `sm_100` / `sm_103` / `sm_107` |
+| multimem view operations | — | — | — | Yes | `sm_100` / `sm_103` / `sm_107` |
+| atomic_red_view_tko.inbounds=true | — | — | — | Yes | Any supported target |
+| load_view_tko.valid_check | — | — | — | Yes | `sm_107` only |
+| if/select optimization hints | — | — | — | Yes | Any supported target |
+| min_ctas_per_sm | — | — | — | Yes | Any supported target |
+| argument attributes | — | — | — | Yes | Any supported target |
+| rounding_mode=nearest_away | — | — | Yes | Yes | Any supported target |
+| ftof additional rounding modes (type-dependent) | — | — | Yes | Yes | Any supported target |
+| ftoi.saturating | — | — | Yes | Yes | Any supported target |
+| inbounds=true | — | — | Yes | Yes | Any supported target |
+| mmaf.fast_acc | — | Yes | Yes | Yes | Any supported target |
+| exp.rounding_mode (non-approximate) | — | Yes | Yes | Yes | Any supported target |
+| module.producer | — | Yes | Yes | Yes | Any supported target |
+| global.constant | — | Yes | Yes | Yes | Any supported target |
+| global.symbol_visibility | — | Yes | Yes | Yes | Any supported target |
+| num_worker_warps_per_cta | — | Yes | Yes | Yes | Any supported target |
+| num_cta_in_cga greater than 1 | Yes | Yes | Yes | Yes | `sm_90+` |
+| bf16 atomic add | — | Yes | Yes | Yes | `sm_90+` |
+| return inside loop | — | — | Yes | Yes | Any supported target |
+| target sm_90 | — | Yes | Yes | Yes | `sm_90` only |
+| target sm_107 | — | — | Yes | Yes | `sm_107` only |
+| programmatic dependent launch | — | — | Yes | Yes | `sm_90+` |
 
 | Target | Minimum emitted Tile IR version |
 |---|---|
@@ -75,8 +81,8 @@ even when the operations themselves were available earlier.
 Architecture numbers are not a feature hierarchy: `sm_120` supports NVFP4,
 but not scaled MMA using `f8E5M3FNU` scales. Operand types, shapes and attribute
 values still have to satisfy the operation's verifier. In particular,
-`num_worker_warps_per_cta` accepts 1, 2, 4, 8, 16 or 32 in 13.3, and only 4
-or 8 in 13.4.
+`num_worker_warps_per_cta` accepts 1, 2, 4, 8, 16 or 32 in 13.3 and 13.5,
+and only 4 or 8 in 13.4.
 
 PDL additionally needs the driver's `cuLaunchKernelEx` entry point. Optional
 host APIs are resolved at runtime; their availability is separate from the
@@ -85,6 +91,115 @@ device IR requirements. See the [PDL launch contract](host-api.md#programmatic-d
 The driver/toolkit combination must meet
 [NVIDIA's CUDA compatibility rules](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html).
 We do not impose a blanket driver-version-at-least-toolkit-version check.
+
+## CUDA 13.5 development
+
+The 13.5 surface includes unicast/multicast pointer classification,
+`multimem_load_reduce_view_tko`, `multimem_reduce_view_tko`,
+`multimem_store_view_tko`, atomic-view inbounds promises, TMA validity checking,
+condition hints, minimum residency hints, and function argument attributes.
+Named preview APIs for SIMT linking and fragment interchange are separate from
+this surface and are not implemented here.
+
+The raw Rust APIs are exposed as unsafe functions in `cutile::tileir`, defined
+in `cutile/src/_tileir.rs`: `ptr_with_attr_unicast`, `ptr_with_attr_multicast`,
+the three `multimem_*_view_tko` operations, `atomic_red_view_tko_with_inbounds`,
+and `load_view_tko_valid_check`. The `multimem` module provides Add, Min, Max, And,
+Or, Xor, Umin, and Umax reduction markers. These unsafe APIs require live,
+correctly classified mappings and an explicit memory-ordering protocol.
+A Tile IR token does not synchronize independent GPUs.
+
+See [Unsafe GPU communication](unsafe-comms.md) for unicast and multicast
+contracts, available synchronization primitives, and the runnable two-GPU example.
+
+Branch likelihood uses the safe `cutile::core::likely` API. It takes and
+returns a scalar `bool`, with a const-generic prediction like the existing
+value-wrapping assumption APIs:
+
+```rust
+if likely::<true>(condition) {
+    // Ordinary control flow; the existing DSL restrictions still apply.
+}
+```
+
+Use `likely::<false>` to favor the false branch. The consuming `if` receives
+`condition_hint` metadata inside `discardable_perf_hints`; no extra device
+instruction or closure is introduced. A wrong likelihood never affects
+correctness. Hints are advisory and may be ignored. Copies and inline helper
+calls preserve the hint; boolean computations and control-flow joins may
+discard it, so apply it to the final condition.
+
+For boolean tiles, `select(with_likelihood(mask, Likelihood::<true>), a, b)`
+uses the existing typed hint form. Use `Likelihood::<false>` to favor `b`.
+Both APIs require Tile IR 13.5, including when passed through a helper.
+
+Entry annotations accept
+`optimization_hints = (sm_100 = (min_ctas_per_sm = 2,),)` and a `default` group.
+`CompileOptions::min_ctas_per_sm` overrides the entry hint for the active GPU
+and participates in JIT cache identity. Minimum residency is in the range
+0–32; zero disables the constraint. Hints do not change program semantics.
+Function argument attributes are available through the low-level IR builder.
+`DISubprogram::is_declaration` exposes the 13.5 debug declaration flag; ordinary
+definitions keep the flag clear, and older writers reject declarations.
+
+The named `simt` preview has its own feature gate and is not a versioned
+CTK 13.5 API; 13.6 MMA overflow attributes are also outside this versioned surface.
+
+Multicast operations require an NVLink SHARP-capable fabric and the supported
+`sm_100`, `sm_103`, or `sm_107` families. `valid_check=true` specifically needs
+`sm_107` with TMA enabled; B200 does not cover this feature. False validity
+checks and all-false atomic inbounds arrays retain their older version floor.
+
+### Selecting the toolkit
+
+Install a CUDA 13.5 toolkit for the host architecture and select its assembler
+explicitly when the default environment uses an older toolkit:
+
+```bash
+export CUDA_TOOLKIT_PATH=/path/to/cuda-13.5
+export CUTILE_TILEIRAS_PATH="$CUDA_TOOLKIT_PATH/bin/tileiras"
+export CUTILE_BYTECODE_VERSION=13.5
+```
+
+Use one toolkit installation across projects. The assembler and its compiler
+backend must support the requested bytecode version; changing a runtime library
+path does not upgrade the assembler. Tile libraries must be built for the
+toolkit that links them.
+
+### Validation
+
+Run from `cutile-rs/`. The normal CPU runner includes the new frontend,
+bytecode, validation, and GPU-kernel compilation tests. When a matching CUDA Tile IR
+translator is available, the following also checks the emitted images with its
+independent C++ bytecode reader and verifier:
+
+```bash
+CUTILE_REFERENCE_TRANSLATE=/path/to/cuda-tile-translate \
+  cargo test -p cutile --test tile_ir_13_5 --test tile_ir_13_5_multicast
+```
+
+With the shared 13.5 environment above, assemble the feature and multicast
+execution kernels without a GPU. The validity-check kernel targets `sm_107`;
+the other kernels target `sm_100`:
+
+```bash
+cargo test -p cutile --test tile_ir_13_5 --test tile_ir_13_5_multicast \
+  assemble_ -- --ignored
+```
+
+Then on the two-or-more-GPU B200 instance with NVLink SHARP:
+
+```bash
+cargo test -p cutile --test tile_ir_13_5_multicast \
+  multicast_load_reduce_and_store_execute_from_each_gpu -- --ignored --test-threads=1
+bash scripts/run_gpu_tests.sh
+```
+
+The dedicated multicast test exercises each GPU as initiator, checks the
+load-reduced output and both devices' storage after reduction/store, and fails
+if the required devices or fabric are absent. It is ignored by default because
+single-GPU machines cannot run it. Assembler and hardware execution remain
+separate from passing the CPU suite.
 
 ## Keeping the tables current
 

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- CUDA 13.5 Tile IR bytecode, unicast/multicast pointer classification, multicast
+  load-reduce/reduce/store, atomic-view inbounds promises, TMA validity checking,
+  and safe condition likelihood hints for ordinary select and if using
+  `likely::<true/false>(condition)` for scalar branches and typed
+  `with_likelihood(mask, Likelihood::<true/false>)` for select in `cutile::core`.
+  New raw memory operations are unsafe APIs in `cutile::tileir`.
+  Minimum CTA residency is configurable in entry
+  annotations or `CompileOptions`, including default architecture hints.
+- CPU/reference-reader and assembler coverage for the 13.5 surface, plus an
+  explicit two-GPU NVLink SHARP multicast execution test. Version and target
+  checks preserve older bytecode layouts and reject unsupported combinations.
+- An unsafe communication reference and runnable `unsafe_comms` example with
+  independent unicast and multicast modes. Two-GPU tests exercise system-scope
+  signaling, peer loads/stores/atomic adds, multicast operations, and repeated
+  buffer reuse with both launch orders.
+
+### Fixed
+
+- Preserve peer-pointer classification through reshape and broadcast; reject
+  IR shape/offset operations that silently drop the classification.
+
 ### Changed
 
 - Tile and SIMT share `cuda_async` operations, scheduling, futures and launch

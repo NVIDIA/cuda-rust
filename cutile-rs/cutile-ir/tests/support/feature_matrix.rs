@@ -12,6 +12,13 @@ fn describe(requirement: Requirement) -> String {
         Architecture::Any => String::new(),
         Architecture::AtLeast(sm) => format!(" and `sm_{sm}+`"),
         Architecture::Only(sm) => format!(" and `sm_{sm}` only"),
+        Architecture::OneOf(sms) => format!(
+            " and {}",
+            sms.iter()
+                .map(|sm| format!("`sm_{sm}`"))
+                .collect::<Vec<_>>()
+                .join(" / ")
+        ),
     };
     format!("Tile IR {}{arch}", requirement.since)
 }
@@ -89,10 +96,19 @@ pub fn readme_matrix() -> String {
             "",
         ),
         (
-            "Saturating float-to-int, explicit pointer classification, view `inbounds`",
+            "Saturating float-to-int, `ptr_attr<none>`, load/store view `inbounds`",
             Feature::SaturatingFToI,
             "",
         ),
+        (
+            "Unicast/multicast pointers and multicast view operations",
+            Feature::Multimem,
+            "; NVLink SHARP-capable fabric",
+        ),
+        ("Atomic view `inbounds`", Feature::AtomicViewInbounds, ""),
+        ("TMA data-validity checks", Feature::ValidityCheck, ""),
+        ("Condition likelihood hints", Feature::ControlFlowHints, ""),
+        ("Minimum CTAs per SM", Feature::MinCtasPerSm, ""),
         ("`f8e5m3fnu`", Feature::F8E5M3FNU, ""),
         (
             "Scaled MMA with `f8e5m3fnu` scales",
@@ -126,6 +142,11 @@ pub fn full_matrix() -> String {
     }
     out.push_str("---|\n");
     for &feature in Feature::ALL {
+        // This is a 13.4-only value restriction, not a cumulative feature.
+        // Its version-specific range is documented below the table.
+        if feature == Feature::WorkerWarpsRestricted {
+            continue;
+        }
         let requirement = feature.requirement();
         write!(out, "| {} |", feature.name()).unwrap();
         for version in BytecodeVersion::SUPPORTED {
@@ -144,6 +165,11 @@ pub fn full_matrix() -> String {
             Architecture::Any => "Any supported target".to_string(),
             Architecture::AtLeast(sm) => format!("`sm_{sm}+`"),
             Architecture::Only(sm) => format!("`sm_{sm}` only"),
+            Architecture::OneOf(sms) => sms
+                .iter()
+                .map(|sm| format!("`sm_{sm}`"))
+                .collect::<Vec<_>>()
+                .join(" / "),
         };
         writeln!(out, " {arch} |").unwrap();
     }

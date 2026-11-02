@@ -2126,6 +2126,34 @@ pub mod core {
         unreachable!()
     }
 
+    /// Return `condition` unchanged, hinting which outcome an `if` should favor.
+    /// Requires Tile IR 13.5. This is advisory: an incorrect prediction never
+    /// changes correctness, and the compiler may ignore the hint.
+    ///
+    /// Use `if likely::<true>(condition) { ... }` to favor the true branch,
+    /// or `likely::<false>` to favor the false branch. Copies and inline
+    /// helpers preserve the hint; boolean computations and control-flow joins
+    /// may discard it, so apply it to the final condition.
+    #[cuda_tile::compiler_op(name = "likely")]
+    pub fn likely<const EXPECTED: bool>(condition: bool) -> bool {
+        unreachable!()
+    }
+
+    /// Advisory likelihood for a boolean tile used by [`select`].
+    #[derive(Clone, Copy)]
+    pub struct Likelihood<const EXPECTED: bool>;
+
+    /// Return a boolean tile unchanged, with an advisory hint for [`select`].
+    /// Use [`likely`] for scalar branch conditions. Requires Tile IR 13.5.
+    #[cuda_tile::compiler_op(name = "with_likelihood")]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub fn with_likelihood<const S: [i32; N], const EXPECTED: bool>(
+        condition: Tile<bool, S>,
+        _hint: Likelihood<EXPECTED>,
+    ) -> Tile<bool, S> {
+        unreachable!()
+    }
+
     /// `cond ? val_if_true : val_if_false` (element-wise).
     #[cuda_tile::op(name="cuda_tile.select", since="V13_2", params=["cond", "val_if_true", "val_if_false"])]
     #[cuda_tile::variadic_op(N = 6)]

@@ -159,6 +159,9 @@ fn check_region_versions(
                         version,
                     )?;
                 }
+                if values.iter().any(|(key, _)| key == "min_ctas_per_sm") {
+                    require_version("min_ctas_per_sm", Feature::MinCtasPerSm.since(), version)?;
+                }
             }
         }
     }
@@ -427,7 +430,7 @@ fn serialize_type_with_pointer_attribute(
     };
     match ty {
         Type::WithPointerAttribute(base, attr) => {
-            require_version("ptr_attr", Feature::PointerAttribute.since(), version)?;
+            require_version("ptr_attr", attr.feature().since(), version)?;
             if !matches!(base.as_ref(), Type::Pointer(_) | Type::TensorView(_))
                 && pointer_dependency(base).is_none()
             {
@@ -772,12 +775,31 @@ fn write_debug_section(out: &mut Vec<u8>, ctx: &mut WriterCtx) -> Result<()> {
 
     w.write_varint(entries.len() as u64);
     w.align_to(4);
+    // Subprograms are interned with the 13.5 flags field. Preserve older
+    // layouts by omitting that field, but never silently drop a declaration.
+    let encoded_entries = entries
+        .iter()
+        .map(|encoded| {
+            if ctx.version < BytecodeVersion::V13_5
+                && encoded.first() == Some(&(super::enums::DebugTag::DISubprogram as u8))
+            {
+                if encoded.last() != Some(&0) {
+                    return Err(Error::BytecodeWrite(
+                        "DISubprogram declaration flags require Tile IR 13.5".into(),
+                    ));
+                }
+                Ok(&encoded[..encoded.len() - 1])
+            } else {
+                Ok(encoded.as_slice())
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
     let mut offset: u32 = 0;
-    for encoded in entries {
+    for encoded in &encoded_entries {
         w.write_le_u32(offset);
         offset += encoded.len() as u32;
     }
-    for encoded in entries {
+    for encoded in encoded_entries {
         w.write_bytes(encoded);
     }
 
@@ -802,6 +824,12 @@ fn prescan_function(
 
     // Register function name and type from attributes.
     for (name, attr) in &op.attributes {
+        if name == "arg_attrs"
+            && matches!(attr, Attribute::Array(items)
+            if items.iter().all(|a| matches!(a, Attribute::Dictionary(values) if values.is_empty())))
+        {
+            continue;
+        }
         prescan_attribute(name, attr, strings, types);
     }
 
@@ -916,7 +944,15 @@ fn write_function_section(out: &mut Vec<u8>, ctx: &mut WriterCtx) -> Result<()> 
         // Entry flag.
         let is_entry = op.opcode == Opcode::Entry;
         let hints_attr = if is_entry {
-            find_attr(&op.attributes, "optimization_hints").cloned()
+            find_attr(&op.attributes, "optimization_hints")
+                .cloned()
+                .or_else(|| {
+                    (ctx.version >= BytecodeVersion::V13_5).then(|| {
+                        Attribute::OptimizationHints(crate::ir::OptimizationHints {
+                            entries: vec![],
+                        })
+                    })
+                })
         } else {
             None
         };
@@ -940,7 +976,7 @@ fn write_function_section(out: &mut Vec<u8>, ctx: &mut WriterCtx) -> Result<()> 
         if is_entry {
             flags |= FunctionFlag::KindKernel as u8;
         }
-        if is_entry && has_hints {
+        if is_entry && has_hints && ctx.version < BytecodeVersion::V13_5 {
             flags |= FunctionFlag::HasOptimizationHints as u8;
         }
         w.write_byte(flags);
@@ -959,6 +995,34 @@ fn write_function_section(out: &mut Vec<u8>, ctx: &mut WriterCtx) -> Result<()> 
         if let Some(hints_attr) = hints_attr {
             write_self_contained_attribute(
                 &hints_attr,
+                &mut w,
+                &mut ctx.strings,
+                &mut ctx.types,
+                &mut ctx.constants,
+            )?;
+        }
+
+        // 13.5 makes argument attributes a positional function-table field.
+        let arg_attrs = find_attr(&op.attributes, "arg_attrs").filter(|attr| {
+            !matches!(attr, Attribute::Array(items)
+                if items.iter().all(|a| matches!(a, Attribute::Dictionary(values) if values.is_empty())))
+        });
+        if arg_attrs.is_some() {
+            require_version("argument attributes", BytecodeVersion::V13_5, ctx.version)?;
+            let Type::Func(signature) = &func_type else {
+                unreachable!()
+            };
+            if !matches!(arg_attrs, Some(Attribute::Array(items)) if items.len() == signature.inputs.len()
+                && items.iter().all(|a| matches!(a, Attribute::Dictionary(_))))
+            {
+                return Err(Error::BytecodeWrite(
+                    "arg_attrs requires one dictionary per function argument".into(),
+                ));
+            }
+        }
+        if ctx.version >= BytecodeVersion::V13_5 {
+            write_self_contained_attribute(
+                arg_attrs.unwrap_or(&Attribute::Array(vec![])),
                 &mut w,
                 &mut ctx.strings,
                 &mut ctx.types,
@@ -1070,6 +1134,7 @@ impl DebugInfoCollector {
             &sp.linkage_name,
             cu,
             sp.scope_line as u64,
+            sp.is_declaration,
         )
     }
 
@@ -1155,6 +1220,7 @@ impl DebugInfoCollector {
                     sym_name,
                     cu,
                     *line as u64,
+                    false,
                 )
             }
             Location::DebugInfo(di) => self.scope_attr(strings, &di.scope.clone()),

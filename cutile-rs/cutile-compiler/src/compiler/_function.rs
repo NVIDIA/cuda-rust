@@ -914,6 +914,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 linkage_name: format!("{callee_name}@{stem}:{}:{}", def.line, def.column),
                 compile_unit,
                 scope_line: def.line as u32,
+                is_declaration: false,
             })
         } else {
             None

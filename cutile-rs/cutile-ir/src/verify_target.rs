@@ -171,7 +171,29 @@ pub(crate) fn verify_operation(
     let operand = |i: usize| op.operands.get(i).and_then(|v| tile(module.value_type(*v)));
     let result = || op.result_types.first().and_then(tile);
     let rounding = integer(op, "rounding_mode");
+    if matches!(op.opcode, Reshape | Broadcast | Offset)
+        && op
+            .operands
+            .first()
+            .and_then(|v| module.value_type(*v).pointer_attribute())
+            != op.result_types.first().and_then(Type::pointer_attribute)
+    {
+        return Err(fail(
+            "pointer shape/offset operations must preserve ptr_attr",
+        ));
+    }
+    if matches!(op.opcode, AtomicRMW | AtomicCAS | LoadPtrTko | StorePtrTko)
+        && op.operands.iter().any(|v| {
+            module.value_type(*v).pointer_attribute()
+                == Some(crate::ir::PointerAttribute::Multicast)
+        })
+    {
+        return Err(fail("ordinary pointer accesses do not accept multicast pointers; use multimem view operations"));
+    }
     match op.opcode {
+        MultimemLoadReduceViewTko | MultimemReduceViewTko | MultimemStoreViewTko => {
+            verify_multimem(module, op).map_err(|message| fail(&message))?;
+        }
         Bitcast | Reshape | Broadcast | Permute | Pack | Unpack => {
             let src = operand(0).ok_or_else(|| fail("source must be a tile"))?;
             let dst = result().ok_or_else(|| fail("result must be a tile"))?;
@@ -562,6 +584,26 @@ pub(crate) fn verify_operation(
                 .get(usize::from(op.opcode == StoreViewTko))
                 .map(|v| module.value_type(*v))
                 .ok_or_else(|| fail("expected view operand"))?;
+            if view.pointer_attribute() == Some(crate::ir::PointerAttribute::Multicast) {
+                return Err(fail("ordinary view accesses do not accept multicast pointers; use multimem view operations"));
+            }
+            if op
+                .attributes
+                .iter()
+                .any(|(name, attr)| name == "valid_check" && matches!(attr, Attribute::Bool(true)))
+            {
+                for (_, attr) in &op.attributes {
+                    if let Attribute::OptimizationHints(hints) = attr {
+                        if hints.entries.iter().any(|(_, entries)| {
+                            entries.iter().any(|(name, value)| {
+                                name == "allow_tma" && matches!(value, Attribute::Bool(false))
+                            })
+                        }) {
+                            return Err(fail("valid_check requires TMA; enable allow_tma"));
+                        }
+                    }
+                }
+            }
             let (shape, element, padding, sparse) = match view.without_pointer_attribute() {
                 Type::PartitionView(v) => (
                     &v.tile_shape,
@@ -669,6 +711,130 @@ pub(crate) fn verify_operation(
         && operand(0).and_then(scalar) != Some(F32)
     {
         return Err(fail("flush_to_zero requires f32"));
+    }
+    Ok(())
+}
+
+fn verify_multimem(module: &Module, op: &Operation) -> Result<(), String> {
+    use Opcode::*;
+    use ScalarType::*;
+    let load = op.opcode == MultimemLoadReduceViewTko;
+    let reduce = op.opcode == MultimemReduceViewTko;
+    let view = op
+        .operands
+        .first()
+        .map(|v| module.value_type(*v))
+        .ok_or("expected multicast partition view")?;
+    if view.pointer_attribute() != Some(crate::ir::PointerAttribute::Multicast) {
+        return Err("multimem requires a multicast pointer classification".into());
+    }
+    let Type::PartitionView(view) = view.without_pointer_attribute() else {
+        return Err("multimem supports only partition views".into());
+    };
+    let element = view.tensor_view.element_type;
+    if !matches!(element, I32 | I64 | F16 | BF16 | F32 | F64) {
+        return Err("multimem requires i32/i64/f16/bf16/f32/f64 elements".into());
+    }
+    let value = if load {
+        op.result_types.first()
+    } else {
+        op.operands.get(1).map(|v| module.value_type(*v))
+    }
+    .and_then(tile)
+    .ok_or("expected a loaded/stored tile")?;
+    let shape: Vec<i64> = view.tile_shape.iter().map(|&n| i64::from(n)).collect();
+    if value.shape != shape || scalar(value) != Some(element) {
+        return Err(
+            "multimem view and value must have matching tile shape and element type".into(),
+        );
+    }
+    if element.is_float() && (shape.iter().product::<i64>() * bits(element) as i64) % 32 != 0 {
+        return Err("multimem floating-point tile size must be a multiple of 4 bytes".into());
+    }
+    if matches!(element, F16 | BF16)
+        && view.tensor_view.strides.iter().filter(|&&s| s == 1).count() != 1
+    {
+        return Err(
+            "f16/bf16 multimem views require exactly one statically unit-stride dimension".into(),
+        );
+    }
+    if load || reduce {
+        let reduction = integer(op, "reduction").unwrap_or(0);
+        let valid = match reduction {
+            0 => true,
+            1 | 2 => element.is_integer() || (load && matches!(element, F16 | BF16)),
+            3..=7 => element.is_integer(),
+            _ => false,
+        };
+        if !valid {
+            return Err("multimem reduction is not supported for this element type".into());
+        }
+    }
+    let index_start = if load { 1 } else { 2 };
+    let token_start = index_start + shape.len();
+    if op.operands.len() < token_start || op.operands.len() > token_start + 1 {
+        return Err("expected one index per view dimension and an optional token".into());
+    }
+    let mut index_element = None;
+    for v in &op.operands[index_start..token_start] {
+        let index = tile(module.value_type(*v)).ok_or("indices must be scalar integer tiles")?;
+        let kind = scalar(index)
+            .filter(|s| s.is_integer())
+            .ok_or("indices must be scalar integer tiles")?;
+        if !index.shape.is_empty() || index_element.is_some_and(|s| s != kind) {
+            return Err("indices must be scalar integer tiles with matching element types".into());
+        }
+        index_element = Some(kind);
+    }
+    let token_count = op.operands.len() - token_start;
+    let mut expected_segments = vec![1];
+    if !load {
+        expected_segments.push(1);
+    }
+    expected_segments.extend([shape.len() as i64, token_count as i64]);
+    let segments = op.attributes.iter().find_map(|(name, attr)| {
+        if name != "operandSegmentSizes" {
+            return None;
+        }
+        if let Attribute::Array(items) = attr {
+            items
+                .iter()
+                .map(|a| {
+                    if let Attribute::Integer(n, _) = a {
+                        Some(*n)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Option<Vec<_>>>()
+        } else {
+            None
+        }
+    });
+    if segments.as_ref() != Some(&expected_segments) {
+        return Err("invalid multimem operand segment sizes".into());
+    }
+    if (token_count == 1 && module.value_type(op.operands[token_start]) != &Type::Token)
+        || op.result_types.len() != if load { 2 } else { 1 }
+        || op.result_types.last() != Some(&Type::Token)
+    {
+        return Err("invalid multimem token signature".into());
+    }
+    if let Some((_, bounds)) = op.attributes.iter().find(|(name, _)| name == "inbounds") {
+        if !matches!(bounds, Attribute::Array(v) if v.len() == shape.len() && v.iter().all(|a| matches!(a, Attribute::Bool(_))))
+        {
+            return Err("inbounds requires one boolean per view dimension".into());
+        }
+    }
+    let order = integer(op, "memory_ordering_semantics").unwrap_or(0);
+    let scope = integer(op, "memory_scope");
+    if (load && !matches!(order, 0..=2))
+        || (!load && !matches!(order, 0 | 1 | 3))
+        || (reduce && order == 0)
+        || (order == 0 && scope.is_some())
+        || (order != 0 && !matches!(scope, Some(0..=2)))
+    {
+        return Err("invalid multimem memory ordering/scope combination".into());
     }
     Ok(())
 }

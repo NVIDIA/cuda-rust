@@ -42,8 +42,12 @@ fn raw_op_metadata_matches_the_requirements_registry() {
                 .find(|op| canonical_name == op.name())
                 .unwrap_or_else(|| panic!("{name} has no registry entry"));
             let requirement = opcode_requirement(*opcode);
-            let since = if metadata.parse_string("pointer_attribute").is_some() {
-                Feature::PointerAttribute.since()
+            let since = if let Some(attribute) = metadata.parse_string("pointer_attribute") {
+                if attribute == "none" {
+                    Feature::PointerAttribute.since()
+                } else {
+                    Feature::FabricPointer.since()
+                }
             } else {
                 requirement.since
             };

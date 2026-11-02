@@ -212,7 +212,9 @@ jobs:
       - name: Bundle runtime test archives
         run: |
           cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cutile-gpu-tests/cargo-nextest"
-          git rev-parse HEAD > "$RUNNER_TEMP/cutile-gpu-tests/revision.txt"
+          # Container steps may use a different HOME than checkout's Git setup.
+          git -c safe.directory="$GITHUB_WORKSPACE" -C "$GITHUB_WORKSPACE" \
+            rev-parse HEAD > "$RUNNER_TEMP/cutile-gpu-tests/revision.txt"
           cargo nextest --version > "$RUNNER_TEMP/cutile-gpu-tests/nextest-version.txt"
           tar -cf "$RUNNER_TEMP/cutile-gpu-tests.tar" \
             -C "$RUNNER_TEMP/cutile-gpu-tests" .

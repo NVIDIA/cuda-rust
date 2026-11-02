@@ -209,4 +209,7 @@ fn worker_hint_range_tracks_the_selected_dialect() {
         .unwrap_err()
         .to_string()
         .contains("num_worker_warps_per_cta"));
+    TargetCapabilities::new(BytecodeVersion::V13_5, "sm_120")
+        .validate_module(&module)
+        .unwrap();
 }

@@ -433,6 +433,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             }
             let since = match op_attrs.parse_string("since").as_deref() {
                 Some("V13_4") => cutile_ir::bytecode::BytecodeVersion::V13_4,
+                Some("V13_5") => cutile_ir::bytecode::BytecodeVersion::V13_5,
                 Some("V13_3") => cutile_ir::bytecode::BytecodeVersion::V13_3,
                 Some("V13_2") | None => cutile_ir::bytecode::BytecodeVersion::V13_2,
                 Some(other) => {
@@ -534,7 +535,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             "cuda_tile.assume" => {
                 self.compile_raw_assumption(module, block_id, call_expr, fn_item, generic_args, ctx)
             }
-            "cuda_tile.load_view_tko" | "cuda_tile.store_view_tko" => self.compile_raw_view_op(
+            "cuda_tile.load_view_tko"
+            | "cuda_tile.store_view_tko"
+            | "cuda_tile.multimem_load_reduce_view_tko"
+            | "cuda_tile.multimem_reduce_view_tko"
+            | "cuda_tile.multimem_store_view_tko" => self.compile_raw_view_op(
                 module,
                 block_id,
                 call_expr,
@@ -544,8 +549,13 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 ctx,
                 return_type,
             ),
-            "cuda_tile.atomic_red_view_tko" if fn_item.sig.ident == "atomic_red_view_raw" => self
-                .compile_raw_view_op(
+            "cuda_tile.atomic_red_view_tko"
+                if matches!(
+                    fn_item.sig.ident.to_string().as_str(),
+                    "atomic_red_view_raw" | "atomic_red_view_tko_with_inbounds"
+                ) =>
+            {
+                self.compile_raw_view_op(
                     module,
                     block_id,
                     call_expr,
@@ -554,7 +564,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     generic_args,
                     ctx,
                     return_type,
-                ),
+                )
+            }
             "cuda_tile.gdc_launch_dependents_tko" | "cuda_tile.gdc_wait_tko" => {
                 let token_ty = self
                     .compile_type(&syn::parse_quote!(Token), generic_args, &HashMap::new())?
@@ -2782,19 +2793,31 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             op_operands.extend_from_slice(&arg_values);
         }
 
-        let pointer_attribute =
-            if op_attrs.parse_string("pointer_attribute").as_deref() == Some("none") {
-                Some(cutile_ir::ir::PointerAttribute::None)
-            } else if matches!(
-                opcode,
-                Opcode::MakeTensorView | Opcode::MakePartitionView | Opcode::Offset
-            ) {
-                op_operands
-                    .first()
-                    .and_then(|v| module.value_type(*v).pointer_attribute())
-            } else {
-                None
-            };
+        let pointer_attribute = if let Some(attribute) = op_attrs.parse_string("pointer_attribute")
+        {
+            Some(match attribute.as_str() {
+                "none" => cutile_ir::ir::PointerAttribute::None,
+                "unicast" => cutile_ir::ir::PointerAttribute::Unicast,
+                "multicast" => cutile_ir::ir::PointerAttribute::Multicast,
+                _ => {
+                    return self
+                        .jit_error_result(&call_expr.span(), "unknown pointer classification")
+                }
+            })
+        } else if matches!(
+            opcode,
+            Opcode::MakeTensorView
+                | Opcode::MakePartitionView
+                | Opcode::Offset
+                | Opcode::Reshape
+                | Opcode::Broadcast
+        ) {
+            op_operands
+                .first()
+                .and_then(|v| module.value_type(*v).pointer_attribute())
+        } else {
+            None
+        };
         if let Some(attribute) = pointer_attribute {
             let ty = super::_type::convert_type(&return_type).ok_or_else(|| {
                 self.jit_error(&call_expr.span(), "expected a pointer or view result type")
@@ -2804,6 +2827,15 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         }
 
         let mut attrs: Vec<(String, Attribute)> = vec![];
+        if opcode == Opcode::Select {
+            if let Some(expected) = compiled_args.first().and_then(|v| v.condition_likelihood) {
+                attrs.push((
+                    "optimization_hints".into(),
+                    super::optimization_hints::build_condition_hint(expected),
+                ));
+            }
+        }
+
         // Conversion signedness belongs to the integer side, not necessarily
         // to the first operand (ftoi's first operand is floating point).
         if matches!(opcode, Opcode::FToI | Opcode::IToF) {
@@ -4073,7 +4105,16 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 .ok_or_else(|| self.jit_error(&expr.span(), "expected Token"))?,
             );
         }
-        let is_load = opcode == Opcode::LoadViewTko;
+        let is_load = matches!(
+            opcode,
+            Opcode::LoadViewTko | Opcode::MultimemLoadReduceViewTko
+        );
+        let is_multimem = matches!(
+            opcode,
+            Opcode::MultimemLoadReduceViewTko
+                | Opcode::MultimemReduceViewTko
+                | Opcode::MultimemStoreViewTko
+        );
         let is_atomic = opcode == Opcode::AtomicRedViewTko;
         let mut builder = OpBuilder::new(opcode, self.ir_location(&call.span()));
         let mut operands = vec![view_value];
@@ -4103,7 +4144,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             let value = compile_value(module, ctx, "value")?
                 .value
                 .ok_or_else(|| self.jit_error(&call.span(), "expected stored tile"))?;
-            operands.insert(0, value);
+            if is_multimem {
+                operands.push(value);
+            } else {
+                operands.insert(0, value);
+            }
             segments.push(1);
         }
         operands.extend(&indices);
@@ -4146,13 +4191,42 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         if ordering != 0 {
             builder = builder.attr("memory_scope", Attribute::i32(scope));
         }
-        if !is_atomic {
+        if is_multimem && opcode != Opcode::MultimemStoreViewTko {
+            let reduction =
+                super::shared_utils::extract_zst_type_name(argument("reduction"), "reduction")?;
+            let code = match reduction.as_str() {
+                "Add" => 0,
+                "Min" => 1,
+                "Max" => 2,
+                "And" => 3,
+                "Or" => 4,
+                "Xor" => 5,
+                "Umin" => 6,
+                "Umax" => 7,
+                _ => return self.jit_error_result(&call.span(), "unknown multimem reduction"),
+            };
+            builder = builder.attr("reduction", Attribute::i32(code));
+        }
+        if !is_atomic && !is_multimem {
             let hints = self.read_view_hint_params(&params, call, ctx, generics)?;
             if let Some(hints) =
                 super::optimization_hints::build_load_store_hints(&self.optimization_hints, hints)
             {
                 builder = builder.attr("optimization_hints", hints);
             }
+        }
+        if params.iter().any(|p| p == "valid_check") {
+            let value = compile_value(module, ctx, "valid_check")?
+                .bounds
+                .filter(|b| b.start == b.end)
+                .ok_or_else(|| {
+                    self.jit_error(&call.span(), "valid_check must be a compile-time boolean")
+                })?;
+            if value.start != 0 {
+                builder = builder.attr("valid_check", Attribute::Bool(true));
+            }
+        }
+        if params.iter().any(|p| p == "inbounds") {
             let flags = compile_value(module, ctx, "inbounds")?
                 .values
                 .ok_or_else(|| {
@@ -4579,6 +4653,9 @@ fn op_name_to_opcode(op_name: &str) -> Result<Opcode, JITError> {
         "make_gather_scatter_view" => Ok(Opcode::MakeGatherScatterView),
         "make_strided_view" => Ok(Opcode::MakeStridedView),
         "atomic_red_view_tko" => Ok(Opcode::AtomicRedViewTko),
+        "multimem_load_reduce_view_tko" => Ok(Opcode::MultimemLoadReduceViewTko),
+        "multimem_reduce_view_tko" => Ok(Opcode::MultimemReduceViewTko),
+        "multimem_store_view_tko" => Ok(Opcode::MultimemStoreViewTko),
         "fma" => Ok(Opcode::Fma),
         "mmaf" => Ok(Opcode::MmaF),
         "mmaf_scaled" => Ok(Opcode::MmaFScaled),

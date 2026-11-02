@@ -407,6 +407,10 @@ operation.
 The raw intrinsics live in `cutile::core`; view constructors and their
 types also live in `cutile::tileir`. They are for callers that can uphold
 the documented unsafe invariants. Existing convenience APIs remain unchanged.
+
+For CUDA 13.5 peer and multicast memory access, see
+[Unsafe GPU communication](unsafe-comms.md), including the synchronization
+primitives, mapping contracts, and runnable two-GPU example.
 The JIT checks both the selected assembler's bytecode version and the actual
 target architecture. Type, attribute and operand-configuration requirements
 apply even when an operation itself predates them.

@@ -1079,7 +1079,9 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
                 }
             }
             Pat::Type(pat_type) => {
-                self.bind_pattern_with_syn_type(&pat_type.pat, &pat_type.ty)?;
+                // Preserve layout parameters inferred from the initializer:
+                // Tensor/Partition annotations alone do not encode strides.
+                self.bind_pattern_with_type(&pat_type.pat, &pat_type.ty, tile_ty)?;
             }
             Pat::Paren(paren) => {
                 self.bind_pattern_with_type(&paren.pat, ty, tile_ty)?;

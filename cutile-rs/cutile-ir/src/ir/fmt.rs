@@ -1069,6 +1069,36 @@ impl<'a> ModulePrinter<'a> {
                 self.print_reduce_or_scan(op_id, out);
             }
 
+            Opcode::MultimemLoadReduceViewTko
+            | Opcode::MultimemReduceViewTko
+            | Opcode::MultimemStoreViewTko => {
+                for (i, operand) in op.operands.iter().enumerate() {
+                    write!(
+                        out,
+                        "{}%{}",
+                        if i == 0 { " " } else { ", " },
+                        operand.index()
+                    )
+                    .unwrap();
+                }
+                self.print_attr_dict(op_id, &["operandSegmentSizes"], out);
+                write!(out, " : (").unwrap();
+                for (i, operand) in op.operands.iter().enumerate() {
+                    if i != 0 {
+                        write!(out, ", ").unwrap();
+                    }
+                    write!(out, "{}", format_type(self.module.value_type(*operand))).unwrap();
+                }
+                write!(out, ") -> (").unwrap();
+                for (i, ty) in op.result_types.iter().enumerate() {
+                    if i != 0 {
+                        write!(out, ", ").unwrap();
+                    }
+                    write!(out, "{}", format_type(ty)).unwrap();
+                }
+                writeln!(out, ")").unwrap();
+            }
+
             // ---- Global / Module / Entry handled elsewhere ----
             Opcode::Alloca
             | Opcode::AtomicRedViewTko
@@ -1379,7 +1409,7 @@ impl<'a> ModulePrinter<'a> {
         // Operands: [base, dynamic_shape..., dynamic_strides...]
         // The result type tells us the static shape/strides.
         let result_ty = op.result_types.first();
-        let tv = match result_ty {
+        let tv = match result_ty.map(Type::without_pointer_attribute) {
             Some(Type::TensorView(tv)) => Some(tv),
             _ => None,
         };
@@ -2016,11 +2046,14 @@ fn opcode_name(opcode: Opcode) -> &'static str {
 /// Format a tile-ir `Type` as an MLIR type string (shorthand, no `!cuda_tile.` prefix).
 pub fn format_type(ty: &Type) -> String {
     match ty {
-        Type::WithPointerAttribute(base, _) => {
+        Type::WithPointerAttribute(base, attribute) => {
             let mut text = format_type(base);
             if let Some(start) = text.find("ptr<").or_else(|| text.find("tensor_view<")) {
                 if let Some(end) = text[start..].find('>') {
-                    text.insert_str(start + end, ", #cuda_tile.ptr_attr<none>");
+                    text.insert_str(
+                        start + end,
+                        &format!(", #cuda_tile.ptr_attr<{}>", attribute.name()),
+                    );
                 }
             }
             text

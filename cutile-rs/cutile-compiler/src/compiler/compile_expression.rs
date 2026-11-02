@@ -3022,13 +3022,19 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         [if_captured_var_arg_tys, branch_result_type].concat()
                     };
 
-                    let (if_op_id, mut result_values) =
+                    let mut builder =
                         OpBuilder::new(Opcode::If, self.ir_location(&if_expr.cond.span()))
                             .operand(condition_val)
                             .results(if_result_types.iter().cloned())
                             .region(then_region_id)
-                            .region(else_region_id)
-                            .build(module);
+                            .region(else_region_id);
+                    if let Some(expected) = conditional_val.condition_likelihood {
+                        builder = builder.attr(
+                            "optimization_hints",
+                            super::optimization_hints::build_condition_hint(expected),
+                        );
+                    }
+                    let (if_op_id, mut result_values) = builder.build(module);
                     append_op(module, block_id, if_op_id);
 
                     if let Some(ty) = then_return_type {

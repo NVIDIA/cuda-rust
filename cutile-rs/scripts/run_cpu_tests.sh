@@ -77,6 +77,9 @@ for test_target in \
     span_source_location \
     trait_dispatch_probe \
     tile_ir_capabilities \
+    tile_ir_13_5 \
+    tile_ir_13_5_multicast \
+    tile_ir_13_5_comms \
     token_threading \
     two_cga_trait_impl \
     type_inference_sanity \

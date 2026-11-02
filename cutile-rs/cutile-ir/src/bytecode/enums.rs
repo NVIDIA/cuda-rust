@@ -168,9 +168,14 @@ impl BytecodeVersion {
         minor: 4,
         tag: 0,
     };
+    pub const V13_5: Self = Self {
+        major: 13,
+        minor: 5,
+        tag: 0,
+    };
 
     /// Newest version this writer can emit.
-    pub const CURRENT: Self = Self::V13_4;
+    pub const CURRENT: Self = Self::V13_5;
 
     /// Oldest version this writer can emit.
     ///
@@ -183,7 +188,7 @@ impl BytecodeVersion {
 
     /// All emittable versions, oldest to newest. Used to probe the installed
     /// `tileiras` for the newest bytecode version it accepts.
-    pub const SUPPORTED: [Self; 3] = [Self::V13_2, Self::V13_3, Self::V13_4];
+    pub const SUPPORTED: [Self; 4] = [Self::V13_2, Self::V13_3, Self::V13_4, Self::V13_5];
 }
 
 impl std::fmt::Display for BytecodeVersion {

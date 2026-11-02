@@ -76,13 +76,18 @@ pub(super) fn write_op_body(
         | PtrToPtr
         | RemF
         | Reshape
-        | Select
         | Sin
         | SinH
         | Tan
         | Unpack
         | XOrI => {
             write_result_types(op, w, ctx)?;
+            write_operands(op, w, ctx, false)?;
+        }
+
+        Select => {
+            write_result_types(op, w, ctx)?;
+            write_control_flow_hints(op, w, ctx)?;
             write_operands(op, w, ctx, false)?;
         }
 
@@ -422,6 +427,7 @@ pub(super) fn write_op_body(
         If => {
             w.write_varint(op.result_types.len() as u64);
             write_result_types(op, w, ctx)?;
+            write_control_flow_hints(op, w, ctx)?;
             write_operands(op, w, ctx, false)?;
             write_regions(op, w, ctx)?;
         }
@@ -486,6 +492,7 @@ pub(super) fn write_op_body(
             write_inline_attr(op, "memory_ordering_semantics", w, ctx)?;
             write_inline_attr(op, "memory_scope", w, ctx)?;
             write_inline_attr(op, "mode", w, ctx)?;
+            write_inbounds(op, 1, w, ctx)?;
             write_operand_group(op, w, ctx, 0, 1)?;
             write_variadic_operand_group(op, w, ctx, 1)?;
             write_operand_group(op, w, ctx, 2, 1)?;
@@ -524,7 +531,8 @@ pub(super) fn write_op_body(
             write_result_types(op, w, ctx)?;
             let flags = flag_if_present(op, "memory_scope", 0)
                 | flag_if_present(op, "optimization_hints", 1)
-                | flag_if_operand_group(op, 2, 2);
+                | flag_if_operand_group(op, 2, 2)
+                | flag_if_bool_true(op, "valid_check", 3);
             w.write_varint(flags);
             write_inline_attr(op, "memory_ordering_semantics", w, ctx)?;
             if flags & (1 << 0) != 0 {
@@ -534,6 +542,9 @@ pub(super) fn write_op_body(
                 write_inline_attr(op, "optimization_hints", w, ctx)?;
             }
             write_inbounds(op, 1, w, ctx)?;
+            if flags & (1 << 3) != 0 {
+                w.write_byte(1);
+            }
             write_operand_group(op, w, ctx, 0, 1)?;
             write_variadic_operand_group(op, w, ctx, 1)?;
             if flags & (1 << 2) != 0 {
@@ -583,6 +594,38 @@ pub(super) fn write_op_body(
             write_variadic_operand_group(op, w, ctx, 2)?;
             if flags & (1 << 2) != 0 {
                 write_operand_group(op, w, ctx, 3, 1)?;
+            }
+        }
+
+        MultimemLoadReduceViewTko | MultimemReduceViewTko | MultimemStoreViewTko => {
+            w.write_varint(op.result_types.len() as u64);
+            write_result_types(op, w, ctx)?;
+            let load = op.opcode == MultimemLoadReduceViewTko;
+            let reduce = op.opcode == MultimemReduceViewTko;
+            let token_group = if load { 2 } else { 3 };
+            let token_bit = u32::from(!reduce);
+            let flags = flag_if_operand_group(op, token_group, token_bit)
+                | if reduce {
+                    0
+                } else {
+                    flag_if_present(op, "memory_scope", 0)
+                };
+            w.write_varint(flags);
+            write_inline_attr(op, "memory_ordering_semantics", w, ctx)?;
+            if reduce || flags & 1 != 0 {
+                write_inline_attr(op, "memory_scope", w, ctx)?;
+            }
+            if load || reduce {
+                write_inline_attr_or_default(op, "reduction", 0, w, ctx)?;
+            }
+            write_inbounds(op, if load { 1 } else { 2 }, w, ctx)?;
+            write_operand_group(op, w, ctx, 0, 1)?;
+            if !load {
+                write_operand_group(op, w, ctx, 1, 1)?;
+            }
+            write_variadic_operand_group(op, w, ctx, if load { 1 } else { 2 })?;
+            if flags & (1 << token_bit) != 0 {
+                write_operand_group(op, w, ctx, token_group, 1)?;
             }
         }
 
@@ -938,13 +981,39 @@ fn write_inbounds(
             )))
         }
     };
+    let since = if matches!(
+        op.opcode,
+        Opcode::AtomicRedViewTko
+            | Opcode::MultimemLoadReduceViewTko
+            | Opcode::MultimemReduceViewTko
+            | Opcode::MultimemStoreViewTko
+    ) {
+        BytecodeVersion::V13_5
+    } else {
+        BytecodeVersion::V13_4
+    };
     if values.iter().any(|&value| value) {
-        require_version("inbounds=true", Feature::Inbounds.since(), ctx.version)?;
+        require_version("inbounds=true", since, ctx.version)?;
     }
-    if ctx.version >= BytecodeVersion::V13_4 {
+    if ctx.version >= since {
         w.write_varint(rank as u64);
         for value in values {
             w.write_byte(u8::from(value));
+        }
+    }
+    Ok(())
+}
+
+fn write_control_flow_hints(
+    op: &Operation,
+    w: &mut EncodingWriter,
+    ctx: &mut WriterCtx,
+) -> Result<()> {
+    if ctx.version >= BytecodeVersion::V13_5 {
+        let flags = flag_if_present(op, "optimization_hints", 0);
+        w.write_varint(flags);
+        if flags != 0 {
+            write_inline_attr(op, "optimization_hints", w, ctx)?;
         }
     }
     Ok(())
@@ -1028,6 +1097,90 @@ mod tests {
         let mut w = EncodingWriter::new();
         write_op_body(module.op(op), &mut w, &mut ctx)?;
         Ok(w.into_bytes())
+    }
+
+    // Golden layouts for the Tile IR 13.5 bytecode format.
+    // Result counts, optional-token flags, dense inbounds bytes and operand
+    // segments are deliberately checked independently of the decoder.
+    #[test]
+    fn multimem_13_5_golden_layouts() {
+        for (opcode, mut expected, reduction) in [
+            (
+                Opcode::MultimemLoadReduceViewTko,
+                vec![2, 1, 2, 3, 2, 2, 5, 1, 1, 0, 1, 1, 2],
+                5,
+            ),
+            (
+                Opcode::MultimemReduceViewTko,
+                vec![1, 0, 1, 3, 2, 7, 1, 1, 0, 1, 1, 2, 3],
+                7,
+            ),
+            (
+                Opcode::MultimemStoreViewTko,
+                vec![1, 0, 3, 3, 2, 1, 1, 0, 1, 1, 2, 3],
+                0,
+            ),
+        ] {
+            for present in [true, false] {
+                let load = opcode == Opcode::MultimemLoadReduceViewTko;
+                let mut module = Module::new("wire");
+                let count = if load { 2 } else { 3 } + usize::from(present);
+                let (_, _, args) =
+                    build_single_block_region(&mut module, &vec![Type::Token; count]);
+                let mut builder = OpBuilder::new(opcode, Location::Unknown)
+                    .operands(args.iter().copied())
+                    .attr(
+                        "memory_ordering_semantics",
+                        Attribute::i32(if load { 2 } else { 3 }),
+                    )
+                    .attr("memory_scope", Attribute::i32(2))
+                    .attr("reduction", Attribute::i32(reduction))
+                    .attr("inbounds", Attribute::dense_bool_array([true]));
+                let mut segments = if load { vec![1, 1] } else { vec![1, 1, 1] };
+                segments.push(i64::from(present));
+                builder = builder.attr(
+                    "operandSegmentSizes",
+                    Attribute::Array(segments.into_iter().map(Attribute::i32).collect()),
+                );
+                if load {
+                    builder = builder.result(tile_f32());
+                }
+                let (op, _) = builder.result(Type::Token).build(&mut module);
+                if !present {
+                    expected.pop();
+                    let flag = if load { 3 } else { 2 };
+                    expected[flag] = if opcode == Opcode::MultimemReduceViewTko {
+                        0
+                    } else {
+                        1
+                    };
+                }
+                assert_eq!(
+                    op_body_bytes_version(&module, &args, op, BytecodeVersion::V13_5).unwrap(),
+                    expected,
+                    "{opcode:?} token={present}"
+                );
+                assert!(op_body_bytes_version(&module, &args, op, BytecodeVersion::V13_4).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn select_flags_start_in_13_5_even_without_hints() {
+        let mut module = Module::new("select");
+        let (_, _, args) = build_single_block_region(&mut module, &vec![tile_f32(); 3]);
+        let (op, _) = OpBuilder::new(Opcode::Select, Location::Unknown)
+            .operands(args.iter().copied())
+            .result(tile_f32())
+            .build(&mut module);
+        assert_eq!(
+            op_body_bytes_version(&module, &args, op, BytecodeVersion::V13_4).unwrap(),
+            [1, 0, 1, 2]
+        );
+        assert_eq!(
+            op_body_bytes_version(&module, &args, op, BytecodeVersion::V13_5).unwrap(),
+            [1, 0, 0, 1, 2]
+        );
     }
 
     fn compare_python(operation: &str, version: BytecodeVersion, option: bool, actual: &[u8]) {

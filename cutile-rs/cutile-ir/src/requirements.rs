@@ -21,6 +21,7 @@ pub enum Architecture {
     Any,
     AtLeast(u32),
     Only(u32),
+    OneOf(&'static [u32]),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,6 +52,15 @@ impl Requirement {
             Architecture::AtLeast(sm) => target.require_sm(name, sm, location),
             Architecture::Only(sm) if target.sm() == Some(sm) => Ok(()),
             Architecture::Only(sm) => Err(target.error(name, &format!("sm_{sm}"), location)),
+            Architecture::OneOf(sms) if target.sm().is_some_and(|sm| sms.contains(&sm)) => Ok(()),
+            Architecture::OneOf(sms) => Err(target.error(
+                name,
+                &sms.iter()
+                    .map(|sm| format!("sm_{sm}"))
+                    .collect::<Vec<_>>()
+                    .join(" or "),
+                location,
+            )),
         }
     }
 }
@@ -89,7 +99,7 @@ macro_rules! features {
     };
 }
 
-use Architecture::{Any, AtLeast, Only};
+use Architecture::{Any, AtLeast, OneOf, Only};
 
 features! {
     Baseline => ("baseline Tile IR", V13_2, AtLeast(80)),
@@ -110,6 +120,13 @@ features! {
     F8E5M3FNU => ("f8E5M3FNU", V13_4, AtLeast(107)),
     NewScaleMma => ("cuda_tile.mmaf_scaled with f8E5M3FNU scales", V13_4, Only(107)),
     PointerAttribute => ("ptr_attr", V13_4, Any),
+    FabricPointer => ("unicast/multicast pointer", V13_5, OneOf(&[100, 103, 107])),
+    Multimem => ("multimem view operations", V13_5, OneOf(&[100, 103, 107])),
+    AtomicViewInbounds => ("atomic_red_view_tko.inbounds=true", V13_5, Any),
+    ValidityCheck => ("load_view_tko.valid_check", V13_5, Only(107)),
+    ControlFlowHints => ("if/select optimization hints", V13_5, Any),
+    MinCtasPerSm => ("min_ctas_per_sm", V13_5, Any),
+    ArgumentAttributes => ("argument attributes", V13_5, Any),
     NearestAway => ("rounding_mode=nearest_away", V13_4, Any),
     ExtendedFloatRounding => ("ftof additional rounding modes (type-dependent)", V13_4, Any),
     SaturatingFToI => ("ftoi.saturating", V13_4, Any),
@@ -168,12 +185,28 @@ pub const fn scalar_requirement(scalar: ScalarType) -> Requirement {
 
 pub fn attribute_feature(op: Opcode, name: &str, attr: &Attribute) -> Option<Feature> {
     match (name, attr) {
+        ("valid_check", Attribute::Bool(true)) => Some(Feature::ValidityCheck),
+        ("arg_attrs", Attribute::Array(items))
+            if items
+                .iter()
+                .all(|a| matches!(a, Attribute::Dictionary(values) if values.is_empty())) =>
+        {
+            None
+        }
+        ("arg_attrs", _) => Some(Feature::ArgumentAttributes),
+        ("optimization_hints", _) if matches!(op, Opcode::If | Opcode::Select) => {
+            Some(Feature::ControlFlowHints)
+        }
         ("rounding_mode", Attribute::Integer(7, _)) => Some(Feature::NearestAway),
         ("saturating", Attribute::Bool(true)) => Some(Feature::SaturatingFToI),
         ("inbounds", Attribute::Array(a))
             if a.iter().any(|v| matches!(v, Attribute::Bool(true))) =>
         {
-            Some(Feature::Inbounds)
+            Some(if op == Opcode::AtomicRedViewTko {
+                Feature::AtomicViewInbounds
+            } else {
+                Feature::Inbounds
+            })
         }
         ("fast_acc", Attribute::Bool(true)) => Some(Feature::FastAccumulation),
         ("producer", _) => Some(Feature::Producer),
@@ -196,6 +229,9 @@ macro_rules! operations {
 }
 
 operations! {
+    MultimemLoadReduceViewTko => Multimem,
+    MultimemReduceViewTko => Multimem,
+    MultimemStoreViewTko => Multimem,
     AbsF => Baseline,
     AbsI => Baseline,
     AddF => Baseline,

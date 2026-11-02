@@ -1014,12 +1014,14 @@ fn default_cuda_toolkit_candidates() -> &'static [PathBuf] {
     CANDIDATES.get_or_init(|| {
         #[cfg(windows)]
         let candidates = [
+            r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.5",
             r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4",
             r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3",
             r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2",
         ];
         #[cfg(not(windows))]
         let candidates = [
+            "/usr/local/cuda-13.5",
             "/usr/local/cuda-13.4",
             "/usr/local/cuda-13.3",
             "/usr/local/cuda-13.2",

@@ -24,6 +24,7 @@ pub struct SMHints {
     pub occupancy: Option<i32>,
     pub max_divisibility: Option<i32>,
     pub num_worker_warps_per_cta: Option<i32>,
+    pub min_ctas_per_sm: Option<i32>,
 }
 
 impl SMHints {
@@ -34,6 +35,7 @@ impl SMHints {
             occupancy: None,
             max_divisibility: None,
             num_worker_warps_per_cta: None,
+            min_ctas_per_sm: None,
         }
     }
 
@@ -52,6 +54,15 @@ impl SMHints {
                 .jit_error_result("occupancy hint has already been set");
         }
         self.occupancy = Some(get_int_hint(hint)?);
+        Ok(())
+    }
+
+    pub fn set_min_ctas_per_sm(&mut self, hint: &Expr) -> Result<(), JITError> {
+        if self.min_ctas_per_sm.is_some() {
+            return SourceLocation::unknown()
+                .jit_error_result("min_ctas_per_sm hint has already been set");
+        }
+        self.min_ctas_per_sm = Some(get_int_hint(hint)?);
         Ok(())
     }
 
@@ -179,6 +190,8 @@ pub struct CompileOptions {
     pub num_cta_in_cga: Option<i32>,
     pub max_divisibility: Option<i32>,
     pub num_worker_warps_per_cta: Option<i32>,
+    /// CUDA 13.5 minimum resident CTAs per SM (0–32); zero disables the constraint.
+    pub min_ctas_per_sm: Option<i32>,
     pub codegen: CodegenMode,
     /// Instrument memory accesses for Compute Sanitizer's memcheck tool
     /// (`tileiras --sanitize=memcheck`).
@@ -192,6 +205,7 @@ impl Default for CompileOptions {
             num_cta_in_cga: None,
             max_divisibility: None,
             num_worker_warps_per_cta: None,
+            min_ctas_per_sm: None,
             codegen: CodegenMode::RELEASE.with_debug_info(BUILD_DEBUG_INFO),
             sanitize_memcheck: false,
         }
@@ -228,6 +242,12 @@ impl CompileOptions {
 
     pub fn num_worker_warps_per_cta(mut self, num_worker_warps_per_cta: i32) -> Self {
         self.num_worker_warps_per_cta = Some(num_worker_warps_per_cta);
+        self
+    }
+
+    /// Set the CUDA 13.5 minimum-residency hint. Zero disables the constraint.
+    pub fn min_ctas_per_sm(mut self, min_ctas_per_sm: i32) -> Self {
+        self.min_ctas_per_sm = Some(min_ctas_per_sm);
         self
     }
 
@@ -289,7 +309,7 @@ impl OptimizationHints {
         for sm_key_val in &opt_hints.elems {
             let (opt_key, opt_value) = Self::parse_key_value(sm_key_val)?;
             {
-                if !opt_key.starts_with("sm_") {
+                if opt_key != "default" && !opt_key.starts_with("sm_") {
                     return SourceLocation::unknown().jit_error_result(&format!(
                         "Unexpected optimization hint {}.",
                         sm_key_val.to_token_stream()
@@ -310,6 +330,7 @@ impl OptimizationHints {
                         "num_worker_warps_per_cta" => {
                             sm_hints_result.set_num_worker_warps_per_cta(&hints)?
                         }
+                        "min_ctas_per_sm" => sm_hints_result.set_min_ctas_per_sm(&hints)?,
                         "allow_tma" | "latency" => {
                             return SourceLocation::unknown().jit_error_result(&format!(
                                     "'{key}' is a per-op hint and cannot be set at the entry level. \
@@ -347,6 +368,7 @@ impl OptimizationHints {
             && options.num_cta_in_cga.is_none()
             && options.max_divisibility.is_none()
             && options.num_worker_warps_per_cta.is_none()
+            && options.min_ctas_per_sm.is_none()
         {
             return;
         }
@@ -366,6 +388,9 @@ impl OptimizationHints {
         }
         if let Some(max_divisibility) = options.max_divisibility {
             sm_hints.max_divisibility = Some(max_divisibility);
+        }
+        if let Some(min_ctas_per_sm) = options.min_ctas_per_sm {
+            sm_hints.min_ctas_per_sm = Some(min_ctas_per_sm);
         }
         if let Some(num_worker_warps_per_cta) = options.num_worker_warps_per_cta {
             sm_hints.num_worker_warps_per_cta = Some(num_worker_warps_per_cta);

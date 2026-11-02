@@ -40,6 +40,7 @@ pub use doctor::*;
 pub use examples_list::*;
 use fingerprint::*;
 pub use fmt::*;
+pub use host_cargo::standalone_crate_name;
 use host_cargo::*;
 use interop::*;
 pub use ltoir::*;

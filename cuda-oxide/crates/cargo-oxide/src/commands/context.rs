@@ -25,6 +25,7 @@ pub struct OxideConfig {
 ///
 /// Built once at startup by [`resolve_context`] and passed by reference to
 /// every command handler. Avoids repeated filesystem walks and backend builds.
+#[derive(Clone)]
 pub struct Context {
     /// Absolute path to the workspace root (contains top-level `Cargo.toml`).
     pub workspace_root: PathBuf,

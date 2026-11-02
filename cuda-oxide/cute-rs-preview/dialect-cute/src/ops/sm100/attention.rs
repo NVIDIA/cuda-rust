@@ -20,10 +20,7 @@
 //! TMA's three coordinates address the descriptor's physical axes: within-span
 //! column, row, and column-span index. For a 64-element span, physical
 //! `(row, column) = (7, 128)` becomes `(c0, c1, c2) = (0, 7, 2)`.
-use crate::{
-    attributes::CuteComposedLayoutAttr,
-    layout::{ComposedLayout, Layout, OffsetUnit, Swizzle},
-};
+use crate::attributes::CuteComposedLayoutAttr;
 use dialect_mir::types::{MirFP16Type, MirPtrType, address_space};
 use pliron::{
     attribute::Attribute,
@@ -60,40 +57,7 @@ use pliron_derive::{pliron_attr, pliron_op};
 /// plan.verify(&Context::new()).unwrap();
 /// ```
 pub fn shared_layout(rows: u32, cols: u32, mn: bool) -> Result<CuteComposedLayoutAttr, String> {
-    let (contiguous, outer) = if mn { (rows, cols) } else { (cols, rows) };
-    if contiguous < 32
-        || (contiguous != 32 && !contiguous.is_multiple_of(64))
-        || outer == 0
-        || !outer.is_multiple_of(8)
-    {
-        return Err(
-            "SM100 shared layout needs contiguous 32 or a multiple of 64 and outer multiple of 8"
-                .into(),
-        );
-    }
-    let span = contiguous.min(64);
-    let (shape, stride) = if mn {
-        (
-            format!("(({span},{}),(8,{}))", rows / span, cols / 8),
-            format!("((1,{}),({span},{}))", span * cols, span * 8),
-        )
-    } else {
-        (
-            format!("((8,{}),({span},{}))", rows / 8, cols / span),
-            format!("(({span},{}),(1,{}))", span * 8, span * rows),
-        )
-    };
-    let outer: Layout = format!("{shape}:{stride}")
-        .parse()
-        .map_err(|e| format!("{e}"))?;
-    ComposedLayout::new(
-        Swizzle::new(if span == 32 { 2 } else { 3 }, 3, 3),
-        0,
-        outer,
-        OffsetUnit::Elements,
-    )
-    .map(CuteComposedLayoutAttr)
-    .map_err(|e| e.to_string())
+    crate::layout::algebra::sm100_smem_layout(rows, cols, mn).map(CuteComposedLayoutAttr)
 }
 
 /// One independent FP16 MMA product with FP32 accumulation.

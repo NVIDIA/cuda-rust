@@ -231,6 +231,7 @@ check-guards:
     bash scripts/check-host-api-paths.sh
     bash scripts/check-shared-crate-pin.sh
     bash scripts/check-oxide-artifacts-parity.sh
+    bash scripts/check-cute-layout-algebra.sh
     # Host-crate dev-dependencies (cuda-async's loom) are outside the SIMT graph.
     # The git-root deny.toml is a copy of cuda-oxide/deny.toml.
     cd .. && cargo deny --manifest-path Cargo.toml --workspace --locked check

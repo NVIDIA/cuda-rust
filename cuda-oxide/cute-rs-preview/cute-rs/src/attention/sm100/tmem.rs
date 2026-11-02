@@ -308,18 +308,19 @@ chunked_fragment!(128; 0 => a, 32 => b, 64 => c, 96 => d);
 
 impl TmemFragment<128> {
     /// Compute the per-head reciprocal root-mean-square scale `1 / sqrt(mean(x^2) + eps)`
-    /// across all 128 FP32 columns of this thread's row fragment using `cute.arch.rsqrt`.
+    /// across all 128 FP32 columns (`ColMajor<32, 4>`) of this thread's row fragment
+    /// using `cute.arch.rsqrt`.
     #[must_use]
     #[inline(always)]
     pub fn rms_inv_std(&self, eps: f32) -> f32 {
         let mut sum_sq = 0.0f32;
-        let mut j = 0usize;
+        let mut j = 0u32;
         while j < 32 {
             thread::__unroll_config::<0>();
-            let v0 = self.values[j];
-            let v1 = self.values[32 + j];
-            let v2 = self.values[64 + j];
-            let v3 = self.values[96 + j];
+            let v0 = self.values[cute_layout::crd2idx_col_major_2d(j, 0, 32) as usize];
+            let v1 = self.values[cute_layout::crd2idx_col_major_2d(j, 1, 32) as usize];
+            let v2 = self.values[cute_layout::crd2idx_col_major_2d(j, 2, 32) as usize];
+            let v3 = self.values[cute_layout::crd2idx_col_major_2d(j, 3, 32) as usize];
             sum_sq += v0 * v0 + v1 * v1 + v2 * v2 + v3 * v3;
             j += 1;
         }
@@ -340,23 +341,25 @@ impl TmemFragment<128> {
         gamma: Option<*const f32>,
         dst: *mut u8,
     ) {
+        let gamma_view = gamma.map(|ptr| unsafe {
+            crate::tensor::partition::StridedTensor::from_raw_parts(ptr, 128, 1)
+        });
         let dst_u32 = dst.cast::<u32>();
         let mut chunk = 0usize;
         while chunk < 4 {
             thread::__unroll_config::<0>();
-            let base = chunk * 32;
             let mut packed = [0u32; 8];
             let mut w = 0usize;
             while w < 8 {
                 thread::__unroll_config::<0>();
-                let idx = base + w * 4;
-                let (v0, v1, v2, v3) = if let Some(g_ptr) = gamma {
+                let idx = cute_layout::crd2idx_row_major_3d(chunk, w, 0, 8, 4);
+                let (v0, v1, v2, v3) = if let Some(g_view) = gamma_view {
                     unsafe {
                         (
-                            self.values[idx] * scale * (*g_ptr.add(idx)),
-                            self.values[idx + 1] * scale * (*g_ptr.add(idx + 1)),
-                            self.values[idx + 2] * scale * (*g_ptr.add(idx + 2)),
-                            self.values[idx + 3] * scale * (*g_ptr.add(idx + 3)),
+                            self.values[idx] * scale * g_view.get_unchecked(idx),
+                            self.values[idx + 1] * scale * g_view.get_unchecked(idx + 1),
+                            self.values[idx + 2] * scale * g_view.get_unchecked(idx + 2),
+                            self.values[idx + 3] * scale * g_view.get_unchecked(idx + 3),
                         )
                     }
                 } else {
@@ -372,9 +375,10 @@ impl TmemFragment<128> {
                 packed[w] = lo16 | (hi16 << 16);
                 w += 1;
             }
+            let chunk_offset = cute_layout::crd2idx_row_major_2d(chunk, 0, 8);
             unsafe {
                 crate::store_global_no_allocate(
-                    dst_u32.add(chunk * 8),
+                    dst_u32.add(chunk_offset),
                     &crate::GlobalStoreTile(packed),
                 );
             }

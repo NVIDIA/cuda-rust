@@ -355,11 +355,12 @@ pub mod kernels {
         let seq_k = if SK == 0 { seq_k } else { SK };
         let heads = if HEADS == 0 { heads } else { HEADS };
         let tid = thread::threadIdx_x();
-        let lane = tid % 32;
-        let warp_id = (tid / 32) as usize;
+        let (lane, warp_u32) = cute_rs::idx2crd_col_major_2d(tid, 32);
+        let warp_id = warp_u32 as usize;
         let query_blocks = seq_q.div_ceil(64);
-        let query_block = (thread::blockIdx_x() % query_blocks) as usize;
-        let head = (thread::blockIdx_x() / query_blocks) as usize;
+        let (qb_u32, head_u32) = cute_rs::idx2crd_col_major_2d(thread::blockIdx_x(), query_blocks);
+        let query_block = qb_u32 as usize;
+        let head = head_u32 as usize;
         let stride = heads as usize * 64;
         unsafe {
             let storage = DynamicSharedArray::<u8, 1024>::get_raw().cast::<PrefillSharedStorage>();

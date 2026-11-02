@@ -147,9 +147,22 @@ The pipeline inspects which intrinsics the code uses and selects a target:
 | tcgen05 / TMEM         | sm_100a   | Blackwell datacenter |
 | WGMMA                  | sm_90a    | Hopper only          |
 | TMA / mbarrier         | sm_100    | Hopper+ compatible   |
+| Cluster compatibility queries | sm_90 by default | Known pre-sm90 targets use one-block clusters |
 | Basic CUDA             | sm_80     | Ampere+ (max compat) |
 
-Override with `CUDA_OXIDE_TARGET=<target>`.
+Override with `CUDA_OXIDE_TARGET=<target>`. A device hint used for pre-sm90
+cluster-query fallback pins the artifact to that target; incompatible higher-floor
+operations are rejected. Unused hints remain advisory.
+
+From `cuda-oxide/`, run the source-to-NVVM-IR cluster-query regression with:
+
+```sh
+cargo test -p mir-importer cluster_query_lowering_preserves_target_selection_and_raw_floors
+```
+
+It checks pre-sm90 compatibility lowering, conditional device-hint pinning,
+and the raw intrinsic target floor using the pinned Rust toolchain. It requires
+neither a GPU nor CUDA compiler tools.
 
 ## Public API
 

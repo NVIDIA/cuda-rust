@@ -1041,7 +1041,7 @@ impl<'a> ModuleExportState<'a> {
         // A struct or array parameter reaches the kernel as the bytes the
         // host wrote, so a shared or local pointer inside one is as
         // impossible to supply as a bare one. Before this recursion a
-        // `struct { p: SharedPtr<f32>, n: u32 }` parameter compiled and the
+        // `struct { p: *mut Barrier, n: u32 }` parameter compiled and the
         // kernel applied `cvta.shared.u64` to host bytes.
         if is_kernel {
             for (index, arg_ty) in func_ty.arg_types().iter().enumerate() {

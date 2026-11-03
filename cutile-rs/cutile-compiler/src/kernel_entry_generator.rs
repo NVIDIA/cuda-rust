@@ -22,6 +22,7 @@ use proc_macro2::Span;
 use quote::ToTokens;
 use std::collections::HashMap;
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use syn::visit_mut::VisitMut;
 use syn::{Expr, FnArg, GenericArgument, ItemFn, ItemImpl, Lit, Stmt, Token};
 
@@ -657,8 +658,10 @@ pub fn generate_entry_point(
     statements.push(final_stmnt);
     fn_entry.block.stmts = statements;
 
-    // This source code is not visible.
-    let mut visitor = SpanSetter::new(Span::call_site());
+    // Generated entry setup has no user-written body. Attribute it, including
+    // assumptions and the call into the kernel, to the user's signature.
+    // The original kernel body keeps its own spans when it is inlined.
+    let mut visitor = SpanSetter::new(fn_item.sig.span());
     visitor.visit_item_fn_mut(&mut fn_entry);
 
     Ok((

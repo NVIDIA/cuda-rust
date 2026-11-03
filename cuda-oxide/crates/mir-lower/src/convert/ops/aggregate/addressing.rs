@@ -332,6 +332,32 @@ pub(crate) fn convert_field_addr(
     Ok(())
 }
 
+/// Compute the provable byte alignment of a field at `offset` within an aggregate
+/// whose base pointer is aligned to `base_align`.
+pub(crate) fn field_alignment_from_base(base_align: u64, offset: u64) -> Option<u32> {
+    if base_align == 0 {
+        return None;
+    }
+    let provable = if offset == 0 {
+        base_align
+    } else {
+        gcd_alignment(base_align, offset)
+    };
+    if provable.is_power_of_two() {
+        u32::try_from(provable).ok()
+    } else {
+        None
+    }
+}
+
+/// Greatest common divisor of two byte alignments or offsets.
+fn gcd_alignment(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
 /// Record on a field address what its alignment provably is.
 ///
 /// A load reads its alignment from its own result type, and a scalar records
@@ -356,29 +382,9 @@ fn stamp_field_address_alignment(
     abi_align: u64,
     field_offset: Option<u64>,
 ) {
-    const fn gcd(a: u64, b: u64) -> u64 {
-        if b == 0 { a } else { gcd(b, a % b) }
-    }
-
-    if abi_align == 0 {
-        return;
-    }
-    let Some(offset) = field_offset else {
-        return;
-    };
-    let provable = if offset == 0 {
-        abi_align
-    } else {
-        gcd(abi_align, offset)
-    };
-    // Every rustc layout has a power-of-two `abi_align`, but dialect-mir only
-    // verifier-enforces that for unions and enums; a malformed hand-built
-    // struct or tuple layout could reach here with e.g. 12, and a
-    // non-power-of-two `align N` is invalid LLVM IR that llc rejects.
-    if !provable.is_power_of_two() {
-        return;
-    }
-    if let Ok(align) = u32::try_from(provable) {
+    if let Some(align) =
+        field_offset.and_then(|offset| field_alignment_from_base(abi_align, offset))
+    {
         llvm_export::ops::set_address_alignment(ctx, gep, align);
     }
 }
@@ -498,40 +504,54 @@ fn element_address_provable_alignment(
     element_ty: TypeHandle,
     index: Value,
 ) -> Option<u32> {
-    const fn gcd(a: u64, b: u64) -> u64 {
-        if b == 0 { a } else { gcd(b, a % b) }
-    }
-
-    // What the base address already proved, else what the element type
-    // states (identical to the array's own alignment).
     let base_align = arr_ptr
         .defining_op()
         .and_then(|def| llvm_export::ops::address_alignment(ctx, def))
         .map(u64::from)
         .or_else(|| mir_type_abi_align(ctx, element_ty))?;
+    element_alignment_from_base(ctx, base_align, element_ty, index)
+}
+
+/// Narrow a proven base alignment by a verified element stride and index.
+/// Carrier callers must supply a base alignment derived from their MIR proof;
+/// the semantic element's natural ABI alignment is not a valid fallback when
+/// an array is embedded at an underaligned packed offset.
+fn element_alignment_from_base(
+    ctx: &Context,
+    base_align: u64,
+    element_ty: TypeHandle,
+    index: Value,
+) -> Option<u32> {
     if base_align == 0 {
         return None;
     }
-
     let stride = mir_element_stride(ctx, element_ty)?;
-    if stride == 0 {
+    array_alignment_from_base_and_stride(ctx, base_align, stride, index)
+}
+
+/// Narrow a proven base alignment with an exact physical element stride.
+/// The carrier proof obtains this stride from its verified generic-pointer
+/// storage type: semantic AS3 pointer sizes are backend-dependent, so the MIR
+/// stride utility intentionally returns None for those types.
+pub(crate) fn array_alignment_from_base_and_stride(
+    ctx: &Context,
+    base_align: u64,
+    stride: u64,
+    index: Value,
+) -> Option<u32> {
+    if base_align == 0 {
         return None;
     }
-
     let provable = match constant_index_value(ctx, index) {
         Some(0) => base_align,
-        Some(i) => gcd(base_align, i.checked_mul(stride)?),
-        // Any element is reachable, so claim only what every stride preserves.
-        None => gcd(base_align, stride),
+        Some(i) => gcd_alignment(base_align, i.checked_mul(stride)?),
+        None => gcd_alignment(base_align, stride),
     };
-
-    // Same guard as the field path: dialect-mir does not verifier-enforce a
-    // power-of-two `abi_align` for every aggregate, and a non-power-of-two
-    // `align N` is invalid LLVM IR that llc rejects.
-    if !provable.is_power_of_two() {
-        return None;
+    if provable.is_power_of_two() {
+        u32::try_from(provable).ok()
+    } else {
+        None
     }
-    u32::try_from(provable).ok()
 }
 
 /// The constant an index operand holds, if it is one.

@@ -1,0 +1,11 @@
+error[E0505]: cannot move out of `g` because it is borrowed
+  --> tests/compile_fail/primitives_view_after_deallocation.rs:12:26
+   |
+10 | fn wrong(g:TmemGuard<TmemReady,512,CtaGroup2>) {
+   |          - binding `g` declared here
+11 |     let view = g.view::<TmemF32<256,192>>(ColumnOffset::new(0)).unwrap();
+   |                - borrow of `g` occurs here
+12 |     let _dead = unsafe { g.dealloc_collective() };
+   |                          ^ move out of `g` occurs here
+13 |     consume_view(view);
+   |                  ---- borrow later used here

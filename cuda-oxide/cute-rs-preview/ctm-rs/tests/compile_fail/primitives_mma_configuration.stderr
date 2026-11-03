@@ -1,0 +1,122 @@
+error[E0277]: the trait bound `ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup1, 256, 192, ctm_rs::tcgen05::descriptors::KMajor, ctm_rs::tcgen05::descriptors::KMajor>: MmaSpec` is not satisfied
+  --> tests/compile_fail/primitives_mma_configuration.rs:16:10
+   |
+16 |  let _ = InstructionDescriptor::<DenseSharedF16<CtaGroup1,256,192,KMajor,KMajor>>::new();
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+   = help: the trait `MmaSpec` is not implemented for `ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup1, 256, 192, ctm_rs::tcgen05::descriptors::KMajor, ctm_rs::tcgen05::descriptors::KMajor>`
+help: the following other types implement trait `MmaSpec`
+  --> src/tcgen05/descriptors.rs
+   |
+   |         impl MmaSpec for DenseSharedF16<CtaGroup2, 256, $n, KMajor, KMajor> {
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |         |
+   |         `ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup2, 256, 160, ctm_rs::tcgen05::descriptors::KMajor, ctm_rs::tcgen05::descriptors::KMajor>`
+   |         `ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup2, 256, 192, ctm_rs::tcgen05::descriptors::KMajor, ctm_rs::tcgen05::descriptors::KMajor>`
+...
+   | spec!(192, F16TileB96);
+   | ---------------------- in this macro invocation
+   | spec!(160, F16TileB80);
+   | ---------------------- in this macro invocation
+note: required by a bound in `ctm_rs::tcgen05::descriptors::InstructionDescriptor`
+  --> src/tcgen05/descriptors.rs
+   |
+   | pub struct InstructionDescriptor<S: MmaSpec> {
+   |                                     ^^^^^^^ required by this bound in `InstructionDescriptor`
+   = note: this error originates in the macro `spec` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the associated function or constant `new` exists for struct `ctm_rs::tcgen05::descriptors::InstructionDescriptor<ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup1, 256, 192, ctm_rs::tcgen05::descriptors::KMajor, ctm_rs::tcgen05::descriptors::KMajor>>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/primitives_mma_configuration.rs:16:84
+   |
+16 |  let _ = InstructionDescriptor::<DenseSharedF16<CtaGroup1,256,192,KMajor,KMajor>>::new();
+   |                                                                                    ^^^ associated function or constant cannot be called due to unsatisfied trait bounds
+   |
+  ::: src/tcgen05/descriptors.rs
+   |
+   | pub struct DenseSharedF16<G, const M: u32, const N: u32, AMajor, BMajor>(
+   | ------------------------------------------------------------------------ doesn't satisfy `_: MmaSpec`
+   |
+   = note: the following trait bounds were not satisfied:
+           `ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup1, 256, 192, ctm_rs::tcgen05::descriptors::KMajor, ctm_rs::tcgen05::descriptors::KMajor>: MmaSpec`
+
+error[E0277]: the trait bound `ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup2, 128, 192, ctm_rs::tcgen05::descriptors::KMajor, ctm_rs::tcgen05::descriptors::KMajor>: MmaSpec` is not satisfied
+  --> tests/compile_fail/primitives_mma_configuration.rs:17:10
+   |
+17 |  let _ = InstructionDescriptor::<DenseSharedF16<CtaGroup2,128,192,KMajor,KMajor>>::new();
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+   = help: the trait `MmaSpec` is not implemented for `ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup2, 128, 192, ctm_rs::tcgen05::descriptors::KMajor, ctm_rs::tcgen05::descriptors::KMajor>`
+help: the following other types implement trait `MmaSpec`
+  --> src/tcgen05/descriptors.rs
+   |
+   |         impl MmaSpec for DenseSharedF16<CtaGroup2, 256, $n, KMajor, KMajor> {
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |         |
+   |         `ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup2, 256, 160, ctm_rs::tcgen05::descriptors::KMajor, ctm_rs::tcgen05::descriptors::KMajor>`
+   |         `ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup2, 256, 192, ctm_rs::tcgen05::descriptors::KMajor, ctm_rs::tcgen05::descriptors::KMajor>`
+...
+   | spec!(192, F16TileB96);
+   | ---------------------- in this macro invocation
+   | spec!(160, F16TileB80);
+   | ---------------------- in this macro invocation
+note: required by a bound in `ctm_rs::tcgen05::descriptors::InstructionDescriptor`
+  --> src/tcgen05/descriptors.rs
+   |
+   | pub struct InstructionDescriptor<S: MmaSpec> {
+   |                                     ^^^^^^^ required by this bound in `InstructionDescriptor`
+   = note: this error originates in the macro `spec` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the associated function or constant `new` exists for struct `ctm_rs::tcgen05::descriptors::InstructionDescriptor<ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup2, 128, 192, ctm_rs::tcgen05::descriptors::KMajor, ctm_rs::tcgen05::descriptors::KMajor>>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/primitives_mma_configuration.rs:17:84
+   |
+17 |  let _ = InstructionDescriptor::<DenseSharedF16<CtaGroup2,128,192,KMajor,KMajor>>::new();
+   |                                                                                    ^^^ associated function or constant cannot be called due to unsatisfied trait bounds
+   |
+  ::: src/tcgen05/descriptors.rs
+   |
+   | pub struct DenseSharedF16<G, const M: u32, const N: u32, AMajor, BMajor>(
+   | ------------------------------------------------------------------------ doesn't satisfy `_: MmaSpec`
+   |
+   = note: the following trait bounds were not satisfied:
+           `ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup2, 128, 192, ctm_rs::tcgen05::descriptors::KMajor, ctm_rs::tcgen05::descriptors::KMajor>: MmaSpec`
+
+error[E0277]: the trait bound `ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup2, 256, 192, MnMajor, ctm_rs::tcgen05::descriptors::KMajor>: MmaSpec` is not satisfied
+  --> tests/compile_fail/primitives_mma_configuration.rs:18:10
+   |
+18 |  let _ = InstructionDescriptor::<DenseSharedF16<CtaGroup2,256,192,MnMajor,KMajor>>::new();
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+   = help: the trait `MmaSpec` is not implemented for `ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup2, 256, 192, MnMajor, ctm_rs::tcgen05::descriptors::KMajor>`
+help: the following other types implement trait `MmaSpec`
+  --> src/tcgen05/descriptors.rs
+   |
+   |         impl MmaSpec for DenseSharedF16<CtaGroup2, 256, $n, KMajor, KMajor> {
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |         |
+   |         `ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup2, 256, 160, ctm_rs::tcgen05::descriptors::KMajor, ctm_rs::tcgen05::descriptors::KMajor>`
+   |         `ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup2, 256, 192, ctm_rs::tcgen05::descriptors::KMajor, ctm_rs::tcgen05::descriptors::KMajor>`
+...
+   | spec!(192, F16TileB96);
+   | ---------------------- in this macro invocation
+   | spec!(160, F16TileB80);
+   | ---------------------- in this macro invocation
+note: required by a bound in `ctm_rs::tcgen05::descriptors::InstructionDescriptor`
+  --> src/tcgen05/descriptors.rs
+   |
+   | pub struct InstructionDescriptor<S: MmaSpec> {
+   |                                     ^^^^^^^ required by this bound in `InstructionDescriptor`
+   = note: this error originates in the macro `spec` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the associated function or constant `new` exists for struct `ctm_rs::tcgen05::descriptors::InstructionDescriptor<ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup2, 256, 192, MnMajor, ctm_rs::tcgen05::descriptors::KMajor>>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/primitives_mma_configuration.rs:18:85
+   |
+18 |  let _ = InstructionDescriptor::<DenseSharedF16<CtaGroup2,256,192,MnMajor,KMajor>>::new();
+   |                                                                                     ^^^ associated function or constant cannot be called due to unsatisfied trait bounds
+   |
+  ::: src/tcgen05/descriptors.rs
+   |
+   | pub struct DenseSharedF16<G, const M: u32, const N: u32, AMajor, BMajor>(
+   | ------------------------------------------------------------------------ doesn't satisfy `_: MmaSpec`
+   |
+   = note: the following trait bounds were not satisfied:
+           `ctm_rs::tcgen05::descriptors::DenseSharedF16<CtaGroup2, 256, 192, MnMajor, ctm_rs::tcgen05::descriptors::KMajor>: MmaSpec`

@@ -67,9 +67,12 @@
 //!   taking `&[f32]`, and take the view **inside the kernel** with
 //!   [`as_vectors`] / [`as_vectors_mut`]. This needs no host-side type at all.
 //! - Or reinterpret the flat buffer once at the boundary with `cuda-core`'s
-//!   `DeviceBuffer::cast_chunks`, using a host-defined `#[repr(C, align(16))]`
-//!   element that implements `DeviceCopy`, and launch a kernel that takes that
-//!   element type directly.
+//!   `DeviceBuffer::cast_chunks`, which requires `bytemuck::AnyBitPattern` of
+//!   its target. These types implement `bytemuck::Pod`, so
+//!   `floats.cast_chunks::<F32x4>()` works, and so does a host-defined
+//!   `#[repr(C, align(16))]` element with its own `Pod` impl. Launch a kernel
+//!   that takes the vector type directly, and cast back to the scalar type
+//!   before reading the result on the host.
 //!
 //! # Related "N x scalar" types
 //!
@@ -123,6 +126,14 @@ macro_rules! define_vector {
             type Elem = $elem;
             const LANES: usize = $lanes;
         }
+
+        // SAFETY: a public array of plain integers or floats whose size equals
+        // the alignment (checked below), so there is no padding and every bit
+        // pattern is a valid value. `Pod` is what lets cuda-core's
+        // `DeviceBuffer::cast_chunks` regroup a flat scalar buffer into this
+        // type.
+        unsafe impl bytemuck::Zeroable for $name {}
+        unsafe impl bytemuck::Pod for $name {}
 
         impl $name {
             /// Build a vector from its lanes.

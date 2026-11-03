@@ -33,7 +33,7 @@
 //!   .../enum_niche_payload/target/release/enum_niche_payload --verify-ptx
 
 use core::marker::PhantomData;
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, cuda_module, kernel, thread};
 
@@ -83,7 +83,7 @@ struct LeaseRaw<'r> {
 
 impl Stepper {
     fn own(&mut self, thread: u32) -> Option<Lease<'_>> {
-        if thread % 2 != 0 {
+        if !thread.is_multiple_of(2) {
             return None;
         }
         Some(Lease {
@@ -93,7 +93,7 @@ impl Stepper {
     }
 
     fn own_raw(&mut self, thread: u32) -> Option<LeaseRaw<'_>> {
-        if thread % 2 != 0 {
+        if !thread.is_multiple_of(2) {
             return None;
         }
         Some(LeaseRaw {

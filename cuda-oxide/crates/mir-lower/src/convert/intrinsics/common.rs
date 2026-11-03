@@ -155,10 +155,28 @@ pub fn inline_asm_convergent(
     rewriter: &mut DialectConversionRewriter,
     current_op: Ptr<Operation>,
     result_ty: pliron::r#type::TypeHandle,
-    inputs: Vec<Value>,
+    mut inputs: Vec<Value>,
     asm_template: &str,
     constraints: &str,
 ) -> Ptr<Operation> {
+    if ((asm_template.contains("cvta.to.shared.u64 ") && asm_template.contains(", $0;"))
+        || asm_template.contains("tcgen05.commit."))
+        && let Some(first) = inputs.first_mut()
+    {
+        let first_ty = first.get_type(ctx);
+        let addrspace = first_ty
+            .deref(ctx)
+            .downcast_ref::<llvm_types::PointerType>()
+            .map(|pt| pt.address_space());
+        if let Some(space) = addrspace
+            && space != 0
+        {
+            let generic_ty = llvm_types::PointerType::get(ctx, 0).into();
+            let cast_op = llvm::AddrSpaceCastOp::new(ctx, *first, generic_ty);
+            rewriter.insert_operation(ctx, cast_op.get_operation());
+            *first = cast_op.get_operation().deref(ctx).get_result(0);
+        }
+    }
     let inline_asm = llvm::InlineAsmOp::build(
         ctx,
         result_ty,
@@ -242,6 +260,7 @@ mod tests {
         ClusterSharedCast,
         CallIntrinsic,
         InlineAsmConvergent,
+        InlineAsmConvergentGenericPtr(&'static str),
         InlineAsmSideEffect,
         TruncToI1,
     }
@@ -308,6 +327,20 @@ mod tests {
                         vec![],
                         "bar.sync 0;",
                         "~{memory}",
+                    );
+                    None
+                }
+                HelperAction::InlineAsmConvergentGenericPtr(template) => {
+                    let void_ty = llvm_types::VoidType::get(ctx);
+                    let ptr = block.deref(ctx).get_argument(0);
+                    inline_asm_convergent(
+                        ctx,
+                        rewriter,
+                        op,
+                        void_ty.into(),
+                        vec![ptr],
+                        template,
+                        "l,~{memory}",
                     );
                     None
                 }
@@ -730,5 +763,43 @@ mod tests {
             trunks[0].get_operation().deref(&ctx).get_result(0)
         );
         assert_eq!(integer_width(&ctx, result_ty), 1);
+    }
+
+    #[test]
+    fn inline_asm_convergent_normalizes_non_generic_first_pointer_for_generic_templates() {
+        for template in [
+            "{ .reg .u64 %shared64; cvta.to.shared.u64 %shared64, $0; }",
+            "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster.multicast::cluster.b64 [$0], 3;",
+        ] {
+            let mut ctx = make_ctx();
+            let shared_ptr_ty: TypeHandle = llvm_types::PointerType::get(&ctx, 3).into();
+            let (module_ptr, entry) = build_test_func(&mut ctx, vec![shared_ptr_ty]);
+            append_trigger(&mut ctx, entry);
+
+            assert!(
+                run_helper_action(
+                    &mut ctx,
+                    module_ptr,
+                    HelperAction::InlineAsmConvergentGenericPtr(template),
+                )
+                .is_none()
+            );
+
+            let casts = find_body_ops::<llvm::AddrSpaceCastOp>(&ctx, module_ptr);
+            assert_eq!(casts.len(), 1);
+            let cast_result = casts[0].get_operation().deref(&ctx).get_result(0);
+            assert_eq!(pointer_addr_space(&ctx, cast_result.get_type(&ctx)), 0);
+
+            let asms = find_body_ops::<llvm::InlineAsmOp>(&ctx, module_ptr);
+            assert_eq!(asms.len(), 1);
+            assert_eq!(
+                asms[0]
+                    .get_operation()
+                    .deref(&ctx)
+                    .operands()
+                    .collect::<Vec<_>>(),
+                vec![cast_result]
+            );
+        }
     }
 }

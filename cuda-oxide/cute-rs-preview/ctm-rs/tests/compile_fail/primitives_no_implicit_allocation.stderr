@@ -1,0 +1,11 @@
+error[E0599]: no method named `alloc` found for struct `TmemGuard<State, N_COLS, Group>` in the current scope
+ --> tests/compile_fail/primitives_no_implicit_allocation.rs:8:71
+  |
+8 | fn group1(g:TmemGuard<TmemUninit,512,CtaGroup1>) { let _ = unsafe { g.alloc() }; }
+  |                                                                       ^^^^^ method not found in `TmemGuard<TmemUninit, 512>`
+
+error[E0599]: no method named `alloc` found for struct `TmemGuard<State, N_COLS, Group>` in the current scope
+  --> tests/compile_fail/primitives_no_implicit_allocation.rs:10:71
+   |
+10 | fn group2(g:TmemGuard<TmemUninit,512,CtaGroup2>) { let _ = unsafe { g.alloc() }; }
+   |                                                                       ^^^^^ method not found in `TmemGuard<TmemUninit, 512, CtaGroup2>`

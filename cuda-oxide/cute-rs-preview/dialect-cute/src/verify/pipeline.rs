@@ -17,12 +17,12 @@ use pliron::{
 
 use super::{
     Result,
-    cfg::{operation_dominates, operation_reaches},
+    cfg::{operation_dominates, operation_reaches, scope_has_any},
     ghosts::pipeline_semantic_ids,
     invalid,
     provenance::{
-        OrdinaryFacts, poison_missing_forwarding_sources, propagate_ordinary_plumbing,
-        seed_unknown_integer_carriers,
+        CarrierFact, LocalCells, OrdinaryFacts, poison_missing_forwarding_sources,
+        propagate_ordinary_plumbing, seed_unknown_integer_carriers,
     },
 };
 use crate::{
@@ -175,6 +175,12 @@ enum PipelineFact {
     Unknown(#[doc = "Original SSA value lacking semantic provenance."] Value),
 }
 
+impl CarrierFact for PipelineFact {
+    fn is_opaque(&self) -> bool {
+        matches!(self, Self::Unknown(_))
+    }
+}
+
 /// Require an unambiguous slot or phase fact rooted at cursor creation.
 fn pipeline_state_root(
     facts: &OrdinaryFacts<PipelineFact>,
@@ -206,6 +212,7 @@ fn build_pipeline_facts(
     ctx: &Context,
     operations: &[Ptr<Operation>],
 ) -> OrdinaryFacts<PipelineFact> {
+    let cells = LocalCells::new(ctx, operations);
     let mut facts = OrdinaryFacts::default();
     for operation in operations {
         if Operation::get_opid(*operation, ctx) == CutePipelineStateNewOp::get_opid_static() {
@@ -216,7 +223,7 @@ fn build_pipeline_facts(
     }
 
     loop {
-        let mut changed = propagate_ordinary_plumbing(ctx, operations, &mut facts);
+        let mut changed = propagate_ordinary_plumbing(ctx, operations, &cells, &mut facts);
         for operation in operations {
             if Operation::get_opid(*operation, ctx) != CutePipelineStateAdvanceOp::get_opid_static()
             {
@@ -248,9 +255,14 @@ fn build_pipeline_facts(
 
     seed_unknown_integer_carriers(ctx, operations, &mut facts, 32, PipelineFact::Unknown);
     loop {
-        let poisoned =
-            poison_missing_forwarding_sources(ctx, operations, &mut facts, PipelineFact::Unknown);
-        let propagated = propagate_ordinary_plumbing(ctx, operations, &mut facts);
+        let poisoned = poison_missing_forwarding_sources(
+            ctx,
+            operations,
+            &cells,
+            &mut facts,
+            PipelineFact::Unknown,
+        );
+        let propagated = propagate_ordinary_plumbing(ctx, operations, &cells, &mut facts);
         if !poisoned && !propagated {
             break;
         }
@@ -302,6 +314,10 @@ pub(super) fn require_producer_pipeline_order(
 /// Validate handle ownership, complete cursor lifecycles, CFG order, and expected TMA byte totals.
 pub(super) fn verify_pipeline_story(ctx: &Context, all_ops: &[Ptr<Operation>]) -> Result {
     let ids = pipeline_semantic_ids();
+    // Facts start only at this family's operations; a scope without one has nothing to check.
+    if !scope_has_any(ctx, all_ops, &ids) {
+        return Ok(());
+    }
     let facts = build_pipeline_facts(ctx, all_ops);
     let makes: Vec<_> = all_ops
         .iter()

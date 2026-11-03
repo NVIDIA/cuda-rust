@@ -467,8 +467,10 @@ pub fn cuda_module(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// the loop has a `break` or another extra exit, the compiler warns and skips
 /// partial unrolling for that loop.
 ///
-/// Partial unrolling also requires a positive counter step, a `<` or `<=` test,
-/// and a limit that does not change inside the loop. One annotation may create
+/// Partial unrolling also requires a `<` or `<=` test, a limit that does not
+/// change inside the loop, and a counter that advances by the same positive
+/// constant or loop-invariant runtime value on every iteration, such as
+/// `blockDim_x()` in a block-stride loop. One annotation may create
 /// at most 1,024 body copies, 8,192 cloned basic blocks, and 65,536 cloned
 /// operations. Factors above 1,024 are rejected; unsupported loop shapes warn
 /// and are not unrolled.
@@ -880,8 +882,9 @@ pub fn cooperative_launch(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `isize`); other iterator loops are not yet recognized. Partial
 /// factors must be `N >= 2`. Multiple `continue` paths are supported; full
 /// unrolling preserves `break` and multiple exit targets. Partial unrolling
-/// requires a positive counter step, a `<` or `<=` test, an unchanging limit,
-/// and no exit besides the normal header test.
+/// requires a `<` or `<=` test, an unchanging limit, a step that is a positive
+/// constant or a loop-invariant runtime value, and no exit besides the normal
+/// header test.
 ///
 /// One annotation may create at most 1,024 body copies, 8,192 cloned basic
 /// blocks, and 65,536 cloned operations. Factors above 1,024 are rejected;

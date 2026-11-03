@@ -30,7 +30,13 @@
 //! before unrolling. Full `#[unroll]` also preserves early `break` paths and
 //! multiple exit targets. Partial `#[unroll(N)]` warns and leaves the loop not
 //! unrolled when it has an extra exit. Partial unrolling currently requires a
-//! positive step, a `<` or `<=` test, and a loop-invariant bound.
+//! `<` or `<=` test and a loop-invariant bound; the bound may be recomputed in
+//! the loop from fixed values, as `while i < n as usize` casts `n` on every
+//! iteration. Its counter may start at a
+//! runtime value, and its step may be a positive constant or a loop-invariant
+//! runtime value such as `blockDim_x()` in a block-stride loop. With a runtime
+//! step the main loop's guard replays the source test on every counter in the
+//! group, so a group runs only when the source loop would run all of it.
 //!
 //! To bound compile time and memory, one request may create at most 1,024 body
 //! copies, 8,192 cloned blocks, and 65,536 cloned operations. Larger requests
@@ -61,7 +67,7 @@ use pliron::graph::ControlFlowGraph;
 use pliron::graph::dominance::DomInfo;
 use pliron::irbuild::{
     IRStatus,
-    cloning::{IrMapping, clone_blocks_into},
+    cloning::{IrMapping, clone_blocks_into, clone_operation},
     listener::DummyListener,
     rewriter::IRRewriter,
 };
@@ -83,7 +89,7 @@ use std::fmt;
 use std::num::NonZero;
 use std::path::PathBuf;
 
-use crate::analyses::induction::{self, ArgKind, CmpPred};
+use crate::analyses::induction::{self, ArgKind, CmpPred, RuntimeStep};
 use crate::analyses::loop_info::LoopInfo;
 use crate::canonicalize::{
     CanonicalizeOutcome, close_header_liveouts, hoist_header_constants, merge_backedges,
@@ -563,8 +569,7 @@ struct LoopShape {
     /// header -> normal_exit operands (the normal-completion live-out values).
     normal_exit_ops: Vec<Value>,
     iv_idx: usize,
-    iv_init: i128,
-    iv_step: i128,
+    counter: Counter,
     iv_type: TypeHandle,
     /// The boolean type of the header's exit test (for any new comparison).
     i1_type: TypeHandle,
@@ -573,6 +578,16 @@ struct LoopShape {
     /// Every block of the loop (header included). Used to tell loop-internal uses
     /// of the carried values from out-of-loop (live-out) uses.
     loop_blocks: FxHashSet<Ptr<BasicBlock>>,
+}
+
+/// How the loop counter advances on every back-edge.
+#[derive(Clone, Copy)]
+enum Counter {
+    /// `init + k*step`, both known at compile time.
+    Constant { init: i128, step: i128 },
+    /// The same `step` every iteration, but the start or the step is only
+    /// known at runtime, so the counter has no compile-time formula.
+    Runtime(RuntimeStep),
 }
 
 /// True if `v` is the result of an operation located in one of `set`'s blocks
@@ -648,17 +663,20 @@ fn analyze_shape(
 
     let iv_idx = match rec.primary_iv {
         Some(iv_idx) => iv_idx,
-        None if rec
-            .args
-            .iter()
-            .any(|arg| matches!(arg, ArgKind::BasicIv { .. })) =>
+        None if rec.args.iter().any(|arg| {
+            matches!(arg, ArgKind::BasicIv { .. } | ArgKind::RuntimeIv { .. })
+        }) =>
         {
             return Err("the loop has a counter, but its exit test is not of the form `counter <op> bound` (or `counter + const <op> bound`)".into());
         }
-        None => return Err("no recognized induction variable (loop counter)".into()),
+        None => return Err("no recognized induction variable (loop counter); the counter must advance by the same constant or loop-invariant value on every iteration".into()),
     };
-    let (iv_init, iv_step) = match &rec.args[iv_idx] {
-        ArgKind::BasicIv { init, step } => (*init, *step),
+    let counter = match &rec.args[iv_idx] {
+        ArgKind::BasicIv { init, step } => Counter::Constant {
+            init: *init,
+            step: *step,
+        },
+        ArgKind::RuntimeIv { step } => Counter::Runtime(*step),
         _ => return Err("the loop counter is not a simple induction variable".into()),
     };
 
@@ -806,8 +824,7 @@ fn analyze_shape(
         entry_ops,
         normal_exit_ops,
         iv_idx,
-        iv_init,
-        iv_step,
+        counter,
         iv_type,
         i1_type,
         preheader_term,
@@ -972,17 +989,22 @@ fn integer_value_bounds(ctx: &Context, ty: TypeHandle) -> Option<(i128, i128)> {
 /// Full unrolling uses a mathematical recurrence. Prove that the fixed-width IV
 /// reaches the same final value without wrapping; otherwise the original loop
 /// may continue after the trip count this analysis computed.
-fn full_iv_stays_in_range(ctx: &Context, shape: &LoopShape, trip: i128) -> bool {
+fn full_iv_stays_in_range(
+    ctx: &Context,
+    shape: &LoopShape,
+    (init, step): (i128, i128),
+    trip: i128,
+) -> bool {
     let Some((min, max)) = integer_value_bounds(ctx, shape.iv_type) else {
         return false;
     };
-    let Some(delta) = trip.checked_mul(shape.iv_step) else {
+    let Some(delta) = trip.checked_mul(step) else {
         return false;
     };
-    let Some(final_iv) = shape.iv_init.checked_add(delta) else {
+    let Some(final_iv) = init.checked_add(delta) else {
         return false;
     };
-    (min..=max).contains(&shape.iv_init) && (min..=max).contains(&final_iv)
+    (min..=max).contains(&init) && (min..=max).contains(&final_iv)
 }
 
 /// With an exit test `IV + offset <pred> bound`, the header computes
@@ -993,6 +1015,7 @@ fn full_iv_stays_in_range(ctx: &Context, shape: &LoopShape, trip: i128) -> bool 
 fn full_exit_test_stays_in_range(
     ctx: &Context,
     shape: &LoopShape,
+    (init, step): (i128, i128),
     trip: i128,
     offset: i128,
 ) -> bool {
@@ -1003,12 +1026,12 @@ fn full_exit_test_stays_in_range(
         return false;
     };
     let Some(final_iv) = trip
-        .checked_mul(shape.iv_step)
-        .and_then(|delta| shape.iv_init.checked_add(delta))
+        .checked_mul(step)
+        .and_then(|delta| init.checked_add(delta))
     else {
         return false;
     };
-    [shape.iv_init, final_iv].iter().all(|&iv| {
+    [init, final_iv].iter().all(|&iv| {
         iv.checked_add(offset)
             .is_some_and(|tested| (min..=max).contains(&tested))
     })
@@ -1061,6 +1084,12 @@ fn full_unroll(
             ));
         }
     };
+    // a runtime counter has no trip count, so this only names the pair
+    let Counter::Constant { init, step } = s.counter else {
+        return Ok(UnrollOutcome::Skipped(
+            "full #[unroll] needs a counter with a compile-time-constant start and step".into(),
+        ));
+    };
     if let Err(reason) = check_clone_budget(ctx, trip_count, &s.body_blocks_ordered) {
         return Ok(UnrollOutcome::Skipped(reason));
     }
@@ -1070,13 +1099,13 @@ fn full_unroll(
         ));
     }
     let trip = i128::from(trip_count);
-    if !full_iv_stays_in_range(ctx, &s, trip) {
+    if !full_iv_stays_in_range(ctx, &s, (init, step), trip) {
         return Ok(UnrollOutcome::Skipped(
             "the loop counter may wrap before the computed full-unroll trip count is reached"
                 .into(),
         ));
     }
-    if !full_exit_test_stays_in_range(ctx, &s, trip, rec.iv_offset) {
+    if !full_exit_test_stays_in_range(ctx, &s, (init, step), trip, rec.iv_offset) {
         return Ok(UnrollOutcome::Skipped(
             "the exit test's `counter + const` may wrap in the counter's type, so the computed trip count may be wrong".into(),
         ));
@@ -1100,12 +1129,12 @@ fn full_unroll(
     };
     let mut iv_literals = Vec::with_capacity(literal_count);
     for k in 0..=trip_count {
-        let Some(delta) = i128::from(k).checked_mul(s.iv_step) else {
+        let Some(delta) = i128::from(k).checked_mul(step) else {
             return Ok(UnrollOutcome::Skipped(
                 "the full-unroll counter arithmetic overflows the analysis range".into(),
             ));
         };
-        let Some(value) = s.iv_init.checked_add(delta) else {
+        let Some(value) = init.checked_add(delta) else {
             return Ok(UnrollOutcome::Skipped(
                 "the full-unroll counter arithmetic overflows the analysis range".into(),
             ));
@@ -1205,14 +1234,19 @@ fn make_const(ctx: &mut Context, ty: TypeHandle, value: i128, before: Ptr<Operat
 /// Multiple source latches are supported after normalization. An early `break`
 /// or another exit is not yet supported here: the main and remainder loops would
 /// need their path-specific exit values merged. Such a request warns and skips.
-/// Only counting-up loops (test `<` or `<=`, positive step) are handled.
+/// Only loops tested with `<` or `<=` are handled. A constant step must be
+/// positive, even from a runtime start. A runtime step can have any
+/// value, because its guard tests every counter in the group.
 ///
 /// What it produces (the loop was entered as `preheader -> header`):
 /// ```text
 ///   preheader -> main_h(init...)
 ///   main_h(acc, i):                       (i = counter, acc = carried values)
-///       if (i + (factor-1)*step) + off <pred> bound  -> copy0   (a full group fits)
-///       else                                         -> header  (run the remainder)
+///       constant step and start:
+///         if (i + (factor-1)*step) + off <pred> bound  -> copy0  (a full group fits)
+///       runtime step or start, with i_0 = i and i_k = i_(k-1) + step:
+///         if all k: i_k + off <pred> bound              -> copy0  (the source runs all)
+///       else                                            -> header (run the remainder)
 ///   copy0 .. copy(factor-1): the body, factor times, chained; the last copy's
 ///       latch loops back to main_h with (acc', i + factor*step)
 ///   header/.../latch: the original loop, now just the leftover tail
@@ -1247,28 +1281,57 @@ fn partial_unroll(
             ));
         }
     };
-    // Partial unroll needs an up-counting loop with a known bound value.
-    if s.iv_step <= 0 || !matches!(rec.continue_pred, Some(CmpPred::Lt) | Some(CmpPred::Le)) {
+    // Partial unroll needs an up-counting loop with a known bound value. A
+    // runtime step value cannot be checked here; the main-loop guard for it
+    // replays the source test on every counter in the group instead.
+    let positive_step = match s.counter {
+        Counter::Constant { step, .. } | Counter::Runtime(RuntimeStep::Const(step)) => step > 0,
+        Counter::Runtime(RuntimeStep::Value(_)) => true,
+    };
+    if !positive_step || !matches!(rec.continue_pred, Some(CmpPred::Lt) | Some(CmpPred::Le)) {
         return Ok(UnrollOutcome::Skipped(
             "partial #[unroll(N)] supports only up-counting loops (test < or <=, positive step) for now".into(),
         ));
     }
-    let Some(last_span) = (n - 1).checked_mul(s.iv_step) else {
-        return Ok(UnrollOutcome::Skipped(
-            "the partial-unroll counter step is too large to analyze safely".into(),
-        ));
+    let group = match s.counter {
+        Counter::Constant { init, step } => {
+            let Some(last_span) = (n - 1).checked_mul(step) else {
+                return Ok(UnrollOutcome::Skipped(
+                    "the partial-unroll counter step is too large to analyze safely".into(),
+                ));
+            };
+            let Some(group_step) = n.checked_mul(step) else {
+                return Ok(UnrollOutcome::Skipped(
+                    "the partial-unroll counter step is too large to analyze safely".into(),
+                ));
+            };
+            if !partial_span_is_representable(ctx, s.iv_type, last_span) {
+                return Ok(UnrollOutcome::Skipped(
+                    "the partial-unroll group spans too much of the counter type to guard wraparound safely"
+                        .into(),
+                ));
+            }
+            // Validate each per-copy offset before creating the main header or
+            // cloning any body block, so arithmetic failure is always a clean
+            // skip.
+            let mut copy_offsets = Vec::with_capacity(factor_usize);
+            for j in 0..factor {
+                let Some(offset) = i128::from(j).checked_mul(step) else {
+                    return Ok(UnrollOutcome::Skipped(
+                        "the partial-unroll counter offset overflows the analysis range".into(),
+                    ));
+                };
+                copy_offsets.push(offset);
+            }
+            Group::Constant {
+                init,
+                last_span,
+                group_step,
+                copy_offsets,
+            }
+        }
+        Counter::Runtime(step) => Group::Runtime(step),
     };
-    let Some(group_step) = n.checked_mul(s.iv_step) else {
-        return Ok(UnrollOutcome::Skipped(
-            "the partial-unroll counter step is too large to analyze safely".into(),
-        ));
-    };
-    if !partial_span_is_representable(ctx, s.iv_type, last_span) {
-        return Ok(UnrollOutcome::Skipped(
-            "the partial-unroll group spans too much of the counter type to guard wraparound safely"
-                .into(),
-        ));
-    }
     let pred = rec.continue_pred.unwrap();
     let bound = match rec.bound_value {
         Some(b) => b,
@@ -1278,32 +1341,20 @@ fn partial_unroll(
             ));
         }
     };
-    // The guard we build below, `i + (N-1)*step <pred> bound`, is only correct if
-    // `bound` is the same on every iteration. A constant bound is always fine (we
-    // re-materialize it in the main header below, so where its op sits does not
-    // matter). A non-constant bound that is a loop-carried header argument or is
-    // computed inside the loop can change within a group of N iterations, which
-    // would make the guard admit too many iterations (a miscompile), and would
-    // not dominate the new main header either. Bail loudly on those.
-    let bound_is_const = induction::const_i128(ctx, bound).is_some();
-    if !bound_is_const
-        && (s.header_args.contains(&bound) || defined_in_loop(ctx, bound, &s.loop_blocks))
+    // The guard we build below tests the group's counters against `bound`, so
+    // it is only correct if `bound` is the same on every iteration. A constant
+    // bound is always fine. So is one that `induction::loop_invariant` proves
+    // fixed, such as `n as usize` recomputed in the header; the guard
+    // recomputes it in the main header (`materialize_invariant`). A
+    // loop-carried header argument or any other value computed in the loop can
+    // change within a group of N iterations, which would make the guard admit
+    // too many iterations (a miscompile). Bail loudly on those.
+    if induction::const_i128(ctx, bound).is_none()
+        && !induction::loop_invariant(ctx, &s.loop_blocks, bound)
     {
         return Ok(UnrollOutcome::Skipped(
             "partial #[unroll(N)] needs a loop-invariant bound (the loop's limit must be the same on every iteration); this loop's limit changes inside the loop".into(),
         ));
-    }
-
-    // Validate each per-copy offset before creating the main header or cloning
-    // any body block, so arithmetic failure is always a clean skip.
-    let mut copy_offsets = Vec::with_capacity(factor_usize);
-    for j in 0..factor {
-        let Some(offset) = i128::from(j).checked_mul(s.iv_step) else {
-            return Ok(UnrollOutcome::Skipped(
-                "the partial-unroll counter offset overflows the analysis range".into(),
-            ));
-        };
-        copy_offsets.push(offset);
     }
 
     let arg_types: Vec<TypeHandle> = s.header_args.iter().map(|a| a.get_type(ctx)).collect();
@@ -1315,31 +1366,68 @@ fn partial_unroll(
         .collect();
     let mh_iv = mh_args[s.iv_idx];
 
+    // The counter each copy runs with, and the one the next group starts at.
+    // A constant step gives copy j an explicit `mh_iv + j*step`. This is
+    // semantically the same recurrence, and it keeps the affine relation
+    // visible even when a synthetic unified latch forwards its counter through
+    // a block argument. A runtime step repeats the source's own `counter +
+    // step`, so each copy sees exactly the value the source loop computes,
+    // wraparound included.
+    // loop-invariant values recomputed in `main_h`, shared by the step and
+    // the bound so each in-loop definition is cloned once
+    let mut invariants = IrMapping::new();
+    let (copy_ivs, next_iv) = match &group {
+        Group::Constant {
+            group_step,
+            copy_offsets,
+            ..
+        } => {
+            let mut copy_ivs = Vec::with_capacity(factor_usize);
+            for (j, &offset) in copy_offsets.iter().enumerate() {
+                copy_ivs.push(if j == 0 {
+                    mh_iv
+                } else {
+                    let offset_value = append_const(ctx, s.iv_type, offset, main_h);
+                    append_add(ctx, s.iv_type, mh_iv, offset_value, main_h)
+                });
+            }
+            let next_offset = append_const(ctx, s.iv_type, *group_step, main_h);
+            let next_iv = append_add(ctx, s.iv_type, mh_iv, next_offset, main_h);
+            (copy_ivs, next_iv)
+        }
+        Group::Runtime(step) => {
+            let step_value = match *step {
+                RuntimeStep::Const(step) => append_const(ctx, s.iv_type, step, main_h),
+                RuntimeStep::Value(step) => {
+                    materialize_invariant(ctx, step, &s.loop_blocks, main_h, &mut invariants)
+                }
+            };
+            let mut copy_ivs = vec![mh_iv];
+            for _ in 1..factor_usize {
+                let previous = *copy_ivs.last().expect("copy 0 is present");
+                copy_ivs.push(append_add(ctx, s.iv_type, previous, step_value, main_h));
+            }
+            let last = *copy_ivs.last().expect("copy 0 is present");
+            let next_iv = append_add(ctx, s.iv_type, last, step_value, main_h);
+            (copy_ivs, next_iv)
+        }
+    };
+
     // Lay down `factor` copies of the body, threading non-IV carried values from
-    // one copy to the next. Give each copy an explicit `mh_iv + j*step` counter.
-    // This is semantically the same recurrence, and it keeps the affine relation
-    // visible even when a synthetic unified latch forwards its counter through a
-    // block argument.
+    // one copy to the next.
     let mut running: Vec<Value> = mh_args.clone();
     let mut copies: Vec<CopyResult> = Vec::with_capacity(factor_usize);
-    for (j, offset) in copy_offsets.iter().copied().enumerate() {
-        let copy_iv = if j == 0 {
-            mh_iv
-        } else {
-            let offset_value = append_const(ctx, s.iv_type, offset, main_h);
-            append_add(ctx, s.iv_type, mh_iv, offset_value, main_h)
-        };
+    for &copy_iv in &copy_ivs {
         let mut subst = running.clone();
         subst[s.iv_idx] = copy_iv;
         let c = clone_one_copy(ctx, region, &s, &subst);
         running = c.next_running.clone();
         copies.push(c);
     }
-    let next_offset = append_const(ctx, s.iv_type, group_step, main_h);
-    running[s.iv_idx] = append_add(ctx, s.iv_type, mh_iv, next_offset, main_h);
+    running[s.iv_idx] = next_iv;
 
     // Chain copy j's latch into copy j+1's entry; the last copy's latch loops
-    // back to main_h carrying `running` (counter now mh_iv + factor*step).
+    // back to main_h carrying `running` (the counter of the next group).
     for j in 0..(factor_usize - 1) {
         let next_entry = copies[j + 1].entry;
         let next_args = copies[j + 1].entry_args.clone();
@@ -1353,30 +1441,115 @@ fn partial_unroll(
         MirGotoOp::new(rem_latch).set_loop_unroll_disable(ctx);
     }
 
-    // The main-loop counter is mh_iv = init + (factor*step)*t, so it is always
-    // init plus a multiple of factor*step. That lets us replace counter-derived
-    // index ops -- `(counter +/- const) & mask` and `(counter +/- const) % 2^k`
-    // -- in the copies with literals (`fold_constant_index_in_copies`), the main
-    // payoff of unrolling. Scan every cloned copy block.
-    let copy_blocks: Vec<Ptr<BasicBlock>> = copies
-        .iter()
-        .flat_map(|c| c.blocks.iter().copied())
-        .collect();
-    fold_constant_index_in_copies(ctx, &copy_blocks, mh_iv, s.iv_init, group_step);
-
-    // main_h guard: stay in the main loop only while a whole group of `factor`
-    // iterations still fits. The last copy in a group uses counter
-    // mh_iv + (factor-1)*step, so the group fits when that still passes the test
-    // and did not wrap below mh_iv. True -> copy 0 (enter the main body); False
-    // -> the original header (the remainder loop), passing the current carried
-    // values. The remainder then preserves the source loop's exact wrap behavior.
-    // A constant bound may be defined inside the (original) loop, which does not
-    // dominate `main_h`; re-materialize it here. A non-constant bound was already
-    // checked to be defined outside the loop, so it dominates `main_h` as-is.
+    // A bound computed inside the (original) loop does not dominate `main_h`;
+    // re-materialize it here. A constant is rebuilt as a literal; any other
+    // bound was proved loop-invariant above, and one defined outside the loop
+    // dominates `main_h` as-is.
     let guard_bound = match induction::const_i128(ctx, bound) {
         Some(c) => append_const(ctx, bound.get_type(ctx), c, main_h),
-        None => bound,
+        None => materialize_invariant(ctx, bound, &s.loop_blocks, main_h, &mut invariants),
     };
+    let cont = match &group {
+        Group::Constant {
+            init,
+            last_span,
+            group_step,
+            ..
+        } => {
+            // The main-loop counter is mh_iv = init + (factor*step)*t, so it is
+            // always init plus a multiple of factor*step. That lets us replace
+            // counter-derived index ops -- `(counter +/- const) & mask` and
+            // `(counter +/- const) % 2^k` -- in the copies with literals
+            // (`fold_constant_index_in_copies`), the main payoff of unrolling.
+            // Scan every cloned copy block.
+            let copy_blocks: Vec<Ptr<BasicBlock>> = copies
+                .iter()
+                .flat_map(|c| c.blocks.iter().copied())
+                .collect();
+            fold_constant_index_in_copies(ctx, &copy_blocks, mh_iv, *init, *group_step);
+            constant_step_guard(ctx, &s, rec, mh_iv, *last_span, guard_bound, main_h)
+        }
+        Group::Runtime(_) => {
+            // The source loop runs copy j's iteration exactly when its exit test
+            // passes for that copy's counter. Each counter is the value the
+            // source computes, so testing all of them admits a group only when
+            // the source would run every iteration in it. This needs no
+            // assumption about the step's sign or about wraparound.
+            let mut cont = None;
+            for &copy_iv in &copy_ivs {
+                let tested = match rec.iv_offset {
+                    0 => copy_iv,
+                    off => {
+                        let off_value = append_const(ctx, s.iv_type, off, main_h);
+                        append_add(ctx, s.iv_type, copy_iv, off_value, main_h)
+                    }
+                };
+                let passes = append_cmp(ctx, pred, tested, guard_bound, s.i1_type, main_h);
+                cont = Some(match cont {
+                    None => passes,
+                    Some(cont) => append_bitand(ctx, s.i1_type, cont, passes, main_h),
+                });
+            }
+            cont.expect("a group has at least two copies")
+        }
+    };
+
+    // main_h ends in the guard: true -> copy 0 (enter the main body); false ->
+    // the original header (the remainder loop), passing the current carried
+    // values. The remainder then preserves the source loop's exact wrap
+    // behavior.
+    let entry0 = copies[0].entry;
+    let entry0_args = copies[0].entry_args.clone();
+    let (flat, segs) =
+        MirCondBranchOp::compute_segment_sizes(vec![vec![cont], entry0_args, mh_args.clone()]);
+    let cbr = Operation::new(
+        ctx,
+        MirCondBranchOp::get_concrete_op_info(),
+        vec![],
+        flat,
+        vec![entry0, s.header],
+        0,
+    );
+    Operation::get_op::<MirCondBranchOp>(cbr, ctx)
+        .expect("MirCondBranchOp")
+        .set_operand_segment_sizes(ctx, segs);
+    cbr.insert_at_back(main_h, ctx);
+
+    // Finally, make the preheader branch into the new main loop instead of the
+    // original header, reusing the same initial values it already passed. The
+    // original loop stays in place and becomes the remainder.
+    rewire_goto(ctx, s.preheader_term, main_h, &s.init_ops);
+    Ok(UnrollOutcome::Unrolled)
+}
+
+/// How a partial unroll steps its main loop, decided before any IR changes.
+enum Group {
+    /// A constant step from a constant start: the counter is
+    /// `init + group_step*t`, and copy j adds `copy_offsets[j]`.
+    Constant {
+        init: i128,
+        last_span: i128,
+        group_step: i128,
+        copy_offsets: Vec<i128>,
+    },
+    /// A step or start only known at runtime: each copy adds the step to the
+    /// previous copy's counter.
+    Runtime(RuntimeStep),
+}
+
+/// The main-loop guard for a constant step: stay in the main loop only while
+/// a whole group of `factor` iterations still fits. The last copy in a group
+/// uses counter `mh_iv + last_span`, so the group fits when that still passes
+/// the test and did not wrap below `mh_iv`.
+fn constant_step_guard(
+    ctx: &mut Context,
+    s: &LoopShape,
+    rec: &induction::LoopRecurrences,
+    mh_iv: Value,
+    last_span: i128,
+    guard_bound: Value,
+    main_h: Ptr<BasicBlock>,
+) -> Value {
     let last_off = append_const(ctx, s.iv_type, last_span, main_h);
     let last_iv = append_add(ctx, s.iv_type, mh_iv, last_off, main_h);
     // With an exit test `IV + off <pred> bound`, compare what the source test
@@ -1400,34 +1573,48 @@ fn partial_unroll(
             (tested, Some(no_wrap))
         }
     };
+    let pred = rec
+        .continue_pred
+        .expect("partial unrolling checked the predicate");
     let within_bound = append_cmp(ctx, pred, last_tested, guard_bound, s.i1_type, main_h);
     let no_wrap = append_cmp(ctx, CmpPred::Ge, last_iv, mh_iv, s.i1_type, main_h);
     let mut cont = append_bitand(ctx, s.i1_type, within_bound, no_wrap, main_h);
     if let Some(offset_no_wrap) = offset_no_wrap {
         cont = append_bitand(ctx, s.i1_type, cont, offset_no_wrap, main_h);
     }
-    let entry0 = copies[0].entry;
-    let entry0_args = copies[0].entry_args.clone();
-    let (flat, segs) =
-        MirCondBranchOp::compute_segment_sizes(vec![vec![cont], entry0_args, mh_args.clone()]);
-    let cbr = Operation::new(
-        ctx,
-        MirCondBranchOp::get_concrete_op_info(),
-        vec![],
-        flat,
-        vec![entry0, s.header],
-        0,
-    );
-    Operation::get_op::<MirCondBranchOp>(cbr, ctx)
-        .expect("MirCondBranchOp")
-        .set_operand_segment_sizes(ctx, segs);
-    cbr.insert_at_back(main_h, ctx);
+    cont
+}
 
-    // Finally, make the preheader branch into the new main loop instead of the
-    // original header, reusing the same initial values it already passed. The
-    // original loop stays in place and becomes the remainder.
-    rewire_goto(ctx, s.preheader_term, main_h, &s.init_ops);
-    Ok(UnrollOutcome::Unrolled)
+/// Recompute loop-invariant `value` at the end of `block`, which runs before
+/// the loop, and return the copy. A value defined outside `loop_blocks` is
+/// returned as is. One computed in the loop is rebuilt by cloning its
+/// operations, operands first; [`induction::loop_invariant`] has already
+/// checked that they are pure and read only values fixed for the launch, so
+/// the copy has the same value as every in-loop computation.
+fn materialize_invariant(
+    ctx: &mut Context,
+    value: Value,
+    loop_blocks: &FxHashSet<Ptr<BasicBlock>>,
+    block: Ptr<BasicBlock>,
+    mapper: &mut IrMapping,
+) -> Value {
+    if let Some(copy) = mapper.lookup_value(value) {
+        return copy;
+    }
+    let Some(def) = value.defining_op() else {
+        return value;
+    };
+    if !defined_in_loop(ctx, value, loop_blocks) {
+        return value;
+    }
+    let operands: Vec<Value> = def.deref(ctx).operands().collect();
+    for operand in operands {
+        materialize_invariant(ctx, operand, loop_blocks, block, mapper);
+    }
+    let mut rewriter = IRRewriter::<DummyListener>::default();
+    let copy = clone_operation(def, ctx, &mut rewriter, mapper);
+    copy.insert_at_back(block, ctx);
+    mapper.lookup_value_or_default(value)
 }
 
 /// If `v` is the counter `iv` plus or minus some constants (e.g. `iv`, `iv + 1`,

@@ -190,14 +190,19 @@ wrong value.
 
 The supported relocation scope is intentionally narrow: thin pointers and slice
 fat pointers whose data word targets another device static in global or constant
-memory, including zero and non-zero byte addends. For slices, the data word
+memory, or anonymous constant memory such as `&19` or `&[1, 2, 3]`, including
+zero and non-zero byte addends. Each anonymous allocation becomes its own
+read-only device global (see `promoted_ref_return`). For slices, the data word
 carries provenance while the length metadata remains literal initializer data.
 A top-level union is admitted only when the complete union is one naturally
 aligned pointer word and every non-ZST alternative is a
-representation-compatible thin pointer. Anonymous promoted allocations,
-functions, vtables, trait-object metadata, other fat-pointer forms, unsized
-pointees, nested unions, pointer/integer unions, and relocation targets outside
-device static storage remain fail-closed. Packed or otherwise unaligned
+representation-compatible thin pointer. Functions, vtables, trait-object
+metadata, other fat-pointer forms, unsized pointees, nested unions,
+pointer/integer unions, and relocation targets other than device statics and
+anonymous constant memory remain fail-closed, as do relocations to
+`SharedArray` and `Barrier` statics, which live in per-block shared memory
+(see `error_shared_static_relocation`), and initializers whose type stores a
+pointer to a `SharedArray` or `Barrier` (see `error_shared_pointer_constant`). Packed or otherwise unaligned
 thin-pointer slots are supported when the containing top-level struct has an
 explicit, non-overlapping rustc layout. One direct nested packed struct is also
 supported when the enclosing top-level layout is ordinary/non-divergent and the

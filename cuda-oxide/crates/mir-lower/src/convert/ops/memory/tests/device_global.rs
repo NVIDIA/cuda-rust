@@ -106,6 +106,87 @@ fn convert_global_alloc_rejects_conflicting_key_declarations() {
     );
 }
 
+/// Append an immutable initialized global typed as `global_ty` over `hex`.
+fn append_initialized_view(
+    ctx: &mut Context,
+    block: Ptr<BasicBlock>,
+    global_key: &str,
+    global_ty: TypeHandle,
+    hex: &str,
+) {
+    let op = append_global_alloc_typed(ctx, block, global_key, false, false, global_ty);
+    let alloc = mir::MirGlobalAllocOp::new(op);
+    alloc.set_alignment_value(ctx, 4);
+    alloc.mark_immutable(ctx);
+    let initializer_key: Identifier = "global_initializer_hex".try_into().unwrap();
+    op.deref_mut(ctx)
+        .attributes
+        .set(initializer_key, StringAttr::new(hex.to_string()));
+}
+
+/// Lower one module declaring `"shared-alloc"` as `[8 x u8]` and as
+/// `[u32; 2]`, in the given order, and count the globals it produces.
+fn lowered_globals_for_two_views(words_first: bool) -> usize {
+    let mut ctx = make_ctx();
+    let (module_ptr, block) = build_kernel(&mut ctx, vec![], vec![]);
+    let byte_ty: TypeHandle = IntegerType::get(&ctx, 8, Signedness::Unsigned).into();
+    let word_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+    let bytes: TypeHandle = MirArrayType::get(&mut ctx, byte_ty, 8).into();
+    let words: TypeHandle = MirArrayType::get(&mut ctx, word_ty, 2).into();
+    let views = if words_first {
+        [words, bytes]
+    } else {
+        [bytes, words]
+    };
+    for view in views {
+        append_initialized_view(&mut ctx, block, "shared-alloc", view, "0100000035000000");
+    }
+    append_mir_return(&mut ctx, block, vec![]);
+
+    crate::lower_mir_to_llvm(&mut ctx, module_ptr).expect("lowering failed");
+
+    let top = module_top_block(&ctx, module_ptr);
+    top.deref(&ctx)
+        .iter(&ctx)
+        .filter_map(|op| Operation::get_op::<llvm::GlobalOp>(op, &ctx))
+        .filter(|global| global.source_global_key(&ctx).as_deref() == Some("shared-alloc"))
+        .count()
+}
+
+/// One read-only rustc allocation reached through two MIR types stays one
+/// symbol, so pointers through either view compare equal, whichever view
+/// lowering meets first.
+#[test]
+fn immutable_initialized_global_shares_storage_across_typed_views() {
+    assert_eq!(lowered_globals_for_two_views(false), 1);
+    assert_eq!(lowered_globals_for_two_views(true), 1);
+}
+
+/// A later view of shared storage still has to prove its layout against the
+/// shared bytes; sharing a key is not a way around the layout check.
+#[test]
+fn typed_view_of_shared_storage_must_match_its_bytes() {
+    let mut ctx = make_ctx();
+    let (module_ptr, block) = build_kernel(&mut ctx, vec![], vec![]);
+    let byte_ty: TypeHandle = IntegerType::get(&ctx, 8, Signedness::Unsigned).into();
+    let word_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+    let bytes: TypeHandle = MirArrayType::get(&mut ctx, byte_ty, 8).into();
+    let too_many_words: TypeHandle = MirArrayType::get(&mut ctx, word_ty, 3).into();
+    append_initialized_view(&mut ctx, block, "shared-alloc", bytes, "0100000035000000");
+    append_initialized_view(
+        &mut ctx,
+        block,
+        "shared-alloc",
+        too_many_words,
+        "0100000035000000",
+    );
+    append_mir_return(&mut ctx, block, vec![]);
+
+    let error = crate::lower_mir_to_llvm(&mut ctx, module_ptr)
+        .expect_err("a 12-byte view of 8 initialized bytes must be rejected");
+    assert!(error.to_string().contains("byte-compatible"), "{error}");
+}
+
 #[test]
 fn device_global_declaration_identity_covers_every_storage_property() {
     let ctx = make_ctx();

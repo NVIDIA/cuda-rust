@@ -1,3 +1,17 @@
-# The raw CUDA FFI crate (cuda-bindings) is shared with cutile-rs and lives in
-# NVlabs/cutile-rs since the host-crate migration; review ownership for it is
-# declared there. No path in this repository currently needs a code owner.
+# Later matching patterns take precedence.
+# Names from the CUDA Rust unification proposal: Nihal is SIMT DRI,
+# Melih is Tile DRI, shared host crates are dual-reviewed, everything
+# else falls to the maintainer set.
+
+# Remaining git-root files (Cargo.toml, CI, docs, etc.).
+* @nihalpasham @binarybana @kkraus14 @elibol @rparolin @cryos @roivanov
+
+# Shared host crates: Tile DRI plus Keith / Rob / Nihal.
+/cuda-bindings/ @elibol @kkraus14 @rparolin @nihalpasham
+/cuda-core/ @elibol @kkraus14 @rparolin @nihalpasham
+/cuda-core-derive/ @elibol @kkraus14 @rparolin @nihalpasham
+/cuda-async/ @elibol @kkraus14 @rparolin @nihalpasham
+
+# Model trees.
+/cutile-rs/ @elibol
+/cuda-oxide/ @nihalpasham

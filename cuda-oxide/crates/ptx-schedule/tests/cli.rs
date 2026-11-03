@@ -1,0 +1,393 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
+
+struct Fixture {
+    dir: PathBuf,
+    input: PathBuf,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let id = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("ptx-schedule-cli-{}-{id}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("input.ptx");
+        fs::write(
+            &input,
+            ".version 8.0\n.target sm_80\n.address_size 64\n.visible .entry k() {\n  bar.sync 0;\n  ret;\n}\n",
+        )
+        .unwrap();
+        Self { dir, input }
+    }
+
+    fn output(&self) -> PathBuf {
+        self.dir.join("output.ptx")
+    }
+
+    fn run(&self, args: &[&str]) -> Output {
+        self.run_in(&self.dir, args)
+    }
+
+    fn run_in(&self, cwd: &Path, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_ptx-schedule"))
+            .current_dir(cwd)
+            .arg(&self.input)
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    fn bytes(&self) -> Vec<u8> {
+        fs::read(&self.input).unwrap()
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn run_without_input(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_ptx-schedule"))
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+fn assert_usage_error(output: Output, fragment: &str, absent: Option<&Path>) {
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(stderr(&output).contains(fragment), "{}", stderr(&output));
+    if let Some(path) = absent {
+        assert!(!path.exists(), "unexpected output at {}", path.display());
+    }
+}
+
+#[test]
+fn help_shows_the_two_exclusive_forms() {
+    let output = run_without_input(&["--help"]);
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("ptx-schedule <INPUT.ptx> --list-sites"));
+    assert!(stdout.contains("ptx-schedule <INPUT.ptx> -o <OUTPUT> [OPTIONS]"));
+    let flattened = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        flattened.contains("Must differ from the input and --output"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn malformed_commands_are_named_usage_errors() {
+    assert_usage_error(run_without_input(&[]), "<INPUT.ptx>", None);
+
+    let fixture = Fixture::new();
+    let output_path = fixture.output();
+    for (args, fragment) in [
+        (vec!["--seed"], "value is required"),
+        (vec!["--focus", "--list-sites"], "value is required"),
+        (vec!["--seed", "abc", "-o", "unused.ptx"], "invalid value"),
+        (vec!["--bogus"], "unexpected argument"),
+        (vec!["--list-sites", "--seed", "1"], "cannot be used with"),
+        (vec!["--seed", "1"], "required"),
+    ] {
+        assert_usage_error(fixture.run(&args), fragment, Some(&output_path));
+    }
+}
+
+#[test]
+fn both_valid_modes_execute() {
+    let fixture = Fixture::new();
+    let listed = fixture.run(&["--list-sites"]);
+    assert!(listed.status.success(), "{listed:?}");
+    assert!(String::from_utf8_lossy(&listed.stdout).contains("bar.sync 0"));
+
+    let output_path = fixture.output();
+    let rewritten = fixture.run(&["--seed", "7", "--output", output_path.to_str().unwrap()]);
+    assert!(rewritten.status.success(), "{rewritten:?}");
+    assert!(output_path.is_file());
+}
+
+fn assert_rejected(output: &Output, fragment: &str) {
+    assert!(
+        !output.status.success(),
+        "run should be rejected, got {output:?}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("ptx-schedule: seed="),
+        "success summary must not claim a write that was rejected: {stdout}"
+    );
+    assert!(stderr(output).contains(fragment), "{}", stderr(output));
+}
+
+/// A `--decisions-json` destination that is the PTX input or `--output`.
+fn assert_decisions_rejected(output: &Output) {
+    assert_rejected(output, "refusing to overwrite PTX");
+}
+
+#[test]
+fn decisions_json_exact_output_collision_is_rejected() {
+    let fixture = Fixture::new();
+    let before = fixture.bytes();
+    let output_path = fixture.output();
+    fs::write(&output_path, "ORIGINAL-PTX").unwrap();
+    let path = output_path.to_str().unwrap();
+    let output = fixture.run(&["--seed", "7", "--output", path, "--decisions-json", path]);
+    assert_decisions_rejected(&output);
+    assert_eq!(fixture.bytes(), before);
+    assert_eq!(fs::read_to_string(&output_path).unwrap(), "ORIGINAL-PTX");
+}
+
+#[test]
+fn decisions_json_dot_alias_of_output_is_rejected() {
+    let fixture = Fixture::new();
+    let before = fixture.bytes();
+    let output_path = fixture.output();
+    let output = fixture.run(&[
+        "--seed",
+        "7",
+        "--output",
+        "output.ptx",
+        "--decisions-json",
+        "./output.ptx",
+    ]);
+    assert_decisions_rejected(&output);
+    assert_eq!(fixture.bytes(), before);
+    assert!(
+        !output_path.exists(),
+        "rejected run must not create PTX output"
+    );
+}
+
+#[test]
+fn decisions_json_dotdot_alias_of_output_is_rejected() {
+    let fixture = Fixture::new();
+    let before = fixture.bytes();
+    let nested = fixture.dir.join("nested");
+    fs::create_dir_all(&nested).unwrap();
+    let output_path = fixture.output();
+    let output = fixture.run_in(
+        &nested,
+        &[
+            "--seed",
+            "7",
+            "--output",
+            "../output.ptx",
+            "--decisions-json",
+            "../nested/../output.ptx",
+        ],
+    );
+    assert_decisions_rejected(&output);
+    assert_eq!(fixture.bytes(), before);
+    assert!(
+        !output_path.exists(),
+        "rejected run must not create PTX output"
+    );
+}
+
+#[test]
+fn decisions_json_equal_to_input_leaves_input_unchanged() {
+    let fixture = Fixture::new();
+    let before = fixture.bytes();
+    let output_path = fixture.output();
+    let input = fixture.input.to_str().unwrap();
+    let output = fixture.run(&[
+        "--seed",
+        "7",
+        "--output",
+        output_path.to_str().unwrap(),
+        "--decisions-json",
+        input,
+    ]);
+    assert_decisions_rejected(&output);
+    assert_eq!(fixture.bytes(), before);
+    assert!(
+        !output_path.exists(),
+        "rejected run must not write --output"
+    );
+
+    let dotted = fixture.run(&[
+        "--seed",
+        "7",
+        "--output",
+        "output.ptx",
+        "--decisions-json",
+        "./input.ptx",
+    ]);
+    assert_decisions_rejected(&dotted);
+    assert_eq!(fixture.bytes(), before);
+    assert!(
+        !output_path.exists(),
+        "rejected run must not write --output"
+    );
+}
+
+#[test]
+fn inplace_ptx_rewrite_allows_a_distinct_decisions_json() {
+    let fixture = Fixture::new();
+    let decisions = fixture.dir.join("decisions.json");
+    let input = fixture.input.to_str().unwrap();
+    let output = fixture.run(&[
+        "--seed",
+        "7",
+        "--output",
+        input,
+        "--decisions-json",
+        decisions.to_str().unwrap(),
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("ptx-schedule: seed="));
+    let ptx = fs::read_to_string(&fixture.input).unwrap();
+    assert!(ptx.contains("nanosleep.u32"), "{ptx}");
+    assert!(!ptx.trim_start().starts_with('{'), "{ptx}");
+    let json = fs::read_to_string(&decisions).unwrap();
+    assert!(json.contains("\"sites_injected\""), "{json}");
+}
+
+#[cfg(unix)]
+#[test]
+fn decisions_json_dangling_symlink_to_output_is_rejected() {
+    let fixture = Fixture::new();
+    let before = fixture.bytes();
+    let output_path = fixture.output();
+    // The link's target does not exist yet; a write through the link creates it.
+    std::os::unix::fs::symlink("output.ptx", fixture.dir.join("link.json")).unwrap();
+    let output = fixture.run(&[
+        "--seed",
+        "7",
+        "--output",
+        "output.ptx",
+        "--decisions-json",
+        "link.json",
+    ]);
+    assert_rejected(&output, "which is --output; refusing to overwrite PTX");
+    assert_eq!(fixture.bytes(), before);
+    assert!(
+        !output_path.exists(),
+        "rejected run must not create PTX output"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn output_dangling_symlink_to_decisions_target_is_rejected() {
+    let fixture = Fixture::new();
+    let before = fixture.bytes();
+    let target = fixture.dir.join("target.ptx");
+    std::os::unix::fs::symlink("target.ptx", fixture.dir.join("outlink.ptx")).unwrap();
+    let output = fixture.run(&[
+        "--seed",
+        "7",
+        "--output",
+        "outlink.ptx",
+        "--decisions-json",
+        "target.ptx",
+    ]);
+    assert_rejected(&output, "which is --output; refusing to overwrite PTX");
+    assert_eq!(fixture.bytes(), before);
+    assert!(
+        !target.exists(),
+        "rejected run must not create the link target"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn decisions_json_hard_link_of_input_is_rejected() {
+    let fixture = Fixture::new();
+    let before = fixture.bytes();
+    let output_path = fixture.output();
+    fs::hard_link(&fixture.input, fixture.dir.join("alias.json")).unwrap();
+    let output = fixture.run(&[
+        "--seed",
+        "7",
+        "--output",
+        "output.ptx",
+        "--decisions-json",
+        "alias.json",
+    ]);
+    assert_rejected(&output, "which is the PTX input; refusing to overwrite PTX");
+    assert_eq!(fixture.bytes(), before);
+    assert!(
+        !output_path.exists(),
+        "rejected run must not create PTX output"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn decisions_json_hard_link_of_output_is_rejected() {
+    let fixture = Fixture::new();
+    let before = fixture.bytes();
+    let output_path = fixture.output();
+    fs::write(&output_path, "ORIGINAL-PTX").unwrap();
+    fs::hard_link(&output_path, fixture.dir.join("alias.json")).unwrap();
+    let output = fixture.run(&[
+        "--seed",
+        "7",
+        "--output",
+        "output.ptx",
+        "--decisions-json",
+        "alias.json",
+    ]);
+    assert_rejected(&output, "which is --output; refusing to overwrite PTX");
+    assert_eq!(fixture.bytes(), before);
+    assert_eq!(fs::read_to_string(&output_path).unwrap(), "ORIGINAL-PTX");
+}
+
+#[test]
+fn decisions_json_directory_is_rejected_before_the_ptx_write() {
+    let fixture = Fixture::new();
+    let before = fixture.bytes();
+    let output_path = fixture.output();
+    let output = fixture.run(&[
+        "--seed",
+        "7",
+        "--output",
+        "output.ptx",
+        "--decisions-json",
+        ".",
+    ]);
+    assert_rejected(&output, "--decisions-json names a directory");
+    assert_eq!(fixture.bytes(), before);
+    assert!(
+        !output_path.exists(),
+        "rejected run must not create PTX output"
+    );
+}
+
+#[test]
+fn output_without_a_file_name_is_blamed_on_output() {
+    let fixture = Fixture::new();
+    let before = fixture.bytes();
+    let bad_output = fixture.dir.join("missing").join("..");
+    let output = fixture.run(&[
+        "--seed",
+        "7",
+        "--output",
+        bad_output.to_str().unwrap(),
+        "--decisions-json",
+        "decisions.json",
+    ]);
+    assert_rejected(&output, "--output path has no file name");
+    assert_eq!(fixture.bytes(), before);
+    assert!(
+        !fixture.dir.join("decisions.json").exists(),
+        "rejected run must not write the report"
+    );
+}

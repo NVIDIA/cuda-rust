@@ -1,0 +1,62 @@
+error[E0277]: the trait bound `TileBlock: GlobalScope` is not satisfied
+ --> tests/ui/global_block_scope.rs:8:36
+  |
+8 |     global.load(ordering::Relaxed, scope::TileBlock);
+  |            ----                    ^^^^^^^^^^^^^^^^ the trait `GlobalScope` is not implemented for `TileBlock`
+  |            |
+  |            required by a bound introduced by this call
+  |
+help: the following other types implement trait `GlobalScope`
+ --> src/_core.rs
+  |
+  |     impl GlobalScope for Device {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `cutile::_core::scope::Device`
+  |     impl GlobalScope for System {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `cutile::_core::scope::System`
+note: required by a bound in `cutile::core::Global_0::<A>::load`
+ --> src/_core.rs
+  |
+  |         pub fn load<O: ordering::AtomicLoadMode, Sc: scope::GlobalScope>(
+  |                                                      ^^^^^^^^^^^^^^^^^^ required by this bound in `Global_0::<A>::load`
+
+error[E0277]: the trait bound `TileBlock: GlobalScope` is not satisfied
+ --> tests/ui/global_block_scope.rs:9:44
+  |
+9 |     global.store(value, ordering::Release, scope::TileBlock);
+  |            -----                           ^^^^^^^^^^^^^^^^ the trait `GlobalScope` is not implemented for `TileBlock`
+  |            |
+  |            required by a bound introduced by this call
+  |
+help: the following other types implement trait `GlobalScope`
+ --> src/_core.rs
+  |
+  |     impl GlobalScope for Device {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `cutile::_core::scope::Device`
+  |     impl GlobalScope for System {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `cutile::_core::scope::System`
+note: required by a bound in `cutile::core::Global_0::<A>::store`
+ --> src/_core.rs
+  |
+  |         pub fn store<O: ordering::AtomicStoreMode, Sc: scope::GlobalScope>(
+  |                                                        ^^^^^^^^^^^^^^^^^^ required by this bound in `Global_0::<A>::store`
+
+error[E0277]: the trait bound `TileBlock: GlobalScope` is not satisfied
+  --> tests/ui/global_block_scope.rs:10:49
+   |
+10 |     global.atomic_add(value, ordering::Relaxed, scope::TileBlock);
+   |            ----------                           ^^^^^^^^^^^^^^^^ the trait `GlobalScope` is not implemented for `TileBlock`
+   |            |
+   |            required by a bound introduced by this call
+   |
+help: the following other types implement trait `GlobalScope`
+  --> src/_core.rs
+   |
+   |     impl GlobalScope for Device {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `cutile::_core::scope::Device`
+   |     impl GlobalScope for System {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `cutile::_core::scope::System`
+note: required by a bound in `cutile::core::Global_0::<A>::atomic_add`
+  --> src/_core.rs
+   |
+   |         pub fn atomic_add<O: ordering::GlobalAtomicMode, Sc: scope::GlobalScope>(
+   |                                                              ^^^^^^^^^^^^^^^^^^ required by this bound in `Global_0::<A>::atomic_add`

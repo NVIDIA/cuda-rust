@@ -1,0 +1,7 @@
+error[E0599]: no associated function or constant named `MAX_THREADS` found for type parameter `P` in the current scope
+  --> tests/compile_fail/policy_config_unresolved.rs:10:20
+   |
+10 | #[launch_bounds(P::MAX_THREADS)]
+   |                    ^^^^^^^^^^^ associated function or constant not found in `P`
+11 | fn unresolved<P>() {}
+   |               - associated function or constant `MAX_THREADS` not found for this type parameter

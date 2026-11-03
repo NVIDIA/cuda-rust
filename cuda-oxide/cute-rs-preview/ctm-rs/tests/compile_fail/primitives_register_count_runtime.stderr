@@ -1,0 +1,7 @@
+error[E0435]: attempt to use a non-constant value in a constant
+ --> tests/compile_fail/primitives_register_count_runtime.rs:9:33
+  |
+8 | fn wrong(count: u32) {
+  |          ----- this would need to be a `const`
+9 |     unsafe { setmaxnreg_inc::<{ count }>() };
+  |                                 ^^^^^

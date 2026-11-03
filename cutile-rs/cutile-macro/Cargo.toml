@@ -1,0 +1,29 @@
+[package]
+name = "cutile-macro"
+description = "cuTile Rust module macro."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["mlir", "cutile", "compiler"]
+
+[lib]
+proc-macro = true
+
+[dev-dependencies]
+trybuild = { workspace = true }
+
+[dependencies]
+syn = { workspace = true }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+itertools = { workspace = true }
+convert_case = { workspace = true }
+cutile-compiler = { workspace = true }
+sha2 = { workspace = true }
+
+[lints]
+workspace = true

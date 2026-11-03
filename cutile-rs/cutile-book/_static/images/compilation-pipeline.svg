@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 840" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <!-- Load NVIDIA font from CDN -->
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 700;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Bd.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 500;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Medium.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Filters -->
+    <filter id="shadow">
+      <feDropShadow dx="2" dy="3" stdDeviation="3" flood-opacity="0.15"/>
+    </filter>
+    
+    <filter id="glow-green">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Dark arrow marker -->
+    <marker id="arrow-dark" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M 0 0 L 10 4 L 0 8 L 2.5 4 Z" fill="#374151"/>
+    </marker>
+
+    <!-- Grid pattern for light background -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#e5e7eb" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  
+  <!-- Background - dirty white -->
+  <rect width="980" height="840" fill="#f5f5f0"/>
+  <rect width="980" height="840" fill="url(#grid)" opacity="0.6"/>
+  
+  <!-- Main Title -->
+  <text x="490" y="40" text-anchor="middle" font-size="28" font-weight="500" fill="#1f2937" letter-spacing="-0.5">cuTile Rust Compilation Pipeline</text>
+  <line x1="290" y1="52" x2="690" y2="52" stroke="#76B900" stroke-width="2" opacity="0.8"/>
+  <text x="490" y="74" text-anchor="middle" font-size="14" fill="#6b7280">From Rust kernel code to GPU execution</text>
+
+  <!-- ==================== TIER 1: Device compilation ==================== -->
+  <text x="30" y="108" font-size="14" font-weight="600" fill="#76B900" letter-spacing="0.3">Device compilation</text>
+  <line x1="30" y1="117" x2="175" y2="117" stroke="#76B900" stroke-width="1" opacity="0.5"/>
+  
+  <!-- Labels row (above boxes) -->
+  <g transform="translate(0, 138)">
+    <text x="210" y="0" text-anchor="middle" font-size="12" font-weight="700" fill="#374151">proc-macro</text>
+    <text x="400" y="0" text-anchor="middle" font-size="12" font-weight="700" fill="#374151">compile()</text>
+    <text x="630" y="0" text-anchor="middle" font-size="12" font-weight="700" fill="#374151">lower</text>
+  </g>
+  
+  <!-- Stage 1: Rust Source -->
+  <g transform="translate(30, 150)">
+    <rect width="155" height="105" rx="10" fill="#ffffff" filter="url(#shadow)"/>
+    <rect width="155" height="105" rx="10" fill="none" stroke="#dea584" stroke-width="2"/>
+    <rect x="2" y="2" width="151" height="28" rx="8" fill="#fef3e8"/>
+    <text x="77" y="21" text-anchor="middle" font-size="13" font-weight="600" fill="#c2410c">Rust Source</text>
+    
+    <g transform="translate(10, 42)" font-family="'RobotoMono', monospace" font-size="9" fill="#374151">
+      <text fill="#dc2626">#[cutile::module]</text>
+      <text y="14" fill="#dc2626">mod</text>
+      <text x="24" y="14" fill="#2563eb">my_kernel</text>
+      <text x="74" y="14">{</text>
+      <text x="4" y="28" fill="#dc2626">#[entry()]</text>
+      <text x="4" y="42" fill="#dc2626">fn</text>
+      <text x="18" y="42" fill="#7c3aed">compute</text>
+      <text x="58" y="42">() {}</text>
+    </g>
+  </g>
+  
+  <!-- Arrow 1 -->
+  <path d="M 190 202 L 226 202" stroke="#374151" stroke-width="1.5" marker-end="url(#arrow-dark)"/>
+
+  <!-- Stage 2: AST -->
+  <g transform="translate(235, 150)">
+    <rect width="135" height="105" rx="10" fill="#ffffff" filter="url(#shadow)"/>
+    <rect width="135" height="105" rx="10" fill="none" stroke="#ef4444" stroke-width="2"/>
+    <rect x="2" y="2" width="131" height="28" rx="8" fill="#fef2f2"/>
+    <text x="67" y="21" text-anchor="middle" font-size="13" font-weight="600" fill="#dc2626">Rust AST</text>
+    
+    <g transform="translate(10, 42)" font-family="'RobotoMono', monospace" font-size="9" fill="#374151">
+      <text fill="#9ca3af">// Compile time</text>
+      <text y="14">ItemFn {</text>
+      <text x="4" y="28">name: </text>
+      <text x="38" y="28" fill="#2563eb">"compute"</text>
+      <text x="4" y="42">body: Block{}</text>
+      <text y="561">}</text>
+    </g>
+  </g>
+
+  <!-- Arrow 2 -->
+  <path d="M 375 202 L 411 202" stroke="#374151" stroke-width="1.5" marker-end="url(#arrow-dark)"/>
+
+  <!-- Stage 3: Tile IR -->
+  <g transform="translate(420, 150)">
+    <rect width="160" height="105" rx="10" fill="#ffffff" filter="url(#shadow)"/>
+    <rect width="160" height="105" rx="10" fill="none" stroke="#6366f1" stroke-width="2"/>
+    <rect x="2" y="2" width="156" height="28" rx="8" fill="#eef2ff"/>
+    <text x="80" y="21" text-anchor="middle" font-size="13" font-weight="600" fill="#4f46e5">Tile IR</text>
+    
+    <g transform="translate(10, 42)" font-family="'RobotoMono', monospace" font-size="9" fill="#374151">
+      <text fill="#2563eb">cuda_tile.module</text>
+      <text y="14" fill="#2563eb">entry</text>
+      <text x="30" y="14">@compute {</text>
+      <text x="4" y="28">%0 =</text>
+      <text x="28" y="28" fill="#7c3aed">get_id</text>
+      <text x="4" y="42">%1 =</text>
+      <text x="28" y="42" fill="#7c3aed">tile.load</text>
+      <text y="56">}</text>
+    </g>
+  </g>
+
+  <!-- Arrow 3 -->
+  <path d="M 585 202 L 680 202" stroke="#374151" stroke-width="1.5" marker-end="url(#arrow-dark)"/>
+
+  <!-- Stage 4: CUBIN -->
+  <g transform="translate(685, 150)">
+    <rect width="130" height="105" rx="10" fill="#ffffff" filter="url(#shadow)"/>
+    <rect width="130" height="105" rx="10" fill="none" stroke="#76B900" stroke-width="2"/>
+    <rect x="2" y="2" width="126" height="28" rx="8" fill="#f0fdf4"/>
+    <text x="65" y="21" text-anchor="middle" font-size="13" font-weight="600" fill="#15803d">CUBIN</text>
+
+    <g transform="translate(10, 38)">
+      <rect width="110" height="55" rx="6" fill="#ecfdf5"/>
+      <text x="55" y="25" text-anchor="middle" font-size="20">📦</text>
+      <text x="55" y="45" text-anchor="middle" font-size="9" fill="#15803d">GPU Binary (cached)</text>
+    </g>
+  </g>
+
+  <!-- ==================== TIER 2: Host compilation ==================== -->
+  <text x="30" y="295" font-size="14" font-weight="600" fill="#2563eb" letter-spacing="0.3">Host compilation</text>
+  <line x1="30" y1="304" x2="165" y2="304" stroke="#2563eb" stroke-width="1" opacity="0.5"/>
+
+  <!-- Host Code -->
+  <g transform="translate(30, 318)">
+    <rect width="300" height="120" rx="10" fill="#ffffff" filter="url(#shadow)"/>
+    <rect width="300" height="120" rx="10" fill="none" stroke="#3b82f6" stroke-width="2"/>
+    <rect x="2" y="2" width="296" height="28" rx="8" fill="#eff6ff"/>
+    <text x="150" y="21" text-anchor="middle" font-size="13" font-weight="600" fill="#1d4ed8">Host Code (CPU)</text>
+    
+    <g transform="translate(14, 44)" font-family="'RobotoMono', monospace" font-size="10" fill="#374151">
+      <text fill="#dc2626">let</text>
+      <text x="22">device =</text>
+      <text x="76" fill="#2563eb">Device</text>
+      <text x="112">::new(0)?;</text>
+      <text y="18" fill="#dc2626">let</text>
+      <text x="22" y="18">stream = device.new_stream()?;</text>
+      <text y="38" fill="#dc2626">let</text>
+      <text x="22" y="38">launcher =</text>
+      <text x="90" y="38" fill="#7c3aed">compute</text>
+      <text x="172" y="38">();</text>
+      <text y="58">launcher.</text>
+      <text x="58" y="58" fill="#7c3aed">grid</text>
+      <text x="82" y="58">((2,2,1)).</text>
+      <text x="145" y="58" fill="#7c3aed">sync_on</text>
+      <text x="192" y="58">(..)</text>
+    </g>
+  </g>
+
+  <!-- ==================== TIER 3: Execution ==================== -->
+  <text x="30" y="485" font-size="14" font-weight="600" fill="#0891b2" letter-spacing="0.3">Execution</text>
+  <line x1="30" y1="494" x2="110" y2="494" stroke="#0891b2" stroke-width="1" opacity="0.5"/>
+
+  <!-- Arrow: Host Code to CPU Execution -->
+  <g transform="translate(170, 443)">
+    <text x="20" y="12" font-size="11" font-weight="600" fill="#374151">runs on</text>
+    <path d="M 0 20 L 0 55" stroke="#374151" stroke-width="2" marker-end="url(#arrow-dark)"/>
+  </g>
+
+  <!-- CPU Execution -->
+  <g transform="translate(30, 510)">
+    <rect width="300" height="85" rx="10" fill="#ffffff" filter="url(#shadow)"/>
+    <rect width="300" height="85" rx="10" fill="none" stroke="#64748b" stroke-width="2"/>
+    <rect x="2" y="2" width="296" height="28" rx="8" fill="#f1f5f9"/>
+    <text x="150" y="21" text-anchor="middle" font-size="13" font-weight="600" fill="#475569">CPU Execution</text>
+    
+    <g transform="translate(15, 40)">
+      <rect width="270" height="35" rx="6" fill="#e2e8f0"/>
+      <text x="135" y="23" text-anchor="middle" font-size="13" font-weight="500" fill="#374151">Orchestrates launches, manages memory</text>
+    </g>
+  </g>
+
+  <!-- Arrow: CUBIN to GPU Execution -->
+  <g transform="translate(755, 260)">
+    <text x="20" y="140" font-size="11" font-weight="600" fill="#374151">loaded</text>
+    <path d="M 0 0 L 0 250" stroke="#374151" stroke-width="2" marker-end="url(#arrow-dark)"/>
+  </g>
+
+  <!-- Arrow: CPU to GPU (dispatch) -->
+  <g transform="translate(335, 550)">
+    <text x="110" y="0" text-anchor="middle" font-size="11" font-weight="600" fill="#374151">dispatch kernel</text>
+    <path d="M 0 14 L 212 14" stroke="#374151" stroke-width="2" marker-end="url(#arrow-dark)"/>
+  </g>
+
+  <!-- GPU Execution -->
+  <g transform="translate(555, 510)">
+    <rect width="395" height="85" rx="10" fill="#ffffff" filter="url(#shadow)"/>
+    <rect width="395" height="85" rx="10" fill="none" stroke="#06b6d4" stroke-width="2"/>
+    <rect x="2" y="2" width="391" height="28" rx="8" fill="#ecfeff"/>
+    <text x="197" y="21" text-anchor="middle" font-size="13" font-weight="600" fill="#0e7490">GPU Execution</text>
+    
+    <!-- Tile blocks running in parallel -->
+    <g transform="translate(15, 40)">
+      <text x="0" y="18" font-size="12" fill="#6b7280">Tile Blocks:</text>
+      
+      <g transform="translate(55, 2)">
+        <rect width="70" height="34" rx="5" fill="#f97583"/>
+        <text x="35" y="22" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="500">TILE 0</text>
+      </g>cuda-tile-rs/build.rs:124:17
+123
+
+      <g transform="translate(135, 2)">
+        <rect width="70" height="34" rx="5" fill="#56d364"/>
+        <text x="35" y="22" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="500">TILE 1</text>
+      </g>
+      <g transform="translate(215, 2)">
+        <rect width="70" height="34" rx="5" fill="#3b82f6"/>
+        <text x="35" y="22" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="500">TILE 2</text>
+      </g>
+      <g transform="translate(295, 2)">
+        <rect width="70" height="34" rx="5" fill="#a855f7"/>
+        <text x="35" y="22" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="500">TILE 3</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- ==================== BOTTOM: Key Insights ==================== -->
+  <g transform="translate(30, 630)">
+    <text x="0" y="22" font-size="16" font-weight="700" fill="#1f2937" letter-spacing="0.5">Key Insights</text>
+    <line x1="0" y1="32" x2="125" y2="32" stroke="#76B900" stroke-width="2" opacity="0.8"/>
+    
+    <g transform="translate(0, 55)">
+      <!-- Point 1 -->
+      <g transform="translate(0, 0)">
+        <rect x="0" y="0" width="4" height="22" rx="1" fill="#ea580c"/>
+        <text x="18" y="17" font-size="15" font-weight="400" letter-spacing="0.2">
+          <tspan font-family="'RobotoMono', monospace" font-size="13" fill="#c2410c" font-weight="500">#[cutile::module]</tspan>
+          <tspan fill="#374151"> captures Rust code as AST at compile time</tspan>
+        </text>
+      </g>
+      
+      <!-- Point 2 -->
+      <g transform="translate(0, 36)">
+        <rect x="0" y="0" width="4" height="22" rx="1" fill="#6366f1"/>
+        <text x="18" y="17" font-size="15" font-weight="400" letter-spacing="0.2">
+          <tspan font-family="'RobotoMono', monospace" font-size="13" fill="#4f46e5" font-weight="500">CUDATileFunctionCompiler</tspan>
+          <tspan fill="#374151"> translates AST → Tile IR → cubin at </tspan>
+          <tspan font-family="'RobotoMono', monospace" font-size="13" fill="#ea580c" font-weight="500">first runtime</tspan>
+        </text>
+      </g>
+      
+      <!-- Point 3 -->
+      <g transform="translate(0, 72)">
+        <rect x="0" y="0" width="4" height="22" rx="1" fill="#76B900"/>
+        <text x="18" y="17" font-size="15" font-weight="400" letter-spacing="0.2">
+          <tspan fill="#374151">Compiled kernels are </tspan>
+          <tspan font-family="'RobotoMono', monospace" font-size="13" fill="#15803d" font-weight="500">cached</tspan>
+          <tspan fill="#374151"> — subsequent runs skip compilation entirely</tspan>
+        </text>
+      </g>
+      
+      <!-- Point 4 -->
+      <g transform="translate(0, 108)">
+        <rect x="0" y="0" width="4" height="22" rx="1" fill="#06b6d4"/>
+        <text x="18" y="17" font-size="15" font-weight="400" letter-spacing="0.2">
+          <tspan font-family="'RobotoMono', monospace" font-size="13" fill="#0e7490" font-weight="500">CUDA Driver</tspan>
+          <tspan fill="#374151"> dispatches tiles to SMs (Streaming Multiprocessors) on the GPU</tspan>
+        </text>
+      </g>
+    </g>
+  </g>
+
+</svg>

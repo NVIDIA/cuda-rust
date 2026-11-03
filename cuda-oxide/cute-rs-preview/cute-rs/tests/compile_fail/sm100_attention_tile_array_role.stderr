@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/sm100_attention_tile_array_role.rs:14:26
+   |
+14 |     unsafe { mma.gemm(0, &tile, &tile, false) };
+   |                  ----    ^^^^^ expected `OperandA`, found `OperandB`
+   |                  |
+   |                  arguments to this method are incorrect
+   |
+   = note: expected reference `&SharedTile<SharedLayout<64, 64>, OperandA>`
+              found reference `&SharedTile<SharedLayout<64, 64>, OperandB>`
+note: method defined here
+  --> src/attention/sm100/mma.rs
+   |
+   |     pub unsafe fn gemm(
+   |                   ^^^^

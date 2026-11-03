@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 500" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+    
+    <!-- Arrow markers -->
+    <marker id="arrow-white" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M 0 0.5 L 5 3 L 0 5.5" fill="none" stroke="#ffffff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="500" fill="#0d1117"/>
+  <rect width="900" height="500" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="450" y="38" text-anchor="middle" font-size="24" font-weight="600" fill="#ffffff" letter-spacing="-0.5">Reduction Operations</text>
+  <line x1="320" y1="50" x2="580" y2="50" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+  <text x="450" y="72" text-anchor="middle" font-size="14" fill="#c9d1d9">reduce_max along different axes</text>
+
+  <!-- ==================== INPUT TILE ==================== -->
+  <g transform="translate(50, 130)">
+    <text x="160" y="-20" text-anchor="middle" font-size="14" font-weight="600" fill="#ffffff">Input Tile [4, 8]</text>
+    
+    <!-- Grid of values - 38px wide boxes with 2px gaps, 33px tall with 2px gaps -->
+    <g transform="translate(0, 0)">
+      <!-- Row 0 (pink) -->
+      <rect x="0" y="0" width="38" height="33" fill="#f97583" rx="4"/>
+      <text x="19" y="21" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">1</text>
+      <rect x="40" y="0" width="38" height="33" fill="#f97583" rx="4"/>
+      <text x="59" y="21" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">2</text>
+      <rect x="80" y="0" width="38" height="33" fill="#f97583" rx="4"/>
+      <text x="99" y="21" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">3</text>
+      <rect x="120" y="0" width="38" height="33" fill="#f97583" rx="4"/>
+      <text x="139" y="21" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">4</text>
+      <rect x="160" y="0" width="38" height="33" fill="#f97583" rx="4"/>
+      <text x="179" y="21" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">5</text>
+      <rect x="200" y="0" width="38" height="33" fill="#f97583" rx="4"/>
+      <text x="219" y="21" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">6</text>
+      <rect x="240" y="0" width="38" height="33" fill="#f97583" rx="4"/>
+      <text x="259" y="21" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">7</text>
+      <rect x="280" y="0" width="38" height="33" fill="#f97583" rx="4"/>
+      <text x="299" y="21" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">8</text>
+      
+      <!-- Row 1 (blue) -->
+      <rect x="0" y="35" width="38" height="33" fill="#79c0ff" rx="4"/>
+      <text x="19" y="56" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">9</text>
+      <rect x="40" y="35" width="38" height="33" fill="#79c0ff" rx="4"/>
+      <text x="59" y="56" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">10</text>
+      <rect x="80" y="35" width="38" height="33" fill="#79c0ff" rx="4"/>
+      <text x="99" y="56" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">11</text>
+      <rect x="120" y="35" width="38" height="33" fill="#79c0ff" rx="4"/>
+      <text x="139" y="56" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">12</text>
+      <rect x="160" y="35" width="38" height="33" fill="#79c0ff" rx="4"/>
+      <text x="179" y="56" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">13</text>
+      <rect x="200" y="35" width="38" height="33" fill="#79c0ff" rx="4"/>
+      <text x="219" y="56" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">14</text>
+      <rect x="240" y="35" width="38" height="33" fill="#79c0ff" rx="4"/>
+      <text x="259" y="56" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">15</text>
+      <rect x="280" y="35" width="38" height="33" fill="#79c0ff" rx="4"/>
+      <text x="299" y="56" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">16</text>
+      
+      <!-- Row 2 (purple) -->
+      <rect x="0" y="70" width="38" height="33" fill="#d2a8ff" rx="4"/>
+      <text x="19" y="91" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">17</text>
+      <rect x="40" y="70" width="38" height="33" fill="#d2a8ff" rx="4"/>
+      <text x="59" y="91" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">18</text>
+      <rect x="80" y="70" width="38" height="33" fill="#d2a8ff" rx="4"/>
+      <text x="99" y="91" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">19</text>
+      <rect x="120" y="70" width="38" height="33" fill="#d2a8ff" rx="4"/>
+      <text x="139" y="91" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">20</text>
+      <rect x="160" y="70" width="38" height="33" fill="#d2a8ff" rx="4"/>
+      <text x="179" y="91" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">21</text>
+      <rect x="200" y="70" width="38" height="33" fill="#d2a8ff" rx="4"/>
+      <text x="219" y="91" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">22</text>
+      <rect x="240" y="70" width="38" height="33" fill="#d2a8ff" rx="4"/>
+      <text x="259" y="91" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">23</text>
+      <rect x="280" y="70" width="38" height="33" fill="#d2a8ff" rx="4"/>
+      <text x="299" y="91" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">24</text>
+      
+      <!-- Row 3 (green) -->
+      <rect x="0" y="105" width="38" height="33" fill="#56d364" rx="4"/>
+      <text x="19" y="126" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">25</text>
+      <rect x="40" y="105" width="38" height="33" fill="#56d364" rx="4"/>
+      <text x="59" y="126" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">26</text>
+      <rect x="80" y="105" width="38" height="33" fill="#56d364" rx="4"/>
+      <text x="99" y="126" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">27</text>
+      <rect x="120" y="105" width="38" height="33" fill="#56d364" rx="4"/>
+      <text x="139" y="126" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">28</text>
+      <rect x="160" y="105" width="38" height="33" fill="#56d364" rx="4"/>
+      <text x="179" y="126" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">29</text>
+      <rect x="200" y="105" width="38" height="33" fill="#56d364" rx="4"/>
+      <text x="219" y="126" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">30</text>
+      <rect x="240" y="105" width="38" height="33" fill="#56d364" rx="4"/>
+      <text x="259" y="126" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">31</text>
+      <rect x="280" y="105" width="38" height="33" fill="#56d364" rx="4"/>
+      <text x="299" y="126" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">32</text>
+    </g>
+  </g>
+
+  <!-- ==================== AXIS 1 REDUCTION (ROW-WISE) ==================== -->
+  <g transform="translate(420, 130)">
+    <text x="100" y="-30" text-anchor="middle" font-size="14" font-weight="600" fill="#56d364">reduce_max(tile, 1)</text>
+    <text x="100" y="-12" text-anchor="middle" font-size="11" fill="#c9d1d9">→ max across each row</text>
+    
+    <!-- Arrows -->
+    <line x1="-50" y1="16" x2="20" y2="16" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+    <line x1="-50" y1="51" x2="20" y2="51" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+    <line x1="-50" y1="86" x2="20" y2="86" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+    <line x1="-50" y1="121" x2="20" y2="121" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+    
+    <!-- Results -->
+    <g transform="translate(30, 0)">
+      <rect x="0" y="0" width="48" height="33" fill="#56d364" rx="6"/>
+      <text x="24" y="21" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">8</text>
+      
+      <rect x="0" y="35" width="48" height="33" fill="#56d364" rx="6"/>
+      <text x="24" y="56" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">16</text>
+      
+      <rect x="0" y="70" width="48" height="33" fill="#56d364" rx="6"/>
+      <text x="24" y="91" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">24</text>
+      
+      <rect x="0" y="105" width="48" height="33" fill="#56d364" rx="6"/>
+      <text x="24" y="126" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">32</text>
+    </g>
+    
+    <!-- Output shape -->
+    <text x="55" y="165" text-anchor="middle" font-size="11" fill="#c9d1d9">Output: [4]</text>
+  </g>
+
+  <!-- ==================== AXIS 0 REDUCTION (COLUMN-WISE) ==================== -->
+  <g transform="translate(50, 350)">
+    <text x="160" y="-20" text-anchor="middle" font-size="14" font-weight="600" fill="#79c0ff">reduce_max(tile, 0)</text>
+    <text x="160" y="0" text-anchor="middle" font-size="11" fill="#c9d1d9">↓ max down each column</text>
+    
+    <!-- Results -->
+    <g transform="translate(0, 20)">
+      <rect x="0" y="0" width="38" height="38" fill="#79c0ff" rx="6"/>
+      <text x="19" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">25</text>
+      
+      <rect x="40" y="0" width="38" height="38" fill="#79c0ff" rx="6"/>
+      <text x="59" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">26</text>
+      
+      <rect x="80" y="0" width="38" height="38" fill="#79c0ff" rx="6"/>
+      <text x="99" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">27</text>
+      
+      <rect x="120" y="0" width="38" height="38" fill="#79c0ff" rx="6"/>
+      <text x="139" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">28</text>
+      
+      <rect x="160" y="0" width="38" height="38" fill="#79c0ff" rx="6"/>
+      <text x="179" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">29</text>
+      
+      <rect x="200" y="0" width="38" height="38" fill="#79c0ff" rx="6"/>
+      <text x="219" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">30</text>
+      
+      <rect x="240" y="0" width="38" height="38" fill="#79c0ff" rx="6"/>
+      <text x="259" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">31</text>
+      
+      <rect x="280" y="0" width="38" height="38" fill="#79c0ff" rx="6"/>
+      <text x="299" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">32</text>
+    </g>
+    
+    <!-- Output shape -->
+    <text x="160" y="80" text-anchor="middle" font-size="11" fill="#c9d1d9">Output: [8]</text>
+  </g>
+
+  <!-- ==================== CODE EXAMPLES ==================== -->
+  <g transform="translate(550, 350)">
+    <rect width="300" height="80" rx="8" fill="#161b22"/>
+    <rect width="300" height="80" rx="8" fill="none" stroke="#30363d" stroke-width="1"/>
+    
+    <text x="15" y="25" font-family="'RobotoMono', monospace" font-size="11">
+      <tspan fill="#c9d1d9">// Row-wise max</tspan>
+    </text>
+    <text x="15" y="45" font-family="'RobotoMono', monospace" font-size="11">
+      <tspan fill="#ff7b72">let</tspan>
+      <tspan fill="#ffffff"> row_max = </tspan>
+      <tspan fill="#d2a8ff">reduce_max</tspan>
+      <tspan fill="#ffffff">(tile, </tspan>
+      <tspan fill="#56d364">1</tspan>
+      <tspan fill="#ffffff">);</tspan>
+    </text>
+    <text x="15" y="65" font-family="'RobotoMono', monospace" font-size="11">
+      <tspan fill="#ff7b72">let</tspan>
+      <tspan fill="#ffffff"> col_max = </tspan>
+      <tspan fill="#d2a8ff">reduce_max</tspan>
+      <tspan fill="#ffffff">(tile, </tspan>
+      <tspan fill="#79c0ff">0</tspan>
+      <tspan fill="#ffffff">);</tspan>
+    </text>
+  </g>
+
+</svg>

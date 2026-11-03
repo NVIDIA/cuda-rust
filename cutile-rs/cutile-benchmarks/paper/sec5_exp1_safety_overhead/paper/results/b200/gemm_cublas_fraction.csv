@@ -1,0 +1,13 @@
+impl,config,M,N,K,tflops,cublas_tflops,frac_cublas,pct_cublas
+cutile_python_persistent,persistent,1024,1024,1024,215.65,209.49,1.029405,102.94
+cutile_python_persistent,persistent,2048,2048,2048,989.83,923.88,1.071383,107.14
+cutile_python_persistent,persistent,4096,4096,4096,1608.25,1741.72,0.923369,92.34
+cutile_python_persistent,persistent,8192,8192,8192,2037.83,2147.29,0.949024,94.90
+cutile_python_persistent,persistent,16384,16384,16384,2108.79,2193.20,0.961513,96.15
+cutile_python_persistent,persistent,32768,32768,32768,2111.20,2187.30,0.965208,96.52
+rust_persistent_dynamic,persistent_safe,1024,1024,1024,210.08,209.49,1.002816,100.28
+rust_persistent_dynamic,persistent_safe,2048,2048,2048,958.41,923.88,1.037374,103.74
+rust_persistent_dynamic,persistent_safe,4096,4096,4096,1638.69,1741.72,0.940846,94.08
+rust_persistent_dynamic,persistent_safe,8192,8192,8192,2068.88,2147.29,0.963484,96.35
+rust_persistent_dynamic,persistent_safe,16384,16384,16384,2127.31,2193.20,0.969957,97.00
+rust_persistent_dynamic,persistent_safe,32768,32768,32768,2121.46,2187.30,0.969899,96.99

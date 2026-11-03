@@ -1,0 +1,20 @@
+[package]
+name = "cuda-artifact-finalizer"
+version = "0.3.0"
+edition.workspace = true
+description = "Driver-independent NVVM IR and LTOIR finalization for cuda-oxide"
+readme = "README.md"
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+libnvvm-sys = { workspace = true }
+nvjitlink-sys = { workspace = true }
+ptx-parse = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

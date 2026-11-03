@@ -1,0 +1,5 @@
+# Custom labels of the self-hosted runners this repository uses, so
+# `actionlint .github/workflows/*.yml` validates the workflows cleanly.
+self-hosted-runner:
+  labels:
+    - linux-amd64-cpu16

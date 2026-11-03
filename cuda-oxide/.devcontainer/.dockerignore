@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# This image installs its tools without copying repository files.
+# Source code is mounted at runtime; keep the build context empty.
+*

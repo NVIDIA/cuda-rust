@@ -1,0 +1,506 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+use llvm_export::{
+    export::{
+        DeviceExternDecl, NvvmExportConfig, NvvmIrDialect, PtxExportConfig,
+        export_module_to_string, export_module_to_string_with_config,
+        export_module_with_externs_and_roots,
+    },
+    ops::{FuncOp, GlobalOp, GlobalOpExt, ReturnOp},
+    types::{ArrayType, FuncType, PointerType, StructLayout, StructType, VoidType},
+};
+use pliron::{
+    basic_block::BasicBlock,
+    builtin::{
+        attributes::StringAttr,
+        ops::ModuleOp,
+        types::{IntegerType, Signedness},
+    },
+    context::{Context, Ptr},
+    identifier::Identifier,
+    op::Op,
+    r#type::TypeHandle,
+};
+
+use crate::common::module_top_block;
+
+#[test]
+fn legacy_kernel_metadata_uses_typed_function_references() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "legacy_metadata".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    let ptr_ty = PointerType::get(&ctx, 0);
+    let void_ty = VoidType::get(&ctx);
+    let func_ty = FuncType::get(&ctx, void_ty.into(), vec![ptr_ty.into()], false);
+    let func = FuncOp::new(&mut ctx, "metadata_kernel".try_into().unwrap(), func_ty);
+    func.get_operation().deref_mut(&ctx).attributes.set(
+        "gpu_kernel".try_into().unwrap(),
+        StringAttr::new("true".into()),
+    );
+    let entry = func.get_or_create_entry_block(&mut ctx);
+    ReturnOp::new(&mut ctx, None)
+        .get_operation()
+        .insert_at_back(entry, &ctx);
+    func.get_operation().insert_at_back(module_block, &ctx);
+
+    let config = NvvmExportConfig::new(NvvmIrDialect::LegacyLlvm7);
+    let ir = export_module_to_string_with_config(&ctx, &module, &config)
+        .expect("legacy metadata export succeeds");
+    assert!(
+        ir.contains(
+            "@llvm.used = appending global [1 x i8*] [i8* bitcast (void (i8*)* @metadata_kernel to i8*)]"
+        ),
+        "{ir}"
+    );
+    assert!(
+        ir.contains("!{void (i8*)* @metadata_kernel, !\"kernel\", i32 1}"),
+        "{ir}"
+    );
+}
+
+#[test]
+fn llvm_used_roots_only_explicitly_retained_globals() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "retained_globals".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signless);
+
+    let retained = GlobalOp::new(&mut ctx, "IKET_META".try_into().unwrap(), i32_ty.into());
+    retained.set_address_space(&mut ctx, 1);
+    retained.mark_retained(&mut ctx);
+    retained.get_operation().insert_at_back(module_block, &ctx);
+
+    let ordinary = GlobalOp::new(&mut ctx, "ORDINARY".try_into().unwrap(), i32_ty.into());
+    ordinary.set_address_space(&mut ctx, 1);
+    ordinary.get_operation().insert_at_back(module_block, &ctx);
+
+    let ir = export_module_to_string_with_config(&ctx, &module, &PtxExportConfig)
+        .expect("retained global export succeeds");
+    assert!(
+        ir.contains(
+            "@llvm.used = appending global [1 x ptr] [ptr addrspacecast (ptr addrspace(1) @IKET_META to ptr)], section \"llvm.metadata\""
+        ),
+        "{ir}"
+    );
+    assert!(!ir.contains("@ORDINARY to ptr"), "{ir}");
+}
+
+#[test]
+fn legacy_llvm_used_roots_retained_address_space_global() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "legacy_retained_global".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signless);
+    let retained = GlobalOp::new(&mut ctx, "IKET_META".try_into().unwrap(), i32_ty.into());
+    retained.set_address_space(&mut ctx, 1);
+    retained.mark_retained(&mut ctx);
+    retained.get_operation().insert_at_back(module_block, &ctx);
+
+    let config = NvvmExportConfig::new(NvvmIrDialect::LegacyLlvm7);
+    let ir = export_module_to_string_with_config(&ctx, &module, &config)
+        .expect("legacy retained global export succeeds");
+    assert!(
+        ir.contains(
+            "@llvm.used = appending global [1 x i8*] [i8* addrspacecast (i32 addrspace(1)* @IKET_META to i8*)], section \"llvm.metadata\""
+        ),
+        "{ir}"
+    );
+}
+
+/// Host-written storage must not look like a known constant to LTO in any IR
+/// dialect, and it stays rooted in `@llvm.used` so the symbol the host
+/// resolves survives even when every read of it is optimized away. Ordinary
+/// globals keep their plain definition and stay out of the root list.
+#[test]
+fn host_written_global_exports_externally_initialized() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "host_written".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signless);
+
+    // Mirror `create_device_global`: a `#[constant]` carries both markers.
+    let params = GlobalOp::new(&mut ctx, "PARAMS".try_into().unwrap(), i32_ty.into());
+    params.set_address_space(&mut ctx, 4);
+    params.mark_retained(&mut ctx);
+    params.mark_host_written(&mut ctx);
+    params.get_operation().insert_at_back(module_block, &ctx);
+
+    let ordinary = GlobalOp::new(&mut ctx, "ORDINARY".try_into().unwrap(), i32_ty.into());
+    ordinary.set_address_space(&mut ctx, 1);
+    ordinary.get_operation().insert_at_back(module_block, &ctx);
+
+    let opaque_used = "@llvm.used = appending global [1 x ptr] [ptr addrspacecast (ptr addrspace(4) @PARAMS to ptr)], section \"llvm.metadata\"";
+    let legacy_used = "@llvm.used = appending global [1 x i8*] [i8* addrspacecast (i32 addrspace(4)* @PARAMS to i8*)], section \"llvm.metadata\"";
+    let modern = NvvmExportConfig::new(NvvmIrDialect::Modern);
+    let legacy = NvvmExportConfig::new(NvvmIrDialect::LegacyLlvm7);
+    for (ir, used) in [
+        (
+            export_module_to_string_with_config(&ctx, &module, &PtxExportConfig),
+            opaque_used,
+        ),
+        (
+            export_module_to_string_with_config(&ctx, &module, &modern),
+            opaque_used,
+        ),
+        (
+            export_module_to_string_with_config(&ctx, &module, &legacy),
+            legacy_used,
+        ),
+    ] {
+        let ir = ir.expect("host-written global export succeeds");
+        assert!(
+            ir.contains("@PARAMS = addrspace(4) externally_initialized global i32"),
+            "{ir}"
+        );
+        assert!(ir.contains(used), "{ir}");
+        assert!(ir.contains("@ORDINARY = addrspace(1) global i32"), "{ir}");
+        assert!(!ir.contains("@ORDINARY to"), "{ir}");
+    }
+}
+
+#[test]
+fn ptx_export_records_kernel_roots_for_internalization() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "ptx_roots".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signless);
+    let global = GlobalOp::new(&mut ctx, "COEFFS".try_into().unwrap(), i32_ty.into());
+    global.set_address_space(&mut ctx, 4);
+    global.get_operation().insert_at_back(module_block, &ctx);
+    let func_ty = FuncType::get(&ctx, VoidType::get(&ctx).into(), vec![], false);
+    let func = FuncOp::new(&mut ctx, "entry_kernel".try_into().unwrap(), func_ty);
+    func.get_operation().deref_mut(&ctx).attributes.set(
+        "gpu_kernel".try_into().unwrap(),
+        StringAttr::new("true".into()),
+    );
+    let entry = func.get_or_create_entry_block(&mut ctx);
+    ReturnOp::new(&mut ctx, None)
+        .get_operation()
+        .insert_at_back(entry, &ctx);
+    func.get_operation().insert_at_back(module_block, &ctx);
+
+    let exported = export_module_with_externs_and_roots::<DeviceExternDecl>(
+        &ctx,
+        &module,
+        &[],
+        &PtxExportConfig,
+    )
+    .expect("PTX export succeeds");
+    let ir = exported.llvm_ir;
+    assert!(
+        ir.contains(
+            "@llvm.used = appending global [1 x ptr] [ptr @entry_kernel], section \"llvm.metadata\""
+        ),
+        "{ir}"
+    );
+    assert_eq!(exported.public_symbols, ["COEFFS", "entry_kernel"]);
+}
+
+#[test]
+fn ptx_export_records_standalone_device_function_roots_for_internalization() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "ptx_device_root".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    let func_ty = FuncType::get(&ctx, VoidType::get(&ctx).into(), vec![], false);
+    let prefixed_name = format!(
+        "{}standalone_export",
+        reserved_oxide_symbols::LEGACY_DEVICE_PREFIX
+    );
+    let func = FuncOp::new(
+        &mut ctx,
+        prefixed_name.as_str().try_into().unwrap(),
+        func_ty,
+    );
+    let entry = func.get_or_create_entry_block(&mut ctx);
+    ReturnOp::new(&mut ctx, None)
+        .get_operation()
+        .insert_at_back(entry, &ctx);
+    func.get_operation().insert_at_back(module_block, &ctx);
+
+    let exported = export_module_with_externs_and_roots::<DeviceExternDecl>(
+        &ctx,
+        &module,
+        &[],
+        &PtxExportConfig,
+    )
+    .expect("standalone PTX export succeeds");
+    assert_eq!(exported.public_symbols, ["standalone_export"]);
+    assert!(
+        exported.llvm_ir.contains(
+            "@llvm.used = appending global [1 x ptr] [ptr @standalone_export], section \"llvm.metadata\""
+        ),
+        "{}",
+        exported.llvm_ir
+    );
+}
+
+/// Builds a `void` function taking pointer parameters in the given address
+/// spaces, with an empty body, optionally carrying the `gpu_kernel` marker
+/// the exporter uses to distinguish an entry from a device function.
+fn pointer_param_function(
+    ctx: &mut Context,
+    module_block: Ptr<BasicBlock>,
+    name: &str,
+    address_spaces: &[u32],
+    is_kernel: bool,
+) {
+    let params: Vec<TypeHandle> = address_spaces
+        .iter()
+        .map(|space| PointerType::get(ctx, *space).into())
+        .collect();
+    typed_param_function(ctx, module_block, name, params, is_kernel);
+}
+
+/// Builds a `void` function with the given parameter types and an empty
+/// body, optionally carrying the `gpu_kernel` marker.
+fn typed_param_function(
+    ctx: &mut Context,
+    module_block: Ptr<BasicBlock>,
+    name: &str,
+    params: Vec<TypeHandle>,
+    is_kernel: bool,
+) {
+    let void_ty = VoidType::get(ctx);
+    let func_ty = FuncType::get(ctx, void_ty.into(), params, false);
+    let func = FuncOp::new(ctx, name.try_into().unwrap(), func_ty);
+    if is_kernel {
+        let kernel_key: Identifier = "gpu_kernel".try_into().unwrap();
+        func.get_operation()
+            .deref_mut(ctx)
+            .attributes
+            .set(kernel_key, StringAttr::new("true".to_string()));
+    }
+    let entry = func.get_or_create_entry_block(ctx);
+    ReturnOp::new(ctx, None)
+        .get_operation()
+        .insert_at_back(entry, ctx);
+    func.get_operation().insert_at_back(module_block, ctx);
+}
+
+/// A kernel receives its parameters in `.param` space from the host, which
+/// holds no shared-memory address to pass. The exporter must refuse the
+/// signature instead of emitting `.ptr .shared`, which ptxas accepts but the
+/// driver rejects at module load, taking every kernel in the module down.
+#[test]
+fn kernel_rejects_a_shared_memory_pointer_parameter() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "kernel_shared_param".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    pointer_param_function(&mut ctx, module_block, "shared_param", &[0, 3], true);
+
+    let error = export_module_to_string(&ctx, &module)
+        .expect_err("export must refuse a kernel parameter in shared memory");
+    assert!(
+        error.contains(
+            "kernel `@shared_param` parameter 1 is a pointer into shared memory (address space 3)"
+        ),
+        "{error}"
+    );
+}
+
+/// Local memory is per-thread, so the host has no address in it to pass
+/// either; the exporter refuses it on the same grounds as shared.
+#[test]
+fn kernel_rejects_a_local_memory_pointer_parameter() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "kernel_local_param".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    pointer_param_function(&mut ctx, module_block, "local_param", &[5], true);
+
+    let error = export_module_to_string(&ctx, &module)
+        .expect_err("export must refuse a kernel parameter in local memory");
+    assert!(
+        error.contains(
+            "kernel `@local_param` parameter 0 is a pointer into local memory (address space 5)"
+        ),
+        "{error}"
+    );
+}
+
+/// The host fills a struct parameter byte by byte, so a shared pointer
+/// inside one is as impossible to supply as a bare one. The exporter looks
+/// through the aggregate and names the field path it found, with a message
+/// distinct from the bare form.
+#[test]
+fn kernel_rejects_a_shared_memory_pointer_inside_a_struct_parameter() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "kernel_shared_struct_param".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    let shared_ptr_ty = PointerType::get(&ctx, 3);
+    let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signless);
+    let args_ty = StructType::get_unnamed(
+        &ctx,
+        (
+            vec![shared_ptr_ty.into(), i32_ty.into()],
+            StructLayout::Unpacked,
+        ),
+    );
+    typed_param_function(
+        &mut ctx,
+        module_block,
+        "shared_struct_param",
+        vec![args_ty.into()],
+        true,
+    );
+
+    let error = export_module_to_string(&ctx, &module)
+        .expect_err("export must refuse a kernel parameter struct that holds a shared pointer");
+    assert!(
+        error.contains(
+            "kernel `@shared_struct_param` parameter 0 holds a pointer into shared memory \
+             (address space 3) at field path `.0`"
+        ),
+        "{error}"
+    );
+}
+
+/// An array parameter is refused the same way, and the path names the
+/// element position.
+#[test]
+fn kernel_rejects_a_shared_memory_pointer_inside_an_array_parameter() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "kernel_shared_array_param".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    let generic_ptr_ty = PointerType::get(&ctx, 0);
+    let shared_ptr_ty = PointerType::get(&ctx, 3);
+    let pair_ty = ArrayType::get(&ctx, shared_ptr_ty.into(), 2);
+    typed_param_function(
+        &mut ctx,
+        module_block,
+        "shared_array_param",
+        vec![generic_ptr_ty.into(), pair_ty.into()],
+        true,
+    );
+
+    let error = export_module_to_string(&ctx, &module)
+        .expect_err("export must refuse a kernel parameter array of shared pointers");
+    assert!(
+        error.contains(
+            "kernel `@shared_array_param` parameter 1 holds a pointer into shared memory \
+             (address space 3) at field path `[0]`"
+        ),
+        "{error}"
+    );
+}
+
+/// A pointer buried under a struct, an array and another struct is found and
+/// reported with its full path; local memory is refused on the same grounds.
+#[test]
+fn kernel_rejects_a_local_memory_pointer_nested_below_an_array_element() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "kernel_local_nested_param".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    let local_ptr_ty = PointerType::get(&ctx, 5);
+    let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signless);
+    let leaf_ty = StructType::get_unnamed(
+        &ctx,
+        (
+            vec![local_ptr_ty.into(), i32_ty.into()],
+            StructLayout::Unpacked,
+        ),
+    );
+    let pair_ty = ArrayType::get(&ctx, leaf_ty.into(), 2);
+    let args_ty = StructType::get_unnamed(
+        &ctx,
+        (vec![i32_ty.into(), pair_ty.into()], StructLayout::Unpacked),
+    );
+    typed_param_function(
+        &mut ctx,
+        module_block,
+        "local_nested_param",
+        vec![args_ty.into()],
+        true,
+    );
+
+    let error = export_module_to_string(&ctx, &module)
+        .expect_err("export must refuse a nested local-memory pointer in a kernel parameter");
+    assert!(
+        error.contains(
+            "kernel `@local_nested_param` parameter 0 holds a pointer into local memory \
+             (address space 5) at field path `.1[0].0`"
+        ),
+        "{error}"
+    );
+}
+
+/// The recursion refuses only what the host cannot supply: a struct of
+/// generic and global pointers stays a valid kernel parameter, and a device
+/// (non-kernel) function may take the struct that holds a shared pointer.
+#[test]
+fn kernel_keeps_a_struct_of_host_addressable_pointers_and_device_functions_keep_nested_shared() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "kernel_allowed_struct_params".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    let generic_ptr_ty = PointerType::get(&ctx, 0);
+    let global_ptr_ty = PointerType::get(&ctx, 1);
+    let shared_ptr_ty = PointerType::get(&ctx, 3);
+    let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signless);
+    let host_ty = StructType::get_unnamed(
+        &ctx,
+        (
+            vec![generic_ptr_ty.into(), global_ptr_ty.into()],
+            StructLayout::Unpacked,
+        ),
+    );
+    let shared_ty = StructType::get_unnamed(
+        &ctx,
+        (
+            vec![shared_ptr_ty.into(), i32_ty.into()],
+            StructLayout::Unpacked,
+        ),
+    );
+    typed_param_function(
+        &mut ctx,
+        module_block,
+        "host_struct_param",
+        vec![host_ty.into()],
+        true,
+    );
+    typed_param_function(
+        &mut ctx,
+        module_block,
+        "device_shared_struct",
+        vec![shared_ty.into()],
+        false,
+    );
+
+    let ir = export_module_to_string(&ctx, &module)
+        .expect("a host-addressable struct parameter and a device function's shared struct export");
+    assert!(
+        ir.contains("define ptx_kernel void @host_struct_param({ ptr, ptr addrspace(1) } %v0)"),
+        "{ir}"
+    );
+    assert!(
+        ir.contains("@device_shared_struct({ ptr addrspace(3), i32 } %v0)"),
+        "{ir}"
+    );
+}
+
+/// The refusal is scoped to what the host cannot supply. Generic, global,
+/// and constant pointer parameters are host-addressable and stay accepted on
+/// kernels, and a device (non-kernel) function may carry any state space on
+/// its parameters, shared included.
+#[test]
+fn kernel_keeps_host_addressable_pointer_parameters_and_device_functions_keep_shared() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "kernel_allowed_params".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    pointer_param_function(&mut ctx, module_block, "allowed_param", &[0, 1, 4], true);
+    pointer_param_function(&mut ctx, module_block, "device_shared", &[3], false);
+
+    let ir = export_module_to_string(&ctx, &module)
+        .expect("generic/global/constant kernel parameters and device shared must export");
+    assert!(
+        ir.contains(
+            "define ptx_kernel void @allowed_param(ptr %v0, ptr addrspace(1) %v1, ptr addrspace(4) %v2)"
+        ),
+        "{ir}"
+    );
+    assert!(
+        ir.contains("define void @device_shared(ptr addrspace(3) %v0)"),
+        "{ir}"
+    );
+}

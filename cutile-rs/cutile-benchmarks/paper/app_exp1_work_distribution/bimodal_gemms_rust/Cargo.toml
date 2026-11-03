@@ -1,0 +1,24 @@
+[package]
+name = "bimodal-gemms-rust"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+publish = false
+
+[[bin]]
+name = "bimodal_gemms"
+path = "src/main.rs"
+
+[dependencies]
+cuda-core = "0.2.0"
+cuda-async = "0.2.0"
+cutile = "0.2.0"
+cutile-macro = "0.2.0"
+cutile-compiler = "0.2.0"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+[workspace]

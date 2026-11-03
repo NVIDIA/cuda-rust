@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 580" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="580" fill="#0d1117"/>
+  <rect width="900" height="580" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="450" y="38" text-anchor="middle" font-size="24" font-weight="600" fill="#ffffff" letter-spacing="-0.5">GPU Memory Hierarchy</text>
+  <line x1="300" y1="50" x2="600" y2="50" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+  <text x="450" y="72" text-anchor="middle" font-size="14" fill="#8b949e">H100 GPU — Faster memory is smaller, closer to compute</text>
+
+  <!-- Left side labels -->
+  <g transform="translate(30, 115)">
+    <text x="0" y="0" font-size="11" font-weight="600" fill="#56d364">FASTER</text>
+    <text x="0" y="14" font-size="10" fill="#6e7681">SMALLER</text>
+    
+    <line x1="22" y1="28" x2="22" y2="260" stroke="#6e7681" stroke-width="1.5" stroke-dasharray="4,4"/>
+    <polygon points="22,265 18,255 26,255" fill="#6e7681"/>
+    
+    <text x="0" y="285" font-size="11" font-weight="600" fill="#f97583">SLOWER</text>
+    <text x="0" y="299" font-size="10" fill="#6e7681">LARGER</text>
+  </g>
+
+  <!-- ==================== MEMORY TIERS ==================== -->
+  <!-- All bars left-aligned at x=100, growing wider to the right -->
+  
+  <!-- Tier 1: Registers - Smallest bar -->
+  <g transform="translate(100, 100)">
+    <rect width="260" height="60" rx="8" fill="#56d364"/>
+    <text x="130" y="28" text-anchor="middle" font-size="15" font-weight="700" fill="#ffffff">Registers</text>
+    <text x="130" y="48" text-anchor="middle" font-size="12" fill="rgba(255,255,255,0.9)">256 KB per SM</text>
+    
+    <!-- Stats - positioned after the bar -->
+    <g transform="translate(280, 5)">
+      <rect width="150" height="50" rx="6" fill="#161b22"/>
+      <rect width="150" height="50" rx="6" fill="none" stroke="#56d364" stroke-width="1"/>
+      <text x="15" y="22" font-size="12" font-weight="600" fill="#56d364">⚡ ~20 TB/s</text>
+      <text x="15" y="40" font-size="11" fill="#8b949e">~1 cycle</text>
+    </g>
+  </g>
+  
+  <!-- Tier 2: Shared Memory -->
+  <g transform="translate(100, 180)">
+    <rect width="340" height="60" rx="8" fill="#79c0ff"/>
+    <text x="170" y="28" text-anchor="middle" font-size="15" font-weight="700" fill="#ffffff">Shared Memory</text>
+    <text x="170" y="48" text-anchor="middle" font-size="12" fill="rgba(255,255,255,0.9)">228 KB per SM</text>
+    
+    <!-- Stats -->
+    <g transform="translate(360, 5)">
+      <rect width="150" height="50" rx="6" fill="#161b22"/>
+      <rect width="150" height="50" rx="6" fill="none" stroke="#79c0ff" stroke-width="1"/>
+      <text x="15" y="22" font-size="12" font-weight="600" fill="#79c0ff">⚡ ~19 TB/s</text>
+      <text x="15" y="40" font-size="11" fill="#8b949e">~20 cycles</text>
+    </g>
+  </g>
+  
+  <!-- Tier 3: L2 Cache -->
+  <g transform="translate(100, 260)">
+    <rect width="420" height="60" rx="8" fill="#d2a8ff"/>
+    <text x="210" y="28" text-anchor="middle" font-size="15" font-weight="700" fill="#ffffff">L2 Cache</text>
+    <text x="210" y="48" text-anchor="middle" font-size="12" fill="rgba(255,255,255,0.9)">50 MB total</text>
+    
+    <!-- Stats -->
+    <g transform="translate(440, 5)">
+      <rect width="150" height="50" rx="6" fill="#161b22"/>
+      <rect width="150" height="50" rx="6" fill="none" stroke="#d2a8ff" stroke-width="1"/>
+      <text x="15" y="22" font-size="12" font-weight="600" fill="#d2a8ff">~12 TB/s</text>
+      <text x="15" y="40" font-size="11" fill="#8b949e">~200 cycles</text>
+    </g>
+  </g>
+  
+  <!-- Tier 4: Global Memory - Largest bar -->
+  <g transform="translate(100, 340)">
+    <rect width="500" height="60" rx="8" fill="#f97583"/>
+    <text x="250" y="28" text-anchor="middle" font-size="15" font-weight="700" fill="#ffffff">Global Memory (HBM)</text>
+    <text x="250" y="48" text-anchor="middle" font-size="12" fill="rgba(255,255,255,0.9)">80 GB total</text>
+    
+    <!-- Stats -->
+    <g transform="translate(520, 5)">
+      <rect width="150" height="50" rx="6" fill="#161b22"/>
+      <rect width="150" height="50" rx="6" fill="none" stroke="#f97583" stroke-width="1"/>
+      <text x="15" y="22" font-size="12" font-weight="600" fill="#f97583">🐢 3.35 TB/s</text>
+      <text x="15" y="40" font-size="11" fill="#8b949e">~400 cycles</text>
+    </g>
+  </g>
+
+  <!-- ==================== TILE-RUST MAPPING (BOTTOM) ==================== -->
+  <g transform="translate(50, 420)">
+    <rect width="800" height="140" rx="12" fill="#161b22"/>
+    <rect width="800" height="140" rx="12" fill="none" stroke="#76B900" stroke-width="2"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="796" height="34" rx="10" fill="#1c2128"/>
+    <text x="400" y="24" text-anchor="middle" font-size="14" font-weight="600" fill="#76B900">cuTile Rust Memory Mapping</text>
+    
+    <!-- Mappings -->
+    <g transform="translate(40, 48)">
+      <!-- Registers = Tiles -->
+      <g transform="translate(0, 0)">
+        <rect width="170" height="48" rx="6" fill="rgba(86,211,100,0.12)"/>
+        <rect width="170" height="48" rx="6" fill="none" stroke="#56d364" stroke-width="1"/>
+        <text x="85" y="19" text-anchor="middle" font-size="11" font-weight="600" fill="#56d364">Registers</text>
+        <text x="85" y="37" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="11" fill="#ffffff">Tile&lt;f32, [16,16]&gt;</text>
+      </g>
+      
+      <!-- Shared Memory -->
+      <g transform="translate(185, 0)">
+        <rect width="170" height="48" rx="6" fill="rgba(121,192,255,0.12)"/>
+        <rect width="170" height="48" rx="6" fill="none" stroke="#79c0ff" stroke-width="1"/>
+        <text x="85" y="19" text-anchor="middle" font-size="11" font-weight="600" fill="#79c0ff">Shared Memory</text>
+        <text x="85" y="37" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="11" fill="#ffffff">Auto-managed</text>
+      </g>
+      
+      <!-- L2 Cache -->
+      <g transform="translate(370, 0)">
+        <rect width="170" height="48" rx="6" fill="rgba(210,168,255,0.12)"/>
+        <rect width="170" height="48" rx="6" fill="none" stroke="#d2a8ff" stroke-width="1"/>
+        <text x="85" y="19" text-anchor="middle" font-size="11" font-weight="600" fill="#d2a8ff">L2 Cache</text>
+        <text x="85" y="37" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="11" fill="#ffffff">Hardware cache</text>
+      </g>
+      
+      <!-- Global Memory -->
+      <g transform="translate(555, 0)">
+        <rect width="170" height="48" rx="6" fill="rgba(249,117,131,0.12)"/>
+        <rect width="170" height="48" rx="6" fill="none" stroke="#f97583" stroke-width="1"/>
+        <text x="85" y="19" text-anchor="middle" font-size="11" font-weight="600" fill="#f97583">Global Memory</text>
+        <text x="85" y="37" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="11" fill="#ffffff">Tensor&lt;f32&gt;</text>
+      </g>
+    </g>
+    
+    <!-- Key insight -->
+    <g transform="translate(40, 105)">
+      <rect width="720" height="26" rx="6" fill="#21262d"/>
+      <text x="360" y="18" text-anchor="middle" font-size="11" fill="#c9d1d9">
+        <tspan font-weight="600" fill="#76B900">Key:</tspan>
+        <tspan fill="#ffffff"> Load → Registers (Tiles)</tspan>
+        <tspan fill="#6e7681"> | </tspan>
+        <tspan fill="#ffffff">Compute in Tiles</tspan>
+        <tspan fill="#6e7681"> | </tspan>
+        <tspan fill="#ffffff">.store() → Global Memory</tspan>
+      </text>
+    </g>
+  </g>
+
+</svg>

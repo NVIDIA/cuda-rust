@@ -1,0 +1,7 @@
+# Preserve generated paper artifacts exactly. These files include captured CSV,
+# log, and text output whose original whitespace should not be rewritten just
+# to satisfy repository whitespace checks.
+*.csv -whitespace
+*.jsonl -whitespace
+*.log -whitespace
+*.txt -whitespace

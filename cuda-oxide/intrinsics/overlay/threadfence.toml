@@ -1,0 +1,19 @@
+schema = 34
+family = "sync"
+
+[threadfence]
+llvm_evidence_profile = "rust-llvm-23.1.3-aab11ee0"
+libnvvm_evidence_profile = "cuda-13.3-libnvvm-13.3.33-threadfence"
+runtime_validation = "unexecuted"
+
+[[threadfence.variant]]
+abi_id = "i0298"
+scope = "cta"
+
+[[threadfence.variant]]
+abi_id = "i0299"
+scope = "device"
+
+[[threadfence.variant]]
+abi_id = "i0300"
+scope = "system"

@@ -1,0 +1,17 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/policy_contract_wrong_brand.rs:41:16
+   |
+41 |     needs_wide(small);
+   |     ---------- ^^^^^ expected `WidePolicy`, found `SmallPolicy`
+   |     |
+   |     arguments to this function are incorrect
+   |
+   = note: expected reference `&PreparedLaunch<__configured_CudaKernel<WidePolicy>>`
+              found reference `&PreparedLaunch<__configured_CudaKernel<SmallPolicy>>`
+note: function defined here
+  --> tests/compile_fail/policy_contract_wrong_brand.rs:33:4
+   |
+33 | fn needs_wide(
+   |    ^^^^^^^^^^
+34 |     _: &cuda_core::PreparedLaunch<kernels::__configured_CudaKernel<WidePolicy>>,
+   |     ---------------------------------------------------------------------------

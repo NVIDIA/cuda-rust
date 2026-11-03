@@ -1,0 +1,13 @@
+error[E0133]: call to unsafe function `LoadedModule::contracted_unchecked` is unsafe and requires unsafe block
+  --> tests/compile_fail/contract_unchecked_requires_unsafe.rs:22:5
+   |
+22 | /     module
+23 | |         .contracted_unchecked(
+24 | |             stream,
+25 | |             cuda_core::LaunchConfig {
+...  |
+30 | |             input,
+31 | |         )
+   | |_________^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior

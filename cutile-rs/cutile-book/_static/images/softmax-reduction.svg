@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 470" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Arrow markers -->
+    <marker id="arrow-white" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#ffffff" fill-opacity="0.8"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#ffa657" fill-opacity="0.9"/>
+    </marker>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="470" fill="#0d1117"/>
+  <rect width="900" height="470" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="450" y="40" text-anchor="middle" font-size="24" font-weight="600" fill="#ffffff" letter-spacing="-0.5">Reduction: reduce_max(tile, axis=1)</text>
+  <line x1="280" y1="54" x2="620" y2="54" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+  <text x="450" y="82" text-anchor="middle" font-size="14" font-weight="500" fill="#c9d1d9">Collapse dimension by applying operation (max/sum) along an axis</text>
+
+  <!-- ==================== Original Tile ==================== -->
+  <g transform="translate(70, 155)">
+    <!-- Label -->
+    <text x="140" y="-18" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff">Original Tile [2, 4]</text>
+    
+    <!-- Row 0 -->
+    <g transform="translate(0, 0)">
+      <rect width="65" height="55" rx="6" fill="#f97583"/>
+      <text x="32" y="35" text-anchor="middle" font-size="20" font-weight="700" fill="#ffffff">1</text>
+    </g>
+    <g transform="translate(72, 0)">
+      <rect width="65" height="55" rx="6" fill="#56d364"/>
+      <text x="32" y="35" text-anchor="middle" font-size="20" font-weight="700" fill="#ffffff">5</text>
+    </g>
+    <g transform="translate(144, 0)">
+      <rect width="65" height="55" rx="6" fill="#f97583"/>
+      <text x="32" y="35" text-anchor="middle" font-size="20" font-weight="700" fill="#ffffff">3</text>
+    </g>
+    <g transform="translate(216, 0)">
+      <rect width="65" height="55" rx="6" fill="#f97583"/>
+      <text x="32" y="35" text-anchor="middle" font-size="20" font-weight="700" fill="#ffffff">4</text>
+    </g>
+    
+    <!-- Row label -->
+    <text x="-30" y="32" text-anchor="middle" font-size="12" font-weight="600" fill="#c9d1d9">row 0</text>
+    
+    <!-- Row 1 -->
+    <g transform="translate(0, 70)">
+      <rect width="65" height="55" rx="6" fill="#f97583"/>
+      <text x="32" y="35" text-anchor="middle" font-size="20" font-weight="700" fill="#ffffff">8</text>
+    </g>
+    <g transform="translate(72, 70)">
+      <rect width="65" height="55" rx="6" fill="#f97583"/>
+      <text x="32" y="35" text-anchor="middle" font-size="20" font-weight="700" fill="#ffffff">2</text>
+    </g>
+    <g transform="translate(144, 70)">
+      <rect width="65" height="55" rx="6" fill="#79c0ff"/>
+      <text x="32" y="35" text-anchor="middle" font-size="20" font-weight="700" fill="#ffffff">9</text>
+    </g>
+    <g transform="translate(216, 70)">
+      <rect width="65" height="55" rx="6" fill="#f97583"/>
+      <text x="32" y="35" text-anchor="middle" font-size="20" font-weight="700" fill="#ffffff">1</text>
+    </g>
+    
+    <!-- Row label -->
+    <text x="-30" y="102" text-anchor="middle" font-size="12" font-weight="600" fill="#c9d1d9">row 1</text>
+    
+    <!-- Axis indicator -->
+    <g transform="translate(0, 155)">
+      <path d="M 0 0 L 280 0" stroke="#ffa657" stroke-width="1.5" stroke-opacity="0.8" marker-end="url(#arrow-orange)"/>
+      <text x="140" y="24" text-anchor="middle" font-size="13" font-weight="600" fill="#ffa657">axis = 1 (reduce across columns →)</text>
+    </g>
+  </g>
+
+  <!-- Arrow with reduce_max box -->
+  <g transform="translate(380, 210)">
+    <rect x="0" y="-24" width="130" height="48" rx="8" fill="#21262d"/>
+    <rect x="0" y="-24" width="130" height="48" rx="8" fill="none" stroke="#76B900" stroke-width="1.5"/>
+    <text x="65" y="8" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="14" font-weight="600" fill="#76B900">reduce_max()</text>
+    
+    <path d="M 145 0 L 195 0" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.7" marker-end="url(#arrow-white)"/>
+  </g>
+
+  <!-- ==================== Result Tile ==================== -->
+  <g transform="translate(600, 155)">
+    <!-- Label -->
+    <text x="55" y="-18" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff">Result [2]</text>
+    
+    <!-- Row 0 max -->
+    <g transform="translate(0, 0)">
+      <rect width="110" height="55" rx="6" fill="#56d364"/>
+      <text x="55" y="35" text-anchor="middle" font-size="20" font-weight="700" fill="#ffffff">5</text>
+    </g>
+    
+    <!-- max label - larger and more legible -->
+    <g transform="translate(125, 10)">
+      <rect x="-5" y="-5" width="120" height="32" rx="4" fill="#21262d" fill-opacity="0.6"/>
+      <text x="55" y="18" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="14" font-weight="600" fill="#c9d1d9">max(1,5,3,4)</text>
+    </g>
+    
+    <!-- Row 1 max -->
+    <g transform="translate(0, 70)">
+      <rect width="110" height="55" rx="6" fill="#79c0ff"/>
+      <text x="55" y="35" text-anchor="middle" font-size="20" font-weight="700" fill="#ffffff">9</text>
+    </g>
+    
+    <!-- max label - larger and more legible -->
+    <g transform="translate(125, 80)">
+      <rect x="-5" y="-5" width="120" height="32" rx="4" fill="#21262d" fill-opacity="0.6"/>
+      <text x="55" y="18" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="14" font-weight="600" fill="#c9d1d9">max(8,2,9,1)</text>
+    </g>
+    
+    <!-- Shape change -->
+    <g transform="translate(-25, 160)">
+      <rect width="160" height="36" rx="6" fill="#21262d"/>
+      <rect width="160" height="36" rx="6" fill="none" stroke="#ffffff" stroke-width="1"/>
+      <text x="80" y="24" text-anchor="middle" font-size="14" font-weight="600" fill="#ffffff">[2, 4] → [2]</text>
+    </g>
+  </g>
+
+  <!-- Bottom code snippet -->
+  <g transform="translate(50, 405)">
+    <rect width="800" height="52" rx="8" fill="#161b22"/>
+    <rect width="800" height="52" rx="8" fill="none" stroke="#ffffff" stroke-width="1"/>
+    <text x="400" y="33" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="14" font-weight="500">
+      <tspan fill="#ff7b72" font-weight="600">let</tspan>
+      <tspan fill="#ffffff"> tile_max: Tile&lt;f32, {[BM]}&gt; = </tspan>
+      <tspan fill="#76B900" font-weight="600">reduce_max</tspan>
+      <tspan fill="#ffffff">(tile_x, </tspan>
+      <tspan fill="#79c0ff">1i32</tspan>
+      <tspan fill="#ffffff">);</tspan>
+      <tspan fill="#8b949e">  // axis=1 → reduce columns</tspan>
+    </text>
+  </g>
+
+</svg>

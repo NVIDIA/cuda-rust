@@ -1,0 +1,23 @@
+# Shared Sphinx deps for cuda-oxide-book and cutile-rs/cutile-book.
+# Keep in sync with cuda-oxide-book/requirements.txt — the Pages workflow
+# installs from that file once for both books.
+#
+# Upper-bounded on the major: the cuda-oxide build runs warnings-as-errors (-W),
+# and a new major routinely introduces warnings, which would redden every PR
+# and the main-branch deploy overnight. Bump a bound deliberately instead.
+#
+# Every requirement carries one, not just Sphinx. The rationale is not
+# Sphinx-specific: myst-parser decides what counts as a malformed directive or
+# an unresolved cross-reference, and the theme emits its own warnings, so
+# either can fail `-W` on a release nobody asked for.
+#
+# Each bound is the next major above what resolves today, so this changes no
+# installed version.
+sphinx>=7.0,<10
+pydata-sphinx-theme>=0.15,<1
+myst-parser>=3.0,<6
+sphinx-copybutton>=0.5,<1
+sphinx-design>=0.6,<1
+sphinx-sitemap>=2.6,<3
+# Local live-reload only; no CI path invokes it.
+sphinx-autobuild>=2024.10,<2027

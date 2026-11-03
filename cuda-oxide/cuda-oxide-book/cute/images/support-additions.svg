@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 680" width="1240" height="680" role="img"
+  aria-label="Feature additions in CuTeDSL 4.4 to 4.7 against the cute-rs preview, one row per feature with a status glyph and a short note">
+<style>
+  :root, svg {
+  --bg: #f4f6f8; --fg: #1a232e; --muted: #5d6b7a; --line: #9aa7b4; --panel: #ffffff;
+  --meta: #0e7c72; --meta-fill: #d9f3ef; --code: #b4560a; --code-fill: #fdebd2;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+ }
+  @media (prefers-color-scheme: dark) { :root, svg {
+  --bg: #1b1d23; --fg: #f2f4f7; --muted: #bcc4d0; --line: #5c6475; --panel: #282c36;
+  --meta: #7ed8bb; --meta-fill: #346357; --code: #f4c474; --code-fill: #735a3c;
+ } }
+</style>
+<rect x="0" y="0" width="1240" height="680" style="fill: var(--bg)"/>
+<text x="40" y="34" text-anchor="start" style="font: 600 17px var(--sans); fill: var(--fg)">Feature additions in CuTeDSL 4.4 to 4.7</text>
+<text x="40" y="56" text-anchor="start" style="font: 400 12.5px var(--sans); fill: var(--muted)">What a CuTeDSL user relies on beyond the per-architecture atoms, and what the preview has instead.</text>
+<text x="40" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">FEATURE</text>
+<text x="392" y="92" text-anchor="middle" style="font: 600 11px var(--sans); fill: var(--muted)">CuTeDSL 4.7</text>
+<text x="472" y="92" text-anchor="middle" style="font: 600 11px var(--sans); fill: var(--muted)">cute-rs</text>
+<text x="540" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">WHAT THE PREVIEW HAS</text>
+<rect x="32" y="102" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="118" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Epilogue fusion (EFC)</text>
+<circle cx="392" cy="114" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="114" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 472 107 A 7 7 0 0 1 472 121 Z" style="fill: var(--code)"/>
+<text x="540" y="118" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">two fixed FP16 epilogues; activations fused by hand; no user hook</text>
+<text x="40" y="142" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Dynamic layouts</text>
+<circle cx="392" cy="138" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="138" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 472 131 A 7 7 0 0 1 472 145 Z" style="fill: var(--code)"/>
+<text x="540" y="142" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">runtime lengths and one row pitch; tiles, strides and swizzles are types</text>
+<rect x="32" y="150" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="166" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">JIT and caching</text>
+<circle cx="392" cy="162" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<line x1="467" y1="162" x2="477" y2="162" style="stroke: var(--line); stroke-width: 1.6"/>
+<text x="540" y="166" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">ahead of time through rustc and Cargo; nothing to JIT or cache</text>
+<text x="40" y="190" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">AOT export</text>
+<circle cx="392" cy="186" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="186" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 472 179 A 7 7 0 0 1 472 193 Z" style="fill: var(--code)"/>
+<text x="540" y="190" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">cubin embedded in the Rust binary; no C header or .so export</text>
+<rect x="32" y="198" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="214" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">TVM FFI, PyTorch, JAX, DLPack</text>
+<circle cx="392" cy="210" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="210" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="540" y="214" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">none; buffers live in cuda-core DeviceBuffer</text>
+<text x="40" y="238" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Autotuning</text>
+<circle cx="392" cy="234" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="234" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="540" y="238" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">none; tile shapes are const generics, tune in a host harness</text>
+<rect x="32" y="246" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="262" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Task Scheduling</text>
+<circle cx="392" cy="258" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="258" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="540" y="262" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">none; the verifier checks protocol order, not schedules</text>
+<text x="40" y="286" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Inline PTX and cute.ffi</text>
+<circle cx="392" cy="282" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="282" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="540" y="286" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">none on the CuTe path; hardware through ctm-rs and cuda-device</text>
+<rect x="32" y="294" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="310" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">printf, print_tensor, IR dumps</text>
+<circle cx="392" cy="306" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="306" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 472 299 A 7 7 0 0 1 472 313 Z" style="fill: var(--code)"/>
+<text x="540" y="310" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">MLIR, MIR and LLVM dumps; no device printf in CuTe kernels</text>
+<text x="40" y="334" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">IKET profiling</text>
+<circle cx="392" cy="330" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="330" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="540" y="334" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">none; profile the embedded cubin with Nsight</text>
+<rect x="32" y="342" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="358" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">CUDA graphs, PDL, cooperative launch</text>
+<circle cx="392" cy="354" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="354" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 472 347 A 7 7 0 0 1 472 361 Z" style="fill: var(--code)"/>
+<text x="540" y="358" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">graphs, the PDL attribute and cooperative launch from the host</text>
+<text x="40" y="382" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Typed shared memory</text>
+<circle cx="392" cy="378" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="378" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 472 371 A 7 7 0 0 1 472 385 Z" style="fill: var(--code)"/>
+<text x="540" y="382" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">typed static and dynamic arrays; no bump allocator</text>
+<rect x="32" y="390" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="406" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">TensorSSA register vectors</text>
+<circle cx="392" cy="402" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="402" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 472 395 A 7 7 0 0 1 472 409 Z" style="fill: var(--code)"/>
+<text x="540" y="406" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">RegisterTile with +, -, *, / and unary -, map, zip_map, fold and gather</text>
+<text x="40" y="430" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">block_copy</text>
+<circle cx="392" cy="426" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="426" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 472 419 A 7 7 0 0 1 472 433 Z" style="fill: var(--code)"/>
+<text x="540" y="430" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">a typed two-CTA TMA copy; no shared-to-TMEM copy</text>
+<rect x="32" y="438" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="454" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Grouped GEMM, MoE, ptr-array</text>
+<circle cx="392" cy="450" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="450" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="540" y="454" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">none; one launch per group</text>
+<text x="40" y="478" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Mixed-input GEMM</text>
+<circle cx="392" cy="474" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="474" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="540" y="478" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">none; operands share one type</text>
+<rect x="32" y="486" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="502" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Distributed kernels</text>
+<circle cx="392" cy="498" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="498" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="540" y="502" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">none; single GPU</text>
+<text x="40" y="526" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Grouped block-scaled and blockwise GEMM</text>
+<circle cx="392" cy="522" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="522" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="540" y="526" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">dense block-scaled GEMM and GEMV only</text>
+<rect x="32" y="534" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="550" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">FMHA backward</text>
+<circle cx="392" cy="546" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="546" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="540" y="550" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">forward only</text>
+<text x="40" y="574" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Convolution</text>
+<circle cx="392" cy="570" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="570" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 472 563 A 7 7 0 0 1 472 577 Z" style="fill: var(--code)"/>
+<text x="540" y="574" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">implicit im2col on the BF16 register path; no TMA im2col</text>
+<rect x="32" y="582" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="598" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Sub-byte types</text>
+<circle cx="392" cy="594" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="594" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 472 587 A 7 7 0 0 1 472 601 Z" style="fill: var(--code)"/>
+<text x="540" y="598" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">FP4 and scale carriers; no Int4, no FP6</text>
+<text x="40" y="622" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Primitives API (4.7, experimental)</text>
+<circle cx="392" cy="618" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="472" cy="618" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 472 611 A 7 7 0 0 1 472 625 Z" style="fill: var(--code)"/>
+<text x="540" y="622" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">ctm-rs covers the shipped kernels; no atomics, wgmma, libdevice</text>
+<circle cx="47" cy="652" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="62" y="656" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">available</text>
+<circle cx="160" cy="652" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 160 645 A 7 7 0 0 1 160 659 Z" style="fill: var(--code)"/>
+<text x="175" y="656" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">fixed or narrower form only</text>
+<circle cx="399" cy="652" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="414" y="656" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">not available</text>
+<line x1="535" y1="652" x2="545" y2="652" style="stroke: var(--line); stroke-width: 1.6"/>
+<text x="555" y="656" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">not applicable</text>
+</svg>

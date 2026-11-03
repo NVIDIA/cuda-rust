@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Arrow markers -->
+    <marker id="arrow-white" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M 0 0.5 L 5 3 L 0 5.5" fill="none" stroke="#ffffff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="560" fill="#0d1117"/>
+  <rect width="900" height="560" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="450" y="38" text-anchor="middle" font-size="24" font-weight="600" fill="#ffffff" letter-spacing="-0.5">Online Softmax: Processing Chunks Incrementally</text>
+  <line x1="250" y1="52" x2="650" y2="52" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+
+  <!-- ==================== TOP: Traditional Softmax ==================== -->
+  <g transform="translate(50, 75)">
+    <!-- Container -->
+    <rect width="800" height="105" rx="10" fill="#161b22"/>
+    <rect width="800" height="105" rx="10" fill="none" stroke="#ff7b72" stroke-width="2" stroke-dasharray="6,4"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="796" height="30" rx="8" fill="#3d1f1f"/>
+    <text x="400" y="22" text-anchor="middle" font-size="14" font-weight="600" fill="#ff7b72">❌ Traditional Softmax: Needs ALL values before computing</text>
+    
+    <!-- Flow -->
+    <g transform="translate(30, 50)">
+      <rect width="200" height="42" rx="6" fill="#4a5568"/>
+      <text x="100" y="27" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Compute Q @ Kᵀ</text>
+      
+      <path d="M 210 21 L 255 21" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+      
+      <rect x="265" y="0" width="220" height="42" rx="6" fill="#f97583"/>
+      <text x="375" y="18" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Store entire N×N matrix</text>
+      <text x="375" y="35" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">(16 GB for N=65k!)</text>
+      
+      <path d="M 495 21 L 540 21" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+      
+      <rect x="550" y="0" width="200" height="42" rx="6" fill="#4a5568"/>
+      <text x="650" y="27" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Apply Softmax</text>
+    </g>
+  </g>
+
+  <!-- ==================== BOTTOM: Online Softmax ==================== -->
+  <g transform="translate(50, 200)">
+    <!-- Container -->
+    <rect width="800" height="340" rx="10" fill="#161b22"/>
+    <rect width="800" height="340" rx="10" fill="none" stroke="#76B900" stroke-width="2.5"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="796" height="30" rx="8" fill="#1a2a1a"/>
+    <text x="400" y="22" text-anchor="middle" font-size="14" font-weight="600" fill="#76B900">✓ Online Softmax: Process incrementally, update running stats</text>
+    
+    <!-- Q tile (fixed) -->
+    <g transform="translate(30, 55)">
+      <rect width="85" height="85" rx="8" fill="#79c0ff"/>
+      <text x="42" y="35" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">Q tile</text>
+      <text x="42" y="55" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">(BM × D)</text>
+      <text x="42" y="75" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">Loaded once</text>
+    </g>
+    
+    <!-- Arrow from Q -->
+    <path d="M 125 97 L 155 97" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+    
+    <!-- Chunk 1 -->
+    <g transform="translate(165, 55)">
+      <rect width="130" height="85" rx="8" fill="#21262d"/>
+      <rect width="130" height="85" rx="8" fill="none" stroke="#56d364" stroke-width="2"/>
+      
+      <text x="65" y="22" text-anchor="middle" font-size="13" font-weight="700" fill="#56d364">K₁, V₁</text>
+      <text x="65" y="42" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">Compute scores</text>
+      <text x="65" y="58" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">Update m, l, acc</text>
+      <text x="65" y="77" text-anchor="middle" font-size="11" font-weight="600" fill="#56d364">→ Discard after</text>
+    </g>
+    
+    <!-- Arrow -->
+    <path d="M 305 97 L 335 97" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+    
+    <!-- Chunk 2 -->
+    <g transform="translate(345, 55)">
+      <rect width="130" height="85" rx="8" fill="#21262d"/>
+      <rect width="130" height="85" rx="8" fill="none" stroke="#ffa657" stroke-width="2"/>
+      
+      <text x="65" y="22" text-anchor="middle" font-size="13" font-weight="700" fill="#ffa657">K₂, V₂</text>
+      <text x="65" y="42" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">If new max > old:</text>
+      <text x="65" y="58" text-anchor="middle" font-size="13" font-weight="700" fill="#ffa657">Rescale acc!</text>
+      <text x="65" y="77" text-anchor="middle" font-size="11" font-weight="600" fill="#ffa657">→ Discard after</text>
+    </g>
+    
+    <!-- Arrow -->
+    <path d="M 485 97 L 515 97" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+    
+    <!-- Chunk 3 -->
+    <g transform="translate(525, 55)">
+      <rect width="130" height="85" rx="8" fill="#21262d"/>
+      <rect width="130" height="85" rx="8" fill="none" stroke="#d2a8ff" stroke-width="2"/>
+      
+      <text x="65" y="22" text-anchor="middle" font-size="13" font-weight="700" fill="#d2a8ff">K₃, V₃ ⋯</text>
+      <text x="65" y="42" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">Keep accumulating</text>
+      <text x="65" y="58" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">with corrections</text>
+      <text x="65" y="77" text-anchor="middle" font-size="11" font-weight="600" fill="#d2a8ff">→ Discard after</text>
+    </g>
+    
+    <!-- Arrow -->
+    <path d="M 665 97 L 695 97" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+    
+    <!-- Final result -->
+    <g transform="translate(705, 55)">
+      <rect width="85" height="85" rx="8" fill="#76B900"/>
+      <text x="42" y="35" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">Output</text>
+      <text x="42" y="55" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">(BM × D)</text>
+      <text x="42" y="75" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">acc / l</text>
+    </g>
+    
+    <!-- Running state indicator -->
+    <g transform="translate(165, 160)">
+      <rect width="625" height="60" rx="8" fill="#2d2a1f" opacity="0.5"/>
+      <rect width="625" height="60" rx="8" fill="none" stroke="#e3b341" stroke-width="2"/>
+      
+      <text x="312" y="20" text-anchor="middle" font-size="13" font-weight="700" fill="#e3b341">⚡ Running State (stays in registers)</text>
+      
+      <g transform="translate(30, 30)">
+        <rect width="165" height="24" rx="4" fill="#21262d"/>
+        <text x="82" y="17" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">
+          <tspan fill="#e3b341">m</tspan>
+          <tspan fill="#ffffff"> : running max</tspan>
+        </text>
+      </g>
+      
+      <g transform="translate(215, 30)">
+        <rect width="165" height="24" rx="4" fill="#21262d"/>
+        <text x="82" y="17" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">
+          <tspan fill="#e3b341">l</tspan>
+          <tspan fill="#ffffff"> : running sum</tspan>
+        </text>
+      </g>
+      
+      <g transform="translate(400, 30)">
+        <rect width="200" height="24" rx="4" fill="#21262d"/>
+        <text x="100" y="17" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">
+          <tspan fill="#e3b341">acc</tspan>
+          <tspan fill="#ffffff"> : output accumulator</tspan>
+        </text>
+      </g>
+    </g>
+    
+    <!-- The rescaling trick -->
+    <g transform="translate(30, 245)">
+      <rect width="740" height="80" rx="8" fill="#21262d"/>
+      <rect width="740" height="80" rx="8" fill="none" stroke="#ffffff" stroke-width="1.5"/>
+      
+      <text x="20" y="24" font-size="14" font-weight="700" fill="#ffa657">The Rescaling Trick:</text>
+      
+      <text x="20" y="46" font-size="13" font-weight="600" fill="#ffffff">When new max > old max, correct previous results:</text>
+      
+      <text x="20" y="68" font-family="'RobotoMono', monospace" font-size="13" font-weight="500">
+        <tspan fill="#e3b341">α</tspan>
+        <tspan fill="#ffffff"> = </tspan>
+        <tspan fill="#d2a8ff">exp</tspan>
+        <tspan fill="#ffffff">(old_max - new_max)</tspan>
+        <tspan fill="#ffffff">  →  </tspan>
+        <tspan fill="#e3b341">acc</tspan>
+        <tspan fill="#ffffff"> *= </tspan>
+        <tspan fill="#e3b341">α</tspan>
+        <tspan fill="#ffffff"> , </tspan>
+        <tspan fill="#e3b341">l</tspan>
+        <tspan fill="#ffffff"> *= </tspan>
+        <tspan fill="#e3b341">α</tspan>
+      </text>
+    </g>
+  </g>
+
+</svg>

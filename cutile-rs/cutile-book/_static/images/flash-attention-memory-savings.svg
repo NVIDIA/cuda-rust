@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+    </style>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+    
+    <!-- Arrow marker -->
+    <marker id="arrow-white" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M 0 0.5 L 5 3 L 0 5.5" fill="none" stroke="#ffffff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="520" fill="#0d1117"/>
+  <rect width="900" height="520" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Title -->
+  <text x="450" y="38" text-anchor="middle" font-size="22" font-weight="600" fill="#ffffff">Fused Attention: Memory Savings</text>
+  <line x1="260" y1="52" x2="640" y2="52" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+
+  <!-- Left: Standard Attention -->
+  <g transform="translate(50, 85)">
+    <rect width="380" height="400" rx="10" fill="#161b22"/>
+    <rect width="380" height="400" rx="10" fill="none" stroke="#ff7b72" stroke-width="2" stroke-dasharray="6,4"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="376" height="34" rx="8" fill="#3d1f1f"/>
+    <text x="190" y="25" text-anchor="middle" font-size="14" font-weight="700" fill="#ff7b72">❌ Standard Attention</text>
+    
+    <!-- N×N Matrix visualization -->
+    <g transform="translate(65, 55)">
+      <text x="125" y="0" text-anchor="middle" font-size="13" font-weight="600" fill="#c9d1d9">Must store entire N×N matrix</text>
+      
+      <!-- The big matrix -->
+      <rect x="0" y="15" width="250" height="180" rx="6" fill="#ff7b72" fill-opacity="0.15"/>
+      <rect x="0" y="15" width="250" height="180" rx="6" fill="none" stroke="#ff7b72" stroke-width="2"/>
+      
+      <!-- Grid lines inside matrix -->
+      <g stroke="#ff7b72" stroke-width="0.5" stroke-opacity="0.3">
+        <line x1="50" y1="15" x2="50" y2="195"/>
+        <line x1="100" y1="15" x2="100" y2="195"/>
+        <line x1="150" y1="15" x2="150" y2="195"/>
+        <line x1="200" y1="15" x2="200" y2="195"/>
+        <line x1="0" y1="51" x2="250" y2="51"/>
+        <line x1="0" y1="87" x2="250" y2="87"/>
+        <line x1="0" y1="123" x2="250" y2="123"/>
+        <line x1="0" y1="159" x2="250" y2="159"/>
+      </g>
+      
+      <!-- Labels -->
+      <text x="125" y="105" text-anchor="middle" font-size="16" font-weight="700" fill="#ff7b72">N × N</text>
+      <text x="125" y="125" text-anchor="middle" font-size="12" fill="#ff7b72">Attention Scores</text>
+      
+      <!-- Dimension labels -->
+      <text x="125" y="210" text-anchor="middle" font-size="11" fill="#c9d1d9">N (sequence length)</text>
+      <text x="-15" y="105" text-anchor="middle" font-size="11" fill="#c9d1d9" transform="rotate(-90, -15, 105)">N</text>
+    </g>
+    
+    <!-- Memory calculation -->
+    <g transform="translate(30, 280)">
+      <rect x="0" y="0" width="320" height="70" rx="6" fill="#4d2d2d"/>
+      
+      <text x="160" y="22" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Memory Usage</text>
+      <text x="160" y="45" text-anchor="middle" font-size="15" font-weight="700" fill="#ffffff">O(N²)</text>
+      <text x="160" y="62" text-anchor="middle" font-size="11" fill="#ffffff" opacity="0.8">N=65k → 4 billion elements!</text>
+    </g>
+    
+    <!-- Summary -->
+    <g transform="translate(30, 365)">
+      <rect x="0" y="0" width="320" height="26" rx="5" fill="#f97583"/>
+      <text x="160" y="18" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">💥 Won't fit in GPU memory!</text>
+    </g>
+  </g>
+
+  <!-- Right: Flash Attention -->
+  <g transform="translate(470, 85)">
+    <rect width="380" height="400" rx="10" fill="#161b22"/>
+    <rect width="380" height="400" rx="10" fill="none" stroke="#76B900" stroke-width="2.5"/>
+    
+    <!-- Header -->
+    <rect x="2" y="2" width="376" height="34" rx="8" fill="#1a2a1a"/>
+    <text x="190" y="25" text-anchor="middle" font-size="14" font-weight="700" fill="#76B900">✓ Fused Attention</text>
+    
+    <!-- Streaming visualization -->
+    <g transform="translate(30, 55)">
+      <text x="160" y="0" text-anchor="middle" font-size="13" font-weight="600" fill="#c9d1d9">Stream tiles, never store full matrix</text>
+      
+      <!-- Q tile (stays in registers) -->
+      <g transform="translate(20, 25)">
+        <rect x="0" y="0" width="70" height="50" rx="4" fill="#79c0ff"/>
+        <text x="35" y="22" text-anchor="middle" font-size="11" font-weight="600" fill="#ffffff">Q tile</text>
+        <text x="35" y="38" text-anchor="middle" font-size="10" fill="#ffffff">(BM×D)</text>
+      </g>
+      <text x="105" y="55" font-size="10" font-weight="500" fill="#79c0ff">Keep in registers</text>
+      
+      <!-- Arrow down -->
+      <path d="M 55 85 L 55 105" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+      
+      <!-- K,V tiles streaming through -->
+      <g transform="translate(0, 115)">
+        <rect x="0" y="0" width="60" height="40" rx="4" fill="#56d364"/>
+        <text x="30" y="18" text-anchor="middle" font-size="10" font-weight="600" fill="#ffffff">K₁,V₁</text>
+        <text x="30" y="32" text-anchor="middle" font-size="9" fill="#ffffff">(BN×D)</text>
+        
+        <path d="M 65 20 L 80 20" stroke="#76B900" stroke-width="1.5"/>
+        
+        <rect x="85" y="0" width="60" height="40" rx="4" fill="#56d364"/>
+        <text x="115" y="18" text-anchor="middle" font-size="10" font-weight="600" fill="#ffffff">K₂,V₂</text>
+        <text x="115" y="32" text-anchor="middle" font-size="9" fill="#ffffff">(BN×D)</text>
+        
+        <path d="M 150 20 L 165 20" stroke="#76B900" stroke-width="1.5"/>
+        
+        <rect x="170" y="0" width="60" height="40" rx="4" fill="#56d364"/>
+        <text x="200" y="18" text-anchor="middle" font-size="10" font-weight="600" fill="#ffffff">K₃,V₃</text>
+        <text x="200" y="32" text-anchor="middle" font-size="9" fill="#ffffff">(BN×D)</text>
+        
+        <text x="245" y="25" font-size="14" fill="#76B900">→</text>
+        <text x="275" y="25" font-size="10" fill="#8b949e">...</text>
+      </g>
+      <text x="160" y="170" text-anchor="middle" font-size="10" font-weight="500" fill="#56d364">Stream one tile at a time</text>
+    </g>
+    
+    <!-- What we store -->
+    <g transform="translate(30, 250)">
+      <rect x="0" y="0" width="320" height="95" rx="6" fill="#21262d"/>
+      <rect x="0" y="0" width="320" height="95" rx="6" fill="none" stroke="#76B900" stroke-width="1"/>
+      
+      <text x="160" y="18" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">What we store at any time:</text>
+      
+      <g transform="translate(15, 30)">
+        <text x="0" y="0" font-size="11" fill="#79c0ff">• Q tile:</text>
+        <text x="65" y="0" font-size="11" fill="#c9d1d9">BM×D = ~4K elements</text>
+        
+        <text x="0" y="18" font-size="11" fill="#56d364">• K,V tiles:</text>
+        <text x="70" y="18" font-size="11" fill="#c9d1d9">BN×D = ~2K each</text>
+        
+        <text x="0" y="36" font-size="11" fill="#e3b341">• Running stats:</text>
+        <text x="95" y="36" font-size="11" fill="#c9d1d9">~BM = ~64</text>
+        
+        <text x="0" y="54" font-size="11" fill="#d2a8ff">• Accumulator:</text>
+        <text x="90" y="54" font-size="11" fill="#c9d1d9">BM×D = ~4K</text>
+      </g>
+    </g>
+    
+    <!-- Memory calculation -->
+    <g transform="translate(30, 355)">
+      <rect x="0" y="0" width="155" height="36" rx="5" fill="#56d364"/>
+      <text x="77" y="16" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">Memory:</text>
+      <text x="77" y="30" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">O(N)</text>
+      
+      <rect x="165" y="0" width="155" height="36" rx="5" fill="#56d364"/>
+      <text x="242" y="16" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">Total:</text>
+      <text x="242" y="30" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">~12K elements</text>
+    </g>
+  </g>
+
+</svg>
+

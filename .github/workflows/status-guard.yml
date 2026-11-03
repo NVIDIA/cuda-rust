@@ -1,30 +1,39 @@
 ---
 name: status-guard
 
+# Self-hosted runners reject pull_request. copy-pr-bot mirrors trusted PRs to
+# pull-request/<n>, and this workflow triggers on that push.
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    branches:
+      - main
+      - "pull-request/[0-9]+"
 
+# Each commit on main gets its own group, so it starts at once. Any other ref
+# still shares one group and cancels the older run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref_name }}${{ github.ref_name == 'main' && format('-{0}', github.sha) || '' }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 permissions:
   contents: read
 
+# A container job's default shell is dash. The VM jobs already run bash.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   error-example-status-guard:
     name: error-example status guard
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
 
       - name: Verify error* examples are in STATUS.md and smoketest.sh
-        run: bash scripts/check-error-example-status.sh
+        run: bash cuda-oxide/scripts/check-error-example-status.sh
 
   # Both of the things this checks are otherwise only visible when the suite
   # runs on a GPU: the compile-only lane collapses every category into
@@ -33,7 +42,7 @@ jobs:
   # marker and needed a follow-up commit on main to stop reporting FAIL.
   example-smoketest-contract:
     name: smoketest example contract
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -41,14 +50,14 @@ jobs:
 
       # Reads sources only: no cargo, no CUDA toolkit, no LLVM.
       - name: Verify smoketest categories and standard-example success markers
-        run: bash scripts/check-example-smoketest-contract.sh
+        run: bash cuda-oxide/scripts/check-example-smoketest-contract.sh
 
   # README's Crate Overview is the only map of the tree a newcomer gets, and
   # nothing fails when a crate is missing from it: dialect-iket and iket-lower
   # were both absent, 1,700 lines with no row between them.
   crate-inventory:
     name: crate inventory
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -56,18 +65,17 @@ jobs:
 
       # Reads Cargo.toml and README.md: no cargo, no lockfile, no network.
       - name: Verify README lists every workspace member
-        run: bash scripts/check-crate-inventory.sh
+        run: bash cuda-oxide/scripts/check-crate-inventory.sh
 
-  # The pin is copied into places no build compares: the nested backend pin
-  # (rustup reads it for the backend's own [workspace], so a mismatch there
-  # is a load failure rather than a warning), the scaffold `cargo oxide new`
-  # writes into user projects, the devcontainer's preinstalled toolchain, the
-  # book's quoted [toolchain] blocks, and the dated rustup/cargo commands in
-  # the book and READMEs. #727 added rustfmt to both real files and left both
-  # book quotes behind.
+  # The pin is copied into places no build compares: the scaffold `cargo oxide
+  # new` writes into user projects, the devcontainer's preinstalled toolchain,
+  # the book's quoted [toolchain] blocks, the explicit rustup/cargo commands in
+  # the book and READMEs, and the `rust-overlay` input in `cuda-oxide/flake.lock`.
+  # #727 added rustfmt to both real files and left both book quotes behind;
+  # #1609 bumped the pin to 1.99.1 and left `flake.lock` behind.
   toolchain-pin-parity:
     name: toolchain pin parity
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -75,7 +83,11 @@ jobs:
 
       # Reads sources only: no rustup, no cargo, no CUDA toolkit.
       - name: Verify every copy of the toolchain pin agrees
-        run: bash scripts/check-toolchain-parity.sh
+        run: bash cuda-oxide/scripts/check-toolchain-parity.sh
+
+      # The Rust jobs run in rust:<version> images, a copy of the root pin.
+      - name: Verify the workflow container images match the root pin
+        run: bash cuda-oxide/scripts/check-ci-image-pins.sh
 
   # The book's Command reference is the only complete list of the CLI surface in
   # the docs, and adding a subcommand to the clap enum is a one-line change that
@@ -83,7 +95,7 @@ jobs:
   # missing when that table was written (#794).
   cli-doc-coverage:
     name: CLI command reference
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -91,7 +103,7 @@ jobs:
 
       # Reads the clap enum and the book: no cargo, no build, no network.
       - name: Verify the book documents every cargo oxide subcommand
-        run: bash scripts/check-cli-doc-coverage.sh
+        run: bash cuda-oxide/scripts/check-cli-doc-coverage.sh
 
   # A Rust code block in the book or a README is something a reader pastes. When
   # a device function is renamed the docs still render, so the stale name
@@ -101,7 +113,7 @@ jobs:
   # the crate and example READMEs.
   book-api-names:
     name: book device-API names
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -110,7 +122,7 @@ jobs:
       # Reads the book, the crate and example READMEs, and cuda-device's
       # sources: no cargo, no build, no network.
       - name: Verify every device call the book shows resolves
-        run: bash scripts/check-book-api-names.sh
+        run: bash cuda-oxide/scripts/check-book-api-names.sh
 
   # A book block is pasted into an edition-2024 `cargo oxide new` project, where
   # the first `cargo fmt` reorders its `use` lines (`{DisjointSlice, kernel,
@@ -122,17 +134,22 @@ jobs:
   # bodies, and partial snippets with no enclosing item, never trip it.
   book-import-order:
     name: book import order
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 10
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
 
-      # rustfmt comes from rust-toolchain.toml's component list through the
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # rustfmt comes from cuda-oxide/rust-toolchain.toml's component list through the
       # rustup proxy, as in fmt.yml, so the order checked is the pinned
-      # nightly's. No cargo, no CUDA toolkit, no network beyond the toolchain.
+      # toolchain's. No cargo, no CUDA toolkit, no network beyond the toolchain.
       - name: Verify the book's Rust blocks use rustfmt's import order
-        run: bash scripts/check-book-import-order.sh
+        run: bash cuda-oxide/scripts/check-book-import-order.sh
 
   # #1190 split large files into module directories and left three prose
   # references pointing at paths it had removed; #1197 repointed those and 14
@@ -142,14 +159,14 @@ jobs:
   # in markdown and in `///` / `//!` doc comments. Git and Python, no toolchain.
   source-references:
     name: source references
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 10
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
 
       - name: Verify prose references name tracked files or declared outputs
-        run: bash scripts/check-source-references.sh
+        run: bash cuda-oxide/scripts/check-source-references.sh
 
   # The dialect-nvvm book page prints the catalog SHA-256 and states its own
   # freshness rule: if the stamp no longer matches, every count on the page
@@ -161,7 +178,7 @@ jobs:
   # because the page derives staleness from it.
   book-catalog-stamp:
     name: book catalog stamp
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -169,7 +186,7 @@ jobs:
 
       # Hashes one file and greps one page: no cargo, no build, no network.
       - name: Verify the dialect page's catalog stamp is current
-        run: bash scripts/check-book-catalog-stamp.sh
+        run: bash cuda-oxide/scripts/check-book-catalog-stamp.sh
 
   # `unit-tests.yml`'s matrix is the only thing deciding which crates get
   # `cargo test`, and a member missing from it fails nothing: the workflow is
@@ -179,7 +196,7 @@ jobs:
   # reading as complete is what hid them.
   test-matrix-coverage:
     name: test-matrix coverage
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -187,7 +204,7 @@ jobs:
 
       # Reads Cargo.toml, unit-tests.yml and the Justfile: no cargo, no network.
       - name: Verify every workspace member is tested or declared untested
-        run: bash scripts/check-test-matrix-coverage.sh
+        run: bash cuda-oxide/scripts/check-test-matrix-coverage.sh
 
   # #702 let a kernel-only crate drop the host surface (and with it `cuda.h`) via
   # `cuda-macros = { default-features = false }`, which is what #701 asked for.
@@ -199,16 +216,21 @@ jobs:
   # here.
   device-only-build:
     name: device-only kernel crate
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 10
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
 
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       # Deliberately no CUDA toolkit step: a toolkit on the runner would mask
       # exactly the dependency this job exists to keep out of the graph.
       - name: Verify a kernel-only crate builds with no host surface
-        run: bash scripts/check-device-only-build.sh
+        run: bash cuda-oxide/scripts/check-device-only-build.sh
 
   # cuda-bindings, cuda-core, and cuda-async are shared with cutile-rs. Their
   # roots carry cutile's Tile API and the cuda-oxide surface lives under
@@ -218,7 +240,7 @@ jobs:
   # snippets, which is how some forty stale lines outlived the crate switch.
   host-api-paths:
     name: host API paths in docs and templates
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -226,32 +248,33 @@ jobs:
 
       # Reads sources only: no rustup, no cargo, no CUDA toolkit.
       - name: Verify docs and templates spell the shared crates' simt paths
-        run: bash scripts/check-host-api-paths.sh
+        run: bash cuda-oxide/scripts/check-host-api-paths.sh
 
-  # The shared host-crate release is named once in the root workspace and
-  # copied into every example manifest and into the `cargo oxide new`
-  # templates. A drifted example resolves a second runtime and breaks the
-  # shared example build cache; a drifted scaffold hands each new project a
-  # runtime the generated code was not written against.
+  # The shared host crates are path dependencies in the SIMT and example
+  # workspaces, and the `cargo oxide new` templates take them from the same
+  # git source as cuda-host. A drifted example resolves a second runtime and
+  # breaks the shared example build cache; a scaffold naming a crates.io copy
+  # hands each new project two cuda_core crates, and the project fails to
+  # compile.
   shared-crate-pin-parity:
     name: shared host-crate pin parity
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
 
       # Reads sources only: no rustup, no cargo, no CUDA toolkit.
-      - name: Verify every shared-crate pin agrees with the root workspace
-        run: bash scripts/check-shared-crate-pin.sh
+      - name: Verify the host crates are path dependencies at tip of tree and the scaffold takes them from git beside cuda-host
+        run: bash cuda-oxide/scripts/check-shared-crate-pin.sh
 
-  # crates/oxide-artifacts is only the publish source now; the backend writes
-  # and the shared cuda-core reads through the crates.io release. An in-tree
-  # bump that is not published and repointed reaches no consumer, so the
-  # in-tree version, both manifests, and every lock must agree.
+  # cuda-oxide/crates/oxide-artifacts is only the publish source now; the
+  # backend writes and the shared cuda-core reads through the crates.io
+  # release. An in-tree bump that is not published and repointed reaches no
+  # consumer, so the in-tree version, both manifests, and every lock must agree.
   oxide-artifacts-parity:
     name: oxide-artifacts release parity
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository
@@ -259,4 +282,4 @@ jobs:
 
       # Reads sources only: no rustup, no cargo, no CUDA toolkit.
       - name: Verify the in-tree crate matches the consumed release
-        run: bash scripts/check-oxide-artifacts-parity.sh
+        run: bash cuda-oxide/scripts/check-oxide-artifacts-parity.sh

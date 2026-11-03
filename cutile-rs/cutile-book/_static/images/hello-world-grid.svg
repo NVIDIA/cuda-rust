@@ -1,0 +1,235 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="'NVIDIA', 'Inter', 'SF Pro Display', Arial, sans-serif">
+  <defs>
+    <!-- Load NVIDIA font from CDN -->
+    <style type="text/css">
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Rg.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'NVIDIA';
+        font-style: normal;
+        font-weight: 700;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/nvidia-sans/GLOBAL/NVIDIASans_W_Bd.woff2') format('woff2');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 400;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Regular.ttf') format('truetype');
+      }
+      @font-face {
+        font-family: 'RobotoMono';
+        font-style: normal;
+        font-weight: 500;
+        src: url('https://images.nvidia.com/etc/designs/nvidiaGDC/clientlibs_base/fonts/Roboto_Mono/static/RobotoMono-Medium.ttf') format('truetype');
+      }
+    </style>
+    
+    <!-- Gradients -->
+    <linearGradient id="tile-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#21262d"/>
+      <stop offset="100%" style="stop-color:#161b22"/>
+    </linearGradient>
+    
+    <!-- Filters -->
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="shadow">
+      <feDropShadow dx="2" dy="4" stdDeviation="4" flood-opacity="0.3"/>
+    </filter>
+
+    <!-- White arrow marker -->
+    <marker id="arrow-white" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M 0 0.5 L 5 3 L 0 5.5" fill="none" stroke="#ffffff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1c2128" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="520" fill="#0d1117"/>
+  <rect width="900" height="520" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Main Title -->
+  <text x="450" y="40" text-anchor="middle" font-size="26" font-weight="500" fill="#ffffff" letter-spacing="-0.5">Grid of Tiles (2 × 2 × 1)</text>
+  <line x1="280" y1="53" x2="620" y2="53" stroke="#76B900" stroke-width="2" opacity="0.6"/>
+  <text x="450" y="75" text-anchor="middle" font-size="14" fill="#8b949e">Each tile runs the same kernel code in parallel</text>
+
+  <!-- ==================== LEFT: Grid Container ==================== -->
+  <g transform="translate(40, 100)">
+    <!-- Container background -->
+    <rect width="380" height="340" rx="12" fill="#161b22"/>
+    <!-- Container border (drawn on top) -->
+    <rect width="380" height="340" rx="12" fill="none" stroke="#ffffff" stroke-width="2"/>
+    
+    <!-- Header (inset to not cover border) -->
+    <rect x="2" y="2" width="376" height="42" rx="10" fill="#1c2128"/>
+    <text x="190" y="30" text-anchor="middle" font-size="16" font-weight="500" fill="#c9d1d9" letter-spacing="0.5">GPU GRID</text>
+    
+    <!-- Axis arrows for origin -->
+    <g transform="translate(55, 55)">
+      <!-- X-axis arrow -->
+      <line x1="0" y1="0" x2="295" y2="0" stroke="#6e7681" stroke-width="1.5"/>
+      <polygon points="295,0 287,-4 287,4" fill="#6e7681"/>
+      <text x="305" y="4" font-size="11" fill="#6e7681">x</text>
+      
+      <!-- Y-axis arrow -->
+      <line x1="0" y1="0" x2="0" y2="245" stroke="#6e7681" stroke-width="1.5"/>
+      <polygon points="0,245 -4,237 4,237" fill="#6e7681"/>
+      <text x="-4" y="260" font-size="11" fill="#6e7681">y</text>
+    </g>
+    
+    <!-- 2x2 Tile Grid -->
+    <g transform="translate(65, 65)">
+      <!-- Tile (0,0) - Pink -->
+      <g transform="translate(0, 0)">
+        <rect width="135" height="100" rx="10" fill="#f97583"/>
+        <text x="67" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#ffffff">(0, 0, 0)</text>
+        <text x="67" y="50" text-anchor="middle" font-size="11" fill="rgba(255,255,255,0.8)">Tile ID</text>
+        <rect x="10" y="62" width="115" height="26" rx="6" fill="rgba(0,0,0,0.3)"/>
+        <text x="67" y="80" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="10" fill="#ffffff">pids = (0,0,0)</text>
+      </g>
+      
+      <!-- Tile (1,0) - Green -->
+      <g transform="translate(150, 0)">
+        <rect width="135" height="100" rx="10" fill="#56d364"/>
+        <text x="67" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#ffffff">(1, 0, 0)</text>
+        <text x="67" y="50" text-anchor="middle" font-size="11" fill="rgba(255,255,255,0.8)">Tile ID</text>
+        <rect x="10" y="62" width="115" height="26" rx="6" fill="rgba(0,0,0,0.3)"/>
+        <text x="67" y="80" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="10" fill="#ffffff">pids = (1,0,0)</text>
+      </g>
+      
+      <!-- Tile (0,1) - Blue -->
+      <g transform="translate(0, 115)">
+        <rect width="135" height="100" rx="10" fill="#79c0ff"/>
+        <text x="67" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#ffffff">(0, 1, 0)</text>
+        <text x="67" y="50" text-anchor="middle" font-size="11" fill="rgba(255,255,255,0.8)">Tile ID</text>
+        <rect x="10" y="62" width="115" height="26" rx="6" fill="rgba(0,0,0,0.3)"/>
+        <text x="67" y="80" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="10" fill="#ffffff">pids = (0,1,0)</text>
+      </g>
+      
+      <!-- Tile (1,1) - Purple (no white border, just glow) -->
+      <g transform="translate(150, 115)" filter="url(#glow)">
+        <rect width="135" height="100" rx="10" fill="#d2a8ff"/>
+        <text x="67" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#ffffff">(1, 1, 0)</text>
+        <text x="67" y="50" text-anchor="middle" font-size="11" fill="rgba(255,255,255,0.8)">Tile ID</text>
+        <rect x="10" y="62" width="115" height="26" rx="6" fill="rgba(0,0,0,0.3)"/>
+        <text x="67" y="80" text-anchor="middle" font-family="'RobotoMono', monospace" font-size="10" fill="#ffffff">pids = (1,1,0)</text>
+      </g>
+    </g>
+    
+    <!-- Axis labels - properly spaced -->
+    <text x="132" y="320" text-anchor="middle" font-size="11" fill="#8b949e">x = 0</text>
+    <text x="282" y="320" text-anchor="middle" font-size="11" fill="#8b949e">x = 1</text>
+    <text x="42" y="120" text-anchor="end" font-size="11" fill="#8b949e">y = 0</text>
+    <text x="42" y="235" text-anchor="end" font-size="11" fill="#8b949e">y = 1</text>
+  </g>
+
+  <!-- White Arrow -->
+  <path d="M 435 270 L 478 270" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrow-white)"/>
+
+  <!-- ==================== RIGHT: Terminal Output ==================== -->
+  <g transform="translate(490, 100)">
+    <!-- Container background -->
+    <rect width="370" height="340" rx="12" fill="#161b22"/>
+    <!-- Container border (drawn on top) -->
+    <rect width="370" height="340" rx="12" fill="none" stroke="#ffffff" stroke-width="2"/>
+    
+    <!-- Terminal Header (inset to not cover border) -->
+    <rect x="2" y="2" width="366" height="42" rx="10" fill="#1c2128"/>
+    <circle cx="25" cy="23" r="7" fill="#ff5f56"/>
+    <circle cx="48" cy="23" r="7" fill="#ffbd2e"/>
+    <circle cx="71" cy="23" r="7" fill="#27c93f"/>
+    <text x="185" y="30" text-anchor="middle" font-size="14" fill="#c9d1d9">Terminal Output</text>
+    
+    <!-- Terminal content -->
+    <g transform="translate(20, 60)">
+      <!-- Command -->
+      <text font-family="'RobotoMono', monospace" font-size="11" fill="#8b949e">$</text>
+      <text x="15" font-family="'RobotoMono', monospace" font-size="11" fill="#79c0ff">cargo run --example hello_world</text>
+      
+      <!-- Output lines -->
+      <g transform="translate(0, 35)" font-family="'RobotoMono', monospace" font-size="11">
+        <!-- Line 1 -->
+        <text fill="#c9d1d9">Hello from tile </text>
+        <text x="120" fill="#f97583">&lt;0, 0, 0&gt;</text>
+        <text x="190" fill="#c9d1d9"> in grid </text>
+        <text x="258" fill="#58a6ff">&lt;2, 2, 1&gt;</text>
+        
+        <!-- Line 2 -->
+        <text y="25" fill="#c9d1d9">Hello from tile </text>
+        <text x="120" y="25" fill="#56d364">&lt;1, 0, 0&gt;</text>
+        <text x="190" y="25" fill="#c9d1d9"> in grid </text>
+        <text x="258" y="25" fill="#58a6ff">&lt;2, 2, 1&gt;</text>
+        
+        <!-- Line 3 -->
+        <text y="50" fill="#c9d1d9">Hello from tile </text>
+        <text x="120" y="50" fill="#79c0ff">&lt;0, 1, 0&gt;</text>
+        <text x="190" y="50" fill="#c9d1d9"> in grid </text>
+        <text x="258" y="50" fill="#58a6ff">&lt;2, 2, 1&gt;</text>
+        
+        <!-- Line 4 (highlighted) -->
+        <rect x="-5" y="65" width="330" height="24" rx="6" fill="rgba(210,168,255,0.15)"/>
+        <text y="82" fill="#c9d1d9">Hello from tile </text>
+        <text x="120" y="82" fill="#d2a8ff" font-weight="500">&lt;1, 1, 0&gt;</text>
+        <text x="190" y="82" fill="#c9d1d9"> in grid </text>
+        <text x="258" y="82" fill="#58a6ff">&lt;2, 2, 1&gt;</text>
+      </g>
+      
+      <!-- Code snippet -->
+      <g transform="translate(0, 170)">
+        <rect x="-5" y="-5" width="330" height="90" rx="8" fill="#0d1117" stroke="#6e7681" stroke-width="1"/>
+        <g font-family="'RobotoMono', monospace" font-size="10" fill="#c9d1d9">
+          <text y="15" fill="#ff7b72">let</text>
+          <text x="25" y="15">pids =</text>
+          <text x="65" y="15" fill="#d2a8ff">get_tile_block_id</text>
+          <text x="165" y="15">();</text>
+          <text y="35" fill="#ff7b72">let</text>
+          <text x="25" y="35">npids =</text>
+          <text x="72" y="35" fill="#d2a8ff">get_num_tile_blocks</text>
+          <text x="185" y="35">();</text>
+          <text y="55" fill="#8b949e">// pids  = (x, y, z) → tile position</text>
+          <text y="75" fill="#8b949e">// npids = (2, 2, 1) → grid dimensions</text>
+        </g>
+      </g>
+    </g>
+  </g>
+
+  <!-- ==================== BOTTOM: Legend ==================== -->
+  <g transform="translate(40, 460)">
+    <!-- Legend background -->
+    <rect width="820" height="50" rx="10" fill="#161b22"/>
+    <!-- Legend border (drawn on top) -->
+    <rect width="820" height="50" rx="10" fill="none" stroke="#ffffff" stroke-width="2"/>
+    
+    <!-- Legend label -->
+    <text x="25" y="25" font-size="12" fill="#8b949e">Legend</text>
+    <text x="25" y="40" font-size="13" font-weight="500" fill="#ffffff">Tiles</text>
+    
+    <!-- Tile colors -->
+    <rect x="100" y="15" width="20" height="20" rx="4" fill="#f97583"/>
+    <rect x="130" y="15" width="20" height="20" rx="4" fill="#56d364"/>
+    <rect x="160" y="15" width="20" height="20" rx="4" fill="#79c0ff"/>
+    <rect x="190" y="15" width="20" height="20" rx="4" fill="#d2a8ff"/>
+    <text x="225" y="30" font-size="11" fill="#8b949e">(each color = unique tile)</text>
+    
+    <!-- Function -->
+    <text x="480" y="30" font-family="'RobotoMono', monospace" font-size="11" fill="#76B900">get_tile_block_id()</text>
+    <text x="620" y="30" font-size="11" fill="#8b949e">→</text>
+    <text x="640" y="30" font-size="11" fill="#c9d1d9">(x, y, z) position</text>
+  </g>
+
+</svg>

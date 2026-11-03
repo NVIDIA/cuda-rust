@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/launch_contract/fail_wrong_brand.rs:35:14
+   |
+35 |     launch_b(prepared);
+   |     -------- ^^^^^^^^ expected `&PreparedLaunch<KernelB>`, found `&PreparedLaunch<KernelA>`
+   |     |
+   |     arguments to this function are incorrect
+   |
+   = note: expected reference `&PreparedLaunch<KernelB>`
+              found reference `&PreparedLaunch<KernelA>`
+note: function defined here
+  --> tests/launch_contract/fail_wrong_brand.rs:32:4
+   |
+32 | fn launch_b(_: &PreparedLaunch<KernelB>) {}
+   |    ^^^^^^^^ ---------------------------

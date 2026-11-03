@@ -1,0 +1,22 @@
+[package]
+name = "cuda-tile-rs"
+version.workspace = true
+authors = ["Jared Roesch", "Melih Elibol"]
+description = "Thin Rust wrapper around the cuda-tile C++ library. Builds `cuda-tile-translate` and exposes a bytecode-to-MLIR decoder."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+exclude = [
+    "cuda-tile/media",
+]
+
+[dependencies]
+
+[build-dependencies]
+cmake = "0.1"
+bindgen = "0.71"
+
+[lints]
+workspace = true

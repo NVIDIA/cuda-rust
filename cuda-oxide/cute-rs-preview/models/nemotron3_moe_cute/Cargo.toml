@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemotron3_moe_cute"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "Nemotron-3 NVFP4 ReLU² Mixture-of-Experts (MoE) in cute-rs."
+
+[workspace]
+
+[dependencies]
+cuda-core = { path = "../../../../cuda-core" }
+cuda-device = { path = "../../../crates/cuda-device" }
+cuda-host = { path = "../../../crates/cuda-host" }
+cuda-macros = { path = "../../../crates/cuda-macros" }
+ctm-rs = { path = "../../ctm-rs" }
+cute-rs = { path = "../../cute-rs", features = ["host"] }

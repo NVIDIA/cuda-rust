@@ -1,0 +1,11 @@
+error[E0080]: evaluation panicked: launch_bounds maximum threads must be greater than zero
+  --> tests/compile_fail/policy_contract_zero_threads.rs:20:1
+   |
+20 | #[cuda_module]
+   | ^^^^^^^^^^^^^^ evaluation of `<kernels::__configured_CudaKernel<InvalidPolicy> as cuda_core::KernelLaunchContract>::SPEC` failed here
+
+note: erroneous constant encountered
+  --> tests/compile_fail/policy_contract_zero_threads.rs:31:5
+   |
+31 |     <kernels::__configured_CudaKernel<InvalidPolicy> as KernelLaunchContract>::SPEC;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,24 @@
+key,value
+gpu_clock_mhz,1830
+clock_lock_status,failed
+gpu_index,0
+gemm_sol_dense_tflops,2250
+gemm_sol_sparse_tflops,4500
+gemm_sol_source,https://www.nvidia.com/en-us/data-center/hgx/
+gemm_sol_basis,HGX B200 FP16/BF16 Tensor Core 36 PFLOP/s sparse for 8 GPUs; dense is half sparse; dense per GPU is 2250 TFLOP/s
+elem_b,16384
+elem_num_ctas,default
+elem_cache_sweep_mib,1024
+pin_command,taskset -c 42
+gemm_check,1
+run_cublas,1
+cublas_baseline,direct_cublaslt_cpp
+cublas_timing,warmup5_samples10_iters3_no_cuda_graphs
+cuda_version,13.2
+gpu_name,NVIDIA B200
+driver_version,595.58.03
+current_sm_clock_mhz,120
+max_sm_clock_mhz,1965
+memory_clock_mhz,3996
+power_limit_w,1000.00
+nominal_memory_bandwidth_gbps,7672.320000

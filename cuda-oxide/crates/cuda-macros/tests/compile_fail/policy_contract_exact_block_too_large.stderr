@@ -1,0 +1,11 @@
+error[E0080]: evaluation panicked: launch_contract exact block exceeds launch_bounds maximum threads
+  --> tests/compile_fail/policy_contract_exact_block_too_large.rs:20:1
+   |
+20 | #[cuda_module]
+   | ^^^^^^^^^^^^^^ evaluation of `<kernels::__configured_CudaKernel<SmallPolicy> as cuda_core::KernelLaunchContract>::SPEC` failed here
+
+note: erroneous constant encountered
+  --> tests/compile_fail/policy_contract_exact_block_too_large.rs:31:5
+   |
+31 |     <kernels::__configured_CudaKernel<SmallPolicy> as KernelLaunchContract>::SPEC;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

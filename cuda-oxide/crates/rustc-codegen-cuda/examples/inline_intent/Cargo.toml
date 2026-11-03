@@ -1,0 +1,25 @@
+cargo-features = ["profile-rustflags"]
+
+[package]
+name = "inline_intent"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+# Mark as standalone crate (not part of parent workspace).
+[workspace]
+
+[dependencies]
+cuda-device = { path = "../../../cuda-device" }
+cuda-host = { path = "../../../cuda-host" }
+cuda-core = { path = "../../../../../cuda-core" }
+
+# Every helper here must reach LLVM as its own definition for its inline
+# attribute to be observable. At default release settings rustc's MIR inliner
+# folds the small `#[inline]` and `#[inline(always)]` helpers into the kernel
+# first, and the shape check would have nothing to look at. Scoping the flag
+# to this package keeps the shared dependency tree identical to every other
+# example; a global RUSTFLAGS entry would re-key every dependency unit and
+# force a full second dependency-tree build in CI.
+[profile.release.package.inline_intent]
+rustflags = ["-Zinline-mir=no"]

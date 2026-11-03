@@ -1,0 +1,13 @@
+# Original local reference kernels and Python environment.
+/reference/
+/.venv
+
+# Local performance investigations and benchmark artifacts.
+/benchmark-results/
+/benchmarks/
+/PERFORMANCE.md
+/performance.md
+/LARGE_WORKLOAD*.md
+/large_workload*.md
+*.nsys-rep
+*.ncu-rep

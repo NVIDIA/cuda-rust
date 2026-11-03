@@ -91,13 +91,13 @@ TCGEN05_EXAMPLES=(gemm_sol tcgen05 tcgen05_matmul)
 WGMMA_EXAMPLES=(wgmma)
 BLACKWELL_MMA_EXAMPLES=(mma_mxf8f6f4)
 LTOIR_EXAMPLES=(addressof_sharedarray constant_memory cpp_consumes_rust_device device_ffi_test legacy_atomic_fadd legacy_atomic_rmw_cas legacy_nvvm_pointer_shapes manual_launch_libdevice mathdx_ffi_test primitive_stress)
-LTOIR_MODERN_EXAMPLES=(small_type_ffi_test)
+LTOIR_MODERN_EXAMPLES=(small_type_ffi_test nvvm_entry_allocas)
 TILELIB_EXAMPLES=(tilelib_relu)
 AUTO_NVVM_EXAMPLES=(libdevice_math)
 IKET_EXAMPLES=(iket_trace)
 BLACKWELL_COMPILE_EXAMPLES=(generated_intrinsics_blackwell)
 SM100_COMPILE_EXAMPLES=(redux_f32)
-NVVM_VERIFY_EXAMPLES=(constant_memory cp_async_small device_global enum_constant_provenance ex2_approx_f16 generated_intrinsics generated_intrinsics_blackwell generated_ldmatrix kernel_reference_validity legacy_atomic_fadd legacy_atomic_rmw_cas libdevice_math legacy_nvvm_pointer_shapes packed_atomic_add primitive_stress scoped_atomic_load_store shuffle_64 tcgen05 tuple_constant_provenance wgmma_mma_bf16)
+NVVM_VERIFY_EXAMPLES=(array_from_fn constant_memory cp_async_small device_global enum_constant_provenance ex2_approx_f16 generated_intrinsics generated_intrinsics_blackwell generated_ldmatrix kernel_reference_validity legacy_atomic_fadd legacy_atomic_rmw_cas libdevice_math legacy_nvvm_pointer_shapes packed_atomic_add primitive_stress scoped_atomic_load_store shuffle_64 tcgen05 tuple_constant_provenance wgmma_mma_bf16)
 ERROR_EXAMPLES=(error error_set_discriminant_uninhabited error_enum_bool_payload_addr error_enum_pointer_overlap error_enum_shared_pointer_layout error_heap_alloc error_host_arch_intrinsic error_host_target_feature error_kernel_shared_param error_missing_device_attr error_generated_intrinsic_abi error_generated_intrinsic_unknown_id error_generated_intrinsic_fn_pointer error_generated_intrinsic_callable error_union_shared_pointer_addr error_union_shared_pointer_layout)
 
 # Per-example rustc flags policy: an example that needs a special rustc flag
@@ -2282,6 +2282,22 @@ run_cargo() {
     if [[ ${CARGO_EC} -eq 0 && -f "${shape_check}" ]]; then
         if ! bash "${shape_check}" >>"${log}" 2>&1; then
             printf '%s failed its verify-code-shape.sh assertions\n' "${ex}" >>"${log}"
+            CARGO_EC=1
+        fi
+    fi
+    # Loop-hint warnings are rustc diagnostics, so cargo counts every one of
+    # them. A warning printed around rustc leaves no summary to count it.
+    # unroll_smoke exists to produce them, so it may not come back empty.
+    if [[ ${CARGO_EC} -eq 0 ]]; then
+        local hint_warnings counted_warnings
+        hint_warnings=$(grep -cE '^warning: .* requested but the loop (was not unrolled|may still be unrolled)' "${log}" || true)
+        counted_warnings=$(grep -oE 'generated [0-9]+ warnings?' "${log}" | awk '{ sum += $2 } END { print sum + 0 }')
+        if [[ "${ex}" == "unroll_smoke" && ${hint_warnings} -eq 0 ]]; then
+            printf '%s produced no loop-hint warnings\n' "${ex}" >>"${log}"
+            CARGO_EC=1
+        elif [[ ${counted_warnings} -lt ${hint_warnings} ]]; then
+            printf '%s printed %d loop-hint warnings but cargo counted %d warnings\n' \
+                "${ex}" "${hint_warnings}" "${counted_warnings}" >>"${log}"
             CARGO_EC=1
         fi
     fi

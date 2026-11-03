@@ -52,6 +52,13 @@ pub const CALLEE_SATURATING_SUB: &str = placeholder!("saturating_sub");
 /// chunk count with `exact_div(self.len(), N)`.
 pub const CALLEE_EXACT_DIV: &str = placeholder!("exact_div");
 
+/// Placeholder call used for `core::intrinsics::float_to_int_unchecked`.
+///
+/// Float-to-integer conversion where the caller guarantees the value is finite
+/// and fits the destination type once truncated. Backs `f32::to_int_unchecked`
+/// and `f64::to_int_unchecked`.
+pub const CALLEE_FLOAT_TO_INT_UNCHECKED: &str = placeholder!("float_to_int_unchecked");
+
 /// Placeholder call used for `core::intrinsics::carrying_mul_add`.
 /// Backs the bigint helper methods `carrying_mul_add`, `carrying_mul`,
 /// and `widening_mul` on integer types.
@@ -105,6 +112,7 @@ pub fn is_known_placeholder(callee: &str) -> bool {
                 | CALLEE_SATURATING_ADD
                 | CALLEE_SATURATING_SUB
                 | CALLEE_EXACT_DIV
+                | CALLEE_FLOAT_TO_INT_UNCHECKED
                 | CALLEE_CARRYING_MUL_ADD
                 | CALLEE_SELECT_UNPREDICTABLE
         )
@@ -127,9 +135,10 @@ pub fn is_known_placeholder(callee: &str) -> bool {
 /// [`is_backend_dependent_libdevice_placeholder`].
 ///
 /// The `max`/`min` placeholders (`maximum_number_nsz_*` /
-/// `minimum_number_nsz_*`) are in NEITHER list: they lower to an ordered
-/// compare/select expansion under every intrinsic backend, so they never
-/// produce a `__nv_*` call. (`llvm.maxnum`/`llvm.minnum` are unusable
+/// `minimum_number_nsz_*`) are in NEITHER list: they never produce a
+/// `__nv_*` call. Under the LLVM NVPTX backend f32 lowers to the native
+/// `llvm.nvvm.fmax.f` / `llvm.nvvm.fmin.f`; f64 and the libNVVM backend use an
+/// ordered compare/select expansion. (`llvm.maxnum`/`llvm.minnum` are unusable
 /// because under LLVM 21 they propagate signaling NaNs, contradicting
 /// Rust's ignore-any-NaN contract; see #390.)
 pub fn is_libdevice_backed_placeholder(callee: &str) -> bool {
@@ -308,6 +317,7 @@ mod tests {
         CALLEE_SATURATING_ADD,
         CALLEE_SATURATING_SUB,
         CALLEE_EXACT_DIV,
+        CALLEE_FLOAT_TO_INT_UNCHECKED,
         CALLEE_CARRYING_MUL_ADD,
         CALLEE_FADD_FAST,
         CALLEE_FSUB_FAST,

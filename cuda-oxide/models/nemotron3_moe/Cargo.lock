@@ -184,7 +184,6 @@ dependencies = [
  "bytemuck",
  "cuda-macros",
  "cuda-repr",
- "cuda-target-spec",
 ]
 
 [[package]]

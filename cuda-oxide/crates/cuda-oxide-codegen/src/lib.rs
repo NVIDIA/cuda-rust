@@ -133,6 +133,8 @@ pub mod __private {
     pub use crate::verify::verify_operation;
     #[doc(hidden)]
     pub use llvm_export::export::DeviceExternType;
+    #[doc(hidden)]
+    pub use mir_transforms::unroll::{HintLocation, HintWarning};
 
     /// Whether the resolved target floor supports Ampere integer `redux.sync` (`sm_80+`).
     #[doc(hidden)]

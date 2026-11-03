@@ -126,6 +126,7 @@
 pub mod context;
 pub mod conversion_interface;
 pub mod convert;
+pub mod entry_allocas;
 pub mod helpers;
 pub mod lowering;
 mod packed_shared_local_storage;
@@ -452,6 +453,11 @@ pub fn lower_mir_to_llvm_with_options(
     // an extra branch per iteration. Split such arguments into scalar leaves
     // so the exported IR carries scalar PHIs, as SROA would produce.
     scalarize_block_args::scalarize_aggregate_block_args(ctx, module_op)?;
+    // Move eligible fixed-size scratch allocas (both from the MIR entry block
+    // shifted to `bb0` by `convert_func`'s aggregate prologue and from
+    // use-site converters) into each function's true `entry` block so both
+    // `opt -O2`/`llc` and `libNVVM` see static stack slots.
+    entry_allocas::hoist_fixed_allocas(ctx, module_op);
     Ok(nounroll.warnings)
 }
 

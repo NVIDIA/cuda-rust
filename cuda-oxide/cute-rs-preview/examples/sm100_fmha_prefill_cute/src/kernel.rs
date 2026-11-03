@@ -35,18 +35,20 @@ use cute_rs::attention::sm100::pipeline::{
     PipelineAsync, PipelineAsyncUmma, PipelineTmaUmma, PipelineUmmaAsync,
 };
 use cute_rs::attention::sm100::{
-    MmaSs, MmaTs, SharedLayout, SharedTile, TmaCopy, TmemAllocator, TmemFragment, tmem_row_address,
+    MmaSs, MmaTs, SharedTile, TmaCopy, TmemAllocator, TmemFragment, tmem_row_address,
 };
-use cute_rs::{OperandA, OperandB, TensorMap};
+use cute_rs::{
+    ColMajor, ComposedLayout, OperandA, OperandB, RowMajor, Swizzle, TensorMap, size_in_bytes,
+};
 
 /// K-major shared layout for a 128 × 128 FP16 query tile.
-pub type QLayout = SharedLayout<128, 128>;
+pub type QLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 128>>;
 /// K-major shared layout for a 128 × 128 FP16 key tile.
-pub type KLayout = SharedLayout<128, 128>;
+pub type KLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 128>>;
 /// MN-major shared layout for a 128 × 128 FP16 value tile.
-pub type VLayout = SharedLayout<128, 128, true>;
+pub type VLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, ColMajor<128, 128>>;
 /// K-major shared layout used to store a 128 × 128 FP16 output tile.
-pub type OLayout = SharedLayout<128, 128>;
+pub type OLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 128>>;
 /// Single-CTA 128 × 128 × 128 QK MMA with both operands in shared memory.
 type Qk = MmaSs<QLayout, KLayout, 128, 128, 128, 1>;
 /// Single-CTA 128 × 128 × 128 PV MMA with probabilities in tensor memory.
@@ -54,8 +56,8 @@ type Pv = MmaTs<VLayout, 128, 128, 128, 1>;
 
 /// Threads per CTA, partitioned among softmax, correction, MMA, and TMA roles.
 pub const THREADS: u32 = 512;
-/// Bytes in one 128 × 128 FP16 shared-memory tile.
-const TILE_BYTES: usize = 128 * 128 * 2;
+/// Bytes in one 128 × 128 FP16 shared-memory tile, derived from [`QLayout`] via [`size_in_bytes`].
+const TILE_BYTES: usize = size_in_bytes::<f16, QLayout>() as usize;
 /// Expected TMA transaction bytes for one 128 × 128 FP16 tile.
 const TILE_TX_BYTES: u32 = TILE_BYTES as u32;
 /// Byte offset of the two output tiles, after the barrier/token prefix.

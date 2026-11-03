@@ -13,7 +13,7 @@ use cuda_async::error::DeviceError;
 use std::future::IntoFuture;
 
 fn has_gpu() -> bool {
-    cuda_core::Device::device_count()
+    cuda_core::Context::device_count()
         .map(|n| n > 0)
         .unwrap_or(false)
 }
@@ -28,7 +28,7 @@ fn scope_empty_closure() {
         return;
     }
     on_fresh_thread(|| {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
 
         let graph = CudaGraph::scope(&stream, |_s| Ok(())).unwrap();
@@ -42,7 +42,7 @@ fn scope_records_value_ops() {
         return;
     }
     on_fresh_thread(|| {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
 
         let mut recorded = Vec::new();
@@ -66,7 +66,7 @@ fn scope_error_propagation() {
         return;
     }
     on_fresh_thread(|| {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
 
         let result = CudaGraph::scope(&stream, |_s| {
@@ -93,7 +93,7 @@ fn scope_panic_safety() {
         return;
     }
     let result = std::thread::spawn(|| {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
 
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -103,7 +103,7 @@ fn scope_panic_safety() {
         }));
 
         // Stream should still be usable after the panic.
-        unsafe { stream.synchronize() }.unwrap();
+        stream.synchronize().unwrap();
     })
     .join();
 
@@ -119,7 +119,7 @@ fn scope_multiple_launches() {
         return;
     }
     on_fresh_thread(|| {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
 
         let graph = CudaGraph::scope(&stream, |_s| Ok(())).unwrap();
@@ -140,7 +140,7 @@ fn scope_nested_execution_rejected() {
         return;
     }
     on_fresh_thread(|| {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
         let other_stream = device.new_stream().unwrap();
 
@@ -179,7 +179,7 @@ fn launch_outlives_its_graph() {
         return;
     }
     on_fresh_thread(|| {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
 
         let graph = CudaGraph::scope(&stream, |s| {
@@ -214,7 +214,7 @@ fn capture_rejects_nested_execution() {
         return;
     }
     on_fresh_thread(|| {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
 
         let mut graph = CudaGraph::capture(
@@ -242,7 +242,7 @@ fn capture_panic_ends_capture_and_releases_lock() {
         return;
     }
     on_fresh_thread(|| {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
 
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -253,7 +253,9 @@ fn capture_panic_ends_capture_and_releases_lock() {
         }));
         assert!(panicked.is_err(), "the panic must propagate");
 
-        unsafe { stream.synchronize() }.expect("stream must not be left in capture mode");
+        stream
+            .synchronize()
+            .expect("stream must not be left in capture mode");
         assert_eq!(value(2).sync_on(&stream).expect("lock must be free"), 2);
         let mut graph = CudaGraph::capture(stream.clone(), value(4)).expect("recapture");
         assert_eq!(graph.take_output(), Some(4));
@@ -284,7 +286,7 @@ fn capture_error_ends_capture_and_releases_lock() {
         return;
     }
     on_fresh_thread(|| {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
 
         let err = match CudaGraph::capture(stream.clone(), FailingOp) {
@@ -296,7 +298,9 @@ fn capture_error_ends_capture_and_releases_lock() {
             "op error must propagate unchanged, got {err:?}"
         );
 
-        unsafe { stream.synchronize() }.expect("stream must not be left in capture mode");
+        stream
+            .synchronize()
+            .expect("stream must not be left in capture mode");
         assert_eq!(value(2).sync_on(&stream).expect("lock must be free"), 2);
         CudaGraph::capture(stream.clone(), value(4)).expect("recapture");
     });
@@ -310,7 +314,7 @@ fn graph_combinators_capture_and_replay() {
         return;
     }
     on_fresh_thread(|| {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
 
         let mut graph = value(5).graph_on(stream.clone()).expect("graph_on");
@@ -327,7 +331,9 @@ fn graph_combinators_capture_and_replay() {
                 .graph_on(stream.clone())
         }));
         assert!(panicked.is_err());
-        unsafe { stream.synchronize() }.expect("stream must not be left in capture mode");
+        stream
+            .synchronize()
+            .expect("stream must not be left in capture mode");
         assert_eq!(value(7).sync_on(&stream).expect("lock must be free"), 7);
     });
 }
@@ -345,7 +351,7 @@ fn update_runs_unit_graph_nodes() {
         return;
     }
     on_fresh_thread(|| {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
 
         let graph = CudaGraph::scope(&stream, |_s| Ok(())).unwrap();

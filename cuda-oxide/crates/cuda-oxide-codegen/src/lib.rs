@@ -133,6 +133,8 @@ pub mod __private {
     pub use crate::verify::verify_operation;
     #[doc(hidden)]
     pub use llvm_export::export::DeviceExternType;
+    #[doc(hidden)]
+    pub use mir_transforms::unroll::{HintLocation, HintWarning};
 
     /// Compiler-only attribute used to carry the Rust generated-intrinsic ABI marker.
     #[doc(hidden)]

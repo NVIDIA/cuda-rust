@@ -99,11 +99,14 @@ pub mod kernels {
         let seq_k = if SEQ_K == 0 { seq_k } else { SEQ_K };
         let heads = if HEADS == 0 { heads } else { HEADS };
         let tid = thread::threadIdx_x() as usize;
-        let lane = tid % 32;
-        let warp_id = tid / 32;
+        let (lane_u32, warp_u32) = cute_rs::idx2crd_col_major_2d(tid as u32, 32);
+        let lane = lane_u32 as usize;
+        let warp_id = warp_u32 as usize;
         let splits = (seq_k as usize).div_ceil(64);
-        let split = thread::blockIdx_x() as usize % splits;
-        let head = thread::blockIdx_x() as usize / splits;
+        let (split_u32, head_u32) =
+            cute_rs::idx2crd_col_major_2d(thread::blockIdx_x(), splits as u32);
+        let split = split_u32 as usize;
+        let head = head_u32 as usize;
         unsafe {
             let smem = DynamicSharedArray::<f16, 1024>::get_raw().cast::<f16>();
             let sk = KvTile::from_raw_parts(smem, 4096);

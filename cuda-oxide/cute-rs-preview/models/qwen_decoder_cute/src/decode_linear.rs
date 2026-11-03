@@ -537,7 +537,7 @@ fn fixture<const IN: usize, const OUT: usize>(
             // Run the original four-warp entry on the same buffers. The new
             // launch must be bitwise equal, not merely within the oracle's bound.
             let mut original = Batch::<OUT>::allocate(&runner.stream, rows)?;
-            let config = cuda_core::simt::LaunchConfig {
+            let config = cuda_core::LaunchConfig {
                 grid_dim: (OUT.div_ceil(8).div_ceil(4) as u32, 1, 1),
                 block_dim: (128, 1, 1),
                 shared_mem_bytes: 0,

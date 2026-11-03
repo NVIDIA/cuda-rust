@@ -26,7 +26,7 @@ use crate::model::Batch;
 use crate::operator::Result;
 use ctm_rs::memory::{DisjointSlice, DynamicSharedArray};
 use ctm_rs::{cuda_module, kernel, launch_bounds, thread};
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
 use cute_rs::arch::NamedBarrier;
 use cute_rs::block_scaled::{
@@ -154,16 +154,18 @@ pub(crate) mod kernels {
         if tid >= total_tiles {
             return;
         }
-        let row = tid / tiles_per_row;
-        let tile = tid % tiles_per_row;
+        let (row_u32, tile_u32) = cute_rs::idx2crd_row_major_2d(tid as u32, tiles_per_row as u32);
+        let row = row_u32 as usize;
+        let tile = tile_u32 as usize;
         let scale_layout = Sm1xxBlockScaleKMajor::<16>::new(rows, k);
         let in_tensor = Tensor::from_slice(input);
         let mut scales_out = StridedTensorMut::from_disjoint_slice(&mut out_scales);
 
         let mut g = 0usize;
         while g < 4 {
-            let group = tile * 4 + g;
-            let vec_base = (row * (k / 16) + group) * 2;
+            let group = cute_rs::crd2idx_row_major_2d(tile, g, 4);
+            let group_idx = cute_rs::crd2idx_row_major_2d(row, group, k / 16);
+            let vec_base = cute_rs::crd2idx_row_major_2d(group_idx, 0, 2);
             let lo_half =
                 unsafe { in_tensor.local_tile::<8>(vec_base).load() }.map(BFloat16::to_f32);
             let hi_half =
@@ -201,7 +203,7 @@ pub(crate) mod kernels {
             ]);
             unsafe {
                 TensorMut::from_disjoint_slice(&mut out_values)
-                    .local_tile::<8>(row * (k / 16) + group)
+                    .local_tile::<8>(group_idx)
                     .store(packed);
             }
             g += 1;
@@ -228,12 +230,13 @@ pub(crate) mod kernels {
         outputs: usize,
     ) {
         let tid = thread::threadIdx_x();
-        let warp_id = (tid / 32) as usize;
-        let lane = tid % 32;
+        let (lane, warp_u32) = cute_rs::idx2crd_col_major_2d(tid, 32);
+        let warp_id = warp_u32 as usize;
         let n_tiles = outputs.div_ceil(64);
-        let block_id = thread::blockIdx_x() as usize;
-        let n_base = (block_id % n_tiles) * 64;
-        let m_base = (block_id / n_tiles) * 32;
+        let (n_tile_u32, m_tile_u32) =
+            cute_rs::idx2crd_col_major_2d(thread::blockIdx_x(), n_tiles as u32);
+        let n_base = (n_tile_u32 as usize) * 64;
+        let m_base = (m_tile_u32 as usize) * 32;
         if m_base >= rows || n_base >= outputs {
             return;
         }

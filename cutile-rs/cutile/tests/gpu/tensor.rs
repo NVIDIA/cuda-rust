@@ -19,7 +19,7 @@ fn reinterpret_rejects_misaligned_storage() {
         Tensor::<u8>::from_raw_parts(
             base.device_pointer().cu_deviceptr() + 1,
             4,
-            base.device_id(),
+            base.context().default_stream(),
             vec![4],
             vec![1],
         )
@@ -42,7 +42,7 @@ fn from_raw_parts_rejects_shape_storage_mismatch() {
         Tensor::<u32>::from_raw_parts(
             base.device_pointer().cu_deviceptr(),
             4,
-            base.device_id(),
+            base.context().default_stream(),
             vec![2],
             vec![1],
         )

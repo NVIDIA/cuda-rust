@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 836" width="1240" height="836" role="img"
-  aria-label="cute-rs preview against CuTeDSL 4.7: a status grid of feature areas for CuTeDSL 4.7 and the cute-rs preview on sm_100a and sm_120a">
+  aria-label="cute-rs preview against CuTeDSL 4.7: a status grid of feature areas for CuTeDSL 4.7 and the cute-rs preview on sm_100a, sm_103a and sm_120a">
 <style>
   :root, svg {
   --bg: #f4f6f8; --fg: #1a232e; --muted: #5d6b7a; --line: #9aa7b4; --panel: #ffffff;
@@ -14,7 +14,7 @@
 </style>
 <rect x="0" y="0" width="1240" height="836" style="fill: var(--bg)"/>
 <text x="40" y="34" text-anchor="start" style="font: 600 17px var(--sans); fill: var(--fg)">cute-rs preview against CuTeDSL 4.7</text>
-<text x="40" y="56" text-anchor="start" style="font: 400 12.5px var(--sans); fill: var(--muted)">Rust CuTe kernels compiled ahead of time through the pinned CUTLASS 4.7 compiler for two Blackwell targets. Status at 5eaa6cbda (2026-10-22).</text>
+<text x="40" y="56" text-anchor="start" style="font: 400 12.5px var(--sans); fill: var(--muted)">Rust CuTe kernels compiled ahead of time through the pinned CUTLASS 4.7 compiler for three Blackwell targets. Status at 5eaa6cbda (2026-10-22).</text>
 <text x="40" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">TARGETS</text>
 <rect x="40.0" y="106" width="158.9" height="58" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
 <text x="50.0" y="124" text-anchor="start" style="font: 600 10.5px var(--sans); fill: var(--fg)">Ampere  sm_80/86/87</text>
@@ -35,13 +35,13 @@
 <circle cx="459.14285714285717" cy="146" r="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
 <text x="471.14285714285717" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">cute-rs</text>
 <rect x="540.6" y="106" width="158.9" height="58" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
-<text x="550.5714285714286" y="124" text-anchor="start" style="font: 600 10.5px var(--sans); fill: var(--fg)">Blackwell  sm_100a</text>
+<text x="550.5714285714286" y="124" text-anchor="start" style="font: 600 10.5px var(--sans); fill: var(--fg)">Blackwell  sm_100a, sm_103a</text>
 <circle cx="556.5714285714286" cy="146" r="6" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
 <text x="568.5714285714286" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">CuTeDSL</text>
 <circle cx="626.0" cy="146" r="6" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
 <text x="638.0" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">cute-rs</text>
 <rect x="707.4" y="106" width="158.9" height="58" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
-<text x="717.4285714285714" y="124" text-anchor="start" style="font: 600 10.5px var(--sans); fill: var(--fg)">Blackwell  sm_103a, sm_110a</text>
+<text x="717.4285714285714" y="124" text-anchor="start" style="font: 600 10.5px var(--sans); fill: var(--fg)">Blackwell  sm_110a</text>
 <circle cx="723.4285714285714" cy="146" r="6" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
 <text x="735.4285714285714" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">CuTeDSL</text>
 <circle cx="792.8571428571429" cy="146" r="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
@@ -61,7 +61,7 @@
 <text x="40" y="198" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">FEATURE AREA</text>
 <text x="372" y="198" text-anchor="middle" style="font: 600 11px var(--sans); fill: var(--muted)">CuTeDSL 4.7</text>
 <text x="452" y="185" text-anchor="middle" style="font: 600 11px var(--sans); fill: var(--muted)">cute-rs</text>
-<text x="452" y="198" text-anchor="middle" style="font: 600 11px var(--mono); fill: var(--muted)">sm_100a</text>
+<text x="452" y="198" text-anchor="middle" style="font: 600 10px var(--mono); fill: var(--muted)">sm_100a/103a</text>
 <text x="532" y="185" text-anchor="middle" style="font: 600 11px var(--sans); fill: var(--muted)">cute-rs</text>
 <text x="532" y="198" text-anchor="middle" style="font: 600 11px var(--mono); fill: var(--muted)">sm_120a</text>
 <text x="600" y="198" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">WHAT THE PREVIEW HAS</text>

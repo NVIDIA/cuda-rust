@@ -131,7 +131,7 @@ impl L2Clear {
     /// Twice the L2 size flushes reliably; clamp keeps pathological
     /// attribute readings from allocating absurd buffers.
     fn new(stream: &Arc<Stream>) -> Result<Self, Error> {
-        let l2 = stream.device().l2_cache_size_bytes().unwrap_or(0);
+        let l2 = stream.context().l2_cache_size_bytes().unwrap_or(0);
         let num_bytes = (l2 * 2).clamp(64 << 20, 512 << 20);
         // Safety: freed in Drop on the same stream; never exposed.
         let dptr = unsafe { cuda_core::malloc_async(num_bytes, stream) }?;
@@ -165,7 +165,7 @@ fn time_one<F>(stream: &Arc<Stream>, f: &mut F) -> Result<f32, Error>
 where
     F: FnMut(&Arc<Stream>) -> Result<(), Error>,
 {
-    let device = stream.device();
+    let device = stream.context();
     let start = device.new_event()?;
     let end = device.new_event()?;
     start.record(stream)?;

@@ -728,6 +728,8 @@ mod tests {
                 let files = OutputFiles {
                     llvm_ir: std::path::Path::new("unused.ll"),
                     ptx: std::path::Path::new("unused.ptx"),
+                    cubin: std::path::Path::new("unused.cubin"),
+                    mlir: None,
                     stale_before_export: &[],
                 };
                 let request = ModulePipelineRequest::for_rust_pipeline(
@@ -735,6 +737,8 @@ mod tests {
                     nvvm,
                     &backend,
                     debug_kind,
+                    None,
+                    &[],
                     files,
                     PipelineTrace::default(),
                 );
@@ -767,6 +771,7 @@ mod tests {
                 let root = tempfile::tempdir().unwrap();
                 let llvm_ir = root.path().join("module.ll");
                 let ptx = root.path().join("module.ptx");
+                let cubin = root.path().join("module.cubin");
                 let backend = BackendOptions {
                     device_arch_hint: Some(DeviceArchHint::parse("sm_120".to_string())),
                     verbose: true,
@@ -777,9 +782,13 @@ mod tests {
                     nvvm,
                     &backend,
                     llvm_export::export::DebugKind::Off,
+                    None,
+                    &[],
                     OutputFiles {
                         llvm_ir: &llvm_ir,
                         ptx: &ptx,
+                        cubin: &cubin,
+                        mlir: None,
                         stale_before_export: &[],
                     },
                     PipelineTrace::default(),

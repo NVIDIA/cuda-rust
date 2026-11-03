@@ -161,6 +161,11 @@ while i < 8 {
 The pass gives the eight copies counter values `0` through `7`. Constant
 propagation can then fold expressions derived from those literals.
 
+The bound does not have to be a literal. The pass folds integer arithmetic on
+constants before it reads the trip count, so `while i < N / 8` unrolls in each
+instantiation of a function with a const generic `N`. Casts and
+overflow-checked arithmetic in the bound are not yet folded.
+
 ### Partial unrolling
 
 `#[unroll(4)]` also works when the limit is a runtime value:
@@ -255,8 +260,9 @@ The source attribute travels through the compiler in six stages:
    and inserts an internal marker call at the start of that loop.
 2. `mir-importer` recognizes the call and emits a `mir.unroll_hint` operation.
    The marker produces no runtime code.
-3. `LoopInfo` finds the enclosing loop, while induction analysis finds its
-   counter, start, step, bound, and—when possible—trip count.
+3. Constant propagation folds constant expressions, such as a bound written
+   `N / 8`. `LoopInfo` then finds the enclosing loop, while induction analysis
+   finds its counter, start, step, bound, and—when possible—trip count.
 4. The pass normalizes supported control flow. It joins multiple `continue`
    paths into one path back to the loop header and routes supported
    loop-carried values out of a fully unrolled loop.
@@ -328,6 +334,40 @@ instruction cache.
 Choose a factor that matches the structure of the algorithm—often a pipeline
 depth or another small natural group—and benchmark the result. Removing
 `#[unroll]` should always remain an easy comparison.
+
+---
+
+## Keeping a loop rolled with `#[nounroll]`
+
+The unroll pass only acts on `#[unroll]` requests, but LLVM, libNVVM, and ptxas
+have their own unrollers. ptxas in particular fully unrolls small
+constant-trip-count loops even when the PTX keeps them rolled. `#[nounroll]`
+asks all three to leave a loop alone. It does not go through the unroll pass:
+
+1. The macro inserts a different marker, and `mir-importer` emits a
+   `mir.nounroll_hint` operation inside the loop.
+2. The hint survives MIR preparation. The unroll pass ignores it, so unrolling
+   an enclosing loop copies the hint along with the inner loop.
+3. Just before lowering, after the last transform that can reshape loops, each
+   hint is mapped to its innermost loop. The loop's back-edges are joined
+   through one latch block, and the hint is removed.
+4. Lowering marks that latch's branch, and the LLVM IR exporter attaches
+   `!llvm.loop` metadata with `llvm.loop.unroll.disable` to it. The NVPTX
+   backend prints `.pragma "nounroll";` at the loop header; libNVVM reads the
+   same metadata.
+
+Step 3 also runs in full-debug builds, which skip MIR preparation. A hint that
+is not inside any loop is dropped with a warning that names the attribute's
+`file:line:column`. A hint in unreachable code is dropped silently. WGMMA
+counted-loop fusion replaces a K loop with one operation that generates its own
+PTX loop. It moves a `#[nounroll]` request onto that operation, whose loop
+header then starts with `.pragma "nounroll";`, and leaves the original blocks
+unreachable.
+
+Like `#[unroll]`, the hint is mapped to the innermost loop around it. A loop
+whose body never repeats, such as `loop { ...; break; }`, produces no loop in
+MIR. If it sits inside another loop, the request applies to that enclosing
+loop.
 
 To inspect the pass's analysis, build verbosely:
 

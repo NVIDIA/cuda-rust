@@ -1,0 +1,11 @@
+error[E0599]: no method named `store` found for struct `Tensor<'a, Element, Layout, Storage>` in the current scope
+  --> tests/compile_fail/immutable_store.rs:17:19
+   |
+17 |     unsafe { tile.store(values) };
+   |                   ^^^^^
+   |
+help: there is a method `storage` with a similar name, but with different arguments
+  --> src/tensor/mod.rs
+   |
+   |     pub const fn storage(&self) -> &'a [Storage] {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

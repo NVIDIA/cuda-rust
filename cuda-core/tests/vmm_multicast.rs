@@ -17,7 +17,7 @@
 //!
 //! Requires an NVLink-switch system (e.g. HGX H100/B200); skips elsewhere.
 
-use cuda_core::{vmm, Device, IntoResult};
+use cuda_core::{vmm, Context, IntoResult};
 use std::mem::MaybeUninit;
 
 fn gpu_count() -> Result<usize, cuda_core::DriverError> {
@@ -37,8 +37,8 @@ fn multicast_two_gpu_team_roundtrip() {
         return;
     }
 
-    let ctx0 = Device::new(0).expect("GPU 0 device");
-    let ctx1 = Device::new(1).expect("GPU 1 device");
+    let ctx0 = Context::new(0).expect("GPU 0 device");
+    let ctx1 = Context::new(1).expect("GPU 1 device");
     let devices = [ctx0.cu_device(), ctx1.cu_device()];
 
     for (i, &dev) in devices.iter().enumerate() {

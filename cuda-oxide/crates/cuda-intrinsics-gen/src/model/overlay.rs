@@ -168,6 +168,8 @@ pub struct StmatrixAdmissionVariant {
 pub struct MbarrierExtendedAdmission {
     pub llvm_evidence_profile: String,
     pub libnvvm_evidence_profile: String,
+    #[serde(default)]
+    pub relaxed_libnvvm_evidence_profile: Option<String>,
     pub runtime_validation: RuntimeValidation,
     #[serde(rename = "variant")]
     pub variants: Vec<MbarrierExtendedAdmissionVariant>,

@@ -21,7 +21,7 @@
         "./cutile-rs/Cargo.toml",
         "./cuda-oxide/crates/rustc-codegen-cuda/Cargo.toml",
         "./cuda-oxide/crates/rustc-codegen-cuda/examples/debug_pointer_locals/Cargo.toml",
-        "./cuda-oxide/crates/rustc-codegen-cuda/examples/gemm_sol_final/Cargo.toml",
+        "./cuda-oxide/examples/gemm_sol_final/Cargo.toml",
         "./cuda-oxide/crates/rustc-codegen-cuda/examples/vecadd/Cargo.toml",
         "./cuda-oxide/crates/rustc-codegen-cuda/examples/abi_hmm/Cargo.toml",
     ],

@@ -42,7 +42,7 @@ shape its direction by sharing feedback on your experience.
 | Safety | Data-race freedom for disjoint slice accesses; you control thread synchronization and shared memory | Data-race freedom by construction within a kernel: no explicit thread indexing, shared memory, or synchronization |
 | Indexing | Explicit thread/block indices | Implicit via partitions |
 | Compiles | Ahead of time, Rust → PTX | JIT at first launch, Rust → Tile IR → cubin |
-| Toolchain | Pinned nightly, managed by `cargo oxide` | Stable Rust 1.89 or newer |
+| Toolchain | Pinned stable Rust (`1.99.1`), managed by `cargo oxide` | Stable Rust 1.89 or newer |
 | Portability | Produces PTX that the driver compiles for compatible GPUs; you control tuning per GPU | CUDA architecture-agnostic; the compiler tunes per GPU |
 | Reach for it when | You need direct control over threads, warps, shared memory, TMA, or cluster ops | Your problem is naturally expressed as tensor computations and you want the compiler to handle scheduling details |
 
@@ -67,6 +67,7 @@ cuda-rust/
 ├── cuda-bindings/      runtime — CUDA driver API bindings
 ├── cuda-core/          runtime — contexts, streams, memory, modules, events, launch
 ├── cuda-core-derive/   runtime — derive macros for cuda-core
+├── cuda-repr/          shared no_std host/device representation contracts
 ├── cuda-async/         runtime — lazy ops, futures, streams, graphs
 ├── cuda-oxide/         SIMT model — compiler, device crates, cuda-oxide-book
 └── cutile-rs/          Tile model — compiler, tile crates, cutile-book
@@ -81,7 +82,7 @@ are documented in the cutile-rs book.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for commit sign-off requirements, pull requests, and CI. Toolchain requirements differ between the two: cutile-rs builds on stable Rust, cuda-oxide needs its pinned nightly via `cargo oxide`; each book covers its own.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for commit sign-off requirements, pull requests, and CI. Both components build on stable Rust and pin their toolchains in their respective `rust-toolchain.toml` files (with `rustc-dev` and `llvm-tools` for `cuda-oxide`, managed via `cargo oxide`); each book covers its own setup.
 
 ## License
 

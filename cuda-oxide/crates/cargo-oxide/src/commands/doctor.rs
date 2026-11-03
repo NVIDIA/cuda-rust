@@ -360,7 +360,7 @@ pub(super) fn backend_source_check(
 
 /// Validate the development environment.
 ///
-/// Checks for: Rust nightly toolchain, `rust-toolchain.toml`, the codegen
+/// Checks for: Rust toolchain (`rustc`), `rust-toolchain.toml`, the codegen
 /// backend `.so` (informational), CUDA headers (`cuda.h`), CUDA toolkit
 /// (`nvcc`, libNVVM, nvJitLink, libdevice), LLVM (`llc`), clang/libclang,
 /// the NVIDIA driver / GPU (informational), and optionally `cuda-gdb` /
@@ -379,17 +379,11 @@ pub fn doctor(ctx: &Context) {
     let mut ok = true;
 
     // 1. Rust toolchain
-    print!("Rust nightly toolchain... ");
+    print!("Rust toolchain... ");
     match Command::new("rustc").args(["--version"]).output() {
         Ok(output) if output.status.success() => {
             let version = String::from_utf8_lossy(&output.stdout);
-            let version = version.trim();
-            if version.contains("nightly") {
-                println!("✓ {}", version);
-            } else {
-                println!("✗ expected nightly, got: {}", version);
-                ok = false;
-            }
+            println!("✓ {}", version.trim());
         }
         _ => {
             println!("✗ rustc not found");

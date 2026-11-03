@@ -39,7 +39,7 @@ alongside the normal host binary.
 ## `cuda-async`
 
 The async execution layer, a crate shared with cutile-rs and maintained at
-the repository root (`cuda-async/`). The cuda-oxide model lives under `cuda_async::simt`:
+the repository root (`cuda-async/`). Tile and SIMT share the same types:
 `DeviceOperation` (lazy GPU work description), `DeviceFuture` (stream-bound
 execution), and `DeviceBox<T>` (device-owned memory). Compose work with
 `zip!`, `and_then`, and `value()`.
@@ -55,8 +55,9 @@ cores, atomics, and debug facilities.
 Safe RAII wrappers around the CUDA Driver API: `CudaContext`, `CudaStream`,
 `DeviceBuffer<T>`, and module loading. Handles GPU context and memory management
 on the host side. Shared with cutile-rs and maintained at the repository root
-(`cuda-core/`); the cuda-oxide surface is re-exported at the crate root except
-`simt::LaunchConfig`, `simt::vmm`, `simt::peer`, and `simt::memory`.
+(`cuda-core/`). Both programming models use its shared `Context`, `Stream`,
+`LaunchConfig` and typed allocation storage. A `Device` identifies the physical GPU;
+a `Context` identifies an execution context on that GPU.
 
 ## `DeviceOperation`
 

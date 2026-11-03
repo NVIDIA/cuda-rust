@@ -175,6 +175,7 @@ pub enum RegisterMmaKind {
     Standard,
     F8f6f4,
     Mxf8f6f4,
+    Mxf4,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

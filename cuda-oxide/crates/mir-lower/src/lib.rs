@@ -400,7 +400,15 @@ pub fn lower_mir_to_llvm_with_options(
     // unsupported pointer shapes retain the deferred pointer-group fallback.
     // Run this while MIR control flow and unsigned constants are still intact.
     wgmma_deferred_accumulator::fuse_deferred_accumulators(ctx, module_op)?;
-    // WGMMA fusion is the final MIR-producing transform in this entry point.
+    // `#[nounroll]` loops: give each marked loop one latch and mark its branch
+    // for `llvm.loop.unroll.disable`. This runs after every transform that can
+    // clone or reshape loops, including the WGMMA K-loop fusion above, and in
+    // full-debug builds too, which skip MIR preparation.
+    for latch in mir_transforms::nounroll::resolve_nounroll_hints(module_op, ctx)? {
+        llvm_export::ops::set_loop_unroll_disable(ctx, latch);
+    }
+    // WGMMA fusion and nounroll latch placement are the final MIR-producing
+    // transforms in this entry point.
     // Reverify immediately before dialect conversion erases pointer kinds so a
     // future transform cannot bypass the provenance invariant.
     dialect_mir::verification::verify_pointer_kind_producers(ctx, module_op)?;

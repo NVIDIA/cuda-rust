@@ -19,8 +19,8 @@ runs:
   using: composite
   steps:
     - name: Validate inputs
+      working-directory: ${{ github.workspace }}
       shell: bash
-      working-directory: cutile-rs
       env:
         RUST_COMPONENTS: ${{ inputs.components }}
         RUST_CACHE: ${{ inputs.cache }}
@@ -35,8 +35,8 @@ runs:
         fi
 
     - name: Install build dependencies
+      working-directory: ${{ github.workspace }}
       shell: bash
-      working-directory: cutile-rs
       run: |
         apt-get update -qq
         apt-get install -y -qq --no-install-recommends build-essential curl \
@@ -47,7 +47,8 @@ runs:
     # nightly lives in cuda-oxide/rust-toolchain.toml.
     - name: Install Rust
       shell: bash
-      working-directory: cutile-rs
+      # relative path to land at the rust-toolchain.toml regardless of use of $ or ./ syntax
+      working-directory: ${{ github.action_path }}/../../..
       env:
         RUST_COMPONENTS: ${{ inputs.components }}
       run: |

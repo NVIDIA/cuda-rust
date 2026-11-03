@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 510" width="1240" height="510" role="img"
+  aria-label="ctm-rs at a glance: typed carriers on the left select instruction families in the middle, consumed by one of two compiler profiles on the right; the author owns election, phases, completion, collector order and lifetimes">
+<style>
+  :root, svg {
+  --bg: #f4f6f8; --fg: #1a232e; --muted: #5d6b7a; --line: #9aa7b4; --panel: #ffffff;
+  --meta: #0e7c72; --meta-fill: #d9f3ef; --code: #b4560a; --code-fill: #fdebd2;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+ }
+  @media (prefers-color-scheme: dark) { :root, svg {
+  --bg: #1b1d23; --fg: #f2f4f7; --muted: #bcc4d0; --line: #5c6475; --panel: #282c36;
+  --meta: #7ed8bb; --meta-fill: #346357; --code: #f4c474; --code-fill: #735a3c;
+ } }
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--fg)"/></marker></defs>
+<rect x="0" y="0" width="1240" height="510" style="fill: var(--bg)"/>
+<text x="40" y="34" text-anchor="start" style="font: 600 17px var(--sans); fill: var(--fg)">ctm-rs at a glance</text>
+<text x="40" y="56" text-anchor="start" style="font: 400 12.5px var(--sans); fill: var(--muted)">Typed instruction primitives beneath cute-rs. The types check the local contract; the author owns the schedule.</text>
+<text x="40" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">TYPED RUST API</text>
+<text x="440" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">INSTRUCTION FAMILIES  (dialect-nvvm)</text>
+<text x="900" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">COMPILER PROFILES</text>
+<rect x="40" y="106" width="340" height="38" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="52" y="123" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--meta)">SharedRegion&lt;F&gt;</text>
+<text x="52" y="138" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">alignment, capacity, address space</text>
+<rect x="40" y="150" width="340" height="38" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="52" y="167" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--meta)">TensorMap&lt;f16, F&gt;</text>
+<text x="52" y="182" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">128-byte descriptor, grid-constant ABI</text>
+<rect x="40" y="194" width="340" height="38" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="52" y="211" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--meta)">TmemGuard&lt;State, N, CtaGroup2&gt;</text>
+<text x="52" y="226" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">collective alloc, borrowed views</text>
+<rect x="40" y="238" width="340" height="38" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="52" y="255" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--meta)">SmemOperand&lt;Role, F&gt;</text>
+<text x="52" y="270" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">operand role and physical format</text>
+<rect x="40" y="282" width="340" height="38" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="52" y="299" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--meta)">InstructionDescriptor&lt;S&gt;</text>
+<text x="52" y="314" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">MMA shape, K-major or MN-major</text>
+<rect x="40" y="326" width="340" height="38" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="52" y="343" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--meta)">Mxf4A, Mxf4B, ScalePairA/B</text>
+<text x="52" y="358" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">A4 B2 C4 registers, UE8M0 pairs</text>
+<rect x="40" y="370" width="340" height="38" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="52" y="387" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--meta)">CtaMask&lt;G&gt;, ManagedBarrier</text>
+<text x="52" y="402" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">nonzero mask, ready barrier</text>
+<rect x="440" y="106" width="410" height="38" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="452" y="123" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--code)">tcgen05</text>
+<text x="838" y="123" text-anchor="end" style="font: 600 10.5px var(--mono); fill: var(--muted)">sm_100a</text>
+<text x="452" y="138" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">alloc, dealloc, F16 two-CTA MMA, 32x32b ld/st, commit, fences</text>
+<rect x="440" y="150" width="410" height="38" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="452" y="167" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--code)">TMA</text>
+<text x="838" y="167" text-anchor="end" style="font: 600 10.5px var(--mono); fill: var(--muted)">both</text>
+<text x="452" y="182" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">2D load, two-CTA multicast load, 2D store, prefetch, bulk wait</text>
+<rect x="440" y="194" width="410" height="38" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="452" y="211" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--code)">mbarrier, cluster</text>
+<text x="838" y="211" text-anchor="end" style="font: 600 10.5px var(--mono); fill: var(--muted)">both</text>
+<text x="452" y="226" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">init, arrive, expect_tx, parity wait, mapa, remote arrive</text>
+<rect x="440" y="238" width="410" height="38" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="452" y="255" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--code)">mma.sync</text>
+<text x="838" y="255" text-anchor="end" style="font: 600 10.5px var(--mono); fill: var(--muted)">MXF4: sm_120a</text>
+<text x="452" y="270" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">m16n8k16 F16 and BF16; m16n8k64 MXF4 with UE8M0 scales</text>
+<rect x="440" y="282" width="410" height="38" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="452" y="299" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--code)">ldmatrix, stmatrix</text>
+<text x="838" y="299" text-anchor="end" style="font: 600 10.5px var(--mono); fill: var(--muted)">both</text>
+<text x="452" y="314" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">x4 loads for A and B, x2 FP16 stores</text>
+<rect x="440" y="326" width="410" height="38" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="452" y="343" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--code)">cp.async</text>
+<text x="838" y="343" text-anchor="end" style="font: 600 10.5px var(--mono); fill: var(--muted)">both</text>
+<text x="452" y="358" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">4-byte copies, noinc barrier arrive, commit and wait groups</text>
+<rect x="440" y="370" width="410" height="38" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="452" y="387" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--code)">warp, numerics</text>
+<text x="838" y="387" text-anchor="end" style="font: 600 10.5px var(--mono); fill: var(--muted)">both</text>
+<text x="452" y="402" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">shuffle, elect, vote, reduce; bf16 convert, f32x2, approx math</text>
+<line x1="382" y1="257.0" x2="438" y2="257.0" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<text x="410" y="249.0" text-anchor="middle" style="font: 400 10px var(--sans); fill: var(--muted)">selects</text>
+<rect x="900" y="106" width="300" height="102" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.6"/>
+<text x="912" y="125" text-anchor="start" style="font: 600 11.5px var(--mono); fill: var(--fg)">cutlass-primitives-mlir22</text>
+<text x="912" y="142" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--meta)">ctm-rs alone</text>
+<circle cx="918" cy="156" r="2.5" style="fill: var(--line)"/>
+<text x="928" y="160" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">no CuTe operations, types or attributes</text>
+<circle cx="918" cy="174" r="2.5" style="fill: var(--line)"/>
+<text x="928" y="178" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">the *_ctm GEMM examples</text>
+<circle cx="918" cy="192" r="2.5" style="fill: var(--line)"/>
+<text x="928" y="196" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">CUDA_OXIDE_MLIR_PROFILE selects it</text>
+<rect x="900" y="222" width="300" height="102" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.6"/>
+<text x="912" y="241" text-anchor="start" style="font: 600 11.5px var(--mono); fill: var(--fg)">cutlass-full-cute-mlir22</text>
+<text x="912" y="258" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--meta)">ctm-rs beside cute-rs</text>
+<circle cx="918" cy="272" r="2.5" style="fill: var(--line)"/>
+<text x="928" y="276" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">one Pliron module, two dialects</text>
+<circle cx="918" cy="290" r="2.5" style="fill: var(--line)"/>
+<text x="928" y="294" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">the SM100 attention examples</text>
+<circle cx="918" cy="308" r="2.5" style="fill: var(--line)"/>
+<text x="928" y="312" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">default profile</text>
+<line x1="852" y1="257.0" x2="898" y2="257.0" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<text x="875" y="249.0" text-anchor="middle" style="font: 400 10px var(--sans); fill: var(--muted)">feeds</text>
+<rect x="900" y="338" width="300" height="62" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="912" y="357" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--meta)">targets</text>
+<text x="912" y="374" text-anchor="start" style="font: 400 10.5px var(--mono); fill: var(--muted)">sm_100a or sm_120a</text>
+<text x="912" y="390" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">tcgen05 needs sm_100a; MXF4 needs sm_120a</text>
+<rect x="40" y="430" width="1160" height="56" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="52" y="452" text-anchor="start" style="font: 600 12px var(--sans); fill: var(--fg)">The author still owns, at every unsafe boundary:</text>
+<text x="52" y="472" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">election and lane participation · barrier phases and arrival counts · asynchronous completion before reuse · collector fill and release order · pointer lifetimes</text>
+</svg>

@@ -119,3 +119,65 @@ fn nested_shape() {
     let c = IntTuple::Tuple(vec![t(&[1, 2]), IntTuple::Leaf(5)]);
     assert_eq!(l.call(&c), 128 + 64 + 5);
 }
+
+/// `idx2crd` must invert the colexicographic flat-coordinate walk for flat and nested shapes.
+#[test]
+fn idx2crd_roundtrips_with_crd2idx() {
+    for text in [
+        "(8,32):(32,1)",
+        "(64,2):(1,64)",
+        "((2,4),32):((128,32),1)",
+        "((8,16),(64,2)):((64,512),(1,8192))",
+    ] {
+        let l: Layout = text.parse().unwrap();
+        for flat in 0..l.size() {
+            let coord = idx2crd(flat, &l.shape);
+            assert!(coord.is_congruent(&l.shape));
+            assert_eq!(
+                l.call(&coord),
+                l.call(&IntTuple::Leaf(flat)),
+                "{text} @ {flat}"
+            );
+        }
+    }
+}
+
+/// Allocation-free 2D/3D and grouped-2D coordinate helpers must match `Layout` evaluation.
+#[test]
+fn const_coordinate_helpers_match_layout_algebra() {
+    let col_major = Layout::col_major(t(&[64, 2]));
+    for tid in 0..128u32 {
+        let (r, c) = idx2crd_col_major_2d(tid, 64);
+        assert_eq!(
+            idx2crd(i64::from(tid), &col_major.shape),
+            t(&[i64::from(r), i64::from(c)])
+        );
+    }
+
+    let row_major = Layout::row_major(t(&[4, 8]));
+    for r in 0..4usize {
+        for c in 0..8usize {
+            let idx = crd2idx_row_major_2d(r, c, 8);
+            assert_eq!(idx as i64, row_major.call(&t(&[r as i64, c as i64])));
+            assert_eq!(idx2crd_row_major_2d(idx as u32, 8), (r as u32, c as u32));
+        }
+    }
+
+    // Grouped-M (G=8) 2D tile grid must visit every (m_tile, n_tile) in 0..mtiles x 0..ntiles
+    // exactly once, both when mtiles < 8 and when mtiles >= 8.
+    for mtiles in [1u32, 2, 4, 8, 16, 20, 64] {
+        let ntiles = 24u32;
+        let mut seen = alloc::vec![false; (mtiles * ntiles) as usize];
+        for tile in 0..(mtiles * ntiles) {
+            let (m_tile, n_tile) = idx2crd_grouped_2d::<8>(tile, mtiles, ntiles);
+            assert!(m_tile < mtiles && n_tile < ntiles);
+            let linear = crd2idx_row_major_2d(m_tile as usize, n_tile as usize, ntiles as usize);
+            assert!(
+                !seen[linear],
+                "duplicate tile ({m_tile}, {n_tile}) for mtiles={mtiles}"
+            );
+            seen[linear] = true;
+        }
+        assert!(seen.into_iter().all(|v| v));
+    }
+}

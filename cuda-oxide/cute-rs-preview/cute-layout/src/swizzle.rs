@@ -194,10 +194,15 @@ impl Swizzle {
     /// y_mask = 0b11000
     /// offset & y_mask keeps only those two source bits
     /// ```
-    pub fn y_mask(&self) -> i64 {
+    pub const fn y_mask(&self) -> i64 {
         debug_assert!(self.is_valid());
         let mask = (1i64 << self.num_bits) - 1;
-        mask << (self.num_base as i64 + self.num_shift.max(0) as i64)
+        let shift = if self.num_shift > 0 {
+            self.num_shift as i64
+        } else {
+            0
+        };
+        mask << (self.num_base as i64 + shift)
     }
 
     /// Return a mask with 1s at every target-bit position.
@@ -205,10 +210,12 @@ impl Swizzle {
     /// These are the positions that may be toggled after the source field is
     /// shifted. For `S<2,0,3>`, the target is bits 1..0, so the result is
     /// `0b11`.
-    pub fn z_mask(&self) -> i64 {
+    pub const fn z_mask(&self) -> i64 {
         debug_assert!(self.is_valid());
         let mask = (1i64 << self.num_bits) - 1;
-        mask << (self.num_base as i64 + (-self.num_shift).max(0) as i64)
+        let neg_shift = -self.num_shift;
+        let shift = if neg_shift > 0 { neg_shift as i64 } else { 0 };
+        mask << (self.num_base as i64 + shift)
     }
 
     /// Map one plain tile-relative offset to its physical offset.
@@ -217,8 +224,11 @@ impl Swizzle {
     /// bytes; if `x` counts elements, the result counts elements. Do not add
     /// an absolute pointer before calling this method: pointer-address bits
     /// covered by the source mask would change the XOR result.
-    pub fn apply(&self, x: i64) -> i64 {
+    pub const fn apply(&self, x: i64) -> i64 {
         debug_assert!(self.is_valid());
+        if self.num_bits == 0 {
+            return x;
+        }
         let masked = x & self.y_mask();
         let moved = if self.num_shift >= 0 {
             masked >> self.num_shift
@@ -234,7 +244,7 @@ impl Swizzle {
     /// This is called an *involution*. It holds when source and target fields
     /// do not overlap: the first application XORs the source into the target,
     /// and the second application XORs the same bits back out.
-    pub fn is_involution(&self) -> bool {
+    pub const fn is_involution(&self) -> bool {
         let y = self.y_mask();
         let z = if self.num_shift >= 0 {
             y >> self.num_shift

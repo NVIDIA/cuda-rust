@@ -49,6 +49,7 @@ pub use mma::{CuteSmemTensorType, MmaCarrierShape, mma_carrier_shape};
 pub use pipeline::CuteTmaLoadPipelineType;
 pub use scheduler::CuteWorkTileType;
 pub use tensor::CuteTensorViewType;
+pub(crate) use tensor::scalar_transport_layout;
 pub use tma::CuteTmaViewType;
 
 /// Regression fixtures covering accepted contracts and rejected malformed IR.

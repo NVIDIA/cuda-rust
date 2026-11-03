@@ -526,6 +526,8 @@ pub(super) fn validate_policy(
                 let mma = policy.tcgen05.as_ref().unwrap().mma.as_ref().unwrap();
                 if mma.alias.is_some() {
                     1
+                } else if tcgen05_mma_is_block_scale(mma.form) {
+                    8
                 } else if tcgen05_mma_is_ws(mma.form) {
                     64
                 } else if tcgen05_mma_is_ashift(mma.form) {

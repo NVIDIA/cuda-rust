@@ -41,7 +41,7 @@
 //!   ./debug-tests oob_index        triggers a Rust bounds-check trap
 //!   ./debug-tests null_deref       triggers a null-pointer dereference
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{
     ConstantMemory, DisjointSlice, SharedArray, constant, debug, gpu_assert, gpu_printf, kernel,

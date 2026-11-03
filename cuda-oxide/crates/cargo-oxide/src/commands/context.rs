@@ -507,7 +507,12 @@ fn parse_config_env(
 pub(super) fn example_roots(ctx: &Context) -> Vec<PathBuf> {
     let mut roots = vec![ctx.examples_dir.clone()];
     if ctx.is_workspace {
-        for relative in ["cute-rs-preview/examples", "cute-rs-preview/models"] {
+        for relative in [
+            "models",
+            "examples",
+            "cute-rs-preview/examples",
+            "cute-rs-preview/models",
+        ] {
             let root = ctx.oxide_workspace_root().join(relative);
             if root.is_dir() {
                 roots.push(root);

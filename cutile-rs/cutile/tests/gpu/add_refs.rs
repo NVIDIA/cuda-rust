@@ -31,7 +31,7 @@ use my_module::add;
 #[test]
 fn smoke_add_refs() {
     common::with_test_stack(|| {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
 
         let x = api::ones::<f32>(&[32]).sync_on(&stream).unwrap();

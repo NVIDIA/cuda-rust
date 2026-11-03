@@ -1958,15 +1958,30 @@ mod tests {
         CandidateToolTestDir(path)
     }
 
+    /// Writes `script` as an executable tool that tests can run at once.
+    ///
+    /// A test that writes the tool itself holds a writable handle to it for a
+    /// moment. Another test that spawns a process in that moment hands its
+    /// child a copy of the handle, and the kernel refuses to execute a file
+    /// with a writer (ETXTBSY, "Text file busy") until that child execs or
+    /// exits. Here `cp` creates the tool, so the only process that ever opens
+    /// it for writing has exited before this returns
     #[cfg(unix)]
     fn write_fake_tool(root: &Path, name: &str, script: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
 
         let path = root.join(name);
-        fs::write(&path, script).unwrap();
-        let mut permissions = fs::metadata(&path).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&path, permissions).unwrap();
+        let staging = path.with_added_extension("staging");
+        fs::write(&staging, script).unwrap();
+        let status = std::process::Command::new("cp")
+            .arg(&staging)
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "cp {} failed: {status}", path.display());
+        fs::remove_file(staging).unwrap();
+        // cp masks the mode with the umask; chmod opens no writable handle
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         path
     }
 

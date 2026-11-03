@@ -65,7 +65,7 @@
 
 #![no_std]
 #![feature(f16)]
-#![deny(missing_docs)]
+#![deny(missing_docs, clippy::missing_docs_in_private_items)]
 
 #[cfg(feature = "host")]
 extern crate alloc;
@@ -86,14 +86,15 @@ pub mod pipeline;
 pub mod reduction;
 pub mod scheduler;
 pub mod sm100;
-pub mod static_layout;
 pub mod tensor;
+
+pub use cute_layout::static_layout;
 
 pub use block_scaled::{
     BlockScaledTensor, BlockScaledThreadRow, BlockScaledTile64, DenseBlockScaleKMajor, KMajor,
     LoadedBlockScaledTile64, LoadedNvfp4Tile64, Mkl, MmaScalePair, MmaScaleQuad,
     Mxf4BlockScaledTensor, Nkl, Nvfp4BlockScaledTensor, Nvfp4ThreadRow, Nvfp4Tile64, ScalePack4,
-    SharedScaleAtom, Sm1xxBlockScaleKMajor, Sm120ScaleAtom,
+    SharedNvfp4ScaleAtom, SharedScaleAtom, Sm1xxBlockScaleKMajor, Sm120ScaleAtom,
 };
 pub use copy::cooperative::{GmemMatrix, SmemTile, copy_g2s};
 pub use copy::tiled::{GlobalCopyTensor, SharedTensor, ThrCopy, TiledCopy};
@@ -102,29 +103,37 @@ pub use copy::vector::{
     GlobalStoreElement, GlobalStoreTile, assume, load_tile, store_global_no_allocate, store_tile,
 };
 pub use cute_layout as layout;
+pub use cute_layout::{
+    crd2idx_col_major_2d, crd2idx_col_major_3d, crd2idx_row_major_2d, crd2idx_row_major_3d,
+    idx2crd_col_major_2d, idx2crd_grouped_2d, idx2crd_row_major_2d,
+};
 pub use epilogue::{
     SM120_EPILOGUE_BYTES, SM120_EPILOGUE_COLS, SM120_EPILOGUE_ELEMENTS, SM120_EPILOGUE_HALF_BYTES,
     SM120_EPILOGUE_HALF_COLS, SM120_EPILOGUE_HALF_ELEMENTS, SM120_EPILOGUE_ROWS,
     Sm120Epilogue128x128, Sm120EpilogueHalfLayout, Sm120EpilogueWarp128x128,
     sm120_epilogue_atom_origin, sm120_epilogue_physical_offset,
 };
-pub use markers::{C, ColMajor, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
+pub use markers::{
+    C, ColMajor, ComposedLayout, CopyG2S, CopyUniversal, Layout, LeadingDim, RowMajor, Swizzle,
+};
 pub use mma::block_scaled::{
-    Mxf4AccumulatorTile2x8, Mxf4BTileK64, Mxf4ScalePairs, Mxf4ScalePairs128, Mxf4ScaleStage,
-    Mxf4ScaleTile128, Mxf4TiledMma,
+    Mxf4AccumulatorTile2x8, Mxf4BTileK64, Mxf4Nvf4TiledMma, Mxf4ScalePairs, Mxf4ScalePairs128,
+    Mxf4ScaleStage, Mxf4ScaleTile128, Mxf4TiledMma, Nvfp4TiledMma,
 };
 pub use mma::{
-    FragmentA, FragmentB, FragmentBPair, FragmentC, load_matrix_a, load_matrix_b,
+    FragmentA, FragmentB, FragmentBPair, FragmentC, LdmatrixElement, load_matrix_a, load_matrix_b,
     load_matrix_b_pair, load_matrix_b_pair_k_major,
 };
 pub use numeric::{
     BFloat16, E4M3x2, E4M3x4, Float4E2M1FN, Float4E2M1FNx2, Float8E4M3FN, Float8E8M0FNU, Mxf4E2M1,
-    UE8M0x2, UE8M0x4, e4m3_to_f32,
+    UE8M0x2, UE8M0x4, e4m3_to_f32, f32_to_e2m1, f32_to_e4m3,
 };
 pub use pipeline::{Consumer, PipelineState, PipelineTmaAsync, PipelineTmaStore, Producer};
-pub use scheduler::{StaticPersistentTileScheduler, WorkTileInfo};
+pub use scheduler::{PersistentTileSchedulerParams, StaticPersistentTileScheduler, WorkTileInfo};
 pub use sm100::{
-    OperandA, OperandB, PipelineTmaUmma, PipelineUmmaAsync, Sm100ClusterTmaCopy, Sm100SharedTile,
-    Sm100TiledMma, Sm100Tmem, Sm100TmemEpilogue,
+    OperandA, OperandB, PipelineTmaUmma, PipelineUmmaAsync, Sm100BlockScaledTiledMma,
+    Sm100ClusterTmaCopy, Sm100DeallocBarrier, Sm100ScaleTile, Sm100SharedTile, Sm100TiledMma,
+    Sm100Tmem, Sm100TmemEpilogue, Sm100TmemStagedEpilogue,
 };
+pub use static_layout::{crd2idx_2d, idx2crd_2d};
 pub use tensor::{Contiguous1D, RegisterTile, Tensor, TensorElement, TensorMut, Tile1D, Zipped1D};

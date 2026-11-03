@@ -16,7 +16,11 @@ use crate::tensor::{RegisterTile, TensorElement};
 use core::marker::PhantomData;
 use ctm_rs::memory::DisjointSlice;
 
+/// Sealed supertrait module preventing external crates from implementing [`IndexLayout`].
+/// Ensures every [`IndexLayout`] upholds the originating storage bounds proof.
 mod sealed {
+    /// Marker trait implemented only by verified coordinate maps in this module.
+    /// Guarantees that `crd2idx` only produces offsets covered by the parent view.
     pub trait Sealed {}
 }
 
@@ -42,7 +46,11 @@ pub trait IndexLayout: sealed::Sealed + Copy {
 /// One-dimensional shape and positive physical element stride.
 #[derive(Clone, Copy)]
 pub struct Strided1D {
+    /// Number of logical coordinates (`0..len`) in this 1D view.
+    /// Bounds all safe indexing and subview operations.
     len: usize,
+    /// Physical storage elements skipped when the logical index increases by `1`.
+    /// Equal to `1` for contiguous slices.
     stride: usize,
 }
 impl sealed::Sealed for Strided1D {}
@@ -60,8 +68,14 @@ impl IndexLayout for Strided1D {
 /// A contiguous logical interval of a parent coordinate map.
 #[derive(Clone, Copy)]
 pub struct Subrange<Parent: IndexLayout> {
+    /// Underlying coordinate map whose logical domain is being sliced.
+    /// Translates `start + index` to a physical storage offset.
     parent: Parent,
+    /// Starting logical coordinate in `parent` corresponding to index `0`.
+    /// Added before delegating to `parent.crd2idx`.
     start: usize,
+    /// Number of logical elements exposed by this subrange.
+    /// Satisfies `start + len <= parent.len()`.
     len: usize,
 }
 impl<Parent: IndexLayout> sealed::Sealed for Subrange<Parent> {}
@@ -82,8 +96,14 @@ impl<Parent: IndexLayout> IndexLayout for Subrange<Parent> {
 /// count remains in the type even after further slicing or partitioning.
 #[derive(Clone, Copy)]
 pub struct Cyclic<Parent: IndexLayout, const PARTS: usize> {
+    /// Parent coordinate map being split across `PARTS` cyclic lanes.
+    ///Evaluates `part + index * PARTS` to a physical storage offset.
     parent: Parent,
+    /// Lane or partition index in `0..PARTS` owned by the caller.
+    /// Selects the starting offset of the cyclic sequence.
     part: usize,
+    /// Number of elements in this partition (`0` when `part >= parent.len()`).
+    /// Handles ragged tails without reading past the parent view.
     len: usize,
 }
 impl<Parent: IndexLayout, const PARTS: usize> sealed::Sealed for Cyclic<Parent, PARTS> {}
@@ -98,6 +118,8 @@ impl<Parent: IndexLayout, const PARTS: usize> IndexLayout for Cyclic<Parent, PAR
     }
 }
 
+/// Construct cyclic partition `part` (`0..PARTS`) of `layout` and compute its exact element count.
+/// Ragged tails give higher `part` indices one fewer element instead of reading out of bounds.
 #[inline(always)]
 fn partition<Layout: IndexLayout, const PARTS: usize>(
     layout: Layout,
@@ -130,8 +152,14 @@ where
     Layout: IndexLayout,
     Storage: Copy,
 {
+    /// Non-owning read-only base pointer to the underlying storage buffer.
+    /// Indexed only at offsets produced by `layout.crd2idx`.
     base: *const Storage,
+    /// Composable logical-to-physical coordinate map for this tensor view.
+    /// Tracks length, stride, subranges, and cyclic thread partitions.
     layout: Layout,
+    /// Zero-sized lifetime and logical-element marker tying the view to `'a`.
+    /// Prevents the borrowed storage from being mutated or dropped while live.
     borrow: PhantomData<(&'a [Storage], Element)>,
 }
 impl<Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy> Copy
@@ -150,6 +178,9 @@ impl<'a, T: Copy + TensorElement<T>> StridedTensor<'a, T> {
     /// Borrow an ordinary slice with its unchanged scalar element identity.
     #[inline(always)]
     pub fn from_slice(storage: &'a [T]) -> Self {
+        let _ = crate::tensor::Tensor::from_slice(storage)
+            .local_tile::<1>(0)
+            .base();
         unsafe { Self::from_raw_parts(storage.as_ptr(), storage.len(), 1) }
     }
     /// Borrow the logical elements of a strided storage range.
@@ -184,6 +215,65 @@ impl<'a, Element: TensorElement<Storage>, Storage: Copy>
         }
     }
 }
+impl<'a, T: Copy + TensorElement<T>> StridedTensor<'a, T, Strided1D, T> {
+    /// Advance the base pointer by `start * stride` elements and bound the view to `len` elements.
+    ///
+    /// Preserves the flat `Strided1D` layout so loop-invariant or induction-step
+    /// slices become pointer induction variables in LLVM/MLIR.
+    ///
+    /// # Safety
+    /// `start <= self.len()` and `len <= self.len() - start` must hold.
+    #[must_use]
+    #[inline(always)]
+    pub const unsafe fn offset_unchecked(self, start: usize, len: usize) -> Self {
+        Self {
+            base: unsafe { self.base.add(start * self.layout.stride) },
+            layout: Strided1D {
+                len,
+                stride: self.layout.stride,
+            },
+            borrow: PhantomData,
+        }
+    }
+
+    /// Read a logical coordinate from a 1D strided view without a nested trait call.
+    ///
+    /// # Safety
+    /// `index < self.len()` must hold.
+    #[inline(always)]
+    pub unsafe fn at_unchecked(self, index: usize) -> T {
+        unsafe { self.base.add(index * self.layout.stride).read() }
+    }
+}
+
+impl<'a, T: Copy + TensorElement<T>> StridedTensorMut<'a, T, Strided1D, T> {
+    /// Advance the mutable base pointer by `start * stride` elements and bound the view to `len` elements.
+    ///
+    /// # Safety
+    /// `start <= self.len()` and `len <= self.len() - start` must hold.
+    #[must_use]
+    #[inline(always)]
+    pub const unsafe fn offset_unchecked(self, start: usize, len: usize) -> Self {
+        Self {
+            base: unsafe { self.base.add(start * self.layout.stride) },
+            layout: Strided1D {
+                len,
+                stride: self.layout.stride,
+            },
+            borrow: PhantomData,
+        }
+    }
+
+    /// Store one logical coordinate into a 1D strided view without a nested trait call.
+    ///
+    /// # Safety
+    /// `index < self.len()` and no conflicting access may occur.
+    #[inline(always)]
+    pub unsafe fn write_at(&self, index: usize, value: T) {
+        unsafe { self.base.add(index * self.layout.stride).write(value) }
+    }
+}
+
 impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
     StridedTensor<'a, Element, Layout, Storage>
 {
@@ -263,6 +353,15 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
     pub unsafe fn get_unchecked(&self, index: usize) -> Storage {
         unsafe { self.base.add(self.layout.crd2idx(index)).read() }
     }
+    /// Return a const pointer to the storage element at logical coordinate `index`
+    /// using the view's `crd2idx` coordinate map.
+    /// # Safety
+    /// `index < self.len()` and the addressed storage must be live for `'a`.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn ptr_at_unchecked(&self, index: usize) -> *const Storage {
+        unsafe { self.base.add(self.layout.crd2idx(index)) }
+    }
     /// Reduce logical coordinates in increasing order without reassociation.
     #[inline(always)]
     pub fn fold<U>(self, initial: U, mut f: impl FnMut(U, Storage) -> U) -> U {
@@ -286,6 +385,17 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
     #[inline(always)]
     pub unsafe fn load_unchecked<const N: usize>(self) -> RegisterTile<Storage, N> {
         RegisterTile::from_fn(|i| unsafe { self.get_unchecked(i) })
+    }
+    /// Gather `N` values spaced by `STRIDE` starting at `lane` (`lane + i * STRIDE`) without bounds checks.
+    ///
+    /// # Safety
+    /// Every `lane + i * STRIDE` for `i < N` must be `< self.len()`.
+    #[inline(always)]
+    pub unsafe fn load_strided_unchecked<const STRIDE: usize, const N: usize>(
+        self,
+        lane: usize,
+    ) -> RegisterTile<Storage, N> {
+        RegisterTile::from_fn(|i| unsafe { self.get_unchecked(lane + i * STRIDE) })
     }
     /// Transform equally sized logical views, even when their layouts differ.
     /// # Safety
@@ -346,8 +456,14 @@ where
     Layout: IndexLayout,
     Storage: Copy,
 {
+    /// Non-owning mutable base pointer to the underlying storage buffer.
+    /// Indexed only at offsets produced by `layout.crd2idx`.
     base: *mut Storage,
+    /// Composable logical-to-physical coordinate map for this writable view.
+    /// Tracks length, stride, subranges, and cyclic thread partitions.
     layout: Layout,
+    /// Zero-sized exclusive borrow and logical-element marker for `'a`.
+    /// Prevents aliasing mutable views in safe Rust code.
     borrow: PhantomData<(&'a mut [Storage], Element)>,
 }
 impl<'a, T: Copy + TensorElement<T>> StridedTensorMut<'a, T> {
@@ -359,7 +475,13 @@ impl<'a, T: Copy + TensorElement<T>> StridedTensorMut<'a, T> {
     /// Borrow writable device storage while retaining its original alias rules.
     #[inline(always)]
     pub fn from_disjoint_slice(storage: &'a mut DisjointSlice<'_, T>) -> Self {
-        unsafe { Self::from_raw_parts(storage.as_mut_ptr(), storage.len(), 1) }
+        let ptr = storage.as_mut_ptr();
+        let len = storage.len();
+        let view = unsafe { core::slice::from_raw_parts(ptr.cast_const(), len) };
+        let _ = crate::tensor::Tensor::from_slice(view)
+            .local_tile::<1>(0)
+            .base();
+        unsafe { Self::from_raw_parts(ptr, len, 1) }
     }
     /// Borrow writable strided storage with an externally established extent.
     /// # Safety
@@ -450,6 +572,31 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
             borrow: PhantomData,
         }
     }
+    /// Return a mutable pointer to the storage element at logical coordinate `index`
+    /// using the view's `crd2idx` coordinate map.
+    ///
+    /// # Safety
+    /// `index < self.len()` and the caller must uphold exclusive access for the
+    /// addressed storage slice.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn ptr_at_unchecked(&self, index: usize) -> *mut Storage {
+        unsafe { self.base.add(self.layout.crd2idx(index)) }
+    }
+
+    /// Return a mutable pointer to the storage element at 2D row-major coordinate
+    /// `(row, col)` (with `cols` columns per row), composed with this view's `crd2idx`.
+    ///
+    /// # Safety
+    /// `row * cols + col < self.len()` and the caller must uphold exclusive access
+    /// for the addressed storage slice.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn ptr_at_2d_unchecked(&self, row: usize, col: usize, cols: usize) -> *mut Storage {
+        let flat = cute_layout::crd2idx_row_major_2d(row, col, cols);
+        unsafe { self.ptr_at_unchecked(flat) }
+    }
+
     /// Store one logical coordinate using the composed coordinate map.
     /// # Safety
     /// `index < self.len()` and no conflicting access to this coordinate may
@@ -478,6 +625,16 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
     #[inline(always)]
     pub unsafe fn store<const N: usize>(&mut self, values: RegisterTile<Storage, N>) {
         assert!(N <= self.len());
+        unsafe { self.store_unchecked(values) };
+    }
+
+    /// Scatter an ordered register tile after an enclosing extent check.
+    ///
+    /// # Safety
+    /// `N <= self.len()` must hold, and no other active access may conflict
+    /// with the selected destinations.
+    #[inline(always)]
+    pub unsafe fn store_unchecked<const N: usize>(&mut self, values: RegisterTile<Storage, N>) {
         let values = values.into_array();
         let mut i = 0;
         while i < N {
@@ -486,6 +643,70 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
                 self.store_at(i, values[i]);
             }
             i += 1;
+        }
+    }
+
+    /// Scatter `N` values spaced by `STRIDE` starting at `lane` (`lane + i * STRIDE`) without bounds checks.
+    ///
+    /// # Safety
+    /// Every `lane + i * STRIDE` for `i < N` must be `< self.len()` with no conflicting access.
+    #[inline(always)]
+    pub unsafe fn store_strided_unchecked<const STRIDE: usize, const N: usize>(
+        &mut self,
+        lane: usize,
+        values: RegisterTile<Storage, N>,
+    ) {
+        let values = values.into_array();
+        let mut i = 0;
+        while i < N {
+            ctm_rs::thread::__unroll_config::<0>();
+            unsafe {
+                self.store_at(lane + i * STRIDE, values[i]);
+            }
+            i += 1;
+        }
+    }
+
+    /// Store an aligned `N`-element [`GlobalStoreTile`](crate::copy::vector::GlobalStoreTile) at
+    /// logical coordinate `index` without allocating in L1 cache.
+    ///
+    /// # Safety
+    /// `self.layout.crd2idx(index)` must start a contiguous, aligned `N`-element
+    /// range within the underlying global allocation with no conflicting access.
+    #[inline(always)]
+    pub unsafe fn store_global_no_allocate_at<const N: usize>(
+        &mut self,
+        index: usize,
+        values: &crate::copy::vector::GlobalStoreTile<Storage, N>,
+    ) where
+        Storage: crate::copy::vector::GlobalStoreElement,
+    {
+        unsafe {
+            crate::copy::vector::store_global_no_allocate(
+                self.base.add(self.layout.crd2idx(index)),
+                values,
+            );
+        }
+    }
+
+    /// Store packed `u32` words (such as `f16x2` pairs) at logical coordinate `index`
+    /// without allocating in L1 cache.
+    ///
+    /// # Safety
+    /// `self.layout.crd2idx(index)` must be `32`-byte aligned and cover `N`
+    /// `u32` words (`2 * N` `f16` elements) within the underlying global allocation
+    /// with no conflicting access.
+    #[inline(always)]
+    pub unsafe fn store_global_no_allocate_words_at<const N: usize>(
+        &mut self,
+        index: usize,
+        values: &crate::copy::vector::GlobalStoreTile<u32, N>,
+    ) {
+        unsafe {
+            crate::copy::vector::store_global_no_allocate(
+                self.base.add(self.layout.crd2idx(index)).cast::<u32>(),
+                values,
+            );
         }
     }
 }

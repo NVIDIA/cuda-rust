@@ -246,8 +246,9 @@
 //! #[kernel]
 //! pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
 //!     let idx = thread::index_1d();
+//!     let i = idx.get();
 //!     if let Some(c_elem) = c.get_mut(idx) {
-//!         *c_elem = a[idx.get()] + b[idx.get()];
+//!         *c_elem = a[i] + b[i];
 //!     }
 //! }
 //!
@@ -1285,7 +1286,16 @@ fn write_artifact_object(
         "{safe_output_name}.{}.{artifact_id}.{kind}.o",
         std::process::id(),
     ));
-    std::fs::write(&object_path, object)?;
+    // `SHF_GNU_RETAIN` sits in the ELF `SHF_MASKOS` range (`0x0ff00000`), which
+    // GNU ld on AArch64 only honors when `e_ident[EI_OSABI]` is `ELFOSABI_GNU`
+    // (`3`). Stamp `ELFOSABI_GNU` into the ELF header so `--gc-sections`
+    // retains `.oxart` on AArch64 even when linking against a pre-release
+    // `oxide-artifacts` build.
+    let mut patched = object.to_vec();
+    if patched.len() >= 16 && patched.starts_with(b"\x7fELF") && patched[7] == 0 {
+        patched[7] = 3;
+    }
+    std::fs::write(&object_path, &patched)?;
     Ok(object_path)
 }
 

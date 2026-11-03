@@ -5,7 +5,7 @@
 
 //! RMSNorm validation with FP32 accumulation and explicit BF16 rounding boundaries.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
 use cute_rs::BFloat16;
 

@@ -21,7 +21,6 @@ use cute_layout::{IntTuple, validate_cooperative_copy_plan};
 use dialect_cute::ops::CuteCopyG2SOp;
 use dialect_mir::types::MirFP16Type;
 use pliron::{
-    builtin::types::IntegerType,
     common_traits::Verify,
     context::{Context, Ptr},
     operation::Operation,
@@ -43,16 +42,12 @@ impl OperationTranslation for CopyTranslation {
         let elem: TypeHandle = copy.get_attr_copy_g2s_elem(ctx).unwrap().clone().into();
         let element = if elem.deref(ctx).is::<MirFP16Type>() {
             MlirType::Float(crate::MlirFloatType::F16)
-        } else if elem
-            .deref(ctx)
-            .downcast_ref::<IntegerType>()
-            .is_some_and(|ty| ty.width() == 16)
-        {
-            // cp.async transports unchanged bytes. Integer carriers preserve
-            // BF16 storage without introducing an FP16 numerical conversion.
+        } else if dialect_cute::ops::cooperative_elem_bytes(ctx, elem) == Some(2) {
+            // cp.async transports unchanged bytes. Integer and transparent 16-bit
+            // carriers preserve BF16 storage without introducing an FP16 conversion.
             MlirType::Integer(16)
         } else {
-            return Err("CuTe cooperative copy supports f16 or 16-bit integer storage only".into());
+            return Err("CuTe cooperative copy supports f16 or 16-bit storage only".into());
         };
         input.attributes.remove("copy_g2s_elem");
         require_input(&input, 9)?;

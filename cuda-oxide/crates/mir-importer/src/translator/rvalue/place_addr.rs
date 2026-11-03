@@ -22,6 +22,7 @@ use dialect_mir::ops::{
 use pliron::basic_block::BasicBlock;
 use pliron::builtin::types::{IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
+use pliron::linked_list::{ContainsLinkedList, LinkedList};
 use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
@@ -49,6 +50,12 @@ use std::num::NonZeroUsize;
 /// copy are fine) or the construct must be rejected (mutable borrows / raw
 /// mut pointers: writes through a copy are silently lost).
 ///
+/// `Ok(None)` leaves the block as it was: the walk can give up after it has
+/// already emitted ops for a prefix of the chain (the slice load and element
+/// offset before an enum payload it declines to address), and those ops are
+/// erased. A caller's fallback inserts after the same `prev_op`, so leftover
+/// ops would otherwise drift past the block terminator it appends (#1698).
+///
 /// Also used by statement translation to compute the destination address
 /// of projected assignments (indexed `(*ptr)[i]` writes and 3+ element
 /// projection chains), where the same "walk the chain, then act through
@@ -67,7 +74,15 @@ pub(crate) fn translate_place_address(
     let Some(slot) = value_map.get_slot(place.local) else {
         return Ok(None);
     };
-    translate_place_addr_from_slot(
+
+    // the walk inserts a chain right after `prev_op` (or at the block front),
+    // so everything between there and the op that followed it is the walk's
+    let first_inserted = |ctx: &Context| match prev_op {
+        Some(prev) => prev.deref(ctx).get_next(),
+        None => block_ptr.deref(ctx).get_head(),
+    };
+    let boundary = first_inserted(ctx);
+    let walked = translate_place_addr_from_slot(
         ctx,
         body,
         value_map,
@@ -77,7 +92,24 @@ pub(crate) fn translate_place_address(
         block_ptr,
         prev_op,
         loc,
-    )
+    )?;
+    if walked.is_none() {
+        let mut abandoned = Vec::new();
+        let mut cursor = first_inserted(ctx);
+        while let Some(op) = cursor
+            && Some(op) != boundary
+        {
+            abandoned.push(op);
+            cursor = op.deref(ctx).get_next();
+        }
+
+        // users come after their operands in the chain
+        for op in abandoned.into_iter().rev() {
+            Operation::erase(op, ctx);
+        }
+    }
+
+    Ok(walked)
 }
 
 /// Whether an enum payload's SEMANTIC type needs canonical-storage coercion
@@ -1469,5 +1501,134 @@ mod tests {
         let deep: TypeHandle =
             MirStructType::get(&mut ctx, "Deep".into(), vec!["inner".into()], vec![inner]).into();
         assert!(enum_payload_needs_storage_coercion(&ctx, deep));
+    }
+
+    /// Block fixture for the rollback tests: a slot of type `**u32` (so a
+    /// `Deref, Deref` prefix emits two dependent loads), a value map that
+    /// gives local 0 that slot, and a one-local body. The synthetic
+    /// rustc_public handles are never dereferenced, because the walker punts
+    /// on `OpaqueCast` without inspecting its type.
+    fn rollback_fixture(
+        ctx: &mut Context,
+    ) -> (Ptr<BasicBlock>, ValueMap, mir::Body, rustc_public::ty::Ty) {
+        crate::translator::register_dialects(ctx);
+
+        let u32_ty: TypeHandle = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
+        let inner: TypeHandle = MirPtrType::get_generic(ctx, u32_ty, false).into();
+        let outer: TypeHandle = MirPtrType::get_generic(ctx, inner, false).into();
+        let slot_ty: TypeHandle = MirPtrType::get_generic(ctx, outer, false).into();
+        let block = BasicBlock::new(ctx, None, vec![slot_ty]);
+
+        let mut value_map = ValueMap::new(1);
+        value_map.set_slot(0, block.deref(ctx).get_argument(0));
+
+        let rust_ty = rustc_public::ty::Ty::to_val(0);
+        let rust_span = rustc_public::ty::Span::to_val(0);
+        let body = mir::Body::new(
+            vec![],
+            vec![mir::LocalDecl {
+                ty: rust_ty,
+                span: rust_span,
+                mutability: mir::Mutability::Not,
+            }],
+            0,
+            vec![],
+            None,
+            rust_span,
+        );
+        (block, value_map, body, rust_ty)
+    }
+
+    fn placeholder_op(ctx: &mut Context, block: Ptr<BasicBlock>) -> Ptr<Operation> {
+        let u32_ty = IntegerType::get(ctx, 32, Signedness::Unsigned);
+        let op = Operation::new(
+            ctx,
+            MirConstantOp::get_concrete_op_info(),
+            vec![u32_ty.into()],
+            vec![],
+            vec![],
+            0,
+        );
+        op.insert_at_back(block, ctx);
+        op
+    }
+
+    fn block_ops(ctx: &Context, block: Ptr<BasicBlock>) -> Vec<Ptr<Operation>> {
+        block.deref(ctx).iter(ctx).collect()
+    }
+
+    /// Issue #1698: a walk that emits ops for a prefix of the chain and then
+    /// punts must hand the block back unchanged, whether it inserted after an
+    /// op, at the front of a populated block, or into an empty one. The
+    /// caller's fallback inserts after the same `prev_op`, so any leftover
+    /// op would end up after the terminator the caller appends.
+    #[test]
+    fn abandoned_address_walk_erases_its_ops() {
+        let mut ctx = Context::new();
+        let (block, value_map, body, rust_ty) = rollback_fixture(&mut ctx);
+        let anchor = placeholder_op(&mut ctx, block);
+        let follower = placeholder_op(&mut ctx, block);
+        let walk = |ctx: &mut Context, projection, prev_op| {
+            translate_place_address(
+                ctx,
+                &body,
+                &value_map,
+                &mir::Place {
+                    local: 0,
+                    projection,
+                },
+                /* is_mutable */ false,
+                block,
+                prev_op,
+                Location::Unknown,
+            )
+            .expect("the fixture walk must not fail")
+        };
+        let punting_chain = || {
+            vec![
+                mir::ProjectionElem::Deref,
+                mir::ProjectionElem::Deref,
+                mir::ProjectionElem::OpaqueCast(rust_ty),
+            ]
+        };
+
+        // the same prefix without the punt is addressable and emits two loads
+        // into the gap after `anchor`, which is what the punt has to undo
+        let (_, last) = walk(
+            &mut ctx,
+            vec![mir::ProjectionElem::Deref, mir::ProjectionElem::Deref],
+            Some(anchor),
+        )
+        .expect("a pointer-to-pointer deref chain is addressable");
+        let ops = block_ops(&ctx, block);
+        assert_eq!(ops.len(), 4, "the walk must emit one load per Deref");
+        assert_eq!((ops[0], ops[3]), (anchor, follower));
+        assert_eq!(last, Some(ops[2]));
+        for op in [ops[2], ops[1]] {
+            Operation::erase(op, &mut ctx);
+        }
+
+        assert!(walk(&mut ctx, punting_chain(), Some(anchor)).is_none());
+        assert_eq!(
+            block_ops(&ctx, block),
+            vec![anchor, follower],
+            "a punt after `prev_op` must leave no ops behind"
+        );
+
+        assert!(walk(&mut ctx, punting_chain(), None).is_none());
+        assert_eq!(
+            block_ops(&ctx, block),
+            vec![anchor, follower],
+            "a punt at the block front must leave no ops behind"
+        );
+
+        for op in [follower, anchor] {
+            Operation::erase(op, &mut ctx);
+        }
+        assert!(walk(&mut ctx, punting_chain(), None).is_none());
+        assert!(
+            block_ops(&ctx, block).is_empty(),
+            "a punt into an empty block must leave it empty"
+        );
     }
 }

@@ -226,3 +226,32 @@ results:
   seed 1437: PASS [run] CPU/GPU traces matched
 summary: PASS=1, UNSUPPORTED=1
 ```
+
+## Miri Tree Borrows regression sweep
+
+Run generated Rustlantis programs through Miri without requiring CUDA:
+
+```bash
+python3 cuda-oxide/crates/fuzzer/tools/miri_sweep.py --start 358 --count 1
+python3 cuda-oxide/crates/fuzzer/tools/miri_sweep.py --count 500
+```
+
+Before generating programs, the sweep runs two deterministic Miri
+controls: a valid reference-provenance example that must succeed and
+an invalid protected-reborrow example that must produce undefined behavior.
+
+The sweep also executes seed 5 with `static_count = 0`.
+This is a regression for a pre-existing local-reference provenance bug:
+the original generator produced an invalid reborrow rejected by Miri
+Tree Borrows. Checking local-reference read permissions prevents the
+invalid reference from being selected. An isolated ablation reproduced
+both the original generated program and its Miri error.
+
+The sweep uses `nightly-2026-10-11`, enables `-Zmiri-tree-borrows`,
+and generates programs with `static_count = 8`.
+
+Failures preserve the generated Rust source and Miri diagnostics under
+`/tmp/rustlantis-miri-regressions/`.
+
+The reported reference-call coverage is a structural approximation;
+it does not establish that every reference argument originates from a static.

@@ -5,6 +5,7 @@ max_bb_count_hard = 100
 max_fn_count = 20
 max_args_count = 12
 var_dump_chance = 0.5
+static_count = 0
 tuple_max_len = 4
 array_max_len = 8
 struct_max_fields = 8

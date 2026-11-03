@@ -25,22 +25,22 @@
   .cute-rs-preview .arr { fill:none; stroke:#7b7b7b; stroke-width:1.5 }
   .cute-rs-preview .arrhead { fill:none; stroke:#7b7b7b; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round }
   @media (prefers-color-scheme: dark) {
-    .cute-rs-preview .bg { fill:#161618 }
-    .cute-rs-preview .title, .cute-rs-preview .th { fill:#f2f2f2 }
-    .cute-rs-preview .sec { fill:#a3a3a3 }
-    .cute-rs-preview .ts { fill:#b8b8b8 }
-    .cute-rs-preview .k-box { fill:#242428; stroke:#4a4a50 }
-    .cute-rs-preview .tx-box { fill:#f2f2f2 }
-    .cute-rs-preview .hair { stroke:#3a3a40 }
-    .cute-rs-preview .arr, .cute-rs-preview .arrhead { stroke:#a3a3a3 }
-    .cute-rs-preview .k-purple { fill:#3a3490; stroke:#9a93ea }
-    .cute-rs-preview .tx-purple { fill:#e9e7fb }
-    .cute-rs-preview .k-teal { fill:#1f5c47; stroke:#5fc6a0 }
-    .cute-rs-preview .tx-teal { fill:#dff3ec }
-    .cute-rs-preview .k-amber { fill:#6b4100; stroke:#f3b65a }
-    .cute-rs-preview .tx-amber { fill:#fdeed3 }
-    .cute-rs-preview .k-coral { fill:#7d2f1f; stroke:#f08b76 }
-    .cute-rs-preview .tx-coral { fill:#fde7e2 }
+    .cute-rs-preview .bg { fill:#1b1d23 }
+    .cute-rs-preview .title, .cute-rs-preview .th { fill:#f5f6f8 }
+    .cute-rs-preview .sec { fill:#b8beca }
+    .cute-rs-preview .ts { fill:#cfd4de }
+    .cute-rs-preview .k-box { fill:#2e323c; stroke:#5c6375 }
+    .cute-rs-preview .tx-box { fill:#f5f6f8 }
+    .cute-rs-preview .hair { stroke:#5c6375 }
+    .cute-rs-preview .arr, .cute-rs-preview .arrhead { stroke:#b6bcc8 }
+    .cute-rs-preview .k-purple { fill:#524e7d; stroke:#bab5f4 }
+    .cute-rs-preview .tx-purple { fill:#f6f5ff }
+    .cute-rs-preview .k-teal { fill:#346357; stroke:#7ed8bb }
+    .cute-rs-preview .tx-teal { fill:#f0fdf8 }
+    .cute-rs-preview .k-amber { fill:#735a3c; stroke:#f4c474 }
+    .cute-rs-preview .tx-amber { fill:#fff8eb }
+    .cute-rs-preview .k-coral { fill:#6b443e; stroke:#f29b8a }
+    .cute-rs-preview .tx-coral { fill:#fff0ed }
   }
 </style>
 <defs>

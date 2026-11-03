@@ -33,6 +33,7 @@ pub fn register_nvvm_sm120_pack(
     registry.register_operation::<LdmatrixOp>(LoadTranslation)?;
     registry.register_operation::<StmatrixM8n8X2Op>(StoreTranslation)?;
     registry.register_operation::<CpAsyncBulkTensorG2sTile2dOp>(TmaTranslation)?;
+    registry.register_operation::<CpAsyncBulkTensorG2sCtaTile2dOp>(TmaCtaTranslation)?;
     registry.register_attribute::<RegisterMmaShapeAttr>(DropAttribute)?;
     registry.register_attribute::<RegisterMmaOperationAttr>(DropAttribute)?;
     registry.register_attribute::<RegisterMmaKindAttr>(DropAttribute)?;
@@ -330,6 +331,84 @@ impl OperationTranslation for TmaTranslation {
         let mut operations = vec![];
         // The canonical LLVM g2s intrinsic encodes the destination in p7,
         // including for a non-multicast copy into the executing CTA's SMEM.
+        let dst = pointer(
+            session,
+            &mut operations,
+            input.operands[0].clone(),
+            7,
+            &input.location,
+        )?;
+        let barrier = pointer(
+            session,
+            &mut operations,
+            input.operands[1].clone(),
+            3,
+            &input.location,
+        )?;
+        let descriptor = pointer(
+            session,
+            &mut operations,
+            input.operands[2].clone(),
+            0,
+            &input.location,
+        )?;
+        let mut op = operation(
+            "nvvm.cp.async.bulk.tensor.shared.cluster.global",
+            vec![
+                dst,
+                descriptor,
+                input.operands[3].clone(),
+                input.operands[4].clone(),
+                barrier,
+            ],
+            vec![],
+            &input.location,
+        )?;
+        op.properties.insert(
+            "operandSegmentSizes".into(),
+            MlirAttribute::DenseI32Array(vec![1, 1, 2, 1, 0, 0, 0, 0]),
+        );
+        op.properties
+            .insert("useIntrinsic".into(), MlirAttribute::Bool(false));
+        operations.push(op);
+        Ok(operations)
+    }
+}
+
+/// Lower a CTA-local 2D TMA load (`cp.async.bulk.tensor.2d.shared::cta.global.tile`).
+struct TmaCtaTranslation;
+impl OperationTranslation for TmaCtaTranslation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        mut input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        CpAsyncBulkTensorG2sCtaTile2dOp::new(source)
+            .verify(ctx)
+            .map_err(|e| e.to_string())?;
+        require_input(&mut input, "v1:i1035", 6, 0)?;
+        if input.operands[..3]
+            .iter()
+            .any(|operand| matches!(operand.ty, MlirType::Integer(_)))
+        {
+            return Err(
+                "TMA requires pointer carriers for destination, barrier, and descriptor".into(),
+            );
+        }
+        if constant_integer(ctx, source, 5)? != 0 {
+            return Err("ordinary 2D CTA TMA requires the importer's zero cache hint".into());
+        }
+        for index in [3, 4] {
+            if input.operands[index].ty != MlirType::Integer(32) {
+                return Err("2D TMA coordinates must be i32".into());
+            }
+        }
+        if input.operands[5].ty != MlirType::Integer(64) {
+            return Err("2D CTA TMA cache carrier must be i64".into());
+        }
+        let mut operations = vec![];
         let dst = pointer(
             session,
             &mut operations,

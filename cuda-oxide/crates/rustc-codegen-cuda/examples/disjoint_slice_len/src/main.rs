@@ -15,7 +15,7 @@
 //! ```
 //!
 //! Run: cargo oxide run disjoint_slice_len
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_host::cuda_module;
 

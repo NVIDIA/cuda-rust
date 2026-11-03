@@ -12,6 +12,12 @@ The first pass is loop unrolling, requested by the `#[unroll]` /
 `#[unroll(N)]` annotation, which the importer records as a `mir.unroll_hint`
 operation inside the annotated loop. Further loop passes belong here too.
 
+`nounroll.rs` handles the opposite request, `#[nounroll]`. The importer
+records it as a `mir.nounroll_hint` operation, which the unroll pass leaves in
+place. `mir-lower` calls `resolve_nounroll_hints` just before lowering: it
+gives each annotated loop a single latch, removes the hint, and returns the
+latch branch, which the LLVM exporter marks with `llvm.loop.unroll.disable`.
+
 Two more sources ship with it. `canonicalize.rs` prepares a loop for the
 unroller: it merges multiple back-edges (several `continue`s) into one
 synthetic latch and forwards header-carried values out of each loop exit so

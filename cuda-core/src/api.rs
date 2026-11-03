@@ -171,6 +171,7 @@ pub unsafe fn malloc_async(
     num_bytes: usize,
     stream: &Arc<Stream>,
 ) -> Result<sys::CUdeviceptr, DriverError> {
+    stream.context().bind_to_thread()?;
     crate::cudarc_shim::memory::malloc_async(stream.cu_stream(), num_bytes)
 }
 
@@ -185,6 +186,7 @@ pub unsafe fn malloc_from_pool_async(
     pool: &Arc<crate::MemPool>,
     stream: &Arc<Stream>,
 ) -> Result<sys::CUdeviceptr, DriverError> {
+    stream.context().bind_to_thread()?;
     crate::cudarc_shim::pool::malloc_from_pool_async(pool.cu_pool(), stream.cu_stream(), num_bytes)
 }
 
@@ -199,6 +201,7 @@ pub unsafe fn memset_d8_async(
     num_bytes: usize,
     stream: &Arc<Stream>,
 ) -> Result<(), DriverError> {
+    stream.context().bind_to_thread()?;
     crate::cudarc_shim::memory::memset_d8_async(dptr, value, num_bytes, stream.cu_stream())
 }
 
@@ -209,6 +212,7 @@ pub unsafe fn memset_d8_async(
 /// [`malloc_from_pool_async`], `stream` must be ordered after every use of
 /// the allocation, and `dptr` must not be used after this call.
 pub unsafe fn free_async(dptr: sys::CUdeviceptr, stream: &Arc<Stream>) -> Result<(), DriverError> {
+    stream.context().bind_to_thread()?;
     crate::cudarc_shim::memory::free_async(dptr, stream.cu_stream())
 }
 
@@ -222,6 +226,7 @@ pub unsafe fn memcpy_htod_async<T>(
     num_elements: usize,
     stream: &Arc<Stream>,
 ) -> Result<(), DriverError> {
+    stream.context().bind_to_thread()?;
     let num_bytes = num_elements * mem::size_of::<T>();
     unsafe {
         crate::cudarc_shim::memory::memcpy_htod_async(dst, src, num_bytes, stream.cu_stream())
@@ -238,6 +243,7 @@ pub unsafe fn memcpy_dtoh_async<T>(
     num_elements: usize,
     stream: &Arc<Stream>,
 ) -> Result<(), DriverError> {
+    stream.context().bind_to_thread()?;
     let num_bytes = num_elements * mem::size_of::<T>();
     unsafe {
         crate::cudarc_shim::memory::memcpy_dtoh_async(dst, src, num_bytes, stream.cu_stream())
@@ -254,6 +260,7 @@ pub unsafe fn memcpy_dtod_async<T>(
     num_elements: usize,
     stream: &Arc<Stream>,
 ) -> Result<(), DriverError> {
+    stream.context().bind_to_thread()?;
     let num_bytes = num_elements * mem::size_of::<T>();
     unsafe {
         crate::cudarc_shim::memory::memcpy_dtod_async(dst, src, num_bytes, stream.cu_stream())

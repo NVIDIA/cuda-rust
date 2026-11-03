@@ -8,7 +8,7 @@
 //! Run under cuda-gdb with:
 //! `CUDA_OXIDE_DEBUG=full cargo oxide debug debug_pointer_locals`
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, cuda_module, kernel, thread};
 

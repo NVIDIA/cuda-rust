@@ -18,7 +18,7 @@ mod kernels {
 }
 
 fn main() -> Result<(), Error> {
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
     let x = api::ones::<f32>(&[4]).sync_on(&stream)?;
     let _graph = CudaGraph::scope(&stream, |s| {

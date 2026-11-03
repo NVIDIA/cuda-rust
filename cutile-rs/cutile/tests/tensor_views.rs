@@ -48,6 +48,15 @@ mod tensor_views_module {
         let tile: Tile<f32, { [2, 2] }> = load_tile_like(input, output);
         output.store(tile);
     }
+
+    /// Copies a 32x32 tile. Tiles this wide get vectorized loads when the
+    /// specialization claims a 16-byte-aligned base, so a wrong
+    /// `base_ptr_div` on an offset view faults instead of silently working.
+    #[cutile::entry()]
+    fn copy_32x32(output: &mut Tensor<f32, { [32, 32] }>, input: &Tensor<f32, { [-1, -1] }>) {
+        let tile: Tile<f32, { [32, 32] }> = load_tile_like(input, output);
+        output.store(tile);
+    }
 }
 
 #[test]
@@ -264,6 +273,47 @@ fn slice_chained() {
             .expect("Failed.");
         let host: Vec<f32> = result.unpartition().to_host_vec().sync().expect("Failed.");
         assert_eq!(host, vec![5.0, 6.0, 9.0, 10.0]);
+    });
+}
+
+#[test]
+fn view_of_offset_slice_keeps_measured_alignment() {
+    // Slicing one f32 in moves the data pointer 4 bytes off the 16-aligned
+    // allocation. Re-viewing that slice must keep the slice's alignment, not
+    // revert to the allocation's.
+    common::with_test_stack(|| {
+        let tensor = api::arange::<f32>(64).sync().expect("Failed.");
+        let sliced = tensor.slice(&[1..33]).expect("Failed.");
+        let viewed = sliced.view(&[4, 8]).expect("Failed.");
+
+        assert_eq!(sliced.spec().base_ptr_div.divisor, 4);
+        assert_eq!(
+            viewed.spec().base_ptr_div,
+            sliced.spec().base_ptr_div,
+            "view of an offset slice must keep the slice's base_ptr_div"
+        );
+    });
+}
+
+#[test]
+fn view_of_offset_slice_launches_with_wide_tiles() {
+    // arange(128*128 + 16), slice one element in, view as [128, 128], copy
+    // with 32x32 tiles. The view's data pointer is 4 bytes past a 16-byte
+    // boundary, so a spec that claims 16-byte alignment makes the JIT emit
+    // vectorized loads and the launch fails with a misaligned address.
+    common::with_test_stack(|| {
+        let n = 128 * 128;
+        let tensor = api::arange::<f32>(n + 16).sync().expect("Failed.");
+        let sliced = tensor.slice(&[1..1 + n]).expect("Failed.");
+        let viewed = sliced.view(&[128, 128]).expect("Failed.");
+
+        let output = api::zeros::<f32>(&[128, 128]).sync().expect("Failed.");
+        let (result, _) = tensor_views_module::copy_32x32(output.partition([32, 32]), &viewed)
+            .sync()
+            .expect("copy of a view over an offset slice failed");
+        let host: Vec<f32> = result.unpartition().to_host_vec().sync().expect("Failed.");
+        let want: Vec<f32> = (1..1 + n).map(|v| v as f32).collect();
+        assert_eq!(host, want);
     });
 }
 

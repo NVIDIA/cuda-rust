@@ -1,0 +1,15 @@
+[package]
+name = "nounroll"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace]
+
+# Keeps `#[nounroll]` loops rolled through LLVM, libNVVM, and ptxas.
+#   cargo oxide run nounroll
+
+[dependencies]
+cuda-device = { path = "../../../cuda-device" }
+cuda-host = { path = "../../../cuda-host" }
+cuda-core = { path = "../../../../../cuda-core" }

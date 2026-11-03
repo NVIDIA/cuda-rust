@@ -8,6 +8,7 @@
 //! Pure Rust — no melior or tile-ir dependency.
 
 use crate::ast::SourceLocation;
+use crate::cuda_tile_runtime_utils::DEFAULT_OPT_LEVEL;
 use crate::error::{JITError, SpannedJITError};
 use quote::ToTokens;
 use std::collections::BTreeMap;
@@ -99,6 +100,64 @@ pub enum DebugInfoLevel {
     Full,
 }
 
+const BUILD_DEBUG_INFO: DebugInfoLevel = match env!("CUTILE_BUILD_DEBUG_INFO").as_bytes() {
+    b"full" => DebugInfoLevel::Full,
+    b"line" => DebugInfoLevel::Line,
+    _ => DebugInfoLevel::None,
+};
+
+/// How both compile stages generate device code.
+///
+/// Debugging owns level 0 because `tileiras` accepts `--device-debug` at no
+/// other level, so every value maps to flags `tileiras` accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CodegenMode {
+    /// `--opt-level 0 --device-debug`. The frontend also stops hoisting
+    /// bounds checks out of loops, so every check that runs on the device
+    /// sits at the source line that wrote it. Checks the compiler discharged
+    /// by proof or moved to launch time never reach device code in any mode.
+    Debug,
+    /// `--opt-level <level>`, plus `--lineinfo` for profiler correlation.
+    Optimized { level: u8, lineinfo: bool },
+}
+
+impl CodegenMode {
+    pub const RELEASE: Self = Self::Optimized {
+        level: DEFAULT_OPT_LEVEL,
+        lineinfo: false,
+    };
+
+    pub fn opt_level(self) -> u8 {
+        match self {
+            Self::Debug => 0,
+            Self::Optimized { level, .. } => level,
+        }
+    }
+
+    fn with_debug_info(self, debug_info: DebugInfoLevel) -> Self {
+        let level = match self {
+            Self::Debug => DEFAULT_OPT_LEVEL,
+            Self::Optimized { level, .. } => level,
+        };
+        match debug_info {
+            DebugInfoLevel::Full => Self::Debug,
+            DebugInfoLevel::Line => Self::Optimized {
+                level,
+                lineinfo: true,
+            },
+            DebugInfoLevel::None => Self::Optimized {
+                level,
+                lineinfo: false,
+            },
+        }
+    }
+
+    fn with_opt_level(self, level: u8) -> Self {
+        let lineinfo = matches!(self, Self::Optimized { lineinfo: true, .. });
+        Self::Optimized { level, lineinfo }
+    }
+}
+
 /// Runtime compile options for kernel JIT compilation.
 ///
 /// These options control kernel-level compilation hints that can vary between
@@ -111,26 +170,16 @@ pub enum DebugInfoLevel {
 /// `Full` for `debug = "line-tables-only"` or `"limited"`, not `Line`.
 /// `CUDA_RUST_DEBUG=none|line|full` overrides this default at build time;
 /// changing it when running an already-built app has no effect. Use
-/// [`Self::debug_info`] to override the default for one compilation.
+/// [`Self::debug_info`] to override the default for one compilation. At run
+/// time, the `CUTILE_JIT_*` variables in [`crate::jit_env`] override what the
+/// code selected.
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct CompileOptions {
     pub occupancy: Option<i32>,
     pub num_cta_in_cga: Option<i32>,
     pub max_divisibility: Option<i32>,
     pub num_worker_warps_per_cta: Option<i32>,
-    /// `tileiras` optimization level (`--opt-level`). `None` means the
-    /// default: 3, or 0 when `device_debug` is set.
-    pub opt_level: Option<u8>,
-    /// Compile for debugging (`tileiras --device-debug`): the frontend stops
-    /// hoisting bounds checks out of loops, so every check that runs on the
-    /// device sits at the source line that wrote it, and the backend
-    /// generates debug information. Checks the compiler discharged by proof
-    /// or moved to launch time never reach device code in any mode. Implies
-    /// `--opt-level 0` unless `opt_level` is set explicitly.
-    pub device_debug: bool,
-    /// Emit line-number information (`tileiras --lineinfo`) for profiler
-    /// correlation, without the rest of the debug contract.
-    pub lineinfo: bool,
+    pub codegen: CodegenMode,
     /// Instrument memory accesses for Compute Sanitizer's memcheck tool
     /// (`tileiras --sanitize=memcheck`).
     pub sanitize_memcheck: bool,
@@ -143,9 +192,7 @@ impl Default for CompileOptions {
             num_cta_in_cga: None,
             max_divisibility: None,
             num_worker_warps_per_cta: None,
-            opt_level: None,
-            device_debug: env!("CUTILE_BUILD_DEBUG_INFO") == "full",
-            lineinfo: env!("CUTILE_BUILD_DEBUG_INFO") == "line",
+            codegen: CodegenMode::RELEASE.with_debug_info(BUILD_DEBUG_INFO),
             sanitize_memcheck: false,
         }
     }
@@ -156,14 +203,11 @@ impl CompileOptions {
         Self::default()
     }
 
-    /// Selects exactly one debug-info mode, replacing both debug flags.
-    ///
-    /// Other options, including an explicitly set optimization level, are
-    /// preserved. With no explicit optimization level, `Full` uses level 0
-    /// and `None` / `Line` use level 3.
+    /// Selects the debug-info mode. `Full` selects [`CodegenMode::Debug`];
+    /// `None` and `Line` select optimized code at the current level, or at
+    /// level 3 when leaving debug mode.
     pub fn debug_info(mut self, level: DebugInfoLevel) -> Self {
-        self.device_debug = level == DebugInfoLevel::Full;
-        self.lineinfo = level == DebugInfoLevel::Line;
+        self.codegen = self.codegen.with_debug_info(level);
         self
     }
 
@@ -187,18 +231,10 @@ impl CompileOptions {
         self
     }
 
+    /// Selects optimized code at `opt_level`, keeping line info. This leaves
+    /// debug mode, which `tileiras` supports only at level 0.
     pub fn opt_level(mut self, opt_level: u8) -> Self {
-        self.opt_level = Some(opt_level);
-        self
-    }
-
-    pub fn device_debug(mut self, device_debug: bool) -> Self {
-        self.device_debug = device_debug;
-        self
-    }
-
-    pub fn lineinfo(mut self, lineinfo: bool) -> Self {
-        self.lineinfo = lineinfo;
+        self.codegen = self.codegen.with_opt_level(opt_level);
         self
     }
 
@@ -333,6 +369,119 @@ impl OptimizationHints {
         }
         if let Some(num_worker_warps_per_cta) = options.num_worker_warps_per_cta {
             sm_hints.num_worker_warps_per_cta = Some(num_worker_warps_per_cta);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cuda_tile_runtime_utils::TileirasOptions;
+
+    /// `(opt_level, device_debug, lineinfo)` as `tileiras` gets them.
+    fn tileiras(options: &CompileOptions) -> (u8, bool, bool) {
+        let flags = TileirasOptions::from_compile_options(options);
+        let device_debug = flags.codegen == CodegenMode::Debug;
+        let lineinfo = matches!(flags.codegen, CodegenMode::Optimized { lineinfo: true, .. });
+        (flags.codegen.opt_level(), device_debug, lineinfo)
+    }
+
+    #[test]
+    fn every_setter_sequence_yields_flags_tileiras_accepts() {
+        let setters: Vec<fn(CompileOptions) -> CompileOptions> = vec![
+            |o| o.debug_info(DebugInfoLevel::None),
+            |o| o.debug_info(DebugInfoLevel::Line),
+            |o| o.debug_info(DebugInfoLevel::Full),
+            |o| o.opt_level(0),
+            |o| o.opt_level(3),
+        ];
+        for first in &setters {
+            for second in &setters {
+                for third in &setters {
+                    let options = third(second(first(CompileOptions::new())));
+                    let (opt_level, device_debug, lineinfo) = tileiras(&options);
+                    assert!(
+                        !device_debug || (opt_level == 0 && !lineinfo),
+                        "{options:?} resolves to an invalid tileiras combination"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_last_setter_decides_between_debug_and_optimized_code() {
+        let full = DebugInfoLevel::Full;
+        assert_eq!(
+            tileiras(&CompileOptions::new().debug_info(full).opt_level(3)),
+            (3, false, false)
+        );
+        assert_eq!(
+            tileiras(&CompileOptions::new().opt_level(3).debug_info(full)),
+            (0, true, false)
+        );
+    }
+
+    #[test]
+    fn optimized_code_keeps_its_level_and_line_info_across_setters() {
+        let line = DebugInfoLevel::Line;
+        assert_eq!(
+            tileiras(&CompileOptions::new().opt_level(2).debug_info(line)),
+            (2, false, true)
+        );
+        assert_eq!(
+            tileiras(&CompileOptions::new().debug_info(line).opt_level(1)),
+            (1, false, true)
+        );
+        assert_eq!(
+            tileiras(
+                &CompileOptions::new()
+                    .debug_info(DebugInfoLevel::Full)
+                    .debug_info(DebugInfoLevel::None)
+            ),
+            (3, false, false)
+        );
+    }
+
+    #[test]
+    fn cache_bytes_match_the_previous_encoding() {
+        let full = DebugInfoLevel::Full;
+        let line = DebugInfoLevel::Line;
+        for (options, opt_level, flags) in [
+            (
+                CompileOptions::new().debug_info(DebugInfoLevel::None),
+                3,
+                0b000,
+            ),
+            (CompileOptions::new().debug_info(line), 3, 0b010),
+            (CompileOptions::new().debug_info(full), 0, 0b001),
+            (
+                CompileOptions::new().opt_level(1).debug_info(line),
+                1,
+                0b010,
+            ),
+            (
+                CompileOptions::new()
+                    .debug_info(full)
+                    .sanitize_memcheck(true),
+                0,
+                0b101,
+            ),
+            (
+                CompileOptions::new()
+                    .debug_info(DebugInfoLevel::None)
+                    .opt_level(0)
+                    .sanitize_memcheck(true),
+                0,
+                0b100,
+            ),
+        ] {
+            let tileiras = TileirasOptions::from_compile_options(&options);
+            assert_eq!(
+                (tileiras.codegen.opt_level(), tileiras.flags_byte()),
+                (opt_level, flags),
+                "{options:?}"
+            );
         }
     }
 }

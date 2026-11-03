@@ -27,8 +27,9 @@
 use core::marker::PhantomData;
 
 use crate::copy::cooperative::{GmemMatrix, SmemTile, copy_g2s};
-use crate::markers::LeadingDimMarker;
+use crate::markers::{C, CopyUniversal, Layout, LeadingDimMarker, ReifySmem2D, RowMajor};
 use crate::tensor::TensorElement;
+use ctm_rs::memory::DisjointSlice;
 
 /// A typed global-memory source for a block-wide copy.
 ///
@@ -52,11 +53,18 @@ impl<Element: TensorElement<T>, T: Copy, LD, Role> GlobalCopyTensor<Element, T, 
     /// Attach an element meaning and role to a global-memory matrix view.
     #[must_use]
     #[inline(always)]
-    pub(crate) const fn from_carrier(carrier: GmemMatrix<T, LD>) -> Self {
+    pub const fn from_matrix(carrier: GmemMatrix<T, LD>) -> Self {
         Self {
             carrier,
             element: PhantomData,
         }
+    }
+
+    /// Attach an element meaning and role to a global-memory matrix view.
+    #[must_use]
+    #[inline(always)]
+    pub(crate) const fn from_carrier(carrier: GmemMatrix<T, LD>) -> Self {
+        Self::from_matrix(carrier)
     }
 
     /// Return the underlying matrix view used by the compiler copy operation.
@@ -252,6 +260,115 @@ impl<Atom, ThreadLayout, ValueLayout, TileLayout>
                 destination.carrier_mut(),
                 self.thread_idx,
             )
+        }
+    }
+
+    /// Copy this thread's part of one global matrix tile into a shared tile.
+    ///
+    /// Forwards directly to [`crate::copy_g2s`] using the plan's `Atom`,
+    /// `ThreadLayout`, `ValueLayout`, and `TileLayout` type arguments.
+    ///
+    /// # Safety
+    /// The caller must satisfy all participation, alignment, pitch, and bounds
+    /// requirements of [`crate::copy_g2s`].
+    #[inline(always)]
+    pub unsafe fn copy_g2s<T: Copy, LD: LeadingDimMarker, SharedLayout>(
+        &self,
+        source: &GmemMatrix<T, LD>,
+        tile_coord: (usize, usize),
+        destination: &mut SmemTile<T, SharedLayout>,
+    ) {
+        unsafe {
+            copy_g2s::<Atom, ThreadLayout, ValueLayout, TileLayout, SharedLayout, T>(
+                source,
+                tile_coord,
+                destination,
+                self.thread_idx,
+            )
+        }
+    }
+
+    /// Convert row band `ROW` (`0` or `1`) of an `m16n8k16` [`crate::mma::FragmentC`] to `f16x2`
+    /// and store it into `destination` at `(warp_m, tile_n)`.
+    ///
+    /// Mirrors CuTeDSL's `cute.copy(smem_copy_atom_O, taccOrO, taccOsO)` using
+    /// the static [`crate::mma::bf16::CLayout`] and [`SmemTile::store_packed_f16x2`].
+    ///
+    /// # Safety
+    /// `self.thread_idx % 32` must be this thread's hardware lane, `(warp_m * 16 + row, tile_n * 8 + col)`
+    /// must lie inside `destination`, and no conflicting shared-memory access may race this store.
+    #[inline(always)]
+    pub unsafe fn copy_r2s<const ROW: usize, SharedLayout: ReifySmem2D>(
+        &self,
+        source: &crate::mma::FragmentC,
+        destination: &SmemTile<f16, SharedLayout>,
+        warp_m: usize,
+        tile_n: usize,
+    ) {
+        const { assert!(ROW < 2) };
+        let lane = self.thread_idx % 32;
+        let row = warp_m * 16 + crate::mma::FragmentC::row_coord::<ROW>(lane) as usize;
+        let col = crate::mma::FragmentC::col_coord::<0>(lane, tile_n) as usize;
+        unsafe {
+            destination.store_packed_f16x2(row, col, source.0[ROW * 2], source.0[ROW * 2 + 1]);
+        }
+    }
+}
+
+impl<const THR_R: i64, const THR_C: i64, const TILE_R: i64, const TILE_C: i64>
+    ThrCopy<
+        CopyUniversal<16>,
+        Layout<(C<THR_R>, C<THR_C>), (C<THR_C>, C<1>)>,
+        Layout<(C<1>, C<8>), (C<8>, C<1>)>,
+        RowMajor<TILE_R, TILE_C>,
+    >
+{
+    /// Copy this thread's 16-byte (8-element `f16`) slice from shared memory to global memory.
+    ///
+    /// Mirrors CuTeDSL's predicated `cute.copy(gmem_tiled_copy_O, tOsO, tOgO)`
+    /// in FlashAttention-2 epilogues. Threads whose global row is at or beyond
+    /// `total_rows` do not write.
+    ///
+    /// # Safety
+    /// - `self.thread_idx` must be in `0 .. (THR_R * THR_C) as u32`.
+    /// - `source` must be CTA-synchronized, 16-byte aligned, and valid for `SharedLayout`.
+    /// - `destination` must be 16-byte aligned and contain at least `total_rows * row_stride`
+    ///   elements, with `col_offset` and `row_stride` divisible by 8.
+    /// - Participating threads must map to disjoint global output slices.
+    #[inline(always)]
+    pub unsafe fn copy_s2g<SharedLayout: ReifySmem2D>(
+        &self,
+        source: &SmemTile<f16, SharedLayout>,
+        destination: &mut DisjointSlice<f16>,
+        tile_row: usize,
+        total_rows: usize,
+        row_stride: usize,
+        col_offset: usize,
+    ) {
+        const {
+            assert!(THR_R > 0 && THR_C > 0);
+            assert!(TILE_R == THR_R && TILE_C == THR_C * 8);
+            assert!(SharedLayout::SHAPE.0 >= TILE_R && SharedLayout::SHAPE.1 == TILE_C);
+            assert!(SharedLayout::STRIDE.1 == 1);
+            assert!(SharedLayout::NUM_BITS == 0 || SharedLayout::NUM_BASE >= 3);
+        }
+        let tid = self.thread_idx as usize;
+        let thr_cols = THR_C as usize;
+        let local_row = tid / thr_cols;
+        let local_col = (tid % thr_cols) * 8;
+        let global_row = tile_row * (TILE_R as usize) + local_row;
+        if global_row < total_rows {
+            let smem_offset =
+                crate::static_layout::crd2idx_2d::<SharedLayout>(local_row, local_col);
+            let dst_offset = global_row * row_stride + col_offset + local_col;
+            unsafe {
+                let packed = source.base.add(smem_offset).cast::<u128>().read();
+                destination
+                    .as_mut_ptr()
+                    .add(dst_offset)
+                    .cast::<u128>()
+                    .write(packed);
+            }
         }
     }
 }

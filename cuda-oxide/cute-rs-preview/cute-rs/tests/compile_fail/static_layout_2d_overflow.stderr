@@ -5,7 +5,7 @@ error[E0080]: evaluation panicked: static layout physical offset overflow
    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `_` failed inside this call
    |
 note: inside `max_offset_2d::<cute_rs::Layout<(C<4>, C<1>), (C<i64::MAX>, C<1>)>>`
-  --> src/static_layout.rs
+  --> $WORKSPACE/cute-rs-preview/cute-layout/src/static_layout.rs
    |
    |     let row_max = checked_offset_mul(parameter(L::SHAPE.0 - 1), parameter(L::STRIDE.0));
    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -15,7 +15,7 @@ note: inside `static_layout::checked_offset_mul`
    |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
    |
-  ::: src/static_layout.rs
+  ::: $WORKSPACE/cute-rs-preview/cute-layout/src/static_layout.rs
    |
    |         None => panic!("static layout physical offset overflow"),
    |                 ------------------------------------------------ in this macro invocation

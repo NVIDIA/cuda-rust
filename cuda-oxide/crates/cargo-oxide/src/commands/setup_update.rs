@@ -80,6 +80,8 @@ pub fn setup(ctx: &Context) {
     }
 }
 
+/// Builds the workspace backend source in `codegen_crate` and publishes the
+/// result to the shared cache.
 fn build_and_publish(codegen_crate: &Path) {
     println!("Building cuda-oxide codegen backend...");
     println!();

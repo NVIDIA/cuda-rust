@@ -1535,6 +1535,8 @@ pub(super) fn test_tma_admission() -> TmaAdmission {
     TmaAdmission {
         llvm_evidence_profile: "llvm-tma-test".into(),
         libnvvm_evidence_profile: "libnvvm-tma-test".into(),
+        cta_llvm_evidence_profile: Some("llvm-tma-test".into()),
+        cta_libnvvm_evidence_profile: Some("libnvvm-tma-test".into()),
         reduce_llvm_evidence_profile: Some("llvm-tma-reduce-test".into()),
         reduce_libnvvm_evidence_profile: Some("libnvvm-tma-reduce-test".into()),
         runtime_validation: RuntimeValidation::Unexecuted,
@@ -1883,6 +1885,9 @@ pub(super) fn test_mbarrier_extended_admission() -> MbarrierExtendedAdmission {
         MbarrierExtendedOperation::FenceProxyAsyncGenericReleaseSharedCtaCluster,
         MbarrierExtendedOperation::FenceProxyAsyncGenericAcquireSharedClusterCluster,
         MbarrierExtendedOperation::Nanosleep,
+        MbarrierExtendedOperation::ArriveRemoteClusterRelaxed,
+        MbarrierExtendedOperation::TryWaitParityClusterRelaxed,
+        MbarrierExtendedOperation::FenceAcquireSharedClusterCluster,
     ]
     .map(|operation| crate::model::MbarrierExtendedAdmissionVariant {
         abi_id: mbarrier_extended_recipe(operation).abi_id.into(),
@@ -1892,6 +1897,7 @@ pub(super) fn test_mbarrier_extended_admission() -> MbarrierExtendedAdmission {
     MbarrierExtendedAdmission {
         llvm_evidence_profile: "llvm-test".into(),
         libnvvm_evidence_profile: "libnvvm-test".into(),
+        relaxed_libnvvm_evidence_profile: None,
         runtime_validation: RuntimeValidation::Unexecuted,
         variants,
     }

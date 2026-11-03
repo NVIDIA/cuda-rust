@@ -229,6 +229,37 @@ fn dynamic_stack_mentions_without_calls_do_not_raise_requirements() {
 }
 
 #[test]
+fn packed_pointer_global_initializers_require_ptx71() {
+    let packed_relocation = concat!(
+        "@target = addrspace(1) global [4 x i8] c\"\\01\\02\\03\\04\", align 4\n",
+        "@packed = local_unnamed_addr addrspace(1) global <{ [3 x i8], i64, [2 x i8] }> ",
+        "<{ [3 x i8] c\"\\11\\223\", i64 ptrtoint (ptr addrspacecast (ptr addrspace(1) @target to ptr) to i64), [2 x i8] c\"UD\" }>, align 1\n",
+    );
+    let requirements = detect_module_requirements_in_llvm_text(packed_relocation);
+    assert_eq!(requirements.ptx_isa, PtxIsaRequirement::new(71));
+    assert_eq!(
+        required_ptx_feature(&"sm_80".parse().unwrap(), requirements.ptx_isa).unwrap(),
+        Some("+ptx71")
+    );
+    assert_eq!(
+        required_ptx_feature(&"sm_86".parse().unwrap(), requirements.ptx_isa).unwrap(),
+        None
+    );
+
+    for non_packed_or_scalar in [
+        "@unpacked = addrspace(1) global { i64 } { i64 ptrtoint (ptr addrspacecast (ptr addrspace(1) @target to ptr) to i64) }, align 8\n",
+        "@packed_bytes = addrspace(1) global <{ [3 x i8], i32 }> <{ [3 x i8] c\"abc\", i32 7 }>, align 1\n",
+        "; @commented = addrspace(1) global <{ [1 x i8], i64 }> <{ [1 x i8] c\"x\", i64 ptrtoint (ptr @target to i64) }>\n",
+    ] {
+        assert_eq!(
+            detect_module_requirements_in_llvm_text(non_packed_or_scalar).ptx_isa,
+            PtxIsaRequirement::Default,
+            "{non_packed_or_scalar}"
+        );
+    }
+}
+
+#[test]
 fn ptx73_feature_is_requested_only_when_the_target_default_is_older() {
     assert_eq!(
         ptx_isa_requirement_for_floor(72, "test", "test").unwrap(),
@@ -766,5 +797,69 @@ fn generated_dot_product_floors_record_sm61_and_split_backend_support() {
             &"sm_75".parse().unwrap(),
             &libnvvm
         ));
+    }
+}
+
+#[test]
+fn generated_m16n8k8_mma_floors_admit_turing_only_for_fp16() {
+    use crate::generated_intrinsic_targets::{
+        GeneratedIntrinsicBackend, generated_intrinsic_target_by_marker,
+    };
+
+    let backends = [
+        GeneratedIntrinsicBackend::LlvmNvptx,
+        GeneratedIntrinsicBackend::LibNvvm,
+    ];
+    // mma_m16n8k8_f16_f16 and mma_m16n8k8_f32_f16
+    for marker in ["v1:i0521", "v1:i0523"] {
+        let target = generated_intrinsic_target_by_marker(marker).unwrap();
+        for backend in backends {
+            let generated =
+                GeneratedModuleRequirements::from_targets(vec![target]).for_backend(backend);
+            assert_eq!(
+                generated_ptx_isa_requirement(&generated).unwrap(),
+                PtxIsaRequirement::new(65),
+                "{marker} {backend:?}"
+            );
+            assert!(
+                !generated_target_satisfied(&"sm_72".parse().unwrap(), &generated),
+                "{marker} {backend:?}"
+            );
+            for arch in ["sm_75", "sm_80"] {
+                assert!(
+                    generated_target_satisfied(&arch.parse().unwrap(), &generated),
+                    "{marker} {backend:?} {arch}"
+                );
+            }
+            validate_generated_target(&"sm_75".parse().unwrap(), &generated).unwrap();
+        }
+    }
+
+    // The three sm_80 members of the admission (m16n8k4 TF32, m16n8k8 BF16,
+    // m16n8k16 F16) and the m16n8k8 TF32 form keep the Ampere floor, although
+    // LLVM selects the BF16 and TF32 m16n8k8 forms at sm_75.
+    for marker in ["v1:i0520", "v1:i0522", "v1:i0524", "v1:i0107"] {
+        let target = generated_intrinsic_target_by_marker(marker).unwrap();
+        for backend in backends {
+            let generated =
+                GeneratedModuleRequirements::from_targets(vec![target]).for_backend(backend);
+            assert_eq!(
+                generated_ptx_isa_requirement(&generated).unwrap(),
+                PtxIsaRequirement::new(70),
+                "{marker} {backend:?}"
+            );
+            assert!(
+                !generated_target_satisfied(&"sm_75".parse().unwrap(), &generated),
+                "{marker} {backend:?}"
+            );
+            assert!(
+                generated_target_satisfied(&"sm_80".parse().unwrap(), &generated),
+                "{marker} {backend:?}"
+            );
+            let error =
+                validate_generated_target(&"sm_75".parse().unwrap(), &generated).unwrap_err();
+            assert!(error.contains(target.id), "{error}");
+            assert!(error.contains("sm_80 or newer"), "{error}");
+        }
     }
 }

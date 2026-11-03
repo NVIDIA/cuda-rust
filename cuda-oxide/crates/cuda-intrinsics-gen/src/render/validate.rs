@@ -733,10 +733,15 @@ pub(super) fn validate_renderable(catalog: &CatalogFile) -> Result<()> {
                             && match (tma.operation, tma.adapter) {
                                 (
                                     TmaOperation::G2sTile1d
+                                    | TmaOperation::G2sCtaTile1d
                                     | TmaOperation::G2sTile2d
+                                    | TmaOperation::G2sCtaTile2d
                                     | TmaOperation::G2sTile3d
+                                    | TmaOperation::G2sCtaTile3d
                                     | TmaOperation::G2sTile4d
-                                    | TmaOperation::G2sTile5d,
+                                    | TmaOperation::G2sCtaTile4d
+                                    | TmaOperation::G2sTile5d
+                                    | TmaOperation::G2sCtaTile5d,
                                     TmaAdapter::G2sPointersCoordinatesBarrierInjectDefaults,
                                 ) => {
                                     !record.rust.safe
@@ -1106,6 +1111,14 @@ pub(super) fn validate_renderable(catalog: &CatalogFile) -> Result<()> {
                                     MbarrierExtendedAdapter::RawClusterAddressToVoid,
                                 ) => record.id == "mbarrier_arrive_cluster",
                                 (
+                                    MbarrierExtendedOperation::ArriveRemoteClusterRelaxed,
+                                    MbarrierExtendedAdapter::RawClusterAddressToVoid,
+                                ) => record.id == "mbarrier_arrive_cluster_relaxed",
+                                (
+                                    MbarrierExtendedOperation::TryWaitParityClusterRelaxed,
+                                    MbarrierExtendedAdapter::PointerParityToPredicate,
+                                ) => record.id == "mbarrier_try_wait_parity_cluster_relaxed",
+                                (
                                     MbarrierExtendedOperation::TryWaitTokenCta,
                                     MbarrierExtendedAdapter::PointerTokenToPredicate,
                                 ) => record.id == "mbarrier_try_wait",
@@ -1135,6 +1148,10 @@ pub(super) fn validate_renderable(catalog: &CatalogFile) -> Result<()> {
                                     MbarrierExtendedAdapter::ZeroOperandsToVoid,
                                 ) => record.id
                                     == "fence_proxy_async_generic_acquire_shared_cluster_cluster",
+                                (
+                                    MbarrierExtendedOperation::FenceAcquireSharedClusterCluster,
+                                    MbarrierExtendedAdapter::ZeroOperandsToVoid,
+                                ) => record.id == "fence_acquire_shared_cluster_cluster",
                                 (
                                     MbarrierExtendedOperation::Nanosleep,
                                     MbarrierExtendedAdapter::NanosecondsToVoid,

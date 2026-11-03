@@ -17,7 +17,7 @@
  *   cargo run -p cutile-examples --example cuda_graphs
  */
 
-use cuda_core::{Device, Stream};
+use cuda_core::{Context, Stream};
 use cutile::error::Error;
 use cutile::prelude::*;
 use std::time::Instant;
@@ -160,7 +160,7 @@ impl GraphModel {
         let mut buffers: Vec<_> = (0..cfg.n_layers)
             .map(|_| LayerBuffers::allocate(cfg.d, stream))
             .collect::<Result<_, _>>()?;
-        unsafe { stream.synchronize() }?;
+        stream.synchronize()?;
 
         // Capture the forward pass as a CUDA graph. Each s.record()
         // records a graph node, releasing borrows between kernels.
@@ -291,7 +291,7 @@ fn main() -> Result<(), Error> {
         return Ok(());
     }
 
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
 
     let cfg = Config {

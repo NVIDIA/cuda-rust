@@ -331,7 +331,9 @@ impl<const N_COLS: u32> TmemGuard<TmemReady, N_COLS> {
     pub const fn n_cols(&self) -> u32 {
         N_COLS
     }
+}
 
+impl<const N_COLS: u32> TmemGuard<TmemReady, N_COLS> {
     /// Deallocate the TMEM.
     ///
     /// **All threads in the block should call this.** Only warp 0 performs

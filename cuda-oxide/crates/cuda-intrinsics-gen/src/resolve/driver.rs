@@ -243,6 +243,8 @@ pub(crate) fn test_catalog_with_tma(repo_root: &Path) -> Result<CatalogFile> {
     let admission = TmaAdmission {
         llvm_evidence_profile: "llvm-tma-test".into(),
         libnvvm_evidence_profile: "libnvvm-tma-test".into(),
+        cta_llvm_evidence_profile: Some("llvm-tma-test".into()),
+        cta_libnvvm_evidence_profile: Some("libnvvm-tma-test".into()),
         reduce_llvm_evidence_profile: Some("llvm-tma-reduce-test".into()),
         reduce_libnvvm_evidence_profile: Some("libnvvm-tma-reduce-test".into()),
         runtime_validation: RuntimeValidation::Unexecuted,
@@ -316,9 +318,9 @@ pub(crate) fn test_catalog_with_tcgen05(repo_root: &Path) -> Result<CatalogFile>
         .filter(|record| record.family == "tcgen05")
         .count();
     match active_count {
-        233 => return Ok(catalog),
+        233 | 249 => return Ok(catalog),
         0 => {}
-        count => bail!("active tcgen05 catalog has {count} of 233 records"),
+        count => bail!("active tcgen05 catalog has {count} of 249 records"),
     }
     let imported: ImportedFile = read_json(&repo_root.join("intrinsics/imported.json"))?;
     let imported_by_record = index_imported_intrinsics(&imported)?;

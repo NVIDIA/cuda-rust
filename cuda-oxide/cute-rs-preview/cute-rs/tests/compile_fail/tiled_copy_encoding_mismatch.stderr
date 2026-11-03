@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/tiled_copy_encoding_mismatch.rs:23:54
+   |
+23 |     unsafe { copy.get_slice(0).copy(&source, (0, 0), &mut wrong_encoding) };
+   |                                ----                  ^^^^^^^^^^^^^^^^^^^ expected `&mut SharedTensor<Mxf4E2M1, f16, _, Mkl>`, found `&mut SharedTensor<f16, f16, (), Mkl>`
+   |                                |
+   |                                arguments to this method are incorrect
+   |
+   = note: expected mutable reference `&mut SharedTensor<Mxf4E2M1, f16, _, Mkl>`
+              found mutable reference `&mut SharedTensor<f16, f16, (), Mkl>`
+note: method defined here
+  --> src/copy/tiled.rs
+   |
+   |     pub unsafe fn copy<
+   |                   ^^^^

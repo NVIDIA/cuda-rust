@@ -1,0 +1,107 @@
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg class="cute-rs-preview" xmlns="http://www.w3.org/2000/svg" width="1040" height="470" viewBox="0 0 1040 470" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif">
+<title>Track 1: Shifting cuda-oxide development from a daily nightly pin to an official stable Rust release</title>
+<style>
+  .cute-rs-preview text { dominant-baseline:central; text-anchor:middle }
+  .cute-rs-preview .l { text-anchor:start }
+  .cute-rs-preview .bg { fill:#faf9f5 }
+  .cute-rs-preview .title { font-size:17px; font-weight:700; fill:#1e1e1e }
+  .cute-rs-preview .sec { font-size:11px; font-weight:700; letter-spacing:0.06em; fill:#5c5c5c }
+  .cute-rs-preview .th { font-size:13.5px; font-weight:600; fill:#1e1e1e }
+  .cute-rs-preview .ts { font-size:12px; fill:#5c5c5c }
+  .cute-rs-preview .tm { font-family:'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size:11.5px; font-weight:500 }
+  .cute-rs-preview .k-box { fill:#f1efe9; stroke:#c8c5be }
+  .cute-rs-preview .tx-box { fill:#1e1e1e }
+  .cute-rs-preview .k-purple { fill:#ebe9fb; stroke:#7f77dd }
+  .cute-rs-preview .tx-purple { fill:#3a3490 }
+  .cute-rs-preview .k-teal { fill:#dff3ec; stroke:#3aa47f }
+  .cute-rs-preview .tx-teal { fill:#1f5c47 }
+  .cute-rs-preview .k-amber { fill:#fdeed3; stroke:#ef9f27 }
+  .cute-rs-preview .tx-amber { fill:#6b4100 }
+  .cute-rs-preview .k-coral { fill:#fde7e2; stroke:#e0735c }
+  .cute-rs-preview .tx-coral { fill:#7d2f1f }
+  .cute-rs-preview .hair { stroke:#d4d1c9 }
+  .cute-rs-preview .arr { fill:none; stroke:#7b7b7b; stroke-width:1.5 }
+  .cute-rs-preview .arrhead { fill:none; stroke:#7b7b7b; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round }
+  @media (prefers-color-scheme: dark) {
+    .cute-rs-preview .bg { fill:#1b1d23 }
+    .cute-rs-preview .title, .cute-rs-preview .th { fill:#f5f6f8 }
+    .cute-rs-preview .sec { fill:#b8beca }
+    .cute-rs-preview .ts { fill:#cfd4de }
+    .cute-rs-preview .k-box { fill:#2e323c; stroke:#5c6375 }
+    .cute-rs-preview .tx-box { fill:#f5f6f8 }
+    .cute-rs-preview .hair { stroke:#5c6375 }
+    .cute-rs-preview .arr, .cute-rs-preview .arrhead { stroke:#b6bcc8 }
+    .cute-rs-preview .k-purple { fill:#524e7d; stroke:#bab5f4 }
+    .cute-rs-preview .tx-purple { fill:#f6f5ff }
+    .cute-rs-preview .k-teal { fill:#346357; stroke:#7ed8bb }
+    .cute-rs-preview .tx-teal { fill:#f0fdf8 }
+    .cute-rs-preview .k-amber { fill:#735a3c; stroke:#f4c474 }
+    .cute-rs-preview .tx-amber { fill:#fff8eb }
+    .cute-rs-preview .k-coral { fill:#6b443e; stroke:#f29b8a }
+    .cute-rs-preview .tx-coral { fill:#fff0ed }
+  }
+</style>
+<defs>
+  <marker id="arr-dev" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path class="arrhead" d="M2 1L8 5L2 9"/>
+  </marker>
+</defs>
+
+<rect class="bg" width="1040" height="470" rx="10"/>
+<text class="title l" x="36" y="32">Track 1: Moving Development &amp; Repo Toolchains to Stable Rust</text>
+<text class="ts l" x="36" y="54">Pins an official stable Rust release (`1.99.1`) in `cuda-oxide/rust-toolchain.toml` while keeping `rustc_private` and `rustc_public`.</text>
+
+<!-- Top Row: Before -->
+<text class="sec l" x="36" y="88">BEFORE · DAILY NIGHTLY PIN IN CUDA-OXIDE</text>
+<rect class="k-coral" x="36" y="102" width="460" height="118" rx="8" stroke-width="0.9"/>
+<text class="th tx-coral l" x="56" y="126">Nightly Pin in cuda-oxide/rust-toolchain.toml</text>
+<line class="hair" x1="56" y1="142" x2="476" y2="142" stroke-width="0.8"/>
+<text class="tm tx-coral l" x="56" y="164">Root + cutile-rs:  channel = "1.98.0" (Stable)</text>
+<text class="tm tx-coral l" x="56" y="186">cuda-oxide/:       channel = "nightly-2026-10-11"</text>
+<text class="ts tx-coral l" x="56" y="206">Result: daily snapshot drift and mid-cycle rustc churn.</text>
+
+<line class="arr" x1="496" y1="161" x2="540" y2="161" marker-end="url(#arr-dev)"/>
+
+<rect class="k-box" x="544" y="102" width="460" height="118" rx="8" stroke-width="0.9"/>
+<text class="th tx-box l" x="564" y="126">Why Nightly Was Used Originally</text>
+<line class="hair" x1="564" y1="142" x2="984" y2="142" stroke-width="0.8"/>
+<text class="ts tx-box l" x="564" y="164">• Needed #![feature(rustc_private)] for rustc-codegen-cuda</text>
+<text class="ts tx-box l" x="564" y="184">• Needed rustc_public (stable_mir) for mir-importer</text>
+<text class="ts tx-box l" x="564" y="204">• Needed -Z codegen-backend and -Z mir-enable-passes</text>
+
+<!-- Bottom Row: Unified Stable -->
+<text class="sec l" x="36" y="252">NEW WORKFLOW · PINNED STABLE RELEASE (1.99.1)</text>
+
+<rect class="k-teal" x="36" y="266" width="308" height="172" rx="8" stroke-width="0.9"/>
+<text class="th tx-teal l" x="56" y="290">Step 1: Pin Stable Toolchain</text>
+<line class="hair" x1="56" y1="306" x2="324" y2="306" stroke-width="0.8"/>
+<rect class="k-box" x="56" y="318" width="268" height="58" rx="5" stroke-width="0.7"/>
+<text class="tm tx-box l" x="68" y="336">channel = "1.99.1" # Stable!</text>
+<text class="tm tx-box l" x="68" y="358">components = ["rustc-dev", ...]</text>
+<text class="ts tx-teal l" x="56" y="398">Ships LLVM 23.1.1 with NVPTX.</text>
+<text class="ts tx-teal l" x="56" y="418">librustc_public.rlib included!</text>
+
+<line class="arr" x1="344" y1="352" x2="362" y2="352" marker-end="url(#arr-dev)"/>
+
+<rect class="k-purple" x="366" y="266" width="308" height="172" rx="8" stroke-width="0.9"/>
+<text class="th tx-purple l" x="386" y="290">Step 2: cargo-oxide Sets Env</text>
+<line class="hair" x1="386" y1="306" x2="654" y2="306" stroke-width="0.8"/>
+<rect class="k-box" x="386" y="318" width="268" height="58" rx="5" stroke-width="0.7"/>
+<text class="tm tx-box l" x="398" y="336">cmd.env("RUSTC_BOOTSTRAP", "1")</text>
+<text class="tm tx-box l" x="398" y="358">-Z codegen-backend=...</text>
+<text class="ts tx-purple l" x="386" y="398">Works for both building the .so</text>
+<text class="ts tx-purple l" x="386" y="418">and compiling kernel crates.</text>
+
+<line class="arr" x1="674" y1="352" x2="692" y2="352" marker-end="url(#arr-dev)"/>
+
+<rect class="k-amber" x="696" y="266" width="308" height="172" rx="8" stroke-width="0.9"/>
+<text class="th tx-amber l" x="716" y="290">Step 3: 6-Week Release Cadence</text>
+<line class="hair" x1="716" y1="306" x2="984" y2="306" stroke-width="0.8"/>
+<rect class="k-box" x="716" y="318" width="268" height="58" rx="5" stroke-width="0.7"/>
+<text class="tm tx-box l" x="728" y="336">1.99.1 -&gt; 1.100.0 -&gt; 1.101.0</text>
+<text class="ts tx-box l" x="728" y="358">Vetted through 6 weeks of beta</text>
+<text class="ts tx-amber l" x="716" y="398">No daily nightly regressions.</text>
+<text class="ts tx-amber l" x="716" y="418">Same model as Microsoft UTC.</text>
+</svg>

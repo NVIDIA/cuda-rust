@@ -31,8 +31,9 @@ contribution guide. There is no root `Justfile`. The SIMT recipes live in
 - `cuda-bindings/`, `cuda-core/`, `cuda-core-derive/`, and `cuda-async/` — shared
   host crates in the root workspace. Both kernel stacks depend on these by path.
 - `cuda-oxide/` — the SIMT model. Its `Cargo.toml` explicitly lists workspace
-  members under `crates/`; its `rust-toolchain.toml` pins the nightly needed for
-  `rustc_private`. The book is `cuda-oxide/cuda-oxide-book/`, and
+  members under `crates/`; its `rust-toolchain.toml` pins the stable release
+  (`1.99.1`) and `rustc-dev` / `llvm-tools` components needed for `rustc_private`
+  (unlocked via `RUSTC_BOOTSTRAP=1`). The book is `cuda-oxide/cuda-oxide-book/`, and
   `cuda-oxide/intrinsics/` holds the intrinsic catalog and ABI ledger.
   `cuda-oxide/crates/rustc-codegen-cuda/` declares its own workspace and inherits
   the SIMT toolchain pin. Examples and test fixtures can also declare separate
@@ -84,15 +85,18 @@ nested workspaces.
 ## Toolchains
 
 The root `rust-toolchain.toml` and `cutile-rs/rust-toolchain.toml` carry matching
-stable pins. `cuda-oxide/rust-toolchain.toml` supplies the SIMT nightly, including
-for its nested backend workspace. Do not float a pin to work around a failure.
+stable pins. `cuda-oxide/rust-toolchain.toml` supplies the SIMT stable pin and
+compiler components (`rustc-dev`, `llvm-tools`), including for its nested backend
+workspace. Do not float a pin to work around a failure.
 `cuda-oxide/scripts/check-toolchain-parity.sh` checks the SIMT pin against its
 scaffold, development container, and documentation.
+`cuda-oxide/scripts/check-ci-image-pins.sh` checks that the `rust:<version>`
+container images in the workflows match the root pin.
 
 rustup normally resolves the toolchain from the working directory; an explicit
 override can change that. `--manifest-path` does not change the working directory,
 so pointing a root Cargo command at the SIMT manifest does not select the SIMT
-nightly. Change directory first or select the required toolchain explicitly.
+toolchain pin. Change directory first or select the required toolchain explicitly.
 
 Nix environments live in `cuda-oxide/flake.nix` and `cutile-rs/flake.nix`.
 Run `nix develop` from the relevant component.
@@ -105,6 +109,9 @@ Run `nix develop` from the relevant component.
   notice plus `Apache-2.0`, in the form shown under "License Headers" in
   `CONTRIBUTING.md`. Preserve existing and third-party notices.
   `cuda-oxide/scripts/check-spdx-headers.sh` enforces the policy.
+- **Create new branches from the user's fork of this repository.** Synchronize
+  the fork's `main` with upstream before branching. For stacked work, base the
+  next branch on the preceding feature branch in that same fork.
 - **Never push to the canonical upstream repository, `NVIDIA/cuda-rust`.
   Treat it as read-only.** Branch and push to a fork. Before pushing, run
   `git remote -v` and confirm the push remote is a fork of the base, comparing
@@ -223,18 +230,29 @@ the source pull request. The comment on the source pull request links back.
 
 ## CI
 
-Workflows such as `ci.yml`, `examples-compile.yml`, `docs.yml`, and `book.yml`
-carry path filters. The SIMT lanes include shared-host paths as well as
-`cuda-oxide/`; book filters follow documentation sources and build scripts.
-The reusable `clippy.yml`, `fmt.yml`, `unit-tests.yml`, and `cargo-deny.yml`
-workflows inherit the caller's trigger. Check current filters and job conditions
-before interpreting a missing run as either a failure or successful validation.
+Workflows run on NVIDIA self-hosted runners, which reject `pull_request`. They
+trigger on `push` to `main` and to `pull-request/<n>`, the branches copy-pr-bot
+mirrors trusted pull requests to. Do not add `pull_request` triggers or
+`runs-on: ubuntu-latest`; use `linux-amd64-cpu4` (`linux-amd64-cpu16` for the
+Tile test jobs). The one exception is the `deploy` job in `book.yml`, which stays
+on `ubuntu-latest` for GitHub Pages and runs only for `refs/heads/main`.
 
-`cutile-rs.yml` deliberately has no workflow-level path filter. Copy-pr-bot
-mirrors trusted pull requests to `pull-request/<n>` at an existing SHA, which
-GitHub can treat as having no path changes. Its `changes` job gates Tile and
-shared-host jobs; an undetectable diff runs them conservatively. SIMT-only
-changes can skip them when the diff is available.
+Copy-pr-bot creates `pull-request/<n>` at an existing SHA, which GitHub can treat
+as having no path changes, so no workflow uses a workflow-level `paths:` filter.
+`ci.yml`, `examples-compile.yml`, `docs.yml`, `codeql.yml`, `book.yml`,
+`naming-guard.yml`, and `cutile-rs.yml` gate their jobs on a `changes` job
+(`dorny/paths-filter` against `main`); an undetectable diff runs the jobs
+conservatively. The SIMT lanes include shared-host paths as well as `cuda-oxide/`;
+book filters follow documentation sources and build scripts. SIMT-only changes can
+skip the Tile and shared-host jobs when the diff is available. The reusable
+`clippy.yml`, `fmt.yml`, `unit-tests.yml`, and `cargo-deny.yml` workflows inherit
+the caller's trigger. Check the `changes` job and job conditions before
+interpreting a missing run as either a failure or successful validation.
+
+Pull requests need cryptographically signed commits (SSH or GPG, Verified on
+GitHub) as well as the `Signed-off-by` line; copy-pr-bot holds a pull request with
+unsigned commits for validation. A history rewrite drops signatures, so re-sign
+with `git rebase --signoff -S` or `git commit --amend -s -S`.
 
 ## Historical references and fixtures
 

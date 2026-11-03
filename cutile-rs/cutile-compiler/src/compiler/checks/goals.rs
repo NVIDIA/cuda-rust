@@ -173,6 +173,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         &self,
         goals: &AxisGoals<'_>,
         partition: &TileRustValue,
+        span: &Span,
     ) -> bool {
         if let (Some(origin), Some(target)) = (
             goals.index.partition_axis_origin.as_ref(),
@@ -192,6 +193,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     target,
                     goals.extent_axis,
                     goals.tile,
+                    span,
                 )
             {
                 return true;
@@ -238,6 +240,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         &self,
         goals: &AxisGoals<'_>,
         partition: &TileRustValue,
+        span: &Span,
     ) -> bool {
         use cuda_async::predicate::{Atom, Predicate, Term};
         let Some(term) = goals.index.term.as_ref() else {
@@ -275,7 +278,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             "num_tile_blocks({k}) <= ceil(extent({tensor}, {})/{})",
             goals.extent_axis, goals.tile
         );
-        self.lower_obligation(le, cause)
+        self.lower_obligation(le, cause, span)
     }
 
     /// The entailment/launch rung for a constant zero coordinate against a
@@ -300,6 +303,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         &self,
         goals: &AxisGoals<'_>,
         partition: &TileRustValue,
+        span: &Span,
     ) -> bool {
         use cuda_async::predicate::{Predicate, Term};
         if goals.static_extent.is_some() {
@@ -322,7 +326,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             "partition access on axis {} of `{tensor}` requires a non-empty extent",
             goals.extent_axis
         );
-        self.lower_obligation(predicate, cause)
+        self.lower_obligation(predicate, cause, span)
     }
 
     /// The runtime scalar holding the extent for a goal whose static

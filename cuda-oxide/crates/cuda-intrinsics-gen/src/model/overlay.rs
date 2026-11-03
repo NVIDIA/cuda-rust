@@ -168,6 +168,8 @@ pub struct StmatrixAdmissionVariant {
 pub struct MbarrierExtendedAdmission {
     pub llvm_evidence_profile: String,
     pub libnvvm_evidence_profile: String,
+    #[serde(default)]
+    pub relaxed_libnvvm_evidence_profile: Option<String>,
     pub runtime_validation: RuntimeValidation,
     #[serde(rename = "variant")]
     pub variants: Vec<MbarrierExtendedAdmissionVariant>,
@@ -324,6 +326,12 @@ pub struct ClcAdmissionVariant {
 pub struct TmaAdmission {
     pub llvm_evidence_profile: String,
     pub libnvvm_evidence_profile: String,
+    /// Evidence profiles for the CTA-local G2S variants. A shard that lists
+    /// those variants must name both; an older shard without them parses.
+    #[serde(default)]
+    pub cta_llvm_evidence_profile: Option<String>,
+    #[serde(default)]
+    pub cta_libnvvm_evidence_profile: Option<String>,
     #[serde(default)]
     pub reduce_llvm_evidence_profile: Option<String>,
     #[serde(default)]
@@ -341,6 +349,16 @@ pub struct TmaAdmission {
 pub struct TmaAdmissionVariant {
     pub abi_id: String,
     pub operation: TmaOperation,
+}
+
+impl TmaAdmission {
+    /// Whether the shard lists the CTA-local G2S variants. Those variants
+    /// carry their own evidence profiles and need overlay shard schema 65.
+    pub fn admits_cta_g2s(&self) -> bool {
+        self.variants
+            .iter()
+            .any(|variant| variant.operation.is_cta_g2s())
+    }
 }
 
 /// One reviewed tensor-reduction operation and its reserved ABI ID.

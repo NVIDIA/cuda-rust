@@ -87,7 +87,7 @@ set -uo pipefail
 
 # ---- Example categorization ---------------------------------------------
 
-TCGEN05_EXAMPLES=(gemm_sol gemm_sol_final tcgen05 tcgen05_matmul)
+TCGEN05_EXAMPLES=(gemm_sol tcgen05 tcgen05_matmul)
 WGMMA_EXAMPLES=(wgmma)
 BLACKWELL_MMA_EXAMPLES=(mma_mxf8f6f4)
 LTOIR_EXAMPLES=(addressof_sharedarray constant_memory cpp_consumes_rust_device device_ffi_test legacy_atomic_fadd legacy_atomic_rmw_cas legacy_nvvm_pointer_shapes manual_launch_libdevice mathdx_ffi_test primitive_stress)
@@ -227,7 +227,7 @@ nvvm_verify_arch() {
             ;;
         cp_async_small) floor=80 ;;
         ex2_approx_f16) floor=75 ;;
-        generated_intrinsics) floor=80 ;;
+        generated_intrinsics) floor=86 ;;
         generated_ldmatrix) floor=75 ;;
         packed_atomic_add) floor=90 ;;
         shuffle_64) floor=75 ;;
@@ -474,6 +474,12 @@ IKET_EXEC=0
 IKET_ARCH="sm_90"
 if [[ "${host_cc}" =~ ^([0-9]+)\.[0-9]+$ ]] && [[ $((10#${BASH_REMATCH[1]})) -ge 9 ]]; then
     IKET_ARCH="${LTOIR_ARCH}"
+    # The pinned LLVM 23 `llc` used by the direct PTX path does not yet have an
+    # `-mcpu=sm_107` processor entry; use the sm_100 family baseline, which has
+    # the identical SM10x IKET placeholder ABI and JIT-loads on sm_107.
+    if [[ "${IKET_ARCH}" == "sm_107" ]]; then
+        IKET_ARCH="sm_100"
+    fi
     IKET_EXEC=1
 fi
 
@@ -2421,7 +2427,7 @@ run_tilelib() {
 # dominant cost of this script. Point all example builds at one shared
 # CARGO_TARGET_DIR: cargo fingerprints each unit by package + features +
 # workspace_root + toolchain, so identical deps built with the same pinned
-# nightly + backend RUSTFLAGS compile exactly once and are reused across every
+# toolchain + backend RUSTFLAGS compile exactly once and are reused across every
 # example. (Same trick the clippy CI job uses for these workspaces.)
 #
 # The codegen backend .so is built FIRST, with CARGO_TARGET_DIR explicitly

@@ -666,6 +666,7 @@ impl Compiler {
         let scratch = ScratchDirectory::new()?;
         let ll_path = scratch.path().join("module.ll");
         let ptx_path = scratch.path().join("module.ptx");
+        let cubin_path = scratch.path().join("module.cubin");
         let backend_options = BackendOptions {
             iket: crate::options::IketInstrumentation::Auto,
             target_arch: Some(options.target.sm()),
@@ -687,6 +688,8 @@ impl Compiler {
             OutputFiles {
                 llvm_ir: &ll_path,
                 ptx: &ptx_path,
+                cubin: &cubin_path,
+                mlir: None,
                 stale_before_export: &[],
             },
         );
@@ -1009,6 +1012,7 @@ impl From<PipelineError> for CompileError {
                 Self::LibdeviceUnavailable { message }
             }
             PipelineError::Export(message) => Self::Export { message },
+            PipelineError::BackendB(message) => Self::Codegen { message },
             PipelineError::TargetSelection { target, reason } => {
                 Self::TargetSelection { target, reason }
             }

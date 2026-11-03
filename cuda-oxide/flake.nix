@@ -55,7 +55,7 @@
         # LLVM
         llvmPkgs = pkgs.llvmPackages_22;
 
-        # Nightly Rust
+        # Pinned Rust toolchain (from rust-toolchain.toml)
         rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
 
         # cuda
@@ -111,6 +111,7 @@
 
           CUDA_HOME = cudaSymlinked;
           LIBCLANG_PATH = "${llvmPkgs.libclang.lib}/lib";
+          RUSTC_BOOTSTRAP = "1";
         };
 
         cargoOxideDeps = craneLib.buildDepsOnly (
@@ -202,6 +203,7 @@
           shellHook = ''
             export CUDA_HOME="${cudaSymlinked}"
             export LIBCLANG_PATH="${llvmPkgs.libclang.lib}/lib"
+            export RUSTC_BOOTSTRAP="1"
 
             # GPU driver setup borrowed from https://github.com/NVlabs/cutile-rs
             # NixOS provides /run/opengl-driver/lib
@@ -209,8 +211,12 @@
                 export LD_LIBRARY_PATH="/run/opengl-driver/lib:$LD_LIBRARY_PATH"
             else
               # Non-NixOS Linux (Ubuntu, Arch, etc. running Nix)
-              # Symlink only the NVIDIA driver to avoid host glibc pollution
-              _nv_drv_dir=$(mktemp -d /tmp/nix-nvidia-driver.XXXXXX)
+              # Symlink only the NVIDIA driver into a deterministic per-user
+              # directory to avoid host glibc pollution and avoid leaking a new
+              # /tmp directory when `nix develop --command` execs a child.
+              _nv_drv_dir="''${XDG_RUNTIME_DIR:-/tmp}/cuda-oxide-nvidia-driver-$(id -u)"
+              mkdir -p "$_nv_drv_dir"
+              rm -f "$_nv_drv_dir"/libcuda.so* "$_nv_drv_dir"/libnvidia-ptxjitcompiler.so* "$_nv_drv_dir"/libnvidia-gpucomp.so*
 
               for d in /usr/lib/x86_64-linux-gnu \
                        /lib/x86_64-linux-gnu \
@@ -228,11 +234,8 @@
 
               if [ -n "$(ls -A "$_nv_drv_dir" 2>/dev/null)" ]; then
                 export LD_LIBRARY_PATH="$_nv_drv_dir:$LD_LIBRARY_PATH"
-                # cleanup when the user exits the nix shell
-                trap 'rm -rf "$_nv_drv_dir"' EXIT
               else
-                # Clean up immediately if no NVIDIA drivers were found
-                rm -rf "$_nv_drv_dir"
+                rmdir "$_nv_drv_dir" 2>/dev/null || true
               fi
             fi
 

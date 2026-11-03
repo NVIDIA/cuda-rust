@@ -10,7 +10,7 @@ use llvm_export::{
         export_module_with_externs_and_roots,
     },
     ops::{FuncOp, GlobalOp, GlobalOpExt, ReturnOp},
-    types::{FuncType, PointerType, VoidType},
+    types::{ArrayType, FuncType, PointerType, StructLayout, StructType, VoidType},
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -22,6 +22,7 @@ use pliron::{
     context::{Context, Ptr},
     identifier::Identifier,
     op::Op,
+    r#type::TypeHandle,
 };
 
 use crate::common::module_top_block;
@@ -246,10 +247,22 @@ fn pointer_param_function(
     address_spaces: &[u32],
     is_kernel: bool,
 ) {
-    let params: Vec<_> = address_spaces
+    let params: Vec<TypeHandle> = address_spaces
         .iter()
         .map(|space| PointerType::get(ctx, *space).into())
         .collect();
+    typed_param_function(ctx, module_block, name, params, is_kernel);
+}
+
+/// Builds a `void` function with the given parameter types and an empty
+/// body, optionally carrying the `gpu_kernel` marker.
+fn typed_param_function(
+    ctx: &mut Context,
+    module_block: Ptr<BasicBlock>,
+    name: &str,
+    params: Vec<TypeHandle>,
+    is_kernel: bool,
+) {
     let void_ty = VoidType::get(ctx);
     let func_ty = FuncType::get(ctx, void_ty.into(), params, false);
     let func = FuncOp::new(ctx, name.try_into().unwrap(), func_ty);
@@ -304,6 +317,165 @@ fn kernel_rejects_a_local_memory_pointer_parameter() {
             "kernel `@local_param` parameter 0 is a pointer into local memory (address space 5)"
         ),
         "{error}"
+    );
+}
+
+/// The host fills a struct parameter byte by byte, so a shared pointer
+/// inside one is as impossible to supply as a bare one. The exporter looks
+/// through the aggregate and names the field path it found, with a message
+/// distinct from the bare form.
+#[test]
+fn kernel_rejects_a_shared_memory_pointer_inside_a_struct_parameter() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "kernel_shared_struct_param".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    let shared_ptr_ty = PointerType::get(&ctx, 3);
+    let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signless);
+    let args_ty = StructType::get_unnamed(
+        &ctx,
+        (
+            vec![shared_ptr_ty.into(), i32_ty.into()],
+            StructLayout::Unpacked,
+        ),
+    );
+    typed_param_function(
+        &mut ctx,
+        module_block,
+        "shared_struct_param",
+        vec![args_ty.into()],
+        true,
+    );
+
+    let error = export_module_to_string(&ctx, &module)
+        .expect_err("export must refuse a kernel parameter struct that holds a shared pointer");
+    assert!(
+        error.contains(
+            "kernel `@shared_struct_param` parameter 0 holds a pointer into shared memory \
+             (address space 3) at field path `.0`"
+        ),
+        "{error}"
+    );
+}
+
+/// An array parameter is refused the same way, and the path names the
+/// element position.
+#[test]
+fn kernel_rejects_a_shared_memory_pointer_inside_an_array_parameter() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "kernel_shared_array_param".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    let generic_ptr_ty = PointerType::get(&ctx, 0);
+    let shared_ptr_ty = PointerType::get(&ctx, 3);
+    let pair_ty = ArrayType::get(&ctx, shared_ptr_ty.into(), 2);
+    typed_param_function(
+        &mut ctx,
+        module_block,
+        "shared_array_param",
+        vec![generic_ptr_ty.into(), pair_ty.into()],
+        true,
+    );
+
+    let error = export_module_to_string(&ctx, &module)
+        .expect_err("export must refuse a kernel parameter array of shared pointers");
+    assert!(
+        error.contains(
+            "kernel `@shared_array_param` parameter 1 holds a pointer into shared memory \
+             (address space 3) at field path `[0]`"
+        ),
+        "{error}"
+    );
+}
+
+/// A pointer buried under a struct, an array and another struct is found and
+/// reported with its full path; local memory is refused on the same grounds.
+#[test]
+fn kernel_rejects_a_local_memory_pointer_nested_below_an_array_element() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "kernel_local_nested_param".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    let local_ptr_ty = PointerType::get(&ctx, 5);
+    let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signless);
+    let leaf_ty = StructType::get_unnamed(
+        &ctx,
+        (
+            vec![local_ptr_ty.into(), i32_ty.into()],
+            StructLayout::Unpacked,
+        ),
+    );
+    let pair_ty = ArrayType::get(&ctx, leaf_ty.into(), 2);
+    let args_ty = StructType::get_unnamed(
+        &ctx,
+        (vec![i32_ty.into(), pair_ty.into()], StructLayout::Unpacked),
+    );
+    typed_param_function(
+        &mut ctx,
+        module_block,
+        "local_nested_param",
+        vec![args_ty.into()],
+        true,
+    );
+
+    let error = export_module_to_string(&ctx, &module)
+        .expect_err("export must refuse a nested local-memory pointer in a kernel parameter");
+    assert!(
+        error.contains(
+            "kernel `@local_nested_param` parameter 0 holds a pointer into local memory \
+             (address space 5) at field path `.1[0].0`"
+        ),
+        "{error}"
+    );
+}
+
+/// The recursion refuses only what the host cannot supply: a struct of
+/// generic and global pointers stays a valid kernel parameter, and a device
+/// (non-kernel) function may take the struct that holds a shared pointer.
+#[test]
+fn kernel_keeps_a_struct_of_host_addressable_pointers_and_device_functions_keep_nested_shared() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "kernel_allowed_struct_params".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    let generic_ptr_ty = PointerType::get(&ctx, 0);
+    let global_ptr_ty = PointerType::get(&ctx, 1);
+    let shared_ptr_ty = PointerType::get(&ctx, 3);
+    let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signless);
+    let host_ty = StructType::get_unnamed(
+        &ctx,
+        (
+            vec![generic_ptr_ty.into(), global_ptr_ty.into()],
+            StructLayout::Unpacked,
+        ),
+    );
+    let shared_ty = StructType::get_unnamed(
+        &ctx,
+        (
+            vec![shared_ptr_ty.into(), i32_ty.into()],
+            StructLayout::Unpacked,
+        ),
+    );
+    typed_param_function(
+        &mut ctx,
+        module_block,
+        "host_struct_param",
+        vec![host_ty.into()],
+        true,
+    );
+    typed_param_function(
+        &mut ctx,
+        module_block,
+        "device_shared_struct",
+        vec![shared_ty.into()],
+        false,
+    );
+
+    let ir = export_module_to_string(&ctx, &module)
+        .expect("a host-addressable struct parameter and a device function's shared struct export");
+    assert!(
+        ir.contains("define ptx_kernel void @host_struct_param({ ptr, ptr addrspace(1) } %v0)"),
+        "{ir}"
+    );
+    assert!(
+        ir.contains("@device_shared_struct({ ptr addrspace(3), i32 } %v0)"),
+        "{ir}"
     );
 }
 

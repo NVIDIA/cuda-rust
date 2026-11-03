@@ -157,6 +157,7 @@ pub(in crate::render) fn register_mma_attr_variants(
         RegisterMmaKind::Standard => "RegisterMmaKindAttr::Standard",
         RegisterMmaKind::F8f6f4 => "RegisterMmaKindAttr::F8f6f4",
         RegisterMmaKind::Mxf8f6f4 => "RegisterMmaKindAttr::Mxf8f6f4",
+        RegisterMmaKind::Mxf4 => "RegisterMmaKindAttr::Mxf4",
     };
     let accumulator = match mma.accumulator {
         RegisterMmaAccumulator::F16 => "RegisterMmaAccumulatorAttr::F16",

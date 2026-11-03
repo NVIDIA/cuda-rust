@@ -45,6 +45,7 @@ fn helper(x: f32) -> f32 { x * x }
 | `#[kernel]`                                 | Mark a function as a GPU kernel entry point (`.entry` in PTX)       |
 | `#[device]`                                 | Mark a helper function or `extern "C"` block for device compilation |
 | `#[unroll]` / `#[unroll(N)]`               | Request full unrolling, or unrolling by a factor `N >= 2`            |
+| `#[nounroll]`                               | Keep a loop rolled through LLVM, libNVVM, and ptxas                 |
 | `#[launch_bounds(max_threads, min_blocks)]` | Occupancy hints for register allocation                             |
 | `#[constant]`                               | Place a `ConstantMemory<T>` static in constant memory, with a host `set_<name>` |
 | `#[launch_contract(...)]`                   | Declare the launch shape a kernel requires, unlocking a safe (non-`unsafe`) launch |
@@ -450,6 +451,7 @@ cp_async_bulk_commit_group();
 | Function                                      | Description                          |
 |:----------------------------------------------|:-------------------------------------|
 | `cp_async_bulk_tensor_{1..5}d_g2s(...)`       | Global → shared async bulk copy      |
+| `cp_async_bulk_tensor_{1..5}d_g2s_cta(...)`   | Global → this CTA's shared memory    |
 | `cp_async_bulk_tensor_{1..5}d_s2g(...)`       | Shared → global async bulk copy      |
 | `cp_async_bulk_tensor_2d_g2s_multicast(...)`  | Multicast to all CTAs in cluster     |
 | `cp_async_bulk_commit_group()`                | Commit outstanding copies            |
@@ -522,7 +524,7 @@ N_COLS must be a power of 2 in the range [32, 512].
 ### Typed Synchronous
 
 ```rust
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 
 let ctx = CudaContext::new(0).unwrap();
@@ -543,7 +545,7 @@ unsafe {
 ### Typed Async
 
 ```rust
-use cuda_async::simt::device_operation::DeviceOperation;
+use cuda_async::device_operation::DeviceOperation;
 
 let module = kernels::load_async(0)?;
 // SAFETY: this is 1D, buffers contain n elements, and module/scheduler share a context.

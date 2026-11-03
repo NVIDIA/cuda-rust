@@ -719,6 +719,13 @@ impl Compiler {
                     .into_iter()
                     .map(|message| Diagnostic::note(CompilationStage::Codegen, message)),
             );
+            diagnostics.extend(generated.warnings.into_iter().map(|warning| {
+                let message = match &warning.location {
+                    Some(location) => format!("{} ({location})", warning.message),
+                    None => warning.message,
+                };
+                Diagnostic::warning(CompilationStage::MirPreparation, message)
+            }));
             diagnostics.push(Diagnostic::note(
                 CompilationStage::Codegen,
                 format!("generated PTX for {target}"),
